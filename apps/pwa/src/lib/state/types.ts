@@ -30,6 +30,8 @@ export interface Account {
   name: string;
   balanceCents: number;
   kind: AccountKind;
+  /** Card balance semantics discriminator (credit-card only; absent = unknown → statement fallback). */
+  balanceSemantics?: "outstanding_debt" | "legacy_calculated";
   creditLimitCents?: number;
   closingDay?: number;
   dueDay?: number;

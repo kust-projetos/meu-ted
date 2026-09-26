@@ -7,6 +7,7 @@ import PushNotificationsCard from "./PushNotificationsCard";
 import { useAppState } from "@/lib/state/app-state-context";
 import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
 import { routeCompromissos, routePatrimonio, routePlanejamento } from "@/lib/routes";
+import { resolveCardOutstanding } from "@/lib/cards/card-debt";
 
 interface NotificationsSheetProps {
   open: boolean;
@@ -137,9 +138,13 @@ export default function NotificationsSheet({
       const latestStmt = cardStatements
         .filter((s) => s.accountId === card.id)
         .sort((a, b) => b.cycleYearMonth.localeCompare(a.cycleYearMonth))[0];
-      const spent = latestStmt?.totalCents ?? transactions
+      // ADR-018: utilization is outstanding / limit when canonical; the
+      // latest-statement total is legacy fallback only.
+      const statementFallbackCents = latestStmt?.totalCents ?? transactions
         .filter((t) => t.accountId === card.id && t.kind === "expense")
         .reduce((s, t) => s + t.amountCents, 0);
+      const spent = resolveCardOutstanding(card, { statementFallbackCents })
+        .outstandingCents;
       if (spent === 0) continue;
       const ratio = spent / limit;
       let section: AlertSection | null = null;

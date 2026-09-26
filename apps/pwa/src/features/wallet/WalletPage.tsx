@@ -8,6 +8,7 @@ import { StaleBanner } from "@/components/StaleBanner";
 import { useAppState } from "@/lib/state/app-state-context";
 import { Plus } from "lucide-react";
 import { resolveBankPreset } from "@/lib/bank-presets";
+import { resolveCardOutstanding } from "@/lib/cards/card-debt";
 import { routePatrimonio, routePlanejamento } from "@/lib/routes";
 
 function formatBRL(cents: number): string {
@@ -68,7 +69,12 @@ export default function WalletPage() {
     const openStmt = cardStatements.find(
       (s) => s.accountId === card.id && s.status === "open",
     );
-    return { ...card, spent: openStmt?.totalCents ?? 0 };
+    // ADR-018: net-worth card liability is the authoritative outstanding debt
+    // when canonical; the open-statement total is legacy fallback only.
+    const spent = resolveCardOutstanding(card, {
+      statementFallbackCents: openStmt?.totalCents ?? 0,
+    }).outstandingCents;
+    return { ...card, spent };
   });
   const totalCardSpent = cardSpending.reduce((s, c) => s + c.spent, 0);
 
