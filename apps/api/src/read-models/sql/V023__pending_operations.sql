@@ -29,16 +29,24 @@ ALTER TABLE pending_operations
 
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'pending_operations' AND column_name = 'household_id') THEN
+  -- All probes below are scoped to the canonical public.pending_operations
+  -- managed by THIS migration. An unqualified information_schema /
+  -- pg_constraint probe matches same-named relations in other schemas
+  -- (e.g. legacy_archive.pending_operations kept by archive-and-bootstrap
+  -- during the F2 canonical rehearsal), while the unqualified ALTER TABLE
+  -- resolves to the fresh public table — a cross-schema mismatch that
+  -- aborts the replay with `column "household_id" ... does not exist`
+  -- (2026-09-26) and would silently skip the V023 CHECK constraints.
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'pending_operations' AND column_name = 'household_id') THEN
     ALTER TABLE pending_operations ALTER COLUMN household_id DROP NOT NULL;
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'pending_operations' AND column_name = 'chat_id') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'pending_operations' AND column_name = 'chat_id') THEN
     ALTER TABLE pending_operations ALTER COLUMN chat_id DROP NOT NULL;
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'pending_operations' AND column_name = 'amount_cents') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'pending_operations' AND column_name = 'amount_cents') THEN
     ALTER TABLE pending_operations ALTER COLUMN amount_cents DROP NOT NULL;
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'pending_operations' AND column_name = 'date') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'pending_operations' AND column_name = 'date') THEN
     ALTER TABLE pending_operations ALTER COLUMN date DROP NOT NULL;
   END IF;
 END $$;
@@ -49,12 +57,15 @@ ALTER TABLE pending_operations DROP CONSTRAINT IF EXISTS pending_operations_stat
 
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pending_operations_status_v023_check') THEN
+  -- conrelid scoping: same-named CHECK constraints on an archived namesake
+  -- (legacy_archive.pending_operations) must NOT suppress creation on the
+  -- canonical public table (see the column-probe note above).
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pending_operations_status_v023_check' AND conrelid = to_regclass('public.pending_operations')) THEN
     ALTER TABLE pending_operations
       ADD CONSTRAINT pending_operations_status_v023_check
       CHECK (status IN ('pending', 'approved', 'rejected', 'expired'));
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pending_operations_reason_v023_check') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pending_operations_reason_v023_check' AND conrelid = to_regclass('public.pending_operations')) THEN
     ALTER TABLE pending_operations
       ADD CONSTRAINT pending_operations_reason_v023_check
       CHECK (reason IN ('high_value', 'destructive'));

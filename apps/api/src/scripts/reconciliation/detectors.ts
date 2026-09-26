@@ -27,17 +27,92 @@ export type CheckResult = {
   workspaceScope?: string;
 };
 
+/**
+ * Money arrives from pg as a BIGINT decimal string, a safe JS integer, or a
+ * bigint. `number` past 2^53-1 is already rounded on arrival, so it is
+ * rejected (fail-closed `invalid_balance_input`) instead of computed on.
+ * Exact decimal strings stay exact end-to-end and are reported back as
+ * decimal strings only when they exceed the safe-integer range (JSON-safe:
+ * findings never carry a bigint, so `JSON.stringify(report)` cannot throw).
+ */
+export type CentsValue = number | string | bigint;
+
+const PG_BIGINT_MIN = -(2n ** 63n);
+const PG_BIGINT_MAX = 2n ** 63n - 1n;
+const MAX_SAFE_CENTS = 9007199254740991n;
+
+const INT_RE = /^-?\d+$/;
+
+export const parseCentsExact = (value: CentsValue): bigint | null => {
+  let text: string;
+  if (typeof value === "bigint") {
+    text = value.toString();
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) return null;
+    text = String(value);
+  } else if (typeof value === "string") {
+    text = value.trim();
+    if (!INT_RE.test(text)) return null;
+  } else {
+    return null;
+  }
+  let parsed: bigint;
+  try {
+    parsed = BigInt(text);
+  } catch {
+    return null;
+  }
+  if (parsed < PG_BIGINT_MIN || parsed > PG_BIGINT_MAX) return null;
+  return parsed;
+};
+
+/** JSON-safe money: a number while exactly representable, else a decimal string. */
+export const formatCents = (value: bigint): number | string =>
+  value <= MAX_SAFE_CENTS && value >= -MAX_SAFE_CENTS
+    ? Number(value)
+    : value.toString();
+
+/**
+ * Exact cents for fingerprint/legacy numeric consumers: the safe-integer
+ * number, or NaN when the value is invalid or exceeds the safe range (the
+ * fingerprint matchers ignore NaN, so unsafe values stay drift — fail-closed).
+ */
+export const toSafeNumber = (value: CentsValue): number => {
+  const parsed = parseCentsExact(value);
+  if (parsed === null) return NaN;
+  if (parsed > MAX_SAFE_CENTS || parsed < -MAX_SAFE_CENTS) return NaN;
+  return Number(parsed);
+};
+
 export type AccountBalanceRow = {
   accountId: string;
   householdId: string;
-  storedCents: number;
-  initialCents: number | null;
-  incomeCents: number;
-  expenseCents: number;
-  transferInCents: number;
-  transferOutCents: number;
+  storedCents: CentsValue;
+  initialCents: CentsValue | null;
+  incomeCents: CentsValue;
+  expenseCents: CentsValue;
+  transferInCents: CentsValue;
+  transferOutCents: CentsValue;
   /** Account kind ('bank' | 'cash' | 'credit_card'); absent stays permissive. */
   accountKind?: string | null;
+  /**
+   * Slice-2 debt legs, projected by the canonical accounts_balance query:
+   * live linked card-purchase expenses and SUM(statements.paid_cents) for
+   * the account. Present only on the canonical layout; when EITHER leg is
+   * absent (legacy layout, older callers) a credit_card row falls back to
+   * the legacy income/expense derivation so legacy behavior stays verbatim.
+   */
+  cardPurchaseCents?: CentsValue | undefined;
+  cardPaidCents?: CentsValue | undefined;
+  /**
+   * Canonical invalid-link leg: live statement-linked expenses whose
+   * statement_id resolves to NO same account+household statement (missing,
+   * foreign-household, or other-card statement). Excluded from the debt leg
+   * so a wrong link can never count as correctly linked debt; a nonzero leg
+   * raises `invalid_statement_link` (credit_card rows only — bank/cash keep
+   * the pinned statement-link exclusion verbatim).
+   */
+  cardInvalidCents?: CentsValue | undefined;
 };
 
 export type StatementTotalRow = {
@@ -216,23 +291,89 @@ export const detectAccountsBalanceDrift = (
   workspaceScope?: string,
 ): CheckResult => {
   const result = emptyResult("accounts_balance", workspaceScope);
-  const flagNegativeCredit = (row: AccountBalanceRow): void => {
+  const flagNegativeCredit = (row: AccountBalanceRow, stored: bigint): void => {
     // V055 domain rule: only credit_card rows must stay non-negative, so a
     // negative stored balance on a credit card is drift even when it matches
     // the ledger derivation. Bank/cash (and unknown kinds) stay permissive.
-    if (row.storedCents < 0 && row.accountKind === "credit_card") {
+    if (stored < 0n && row.accountKind === "credit_card") {
       pushDrift(result, {
         entity: "accounts",
         entityId: row.accountId,
         kind: "negative_credit_balance",
-        actual: row.storedCents,
+        actual: formatCents(stored),
         detail: { account_kind: row.accountKind },
       });
     }
   };
   for (const row of rows) {
     result.counts.checked += 1;
-    if (row.initialCents === null) {
+    // Exact parse first: any non-integer, unsafe-number, or out-of-range leg
+    // fails closed as drift instead of silently rounding past 2^53.
+    const stored = parseCentsExact(row.storedCents);
+    const initial =
+      row.initialCents === null
+        ? ("unanchored" as const)
+        : parseCentsExact(row.initialCents);
+    const income = parseCentsExact(row.incomeCents);
+    const expense = parseCentsExact(row.expenseCents);
+    const transferIn = parseCentsExact(row.transferInCents);
+    const transferOut = parseCentsExact(row.transferOutCents);
+    const cardPurchase =
+      row.cardPurchaseCents === undefined
+        ? undefined
+        : parseCentsExact(row.cardPurchaseCents);
+    const cardPaid =
+      row.cardPaidCents === undefined
+        ? undefined
+        : parseCentsExact(row.cardPaidCents);
+    const cardInvalid =
+      row.cardInvalidCents === undefined
+        ? undefined
+        : parseCentsExact(row.cardInvalidCents);
+    const badField =
+      stored === null
+        ? "stored_cents"
+        : initial === null
+          ? "initial_cents"
+          : income === null
+            ? "income_cents"
+            : expense === null
+              ? "expense_cents"
+              : transferIn === null
+                ? "transfer_in_cents"
+                : transferOut === null
+                  ? "transfer_out_cents"
+                  : cardPurchase === null
+                    ? "card_purchase_cents"
+                    : cardPaid === null
+                      ? "card_paid_cents"
+                      : cardInvalid === null
+                        ? "card_invalid_cents"
+                        : null;
+    if (badField !== null) {
+      pushDrift(result, {
+        entity: "accounts",
+        entityId: row.accountId,
+        kind: "invalid_balance_input",
+        detail: { field: badField },
+      });
+      continue;
+    }
+    // Unreachable when badField is null (every null leg was reported above);
+    // these guards only narrow the parsed legs to bigint for the compiler.
+    if (
+      stored === null ||
+      income === null ||
+      expense === null ||
+      transferIn === null ||
+      transferOut === null
+    ) {
+      continue;
+    }
+    if (cardPurchase === null || cardPaid === null || cardInvalid === null) {
+      continue;
+    }
+    if (initial === "unanchored") {
       // Negative-balance rule (user-approved): a negative stored balance
       // is legitimate for bank/cash, so an unanchored row is always info
       // (never drift) regardless of sign — except credit cards, which must
@@ -242,37 +383,69 @@ export const detectAccountsBalanceDrift = (
         entityId: row.accountId,
         kind: "unanchored_basis",
         severity: "info",
-        actual: row.storedCents,
+        actual: formatCents(stored),
       });
-      flagNegativeCredit(row);
+      flagNegativeCredit(row, stored);
       continue;
     }
+    // Unreachable (reported as initial_cents above); narrows initial to bigint.
+    if (initial === null) {
+      continue;
+    }
+    // Wrong-statement debt (credit cards only): the invalid leg is excluded
+    // from the derivation below, and any nonzero amount is its own drift so
+    // it can never hide inside a matching balance.
+    if (
+      row.accountKind === "credit_card" &&
+      cardInvalid !== undefined &&
+      cardInvalid !== 0n
+    ) {
+      pushDrift(result, {
+        entity: "accounts",
+        entityId: row.accountId,
+        kind: "invalid_statement_link",
+        actual: formatCents(cardInvalid),
+      });
+    }
     const derived =
-      row.initialCents +
-      row.incomeCents -
-      row.expenseCents -
-      row.transferOutCents +
-      row.transferInCents;
-    if (row.storedCents !== derived) {
+      row.accountKind === "credit_card" &&
+      cardPurchase !== undefined &&
+      cardPaid !== undefined
+        ? // Slice-2 debt (ADR-018): initial + linked purchases − paid.
+          // card_purchases is never an input (no double-count); payments
+          // without a statement_payment_id link still count via paid_cents.
+          // Wrong-statement expenses stay out (cardInvalidCents, flagged
+          // above) instead of counting as correctly linked debt.
+          initial + cardPurchase - cardPaid
+        : initial + income - expense - transferOut + transferIn;
+    if (stored !== derived) {
       pushDrift(result, {
         entity: "accounts",
         entityId: row.accountId,
         kind: "balance_drift",
-        expected: derived,
-        actual: row.storedCents,
+        expected: formatCents(derived),
+        actual: formatCents(stored),
         detail: {
-          initial_cents: row.initialCents,
-          income_cents: row.incomeCents,
-          expense_cents: row.expenseCents,
-          transfer_in_cents: row.transferInCents,
-          transfer_out_cents: row.transferOutCents,
+          initial_cents: formatCents(initial),
+          income_cents: formatCents(income),
+          expense_cents: formatCents(expense),
+          transfer_in_cents: formatCents(transferIn),
+          transfer_out_cents: formatCents(transferOut),
+          ...(row.accountKind === "credit_card" &&
+          cardPurchase !== undefined &&
+          cardPaid !== undefined
+            ? {
+                card_purchase_cents: formatCents(cardPurchase),
+                card_paid_cents: formatCents(cardPaid),
+              }
+            : {}),
         },
       });
     }
     // Negative-balance rule (user-approved): a stored balance that matches
     // the ledger derivation is coherent even when negative — no finding,
     // except on credit cards, which must stay non-negative (V055).
-    flagNegativeCredit(row);
+    flagNegativeCredit(row, stored);
   }
   return result;
 };

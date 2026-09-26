@@ -106,6 +106,56 @@ export const buildArchiveStatements = (
     }
   });
 
+/**
+ * F2 real-dump rehearsal: production dumps contain SERIAL tables (e.g.
+ * `_migration_backup_marker`) whose owned sequence
+ * (`_migration_backup_marker_id_seq`) is inventoried as a SEPARATE
+ * `sequence` relation (`plan.ts` `listRelations`). `ALTER TABLE ... SET
+ * SCHEMA` relocates an OWNED sequence to the target schema automatically,
+ * so a subsequent explicit `ALTER SEQUENCE public.<owned> SET SCHEMA ...`
+ * fails with `relation "public.<owned>" does not exist` and aborts the
+ * whole archive transaction. Owned sequences must therefore never get
+ * their own explicit move — they follow their table. Standalone sequences
+ * (no table owner in the archived schema) still need the explicit move.
+ *
+ * Ownership is pre-computed from the catalog (`pg_depend` `deptype = 'a'`,
+ * sequence `objid` owned by a table `refobjid`), NEVER by name parsing:
+ * a standalone sequence may share a `<table>_<column>_seq` naming pattern
+ * without being owned. The owning table is required to live in the same
+ * archived schema — a sequence owned by a table outside it still needs an
+ * explicit move. Fail-closed is preserved: this only withholds the
+ * redundant ALTER for catalog-proven owned sequences; every other move
+ * error still aborts.
+ */
+export const listOwnedSequenceNames = async (
+  pool: ConversionPool,
+  schema: string,
+): Promise<Set<string>> => {
+  const res = await pool.query(
+    `SELECT seq.relname AS name
+       FROM pg_depend d
+       JOIN pg_class seq ON seq.oid = d.objid
+       JOIN pg_namespace seq_ns ON seq_ns.oid = seq.relnamespace
+       JOIN pg_class tbl ON tbl.oid = d.refobjid
+       JOIN pg_namespace tbl_ns ON tbl_ns.oid = tbl.relnamespace
+      WHERE seq_ns.nspname = $1 AND tbl_ns.nspname = $1
+        AND d.classid = 'pg_class'::regclass
+        AND d.refclassid = 'pg_class'::regclass
+        AND d.deptype = 'a'
+        AND seq.relkind = 'S'`,
+    [schema],
+  );
+  return new Set(res.rows.map((row) => String((row as Record<string, unknown>).name)));
+};
+
+export const excludeOwnedSequences = (
+  relations: InventoriedRelation[],
+  ownedSequenceNames: Set<string> | Iterable<string>,
+): InventoriedRelation[] => {
+  const owned = ownedSequenceNames instanceof Set ? ownedSequenceNames : new Set(ownedSequenceNames);
+  return relations.filter((relation) => !(relation.kind === 'sequence' && owned.has(relation.name)));
+};
+
 export const resolveRerunAction = (input: {
   marker: ConversionMarker | null;
   partial: boolean;
@@ -282,7 +332,12 @@ export const runArchiveAndBootstrap = async (
       await client.query('BEGIN');
       await applyMigrationTimeouts(client);
       await client.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(archiveSchema)}`);
-      for (const statement of buildArchiveStatements(fresh, schema, archiveSchema)) {
+      // Owned sequences follow their table under ALTER TABLE ... SET SCHEMA;
+      // issuing their own ALTER SEQUENCE afterwards would fail with
+      // `relation "public.<seq>" does not exist`. Withhold exactly those.
+      const ownedSequences = await listOwnedSequenceNames(pool, schema);
+      const movable = excludeOwnedSequences(fresh, ownedSequences);
+      for (const statement of buildArchiveStatements(movable, schema, archiveSchema)) {
         await client.query(statement);
       }
       await client.query('COMMIT');

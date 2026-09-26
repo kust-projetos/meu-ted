@@ -72,11 +72,27 @@ const accountsBalance = (
 ): ReconQuery => {
   const values: unknown[] = [];
   if (layout === "canonical") {
-    // V058 anchor: the canonical derivation is
+    // V058 anchor + slice-2 debt legs. bank/cash derive as
     // initial_balance_cents + income − expense − transfer_out + transfer_in
     // (detectors.ts detectAccountsBalanceDrift). Statement-linked purchase
-    // expenses stay excluded from the expense leg: the card write path
-    // (cards/postgres.ts) never touches accounts.balance_cents on purchase.
+    // expenses stay excluded from the expense leg; they are projected
+    // separately as card_purchase_cents because the card write path
+    // (cards/postgres.ts) ADDS purchases to credit_card.balance_cents
+    // (outstanding debt). card_paid_cents sums statements.paid_cents bound
+    // to the account + household — the card credit leg of every payment,
+    // including historical payments with no statement_payment_id link
+    // (their coverage stays with the statement_payment_coverage check).
+    // card_purchases is never summed: the ledger rows are the single
+    // purchase source, so no double-count with the projection.
+    //
+    // Wrong-statement hardening: the debt leg counts ONLY expenses whose
+    // statement_id resolves to a statement bound to the SAME account and
+    // household (id + household + account join). A purchase linked to a
+    // missing, foreign-household, or other-card statement lands in
+    // card_invalid_cents instead, so it can never count as correctly linked
+    // debt — detectors.ts raises invalid_statement_link for it (credit_card
+    // rows; bank/cash keep the pinned statement-link exclusion verbatim).
+    const validStatementLink = `EXISTS (SELECT 1 FROM statements s WHERE s.id = t.statement_id AND s.household_id = a.household_id AND s.account_id = a.id)`;
     return {
       text: `SELECT a.id AS account_id, a.household_id,
         a.kind AS account_kind,
@@ -85,7 +101,10 @@ const accountsBalance = (
         COALESCE(SUM(t.amount_cents) FILTER (WHERE t.kind = 'income' AND t.account_id = a.id), 0)::bigint AS income_cents,
         COALESCE(SUM(t.amount_cents) FILTER (WHERE t.kind = 'expense' AND t.account_id = a.id AND t.statement_id IS NULL), 0)::bigint AS expense_cents,
         COALESCE(SUM(t.amount_cents) FILTER (WHERE t.kind = 'transfer' AND t.transfer_to_account_id = a.id), 0)::bigint AS transfer_in_cents,
-        COALESCE(SUM(t.amount_cents) FILTER (WHERE t.kind = 'transfer' AND t.account_id = a.id), 0)::bigint AS transfer_out_cents
+        COALESCE(SUM(t.amount_cents) FILTER (WHERE t.kind = 'transfer' AND t.account_id = a.id), 0)::bigint AS transfer_out_cents,
+        COALESCE(SUM(t.amount_cents) FILTER (WHERE t.kind = 'expense' AND t.account_id = a.id AND t.statement_id IS NOT NULL AND ${validStatementLink}), 0)::bigint AS card_purchase_cents,
+        COALESCE(SUM(t.amount_cents) FILTER (WHERE t.kind = 'expense' AND t.account_id = a.id AND t.statement_id IS NOT NULL AND NOT (${validStatementLink})), 0)::bigint AS card_invalid_cents,
+        COALESCE((SELECT SUM(s.paid_cents) FROM statements s WHERE s.account_id = a.id AND s.household_id = a.household_id), 0)::bigint AS card_paid_cents
       FROM accounts a
       LEFT JOIN transactions t ON t.household_id = a.household_id AND t.deleted_at IS NULL
       WHERE a.deleted_at IS NULL${scoped("a.household_id", scope, values)}
@@ -279,19 +298,25 @@ const cardPurchase = (scope: ReconScope): ReconQuery => {
   };
 };
 
+export const DUP_IDEMPOTENCY_LEGACY_SCOPE_CAST = "$1::uuid";
+export const DUP_IDEMPOTENCY_CANONICAL_SCOPE_CAST = "$1::text";
+
 const dupIdempotency = (
   layout: SchemaLayout,
   scope: ReconScope,
 ): ReconQuery => {
   const values: unknown[] = [];
-  const scopeFilter =
-    scope.householdId === undefined
-      ? ""
-      : (() => {
-          values.push(scope.householdId);
-          return ` WHERE scope = $${values.length}`;
-        })();
   if (layout === "canonical") {
+    // F2 2026-09-26: the scope predicate carries an explicit ::text cast
+    // (the outer query projects household_id::text AS scope) so PG never
+    // has to infer the parameter type.
+    const scopeFilter =
+      scope.householdId === undefined
+        ? ""
+        : (() => {
+            values.push(scope.householdId);
+            return ` WHERE scope = ${DUP_IDEMPOTENCY_CANONICAL_SCOPE_CAST}`;
+          })();
     return {
       text: `SELECT scope, key, array_agg(DISTINCT payload_hash) AS payload_hashes FROM (
         SELECT household_id::text AS scope, key, payload_hash FROM idempotency_keys
@@ -302,16 +327,22 @@ const dupIdempotency = (
       values,
     };
   }
+  // F2 2026-09-26 regression fix: the legacy branch used to share the
+  // canonical scopeFilter push above AND push again here, emitting
+  // `WHERE household_id = $2` with two bound values — $1 stayed unbound
+  // and untyped, so every legacy --household run failed with
+  // `could not determine data type of parameter $1`. Each branch now binds
+  // exactly once, with an explicit ::uuid cast on the uuid column.
+  const legacyFilter =
+    scope.householdId === undefined
+      ? ""
+      : (() => {
+          values.push(scope.householdId);
+          return ` WHERE household_id = ${DUP_IDEMPOTENCY_LEGACY_SCOPE_CAST}`;
+        })();
   return {
     text: `SELECT household_id::text AS scope, key, array_agg(DISTINCT payload_hash) AS payload_hashes
-    FROM idempotency_keys${
-      scope.householdId === undefined
-        ? ""
-        : (() => {
-            values.push(scope.householdId);
-            return ` WHERE household_id = $${values.length}`;
-          })()
-    }
+    FROM idempotency_keys${legacyFilter}
     GROUP BY household_id, key HAVING COUNT(DISTINCT payload_hash) > 1`,
     values,
   };

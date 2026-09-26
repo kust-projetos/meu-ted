@@ -24,6 +24,7 @@
     "convert:canonical": "tsx src/scripts/canonical-converter/canonical-convert.ts",
     "convert:canonical:dry": "tsx src/scripts/canonical-converter/canonical-convert.ts --dry-run",
     "reconciliation": "tsx src/scripts/reconciliation/run.ts",
+    "probe:prod-schema": "tsx src/scripts/prod-schema-probe.ts",
     "reminders:run": "tsx src/scripts/reminder-job.ts",
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
     "format:reminders:check": "node ../../scripts/check-reminder-format.mjs",

@@ -3,10 +3,13 @@ import {
   ARCHIVE_SCHEMA,
   buildArchiveStatements,
   CONVERSION_STATE_CONVERTED,
+  excludeOwnedSequences,
   isCompletedState,
+  listOwnedSequenceNames,
   resolveRerunAction,
   type InventoriedRelation,
 } from '../../src/scripts/canonical-converter/archive-and-bootstrap.js';
+import type { ConversionPool } from '../../src/scripts/canonical-converter/plan.js';
 
 describe('canonical converter archive statements (M1)', () => {
   it('exposes a configurable archive schema default', () => {
@@ -47,6 +50,48 @@ describe('canonical converter archive statements (M1)', () => {
     expect(() =>
       buildArchiveStatements([{ name: 'x', kind: 'index' as InventoriedRelation['kind'] }], 'public', 'legacy_archive'),
     ).toThrow(/unsupported relation kind/);
+  });
+});
+
+describe('canonical converter owned sequences (F2 real-dump rehearsal)', () => {
+  const stubPool = (rows: Array<Record<string, unknown>>): ConversionPool => ({
+    query: async () => ({ rows, rowCount: rows.length }),
+  });
+
+  it('never issues a redundant ALTER SEQUENCE for a sequence owned by a moved table', () => {
+    const relations: InventoriedRelation[] = [
+      { name: '_migration_backup_marker', kind: 'table' },
+      { name: '_migration_backup_marker_id_seq', kind: 'sequence' },
+      { name: 'standalone_seq', kind: 'sequence' },
+    ];
+    const movable = excludeOwnedSequences(relations, new Set(['_migration_backup_marker_id_seq']));
+    expect(movable).toEqual([
+      { name: '_migration_backup_marker', kind: 'table' },
+      { name: 'standalone_seq', kind: 'sequence' },
+    ]);
+    expect(buildArchiveStatements(movable, 'public', 'legacy_archive')).toEqual([
+      'ALTER TABLE "public"."_migration_backup_marker" SET SCHEMA "legacy_archive"',
+      'ALTER SEQUENCE "public"."standalone_seq" SET SCHEMA "legacy_archive"',
+    ]);
+  });
+
+  it('keeps standalone sequences when nothing is owned', () => {
+    const relations: InventoriedRelation[] = [
+      { name: 'accounts', kind: 'table' },
+      { name: 'standalone_seq', kind: 'sequence' },
+    ];
+    expect(excludeOwnedSequences(relations, new Set())).toEqual(relations);
+  });
+
+  it('reads owned sequences from pg_depend ownership (deptype a)', async () => {
+    const pool = stubPool([{ name: '_migration_backup_marker_id_seq' }]);
+    await expect(listOwnedSequenceNames(pool, 'public')).resolves.toEqual(
+      new Set(['_migration_backup_marker_id_seq']),
+    );
+  });
+
+  it('returns an empty set when no sequence is table-owned', async () => {
+    await expect(listOwnedSequenceNames(stubPool([]), 'public')).resolves.toEqual(new Set());
   });
 });
 
