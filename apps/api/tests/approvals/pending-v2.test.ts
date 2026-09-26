@@ -45,8 +45,10 @@ describe('authoritative pending operation V2', () => {
       createdAt: new Date(Date.now() - 120_000).toISOString(),
       expiresAt: new Date(Date.now() - 60_000).toISOString(),
     });
-    const expired = await store.propose(expiredProposal);
-    await expect(store.confirm(expired.id, { workspaceId: p.workspaceId, actorId: p.actorId, deviceId: p.deviceId }))
+    // P2 (v2-attestation-route-and-ttl): authoritative server time — a
+    // birth-expired proposal fails fast at propose, never persisting a dead
+    // row; expiry of a live proposal still fails closed at confirm.
+    await expect(store.propose(expiredProposal))
       .rejects.toMatchObject({ code: 'approval.expired' });
   });
 

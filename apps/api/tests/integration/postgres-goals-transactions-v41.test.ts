@@ -18,7 +18,7 @@ import { requireTestDatabase } from '../../src/db/db-guard.js';
 const DB_URL = process.env.DATABASE_URL_TEST;
 const ENABLED = Boolean(DB_URL && process.env.DB_TEST_MARKER);
 const describeIfDb = ENABLED ? describe : describe.skip;
-const HOUSEHOLD = process.env.DB_TEST_MARKER || '00000000-0000-4000-8000-00000000d00d';
+const HOUSEHOLD = '00000000-0000-4000-8000-00000000d00d';
 const LEGACY_SCHEMA = `g41_patch_${process.pid}_${Date.now()}`;
 
 const scopedPool = (admin: Pool, schema: string): Pool => {

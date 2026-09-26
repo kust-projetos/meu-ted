@@ -3,6 +3,7 @@ import { z } from "zod";
 import { DEVICE_TOKEN_HEADER } from "../auth/device-token.js";
 import type { AuthenticatedContext } from "../auth/request-context.js";
 import type { IdempotencyStore } from "../writes/idempotency.js";
+import { httpIdempotencyPayload } from "../writes/idempotency.js";
 import { domainErrors } from "../writes/errors.js";
 import type { PushSubscriptionStore } from "../push/store.js";
 import type { PushDelivery, PushPayload } from "../push/delivery.js";
@@ -136,7 +137,7 @@ export const registerPushRoutes = (
       const result = await opts.idempotency.lookupOrRecord(
         ctx.householdId,
         key,
-        parsed.data,
+        httpIdempotencyPayload({ route: 'POST /push/subscriptions' }, parsed.data),
         async () => ({
           status: 201 as const,
           body: publicSubscription(
@@ -185,7 +186,7 @@ export const registerPushRoutes = (
       const result = await opts.idempotency.lookupOrRecord(
         ctx.householdId,
         key,
-        payload,
+        httpIdempotencyPayload({ route: 'POST /push/notifications' }, payload),
         async () => {
           const body = await opts.delivery!.sendToWorkspace(
             ctx.householdId,
@@ -229,7 +230,7 @@ export const registerPushRoutes = (
       const result = await opts.idempotency.lookupOrRecord(
         ctx.householdId,
         key,
-        parsed.data,
+        httpIdempotencyPayload({ route: 'DELETE /push/subscriptions' }, parsed.data),
         async () => {
           const removed = await opts.pushStore.remove(
             ctx.householdId,

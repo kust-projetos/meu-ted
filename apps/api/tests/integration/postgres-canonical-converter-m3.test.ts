@@ -165,18 +165,22 @@ describeIfDb('Postgres canonical converter M3 (anchor + balances step)', () => {
     expect(result.households).toEqual([householdId]);
     expect(result.backfilled).toMatchObject({ updated: 3, canonicalCount: 3 });
     // bank: 5000 + 1000 − 200 − 150 + 50 = 5700; cash: 0 + 150 − 50 = 100;
-    // card purchase (statement-linked) never touches the balance: 0.
+    // card (slice-2 debt): 0 + 400 (linked purchase) − 0 (paid) = 400.
     // FINDING-2: computations are bigint-exact (pg BIGINT arrives as string).
     expect(result.applied.find((r) => r.accountId === bank)).toMatchObject({ computed: 5700n, initial: 5000n });
     expect(result.applied.find((r) => r.accountId === cash)).toMatchObject({ computed: 100n, initial: 0n });
-    expect(result.applied.find((r) => r.accountId === card)).toMatchObject({ computed: 0n, expense: 0n });
+    expect(result.applied.find((r) => r.accountId === card)).toMatchObject({
+      computed: 400n,
+      cardPurchases: 400n,
+      cardPaid: 0n,
+    });
 
     const stored = await db!.query(
       `SELECT id, balance_cents, initial_balance_cents FROM accounts WHERE household_id = $1`,
       [householdId],
     );
     expect(new Map(stored.rows.map((r) => [String(r['id']), Number(r['balance_cents'])]))).toEqual(
-      new Map([[bank, 5700], [cash, 100], [card, 0]]),
+      new Map([[bank, 5700], [cash, 100], [card, 400]]),
     );
 
     // The reconciliation query on the same fixture agrees row by row…
@@ -184,12 +188,13 @@ describeIfDb('Postgres canonical converter M3 (anchor + balances step)', () => {
     const rows = (await db!.query(query.text, query.values)).rows;
     expect(rows).toHaveLength(3);
     for (const row of rows) {
-      const derived =
-        Number(row['initial_cents']) +
-        Number(row['income_cents']) -
-        Number(row['expense_cents']) -
-        Number(row['transfer_out_cents']) +
-        Number(row['transfer_in_cents']);
+      const derived = String(row['account_kind']) === 'credit_card'
+        ? Number(row['initial_cents']) + Number(row['card_purchase_cents']) - Number(row['card_paid_cents'])
+        : Number(row['initial_cents']) +
+          Number(row['income_cents']) -
+          Number(row['expense_cents']) -
+          Number(row['transfer_out_cents']) +
+          Number(row['transfer_in_cents']);
       expect(Number(row['stored_cents'])).toBe(derived);
     }
     // …and the full report is drift-free.
@@ -217,6 +222,9 @@ describeIfDb('Postgres canonical converter M3 (anchor + balances step)', () => {
     await seedHousehold(householdId);
     const card = await seedAccount(householdId, 'Card', 'credit_card', 100);
     const bank = await seedAccount(householdId, 'Checking', 'bank', 100);
+    // Slice 2: a plain (unlinked) expense on a card is an orphan under the
+    // debt model — still fail-closed BEFORE any write, like the old
+    // negative-derivation refusal.
     await seedTx(householdId, 'expense', card, 250);
     await seedTx(householdId, 'expense', bank, 250);
     await expect(runBalancesStep(db!, { householdId })).rejects.toThrow(BalanceError);
@@ -236,7 +244,9 @@ describeIfDb('Postgres canonical converter M3 (anchor + balances step)', () => {
     // Legacy shape (V032/V033): the purchase link lives in
     // card_purchases.transaction_id while the transaction row carries no
     // statement_id. Without the pre-balances resolution the purchase
-    // would debit the card (and fail closed as a negative credit_card).
+    // would hit the debt computation as an UNLINKED card expense and fail
+    // closed as an orphan. With it, the purchase links and adds to debt
+    // exactly like the write path adds it.
     const householdId = randomUUID();
     await seedHousehold(householdId);
     const card = await seedAccount(householdId, 'Card', 'credit_card', 0);
@@ -278,8 +288,13 @@ describeIfDb('Postgres canonical converter M3 (anchor + balances step)', () => {
     await db!.query(`INSERT INTO legacy_archive.statements (id, household_id) VALUES ($1, $2)`, [stmt, householdId]);
 
     const result = await runBalancesStep(db!, { householdId });
-    // The purchase is statement-linked like the write path: no balance effect.
-    expect(result.applied.find((r) => r.accountId === card)).toMatchObject({ computed: 0n, expense: 0n });
+    // The purchase is statement-linked like the write path: it adds to the
+    // card debt (statement paid 0, so debt = 400).
+    expect(result.applied.find((r) => r.accountId === card)).toMatchObject({
+      computed: 400n,
+      cardPurchases: 400n,
+      cardPaid: 0n,
+    });
     const tx = await db!.query(`SELECT statement_id FROM transactions WHERE id = $1`, [txId]);
     expect(String(tx.rows[0]!.statement_id)).toBe(stmt);
   }, 60_000);

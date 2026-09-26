@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import {
   expectedMigrationManifest,
+  normalizeStoredChecksum,
   planMigrations,
   type AppliedMigrationRow,
+  type MigrationDrift,
   type MigrationPlan,
 } from '../../read-models/sql/migrate.js';
 import {
@@ -44,6 +46,72 @@ export type ConversionQueryResult = {
   rowCount?: number | null;
 };
 
+/** A preflight observation query that failed instead of returning a count. */
+export type PreflightQueryError = {
+  /** PREFLIGHT_QUERIES key (or 'unknown' when the text is unrecognized). */
+  query: string;
+  /** Postgres SQLSTATE (e.g. '42883', '42703') or 'unknown'. No row data. */
+  code: string;
+  /** Sanitized single-line server message (capped; never row contents). */
+  message: string;
+};
+
+/**
+ * Audited V023 baseline divergence (diagnosis 2026-09-26, dry-run gate on
+ * the anonymized production dump: `canonical:V023:checksum`).
+ *
+ * The repo's V023 file gained ONE additive idempotent line AFTER
+ * production applied it (`ADD COLUMN IF NOT EXISTS chat_id`, commit
+ * `0cae822` — the column `src/approvals/pending.ts` writes was missing on
+ * fresh databases); the production schema already carries the column, and
+ * the migrate runtime tolerates this pre-guard drift with a warning
+ * (`migrate.ts` baselineDrift: V023 < MIGRATION_DRIFT_BASELINE_VERSION 44,
+ * boot continues — confirmed, migrate.ts unchanged).
+ *
+ * 2026-09-26 schema-qualification fix for the archived-schema multi-schema
+ * replay (F2 rehearsal): V023's DO blocks probed information_schema /
+ * pg_constraint by table NAME only, matching the archived namesake in
+ * `legacy_archive` while the unqualified ALTER resolved to the fresh public
+ * table (`column "household_id" ... does not exist`). All four column
+ * probes are now scoped by `table_schema = 'public'` and both constraint
+ * probes by `conrelid = to_regclass('public.pending_operations')`. Fresh-DB
+ * semantics are unchanged (m-suite replays stay green) and the file stays
+ * idempotent.
+ *
+ * The converter forgives a CLOSED SET of exactly three forms, all anchored
+ * at the CURRENT (re-qualified) file hash on the expected side:
+ *   1. ledger checksum == the historical full hash below (original
+ *      production application, read from production `_migrations`);
+ *   2. ledger checksum == the pre-qualification full hash below (databases
+ *      that applied V023 between 0cae822 and the re-qualification);
+ *   3. ledger checksum == the current file hash itself.
+ * Any other V023 checksum drift, any name drift, and any V044+ drift keep
+ * blocking.
+ */
+export const V023_AUDITED_CURRENT_CHECKSUM =
+  'f00db6996ba65ea0d7e33dc902772fea7c501286d8fc66a3be60107820a9b828';
+export const V023_AUDITED_PREVIOUS_CHECKSUM =
+  'ca412d7481a912ff8fa4a254a8e873d17768a018991d2dd2177e9529aa815901';
+// Full hash pinned from production `_migrations` 2026-09-26 (original
+// production application of V023; supersedes the earlier 8-hex
+// `9c8cb904` prefix diagnosis — prefix matching is no longer accepted).
+export const V023_AUDITED_HISTORICAL_CHECKSUM =
+  '9c8cb904d96c1b37b45533e0cb16e561ece865b01c4775a3926b519b798a6a76';
+/** @deprecated prefix-only matching is no longer accepted; use V023_AUDITED_HISTORICAL_CHECKSUM. */
+export const V023_AUDITED_HISTORICAL_PREFIX = '9c8cb904';
+
+export const isAuditedV023BaselineDivergence = (drift: Pick<MigrationDrift, 'version' | 'kind' | 'expected' | 'applied'>): boolean => {
+  if (drift.version !== 23 || drift.kind !== 'checksum' || drift.expected !== V023_AUDITED_CURRENT_CHECKSUM) {
+    return false;
+  }
+  const applied = normalizeStoredChecksum(drift.applied).toLowerCase();
+  return (
+    applied === V023_AUDITED_HISTORICAL_CHECKSUM ||
+    applied === V023_AUDITED_PREVIOUS_CHECKSUM ||
+    applied === V023_AUDITED_CURRENT_CHECKSUM
+  );
+};
+
 export type ConversionPool = {
   query: (sql: string, params?: unknown[]) => Promise<ConversionQueryResult>;
 };
@@ -54,6 +122,7 @@ export type StubPool = ConversionPool;
 export type PlanEvidence = {
   relations: InventoriedRelation[];
   counts: Record<string, number>;
+  contentDigests: Record<string, string>;
   legacyMigrationPlan: MigrationPlan;
   canonicalMigrationPlan: MigrationPlan;
   ledgerMissing: boolean;
@@ -61,7 +130,7 @@ export type PlanEvidence = {
   missingLegacyColumns: string[];
   missingCoreTables: string[];
   preflight: CanonicalConversionPreflight;
-  preflightUnavailable: string[];
+  preflightErrors: PreflightQueryError[];
   knownRelations?: string[] | undefined;
 };
 
@@ -69,6 +138,7 @@ export type ConversionInventory = {
   schema: string;
   relations: InventoriedRelation[];
   counts: Record<string, number>;
+  contentDigests: Record<string, string>;
   ledger: AppliedMigrationRow[];
   legacyMigrationPlan: MigrationPlan;
   canonicalMigrationPlan: MigrationPlan;
@@ -78,7 +148,7 @@ export type ConversionInventory = {
   missingLegacyColumns: string[];
   missingCoreTables: string[];
   preflight: CanonicalConversionPreflight;
-  preflightUnavailable: string[];
+  preflightErrors: PreflightQueryError[];
 };
 
 export type ConversionPlan = {
@@ -253,6 +323,93 @@ const countTable = async (pool: ConversionPool, schema: string, table: string): 
   return intCount(res.rows[0]?.count);
 };
 
+/**
+ * SOURCE-DIGEST (bounded-memory fix): deterministic per-table content
+ * evidence with O(1) application memory.
+ *
+ * Design:
+ * - TABLES only (`relation.kind === 'table'`): views, materialized views
+ *   and sequences carry no convertible row content of their own, and
+ *   extension-owned / temp objects never reach the inventory
+ *   (`listRelations` filters extension members by OID; temp tables live
+ *   outside the inventoried schema).
+ * - Single-row DB aggregate: the query returns exactly ONE row
+ *   (`COUNT(*)` + two `SUM()` accumulators over `md5(t::text)` split into
+ *   high/low 64-bit halves). Postgres holds only three accumulators while
+ *   scanning — no `string_agg`/`array_agg` server-side accumulation, no
+ *   `ORDER BY` of the whole table, no per-row hashes leaving Postgres.
+ *   The Node side hashes one short `n:s_hi:s_lo` string, so application
+ *   memory is bounded regardless of table size.
+ * - `t::text` is the table's own rowtype rendering, schema-name free, so
+ *   the digest is comparable across `public` and `legacy_archive`. No
+ *   `pgcrypto` dependency. No raw PII appears in the inventory or
+ *   fingerprint.
+ * - Row-order independent: `COUNT` + `SUM` are commutative, so physical/
+ *   insertion order (heap, autovacuum, dump restore) cannot flip the
+ *   digest. Exact duplicate handling: every occurrence contributes to both
+ *   sums, so multiplicities are part of the digest (unlike XOR, where an
+ *   even multiplicity cancels out).
+ * - Fail closed: any query error propagates (the plan is never built over
+ *   unknown content), a missing aggregate row throws, and malformed
+ *   `n`/`s_hi`/`s_lo` values throw instead of being digested silently. An
+ *   empty table digests deterministically as SHA-256 of `"0:0:0"`.
+ */
+export const digestTableContent = async (
+  pool: ConversionPool,
+  schema: string,
+  table: string,
+): Promise<string> => {
+  const res = await pool.query(
+    `SELECT COUNT(*)::text AS n, ` +
+      `COALESCE(SUM((('x' || SUBSTR(md5(t::text), 1, 16))::bit(64)::bigint)), 0::numeric)::text AS s_hi, ` +
+      `COALESCE(SUM((('x' || SUBSTR(md5(t::text), 17, 16))::bit(64)::bigint)), 0::numeric)::text AS s_lo ` +
+      `FROM ${quoteIdent(schema)}.${quoteIdent(table)} AS t`,
+  );
+  const row = res.rows[0] as { n?: unknown; s_hi?: unknown; s_lo?: unknown } | undefined;
+  if (row === undefined) {
+    throw new Error(
+      `canonical converter plan returned no content aggregate for "${schema}"."${table}": refusing to digest`,
+    );
+  }
+  const nText = typeof row.n === 'string' ? row.n : String(row.n ?? '');
+  const sHiText = typeof row.s_hi === 'string' ? row.s_hi : String(row.s_hi ?? '');
+  const sLoText = typeof row.s_lo === 'string' ? row.s_lo : String(row.s_lo ?? '');
+  if (!/^\d+$/.test(nText)) {
+    throw new Error(
+      `canonical converter plan returned a malformed content aggregate for "${schema}"."${table}": refusing to digest`,
+    );
+  }
+  const n = Number(nText);
+  if (!Number.isSafeInteger(n) || n < 0) {
+    throw new Error(
+      `canonical converter plan returned a malformed content aggregate for "${schema}"."${table}": refusing to digest`,
+    );
+  }
+  if (!/^-?\d+$/.test(sHiText) || !/^-?\d+$/.test(sLoText)) {
+    throw new Error(
+      `canonical converter plan returned a malformed content aggregate for "${schema}"."${table}": refusing to digest`,
+    );
+  }
+  return createHash('sha256').update(`${nText}:${sHiText}:${sLoText}`, 'utf8').digest('hex');
+};
+
+export const digestTableContents = async (
+  pool: ConversionPool,
+  schema: string,
+  relations: InventoriedRelation[],
+): Promise<Record<string, string>> => {
+  // Sequential on purpose: the orchestrator (`convert.ts`
+  // `collectPlanForSchema`) funnels queries through a single serialized pg
+  // client, so concurrent fans offer nothing and only obscure failure
+  // attribution. Fail-closed is preserved: the first error aborts the plan.
+  const digests: Record<string, string> = {};
+  for (const relation of relations) {
+    if (relation.kind !== 'table') continue;
+    digests[relation.name] = await digestTableContent(pool, schema, relation.name);
+  }
+  return digests;
+};
+
 const readLedger = async (
   pool: ConversionPool,
   schema: string,
@@ -330,6 +487,14 @@ export const buildConversionPlan = (evidence: PlanEvidence): Omit<ConversionPlan
       });
     }
     for (const drift of plan.baselineDrift) {
+      if (isAuditedV023BaselineDivergence(drift)) {
+        informational.push({
+          code: 'migration_baseline_v023_audited',
+          count: 1,
+          evidence: `${manifest}:V${String(drift.version).padStart(3, '0')}:${drift.kind} (audited divergence, commit 0cae822)`,
+        });
+        continue;
+      }
       blockers.push({
         code: 'migration_baseline_drift',
         count: 1,
@@ -349,11 +514,22 @@ export const buildConversionPlan = (evidence: PlanEvidence): Omit<ConversionPlan
       blockers.push({ code: finding.code, count: finding.count, evidence: 'preflight' });
     }
   }
-  if (evidence.preflightUnavailable.length > 0) {
+  // FIX (dry-run gate 2026-09-26): a failed observation query used to be
+  // swallowed into a silent zero-count plus a bare `preflight_unavailable`
+  // blocker, hiding the real SQL failure (e.g. `text = uuid` on
+  // memberships, missing column on invites). The sanitized SQLSTATE and
+  // server message now reach the blocker diagnostics and fail the plan as
+  // `preflight_error` — a zero count is only ever reported when the query
+  // actually returned zero.
+  if (evidence.preflightErrors.length > 0) {
+    const detail = [...evidence.preflightErrors]
+      .map((entry) => `${entry.query}(${entry.code}): ${entry.message}`)
+      .sort()
+      .join('; ');
     blockers.push({
-      code: 'preflight_unavailable',
-      count: evidence.preflightUnavailable.length,
-      evidence: [...evidence.preflightUnavailable].sort().join(','),
+      code: 'preflight_error',
+      count: evidence.preflightErrors.length,
+      evidence: detail,
     });
   }
   if (evidence.nonzeroInitialBalance > 0) {
@@ -391,6 +567,17 @@ export const buildConversionPlan = (evidence: PlanEvidence): Omit<ConversionPlan
   return { ready: blockers.length === 0, blockers, informational };
 };
 
+const sanitizePreflightErrorMessage = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error);
+  const singleLine = message.replace(/\s+/g, ' ').trim().slice(0, 280);
+  return singleLine === '' ? 'unknown error' : singleLine;
+};
+
+const preflightErrorCode = (error: unknown): string => {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return typeof code === 'string' && code.trim() !== '' ? code : 'unknown';
+};
+
 const stableStringify = (value: unknown): string => {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
@@ -406,7 +593,10 @@ export const fingerprintPlan = (plan: Omit<ConversionPlan, 'fingerprint'>): stri
   // `public` pre-bootstrap and re-collects it over `legacy_archive` once
   // the legacy lives there (SET SCHEMA moves relations 1:1). Normalizing
   // the schema name keeps the two proofs comparable so a rerun can tell
-  // "same source" from "source changed since the conversion".
+  // "same source" from "source changed since the conversion". The
+  // per-table `contentDigests` (SOURCE-DIGEST) ride inside `inventory`, so
+  // same-cardinality VALUE changes flip the fingerprint exactly like
+  // count/ledger/preflight changes do.
   const normalized: Omit<ConversionPlan, 'fingerprint'> = {
     ...plan,
     inventory: { ...plan.inventory, schema: '' },
@@ -426,6 +616,12 @@ export const collectConversionPlan = async (
     if (relation.kind === 'function') continue;
     counts[relation.name] = await countTable(pool, schema, relation.name);
   }
+  // SOURCE-DIGEST: content evidence for every inventoried TABLE. Views,
+  // materialized views and sequences are inventoried (and counted) but
+  // never content-digested; functions are neither counted nor digested.
+  // Partial coverage would be a misleading proof, so this covers ALL
+  // inventoried tables or throws (fail closed) — never a silent subset.
+  const contentDigests = await digestTableContents(pool, schema, relations);
   const { ledger, missing } = await readLedger(pool, schema);
   const legacyMigrationPlan = planMigrations(expectedMigrationManifest(true), ledger);
   const canonicalMigrationPlan = planMigrations(expectedMigrationManifest(false), ledger);
@@ -435,14 +631,18 @@ export const collectConversionPlan = async (
     missingColumns(pool, schema),
   ]);
   const missingCoreTables = LEGACY_CORE_TABLES.filter((table) => !names.has(table));
-  const preflightUnavailable: string[] = [];
+  const preflightErrors: PreflightQueryError[] = [];
   const preflight = await runCanonicalConversionPreflight(async (text) => {
     try {
       const res = await pool.query(text);
       return res.rows.map((row) => ({ count: row.count }));
-    } catch {
+    } catch (error) {
       const name = Object.keys(PREFLIGHT_QUERIES).find((key) => PREFLIGHT_QUERIES[key as keyof typeof PREFLIGHT_QUERIES] === text) ?? 'unknown';
-      preflightUnavailable.push(name);
+      preflightErrors.push({
+        query: name,
+        code: preflightErrorCode(error),
+        message: sanitizePreflightErrorMessage(error),
+      });
       return [{ count: 0 }];
     }
   });
@@ -450,6 +650,7 @@ export const collectConversionPlan = async (
     schema,
     relations,
     counts,
+    contentDigests,
     ledger,
     legacyMigrationPlan,
     canonicalMigrationPlan,
@@ -459,7 +660,7 @@ export const collectConversionPlan = async (
     missingLegacyColumns,
     missingCoreTables,
     preflight,
-    preflightUnavailable,
+    preflightErrors,
   };
   const { ready, blockers, informational } = buildConversionPlan({ ...inventory, knownRelations: opts.knownRelations });
   const withoutFingerprint: Omit<ConversionPlan, 'fingerprint'> = { ready, blockers, informational, inventory };

@@ -203,6 +203,98 @@ describeIfDb('V4.1 Phase 3 (UOW2) — Postgres single-tx domain mutations', () =
     expect((replay.response as { id: string }).id).toBe((retry.response as { id: string }).id);
   }, 60_000);
 
+  it('cards createCard: crash after the effect rolls back; retry converges to 1 card', async () => {
+    const household = track(randomUUID());
+    const cards = createPostgresCardStore(pool);
+    const idempotency = createPostgresIdempotencyStore({ pool });
+    const payload = { name: 'PG Visa', creditLimitCents: 200_000, closingDay: 10, dueDay: 20 };
+
+    let attempts = 0;
+    const crashingProducer = async (claimTx: unknown) => {
+      attempts += 1;
+      const card = await runCardMutation(cards, claimTx, household, 'createCard', payload);
+      if (attempts === 1) {
+        // Simulate a crash AFTER the financial write but BEFORE completion:
+        // a deliberate constraint violation aborts the whole claim tx.
+        await (claimTx as { query: (t: string) => Promise<unknown> }).query(
+          'INSERT INTO transactions (id) VALUES (NULL)',
+        );
+      }
+      return card;
+    };
+    await expect(idempotency.lookupOrRecord(household, 'pg-card-create-crash-1', payload, crashingProducer)).rejects.toThrow();
+
+    // Single-tx proof: the rolled-back attempt left NO orphan behind.
+    const orphaned = await pool.query('SELECT COUNT(*)::int AS n FROM accounts WHERE household_id = $1', [household]);
+    expect(orphaned.rows[0]!.n).toBe(0);
+
+    const retry = await idempotency.lookupOrRecord(household, 'pg-card-create-crash-1', payload, (claimTx) =>
+      runCardMutation(cards, claimTx, household, 'createCard', payload),
+    );
+    expect(retry.replayed).toBe(false);
+    const final = await pool.query('SELECT COUNT(*)::int AS n FROM accounts WHERE household_id = $1', [household]);
+    expect(final.rows[0]!.n).toBe(1);
+
+    const replay = await idempotency.lookupOrRecord(household, 'pg-card-create-crash-1', payload, (claimTx) =>
+      runCardMutation(cards, claimTx, household, 'createCard', payload),
+    );
+    expect(replay.replayed).toBe(true);
+    expect((replay.response as { id: string }).id).toBe((retry.response as { id: string }).id);
+  }, 60_000);
+
+  it('cards updatePurchase: crash after the effect rolls back; retry converges + replay', async () => {
+    const household = track(randomUUID());
+    const { cat } = await seedBankAndCategory(household);
+    const cards = createPostgresCardStore(pool);
+    const idempotency = createPostgresIdempotencyStore({ pool });
+    const card = await cards.createCard(household, {
+      name: 'PG Visa', creditLimitCents: 200_000, closingDay: 10, dueDay: 20,
+    });
+    // Future date keeps the attaching statement genuinely 'open' under the
+    // real clock (an overdue statement would reject the PATCH).
+    const openDate = new Date(Date.now() + 45 * 86_400_000).toISOString().slice(0, 10);
+    const txs = await cards.createCardPurchase(household, {
+      accountId: card.id, description: 'PG shop', amountCents: 1500, date: openDate, categoryId: cat.id,
+    });
+    const purchaseId = txs[0]!.id;
+    const patch = { description: 'PG fair' };
+
+    let attempts = 0;
+    const crashingProducer = async (claimTx: unknown) => {
+      attempts += 1;
+      const detail = await runCardMutation(cards, claimTx, household, 'updatePurchase', { purchaseId, patch });
+      // The InTx detail reflects the uncommitted change on the same client.
+      expect(detail.purchases.map((p) => p.description)).toContain('PG fair');
+      if (attempts === 1) {
+        // Simulate a crash AFTER the effect but BEFORE completion:
+        // a deliberate constraint violation aborts the whole claim tx.
+        await (claimTx as { query: (t: string) => Promise<unknown> }).query(
+          'INSERT INTO transactions (id) VALUES (NULL)',
+        );
+      }
+      return detail;
+    };
+    await expect(idempotency.lookupOrRecord(household, 'pg-card-patch-crash-1', { id: purchaseId, ...patch }, crashingProducer)).rejects.toThrow();
+
+    // Single-tx proof: the rolled-back attempt left the ledger untouched.
+    const orphaned = await pool.query('SELECT description FROM transactions WHERE id = $1', [purchaseId]);
+    expect(orphaned.rows[0]!.description).toBe('PG shop');
+
+    const retry = await idempotency.lookupOrRecord(household, 'pg-card-patch-crash-1', { id: purchaseId, ...patch }, (claimTx) =>
+      runCardMutation(cards, claimTx, household, 'updatePurchase', { purchaseId, patch }),
+    );
+    expect(retry.replayed).toBe(false);
+    expect((retry.response as { purchases: { description: string }[] }).purchases.map((p) => p.description)).toContain('PG fair');
+    const final = await pool.query('SELECT description FROM transactions WHERE id = $1', [purchaseId]);
+    expect(final.rows[0]!.description).toBe('PG fair');
+
+    const replay = await idempotency.lookupOrRecord(household, 'pg-card-patch-crash-1', { id: purchaseId, ...patch }, (claimTx) =>
+      runCardMutation(cards, claimTx, household, 'updatePurchase', { purchaseId, patch }),
+    );
+    expect(replay.replayed).toBe(true);
+    expect(replay.response).toEqual(retry.response);
+  }, 60_000);
+
   it('Phase 4 fail-closed: real PG claim client + store without InTx → invariant error, zero effects', async () => {
     const household = track(randomUUID());
     const { acc } = await seedBankAndCategory(household);

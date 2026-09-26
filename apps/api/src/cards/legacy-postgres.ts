@@ -21,7 +21,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import type { Account, Transaction, Statement, StatementPurchase, RecurringPurchase } from '../types/domain.js';
+import type { Account, Transaction, Statement, StatementDetail, StatementPurchase, RecurringPurchase } from '../types/domain.js';
 import type { CardStore } from './store.js';
 import { withTransaction } from '../db/pool.js';
 import { domainErrors } from '../writes/errors.js';
@@ -87,6 +87,10 @@ const mapAccount = (r: Row): Account => opt<Account>(
     kind: 'credit_card',
     balanceCents: Number(r['balance_cents'] ?? 0),
     status: r['active'] ? 'active' : 'inactive',
+    // Legacy semantics: balance is computed from the ledger
+    // (initial + income − expense …), NOT outstanding debt.
+    // Mapper constant — no persisted-schema change, no raw config leak.
+    balanceSemantics: 'legacy_calculated',
   },
   {
     creditLimitCents: r['credit_limit_cents'] != null ? Number(r['credit_limit_cents']) : undefined,
@@ -200,6 +204,9 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
   type CreateCardInstallmentsInput = Parameters<CardStore['createCardInstallments']>[1];
   type CreateRecurringPurchaseInput = Parameters<CardStore['createRecurringPurchase']>[1];
   type PayStatementInput = Parameters<CardStore['payStatement']>[2];
+  type CreateCardInput = Parameters<CardStore['createCard']>[1];
+  type UpdateCardInput = Parameters<CardStore['updateCard']>[2];
+  type UpdatePurchaseInput = Parameters<CardStore['updatePurchase']>[2];
 
   /**
    * V4.1 Phase 3 (UOW2) — legacy client-bound card cores (no transaction
@@ -459,6 +466,366 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
     throw domainErrors.notFound('Compra');
   };
 
+  /**
+   * Client-bound statement detail read (same 3-source shape as the pool
+   * `getStatementDetail`: card_purchases → transactions by statement →
+   * transactions by account+period). Used by `updatePurchaseInTx` so the
+   * returned detail reflects the uncommitted change — reading through
+   * the pool before commit would return the pre-update projection.
+   */
+  const getStatementDetailInTx = async (
+    client: PoolClient,
+    householdId: string,
+    statementId: string,
+  ): Promise<StatementDetail | null> => {
+    const stmtRows = await client.query<Row>(
+      `SELECT id, household_id, account_id, cycle_year_month,
+              closing_date, due_date, total_cents, paid_cents, status
+         FROM statements
+        WHERE id = $1 AND household_id = $2`,
+      [statementId, householdId],
+    );
+    if (stmtRows.rows.length === 0) return null;
+    const s = mapStatement(stmtRows.rows[0]!);
+
+    let purchaseRows = (
+      await client.query<Row>(
+        `SELECT cp.id, cp.description, cp.amount_cents, cp.date::text AS date,
+                cp.installments_total, cp.installment_number,
+                c.id AS category_id, c.name AS category_name
+           FROM card_purchases cp
+           LEFT JOIN categories c ON cp.category_id = c.id AND c.household_id = $2
+          WHERE cp.statement_id = $1 AND cp.household_id = $2 AND cp.deleted_at IS NULL
+          ORDER BY cp.date ASC, cp.created_at ASC`,
+        [statementId, householdId],
+      )
+    ).rows;
+
+    if (purchaseRows.length === 0) {
+      purchaseRows = (
+        await client.query<Row>(
+          `SELECT t.id, t.description, t.amount_cents, t.date::text AS date,
+                  t.installments_total, t.installment_number, t.is_recurring,
+                  c.id AS category_id, c.name AS category_name
+             FROM transactions t
+             LEFT JOIN categories c ON t.category_id = c.id AND c.household_id = $2
+            WHERE t.statement_id = $1
+              AND t.household_id = $2
+              AND t.deleted_at IS NULL
+            ORDER BY t.date ASC, t.created_at ASC`,
+          [statementId, householdId],
+        )
+      ).rows;
+    }
+
+    if (purchaseRows.length === 0) {
+      const closing = new Date(s.closingDate + 'T00:00:00.000Z');
+      const prevClosing = new Date(closing);
+      prevClosing.setUTCMonth(prevClosing.getUTCMonth() - 1);
+      const periodStart = prevClosing.toISOString().slice(0, 10);
+
+      purchaseRows = (
+        await client.query<Row>(
+          `SELECT t.id, t.description, t.amount_cents, t.date::text AS date,
+                  t.installments_total, t.installment_number, t.is_recurring,
+                  c.id AS category_id, c.name AS category_name
+             FROM transactions t
+             LEFT JOIN categories c ON t.category_id = c.id AND c.household_id = $4
+            WHERE t.from_account_id = $1
+              AND t.household_id = $4
+              AND t.is_credit_card_purchase = true
+              AND t.date > $2
+              AND t.date <= $3
+              AND t.deleted_at IS NULL
+            ORDER BY t.date ASC, t.created_at ASC`,
+          [s.accountId, periodStart, s.closingDate, householdId],
+        )
+      ).rows;
+    }
+
+    const purchases: StatementPurchase[] = purchaseRows.map((r) => {
+      const instNum = r['installment_number'];
+      const instTotal = r['installments_total'];
+      const dateStr = r['date'] instanceof Date ? (r['date'] as Date).toISOString().slice(0, 10) : String(r['date']).slice(0, 10);
+      return opt<StatementPurchase>(
+        {
+          id: r['id'] as string,
+          description: r['description'] as string,
+          amountCents: Number(r['amount_cents']),
+          date: dateStr,
+          isRecurring: Boolean(r['is_recurring']),
+        },
+        {
+          categoryId: (r['category_id'] as string) ?? undefined,
+          categoryName: (r['category_name'] as string) ?? undefined,
+          ...(instNum != null ? { installmentNumber: Number(instNum) } : {}),
+          ...(instTotal != null ? { installmentsTotal: Number(instTotal) } : {}),
+        } as Partial<StatementPurchase>,
+      );
+    });
+
+    return { ...s, purchases };
+  };
+
+  /**
+   * Client-bound purchase-PATCH core (no transaction handling, no detail
+   * read): the exact body previously inline in the plain `updatePurchase`
+   * — lock order STATEMENT → TRANSACTION → projection, open-statement
+   * gate under lock, ledger + projection sync, locked total recompute.
+   * Returns the pinned statement id; the caller reads the detail on the
+   * same client (`updatePurchaseInTx`) or after commit (plain method).
+   */
+  const updatePurchaseCoreInTx = async (
+    client: PoolClient,
+    householdId: string,
+    purchaseId: string,
+    input: UpdatePurchaseInput,
+  ): Promise<string> => {
+    if (input.categoryId) {
+      const catRows = await client.query<Row>(
+        `SELECT id FROM categories WHERE id = $1 AND household_id = $2`,
+        [input.categoryId, householdId],
+      );
+      if (catRows.rowCount === 0 || catRows.rows.length === 0) throw domainErrors.notFound('Categoria');
+    }
+
+    // Task 2.6 (SPEC §9.3): one dynamic SET builder shared by both
+    // tables — placeholders derived from the key prefix length ($1/$2
+    // are the row keys), so any single field or combination binds.
+    const buildPatch = (): { clause: string; values: unknown[] } => {
+      const sets: string[] = [];
+      const values: unknown[] = [];
+      const next = (): number => 2 + values.length + 1;
+      if (input.description !== undefined) { sets.push(`description = $${next()}`); values.push(input.description); }
+      if (input.amountCents !== undefined) { sets.push(`amount_cents = $${next()}`); values.push(input.amountCents); }
+      if (input.date !== undefined) { sets.push(`date = $${next()}`); values.push(input.date); }
+      if (input.categoryId !== undefined) { sets.push(`category_id = $${next()}`); values.push(input.categoryId); }
+      if (sets.length === 0) throw domainErrors.invalid('body', 'nenhum campo para atualizar');
+      return { clause: sets.join(', '), values };
+    };
+
+    // V4.1 REVIEWFIX F5 [major]: global lock order STATEMENT →
+    // TRANSACTION → projection (was: projection → transaction →
+    // statement, deadlocking against cancelPurchase). Rows are peeked
+    // WITHOUT locks to discover the statement; the statement row is
+    // locked first, then the purchase rows.
+    const cpPeek = await client.query<Row>(
+      `SELECT id, statement_id, account_id, amount_cents, date, transaction_id FROM card_purchases WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
+      [purchaseId, householdId],
+    );
+
+    let stmtId: string | null = null;
+    let viaProjection = false;
+
+    if (cpPeek.rows.length > 0) {
+      viaProjection = true;
+      stmtId = cpPeek.rows[0]!['statement_id'] as string ?? null;
+    } else {
+      const txPeek = await client.query<Row>(
+        `SELECT id, statement_id FROM transactions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
+        [purchaseId, householdId],
+      );
+      if (txPeek.rowCount === 0 || txPeek.rows.length === 0) throw domainErrors.notFound('Compra');
+      stmtId = txPeek.rows[0]!['statement_id'] as string ?? null;
+    }
+    if (!stmtId) throw domainErrors.notFound('Compra');
+    // Pin the peeked statement: rows re-read under lock must agree.
+    const peekStmtId: string = stmtId;
+
+    // V4.1 REVIEWFIX F7 [major]: like cancelPurchase, PATCH only edits
+    // purchases of an open statement (checked under the statement lock).
+    const stmtLocked = await client.query<Row>(
+      `SELECT * FROM statements WHERE id = $1 AND household_id = $2 FOR UPDATE`,
+      [stmtId, householdId],
+    );
+    if ((stmtLocked.rowCount ?? 0) === 0) throw domainErrors.notFound('Compra');
+    const lockedStmt = mapStatement(stmtLocked.rows[0]!);
+    if (lockedStmt.status !== 'open') {
+      throw domainErrors.conflict('Fatura não está aberta para edição.');
+    }
+
+    // Linked-date cycle guard (same rule as the canonical store): a date
+    // edit must not silently cross into another billing cycle — the
+    // purchase would stay linked to the old statement while its date
+    // belongs to a new one. Rejected BEFORE any mutation.
+    const assertDateInLockedCycle = async (accountId: string | null, newDate: string): Promise<void> => {
+      if (!accountId) throw domainErrors.notFound('Cartão');
+      const cardDayRows = await client.query<Row>(
+        `SELECT closing_day FROM accounts
+           WHERE id = $1 AND household_id = $2 AND is_credit_card = true
+             AND active = true AND deleted_at IS NULL`,
+        [accountId, householdId],
+      );
+      if ((cardDayRows.rowCount ?? 0) === 0 || cardDayRows.rows.length === 0) {
+        throw domainErrors.notFound('Cartão');
+      }
+      const dayRaw = cardDayRows.rows[0]!['closing_day'];
+      if (dayRaw == null) {
+        throw domainErrors.invalid('accountId', 'cartão sem fechamento/vencimento configurado');
+      }
+      const newCycle = getClosingDate(newDate, Number(dayRaw)).slice(0, 7);
+      if (newCycle !== lockedStmt.cycleYearMonth) {
+        throw domainErrors.invalid('date', 'nova data pertence a outro ciclo de fatura; cancele e recrie a compra');
+      }
+    };
+
+    if (viaProjection) {
+      // Lock the projection row, then the ledger row (STMT already held).
+      const cpExists = await client.query<Row>(
+        `SELECT id, statement_id, account_id, amount_cents, date, transaction_id FROM card_purchases WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+        [purchaseId, householdId],
+      );
+      if (cpExists.rows.length === 0) throw domainErrors.notFound('Compra');
+      const cp = cpExists.rows[0]!;
+      const patch = buildPatch();
+      const txId = cp['transaction_id'] as string | null;
+
+      // HIGH fail-closed: an orphan projection (no transaction_id) cannot
+      // prove a unique ledger candidate from household/statement/amount/
+      // date heuristics — even 1 candidate could be the wrong row. Any
+      // amount/date/description edit that would need the ledger is
+      // rejected with 409 BEFORE any write (no heuristic guessing, no
+      // ledger sync). Category-only edits stay projection-only.
+      if (!txId) {
+        const needsLedger =
+          input.description !== undefined ||
+          input.amountCents !== undefined ||
+          input.date !== undefined;
+        if (needsLedger) {
+          throw domainErrors.conflict('Compra legada sem vínculo com o lançamento: intervenção manual necessária.');
+        }
+      }
+
+      // Linked purchase with a date edit: same cross-cycle guard as the
+      // canonical store, resolved via the card closing_day.
+      if (txId && input.date !== undefined) {
+        await assertDateInLockedCycle(cp['account_id'] as string | null, input.date);
+      }
+
+      await client.query(
+        `UPDATE card_purchases SET ${patch.clause}, updated_at = NOW() WHERE id = $1 AND household_id = $2`,
+        [purchaseId, householdId, ...patch.values],
+      );
+
+      // Task 2.7 (D2): the same fields land on the linked ledger row in
+      // the same transaction — never a silent projection divergence.
+      // Orphan rows never reach here with ledger-touching fields (rejected
+      // above); category-only orphan edits stay projection-only.
+      if (txId) {
+        const txLock = await client.query<Row>(
+          `SELECT id FROM transactions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+          [txId, householdId],
+        );
+        if ((txLock.rowCount ?? 0) === 0) throw domainErrors.notFound('Compra');
+        const txPatch = buildPatch();
+        await client.query(
+          `UPDATE transactions SET ${txPatch.clause}, updated_at = NOW() WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
+          [txId, householdId, ...txPatch.values],
+        );
+      }
+    } else {
+      // Try transactions table (purchase created only as a transaction).
+      const txExists = await client.query<Row>(
+        `SELECT id, statement_id, from_account_id FROM transactions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+        [purchaseId, householdId],
+      );
+      if (txExists.rowCount === 0 || txExists.rows.length === 0) throw domainErrors.notFound('Compra');
+
+      // Same cross-cycle guard for the ledger-only path.
+      if (input.date !== undefined) {
+        await assertDateInLockedCycle(txExists.rows[0]!['from_account_id'] as string | null, input.date);
+      }
+
+      const patch = buildPatch();
+      await client.query(
+        `UPDATE transactions SET ${patch.clause}, updated_at = NOW() WHERE id = $1 AND household_id = $2`,
+        [purchaseId, householdId, ...patch.values],
+      );
+      // Sync live projection rows pointing at this transaction.
+      const projPatch = buildPatch();
+      await client.query(
+        `UPDATE card_purchases SET ${projPatch.clause}, updated_at = NOW() WHERE transaction_id = $1 AND household_id = $2 AND deleted_at IS NULL`,
+        [purchaseId, householdId, ...projPatch.values],
+      );
+      stmtId = txExists.rows[0]!['statement_id'] as string ?? null;
+      if (!stmtId || stmtId !== peekStmtId) throw domainErrors.notFound('Compra');
+    }
+
+    // Task 2.8: recompute under the statement row lock (already held —
+    // recalcStatement re-locks the same row in the same tx, a no-op).
+    // peekStmtId pins the statement: both branches re-validated it.
+    await recalcStatement(peekStmtId, householdId, client);
+    return peekStmtId;
+  };
+
+  /**
+   * V4.1 Phase 4 (card-atomic-three) — legacy client-bound card
+   * create/update cores (no transaction handling; legacy SQL preserved).
+   */
+  const createCardInTx = async (
+    client: PoolClient,
+    householdId: string,
+    input: CreateCardInput,
+  ): Promise<Account> => {
+    const id = randomUUID();
+    await client.query(
+      `INSERT INTO accounts (id, household_id, name, is_credit_card, active, credit_limit_cents, closing_day, due_day, initial_balance_cents, created_at, updated_at)
+       VALUES ($1, $2, $3, true, true, $4, $5, $6, 0, NOW(), NOW())`,
+      [id, householdId, input.name, input.creditLimitCents, input.closingDay, input.dueDay],
+    );
+    const res = await client.query<Row>(
+      `SELECT id, household_id, name, active, credit_limit_cents, closing_day, due_day
+         FROM accounts WHERE id = $1 AND household_id = $2`,
+      [id, householdId],
+    );
+    return mapAccount(res.rows[0]!);
+  };
+
+  const updateCardInTx = async (
+    client: PoolClient,
+    householdId: string,
+    id: string,
+    input: UpdateCardInput,
+  ): Promise<Account> => {
+    // Task 2.5 (SPEC §9.3): placeholders derived from params.length —
+    // fixed $3..$6 nullified/misbound every partial PATCH.
+    const sets: string[] = [];
+    const params: unknown[] = [id, householdId];
+    if (input.name !== undefined) { sets.push(`name = $${params.length + 1}`); params.push(input.name); }
+    if (input.creditLimitCents !== undefined) { sets.push(`credit_limit_cents = $${params.length + 1}`); params.push(input.creditLimitCents); }
+    if (input.closingDay !== undefined) { sets.push(`closing_day = $${params.length + 1}`); params.push(input.closingDay); }
+    if (input.dueDay !== undefined) { sets.push(`due_day = $${params.length + 1}`); params.push(input.dueDay); }
+    if (sets.length === 0) throw domainErrors.invalid('body', 'nenhum campo para atualizar');
+
+    const res = await client.query<Row>(
+      `UPDATE accounts
+          SET ${sets.join(', ')}, updated_at = NOW()
+        WHERE id = $1 AND household_id = $2 AND is_credit_card = true AND active = true AND deleted_at IS NULL
+        RETURNING id, household_id, name, active, credit_limit_cents, closing_day, due_day`,
+      params,
+    );
+    if (res.rowCount === 0 || res.rows.length === 0) throw domainErrors.notFound('Cartão');
+    return mapAccount(res.rows[0]!);
+  };
+
+  /**
+   * Client-bound purchase PATCH: the core runs on the caller's client and
+   * the StatementDetail is read back on that SAME client, so the response
+   * reflects the uncommitted change (a pool read before commit would
+   * return the pre-update projection). No nested transaction.
+   */
+  const updatePurchaseInTx = async (
+    client: PoolClient,
+    householdId: string,
+    purchaseId: string,
+    input: UpdatePurchaseInput,
+  ): Promise<StatementDetail> => {
+    const stmtId = await updatePurchaseCoreInTx(client, householdId, purchaseId, input);
+    const detail = await getStatementDetailInTx(client, householdId, stmtId);
+    if (!detail) throw domainErrors.notFound('Fatura');
+    return detail;
+  };
+
   const store: CardStore = {
     async listCreditCardAccounts(householdId) {
       const rows = await query<Row>(
@@ -671,147 +1038,12 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
       // Task 2.7: the detail is read AFTER commit — getStatementDetail
       // queries through the pool, which cannot see this transaction's
       // uncommitted writes (reading it inside the tx always returned the
-      // pre-update projection).
-      const stmtId = await withTransaction(pool, async (client): Promise<string> => {
-        if (input.categoryId) {
-          const catRows = await client.query<Row>(
-            `SELECT id FROM categories WHERE id = $1 AND household_id = $2`,
-            [input.categoryId, householdId],
-          );
-          if (catRows.rowCount === 0 || catRows.rows.length === 0) throw domainErrors.notFound('Categoria');
-        }
-
-        // Task 2.6 (SPEC §9.3): one dynamic SET builder shared by both
-        // tables — placeholders derived from the key prefix length ($1/$2
-        // are the row keys), so any single field or combination binds.
-        const buildPatch = (): { clause: string; values: unknown[] } => {
-          const sets: string[] = [];
-          const values: unknown[] = [];
-          const next = (): number => 2 + values.length + 1;
-          if (input.description !== undefined) { sets.push(`description = $${next()}`); values.push(input.description); }
-          if (input.amountCents !== undefined) { sets.push(`amount_cents = $${next()}`); values.push(input.amountCents); }
-          if (input.date !== undefined) { sets.push(`date = $${next()}`); values.push(input.date); }
-          if (input.categoryId !== undefined) { sets.push(`category_id = $${next()}`); values.push(input.categoryId); }
-          if (sets.length === 0) throw domainErrors.invalid('body', 'nenhum campo para atualizar');
-          return { clause: sets.join(', '), values };
-        };
-
-        // V4.1 REVIEWFIX F5 [major]: global lock order STATEMENT →
-        // TRANSACTION → projection (was: projection → transaction →
-        // statement, deadlocking against cancelPurchase). Rows are peeked
-        // WITHOUT locks to discover the statement; the statement row is
-        // locked first, then the purchase rows.
-        const cpPeek = await client.query<Row>(
-          `SELECT id, statement_id, amount_cents, date, transaction_id FROM card_purchases WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
-          [purchaseId, householdId],
-        );
-
-        let stmtId: string | null = null;
-        let viaProjection = false;
-
-        if (cpPeek.rows.length > 0) {
-          viaProjection = true;
-          stmtId = cpPeek.rows[0]!['statement_id'] as string ?? null;
-        } else {
-          const txPeek = await client.query<Row>(
-            `SELECT id, statement_id FROM transactions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
-            [purchaseId, householdId],
-          );
-          if (txPeek.rowCount === 0 || txPeek.rows.length === 0) throw domainErrors.notFound('Compra');
-          stmtId = txPeek.rows[0]!['statement_id'] as string ?? null;
-        }
-        if (!stmtId) throw domainErrors.notFound('Compra');
-        // Pin the peeked statement: rows re-read under lock must agree.
-        const peekStmtId: string = stmtId;
-
-        // V4.1 REVIEWFIX F7 [major]: like cancelPurchase, PATCH only edits
-        // purchases of an open statement (checked under the statement lock).
-        const stmtLocked = await client.query<Row>(
-          `SELECT * FROM statements WHERE id = $1 AND household_id = $2 FOR UPDATE`,
-          [stmtId, householdId],
-        );
-        if ((stmtLocked.rowCount ?? 0) === 0) throw domainErrors.notFound('Compra');
-        if (mapStatement(stmtLocked.rows[0]!).status !== 'open') {
-          throw domainErrors.conflict('Fatura não está aberta para edição.');
-        }
-
-        if (viaProjection) {
-          // Lock the projection row, then the ledger row (STMT already held).
-          const cpExists = await client.query<Row>(
-            `SELECT id, statement_id, amount_cents, date, transaction_id FROM card_purchases WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
-            [purchaseId, householdId],
-          );
-          if (cpExists.rows.length === 0) throw domainErrors.notFound('Compra');
-          const cp = cpExists.rows[0]!;
-          const patch = buildPatch();
-          await client.query(
-            `UPDATE card_purchases SET ${patch.clause}, updated_at = NOW() WHERE id = $1 AND household_id = $2`,
-            [purchaseId, householdId, ...patch.values],
-          );
-
-          // Task 2.7 (D2): the same fields land on the linked ledger row in
-          // the same transaction — never a silent projection divergence.
-          const txId = cp['transaction_id'] as string | null;
-          if (txId) {
-            const txLock = await client.query<Row>(
-              `SELECT id FROM transactions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
-              [txId, householdId],
-            );
-            if ((txLock.rowCount ?? 0) === 0) throw domainErrors.notFound('Compra');
-            const txPatch = buildPatch();
-            await client.query(
-              `UPDATE transactions SET ${txPatch.clause}, updated_at = NOW() WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
-              [txId, householdId, ...txPatch.values],
-            );
-          } else {
-            // Legacy orphan without transaction_id: sync the single
-            // unambiguous ledger candidate matched on pre-update values;
-            // ambiguous history is left for human review (cancelPurchase
-            // follows the same rule).
-            const oldDate = cp['date'] instanceof Date
-              ? (cp['date'] as Date).toISOString().slice(0, 10)
-              : String(cp['date']).slice(0, 10);
-            const candidates = await client.query<Row>(
-              `SELECT id FROM transactions WHERE household_id = $1 AND statement_id = $2 AND amount_cents = $3 AND date = $4 AND deleted_at IS NULL FOR UPDATE`,
-              [householdId, stmtId, cp['amount_cents'], oldDate],
-            );
-            if (candidates.rows.length === 1) {
-              const txPatch = buildPatch();
-              await client.query(
-                `UPDATE transactions SET ${txPatch.clause}, updated_at = NOW() WHERE id = $1 AND household_id = $2`,
-                [candidates.rows[0]!['id'], householdId, ...txPatch.values],
-              );
-            }
-          }
-        } else {
-          // Try transactions table (purchase created only as a transaction).
-          const txExists = await client.query<Row>(
-            `SELECT id, statement_id FROM transactions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
-            [purchaseId, householdId],
-          );
-          if (txExists.rowCount === 0 || txExists.rows.length === 0) throw domainErrors.notFound('Compra');
-
-          const patch = buildPatch();
-          await client.query(
-            `UPDATE transactions SET ${patch.clause}, updated_at = NOW() WHERE id = $1 AND household_id = $2`,
-            [purchaseId, householdId, ...patch.values],
-          );
-          // Sync live projection rows pointing at this transaction.
-          const projPatch = buildPatch();
-          await client.query(
-            `UPDATE card_purchases SET ${projPatch.clause}, updated_at = NOW() WHERE transaction_id = $1 AND household_id = $2 AND deleted_at IS NULL`,
-            [purchaseId, householdId, ...projPatch.values],
-          );
-          stmtId = txExists.rows[0]!['statement_id'] as string ?? null;
-          if (!stmtId || stmtId !== peekStmtId) throw domainErrors.notFound('Compra');
-        }
-
-        // Task 2.8: recompute under the statement row lock (already held —
-        // recalcStatement re-locks the same row in the same tx, a no-op).
-        // peekStmtId pins the statement: both branches re-validated it.
-        await recalcStatement(peekStmtId, householdId, client);
-        return peekStmtId;
-      });
+      // pre-update projection). The mutation core is shared with
+      // `updatePurchaseInTx` (claim-tx path), which reads the detail back
+      // on the same client instead.
+      const stmtId = await withTransaction(pool, (client) =>
+        updatePurchaseCoreInTx(client, householdId, purchaseId, input),
+      );
       return (await this.getStatementDetail(householdId, stmtId))!;
     },
 
@@ -829,5 +1061,8 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
     createRecurringPurchaseInTx,
     payStatementInTx,
     cancelPurchaseInTx,
+    createCardInTx,
+    updateCardInTx,
+    updatePurchaseInTx,
   });
 };

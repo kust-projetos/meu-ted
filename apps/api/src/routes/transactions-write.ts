@@ -8,9 +8,10 @@ import type { IdempotencyStore } from '../writes/idempotency.js';
 import { createExpenseInputSchema, createIncomeInputSchema, createTransferInputSchema, updateTransactionInputSchema } from '../writes/types.js';
 import type { CreateExpenseInput, CreateIncomeInput } from '../writes/types.js';
 import { runTransactionMutation } from '../writes/keyed-mutations.js';
+import { runCardMutation } from '../cards/keyed-mutations.js';
 import { DomainError } from '../writes/errors.js';
 import { mapPgError } from '../db/sqlstate.js';
-import { requireIdempotencyKey } from '../writes/idempotency.js';
+import { requireIdempotencyKey, httpIdempotencyPayload } from '../writes/idempotency.js';
 import { attachMutationReceipt } from '../reconciliation/effects-registry.js';
 import type { AuthResolver } from './auth.js';
 
@@ -71,12 +72,18 @@ export const registerTransactionWriteRoutes = (
     throw err;
   };
 
-  const runIdempotent = async <T>(req: import('fastify').FastifyRequest, householdId: string, payload: unknown, producer: (claimTx?: unknown) => Promise<T>): Promise<T> => {
+  const runIdempotent = async <T>(
+    req: import('fastify').FastifyRequest,
+    householdId: string,
+    identity: { route: string; resourceId?: string; origin?: string },
+    payload: unknown,
+    producer: (claimTx?: unknown) => Promise<T>,
+  ): Promise<T> => {
     const raw = req.headers[IDEMPOTENCY_HEADER] ?? req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
     if (raw === undefined) return producer(undefined);
     const key = requireIdempotencyKey(req.headers);
     if (!opts.idempotency) return producer(undefined);
-    return (await opts.idempotency.lookupOrRecord(householdId, key, payload, producer)).response;
+    return (await opts.idempotency.lookupOrRecord(householdId, key, httpIdempotencyPayload(identity, payload), producer)).response;
   };
   const idemKey = (req: import('fastify').FastifyRequest): string | undefined => {
     const raw = req.headers[IDEMPOTENCY_HEADER] ?? req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
@@ -92,7 +99,7 @@ export const registerTransactionWriteRoutes = (
       const key = idemKey(req);
       const fn = async (claimTx?: unknown) => producer(ctx, parsed.data, claimTx);
       try {
-        const result = key && opts.idempotency ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, parsed.data, fn) : { response: await fn(), replayed: false };
+        const result = key && opts.idempotency ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: `POST ${path}` }, parsed.data), fn) : { response: await fn(), replayed: false };
         if (result.replayed) reply.header('Idempotent-Replayed', 'true');
         return reply.code(result.response.status).send(result.response.body);
       } catch (e) { return handleError(e, reply); }
@@ -117,7 +124,14 @@ export const registerTransactionWriteRoutes = (
       const key = idemKey(req);
       const fn = async (claimTx?: unknown) => producer(ctx, normalized.data as { accountId: string } & Record<string, unknown>, origin, claimTx);
       try {
-        const result = key && opts.idempotency ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, normalized.data, fn) : { response: await fn(), replayed: false };
+        // Origin identity is captured BEFORE normalization from the
+        // caller-provided key (cardId vs accountId + its value) so the same
+        // raw key + cardId=X vs accountId=X (same UUID value) conflicts
+        // instead of falsely replaying the normalized { accountId: X } body.
+        const originIdentity = origin.fromCard
+          ? `card:${String((parsed.data as { cardId?: unknown }).cardId ?? origin.accountId)}`
+          : `account:${String((parsed.data as { accountId?: unknown }).accountId ?? origin.accountId)}`;
+        const result = key && opts.idempotency ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: `POST ${path}`, origin: originIdentity }, normalized.data), fn) : { response: await fn(), replayed: false };
         if (result.replayed) reply.header('Idempotent-Replayed', 'true');
         return reply.code(result.response.status).send(result.response.body);
       } catch (e) { return handleError(e, reply); }
@@ -128,13 +142,17 @@ export const registerTransactionWriteRoutes = (
     // H-01: a card origin preserves the invoice path — a 1x purchase goes
     // through the CardStore (statement + card_purchases link), never through
     // the plain balance expense. Single-tx response shape is preserved.
-    // V4.1 Phase 3: the card path has no claim-tx extension (cards/** is
-    // out of scope), so it keeps its own boundary — see the tx table.
+    // V4.1 Phase 4 (fail-closed atomicity): the card purchase joins the open
+    // idempotency claim tx via runCardMutation('purchase') — claim + effect +
+    // completion commit together; a PG store without `createCardPurchaseInTx`
+    // fails closed with `idempotency.atomic_mutation_not_supported` (never a
+    // plain fallback that would commit outside the claim tx and lose the
+    // crash gap).
     if (origin.fromCard) {
       if (!opts.cardStore) {
         throw new DomainError('unsupported', 'compras no cartão indisponíveis neste ambiente.', 503);
       }
-      const txs = await opts.cardStore.createCardPurchase(ctx.householdId, {
+      const txs = (await runCardMutation(opts.cardStore, claimTx, ctx.householdId, 'purchase', {
         accountId: origin.accountId,
         description: String(input['description'] ?? ''),
         amountCents: Number(input['amountCents']),
@@ -142,7 +160,7 @@ export const registerTransactionWriteRoutes = (
         ...(input['categoryId'] ? { categoryId: String(input['categoryId']) } : {}),
         ...(input['subcategoryId'] ? { subcategoryId: String(input['subcategoryId']) } : {}),
         ...(input['notes'] ? { notes: String(input['notes']) } : {}),
-      });
+      })) as import('../types/domain.js').Transaction[];
       const first = txs[0];
       if (!first) throw new DomainError('unsupported', 'compra no cartão não retornou lançamento.', 500);
       return { status: 201, body: attachMutationReceipt(first, 'transaction.create', { type: 'transaction', id: first.id }) };
@@ -186,7 +204,7 @@ export const registerTransactionWriteRoutes = (
       }
       return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
     }
-    try { return reply.code(200).send(await runIdempotent(req, ctx.householdId, { id: params.data.id, ...parsed.data }, async (claimTx) => attachMutationReceipt(await runTransactionMutation(opts.writes, claimTx, ctx.householdId, 'update', { id: params.data.id, patch: parsed.data }), 'transaction.update', { type: 'transaction', id: params.data.id }))); }
+    try { return reply.code(200).send(await runIdempotent(req, ctx.householdId, { route: 'PATCH /transactions/:id', resourceId: params.data.id }, { id: params.data.id, ...parsed.data }, async (claimTx) => attachMutationReceipt(await runTransactionMutation(opts.writes, claimTx, ctx.householdId, 'update', { id: params.data.id, patch: parsed.data }), 'transaction.update', { type: 'transaction', id: params.data.id }))); }
     catch (e) { return handleError(e, reply); }
   });
 
@@ -199,7 +217,7 @@ export const registerTransactionWriteRoutes = (
       // registry-derived transaction.delete receipt. The receipt is built
       // inside the idempotent producer so replays preserve the mutationId;
       // 204 cannot carry a body. Second delete still 404s (tombstone kept).
-      const deleted = await runIdempotent(req, ctx.householdId, { id: params.data.id }, async (claimTx) =>
+      const deleted = await runIdempotent(req, ctx.householdId, { route: 'DELETE /transactions/:id', resourceId: params.data.id }, { id: params.data.id }, async (claimTx) =>
         attachMutationReceipt(await runTransactionMutation(opts.writes, claimTx, ctx.householdId, 'softDelete', { id: params.data.id }), 'transaction.delete', { type: 'transaction', id: params.data.id }),
       );
       return reply.code(200).send(deleted);

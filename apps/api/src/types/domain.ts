@@ -11,6 +11,23 @@ export type UUID = string;
 export type AccountKind = "bank" | "cash" | "credit_card";
 export type AccountStatus = "active" | "inactive";
 
+/**
+ * Card balance semantics discriminator (card-balance-semantics-contract).
+ *
+ * - `outstanding_debt`: `balanceCents` IS the authoritative outstanding
+ *   debt (canonical store, ADR-018).
+ * - `legacy_calculated`: `balanceCents` is computed from the ledger
+ *   (`initial + income − expense …`) and is NOT outstanding debt.
+ *
+ * Additive and optional: rows predating the contract (or stores that do
+ * not tag it, e.g. in-memory) omit it. Consumers MUST treat a missing
+ * or unrecognized value as `unknown` → statement-fallback display and
+ * MUST NOT infer layout from the balance value. The literals are safe
+ * semantic descriptors — never raw persistence detail (no table/column
+ * or schema-config names).
+ */
+export type CardBalanceSemantics = "outstanding_debt" | "legacy_calculated";
+
 export type Account = {
   id: UUID;
   householdId: UUID;
@@ -18,6 +35,8 @@ export type Account = {
   kind: AccountKind;
   balanceCents: MoneyCents;
   status: AccountStatus;
+  /** Card balance semantics discriminator (credit-card only; absent = unknown fallback). */
+  balanceSemantics?: CardBalanceSemantics;
   /** Credit-card only. Null for bank/cash accounts. */
   creditLimitCents?: MoneyCents;
   /** Credit-card only. Day of month the billing cycle closes (1-31). */

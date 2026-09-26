@@ -8,10 +8,12 @@ import {
   detectPayablePaymentDrift,
   detectStatementPaymentDrift,
   detectStatementTotalDrift,
+  toSafeNumber,
 } from "./detectors.js";
 import type {
   AccountBalanceRow,
   CardPurchaseRow,
+  CentsValue,
   CheckResult,
   CyclePaymentRow,
   DuplicatesInput,
@@ -49,6 +51,31 @@ const num = (value: unknown, fallback = 0): number => {
   if (value === null || value === undefined) return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+/**
+ * Exact money keeper for the accounts_balance check: pg BIGINT money arrives
+ * as a decimal string and must NEVER pass through Number() (precision loss
+ * past 2^53-1 hides drift). bigint/string/number values flow through
+ * verbatim for detectors.ts to parse exactly; anything else (including a
+ * NULL stored leg) fails closed instead of silently substituting 0.
+ */
+const cents = (value: unknown, what: string): CentsValue => {
+  if (
+    typeof value === "bigint" ||
+    typeof value === "number" ||
+    typeof value === "string"
+  ) {
+    return value;
+  }
+  throw new Error(
+    `reconciliation: ${what} is missing or not a money value (${String(value)}): refusing to substitute 0`,
+  );
+};
+
+const optCents = (value: unknown, what: string): CentsValue | undefined => {
+  if (value === null || value === undefined) return undefined;
+  return cents(value, what);
 };
 
 const str = (value: unknown): string | null => {
@@ -127,20 +154,38 @@ export const resolveSchemaLayout = (
 
 const mapRows = {
   accounts_balance: (rows: Row[]): AccountBalanceRow[] =>
-    rows.map((r) => ({
-      accountId: reqStr(r["account_id"]),
-      householdId: reqStr(r["household_id"]),
-      storedCents: num(r["stored_cents"]),
-      initialCents:
-        r["initial_cents"] === null || r["initial_cents"] === undefined
-          ? null
-          : num(r["initial_cents"]),
-      incomeCents: num(r["income_cents"]),
-      expenseCents: num(r["expense_cents"]),
-      transferInCents: num(r["transfer_in_cents"]),
-      transferOutCents: num(r["transfer_out_cents"]),
-      accountKind: str(r["account_kind"]),
-    })),
+    rows.map((r) => {
+      const row: AccountBalanceRow = {
+        accountId: reqStr(r["account_id"]),
+        householdId: reqStr(r["household_id"]),
+        storedCents: cents(r["stored_cents"], "stored_cents"),
+        initialCents:
+          r["initial_cents"] === null || r["initial_cents"] === undefined
+            ? null
+            : cents(r["initial_cents"], "initial_cents"),
+        incomeCents: cents(r["income_cents"], "income_cents"),
+        expenseCents: cents(r["expense_cents"], "expense_cents"),
+        transferInCents: cents(r["transfer_in_cents"], "transfer_in_cents"),
+        transferOutCents: cents(r["transfer_out_cents"], "transfer_out_cents"),
+        accountKind: str(r["account_kind"]),
+      };
+      // Slice-2 debt legs: projected by the canonical query only. Absent
+      // on the legacy layout (stays undefined) so the detector keeps the
+      // legacy derivation there verbatim.
+      const cardPurchase = optCents(
+        r["card_purchase_cents"],
+        "card_purchase_cents",
+      );
+      if (cardPurchase !== undefined) row.cardPurchaseCents = cardPurchase;
+      const cardPaid = optCents(r["card_paid_cents"], "card_paid_cents");
+      if (cardPaid !== undefined) row.cardPaidCents = cardPaid;
+      const cardInvalid = optCents(
+        r["card_invalid_cents"],
+        "card_invalid_cents",
+      );
+      if (cardInvalid !== undefined) row.cardInvalidCents = cardInvalid;
+      return row;
+    }),
   statement_total: (rows: Row[]): StatementTotalRow[] =>
     rows.map((r) => ({
       statementId: reqStr(r["statement_id"]),
@@ -298,7 +343,10 @@ export const runReconciliation = async (
         negativeCreditBalances: balanceRows.map((row) => ({
           accountId: row.accountId,
           householdId: row.householdId,
-          storedCents: row.storedCents,
+          // Exact-to-safe bridge for the hash-only fingerprint: safe values
+          // convert exactly (the approved entry is small); unsafe/invalid
+          // values become NaN, which the matcher ignores so they stay drift.
+          storedCents: toSafeNumber(row.storedCents),
           accountKind: row.accountKind ?? null,
         })),
       },

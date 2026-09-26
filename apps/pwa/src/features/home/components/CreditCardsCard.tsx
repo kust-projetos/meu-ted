@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import Link from "next/link";
 import { formatBRL } from "@/lib/format/brl";
 import type { Account, CardStatement, Transaction } from "@/lib/state/types";
+import { resolveCardOutstanding } from "@/lib/cards/card-debt";
 import { routePatrimonio } from "@/lib/routes";
 
 interface CardRow {
@@ -28,9 +29,13 @@ export function CreditCardsCard({ cards, statements, transactions, onOpenCard }:
         const stmts = statements
           .filter((s) => s.accountId === card.id)
           .sort((a, b) => b.cycleYearMonth.localeCompare(a.cycleYearMonth));
-        const spent = stmts[0]?.totalCents ?? transactions
+        // ADR-018: outstanding debt comes from authoritative card.balanceCents
+        // when canonical; the latest-statement total is legacy fallback only.
+        const statementFallbackCents = stmts[0]?.totalCents ?? transactions
           .filter((t) => t.accountId === card.id && t.kind === "expense")
           .reduce((s, t) => s + t.amountCents, 0);
+        const spent = resolveCardOutstanding(card, { statementFallbackCents })
+          .outstandingCents;
         const limit = card.creditLimitCents ?? 1;
         const pct = Math.min((spent / limit) * 100, 100);
         const barColor =

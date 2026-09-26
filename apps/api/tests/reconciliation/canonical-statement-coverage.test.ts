@@ -20,6 +20,10 @@ const makePool = (routes: {
 }): ReconPool => ({
   query: async (text: string) => {
     if (text.includes("statements_paid_sum")) return { rows: routes.coverageRows };
+    // The canonical accounts_balance query embeds an `s.paid_cents`
+    // subquery (card_paid_cents leg), so route it before the statement
+    // branch: it must see no rows here, never statement-shaped rows.
+    if (text.includes("AS account_id")) return { rows: [] };
     if (text.includes("s.paid_cents")) return { rows: routes.statementRows };
     return { rows: [] };
   },

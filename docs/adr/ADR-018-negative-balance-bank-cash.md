@@ -87,6 +87,16 @@ como autorização de semântica de saldo.
 
 ## Consequências
 
+> **Atualização de implementação (2026-09-26, ainda não implantada):** no
+> canônico, `credit_card.balance_cents` materializa a dívida de todos os
+> ciclos: `initial_balance_cents + compras vivas vinculadas − soma dos
+> pagamentos das faturas`. O pagamento reduz simultaneamente a dívida e o
+> saldo da conta pagadora; um resultado negativo falha sem clamp. A API
+> distingue explicitamente `balanceSemantics: outstanding_debt` no cartão
+> canônico de `legacy_calculated` no legado; a PWA só usa o saldo como dívida
+> quando recebe a primeira semântica. Os dados de teste legados com dívida
+> negativa ou compras sem fatura não são convertidos por inferência.
+
 - Detectores e gates passam a distinguir kind: saldo armazenado negativo
   em `BANK`/`CASH` que confere com o ledger não emite finding após a
   implementação; em `credit_card` continua erro (validação de escrita +

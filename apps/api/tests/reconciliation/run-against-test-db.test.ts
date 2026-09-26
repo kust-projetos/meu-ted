@@ -69,6 +69,29 @@ describe("reconciliation SQL safety (no database needed)", () => {
     expect(isSelectOnly(canonical)).toBe(true);
   });
 
+  it("types the household scope parameter and binds it exactly once per check (legacy dup_idempotency regression)", () => {
+    // Regression (F2 2026-09-26): legacy --household runs failed with
+    // `could not determine data type of parameter $1`. dupIdempotency pushed
+    // the household id twice while the legacy text referenced only $2,
+    // leaving $1 unbound and untyped. Every scoped check must bind exactly
+    // one value, and the idempotency scope predicates must carry an explicit
+    // cast (uuid for the legacy column, text for the canonical scope alias).
+    const householdId = randomUUID();
+    for (const layout of LAYOUTS) {
+      const queries = buildReconciliationQueries(layout, { householdId });
+      for (const [check, query] of Object.entries(queries)) {
+        expect(query.values, `${layout}/${check} must bind the scope exactly once`).toHaveLength(1);
+        expect(query.values[0], `${layout}/${check} scope value`).toBe(householdId);
+      }
+    }
+    const legacy = buildReconciliationQueries("legacy", { householdId }).dup_idempotency;
+    expect(legacy.text).toMatch(/WHERE household_id = \$1::uuid/);
+    expect(legacy.text).not.toMatch(/\$2/);
+    const canonical = buildReconciliationQueries("canonical", { householdId }).dup_idempotency;
+    expect(canonical.text).toMatch(/WHERE scope = \$1::text/);
+    expect(canonical.text).not.toMatch(/\$2/);
+  });
+
   it("rejects multi-statement and write payloads", () => {
     expect(isSelectOnly("SELECT 1; SELECT 2")).toBe(false);
     expect(isSelectOnly("SELECT 1; DROP TABLE accounts")).toBe(false);

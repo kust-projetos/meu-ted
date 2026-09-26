@@ -6,6 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { runWriteStoreContract } from '../contract/write-store.contract.js';
 import { createPostgresWriteStore } from '../../src/writes/postgres.js';
 import { runMigrations } from '../../src/read-models/sql/migrate.js';
+import { createPool } from '../../src/db/pool.js';
 import { requireTestDatabase } from '../../src/db/db-guard.js';
 import type { Pool } from 'pg';
 

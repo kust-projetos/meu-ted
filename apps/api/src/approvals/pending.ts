@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { withTransaction } from '../db/pool.js';
+import { canonicalJson } from '../writes/canonical-json.js';
 import { domainErrors } from '../writes/errors.js';
 
 export type PendingStatus = 'pending' | 'approved' | 'rejected' | 'expired';
@@ -50,6 +51,30 @@ export type PendingOperationStore = {
 
 const EXPIRATION_MS = 30 * 60 * 1000;
 
+/**
+ * Security P2 (pending-approval-identity): a reused idempotency key must
+ * prove identity. Same workspace + same key with a different operation,
+ * requester, or payload is `idempotency.conflict` (409) — never a silent
+ * reuse of another operation's pending row. Payload comparison uses
+ * canonical JSON so key order alone never conflicts. V2 proposalHash is
+ * intentionally untouched here (see pending-v2.ts).
+ */
+const samePendingIdentity = (
+  existing: { operation: string; requesterId: string; payload: unknown },
+  candidate: { operation: string; requesterId: string; payload: unknown },
+): boolean =>
+  existing.operation === candidate.operation &&
+  existing.requesterId === candidate.requesterId &&
+  canonicalJson(existing.payload) === canonicalJson(candidate.payload);
+
+const samePendingRowIdentity = (
+  row: PendingRow,
+  input: CreatePendingInput,
+): boolean =>
+  (row.operation as string) === input.operation &&
+  (row.requester_id as string) === input.requesterId &&
+  canonicalJson(row.payload) === canonicalJson(input.payload);
+
 export const createPostgresPendingOperationStore = (pool: Pool): PendingOperationStore => {
   const read = async (client: PoolClient, id: string, householdId: string): Promise<PendingOperation> => {
     const result = await client.query<PendingRow>('SELECT * FROM pending_operations WHERE id = $1 AND workspace_id = $2 AND protocol_version IS NULL', [id, householdId]);
@@ -63,10 +88,15 @@ export const createPostgresPendingOperationStore = (pool: Pool): PendingOperatio
       `INSERT INTO pending_operations (workspace_id, chat_id, requester_id, operation, payload, reason, idempotency_key, status, expires_at)
        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, 'pending', NOW() + INTERVAL '30 minutes')
        ON CONFLICT (workspace_id, idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
-       RETURNING *`,
+       RETURNING *, (xmax = 0) AS is_insert`,
       [input.householdId, input.chatId ?? null, input.requesterId, input.operation, JSON.stringify(input.payload), input.reason, input.idempotencyKey],
     );
-    return mapPending(result.rows[0]!);
+    const row = result.rows[0]!;
+    // Racing inserts serialize on the unique (workspace_id, idempotency_key):
+    // the loser returns the winner's row via ON CONFLICT. Either path must
+    // prove identity — a divergent operation/requester/payload is 409.
+    if (!samePendingRowIdentity(row, input)) throw domainErrors.idempotencyConflict();
+    return mapPending(row);
   },
   async get(id, householdId) {
     const result = await pool.query<PendingRow>('SELECT * FROM pending_operations WHERE id = $1 AND workspace_id = $2 AND protocol_version IS NULL', [id, householdId]);
@@ -140,6 +170,8 @@ export const createPostgresPendingOperationStore = (pool: Pool): PendingOperatio
 
 export const createInMemoryPendingOperationStore = (): PendingOperationStore => {
   const records = new Map<string, PendingOperation>();
+  const byIdempotencyKey = new Map<string, PendingOperation>();
+  const keyOf = (householdId: string, idempotencyKey: string): string => `${householdId}::${idempotencyKey}`;
   const find = (id: string, householdId: string): PendingOperation => {
     const record = records.get(id);
     if (!record || record.householdId !== householdId) throw domainErrors.approvalNotFound();
@@ -149,6 +181,15 @@ export const createInMemoryPendingOperationStore = (): PendingOperationStore => 
 
   return {
     async create(input) {
+      // Synchronous check+insert: no await before both maps are written, so
+      // concurrent racing creates in the same tick serialize — the second
+      // observes the first and replays (identical) or conflicts (divergent).
+      const composite = keyOf(input.householdId, input.idempotencyKey);
+      const existing = byIdempotencyKey.get(composite);
+      if (existing) {
+        if (!samePendingIdentity(existing, input)) throw domainErrors.idempotencyConflict();
+        return existing;
+      }
       const createdAt = new Date().toISOString();
       const record: PendingOperation = {
         ...input,
@@ -158,6 +199,7 @@ export const createInMemoryPendingOperationStore = (): PendingOperationStore => 
         expiresAt: new Date(Date.now() + EXPIRATION_MS).toISOString(),
       };
       records.set(record.id, record);
+      byIdempotencyKey.set(composite, record);
       return record;
     },
     async get(id, householdId) {

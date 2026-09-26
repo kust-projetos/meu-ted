@@ -2,7 +2,9 @@
  * Card routes — credit card read/write endpoints for the PWA.
  *
  * Registered under /cards/*. Requires X-Device-Token header.
- * Idempotency-key supported for POST endpoints.
+ * Every financial POST/PATCH/DELETE requires a valid Idempotency-Key
+ * (fail-closed 400 before any producer); keyed retries replay the original
+ * response exactly once via the idempotency claim (atomic claim + effect).
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
@@ -10,7 +12,7 @@ import { z } from 'zod';
 import { DEVICE_TOKEN_HEADER } from '../auth/device-token.js';
 import { DomainError } from '../writes/errors.js';
 import { mapPgError } from '../db/sqlstate.js';
-import { requireIdempotencyKey, type IdempotencyStore } from '../writes/idempotency.js';
+import { requireIdempotencyKey, httpIdempotencyPayload, type IdempotencyStore } from '../writes/idempotency.js';
 import type { CardStore } from '../cards/store.js';
 import type { AuthResolver } from './auth.js';
 import { attachMutationReceipt } from '../reconciliation/effects-registry.js';
@@ -175,15 +177,18 @@ export const registerCardRoutes = (
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     const parsed = purchaseSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
-    const rawKey = req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
-    const key = rawKey !== undefined ? requireIdempotencyKey(req.headers) : undefined;
+    // Fail-closed: missing/invalid key → 400 before any producer or approval side effect.
+    let key: string;
+    try {
+      key = requireIdempotencyKey(req.headers);
+    } catch (e) { return handleError(e, reply); }
     if (opts.approvalPolicy && opts.pendingStore) {
       const pending = await createPendingApproval(opts.approvalPolicy, opts.pendingStore, {
         householdId: ctx.householdId,
         requesterId: ctx.deviceId,
         operation: 'card.create_purchase',
         payload: parsed.data,
-        idempotencyKey: key ?? crypto.randomUUID(),
+        idempotencyKey: key,
         amountCents: parsed.data.amountCents,
         destructive: false,
       });
@@ -213,7 +218,7 @@ export const registerCardRoutes = (
       };
     };
     try {
-      const result = key ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, parsed.data, fn) : { response: await fn(), replayed: false };
+      const result = await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'POST /cards/purchases' }, parsed.data), fn);
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);
     } catch (e) { return handleError(e, reply); }
@@ -224,8 +229,11 @@ export const registerCardRoutes = (
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     const parsed = installmentsSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
-    const rawKey = req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
-    const key = rawKey !== undefined ? requireIdempotencyKey(req.headers) : undefined;
+    // Fail-closed: missing/invalid key → 400 before any producer.
+    let key: string;
+    try {
+      key = requireIdempotencyKey(req.headers);
+    } catch (e) { return handleError(e, reply); }
     const fn = async (claimTx?: unknown) => {
       const txs = await runCardMutation(opts.cardStore, claimTx, ctx.householdId, 'installments', {
         accountId: parsed.data.accountId,
@@ -246,7 +254,7 @@ export const registerCardRoutes = (
       };
     };
     try {
-      const result = key ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, parsed.data, fn) : { response: await fn(), replayed: false };
+      const result = await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'POST /cards/installments' }, parsed.data), fn);
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);
     } catch (e) { return handleError(e, reply); }
@@ -272,8 +280,11 @@ export const registerCardRoutes = (
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     const parsed = recurringSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
-    const rawKey = req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
-    const key = rawKey !== undefined ? requireIdempotencyKey(req.headers) : undefined;
+    // Fail-closed: missing/invalid key → 400 before any producer.
+    let key: string;
+    try {
+      key = requireIdempotencyKey(req.headers);
+    } catch (e) { return handleError(e, reply); }
     const fn = async (claimTx?: unknown) => {
       const r = await runCardMutation(opts.cardStore, claimTx, ctx.householdId, 'recurring', {
         accountId: parsed.data.accountId,
@@ -289,7 +300,7 @@ export const registerCardRoutes = (
       return { status: 201 as const, body: attachMutationReceipt(r, 'statement.create', { type: 'recurring-purchase', id: r.id }) };
     };
     try {
-      const result = key ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, parsed.data, fn) : { response: await fn(), replayed: false };
+      const result = await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'POST /cards/recurring' }, parsed.data), fn);
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);
     } catch (e) { return handleError(e, reply); }
@@ -302,8 +313,11 @@ export const registerCardRoutes = (
     if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
     const parsed = paySchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
-    const rawKey = req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
-    const key = rawKey !== undefined ? requireIdempotencyKey(req.headers) : undefined;
+    // Fail-closed: missing/invalid key → 400 before any producer.
+    let key: string;
+    try {
+      key = requireIdempotencyKey(req.headers);
+    } catch (e) { return handleError(e, reply); }
     const fn = async (claimTx?: unknown) => {
       // V4.1 Phase 3 (UOW2): lock → remaining → payment → paid/status join
       // the idempotency claim tx.
@@ -316,7 +330,7 @@ export const registerCardRoutes = (
     try {
       // Finding 1: the hashed payload embeds the route resource id — same
       // key+body on a different statement id must conflict, not replay.
-      const result = key ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, { id: params.data.id, ...parsed.data }, fn) : { response: await fn(), replayed: false };
+      const result = await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'POST /cards/statements/:id/pay', resourceId: params.data.id }, { id: params.data.id, ...parsed.data }), fn);
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);
     } catch (e) { return handleError(e, reply); }
@@ -327,10 +341,24 @@ export const registerCardRoutes = (
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     const parsed = createCardSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
+    // Fail-closed: missing/invalid key → 400 before any producer.
+    let key: string;
     try {
-      const card = await opts.cardStore.createCard(ctx.householdId, parsed.data);
+      key = requireIdempotencyKey(req.headers);
+    } catch (e) { return handleError(e, reply); }
+    const fn = async (claimTx?: unknown) => {
+      // V4.1 Phase 4 (card-atomic-three): the card create joins the
+      // idempotency claim tx (claim + effect + completion, one commit).
+      const card = await runCardMutation(opts.cardStore, claimTx, ctx.householdId, 'createCard', parsed.data);
       // T3.2 (SPEC §15.1): a credit card is an account → account.create.
-      return reply.code(201).send(attachMutationReceipt(card, 'account.create', { type: 'account', id: card.id }));
+      // Receipt built inside the idempotent producer so keyed replays
+      // preserve the mutationId.
+      return { status: 201 as const, body: attachMutationReceipt(card, 'account.create', { type: 'account', id: card.id }) };
+    };
+    try {
+      const result = await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'POST /cards' }, parsed.data), fn);
+      if (result.replayed) reply.header('Idempotent-Replayed', 'true');
+      return reply.code(result.response.status).send(result.response.body);
     } catch (e) { return handleError(e, reply); }
   });
 
@@ -341,10 +369,28 @@ export const registerCardRoutes = (
     if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
     const parsed = updateCardSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
+    // Fail-closed: missing/invalid key → 400 before any producer.
+    let key: string;
     try {
-      const card = await opts.cardStore.updateCard(ctx.householdId, params.data.id, parsed.data as Parameters<typeof opts.cardStore.updateCard>[2]);
+      key = requireIdempotencyKey(req.headers);
+    } catch (e) { return handleError(e, reply); }
+    const fn = async (claimTx?: unknown) => {
+      // V4.1 Phase 4 (card-atomic-three): the card update joins the
+      // idempotency claim tx (claim + effect + completion, one commit).
+      const card = await runCardMutation(opts.cardStore, claimTx, ctx.householdId, 'updateCard', {
+        id: params.data.id,
+        patch: parsed.data as Parameters<typeof opts.cardStore.updateCard>[2],
+      });
       // T3.2 (SPEC §15.1): same account domain → account.update.
-      return reply.code(200).send(attachMutationReceipt(card, 'account.update', { type: 'account', id: params.data.id }));
+      // Receipt built inside the idempotent producer so keyed replays
+      // preserve the mutationId. The hashed payload embeds the route
+      // resource id — same key+body on a different card must conflict.
+      return { status: 200 as const, body: attachMutationReceipt(card, 'account.update', { type: 'account', id: params.data.id }) };
+    };
+    try {
+      const result = await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'PATCH /cards/:id', resourceId: params.data.id }, { id: params.data.id, ...parsed.data }), fn);
+      if (result.replayed) reply.header('Idempotent-Replayed', 'true');
+      return reply.code(result.response.status).send(result.response.body);
     } catch (e) { return handleError(e, reply); }
   });
 
@@ -361,11 +407,30 @@ export const registerCardRoutes = (
     }).refine((v) => v.description !== undefined || v.amountCents !== undefined || v.date !== undefined || v.categoryId !== undefined, { message: 'nenhum campo para atualizar' });
     const parsed = purchaseSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
+    // Fail-closed: missing/invalid key → 400 before any producer.
+    let key: string;
     try {
-      const detail = await opts.cardStore.updatePurchase(ctx.householdId, params.data.id, parsed.data as Parameters<typeof opts.cardStore.updatePurchase>[2]);
+      key = requireIdempotencyKey(req.headers);
+    } catch (e) { return handleError(e, reply); }
+    const fn = async (claimTx?: unknown) => {
+      // V4.1 Phase 4 (card-atomic-three): the purchase PATCH joins the
+      // idempotency claim tx; the StatementDetail is read back on the
+      // same claim client so the response reflects the uncommitted change.
+      const detail = await runCardMutation(opts.cardStore, claimTx, ctx.householdId, 'updatePurchase', {
+        purchaseId: params.data.id,
+        patch: parsed.data as Parameters<typeof opts.cardStore.updatePurchase>[2],
+      });
       // T3.2 (SPEC §15.1): a purchase edit mutates its transaction →
       // transaction.update (additive: statement detail fields untouched).
-      return reply.code(200).send(attachMutationReceipt(detail, 'transaction.update', { type: 'transaction', id: params.data.id }));
+      // Receipt built inside the idempotent producer so keyed replays
+      // preserve the mutationId. The hashed payload embeds the route
+      // resource id — same key+body on a different purchase must conflict.
+      return { status: 200 as const, body: attachMutationReceipt(detail, 'transaction.update', { type: 'transaction', id: params.data.id }) };
+    };
+    try {
+      const result = await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'PATCH /cards/purchases/:id', resourceId: params.data.id }, { id: params.data.id, ...parsed.data }), fn);
+      if (result.replayed) reply.header('Idempotent-Replayed', 'true');
+      return reply.code(result.response.status).send(result.response.body);
     } catch (e) { return handleError(e, reply); }
   });
 
@@ -374,8 +439,11 @@ export const registerCardRoutes = (
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
-    const rawKey = req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
-    const key = rawKey !== undefined ? requireIdempotencyKey(req.headers) : undefined;
+    // Fail-closed: missing/invalid key → 400 before any producer.
+    let key: string;
+    try {
+      key = requireIdempotencyKey(req.headers);
+    } catch (e) { return handleError(e, reply); }
     // T3.2 (SPEC §15.1): 200 with a transaction.delete receipt — 204 cannot
     // carry a body. Cancelling removes a financial effect, so a receipt is
     // required. Receipt built inside the idempotent producer so keyed
@@ -393,7 +461,7 @@ export const registerCardRoutes = (
       };
     };
     try {
-      const result = key ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, { id: params.data.id }, fn) : { response: await fn(), replayed: false };
+      const result = await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'DELETE /cards/purchases/:id', resourceId: params.data.id }, { id: params.data.id }), fn);
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);
     } catch (e) { return handleError(e, reply); }

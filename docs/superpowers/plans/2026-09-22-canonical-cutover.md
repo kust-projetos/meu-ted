@@ -1,6 +1,19 @@
 # Plano — Canonical Cutover (rascunho para aprovação)
 
 **Status:** PROPOSTO — aguarda aprovação do owner. Nenhum passo foi executado.
+
+> **Reavaliação 2026-09-26:** o owner confirmou que todos os dados atuais de
+> produção são testes descartáveis e autorizou ajustá-los. O F2 local sobre
+> dump anonimizado anterior passou para o algoritmo antigo, mas após corrigir
+> a dívida de cartão a conversão desse dump falha corretamente em despesa de
+> cartão sem fatura; não converter nem silenciar o bloqueio. Para esta base,
+> a rota proposta é backup verificado do banco legado, banco canônico **novo e
+> separado** com V001–V058, rollout da API revisada por digest e bootstrap de
+> acesso administrativo pelo fluxo autorizado. Não alterar nem descartar o
+> banco legado ou volumes compartilhados; ele permanece como rollback. A
+> sequência F3–F5 abaixo descreve a conversão de dados que se optou por não
+> executar neste cenário e não deve ser usada como comando de operação.
+
 **Pré-requisitos já satisfeitos (SPEC §21):** V4.1 Closure DONE (PR #11/#12; produção `d5ba79d` nos 3 apps) · reconciliação compreendida (1 finding conhecido, dossier pronto) · nenhum drift novo inexplicado · rollback comprovado (tag `rollback-pre-d5ba79d` + rehearsal de backup-restore).
 
 ## Objetivo

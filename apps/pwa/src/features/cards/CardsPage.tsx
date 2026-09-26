@@ -8,6 +8,7 @@ import BottomSheet from "@/components/BottomSheet";
 import { StaleBanner } from "@/components/StaleBanner";
 import { WriteErrorBanner } from "@/components/WriteErrorBanner";
 import { fetchStatementDetail, updateCardPurchase } from "@/lib/api/endpoints";
+import { resolveCardOutstanding } from "@/lib/cards/card-debt";
 import type { StatementDetail, StatementPurchase } from "@/lib/state/types";
 import { useAppState } from "@/lib/state/app-state-context";
 import { Plus, ChevronLeft, CreditCard as CreditCardIcon, Edit3 } from "lucide-react";
@@ -652,7 +653,13 @@ export default function CardsPage() {
       .sort((a, b) => b.cycleYearMonth.localeCompare(a.cycleYearMonth));
     const currentStmt = stmts[0];
 
-    const spentCents = currentStmt?.totalCents ?? txPurchases.reduce((s, p) => s + p.amountCents, 0);
+    // ADR-018: card.balanceCents (canonical) is the authoritative outstanding
+    // debt across cycles/partial payments. The per-statement total is only a
+    // legacy fallback (production runs the legacy layout until cutover).
+    const statementFallbackCents =
+      currentStmt?.totalCents ?? txPurchases.reduce((s, p) => s + p.amountCents, 0);
+    const spentCents = resolveCardOutstanding(card, { statementFallbackCents })
+      .outstandingCents;
     const limit = card.creditLimitCents ?? 1;
     const pct = Math.min((spentCents / limit) * 100, 100);
     return {
@@ -752,7 +759,13 @@ export default function CardsPage() {
               ? new Date(`${selectedStmtSummary.dueDate}T12:00:00`).getDate()
               : card.dueDay;
             const preset = resolveBankPreset({ name: card.name, color: card.color });
-            const availCents = card.creditLimitCents - detailSpent;
+            // ADR-018: "Limite livre" is limit − total outstanding (authoritative
+            // card.balanceCents when canonical), not limit − selected statement.
+            const rawCard = creditCards.find((a) => a.id === card.id);
+            const availCents = resolveCardOutstanding(
+              { balanceCents: rawCard?.balanceCents, creditLimitCents: card.creditLimitCents, balanceSemantics: rawCard?.balanceSemantics },
+              { statementFallbackCents: detailSpent },
+            ).availableCents ?? card.creditLimitCents - detailSpent;
             const masked = formatMaskedNumber(getLastFour(card.id));
 
             return (

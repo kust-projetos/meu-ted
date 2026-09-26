@@ -8,6 +8,10 @@ export const accountSchema = z.object({
   id,
   name: z.string(),
   balanceCents: cents.optional(),
+  // Explicit card-balance semantics discriminator (additive, optional).
+  // Unknown/future values normalize to undefined → statement-fallback display,
+  // never a validation crash and never inferred from the balance value.
+  balanceSemantics: z.enum(["outstanding_debt", "legacy_calculated"]).optional().catch(undefined),
   kind: z.enum(["bank", "cash", "credit_card", "checking", "savings", "investment"]).optional(),
   status: z.string().optional(),
   creditLimitCents: cents.optional(),

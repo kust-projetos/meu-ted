@@ -52,19 +52,25 @@ describe('canonical converter balances (M3, pure)', () => {
     expect(out.find((r) => r.accountId === 'a2')).toMatchObject({ computed: 100n });
   });
 
-  it('ignores statement-linked purchase expenses (no write-path balance effect)', () => {
+  it('excludes statement-linked expenses from bank/cash (purchases live on cards)', () => {
     const out = computeCanonicalBalances([acc({ initialBalanceCents: 1000 })], [
       tx({ id: 't-card', kind: 'expense', amountCents: 400, statementId: 's1' }),
     ]);
-    // cards/postgres createCardPurchaseInTx never touches accounts.balance_cents,
-    // and the canonical reconciliation excludes statement-linked expenses alike.
+    // Slice 2 (ADR-018 debt): linked purchases ADD to credit_card debt;
+    // a bank/cash row never carries one, so the legacy exclusion stays.
     expect(out[0]).toMatchObject({ computed: 1000n, expense: 0n });
   });
 
-  it('fails closed on statement-payment expenses (unresolvable card credit leg)', () => {
+  it('debits payer statement-payment expenses on bank/cash; refuses them pointed at a card', () => {
+    const bank = computeCanonicalBalances([acc({ initialBalanceCents: 1000 })], [
+      tx({ id: 't-pay', kind: 'expense', amountCents: 400, statementPaymentId: 's1' }),
+    ]);
+    // payStatementInTx debits the payer exactly like a plain expense; the
+    // card credit arrives via statements.paid_cents, never via this row.
+    expect(bank[0]).toMatchObject({ computed: 600n, expense: 400n });
     expect(() =>
-      computeCanonicalBalances([acc({ initialBalanceCents: 1000 })], [
-        tx({ id: 't-pay', kind: 'expense', amountCents: 400, statementPaymentId: 's1' }),
+      computeCanonicalBalances([acc({ kind: 'credit_card', initialBalanceCents: 1000 })], [
+        tx({ id: 't-pay-card', kind: 'expense', amountCents: 400, statementPaymentId: 's1' }),
       ]),
     ).toThrow(BalanceError);
   });
@@ -74,10 +80,20 @@ describe('canonical converter balances (M3, pure)', () => {
       tx({ amountCents: 250 }),
     ]);
     expect(bank[0]!.computed).toBe(-150n);
+    // Slice 2: a plain (unlinked) expense on a card is an orphan under the
+    // debt model — and a linked-purchases-minus-paid derivation that lands
+    // negative is refused with no clamp. Both fail closed.
     expect(() =>
       computeCanonicalBalances([acc({ kind: 'credit_card', initialBalanceCents: 100 })], [
         tx({ amountCents: 250 }),
       ]),
+    ).toThrow(BalanceError);
+    expect(() =>
+      computeCanonicalBalances(
+        [acc({ kind: 'credit_card', initialBalanceCents: 100 })],
+        [tx({ amountCents: 50, statementId: 's1' })],
+        [{ id: 's1', householdId: household, accountId: 'a1', paidCents: 200 }],
+      ),
     ).toThrow(BalanceError);
   });
 
@@ -129,5 +145,19 @@ describe('canonical converter balances (M3, pure)', () => {
         [tx({ id: 't-over', kind: 'income', amountCents: 1 })],
       ),
     ).toThrow(/BIGINT/i);
+  });
+
+  it('JSON boundary: credit_card debt at 2^53-1 passes, at 2^53 fails closed before any write', () => {
+    // Exact bigint is kept inside the converter; only the JSON-unsafe
+    // credit_card result is refused. bank/cash keep the BIGINT-only rule.
+    const card = (initial: string): BalanceAccountInput => acc({ id: 'a1', kind: 'credit_card', initialBalanceCents: initial });
+    const ok = computeCanonicalBalances([card('9007199254740991')], []);
+    expect(ok[0]!.computed).toBe(9007199254740991n);
+    expect(() => computeCanonicalBalances([card('9007199254740992')], [])).toThrow(
+      /MAX_SAFE_INTEGER/,
+    );
+    // Bank beyond safe still computes exactly (no JSON debt advertised).
+    const bank = computeCanonicalBalances([acc({ initialBalanceCents: '9007199254740992' })], []);
+    expect(bank[0]!.computed).toBe(9007199254740992n);
   });
 });
