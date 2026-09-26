@@ -18,6 +18,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { runReadModelStoreContract, defaultContractSeed } from '../contract/read-model-store.contract.js';
 import { createPostgresReadModelStore } from '../../src/read-models/postgres-store.js';
 import { runMigrations } from '../../src/read-models/sql/migrate.js';
+import { createPool } from '../../src/db/pool.js';
 import { requireTestDatabase } from '../../src/db/db-guard.js';
 import type { Pool } from 'pg';
 

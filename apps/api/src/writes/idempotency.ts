@@ -114,14 +114,100 @@ export const legacyHashPayload = (payload: unknown): string => {
 };
 
 /**
+ * HTTP idempotency envelope (v3).
+ *
+ * HTTP callsites wrap their body with `httpIdempotencyPayload` so the hash
+ * consumed by the existing `lookupOrRecord` covers a versioned canonical
+ * route/method/resource/origin identity plus the body. The raw
+ * Idempotency-Key keeps its workspace uniqueness (`buildIdempotencyKey` is
+ * untouched); only the hashed payload gains operation identity.
+ *
+ * Non-HTTP callers keep passing raw payloads and behave exactly as before.
+ */
+export const HTTP_IDEMPOTENCY_ENVELOPE_VERSION = 3 as const;
+
+export type HttpIdempotencyOperationIdentity = {
+  /** Route template identity: `METHOD /path-template`, e.g. `POST /cards/purchases`. */
+  route: string;
+  /** Route resource id (e.g. `:id` param) when the route addresses one resource. */
+  resourceId?: string;
+  /** Caller origin (e.g. `pwa`, `agent`) when the same route serves several origins. */
+  origin?: string;
+};
+
+export type HttpIdempotencyEnvelope = {
+  version: typeof HTTP_IDEMPOTENCY_ENVELOPE_VERSION;
+  route: string;
+  resourceId?: string;
+  origin?: string;
+  payload: unknown;
+};
+
+export const isHttpIdempotencyEnvelope = (value: unknown): value is HttpIdempotencyEnvelope => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record['version'] === HTTP_IDEMPOTENCY_ENVELOPE_VERSION &&
+    typeof record['route'] === 'string' &&
+    'payload' in record
+  );
+};
+
+const HTTP_ROUTE_PATTERN = /^[A-Z]{3,7} \/.+/;
+
+/**
+ * Builds a JSON-safe v3 envelope for HTTP callsites.
+ *
+ * Stability: the envelope is hashed with `hashPayloadV2` (canonical JSON),
+ * so key order never changes the hash. A distinct `route`, `resourceId` or
+ * `origin` produces a different hash (cross-route/cross-origin reuse
+ * conflicts instead of replaying).
+ */
+export const httpIdempotencyPayload = (
+  operationIdentity: HttpIdempotencyOperationIdentity,
+  payload: unknown,
+): HttpIdempotencyEnvelope => {
+  const route = operationIdentity?.route;
+  if (typeof route !== 'string' || !HTTP_ROUTE_PATTERN.test(route)) {
+    throw domainErrors.invalid('route', 'route must look like "POST /cards/purchases"');
+  }
+  const resourceId = operationIdentity?.resourceId;
+  if (resourceId !== undefined && (typeof resourceId !== 'string' || !resourceId)) {
+    throw domainErrors.invalid('resourceId', 'resourceId must be a non-empty string when provided');
+  }
+  const origin = operationIdentity?.origin;
+  if (origin !== undefined && (typeof origin !== 'string' || !origin)) {
+    throw domainErrors.invalid('origin', 'origin must be a non-empty string when provided');
+  }
+  return {
+    ...( { version: HTTP_IDEMPOTENCY_ENVELOPE_VERSION } as const ),
+    route,
+    ...(resourceId !== undefined ? { resourceId } : {}),
+    ...(origin !== undefined ? { origin } : {}),
+    payload,
+  };
+};
+
+/**
  * V4.1 Phase 3 Task 3.7 — tolerant replay comparison. A stored hash replays
  * when it matches the V2 recomputation OR either legacy algorithm; anything
  * else is a payload mismatch (caller raises `idempotency.conflict`).
+ *
+ * Strictness for HTTP envelopes (v3): an envelope payload replays ONLY on a
+ * V2 match over that exact envelope. Legacy v1-sha256 / 32-bit hashes never
+ * match an envelope — including legacy hashes of the raw body — so a claim
+ * recorded over a raw payload can never replay as an enveloped claim.
  */
-export const matchesPayloadHash = (storedHash: string, payload: unknown): boolean =>
-  storedHash === hashPayloadV2(payload) ||
-  storedHash === hashIdempotencyPayload(payload) ||
-  storedHash === legacyHashPayload(payload);
+export const matchesPayloadHash = (storedHash: string, payload: unknown): boolean => {
+  if (isHttpIdempotencyEnvelope(payload)) {
+    return storedHash === hashPayloadV2(payload);
+  }
+  return (
+    storedHash === hashPayloadV2(payload) ||
+    storedHash === hashIdempotencyPayload(payload) ||
+    storedHash === legacyHashPayload(payload)
+  );
+};
 
 export const createIdempotencyRequest = (
   identity: { householdId: string; deviceId?: string },

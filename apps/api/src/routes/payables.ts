@@ -4,7 +4,7 @@ import { DEVICE_TOKEN_HEADER } from "../auth/device-token.js";
 import type { PayableStore } from "../payables/store.js";
 import { DomainError } from "../writes/errors.js";
 import { mapPgError } from "../db/sqlstate.js";
-import { requireIdempotencyKey, type IdempotencyStore } from "../writes/idempotency.js";
+import { requireIdempotencyKey, httpIdempotencyPayload, type IdempotencyStore } from "../writes/idempotency.js";
 import type { AuthResolver } from "./auth.js";
 import { isoDateSchema as isoDate } from "../shared/iso-date.js";
 import { positiveMoneyCentsSchema } from "../shared/money.js";
@@ -238,7 +238,7 @@ export const registerPayableRoutes = (
         ? await opts.idempotency.lookupOrRecord(
             ctx.householdId,
             key,
-            parsed.data,
+            httpIdempotencyPayload({ route: 'POST /payables' }, parsed.data),
             fn,
           )
         : { response: await fn(), replayed: false };
@@ -290,7 +290,7 @@ export const registerPayableRoutes = (
             key,
             // Finding 1: the hashed payload embeds the route resource id —
             // same key+body on a different payable id must conflict, not replay.
-            { id: params.data.id, ...parsed.data },
+            httpIdempotencyPayload({ route: 'POST /payables/:id/pay', resourceId: params.data.id }, { id: params.data.id, ...parsed.data }),
             fn,
           )
         : { response: await fn(), replayed: false };
@@ -386,7 +386,7 @@ export const registerPayableRoutes = (
         ? await opts.idempotency.lookupOrRecord(
             ctx.householdId,
             key,
-            { id: params.data.id, ...parsed.data },
+            httpIdempotencyPayload({ route: 'PATCH /payables/:id', resourceId: params.data.id }, { id: params.data.id, ...parsed.data }),
             fn,
           )
         : { response: await fn(), replayed: false };
@@ -451,7 +451,7 @@ export const registerPayableRoutes = (
       const result = await opts.idempotency.lookupOrRecord(
         ctx.householdId,
         key,
-        req.query ?? {},
+        httpIdempotencyPayload({ route: 'POST /payables/refresh-status' }, req.query ?? {}),
         fn,
       );
       if (result.replayed) reply.header("Idempotent-Replayed", "true");
@@ -496,7 +496,7 @@ export const registerPayableRoutes = (
       const result = await opts.idempotency.lookupOrRecord(
         ctx.householdId,
         key,
-        parsed.data,
+        httpIdempotencyPayload({ route: 'POST /payables/auto-create-from-templates' }, parsed.data),
         fn,
       );
       if (result.replayed) reply.header("Idempotent-Replayed", "true");
@@ -560,7 +560,7 @@ export const registerPayableRoutes = (
         ? await opts.idempotency.lookupOrRecord(
             ctx.householdId,
             key,
-            parsed.data,
+            httpIdempotencyPayload({ route: 'POST /payables/templates' }, parsed.data),
             fn,
           )
         : { response: await fn(), replayed: false };
@@ -616,7 +616,7 @@ export const registerPayableRoutes = (
       const result = await opts.idempotency.lookupOrRecord(
         ctx.householdId,
         key,
-        parsed.data,
+        httpIdempotencyPayload({ route: 'POST /payables/from-template' }, parsed.data),
         fn,
       );
       if (result.replayed) reply.header("Idempotent-Replayed", "true");

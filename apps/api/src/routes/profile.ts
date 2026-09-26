@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { DEVICE_TOKEN_HEADER } from '../auth/device-token.js';
-import { requireIdempotencyKey, type IdempotencyStore } from '../writes/idempotency.js';
+import { requireIdempotencyKey, httpIdempotencyPayload, type IdempotencyStore } from '../writes/idempotency.js';
 import type { ProfileStore } from '../profile/store.js';
 import type { AuthResolver } from './auth.js';
 
@@ -125,7 +125,7 @@ export const registerProfileRoutes = (
 
     try {
       const result = key && opts.idempotency
-        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, data, fn)
+        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'PATCH /profile' }, data), fn)
         : { response: await fn(), replayed: false };
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { DEVICE_TOKEN_HEADER } from '../auth/device-token.js';
 import { DomainError } from '../writes/errors.js';
 import { mapPgError } from '../db/sqlstate.js';
-import { requireIdempotencyKey, type IdempotencyStore } from '../writes/idempotency.js';
+import { requireIdempotencyKey, httpIdempotencyPayload, type IdempotencyStore } from '../writes/idempotency.js';
 import type { GoalStore } from '../goals/store.js';
 import type { AuthResolver } from './auth.js';
 import { isoDateSchema as isoDate } from '../shared/iso-date.js';
@@ -96,7 +96,7 @@ export const registerGoalRoutes = (
     };
     try {
       const result = key
-        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, p.data, fn)
+        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'POST /goals' }, p.data), fn)
         : { response: await fn(), replayed: false };
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);
@@ -124,7 +124,7 @@ export const registerGoalRoutes = (
     };
     try {
       const result = key
-        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, { id: params.data.id, ...p.data }, fn)
+        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'POST /goals/:id/contribute', resourceId: params.data.id }, { id: params.data.id, ...p.data }), fn)
         : { response: await fn(), replayed: false };
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);
@@ -158,7 +158,7 @@ export const registerGoalRoutes = (
     };
     try {
       const result = key
-        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, { id: params.data.id, ...p.data }, fn)
+        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'PATCH /goals/:id', resourceId: params.data.id }, { id: params.data.id, ...p.data }), fn)
         : { response: await fn(), replayed: false };
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);

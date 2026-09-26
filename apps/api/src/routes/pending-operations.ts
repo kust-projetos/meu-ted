@@ -8,7 +8,7 @@ import { computePendingOperationV2Hash, isActionablePendingOperationPresentation
 import { validateApprovalToolArgs } from '../approvals/tool-registry.js';
 import { buildPendingOperationPresentation } from '../approvals/presentation.js';
 import type { ReadModelStore } from '../read-models/store.js';
-import { PendingOperationV2Error, type PendingExecutor, type PendingOperationExecutor, type PendingOperationStore, type PendingOperationV2Store } from '../approvals/pending.js';
+import { PendingOperationV2Error, PENDING_V2_MAX_TTL_MS, type PendingExecutor, type PendingOperationExecutor, type PendingOperationStore, type PendingOperationV2Store } from '../approvals/pending.js';
 import { createInMemoryPendingOperationStore } from '../approvals/pending.js';
 import type { UndoService } from '../approvals/undo.js';
 
@@ -180,7 +180,18 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
         const checked = validateApprovalToolArgs(body.data.tool, body.data.normalizedArgs);
         if (!checked.success && checked.code === 'tool.not_allowed') return reply.code(403).send({ code: 'tool.not_allowed', message: 'Ferramenta não permitida no protocolo de aprovação.' });
         if (!checked.success) return reply.code(422).send({ code: 'approval.invalid_args', message: 'Argumentos inválidos para a ferramenta de aprovação.', details: checked.issues });
-        const base = { version: 2 as const, ...identity(ctx), tool: body.data.tool, normalizedArgs: checked.data as PendingOperationV2['normalizedArgs'], proposalHash: '', idempotencyKey: key, createdAt: new Date().toISOString(), expiresAt: body.data.expiresAt ?? new Date(Date.now() + 30 * 60_000).toISOString(), bindings: identity(ctx) };
+        // P2 TTL (route half): authoritative server time — createdAt is
+        // always now (the body carries no createdAt), and a user-supplied
+        // expiresAt is clamped to createdAt + PENDING_V2_MAX_TTL_MS (the
+        // store re-enforces the same ceiling as defense-in-depth). A
+        // birth-expired request fails fast here, never reaching the store.
+        const nowMs = Date.now();
+        const requestedExpiresMs = body.data.expiresAt !== undefined ? Date.parse(body.data.expiresAt) : Number.NaN;
+        const effectiveExpiresAt = Number.isNaN(requestedExpiresMs)
+          ? new Date(nowMs + PENDING_V2_MAX_TTL_MS).toISOString()
+          : new Date(Math.min(requestedExpiresMs, nowMs + PENDING_V2_MAX_TTL_MS)).toISOString();
+        if (Date.parse(effectiveExpiresAt) <= nowMs) return reply.code(409).send({ code: 'approval.expired', message: 'A proposta já expirou.' });
+        const base = { version: 2 as const, ...identity(ctx), tool: body.data.tool, normalizedArgs: checked.data as PendingOperationV2['normalizedArgs'], proposalHash: '', idempotencyKey: key, createdAt: new Date(nowMs).toISOString(), expiresAt: effectiveExpiresAt, bindings: identity(ctx) };
         const operation = { ...base, proposalHash: await computePendingOperationV2Hash(base) };
         const result = await v2Store.propose(operation);
         // SPEC §7.7: same key + same payload replays the existing operation.
@@ -276,7 +287,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
     const reject = async (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.cancel)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); try { return reply.send(await v2Store.cancel(params.data.id, identity(ctx))); } catch (error) { return handleError(error, reply, true); } };
     app.post('/pending-operations/v2/:id/reject', reject);
     app.post('/pending-operations/v2/:id/cancel', reject);
-    app.post('/pending-operations/v2/:id/execute', async (req, reply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.execute)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); const body = z.object({ attestation: z.string().min(32) }).strict().safeParse(req.body ?? {}); if (!body.success) return reply.code(400).send({ code: 'validation.error', issues: body.error.issues }); if (!v2Executor) return reply.code(501).send({ code: 'unsupported', message: 'Executor V2 não configurado.' }); try { return reply.send(await v2Store.execute(body.data.attestation, identity(ctx), v2Executor)); } catch (error) { return handleError(error, reply, true); } });
+    app.post('/pending-operations/v2/:id/execute', async (req, reply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.execute)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); const body = z.object({ attestation: z.string().min(32) }).strict().safeParse(req.body ?? {}); if (!body.success) return reply.code(400).send({ code: 'validation.error', issues: body.error.issues }); if (!v2Executor) return reply.code(501).send({ code: 'unsupported', message: 'Executor V2 não configurado.' }); try { return reply.send(await v2Store.execute(body.data.attestation, identity(ctx), v2Executor, params.data.id)); } catch (error) { return handleError(error, reply, true); } });
     app.post('/pending-operations/v2/:id/retry', async (req, reply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.retry)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); try { if (!(await requireActionablePresentation(params.data.id, ctx, 'failed', reply))) return; return reply.send(await v2Store.retry(params.data.id, identity(ctx))); } catch (error) { return handleError(error, reply, true); } });
     // T6.1 (audit remediation, SPEC §11): controlled crash-recovery entry
     // point — same Agent-only auth/capability model as the sibling V2 routes.

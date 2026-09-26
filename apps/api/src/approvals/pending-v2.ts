@@ -63,6 +63,23 @@ const assertCanonicalArgs = (fail: (code: string, message: string, statusCode?: 
 const nowIso = (): string => new Date().toISOString();
 
 /**
+ * Security P2 (v2-attestation-route-and-ttl): authoritative TTL helpers.
+ * `createdAt` is always server now (a crafted backdated/future `createdAt`
+ * in the proposed object is ignored for the lifetime window); the effective
+ * expiry is `min(requestedExpiresAt, now + PENDING_V2_MAX_TTL_MS)`. A past
+ * (already-expired) effective expiry fails fast with `approval.expired`
+ * instead of persisting a dead row. The proposal hash is unaffected: it
+ * covers only tool/normalizedArgs/identity, never timestamps.
+ */
+export const clampPendingV2ExpiresAt = (requestedExpiresAt: string, nowMs = Date.now()): string => {
+  const requested = Date.parse(requestedExpiresAt);
+  const effective = Number.isNaN(requested)
+    ? nowMs + PENDING_V2_MAX_TTL_MS
+    : Math.min(requested, nowMs + PENDING_V2_MAX_TTL_MS);
+  return new Date(effective).toISOString();
+};
+
+/**
  * T3.2 (SPEC §15.1): every TX2 success carries a MutationReceipt with an
  * API-generated mutationId, registry-derived affectedTargets and the origin
  * operationId. Executors built on the tool registry already attach one —
@@ -91,6 +108,16 @@ const withTedReceipt = (
  * exported constant so the reconciler and the claim share it by construction.
  */
 export const PENDING_V2_EXECUTION_LEASE_MS = 60_000;
+
+/**
+ * Security P2 (v2-attestation-route-and-ttl): server-authoritative ceiling
+ * for a pending operation's lifetime. `expiresAt` is client-supplied at
+ * propose time and could otherwise pin an approval open indefinitely; both
+ * the route and the store clamp the effective expiry to
+ * `createdAt(server now) + PENDING_V2_MAX_TTL_MS` (existing 30 min norm).
+ * Single constant shared by route + both store backends by construction.
+ */
+export const PENDING_V2_MAX_TTL_MS = 30 * 60_000;
 
 /**
  * SPEC §11 (T2.4): lease duration is configurable — explicit override wins,
@@ -176,7 +203,16 @@ export type PendingOperationV2Store = {
    */
   listActive(identity: PendingIdentity): Promise<readonly PendingOperationV2Record[]>;
   confirm(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
-  execute(token: string, identity: PendingIdentity, executor: PendingExecutor): Promise<PendingOperationV2Record>;
+  /**
+   * Security P2 (v2-attestation-route-and-ttl): `expectedId` binds the URL
+   * operation id to the claim. When supplied, the attestation only claims
+   * the row with that id — an A-attestation sent to a B-URL is refused
+   * with `approval.attestation_replayed` (403) with zero effect (no
+   * consumption, no status transition, executor never runs), tenant-scoped
+   * by the identity like every other path. Omitted (legacy direct-store
+   * callers) keeps the previous token-only claim.
+   */
+  execute(token: string, identity: PendingIdentity, executor: PendingExecutor, expectedId?: string): Promise<PendingOperationV2Record>;
   retry(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
   cancel(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
   expire(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
@@ -263,7 +299,13 @@ export const createPostgresPendingOperationV2Store = (
     async propose(operation) {
       if (!pendingOperationV2Schema.safeParse(operation).success || !(await verifyPendingOperationV2Hash(operation))) fail('approval.invalid_hash', 'Proposta V2 inválida ou hash divergente.', 400);
       assertCanonicalArgs(fail, operation);
-      const result = await pool.query<PendingV2Row>(`INSERT INTO pending_operations (workspace_id, requester_id, operation, payload, reason, idempotency_key, status, expires_at, protocol_version, actor_id, device_id, tool, normalized_args, proposal_hash, execution_status) VALUES ($1,$2,$3,$4::jsonb,'high_value',$5,'pending',$6,$7,$8,$9,$10,$11::jsonb,$12,'proposed') ON CONFLICT (workspace_id,idempotency_key) WHERE protocol_version = 2 AND workspace_id IS NOT NULL AND idempotency_key IS NOT NULL DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key RETURNING *, (xmax = 0) AS is_insert`, [operation.workspaceId, operation.actorId, operation.tool, JSON.stringify(operation.normalizedArgs), operation.idempotencyKey, operation.expiresAt, 2, operation.actorId, operation.deviceId, operation.tool, JSON.stringify(operation.normalizedArgs), operation.proposalHash]);
+      // P2 TTL: authoritative server time — ignore any crafted createdAt for
+      // the lifetime window, clamp the expiry to the server max, fail fast
+      // on a birth-expired proposal. DB created_at stays the default NOW().
+      const nowMs = Date.now();
+      const effectiveExpiresAt = clampPendingV2ExpiresAt(operation.expiresAt, nowMs);
+      if (Date.parse(effectiveExpiresAt) <= nowMs) fail('approval.expired', 'A proposta já expirou.', 409);
+      const result = await pool.query<PendingV2Row>(`INSERT INTO pending_operations (workspace_id, requester_id, operation, payload, reason, idempotency_key, status, expires_at, protocol_version, actor_id, device_id, tool, normalized_args, proposal_hash, execution_status) VALUES ($1,$2,$3,$4::jsonb,'high_value',$5,'pending',$6,$7,$8,$9,$10,$11::jsonb,$12,'proposed') ON CONFLICT (workspace_id,idempotency_key) WHERE protocol_version = 2 AND workspace_id IS NOT NULL AND idempotency_key IS NOT NULL DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key RETURNING *, (xmax = 0) AS is_insert`, [operation.workspaceId, operation.actorId, operation.tool, JSON.stringify(operation.normalizedArgs), operation.idempotencyKey, effectiveExpiresAt, 2, operation.actorId, operation.deviceId, operation.tool, JSON.stringify(operation.normalizedArgs), operation.proposalHash]);
       const row = result.rows[0]!;
       if (String(row.proposal_hash) !== operation.proposalHash) fail('idempotency.conflict', 'Chave de idempotência já utilizada com proposta diferente.');
       const existing = row.is_insert === false;
@@ -301,18 +343,28 @@ export const createPostgresPendingOperationV2Store = (
       events.push({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() });
       return mapV2(reemitted.rows[0]!, reissued);
     } if (status !== 'proposed') return fail('approval.not_pending', 'A operação não está pendente.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_issued_at=NOW() WHERE id=$1 RETURNING *", [id, hashAttestation(token)]); events.push({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!, token); }); },
-    async execute(token, identity, executor) {
+    async execute(token, identity, executor, expectedId?) {
       // TX1 — claim. Consumes the attestation, marks `executing`, writes the
       // lease columns, and COMMITS before the executor runs: a failure after
-      // this point can never roll the claim back (H-04).
+      // this point can never roll the claim back (H-04). P2: when expectedId
+      // (the URL id) is supplied the claim additionally filters by id, so a
+      // cross-URL attestation can never claim another row — atomically, in
+      // this single UPDATE.
       const claimed = await withTransaction(pool, async (client) => {
-        const claim = await client.query<PendingV2Row>("UPDATE pending_operations SET attestation_consumed_at=NOW(), execution_status='executing', execution_claimed_at=NOW(), execution_lease_expires_at=NOW() + ($5 * INTERVAL '1 millisecond'), execution_attempt_count=execution_attempt_count+1 WHERE workspace_id=$1 AND actor_id=$2 AND device_id=$3 AND protocol_version=2 AND attestation_hash=$4 AND attestation_consumed_at IS NULL AND execution_status='confirmed' AND expires_at>NOW() RETURNING *", [identity.workspaceId, identity.actorId, identity.deviceId, hashAttestation(token), resolvePendingV2LeaseMs(options?.leaseMs)]);
+        const claim = expectedId === undefined
+          ? await client.query<PendingV2Row>("UPDATE pending_operations SET attestation_consumed_at=NOW(), execution_status='executing', execution_claimed_at=NOW(), execution_lease_expires_at=NOW() + ($5 * INTERVAL '1 millisecond'), execution_attempt_count=execution_attempt_count+1 WHERE workspace_id=$1 AND actor_id=$2 AND device_id=$3 AND protocol_version=2 AND attestation_hash=$4 AND attestation_consumed_at IS NULL AND execution_status='confirmed' AND expires_at>NOW() RETURNING *", [identity.workspaceId, identity.actorId, identity.deviceId, hashAttestation(token), resolvePendingV2LeaseMs(options?.leaseMs)])
+          : await client.query<PendingV2Row>("UPDATE pending_operations SET attestation_consumed_at=NOW(), execution_status='executing', execution_claimed_at=NOW(), execution_lease_expires_at=NOW() + ($6 * INTERVAL '1 millisecond'), execution_attempt_count=execution_attempt_count+1 WHERE id=$5 AND workspace_id=$1 AND actor_id=$2 AND device_id=$3 AND protocol_version=2 AND attestation_hash=$4 AND attestation_consumed_at IS NULL AND execution_status='confirmed' AND expires_at>NOW() RETURNING *", [identity.workspaceId, identity.actorId, identity.deviceId, hashAttestation(token), expectedId, resolvePendingV2LeaseMs(options?.leaseMs)]);
         const row = claim.rows[0];
         if (!row) {
           // Claim miss: distinguish an in-flight execution (valid OR expired
           // lease — recovery belongs to the reconciler, never to a second
           // executor run) from a genuinely invalid/replayed attestation.
-          const probe = await pool.query<PendingV2Row>("SELECT execution_status FROM pending_operations WHERE workspace_id=$1 AND protocol_version=2 AND attestation_hash=$2 LIMIT 1", [identity.workspaceId, hashAttestation(token)]);
+          // P2: the probe is id-aware when expectedId is supplied, so a
+          // cross-URL attestation reports replay (never in-progress of
+          // another row, never an existence oracle).
+          const probe = expectedId === undefined
+            ? await pool.query<PendingV2Row>("SELECT execution_status FROM pending_operations WHERE workspace_id=$1 AND protocol_version=2 AND attestation_hash=$2 LIMIT 1", [identity.workspaceId, hashAttestation(token)])
+            : await pool.query<PendingV2Row>("SELECT execution_status FROM pending_operations WHERE id=$3 AND workspace_id=$1 AND protocol_version=2 AND attestation_hash=$2 LIMIT 1", [identity.workspaceId, hashAttestation(token), expectedId]);
           if (probe.rows[0] && String(probe.rows[0].execution_status) === 'executing') {
             return fail('approval.execution_in_progress', 'Execução já em andamento.', 409);
           }
@@ -505,12 +557,20 @@ export const createInMemoryPendingOperationV2Store = (
     async propose(operation) {
       if (!pendingOperationV2Schema.safeParse(operation).success || !(await verifyPendingOperationV2Hash(operation))) fail('approval.invalid_hash', 'Proposta V2 inválida ou hash divergente.', 400);
       assertCanonicalArgs(fail, operation);
+      // P2 TTL (in-memory mirror of the Postgres path): authoritative server
+      // time — a crafted backdated/future createdAt never extends the
+      // lifetime window; the expiry is clamped to the server max and a
+      // birth-expired proposal fails fast instead of persisting a dead row.
+      const nowMs = Date.now();
+      const effectiveExpiresAt = clampPendingV2ExpiresAt(operation.expiresAt, nowMs);
+      if (Date.parse(effectiveExpiresAt) <= nowMs) fail('approval.expired', 'A proposta já expirou.', 409);
+      const authoritativeCreatedAt = new Date(nowMs).toISOString();
       const existing = [...records.values()].find((r) => r.workspaceId === operation.workspaceId && r.idempotencyKey === operation.idempotencyKey);
       if (existing) {
         if (existing.proposalHash !== operation.proposalHash) fail('idempotency.conflict', 'Chave de idempotência já utilizada com proposta diferente.');
         return { ...existing, existing: true };
       }
-      const record: PendingOperationV2Record = { ...operation, id: randomUUID(), status: 'proposed', executionAttemptCount: 0 };
+      const record: PendingOperationV2Record = { ...operation, createdAt: authoritativeCreatedAt, expiresAt: effectiveExpiresAt, id: randomUUID(), status: 'proposed', executionAttemptCount: 0 };
       records.set(record.id, record);
       events.push({ operationId: record.id, event: 'propose', actorId: record.actorId, at: nowIso() });
       return { ...record, existing: false };
@@ -547,9 +607,17 @@ export const createInMemoryPendingOperationV2Store = (
       events.push({ operationId: id, event: 'confirm', actorId: record.actorId, at: nowIso() });
       return record;
     },
-    async execute(token, identity, executor) {
+    async execute(token, identity, executor, expectedId?) {
       const found = tokens.get(token);
       if (!found) throw new PendingOperationV2Error('approval.attestation_replayed', 'Attestation inválida ou já consumida.', 403);
+      // P2 binding: the URL id must name the attestation's own operation.
+      // Checked BEFORE any consumption or resolve() side effect, so a
+      // cross-URL attestation is refused with zero effect on either row
+      // (no consumption, no expiry transition, executor never runs) and no
+      // existence oracle for the named URL id.
+      if (expectedId !== undefined && found.id !== expectedId) {
+        throw new PendingOperationV2Error('approval.attestation_replayed', 'Attestation inválida ou já consumida.', 403);
+      }
       if (found.consumed) {
         // Consumed attestation on an in-flight execution (valid OR expired
         // lease) → in-progress, never a duplicate run. Recovery of an

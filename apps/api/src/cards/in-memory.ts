@@ -144,6 +144,16 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
     return a;
   };
 
+  /** Canonical debt (ADR-018): fail closed when a write would drive card debt below zero. */
+  const assertCardDebtAllowed = (card: Account, deltaCents: number): void => {
+    if (!Number.isSafeInteger(deltaCents) || !Number.isSafeInteger(card.balanceCents)) {
+      throw domainErrors.invalid('amountCents', 'valor fora do intervalo suportado');
+    }
+    const next = card.balanceCents + deltaCents;
+    if (!Number.isSafeInteger(next) || next < 0) {
+      throw domainErrors.invalid('amountCents', 'saldo devedor do cartão não permite a operação');
+    }
+  };
   /** M-05: same active/expense-kind category rule as plain entries. */
   const resolveCardCategory = (householdId: string, categoryId: string): void => {
     // V4.1 Task 2.14: delegated to the central resolver — same 404/400
@@ -294,6 +304,8 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
         ...(input.installmentsTotal != null ? { installmentsTotal: input.installmentsTotal } : {}),
         ...(input.installmentNumber != null ? { installmentNumber: input.installmentNumber } : {}),
       });
+      // Canonical debt (ADR-018): purchase adds exact amount once, same unit of work.
+      card.balanceCents += input.amountCents;
       recalcTotal(stmt.id, householdId);
       return [tx];
     },
@@ -345,6 +357,8 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
           ...(input.notes !== undefined ? { notes: input.notes } : {}),
         });
         txs.push(tx);
+        // Canonical debt: each installment adds its exact parcel once.
+        card.balanceCents += amount;
         recalcTotal(stmt.id, householdId);
       }
       return txs;
@@ -395,6 +409,12 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
       if (!from) throw domainErrors.notFound('Conta de origem');
       if (from.kind === 'credit_card') throw domainErrors.invalid('fromAccountId', 'não pode pagar fatura com cartão de crédito');
 
+      // Canonical debt (ADR-018): payment subtracts exact amount from the
+      // card. Fail closed before any mutation so a short debt never clamps.
+      const card = state.accounts.find(a => a.householdId === householdId && a.id === s.accountId);
+      if (!card || card.kind !== 'credit_card' || card.status !== 'active') throw domainErrors.notFound('Cartão');
+      assertCardDebtAllowed(card, -input.amountCents);
+
       // Deduct from source account. Negative-balance rule
       // (user-approved): a bank/cash payer may cross below zero.
       from.balanceCents -= input.amountCents;
@@ -415,9 +435,8 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
       s.paidCents += input.amountCents;
       s.status = computeStatus(s, todayISO());
 
-      // Create payment transaction (transfer-like, from source to the card's "balance")
-      const card = state.accounts.find(a => a.householdId === householdId && a.id === s.accountId);
-      if (card) card.balanceCents += input.amountCents;
+      // Canonical debt: payment subtracts from the card; payer debited separately above.
+      card.balanceCents -= input.amountCents;
 
       return s;
     },
@@ -460,10 +479,42 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
         const txStmt = statements.find(s => s.householdId === householdId && s.id === txStatementId);
         if (!txStmt) throw domainErrors.notFound('Compra');
         if (txStmt.status !== 'open') throw domainErrors.conflict('Fatura não está aberta para edição.');
+        // REVIEWFIX (MEDIUM): resolve the debt card BEFORE any mutation so
+        // a missing / inactive / wrong-household card fails closed instead
+        // of silently skipping the amount delta while the ledger mutates.
+        const delta = input.amountCents !== undefined ? input.amountCents - tx.amountCents : 0;
+        let debtCard: Account | undefined;
+        if (delta !== 0 || input.date !== undefined) {
+          const found = state.accounts.find(a => a.id === tx.accountId && a.householdId === householdId);
+          if (!found) throw domainErrors.notFound('Cartão');
+          if (found.status !== 'active') throw domainErrors.notFound('Cartão');
+          if (found.kind !== 'credit_card') throw domainErrors.notFound('Cartão');
+          debtCard = found;
+        }
+        // REVIEWFIX (Security — PATCH date cycle): reject a date that
+        // resolves to a different statement cycle BEFORE any mutation —
+        // the purchase would otherwise stay linked to the old statement
+        // while its date belongs to a new one.
+        if (input.date !== undefined) {
+          const card = debtCard!;
+          if (!card.closingDay) {
+            throw domainErrors.invalid('accountId', 'cartão sem fechamento/vencimento configurado');
+          }
+          const newCycle = cycleYearMonth(getClosingDate(input.date, card.closingDay));
+          if (newCycle !== txStmt.cycleYearMonth) {
+            throw domainErrors.invalid('date', 'nova data pertence a outro ciclo de fatura; cancele e recrie a compra');
+          }
+        }
+        // Canonical debt (ADR-018): PATCH amount applies the delta. Fail
+        // closed before any mutation so a short debt never clamps.
+        if (debtCard && delta !== 0) {
+          assertCardDebtAllowed(debtCard, delta);
+        }
         if (input.description !== undefined) tx.description = input.description;
         if (input.amountCents !== undefined) tx.amountCents = input.amountCents;
         if (input.date !== undefined) tx.date = input.date;
         if (input.categoryId !== undefined) tx.categoryId = input.categoryId;
+        if (debtCard && delta !== 0) debtCard.balanceCents += delta;
 
         // Task 2.7 (D2): ledger = transactions → keep the card_purchases
         // projection row in sync inside the same unit of work.
@@ -509,12 +560,18 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
         const stmt = statements.find(s => s.householdId === householdId && s.id === (tx as any).statementId);
         if (!stmt) throw domainErrors.notFound('Compra');
         if (stmt.status !== 'open') throw domainErrors.conflict('Fatura não está aberta para cancelamento.');
+        // Canonical debt (ADR-018): cancel subtracts the amount once. Fail
+        // closed before any mutation so a short debt never clamps.
+        const debtCard = state.accounts.find(a => a.id === tx.accountId && a.householdId === householdId);
+        if (!debtCard || debtCard.kind !== 'credit_card' || debtCard.status !== 'active') throw domainErrors.notFound('Cartão');
+        assertCardDebtAllowed(debtCard, -tx.amountCents);
         state.deletedTransactions.add(tx.id);
         // M-04: the audit link lives in cardPurchases keyed by its own id —
         // also drop the row linked by transaction_id so the canceled
         // purchase disappears from statement detail.
         const idx = cardPurchases.findIndex(cp => cp.id === purchaseId || cp.transactionId === purchaseId);
         if (idx >= 0) cardPurchases.splice(idx, 1);
+        debtCard.balanceCents -= tx.amountCents;
         recalcTotal(stmt.id, householdId);
         return;
       }
@@ -531,10 +588,14 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
         const candidates = state.transactions.filter(t => !state.deletedTransactions.has(t.id) && t.householdId === householdId && (t as any).statementId === stmt.id && t.amountCents === cp.amountCents && t.date === cp.date);
         if (candidates.length !== 1) throw domainErrors.conflict('Compra legada sem vínculo único: intervenção manual necessária.');
         // Cancelar ambos
+        const legacyCard = state.accounts.find(a => a.id === candidates[0]!.accountId && a.householdId === householdId);
+        if (!legacyCard || legacyCard.kind !== 'credit_card' || legacyCard.status !== 'active') throw domainErrors.notFound('Cartão');
+        assertCardDebtAllowed(legacyCard, -cp.amountCents);
         if (!(state as any)._deletedCardPurchases) (state as any)._deletedCardPurchases = new Set<string>();
         (state as any)._deletedCardPurchases.add(purchaseId);
         cardPurchases.splice(cpIndex, 1);
         state.deletedTransactions.add(candidates[0]!.id);
+        legacyCard.balanceCents -= cp.amountCents;
         recalcTotal(stmt.id, householdId);
         return;
       }

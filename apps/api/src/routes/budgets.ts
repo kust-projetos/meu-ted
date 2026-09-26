@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { DEVICE_TOKEN_HEADER } from '../auth/device-token.js';
 import { DomainError } from '../writes/errors.js';
 import { mapPgError } from '../db/sqlstate.js';
-import { requireIdempotencyKey, type IdempotencyStore } from '../writes/idempotency.js';
+import { requireIdempotencyKey, httpIdempotencyPayload, type IdempotencyStore } from '../writes/idempotency.js';
 import type { BudgetStore } from '../budgets/store.js';
 import type { AuthResolver } from './auth.js';
 import { isoDateSchema as isoDate } from '../shared/iso-date.js';
@@ -98,7 +98,7 @@ export const registerBudgetRoutes = (
     };
     try {
       const result = key
-        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, parsed.data, fn)
+        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'POST /budgets' }, parsed.data), fn)
         : { response: await fn(), replayed: false };
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);
@@ -126,7 +126,7 @@ export const registerBudgetRoutes = (
     };
     try {
       const result = key
-        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, { id: params.data.id, ...parsed.data }, fn)
+        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'PATCH /budgets/:id', resourceId: params.data.id }, { id: params.data.id, ...parsed.data }), fn)
         : { response: await fn(), replayed: false };
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);

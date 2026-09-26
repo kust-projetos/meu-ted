@@ -9,7 +9,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { DEVICE_TOKEN_HEADER } from '../auth/device-token.js';
 import { DomainError } from '../writes/errors.js';
-import { requireIdempotencyKey, type IdempotencyStore } from '../writes/idempotency.js';
+import { requireIdempotencyKey, httpIdempotencyPayload, type IdempotencyStore } from '../writes/idempotency.js';
 import type { SubscriptionStore } from '../subscriptions/store.js';
 import type { AuthResolver } from './auth.js';
 
@@ -106,7 +106,7 @@ export const registerSubscriptionRoutes = (
     };
     try {
       const result = key
-        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, parsed.data, fn)
+        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'POST /subscriptions' }, parsed.data), fn)
         : { response: await fn(), replayed: false };
       if (result.replayed) reply.header('Idempotent-Replayed', 'true');
       return reply.code(result.response.status).send(result.response.body);
