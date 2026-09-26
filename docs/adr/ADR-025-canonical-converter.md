@@ -56,6 +56,18 @@ pós-cutover.
 
 ## Consequências
 
+> **Atualização de implementação (2026-09-26, ainda não implantada):** a
+> projeção canônica do cartão segue a ADR-018: dívida materializada = âncora
+> inicial + compras vivas vinculadas a faturas do mesmo cartão/household −
+> `statements.paid_cents`. Compras, parcelas, edição e cancelamento aplicam
+> os deltas na mesma transação da fatura e do ledger; o pagamento debita a
+> conta pagadora e reduz a dívida do cartão. A reconciliação e o conversor
+> verificam a mesma fórmula, sem somar `card_purchases` uma segunda vez nem
+> inferir pagamentos históricos por descrição. Âncora negativa de cartão,
+> vínculo inválido ou dívida negativa continuam NO-GO. Isto substitui a
+> descrição do write-path de cartão nos itens 2 e nas referências históricas
+> deste ADR; não autoriza reparo automático de dados nem deploy.
+
 - O cutover deixa de estar bloqueado pela inexistência do conversor; a F2 do
   plano de cutover passa a ser executável com
   `scripts/rehearse-canonical-conversion.mjs` (ensaio em PostgreSQL
