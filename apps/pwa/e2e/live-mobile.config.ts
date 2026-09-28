@@ -5,7 +5,7 @@ import { defineConfig } from "@playwright/test";
  * TED mutation approval) against a REAL deployment at mobile viewport.
  *
  * Opt-in: PWA_LIVE_E2E=1 + PWA_LIVE_ADMIN_EMAIL/PWA_LIVE_ADMIN_PASSWORD.
- * Base URL: PWA_LIVE_BASE_URL (default: production PWA on workers.dev).
+ * Base URL: PWA_LIVE_BASE_URL (required when the live test is enabled).
  * No credentials checked in. No webServer — target must be reachable.
  */
 export default defineConfig({
@@ -17,7 +17,7 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   use: {
-    baseURL: process.env.PWA_LIVE_BASE_URL || "https://pi-finance-pwa.walissonead.workers.dev",
+    baseURL: process.env.PWA_LIVE_BASE_URL || "https://example.invalid",
     headless: true,
     viewport: { width: 390, height: 844 },
     userAgent:

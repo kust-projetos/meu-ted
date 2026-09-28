@@ -13,6 +13,7 @@ import { test, expect, type Page } from "@playwright/test";
 const LIVE = process.env.PWA_LIVE_E2E === "1";
 const EMAIL = process.env.PWA_LIVE_ADMIN_EMAIL || "";
 const PASSWORD = process.env.PWA_LIVE_ADMIN_PASSWORD || "";
+const LIVE_BASE_URL = process.env.PWA_LIVE_BASE_URL || "";
 
 const RUN_ID = Date.now().toString(36);
 const ACCOUNT_NAME = `Conta E2E Mobile ${RUN_ID}`;
@@ -39,7 +40,7 @@ type TransactionRow = {
 test.describe.configure({ mode: "serial" });
 
 test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
-  test.skip(!LIVE || !EMAIL || !PASSWORD, "Opt-in: PWA_LIVE_E2E=1 + credenciais via env");
+  test.skip(!LIVE || !EMAIL || !PASSWORD || !LIVE_BASE_URL, "Opt-in: PWA_LIVE_E2E=1 + credenciais + base URL via env");
 
   const pageErrors: string[] = [];
 
@@ -141,7 +142,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     // direct transport overrides) are blocked; auth/device bootstrap is
     // explicitly exempt; financial/agent writes fail closed until Test Family
     // is selected and then must match the selected workspace in header + path.
-    const appOrigin = new URL(process.env.PWA_LIVE_BASE_URL || "https://pi-finance-pwa.walissonead.workers.dev").origin;
+    const appOrigin = new URL(LIVE_BASE_URL).origin;
     await page.route("**/*", async (route) => {
       const request = route.request();
       const method = request.method().toUpperCase();
