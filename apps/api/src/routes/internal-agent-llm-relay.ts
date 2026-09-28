@@ -54,7 +54,7 @@ const parseEnvAllowlist = (raw: string | undefined): string[] | null => {
 };
 
 export interface RelayModelSource {
-  listModels(): Promise<Array<{ providerId: string; modelId: string; enabled: boolean }>>;
+  listModels(): Promise<Array<{ providerId: string; modelId: string; enabled: boolean; protocol?: string }>>;
   listProviders(): Promise<Array<{ id: string; enabled: boolean; kind: string }>>;
 }
 
@@ -76,13 +76,13 @@ export const createRelayModelResolver = (deps: {
   store?: RelayModelSource;
   cacheTtlMs?: number;
   now?: () => number;
-} = {}) => {
+} = {}): (() => Promise<{ allowed: Set<string>; protocols: Map<string, string> }>) => {
   const ttl = deps.cacheTtlMs ?? RELAY_MODEL_CACHE_TTL_MS;
   const now = deps.now ?? Date.now;
-  let cache: { at: number; models: Set<string> } | null = null;
-  return async (): Promise<Set<string>> => {
+  let cache: { at: number; allowed: Set<string>; protocols: Map<string, string> } | null = null;
+  return async (): Promise<{ allowed: Set<string>; protocols: Map<string, string> }> => {
     const envList = parseEnvAllowlist(process.env.RELAY_ALLOWED_MODELS);
-    if (envList) return new Set(envList);
+    if (envList) return { allowed: new Set(envList), protocols: new Map() };
     if (deps.store) {
       if (!cache || now() - cache.at >= ttl) {
         const [models, providers] = await Promise.all([
@@ -92,18 +92,21 @@ export const createRelayModelResolver = (deps: {
         const usableProviders = new Set(
           providers.filter((p) => p.enabled && isKindExecutable(p.kind)).map((p) => p.id),
         );
-        cache = {
-          at: now(),
-          models: new Set(
-            models
-              .filter((m) => m.enabled && usableProviders.has(m.providerId))
-              .map((m) => `${m.providerId}:${m.modelId}`),
-          ),
-        };
+        const allowed = new Set<string>();
+        const protocols = new Map<string, string>();
+        for (const m of models) {
+          if (!m.enabled || !usableProviders.has(m.providerId)) continue;
+          const key = `${m.providerId}:${m.modelId}`;
+          allowed.add(key);
+          if (typeof m.protocol === 'string' && m.protocol.length > 0) {
+            protocols.set(key, m.protocol);
+          }
+        }
+        cache = { at: now(), allowed, protocols };
       }
-      return cache.models;
+      return { allowed: cache.allowed, protocols: cache.protocols };
     }
-    return DEFAULT_ALLOWED_MODELS;
+    return { allowed: DEFAULT_ALLOWED_MODELS, protocols: new Map() };
   };
 };
 
@@ -218,8 +221,11 @@ export const registerAgentLlmRelayRoutes = (
     // Fase 3 D3: a configured store that fails resolves fail-closed with an
     // explicit operational code — never a silent fallback to the built-in set.
     let allowedModels: Set<string>;
+    let modelProtocols: Map<string, string>;
     try {
-      allowedModels = await resolveAllowedModels();
+      const resolved = await resolveAllowedModels();
+      allowedModels = resolved.allowed;
+      modelProtocols = resolved.protocols;
     } catch {
       return reply.code(503).send({
         code: 'agent.relay_allowlist_unavailable',
@@ -234,6 +240,14 @@ export const registerAgentLlmRelayRoutes = (
       return reply.code(403).send({ code: 'agent.model_not_allowlisted', message: 'Modelo não permitido no relay.' });
     }
 
+    // FIX-API-RELAY-PROTOCOL-AWARE: the wire protocol is resolved from the
+    // DB model row (server authority, same cached list as the allowlist).
+    // openai/openrouter are chat-completions natively; opencode kinds follow
+    // the registered model protocol so the whole go/zen catalogue (responses
+    // AND chat-completions models) is servable — unknown pairs keep the
+    // historical /responses default.
+    const useChatCompletions =
+      isOpenAiCompatible || modelProtocols.get(`${provider}:${model}`) === 'chat-completions';
     const baseUrl = provider === 'opencode-zen'
       ? 'https://opencode.ai/zen/v1'
       : provider === 'opencode-go'
@@ -242,7 +256,7 @@ export const registerAgentLlmRelayRoutes = (
           ? 'https://openrouter.ai/api/v1'
           : 'https://api.openai.com/v1';
     // H-02: allowlisted upstream origins only (H-06) — never a caller-supplied URL.
-    const upstreamUrl = isOpenAiCompatible ? `${baseUrl}/chat/completions` : `${baseUrl}/responses`;
+    const upstreamUrl = useChatCompletions ? `${baseUrl}/chat/completions` : `${baseUrl}/responses`;
     const upstreamHeaders: Record<string, string> = {
       authorization: `Bearer ${providerApiKey}`,
       'content-type': 'application/json',
@@ -255,7 +269,7 @@ export const registerAgentLlmRelayRoutes = (
         ? { 'x-opencode-session': sessionId ?? `ted-${globalThis.crypto.randomUUID()}` }
         : {}),
     };
-    const upstreamBody = isOpenAiCompatible
+    const upstreamBody = useChatCompletions
       ? {
         model,
         messages: [
@@ -401,7 +415,7 @@ export const registerAgentLlmRelayRoutes = (
         });
       }
 
-      const text = isOpenAiCompatible
+      const text = useChatCompletions
         ? (body?.choices?.[0]?.message?.content ?? '')
         : (body?.output
           ?.filter((o) => o.type === 'message')
