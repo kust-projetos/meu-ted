@@ -757,6 +757,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             model: target.modelName,
             prompt: input.text.slice(0, 15_000),
             system: cognition.system.slice(0, 7_900),
+            // FIX-AGENT-RELAY-SESSION-ID: stable per-conversation id (one DO
+            // per workspace) forwarded by the API relay as the Go upstream's
+            // `x-opencode-session` — required for routing/prompt-cache
+            // affinity, charset-safe by construction (uuid format).
+            sessionId: `ted-${input.workspaceId}`,
           }),
           redirect: 'error',
         }, relayTimeoutMs);

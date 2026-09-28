@@ -102,6 +102,129 @@ describe('FIX-API-OPENCODE-GO-RELAY-KEY — distinct opencode-go credential (RED
   });
 });
 
+describe('FIX-API-OPENCODE-GO-SESSION-HEADER — upstream Go requests carry x-opencode-session', () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    process.env.RELAY_ALLOWED_MODELS = 'relay-regression-model';
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    app = Fastify({ logger: false });
+  });
+
+  afterEach(async () => {
+    delete process.env.RELAY_ALLOWED_MODELS;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    vi.restoreAllMocks();
+    await app.close();
+  });
+
+  it('forwards the caller sessionId as x-opencode-session on the Go upstream', async () => {
+    registerAgentLlmRelayRoutes(app, {
+      adminToken: ADMIN_TOKEN,
+      zenApiKey: ZEN_KEY,
+      opencodeGoApiKey: GO_KEY,
+    });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(goUpstreamOk()));
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/llm-relay',
+      headers,
+      payload: {
+        provider: 'opencode-go',
+        model: 'relay-regression-model',
+        prompt: 'hi',
+        sessionId: 'ted-ws-abc123',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const [, init] = fetchSpy.mock.calls[0]!;
+    const sentHeaders = (init as RequestInit).headers as Record<string, string>;
+    expect(sentHeaders['x-opencode-session']).toBe('ted-ws-abc123');
+  });
+
+  it('generates a bounded fallback session id when the caller omits sessionId', async () => {
+    registerAgentLlmRelayRoutes(app, {
+      adminToken: ADMIN_TOKEN,
+      zenApiKey: ZEN_KEY,
+      opencodeGoApiKey: GO_KEY,
+    });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(goUpstreamOk()));
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/llm-relay',
+      headers,
+      payload: { provider: 'opencode-go', model: 'relay-regression-model', prompt: 'hi' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const [, init] = fetchSpy.mock.calls[0]!;
+    const sentHeaders = (init as RequestInit).headers as Record<string, string>;
+    expect(typeof sentHeaders['x-opencode-session']).toBe('string');
+    expect(sentHeaders['x-opencode-session']!.length).toBeGreaterThanOrEqual(8);
+    expect(sentHeaders['x-opencode-session']).toMatch(/^[A-Za-z0-9._:-]+$/);
+  });
+
+  it('does not send the Go session header to the Zen upstream', async () => {
+    registerAgentLlmRelayRoutes(app, {
+      adminToken: ADMIN_TOKEN,
+      zenApiKey: ZEN_KEY,
+      opencodeGoApiKey: GO_KEY,
+    });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(goUpstreamOk()));
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/llm-relay',
+      headers,
+      payload: {
+        provider: 'opencode-zen',
+        model: 'relay-regression-model',
+        prompt: 'hi',
+        sessionId: 'ted-ws-abc123',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const [, init] = fetchSpy.mock.calls[0]!;
+    const sentHeaders = (init as RequestInit).headers as Record<string, string>;
+    expect(sentHeaders['x-opencode-session']).toBeUndefined();
+  });
+
+  it('rejects malformed sessionId values with validation.error', async () => {
+    registerAgentLlmRelayRoutes(app, {
+      adminToken: ADMIN_TOKEN,
+      zenApiKey: ZEN_KEY,
+      opencodeGoApiKey: GO_KEY,
+    });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/llm-relay',
+      headers,
+      payload: {
+        provider: 'opencode-go',
+        model: 'relay-regression-model',
+        prompt: 'hi',
+        sessionId: 'bad id with spaces!',
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ code: 'validation.error' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('FIX-RELAY-NO-REDIRECT-FOLLOW — upstream 3xx fails closed without following (RED)', () => {
   let app: FastifyInstance;
 

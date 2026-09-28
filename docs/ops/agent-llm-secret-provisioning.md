@@ -21,6 +21,11 @@ Este guia detalha o provisionamento seguro de segredos e credenciais para o assi
 - `AGENT_AUTH_SERVICE_TOKEN`: Token de autenticação interna do serviço de agente.
 - `AGENT_CONFIG_TOKEN`: Token para consulta e validação de configuração em tempo de execução.
 - `AGENT_DELEGATION_SECRET`: Segredo HMAC para assinatura de tokens delegados de workspace.
+- Chaves de provedor usadas pelo relay LLM (`/internal/agent/llm-relay`) — obrigatória a do par ativo/fallback:
+  - `OPENCODE_ZEN_API_KEY`
+  - `OPENCODE_GO_API_KEY`: exigida pelo relay para o provider `opencode-go` (o upstream Go, além da chave, exige o header `x-opencode-session`, enviado pelo relay com o `sessionId` estável por conversa).
+  - `OPENAI_API_KEY`
+  - `OPENROUTER_API_KEY`
 
 ### 2.2 Assistente Cloudflare Worker (`apps/agent`)
 - `PI_API_ORIGIN`: Origem autoritativa da API (`https://api.synkroo.com.br` em produção).
