@@ -163,14 +163,12 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
         await route.continue();
         return;
       }
-      const financialResources = [
-        "accounts", "cards", "categories", "transactions", "pending-operations",
-        "undo", "budgets", "goals", "goal-contributions", "subscriptions",
-        "payables", "payable-templates", "recurring-purchases", "statements",
-      ];
-      const financeBackendPath = financialResources.some((resource) =>
-        path.startsWith(`/api/backend/${resource}`),
-      );
+      const globalBackendReads = new Set([
+        "/api/backend/auth/get-session",
+        "/api/backend/workspaces",
+        "/api/backend/health",
+      ]);
+      const workspaceBackendPath = path.startsWith("/api/backend/") && !globalBackendReads.has(path);
       const agentPath = path.startsWith("/api/agent/");
       const agentMatch = path.match(/^\/api\/agent\/agents\/finance-chat-agent\/([^/]+)\/rpc\/(.+)$/);
       const agentWorkspaceMatches = agentPath && agentMatch?.[1] === ACTIVE_WS;
@@ -187,7 +185,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
         await route.continue();
         return;
       }
-      const scopedRequest = financeBackendPath || agentPath || allowedBackendWrite;
+      const scopedRequest = workspaceBackendPath || agentPath || allowedBackendWrite;
       const wrongWorkspace = workspaceHeader !== ACTIVE_WS || (agentPath && !agentWorkspaceMatches);
       // Before selection, let the read-only home shell bootstrap; block all
       // scoped writes. After selection, reads are also checked so the reload
@@ -199,6 +197,12 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
       }
       if (agentPath && !agentWorkspaceMatches) {
         workspaceWriteViolations.push(`${method} ${path} path-workspace=${agentMatch?.[1] ?? "<missing>"}`);
+        await route.abort("blockedbyclient");
+        return;
+      }
+      const workspacePathMatch = path.match(/^\/api\/backend\/workspaces\/([^/]+)(?:\/|$)/);
+      if (workspacePathMatch && workspacePathMatch[1] !== ACTIVE_WS) {
+        workspaceWriteViolations.push(`${method} ${path} path-workspace=${workspacePathMatch[1]}`);
         await route.abort("blockedbyclient");
         return;
       }
