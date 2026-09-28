@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 vi.mock("next/font/local", () => ({
-  default: () => ({ variable: "--font-mock" }),
+  default: (opts: { variable?: string }) => ({ variable: opts?.variable ?? "--font-mock" }),
 }));
 
 describe("viewport", () => {

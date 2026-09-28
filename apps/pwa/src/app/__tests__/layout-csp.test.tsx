@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import { buildCspValue } from "@/proxy-utils";
 
 vi.mock("next/font/local", () => ({
-  default: () => ({ variable: "--font-mock" }),
+  default: (opts: { variable?: string }) => ({ variable: opts?.variable ?? "--font-mock" }),
 }));
 
 // Controllable stand-in for the per-request headers the middleware sets

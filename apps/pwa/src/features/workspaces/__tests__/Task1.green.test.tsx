@@ -2,9 +2,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 
-vi.mock("next/font/google", () => ({
-  Plus_Jakarta_Sans: () => ({ variable: "--font-plus-jakarta-sans" }),
-  Space_Grotesk: () => ({ variable: "--font-space-grotesk" }),
+vi.mock("next/font/local", () => ({
+  default: (opts: { variable?: string }) => ({ variable: opts?.variable ?? "--font-mock" }),
 }));
 
 const baseContext = vi.hoisted(() => ({

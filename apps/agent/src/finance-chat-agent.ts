@@ -1,4 +1,4 @@
-﻿import { AIChatAgent, type UIMessage } from "agents/ai-chat-agent";
+import { AIChatAgent, type UIMessage } from "agents/ai-chat-agent";
 import { streamText, generateText, stepCountIs } from "ai";
 import { z } from "zod";
 import { protocolSchema } from "@pi-finance/llm-contracts/schemas";
@@ -99,7 +99,7 @@ export type Env = {
  * /rpc/chat ingress. The gateway (worker.ts) already rejects bodies above
  * MAX_RPC_BODY_BYTES with 413 before forwarding; these caps keep a single
  * turn cheap even for callers that reach the DO directly. Chat turns carry
- * short text plus metadata-only attachments â€” never bulk content.
+ * short text plus metadata-only attachments — never bulk content.
  */
 export const MAX_CHAT_TEXT_CHARS = 32_000;
 export const MAX_CHAT_ATTACHMENTS = 10;
@@ -141,14 +141,14 @@ import {
   relayPublicMessage,
 } from "./llm/relay-failover.js";
 import { authorizeTurnExecution } from "./llm/rollout.js";
-// Re-exported so existing import sites (tests, compat) keep working â€”
+// Re-exported so existing import sites (tests, compat) keep working —
 // the canonical definitions live in llm/attempts.ts (H-02 executor).
 export { isCodexProviderId, resolveBareModelName } from "./llm/attempts.js";
 
 /**
  * Fase 3-FIX R2: local persisted rows are validated with the same
  * contract/invariants as the remote snapshot before execution. Corrupted
- * rows are discarded (miss â†’ remote refetch), never executed.
+ * rows are discarded (miss → remote refetch), never executed.
  */
 export const intentionSnapshotRowSchema = z.object({
   intention_id: z.string().min(1),
@@ -193,7 +193,7 @@ export const ensureIntentionSnapshotColumns = (sql: {
       }
     }
   }
-  // Fase 3-FIX R2: structural backfill â€” fill names derivable from
+  // Fase 3-FIX R2: structural backfill — fill names derivable from
   // conventional `provider_id:model_id` row ids. Opaque ids are left NULL
   // on purpose (fail-closed at use, never guessed). Idempotent and scoped
   // to NULL cells only, so concurrent writers cannot clobber real names.
@@ -266,7 +266,7 @@ export { TED_INSTRUCTIONS_VERSION };
 /**
  * Item 6 (Onda 2): relay fetch with ONE absolute deadline over headers AND
  * body parsing. Uses the existing per-leg budget (RELAY_ATTEMPT_TIMEOUT_MS,
- * 60 s â€” no increase, no timer reset between headers/body). The abort signal
+ * 60 s — no increase, no timer reset between headers/body). The abort signal
  * is sent at the deadline, and the outer Promise.race forces finite
  * termination even when the fetch implementation or `response.json()`
  * ignores abort. Late headers/body after the deadline can never become
@@ -279,7 +279,7 @@ export { TED_INSTRUCTIONS_VERSION };
  *
   * FIX-W2-AGENT-LATE-RESPONSE-AND-BROKER-ERROR: a delayed event loop can let
   * headers/body resolve after the absolute deadline but before the timer
-  * callback fires â€” the race alone would then accept a late success. The
+  * callback fires — the race alone would then accept a late success. The
   * monotonic `now()` check after each stage fails closed with the same bare
   * `TimeoutError` even when the timer has not fired yet. Production default
   * is `performance.now()` (monotonic, bounded); tests may inject a fake
@@ -308,7 +308,7 @@ const relayTimeoutError = (timeoutMs: number): Error =>
  * FIX-AGENT-RELAY-DISCARDED-BODY-CANCEL (item 6 resource cleanup): best-effort
  * discard of a relay Response body. Never awaited, never blocks the timeout
  * path: a locked body (cancel throws synchronously) or a rejected cancel
- * promise is swallowed. Called only on timeout/discard branches â€” the fast
+ * promise is swallowed. Called only on timeout/discard branches — the fast
  * success path never cancels. Mirrors `cancelBrokerResponseBody`.
  */
 const cancelRelayResponseBody = (res: Response | undefined): void => {
@@ -327,7 +327,7 @@ const cancelRelayResponseBody = (res: Response | undefined): void => {
 /**
  * Test seam for the per-leg relay budget. Production default is
  * RELAY_ATTEMPT_TIMEOUT_MS (60 s). `AGENT_RELAY_TIMEOUT_MS` (string or
- * number) may only SHORTEN the budget â€” values at/above the default clamp
+ * number) may only SHORTEN the budget — values at/above the default clamp
  * to the default, so the platform budget can never be increased here.
  */
 export const resolveRelayLegTimeoutMs = (env: Env | undefined): number => {
@@ -363,7 +363,7 @@ export const fetchRelayJsonWithDeadline = async (
   let seenResponse: Response | undefined;
   // The timer callback and the race-settlement branches can both observe the
   // same timeout (timer fires while .json() is pending): discard the known
-  // body exactly once â€” cancel itself is idempotent, but one attempt keeps
+  // body exactly once — cancel itself is idempotent, but one attempt keeps
   // the timeout path deterministic. The late-fulfillment handler below marks
   // the same flag after its direct cancel, so the post-race expired branch
   // for the SAME late response skips its second cancel (mirrors the broker
@@ -448,8 +448,8 @@ export const fetchRelayJsonWithDeadline = async (
 
 /**
  * Regra de ouro da camada cognitiva (ver agent-config/instructions.ts):
- * sempre utilize a ferramenta adequada em vez de responder "sem autorizaÃ§Ã£o"
- * ou "nÃ£o tenho acesso" â€” a partir de dados reais do workspace via tools.
+ * sempre utilize a ferramenta adequada em vez de responder "sem autorização"
+ * ou "não tenho acesso" — a partir de dados reais do workspace via tools.
  */
 
 export class FinanceChatAgent extends AIChatAgent<Env> {
@@ -487,7 +487,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       } catch {
         // Memory is best-effort: turns work without it.
       }
-      // SPEC Â§7.8 (ADR-014): MutationDraft table for multi-turn intention
+      // SPEC §7.8 (ADR-014): MutationDraft table for multi-turn intention
       // persistence (idempotent; best-effort like the memory schema above).
       try {
         initializeMutationDraftSchema(state.storage.sql as unknown as { exec<T>(query: string, ...bindings: unknown[]): Iterable<T> });
@@ -503,7 +503,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     return sql && typeof sql.exec === 'function' ? sql : null;
   }
 
-  /** Loads the injected MEMÃ“RIA DO USUÃRIO block (null when disabled/empty). */
+  /** Loads the injected MEMÓRIA DO USUÁRIO block (null when disabled/empty). */
   private loadMemoryContext(workspaceId: string, actorId: string, query: string): string | null {
     const sql = this.memorySql();
     if (!sql || !isMemoryEnabled(sql, workspaceId)) return null;
@@ -556,8 +556,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       onAuthorityUnreachable: (err) => {
         // FIX-AGENT-LOG-CORRELATION-AND-ABORT-STATUS (W2): nunca imprime
         // input.intentionId, err.message, RuntimeSnapshotError.excerpt ou
-        // corpo de resposta â€” todos podem carregar texto do chamador,
-        // runtime-config ou injeÃ§Ã£o. SÃ³ evento constante + status numÃ©rico
+        // corpo de resposta — todos podem carregar texto do chamador,
+        // runtime-config ou injeção. Só evento constante + status numérico
         // seguro + classe de erro allowlistada (sem message/body).
         const e = err as { status?: unknown; statusCode?: unknown } | null;
         const rawStatus =
@@ -592,7 +592,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           };
           // Fase 3-FIX R2: the persisted row is validated with the same
           // contract/invariants as the remote snapshot. Corrupted rows and
-          // opaque row ids without a persisted name are discarded (miss â†’
+          // opaque row ids without a persisted name are discarded (miss →
           // remote refetch below), never executed.
           const parsed = intentionSnapshotRowSchema.safeParse(candidate);
           if (parsed.success) {
@@ -638,7 +638,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       fallback_model_id: config.fallbackModelId ?? null,
       // Fase 3 item 5 + Fase 3-FIX R2: bare upstream name from the validated
       // slot; legacy derivation only when the slot is absent (conventional
-      // prefix only â€” opaque ids stay null and fail closed at use).
+      // prefix only — opaque ids stay null and fail closed at use).
       model_name:
         config.activeModelName ??
         resolveBareModelName(config.activeProviderId, config.activeModelId, null),
@@ -678,7 +678,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * identity is used for scoping reads, never for granting write authority.
    *
    * AGENT-005: relay (`pwa-rest`) and `streamText` (SDK) model text is raw
-   * provider output â€” it becomes user-visible ONLY through the
+   * provider output — it becomes user-visible ONLY through the
    * ConversationOrchestrator read path, which routes evidence-backed turns
    * through `createGroundedResponseWithRetry` (deterministic renderers or
    * validated text, safe fallback otherwise). Never publish this return
@@ -704,7 +704,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       }
       // Internal grounding retries reuse this provider with the internal-only
       // flag set by the correction callback: they must not pollute durable
-      // history with scaffolding turns. The flag is the ONLY trusted signal â€”
+      // history with scaffolding turns. The flag is the ONLY trusted signal —
       // user text that literally contains the marker can never confer
       // internal status (normalize builds it as false), so it persists once
       // as a normal user turn.
@@ -723,25 +723,25 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         await this.persistMessages([userMessage]);
       }
       const relayOrigin = this.env?.API_ORIGIN ?? 'https://api.synkroo.com.br';
-      // Item 5 (Onda 2): failover restrito do relay â€” no mÃ¡ximo 1 primÃ¡ria +
+      // Item 5 (Onda 2): failover restrito do relay — no máximo 1 primária +
       // 1 fallback distinto (RELAY_MAX_ATTEMPTS), cada perna com budget
-      // explÃ­cito RELAY_ATTEMPT_TIMEOUT_MS (espelha o requestTimeoutMs da API).
-      // A mensagem do usuÃ¡rio persiste exatamente 1x aqui; o texto do relay
-      // nunca Ã© persistido (sÃ³ a resposta final grounded no /rpc/chat).
+      // explícito RELAY_ATTEMPT_TIMEOUT_MS (espelha o requestTimeoutMs da API).
+      // A mensagem do usuário persiste exatamente 1x aqui; o texto do relay
+      // nunca é persistido (só a resposta final grounded no /rpc/chat).
       const { primary: relayPrimary, fallback: relayFallback } = resolveRelayTargets(activeSnapshot);
       if (!relayPrimary) {
         throw Object.assign(new Error('agent.provider_not_configured'), { code: 'agent.provider_not_configured', status: 503 });
       }
       const runRelayLeg = async (target: { providerId: string; modelName: string }): Promise<string> => {
-        // VerificaÃ§Ã£o por perna sem segredo: provider relayÃ¡vel + nome
-        // resolvido. Allowlist/key sÃ£o autoridade da API (403/503 dela nunca
-        // disparam fallback pelo classificador explÃ­cito de relay).
+        // Verificação por perna sem segredo: provider relayável + nome
+        // resolvido. Allowlist/key são autoridade da API (403/503 dela nunca
+        // disparam fallback pelo classificador explícito de relay).
         if (!isRelayableProvider(target.providerId) || !target.modelName) {
           throw Object.assign(new Error('agent.provider_not_configured'), { code: 'agent.provider_not_configured', status: 503 });
         }
         const relayUrl = `${relayOrigin.replace(/\/$/, '')}/internal/agent/llm-relay`;
         // Item 6 (Onda 2): the per-leg budget (RELAY_ATTEMPT_TIMEOUT_MS) is an
-        // ABSOLUTE deadline over fetch headers AND body parsing â€” the helper
+        // ABSOLUTE deadline over fetch headers AND body parsing — the helper
         // sends abort at the deadline and forces finite termination even when
         // fetch or response.json() ignores abort. AGENT_RELAY_TIMEOUT_MS may
         // only shorten the budget (tests); it can never increase it.
@@ -759,16 +759,19 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             system: cognition.system.slice(0, 7_900),
             // FIX-AGENT-RELAY-SESSION-ID: stable per-conversation id (one DO
             // per workspace) forwarded by the API relay as the Go upstream's
-            // `x-opencode-session` â€” required for routing/prompt-cache
+            // `x-opencode-session` — required for routing/prompt-cache
             // affinity, charset-safe by construction (uuid format).
             sessionId: `ted-${input.workspaceId}`,
           }),
-          redirect: 'manual',
           // FIX-AGENT-RELAY-EDGE-REDIRECT: Workers fetch throws TypeError on
           // redirect: 'error' ("won't be implemented at the edge"). 'manual'
           // keeps the no-follow SSRF guarantee — a 3xx/opaqueredirect arrives
-          // as a non-ok response and fails closed in the leg mapping below.
+          // as a non-ok response and fails closed in the mapping below.
+          redirect: 'manual',
         }, relayTimeoutMs).catch((relayFetchErr: unknown) => {
+          // Observability for instant edge failures that would otherwise
+          // surface as opaque http_502. The bounded message comes from the
+          // fetch runtime itself (never prompt/secret material).
           const e = relayFetchErr as { name?: unknown; status?: unknown; message?: unknown } | null;
           console.info(JSON.stringify({
             eventType: 'relay.leg.throw',
@@ -780,10 +783,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         });
         if (!ok) {
           // FIX-AGENT-RELAY-FAILOVER-HARDENING (B): preserva o {code,status}
-          // estruturado do relay em vez de colapsar tudo em 502 â€” o /rpc/chat
-          // propaga esse status/code â€” mas com a mensagem pÃºblica fixa. O
-          // `body.message` bruto do upstream NUNCA Ã© ecoado (pode conter
-          // system prompt, segredos ou injeÃ§Ã£o); `body.code` passa pela
+          // estruturado do relay em vez de colapsar tudo em 502 — o /rpc/chat
+          // propaga esse status/code — mas com a mensagem pública fixa. O
+          // `body.message` bruto do upstream NUNCA é ecoado (pode conter
+          // system prompt, segredos ou injeção); `body.code` passa pela
           // allowlist de charset.
           const code = sanitizeRelayCode(typeof body.code === 'string' ? body.code : '', status);
           throw Object.assign(
@@ -800,7 +803,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         primary: relayPrimary,
         fallback: relayFallback,
         runLeg: runRelayLeg,
-        // ReautorizaÃ§Ã£o imediata entre a primÃ¡ria falha e o fallback: epoch
+        // Reautorização imediata entre a primária falha e o fallback: epoch
         // mudado nega a segunda perna antes de qualquer chamada ao provider.
         authorizeBetween: () => this.authorizeTurn(activeSnapshot, {
           workspaceId: input.workspaceId,
@@ -808,12 +811,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           intentionId: input.intentionId,
         }),
       }).catch((relayError: unknown) => {
-        // FIX-AGENT-RELAY-FAILOVER-HARDENING (C): falha dupla â€” a primÃ¡ria
-        // era elegÃ­vel, o fallback foi realmente invocado e ambas as pernas
+        // FIX-AGENT-RELAY-FAILOVER-HARDENING (C): falha dupla — a primária
+        // era elegível, o fallback foi realmente invocado e ambas as pernas
         // falharam (erro composto carrega o par de reasons). Emite UM evento
-        // sanitizado com os dois reason codes e correlaÃ§Ã£o opaca, e
-        // re-lanÃ§a. 1-shot, sem fallback, sucesso da primÃ¡ria e negaÃ§Ã£o de
-        // autoridade entre pernas nÃ£o emitem este evento.
+        // sanitizado com os dois reason codes e correlação opaca, e
+        // re-lança. 1-shot, sem fallback, sucesso da primária e negação de
+        // autoridade entre pernas não emitem este evento.
         const primaryReason = (relayError as { primaryReason?: unknown })?.primaryReason;
         const fallbackReason = (relayError as { fallbackReason?: unknown })?.fallbackReason;
         if (typeof primaryReason === 'string' && primaryReason && typeof fallbackReason === 'string' && fallbackReason) {
@@ -932,7 +935,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     correctionProvider?: (input: TurnInput, plan: TurnPlan, unsupportedClaims: readonly string[]) => Promise<string | null>;
     /** Sanitized lifecycle event sink, shared by the turn and its evidence reads. */
     events?: (eventType: string, fields: Record<string, unknown>) => void;
-    /** SPEC Â§7.8 draft store (DO storage). Absent = legacy single-turn flow. */
+    /** SPEC §7.8 draft store (DO storage). Absent = legacy single-turn flow. */
     draftStore?: SqlMutationDraftStore;
     /** debt-undo-confirmation-protocol override (tests). Absent = DO store + authoritative preview. */
     undoProposals?: ConstructorParameters<typeof ConversationOrchestrator>[0] extends { undoProposals?: infer U } ? U : never;
@@ -971,7 +974,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /**
-   * Authoritative entity lists for SPEC Â§7.2/Â§7.3 resolution: the same
+   * Authoritative entity lists for SPEC §7.2/§7.3 resolution: the same
    * `GET /accounts` + `GET /categories` reads the evidence layer uses,
    * scoped by the turn's `financial.read` delegation. Unreadable lists fail
    * closed downstream (clarification, never a proposal).
@@ -987,12 +990,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   override async onChatMessage(messagePayload: unknown, ..._rest: unknown[]): Promise<unknown> {
     // C-06 trust boundary: the SDK direct leg carries NO transport identity.
     // `payload.actorId` is a gateway-stamped hint, NEVER a source of
-    // identity â€” the Worker gateway compares any client-supplied actorId
+    // identity — the Worker gateway compares any client-supplied actorId
     // against the authenticated actor (403 on mismatch) before this code is
     // reachable, and the REST legs derive identity from verified headers.
     const payload = (messagePayload ?? {}) as { text?: string; intentionId?: string; messageId?: string; actorId?: string; workspaceId?: string };
     const text = typeof payload.text === "string" ? payload.text.trim() : "";
-    // SPEC Â§7.7: no Date.now()/random fallback â€” the caller owns the turn
+    // SPEC §7.7: no Date.now()/random fallback — the caller owns the turn
     // identity; without it the turn cannot dedup safely.
     const intentionId = typeof payload.intentionId === "string" && payload.intentionId.trim()
       ? payload.intentionId.trim()
@@ -1047,13 +1050,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       activeSnapshot = await this.authorizeTurn(snapshot, { workspaceId: sdkWorkspace, actorId, intentionId });
     } catch (turnErr) {
       if ((turnErr as { code?: string })?.code === 'agent.security_epoch_changed') {
-        return { text: "ConfiguraÃ§Ã£o de IA atualizada durante o turno. Tente de novo." };
+        return { text: "Configuração de IA atualizada durante o turno. Tente de novo." };
       }
       return { text: "TED ready: provider not configured" };
     }
 
     try {
-      // H-02: the direct leg runs inside the unified attempts executor â€”
+      // H-02: the direct leg runs inside the unified attempts executor —
       // concrete upstream pairs, one primary + one distinct fallback,
       // retryable-only failover. Unresolvable snapshots fail closed.
       const runDirect = async (target: { providerId: string; modelName: string }) => {
@@ -1105,10 +1108,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         const historyTurns = this.sdkTurns();
         const compaction = await compactContext(historyTurns, {
           summarize: async (turns) => {
-            const transcript = turns.map((turn) => `${turn.role === 'user' ? 'UsuÃ¡rio' : 'TED'}: ${turn.content}`).join('\n');
+            const transcript = turns.map((turn) => `${turn.role === 'user' ? 'Usuário' : 'TED'}: ${turn.content}`).join('\n');
             const summary = await generateText({
               model: modelInstance.model,
-              system: 'Resuma a conversa abaixo em atÃ© 500 caracteres, em pt-BR, preservando preferÃªncias e decisÃµes durÃ¡veis. NUNCA inclua saldos, valores atuais, faturas, limites ou extratos como fatos: valores financeiros atuais nunca sÃ£o durÃ¡veis.',
+              system: 'Resuma a conversa abaixo em até 500 caracteres, em pt-BR, preservando preferências e decisões duráveis. NUNCA inclua saldos, valores atuais, faturas, limites ou extratos como fatos: valores financeiros atuais nunca são duráveis.',
               prompt: transcript,
               maxOutputTokens: 400,
             });
@@ -1152,13 +1155,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         outcome,
       );
 
-      // H-14: same post-inference re-verification as the relay leg â€” a
+      // H-14: same post-inference re-verification as the relay leg — a
       // revocation during inference blocks publication of the result.
       try {
         await this.authorizeTurn(activeSnapshot, { workspaceId: sdkWorkspace, actorId, intentionId });
       } catch (postErr) {
         if ((postErr as { code?: string })?.code === 'agent.security_epoch_changed') {
-          return { text: "ConfiguraÃ§Ã£o de IA atualizada durante o turno. Tente de novo." };
+          return { text: "Configuração de IA atualizada durante o turno. Tente de novo." };
         }
         return { text: "TED ready: provider not configured" };
       }
@@ -1192,7 +1195,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
                 );
                 const extracted = await generateText({
                   model: learnModel.model,
-                  system: 'Extraia atÃ© 2 aprendizados durÃ¡veis sobre a pessoa (preferÃªncias, contas, categorias, metas). Responda sÃ³ com os itens, um por linha, em pt-BR. Se nÃ£o houver nada durÃ¡vel, responda vazio.',
+                  system: 'Extraia até 2 aprendizados duráveis sobre a pessoa (preferências, contas, categorias, metas). Responda só com os itens, um por linha, em pt-BR. Se não houver nada durável, responda vazio.',
                   prompt: transcript,
                   maxOutputTokens: 300,
                 });
@@ -1212,7 +1215,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       if ((err as { code?: string })?.code === 'agent.provider_not_configured') {
         return { text: "TED ready: provider not configured" };
       }
-      const message = (err as Error)?.message ?? "Erro desconhecido ao processar inferÃªncia.";
+      const message = (err as Error)?.message ?? "Erro desconhecido ao processar inferência.";
       return { text: `TED error: ${redactTranscript(message)}` };
     }
   }
@@ -1306,8 +1309,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       }, secret);
       const requestWithApprovalToken = async <T>(method: string, path: string, opts: Parameters<typeof requestPiApiJson>[2] = {}) =>
         requestPiApiJson<T>(method, path, { ...opts, delegatedToken, apiOrigin: this.env?.API_ORIGIN });
-      // T1.5 (SPEC Â§8.1/Â§8.2): the approval button converges into the same
-      // PendingOperationCoordinator as natural language â€” one decision
+      // T1.5 (SPEC §8.1/§8.2): the approval button converges into the same
+      // PendingOperationCoordinator as natural language — one decision
       // machine, no parallel path. The card names its operation, so decide()
       // addresses it by id (no listing, no disambiguation).
       const result = await new PendingOperationCoordinator({
@@ -1317,7 +1320,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         decision: body.decision as 'confirm' | 'cancel' | 'retry',
         identity: { workspaceId, actorId, deviceId },
       });
-      // AGENT-010: sanitized approval lifecycle events (status only â€” never
+      // AGENT-010: sanitized approval lifecycle events (status only — never
       // operation payloads, tokens, or financial values).
       try {
         if (result.status === 'succeeded') {
@@ -1337,14 +1340,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       }
       return Response.json(result);
     } catch {
-      return Response.json({ code: "agent.approval_failed", message: "NÃ£o foi possÃ­vel concluir a decisÃ£o." }, { status: 502 });
+      return Response.json({ code: "agent.approval_failed", message: "Não foi possível concluir a decisão." }, { status: 502 });
     }
   }
 
   /**
-   * T5.3 (H-14, SPEC Â§22): authoritative listing of the workspace's active
+   * T5.3 (H-14, SPEC §22): authoritative listing of the workspace's active
    * pending operations, relayed lean to trusted PWA surfaces (Home badge,
-   * AprovaÃ§Ãµes page). The browser NEVER decides here â€” this is a read-only
+   * Aprovações page). The browser NEVER decides here — this is a read-only
    * reflection. The delegated credential carries the READ capability only
    * and the response is the strict lean projection (never attestation,
    * never raw normalizedArgs), scoped to the gateway-verified
@@ -1377,7 +1380,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       return Response.json({ items, total: items.length });
     } catch {
       return Response.json(
-        { code: "agent.pending_list_unavailable", message: "NÃ£o foi possÃ­vel carregar as aprovaÃ§Ãµes agora." },
+        { code: "agent.pending_list_unavailable", message: "Não foi possível carregar as aprovações agora." },
         { status: 502 },
       );
     }
@@ -1395,8 +1398,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       domain: "transactions",
       skillNames: routed.skillNames.slice(0, 2),
       requestedOperations: [{ name: parsed.kind === "income" ? "transactions.income.create" : "transactions.expense.create", kind: "mutation" }],
-      // SPEC Â§7.6: canonical IDs are never resolved at plan time â€” the
-      // orchestrator resolves them against authoritative reads (Â§7.2/Â§7.3).
+      // SPEC §7.6: canonical IDs are never resolved at plan time — the
+      // orchestrator resolves them against authoritative reads (§7.2/§7.3).
       missingFields: ["accountId", "categoryId"],
       ambiguity: null,
       confidence: routed.confidence,
@@ -1407,9 +1410,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * Constructs the per-turn, approval-scoped transport injected into the
    * canonical orchestrator. No browser-owned data crosses this boundary.
    *
-   * T1.5 (SPEC Â§8.1): ONE client carries every decision capability
+   * T1.5 (SPEC §8.1): ONE client carries every decision capability
    * (propose/read/confirm/execute/retry/cancel) so proposal, confirmation,
-   * cancellation and retry turns share the same transport + coordinator â€”
+   * cancellation and retry turns share the same transport + coordinator —
    * the previous propose-only asymmetry starved decision turns.
    */
   private async mutationApiClientForTurn(input: TurnInput, needsMutationClient: boolean): Promise<MutationApiClient | undefined> {
@@ -1445,7 +1448,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * capability the API requires on GETs; the workspace/actor scoping the
    * API enforces comes from these claims (generated tools never send
    * `context` params on the wire). Device-bound when the channel carries a
-   * verified device, read-only otherwise. Absent without a secret â€” reads
+   * verified device, read-only otherwise. Absent without a secret — reads
    * then fail closed into `error` evidence, exactly like today's
    * unauthenticated model-tool reads.
    */
@@ -1467,8 +1470,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /**
-   * SPEC Â§7.8 draft store over DO SQLite storage. Undefined when storage is
-   * unavailable â€” the orchestrator then keeps the legacy single-turn flow.
+   * SPEC §7.8 draft store over DO SQLite storage. Undefined when storage is
+   * unavailable — the orchestrator then keeps the legacy single-turn flow.
    */
   private draftStoreForRequest(): SqlMutationDraftStore | undefined {
     const sql = this.state?.storage?.sql as unknown as { exec<T>(query: string, ...bindings: unknown[]): Iterable<T> } | undefined;
@@ -1483,7 +1486,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
 
   /**
    * debt-undo-confirmation-protocol: persistent undo proposal store over DO
-   * SQLite storage. Undefined when storage is unavailable â€” chat turns then
+   * SQLite storage. Undefined when storage is unavailable — chat turns then
    * degrade to a deterministic no-proposal reply (never execution).
    */
   private undoStoreForRequest(): SqlUndoProposalStore | undefined {
@@ -1609,7 +1612,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       if (code === 'undo.expired') return Response.json({ code, message: 'Undo proposal expired.' }, { status: 410 });
       if (code === 'undo.executing') return Response.json({ code, message: 'Undo already in progress.' }, { status: 409 });
       if (code === 'undo.terminal') return Response.json({ code, message: 'Undo proposal already decided.' }, { status: 409 });
-      return Response.json({ code: "agent.approval_failed", message: "NÃ£o foi possÃ­vel concluir a decisÃ£o." }, { status: 502 });
+      return Response.json({ code: "agent.approval_failed", message: "Não foi possível concluir a decisão." }, { status: 502 });
     }
   }
 
@@ -1617,7 +1620,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * debt-undo-proposal-rehydration: read-only active-listing for chat
    * startup/workspace change (`GET /rpc/undo/active`). Identity SOLELY from
    * the gateway-verified headers; returns ONLY bound live summaries
-   * (`proposed` + truthful `executing`, safe projection â€” never targets,
+   * (`proposed` + truthful `executing`, safe projection — never targets,
    * keys or raw operation data). Never previews, never calls the undo API,
    * never decides: the `api` dependency throws if ever touched.
    */
@@ -1647,7 +1650,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       const items = service.listActive({ workspaceId, actorId, deviceId });
       return Response.json({ items, total: items.length });
     } catch {
-      return Response.json({ code: "agent.approval_failed", message: "NÃ£o foi possÃ­vel carregar as propostas agora." }, { status: 502 });
+      return Response.json({ code: "agent.approval_failed", message: "Não foi possível carregar as propostas agora." }, { status: 502 });
     }
   }
 
@@ -1662,7 +1665,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     const url = new URL(request.url);
     // H-07 defense in depth: the gateway authenticates and stamps
     // x-agent-actor/workspace, but the DO never trusts those headers alone
-    // when the connection token is present â€” the token signature is
+    // when the connection token is present — the token signature is
     // re-verified here and its claims must match the stamped identity.
     // (Signature-only: single-use consumption already happened at the
     // gateway, so this performs no network call.)
@@ -1694,7 +1697,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       if (!actorId || !workspaceId || !actorId.trim() || !workspaceId.trim()) {
         return Response.json({ code: "agent.unauthorized", message: "Missing authenticated actor or workspace" }, { status: 401 });
       }
-      // C-06: effective identity â€” built ONCE from the gateway-verified
+      // C-06: effective identity — built ONCE from the gateway-verified
       // headers (assertConnectionBinding already ran above) and frozen.
       // Any `actorId`/`actor_id` field in the client JSON body is IGNORED
       // for identity (spoof-tested): memory, tools, audit, export and
@@ -1704,7 +1707,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         workspaceId,
         role: (request.headers.get("x-agent-role") === "owner" ? "owner" : "member") as "owner" | "member",
       });
-      // H-12: device binding â€” gateway-stamped (x-agent-device) and
+      // H-12: device binding — gateway-stamped (x-agent-device) and
       // cross-checked against the connection token claims in
       // assertConnectionBinding above; never a free client header.
       const deviceHeader = request.headers.get("x-agent-device")?.trim();
@@ -1716,7 +1719,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       } catch {
         return Response.json({ code: "agent.invalid_message" }, { status: 400 });
       }
-      // FIX-FINAL-2 FINDING 2: semantic payload caps â€” fail fast with 413
+      // FIX-FINAL-2 FINDING 2: semantic payload caps — fail fast with 413
       // (same code as the gateway ceiling) before scrubbing, persistence,
       // or any model call.
       const candidateText = typeof body.text === "string" ? body.text : (typeof body.content === "string" ? body.content : "");
@@ -1728,14 +1731,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       }
       const rawText = typeof body.text === "string" ? body.text : (typeof body.content === "string" ? body.content : "");
       const unredactedText = rawText.trim();
-      // H-09: attachments persist as METADATA ONLY â€” inline content and
+      // H-09: attachments persist as METADATA ONLY — inline content and
       // data: URLs are dropped before anything becomes durable.
       const { attachments: incomingAttachments } = scrubAttachments(body.attachments);
       if (!unredactedText && incomingAttachments.length === 0) return Response.json({ code: "agent.invalid_message" }, { status: 400 });
       // H-09: central DLP scrub before the text becomes durable (transcript,
       // memory, summary, learning, export all read this value downstream).
       const text = unredactedText ? scrubForPersistence(unredactedText) : incomingAttachments.length > 0 ? `[anexo ${incomingAttachments.map((a) => a.name).join(", ")}]` : "";
-      // SPEC Â§7.7/Â§7.7.1: the intentionId derives deterministically from the
+      // SPEC §7.7/§7.7.1: the intentionId derives deterministically from the
       // PWA messageId (intentionId field, or messageId alias). No
       // Date.now()/random fallback: a redelivery after a lost response
       // carries the same id and dedups to the same proposal downstream.
@@ -1760,7 +1763,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       }
       try {
         const mutationPlan = this.mutationProposalPlan(restInput);
-        // SPEC Â§7.8: a bare continuation answer ("Nubank") carries no
+        // SPEC §7.8: a bare continuation answer ("Nubank") carries no
         // mutation plan, but with a recoverable draft it still needs the
         // mutation client + reader so the turn can complete the handoff.
         const draftStore = this.draftStoreForRequest();
@@ -1771,8 +1774,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             Date.now(),
           )
           : false;
-        // T1.5 (SPEC Â§8): decision turns (confirmation/cancel/retry) build
-        // the same MutationApiClient as proposals â€” the orchestrator's
+        // T1.5 (SPEC §8): decision turns (confirmation/cancel/retry) build
+        // the same MutationApiClient as proposals — the orchestrator's
         // coordinator needs the transport even when no draft exists.
         const routed = routeIntent(text);
         const needsMutation = mutationPlan !== null || hasPendingDraft
@@ -1794,9 +1797,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           // was persisted for them either), so their historical
           // non-persistence is preserved unchanged.
           if (turnResult.plan.mode !== 'mutation-proposal' && turnResult.plan.mode !== 'confirmation' && turnResult.plan.mode !== 'cancel') {
-            // T3.1 (SPEC Â§14): a fail-closed read never reaches the response
+            // T3.1 (SPEC §14): a fail-closed read never reaches the response
             // provider, which is where the user message is otherwise
-            // persisted â€” persist it here so history keeps the Q&A pair
+            // persisted — persist it here so history keeps the Q&A pair
             // (fail-closed only ever happens on the read path, so mutation
             // non-persistence above is unaffected).
             if (turnResult.failClosed) {
@@ -1822,19 +1825,19 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
                 status: turnResult.mutation.status,
                 operation: turnResult.plan.requestedOperations[0]?.name,
                 summary: turnResult.response.text,
-                // T3.4 (SPEC Â§16): the safe card projection derived from the
+                // T3.4 (SPEC §16): the safe card projection derived from the
                 // canonical args. Re-validated here so only schema-conformant
                 // display fields cross to the browser (attestation can never
-                // ride along â€” the strict schema rejects it).
+                // ride along — the strict schema rejects it).
                 ...(() => {
                   const presentation = (turnResult.mutation as { presentation?: unknown }).presentation;
                   if (!presentation) return {};
                   const parsed = pendingOperationPresentationSchema.safeParse(presentation);
                   return parsed.success ? { presentation: parsed.data } : {};
                 })(),
-                // T3.3 (SPEC Â§15.1): the REAL execution receipt relayed from
+                // T3.3 (SPEC §15.1): the REAL execution receipt relayed from
                 // the API on succeeded turns. Re-validated with the strict
-                // contract schema â€” a receipt carrying attestation or any
+                // contract schema — a receipt carrying attestation or any
                 // unknown key is dropped, never partially forwarded.
                 ...(() => {
                   const receipt = (turnResult.mutation as { receipt?: unknown }).receipt;
@@ -1847,7 +1850,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           return Response.json({ status: "completed", output: turnResult.response.text, ...(pendingOperation ? { pendingOperation } : {}),
             // debt-undo-confirmation-protocol: separate undo proposal relay
             // (requestId for the decision RPC; the fixed target never leaves
-            // the DO). Re-validated shape â€” unknown keys are dropped.
+            // the DO). Re-validated shape — unknown keys are dropped.
             ...(() => {
               const proposal = (turnResult as { undoProposal?: unknown }).undoProposal as { requestId?: unknown; status?: unknown; expiresAt?: unknown } | undefined;
               if (!proposal || typeof proposal.requestId !== 'string' || proposal.status !== 'proposed' || typeof proposal.expiresAt !== 'string') return {};
@@ -1861,10 +1864,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         if (typeof status === 'number' && status >= 400 && status < 600) {
           return Response.json({ code: typeof code === 'string' ? code : 'agent.inference_error', message: redactTranscript((error as Error).message) }, { status });
         }
-        return Response.json({ code: 'agent.inference_error', message: 'Falha ao processar a solicitaÃ§Ã£o.' }, { status: 502 });
+        return Response.json({ code: 'agent.inference_error', message: 'Falha ao processar a solicitação.' }, { status: 502 });
       }
 
-      return Response.json({ code: 'agent.no_response', message: 'NÃ£o foi possÃ­vel produzir uma resposta segura.' }, { status: 502 });
+      return Response.json({ code: 'agent.no_response', message: 'Não foi possível produzir uma resposta segura.' }, { status: 502 });
 
     }
 
@@ -1895,7 +1898,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       return Response.json({ ok: true, enabled });
     }
 
-    // Part B: "Nova sessÃ£o" â€” archives the current session (count + best-
+    // Part B: "Nova sessão" — archives the current session (count + best-
     // effort summary) into the registry, clears the model context (SDK
     // messages), and starts a fresh session. Stored history rows are
     // preserved in the registry summary; durable memories are untouched.
@@ -1959,7 +1962,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       const identity = Object.freeze({ actorId, workspaceId });
 
       const allMessages = Array.isArray(this.messages) ? this.messages : [];
-      // Isolamento por workspace: filtrar mensagens cujo workspaceId difere (defesa em profundidade, DO jÃ¡ Ã© por workspace)
+      // Isolamento por workspace: filtrar mensagens cujo workspaceId difere (defesa em profundidade, DO já é por workspace)
       const rawMessages = allMessages.filter((msg) => {
         const ws = (msg.metadata as { workspaceId?: string } | undefined)?.workspaceId;
         return !ws || ws === identity.workspaceId;
