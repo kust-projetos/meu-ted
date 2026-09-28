@@ -22,6 +22,7 @@ import {
   clearOfflineIdentity,
   clearOfflineWorkspaceBinding,
 } from "@/lib/auth/offline-identity";
+import { clearActiveWorkspacePreference } from "@/lib/auth/active-workspace-preference";
 import { deleteV2Snapshot, deleteV3Snapshot } from "@/lib/state/snapshot-db";
 import { clearActiveWorkspaceId } from "@/lib/api/client";
 import { clearAgentSession } from "@/lib/api/agent-auth";
@@ -164,8 +165,26 @@ export async function clearSensitiveSession(
     tasks.push(
       Promise.resolve().then(() => { try { clearLastOnlineAuthenticatedAt(); } catch { /* noop */ } }),
     );
+    // The active-workspace preference is bound to the principal being torn
+    // down — a later login (possibly another user on a shared device) must
+    // never remount on the previous session's workspace.
+    tasks.push(
+      Promise.resolve().then(() => { try { clearActiveWorkspacePreference(); } catch { /* noop */ } }),
+    );
   }
   if (doWorkspaceBinding) {
+    // Workspace-switch teardown ordering guarantee (AUTH-T07 race review):
+    // these localStorage clears are queued as microtasks AT CALL TIME, so
+    // they always complete before any LATER task (e.g. B's login/binding)
+    // can run — a B binding written after this call starts can never be
+    // clobbered by it. The only deferred work below is the IndexedDB
+    // snapshot deletes, which never touch localStorage keys; and this path
+    // never touches the principal-bound active-workspace preference, so B's
+    // fresh preference survives unconditionally. Callers additionally guard
+    // every post-purge write with a generation + principal check, so even a
+    // principal switch landing mid-purge commits nothing under the new
+    // principal. Covered by `workspace-stale-load` (deferred-IDB + B
+    // binding test).
     tasks.push(
       Promise.resolve().then(() => { try { clearOfflineWorkspaceBinding(); } catch { /* noop */ } }),
     );
@@ -180,6 +199,10 @@ export async function clearSensitiveSession(
   }
   if (doSnapshot) {
     // v2 IndexedDB snapshot — independent of the v1 localStorage delete above.
+    // IDB NON-BLOCKER (reviewed): V2/V3 deletes use fixed slots, so a
+    // deferred purge racing a later login as B may delete B's freshly
+    // written cache (resync loss only — slots are never cross-user readable,
+    // so no cross-data leak). Never claim the purged snapshot survives.
     tasks.push(deleteV2Snapshot().catch(() => { /* noop */ }));
     // Phase 3: the snapshot purge always includes the V3 slot, so a
     // workspace switch or logout can never leave identity-keyed data behind.

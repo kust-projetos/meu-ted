@@ -50,6 +50,8 @@ export function WorkspaceSwitcher({
 }: WorkspaceSwitcherProps) {
   const ws = useWorkspaceSafe();
   const [open, setOpen] = useState(false);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -148,6 +150,39 @@ export function WorkspaceSwitcher({
     ? workspaceColor(activeWorkspace.name, activeWorkspace.kind)
     : "var(--primary)";
 
+  // Cross-workspace write guard: the dropdown only closes AFTER the switch
+  // fully commits (API client header + state), so the visible label can
+  // never announce a workspace whose writes would still target another one.
+  // Switch failures are modeled in context error state (never a rejection),
+  // but with a non-empty list the switcher used to hide that error when the
+  // menu closed. Keep the close + coherent label, and surface the reason
+  // inline via aria-live (no browser alert).
+  async function handleSelect(workspaceId: string): Promise<void> {
+    if (!selectWorkspace || pendingId) return;
+    setPendingId(workspaceId);
+    setSwitchError(null);
+    try {
+      await selectWorkspace(workspaceId);
+    } catch (cause) {
+      // selectWorkspace models failures in context error state and never
+      // rejects by contract — this guard keeps a future/foreign rejection
+      // from escaping the `void` onClick as an unhandled rejection, and
+      // surfaces its reason inline so the closed menu never swallows it.
+      setSwitchError(
+        cause instanceof Error ? cause.message : "Não foi possível trocar de espaço.",
+      );
+    } finally {
+      setPendingId(null);
+      setOpen(false);
+    }
+  }
+
+  // Inline failure reason shown even when the list is non-empty: prefer the
+  // just-captured rejection, else the modeled context error. Rendered below
+  // (menu stays closed, label/header stay as committed).
+  const visibleSwitchError =
+    switchError ?? (workspaces.length > 0 ? error : null);
+
   return (
     <div className="relative inline-block text-left" ref={dropdownRef}>
       <button
@@ -202,6 +237,21 @@ export function WorkspaceSwitcher({
           }`}
         />
       </button>
+      {visibleSwitchError && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          data-testid="workspace-switch-error"
+          className={`mt-1 max-w-[280px] truncate rounded-full border px-3 py-1 text-xs font-semibold ${
+            variant === "hero"
+              ? "border-danger/40 bg-danger/20 text-danger"
+              : "border-danger/30 bg-danger-tint text-danger"
+          }`}
+          title={visibleSwitchError}
+        >
+          {visibleSwitchError}
+        </div>
+      )}
 
       {open && (
         <div className="absolute right-0 z-50 mt-2 w-[300px] max-w-[calc(100vw-1.5rem)] origin-top-right overflow-hidden rounded-[18px] border border-border-subtle bg-surface-1 shadow-elevated animate-fade-in">
@@ -226,10 +276,9 @@ export function WorkspaceSwitcher({
                   type="button"
                   role="option"
                   aria-selected={isSelected}
-                  onClick={() => {
-                    if (selectWorkspace) void selectWorkspace(w.id);
-                    setOpen(false);
-                  }}
+                  disabled={pendingId !== null}
+                  aria-busy={pendingId === w.id}
+                  onClick={() => void handleSelect(w.id)}
                   className={`flex w-full items-center gap-3 rounded-[12px] px-3 py-2 text-left transition-all ${
                     isSelected
                       ? "bg-primary-tint text-primary font-bold shadow-xs"

@@ -200,6 +200,40 @@ describe("WorkspaceManagerPage", () => {
      const input = screen.getByLabelText("E-mail do convidado");
      await user.type(input, "novo@example.com");
      await user.click(screen.getByRole("button", { name: "Convidar membro" }));
-     await waitFor(() => expect(screen.getByText("Apenas o owner pode convidar quem ainda não possui conta.")).toBeInTheDocument());
-   });
- });
+      await waitFor(() => expect(screen.getByText("Apenas o owner pode convidar quem ainda não possui conta.")).toBeInTheDocument());
+    });
+
+  it("retry after load error keeps inline error without unhandled rejection", async () => {
+    const user = userEvent.setup();
+    context.error = "Não foi possível carregar os workspaces.";
+    context.refreshWorkspaces = vi.fn().mockRejectedValue(new Error("offline"));
+    const unhandled: unknown[] = [];
+    const onUnhandled = (event: PromiseRejectionEvent) => {
+      unhandled.push(event.reason);
+      event.preventDefault();
+    };
+    window.addEventListener("unhandledrejection", onUnhandled);
+    try {
+      render(<WorkspaceManagerPage />);
+
+      await user.click(screen.getByRole("button", { name: "Tentar novamente" }));
+      await waitFor(() => expect(context.refreshWorkspaces).toHaveBeenCalled());
+      // Allow a rejected refresh to surface as unhandled if the handler
+      // does not consume it (the click handler must .catch after the
+      // context already modeled the error).
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(unhandled).toHaveLength(0);
+      // The load error stays inline (manager banner with retry; the header
+      // switcher mirrors the same context error) after a failed retry.
+      expect(
+        screen.getAllByText("Não foi possível carregar os workspaces.").length,
+      ).toBeGreaterThanOrEqual(1);
+      expect(screen.getByRole("button", { name: "Tentar novamente" })).toBeInTheDocument();
+    } finally {
+      window.removeEventListener("unhandledrejection", onUnhandled);
+      context.error = null;
+      context.refreshWorkspaces = vi.fn();
+    }
+  });
+});
