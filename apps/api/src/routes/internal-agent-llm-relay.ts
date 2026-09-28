@@ -12,6 +12,19 @@ const relayBody = z.object({
   model: z.string().trim().min(1).max(120),
   prompt: z.string().trim().min(1).max(16000),
   system: z.string().trim().max(8000).optional(),
+  /**
+   * FIX-API-OPENCODE-GO-SESSION-HEADER: stable per-conversation id the Go
+   * upstream requires for routing/prompt-cache affinity (`x-opencode-session`).
+   * Charset-bounded, never a free-form echo; opencode-zen/openai/openrouter
+   * upstreams do not receive it.
+   */
+  sessionId: z
+    .string()
+    .trim()
+    .min(8)
+    .max(128)
+    .regex(/^[A-Za-z0-9._:-]+$/, 'sessionId contains disallowed characters')
+    .optional(),
 });
 
 const DEFAULT_ALLOWED_MODELS = new Set([
@@ -173,7 +186,7 @@ export const registerAgentLlmRelayRoutes = (
     if (!parsed.success) {
       return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
     }
-    const { provider, model, prompt, system } = parsed.data;
+    const { provider, model, prompt, system, sessionId } = parsed.data;
 
     // H-02: each relayable provider needs its own key — a missing key fails
     // closed before any upstream call.
@@ -234,6 +247,13 @@ export const registerAgentLlmRelayRoutes = (
       authorization: `Bearer ${providerApiKey}`,
       'content-type': 'application/json',
       ...(isOpenRouter ? { 'HTTP-Referer': 'https://synkroo.com.br', 'X-Title': 'Pi Financeiro' } : {}),
+      // FIX-API-OPENCODE-GO-SESSION-HEADER: the Go upstream rejects requests
+      // without a stable session id (400 MissingSessionID). A caller-provided
+      // id keeps prompt-cache affinity across turns; the generated fallback
+      // only satisfies the contract (routing optimization is best-effort).
+      ...(isGo
+        ? { 'x-opencode-session': sessionId ?? `ted-${globalThis.crypto.randomUUID()}` }
+        : {}),
     };
     const upstreamBody = isOpenAiCompatible
       ? {
