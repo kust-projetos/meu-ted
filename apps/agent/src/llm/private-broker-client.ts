@@ -246,7 +246,11 @@ export const executeBrokerCompletion = async (
       method: 'POST',
       headers,
       body: rawBody,
-      redirect: 'error',
+      // FIX-AGENT-RELAY-EDGE-REDIRECT: Workers fetch throws TypeError on
+      // redirect: 'error' (see model-factory createSafeFetch). 'manual' keeps
+      // the no-follow guarantee; the 3xx/opaqueredirect rejection below fails
+      // closed before the body is ever processed.
+      redirect: 'manual',
       signal: controller.signal,
     });
     // Late headers arriving after the race already settled with the timeout:
@@ -270,6 +274,12 @@ export const executeBrokerCompletion = async (
     );
     res = await Promise.race([fetchPromise, deadline]);
     seenResponse = res;
+    // FIX-AGENT-RELAY-EDGE-REDIRECT: a redirect response (or the opaque
+    // redirect workers produce for 'manual' on cross-origin) is rejected
+    // outright — never followed, never processed.
+    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+      throw new TypeError('redirected request rejected by safe fetch');
+    }
   } catch (err) {
     if (timer !== undefined) clearTimeout(timer);
     // FIX-AGENT-BROKER-BOUNDED-SAFE-ERRORS: never rethrow the raw transport
