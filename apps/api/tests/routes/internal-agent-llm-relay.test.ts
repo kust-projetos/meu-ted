@@ -10,7 +10,12 @@ const headers = { 'x-agent-runtime-admin-token': ADMIN_TOKEN, origin: 'http://lo
 
 const upstreamOk = () =>
   new Response(
-    JSON.stringify({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'hi' }] }] }),
+    JSON.stringify({
+      // FIX-API-RELAY-PROTOCOL-AWARE: both wire shapes — the relay extracts
+      // per the model's registered protocol (responses OR chat-completions).
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'hi' }] }],
+      choices: [{ message: { content: 'hi' } }],
+    }),
     { status: 200, headers: { 'content-type': 'application/json' } },
   );
 
@@ -830,5 +835,111 @@ describe('W2-ITEM6 — absolute transport deadline: fetch/body que ignoram abort
     } finally {
       clearSpy.mockRestore();
     }
+  });
+});
+
+const GO_KEY_LOCAL = 'test-go-key-synthetic-ccc';
+
+describe('FIX-API-RELAY-PROTOCOL-AWARE — upstream path follows the model protocol', () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    delete process.env.RELAY_ALLOWED_MODELS;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    app = Fastify({ logger: false });
+  });
+
+  afterEach(async () => {
+    delete process.env.RELAY_ALLOWED_MODELS;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    vi.restoreAllMocks();
+    await app.close();
+  });
+
+  it('routes an opencode model registered as chat-completions to /chat/completions', async () => {
+    const store = createInMemoryLlmConfigStore();
+    await store.setProviderEnabled('opencode-go', true);
+    const created = await store.upsertModel({
+      providerId: 'opencode-go', modelId: 'glm-like', protocol: 'chat-completions', privacyClass: 'training_prohibited', enabled: true,
+    });
+    await store.setModelEnabled(created.id, true);
+    registerAgentLlmRelayRoutes(app, {
+      adminToken: ADMIN_TOKEN,
+      zenApiKey: ZEN_KEY,
+      opencodeGoApiKey: GO_KEY_LOCAL,
+      llmConfigStore: store,
+    });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: 'cc-hi' } }] }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+
+    const res = await app.inject({
+      method: 'POST', url: '/internal/agent/llm-relay', headers,
+      payload: { provider: 'opencode-go', model: 'glm-like', prompt: 'hi', sessionId: 'ted-ws-1' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ text: 'cc-hi' });
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(String(url)).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+    const sentBody = JSON.parse(String((init as RequestInit).body)) as { messages?: unknown; input?: unknown };
+    expect(Array.isArray(sentBody.messages)).toBe(true);
+    expect(sentBody.input).toBeUndefined();
+    const sentHeaders = (init as RequestInit).headers as Record<string, string>;
+    expect(sentHeaders['x-opencode-session']).toBe('ted-ws-1');
+  });
+
+  it('keeps /responses for a responses-protocol model', async () => {
+    const store = createInMemoryLlmConfigStore();
+    await store.setProviderEnabled('opencode-go', true);
+    const created = await store.upsertModel({
+      providerId: 'opencode-go', modelId: 'muse-like', protocol: 'responses', privacyClass: 'training_prohibited', enabled: true,
+    });
+    await store.setModelEnabled(created.id, true);
+    registerAgentLlmRelayRoutes(app, {
+      adminToken: ADMIN_TOKEN,
+      zenApiKey: ZEN_KEY,
+      opencodeGoApiKey: GO_KEY_LOCAL,
+      llmConfigStore: store,
+    });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(upstreamOk());
+
+    const res = await app.inject({
+      method: 'POST', url: '/internal/agent/llm-relay', headers,
+      payload: { provider: 'opencode-go', model: 'muse-like', prompt: 'hi' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(String(url)).toBe('https://opencode.ai/zen/go/v1/responses');
+    const sentBody = JSON.parse(String((init as RequestInit).body)) as { messages?: unknown; input?: unknown };
+    expect(sentBody.input).toBe('hi');
+    expect(sentBody.messages).toBeUndefined();
+  });
+
+  it('defaults an env-allowlisted model without a DB row to /responses', async () => {
+    process.env.RELAY_ALLOWED_MODELS = 'env-only-model';
+    const store = createInMemoryLlmConfigStore();
+    registerAgentLlmRelayRoutes(app, {
+      adminToken: ADMIN_TOKEN,
+      zenApiKey: ZEN_KEY,
+      opencodeGoApiKey: GO_KEY_LOCAL,
+      llmConfigStore: store,
+    });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(upstreamOk());
+
+    const res = await app.inject({
+      method: 'POST', url: '/internal/agent/llm-relay', headers,
+      payload: { provider: 'opencode-go', model: 'env-only-model', prompt: 'hi' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const [url] = fetchSpy.mock.calls[0]!;
+    expect(String(url)).toBe('https://opencode.ai/zen/go/v1/responses');
   });
 });
