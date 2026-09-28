@@ -69,7 +69,7 @@ describe('Private Broker Client (Task 5A)', () => {
           'cf-access-client-id': 'cf-id-1',
           'cf-access-client-secret': 'cf-secret-1',
         }),
-        redirect: 'error',
+        redirect: 'manual',
       }),
     );
   });

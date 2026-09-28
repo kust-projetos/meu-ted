@@ -763,8 +763,24 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             // affinity, charset-safe by construction (uuid format).
             sessionId: `ted-${input.workspaceId}`,
           }),
-          redirect: 'error',
-        }, relayTimeoutMs);
+          // FIX-AGENT-RELAY-EDGE-REDIRECT: Workers fetch throws TypeError on
+          // redirect: 'error' ("won't be implemented at the edge"). 'manual'
+          // keeps the no-follow SSRF guarantee — a 3xx/opaqueredirect arrives
+          // as a non-ok response and fails closed in the mapping below.
+          redirect: 'manual',
+        }, relayTimeoutMs).catch((relayFetchErr: unknown) => {
+          // Observability for instant edge failures that would otherwise
+          // surface as opaque http_502. The bounded message comes from the
+          // fetch runtime itself (never prompt/secret material).
+          const e = relayFetchErr as { name?: unknown; status?: unknown; message?: unknown } | null;
+          console.info(JSON.stringify({
+            eventType: 'relay.leg.throw',
+            name: typeof e?.name === 'string' ? e.name : 'unknown',
+            status: typeof e?.status === 'number' ? e.status : null,
+            msg: typeof e?.message === 'string' ? e.message.slice(0, 240) : '',
+          }));
+          throw relayFetchErr;
+        });
         if (!ok) {
           // FIX-AGENT-RELAY-FAILOVER-HARDENING (B): preserva o {code,status}
           // estruturado do relay em vez de colapsar tudo em 502 — o /rpc/chat

@@ -1,8 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
-vi.mock("next/font/google", () => ({
-  Plus_Jakarta_Sans: () => ({ variable: "--font-plus-jakarta-sans" }),
-  Space_Grotesk: () => ({ variable: "--font-space-grotesk" }),
+vi.mock("next/font/local", () => ({
+  default: (opts: { variable?: string }) => ({ variable: opts?.variable ?? "--font-mock" }),
 }));
 
 describe("viewport", () => {

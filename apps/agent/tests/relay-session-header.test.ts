@@ -44,6 +44,47 @@ const createTestAgent = () => {
   return { agent, persisted };
 };
 
+const relayInits: RequestInit[] = [];
+
+const stubWorkerEgress = () => {
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes('/internal/agent/llm-config')) {
+      return new Response(JSON.stringify(snapshotBody()), { status: 200 });
+    }
+    if (u.includes('/internal/agent/llm-relay')) {
+      relayInits.push(init ?? {});
+      return new Response(JSON.stringify({ text: 'ok' }), { status: 200 });
+    }
+    // T3.1 (SPEC §14): usable evidence so the turn reaches the relay.
+    if (u.includes('/budgets')) {
+      return new Response(JSON.stringify({ budgets: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
+    }
+    return new Response('not found', { status: 404 });
+  }) as unknown as typeof fetch;
+};
+
+describe('FIX-AGENT-RELAY-EDGE-REDIRECT: relay leg is executable at the Workers edge', () => {
+  const realFetch = globalThis.fetch;
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    relayInits.length = 0;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('uses redirect "manual" (Workers fetch throws TypeError on redirect "error")', async () => {
+    const { agent } = createTestAgent();
+    stubWorkerEgress();
+    const res = await agent.fetch(chatRequest('como está meu orçamento?', 'intent-r1'));
+    expect(res.status).toBe(200);
+    expect(relayInits.length).toBeGreaterThanOrEqual(1);
+    expect(relayInits[0]!['redirect']).toBe('manual');
+    expect(relayInits[0]!['redirect']).not.toBe('error');
+  });
+});
+
 const chatRequest = (text: string, intentionId: string) =>
   new Request('https://agent.test.local/rpc/chat', {
     method: 'POST',
