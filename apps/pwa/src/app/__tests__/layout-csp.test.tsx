@@ -2,9 +2,8 @@ import React, { type ReactElement } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { buildCspValue } from "@/proxy-utils";
 
-vi.mock("next/font/google", () => ({
-  Plus_Jakarta_Sans: () => ({ variable: "--font-plus-jakarta-sans" }),
-  Space_Grotesk: () => ({ variable: "--font-space-grotesk" }),
+vi.mock("next/font/local", () => ({
+  default: () => ({ variable: "--font-mock" }),
 }));
 
 // Controllable stand-in for the per-request headers the middleware sets
