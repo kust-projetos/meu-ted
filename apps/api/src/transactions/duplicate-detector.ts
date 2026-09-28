@@ -54,25 +54,17 @@ export async function findDuplicate(
   const minDate = new Date(new Date(params.date).getTime() - windowDays * 86400000).toISOString().slice(0, 10);
   const maxDate = new Date(new Date(params.date).getTime() + windowDays * 86400000).toISOString().slice(0, 10);
 
-  if (params.idempotencyKey) {
-    const keyResult = await pool.query(
-      `SELECT id, kind, amount_cents, description, date, from_account_id, to_account_id, created_at
-       FROM transactions
-       WHERE household_id = $1
-         AND idempotency_key = $2
-         AND deleted_at IS NULL
-       LIMIT 1`,
-      [params.householdId, params.idempotencyKey]
-    );
-    if (keyResult.rows.length > 0) {
-      const row = keyResult.rows[0] as any;
-      return { ...row, match_type: "idempotency_key", similarity: 1.0 };
-    }
-  }
-
+  // FIX-API-DUPLICATE-CANONICAL: the canonical `transactions` table has no
+  // `from_account_id`/`to_account_id`/`idempotency_key` columns — the legacy
+  // pre-query 500'd every call (`column "from_account_id" does not exist`).
+  // Canonical idempotency is enforced authoritatively at write time (the same
+  // key cannot create twice), so the pre-create warning only needs the
+  // semantic scan over the canonical columns, aliased to the legacy match
+  // shape to keep consumers unchanged.
+  void params.idempotencyKey;
   const accountId = params.accountId ?? params.fromAccountId;
   const result = await pool.query(
-    `SELECT id, kind, amount_cents, description, date, from_account_id, to_account_id, created_at
+    `SELECT id, kind, amount_cents, description, date, account_id AS from_account_id, transfer_to_account_id AS to_account_id, created_at
      FROM transactions
      WHERE household_id = $1
        AND kind = $2
@@ -80,7 +72,7 @@ export async function findDuplicate(
        AND date BETWEEN $4 AND $5
        AND deleted_at IS NULL
        AND (
-         ($6::uuid IS NOT NULL AND (from_account_id = $6 OR to_account_id = $6))
+         ($6::uuid IS NOT NULL AND (account_id = $6 OR transfer_to_account_id = $6))
          OR ($6::uuid IS NULL)
        )
      ORDER BY created_at DESC

@@ -13,12 +13,15 @@ describe("duplicate-detector", () => {
     expect(jaccardSimilarity("", "qualquer")).toBe(0);
   });
 
-  it("finds duplicate via idempotency key", async () => {
+  it("queries the CANONICAL schema only (no legacy from_account_id/idempotency pre-query)", async () => {
+    // FIX-API-DUPLICATE-CANONICAL: production (DB_SCHEMA=canonical) 500s with
+    // `column "from_account_id" does not exist` — the detector must query the
+    // canonical columns and must not run the legacy idempotency pre-query
+    // (canonical idempotency is enforced authoritatively at write time).
+    const queries: string[] = [];
     const pool: any = {
-      query: async (sql: string, params: any[]) => {
-        if (sql.includes("idempotency_key")) {
-          return { rows: [{ id: "existing-1", amount_cents: "1000", description: "old", date: new Date("2026-08-20"), from_account_id: null, to_account_id: null, created_at: new Date() }] };
-        }
+      query: async (sql: string) => {
+        queries.push(sql);
         return { rows: [] };
       },
     };
@@ -29,10 +32,20 @@ describe("duplicate-detector", () => {
       amountCents: 1000,
       date: "2026-08-20",
       idempotencyKey: "key-123",
+      accountId: "00000000-0000-0000-0000-000000000001",
     });
-    expect(match).not.toBeNull();
-    expect(match?.match_type).toBe("idempotency_key");
-    expect(match?.similarity).toBe(1);
+    expect(match).toBeNull();
+    expect(queries).toHaveLength(1);
+    const sql = queries[0]!;
+    // Canonical columns (aliased to the legacy match shape for consumers).
+    expect(sql).toContain("account_id AS from_account_id");
+    expect(sql).toContain("transfer_to_account_id AS to_account_id");
+    expect(sql).toContain("(account_id = $6 OR transfer_to_account_id = $6)");
+    expect(sql).toContain("household_id");
+    // No legacy column usage and no legacy idempotency pre-query.
+    expect(sql).not.toContain(" from_account_id =");
+    expect(sql).not.toContain(" to_account_id =");
+    expect(sql).not.toContain("idempotency_key");
   });
 
   it("finds semantic duplicate with similarity >=0.6", async () => {
