@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import { getToken } from "../auth/token-store";
 
 export type AgentConnectionTokenResponse = {
   token: string;
@@ -84,11 +85,19 @@ export const fetchAgentConnectionToken = async (
   // H-13: the mint flight is tracked so logout/401/switch aborts it.
   const { signal, release } = trackAgentConnection();
   try {
+    // FIX-PWA-DEVICE-BOUND-MINT: the mint carries the device token via the
+    // T2.5 EXPLICIT channel (apiFetch `token` → `x-device-token`), so the API
+    // emits a device-bound JWT (H-12). Without it the Worker deletes
+    // `x-agent-device` and every approval/undo RPC answers 401
+    // `agent.approval_context_required`. Explicit + scoped: this is not the
+    // banned universal attach — regular calls stay cookie-only.
+    const deviceToken = getToken();
     const response = await apiFetch<AgentConnectionTokenResponse>("/auth/agent-token", {
       method: "POST",
       headers: {
         "X-Workspace-Id": workspaceId,
       },
+      ...(deviceToken ? { token: deviceToken } : {}),
       signal,
     });
 
