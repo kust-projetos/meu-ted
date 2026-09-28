@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@/lib/test-utils";
+import { act } from "react";
+import { render, screen, waitFor } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import { WorkspaceSwitcher } from "../WorkspaceSwitcher";
 import type { WorkspaceContextValue } from "@/lib/auth/workspace-context";
@@ -215,5 +216,148 @@ describe("WorkspaceSwitcher Component (Task 9)", () => {
 
     await user.click(screen.getByRole("option", { name: /Empresa LTDA/i }));
     expect(mockContext.value.selectWorkspace).toHaveBeenCalledWith("ws-2");
+  });
+
+  it("only closes after selectWorkspace settles, so the label never announces a workspace whose header is not committed yet", async () => {
+    const user = userEvent.setup();
+    let resolveSelect!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      resolveSelect = resolve;
+    });
+    mockContext.value = {
+      ...mockContext.value,
+      selectWorkspace: vi.fn(() => pending),
+    };
+
+    render(<WorkspaceSwitcher compact />);
+    await user.click(screen.getByRole("button", { name: /selecionar espaço/i }));
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("option", { name: /Empresa LTDA/i }));
+    expect(mockContext.value.selectWorkspace).toHaveBeenCalledWith("ws-2");
+    // While the switch commits, the dropdown stays open and options lock.
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Empresa LTDA/i })).toBeDisabled();
+
+    resolveSelect();
+    await waitFor(() =>
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("swallows a selectWorkspace rejection: the dropdown still closes and no unhandled rejection escapes the void onClick", async () => {
+    const user = userEvent.setup();
+    const rejections: unknown[] = [];
+    const onUnhandled = (event: PromiseRejectionEvent) => {
+      rejections.push(event.reason);
+    };
+    window.addEventListener("unhandledrejection", onUnhandled);
+    try {
+      let rejectSelect!: (reason?: unknown) => void;
+      mockContext.value = {
+        ...mockContext.value,
+        selectWorkspace: vi.fn(
+          () =>
+            new Promise<void>((_, reject) => {
+              rejectSelect = reject;
+            }),
+        ),
+      };
+
+      render(<WorkspaceSwitcher compact />);
+      await user.click(screen.getByRole("button", { name: /selecionar espaço/i }));
+      expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("option", { name: /Empresa LTDA/i }));
+      expect(mockContext.value.selectWorkspace).toHaveBeenCalledWith("ws-2");
+      // While the switch commits, the dropdown stays open and options lock.
+      expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+      await act(async () => {
+        rejectSelect(new Error("Network down"));
+      });
+      await waitFor(() =>
+        expect(screen.queryByRole("listbox")).not.toBeInTheDocument(),
+      );
+      // The label still names the committed workspace (the failure is
+      // modeled in context error state, never announced as the new label).
+      expect(
+        screen.getByRole("button", { name: /selecionar espaço/i }),
+      ).toHaveTextContent("Minhas Finanças");
+
+      // Single event-loop yield so a leaked rejection would have dispatched
+      // its unhandledrejection by now — a settle flush, not a race barrier.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(rejections).toEqual([]);
+    } finally {
+      window.removeEventListener("unhandledrejection", onUnhandled);
+    }
+  });
+
+  it("surfaces a selectWorkspace rejection inline: menu closes, label stays coherent, reason is announced", async () => {
+    const user = userEvent.setup();
+    let rejectSelect!: (reason?: unknown) => void;
+    mockContext.value = {
+      ...mockContext.value,
+      selectWorkspace: vi.fn(
+        () =>
+          new Promise<void>((_, reject) => {
+            rejectSelect = reject;
+          }),
+      ),
+    };
+
+    render(<WorkspaceSwitcher compact />);
+    await user.click(screen.getByRole("button", { name: /selecionar espaço/i }));
+    await user.click(screen.getByRole("option", { name: /Empresa LTDA/i }));
+
+    await act(async () => {
+      rejectSelect(new Error("Network down"));
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument(),
+    );
+    const alert = await screen.findByTestId("workspace-switch-error");
+    expect(alert).toHaveAttribute("role", "alert");
+    expect(alert).toHaveTextContent("Network down");
+    expect(
+      screen.getByRole("button", { name: /selecionar espaço/i }),
+    ).toHaveTextContent("Minhas Finanças");
+  });
+
+  it("shows the modeled authorization error inline when the list is non-empty", async () => {
+    const user = userEvent.setup();
+    mockContext.value = {
+      ...mockContext.value,
+      error: "Token inválido",
+    };
+
+    render(<WorkspaceSwitcher compact />);
+    const alert = await screen.findByTestId("workspace-switch-error");
+    expect(alert).toHaveAttribute("role", "alert");
+    expect(alert).toHaveTextContent("Token inválido");
+    // Switcher stays usable: trigger keeps the committed label and the menu opens.
+    expect(
+      screen.getByRole("button", { name: /selecionar espaço/i }),
+    ).toHaveTextContent("Minhas Finanças");
+    await user.click(screen.getByRole("button", { name: /selecionar espaço/i }));
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("shows the modeled network error inline when the list is non-empty", async () => {
+    mockContext.value = {
+      ...mockContext.value,
+      error: "API offline",
+    };
+
+    render(<WorkspaceSwitcher compact />);
+    const alert = await screen.findByTestId("workspace-switch-error");
+    expect(alert).toHaveAttribute("role", "alert");
+    expect(alert).toHaveTextContent("API offline");
+    expect(
+      screen.getByRole("button", { name: /selecionar espaço/i }),
+    ).toHaveTextContent("Minhas Finanças");
   });
 });

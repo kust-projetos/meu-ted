@@ -31,6 +31,12 @@ const api = vi.hoisted(() => ({
   closeAllSockets: vi.fn(),
 }));
 const clientState = vi.hoisted(() => ({ active: undefined as string | undefined }));
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
 vi.mock("@/lib/api/workspaces", () => api);
 vi.mock("./socket-registry", () => ({ closeAllSockets: api.closeAllSockets }));
 vi.mock("@/lib/api/client", () => ({
@@ -57,6 +63,7 @@ vi.mock("@/lib/api/client", () => ({
 function Probe() {
   const {
     activeWorkspace,
+    loading,
     workspaces,
     selectWorkspace,
     error,
@@ -77,6 +84,7 @@ function Probe() {
   const [refreshError, setRefreshError] = useState<string | null>(null);
   return <>
     <div data-testid="active">{activeWorkspace?.name ?? "none"}</div>
+    <div data-testid="loading">{String(loading)}</div>
     <div data-testid="error">{error ?? "no-error"}</div>
     <div data-testid="is-auth-error">{String(isAuthError ?? false)}</div>
     <div data-testid="refresh-error">{refreshError ?? "no-refresh-error"}</div>
@@ -211,15 +219,27 @@ describe("WorkspaceProvider", () => {
   });
 
   it("keeps archived workspaces visible but never selects one as active", async () => {
-    api.fetchWorkspaces.mockResolvedValue([
+    const authorized = [
       { id: "workspace-1", name: "Casa", kind: "personal", role: "owner", status: "archived" },
       { id: "workspace-2", name: "Equipe", kind: "shared", role: "member", status: "active" },
-    ]);
+    ];
+    api.fetchWorkspaces.mockResolvedValue(authorized);
+    const callsBeforeRender = api.fetchWorkspaces.mock.calls.length;
     render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
 
     expect(await screen.findByTestId("active")).toHaveTextContent("Equipe");
+    await waitFor(() => expect(api.fetchWorkspaces).toHaveBeenCalledTimes(callsBeforeRender + 1));
+    const serverRevalidation = deferred<typeof authorized>();
+    api.fetchWorkspaces.mockImplementationOnce(() => serverRevalidation.promise);
     await userEvent.setup().click(screen.getByRole("button", { name: "Casa" }));
-    expect(screen.getByTestId("active")).toHaveTextContent("Equipe");
+    await waitFor(() => expect(api.fetchWorkspaces).toHaveBeenCalledTimes(callsBeforeRender + 2));
+    // While the cross-workspace purge + fresh server validation is pending,
+    // the provider stays on its fail-safe loading shell (not the stale target).
+    expect(screen.getByText("Carregando workspaces…")).toBeInTheDocument();
+    expect(screen.queryByTestId("active")).not.toBeInTheDocument();
+    serverRevalidation.resolve(authorized);
+    expect(await screen.findByTestId("active")).toHaveTextContent("Equipe");
+    expect(clientState.active).toBe("workspace-2");
   });
 
   it("refreshes the authorized list after lifecycle operations", async () => {

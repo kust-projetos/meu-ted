@@ -504,7 +504,7 @@ export default function WorkspaceManagerPage() {
         {error && (
           <div className="flex items-center justify-between gap-3 rounded-[16px] border border-warning/30 bg-warning-tint px-4 py-3 text-[13px] font-semibold text-warning" role="alert">
             <span>{error}</span>
-            <Button type="button" variant="ghost" size="sm" onClick={() => void refreshWorkspaces()}>Tentar novamente</Button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => void refreshWorkspaces().catch(() => {})}>Tentar novamente</Button>
           </div>
         )}
         {actionError && (
