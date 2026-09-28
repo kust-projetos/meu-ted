@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
-import { Plus_Jakarta_Sans, Space_Grotesk } from "next/font/google";
+// FIX-PWA-FONT-BUILD: self-hosted variable fonts (latin, pt-BR coverage).
+// next/font/google downloads fonts from Google at build time and broke CI
+// with "next/font: TypeError: Cannot read properties of null" flakes.
+import localFont from "next/font/local";
 import { RootProviders } from "@/components/RootProviders";
 import { THEME_SCRIPT } from "@/lib/theme";
 import "./globals.css";
@@ -8,16 +11,16 @@ import "./globals.css";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const plusJakartaSans = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
+const plusJakartaSans = localFont({
+  src: [{ path: "../fonts/PlusJakartaSans-Variable.woff2", weight: "200 800", style: "normal" }],
   variable: "--font-plus-jakarta-sans",
+  display: "swap",
 });
 
-const spaceGrotesk = Space_Grotesk({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+const spaceGrotesk = localFont({
+  src: [{ path: "../fonts/SpaceGrotesk-Variable.woff2", weight: "300 700", style: "normal" }],
   variable: "--font-space-grotesk",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
