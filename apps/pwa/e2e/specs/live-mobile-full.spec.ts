@@ -619,7 +619,13 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     for (const path of mobileRoutes) {
       await page.goto(path, { waitUntil: "domcontentloaded" });
       await expect(page.locator("main")).toBeVisible({ timeout: 30000 });
-      await expect(page.getByRole("button", { name: "Selecionar espaço" })).toContainText("Test Family", { timeout: 15000 });
+      if (path === "/hub/alertas") {
+        // AlertasTabs intentionally omits PageHeader/WorkspaceSwitcher; its
+        // workspace-scoped reads remain covered by the request guard above.
+        await expect(page.getByRole("tablist", { name: "Alertas" })).toBeVisible({ timeout: 15000 });
+      } else {
+        await expect(page.getByRole("button", { name: "Selecionar espaço" })).toContainText("Test Family", { timeout: 15000 });
+      }
       await expect(page.locator("body")).not.toContainText("Carregando…", { timeout: 30000 });
       await shot(page, `11-nav-${path.replace(/\W+/g, "-")}`);
     }
