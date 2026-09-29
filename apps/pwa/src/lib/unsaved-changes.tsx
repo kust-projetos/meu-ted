@@ -36,6 +36,16 @@ import {
 export interface UnsavedChangesContextValue {
   /** True if any source (trackWrite or token) is dirty. */
   isDirty: boolean;
+  /**
+   * Monotonically increasing revision bumped on every real dirty-state
+   * transition (trackWrite acquire/release, markDirty/markClean that
+   * actually changes a source). Idempotent no-ops do not bump. Lets
+   * effects observe a dirty→clean round-trip within a single React batch
+   * (isDirty starts/ends false, so [isDirty] alone would not rerun).
+   */
+  dirtyVersion: number;
+  /** Synchronous current dirty query (reads live refs, no effect lag). */
+  isDirtyNow: () => boolean;
   /** Register a pending write. Returns a cleanup function (call on resolve). */
   trackWrite: () => () => void;
   /** Mark a token as dirty. Idempotent. */
@@ -50,6 +60,8 @@ const UnsavedChangesContext = createContext<UnsavedChangesContextValue | null>(n
 
 const NULL_VALUE: UnsavedChangesContextValue = {
   isDirty: false,
+  dirtyVersion: 0,
+  isDirtyNow: () => false,
   trackWrite: () => () => {},
   markDirty: () => {},
   markClean: () => {},
@@ -61,45 +73,67 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const countRef = useRef(0);
   const [dirtyTokens, setDirtyTokens] = useState<ReadonlySet<symbol>>(new Set());
   const tokenSetRef = useRef<Set<symbol>>(new Set());
+  const [dirtyVersion, setDirtyVersion] = useState(0);
+  const versionRef = useRef(0);
+
+  const bumpVersion = useCallback(() => {
+    versionRef.current += 1;
+    setDirtyVersion(versionRef.current);
+  }, []);
 
   const trackWrite = useCallback(() => {
     countRef.current += 1;
     setDirtyCount(countRef.current);
+    bumpVersion();
     let resolved = false;
     return () => {
       if (resolved) return;
       resolved = true;
       countRef.current -= 1;
       setDirtyCount(countRef.current);
+      bumpVersion();
     };
-  }, []);
+  }, [bumpVersion]);
 
   const markDirty = useCallback((token: symbol) => {
     if (tokenSetRef.current.has(token)) return;
     tokenSetRef.current.add(token);
     setDirtyTokens(new Set(tokenSetRef.current));
-  }, []);
+    bumpVersion();
+  }, [bumpVersion]);
 
   const markClean = useCallback((token: symbol) => {
     if (!tokenSetRef.current.has(token)) return;
     tokenSetRef.current.delete(token);
     setDirtyTokens(new Set(tokenSetRef.current));
-  }, []);
+    bumpVersion();
+  }, [bumpVersion]);
 
   const isFormDirty = useCallback(
     (token: symbol) => dirtyTokens.has(token),
     [dirtyTokens],
   );
 
+  // Synchronous read backed by the same refs mutated synchronously in
+  // trackWrite/release and markDirty/markClean. Stable identity so event
+  // handlers (e.g. SW controllerchange) can close over it and always see
+  // live state without waiting for the passive isDirty effect to flush.
+  const isDirtyNow = useCallback(
+    () => countRef.current > 0 || tokenSetRef.current.size > 0,
+    [],
+  );
+
   const value = useMemo<UnsavedChangesContextValue>(
     () => ({
       isDirty: dirtyCount > 0 || dirtyTokens.size > 0,
+      dirtyVersion,
+      isDirtyNow,
       trackWrite,
       markDirty,
       markClean,
       isFormDirty,
     }),
-    [dirtyCount, dirtyTokens, trackWrite, markDirty, markClean, isFormDirty],
+    [dirtyCount, dirtyTokens, dirtyVersion, trackWrite, markDirty, markClean, isFormDirty, isDirtyNow],
   );
 
   return (

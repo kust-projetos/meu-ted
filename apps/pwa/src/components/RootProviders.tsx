@@ -87,33 +87,33 @@ export function RootProviders({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const isInviteRoute = pathname?.startsWith("/convite");
+  // Exact invite pathname only: usePathname() never carries a query string,
+  // so "/convites" (or any prefix-sibling) must NOT bypass AuthGate.
+  const isInviteRoute = pathname === "/convite";
 
-  if (isInviteRoute) {
-    return (
-      <ThemeProvider>
-        <UnsavedChangesProvider>
-          <SWCoordinator>
-            <SheetProvider>{children}</SheetProvider>
-          </SWCoordinator>
-        </UnsavedChangesProvider>
-      </ThemeProvider>
-    );
-  }
-
-  const inner = (
-    <UnsavedChangesProvider>
-      <SWCoordinator>
-        <WorkspaceProvider>
-          <AppStateProvider>
-            <SheetProvider>{children}</SheetProvider>
-          </AppStateProvider>
-        </WorkspaceProvider>
-      </SWCoordinator>
-    </UnsavedChangesProvider>
+  // Single SWCoordinator/UnsavedChangesProvider instance across route branch
+  // changes: only the content BELOW the coordinator swaps type (invite sheet
+  // vs AuthGate-gated app tree), so switching / ↔ /convite never unmounts
+  // the coordinator and never loses activationRequested/activatedWorkers/
+  // pendingReload state. The invite branch still bypasses AuthGate +
+  // WorkspaceProvider/AppStateProvider (public token flow).
+  const routeContent = isInviteRoute ? (
+    <SheetProvider>{children}</SheetProvider>
+  ) : (
+    <AuthGate>
+      <WorkspaceProvider>
+        <AppStateProvider>
+          <SheetProvider>{children}</SheetProvider>
+        </AppStateProvider>
+      </WorkspaceProvider>
+    </AuthGate>
   );
 
-  const tree = isApiConfigured() ? <AuthGate>{inner}</AuthGate> : inner;
-
-  return <ThemeProvider>{tree}</ThemeProvider>;
+  return (
+    <ThemeProvider>
+      <UnsavedChangesProvider>
+        <SWCoordinator>{routeContent}</SWCoordinator>
+      </UnsavedChangesProvider>
+    </ThemeProvider>
+  );
 }
