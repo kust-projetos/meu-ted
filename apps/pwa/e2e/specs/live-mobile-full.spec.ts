@@ -138,6 +138,18 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
         rpc === "undo/decision"
       );
     };
+    // Decision POST observer: attached before the first navigation so the
+    // full journey is covered with no start gap. Captures any
+    // finance-chat-agent pending-operations decision POST, in any workspace;
+    // the final assertion requires exactly the single expected path.
+    const decisionRequestPaths: string[] = [];
+    const trackDecisionRequest = (request: Request) => {
+      if (request.method() !== "POST") return;
+      const pathname = new URL(request.url()).pathname;
+      if (!/^\/api\/agent\/agents\/finance-chat-agent\/[^/]+\/rpc\/pending-operations\/[^/]+\/decision$/.test(pathname)) return;
+      decisionRequestPaths.push(pathname);
+    };
+    page.on("request", trackDecisionRequest);
     // Install before the first navigation. Off-origin mutations (NEXT_PUBLIC_*
     // direct transport overrides) are blocked; auth/device bootstrap is
     // explicitly exempt; financial/agent writes fail closed until Test Family
@@ -418,13 +430,6 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     expect(operationWrapperId).toMatch(/^ted-op-[0-9a-f-]{36}$/i);
     const operationId = operationWrapperId!.slice("ted-op-".length);
     const decisionRequestPath = `/api/agent/agents/finance-chat-agent/${ACTIVE_WS}/rpc/pending-operations/${operationId}/decision`;
-    const decisionRequestPaths: string[] = [];
-    const trackDecisionRequest = (request: Request) => {
-      if (request.method() === "POST" && new URL(request.url()).pathname === decisionRequestPath) {
-        decisionRequestPaths.push(decisionRequestPath);
-      }
-    };
-    page.on("request", trackDecisionRequest);
     const confirmBtn = approvalCard.getByRole("button", { name: /Confirmar R\$\s*2[.,]00/i });
     await expect(confirmBtn).toBeVisible();
     await expect(approvalCard).toContainText(TX_DESC_TED);
@@ -473,10 +478,15 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     await shot(page, "09-ted-recibo");
 
     // ── VERIFICAÇÃO DA MUTAÇÃO no extrato ─────────────────────────────────
+    // A linha visível é asseverada dentro da lista de registros (escopo
+    // records-groups, não o body inteiro) e a amarração autoritativa é pelo
+    // receipt.entity.id retornado na decisão — a descrição exata continua
+    // obrigatória, mas não é o único localizador.
     await page.goto("/registros", { waitUntil: "domcontentloaded" });
-    await expect(page.getByText(TX_DESC_TED).first()).toBeVisible({ timeout: 30000 });
-    const created = await page.evaluate(async ({ workspaceId, descriptions }) => {
+    await expect(page.getByTestId("records-groups").getByText(TX_DESC_TED).first()).toBeVisible({ timeout: 30000 });
+    const created = await page.evaluate(async ({ workspaceId, descriptions, expectedTedId }) => {
       const matches: TransactionRow[] = [];
+      const all: TransactionRow[] = [];
       let offset = 0;
       let total: number | null = null;
       let firstStatus = 0;
@@ -486,6 +496,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
         paginationComplete: false,
         pageErrorStatus,
         entries: Object.fromEntries(descriptions.map((description: string) => [description, []])),
+        byReceiptId: null,
       });
       while (!complete) {
         const response = await fetch(`/api/backend/transactions?limit=100&offset=${offset}`, {
@@ -517,6 +528,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
           return incomplete(firstStatus, "empty page before total");
         }
         matches.push(...items.filter((item) => typeof item.description === "string" && descriptions.includes(item.description)));
+        all.push(...items);
         offset += items.length;
         if (offset > total) return incomplete(firstStatus, "page exceeded total");
         complete = offset >= total;
@@ -537,8 +549,20 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
         status: firstStatus,
         paginationComplete: total !== null && offset >= total,
         entries,
+        byReceiptId: (() => {
+          const item = all.find((candidate) => String(candidate.id) === String(expectedTedId));
+          if (!item) return null;
+          return {
+            id: item?.id ?? null,
+            description: item?.description ?? null,
+            amountCents: item?.amountCents ?? item?.amount_cents ?? null,
+            date: typeof item?.date === "string" ? item.date.slice(0, 10) : null,
+            accountId: item?.accountId ?? item?.account_id ?? null,
+            categoryId: item?.subcategoryId ?? item?.subcategory_id ?? item?.categoryId ?? item?.category_id ?? null,
+          };
+        })(),
       };
-    }, { workspaceId: ACTIVE_WS, descriptions: [TX_DESC, TX_DESC_TED] });
+    }, { workspaceId: ACTIVE_WS, descriptions: [TX_DESC, TX_DESC_TED], expectedTedId: decisionBody.receipt?.entity?.id });
     expect(created.status).toBe(200);
     expect(created.paginationComplete).toBe(true);
     expect(created.entries[TX_DESC]).toMatchObject({
@@ -561,6 +585,18 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     // receipt entity id returned by the single approval decision.
     expect(created.entries[TX_DESC_TED].id, "ledger transaction id must equal the decision receipt entity id")
       .toBe(decisionBody.receipt?.entity?.id);
+    // Localizador autoritativo por receipt.entity.id: a linha do ledger é
+    // encontrada pelo id do recibo (não só pela descrição) e a descrição
+    // armazenada deve ser exatamente o marker único — sem enfraquecer.
+    expect(created.byReceiptId, "ledger must contain the receipt entity id").not.toBeNull();
+    expect(created.byReceiptId).toMatchObject({
+      id: decisionBody.receipt?.entity?.id,
+      description: TX_DESC_TED,
+      amountCents: 200,
+      date: expectedTedDate,
+      accountId: testAccountId,
+      categoryId: lancheCategoryId,
+    });
     await shot(page, "10-extrato-pos-ted");
 
     // ── NAVEGAÇÃO: superfícies principais renderizam em mobile ─────────────
