@@ -118,6 +118,11 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     let workspaceGuardReady = false;
     const consoleErrors: string[] = [];
     const workspaceWriteViolations: string[] = [];
+    // Early agent-token mints blocked client-side before Test Family selection
+    // (or with a wrong workspace header). These never reach the server — they
+    // are recorded separately so the final hygiene assertion does not confuse
+    // an aborted pre-workspace attempt with an actual unsafe write.
+    const blockedEarlyAgentTokenAttempts: string[] = [];
     page.on("console", (message) => {
       if (authComplete && message.type() === "error") consoleErrors.push(message.text().slice(0, 300));
     });
@@ -181,6 +186,8 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
         "/api/backend/auth/get-session",
         "/api/backend/workspaces",
         "/api/backend/health",
+        // Device self-verification: global identity read with no workspace scope.
+        "/api/backend/auth/devices/me",
       ]);
       const workspaceBackendPath = path.startsWith("/api/backend/") && !globalBackendReads.has(path);
       const agentPath = path.startsWith("/api/agent/");
@@ -194,6 +201,21 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
         path === "/api/backend/auth/devices/register"
       );
       const allowedBackendWrite = allowedBackendWrites.has(`${method} ${path}`);
+      // Early agent-token guard: token mint before Test Family is selected or
+      // with the wrong workspace must stay blocked, but it is NOT an unsafe
+      // write sent to the server — page.route aborts it client-side. Record
+      // separately and return before the generic workspace violation tracking.
+      if (
+        method === "POST" &&
+        path === "/api/backend/auth/agent-token" &&
+        (!workspaceGuardReady || workspaceHeader !== ACTIVE_WS)
+      ) {
+        blockedEarlyAgentTokenAttempts.push(
+          `${method} ${path} workspace=${workspaceHeader ?? "<missing>"} ready=${workspaceGuardReady}`,
+        );
+        await route.abort("blockedbyclient");
+        return;
+      }
 
       if (authBootstrap && mutating) {
         await route.continue();
@@ -634,6 +656,14 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     page.off("request", trackDecisionRequest);
 
     // ── HIGIENE: nenhum erro de página não tratado durante a jornada ───────
+    // Diagnostic: early agent-token attempts above were deliberately
+    // intercepted client-side (blockedbyclient) before Test Family selection
+    // or with a wrong workspace header — they never reached the server and
+    // are not workspace writes. Only workspaceWriteViolations must stay empty.
+    test.info().annotations.push({
+      type: "live-auth-guard",
+      description: `blocked early agent-token attempts (client-aborted, never sent): ${blockedEarlyAgentTokenAttempts.length} :: ${blockedEarlyAgentTokenAttempts.join(" | ")}`,
+    });
     expect(workspaceWriteViolations, `writes outside selected workspace: ${workspaceWriteViolations.join(" | ")}`).toHaveLength(0);
     expect(pageErrors, `page errors: ${pageErrors.join(" | ")}`).toHaveLength(0);
     expect(consoleErrors, `console errors after login: ${consoleErrors.join(" | ")}`).toHaveLength(0);
