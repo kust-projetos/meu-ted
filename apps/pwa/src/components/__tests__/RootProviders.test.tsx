@@ -62,7 +62,6 @@ function installServiceWorkerMock() {
         originalDescriptor,
       );
     } else if (!hadOwnServiceWorker) {
-      // @ts-expect-error jsdom cleanup: remove the test-only own property
       delete (globalThis.navigator as { serviceWorker?: unknown }).serviceWorker;
     }
   };
