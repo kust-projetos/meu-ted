@@ -101,14 +101,23 @@ const makeFakeApprovalApi = (initial: FakeOp[] = [], fakeOpts?: { executeReceipt
         op.status = 'succeeded';
         events.push(`execute:${id}`);
         const mutationId = `mut-${id}`;
+        // Real API contract: every success carries a linked receipt
+        // (receipt.operationId = pending id, entity.id = transaction id).
         const receipt = fakeOpts?.executeReceipt
-          ? { ...fakeOpts.executeReceipt, mutationId, operationId: id, entity: { type: 'transaction', id } }
-          : undefined;
+          ? { ...fakeOpts.executeReceipt, mutationId, operationId: id, entity: { type: 'transaction', id: mutationId } }
+          : {
+              mutationId,
+              mutationKind: 'transactions.expense.create',
+              status: 'succeeded',
+              affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
+              operationId: id,
+              entity: { type: 'transaction', id: mutationId },
+            };
         return {
+          id,
           status: 'succeeded',
-          operationId: id,
           mutationId,
-          ...(receipt ? { execution: { status: 'succeeded', operationId: id, receipt } } : {}),
+          execution: { status: 'succeeded', operationId: mutationId, receipt },
         };
       }
       if (action === 'cancel') {
@@ -158,7 +167,18 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
     const orchestrator = setup(fake);
     const result = await turn(orchestrator, 'sim', 'intent-confirm-1');
 
-    expect(result.mutation).toEqual({ operationId: 'op-1', status: 'succeeded' });
+    expect(result.mutation).toEqual({
+      operationId: 'op-1',
+      status: 'succeeded',
+      receipt: {
+        mutationId: 'mut-op-1',
+        mutationKind: 'transactions.expense.create',
+        status: 'succeeded',
+        affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
+        operationId: 'op-1',
+        entity: { type: 'transaction', id: 'mut-op-1' },
+      },
+    });
     expect(result.response?.text).toBe('Lançamento registrado com sucesso.');
     expect(fake.events).toEqual(['listActive', 'confirm:op-1', 'execute:op-1']);
     expect(fake.ops.get('op-1')?.status).toBe('succeeded');
@@ -185,7 +205,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
         status: 'succeeded',
         affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
         operationId: 'op-1',
-        entity: { type: 'transaction', id: 'op-1' },
+        entity: { type: 'transaction', id: 'mut-op-1' },
       },
     });
     expect(JSON.stringify(result.mutation)).not.toContain('attestation');
@@ -211,7 +231,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
         status: 'succeeded',
         affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
         operationId: 'op-1',
-        entity: { type: 'transaction', id: 'op-1' },
+        entity: { type: 'transaction', id: 'mut-op-1' },
       },
     });
   });
@@ -222,7 +242,18 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
     // Forged id must not be confirmed; the authoritative listing wins.
     const result = await turn(orchestrator, 'sim', 'intent-confirm-2', { pendingOperationIds: ['op-forged'] });
 
-    expect(result.mutation).toEqual({ operationId: 'op-real', status: 'succeeded' });
+    expect(result.mutation).toEqual({
+      operationId: 'op-real',
+      status: 'succeeded',
+      receipt: {
+        mutationId: 'mut-op-real',
+        mutationKind: 'transactions.expense.create',
+        status: 'succeeded',
+        affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
+        operationId: 'op-real',
+        entity: { type: 'transaction', id: 'mut-op-real' },
+      },
+    });
     expect(fake.events).not.toContain('confirm:op-forged');
     expect(fake.events).toEqual(['listActive', 'confirm:op-real', 'execute:op-real']);
   });
@@ -281,7 +312,18 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
     const orchestrator = setup(fake);
     const result = await turn(orchestrator, 'tenta de novo', 'intent-retry-1');
 
-    expect(result.mutation).toEqual({ operationId: 'op-failed', status: 'succeeded' });
+    expect(result.mutation).toEqual({
+      operationId: 'op-failed',
+      status: 'succeeded',
+      receipt: {
+        mutationId: 'mut-op-failed',
+        mutationKind: 'transactions.expense.create',
+        status: 'succeeded',
+        affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
+        operationId: 'op-failed',
+        entity: { type: 'transaction', id: 'mut-op-failed' },
+      },
+    });
     expect(result.response?.text).toBe('Lançamento registrado com sucesso.');
     expect(fake.events).toEqual(['listActive', 'retry:op-failed', 'execute:op-failed']);
   });
@@ -400,8 +442,30 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
       identity: { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! },
     });
 
-    expect(nl.mutation).toEqual({ operationId: 'op-1', status: 'succeeded' });
-    expect(button).toEqual({ operationId: 'op-1', status: 'succeeded' });
+    expect(nl.mutation).toEqual({
+      operationId: 'op-1',
+      status: 'succeeded',
+      receipt: {
+        mutationId: 'mut-op-1',
+        mutationKind: 'transactions.expense.create',
+        status: 'succeeded',
+        affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
+        operationId: 'op-1',
+        entity: { type: 'transaction', id: 'mut-op-1' },
+      },
+    });
+    expect(button).toEqual({
+      operationId: 'op-1',
+      status: 'succeeded',
+      receipt: {
+        mutationId: 'mut-op-1',
+        mutationKind: 'transactions.expense.create',
+        status: 'succeeded',
+        affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
+        operationId: 'op-1',
+        entity: { type: 'transaction', id: 'mut-op-1' },
+      },
+    });
     expect(fakeButton.events).toEqual(['confirm:op-1', 'execute:op-1']);
   });
 
@@ -415,5 +479,43 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
     });
     expect(result).toEqual({ operationId: 'op-1', status: 'cancelled' });
     expect(fake.events).toEqual(['cancel:op-1']);
+  });
+
+  it('coordinator retry rejects a response bound to another operation before execute', async () => {
+    const fake = makeFakeApprovalApi([expenseOp('op-1', 'failed')]);
+    fake.request.mockResolvedValueOnce({ id: 'op-other', attestation: 'b'.repeat(40) });
+    const coordinator = new PendingOperationCoordinator({ client: fake.api });
+
+    await expect(
+      coordinator.retry('op-1', { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! }),
+    ).rejects.toThrow('approval.operation_id_mismatch');
+    expect(fake.request).toHaveBeenCalledTimes(1);
+    expect(fake.request.mock.calls[0]?.[1]).toBe('/pending-operations/v2/op-1/retry');
+    expect(fake.events).not.toContain('execute:op-other');
+  });
+
+  it('coordinator cancel rejects a response bound to another operation', async () => {
+    const fake = makeFakeApprovalApi([expenseOp('op-1')]);
+    fake.request.mockResolvedValueOnce({ id: 'op-other', status: 'cancelled' });
+    const coordinator = new PendingOperationCoordinator({ client: fake.api });
+
+    await expect(
+      coordinator.cancel('op-1', { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! }),
+    ).rejects.toThrow('approval.operation_id_mismatch');
+    expect(fake.request).toHaveBeenCalledTimes(1);
+    expect(fake.request.mock.calls[0]?.[1]).toBe('/pending-operations/v2/op-1/cancel');
+    expect(fake.events).not.toContain('cancel:op-1');
+  });
+
+  it('coordinator cancel only reports success when the returned status is cancelled', async () => {
+    const fake = makeFakeApprovalApi([expenseOp('op-1')]);
+    fake.request.mockResolvedValueOnce({ id: 'op-1', status: 'proposed' });
+    const coordinator = new PendingOperationCoordinator({ client: fake.api });
+
+    await expect(
+      coordinator.cancel('op-1', { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! }),
+    ).rejects.toThrow('approval.cancel_not_confirmed');
+    expect(fake.request).toHaveBeenCalledTimes(1);
+    expect(fake.events).not.toContain('cancel:op-1');
   });
 });

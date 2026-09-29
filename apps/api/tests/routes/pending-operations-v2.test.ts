@@ -177,7 +177,8 @@ describe('pending operation V2 routes', () => {
       expect(receipt.status).toBe('succeeded');
       expect(Array.isArray(receipt.affectedTargets)).toBe(true);
       expect(receipt.affectedTargets.length).toBeGreaterThan(0);
-      expect(receipt.operationId).toBeTruthy();
+      expect(receipt.operationId).toBe(id);
+      expect(receipt.entity).toEqual({ type: 'transaction', id: 'tx-1' });
       expect(mutationReceiptSchema.safeParse(receipt).success).toBe(true);
       // INV-05: authority material never rides along on the execution result.
       expect(Object.keys(body)).not.toContain('attestation');
@@ -204,7 +205,7 @@ describe('pending operation V2 routes', () => {
       expect(executed.statusCode).toBe(200);
       const body = executed.json();
       expect(body.mutationId).toBe('mut-fixed-0001');
-      expect(body.execution.receipt).toEqual(executorReceipt);
+      expect(body.execution.receipt).toEqual({ ...executorReceipt, operationId: id });
     });
 
     it('reconcile (crash recovery) also returns the receipt in the response body', async () => {

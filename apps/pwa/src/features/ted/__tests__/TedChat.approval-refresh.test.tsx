@@ -3,8 +3,8 @@
  *
  * Approval success refreshes BOTH the chat history (existing behavior,
  * must not regress) AND the financial UI through the single
- * MutationReconciler (new: reconcileMutation with the operation-derived
- * mutationKind until T3.4 exposes the execution receipt via agent-client).
+ * MutationReconciler using the required API execution receipt. Non-success
+ * decisions refresh approval/history state only, never financial domains.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@/lib/test-utils";
@@ -97,6 +97,14 @@ const actionablePresentation = (
 describe("TedChat — post-approval reconciliation (T3.3)", () => {
   it("approval success reconciles financial UI AND reloads chat history", async () => {
     const user = userEvent.setup();
+    const receipt: agentClient.PendingOperationReceipt = {
+      mutationId: "mut-op-1",
+      mutationKind: "transactions.expense.create",
+      status: "succeeded",
+      affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
+      operationId: "op-1",
+      entity: { type: "transaction", id: "tx-1" },
+    };
     // Deferred history: approving while a reload is in flight must still
     // reconcile first, then reload (SPEC §15.4: chat + financial UI).
     // Only the MOUNT reload gates: the send/decision reloads resolve
@@ -131,6 +139,7 @@ describe("TedChat — post-approval reconciliation (T3.3)", () => {
     vi.spyOn(agentClient, "decidePendingOperation").mockResolvedValue({
       operationId: "op-1",
       status: "succeeded",
+      receipt,
     });
 
     render(<TedChat open onClose={() => {}} />);
@@ -149,13 +158,11 @@ describe("TedChat — post-approval reconciliation (T3.3)", () => {
 
     const historyCallsAfterProposal = historySpy.mock.calls.length;
 
-    // Approve: financial UI reconciles, then chat history reloads.
+    // Approve: the canonical receipt reconciles financial UI, then chat history reloads.
     await user.click(screen.getByRole("button", { name: "Confirmar R$ 850,00" }));
 
     await waitFor(() =>
-      expect(reconcileMutation).toHaveBeenCalledWith({
-        mutationKind: "transactions.expense.create",
-      }),
+      expect(reconcileMutation).toHaveBeenCalledWith({ receipt }),
     );
     await waitFor(() =>
       expect(historySpy.mock.calls.length).toBeGreaterThan(
@@ -172,6 +179,47 @@ describe("TedChat — post-approval reconciliation (T3.3)", () => {
     expect(screen.queryByRole("button", { name: "Aprovar" })).toBeNull();
   });
 
+  it.each([
+    ["cancelled", "proposed", "cancel", "Cancelar"],
+    ["failed", "failed", "retry", "Tentar novamente"],
+  ] as const)(
+    "%s decision refreshes approval state without reconciling financial domains",
+    async (decisionStatus, operationStatus, decision, buttonName) => {
+      const user = userEvent.setup();
+      const operationId = `op-${decisionStatus}`;
+      const presentation = actionablePresentation(operationId, { status: operationStatus });
+      vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
+      vi.spyOn(agentClient, "fetchActivePendingOperations").mockResolvedValue([
+        {
+          id: operationId,
+          status: operationStatus,
+          tool: "transactions.expense.create",
+          createdAt: "2026-09-14T10:00:00.000Z",
+          expiresAt: "2026-09-14T13:00:00.000Z",
+          description: "Mercado",
+          presentation,
+        },
+      ]);
+      vi.spyOn(agentClient, "decidePendingOperation").mockResolvedValue({
+        operationId,
+        status: decisionStatus,
+        ...(decisionStatus === "failed" ? { retryable: true } : {}),
+      });
+
+      render(<TedChat open onClose={() => {}} />);
+      await user.click(await screen.findByRole("button", { name: buttonName }));
+
+      await waitFor(() =>
+        expect(agentClient.decidePendingOperation).toHaveBeenCalledWith(
+          "ws-1",
+          operationId,
+          decision,
+        ),
+      );
+      expect(reconcileMutation).not.toHaveBeenCalled();
+    },
+  );
+
   it("real receipt wins: reconciliation consumes the receipt (mutationId dedup), not the kind fallback", async () => {
     const user = userEvent.setup();
     const receipt: agentClient.PendingOperationReceipt = {
@@ -180,7 +228,7 @@ describe("TedChat — post-approval reconciliation (T3.3)", () => {
       status: "succeeded" as const,
       affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
       operationId: "op-1",
-      entity: { type: "transaction", id: "op-1" },
+      entity: { type: "transaction", id: "tx-1" },
     };
     // Authoritative history keeps the proposed card alive across reloads
     // (loadHistory resets pendingOps from server state on every resolve).

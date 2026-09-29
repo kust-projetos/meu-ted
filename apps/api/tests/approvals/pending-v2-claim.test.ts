@@ -111,14 +111,17 @@ function defineClaimSuite(
       const id = identityOf();
       const saved = await proposeCanonical(store, id);
       const confirmed = await store.confirm(saved.id, id);
-      const receipt = succeededResult();
-      const done = await store.execute(confirmed.attestation!, id, async () => receipt);
+      const executorResult = succeededResult();
+      const done = await store.execute(confirmed.attestation!, id, async () => executorResult);
       expect(done.status).toBe('succeeded');
-      expect(done.execution).toMatchObject({ status: 'succeeded', operationId: receipt.operationId });
+      expect(done.execution).toMatchObject({ status: 'succeeded', operationId: executorResult.operationId });
       // T3.2 (SPEC §15.1): mutation_id persists the RECEIPT identity, and the
-      // execution result carries the receipt (additive envelope).
-      const doneExecution = done.execution as { receipt: { mutationId: string } };
+      // execution result carries the receipt (additive envelope). Receipt
+      // identity rule: operationId = pending id, entity.id = transaction id.
+      const doneExecution = done.execution as { receipt: { mutationId: string; operationId: string; entity: { type: string; id: string } } };
       expect(doneExecution.receipt).toBeTruthy();
+      expect(doneExecution.receipt.operationId).toBe(saved.id);
+      expect(doneExecution.receipt.entity).toEqual({ type: 'transaction', id: executorResult.operationId });
       expect(done.mutationId).toBe(doneExecution.receipt.mutationId);
       expect(done.executionClaimedAt).toBeTruthy();
       expect(done.executionLeaseExpiresAt).toBeTruthy();

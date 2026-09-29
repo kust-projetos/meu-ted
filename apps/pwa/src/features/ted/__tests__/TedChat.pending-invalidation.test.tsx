@@ -91,6 +91,14 @@ describe("TedChat — pending-operations invalidation dispatch (T5.3)", () => {
       vi.spyOn(agentClient, "decidePendingOperation").mockResolvedValue({
         operationId: "op-1",
         status: "succeeded",
+        receipt: {
+          mutationId: "mut-op-1",
+          mutationKind: "transactions.expense.create",
+          status: "succeeded",
+          affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
+          operationId: "op-1",
+          entity: { type: "transaction", id: "tx-1" },
+        },
       });
 
       render(<TedChat open onClose={() => {}} />);

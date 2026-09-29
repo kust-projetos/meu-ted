@@ -9,22 +9,23 @@ describe('MutationExecutor approval decision RPC', () => {
     globalThis.fetch = realFetch;
     vi.restoreAllMocks();
   });
-  /** API execute response shaped like the authoritative record (mapV2). */
+  /** API execute response shaped like the authoritative record (mapV2): top-level
+   * `id` is the pending-operation id; `execution.operationId` names the
+   * persisted transaction — never the decision id. No top-level `operationId`. */
   const apiExecutionWithReceipt = {
     id: 'op-1',
     status: 'succeeded',
-    operationId: 'op-1',
     mutationId: 'mut-1',
     execution: {
       status: 'succeeded',
-      operationId: 'op-1',
+      operationId: 'mut-1',
       receipt: {
         mutationId: 'mut-1',
         mutationKind: 'transactions.expense.create',
         status: 'succeeded',
         affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
         operationId: 'op-1',
-        entity: { type: 'transaction', id: 'op-1' },
+        entity: { type: 'transaction', id: 'mut-1' },
       },
     },
   };
@@ -34,13 +35,21 @@ describe('MutationExecutor approval decision RPC', () => {
     status: 'succeeded',
     affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
     operationId: 'op-1',
-    entity: { type: 'transaction', id: 'op-1' },
+    entity: { type: 'transaction', id: 'mut-1' },
   };
 
   it('executes a confirmed operation with the per-request delegated approval token and returns only the safe DTO', async () => {
+    const receiptForOp1 = {
+      mutationId: 'mut-1',
+      mutationKind: 'transactions.expense.create',
+      status: 'succeeded',
+      affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
+      operationId: 'op-1',
+      entity: { type: 'transaction', id: 'mut-1' },
+    };
     const request = vi.fn()
       .mockResolvedValueOnce({ id: 'op-1', attestation: 'a'.repeat(32) })
-      .mockResolvedValueOnce({ status: 'succeeded', operationId: 'op-1', attestation: 'must-not-escape' });
+      .mockResolvedValueOnce({ id: 'op-1', status: 'succeeded', execution: { status: 'succeeded', operationId: 'mut-1', receipt: receiptForOp1 }, attestation: 'must-not-escape' });
     const executor = new MutationExecutor({ request });
 
     const result = await executor.decide({
@@ -51,7 +60,7 @@ describe('MutationExecutor approval decision RPC', () => {
       identity: { workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-1' },
     });
 
-    expect(result).toEqual({ operationId: 'op-1', status: 'succeeded' });
+    expect(result).toEqual({ operationId: 'op-1', status: 'succeeded', receipt: receiptForOp1 });
     expect(result).not.toHaveProperty('attestation');
     expect(request).toHaveBeenNthCalledWith(1, 'POST', '/pending-operations/v2/op-1/confirm', expect.objectContaining({
       delegatedToken: 'approval-token-1',
@@ -89,7 +98,7 @@ describe('MutationExecutor approval decision RPC', () => {
     Object.defineProperty(agent, 'env', { value: { API_ORIGIN: 'https://api.test.local', AGENT_CONNECTION_TOKEN_SECRET: secret, AGENT_DELEGATION_SECRET: 'delegation-secret' }, configurable: true });
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'op-4', attestation: 'a'.repeat(32) }), { status: 200, headers: { 'content-type': 'application/json' } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ...apiExecutionWithReceipt, id: 'op-4', operationId: 'op-4', mutationId: 'mut-4', attestation: 'must-not-escape', execution: { ...apiExecutionWithReceipt.execution, operationId: 'op-4', receipt: { ...expectedReceipt, mutationId: 'mut-4', operationId: 'op-4', entity: { type: 'transaction', id: 'op-4' } } } }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'op-4', status: 'succeeded', mutationId: 'mut-4', attestation: 'must-not-escape', execution: { status: 'succeeded', operationId: 'mut-4', receipt: { ...expectedReceipt, mutationId: 'mut-4', operationId: 'op-4', entity: { type: 'transaction', id: 'mut-4' } } } }), { status: 200, headers: { 'content-type': 'application/json' } }));
 
     const response = await agent.fetch(new Request('https://agent.test.local/rpc/pending-operations/op-4/decision', {
       method: 'POST',
@@ -107,7 +116,7 @@ describe('MutationExecutor approval decision RPC', () => {
     const json = (await response.json()) as { operationId?: string; status?: string; receipt?: unknown };
     expect(json.operationId).toBe('op-4');
     expect(json.status).toBe('succeeded');
-    expect(json.receipt).toEqual({ ...expectedReceipt, mutationId: 'mut-4', operationId: 'op-4', entity: { type: 'transaction', id: 'op-4' } });
+    expect(json.receipt).toEqual({ ...expectedReceipt, mutationId: 'mut-4', operationId: 'op-4', entity: { type: 'transaction', id: 'mut-4' } });
     expect(JSON.stringify(json)).not.toContain('attestation');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/pending-operations/v2/op-4/confirm');
@@ -115,7 +124,7 @@ describe('MutationExecutor approval decision RPC', () => {
   });
 
   it('cancels without accepting browser-supplied identity or attestation fields', async () => {
-    const request = vi.fn().mockResolvedValueOnce({ id: 'op-2', executionStatus: 'cancelled' });
+    const request = vi.fn().mockResolvedValueOnce({ id: 'op-2', status: 'cancelled', executionStatus: 'cancelled' });
     const executor = new MutationExecutor({ request });
 
     await expect(executor.decide({
@@ -135,7 +144,7 @@ describe('MutationExecutor approval decision RPC', () => {
     Object.defineProperty(agent, 'env', { value: { API_ORIGIN: 'https://api.test.local', AGENT_CONNECTION_TOKEN_SECRET: secret, AGENT_DELEGATION_SECRET: 'delegation-secret' }, configurable: true });
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'op-3', attestation: 'a'.repeat(32) }), { status: 200, headers: { 'content-type': 'application/json' } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'succeeded', operationId: 'op-3' }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'op-3', status: 'succeeded', execution: { status: 'succeeded', operationId: 'mut-3', receipt: { mutationId: 'mut-3', mutationKind: 'transactions.expense.create', status: 'succeeded', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'], operationId: 'op-3', entity: { type: 'transaction', id: 'mut-3' } } } }), { status: 200, headers: { 'content-type': 'application/json' } }));
 
     const response = await agent.fetch(new Request('https://agent.test.local/rpc/pending-operations/op-3/decision', {
       method: 'POST',
@@ -150,7 +159,7 @@ describe('MutationExecutor approval decision RPC', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ operationId: 'op-3', status: 'succeeded' });
+    expect(await response.json()).toEqual({ operationId: 'op-3', status: 'succeeded', receipt: { mutationId: 'mut-3', mutationKind: 'transactions.expense.create', status: 'succeeded', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'], operationId: 'op-3', entity: { type: 'transaction', id: 'mut-3' } } });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/pending-operations/v2/op-3/confirm');
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/pending-operations/v2/op-3/execute');

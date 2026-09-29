@@ -21,10 +21,10 @@ describe('T2.4 mutation pipeline', () => {
   });
 
   it('executes with opaque attestation and derives success from API result', async () => {
-    const request = vi.fn().mockResolvedValue({ status: 'succeeded', operationId: 'op-1' });
+    const request = vi.fn().mockResolvedValue({ id: 'pending-1', status: 'succeeded', execution: { status: 'succeeded', operationId: 'mut-pending-1', receipt: { mutationId: 'mut-pending-1', mutationKind: 'transactions.expense.create', status: 'succeeded', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'], operationId: 'pending-1', entity: { type: 'transaction', id: 'mut-pending-1' } } } });
     const executor = new MutationExecutor({ request });
     const result = await executor.execute({ operationId: 'pending-1', attestation: 'a'.repeat(32), identity: { workspaceId: 'w', actorId: 'a', deviceId: 'd' } });
-    expect(result).toEqual({ status: 'succeeded', operationId: 'op-1' });
+    expect(result).toEqual({ status: 'succeeded', operationId: 'pending-1', receipt: { mutationId: 'mut-pending-1', mutationKind: 'transactions.expense.create', status: 'succeeded', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'], operationId: 'pending-1', entity: { type: 'transaction', id: 'mut-pending-1' } } });
     expect(request).toHaveBeenCalledWith('POST', '/pending-operations/v2/pending-1/execute', expect.objectContaining({ body: { attestation: 'a'.repeat(32) } }));
   });
 });

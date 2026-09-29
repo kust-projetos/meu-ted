@@ -23,12 +23,34 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       capturedUrl = String(url);
       capturedInit = init;
-      return new Response(JSON.stringify({ operationId: "op-1", status: "succeeded" }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          operationId: "op-1",
+          status: "succeeded",
+          receipt: {
+            mutationId: "mut-1",
+            mutationKind: "transactions.expense.create",
+            status: "succeeded",
+            affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
+            operationId: "op-1",
+            entity: { type: "transaction", id: "tx-1" },
+          },
+        }),
+        { status: 200 },
+      );
     });
 
     await expect(decidePendingOperation("workspace-123", "op-1", "confirm")).resolves.toEqual({
       operationId: "op-1",
       status: "succeeded",
+      receipt: {
+        mutationId: "mut-1",
+        mutationKind: "transactions.expense.create",
+        status: "succeeded",
+        affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
+        operationId: "op-1",
+        entity: { type: "transaction", id: "tx-1" },
+      },
     });
 
     expect(capturedUrl).toBe("https://agent.example.test/agents/finance-chat-agent/workspace-123/rpc/pending-operations/op-1/decision");
@@ -403,7 +425,17 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
       status: "succeeded" as const,
       affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
       operationId: "op-1",
-      entity: { type: "transaction", id: "op-1" },
+      entity: { type: "transaction", id: "tx-1" },
+    };
+
+    const mockDecision =
+      (body: unknown) =>
+      async (): Promise<Response> =>
+        new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+
+    const stubAgent = () => {
+      vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
+      vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("conn-token-123");
     };
 
     it("decidePendingOperation parses and exposes the real execution receipt", async () => {
@@ -423,7 +455,133 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
       });
     });
 
-    it("a receipt carrying attestation is dropped wholesale — nothing tainted reaches the browser (INV-05)", async () => {
+    it("succeeded with distinct pending vs transaction IDs parses (operationId=pending, entity.id=transaction)", async () => {
+      stubAgent();
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        mockDecision({ operationId: "op-1", status: "succeeded", receipt: cleanReceipt }),
+      );
+
+      const result = await decidePendingOperation("workspace-123", "op-1", "confirm");
+      expect(result.status).toBe("succeeded");
+      expect(result.receipt?.operationId).toBe("op-1");
+      expect(result.receipt?.entity?.type).toBe("transaction");
+      expect(result.receipt?.entity?.id).toBe("tx-1");
+      expect(result.receipt?.entity?.id).not.toBe("op-1");
+    });
+
+    it("succeeded with missing receipt rejects — never resolves as success without receipt", async () => {
+      stubAgent();
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        mockDecision({ operationId: "op-1", status: "succeeded" }),
+      );
+
+      const err = await decidePendingOperation("workspace-123", "op-1", "confirm").catch(
+        (e: unknown) => e as Error & { code?: string },
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error & { code?: string }).code).toBe("agent.execution_outcome_unknown");
+      expect(err.message).toMatch(/resultado.*verificad/i);
+      expect(err.message).not.toMatch(/tente novamente/i);
+    });
+
+    it("succeeded with wrong receipt.operationId rejects", async () => {
+      stubAgent();
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        mockDecision({
+          operationId: "op-1",
+          status: "succeeded",
+          receipt: { ...cleanReceipt, operationId: "op-other" },
+        }),
+      );
+
+      await expect(decidePendingOperation("workspace-123", "op-1", "confirm")).rejects.toMatchObject({
+        code: "agent.execution_outcome_unknown",
+      });
+    });
+
+    it("succeeded with a mismatched decision operationId rejects as an uncertain outcome", async () => {
+      stubAgent();
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        mockDecision({ operationId: "op-other", status: "succeeded", receipt: cleanReceipt }),
+      );
+
+      const err = await decidePendingOperation("workspace-123", "op-1", "confirm").catch(
+        (e: unknown) => e as Error & { code?: string },
+      );
+      expect(err).toMatchObject({ code: "agent.execution_outcome_unknown" });
+      expect(err.message).toMatch(/resultado.*verificad/i);
+      expect(err.message).not.toMatch(/tente novamente/i);
+    });
+
+    it.each([
+      ["wrong entity type", { ...cleanReceipt, entity: { type: "account", id: "tx-1" } }],
+      ["missing entity id", { ...cleanReceipt, entity: { type: "transaction", id: "" } }],
+      ["missing entity", { ...cleanReceipt, entity: undefined }],
+    ])("succeeded with %s rejects", async (_label, receipt) => {
+      stubAgent();
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        mockDecision({ operationId: "op-1", status: "succeeded", receipt }),
+      );
+
+      await expect(decidePendingOperation("workspace-123", "op-1", "confirm")).rejects.toMatchObject({
+        code: "agent.execution_outcome_unknown",
+      });
+    });
+
+    it("cancelled without receipt still parses (no receipt required off the succeeded path)", async () => {
+      stubAgent();
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        mockDecision({ operationId: "op-1", status: "cancelled" }),
+      );
+
+      await expect(decidePendingOperation("workspace-123", "op-1", "cancel")).resolves.toEqual({
+        operationId: "op-1",
+        status: "cancelled",
+      });
+    });
+
+    it("failed without receipt still parses (no receipt required off the succeeded path)", async () => {
+      stubAgent();
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        mockDecision({ operationId: "op-1", status: "failed", retryable: true }),
+      );
+
+      await expect(decidePendingOperation("workspace-123", "op-1", "retry")).resolves.toEqual({
+        operationId: "op-1",
+        status: "failed",
+        retryable: true,
+      });
+    });
+
+    it.each(["cancelled", "failed"] as const)(
+      "%s decision must still identify the requested operation",
+      async (status) => {
+        stubAgent();
+        vi.spyOn(globalThis, "fetch").mockImplementation(
+          mockDecision({ operationId: "op-other", status }),
+        );
+
+        await expect(decidePendingOperation("workspace-123", "op-1", "cancel")).rejects.toMatchObject({
+          code: "agent.execution_outcome_unknown",
+        });
+      },
+    );
+
+    it.each(["cancelled", "failed"] as const)(
+      "%s decision with a receipt rejects instead of forwarding it to financial reconciliation",
+      async (status) => {
+        stubAgent();
+        vi.spyOn(globalThis, "fetch").mockImplementation(
+          mockDecision({ operationId: "op-1", status, receipt: cleanReceipt }),
+        );
+
+        await expect(decidePendingOperation("workspace-123", "op-1", "cancel")).rejects.toMatchObject({
+          code: "agent.invalid_decision_result",
+        });
+      },
+    );
+
+    it("a receipt carrying attestation rejects — nothing tainted silently becomes succeeded (INV-05)", async () => {
       vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
       vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("conn-token-123");
       vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
@@ -437,12 +595,12 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
         ),
       );
 
-      const result = await decidePendingOperation("workspace-123", "op-1", "confirm");
-      expect(result.receipt).toBeUndefined();
-      expect(JSON.stringify(result)).not.toContain("attestation");
+      const captured = await decidePendingOperation("workspace-123", "op-1", "confirm").catch((e: unknown) => e);
+      expect(captured).toMatchObject({ code: "agent.execution_outcome_unknown" });
+      expect(JSON.stringify(captured)).not.toContain("attestation");
     });
 
-    it("a receipt with an unknown key is dropped (strict browser allowlist)", async () => {
+    it("a receipt with an unknown key rejects (strict browser allowlist, never silent success)", async () => {
       vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
       vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("conn-token-123");
       vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
@@ -456,9 +614,9 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
         ),
       );
 
-      const result = await decidePendingOperation("workspace-123", "op-1", "confirm");
-      expect(result.receipt).toBeUndefined();
-      expect(JSON.stringify(result)).not.toContain("normalizedArgs");
+      const captured = await decidePendingOperation("workspace-123", "op-1", "confirm").catch((e: unknown) => e);
+      expect(captured).toMatchObject({ code: "agent.execution_outcome_unknown" });
+      expect(JSON.stringify(captured)).not.toContain("normalizedArgs");
     });
 
     it("sendAgentMessage exposes pendingOperation.receipt from a succeeded chat turn", async () => {
@@ -484,6 +642,34 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
       const turn = await sendAgentMessage("ws-1", "confirma");
       expect(turn.pendingOperation?.receipt).toEqual(cleanReceipt);
       expect(JSON.stringify(turn)).not.toContain("attestation");
+    });
+
+    it.each([
+      ["missing receipt", undefined],
+      ["receipt for another pending operation", { ...cleanReceipt, operationId: "op-other" }],
+      ["receipt without a transaction entity", { ...cleanReceipt, entity: undefined }],
+    ])("sendAgentMessage rejects succeeded chat turns with %s", async (_label, receipt) => {
+      stubAgent();
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        new Response(
+          JSON.stringify({
+            turnId: "t1",
+            status: "completed",
+            output: "Lançamento registrado com sucesso.",
+            pendingOperation: {
+              id: "op-1",
+              status: "succeeded",
+              operation: "transactions.expense.create",
+              ...(receipt ? { receipt } : {}),
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+
+      await expect(sendAgentMessage("ws-1", "confirma")).rejects.toMatchObject({
+        code: "agent.execution_outcome_unknown",
+      });
     });
   });
 

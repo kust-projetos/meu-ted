@@ -8,7 +8,7 @@
  * Opt-in: PWA_LIVE_E2E=1 + PWA_LIVE_ADMIN_EMAIL + PWA_LIVE_ADMIN_PASSWORD.
  * Marca "Teste E2E" nos dados criados para identificação/limpeza.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Request } from "@playwright/test";
 
 const LIVE = process.env.PWA_LIVE_E2E === "1";
 const EMAIL = process.env.PWA_LIVE_ADMIN_EMAIL || "";
@@ -165,6 +165,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
         return;
       }
       const globalBackendReads = new Set([
+        "/api/backend/auth/session",
         "/api/backend/auth/get-session",
         "/api/backend/workspaces",
         "/api/backend/health",
@@ -264,11 +265,11 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     const accountsNavigation = page.goto("/hub/patrimonio?aba=contas", { waitUntil: "domcontentloaded" });
     await accountsNavigation;
     const accountsRead = await accountsReloadRequest;
-    const accountsReadResponse = await accountsReloadResponse;
     expect(
       accountsRead.headers()["x-workspace-id"],
       "GET /accounts emitted by the full reload must use the selected test workspace",
     ).toBe(ACTIVE_WS);
+    const accountsReadResponse = await accountsReloadResponse;
     expect(accountsReadResponse.status()).toBe(200);
     const restoredPreference = await page.evaluate(() => {
       try {
@@ -407,7 +408,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     await sendTedMessage(
       page,
       dialog,
-      `Registre uma despesa de R$ 2,00 com descrição "${TX_DESC_TED}" na conta ${ACCOUNT_NAME}, categoria Lanche, hoje.`,
+      `Na conta ${ACCOUNT_NAME}, categoria Lanche, hoje gastei R$ 2,00 ${TX_DESC_TED}`,
     );
     const approvalCard = dialog.locator('[data-testid="ted-approval-item"], [data-testid="ted-approval-focused"]')
       .filter({ hasText: TX_DESC_TED })
@@ -416,11 +417,19 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     const operationWrapperId = await approvalCard.getAttribute("id");
     expect(operationWrapperId).toMatch(/^ted-op-[0-9a-f-]{36}$/i);
     const operationId = operationWrapperId!.slice("ted-op-".length);
+    const decisionRequestPath = `/api/agent/agents/finance-chat-agent/${ACTIVE_WS}/rpc/pending-operations/${operationId}/decision`;
+    const decisionRequestPaths: string[] = [];
+    const trackDecisionRequest = (request: Request) => {
+      if (request.method() === "POST" && new URL(request.url()).pathname === decisionRequestPath) {
+        decisionRequestPaths.push(decisionRequestPath);
+      }
+    };
+    page.on("request", trackDecisionRequest);
     const confirmBtn = approvalCard.getByRole("button", { name: /Confirmar R\$\s*2[.,]00/i });
     await expect(confirmBtn).toBeVisible();
-    await expect(approvalCard.getByText(TX_DESC_TED, { exact: true })).toBeVisible();
+    await expect(approvalCard).toContainText(TX_DESC_TED);
     await expect(approvalCard.getByText(ACCOUNT_NAME, { exact: true })).toBeVisible();
-    await expect(approvalCard.getByText(/Lanche/)).toBeVisible();
+    await expect(approvalCard.getByText("Lanche", { exact: true })).toBeVisible();
     const approvalDetails = await approvalCard.locator("dl").innerText();
     const tedDateMatch = /Data\s+(\d{2}\/\d{2}\/\d{4})/.exec(approvalDetails);
     expect(tedDateMatch, `approval card date missing: ${approvalDetails}`).not.toBeNull();
@@ -437,21 +446,27 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     await confirmBtn.evaluate((btn) => (btn as HTMLButtonElement).click());
     const decisionResult = await decisionResponse;
     expect(decisionResult.status(), "agent approval decision status").toBeLessThan(300);
-    // Authoritative receipt: the decision contract exposes operationId +
-    // status + an optional execution receipt with entity { type, id }
-    // (agent-client pendingDecisionSchema / mutationReceiptSchema). The
-    // ledger assertion below ties the listed transaction id to it.
+    // Authoritative receipt: succeeded requires operationId + receipt with
+    // entity { type, id }. The ledger assertion below ties the listed
+    // transaction id to that entity.
     const decisionBody = await decisionResult.json() as {
       operationId?: unknown;
       status?: unknown;
-      receipt?: { status?: unknown; operationId?: unknown; entity?: { type?: unknown; id?: unknown } };
+      receipt?: {
+        status?: unknown;
+        operationId?: unknown;
+        mutationId?: unknown;
+        entity?: { type?: unknown; id?: unknown };
+      };
     };
     expect(decisionBody.operationId, "decision receipt must name the approved operation").toBe(operationId);
     expect(decisionBody.status, "decision receipt status").toBe("succeeded");
-    if (decisionBody.receipt !== undefined) {
-      expect(decisionBody.receipt.status, "execution receipt status").toBe("succeeded");
-      expect(decisionBody.receipt.operationId, "execution receipt operation").toBe(operationId);
-    }
+    expect(decisionBody.receipt, "successful approval must return an execution receipt").toBeDefined();
+    expect(decisionBody.receipt?.status, "execution receipt status").toBe("succeeded");
+    expect(decisionBody.receipt?.operationId, "execution receipt pending operation").toBe(operationId);
+    expect(decisionBody.receipt?.mutationId, "execution receipt mutation identity").toEqual(expect.any(String));
+    expect(decisionBody.receipt?.entity?.type, "execution receipt entity type").toBe("transaction");
+    expect(decisionBody.receipt?.entity?.id, "execution receipt transaction id").toEqual(expect.any(String));
     // Recibo de mutação: o card sai do estado pendente (botão some) e o TED
     // confirma a execução.
     await expect(confirmBtn).toBeHidden({ timeout: 60_000 });
@@ -536,22 +551,16 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     });
     expect(created.entries[TX_DESC_TED]).toMatchObject({
       count: 1,
+      id: decisionBody.receipt?.entity?.id,
       amountCents: 200,
       date: expectedTedDate,
       accountId: testAccountId,
       categoryId: lancheCategoryId,
     });
-    // Ledger-vs-receipt: when the decision contract exposes the created
-    // entity id (receipt.entity.id), the listed transaction id must equal
-    // it. The contract is authoritative here — no id is fabricated when the
-    // receipt carries no entity (status/receipt assertions above stand).
-    const receiptEntityId = typeof decisionBody.receipt?.entity?.id === "string"
-      ? decisionBody.receipt.entity.id
-      : null;
-    if (receiptEntityId !== null) {
-      expect(decisionBody.receipt?.entity?.type, "receipt entity type").toBe("transaction");
-      expect(created.entries[TX_DESC_TED].id, "ledger transaction id must equal the decision receipt entity id").toBe(receiptEntityId);
-    }
+    // Ledger-vs-receipt: the listed transaction id must equal the mandatory
+    // receipt entity id returned by the single approval decision.
+    expect(created.entries[TX_DESC_TED].id, "ledger transaction id must equal the decision receipt entity id")
+      .toBe(decisionBody.receipt?.entity?.id);
     await shot(page, "10-extrato-pos-ted");
 
     // ── NAVEGAÇÃO: superfícies principais renderizam em mobile ─────────────
@@ -578,6 +587,9 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
       await expect(page.locator("body")).not.toContainText("Carregando…", { timeout: 30000 });
       await shot(page, `11-nav-${path.replace(/\W+/g, "-")}`);
     }
+    expect(decisionRequestPaths, "one approval must dispatch exactly one financial decision POST")
+      .toEqual([decisionRequestPath]);
+    page.off("request", trackDecisionRequest);
 
     // ── HIGIENE: nenhum erro de página não tratado durante a jornada ───────
     expect(workspaceWriteViolations, `writes outside selected workspace: ${workspaceWriteViolations.join(" | ")}`).toHaveLength(0);

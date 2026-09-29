@@ -69,8 +69,12 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
     setError(null);
     try {
       await resolve("confirm");
-    } catch (e) {
-      setError((e as Error).message);
+    } catch {
+      // Confirm may have reached the API and committed the write even when
+      // the response/receipt is missing. Keep this card non-actionable until
+      // the authoritative operation state has been refreshed.
+      setStatus("executing");
+      setError("O resultado desta operação ainda não foi verificado. Atualize o estado antes de tomar outra decisão.");
     } finally {
       setLoading(false);
     }
@@ -153,7 +157,11 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
     // SPEC §16: never premature success (INV-03) — the operation is running.
     return (
       <div className="my-2 rounded-[14px] border border-border-subtle bg-surface-2 p-3 text-xs text-text-secondary">
-        ⏳ {describePendingOperationStatus(status)}: <strong className="text-text-primary">{operationLabel}</strong>
+        {error ? (
+          <><strong className="text-warning">⚠️ {error}</strong>: <strong className="text-text-primary">{operationLabel}</strong></>
+        ) : (
+          <>⏳ {describePendingOperationStatus(status)}: <strong className="text-text-primary">{operationLabel}</strong></>
+        )}
       </div>
     );
   }

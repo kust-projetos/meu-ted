@@ -67,6 +67,10 @@ export class MutationApiClient {
     }
   }
 
+  private assertPendingOperationId(returnedId: unknown, requestedId: string): void {
+    if (returnedId !== requestedId) throw new Error('approval.operation_id_mismatch');
+  }
+
   propose(input: {
     tool: string;
     normalizedArgs: PendingOperationV2['normalizedArgs'];
@@ -97,8 +101,10 @@ export class MutationApiClient {
         'POST', `/pending-operations/v2/${encodeURIComponent(operationId)}/cancel`,
         { headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId } },
       );
+      this.assertPendingOperationId(result.id, operationId);
+      if (result.status !== 'cancelled') throw new Error('approval.cancel_not_confirmed');
       this.events('approval.rejected', { status: 'rejected' });
-      return { operationId: typeof result.id === 'string' ? result.id : operationId, status: 'cancelled' as const };
+      return { operationId, status: 'cancelled' as const };
     });
   }
 
@@ -109,9 +115,10 @@ export class MutationApiClient {
         'POST', `/pending-operations/v2/${encodeURIComponent(operationId)}/retry`,
         { headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId } },
       );
+      this.assertPendingOperationId(result.id, operationId);
       if (typeof result.attestation !== 'string' || result.attestation.length < 32) throw new Error('approval.missing_attestation');
       this.events('approval.confirmed', { status: 'confirmed' });
-      return { operationId: typeof result.id === 'string' ? result.id : operationId, attestation: result.attestation };
+      return { operationId, attestation: result.attestation };
     });
   }
 

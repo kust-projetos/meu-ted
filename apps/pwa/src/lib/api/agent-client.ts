@@ -139,25 +139,30 @@ export const PENDING_OPERATION_STATUS = [
 
 export type PendingOperationStatus = (typeof PENDING_OPERATION_STATUS)[number];
 
+type AgentTurnPendingOperationBase = Readonly<{
+  id: string;
+  operation: string;
+  summary?: string;
+  presentation?: PendingOperationPresentation;
+}>;
+
+export type AgentTurnPendingOperation =
+  | (AgentTurnPendingOperationBase & Readonly<{
+      status: "succeeded";
+      receipt: PendingOperationReceipt;
+    }>)
+  | (AgentTurnPendingOperationBase & Readonly<{
+      status: Exclude<PendingOperationStatus, "succeeded">;
+      receipt?: never;
+    }>);
+
 export type AgentTurn = {
   turnId: string;
   status: string;
   attempts?: number;
   output?: string;
   memorized?: string[];
-  pendingOperation?: Readonly<{
-    id: string;
-    status: PendingOperationStatus;
-    operation: string;
-    summary?: string;
-    presentation?: PendingOperationPresentation;
-    /**
-     * T3.3: the REAL execution receipt (API-emitted, relayed by the Agent)
-     * on succeeded turns. Absent/invalid collapses to `undefined` — the
-     * reconciler then uses the documented mutationKind fallback.
-     */
-    receipt?: PendingOperationReceipt;
-  }>;
+  pendingOperation?: AgentTurnPendingOperation;
   /**
    * debt-undo-confirmation-protocol: separate undo proposal (requestId for
    * the authenticated decision RPC). Display-only; the fixed target stays
@@ -205,26 +210,58 @@ export function formatDateToBR(isoDate: string): string {
  * turn. A presentation carrying single-use approval material (or any unknown
  * dropped — the operation itself still surfaces in its legacy shape.
  */
-function sanitizePendingOperation(
-  value: AgentTurn["pendingOperation"],
-): AgentTurn["pendingOperation"] {
-  if (!value || typeof value.id !== "string" || typeof value.operation !== "string") return undefined;
-  if (!(PENDING_OPERATION_STATUS as readonly string[]).includes(value.status)) return undefined;
-  const { id, status, operation } = value;
-  const summary = typeof value.summary === "string" ? value.summary : undefined;
+const executionOutcomeUnknown = (): Error & { code: string } =>
+  Object.assign(
+    new Error("O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão."),
+    { code: "agent.execution_outcome_unknown" },
+  );
+
+function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  // A server-asserted success may reach chat output/reconciliation only with
+  // the canonical receipt linked to both the pending operation and tx.
+  if (raw.status === "succeeded") {
+    const candidateId = typeof raw.id === "string" ? raw.id : "";
+    const candidateReceipt = sanitizeMutationReceipt(raw.receipt);
+    const entityId = typeof candidateReceipt?.entity?.id === "string" ? candidateReceipt.entity.id.trim() : "";
+    if (
+      !candidateId.trim() ||
+      !candidateReceipt ||
+      candidateReceipt.operationId !== candidateId ||
+      candidateReceipt.entity?.type !== "transaction" ||
+      !entityId
+    ) {
+      throw executionOutcomeUnknown();
+    }
+  }
+  if (typeof raw.id !== "string" || !raw.id.trim() || typeof raw.operation !== "string") return undefined;
+  if (!(PENDING_OPERATION_STATUS as readonly string[]).includes(String(raw.status))) return undefined;
+  const id = raw.id;
+  const status = raw.status as PendingOperationStatus;
+  const operation = raw.operation;
+  const summary = typeof raw.summary === "string" ? raw.summary : undefined;
   const parsedPresentation =
-    value.presentation && typeof value.presentation === "object"
-      ? pendingOperationPresentationSchema.safeParse(value.presentation)
+    raw.presentation && typeof raw.presentation === "object"
+      ? pendingOperationPresentationSchema.safeParse(raw.presentation)
       : null;
-  const receipt = sanitizeMutationReceipt((value as { receipt?: unknown }).receipt);
-  return {
+  const receipt = sanitizeMutationReceipt(raw.receipt);
+  if (status !== "succeeded" && raw.receipt !== undefined) {
+    const err = new Error("A resposta da decisão não corresponde a um estado sem execução financeira.") as Error & { code?: string };
+    err.code = "agent.invalid_decision_result";
+    throw err;
+  }
+  const safeFields = {
     id,
-    status,
     operation,
     ...(summary !== undefined ? { summary } : {}),
     ...(parsedPresentation && parsedPresentation.success ? { presentation: parsedPresentation.data } : {}),
-    ...(receipt ? { receipt } : {}),
   };
+  if (status === "succeeded") {
+    if (!receipt) throw executionOutcomeUnknown();
+    return { ...safeFields, status, receipt };
+  }
+  return { ...safeFields, status };
 }
 
 /**
@@ -317,11 +354,23 @@ const pendingDecisionSchema = z.object({
   receipt: z.unknown().optional(),
 }).strict();
 
+type PendingOperationDecisionStatus = z.infer<typeof pendingDecisionSchema>["status"];
+
 /** Safe result of an approval decision. Attestations never cross the browser boundary. */
-export type PendingOperationDecision = Omit<z.infer<typeof pendingDecisionSchema>, "receipt"> & {
-  /** T3.3: real execution receipt when the decision executed successfully. */
-  receipt?: PendingOperationReceipt;
-};
+export type PendingOperationDecision =
+  | {
+      operationId: string;
+      status: "succeeded";
+      retryable?: boolean;
+      /** A success is only actionable when it carries its canonical receipt. */
+      receipt: PendingOperationReceipt;
+    }
+  | {
+      operationId: string;
+      status: Exclude<PendingOperationDecisionStatus, "succeeded">;
+      retryable?: boolean;
+      receipt?: never;
+    };
 
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -439,17 +488,20 @@ export async function sendAgentMessage(
     else if (response.status === 403) err.code = "auth.workspace_forbidden";
     throw err;
   }
-  const data = await response.json() as { turnId?: string; intentionId?: string; status?: string; output?: string; memorized?: string[]; pendingOperation?: AgentTurn["pendingOperation"]; undoProposal?: AgentTurn["undoProposal"] };
+  const data = await response.json() as { turnId?: string; intentionId?: string; status?: string; output?: string; memorized?: string[]; pendingOperation?: unknown; undoProposal?: unknown };
+  const pendingOperation = sanitizePendingOperation(data.pendingOperation);
+  const undoProposal = sanitizeUndoProposal(data.undoProposal as AgentTurn["undoProposal"]);
   // The turn landed: the in-flight record is no longer needed. On failure
-  // (throw above) it stays, so retry reuses the same messageId.
+  // (including an unlinked succeeded receipt) it stays, so retry reuses the
+  // same idempotent messageId.
   clearPendingChatSend(workspaceId);
   return {
     turnId: data.turnId ?? data.intentionId ?? `turn-${Date.now()}`,
     status: data.status ?? "completed",
     output: data.output,
     ...(Array.isArray(data.memorized) ? { memorized: data.memorized.filter((m): m is string => typeof m === "string") } : {}),
-    ...(sanitizePendingOperation(data.pendingOperation) ? { pendingOperation: sanitizePendingOperation(data.pendingOperation) } : {}),
-    ...(sanitizeUndoProposal(data.undoProposal) ? { undoProposal: sanitizeUndoProposal(data.undoProposal) } : {}),
+    ...(pendingOperation ? { pendingOperation } : {}),
+    ...(undoProposal ? { undoProposal } : {}),
   };
 }
 
@@ -476,8 +528,57 @@ export async function decidePendingOperation(
   );
   const parsed = pendingDecisionSchema.parse(await parseJson<unknown>(response));
   const receipt = sanitizeMutationReceipt(parsed.receipt);
-  const { receipt: _rawReceipt, ...safe } = parsed;
-  return { ...safe, ...(receipt ? { receipt } : {}) };
+  const safe = {
+    operationId: parsed.operationId,
+    status: parsed.status,
+    ...(parsed.retryable !== undefined ? { retryable: parsed.retryable } : {}),
+  };
+  if (safe.operationId !== operationId) {
+    const err = new Error(
+      "O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão.",
+    ) as Error & { code?: string };
+    err.code = "agent.execution_outcome_unknown";
+    throw err;
+  }
+  // Fail-closed succeeded: the API+Agent contract guarantees a successful
+  // execute carries the pending ID + nested succeeded execution + canonical
+  // receipt (receipt.operationId === pending ID, entity {type:'transaction',
+  // id: transactionID}). A succeeded decision without that receipt cannot be
+  // reconciled, so it must reject — never resolve as success. Other statuses
+  // (cancelled/failed/proposed/expired) carry no receipt by contract.
+  if (safe.status === "succeeded") {
+    const entityId = typeof receipt?.entity?.id === "string" ? receipt.entity.id.trim() : "";
+    if (
+      !receipt ||
+      receipt.operationId !== operationId ||
+      receipt.entity?.type !== "transaction" ||
+      !entityId
+    ) {
+      const err = new Error(
+        "O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão.",
+      ) as Error & { code?: string };
+      err.code = "agent.execution_outcome_unknown";
+      throw err;
+    }
+    return {
+      operationId: safe.operationId,
+      status: "succeeded",
+      ...(safe.retryable !== undefined ? { retryable: safe.retryable } : {}),
+      receipt,
+    };
+  }
+  if (parsed.receipt !== undefined) {
+    const err = new Error(
+      "A resposta da decisão não corresponde a um estado sem execução financeira.",
+    ) as Error & { code?: string };
+    err.code = "agent.invalid_decision_result";
+    throw err;
+  }
+  return {
+    operationId: safe.operationId,
+    status: safe.status,
+    ...(safe.retryable !== undefined ? { retryable: safe.retryable } : {}),
+  };
 }
 
 /**

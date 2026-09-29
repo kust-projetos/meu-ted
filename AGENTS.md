@@ -51,6 +51,15 @@
   - **Comunicação Interativa**: NUNCA utilize prompts interativos locais síncronos desconectados (`AskUserQuestion`); utilize sempre `orca orchestration ask` ou escalação de bloqueios.
   - **Finalização**: Conclusão formalizada via envio de `worker_done` com `--outcome succeeded|failed`, lista de `--files-modified` e `--body` conciso de exatamente 3 frases.
 
+## Subagents Nativos do OpenCode (uso autônomo)
+- **Escopo**: vale quando OpenCode é o runtime ativo; a seção Orca acima continua regendo os fluxos explicitamente executados/supervisionados por Orca.
+- **Planner + `task`**: em sessões OpenCode, o agente principal atua como Planner e usa o mecanismo nativo de subagents (`task`) proativamente para toda tarefa não trivial de análise, implementação, debugging, testes, revisão ou documentação, escolhendo o menor conjunto de papéis úteis.
+- **Direto quando trivial**: mudanças triviais/pontuais/localizadas e perguntas simples podem ser executadas diretamente, sem subagents.
+- **Coordenação**: dividir trabalho independente, atribuir ownership/escopo explícito, critérios de aceite e validação; evitar escrita concorrente nos mesmos arquivos/estado; aguardar workers e integrar evidências no Planner.
+- **Revisão e validação**: usar reviewer independente após mudanças substanciais e tester para validação quando útil; especialistas não subdelegam; Planner mantém decisão e integração.
+- **Sem rito nem fingimento**: tarefa não trivial exige ao menos um subagent útil; evitar fan-out adicional quando o custo exceder o ganho. Falha/indisponibilidade deve ser comunicada e seguir o fallback autorizado pelo runtime, sem fingir participação.
+- **Sem expansão de autoridade**: esta regra não amplia permissões, deploy ou commit.
+
 ## Regras de Engenharia & Qualidade
 1. **TDD Rigoroso (RED -> GREEN)**:
    - Todo bugfix, refatoração ou funcionalidade deve obrigatoriamente iniciar com um teste automatizado falhando (RED) que capture o comportamento desejado antes de escrever o código de produção (GREEN).

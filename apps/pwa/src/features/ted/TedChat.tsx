@@ -21,7 +21,6 @@ import { TedUndoCard, type TedUndoProposal } from "./TedUndoCard";
 import { useRecordingState } from "./use-recording-state";
 import { getChatAttachmentCapabilities } from "@/lib/capabilities";
 import { useOptionalAppState } from "@/lib/state/app-state-context";
-import { resolveTedMutationKind } from "@/lib/state/mutation-reconciler";
 import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 import type { PendingOperationDecision, UndoDecision } from "@/lib/api/agent-client";
 import { useBodyScrollLock, useOverlayDialog } from "@/lib/ui/overlay-a11y";
@@ -307,22 +306,19 @@ export function TedChat({ open, onClose, focusedOperationId = null }: TedChatPro
       : null;
 
   const handleApprovalResolved = async (
-    operation: string,
     decision?: PendingOperationDecision,
   ): Promise<void> => {
     // T5.3 (SPEC §22): an operation was resolved (confirm/cancel/retry) —
     // external reflections of the authoritative listing (Home badge,
     // Aprovações page) refetch via the invalidation event.
     notifyPendingOperationsChanged();
-    if (reconcileFinancialUi) {
+    if (reconcileFinancialUi && decision?.status === "succeeded" && decision.receipt) {
       try {
-        // Real receipt wins (mutationId enables dedup); without one the
-        // deterministic kind mapping applies — never an invented mutationId.
-        await reconcileFinancialUi(
-          decision?.receipt
-            ? { receipt: decision.receipt }
-            : { mutationKind: resolveTedMutationKind(operation) },
-        );
+        // Only an authoritative successful decision with its canonical
+        // receipt may refresh financial domains. Cancelled/failed decisions
+        // still invalidate the approval list and reload chat history below,
+        // but must never trigger a mutation-kind fallback reconciliation.
+        await reconcileFinancialUi({ receipt: decision.receipt });
       } catch {
         // Reconciliation failure surfaces as stale in app-state;
         // the chat history must still reload below.
@@ -746,7 +742,7 @@ export function TedChat({ open, onClose, focusedOperationId = null }: TedChatPro
                   <TedApprovalCard
                     operation={op}
                     workspaceId={activeWorkspace.id}
-                    onResolved={(decision) => void handleApprovalResolved(op.operation, decision)}
+                    onResolved={(decision) => void handleApprovalResolved(decision)}
                   />
                 </div>
               );

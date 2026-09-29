@@ -46,6 +46,7 @@ import { parseFinancialMutation } from '../src/mutations/financial-parser.js';
 import { resolveConfirmation } from '../src/mutations/confirmation-resolver.js';
 import { MutationApiClient } from '../src/mutations/mutation-api-client.js';
 import { MutationExecutor } from '../src/mutations/mutation-executor.js';
+import { MUTATION_EFFECTS_REGISTRY } from '@pi-finance/llm-contracts';
 import { resolveEntity, EntityResolutionError } from '../src/tools/entity-resolution.js';
 import type { EntityReader } from '../src/mutations/entity-resolver.js';
 import { createEvidenceEnvelope, isCurrentEvidence } from '../src/evidence/evidence-envelope.js';
@@ -259,9 +260,36 @@ const createFakePendingApi = (options: FakeApiOptions = {}): FakeApi => {
       if (!operation) throw new Error('approval.not_found');
       const body = (opts.body ?? {}) as Record<string, unknown>;
       if (body.attestation !== attestationFor(id)) throw new Error('approval.invalid_attestation');
-      if (mode === 'execute-incomplete') return { status: 'failed', operationId: id };
+      if (mode === 'execute-incomplete') return { id, status: 'failed' };
       operation.status = 'succeeded';
-      return { status: 'succeeded', operationId: id };
+      // Faithful store-record shape: top-level `id` is the pending-operation
+      // id; `execution.operationId` names the persisted transaction and the
+      // receipt links both (receipt.operationId = pending id,
+      // receipt.entity = { type: 'transaction', id: transaction id }) with
+      // registry-derived kind/targets — the shape MutationExecutor validates.
+      const transactionId = `mut-${id}`;
+      const registryEntry = (MUTATION_EFFECTS_REGISTRY as Record<string, { affectedTargets: readonly string[] } | undefined>)[operation.tool];
+      const receiptKind = registryEntry !== undefined ? operation.tool : 'transactions.income.create';
+      const receiptTargets =
+        registryEntry !== undefined
+          ? [...registryEntry.affectedTargets]
+          : [...MUTATION_EFFECTS_REGISTRY['transactions.income.create'].affectedTargets];
+      return {
+        id,
+        status: 'succeeded',
+        execution: {
+          status: 'succeeded',
+          operationId: transactionId,
+          receipt: {
+            mutationId: transactionId,
+            mutationKind: receiptKind,
+            status: 'succeeded',
+            affectedTargets: receiptTargets,
+            operationId: id,
+            entity: { type: 'transaction', id: transactionId },
+          },
+        },
+      };
     }
     throw new Error(`fake-api.unexpected:${method}:${path}`);
   };

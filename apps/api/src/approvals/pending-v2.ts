@@ -3,11 +3,12 @@ import type { Pool, PoolClient } from 'pg';
 import { withTransaction } from '../db/pool.js';
 import {
   computePendingOperationV2Hash,
+  mutationReceiptSchema,
   pendingOperationV2Schema,
   verifyPendingOperationV2Hash,
   type PendingOperationV2,
 } from '@pi-finance/llm-contracts';
-import { validateApprovalToolArgs } from './tool-registry.js';
+import { validateApprovalToolArgs, getApprovalToolContract, APPROVAL_EXECUTION_UNCERTAIN_CODE, isApprovalExecutionUncertain } from './tool-registry.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
 import { buildObservabilityEvent } from '../audit/events.js';
 
@@ -60,6 +61,25 @@ const assertCanonicalArgs = (fail: (code: string, message: string, statusCode?: 
   if (checked.code === 'tool.not_allowed') fail('tool.not_allowed', 'Ferramenta não permitida no protocolo de aprovação.', 403);
   fail('approval.invalid_args', 'Argumentos inválidos para a ferramenta de aprovação.', 422, checked.issues);
 };
+
+/**
+ * HIGH integrity fix (TOCTOU + hidden `toJSON`): `propose` validates,
+ * hashes, and persists the EXACT same value. The Zod schema projection
+ * (`parsed.data`) is a fresh plain-JSON snapshot taken synchronously before
+ * any await: caller mutations after dispatch cannot move it, and custom
+ * `toJSON`/accessors/prototypes on the caller object cannot survive the
+ * projection (a non-enumerable own `toJSON` is dropped; the output is a
+ * detached plain object). Every `propose` path must bind this snapshot and
+ * never read the caller-owned object again.
+ */
+const snapshotProposeOrFail = (
+  fail: (code: string, message: string, statusCode?: number, details?: unknown) => never,
+  operation: unknown,
+): PendingOperationV2 => {
+  const parsed = pendingOperationV2Schema.safeParse(operation);
+  if (!parsed.success) fail('approval.invalid_hash', 'Proposta V2 inválida ou hash divergente.', 400);
+  return parsed.data;
+};
 const nowIso = (): string => new Date().toISOString();
 
 /**
@@ -80,26 +100,77 @@ export const clampPendingV2ExpiresAt = (requestedExpiresAt: string, nowMs = Date
 };
 
 /**
- * T3.2 (SPEC §15.1): every TX2 success carries a MutationReceipt with an
- * API-generated mutationId, registry-derived affectedTargets and the origin
- * operationId. Executors built on the tool registry already attach one —
- * honor its mutationId; otherwise synthesize it here from the persisted
- * tool so a custom executor can never produce a receipt-less success.
- * The returned mutationId is what TX2 persists into `mutation_id`.
+ * T3.2 (SPEC §15.1): every TX2 success carries a canonical MutationReceipt
+ * with an API-generated (or executor-preserved) mutationId,
+ * registry-derived mutationKind/affectedTargets and the origin operationId.
+ *
+ * The trusted executor path runs a validated TED tool with the SAME
+ * persisted idempotencyKey and returns the actual persisted transaction id
+ * in `result.operationId`. The receipt is ALWAYS rebuilt canonically via
+ * buildTedReceipt(tool, pendingOperationId, {type:'transaction', id:
+ * transactionId}) — executor-supplied mutationKind/affectedTargets/
+ * entity.type are never trusted (a stale or mismatched executor receipt
+ * must not fail the post-write persist). Only a valid executor mutationId
+ * string is preserved so receipt identity stays stable across the
+ * execute/reconcile paths. The canonical candidate is schema-validated;
+ * any failure throws `approval.incomplete_result` (fail closed, never a
+ * partial success) and the execute/reconcile callers map it to execution
+ * uncertainty (`approval.execution_uncertain`, kept `executing` for lease
+ * recovery) — the executor may already have written, so it must never
+ * become a retryable `failed`. An unknown tool or an empty transaction id
+ * fails closed the same way — the idempotency key and the reconciler
+ * protect the already-persisted write.
+ *
+ * Identity rule (safety-critical): `pendingOperationId` is the origin
+ * pending-operation id (claimed.id) and ALWAYS lands in
+ * `receipt.operationId`; `result.operationId` is the persisted transaction
+ * id and ALWAYS lands in `receipt.entity.id`. Never confuse the two.
  */
 const withTedReceipt = (
   result: { status: string; operationId: string; receipt?: unknown },
   tool: string,
+  pendingOperationId: string,
 ): { enriched: Record<string, unknown>; mutationId: string } => {
-  const existing = result.receipt as { mutationId?: unknown } | undefined;
-  if (existing && typeof existing.mutationId === 'string' && existing.mutationId.length > 0) {
-    return { enriched: result as Record<string, unknown>, mutationId: existing.mutationId };
+  const failClosed = (): never => {
+    throw new PendingOperationV2Error('approval.incomplete_result', 'Executor retornou resultado incompleto.');
+  };
+  const pendingId = typeof pendingOperationId === 'string' ? pendingOperationId.trim() : '';
+  const transactionId = typeof result.operationId === 'string' ? result.operationId.trim() : '';
+  if (!pendingId || !transactionId) failClosed();
+  // Trusted tool only: the canonical receipt derives kind/targets from the
+  // persisted operation's registry contract, never from executor output.
+  if (!getApprovalToolContract(tool)) failClosed();
+  let canonical: { mutationId: string };
+  try {
+    canonical = buildTedReceipt(
+      tool as 'transactions.expense.create' | 'transactions.income.create',
+      pendingId,
+      { type: 'transaction', id: transactionId },
+    );
+  } catch {
+    failClosed();
   }
-  const receipt = buildTedReceipt(
-    tool as 'transactions.expense.create' | 'transactions.income.create',
-    result.operationId,
-  );
-  return { enriched: { ...result, receipt }, mutationId: receipt.mutationId };
+  // Preserve receipt identity across execute/reconcile: keep the executor's
+  // mutationId only when it is a valid receipt id string.
+  let candidate: unknown = canonical!;
+  const existing = result.receipt;
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+    const priorId = (existing as { mutationId?: unknown }).mutationId;
+    if (typeof priorId === 'string' && priorId.trim().length > 0 && priorId.trim().length <= 128) {
+      candidate = { ...canonical!, mutationId: priorId.trim() };
+    }
+  }
+  const parsed = mutationReceiptSchema.safeParse(candidate);
+  if (!parsed.success) failClosed();
+  const receipt = parsed.data as { mutationId: string };
+  return { enriched: { ...result, receipt: parsed.data }, mutationId: receipt.mutationId };
+};
+
+const isCompleteExecutorResult = (result: unknown): result is { status: string; operationId: string; receipt?: unknown } => {
+  if (!result || typeof result !== 'object') return false;
+  const typed = result as { status?: unknown; operationId?: unknown };
+  if (typed.status !== 'succeeded') return false;
+  return typeof typed.operationId === 'string' && typed.operationId.trim().length > 0;
 };
 
 /**
@@ -181,6 +252,29 @@ export const resolvePendingV2LeaseMs = (override?: number): number => {
 };
 
 /**
+ * Execution-outcome uncertainty (HIGH review finding): a failure at/after
+ * the financial write (typed `approval.execution_uncertain` from the trusted
+ * TED executor, a successfully-returned but malformed/incomplete executor
+ * result, or a receipt-normalization failure) leaves the outcome UNKNOWN —
+ * the write may already exist. These paths keep the operation `executing`
+ * (no `failed` persist, no `fail` audit event, no retry) so the user can
+ * never propose again and risk a duplicate; the lease reconciler re-runs
+ * the SAME persisted idempotencyKey to resolve it. Only deterministic
+ * pre-write executor throws keep the `failed` path below.
+ *
+ * Stable safe surface: the code is fixed and the message carries no raw
+ * cause. The store surfaces uncertainty as a PendingOperationV2Error so the
+ * route maps it to a 409 body without leaking driver text.
+ */
+const UNCERTAIN_MESSAGE = 'Resultado da execução incerto; operação mantida em execução para reconciliação.';
+const failUncertain = (): never => {
+  throw new PendingOperationV2Error(APPROVAL_EXECUTION_UNCERTAIN_CODE, UNCERTAIN_MESSAGE, 409);
+};
+const isUncertainOutcome = (error: unknown): boolean =>
+  isApprovalExecutionUncertain(error) ||
+  (error instanceof PendingOperationV2Error && error.code === APPROVAL_EXECUTION_UNCERTAIN_CODE);
+
+/**
  * SPEC §10: TX2 failure persists a SANITIZED code only — never the error
  * message, stack, prompt, or executor payload content. Protocol errors keep
  * their code; foreign string codes are allow-listed by shape; everything
@@ -220,7 +314,9 @@ export type PendingOperationV2Store = {
    * SPEC §11.3 (T2.4): reconcile an abandoned `executing` operation whose
    * lease expired — crash recovery, NOT a new approval. Renews the lease,
    * bumps the attempt, and re-runs the SAME executor with the SAME persisted
-   * idempotencyKey, persisting TX2 succeeded/failed exactly like execute().
+   * idempotencyKey, persisting TX2 succeeded/failed exactly like execute()
+   * (uncertain post-write outcomes keep `executing` in both paths — never
+   * `failed`, never retryable — until a later lease recovery resolves them).
    * Valid lease → `approval.execution_in_progress`; any non-`executing`
    * state (including `confirmed`, whose recovery is attestation re-emission
    * per §9/T2.2) → `approval.reconcile_not_allowed`. Terminal states never
@@ -297,19 +393,24 @@ export const createPostgresPendingOperationV2Store = (
   return {
     get audit() { return events; },
     async propose(operation) {
-      if (!pendingOperationV2Schema.safeParse(operation).success || !(await verifyPendingOperationV2Hash(operation))) fail('approval.invalid_hash', 'Proposta V2 inválida ou hash divergente.', 400);
-      assertCanonicalArgs(fail, operation);
+      // HIGH integrity fix: bind the synchronous schema snapshot BEFORE any
+      // await and use it for everything below — no later reads from the
+      // caller-owned object (TOCTOU + hidden toJSON).
+      const snapshot = snapshotProposeOrFail(fail, operation);
+      const canonicalArgsJson = JSON.stringify(snapshot.normalizedArgs);
+      if (!(await verifyPendingOperationV2Hash(snapshot))) fail('approval.invalid_hash', 'Proposta V2 inválida ou hash divergente.', 400);
+      assertCanonicalArgs(fail, snapshot);
       // P2 TTL: authoritative server time — ignore any crafted createdAt for
       // the lifetime window, clamp the expiry to the server max, fail fast
       // on a birth-expired proposal. DB created_at stays the default NOW().
       const nowMs = Date.now();
-      const effectiveExpiresAt = clampPendingV2ExpiresAt(operation.expiresAt, nowMs);
+      const effectiveExpiresAt = clampPendingV2ExpiresAt(snapshot.expiresAt, nowMs);
       if (Date.parse(effectiveExpiresAt) <= nowMs) fail('approval.expired', 'A proposta já expirou.', 409);
-      const result = await pool.query<PendingV2Row>(`INSERT INTO pending_operations (workspace_id, requester_id, operation, payload, reason, idempotency_key, status, expires_at, protocol_version, actor_id, device_id, tool, normalized_args, proposal_hash, execution_status) VALUES ($1,$2,$3,$4::jsonb,'high_value',$5,'pending',$6,$7,$8,$9,$10,$11::jsonb,$12,'proposed') ON CONFLICT (workspace_id,idempotency_key) WHERE protocol_version = 2 AND workspace_id IS NOT NULL AND idempotency_key IS NOT NULL DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key RETURNING *, (xmax = 0) AS is_insert`, [operation.workspaceId, operation.actorId, operation.tool, JSON.stringify(operation.normalizedArgs), operation.idempotencyKey, effectiveExpiresAt, 2, operation.actorId, operation.deviceId, operation.tool, JSON.stringify(operation.normalizedArgs), operation.proposalHash]);
+      const result = await pool.query<PendingV2Row>(`INSERT INTO pending_operations (workspace_id, requester_id, operation, payload, reason, idempotency_key, status, expires_at, protocol_version, actor_id, device_id, tool, normalized_args, proposal_hash, execution_status) VALUES ($1,$2,$3,$4::jsonb,'high_value',$5,'pending',$6,$7,$8,$9,$10,$11::jsonb,$12,'proposed') ON CONFLICT (workspace_id,idempotency_key) WHERE protocol_version = 2 AND workspace_id IS NOT NULL AND idempotency_key IS NOT NULL DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key RETURNING *, (xmax = 0) AS is_insert`, [snapshot.workspaceId, snapshot.actorId, snapshot.tool, canonicalArgsJson, snapshot.idempotencyKey, effectiveExpiresAt, 2, snapshot.actorId, snapshot.deviceId, snapshot.tool, canonicalArgsJson, snapshot.proposalHash]);
       const row = result.rows[0]!;
-      if (String(row.proposal_hash) !== operation.proposalHash) fail('idempotency.conflict', 'Chave de idempotência já utilizada com proposta diferente.');
+      if (String(row.proposal_hash) !== snapshot.proposalHash) fail('idempotency.conflict', 'Chave de idempotência já utilizada com proposta diferente.');
       const existing = row.is_insert === false;
-      events.push({ operationId: String(row.id), event: 'propose', actorId: operation.actorId, at: nowIso() });
+      events.push({ operationId: String(row.id), event: 'propose', actorId: snapshot.actorId, at: nowIso() });
       return { ...mapV2(row), existing };
     },
     async get(id, identity) { return mapV2(await read({ query: pool.query.bind(pool) } as unknown as PoolClient, id, identity)); },
@@ -388,6 +489,14 @@ export const createPostgresPendingOperationV2Store = (
       try {
         result = await executor(mapV2(claimed));
       } catch (error) {
+        // Uncertain post-write outcome (typed `approval.execution_uncertain`):
+        // the write may already exist — keep `executing` for lease recovery
+        // (no `failed` persist, no `fail` audit). Surfaces with its stable
+        // safe code so the caller never receives a false success.
+        if (isUncertainOutcome(error)) {
+          if (error instanceof PendingOperationV2Error) throw error;
+          failUncertain();
+        }
         // TX2 (failure). The terminal persist COMMITS before the error
         // propagates: the consumed attestation is never resurrected. Guarded:
         // when recovery already finalized, the late error still propagates
@@ -402,32 +511,39 @@ export const createPostgresPendingOperationV2Store = (
         if (persistedFailure) events.push({ operationId: String(claimed.id), event: 'fail', actorId: identity.actorId, at: nowIso() });
         throw error;
       }
-      if (!result || typeof result !== 'object' || (result as { status?: unknown }).status !== 'succeeded' || typeof (result as { operationId?: unknown }).operationId !== 'string') {
-        // Discriminated outcome: the guard must be evaluated against the row
-        // AS READ INSIDE the transaction. Checking it again against the
-        // post-update row would misclassify the fresh persist (already
-        // 'failed') as stale and silently swallow the protocol error.
-        const outcome = await withTransaction(pool, async (client) => {
-          const current = await read(client, String(claimed.id), identity, true);
-          if (!stillOurs(current)) return { stale: true as const, row: current };
-          const failed = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='failed', failed_at=NOW(), failure_code=$2 WHERE id=$1 RETURNING *", [String(claimed.id), 'approval.incomplete_result']);
-          return { stale: false as const, row: failed.rows[0]! };
-        });
-        // Stale incomplete result after recovery finalized: authoritative
-        // record wins, no overwrite, no failure reported.
-        if (outcome.stale) return mapV2(outcome.row);
-        events.push({ operationId: String(claimed.id), event: 'fail', actorId: identity.actorId, at: nowIso() });
-        return fail('approval.incomplete_result', 'Executor retornou resultado incompleto.');
+      if (!isCompleteExecutorResult(result)) {
+        // Malformed/incomplete post-write result (the executor may already
+        // have written): uncertain outcome — keep `executing` for lease
+        // recovery, never a retryable `failed`. Stale late results after
+        // recovery finalized return the authoritative record untouched.
+        const current = await withTransaction(pool, async (client) => read(client, String(claimed.id), identity, true));
+        if (!stillOurs(current)) return mapV2(current);
+        failUncertain();
+      }
+      // Receipt enrichment is pure (no DB): normalize BEFORE the TX2 write
+      // so a schema/identity failure keeps `executing` for lease recovery
+      // (uncertain outcome — the write may already exist) instead of
+      // persisting a retryable `failed`.
+      let enrichedExecute: Record<string, unknown>;
+      let executeMutationId: string;
+      try {
+        ({ enriched: enrichedExecute, mutationId: executeMutationId } = withTedReceipt(
+          result as { status: string; operationId: string; receipt?: unknown },
+          String(claimed.tool),
+          String(claimed.id),
+        ));
+      } catch {
+        // Receipt normalization failure after the write returned: uncertain
+        // outcome — stale late results return the authoritative record.
+        const current = await withTransaction(pool, async (client) => read(client, String(claimed.id), identity, true));
+        if (!stillOurs(current)) return mapV2(current);
+        failUncertain();
       }
       // TX2 (success). Guarded: recovery-finalized rows are returned as-is.
       const updated = await withTransaction(pool, async (client) => {
         const current = await read(client, String(claimed.id), identity, true);
         if (!stillOurs(current)) return current;
-        const { enriched, mutationId } = withTedReceipt(
-          result as { status: string; operationId: string; receipt?: unknown },
-          String(claimed.tool),
-        );
-        const terminal = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='succeeded', execution_result=$2::jsonb, mutation_id=$3 WHERE id=$1 RETURNING *", [String(claimed.id), JSON.stringify(enriched), mutationId]);
+        const terminal = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='succeeded', execution_result=$2::jsonb, mutation_id=$3 WHERE id=$1 RETURNING *", [String(claimed.id), JSON.stringify(enrichedExecute), executeMutationId]);
         return terminal.rows[0]!;
       });
       return mapV2(updated);
@@ -479,6 +595,12 @@ export const createPostgresPendingOperationV2Store = (
       try {
         result = await executor(mapV2(renewed));
       } catch (error) {
+        // Uncertain post-write outcome: same contract as execute() — keep
+        // `executing` for a later lease recovery, never `failed`.
+        if (isUncertainOutcome(error)) {
+          if (error instanceof PendingOperationV2Error) throw error;
+          failUncertain();
+        }
         // TX2 (failure). Same shape as execute(): sanitized code only.
         const persistedFailure = await withTransaction(pool, async (client) => {
           const current = await read(client, id, identity, true);
@@ -489,28 +611,34 @@ export const createPostgresPendingOperationV2Store = (
         if (persistedFailure) events.push({ operationId: id, event: 'fail', actorId: identity.actorId, at: nowIso() });
         throw error;
       }
-      if (!result || typeof result !== 'object' || (result as { status?: unknown }).status !== 'succeeded' || typeof (result as { operationId?: unknown }).operationId !== 'string') {
-        // Same discriminated outcome as execute(): guard evaluated against
-        // the row AS READ, never against the post-update row.
-        const outcome = await withTransaction(pool, async (client) => {
-          const current = await read(client, id, identity, true);
-          if (!stillRenewed(current)) return { stale: true as const, row: current };
-          const failed = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='failed', failed_at=NOW(), failure_code=$2 WHERE id=$1 RETURNING *", [id, 'approval.incomplete_result']);
-          return { stale: false as const, row: failed.rows[0]! };
-        });
-        if (outcome.stale) return mapV2(outcome.row);
-        events.push({ operationId: id, event: 'fail', actorId: identity.actorId, at: nowIso() });
-        return fail('approval.incomplete_result', 'Executor retornou resultado incompleto.');
+      if (!isCompleteExecutorResult(result)) {
+        // Malformed/incomplete post-write result: uncertain outcome — keep
+        // `executing`, never a retryable `failed`. Stale late results return
+        // the authoritative record untouched.
+        const current = await withTransaction(pool, async (client) => read(client, id, identity, true));
+        if (!stillRenewed(current)) return mapV2(current);
+        failUncertain();
+      }
+      let enrichedReconcile: Record<string, unknown>;
+      let reconcileMutationId: string;
+      try {
+        ({ enriched: enrichedReconcile, mutationId: reconcileMutationId } = withTedReceipt(
+          result as { status: string; operationId: string; receipt?: unknown },
+          String(renewed.tool),
+          id,
+        ));
+      } catch {
+        // Receipt normalization failure: uncertain outcome — stale late
+        // results return the authoritative record.
+        const current = await withTransaction(pool, async (client) => read(client, id, identity, true));
+        if (!stillRenewed(current)) return mapV2(current);
+        failUncertain();
       }
       // TX2 (success). Guarded: direct-TX2-finalized rows are returned as-is.
       const updated = await withTransaction(pool, async (client) => {
         const current = await read(client, id, identity, true);
         if (!stillRenewed(current)) return current;
-        const { enriched, mutationId } = withTedReceipt(
-          result as { status: string; operationId: string; receipt?: unknown },
-          String(renewed.tool),
-        );
-        const terminal = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='succeeded', execution_result=$2::jsonb, mutation_id=$3 WHERE id=$1 RETURNING *", [id, JSON.stringify(enriched), mutationId]);
+        const terminal = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='succeeded', execution_result=$2::jsonb, mutation_id=$3 WHERE id=$1 RETURNING *", [id, JSON.stringify(enrichedReconcile), reconcileMutationId]);
         return terminal.rows[0]!;
       });
       return mapV2(updated);
@@ -519,6 +647,23 @@ export const createPostgresPendingOperationV2Store = (
     async cancel(id, identity) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); if (!['proposed','confirmed'].includes(String(row.execution_status))) return fail('approval.not_pending', 'A operação não está pendente.'); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='cancelled' WHERE id=$1 RETURNING *", [id]); events.push({ operationId: id, event: 'cancel', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!); }); },
     async expire(id, identity) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); if (!['proposed','confirmed'].includes(String(row.execution_status))) return fail('approval.not_pending', 'A operação não está pendente.'); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='expired' WHERE id=$1 RETURNING *", [id]); events.push({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!); }); },
   };
+};
+
+/**
+ * Integrity boundary (review finding): the in-memory store must never share
+ * nested references with callers. `propose` used to keep the caller's
+ * `normalizedArgs`/`bindings` objects by reference and `expose()` only
+ * shallow-copied, so mutating a proposal result, a `get`/`listActive`/replay
+ * DTO, or an exposed `execution` receipt could rewrite the authoritative
+ * args AFTER the proposal hash was validated — changing what `execute`
+ * receives. Every nested value crossing the boundary is now an independent
+ * JSON deep copy (the Postgres backend already round-trips through JSONB,
+ * so this also keeps backend parity). Plaintext attestation still only
+ * leaves via the intentional confirm/retry issuing paths.
+ */
+const deepCopyJson = <T>(value: T): T => {
+  if (value === undefined) return value;
+  return JSON.parse(JSON.stringify(value)) as T;
 };
 
 export const createInMemoryPendingOperationV2Store = (
@@ -546,40 +691,67 @@ export const createInMemoryPendingOperationV2Store = (
   // T3.3: terminal success responses mirror the Postgres store (mapV2) —
   // the plaintext attestation NEVER leaves the store, even consumed. The
   // execution response is the one the Agent relays a receipt projection
-  // from, so no authority material may ride along.
+  // from, so no authority material may ride along. Nested values are
+  // detached deep copies: callers mutating an exposed DTO must never
+  // rewrite the authoritative stored record.
   const expose = (record: PendingOperationV2Record): PendingOperationV2Record => {
     const { attestation: _omitted, ...exposed } = record;
+    return {
+      ...exposed,
+      normalizedArgs: deepCopyJson(record.normalizedArgs),
+      bindings: deepCopyJson(record.bindings),
+      ...(record.execution !== undefined ? { execution: deepCopyJson(record.execution) } : {}),
+    };
+  };
+  // Intentional issuance paths (confirm/retry) carry the new plaintext
+  // attestation, but nested data stays detached like every other boundary.
+  const issued = (record: PendingOperationV2Record): PendingOperationV2Record => {
+    const exposed = expose(record);
+    if (record.attestation !== undefined) exposed.attestation = record.attestation;
     return exposed;
   };
 
   return {
     get audit() { return events; },
     async propose(operation) {
-      if (!pendingOperationV2Schema.safeParse(operation).success || !(await verifyPendingOperationV2Hash(operation))) fail('approval.invalid_hash', 'Proposta V2 inválida ou hash divergente.', 400);
-      assertCanonicalArgs(fail, operation);
+      // HIGH integrity fix: bind the synchronous schema snapshot BEFORE any
+      // await and use it for everything below — no later reads from the
+      // caller-owned object (TOCTOU + hidden toJSON). The storage copy is
+      // taken from the already-parsed plain snapshot, so a caller `toJSON`
+      // can never rewrite what is hashed and stored.
+      const snapshot = snapshotProposeOrFail(fail, operation);
+      if (!(await verifyPendingOperationV2Hash(snapshot))) fail('approval.invalid_hash', 'Proposta V2 inválida ou hash divergente.', 400);
+      assertCanonicalArgs(fail, snapshot);
       // P2 TTL (in-memory mirror of the Postgres path): authoritative server
       // time — a crafted backdated/future createdAt never extends the
       // lifetime window; the expiry is clamped to the server max and a
       // birth-expired proposal fails fast instead of persisting a dead row.
       const nowMs = Date.now();
-      const effectiveExpiresAt = clampPendingV2ExpiresAt(operation.expiresAt, nowMs);
+      const effectiveExpiresAt = clampPendingV2ExpiresAt(snapshot.expiresAt, nowMs);
       if (Date.parse(effectiveExpiresAt) <= nowMs) fail('approval.expired', 'A proposta já expirou.', 409);
       const authoritativeCreatedAt = new Date(nowMs).toISOString();
-      const existing = [...records.values()].find((r) => r.workspaceId === operation.workspaceId && r.idempotencyKey === operation.idempotencyKey);
+      const existing = [...records.values()].find((r) => r.workspaceId === snapshot.workspaceId && r.idempotencyKey === snapshot.idempotencyKey);
       if (existing) {
-        if (existing.proposalHash !== operation.proposalHash) fail('idempotency.conflict', 'Chave de idempotência já utilizada com proposta diferente.');
-        return { ...existing, existing: true };
+        if (existing.proposalHash !== snapshot.proposalHash) fail('idempotency.conflict', 'Chave de idempotência já utilizada com proposta diferente.');
+        // Attestation-exposure fix: a replay after confirm/retry must never
+        // leak the live plaintext attestation — strip it like every other
+        // non-issuing path, while preserving existing:true/id/status.
+        return { ...expose(existing), existing: true };
       }
-      const record: PendingOperationV2Record = { ...operation, createdAt: authoritativeCreatedAt, expiresAt: effectiveExpiresAt, id: randomUUID(), status: 'proposed', executionAttemptCount: 0 };
+      const record: PendingOperationV2Record = {
+        ...snapshot,
+        normalizedArgs: deepCopyJson(snapshot.normalizedArgs),
+        bindings: deepCopyJson(snapshot.bindings),
+        createdAt: authoritativeCreatedAt, expiresAt: effectiveExpiresAt, id: randomUUID(), status: 'proposed', executionAttemptCount: 0,
+      };
       records.set(record.id, record);
-      events.push({ operationId: record.id, event: 'propose', actorId: record.actorId, at: nowIso() });
-      return { ...record, existing: false };
+      events.push({ operationId: record.id, event: 'propose', actorId: snapshot.actorId, at: nowIso() });
+      return { ...expose(record), existing: false };
     },
     async get(id, identity) {
       // Plaintext attestations never leave the store via reads: only the
       // confirm/retry responses carry the newly issued token.
-      const { attestation: _omitted, ...exposed } = resolve(id, identity);
-      return exposed;
+      return expose(resolve(id, identity));
     },
     async confirm(id, identity) {
       const record = resolve(id, identity);
@@ -591,21 +763,20 @@ export const createInMemoryPendingOperationV2Store = (
         // already-consumed attestation never re-emits (replay path).
         const current = record.attestation ? tokens.get(record.attestation) : undefined;
         if (!current || current.consumed || current.id !== record.id) {
-          const { attestation: _omitted, ...exposed } = record;
-          return exposed;
+          return expose(record);
         }
         current.consumed = true;
         record.attestationIssuedAt = nowIso();
         issue(record);
         events.push({ operationId: id, event: 'confirm', actorId: record.actorId, at: nowIso() });
-        return record;
+        return issued(record);
       }
       if (record.status !== 'proposed') fail('approval.not_pending', 'A proposta não está pendente.');
       record.status = 'confirmed';
       record.attestationIssuedAt = nowIso();
       issue(record);
       events.push({ operationId: id, event: 'confirm', actorId: record.actorId, at: nowIso() });
-      return record;
+      return issued(record);
     },
     async execute(token, identity, executor, expectedId?) {
       const found = tokens.get(token);
@@ -651,8 +822,18 @@ export const createInMemoryPendingOperationV2Store = (
       events.push({ operationId: record.id, event: 'execute', actorId: record.actorId, at: nowIso() });
       let result: unknown;
       try {
-        result = await executor(record);
+        // T3.3 parity with Postgres mapV2(claimed): the executor callback
+        // contract is PendingOperationV2 — never the stored plaintext
+        // attestation. expose() copies without mutating the stored record.
+        result = await executor(expose(record));
       } catch (error) {
+        // Uncertain post-write outcome (typed `approval.execution_uncertain`):
+        // the write may already exist — keep `executing` for lease recovery
+        // (no `failed` persist, no `fail` audit).
+        if (isUncertainOutcome(error)) {
+          if (error instanceof PendingOperationV2Error) throw error;
+          failUncertain();
+        }
         // TX2 (failure): terminal persist lands before the error propagates.
         // Guarded: a recovery that finalized first wins; the late error still
         // propagates but persists nothing.
@@ -663,23 +844,34 @@ export const createInMemoryPendingOperationV2Store = (
         }
         throw error;
       }
-      if (!result || typeof result !== 'object' || (result as { status?: unknown }).status !== 'succeeded' || typeof (result as { operationId?: unknown }).operationId !== 'string') {
-        // Stale incomplete result after recovery finalized: authoritative
-        // record wins, no overwrite.
-        if (!stillOurs()) return record;
-        record.status = 'failed';
-        record.failureCode = 'approval.incomplete_result';
-        events.push({ operationId: record.id, event: 'fail', actorId: record.actorId, at: nowIso() });
-        fail('approval.incomplete_result', 'Executor retornou resultado incompleto.');
+      if (!isCompleteExecutorResult(result)) {
+        // Malformed/incomplete post-write result (the executor may already
+        // have written): uncertain outcome — keep `executing` for lease
+        // recovery, never a retryable `failed`. Stale late results return
+        // the authoritative record untouched — stripped of attestation, like
+        // every other non-issuing path (the old consumed token is spent).
+        if (!stillOurs()) return expose(record);
+        failUncertain();
       }
       // TX2 (success). Guarded: recovery-finalized records are returned as-is.
+      // Enrichment is pure: a normalization/schema failure is an uncertain
+      // outcome (the write may already exist) — keep `executing` for lease
+      // recovery, never a partial success nor a retryable `failed`.
       if (!stillOurs()) return expose(record);
-      const { enriched, mutationId } = withTedReceipt(
-        result as { status: string; operationId: string; receipt?: unknown },
-        record.tool,
-      );
-      record.execution = enriched;
-      record.mutationId = mutationId;
+      try {
+        const { enriched, mutationId } = withTedReceipt(
+          result as { status: string; operationId: string; receipt?: unknown },
+          record.tool,
+          record.id,
+        );
+        // Detach from the executor-owned result object: the stored receipt
+        // must not share references with anything the callback retains.
+        record.execution = deepCopyJson(enriched);
+        record.mutationId = mutationId;
+      } catch {
+        if (!stillOurs()) return expose(record);
+        failUncertain();
+      }
       record.status = 'succeeded';
       return expose(record);
     },
@@ -715,8 +907,16 @@ export const createInMemoryPendingOperationV2Store = (
       // The SAME executor runs with the SAME persisted idempotencyKey.
       let result: unknown;
       try {
-        result = await executor(record);
+        // Same T3.3 contract as execute(): expose() strips the stored
+        // plaintext attestation without mutating the stored record.
+        result = await executor(expose(record));
       } catch (error) {
+        // Uncertain post-write outcome: same contract as execute() — keep
+        // `executing` for a later lease recovery, never `failed`.
+        if (isUncertainOutcome(error)) {
+          if (error instanceof PendingOperationV2Error) throw error;
+          failUncertain();
+        }
         if (stillRenewed()) {
           record.status = 'failed';
           record.failureCode = sanitizePendingV2FailureCode(error);
@@ -724,20 +924,29 @@ export const createInMemoryPendingOperationV2Store = (
         }
         throw error;
       }
-      if (!result || typeof result !== 'object' || (result as { status?: unknown }).status !== 'succeeded' || typeof (result as { operationId?: unknown }).operationId !== 'string') {
+      if (!isCompleteExecutorResult(result)) {
+        // Malformed/incomplete post-write result: uncertain outcome — keep
+        // `executing`, never a retryable `failed`.
         if (!stillRenewed()) return expose(record);
-        record.status = 'failed';
-        record.failureCode = 'approval.incomplete_result';
-        events.push({ operationId: id, event: 'fail', actorId: record.actorId, at: nowIso() });
-        return fail('approval.incomplete_result', 'Executor retornou resultado incompleto.');
+        failUncertain();
       }
       if (!stillRenewed()) return expose(record);
-      const { enriched, mutationId } = withTedReceipt(
-        result as { status: string; operationId: string; receipt?: unknown },
-        record.tool,
-      );
-      record.execution = enriched;
-      record.mutationId = mutationId;
+      try {
+        const { enriched, mutationId } = withTedReceipt(
+          result as { status: string; operationId: string; receipt?: unknown },
+          record.tool,
+          record.id,
+        );
+        // Detach from the executor-owned result object: the stored receipt
+        // must not share references with anything the callback retains.
+        record.execution = deepCopyJson(enriched);
+        record.mutationId = mutationId;
+      } catch {
+        // Receipt normalization failure: uncertain outcome — keep
+        // `executing` for lease recovery.
+        if (!stillRenewed()) return expose(record);
+        failUncertain();
+      }
       record.status = 'succeeded';
       return expose(record);
     },
@@ -748,21 +957,21 @@ export const createInMemoryPendingOperationV2Store = (
       record.attestationIssuedAt = nowIso();
       issue(record);
       events.push({ operationId: id, event: 'confirm', actorId: record.actorId, at: nowIso() });
-      return record;
+      return issued(record);
     },
     async cancel(id, identity) {
       const record = resolve(id, identity);
       if (!['proposed', 'confirmed'].includes(record.status)) fail('approval.not_pending', 'A operação não está pendente.');
       record.status = 'cancelled';
       events.push({ operationId: id, event: 'cancel', actorId: record.actorId, at: nowIso() });
-      return record;
+      return expose(record);
     },
     async expire(id, identity) {
       const record = resolve(id, identity);
       if (!['proposed', 'confirmed'].includes(record.status)) throw new PendingOperationV2Error('approval.not_pending', 'A operação não está pendente.');
       record.status = 'expired';
       events.push({ operationId: id, event: 'expire', actorId: record.actorId, at: nowIso() });
-      return record;
+      return expose(record);
     },
     /**
      * T1.5 (SPEC §8.3) — appended after the terminal transitions so the
@@ -775,7 +984,7 @@ export const createInMemoryPendingOperationV2Store = (
       return [...records.values()]
         .filter((record) => identityMatches(record, identity))
         .filter((record) => ['proposed', 'confirmed', 'executing', 'failed'].includes(record.status))
-        .map(({ attestation: _omitted, ...exposed }) => exposed)
+        .map((record) => expose(record))
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     },
   };

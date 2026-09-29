@@ -50,6 +50,42 @@ export const createToolNotAllowedError = (): Error & { code: 'tool.not_allowed' 
   return error;
 };
 
+/**
+ * Execution-outcome uncertainty (HIGH review finding): the trusted TED
+ * executor performs a financial write and then builds/normalizes a receipt.
+ * A failure at/after the write (writer throw after commit, response loss,
+ * receipt-build failure) leaves the outcome UNKNOWN — the write may already
+ * exist. This typed marker lets the pending-operation store keep the
+ * operation `executing` (no `failed` persist, no `fail` audit, no retry)
+ * until the lease reconciler re-runs the SAME persisted idempotencyKey.
+ *
+ * Stable safe surface: the code is a fixed protocol string and the message
+ * carries no raw cause (never a stack, prompt, or driver text). Only the
+ * trusted executor throws this; generic pre-write executor throws stay
+ * plain errors and keep the existing deterministic `failed` path.
+ */
+export const APPROVAL_EXECUTION_UNCERTAIN_CODE = 'approval.execution_uncertain' as const;
+
+export class ApprovalExecutionUncertainError extends Error {
+  readonly code: typeof APPROVAL_EXECUTION_UNCERTAIN_CODE = APPROVAL_EXECUTION_UNCERTAIN_CODE;
+  readonly statusCode = 409;
+  constructor(
+    message = 'Resultado da execução incerto; operação mantida em execução para reconciliação.',
+  ) {
+    super(message);
+    this.name = 'ApprovalExecutionUncertainError';
+  }
+}
+
+export const createApprovalExecutionUncertainError = (): ApprovalExecutionUncertainError =>
+  new ApprovalExecutionUncertainError();
+
+export const isApprovalExecutionUncertain = (error: unknown): boolean => {
+  if (error instanceof ApprovalExecutionUncertainError) return true;
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === APPROVAL_EXECUTION_UNCERTAIN_CODE;
+};
+
 const executeExpenseCreate: ApprovalToolExecutor = async ({
   writes,
   workspaceId,
@@ -58,12 +94,27 @@ const executeExpenseCreate: ApprovalToolExecutor = async ({
 }) => {
   const parsed = createExpenseInputSchema.safeParse(args);
   if (!parsed.success) throw new Error('validation.invalid_expense_arguments');
-  const transaction = await writes.createExpense(workspaceId, parsed.data, { idempotencyKey });
+  // The writer may throw AFTER the commit (or the response may be lost on
+  // the way back): from here the outcome is uncertain, never a deterministic
+  // pre-write failure. Map every writer throw to the typed marker with a
+  // safe message — the raw cause must never reach the API response.
+  let transaction: { id: string };
+  try {
+    transaction = await writes.createExpense(workspaceId, parsed.data, { idempotencyKey });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
   const operationId = transaction.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('transactions.expense.create', operationId, { type: 'transaction', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
   return {
     status: 'succeeded' as const,
     operationId,
-    receipt: buildTedReceipt('transactions.expense.create', operationId, { type: 'transaction', id: operationId }),
+    receipt,
   };
 };
 
@@ -75,12 +126,25 @@ const executeIncomeCreate: ApprovalToolExecutor = async ({
 }) => {
   const parsed = createIncomeInputSchema.safeParse(args);
   if (!parsed.success) throw new Error('validation.invalid_income_arguments');
-  const transaction = await writes.createIncome(workspaceId, parsed.data, { idempotencyKey });
+  // Same uncertainty contract as the expense path: any writer throw after
+  // the write started is an unknown outcome, never a deterministic failure.
+  let transaction: { id: string };
+  try {
+    transaction = await writes.createIncome(workspaceId, parsed.data, { idempotencyKey });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
   const operationId = transaction.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('transactions.income.create', operationId, { type: 'transaction', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
   return {
     status: 'succeeded' as const,
     operationId,
-    receipt: buildTedReceipt('transactions.income.create', operationId, { type: 'transaction', id: operationId }),
+    receipt,
   };
 };
 
