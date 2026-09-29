@@ -23,12 +23,37 @@ recuperação do estado `confirmed` ocorre EXCLUSIVAMENTE por reemissão de
 attestation e NUNCA usa lease (as colunas de lease só são escritas no claim).
 Estados terminais nunca retornam à execução.
 
+Contrato refinado (sem nova ADR): erros determinísticos conhecidos
+pré-write permanecem `failed` (com `failure_code` sanitizado) e o retry
+explícito é permitido pela mesma operação pendente (`failed → confirmed`,
+nova attestation). Qualquer throw do writer após o início da escrita,
+resultado de sucesso ausente/inválido, falha de normalização do receipt ou
+falha de construção do receipt é resultado incerto: a operação permanece
+`executing` (`approval.execution_uncertain`, sem persistir `failed`, sem
+evento `fail`, sem retry/nova aprovação); a lease expirada é reconciliada
+com a mesma `idempotencyKey` persistida. Sucesso exige `operationId`
+(top-level/decisão) e `receipt.operationId` iguais ao ID da operação
+pendente, com `receipt.entity = { type: 'transaction', id: transactionId }`;
+`succeeded` sem receipt é resultado inválido/incerto.
+Antes de aceitar uma attestation de `confirm`/`retry`, ou concluir um
+`cancel`, o Agent exige que o `id` retornado pela API corresponda exatamente
+ao ID solicitado; mismatch aborta a decisão e impede `/execute`. Um
+cancelamento só é reportado após a API retornar `status = cancelled`.
+
 A migration V052 é aditiva e backward-compatible: apenas adiciona as colunas
 de lease, sem alterar colunas ou comportamento existentes.
 
 ## Consequências
 
-Nenhuma operação permanece `executing` para sempre; recuperação é idempotente
-por construção via mesma chave de idempotência. Falhas do executor geram
-códigos sanitizados auditáveis, e o caminho `confirmed` permanece distinto do
-caminho de lease sem possibilidade de confusão entre reemissão e recuperação.
+A recuperação é idempotente por construção via mesma chave de idempotência.
+Falhas determinísticas pré-write geram códigos sanitizados auditáveis; uma
+operação cujo resultado permaneça incerto fica `executing` até uma reconciliação
+bem-sucedida ou intervenção operacional — nunca é convertida em retryable
+`failed` apenas para encerrar o estado. O caminho `confirmed` permanece distinto
+do caminho de lease sem confusão entre reemissão e recuperação.
+
+Enquanto o resultado permanece incerto, o card de confirmação da PWA trava
+(sem confirmar/cancelar/retry), não chama `onResolved` nem declara sucesso,
+e orienta refresh/rechecagem antes de nova decisão. O E2E live usa exatamente
+um POST de decisão por operação pendente e confere o ID da transação do
+receipt contra o ID do ledger.

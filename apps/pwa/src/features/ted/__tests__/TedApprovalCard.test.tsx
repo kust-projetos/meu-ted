@@ -34,6 +34,14 @@ describe("TedApprovalCard V2", () => {
     vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({
       operationId: "op-1",
       status: "succeeded",
+      receipt: {
+        mutationId: "mut-1",
+        mutationKind: "transactions.expense.create",
+        status: "succeeded",
+        affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
+        operationId: "op-1",
+        entity: { type: "transaction", id: "tx-1" },
+      },
     });
 
     render(
@@ -59,6 +67,38 @@ describe("TedApprovalCard V2", () => {
     );
     expect(JSON.stringify(vi.mocked(agentClient.decidePendingOperation).mock.calls)).not.toContain("attestation");
     expect(await screen.findByText(/registrada/i)).toBeInTheDocument();
+  });
+
+  it("locks the card after an unverified confirmation result until state is refreshed", async () => {
+    const user = userEvent.setup();
+    const onResolved = vi.fn();
+    const uncertain = Object.assign(
+      new Error("O resultado desta operação ainda não pôde ser verificado."),
+      { code: "approval.execution_uncertain" },
+    );
+    vi.mocked(agentClient.decidePendingOperation).mockRejectedValue(uncertain);
+
+    render(
+      <TedApprovalCard
+        operation={{
+          id: "op-uncertain",
+          status: "proposed",
+          operation: "transactions.expense.create",
+          presentation: actionablePresentation("op-uncertain"),
+        }}
+        workspaceId="workspace-1"
+        onResolved={onResolved}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Confirmar R\$ 850,00/ }));
+
+    expect(await screen.findByText(/resultado desta opera.*atualize/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Confirmar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancelar" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Tentar novamente/i })).not.toBeInTheDocument();
+    expect(agentClient.decidePendingOperation).toHaveBeenCalledTimes(1);
+    expect(onResolved).not.toHaveBeenCalled();
   });
 
   it("does not render an action for a non-proposed (resolved) shape", () => {
@@ -193,7 +233,7 @@ describe("TedApprovalCard V2", () => {
       status: "succeeded" as const,
       affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
       operationId: "op-1",
-      entity: { type: "transaction", id: "op-1" },
+      entity: { type: "transaction", id: "tx-1" },
     };
     vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({
       operationId: "op-1",

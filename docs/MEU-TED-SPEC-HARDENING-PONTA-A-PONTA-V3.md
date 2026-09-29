@@ -721,6 +721,12 @@ Se o cancelamento chegar enquanto o handoff draft → PendingOperation está em 
 
 Hoje o primeiro `confirm()` gera a attestation e persiste somente seu hash.
 
+O Agent só aceita a resposta de `confirm`/`retry`/`cancel` quando o `id`
+retornado pela API corresponde exatamente à PendingOperation solicitada. Um
+ID ausente ou divergente é bloqueado antes de usar a attestation e antes de
+chamar `/execute`; nenhuma execução pode ser redirecionada para outra
+PendingOperation.
+
 Se a transação confirmar no PostgreSQL mas a resposta HTTP desaparecer:
 
 ```text
@@ -806,17 +812,24 @@ executor(persisted operation)
 
 O executor continua usando a `idempotencyKey` persistida.
 
-TX2 — sucesso:
+TX2 — sucesso (contrato fechado API+Agent+PWA):
 
 ```text
 BEGIN
 lock operation
-status = succeeded
-execution_result = ...
+status = succeeded  // somente com receipt válido
+execution_result = { status, operationId: <tx id>, receipt }
+receipt.operationId = <pending operation id>
+receipt.entity = { type: 'transaction', id: <tx id> }
+mutation_id = receipt.mutationId
 COMMIT
 ```
 
-TX2 — falha:
+`succeeded` sem receipt é resultado inválido/incerto (nunca sucesso parcial):
+o Agent rejeita com `approval.incomplete_result` e a API mantém `executing`
+para reconciliação.
+
+TX2 — falha determinística pré-write:
 
 ```text
 BEGIN
@@ -827,7 +840,17 @@ failure_code = código sanitizado
 COMMIT
 ```
 
-Somente depois o erro pode ser retornado ao caller.
+Somente depois o erro pode ser retornado ao caller. Retry explícito é
+permitido apenas a partir de `failed`, pela mesma operação (`failed →
+confirmed`, nova attestation, §13).
+
+Resultado incerto (pós-write): throw do writer após o início da escrita,
+resultado de sucesso ausente/inválido, falha de normalização do receipt ou
+falha de construção do receipt — incluindo `approval.incomplete_result` —
+NÃO persiste `failed`, NÃO emite evento `fail` e NÃO expõe retry/nova
+aprovação. A operação permanece `executing`
+(`approval.execution_uncertain`, 409) até a reconciliação da lease expirada
+com a mesma `idempotencyKey` (§11.3).
 
 ## 11. H1 — Recuperação de `executing` abandonado
 
@@ -946,12 +969,17 @@ executing
    └── failed
 
 failed
-   └── confirmed  ← retry explícito, nova attestation
+    └── confirmed  ← retry explícito, nova attestation (somente falha determinística pré-write)
 
-succeeded  [terminal]
+succeeded  [terminal]  ← somente com receipt válido (§10)
 cancelled  [terminal]
 expired    [terminal]
 ```
+
+Resultado incerto não é transição: `executing` permanece `executing`
+(`approval.execution_uncertain`), sem persistir `failed`, sem evento `fail`
+e sem retry/nova aprovação até a reconciliação da lease expirada com a mesma
+`idempotencyKey` (§11.3).
 
 É proibido:
 
@@ -1288,8 +1316,8 @@ Todo estado do fluxo financeiro possui apresentação obrigatória, derivada do 
 | clarificação (draft ativo, §7.8) | pergunta objetiva do campo faltante — "aguardando informação" |
 | proposing (handoff §7.8) | estado interno transitório do Agent; visual = envio em processamento (§19.1); nunca sucesso, nunca cancelamento (INV-03, INV-10) |
 | proposed | card §16 com dados + Confirmar/Cancelar — "aguardando aprovação" |
-| executing | "processando operação…" — nunca sucesso antecipado (INV-03) |
-| succeeded | "concluída" + reconciliação (§15) |
+| executing | "processando operação…" — nunca sucesso antecipado (INV-03); em resultado incerto o card trava (sem Confirmar/Cancelar/retry), não chama `onResolved` nem declara sucesso, e orienta atualizar/rechecar antes de nova decisão |
+| succeeded | "concluída" + reconciliação (§15) — somente com receipt válido (§10) |
 | failed | "falhou" + ação de retry pelo mesmo Decision Service (§8) |
 | cancelled / expired | estado explícito, sem sucesso antecipado |
 | stale (refresh falho) | banner degradado + retry de refresh (§15.5) |
@@ -1933,17 +1961,24 @@ nova attestation
 execução única
 ```
 
-Executor falha:
+Executor falha (falha determinística pré-write):
 
 ```text
 claim committed
 ↓
-executor throws
+executor throws antes da escrita
 ↓
-DB permanece failed
+DB = failed + failure_code sanitizado
 ↓
 attestation antiga continua consumida
+↓
+retry explícito pela mesma operação (failed → confirmed, nova attestation)
 ```
+
+Executor com resultado incerto (pós-write, sem receipt válido ou falha de
+receipt): DB permanece `executing` (`approval.execution_uncertain`), sem
+`failed`, sem evento `fail`, sem retry/nova aprovação — reconciliação da
+lease expirada com a mesma `idempotencyKey` (§11.3).
 
 Replay:
 

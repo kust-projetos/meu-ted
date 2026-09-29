@@ -58,7 +58,18 @@ describe("FIX-P1 RED: TedChat reload from active list", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(agentClient.sendAgentMessage).mockResolvedValue({ turnId: "t1", status: "completed" });
-    vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({ operationId: "pending-v2-1", status: "succeeded" });
+    vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({
+      operationId: "pending-v2-1",
+      status: "succeeded",
+      receipt: {
+        mutationId: "mut-pending-v2-1",
+        mutationKind: "transactions.expense.create",
+        status: "succeeded",
+        affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
+        operationId: "pending-v2-1",
+        entity: { type: "transaction", id: "tx-pending-v2-1" },
+      },
+    });
   });
 
   it("proposal→reload→canonical card→decision: card comes from active list with server presentation", async () => {

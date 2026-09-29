@@ -52,7 +52,7 @@ describe('AGENT-010 sanitized lifecycle events', () => {
         total: 1,
       })
       .mockResolvedValueOnce({ id: 'pending-1', attestation: 'a'.repeat(32) })
-      .mockResolvedValueOnce({ status: 'succeeded', operationId: 'pending-1' });
+      .mockResolvedValueOnce({ id: 'pending-1', status: 'succeeded', execution: { status: 'succeeded', operationId: 'mut-pending-1', receipt: { mutationId: 'mut-pending-1', mutationKind: 'transactions.expense.create', status: 'succeeded', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'], operationId: 'pending-1', entity: { type: 'transaction', id: 'mut-pending-1' } } } });
     const api = new MutationApiClient({ request, events: (type, fields) => seen.push({ type, fields }) });
     const planner = vi.fn()
       .mockReturnValueOnce({

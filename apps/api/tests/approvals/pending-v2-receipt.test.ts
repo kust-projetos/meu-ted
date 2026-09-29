@@ -75,9 +75,11 @@ describe('TED execute success emits a MutationReceipt', () => {
     // Existing envelope preserved (additive).
     expect(execution.status).toBe('succeeded');
     expect(execution.operationId).toBe(entityId);
-    // Receipt present with origin operationId + registry-derived targets.
+    // Receipt present with origin pending-operation id + registry-derived targets.
     expect(execution.receipt).toBeTruthy();
-    expect(execution.receipt.operationId).toBe(entityId);
+    expect(execution.receipt.operationId).toBe(saved.id);
+    expect(execution.receipt.operationId).not.toBe(entityId);
+    expect(execution.receipt.entity).toEqual({ type: 'transaction', id: entityId });
     expect(execution.receipt.mutationKind).toBe('transactions.expense.create');
     expect(execution.receipt.affectedTargets).toEqual(
       MUTATION_EFFECTS_REGISTRY['transactions.expense.create'].affectedTargets,
@@ -109,6 +111,11 @@ describe('TED execute success emits a MutationReceipt', () => {
         entity: { type: 'transaction', id: entityId },
       },
     }));
+    const execution = done.execution as { operationId: string; receipt: Record<string, unknown> };
+    expect(execution.operationId).toBe(entityId);
+    // Executor-stamped tx id is normalized to the origin pending-operation id.
+    expect(execution.receipt.operationId).toBe(saved.id);
+    expect(execution.receipt.entity).toEqual({ type: 'transaction', id: entityId });
     expect(done.mutationId).toBe(mutationId);
   });
 

@@ -83,7 +83,18 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([]);
     vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
     vi.mocked(agentClient.sendAgentMessage).mockResolvedValue({ turnId: "t1", status: "completed" });
-    vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({ operationId: "pending-v2-1", status: "succeeded" });
+    vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({
+      operationId: "pending-v2-1",
+      status: "succeeded",
+      receipt: {
+        mutationId: "mut-pending-v2-1",
+        mutationKind: "transactions.expense.create",
+        status: "succeeded",
+        affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
+        operationId: "pending-v2-1",
+        entity: { type: "transaction", id: "tx-pending-v2-1" },
+      },
+    });
   });
 
   it("mount after reload with a proposed op renders the card from SERVER state, not local residue", async () => {

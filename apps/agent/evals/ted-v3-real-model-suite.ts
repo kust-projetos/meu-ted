@@ -341,7 +341,9 @@ const createPendingApiV3 = (options: { seed?: SeedOperation[] } = {}): PendingAp
       const body = (opts.body ?? {}) as Record<string, unknown>;
       if (body.attestation !== attestationFor(id)) throw new Error('approval.invalid_attestation');
       operation.status = 'succeeded';
-      return { status: 'succeeded', operationId: id };
+      // Faithful store-record shape: top-level `id` is the pending-operation
+      // id; `execution.operationId` names the persisted transaction.
+      return { id, status: 'succeeded', execution: { status: 'succeeded', operationId: `mut-${id}` } };
     }
     // SPEC §8.5 (INV-10): authoritative cancel persisted before any reply.
     const cancelMatch = /^\/pending-operations\/v2\/([^/]+)\/cancel$/.exec(path);

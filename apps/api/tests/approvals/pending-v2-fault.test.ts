@@ -15,10 +15,14 @@
  *                                    deterministic sequential sequencing
  *                                    (primary: contract H-03 suite).
  * - executor failure               → TX1 claim stands; failed persisted with
- *                                    sanitized code; attestation consumed;
- *                                    incomplete-result variant pins the
- *                                    protocol error (primary:
- *                                    pending-v2-claim.test.ts).
+ *                                    sanitized code; attestation consumed
+ *                                    (deterministic pre-write throws only).
+ * - post-write uncertainty          → typed uncertainty, malformed result,
+ *                                    or receipt-normalization failure keeps
+ *                                    `executing` (no fail audit, no retry);
+ *                                    lease recovery re-runs the SAME key
+ *                                    (primary:
+ *                                    pending-v2-uncertainty.test.ts).
  * - API crash after claim (lease)  → lease expiry → reconciler → SAME
  *                                    idempotencyKey → 0/1 effect; late TX2
  *                                    of the abandoned attempt cannot
@@ -256,17 +260,18 @@ function definePendingV2FaultSuite(
       ).rejects.toMatchObject({ code: 'approval.attestation_replayed' });
       expect(reran).toBe(false);
 
-      // Same fault class, incomplete-result variant: a malformed executor
-      // result must fail the protocol loudly (approval.incomplete_result),
-      // never silently return the failed record.
+      // Same fault class, post-write uncertainty variant: a malformed executor
+      // result may already have written, so it keeps `executing` for lease
+      // recovery (typed uncertainty) — never a retryable `failed`.
       const id2 = identityOf();
       const saved2 = await proposeCanonical(store, id2);
       const confirmed2 = await store.confirm(saved2.id, id2);
       await expect(store.execute(confirmed2.attestation!, id2, async () => ({ ok: true })))
-        .rejects.toMatchObject({ code: 'approval.incomplete_result' });
-      const failed2 = await store.get(saved2.id, id2);
-      expect(failed2.status).toBe('failed');
-      expect(failed2.failureCode).toBe('approval.incomplete_result');
+        .rejects.toMatchObject({ code: 'approval.execution_uncertain' });
+      const uncertain2 = await store.get(saved2.id, id2);
+      expect(uncertain2.status).toBe('executing');
+      expect(uncertain2.failureCode).toBeUndefined();
+      await expect(store.retry(saved2.id, id2)).rejects.toMatchObject({ code: 'approval.retry_not_allowed' });
     });
 
     it('API crash after claim: lease expires → reconciler → same idempotencyKey → 0/1 effect (H-05)', async () => {
