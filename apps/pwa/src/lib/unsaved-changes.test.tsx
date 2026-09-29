@@ -63,6 +63,56 @@ describe("UnsavedChangesContext", () => {
   });
 });
 
+describe("UnsavedChangesContext synchronous query", () => {
+  it("reflects markDirty/markClean immediately in the same act via isDirtyNow", () => {
+    const api: { current?: ReturnType<typeof useUnsavedChanges> } = {};
+    function Probe() {
+      api.current = useUnsavedChanges();
+      return null;
+    }
+    render(
+      <UnsavedChangesProvider>
+        <Probe />
+      </UnsavedChangesProvider>,
+    );
+    const token = Symbol("sync-dirty");
+    act(() => {
+      api.current!.markDirty(token);
+      expect(api.current!.isDirtyNow()).toBe(true);
+    });
+    expect(api.current!.isDirty).toBe(true);
+    act(() => {
+      api.current!.markClean(token);
+      expect(api.current!.isDirtyNow()).toBe(false);
+    });
+    expect(api.current!.isDirty).toBe(false);
+  });
+
+  it("reflects trackWrite/release immediately in the same act via isDirtyNow", () => {
+    const api: { current?: ReturnType<typeof useUnsavedChanges> } = {};
+    function Probe() {
+      api.current = useUnsavedChanges();
+      return null;
+    }
+    render(
+      <UnsavedChangesProvider>
+        <Probe />
+      </UnsavedChangesProvider>,
+    );
+    let cleanup: (() => void) | undefined;
+    act(() => {
+      cleanup = api.current!.trackWrite();
+      expect(api.current!.isDirtyNow()).toBe(true);
+    });
+    expect(api.current!.isDirty).toBe(true);
+    act(() => {
+      cleanup!();
+      expect(api.current!.isDirtyNow()).toBe(false);
+    });
+    expect(api.current!.isDirty).toBe(false);
+  });
+});
+
 describe("useFormDirtySafe — provider lifecycle edge cases", () => {
   it("keeps stable markDirty/markClean identities across dirty cycles", () => {
     const { result } = renderHook(() => useFormDirtySafe(), {
@@ -153,5 +203,70 @@ describe("useFormDirtySafe — provider lifecycle edge cases", () => {
     expect(api.second!.isDirty).toBe(false);
     expect(api.second!.markDirty).toBe(secondDirty);
     expect(api.second!.markClean).toBe(secondClean);
+  });
+});
+
+describe("UnsavedChangesContext dirtyVersion", () => {
+  it("defaults to 0 and preserves isDirty contract", () => {
+    const { result } = renderHook(() => useUnsavedChanges(), {
+      wrapper: UnsavedChangesProvider,
+    });
+    expect(result.current.dirtyVersion).toBe(0);
+    expect(result.current.isDirty).toBe(false);
+  });
+
+  it("increments only on real transitions (idempotent no-ops do not bump)", () => {
+    const api: { current?: ReturnType<typeof useUnsavedChanges> } = {};
+    function Probe() {
+      api.current = useUnsavedChanges();
+      return null;
+    }
+    render(
+      <UnsavedChangesProvider>
+        <Probe />
+      </UnsavedChangesProvider>,
+    );
+    const token = Symbol("version-token");
+    expect(api.current!.dirtyVersion).toBe(0);
+    act(() => {
+      api.current!.markDirty(token);
+    });
+    const v1 = api.current!.dirtyVersion;
+    expect(v1).toBeGreaterThan(0);
+    expect(api.current!.isDirty).toBe(true);
+    // Duplicate markDirty is a no-op: version stays.
+    act(() => {
+      api.current!.markDirty(token);
+    });
+    expect(api.current!.dirtyVersion).toBe(v1);
+    act(() => {
+      api.current!.markClean(token);
+    });
+    expect(api.current!.dirtyVersion).toBeGreaterThan(v1);
+    expect(api.current!.isDirty).toBe(false);
+    // Cleaning an unknown token is a no-op: version stays.
+    const v2 = api.current!.dirtyVersion;
+    act(() => {
+      api.current!.markClean(Symbol("unknown"));
+    });
+    expect(api.current!.dirtyVersion).toBe(v2);
+  });
+
+  it("bumps on trackWrite acquire and release", () => {
+    const { result } = renderHook(() => useUnsavedChanges(), {
+      wrapper: UnsavedChangesProvider,
+    });
+    expect(result.current.dirtyVersion).toBe(0);
+    let cleanup: () => void;
+    act(() => {
+      cleanup = result.current.trackWrite();
+    });
+    const v1 = result.current.dirtyVersion;
+    expect(v1).toBeGreaterThan(0);
+    act(() => {
+      cleanup!();
+    });
+    expect(result.current.dirtyVersion).toBeGreaterThan(v1);
+    expect(result.current.isDirty).toBe(false);
   });
 });

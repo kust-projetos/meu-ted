@@ -1,8 +1,75 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { RootProviders } from "../RootProviders";
+import { reloadAdapter } from "@/lib/sw-coordinator";
+
+let mockPathname: string | null = "/";
+vi.mock("next/navigation", () => ({
+  usePathname: () => mockPathname,
+}));
+// Passthrough mocks keep the branch test focused on coordinator identity:
+// AuthGate/Theme/UnsavedChanges/SWCoordinator stay real; these providers
+// only forward children so no downstream fetch noise affects the count.
+vi.mock("@/lib/auth/workspace-context", () => ({
+  WorkspaceProvider: ({ children }: { children: unknown }) => children,
+}));
+vi.mock("@/lib/state/app-state-context", () => ({
+  AppStateProvider: ({ children }: { children: unknown }) => children,
+}));
+vi.mock("@/lib/sheet-context", () => ({
+  SheetProvider: ({ children }: { children: unknown }) => children,
+}));
+
+function installServiceWorkerMock() {
+  const postMessage = vi.fn();
+  const waiting = { postMessage };
+  const swAddEventListener = vi.fn();
+  const swRemoveEventListener = vi.fn();
+  const register = vi.fn().mockResolvedValue({
+    waiting,
+    installing: null,
+    active: {},
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    update: vi.fn().mockResolvedValue(undefined),
+  });
+  // Keep a handle to restore whatever the environment provided before, so
+  // this mock never leaks into later tests.
+  const originalDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis.navigator,
+    "serviceWorker",
+  );
+  const hadOwnServiceWorker = Object.prototype.hasOwnProperty.call(
+    globalThis.navigator,
+    "serviceWorker",
+  );
+  Object.defineProperty(globalThis.navigator, "serviceWorker", {
+    value: {
+      getRegistrations: vi.fn().mockResolvedValue([]),
+      getRegistration: vi.fn().mockResolvedValue(undefined),
+      register,
+      addEventListener: swAddEventListener,
+      removeEventListener: swRemoveEventListener,
+    },
+    configurable: true,
+    writable: true,
+  });
+  const restoreServiceWorker = () => {
+    if (originalDescriptor) {
+      Object.defineProperty(
+        globalThis.navigator,
+        "serviceWorker",
+        originalDescriptor,
+      );
+    } else if (!hadOwnServiceWorker) {
+      delete (globalThis.navigator as { serviceWorker?: unknown }).serviceWorker;
+    }
+  };
+  return { register, postMessage, swAddEventListener, restoreServiceWorker };
+}
 
 beforeEach(() => {
+  mockPathname = "/";
   vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_API_BASE_URL", undefined as unknown as string);
   vi.restoreAllMocks();
 });
@@ -234,6 +301,128 @@ describe("RootProviders — SSR prerender without env (item 7, no false-unconfig
       }
       container.remove();
       consoleErrorSpy.mockRestore();
+    }
+  });
+});
+
+describe("RootProviders — SWCoordinator stays mounted across /convite branch changes", () => {
+  it("switching / ↔ /convite registers the service worker once and keeps invite public", async () => {
+    const { register, postMessage, swAddEventListener, restoreServiceWorker } =
+      installServiceWorkerMock();
+    const reloadSpy = vi
+      .spyOn(reloadAdapter, "reload")
+      .mockImplementation(() => {});
+    // Authenticated cookie session so AuthGate unlocks and mounts the
+    // coordinator on the ordinary route; /pwa-control keeps SW enabled.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: unknown) => {
+      const url = String(input);
+      if (url.includes("/auth/session")) {
+        return new Response(
+          JSON.stringify({
+            user: { id: "u1", email: "a@b.c", name: "T" },
+            session: {},
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/pwa-control")) {
+        return new Response(JSON.stringify({ enabled: true }), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+
+    mockPathname = "/";
+    const view = render(
+      <RootProviders>
+        <div data-testid="route-child">Route Child</div>
+      </RootProviders>,
+    );
+
+    try {
+      // Ordinary route (authenticated): AuthGate unlocks, children visible, no login.
+      expect(await screen.findByTestId("route-child", {}, { timeout: 3000 })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Entrar/i })).not.toBeInTheDocument();
+      await waitFor(
+        () => expect(register).toHaveBeenCalledWith("/sw.js"),
+        { timeout: 3000 },
+      );
+      expect(register).toHaveBeenCalledTimes(1);
+      // Waiting worker is activated with the single canonical message.
+      await waitFor(
+        () => expect(postMessage).toHaveBeenCalledWith({ type: "CLEAN_UPDATE" }),
+        { timeout: 3000 },
+      );
+      expect(postMessage).toHaveBeenCalledTimes(1);
+
+      // Capture the persistent controllerchange listener BEFORE any route
+      // change: it must survive the branch swaps below.
+      const controllerHandlers = swAddEventListener.mock.calls
+        .filter((call) => call[0] === "controllerchange")
+        .map((call) => call[1] as () => void);
+      expect(controllerHandlers).toHaveLength(1);
+      const onControllerChange = controllerHandlers[0]!;
+
+      // Switch to the public invite route (usePathname has no query string):
+      // children render with no login gate and no session probe (AuthGate bypassed).
+      mockPathname = "/convite";
+      view.rerender(
+        <RootProviders>
+          <div data-testid="route-child">Route Child</div>
+        </RootProviders>,
+      );
+      expect(await screen.findByTestId("route-child", {}, { timeout: 3000 })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Entrar/i })).not.toBeInTheDocument();
+
+      // Switch back: AuthGate contract returns, coordinator never remounted.
+      mockPathname = "/";
+      view.rerender(
+        <RootProviders>
+          <div data-testid="route-child">Route Child</div>
+        </RootProviders>,
+      );
+      expect(await screen.findByTestId("route-child", {}, { timeout: 3000 })).toBeInTheDocument();
+
+      // Allow any remount-driven re-registration microtask to flush, then
+      // assert once: no remount, no duplicate activation.
+      await waitFor(
+        () => expect(register).toHaveBeenCalledWith("/sw.js"),
+        { timeout: 3000 },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(register).toHaveBeenCalledTimes(1);
+      expect(postMessage).toHaveBeenCalledTimes(1);
+      // No extra controllerchange listener was attached across the swaps.
+      expect(
+        swAddEventListener.mock.calls.filter((call) => call[0] === "controllerchange"),
+      ).toHaveLength(1);
+
+      // Observer continuity: the handler captured before the swaps still
+      // drives exactly one reload afterward (state was never lost/remounted).
+      onControllerChange();
+      expect(reloadSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      reloadSpy.mockRestore();
+      restoreServiceWorker();
+    }
+  });
+
+  it("keeps the /convites prefix-sibling behind AuthGate", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ user: null }), { status: 200 }),
+    );
+    mockPathname = "/convites";
+    const view = render(
+      <RootProviders>
+        <div data-testid="convites-child">Convites Child</div>
+      </RootProviders>,
+    );
+    try {
+      // Not the exact invite pathname → AuthGate stays: login renders, children gated.
+      expect(await screen.findByRole("button", { name: /Entrar/i }, { timeout: 3000 })).toBeInTheDocument();
+      expect(screen.queryByTestId("convites-child")).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
     }
   });
 });
