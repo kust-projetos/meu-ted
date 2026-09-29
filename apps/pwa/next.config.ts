@@ -56,6 +56,9 @@ const nextConfig: NextConfig = {
 const serwistConfig = {
   swSrc: "src/sw.ts",
   swDest: "public/sw.js",
+  // SWCoordinator owns registration/update/reload so form dirty-state guards
+  // and the live E2E request interceptor observe the same lifecycle.
+  register: false,
   reloadOnOnline: true,
   disable: false,
 };
