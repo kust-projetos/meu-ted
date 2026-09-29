@@ -64,6 +64,11 @@ const ALLOWLIST = [
       "pending-v2 RED-phase Postgres contract parked until Phase 7 removal decision lands.",
   },
   {
+    file: "apps/api/tests/approvals/pending-v2-uncertainty.test.ts",
+    reason:
+      "pending-v2 execution-uncertainty Postgres suite follows the sibling dual-store pattern (runs in CI with PG, skips cleanly without DATABASE_URL_TEST); in-memory half always runs.",
+  },
+  {
     file: "apps/api/tests/integration/postgres-write-store.test.ts",
     reason:
       "Legacy ESI write-store contract superseded by keyed-mutations suites; kept as archived debt reference.",

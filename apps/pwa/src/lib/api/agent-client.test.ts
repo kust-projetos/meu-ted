@@ -475,11 +475,11 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
         mockDecision({ operationId: "op-1", status: "succeeded" }),
       );
 
-      const err = await decidePendingOperation("workspace-123", "op-1", "confirm").catch(
-        (e: unknown) => e as Error & { code?: string },
-      );
+      const err = (await decidePendingOperation("workspace-123", "op-1", "confirm").catch(
+        (e: unknown) => e,
+      )) as Error & { code?: string };
       expect(err).toBeInstanceOf(Error);
-      expect((err as Error & { code?: string }).code).toBe("agent.execution_outcome_unknown");
+      expect(err.code).toBe("agent.execution_outcome_unknown");
       expect(err.message).toMatch(/resultado.*verificad/i);
       expect(err.message).not.toMatch(/tente novamente/i);
     });
@@ -505,9 +505,9 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
         mockDecision({ operationId: "op-other", status: "succeeded", receipt: cleanReceipt }),
       );
 
-      const err = await decidePendingOperation("workspace-123", "op-1", "confirm").catch(
-        (e: unknown) => e as Error & { code?: string },
-      );
+      const err = (await decidePendingOperation("workspace-123", "op-1", "confirm").catch(
+        (e: unknown) => e,
+      )) as Error & { code?: string };
       expect(err).toMatchObject({ code: "agent.execution_outcome_unknown" });
       expect(err.message).toMatch(/resultado.*verificad/i);
       expect(err.message).not.toMatch(/tente novamente/i);
