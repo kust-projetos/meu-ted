@@ -27,6 +27,11 @@ RUN pnpm deploy --legacy --filter meu-ted-api --prod /runtime
 FROM node:24-alpine AS runner
 
 RUN apk update && apk upgrade --no-cache libcrypto3 libssl3
+# Trivy flags undici bundled with the npm CLI (node:24-alpine ships npm in the
+# base image). The runtime only runs `node dist/server/index.js` — it never
+# needs npm/npx/corepack — so drop the bundled npm from the FINAL stage only
+# (build stages above keep npm to install pnpm).
+RUN rm -rf /usr/local/lib/node_modules/npm
 RUN addgroup -g 10001 -S appgroup && adduser -u 10001 -S appuser -G appgroup
 WORKDIR /monorepo/apps/api
 

@@ -18,6 +18,11 @@ FROM node:24-alpine AS runner
 
 # Keep OS libs at the same fixed level as the builder stage.
 RUN apk update && apk upgrade --no-cache libcrypto3 libssl3
+# Trivy flags undici bundled with the npm CLI (node:24-alpine ships npm in the
+# base image). The runtime only runs `node dist/server.js` — it never needs
+# npm/npx/corepack — so drop the bundled npm from the FINAL stage only
+# (the builder stage above keeps npm to install pnpm).
+RUN rm -rf /usr/local/lib/node_modules/npm
 WORKDIR /monorepo/apps/codex-broker
 ENV NODE_ENV=production
 ENV PORT=3005
