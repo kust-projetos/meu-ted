@@ -810,8 +810,11 @@ export const createInMemoryPendingOperationV2Store = (
       const record = resolve(claim.id, identity);
       if (record.status !== 'confirmed' || record.attestation !== token) fail('approval.attestation_replayed', 'Attestation inválida ou já consumida.', 403);
       record.status = 'executing';
-      record.executionClaimedAt = nowIso();
-      record.executionLeaseExpiresAt = new Date(Date.now() + resolvePendingV2LeaseMs(options?.leaseMs)).toISOString();
+      // Single-timestamp claim: both columns derive from one Date.now()
+      // sample so a 1ms tick between two samples can never yield lease+1.
+      const claimedAtMs = Date.now();
+      record.executionClaimedAt = new Date(claimedAtMs).toISOString();
+      record.executionLeaseExpiresAt = new Date(claimedAtMs + resolvePendingV2LeaseMs(options?.leaseMs)).toISOString();
       record.executionAttemptCount = (record.executionAttemptCount ?? 0) + 1;
       // T6.1 stale-finalization guard (in-memory mirror of the Postgres
       // status+attempt check): TX2 only persists while the record is STILL
