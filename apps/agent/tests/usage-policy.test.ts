@@ -572,4 +572,52 @@ describe('Usage attempt ledger (per-provider-attempt reservations)', () => {
     expect(saturated.row?.counted_input_tokens).toBe(Number.MAX_SAFE_INTEGER);
     expect(saturated.row && saturated.row.counted_input_tokens > 200).toBe(true);
   });
+
+  it('storage operational errors propagate instead of masquerading as duplicate', () => {
+    const input = {
+      actorId: 'a', intentionId: 'i', estimatedInputTokens: 50, maxOutputTokens: 50,
+    } as const;
+
+    // SELECT (budget/dedup read) failure propagates.
+    {
+      const storage = createAttemptSql();
+      const failingExec = (<T = Record<string, unknown>>(query: string, ...params: unknown[]): Iterable<T> => {
+        if (query.includes('SELECT 1 FROM usage_attempts')) throw new Error('disk I/O error: SELECT failed');
+        return (storage.exec as (q: string, ...p: unknown[]) => Iterable<T>)(query, ...params);
+      }) as typeof storage.exec;
+      const failing = { exec: failingExec, transactionSync: storage.transactionSync };
+      expect(() => reserveUsageAttempt(failing, { ...input }, generousPolicy)).toThrow(/disk I\/O error/);
+    }
+
+    // INSERT operational failure propagates (never reported as duplicate).
+    {
+      const storage = createAttemptSql();
+      const failingExec = (<T = Record<string, unknown>>(query: string, ...params: unknown[]): Iterable<T> => {
+        if (query.startsWith('INSERT INTO usage_attempts')) throw new Error('disk I/O error: INSERT failed');
+        return (storage.exec as (q: string, ...p: unknown[]) => Iterable<T>)(query, ...params);
+      }) as typeof storage.exec;
+      const failing = { exec: failingExec, transactionSync: storage.transactionSync };
+      let caught: unknown = null;
+      try {
+        reserveUsageAttempt(failing, { ...input }, generousPolicy);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect(String((caught as Error).message)).toMatch(/disk I\/O error/);
+      expect(String((caught as Error).message)).not.toMatch(/duplicate/i);
+    }
+
+    // transactionSync operational failure propagates.
+    {
+      const storage = createAttemptSql();
+      const failing = {
+        exec: storage.exec,
+        transactionSync: <T>(_fn: () => T): T => {
+          throw new Error('database is locked: transactionSync failed');
+        },
+      };
+      expect(() => reserveUsageAttempt(failing, { ...input }, generousPolicy)).toThrow(/transactionSync failed/);
+    }
+  });
 });

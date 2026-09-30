@@ -377,4 +377,89 @@ describe('relay usage attempts (RED)', () => {
     expect(estimateTokens('abcd')).toBe(1);
     expect(DEFAULT_POLICY.maxOutputTokens).toBe(2000);
   });
+
+  it('usageAttemptStorage preserves the DurableObjectStorage receiver for transactionSync', () => {
+    const { agent } = createChatAgent(SNAP_SINGLE);
+    const base = createRelayUsageStorage();
+    const strictStorage = {
+      sql: { exec: base.exec },
+      transactionSync<T>(this: unknown, fn: () => T): T {
+        if (this !== strictStorage) throw new TypeError('transactionSync receiver lost');
+        return fn();
+      },
+    };
+    Object.defineProperty(agent, 'ctx', {
+      value: { storage: strictStorage },
+      writable: true,
+      configurable: true,
+    });
+    const priv = agent as unknown as {
+      usageAttemptStorage(): { transactionSync<T>(fn: () => T): T } | null;
+    };
+    const wrapped = priv.usageAttemptStorage();
+    expect(wrapped).not.toBeNull();
+    expect(wrapped!.transactionSync(() => 'ok')).toBe('ok');
+  });
+
+  it('storage reserve failure maps to sanitized 503 with zero relay calls', async () => {
+    const { agent, persisted, store } = createChatAgent(SNAP_FALLBACK);
+    const rawDbError = 'SECRET-DB-PATH /var/data/ted.db: disk I/O error';
+    const baseExec = store.exec;
+    const failingExec = (<T = Record<string, unknown>>(query: string, ...params: unknown[]): Iterable<T> => {
+      if (query.includes('INSERT INTO usage_attempts')) throw new Error(rawDbError);
+      return (baseExec as (q: string, ...p: unknown[]) => Iterable<T>)(query, ...params);
+    }) as typeof store.exec;
+    const failing = { ...store, exec: failingExec };
+    attachRelayUsageStorage(agent, failing);
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({});
+    const calls = stubEgress(() => okRelay());
+
+    const res = await agent.fetch(chatRequest('Olá, como você está?', 'intent-reserve-fail-1'));
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { code?: string; message?: string };
+    expect(body.code).toBe('agent.persistence_unavailable');
+    expect(calls).toHaveLength(0);
+    expect(persisted.filter((m) => m.role === 'assistant')).toHaveLength(0);
+    // No database error text leaks to the client.
+    expect(JSON.stringify(body)).not.toContain('SECRET-DB-PATH');
+    expect(JSON.stringify(body)).not.toContain('disk I/O error');
+  });
+
+  it('grounding correction reserve failure maps to sanitized 503 with one relay call', async () => {
+    const { agent, persisted, store } = createChatAgent(SNAP_FALLBACK);
+    const rawDbError = 'SECRET-DB-PATH /var/data/ted.db: disk I/O error';
+    const baseExec = store.exec;
+    let reserveInserts = 0;
+    const failingExec = (<T = Record<string, unknown>>(query: string, ...params: unknown[]): Iterable<T> => {
+      if (query.includes('INSERT INTO usage_attempts')) {
+        reserveInserts += 1;
+        if (reserveInserts >= 2) throw new Error(rawDbError);
+      }
+      return (baseExec as (q: string, ...p: unknown[]) => Iterable<T>)(query, ...params);
+    }) as typeof store.exec;
+    const failing = { ...store, exec: failingExec };
+    attachRelayUsageStorage(agent, failing);
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    const calls = stubEgress((_call, index) =>
+      index === 1
+        ? new Response(
+            JSON.stringify({ text: 'Seu gasto foi R$ 999,99 este mês.', providerAttempted: true }),
+            { status: 200 },
+          )
+        : okRelay(),
+    );
+
+    const res = await agent.fetch(chatRequest('Quanto gastei este mês?', 'intent-correction-reserve-fail'));
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { code?: string; message?: string };
+    expect(body.code).toBe('agent.persistence_unavailable');
+    // Initial leg dispatched once; the denied correction reservation never
+    // dispatches a fallback leg or a correction redispatch.
+    expect(calls).toHaveLength(1);
+    // No database error text leaks to the client.
+    expect(JSON.stringify(body)).not.toContain('SECRET-DB-PATH');
+    expect(JSON.stringify(body)).not.toContain('disk I/O error');
+    // No grounded assistant success was published.
+    expect(persisted.filter((m) => m.role === 'assistant')).toHaveLength(0);
+  });
 });

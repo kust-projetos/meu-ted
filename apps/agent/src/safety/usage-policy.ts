@@ -316,22 +316,21 @@ export const reserveUsageAttempt = (
       };
     }
 
-    try {
-      storage.exec(
-        `INSERT INTO usage_attempts (attempt_id, actor_id, intention_id, reserve_input_tokens, reserve_output_tokens, state, counted_input_tokens, counted_output_tokens, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-        candidateId,
-        actorId,
-        intentionId,
-        estimatedInputTokens,
-        maxOutputTokens,
-        'reserved',
-        estimatedInputTokens,
-        maxOutputTokens,
-      );
-    } catch {
-      return { allowed: false, reason: `Duplicate usage attempt id: ${candidateId}`, attemptId: candidateId };
-    }
+    // The duplicate `attemptId` is already rejected by the SELECT above inside
+    // the same atomic transaction: any INSERT exception is an operational
+    // storage failure and must propagate (never masquerade as a duplicate).
+    storage.exec(
+      `INSERT INTO usage_attempts (attempt_id, actor_id, intention_id, reserve_input_tokens, reserve_output_tokens, state, counted_input_tokens, counted_output_tokens, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      candidateId,
+      actorId,
+      intentionId,
+      estimatedInputTokens,
+      maxOutputTokens,
+      'reserved',
+      estimatedInputTokens,
+      maxOutputTokens,
+    );
     return { allowed: true, attemptId: candidateId };
   };
 
