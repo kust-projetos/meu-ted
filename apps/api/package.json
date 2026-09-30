@@ -38,11 +38,10 @@
     "better-auth": "1.6.30",
     "kysely": "^0.29.5",
     "zod": "^3.24.1",
-    "nodemailer": "^9.1.0"
+    "nodemailer": "^10.0.9"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "@types/nodemailer": "^6.4.14",
     "@types/pg": "^8.20.0",
     "@types/web-push": "^3.6.4",
     "tsx": "^4.19.2",

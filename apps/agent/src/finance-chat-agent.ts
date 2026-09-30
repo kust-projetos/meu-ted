@@ -592,7 +592,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     if (!sql || typeof sql.exec !== 'function' || typeof tx !== 'function') return null;
     return {
       exec: <T>(query: string, ...bindings: unknown[]): Iterable<T> => sql.exec<T>(query, ...bindings),
-      transactionSync: <T>(fn: () => T): T => (tx as <T>(fn: () => T) => T)(fn),
+      transactionSync: <T>(fn: () => T): T => (tx as <T>(fn: () => T) => T).call(storage, fn) as T,
     };
   }
 
@@ -858,16 +858,29 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         const systemText = cognition.system.slice(0, 7_900);
         const estimatedInputTokens = estimateTokens(`${systemText}${promptText}`);
         const maxOutputTokens = DEFAULT_POLICY.maxOutputTokens;
-        const reservation = reserveUsageAttempt(
-          attemptStorage,
-          {
-            actorId: input.actorId,
-            intentionId: input.intentionId,
-            estimatedInputTokens,
-            maxOutputTokens,
-          },
-          DEFAULT_POLICY,
-        );
+        // Storage operational failures (SELECT/INSERT/transactionSync throws
+        // inside reserveUsageAttempt) fail closed as a sanitized 503: the
+        // fixed message below never carries database error text. Denied
+        // budgets stay an ordinary `allowed:false` result (429 below). Only
+        // this synchronous reserve call is wrapped — finalize/release stay
+        // best-effort and the provider classifier is untouched.
+        let reservation: { allowed: boolean; attemptId?: string; reason?: string };
+        try {
+          reservation = reserveUsageAttempt(
+            attemptStorage,
+            {
+              actorId: input.actorId,
+              intentionId: input.intentionId,
+              estimatedInputTokens,
+              maxOutputTokens,
+            },
+            DEFAULT_POLICY,
+          );
+        } catch {
+          throw usageUnavailableRelayError(
+            'agent.persistence_unavailable: durable usage storage is not available',
+          );
+        }
         if (!reservation.allowed || !reservation.attemptId) {
           throw quotaRelayError(reservation.reason ?? 'agent.quota_exceeded: usage reservation denied');
         }

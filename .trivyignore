@@ -1,35 +1,5 @@
-﻿# VAL.12 base-image exceptions (origin: node:22-alpine bundled npm CLI).
-# Live Dockerfiles now use node:24-alpine (Phase A expiry remediation), whose
-# bundled npm is EXPECTED to carry the fixed copies — but no trivy scan of the
-# rebuilt node:24 images has been produced yet, so every entry below is
-# RETAINED pending CI `security:containers` evidence on the new images. Do not
-# delete entries until a HIGH/CRITICAL-clean scan proves them gone. The packages
-# below live ONLY under /usr/local/lib/node_modules/npm (verified by image
-# inspection on the node:22 line; absent from pnpm-lock.yaml and from /monorepo
-# app trees) and are not fixable from the app. Expiry: 2026-12-31.
-
-# pacote 19.0.2 bundled in npm CLI (fixed in npm bundled with node >= 24). Expiry: 2026-12-31.
-CVE-2026-9496
-# sigstore 3.1.0 bundled in npm CLI (fixed 4.1.1 in npm bundled with node >= 24). Expiry: 2026-12-31.
-CVE-2026-48815
-# tar 7.5.11 bundled in npm CLI, CRITICAL gzip-bomb DoS (fixed 7.5.19 upstream, ships with node >= 24 npm). Expiry: 2026-12-31.
-CVE-2026-59873
-# tar 7.5.11 bundled in npm CLI, malformed-header DoS (fixed 7.5.18 upstream). Expiry: 2026-12-31.
-CVE-2026-59874
-# tar 7.5.11 bundled in npm CLI, long-path DoS (fixed 7.5.21 upstream). Expiry: 2026-12-31.
-CVE-2026-73566
-# brace-expansion 2.0.2 copy bundled in npm CLI. App transitive copies are fixed
-# via pnpm.overrides (1.1.18/2.1.4/3.0.6/5.0.9); this entry covers only the
-# base-image remnant until the node >= 24 migration. Expiry: 2026-12-31.
-CVE-2026-13149
-# brace-expansion 2.0.2 base-image remnant (same npm CLI copy as above). Expiry: 2026-12-31.
-CVE-2026-14257
-# brace-expansion 2.0.2 base-image remnant (same npm CLI copy as above). Expiry: 2026-12-31.
-CVE-2026-69152
-# ip-address 10.1.0 bundled in npm CLI (no copy exists in the deployed app tree:
-# the lockfile line 10.7.0 belongs to the dev toolchain excluded from prod
-# deploy). Fixed upstream 10.3.1; ships with node >= 24 npm. Expiry: 2026-12-31.
-CVE-2026-69192
-# picomatch 4.0.3 bundled in npm CLI. App copies are 4.0.5/2.3.2 (fixed);
-# this entry covers only the base-image remnant. Expiry: 2026-12-31.
-CVE-2026-33671
+﻿# No active Trivy exceptions.
+# The npm CLI was removed from the final runtime stages; 2026-09-30 scans of
+# the rebuilt API and Broker images reported zero HIGH/CRITICAL findings with
+# no ignore file. Re-introduce an entry only for a verified, narrowly scoped,
+# expiring exception after the corresponding image and package path are audited.
