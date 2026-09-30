@@ -18,7 +18,7 @@
  * - attempt_count auditability across two attempts.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { computePendingOperationV2Hash } from '@pi-finance/llm-contracts';
@@ -384,6 +384,39 @@ function defineLeaseSuite(
 defineLeaseSuite('pending-v2 execution lease (in-memory)', (opts) =>
   createInMemoryPendingOperationV2Store(opts),
 );
+
+describe('pending-v2 execution lease (in-memory) — single-timestamp claim regression', () => {
+  it('claim derives claimedAt and lease expiry from one timestamp even when Date.now ticks +1ms', async () => {
+    // Deterministic off-by-one race regression (in-memory only): the old
+    // claim sampled the clock twice (`nowIso()` then `Date.now()`), so a
+    // 1ms tick between the samples produced lease+1. Fake time pins
+    // `new Date()` at FIXED while the `Date.now()` sample at claim observes
+    // FIXED+1; the fixed claim must still yield exactly the configured
+    // window from a single timestamp.
+    const FIXED = Date.parse('2026-09-14T00:00:00.000Z');
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(FIXED);
+      const store = createInMemoryPendingOperationV2Store({ leaseMs: 5_000 });
+      const id = newIdentity();
+      const saved = await proposeCanonical(store, id);
+      const confirmed = await store.confirm(saved.id, id);
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(FIXED + 1);
+      try {
+        const done = await store.execute(confirmed.attestation!, id, async () => ({
+          status: 'succeeded',
+          operationId: randomUUID(),
+        }));
+        expect(done.executionClaimedAt).toBe(new Date(FIXED + 1).toISOString());
+        expect(Date.parse(done.executionLeaseExpiresAt!) - Date.parse(done.executionClaimedAt!)).toBe(5_000);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 const DB_URL = process.env.DATABASE_URL_TEST;
 
