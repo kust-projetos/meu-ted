@@ -397,6 +397,7 @@ describe('Fase 2 item 8 — dynamic relay allowlist (RED)', () => {
       model: 'openai/gpt-4o-mini',
       provider: 'openrouter',
       cost: 0.00001,
+      providerAttempted: true,
     });
     expect(capturedUrl).toBe('https://openrouter.ai/api/v1/chat/completions');
     expect(capturedHeaders.authorization).toBe('Bearer test-openrouter-key');
@@ -406,6 +407,7 @@ describe('Fase 2 item 8 — dynamic relay allowlist (RED)', () => {
         { role: 'system', content: 'Você é o TED' },
         { role: 'user', content: 'Olá assistente' },
       ],
+      max_tokens: 2000,
     });
   });
 
@@ -941,5 +943,347 @@ describe('FIX-API-RELAY-PROTOCOL-AWARE — upstream path follows the model proto
     expect(res.statusCode).toBe(200);
     const [url] = fetchSpy.mock.calls[0]!;
     expect(String(url)).toBe('https://opencode.ai/zen/go/v1/responses');
+  });
+});
+
+describe('RELAY-ATTEMPT-RECEIPT — maxOutputTokens + providerAttempted + usage (TASK pi-financeiro-api-relay-attempt-receipt)', () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    delete process.env.RELAY_ALLOWED_MODELS;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    app = Fastify({ logger: false });
+  });
+
+  afterEach(async () => {
+    delete process.env.RELAY_ALLOWED_MODELS;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    vi.restoreAllMocks();
+    await app.close();
+  });
+
+  it('success forwards the output cap to chat-completions as max_tokens, marks providerAttempted true, returns normalized usage', async () => {
+    const store = createInMemoryLlmConfigStore();
+    await store.upsertProvider({
+      id: 'openrouter', kind: 'openrouter', transport: 'direct', authMode: 'api-key',
+      secretAlias: 'OPENROUTER_API_KEY', eligibility: 'approved',
+    });
+    await store.setProviderEnabled('openrouter', true);
+    const m = await store.upsertModel({
+      providerId: 'openrouter', modelId: 'openai/gpt-4o-mini', protocol: 'chat-completions',
+      privacyClass: 'training_prohibited', enabled: true,
+    });
+    await store.setModelEnabled(m.id, true);
+    registerAgentLlmRelayRoutes(app, {
+      adminToken: ADMIN_TOKEN, openrouterApiKey: 'test-openrouter-key', llmConfigStore: store,
+    });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async (_url, init) => {
+      const sentBody = JSON.parse(String((init as RequestInit).body ?? '{}'));
+      expect(sentBody.max_tokens).toBe(500);
+      expect(sentBody.max_output_tokens).toBeUndefined();
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: 'capped hi' } }],
+          usage: { prompt_tokens: 12, completion_tokens: 34, total_tokens: 46 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    const res = await app.inject({
+      method: 'POST', url: '/internal/agent/llm-relay', headers,
+      payload: { provider: 'openrouter', model: 'openai/gpt-4o-mini', prompt: 'hi', maxOutputTokens: 500 },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      text: 'capped hi',
+      model: 'openai/gpt-4o-mini',
+      provider: 'openrouter',
+      cost: 0,
+      providerAttempted: true,
+      usage: { inputTokens: 12, outputTokens: 34 },
+    });
+  });
+
+  it('success forwards the output cap to responses as max_output_tokens', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async (_url, init) => {
+      const sentBody = JSON.parse(String((init as RequestInit).body ?? '{}'));
+      expect(sentBody.max_output_tokens).toBe(321);
+      expect(sentBody.max_tokens).toBeUndefined();
+      return new Response(
+        JSON.stringify({
+          output: [{ type: 'message', content: [{ type: 'output_text', text: 'resp hi' }] }],
+          usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    const res = await app.inject({
+      method: 'POST', url: '/internal/agent/llm-relay', headers,
+      payload: { provider: 'opencode-zen', model: 'muse-spark-1.2-contributor-free', prompt: 'hi', maxOutputTokens: 321 },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      text: 'resp hi',
+      providerAttempted: true,
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+  });
+
+  it('defaults maxOutputTokens to 2000 when omitted', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async (_url, init) => {
+      const sentBody = JSON.parse(String((init as RequestInit).body ?? '{}'));
+      expect(sentBody.max_output_tokens).toBe(2000);
+      return new Response(
+        JSON.stringify({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'hi' }] }] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    const res = await app.inject({
+      method: 'POST', url: '/internal/agent/llm-relay', headers,
+      payload: { provider: 'opencode-zen', model: 'muse-spark-1.2-contributor-free', prompt: 'hi' },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ providerAttempted: true });
+    expect(res.json()).not.toHaveProperty('usage');
+  });
+
+  it('omitted or invalid provider usage returns no usage field', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    await app.ready();
+    const payload = { provider: 'opencode-zen', model: 'muse-spark-1.2-contributor-free', prompt: 'hi' };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'a' }] }] }), { status: 200 }),
+    );
+    const noUsage = await app.inject({ method: 'POST', url: '/internal/agent/llm-relay', headers, payload });
+    expect(noUsage.statusCode).toBe(200);
+    expect(noUsage.json()).toMatchObject({ providerAttempted: true });
+    expect(noUsage.json()).not.toHaveProperty('usage');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          output: [{ type: 'message', content: [{ type: 'output_text', text: 'b' }] }],
+          usage: { input_tokens: '10', output_tokens: null, total_tokens: 99, extra: 'leak' },
+        }),
+        { status: 200 },
+      ),
+    );
+    const badUsage = await app.inject({ method: 'POST', url: '/internal/agent/llm-relay', headers, payload });
+    expect(badUsage.statusCode).toBe(200);
+    expect(badUsage.json()).toMatchObject({ providerAttempted: true });
+    expect(badUsage.json()).not.toHaveProperty('usage');
+  });
+
+  it('every pre-provider rejection returns providerAttempted:false', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const badAuth = await app.inject({
+      method: 'POST', url: '/internal/agent/llm-relay',
+      headers: { 'x-agent-runtime-admin-token': 'wrong-token' },
+      payload: { provider: 'opencode-zen', model: 'muse-spark-1.2-contributor-free', prompt: 'hi' },
+    });
+    expect(badAuth.statusCode).toBe(401);
+    expect(badAuth.json()).toMatchObject({ providerAttempted: false });
+
+    const badBody = await app.inject({
+      method: 'POST', url: '/internal/agent/llm-relay', headers,
+      payload: { provider: 'opencode-zen', model: '', prompt: '' },
+    });
+    expect(badBody.statusCode).toBe(400);
+    expect(badBody.json()).toMatchObject({ providerAttempted: false });
+
+    const notAllowlisted = await app.inject({
+      method: 'POST', url: '/internal/agent/llm-relay', headers,
+      payload: { provider: 'opencode-zen', model: 'nope-not-allowlisted', prompt: 'hi' },
+    });
+    expect(notAllowlisted.statusCode).toBe(403);
+    expect(notAllowlisted.json()).toMatchObject({ providerAttempted: false });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('dispatched failures report providerAttempted:true without raw provider text', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    await app.ready();
+    const payload = { provider: 'opencode-zen', model: 'muse-spark-1.2-contributor-free', prompt: 'hi' };
+    const rawSecret = 'UPSTREAM-SECRET-MARK-XYZ';
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { message: rawSecret } }), { status: 500 }),
+    );
+    const failed = await app.inject({ method: 'POST', url: '/internal/agent/llm-relay', headers, payload });
+    expect(failed.statusCode).toBe(502);
+    expect(failed.json()).toMatchObject({ code: 'agent.provider_error', providerAttempted: true });
+    expect(JSON.stringify(failed.json())).not.toContain(rawSecret);
+
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed'));
+    const timedOut = await app.inject({ method: 'POST', url: '/internal/agent/llm-relay', headers, payload });
+    expect(timedOut.statusCode).toBe(504);
+    expect(timedOut.json()).toMatchObject({ code: 'agent.provider_timeout', providerAttempted: true });
+  });
+
+  it('invalid maxOutputTokens is 400 with providerAttempted:false and no fetch', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    for (const maxOutputTokens of [0, 2001, 1.5]) {
+      const res = await app.inject({
+        method: 'POST', url: '/internal/agent/llm-relay', headers,
+        payload: { provider: 'opencode-zen', model: 'muse-spark-1.2-contributor-free', prompt: 'hi', maxOutputTokens },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ providerAttempted: false });
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('RELAY-RECEIPT-REVIEW-FIXES — parser errors carry receipt + strict cost (RED)', () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    delete process.env.RELAY_ALLOWED_MODELS;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    app = Fastify({ logger: false });
+  });
+
+  afterEach(async () => {
+    delete process.env.RELAY_ALLOWED_MODELS;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    vi.restoreAllMocks();
+    await app.close();
+  });
+
+  it('malformed JSON returns providerAttempted:false with sanitized body and no fetch', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/llm-relay',
+      headers: { ...headers, 'content-type': 'application/json' },
+      payload: '{bad-json-prompt-PROMPT-SECRETO-RED',
+    });
+    const json = res.json() as { code?: string; message?: string; providerAttempted?: boolean };
+    expect(res.statusCode).toBe(400);
+    expect(json.providerAttempted).toBe(false);
+    expect(json.code).toBe('validation.error');
+    expect(json.message).toBe('Corpo da requisição inválido.');
+    expect(JSON.stringify(json)).not.toContain('PROMPT-SECRETO-RED');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('unsupported content type returns providerAttempted:false and no fetch', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/llm-relay',
+      headers: { ...headers, 'content-type': 'application/xml' },
+      payload: '<prompt>PROMPT-SECRETO-RED-CT</prompt>',
+    });
+    const json = res.json() as { code?: string; message?: string; providerAttempted?: boolean };
+    expect(res.statusCode).toBe(415);
+    expect(json.providerAttempted).toBe(false);
+    expect(json.code).toBe('validation.error');
+    expect(json.message).toBe('Tipo de conteúdo não suportado. Use application/json.');
+    expect(JSON.stringify(json)).not.toContain('PROMPT-SECRETO-RED-CT');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('body over the limit returns providerAttempted:false and no fetch', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    await app.ready();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const bigPrompt = `BIG-PROMPT-${'x'.repeat(1_100_000)}`;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/llm-relay',
+      headers,
+      payload: { provider: 'opencode-zen', model: 'muse-spark-1.2-contributor-free', prompt: bigPrompt },
+    });
+    const json = res.json() as { code?: string; message?: string; providerAttempted?: boolean };
+    expect(res.statusCode).toBe(413);
+    expect(json.providerAttempted).toBe(false);
+    expect(json.code).toBe('validation.error');
+    expect(json.message).toBe('Corpo da requisição excede o limite permitido.');
+    // Raw oversized prompt must never be echoed back.
+    expect(JSON.stringify(json).length).toBeLessThan(5000);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('other routes keep their default error handling (no relay receipt leak)', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    app.get('/other-probe', async () => ({ ok: true }));
+    await app.ready();
+    const res = await app.inject({ method: 'GET', url: '/no-such-route-xyz' });
+    expect(res.statusCode).toBe(404);
+    expect(JSON.stringify(res.json())).not.toContain('providerAttempted');
+  });
+
+  it('malformed upstream cost (object/string/NaN/negative/Infinity) is never echoed', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    await app.ready();
+    const payload = { provider: 'opencode-zen', model: 'muse-spark-1.2-contributor-free', prompt: 'hi' };
+    const evilCosts: unknown[] = [
+      { amount: 1, evil: 'COST-SECRETO-RED' },
+      'COST-SECRETO-RED-string',
+      '0.01',
+      NaN,
+      Infinity,
+      -5,
+      null,
+    ];
+    for (const cost of evilCosts) {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          output: [{ type: 'message', content: [{ type: 'output_text', text: 'hi' }] }],
+          cost,
+        }),
+      } as unknown as Response);
+      const res = await app.inject({ method: 'POST', url: '/internal/agent/llm-relay', headers, payload });
+      expect(res.statusCode).toBe(200);
+      const json = res.json() as { cost?: unknown; providerAttempted?: boolean };
+      expect(json.providerAttempted).toBe(true);
+      expect(json.cost).toBe(0);
+      expect(Number.isFinite(json.cost)).toBe(true);
+      expect(JSON.stringify(json)).not.toContain('COST-SECRETO-RED');
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('valid numeric cost still passes through exactly', async () => {
+    registerAgentLlmRelayRoutes(app, { adminToken: ADMIN_TOKEN, zenApiKey: ZEN_KEY });
+    await app.ready();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        output: [{ type: 'message', content: [{ type: 'output_text', text: 'hi' }] }],
+        cost: 0.0123,
+      }),
+    } as unknown as Response);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/internal/agent/llm-relay',
+      headers,
+      payload: { provider: 'opencode-zen', model: 'muse-spark-1.2-contributor-free', prompt: 'hi' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ cost: 0.0123, providerAttempted: true });
   });
 });

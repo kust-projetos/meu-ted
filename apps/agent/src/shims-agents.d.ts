@@ -20,8 +20,11 @@ declare module "agents/ai-chat-agent" {
   }
 
   export class AIChatAgent<Env = unknown> {
-    constructor(state: DurableObjectState, env: Env);
-    state: DurableObjectState;
+    constructor(ctx: DurableObjectState, env: Env);
+    /** Durable Object context: durable SQLite lives at ctx.storage.sql. */
+    ctx: DurableObjectState;
+    /** Agent app state (per-connection/chat data) — never carries storage. */
+    state: Record<string, unknown>;
     env: Env;
     messages?: UIMessage[];
     persistMessages(messages: UIMessage[]): Promise<void> | void;

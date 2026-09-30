@@ -9,6 +9,7 @@ import {
 import { initializeMemorySchema, rememberFact } from '../src/agent-config/memory/store.js';
 import { transformLegacyMessages } from '../src/migration/legacy-history.js';
 import { FinanceChatAgent } from '../src/finance-chat-agent.js';
+import { attachRelayUsageStorage } from './helpers/relay-usage-storage.js';
 
 const PAN = '4111111111111111';
 const PAN_SPACED = '4111 1111 1111 1111';
@@ -145,6 +146,9 @@ describe('H-09: ingresso /rpc/chat com PAN + anexo inline', () => {
       persisted.push(...msgs);
     });
     Object.defineProperty(agent, 'state', { value: { storage: {} }, writable: true, configurable: true });
+    // Usage-attempt ledger: the relay leg reserves per dispatch (fail-closed
+    // 503 without atomic storage), so the harness provides it like production.
+    attachRelayUsageStorage(agent);
     Object.defineProperty(agent, 'env', {
       value: { API_ORIGIN: 'https://api.example.test', AGENT_CONFIG_TOKEN: 'config-test-token' },
       writable: true,

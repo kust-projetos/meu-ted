@@ -369,6 +369,33 @@ export type RelayAttemptsOutcome = {
 };
 
 /**
+ * Usage-quota passthrough: reservation denials and unavailable-ledger errors
+ * thrown by the relay leg MUST NOT trigger provider fallback/retry and MUST
+ * NOT be collapsed into the generic safe-relay 502. They carry the exact
+ * typed `{code,status}` from the ledger gate and propagate verbatim through
+ * the executor (primary and fallback legs alike).
+ *
+ * The `__usageQuotaPassthrough` marker is authoritative; the code set is a
+ * backstop so a cloned/rethrown quota error without the marker still skips
+ * fallback. Production quota codes:
+ * - `agent.quota_exceeded` (429): atomic reservation denied (budget/rate cap).
+ * - `agent.usage_unavailable` / `agent.persistence_unavailable` (503):
+ *   no atomic ledger (missing `transactionSync`) — fail closed pre-dispatch.
+ */
+export const USAGE_QUOTA_PASSTHROUGH_CODES: ReadonlySet<string> = new Set([
+  'agent.quota_exceeded',
+  'agent.usage_unavailable',
+  'agent.persistence_unavailable',
+]);
+
+export const isUsageQuotaPassthroughError = (err: unknown): boolean => {
+  if (!err || typeof err !== 'object') return false;
+  if ((err as { __usageQuotaPassthrough?: unknown }).__usageQuotaPassthrough === true) return true;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === 'string' && USAGE_QUOTA_PASSTHROUGH_CODES.has(code);
+};
+
+/**
  * Executa no máximo 1 primária + 1 fallback distinto. A primária preserva seu
  * erro estruturado quando inelegível/sem fallback; quando ambas falham, lança
  * erro composto sanitizado (só reason codes). `authorizeBetween` é a
@@ -396,6 +423,10 @@ export const executeRelayAttempts = async (opts: {
   } catch (err) {
     primaryErr = err;
   }
+  // Usage-quota gate: a denied/unavailable reservation never authorizes a
+  // provider dispatch, so it can never be retried on the fallback leg — the
+  // exact typed error propagates before any eligibility check.
+  if (isUsageQuotaPassthroughError(primaryErr)) throw primaryErr;
   // FIX-AGENT-RELAY-FAILOVER-HARDENING (B): falha única inelegível ou sem
   // fallback falha fechada em 1-shot com o `{code,status}` preservado e a
   // mensagem pública fixa — nunca o erro bruto (que pode carregar o
@@ -411,6 +442,9 @@ export const executeRelayAttempts = async (opts: {
     const result = await opts.runLeg(fallback, 'fallback');
     return { result, usedFallback: true, failoverReason: primaryReason, primary, fallback, attempts: 2 };
   } catch (fallbackErr) {
+    // Same gate on the fallback leg: a quota denial there is the turn's
+    // exact error, never composed into the generic double-failure 502.
+    if (isUsageQuotaPassthroughError(fallbackErr)) throw fallbackErr;
     const fallbackReason = relayFailoverReasonOf(fallbackErr);
     throw Object.assign(
       new Error(`Falha na inferência (primário: ${primaryReason}; fallback: ${fallbackReason}).`),

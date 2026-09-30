@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import type { UIMessage } from "agents/ai-chat-agent";
 import { FinanceChatAgent } from "../src/finance-chat-agent.js";
+import { attachRelayUsageStorage } from "./helpers/relay-usage-storage.js";
 import worker from "../src/worker.js";
 import * as apiClient from "../src/tools/api-client.js";
 import { createAgentConnectionToken } from "../../api/src/auth/agent-connection-token.js";
@@ -28,6 +29,10 @@ const createTestAgent = () => {
     writable: true,
     configurable: true,
   });
+
+  // Usage-attempt ledger: the relay leg reserves per dispatch (fail-closed
+  // 503 without atomic storage), so the harness provides it like production.
+  attachRelayUsageStorage(agent);
 
   Object.defineProperty(agent, "env", {
     value: {
@@ -172,7 +177,7 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
           headers: { "content-type": "application/json" },
         });
       }
-      return new Response(JSON.stringify({ text: RELAY_TEXT }), {
+      return new Response(JSON.stringify({ text: RELAY_TEXT, providerAttempted: true }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -512,7 +517,7 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
       if (init?.body) {
         capturedRelayBody = JSON.parse(init.body as string);
       }
-      return new Response(JSON.stringify({ text: "Relay response containing api_key: leaked-relay-key-xyz987" }), {
+      return new Response(JSON.stringify({ text: "Relay response containing api_key: leaked-relay-key-xyz987", providerAttempted: true }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });

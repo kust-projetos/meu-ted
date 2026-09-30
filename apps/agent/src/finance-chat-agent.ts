@@ -33,16 +33,19 @@ import {
 } from "./agent-config/index.js";
 import {
   checkUsageLimit,
+  DEFAULT_POLICY,
   estimateTokens,
+  finalizeUsageAttempt,
+  initializeUsageAttemptSchema,
   initializeUsageSchema,
   recordUsage,
+  releaseUsageAttempt,
+  reserveUsageAttempt,
 } from "./safety/usage-policy.js";
 import { redactTranscript } from "./transcript-safety.js";
 import { scrubAttachments, scrubForPersistence } from "./privacy/dlp.js";
 import {
   migrateLegacyHistory,
-  transformLegacyMessages,
-  computeHistoryHash,
   type LegacyFullExport,
   type MigrationResult,
   type SdkUIMessage,
@@ -348,7 +351,7 @@ export const fetchRelayJsonWithDeadline = async (
 ): Promise<{
   ok: boolean;
   status: number;
-  body: { text?: unknown; code?: unknown; message?: unknown };
+  body: { text?: unknown; code?: unknown; message?: unknown; providerAttempted?: unknown; usage?: unknown };
 }> => {
   const now = opts?.now ?? defaultRelayMonotonicNow;
   const start = now();
@@ -420,7 +423,7 @@ export const fetchRelayJsonWithDeadline = async (
       abortAndDiscard(response);
       throw relayTimeoutError(timeoutMs);
     }
-    let body: { text?: unknown; code?: unknown; message?: unknown };
+    let body: { text?: unknown; code?: unknown; message?: unknown; providerAttempted?: unknown; usage?: unknown };
     try {
       body = (await Promise.race([
         Promise.resolve(response.json()).catch(() => ({})),
@@ -447,6 +450,61 @@ export const fetchRelayJsonWithDeadline = async (
 };
 
 /**
+ * Usage-attempt ledger wiring for the REST relay leg.
+ *
+ * Production quotas are mandatory on REST: every provider transport dispatch
+ * counts. The typed errors below carry `__usageQuotaPassthrough` so the relay
+ * executor (`isUsageQuotaPassthroughError`) propagates them verbatim — no
+ * fallback/retry, no collapse into the generic 502.
+ */
+export const USAGE_QUOTA_EXCEEDED_CODE = 'agent.quota_exceeded';
+export const USAGE_UNAVAILABLE_CODE = 'agent.persistence_unavailable';
+
+const markUsageQuotaPassthrough = (err: Error): Error =>
+  Object.assign(err, { __usageQuotaPassthrough: true });
+
+const quotaRelayError = (reason: string): Error =>
+  markUsageQuotaPassthrough(Object.assign(new Error(reason), { code: USAGE_QUOTA_EXCEEDED_CODE, status: 429 }));
+
+const usageUnavailableRelayError = (reason: string): Error =>
+  markUsageQuotaPassthrough(
+    Object.assign(new Error(reason), { code: USAGE_UNAVAILABLE_CODE, status: 503 }),
+  );
+
+type RelayAttemptReceipt = {
+  /** Explicit API attestation; null = missing/contradictory (never a release). */
+  providerAttempted: boolean | null;
+  /** Present only when both counts are trustworthy safe non-negative integers. */
+  usage?: { inputTokens: number; outputTokens: number };
+};
+
+/**
+ * Parses the private API attempt receipt. `providerAttempted` is trusted only
+ * as an explicit boolean; `usage` is trusted only when BOTH counts arrive as
+ * safe non-negative integers (chat-completions AND responses conventions
+ * accepted). Anything else is "no trustworthy usage" — the caller retains
+ * the full reservation, never synthesizes counts.
+ */
+export const parseRelayAttemptReceipt = (body: unknown): RelayAttemptReceipt => {
+  const record = (body ?? {}) as Record<string, unknown>;
+  const attemptedRaw = record.providerAttempted;
+  const providerAttempted = attemptedRaw === true ? true : attemptedRaw === false ? false : null;
+  const usageRecord = record.usage as Record<string, unknown> | null | undefined;
+  let usage: { inputTokens: number; outputTokens: number } | undefined;
+  if (usageRecord && typeof usageRecord === 'object') {
+    const rawIn = usageRecord.inputTokens ?? usageRecord.input_tokens ?? usageRecord.prompt_tokens;
+    const rawOut = usageRecord.outputTokens ?? usageRecord.output_tokens ?? usageRecord.completion_tokens;
+    if (
+      typeof rawIn === 'number' && Number.isSafeInteger(rawIn) && rawIn >= 0 &&
+      typeof rawOut === 'number' && Number.isSafeInteger(rawOut) && rawOut >= 0
+    ) {
+      usage = { inputTokens: rawIn, outputTokens: rawOut };
+    }
+  }
+  return { providerAttempted, ...(usage ? { usage } : {}) };
+};
+
+/**
  * Regra de ouro da camada cognitiva (ver agent-config/instructions.ts):
  * sempre utilize a ferramenta adequada em vez de responder "sem autorização"
  * ou "não tenho acesso" — a partir de dados reais do workspace via tools.
@@ -460,6 +518,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     if (state?.storage?.sql) {
       try {
         initializeUsageSchema(state.storage.sql);
+        // Per-provider-attempt ledger (additive table; never touches
+        // usage_ledger). Initialized on the ctor-local handle — the same
+        // surface every request-path accessor must resolve.
+        initializeUsageAttemptSchema(state.storage.sql);
         state.storage.sql.exec(`
           CREATE TABLE IF NOT EXISTS intention_snapshots (
             intention_id TEXT PRIMARY KEY,
@@ -498,9 +560,45 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /** DO SQLite handle or null (tests, degraded storage). */
-  private memorySql(): MemorySql | null {
-    const sql = this.state?.storage?.sql as unknown as MemorySql | undefined;
+  private durableSql(): { exec<T>(query: string, ...bindings: unknown[]): Iterable<T> } | null {
+    // Agents SDK: durable SQLite lives on the DO context (ctx.storage.sql).
+    // Agent `state` is app data and never carries storage — request-path
+    // reads of `this.state.storage.sql` masked a production 503 (ctx
+    // present, state.storage absent) and silently skipped usage limits.
+    // `ctx` is used internally by the SDK but absent from its public types,
+    // hence the narrow cast (fail-closed when unavailable).
+    const sql = (this as unknown as { ctx?: DurableObjectState }).ctx?.storage?.sql as unknown as {
+      exec<T>(query: string, ...bindings: unknown[]): Iterable<T>;
+    } | undefined;
     return sql && typeof sql.exec === 'function' ? sql : null;
+  }
+
+  /**
+   * Atomic storage surface for the usage-attempt ledger: `exec` over the DO
+   * SQLite handle plus `transactionSync` for the atomic check-and-reserve.
+   * Null when either is missing — the relay leg fails closed (safe 503)
+   * before any provider dispatch instead of consuming the provider unmetered.
+   */
+  private usageAttemptStorage(): {
+    exec<T>(query: string, ...bindings: unknown[]): Iterable<T>;
+    transactionSync<T>(fn: () => T): T;
+  } | null {
+    const storage = (this as unknown as { ctx?: DurableObjectState }).ctx?.storage as unknown as {
+      sql?: { exec<T>(query: string, ...bindings: unknown[]): Iterable<T> };
+      transactionSync?: <T>(fn: () => T) => T;
+    } | undefined;
+    const sql = storage?.sql;
+    const tx = storage?.transactionSync;
+    if (!sql || typeof sql.exec !== 'function' || typeof tx !== 'function') return null;
+    return {
+      exec: <T>(query: string, ...bindings: unknown[]): Iterable<T> => sql.exec<T>(query, ...bindings),
+      transactionSync: <T>(fn: () => T): T => (tx as <T>(fn: () => T) => T)(fn),
+    };
+  }
+
+  /** DO SQLite handle typed for the memory layer (null when unavailable). */
+  private memorySql(): MemorySql | null {
+    return this.durableSql() as unknown as MemorySql | null;
   }
 
   /** Loads the injected MEMÓRIA DO USUÁRIO block (null when disabled/empty). */
@@ -548,7 +646,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       fetchConfig: () => fetchRuntimeConfig(apiOrigin, configToken),
       deleteCachedSnapshot: () => {
         try {
-          this.state?.storage?.sql?.exec(`DELETE FROM intention_snapshots WHERE intention_id = ?`, snapshot.intention_id);
+          this.durableSql()?.exec(`DELETE FROM intention_snapshots WHERE intention_id = ?`, snapshot.intention_id);
         } catch {
           // Best effort: the abort below enforces the revocation.
         }
@@ -575,9 +673,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   private async resolveIntentionSnapshot(intentionId: string): Promise<IntentionSnapshotRow | null> {
-    if (this.state?.storage?.sql) {
+    const intentSql = this.durableSql();
+    if (intentSql) {
       try {
-        const rows = [...this.state.storage.sql.exec<IntentionSnapshotRow>(
+        const rows = [...intentSql.exec<IntentionSnapshotRow>(
           `SELECT * FROM intention_snapshots WHERE intention_id = ?`,
           intentionId,
         )];
@@ -646,9 +745,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       created_at: new Date().toISOString(),
     };
 
-    if (this.state?.storage?.sql) {
+    if (intentSql) {
       try {
-        this.state.storage.sql.exec(
+        intentSql.exec(
           `INSERT INTO intention_snapshots (intention_id, version, provider_id, model_id, protocol, rollout_percentage, security_epoch, fallback_provider_id, fallback_model_id, model_name, fallback_model_name, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           snapshot.intention_id,
@@ -739,6 +838,69 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         if (!isRelayableProvider(target.providerId) || !target.modelName) {
           throw Object.assign(new Error('agent.provider_not_configured'), { code: 'agent.provider_not_configured', status: 503 });
         }
+        // Usage-attempt ledger: every provider transport dispatch counts.
+        // Reserve estimated FULL transmitted input (system+prompt as sent) +
+        // max output BEFORE the relay fetch, over the verified TurnInput
+        // identity only (actor/workspace/intention from the gateway-verified
+        // headers — payload IDs never enter here). Each runRelayLeg
+        // invocation reserves a fresh server-generated attemptId, so primary,
+        // fallback, and grounding-correction redispatches each hold their
+        // own attempt. A denied/unavailable reservation throws BEFORE any
+        // fetch with a passthrough typed error (no fallback, no 502
+        // collapse — see isUsageQuotaPassthroughError).
+        const attemptStorage = this.usageAttemptStorage();
+        if (!attemptStorage) {
+          throw usageUnavailableRelayError(
+            'agent.persistence_unavailable: durable usage storage is not available',
+          );
+        }
+        const promptText = input.text.slice(0, 15_000);
+        const systemText = cognition.system.slice(0, 7_900);
+        const estimatedInputTokens = estimateTokens(`${systemText}${promptText}`);
+        const maxOutputTokens = DEFAULT_POLICY.maxOutputTokens;
+        const reservation = reserveUsageAttempt(
+          attemptStorage,
+          {
+            actorId: input.actorId,
+            intentionId: input.intentionId,
+            estimatedInputTokens,
+            maxOutputTokens,
+          },
+          DEFAULT_POLICY,
+        );
+        if (!reservation.allowed || !reservation.attemptId) {
+          throw quotaRelayError(reservation.reason ?? 'agent.quota_exceeded: usage reservation denied');
+        }
+        const attemptId = reservation.attemptId;
+        // Dispatched failure / unknown outcome: retain the FULL reservation.
+        const settleRetain = (): void => {
+          try {
+            finalizeUsageAttempt(attemptStorage, attemptId, null, { reliable: false });
+          } catch {
+            // Accounting is best-effort: never mask the provider outcome.
+          }
+        };
+        // Success: reconcile to reliable valid usage; missing/invalid usage
+        // retains the full reservation (never synthesized counts).
+        const settleSuccess = (usage: { inputTokens: number; outputTokens: number } | undefined): void => {
+          try {
+            if (usage) finalizeUsageAttempt(attemptStorage, attemptId, usage, { reliable: true });
+            else finalizeUsageAttempt(attemptStorage, attemptId, null, { reliable: false });
+          } catch {
+            // Accounting is best-effort: never mask the provider outcome.
+          }
+        };
+        // Proven pre-dispatch rejection: the ONLY release path on this leg.
+        const releasePreDispatch = (): void => {
+          try {
+            releaseUsageAttempt(attemptStorage, attemptId, {
+              kind: 'relay_confirmed_not_dispatched',
+              reliable: true,
+            });
+          } catch {
+            // Accounting is best-effort: never mask the provider outcome.
+          }
+        };
         const relayUrl = `${relayOrigin.replace(/\/$/, '')}/internal/agent/llm-relay`;
         // Item 6 (Onda 2): the per-leg budget (RELAY_ATTEMPT_TIMEOUT_MS) is an
         // ABSOLUTE deadline over fetch headers AND body parsing — the helper
@@ -746,7 +908,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // fetch or response.json() ignores abort. AGENT_RELAY_TIMEOUT_MS may
         // only shorten the budget (tests); it can never increase it.
         const relayTimeoutMs = resolveRelayLegTimeoutMs(this.env);
-        const { ok, status, body } = await fetchRelayJsonWithDeadline(fetch, relayUrl, {
+        let relayResult: {
+          ok: boolean;
+          status: number;
+          body: { text?: unknown; code?: unknown; message?: unknown; providerAttempted?: unknown; usage?: unknown };
+        };
+        try {
+          relayResult = await fetchRelayJsonWithDeadline(fetch, relayUrl, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
@@ -755,13 +923,17 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           body: JSON.stringify({
             provider: target.providerId,
             model: target.modelName,
-            prompt: input.text.slice(0, 15_000),
-            system: cognition.system.slice(0, 7_900),
+            prompt: promptText,
+            system: systemText,
             // FIX-AGENT-RELAY-SESSION-ID: stable per-conversation id (one DO
             // per workspace) forwarded by the API relay as the Go upstream's
             // `x-opencode-session` — required for routing/prompt-cache
             // affinity, charset-safe by construction (uuid format).
             sessionId: `ted-${input.workspaceId}`,
+            // Usage-attempt receipt: caller-requested output cap (bounded
+            // server-side 1..2000). The reservation above holds this same
+            // maximum, so success can only reconcile downward or retain.
+            maxOutputTokens,
           }),
           // FIX-AGENT-RELAY-EDGE-REDIRECT: Workers fetch throws TypeError on
           // redirect: 'error' ("won't be implemented at the edge"). 'manual'
@@ -781,7 +953,23 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           }));
           throw relayFetchErr;
         });
+        } catch (fetchErr) {
+          // No receipt (timeout/transport throw): the dispatch may already
+          // have happened upstream — retain the full reservation, NEVER
+          // release on a timeout/unknown.
+          settleRetain();
+          throw fetchErr;
+        }
+        const { ok, status, body } = relayResult;
+        const receipt = parseRelayAttemptReceipt(body);
         if (!ok) {
+          if (receipt.providerAttempted === false) {
+            releasePreDispatch();
+          } else {
+            // Dispatched failure (true) or missing/contradictory receipt:
+            // retain the full reservation, never release.
+            settleRetain();
+          }
           // FIX-AGENT-RELAY-FAILOVER-HARDENING (B): preserva o {code,status}
           // estruturado do relay em vez de colapsar tudo em 502 — o /rpc/chat
           // propaga esse status/code — mas com a mensagem pública fixa. O
@@ -795,8 +983,19 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           );
         }
         if (typeof body.text !== 'string' || !body.text) {
+          settleRetain();
           throw Object.assign(new Error('agent.invalid_provider_output'), { code: 'agent.inference_error', status: 502 });
         }
+        if (receipt.providerAttempted !== true) {
+          // Missing or contradictory success receipt (absent flag or
+          // explicit false on a 2xx): the full reservation is retained
+          // (never reconciled, never released) and the unattested output is
+          // rejected as invalid — untrusted provider text without an
+          // explicit dispatch attestation is never published.
+          settleRetain();
+          throw Object.assign(new Error('agent.invalid_provider_output'), { code: 'agent.inference_error', status: 502 });
+        }
+        settleSuccess(receipt.usage);
         return redactTranscript(body.text);
       };
       const relayOutcome = await executeRelayAttempts({
@@ -1008,6 +1207,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       return { text: "Mensagem vazia." };
     }
 
+    // Fail-closed quota gate: without durable SQLite the usage limit and
+    // ledger cannot be enforced, so the turn must not consume the provider
+    // unmetered. Returns before any orchestrator/provider invocation.
+    if (!this.durableSql()) {
+      return { text: "TED unavailable: durable storage is not available" };
+    }
+
     // T2.1: the SDK adapter normalizes into the canonical pipeline. Body
     // identity is only a compatibility hint here; authenticated gateway
     // identity remains authoritative at the REST boundary.
@@ -1032,8 +1238,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     if (turnResult.response) return { text: turnResult.response.text };
 
     const estimatedTokens = estimateTokens(text);
-    if (this.state?.storage?.sql) {
-      const budgetCheck = checkUsageLimit(this.state.storage.sql, actorId, estimatedTokens);
+    const usageSql = this.durableSql();
+    if (usageSql) {
+      const budgetCheck = checkUsageLimit(usageSql, actorId, estimatedTokens);
       if (!budgetCheck.allowed) {
         return { text: `Limite de uso atingido: ${budgetCheck.reason}` };
       }
@@ -1168,8 +1375,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
 
       const result = outcome.result;
 
-      if (this.state?.storage?.sql) {
-        recordUsage(this.state.storage.sql, actorId, intentionId, estimatedTokens, estimatedTokens);
+      const recordSql = this.durableSql();
+      if (recordSql) {
+        recordUsage(recordSql, actorId, intentionId, estimatedTokens, estimatedTokens);
       }
 
       // Part B: post-turn learning (heuristic every turn, cheap LLM
@@ -1474,8 +1682,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * unavailable — the orchestrator then keeps the legacy single-turn flow.
    */
   private draftStoreForRequest(): SqlMutationDraftStore | undefined {
-    const sql = this.state?.storage?.sql as unknown as { exec<T>(query: string, ...bindings: unknown[]): Iterable<T> } | undefined;
-    if (!sql || typeof sql.exec !== 'function') return undefined;
+    const sql = this.durableSql();
+    if (!sql) return undefined;
     try {
       initializeMutationDraftSchema(sql);
       return new SqlMutationDraftStore(sql);
@@ -1490,8 +1698,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * degrade to a deterministic no-proposal reply (never execution).
    */
   private undoStoreForRequest(): SqlUndoProposalStore | undefined {
-    const sql = this.state?.storage?.sql as unknown as { exec<T>(query: string, ...bindings: unknown[]): Iterable<T> } | undefined;
-    if (!sql || typeof sql.exec !== 'function') return undefined;
+    const sql = this.durableSql();
+    if (!sql) return undefined;
     try {
       initializeUndoProposalSchema(sql);
       return new SqlUndoProposalStore(sql);
@@ -2016,8 +2224,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         await this.persistMessages(msgs);
       };
 
-      if (this.state?.storage?.sql) {
-        return migrateLegacyHistory(exportData, this.state.storage.sql, persistCallback);
+      const migrationSql = this.durableSql();
+      if (migrationSql) {
+        return migrateLegacyHistory(exportData, migrationSql, persistCallback);
       }
 
       if (exportData.hasInFlightTurns) {
@@ -2029,14 +2238,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         };
       }
 
-      const transformed = transformLegacyMessages(exportData.messages, exportData.workspaceId);
-      await persistCallback(transformed);
-
+      // Fail-closed without durable SQLite: the idempotency marker
+      // (_history_migration_marker) cannot be stored, so persisting history
+      // would duplicate on retry. Never persist nor claim success here.
       return {
-        success: true,
-        importedCount: transformed.length,
+        success: false,
+        importedCount: 0,
         skipped: false,
-        migrationHash: computeHistoryHash(exportData.messages, exportData.workspaceId),
+        reason: "missing_durable_marker_store: durable SQLite marker storage is unavailable, history not persisted",
       };
     });
   }

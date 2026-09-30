@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import type { UIMessage } from 'agents/ai-chat-agent';
 import { createAgentConnectionToken } from '../../api/src/auth/agent-connection-token.js';
 import { FinanceChatAgent } from '../src/finance-chat-agent.js';
+import { attachRelayUsageStorage } from './helpers/relay-usage-storage.js';
 
 const CONNECTION_SECRET = 'test-connection-secret-32-chars-minimum!!';
 const _SERVICE_TOKEN = 'test-service-token-32-chars-minimum!!';
@@ -58,6 +59,9 @@ describe('C-06: actorId do payload nunca vira identidade', () => {
       persisted.push(...msgs);
     });
     Object.defineProperty(agent, 'state', { value: { storage: {} }, writable: true, configurable: true });
+    // Usage-attempt ledger: the relay leg reserves per dispatch (fail-closed
+    // 503 without atomic storage), so the harness provides it like production.
+    attachRelayUsageStorage(agent);
     Object.defineProperty(agent, 'env', {
       value: {
         API_ORIGIN: 'https://api.example.test',

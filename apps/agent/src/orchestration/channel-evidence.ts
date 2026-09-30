@@ -19,6 +19,7 @@
 
 import { createEvidenceEnvelope, type EvidenceEnvelope, type EvidenceInput } from '../evidence/evidence-envelope.js';
 import { generatedHttpTools, type ToolRequestAuth } from '../generated/http-tools.js';
+import { isUsageQuotaPassthroughError } from '../llm/relay-failover.js';
 import { emitSanitizedEvent } from '../observability/events.js';
 import type { TurnInput, TurnPlan } from './conversation-orchestrator.js';
 
@@ -395,6 +396,12 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
    * mechanism. Returns null when there is nothing to correct or the retry
    * itself fails, letting the grounded path fall back safe.
    *
+   * Usage-quota gate: a denied/unavailable correction reservation
+   * (`agent.quota_exceeded` / `agent.usage_unavailable` /
+   * `agent.persistence_unavailable`) is rethrown verbatim — it must remain
+   * an HTTP quota error, never collapse into a 200 deterministic fallback.
+   * Ordinary retry failures still return null (safe fallback).
+   *
    * FIX-AGENT-RELAY-FAILOVER-HARDENING (A): the retry input carries the
    * internal-only `internalCorrection: true` flag — the ONLY signal the
    * response provider trusts to skip user-turn persistence. The marker stays
@@ -415,7 +422,8 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
     try {
       const revised = await deps.respond(correctionInput, plan);
       return typeof revised === 'string' && revised.trim().length > 0 ? revised : null;
-    } catch {
+    } catch (error) {
+      if (isUsageQuotaPassthroughError(error)) throw error;
       return null;
     }
   };

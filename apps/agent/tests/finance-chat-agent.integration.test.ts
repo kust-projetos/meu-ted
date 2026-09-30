@@ -7,6 +7,36 @@ describe("FinanceChatAgent & Worker Integration (Task 4)", () => {
   const API_ORIGIN = "https://api.example.test";
   const WORKSPACE_ID = "workspace-integration-test-1";
 
+  // Realistic empty DO SQLite (ctx.storage.sql is the only storage surface):
+  // usage ledgers read zero, intention snapshots miss (remote refetch below),
+  // every other statement is a permissive no-op. The provider-gate test runs
+  // with storage AVAILABLE so it exercises the provider gate, not the
+  // storage gate (covered by tests/durable-sql-accessor.test.ts).
+  const makeDurableSql = () => ({
+    exec: (<T>(query: string, ..._bindings: unknown[]): Iterable<T> => {
+      if (query.includes("SELECT COUNT(*) AS req_count")) {
+        return [{ req_count: 0 }] as unknown as Iterable<T>;
+      }
+      if (query.includes("SELECT COALESCE(SUM")) {
+        if (query.includes("WHERE actor_id = ?")) {
+          return [{ actor_tokens: 0 }] as unknown as Iterable<T>;
+        }
+        return [{ total_tokens: 0 }] as unknown as Iterable<T>;
+      }
+      return [] as unknown as Iterable<T>;
+    }),
+  });
+
+  const withDurableSql = (agent: FinanceChatAgent) => {
+    Object.defineProperty(agent, "ctx", {
+      value: { storage: { sql: makeDurableSql() } },
+      writable: true,
+      configurable: true,
+    });
+    (agent as unknown as { messages: unknown }).messages = [];
+    (agent as unknown as { persistMessages: unknown }).persistMessages = vi.fn(async () => {});
+  };
+
   const mockEnv: WorkerEnv = {
     API_ORIGIN,
     AGENT_AUTH_SERVICE_TOKEN: "test-auth-service-token",
@@ -81,6 +111,9 @@ describe("FinanceChatAgent & Worker Integration (Task 4)", () => {
 
   it("fails closed when provider is not configured rather than echoing raw input or silently falling back", async () => {
     const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent;
+    // Storage available on purpose: this test guards the PROVIDER gate (no
+    // env, no configured pair), not the durable-storage gate.
+    withDurableSql(agent);
     // Non-finance utterance on purpose: finance-seeking reads fail closed on
     // missing evidence (SPEC §14) before ever consulting the provider, so the
     // provider-gate premise is exercised with a general question.

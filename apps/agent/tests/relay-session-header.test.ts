@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import type { UIMessage } from 'agents/ai-chat-agent';
 import { FinanceChatAgent } from '../src/finance-chat-agent.js';
+import { attachRelayUsageStorage } from './helpers/relay-usage-storage.js';
 
 const snapshotBody = (overrides: Record<string, unknown> = {}) => ({
   runtime: {
@@ -36,6 +37,9 @@ const createTestAgent = () => {
     persisted.push(...msgs);
   });
   Object.defineProperty(agent, 'state', { value: { storage: {} }, writable: true, configurable: true });
+  // Usage-attempt ledger: the relay leg reserves per dispatch (fail-closed
+  // 503 without atomic storage), so the harness provides it like production.
+  attachRelayUsageStorage(agent);
   Object.defineProperty(agent, 'env', {
     value: { API_ORIGIN: 'https://api.example.test', AGENT_CONFIG_TOKEN: 'config-test-token' },
     writable: true,
@@ -54,7 +58,7 @@ const stubWorkerEgress = () => {
     }
     if (u.includes('/internal/agent/llm-relay')) {
       relayInits.push(init ?? {});
-      return new Response(JSON.stringify({ text: 'ok' }), { status: 200 });
+      return new Response(JSON.stringify({ text: 'ok', providerAttempted: true }), { status: 200 });
     }
     // T3.1 (SPEC §14): usable evidence so the turn reaches the relay.
     if (u.includes('/budgets')) {
@@ -113,7 +117,7 @@ describe('FIX-AGENT-RELAY-SESSION-ID: relay body carries a stable x-opencode-ses
       }
       if (u.includes('/internal/agent/llm-relay')) {
         relayBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
-        return new Response(JSON.stringify({ text: 'ok' }), { status: 200 });
+        return new Response(JSON.stringify({ text: 'ok', providerAttempted: true }), { status: 200 });
       }
       // T3.1 (SPEC §14): usable evidence so the turn reaches the relay.
       if (u.includes('/budgets')) {
@@ -143,7 +147,7 @@ describe('FIX-AGENT-RELAY-SESSION-ID: relay body carries a stable x-opencode-ses
       }
       if (u.includes('/internal/agent/llm-relay')) {
         relayBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
-        return new Response(JSON.stringify({ text: 'ok' }), { status: 200 });
+        return new Response(JSON.stringify({ text: 'ok', providerAttempted: true }), { status: 200 });
       }
       if (u.includes('/budgets')) {
         return new Response(JSON.stringify({ budgets: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });

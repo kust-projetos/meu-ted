@@ -178,8 +178,11 @@ describe('debt-undo-proposal-rehydration: RPC GET /rpc/undo/active', () => {
     seed(store, { requestId: 'req-foreign', workspaceId: 'ws-other', actorId: 'actor-1', deviceId: 'device-1', expiresAt: liveExpiresAt });
     const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent;
     Object.defineProperty(agent, 'env', { value: { AGENT_CONNECTION_TOKEN_SECRET: secret }, configurable: true });
-    // Swap the DO storage to the seeded shim.
-    Object.defineProperty(agent, 'state', { value: { storage: { sql } }, configurable: true });
+    // Swap the DO storage to the seeded shim via the documented Agents SDK
+    // path (ctx.storage.sql). No state.storage is provided: production has
+    // no such property (Agent `state` is app data), so a ctx-only agent is
+    // the realistic runtime shape.
+    Object.defineProperty(agent, 'ctx', { value: { storage: { sql } }, configurable: true });
     (agent as unknown as { persistMessages: unknown }).persistMessages = vi.fn(async () => {});
     (agent as unknown as { messages: unknown }).messages = [];
 
@@ -218,7 +221,8 @@ describe('debt-undo-proposal-rehydration: RPC GET /rpc/undo/active', () => {
     initializeUndoProposalSchema(sql);
     const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent;
     Object.defineProperty(agent, 'env', { value: { AGENT_CONNECTION_TOKEN_SECRET: secret }, configurable: true });
-    Object.defineProperty(agent, 'state', { value: { storage: { sql } }, configurable: true });
+    // Realistic runtime shape: durable SQLite via ctx.storage.sql.
+    Object.defineProperty(agent, 'ctx', { value: { storage: { sql } }, configurable: true });
     (agent as unknown as { persistMessages: unknown }).persistMessages = vi.fn(async () => {});
     (agent as unknown as { messages: unknown }).messages = [];
 
@@ -252,6 +256,53 @@ describe('debt-undo-proposal-rehydration: RPC GET /rpc/undo/active', () => {
     );
     expect(foreign.status).toBe(200);
     expect(((await foreign.json()) as { items: unknown[] }).items).toEqual([]);
+  });
+
+  it('fails closed with 503 when ctx SQLite is unavailable (no state.storage fallback)', async () => {
+    const secret = 'connection-secret';
+    const token = await createAgentConnectionToken(
+      { sub: 'actor-1', workspace: 'ws-1', role: 'member', deviceId: 'device-1' },
+      secret,
+    );
+    const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent;
+    Object.defineProperty(agent, 'env', { value: { AGENT_CONNECTION_TOKEN_SECRET: secret }, configurable: true });
+    // No ctx at all: the handler must fail closed, never read app `state`.
+    (agent as unknown as { persistMessages: unknown }).persistMessages = vi.fn(async () => {});
+    (agent as unknown as { messages: unknown }).messages = [];
+
+    const headers = {
+      'x-agent-connection-token': token,
+      'x-agent-actor': 'actor-1',
+      'x-agent-workspace': 'ws-1',
+      'x-agent-device': 'device-1',
+    };
+    const response = await agent.fetch(
+      new Request('https://agent.test.local/rpc/undo/active', { method: 'GET', headers }),
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'agent.persistence_unavailable' });
+  });
+
+  it('draft and undo stores resolve from ctx.storage.sql (identical SDK accessor)', async () => {
+    // Accessor-binding proof only (schema semantics are covered by the
+    // store-level suites): a permissive stub is enough for construction.
+    const sql = { exec: () => [][Symbol.iterator]() };
+    const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent;
+    Object.defineProperty(agent, 'env', { value: {}, configurable: true });
+    Object.defineProperty(agent, 'ctx', { value: { storage: { sql } }, configurable: true });
+    type AgentStores = {
+      undoStoreForRequest(): SqlUndoProposalStore | undefined;
+      draftStoreForRequest(): unknown;
+    };
+    const stores = agent as unknown as AgentStores;
+    expect(stores.undoStoreForRequest()).toBeInstanceOf(SqlUndoProposalStore);
+    expect(stores.draftStoreForRequest()).not.toBeUndefined();
+
+    const bare = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent;
+    Object.defineProperty(bare, 'env', { value: {}, configurable: true });
+    const bareStores = bare as unknown as AgentStores;
+    expect(bareStores.undoStoreForRequest()).toBeUndefined();
+    expect(bareStores.draftStoreForRequest()).toBeUndefined();
   });
 
   it('worker gateway forwards GET /rpc/undo/active with stamped identity', async () => {

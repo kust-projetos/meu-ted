@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { safeCompareTokens as safeCompare } from '../auth/safe-compare.js';
 import { isKindExecutable } from '../agent/llm-config.js';
@@ -12,6 +12,13 @@ const relayBody = z.object({
   model: z.string().trim().min(1).max(120),
   prompt: z.string().trim().min(1).max(16000),
   system: z.string().trim().max(8000).optional(),
+  /**
+   * Quota attempt receipt (slice 1): optional caller-requested output cap.
+   * Bounded 1..2000, defaults to 2000. Forwarded as `max_tokens` on
+   * chat-completions transports and `max_output_tokens` on responses
+   * transports. Never an actor/workspace field, never quota enforcement.
+   */
+  maxOutputTokens: z.number().int().min(1).max(2000).optional(),
   /**
    * FIX-API-OPENCODE-GO-SESSION-HEADER: stable per-conversation id the Go
    * upstream requires for routing/prompt-cache affinity (`x-opencode-session`).
@@ -43,6 +50,81 @@ const DEFAULT_ALLOWED_MODELS = new Set([
 ]);
 
 const RELAY_MODEL_CACHE_TTL_MS = 60_000;
+
+export const RELAY_DEFAULT_MAX_OUTPUT_TOKENS = 2000;
+export const RELAY_MAX_OUTPUT_TOKENS_LIMIT = 2000;
+
+const isSafeNonNegativeInt = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+/**
+ * Quota attempt receipt (slice 2 — review fix): normalize provider-reported
+ * `cost` strictly to a finite non-negative number. Only a `typeof number`
+ * that is finite and >= 0 passes through exactly; omitted, mistyped
+ * (string/object/null), NaN, ±Infinity, or negative values fall back to `0`
+ * — never echoed raw. Numeric strings are NOT coerced (strict).
+ */
+export const normalizeRelayCost = (body: unknown): number => {
+  const cost = (body as { cost?: unknown } | null | undefined)?.cost;
+  if (typeof cost !== 'number' || !Number.isFinite(cost) || cost < 0) return 0;
+  return cost;
+};
+
+/**
+ * Relay-scoped parser error mapping (review fix, slice 2).
+ *
+ * Fastify content-type/body parser failures (malformed JSON, unsupported
+ * media type, body over the limit) reject BEFORE the route handler runs, so
+ * the handler's `providerAttempted:false` returns never execute for them.
+ * This route-level `errorHandler` closes that gap WITHOUT touching the
+ * global error handler (other routes keep Fastify defaults).
+ *
+ * Only known `FST_ERR_CTP_*` parser codes map to `providerAttempted:false`
+ * with a FIXED sanitized message — never `error.message` (may echo the raw
+ * body/prompt). Every other error is re-sent untouched (`reply.send(error)`)
+ * so a post-dispatch unexpected failure can never be mislabeled `false`.
+ */
+const relayParserErrorHandler = (
+  error: FastifyError,
+  _request: FastifyRequest,
+  reply: FastifyReply,
+): unknown => {
+  const code = (error as { code?: unknown })?.code;
+  const statusCode = (error as { statusCode?: unknown })?.statusCode;
+  if (typeof code === 'string' && code.startsWith('FST_ERR_CTP_')) {
+    const status =
+      typeof statusCode === 'number' && Number.isInteger(statusCode) ? statusCode : 400;
+    let message = 'Corpo da requisição inválido.';
+    if (code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      message = 'Corpo da requisição excede o limite permitido.';
+    } else if (code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') {
+      message = 'Tipo de conteúdo não suportado. Use application/json.';
+    }
+    return reply.code(status).send({ code: 'validation.error', message, providerAttempted: false });
+  }
+  return reply.send(error);
+};
+
+/**
+ * Quota attempt receipt (slice 1): normalize provider-reported usage to
+ * `{ inputTokens, outputTokens }` only when BOTH counts are present as safe
+ * non-negative integers. Accepts the chat-completions convention
+ * (`prompt_tokens`/`completion_tokens`) and the responses convention
+ * (`input_tokens`/`output_tokens`). Omitted, partial, mistyped, fractional,
+ * negative, or unsafe-integer usage returns `undefined` (no usage field) —
+ * never a synthesized or partial count, never raw provider text.
+ */
+export const normalizeRelayUsage = (
+  body: unknown,
+): { inputTokens: number; outputTokens: number } | undefined => {
+  const usage = (body as { usage?: unknown } | null | undefined)?.usage;
+  if (typeof usage !== 'object' || usage === null) return undefined;
+  const record = usage as Record<string, unknown>;
+  const rawIn = record.prompt_tokens ?? record.input_tokens ?? record.inputTokens;
+  const rawOut = record.completion_tokens ?? record.output_tokens ?? record.outputTokens;
+  if (!isSafeNonNegativeInt(rawIn) || !isSafeNonNegativeInt(rawOut)) return undefined;
+  return { inputTokens: rawIn, outputTokens: rawOut };
+};
 
 const parseEnvAllowlist = (raw: string | undefined): string[] | null => {
   if (!raw) return null;
@@ -178,18 +260,19 @@ export const registerAgentLlmRelayRoutes = (
     ...(deps.cacheTtlMs !== undefined ? { cacheTtlMs: deps.cacheTtlMs } : {}),
     ...(deps.now ? { now: deps.now } : {}),
   });
-  app.post('/internal/agent/llm-relay', async (req, reply) => {
+  app.post('/internal/agent/llm-relay', { errorHandler: relayParserErrorHandler }, async (req, reply) => {
     const rawToken = req.headers['x-agent-runtime-admin-token'];
     const token = typeof rawToken === 'string' ? rawToken.trim() : '';
     if (!token || !deps.adminToken || !safeCompare(token, deps.adminToken)) {
-      return reply.code(401).send({ code: 'auth.invalid_token', message: 'Token administrativo inválido.' });
+      return reply.code(401).send({ code: 'auth.invalid_token', message: 'Token administrativo inválido.', providerAttempted: false });
     }
 
     const parsed = relayBody.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
+      return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues, providerAttempted: false });
     }
-    const { provider, model, prompt, system, sessionId } = parsed.data;
+    const { provider, model, prompt, system, sessionId, maxOutputTokens: requestedCap } = parsed.data;
+    const maxOutputTokens = requestedCap ?? RELAY_DEFAULT_MAX_OUTPUT_TOKENS;
 
     // H-02: each relayable provider needs its own key — a missing key fails
     // closed before any upstream call.
@@ -215,6 +298,7 @@ export const registerAgentLlmRelayRoutes = (
       return reply.code(503).send({
         code: 'agent.provider_not_configured',
         message: `${missingEnv} não configurada na API.`,
+        providerAttempted: false,
       });
     }
 
@@ -230,6 +314,7 @@ export const registerAgentLlmRelayRoutes = (
       return reply.code(503).send({
         code: 'agent.relay_allowlist_unavailable',
         message: 'Allowlist do relay indisponível (store de configuração inacessível).',
+        providerAttempted: false,
       });
     }
     // Fase 3-FIX R7-rev: the request provider scopes the allowlist — a DB
@@ -237,7 +322,7 @@ export const registerAgentLlmRelayRoutes = (
     // names keep matching by name. A provider absent from the allowlist
     // (or disabled upstream of it) is 403, never borrowed from a sibling.
     if (!allowedModels.has(`${provider}:${model}`) && !allowedModels.has(model)) {
-      return reply.code(403).send({ code: 'agent.model_not_allowlisted', message: 'Modelo não permitido no relay.' });
+      return reply.code(403).send({ code: 'agent.model_not_allowlisted', message: 'Modelo não permitido no relay.', providerAttempted: false });
     }
 
     // FIX-API-RELAY-PROTOCOL-AWARE: the wire protocol is resolved from the
@@ -276,11 +361,13 @@ export const registerAgentLlmRelayRoutes = (
           ...(system ? [{ role: 'system', content: system }] : []),
           { role: 'user', content: prompt },
         ],
+        max_tokens: maxOutputTokens,
       }
       : {
         model,
         input: prompt,
         ...(system ? { instructions: system } : {}),
+        max_output_tokens: maxOutputTokens,
       };
     const requestTimeoutMs = deps.requestTimeoutMs ?? 60_000;
     const timeoutError = () => Object.assign(new Error('Timeout aguardando provider.'), { name: 'AbortError' });
@@ -303,6 +390,10 @@ export const registerAgentLlmRelayRoutes = (
     const monotonicNow = deps.monotonicNow ?? defaultRelayMonotonicNow;
     const startMark = monotonicNow();
     const isExpired = (): boolean => monotonicNow() - startMark >= requestTimeoutMs;
+    // Quota attempt receipt: pre-provider rejections above returned
+    // `providerAttempted:false`. Mark the dispatch immediately before the
+    // upstream fetch — every subsequent error/timeout/success reports true.
+    const providerAttempted = true;
     try {
       const controller = new AbortController();
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -349,7 +440,8 @@ export const registerAgentLlmRelayRoutes = (
               error?: { type?: string; message?: string };
               output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
               choices?: Array<{ message?: { content?: string } }>;
-              cost?: string | number;
+              cost?: unknown;
+              usage?: unknown;
             } | null;
 
             // Same recheck after the body: an immediate body may have settled
@@ -375,6 +467,7 @@ export const registerAgentLlmRelayRoutes = (
           return reply.code(502).send({
             code: 'agent.provider_error',
             message: 'Falha no provider. Tente novamente em instantes.',
+            providerAttempted,
           });
         }
         // FIX-API-RELAY-ALL-ERROR-MESSAGES-SAFE (W2 review): EVERY
@@ -389,29 +482,34 @@ export const registerAgentLlmRelayRoutes = (
           return reply.code(429).send({
             code: 'agent.rate_limited',
             message: 'Provider com muitas requisições. Tente novamente em instantes.',
+            providerAttempted,
           });
         }
         if (res.status === 401) {
           return reply.code(502).send({
             code: 'agent.provider_auth',
             message: 'Falha de autenticação no provider.',
+            providerAttempted,
           });
         }
         if (res.status >= 500) {
           return reply.code(502).send({
             code: 'agent.provider_error',
             message: 'Falha no provider. Tente novamente em instantes.',
+            providerAttempted,
           });
         }
         if (res.status >= 400) {
           return reply.code(502).send({
             code: 'agent.provider_rejected',
             message: 'Provider rejeitou a requisição (conteúdo ou parâmetros inválidos).',
+            providerAttempted,
           });
         }
         return reply.code(502).send({
           code: 'agent.provider_error',
           message: 'Falha no provider. Tente novamente em instantes.',
+          providerAttempted,
         });
       }
 
@@ -425,10 +523,11 @@ export const registerAgentLlmRelayRoutes = (
           .join('') ?? '');
 
       if (!text) {
-        return reply.code(502).send({ code: 'agent.inference_error', message: 'No output generated by provider.' });
+        return reply.code(502).send({ code: 'agent.inference_error', message: 'No output generated by provider.', providerAttempted });
       }
 
-        return reply.send({ text, model, cost: body?.cost ?? 0, provider });
+        const usage = normalizeRelayUsage(body);
+        return reply.send({ text, model, cost: normalizeRelayCost(body), provider, providerAttempted, ...(usage ? { usage } : {}) });
       } finally {
         if (deadlineTimer) clearTimeout(deadlineTimer);
       }
@@ -442,6 +541,7 @@ export const registerAgentLlmRelayRoutes = (
       return reply.code(504).send({
         code: 'agent.provider_timeout',
         message: isAbort ? 'Timeout aguardando provider.' : 'Falha de comunicação com o provider.',
+        providerAttempted: true,
       });
     }
   });

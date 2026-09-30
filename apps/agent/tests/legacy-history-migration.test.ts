@@ -81,7 +81,7 @@ describe('Legacy History Migration into FinanceChatAgent (T4.3: import surface o
       persistedMessages.push(...msgs);
     });
 
-    Object.defineProperty(agent, 'state', {
+    Object.defineProperty(agent, 'ctx', {
       value: { storage: { sql: mockSql } },
       writable: true,
       configurable: true,

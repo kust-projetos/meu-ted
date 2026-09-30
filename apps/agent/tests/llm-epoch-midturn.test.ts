@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import type { UIMessage } from 'agents/ai-chat-agent';
 import { FinanceChatAgent } from '../src/finance-chat-agent.js';
+import { attachRelayUsageStorage } from './helpers/relay-usage-storage.js';
 
 const snapshotBody = (overrides: Record<string, unknown> = {}) => ({
   runtime: {
@@ -36,6 +37,9 @@ const createTestAgent = () => {
     persisted.push(...msgs);
   });
   Object.defineProperty(agent, 'state', { value: { storage: {} }, writable: true, configurable: true });
+  // Usage-attempt ledger: the relay leg reserves per dispatch (fail-closed
+  // 503 without atomic storage), so the harness provides it like production.
+  attachRelayUsageStorage(agent);
   Object.defineProperty(agent, 'env', {
     value: { API_ORIGIN: 'https://api.example.test', AGENT_CONFIG_TOKEN: 'config-test-token' },
     writable: true,
@@ -72,7 +76,7 @@ describe('H-14: revogação fail-closed + epoch comparado durante a resposta', (
       }
       if (u.includes('/internal/agent/llm-relay')) {
         epoch = 3; // revogação acontece enquanto a inferência roda
-        return new Response(JSON.stringify({ text: 'resposta revogada' }), { status: 200 });
+        return new Response(JSON.stringify({ text: 'resposta revogada', providerAttempted: true }), { status: 200 });
       }
       // T3.1 (SPEC §14): finance reads require evidence before inference —
       // serve usable-but-not-deterministically-renderable budget evidence so
@@ -129,7 +133,7 @@ describe('H-14: revogação fail-closed + epoch comparado durante a resposta', (
       }
       if (u.includes('/internal/agent/llm-relay')) {
         authorityUp = false; // cai logo após a inferência
-        return new Response(JSON.stringify({ text: 'resposta sem autoridade' }), { status: 200 });
+        return new Response(JSON.stringify({ text: 'resposta sem autoridade', providerAttempted: true }), { status: 200 });
       }
       // T3.1: evidence must be usable so the turn reaches inference (see
       // test 1); the authority failure under test happens after the relay.
@@ -154,7 +158,7 @@ describe('H-14: revogação fail-closed + epoch comparado durante a resposta', (
       }
       if (u.includes('/internal/agent/llm-relay')) {
         mode = 'disabled';
-        return new Response(JSON.stringify({ text: 'resposta desabilitada' }), { status: 200 });
+        return new Response(JSON.stringify({ text: 'resposta desabilitada', providerAttempted: true }), { status: 200 });
       }
       // T3.1: evidence must be usable so the turn reaches inference (see
       // test 1); the disable under test happens after the relay.
