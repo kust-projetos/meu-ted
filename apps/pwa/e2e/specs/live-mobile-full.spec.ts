@@ -117,6 +117,20 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     let authComplete = false;
     let workspaceGuardReady = false;
     const consoleErrors: string[] = [];
+    const serverErrors: string[] = [];
+    // 5xx watch starts at sign-in dispatch (before the shell renders) so a
+    // failing sign-in/bootstrap response is not missed; console-error capture
+    // keeps the post-login (authComplete) threshold unchanged.
+    let collectServerErrors = false;
+    // Centralized URL sanitizer: pathname only, query/fragment never logged.
+    const toLoggedPath = (raw: string) => {
+      if (!raw) return "";
+      try {
+        return new URL(raw).pathname;
+      } catch {
+        return raw.split(/[?#]/, 1)[0]?.slice(0, 120) ?? "";
+      }
+    };
     const workspaceWriteViolations: string[] = [];
     // Early agent-token mints blocked client-side before Test Family selection
     // (or with a wrong workspace header). These never reach the server — they
@@ -124,7 +138,22 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     // an aborted pre-workspace attempt with an actual unsafe write.
     const blockedEarlyAgentTokenAttempts: string[] = [];
     page.on("console", (message) => {
-      if (authComplete && message.type() === "error") consoleErrors.push(message.text().slice(0, 300));
+      if (!authComplete || message.type() !== "error") return;
+      const text = message.text();
+      // Browser-internal noise only: exact match for the known DevTools
+      // Inspector block message. Every other console error still fails.
+      if (text === "Failed to load resource: net::ERR_BLOCKED_BY_CLIENT.Inspector") return;
+      const locationPath = toLoggedPath(message.location()?.url ?? "");
+      consoleErrors.push(`${text.slice(0, 300)} @ ${locationPath || "<no-location>"}`);
+    });
+    page.on("response", (response) => {
+      if (!collectServerErrors) return;
+      const status = response.status();
+      // No status-based noise filter: every >=500 (including 503) fails.
+      if (status < 500) return;
+      const request = response.request();
+      const path = toLoggedPath(request.url());
+      serverErrors.push(`${request.method().toUpperCase()} ${path} -> ${status}`);
     });
     const allowedBackendWrites = new Set([
       "POST /api/backend/auth/agent-token",
@@ -274,6 +303,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     await shot(page, "01-login");
     await emailInput.first().fill(EMAIL);
     await passwordInput.first().fill(PASSWORD);
+    collectServerErrors = true; // capture 5xx from sign-in dispatch onward
     await page.getByRole("button", { name: "Entrar" }).click();
 
     // Shell autenticado: FAB "Nova transação" do BottomNav aparece.
@@ -667,5 +697,6 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     expect(workspaceWriteViolations, `writes outside selected workspace: ${workspaceWriteViolations.join(" | ")}`).toHaveLength(0);
     expect(pageErrors, `page errors: ${pageErrors.join(" | ")}`).toHaveLength(0);
     expect(consoleErrors, `console errors after login: ${consoleErrors.join(" | ")}`).toHaveLength(0);
+    expect(serverErrors, `server errors (>=500) after login: ${serverErrors.join(" | ")}`).toHaveLength(0);
   });
 });

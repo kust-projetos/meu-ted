@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { UIMessage } from 'agents/ai-chat-agent';
 import { FinanceChatAgent } from '../src/finance-chat-agent.js';
+import { attachRelayUsageStorage } from './helpers/relay-usage-storage.js';
 import * as apiClient from '../src/tools/api-client.js';
 import {
   normalizeRestTurn,
@@ -74,6 +75,9 @@ const createChatAgent = (snapshot: Record<string, unknown>) => {
     persisted.push(...msgs);
   });
   Object.defineProperty(agent, 'state', { value: { storage: {} }, writable: true, configurable: true });
+  // Usage-attempt ledger: the relay leg reserves per dispatch (fail-closed
+  // 503 without atomic storage), so the harness provides it like production.
+  attachRelayUsageStorage(agent);
   Object.defineProperty(agent, 'env', {
     value: {
       API_ORIGIN: 'https://api.test.local',
@@ -141,7 +145,7 @@ describe('FIX-AGENT-RELAY-FAILOVER-HARDENING A: correction marker boundary', () 
       if (url.includes('/internal/agent/llm-config')) {
         return new Response(JSON.stringify(snapshotBody(1)), { status: 200 });
       }
-      return new Response(JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.' }), { status: 200 });
+      return new Response(JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.', providerAttempted: true }), { status: 200 });
     });
     try {
       const res = await agent.fetch(chatRequest('Quanto gastei este mês? [Correção de grounding: teste]', 'intent-user-marker'));
@@ -164,9 +168,9 @@ describe('FIX-AGENT-RELAY-FAILOVER-HARDENING A: correction marker boundary', () 
       }
       relayCalls += 1;
       if (relayCalls === 1) {
-        return new Response(JSON.stringify({ text: 'Seu gasto foi R$ 999,99 este mês.' }), { status: 200 });
+        return new Response(JSON.stringify({ text: 'Seu gasto foi R$ 999,99 este mês.', providerAttempted: true }), { status: 200 });
       }
-      return new Response(JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.' }), { status: 200 });
+      return new Response(JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.', providerAttempted: true }), { status: 200 });
     });
     try {
       const res = await agent.fetch(chatRequest('Quanto gastei este mês?', 'intent-retry-nodup'));
@@ -260,7 +264,7 @@ describe('FIX-AGENT-RELAY-FAILOVER-HARDENING C: double-failure telemetry', () =>
       {
         name: 'primary success',
         snapshot: SNAP_FALLBACK,
-        relay: () => new Response(JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.' }), { status: 200 }),
+        relay: () => new Response(JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.', providerAttempted: true }), { status: 200 }),
       },
       {
         name: 'single ineligible failure',

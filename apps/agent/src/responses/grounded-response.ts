@@ -1,5 +1,6 @@
 import type { EvidenceEnvelope } from '../evidence/evidence-envelope.js';
 import { validateGroundedClaims } from '../evidence/grounding-validator.js';
+import { isUsageQuotaPassthroughError } from '../llm/relay-failover.js';
 import { emitSanitizedEvent } from '../observability/events.js';
 import { renderClarificationFallback, renderUnavailable } from './deterministic-responses.js';
 import { stripToolCallMarkup } from './tool-call-sanitizer.js';
@@ -87,8 +88,12 @@ export const createGroundedResponseWithRetry = async (
           return { text: renderUnavailable(fallbackSubject), grounded: false, rejected: true };
         }
       }
-    } catch {
-      // A retry failure is operational: fall through to the safe fallback.
+    } catch (error) {
+      // Usage-quota gate: a denied/unavailable correction reservation must
+      // remain an HTTP quota error — rethrown verbatim, never collapsed
+      // into the safe deterministic fallback. Ordinary retry failures are
+      // operational: fall through to the safe fallback below.
+      if (isUsageQuotaPassthroughError(error)) throw error;
     }
   }
   sink('agent.grounding.rejected', {

@@ -293,7 +293,8 @@ describe('debt-undo-confirmation-protocol: RPC confirm/cancel', () => {
     // shim used by the service-level suites (persistent across turns).
     const sql = createMemorySql();
     initializeUndoProposalSchema(sql);
-    Object.defineProperty(agent, 'state', { value: { storage: { sql } }, configurable: true });
+    // Durable SQLite via the documented Agents SDK path (ctx.storage.sql).
+    Object.defineProperty(agent, 'ctx', { value: { storage: { sql } }, configurable: true });
     (agent as unknown as { persistMessages: unknown }).persistMessages = vi.fn(async () => {});
     (agent as unknown as { messages: unknown }).messages = [];
     return agent;
@@ -453,7 +454,8 @@ describe('debt-undo-confirmation-race-fix: claim before effect', () => {
       Object.defineProperty(created, 'env', { value: { API_ORIGIN: 'https://api.test.local', AGENT_CONNECTION_TOKEN_SECRET: secret, AGENT_DELEGATION_SECRET: 'delegation-secret' }, configurable: true });
       const sql = createMemorySql();
       initializeUndoProposalSchema(sql);
-      Object.defineProperty(created, 'state', { value: { storage: { sql } }, configurable: true });
+      // Durable SQLite via the documented Agents SDK path (ctx.storage.sql).
+      Object.defineProperty(created, 'ctx', { value: { storage: { sql } }, configurable: true });
       (created as unknown as { persistMessages: unknown }).persistMessages = vi.fn(async () => {});
       (created as unknown as { messages: unknown }).messages = [];
       return created;

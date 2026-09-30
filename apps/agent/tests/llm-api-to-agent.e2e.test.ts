@@ -48,6 +48,27 @@ type ChatResult = { text: string | Promise<string> };
 
 const readText = (out: ChatResult): Promise<string> => Promise.resolve(out.text);
 
+// Realistic empty DO SQLite (ctx.storage.sql is the only storage surface):
+// usage ledgers read zero, intention snapshots miss (remote refetch against
+// the Fastify API below), every other statement is a permissive no-op. All
+// E2E turns run with storage AVAILABLE so they reach the provider/authority
+// legs; the unavailable-storage behavior is covered by
+// tests/durable-sql-accessor.test.ts.
+const makeDurableSql = () => ({
+  exec: (<T>(query: string, ..._bindings: unknown[]): Iterable<T> => {
+    if (query.includes("SELECT COUNT(*) AS req_count")) {
+      return [{ req_count: 0 }] as unknown as Iterable<T>;
+    }
+    if (query.includes("SELECT COALESCE(SUM")) {
+      if (query.includes("WHERE actor_id = ?")) {
+        return [{ actor_tokens: 0 }] as unknown as Iterable<T>;
+      }
+      return [{ total_tokens: 0 }] as unknown as Iterable<T>;
+    }
+    return [] as unknown as Iterable<T>;
+  }),
+});
+
 describe("E2E API -> Agent (Fase 3 item 5)", () => {
   let app: any;
   let adminApp: any;
@@ -166,6 +187,13 @@ describe("E2E API -> Agent (Fase 3 item 5)", () => {
       env: Record<string, string | undefined>;
     };
     agent.env = { API_ORIGIN, AGENT_CONFIG_TOKEN: CONFIG_TOKEN, OPENAI_API_KEY: OPENAI_KEY };
+    Object.defineProperty(agent, "ctx", {
+      value: { storage: { sql: makeDurableSql() } },
+      writable: true,
+      configurable: true,
+    });
+    (agent as unknown as { messages: unknown }).messages = [];
+    (agent as unknown as { persistMessages: unknown }).persistMessages = vi.fn(async () => {});
     return agent;
   };
 

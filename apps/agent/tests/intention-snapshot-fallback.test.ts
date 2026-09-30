@@ -25,7 +25,7 @@ const makeSql = (opts: { pragmaColumns: string[]; selectRows: unknown[] }) => {
 
 const makeAgent = (sql: { exec<T>(query: string, ...bindings: unknown[]): Iterable<T> }) => {
   const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent;
-  Object.defineProperty(agent, 'state', { value: { storage: { sql } }, writable: true, configurable: true });
+  Object.defineProperty(agent, 'ctx', { value: { storage: { sql } }, writable: true, configurable: true });
   Object.defineProperty(agent, 'env', {
     value: { API_ORIGIN: 'https://api.test.local', AGENT_CONFIG_TOKEN: 'config-test-token' },
     writable: true,

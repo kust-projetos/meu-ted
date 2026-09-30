@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { UIMessage } from 'agents/ai-chat-agent';
 import { FinanceChatAgent } from '../src/finance-chat-agent.js';
+import { attachRelayUsageStorage } from './helpers/relay-usage-storage.js';
 import * as apiClient from '../src/tools/api-client.js';
 
 const snapshotBody = () => ({
@@ -38,6 +39,9 @@ const createTestAgent = () => {
     persisted.push(...msgs);
   });
   Object.defineProperty(agent, 'state', { value: { storage: {} }, writable: true, configurable: true });
+  // Usage-attempt ledger: the relay leg reserves per dispatch (fail-closed
+  // 503 without atomic storage), so the harness provides it like production.
+  attachRelayUsageStorage(agent);
   Object.defineProperty(agent, 'env', {
     value: {
       API_ORIGIN: 'https://api.test.local',

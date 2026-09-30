@@ -108,7 +108,7 @@ const headers = { 'x-agent-actor': 'actor-1', 'x-agent-workspace': 'ws-1' };
 
 const createAgent = (sql: ReturnType<typeof createSql>) => {
   const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent & { messages: Array<Record<string, unknown>> };
-  Object.defineProperty(agent, 'state', { value: { storage: { sql } }, writable: true, configurable: true });
+  Object.defineProperty(agent, 'ctx', { value: { storage: { sql } }, writable: true, configurable: true });
   Object.defineProperty(agent, 'env', { value: {}, writable: true, configurable: true });
   agent.messages = [];
   return agent;

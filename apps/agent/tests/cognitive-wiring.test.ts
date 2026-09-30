@@ -18,6 +18,35 @@ vi.mock('ai', async (importOriginal) => {
 const { streamText } = await import('ai');
 const mockedStreamText = streamText as unknown as ReturnType<typeof vi.fn>;
 
+// Realistic empty DO SQLite (ctx.storage.sql is the only storage surface):
+// usage ledgers read zero, intention snapshots miss (remote refetch below),
+// every other statement is a permissive no-op. Normal-path wiring tests run
+// with storage AVAILABLE so the turn reaches inference.
+const makeDurableSql = () => ({
+  exec: (<T>(query: string, ..._bindings: unknown[]): Iterable<T> => {
+    if (query.includes('SELECT COUNT(*) AS req_count')) {
+      return [{ req_count: 0 }] as unknown as Iterable<T>;
+    }
+    if (query.includes('SELECT COALESCE(SUM')) {
+      if (query.includes('WHERE actor_id = ?')) {
+        return [{ actor_tokens: 0 }] as unknown as Iterable<T>;
+      }
+      return [{ total_tokens: 0 }] as unknown as Iterable<T>;
+    }
+    return [] as unknown as Iterable<T>;
+  }),
+});
+
+const withDurableSql = (agent: FinanceChatAgent) => {
+  Object.defineProperty(agent, 'ctx', {
+    value: { storage: { sql: makeDurableSql() } },
+    writable: true,
+    configurable: true,
+  });
+  (agent as unknown as { messages: unknown }).messages = [];
+  (agent as unknown as { persistMessages: unknown }).persistMessages = vi.fn(async () => {});
+};
+
 const snapshotBody = {
   runtime: {
     singleton: 'active',
@@ -58,6 +87,7 @@ describe('onChatMessage cognitive wiring (Part A)', () => {
       AGENT_CONFIG_TOKEN: 'config-token-test',
       OPENCODE_ZEN_API_KEY: 'zen-key-test',
     };
+    withDurableSql(agent);
     const result = (await agent.onChatMessage({
       text: 'Qual o meu saldo?',
       intentionId: 'intent-wiring-1',
@@ -95,6 +125,7 @@ describe('onChatMessage cognitive wiring (Part A)', () => {
       AGENT_CONFIG_TOKEN: 'config-token-test',
       OPENCODE_ZEN_API_KEY: 'zen-key-test',
     };
+    withDurableSql(agent);
     // Amount-less on purpose: a parseable mutation attempt takes the
     // authoritative approval pipeline (SPEC §7, device-bound), not the
     // provider path — curation itself is what this test guards.

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { UIMessage } from 'agents/ai-chat-agent';
 import { FinanceChatAgent } from '../src/finance-chat-agent.js';
+import { attachRelayUsageStorage } from './helpers/relay-usage-storage.js';
 import * as apiClient from '../src/tools/api-client.js';
 import { executeBrokerCompletion } from '../src/llm/private-broker-client.js';
 // RED: this helper does not exist yet — it must enforce one absolute
@@ -425,6 +426,9 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
       persisted.push(...msgs);
     });
     Object.defineProperty(agent, 'state', { value: { storage: {} }, writable: true, configurable: true });
+    // Usage-attempt ledger: the relay leg reserves per dispatch (fail-closed
+    // 503 without atomic storage), so the harness provides it like production.
+    attachRelayUsageStorage(agent);
     Object.defineProperty(agent, 'env', {
       value: {
         API_ORIGIN: 'https://api.test.local',
@@ -489,7 +493,7 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
     // starts (HUNG-TURN prompt reaches agent.fetch), not via sleep().
     const firstFetchStarted = deferred<void>();
     let firstSettled = false;
-    const okRelayBody = () => JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.' });
+    const okRelayBody = () => JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.', providerAttempted: true });
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (info, init) => {
       const url = String(info);
       if (url.includes('/internal/agent/llm-config')) {
@@ -577,7 +581,7 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
       if (body.prompt?.includes('HUNG-TIMEOUT-TURN')) {
         return hungGate.promise;
       }
-      return new Response(JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.' }), {
+      return new Response(JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.', providerAttempted: true }), {
         status: 200,
       });
     });
