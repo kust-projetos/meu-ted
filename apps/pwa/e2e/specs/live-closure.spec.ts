@@ -1021,13 +1021,25 @@ test.describe("live-closure (fechamento autenticado em produção)", () => {
     const row = page.getByText(M.txDescEdit).first();
     await expect(row).toBeVisible({ timeout: 30000 });
     await row.click();
-    await expect(page.getByRole("button", { name: "Editar" })).toBeHidden({ timeout: 10000 }).catch(() => {});
-    await expect(page.getByRole("button", { name: "Cancelar" })).toBeVisible({ timeout: 10000 });
+    // Detail dialog contract (deployed UX): the row opens a read-view dialog
+    // titled with the tx description, holding Editar / Excluir / Fechar —
+    // there is no auto-edit "Cancelar" state. Gate on the dialog + its
+    // Excluir action, scoped to the dialog (never page-wide .last()).
+    const detailDialog = page.locator('[role="dialog"]').filter({ hasText: M.txDescEdit });
+    await expect(detailDialog).toBeVisible({ timeout: 10000 });
+    const deleteButton = detailDialog.getByRole("button", { name: "Excluir" });
+    await expect(deleteButton).toBeVisible({ timeout: 10000 });
+    // Two-step destructive UX: detail "Excluir" opens the confirm sheet
+    // ("Excluir lançamento" — Cancelar/Excluir); the DELETE only fires on
+    // the confirm click.
+    const confirmDialog = page.locator('[role="dialog"]').filter({ hasText: "Esta ação não pode ser desfeita" });
+    await deleteButton.click();
+    await expect(confirmDialog).toBeVisible({ timeout: 10000 });
     const deleteResp = page.waitForResponse(
       (r) => r.request().method() === "DELETE" && new URL(r.url()).pathname === `/api/backend/transactions/${seedTxId}`,
       { timeout: 30000 },
     );
-    await page.getByRole("button", { name: "Excluir" }).last().click();
+    await confirmDialog.getByRole("button", { name: "Excluir" }).click();
     const deleteResult = await deleteResp;
     expect(deleteResult.status()).toBeLessThan(300);
     await expect(page.locator('[role="dialog"]')).toHaveCount(0, { timeout: 15000 });
