@@ -26,6 +26,7 @@ import {
   createPostgresWriteStore,
 } from "../writes/postgres.js";
 import { createLegacyPostgresAuditLogStore, createPostgresAuditLogStore } from "../audit/store.js";
+import { createLegacyBearerAuditSink } from "../audit/legacy-bearer-sink.js";
 import { createUndoService } from "../approvals/undo.js";
 import { InviteError, createInviteService } from "../auth/invites.js";
 import { createPostgresInviteStore } from "../auth/invites-postgres.js";
@@ -179,6 +180,7 @@ export const registerPostgresProductionRoutes = (
       pushStore,
       auditLogs,
       undoService,
+      legacyBearerAuditLog: createLegacyBearerAuditSink(pool),
       disableDeviceRegistration: true,
       analyticsSource: createSqlAnalyticsSource(pool, {
         legacy: true,
@@ -227,6 +229,7 @@ export const registerPostgresProductionRoutes = (
     pushStore,
     auditLogs,
     undoService,
+    legacyBearerAuditLog: createLegacyBearerAuditSink(pool),
     disableDeviceRegistration: true,
     analyticsSource: createSqlAnalyticsSource(pool, {
       stores: { store, cardStore, budgetStore, subscriptionStore },
