@@ -37,6 +37,32 @@ describe('G5.2.2 API delegated token validation', () => {
     expect(scopeResponse.json().code).toBe('auth.delegation_scope_forbidden');
   });
 
+  it('admits the narrow financial.undo.execute capability for POST /pending-operations/undo — the generic financial.write scope must not veto the narrow undo grant', async () => {
+    const now = Date.now();
+    const token = await createDelegatedTokenForTest(
+      {
+        actorId: 'user-1', workspaceId: HOUSEHOLD_A, role: 'member',
+        capabilities: ['financial.undo.execute'], requestId: 'undo-turn-1',
+        deviceId: '55dfb534-0475-4a50-95a1-42665ab4d254',
+      },
+      'test-secret',
+      now,
+    );
+    const { app } = buildTestApp({}, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 'test-secret');
+    await app.ready();
+    const response = await app.inject({
+      method: 'POST', url: '/pending-operations/undo',
+      headers: { authorization: `Bearer ${token}`, 'idempotency-key': 'undo:hh-a:req-undo-1' },
+      payload: {},
+    });
+    // The undo grant is deliberately narrow: the preHandler must admit it
+    // (route handler re-checks the narrow capability as defense in depth),
+    // never veto it with the generic financial.write scope requirement.
+    expect(response.statusCode).not.toBe(403);
+    expect(response.json().code).not.toBe('auth.delegation_scope_forbidden');
+    expect(response.json().code).not.toBe('auth.device_binding_required');
+  });
+
   it('rejects delegated token when workspace membership was revoked server-side', async () => {
     const token = await createDelegatedTokenForTest(
       { actorId: 'user-1', workspaceId: HOUSEHOLD_A, role: 'member', capabilities: ['financial.read'], requestId: 'turn-1' },
