@@ -28,7 +28,8 @@ function makeCapturingPool(reject = false): {
 }
 
 describe("legacy bearer durable audit sink", () => {
-  it("persists the event into audit_logs with the legacy action shape", () => {
+  it("persists the event into audit_logs with the legacy action shape (DB_SCHEMA=legacy)", () => {
+    process.env.DB_SCHEMA = "legacy";
     const { pool, calls } = makeCapturingPool();
     const sink = createLegacyBearerAuditSink(pool, () => new Date("2026-10-01T18:00:00.000Z"));
 
@@ -52,7 +53,48 @@ describe("legacy bearer durable audit sink", () => {
     expect(values?.[4]).toBe("2026-10-01T18:00:00.000Z");
   });
 
+  it("persists the event with the canonical shape when DB_SCHEMA=canonical", () => {
+    process.env.DB_SCHEMA = "canonical";
+    const { pool, calls } = makeCapturingPool();
+    const sink = createLegacyBearerAuditSink(pool, () => new Date("2026-10-01T18:00:00.000Z"));
+
+    sink(EVENT);
+
+    expect(calls).toHaveLength(1);
+    const { text, values } = calls[0]!;
+    // Mirrors the proven canonical audit INSERT (writes/pending-idempotency.ts):
+    // no operation_record_id (nullable), created_at default, actor_id 'device'.
+    expect(text).toContain("INSERT INTO audit_logs");
+    expect(text).toContain("workspace_id");
+    expect(text).toContain("event_type");
+    expect(text).toContain("payload_hash");
+    expect(text).toContain("metadata");
+    expect(text).toContain("gen_random_uuid()");
+    expect(text).not.toContain("household_id");
+    expect(text).not.toContain("user_id");
+    expect(text).not.toContain("action");
+    expect(values?.[0]).toBe(HOUSEHOLD_A);
+    // 'device' is inline SQL; operation and event_type share the same bound
+    // param ($2 used twice), matching the proven canonical audit INSERT.
+    expect(text).toContain("$2, $2");
+    expect(values?.[1]).toBe("auth.request.legacy_bearer_used");
+    expect(values?.[2]).toEqual(expect.stringMatching(/^[0-9a-f]{64}$/));
+    expect(JSON.parse(values?.[3] as string)).toEqual({ workspaceId: HOUSEHOLD_A });
+    delete process.env.DB_SCHEMA;
+  });
+
+  it("defaults to the legacy shape when DB_SCHEMA is unset", () => {
+    delete process.env.DB_SCHEMA;
+    const { pool, calls } = makeCapturingPool();
+    const sink = createLegacyBearerAuditSink(pool, () => new Date("2026-10-01T18:00:00.000Z"));
+
+    sink(EVENT);
+
+    expect(calls[0]!.text).toContain("household_id");
+  });
+
   it("generates a unique row id per emission", () => {
+    process.env.DB_SCHEMA = "legacy";
     const { pool, calls } = makeCapturingPool();
     const sink = createLegacyBearerAuditSink(pool, () => new Date("2026-10-01T18:00:00.000Z"));
 
@@ -65,11 +107,15 @@ describe("legacy bearer durable audit sink", () => {
     for (const id of ids) expect(id).toEqual(expect.any(String));
   });
 
-  it("never breaks authentication: storage failures are swallowed", () => {
-    const { pool } = makeCapturingPool(true);
-    const sink = createLegacyBearerAuditSink(pool, () => new Date("2026-10-01T18:00:00.000Z"));
-
-    expect(() => sink(EVENT)).not.toThrow();
+  it("never breaks authentication: storage failures are swallowed (both shapes)", () => {
+    process.env.DB_SCHEMA = "legacy";
+    const legacy = makeCapturingPool(true);
+    expect(() => createLegacyBearerAuditSink(legacy.pool, () => new Date())(EVENT)).not.toThrow();
+    process.env.DB_SCHEMA = "canonical";
+    const canonical = makeCapturingPool(true);
+    expect(() => createLegacyBearerAuditSink(canonical.pool, () => new Date())(EVENT)).not.toThrow();
+    expect(canonical.calls).toHaveLength(1);
+    delete process.env.DB_SCHEMA;
   });
 });
 
