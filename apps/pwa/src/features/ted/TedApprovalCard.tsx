@@ -256,8 +256,13 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
     return (
       <div className="my-2 rounded-[16px] border border-warning/30 bg-warning-tint p-3.5 text-xs shadow-xs">
         <div className="font-bold text-warning">⚠️ {title}</div>
-        {presentation.description && <div className="mt-1 text-sm font-semibold text-text-primary">{presentation.description}</div>}
         <dl className="mt-2 space-y-1 text-text-primary">
+          {presentation.description && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Descrição</dt>
+              <dd className="font-semibold">{presentation.description}</dd>
+            </div>
+          )}
           {typeof presentation.amountCents === "number" && (
             <div className="flex justify-between gap-2">
               <dt className="text-text-muted">Valor</dt>

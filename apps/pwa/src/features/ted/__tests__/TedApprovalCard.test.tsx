@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@/lib/test-utils";
+import { render, screen, waitFor, within } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import { TedApprovalCard } from "../TedApprovalCard";
 import * as agentClient from "@/lib/api/agent-client";
@@ -146,6 +146,31 @@ describe("TedApprovalCard V2", () => {
     expect(screen.getByText("Mercado")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Confirmar R\$ 850,00/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancelar" })).toBeInTheDocument();
+  });
+
+  it("T3.4 RED: canonical card exposes the description inside the dl (human-reviewable args)", () => {
+    const { container } = render(
+      <TedApprovalCard
+        operation={{
+          id: "pending-v2-1",
+          status: "proposed",
+          operation: "transactions.expense.create",
+          presentation: actionablePresentation("pending-v2-1"),
+        }}
+        workspaceId="workspace-1"
+      />,
+    );
+
+    // The approval dl is the human-review surface the live closure asserts
+    // on: description must be a labeled row inside it (dt Descrição/dd),
+    // meaningful and nonempty — never absent from the dl.
+    const dl = container.querySelector("dl");
+    expect(dl).not.toBeNull();
+    expect(dl?.textContent).toContain("Mercado");
+    expect(within(dl as HTMLElement).getByText("Descrição")).toBeInTheDocument();
+    // Single instance overall: the dl row IS the description (no duplication
+    // that would break exact-text action gates elsewhere).
+    expect(screen.getAllByText("Mercado")).toHaveLength(1);
   });
 
   it("T3.4 RED: legacy payload without presentation fails closed — warning and Cancel only, never blind approval", async () => {

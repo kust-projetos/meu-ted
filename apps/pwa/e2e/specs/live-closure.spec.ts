@@ -77,7 +77,6 @@ import {
   validateScopedHeaders,
   validateTxMutationAllowed,
   validateUndoRequestBody,
-  validateWorkspaceScope,
   type AuditEntry,
   type TrackedTx,
   CLOSURE_ACTIVE_WS,
@@ -730,14 +729,29 @@ test.describe("live-closure (fechamento autenticado em produção)", () => {
 
     // ── TED CONFIRMAR: binding autoritativo → registro → clique ──
     const dialog = await openTed(page);
+    // Capture OUR turn's pending id from the chat RESPONSE (never first-stale:
+    // an older run's pending card may still be listed and must stay untouched —
+    // existing PENDING from other runs is never repeated or decided here).
+    const proposeChatResp = page.waitForResponse(
+      (r) => r.request().method() === "POST" && new URL(r.url()).pathname.endsWith("/rpc/chat"),
+      { timeout: 180_000 },
+    );
     await sendTedMessage(page, dialog, `Na conta ${M.accountName}, categoria Lanche, hoje gastei R$ 2,00 ${M.txDescTed}`);
-    const approvalCard = dialog.locator('[data-testid="ted-approval-item"], [data-testid="ted-approval-focused"]')
-      .filter({ hasText: M.txDescTed })
-      .first();
+    const proposeResult = await proposeChatResp;
+    const proposeBody = await proposeResult.json() as { pendingOperation?: { id?: unknown } };
+    const freshProposeId = typeof proposeBody.pendingOperation?.id === "string" ? proposeBody.pendingOperation.id : "";
+    if (!freshProposeId) {
+      throw new Error(`BLOCKED: chat turn minted no pendingOperation for ${M.txDescTed} — refusing stale first-card`);
+    }
+    validateNoHistoricReuse([freshProposeId]);
+    // Exact DOM selection by pending id (no .first() over possibly stale
+    // cards), plus args markers proving it is our card.
+    const approvalCard = dialog.locator(`[id="ted-op-${freshProposeId}"]`);
     await expect(approvalCard).toBeVisible({ timeout: 180_000 });
+    await expect(approvalCard.getByText(M.txDescTed, { exact: true })).toBeVisible({ timeout: 30000 });
     const wrapperId = await approvalCard.getAttribute("id");
-    expect(wrapperId).toMatch(/^ted-op-[0-9a-f-]{36}$/i);
-    const operationId = wrapperId!.slice("ted-op-".length);
+    expect(wrapperId).toBe(`ted-op-${freshProposeId}`);
+    const operationId = freshProposeId;
     validateNoHistoricReuse([operationId]);
     const decisionPath = decisionPathFor(ACTIVE_WS, operationId);
     validateDecisionPathForOperation(decisionPath, ACTIVE_WS, operationId);
@@ -899,14 +913,26 @@ test.describe("live-closure (fechamento autenticado em produção)", () => {
     }
 
     // ── Segunda proposta TED → CANCELAR (binding autoritativo → registro → clique) ──
+    // Same exact-id selection: OUR turn's pending id from the chat response,
+    // never a stale first card from another run.
+    const cancelChatResp = page.waitForResponse(
+      (r) => r.request().method() === "POST" && new URL(r.url()).pathname.endsWith("/rpc/chat"),
+      { timeout: 180_000 },
+    );
     await sendTedMessage(page, dialog, `Na conta ${M.accountName}, categoria Lanche, hoje gastei R$ 3,00 ${M.txDescTed2}`);
-    const cancelCard = dialog.locator('[data-testid="ted-approval-item"], [data-testid="ted-approval-focused"]')
-      .filter({ hasText: M.txDescTed2 })
-      .first();
+    const cancelChatResult = await cancelChatResp;
+    const cancelChatBody = await cancelChatResult.json() as { pendingOperation?: { id?: unknown } };
+    const freshCancelId = typeof cancelChatBody.pendingOperation?.id === "string" ? cancelChatBody.pendingOperation.id : "";
+    if (!freshCancelId) {
+      throw new Error(`BLOCKED: chat turn minted no pendingOperation for ${M.txDescTed2} — refusing stale first-card`);
+    }
+    validateNoHistoricReuse([freshCancelId]);
+    const cancelCard = dialog.locator(`[id="ted-op-${freshCancelId}"]`);
     await expect(cancelCard).toBeVisible({ timeout: 180_000 });
+    await expect(cancelCard.getByText(M.txDescTed2, { exact: true })).toBeVisible({ timeout: 30000 });
     const cancelWrapperId = await cancelCard.getAttribute("id");
-    expect(cancelWrapperId).toMatch(/^ted-op-[0-9a-f-]{36}$/i);
-    const cancelOpId = cancelWrapperId!.slice("ted-op-".length);
+    expect(cancelWrapperId).toBe(`ted-op-${freshCancelId}`);
+    const cancelOpId = freshCancelId;
     validateNoHistoricReuse([cancelOpId]);
     const cancelPath = decisionPathFor(ACTIVE_WS, cancelOpId);
     validateDecisionPathForOperation(cancelPath, ACTIVE_WS, cancelOpId);
