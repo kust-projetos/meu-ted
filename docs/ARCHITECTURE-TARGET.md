@@ -1,6 +1,6 @@
 # Meu Ted — Arquitetura alvo
 
-**Last verified:** 2026-09-13
+**Last verified:** 2026-10-01
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 ## Estado alvo consolidado
@@ -8,7 +8,10 @@
 O destino do projeto é uma superfície única composta por PWA, API autoritativa
 e TED Agent V2. O browser fala apenas com a origem da PWA; a API da VPS segue
 como única autoridade financeira. Não há runtime WhatsApp/Bridge nem extensão
-Pi como caminho operacional.
+Pi como caminho operacional. O alvo inclui a base canônica única: a API serve
+apenas `pi_financeiro_canonical` e o banco legacy existe somente como archive
+histórico até a aposentadoria formal. Após o flip da Release B não há
+compatibilidade de bearer legado (`SESSION_BEARER_FALLBACK_ENABLED=off`).
 
 ```mermaid
 graph LR
