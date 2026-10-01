@@ -3,6 +3,42 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-01 — fechamento de aceite dos 4 itens, produção alinhada; sem release)
+
+### Fixes de produção (3 causas raiz reais, encontradas pelo live closure E2E)
+
+- API: veto de escopo no undo delegado — o preHandler global exigia
+  `financial.write` genérico e reprovava o token com a grant estreita
+  `financial.undo.execute` (403 → 502 `agent.approval_failed` em todo
+  confirm de undo conversacional). Fix `undoScopeAdmitted` + re-check
+  estreito na rota mantido. TDD RED→GREEN; suíte API 2399/2399. PR #49
+  (`29c015d`), deployado na VPS via wrapper `api-release-20260930.sh`
+  (CI `36900550367`, backup pré-release
+  `pi-canonical-prerelease-20261001T174039Z`, rollback tag preservada).
+- Agent: intent de undo não reconhecia o imperativo "desfaça" (regex só
+  cobria `desfaz|desfazer`; ç ≠ z) — caía no fallback `unsupported` sem
+  mintar proposal. Radical `desfaç` nas duas cópias do matcher; negação
+  segue fail-closed. 778/778. PR #48 (`06c00c2`).
+- PWA: card de aprovação com descrição dentro do `<dl>` (linha rotulada,
+  revisável) + spec live-closure seleciona o card pelo id fresco da
+  resposta do POST `/rpc/chat` (nunca card stale de outra run). 20/20.
+  PR #47 (`375af2c`).
+
+### Aceite verificado (evidência em `docs/reports/2026-10-01-acceptance-closure.md`)
+
+- **Live closure E2E PASS em produção** (28.1s): criar → editar →
+  confirmar → desfazer → cancelar → reload → excluir, guards de escopo
+  fail-closed, cardinalidade exata (2 decisions + 1 undo + 1
+  verify-target), reversão verificada no ledger.
+- Produção alinhada: API `29c015d` (build `36900550367`), PWA/Agent
+  `06c00c2` (build `36896164604`); smokes `/health`, `/ready`,
+  `/api/build-info` verdes.
+- Banco canônico: repair commitado em produção (`repair_committed=2`,
+  `repair_compensated=0`) e **residual zero** (32 contas vivas) —
+  sondagem SELECT-only; cutover F3–F5 permanece gate humano.
+- Falso-verde do comprehensive no PWA CI provado corrigido (steps 8–9 do
+  job `e2e` executando Playwright real, verde em 4 SHAs seguidos).
+
 ## Unreleased (2026-09-30 — acceptance verification PR #44, baseline `096c4e612fbcb7307a1431fa4f1920eb9434d22f`; sem aceite total)
 
 ### Release observada (baseline, não é release nova)
