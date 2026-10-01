@@ -154,6 +154,93 @@
     "range": "<=0.35.4-rc.0"
   },
   {
+    "id": "pwa-2026-10-01-lhci-cli-proxy-shape",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Lighthouse CI only, alternate npm audit graph shape of pwa-2026-09-19-lhci-cli: npm now also routes the advisory via the proxy-agent chain (via includes proxy-agent). Same accepted build-time risk; strict matcher needs both shapes.",
+    "expiresOn": "2026-12-31",
+    "name": "@lhci/cli",
+    "severity": "high",
+    "via": ["@lhci/utils", "lighthouse", "proxy-agent"],
+    "effects": [],
+    "range": "<=0.1.1-alpha.5 || >=0.13.0"
+  },
+  {
+    "id": "pwa-2026-10-01-puppeteer-browsers-proxy-shape",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Lighthouse CI only, alternate npm audit graph shape of pwa-2026-09-19-puppeteer-browsers: via now includes proxy-agent and the range is reported as *. Same accepted build-time risk; strict matcher needs both shapes.",
+    "expiresOn": "2026-12-31",
+    "name": "@puppeteer/browsers",
+    "severity": "high",
+    "via": ["extract-zip", "proxy-agent"],
+    "effects": ["puppeteer-core"],
+    "range": "*"
+  },
+  {
+    "id": "pwa-2026-10-01-basic-ftp",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Lighthouse CI toolchain only (get-uri -> basic-ftp via the @lhci/cli dependency graph; never bundled into the PWA runtime). Advisory GHSA-c475-qrg2-pj4r published 2026-10-01; npm's only proposed resolution is the breaking @lhci/cli 0.13.0 major upgrade. Same accepted build-time chain governance as pwa-2026-09-19-*.",
+    "expiresOn": "2026-12-31",
+    "name": "basic-ftp",
+    "severity": "high",
+    "via": [
+      {
+        "source": 1240853,
+        "name": "basic-ftp",
+        "dependency": "basic-ftp",
+        "title": "basic-ftp: Quadratic-time CPU denial of service in Client.list() Unix directory-listing parser (RE_LINE backtracking)",
+        "url": "https://github.com/advisories/GHSA-c475-qrg2-pj4r",
+        "severity": "high",
+        "cwe": ["CWE-1333"],
+        "cvss": {
+          "score": 0,
+          "vectorString": null
+        },
+        "range": "<=6.2.0"
+      }
+    ],
+    "effects": ["get-uri"],
+    "range": "<=6.2.0"
+  },
+  {
+    "id": "pwa-2026-10-01-get-uri",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Lighthouse CI toolchain only; effect of the new basic-ftp advisory in the @lhci/cli graph, never bundled into the PWA runtime. Same accepted build-time chain governance.",
+    "expiresOn": "2026-12-31",
+    "name": "get-uri",
+    "severity": "high",
+    "via": ["basic-ftp"],
+    "effects": ["pac-proxy-agent"],
+    "range": ">=5.0.0"
+  },
+  {
+    "id": "pwa-2026-10-01-pac-proxy-agent",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Lighthouse CI toolchain only; effect of the new basic-ftp advisory in the @lhci/cli graph, never bundled into the PWA runtime. Same accepted build-time chain governance.",
+    "expiresOn": "2026-12-31",
+    "name": "pac-proxy-agent",
+    "severity": "high",
+    "via": ["get-uri"],
+    "effects": ["proxy-agent"],
+    "range": ">=6.0.0"
+  },
+  {
+    "id": "pwa-2026-10-01-proxy-agent",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Lighthouse CI toolchain only; effect of the new basic-ftp advisory in the @lhci/cli graph, never bundled into the PWA runtime. Same accepted build-time chain governance.",
+    "expiresOn": "2026-12-31",
+    "name": "proxy-agent",
+    "severity": "high",
+    "via": ["pac-proxy-agent"],
+    "effects": ["@lhci/cli", "@puppeteer/browsers"],
+    "range": ">=6.0.0"
+  },
+  {
     "id": "pwa-2026-09-21-sharp-audit-shape",
     "scope": "runtime",
     "owner": "project-maintainer",
