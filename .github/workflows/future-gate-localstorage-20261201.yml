@@ -1,0 +1,100 @@
+name: Future Gate Reminder — localStorage/bearer compat window (2026-12-01)
+
+# Future-dated gate: the ADR-011/ADR-015 compatibility window for the legacy
+# localStorage token writes (`pi-finance:session-token` / `pi-finance:token`,
+# review date 2026-12-01) and the bearer compat flags. This workflow NEVER
+# touches production; it only opens a single idempotent reminder issue.
+on:
+  schedule:
+    - cron: '23 12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  reminder:
+    name: Open future-gate reminder issue (2026-12-01)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Open reminder issue once the review date arrives
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const GATE_DATE = '2026-12-01';
+            const LABEL = 'future-gate-2026-12-01';
+            const TITLE = 'Future gate — review janela compat localStorage/bearer (2026-12-01)';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const today = new Date().toISOString().slice(0, 10);
+            core.info(`today=${today} gate=${GATE_DATE}`);
+            if (today < GATE_DATE) {
+              core.info('Review date not reached — exiting silently, no issue.');
+              return;
+            }
+
+            const { data: found } = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open label:"${LABEL}"`,
+              per_page: 10,
+            });
+            const alreadyOpen = found.items.some(
+              (issue) => issue.title === TITLE || issue.title.startsWith('Future gate — review janela compat'),
+            );
+            if (alreadyOpen) {
+              core.info('Reminder issue already open — idempotent no-op.');
+              return;
+            }
+
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: LABEL });
+            } catch (error) {
+              if (error && error.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: LABEL,
+                  color: 'D93F0B',
+                  description: 'ADR-011/015 localStorage+bearer compat window review (2026-12-01)',
+                });
+                core.info(`Created missing label '${LABEL}'.`);
+              } else {
+                throw error;
+              }
+            }
+
+            const body = [
+              'A janela de compatibilidade **ADR-011/ADR-015** (gravação legada de tokens em localStorage + fallback bearer) venceu em **2026-12-01**.',
+              '',
+              '## Escopo da revisão (read-only primeiro)',
+              '',
+              '- `apps/pwa/src/lib/auth/token-store.ts` — "Revisão/remoção: 2026-12-01" (cabeçalho)',
+              '- `apps/pwa/src/lib/auth/legacy-usage.ts` — telemetria de uso (mesma janela do `NEXT_PUBLIC_LEGACY_BEARER_COMPAT`)',
+              '- `apps/api/src/routes/index.ts` — `SESSION_BEARER_FALLBACK_ENABLED` (default ON; flag env-only)',
+              '- `apps/pwa/src/lib/auth/__tests__/legacy-bearer-release-a.test.ts` etc.',
+              '',
+              '## Contexto que pode ter superado este gate',
+              '',
+              '- Se a **Release B** já foi executada (flip dos dois flags para OFF após o gate D11-R2 de ~2026-10-15), esta revisão se reduz a **remover os caminhos mortos** (código + testes + cleanup `cleanupOrphanedLegacyTokens`).',
+              '- Se a Release B ainda não ocorreu, revisar telemetria de uso antes de decidir.',
+              '',
+              '## Referências',
+              '',
+              '- `CHANGELOG.md` Unreleased 2026-10-01 (seção Release B — janela D11-R2)',
+              '- ADR-011, ADR-015; SPEC V4.1 §20',
+              '',
+              '> Aberta automaticamente por `.github/workflows/future-gate-localstorage-20261201.yml` (somente leitura + issue).',
+            ].join('\n');
+
+            const { data: issue } = await github.rest.issues.create({
+              owner,
+              repo,
+              title: TITLE,
+              body,
+              labels: [LABEL],
+            });
+            core.info(`Created reminder issue #${issue.number}.`);
