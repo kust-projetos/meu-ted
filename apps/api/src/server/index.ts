@@ -62,6 +62,7 @@ import { createAccountInviteService } from "../auth/account-invites.js";
 import { createPostgresPendingOperationV2Store } from "../approvals/pending-v2.js";
 import { createUndoService } from "../approvals/undo.js";
 import { createInMemoryAuditLogStore, createLegacyPostgresAuditLogStore, createPostgresAuditLogStore } from "../audit/store.js";
+import { createLegacyBearerAuditSink } from "../audit/legacy-bearer-sink.js";
 import { registerPendingOperationRoutes } from "../routes/pending-operations.js";
 import { createPendingOperationV2Executor } from "../routes/index.js";
 
@@ -237,6 +238,7 @@ const start = async (): Promise<void> => {
         agentRuntimeAdminToken: cfg.agentRuntimeAdminToken,
         trustedOrigins: cfg.trustedOrigins,
         disableDeviceRegistration: cfg.disableDeviceRegistration,
+        legacyBearerAuditLog: createLegacyBearerAuditSink(pool),
         pool,
         ...(vapid?.publicKey ? { vapidPublicKey: vapid.publicKey } : {}),
        ...(pushDelivery ? { pushDelivery } : {}),
@@ -344,6 +346,7 @@ const start = async (): Promise<void> => {
         agentRuntimeAdminToken: cfg.agentRuntimeAdminToken,
         trustedOrigins: cfg.trustedOrigins,
         disableDeviceRegistration: cfg.disableDeviceRegistration,
+        legacyBearerAuditLog: createLegacyBearerAuditSink(pool),
         pool,
         analyticsSource: createSqlAnalyticsSource(pool, {
           stores: { store, cardStore, budgetStore, subscriptionStore },
