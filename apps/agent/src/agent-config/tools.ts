@@ -182,10 +182,12 @@ export const isExplicitConfirmation = (message: string): boolean => CONFIRMATION
 /**
  * Historical conversational-undo intent matcher, kept for the chat-turn
  * proposal path (the model tool itself is retired above). The `\bundo\b`
- * boundary keeps common words like "segundo" from matching. Textual
- * confirmation NEVER executes undo — only the authenticated RPC decides.
+ * boundary keeps common words like "segundo" from matching, and the
+ * "desfaç" stem covers the pt-BR imperative/subjunctive forms ("desfaça",
+ * "desfaço") that lack the "z" of "desfaz". Textual confirmation NEVER
+ * executes undo — only the authenticated RPC decides.
  */
-const UNDO_INTENT_RE = /(desfaz|desfazer|\bundo\b)/i;
+const UNDO_INTENT_RE = /(desfaz|desfazer|desfaç|\bundo\b)/i;
 
 export const hasUndoIntent = (message: string): boolean => UNDO_INTENT_RE.test(message ?? '');
 

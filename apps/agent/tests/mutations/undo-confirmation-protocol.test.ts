@@ -148,6 +148,12 @@ describe('debt-undo-confirmation-protocol: model surface', () => {
     expect(isUndoProposalRequest('qual o meu saldo?')).toBe(false);
     expect(isUndoProposalRequest('não desfaz nada')).toBe(false);
     expect(isUndoNegation('não desfaz nada')).toBe(true);
+    // Imperative/subjunctive forms are the natural pt-BR phrasing for undo
+    // ("desfaça" has no "z") and must mint a proposal like "desfaz" does.
+    expect(isUndoProposalRequest('desfaça a última ação')).toBe(true);
+    expect(isUndoProposalRequest('desfaça')).toBe(true);
+    expect(isUndoNegation('não desfaça nada')).toBe(true);
+    expect(isUndoProposalRequest('não desfaça nada')).toBe(false);
   });
 
   it('derives a stable proposal idempotency key', () => {
