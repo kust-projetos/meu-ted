@@ -61,7 +61,7 @@ test("registry ranges resolve to the version pinned by the lockfile", () => {
 test("current pnpm v9 importer exposes exact PWA dependency versions", () => {
   const lockfile = fs.readFileSync(path.join(ROOT, "pnpm-lock.yaml"), "utf-8");
   const versions = parseLockfile(lockfile);
-  assert.equal(versions.next, "16.3.5");
+  assert.equal(versions.next, "16.3.8");
   assert.equal(versions["@lhci/cli"], "0.15.1");
   assert.equal(versions.wrangler, "4.135.0");
 });

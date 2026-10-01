@@ -208,6 +208,11 @@ function isPiAgentBearer(authorization: unknown): boolean {
  * P1 (audit item 7): every mutation executes with the pending operation's
  * persisted idempotencyKey, so a retry after partial failure replays the
  * first attempt's transaction instead of booking a second one.
+ *
+ * V2 execution audit: the server-persisted actorId (pending-operation
+ * record binding, verified at execute-claim time) is threaded into the
+ * executor so the keyed write commits its undo-eligible audit row with the
+ * correct actor. No actor identity is ever read from normalizedArgs.
  */
 export const createPendingOperationV2Executor = (writes: WriteStore): PendingExecutor => async (operation) => {
   const contract = requireApprovalToolContract(operation.tool);
@@ -216,6 +221,7 @@ export const createPendingOperationV2Executor = (writes: WriteStore): PendingExe
     workspaceId: operation.workspaceId,
     args: operation.normalizedArgs,
     idempotencyKey: operation.idempotencyKey,
+    actorId: operation.actorId,
   });
 };
 

@@ -52,13 +52,34 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
     onResolved?.(resolved);
   };
 
+  const isUncertainOutcome = (e: unknown): boolean => {
+    const code = (e as { code?: unknown }).code;
+    // A retry that cannot prove its outcome may already have executed.
+    return code === "agent.execution_outcome_unknown" || code === "approval.execution_uncertain";
+  };
+
+  // Shared approve/retry lock: the decision may have reached the API and
+  // committed the write even when the response/receipt is missing. Keep this
+  // card non-actionable until the authoritative operation state is refreshed.
+  const lockUnverified = () => {
+    setStatus("executing");
+    setError("O resultado desta operação ainda não foi verificado. Atualize o estado antes de tomar outra decisão.");
+  };
+
   const handleRetry = async () => {
     setLoading(true);
     setError(null);
     try {
       await resolve("retry");
     } catch (e) {
-      setError((e as Error).message);
+      // Uncertain post-retry outcome: SAME lock as approve — executing, no
+      // Confirm/Cancel/Retry, no duplicate resend. Any other error keeps the
+      // failed state with Retry available.
+      if (isUncertainOutcome(e)) {
+        lockUnverified();
+      } else {
+        setError((e as Error).message);
+      }
     } finally {
       setLoading(false);
     }
@@ -70,11 +91,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
     try {
       await resolve("confirm");
     } catch {
-      // Confirm may have reached the API and committed the write even when
-      // the response/receipt is missing. Keep this card non-actionable until
-      // the authoritative operation state has been refreshed.
-      setStatus("executing");
-      setError("O resultado desta operação ainda não foi verificado. Atualize o estado antes de tomar outra decisão.");
+      lockUnverified();
     } finally {
       setLoading(false);
     }

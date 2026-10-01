@@ -1,6 +1,6 @@
 # Plano — Canonical Cutover (rascunho para aprovação)
 
-**Status:** PROPOSTO — aguarda aprovação do owner. Nenhum passo foi executado.
+**Status:** SUPERSEDED (rota fresh) — ver verificação de aceite 2026-09-30 em `docs/reports/2026-09-30-acceptance-verification.md`. Plano histórico preservado abaixo; sequência de conversão F3–F5 não executada neste cenário e não usar como comando de operação.
 
 > **Reavaliação 2026-09-26:** o owner confirmou que todos os dados atuais de
 > produção são testes descartáveis e autorizou ajustá-los. O F2 local sobre

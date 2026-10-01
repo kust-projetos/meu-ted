@@ -16,6 +16,23 @@ export const UNDO_PROPOSAL_TTL_MS = 10 * 60 * 1000;
 /** Narrow delegated capability for the undo confirm call (not generic). */
 export const UNDO_DELEGATED_CAPABILITY = 'financial.undo.execute';
 
+/** Narrow delegated capability for read-only verification (audit reads). */
+export const UNDO_VERIFY_READ_CAPABILITY = 'financial.read';
+
+/** Strict UUID shape shared with the entity resolver (no invented ids). */
+export const UNDO_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * closure-undo-verify: operations whose created entity is a transaction and
+ * can therefore be compared against an expected `{ type: 'transaction' }`.
+ */
+export const UNDO_VERIFY_ALLOWED_OPERATIONS: ReadonlySet<string> = new Set([
+  'transactions.expense.create',
+  'transactions.income.create',
+  'transactions.transfer.create',
+]);
+
 const UNDO_INTENT_RE = /(desfaz|desfazer|\bundo\b)/i;
 /** Natural-language negation: any "não"/"nao" fails the request closed. */
 const UNDO_NEGATION_RE = /\bn[aã]o\b/i;
@@ -216,6 +233,27 @@ export type UndoIdentity = Readonly<{
 
 export type UndoPreview = (identity: UndoIdentity) => Promise<{ id: string } | null>;
 
+/**
+ * closure-undo-verify: read-only audit surface for target verification.
+ * Returns the workspace's recent audit entries (newest first is fine — the
+ * verifier locates the FIXED proposal target by exact id, never the head).
+ * Never previews, never decides, never mutates.
+ */
+export type UndoAuditItem = Readonly<{
+  id: string;
+  workspaceId?: string;
+  operation?: string;
+  effectRef?: string;
+  metadata?: Record<string, unknown>;
+}>;
+
+export type UndoAuditReader = (identity: UndoIdentity) => Promise<readonly UndoAuditItem[]>;
+
+export type UndoExpectedEntity = Readonly<{
+  type: 'transaction';
+  id: string;
+}>;
+
 export type UndoApi = {
   undo(input: { lastOperationId: string; idempotencyKey: string; identity: UndoIdentity }): Promise<unknown>;
 };
@@ -230,6 +268,12 @@ export class UndoProposalService {
       store: SqlUndoProposalStore;
       preview: UndoPreview;
       api: UndoApi;
+      /**
+       * closure-undo-verify: read-only audit reader used ONLY by `verify`.
+       * Optional so existing construction sites keep compiling; `verify`
+       * fails closed when it is absent (never falls back to `preview`).
+       */
+      audit?: UndoAuditReader;
       now?: () => number;
       ttlMs?: number;
     },
@@ -447,5 +491,123 @@ export class UndoProposalService {
       return fail('undo.terminal', 'Undo proposal already decided.');
     }
     return { kind: 'confirmed', record: next, result };
+  }
+
+  /**
+   * closure-undo-verify: read-only target check for a proposed undo.
+   *
+   * Compares the client-supplied expected transaction entity against the
+   * entity actually created by the proposal's FIXED `targetLastOperationId`
+   * (resolved from the workspace audit trail), answering
+   * `{ requestId, matches }` without persisting anything:
+   *
+   * - identity is checked against the stored row BEFORE any audit read;
+   * - only `proposed` + unexpired rows verify (expired/terminal/executing
+   *   fail closed — and expiry here never writes `markExpired`);
+   * - the audit trail is queried for the EXACT fixed target id — never the
+   *   preview's newest candidate, so a proposal fixed on an old head cannot
+   *   be confirmed against a newer operation;
+   * - the entity resolves `metadata.entityId > effectRef > metadata.after.id`
+   *   with conflicting sources failing closed as ambiguous, and only
+   *   `transactions.*.create` operations are comparable;
+   * - after the audit await the stored row is re-read and its fixed
+   *   target/status/TTL/bindings must be unchanged, otherwise the check
+   *   fails closed as `undo.target_changed` (lost race, retry the verify).
+   *
+   * Never calls `preview`, `api.undo`, or any store mutation — a spy on
+   * those surfaces must observe zero calls across a verify.
+   */
+  async verify(input: { requestId: string; expectedEntity: UndoExpectedEntity; identity: UndoIdentity }): Promise<
+    { kind: 'verified'; requestId: string; matches: boolean }
+  > {
+    const { requestId, expectedEntity, identity } = input;
+    if (!requestId || !identity.workspaceId || !identity.actorId || !identity.deviceId) {
+      return fail('undo.context_required', 'undo.context_required');
+    }
+    if (
+      !expectedEntity ||
+      (expectedEntity as { type?: unknown }).type !== 'transaction' ||
+      typeof (expectedEntity as { id?: unknown }).id !== 'string' ||
+      !UNDO_UUID_RE.test((expectedEntity as { id: string }).id)
+    ) {
+      return fail('undo.invalid_target', 'Expected entity must be { type: \'transaction\', id: UUID }.');
+    }
+    const expectedId = (expectedEntity as { id: string }).id.toLowerCase();
+    const stored = this.deps.store.get(requestId);
+    if (!stored) return fail('undo.not_found', 'Undo proposal not found.');
+    if (
+      stored.workspaceId !== identity.workspaceId ||
+      stored.actorId !== identity.actorId ||
+      stored.deviceId !== identity.deviceId
+    ) {
+      return fail('undo.binding_mismatch', 'Undo proposal belongs to another actor/device/workspace.');
+    }
+    const snapshot = {
+      workspaceId: stored.workspaceId,
+      actorId: stored.actorId,
+      deviceId: stored.deviceId,
+      targetLastOperationId: stored.targetLastOperationId,
+      status: stored.status,
+      expiresAt: stored.expiresAt,
+    };
+    // Read-only liveness: unlike `decide`, expiry here never persists
+    // `markExpired` — the row is left untouched for the decision path.
+    if (stored.status === 'executing') {
+      return fail('undo.executing', 'Undo already in progress.');
+    }
+    if (stored.status !== 'proposed') {
+      return fail('undo.terminal', 'Undo proposal already decided.');
+    }
+    if (stored.expiresAt <= new Date(this.nowMs()).toISOString()) {
+      return fail('undo.expired', 'Undo proposal expired.');
+    }
+    const audit = this.deps.audit;
+    if (!audit) {
+      return fail('agent.audit_unavailable', 'Undo verification is not available.');
+    }
+    const items = await audit(identity);
+    const target = (Array.isArray(items) ? items : []).find((item) => item?.id === snapshot.targetLastOperationId);
+    if (!target) return fail('undo.target_missing', 'Undo target is no longer available.');
+    if (target.workspaceId !== undefined && target.workspaceId !== identity.workspaceId) {
+      return fail('undo.target_missing', 'Undo target is no longer available.');
+    }
+    if (target.operation !== undefined && !UNDO_VERIFY_ALLOWED_OPERATIONS.has(target.operation)) {
+      return fail('undo.unsupported_operation', 'Undo target cannot be verified for this operation.');
+    }
+    const metadata = target.metadata && typeof target.metadata === 'object' ? (target.metadata as Record<string, unknown>) : {};
+    const fromMeta = typeof metadata.entityId === 'string' && metadata.entityId.trim() ? metadata.entityId.trim() : undefined;
+    const fromRef = typeof target.effectRef === 'string' && target.effectRef.trim() ? target.effectRef.trim() : undefined;
+    const after = metadata.after && typeof metadata.after === 'object' ? (metadata.after as Record<string, unknown>) : undefined;
+    const fromAfter = after && typeof after.id === 'string' && after.id.trim() ? after.id.trim() : undefined;
+    // API writer gap (separate owner): `effectRef` may be absent on rows the
+    // writer never populated — the priority chain above degrades gracefully,
+    // but a present conflict is never guessed through.
+    if (fromMeta && fromRef && fromMeta !== fromRef) {
+      return fail('undo.target_ambiguous', 'Undo target entity is ambiguous.');
+    }
+    const resolved = fromMeta ?? fromRef ?? fromAfter;
+    if (!resolved) return fail('undo.target_missing', 'Undo target entity is not available.');
+    if (!UNDO_UUID_RE.test(resolved)) {
+      return fail('undo.invalid_entity', 'Undo target entity is invalid.');
+    }
+    // Race gate: the audit await yielded — the fixed target, status, TTL and
+    // bindings must be exactly what the pre-read snapshotted, otherwise a
+    // concurrent decide/expire moved the row under this check.
+    const current = this.deps.store.get(requestId);
+    if (
+      !current ||
+      current.workspaceId !== snapshot.workspaceId ||
+      current.actorId !== snapshot.actorId ||
+      current.deviceId !== snapshot.deviceId ||
+      current.targetLastOperationId !== snapshot.targetLastOperationId ||
+      current.status !== snapshot.status ||
+      current.expiresAt !== snapshot.expiresAt
+    ) {
+      return fail('undo.target_changed', 'Undo proposal changed during verification.');
+    }
+    if (current.expiresAt <= new Date(this.nowMs()).toISOString()) {
+      return fail('undo.expired', 'Undo proposal expired.');
+    }
+    return { kind: 'verified', requestId, matches: resolved.toLowerCase() === expectedId };
   }
 }

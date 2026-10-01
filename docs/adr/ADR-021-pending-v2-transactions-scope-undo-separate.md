@@ -105,3 +105,20 @@ explícita, fora do protocolo V2.
   (implementação em fonte: aposentadoria V1, intent/endpoint de undo).
 - `apps/agent/src/orchestration/conversation-orchestrator.ts:392-393,696`
   (mapeamento kind → `transactions.{expense,income}.create`).
+
+## Adendo 2026-09-30 — verificador read-only `verify-target` (narrow, sem ampliar V2)
+
+- **Rota:** `POST /rpc/undo/:requestId/verify-target`; body estrito de chave
+  única `{ expectedEntity: { type: 'transaction', id: 'UUID' } }`; resposta
+  `{ requestId, matches }`; nada persiste. Sem campo `target`, sem objeto
+  `transaction`, sem idempotency keys no contrato.
+- **Checks:** identidade só dos headers verificados do gateway; delegação
+  estreita `financial.read` para a leitura de audit; alvo fixo
+  `targetLastOperationId` (nunca o newest do preview); só `proposed` +
+  não-expirado; só `transactions.*.create`; re-leitura pós-audit com falha
+  fechada em `undo.target_changed`. Nunca chama preview/undo/mutação de store.
+- **Escopo:** nenhuma nova tool V2, nenhuma escolha de alvo pelo modelo —
+  este ADR segue inalterado no escopo; o verificador é superfície read-only
+  separada. Fontes: `apps/agent/src/finance-chat-agent.ts`
+  (`handleUndoVerifyTarget`), `apps/agent/src/mutations/undo-proposal.ts`
+  (`verify`).

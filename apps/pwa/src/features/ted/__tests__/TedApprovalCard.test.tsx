@@ -325,6 +325,94 @@ describe("TedApprovalCard mandatory presentation (production functional correcti
     expect(agentClient.decidePendingOperation).not.toHaveBeenCalled();
   });
 
+  it("retry with an uncertain outcome locks like approve — executing, no buttons, single send", async () => {
+    const user = userEvent.setup();
+    const uncertain = Object.assign(
+      new Error("O resultado desta operação ainda não pôde ser verificado."),
+      { code: "agent.execution_outcome_unknown" },
+    );
+    vi.mocked(agentClient.decidePendingOperation).mockRejectedValue(uncertain);
+
+    render(
+      <TedApprovalCard
+        operation={{
+          id: "failed-actionable-1",
+          status: "failed",
+          operation: "transactions.expense.create",
+          presentation: actionablePresentation("failed-actionable-1"),
+        }}
+        workspaceId="workspace-1"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Tentar novamente/i }));
+
+    // Same lock as approve: unverified message, zero decision buttons left,
+    // exactly one retry dispatched (no duplicate resend).
+    expect(await screen.findByText(/resultado desta opera.*atualize/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Tentar novamente/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Confirmar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancelar" })).not.toBeInTheDocument();
+    expect(agentClient.decidePendingOperation).toHaveBeenCalledTimes(1);
+    expect(agentClient.decidePendingOperation).toHaveBeenCalledWith(
+      "workspace-1",
+      "failed-actionable-1",
+      "retry",
+    );
+  });
+
+  it("retry with approval.execution_uncertain locks like approve", async () => {
+    const user = userEvent.setup();
+    const uncertain = Object.assign(
+      new Error("O resultado desta operação ainda não pôde ser verificado."),
+      { code: "approval.execution_uncertain" },
+    );
+    vi.mocked(agentClient.decidePendingOperation).mockRejectedValue(uncertain);
+
+    render(
+      <TedApprovalCard
+        operation={{
+          id: "failed-actionable-1",
+          status: "failed",
+          operation: "transactions.expense.create",
+          presentation: actionablePresentation("failed-actionable-1"),
+        }}
+        workspaceId="workspace-1"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Tentar novamente/i }));
+
+    expect(await screen.findByText(/resultado desta opera.*atualize/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Tentar novamente/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Confirmar/i })).not.toBeInTheDocument();
+    expect(agentClient.decidePendingOperation).toHaveBeenCalledTimes(1);
+  });
+
+  it("retry with a generic error keeps the failed state with Retry available (no lock)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentClient.decidePendingOperation).mockRejectedValue(new Error("rede instável"));
+
+    render(
+      <TedApprovalCard
+        operation={{
+          id: "failed-actionable-1",
+          status: "failed",
+          operation: "transactions.expense.create",
+          presentation: actionablePresentation("failed-actionable-1"),
+        }}
+        workspaceId="workspace-1"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Tentar novamente/i }));
+
+    expect(await screen.findByText("rede instável")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Tentar novamente/i })).toBeInTheDocument();
+    expect(screen.queryByText(/resultado desta opera.*atualize/i)).not.toBeInTheDocument();
+    expect(agentClient.decidePendingOperation).toHaveBeenCalledTimes(1);
+  });
+
   it("failed with actionable presentation shows Valor/Conta/Categoria/Data before Retry and retry calls the Agent", async () => {
     const user = userEvent.setup();
     vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({

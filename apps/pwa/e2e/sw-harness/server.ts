@@ -24,7 +24,9 @@ function argNum(name: string, fallback: number): number {
 
 const TARGET_PORT = argNum("target", 3001);
 const HARNESS_PORT = argNum("port", 3000);
+const FIXTURE_PORT = argNum("fixture", 4010);
 const TARGET_HOST = "127.0.0.1";
+const FIXTURE_URL = `http://${TARGET_HOST}:${FIXTURE_PORT}`;
 
 const LEGACY_PATH = path.join(harnessDir, "legacy-sw.js");
 // Built/current SW lives in public/ after next build (serwist writes here)
@@ -66,6 +68,26 @@ self.addEventListener('fetch', (e) => {
   return fs.readFileSync(p, "utf8");
 }
 
+/**
+ * Mirror of rewriteCspForFixture in e2e/support/harness.ts (kept local so
+ * this server stays dependency-free of @playwright/test).
+ *
+ * SW-served navigations are issued from the SW target and never reach
+ * page-target request interception, so the page.route CSP rewrite cannot
+ * apply to them. The harness proxy applies the same accommodation here, or
+ * every document under SW control keeps the server-original
+ * `connect-src 'self'` and the fixture API is CSP-blocked (login never
+ * completes: journal full of 200s, shell never renders).
+ */
+function rewriteCspForFixture(csp: string): string {
+  return csp
+    .replace(/connect-src\s+([^;]+)/, `connect-src ${FIXTURE_URL} $1`)
+    .replace(
+      /script-src\s+[^;]+/,
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:",
+    );
+}
+
 function proxyRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
   const headers = { ...req.headers, host: `${TARGET_HOST}:${TARGET_PORT}` };
   const opts: http.RequestOptions = {
@@ -77,7 +99,12 @@ function proxyRequest(req: http.IncomingMessage, res: http.ServerResponse): void
   };
 
   const upstream = http.request(opts, (upRes) => {
-    res.writeHead(upRes.statusCode ?? 502, upRes.headers);
+    const headers = { ...upRes.headers };
+    const csp = headers["content-security-policy"];
+    if (typeof csp === "string" && csp.includes("connect-src")) {
+      headers["content-security-policy"] = rewriteCspForFixture(csp);
+    }
+    res.writeHead(upRes.statusCode ?? 502, headers);
     upRes.pipe(res);
   });
 

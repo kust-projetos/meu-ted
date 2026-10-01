@@ -29,6 +29,12 @@ export type ApprovalToolExecutionContext = {
   workspaceId: string;
   args: unknown;
   idempotencyKey: string;
+  /**
+   * Server-bound actor (from the persisted pending-operation record —
+   * never from normalizedArgs). Carried into the keyed write so the
+   * undo-eligible audit row attributes the correct actor.
+   */
+  actorId: string;
 };
 
 export type ApprovalToolResult = { status: 'succeeded'; operationId: string; receipt: MutationReceipt };
@@ -91,16 +97,26 @@ const executeExpenseCreate: ApprovalToolExecutor = async ({
   workspaceId,
   args,
   idempotencyKey,
+  actorId,
 }) => {
   const parsed = createExpenseInputSchema.safeParse(args);
   if (!parsed.success) throw new Error('validation.invalid_expense_arguments');
+  // Fail-closed actor binding: the audit row must attribute a server-bound
+  // actor — never an inferred or missing one. Pre-write deterministic
+  // failure (not uncertainty): the writer never runs without it.
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
   // The writer may throw AFTER the commit (or the response may be lost on
   // the way back): from here the outcome is uncertain, never a deterministic
   // pre-write failure. Map every writer throw to the typed marker with a
   // safe message — the raw cause must never reach the API response.
   let transaction: { id: string };
   try {
-    transaction = await writes.createExpense(workspaceId, parsed.data, { idempotencyKey });
+    // V2 execution audit: the explicit tool operation + server-bound actor
+    // commit with the mutation in the keyed claim tx (undo-eligible).
+    transaction = await writes.createExpense(workspaceId, parsed.data, {
+      idempotencyKey,
+      audit: { operation: 'transactions.expense.create', actorId },
+    });
   } catch {
     throw createApprovalExecutionUncertainError();
   }
@@ -123,14 +139,21 @@ const executeIncomeCreate: ApprovalToolExecutor = async ({
   workspaceId,
   args,
   idempotencyKey,
+  actorId,
 }) => {
   const parsed = createIncomeInputSchema.safeParse(args);
   if (!parsed.success) throw new Error('validation.invalid_income_arguments');
+  // Fail-closed actor binding (same contract as the expense path).
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
   // Same uncertainty contract as the expense path: any writer throw after
   // the write started is an unknown outcome, never a deterministic failure.
   let transaction: { id: string };
   try {
-    transaction = await writes.createIncome(workspaceId, parsed.data, { idempotencyKey });
+    // V2 execution audit: explicit tool operation + server-bound actor.
+    transaction = await writes.createIncome(workspaceId, parsed.data, {
+      idempotencyKey,
+      audit: { operation: 'transactions.income.create', actorId },
+    });
   } catch {
     throw createApprovalExecutionUncertainError();
   }

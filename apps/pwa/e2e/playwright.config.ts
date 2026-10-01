@@ -1,9 +1,14 @@
 import path from "node:path";
 import { defineConfig } from "@playwright/test";
+import { resolveE2ePorts } from "./support/ports";
 
-const FIXTURE_PORT = 4010;
-const HARNESS_PORT = 3000;
-const NEXT_PORT = 3001;
+// Opt-in local overrides (E2E_FIXTURE_PORT / E2E_NEXT_PORT / E2E_HARNESS_PORT);
+// defaults preserve the historical topology (fixture 4010 · Next 3001 · harness 3000).
+const { fixturePort: FIXTURE_PORT, nextPort: NEXT_PORT, harnessPort: HARNESS_PORT } =
+  resolveE2ePorts(process.env);
+// Fail-closed, unconditionally: Playwright starts and cleans up its own
+// servers per run and never attaches to a pre-existing (possibly alien)
+// process. There is no ownership flag and no reuse pathway.
 const PWA_ROOT = path.resolve(__dirname, "..");
 const PWA_APP_DIR = PWA_ROOT;
 
@@ -90,15 +95,15 @@ export default defineConfig({
       command: `pnpm exec tsx e2e/fixture-api/server.ts --port ${FIXTURE_PORT}`,
       port: FIXTURE_PORT,
       cwd: PWA_ROOT,
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 90000,
     },
     {
-      // Next standalone server on 3001 (harness proxies 3000 → 3001).
+      // Next standalone server (harness proxies harness-port → next-port).
       command: `node e2e/standalone-server.mjs`,
       port: NEXT_PORT,
       cwd: PWA_APP_DIR,
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 90000,
       env: {
         ...process.env,
@@ -115,11 +120,13 @@ export default defineConfig({
       },
     },
     {
-      // SW harness owns /sw.js + /__e2e/sw/deploy; proxies the rest to Next
-      command: `pnpm exec tsx e2e/sw-harness/server.ts --target=${NEXT_PORT} --port=${HARNESS_PORT}`,
+      // SW harness owns /sw.js + /__e2e/sw/deploy; proxies the rest to Next.
+      // --fixture lets the harness apply the same CSP accommodation the
+      // page.route rewrite applies (SW-served navigations bypass page.route).
+      command: `pnpm exec tsx e2e/sw-harness/server.ts --target=${NEXT_PORT} --port=${HARNESS_PORT} --fixture=${FIXTURE_PORT}`,
       port: HARNESS_PORT,
       cwd: PWA_ROOT,
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 90000,
     },
   ],

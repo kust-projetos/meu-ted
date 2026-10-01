@@ -15,8 +15,8 @@ importers:
         specifier: 1.6.30
         version: 1.6.30(pg@8.23.0)(vitest@4.1.11(@types/node@22.20.1)(vite@7.3.6(@types/node@22.20.1)(tsx@4.23.13)))
       fastify:
-        specifier: ^5.2.0
-        version: 5.12.3
+        specifier: 5.12.2
+        version: 5.12.2
       kysely:
         specifier: ^0.29.5
         version: 0.29.5
@@ -770,8 +770,8 @@ packages:
   fast-uri@4.1.4:
     resolution: {integrity: sha512-dODXrIxlS9JSdgAnhIUKOosKV1oMtU2VtVw87QRaHzyl5jxO290Ii5tEZfCfzfWNHi3jKWwBSdQj0qIyshdZdQ==}
 
-  fastify@5.12.3:
-    resolution: {integrity: sha512-reZ8wce5VNCcufIt9AVtzZa3L4u1j8esikn7OEgHWLVpRpL5R7Y2+Xzj70OUkv5zDfzUAxXZT6cu4Rt0zr3EKA==}
+  fastify@5.12.2:
+    resolution: {integrity: sha512-npAgfhAigNiLOhCZEg7uFWThMrYoiDX/7/VyzicXSrVSXz6K/KYekW+QpOk7WOnZER0U7MmjvoDHV6qO5x4wKg==}
 
   fastq@1.20.3:
     resolution: {integrity: sha512-XKv5nnLs6nLF71NgiKJLIZFLkPyIEuOselLG7ujZnGrRfQK8HpvY+WqKhAJUAdLomwVHErVS4LfxFlPq0/FTAw==}
@@ -1660,7 +1660,7 @@ snapshots:
 
   fast-uri@4.1.4: {}
 
-  fastify@5.12.3:
+  fastify@5.12.2:
     dependencies:
       '@fastify/ajv-compiler': 4.0.6
       '@fastify/error': 4.2.0

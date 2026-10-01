@@ -5,9 +5,21 @@
  */
 
 import type { Page } from "@playwright/test";
+import { DEFAULT_FIXTURE_PORT, fixtureUrlFor } from "./ports";
 
 export const FIXED_CLOCK = "2026-07-17T12:00:00.000Z";
-export const FIXTURE_URL = "http://127.0.0.1:4010";
+// Opt-in override: E2E_FIXTURE_PORT (default preserves fixture :4010 so every
+// existing spec keeps working unchanged).
+function resolveFixturePort(): number {
+  const raw = process.env.E2E_FIXTURE_PORT;
+  if (raw === undefined || raw === "") return DEFAULT_FIXTURE_PORT;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(`[e2e-ports] invalid E2E_FIXTURE_PORT=${JSON.stringify(raw)}`);
+  }
+  return n;
+}
+export const FIXTURE_URL = fixtureUrlFor(resolveFixturePort());
 export const E2E_TEST_ID_HEADER = "x-e2e-test-id";
 
 /**

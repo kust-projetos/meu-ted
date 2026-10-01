@@ -40,6 +40,11 @@ export default defineConfig({
       "e2e/fixture-api/server.test.ts",
       "e2e/support/failure-guard.test.ts",
       "e2e/support/harness.test.ts",
+      "e2e/support/ports.test.ts",
+      "e2e/support/fail-closed.test.ts",
+      "e2e/support/run-ci-failure.test.ts",
+      "e2e/support/run-ci-outputs.test.ts",
+      "e2e/support/live-closure-guards.test.ts",
     ],
     coverage: {
       provider: "v8",

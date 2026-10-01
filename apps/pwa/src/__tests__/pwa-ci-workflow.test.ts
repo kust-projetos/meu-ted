@@ -13,3 +13,17 @@ describe("PWA CI audit trigger", () => {
     expect(workflow).not.toContain('"scripts/check-pwa-audit.mjs"');
   });
 });
+
+describe("PWA CI e2e job", () => {
+  it("builds shared contracts before the comprehensive E2E runner", () => {
+    // The Next build inside run-ci.sh resolves @pi-finance/llm-contracts via
+    // dist (gh run 36726347704 failed with "Can't resolve
+    // @pi-finance/llm-contracts/types" without it) — same command as quality.
+    const e2eJob = workflow.slice(workflow.indexOf("\n  e2e:"));
+    expect(e2eJob).toContain("pnpm --filter @pi-finance/llm-contracts build");
+    expect(e2eJob).toContain("bash apps/pwa/e2e/run-ci.sh");
+    expect(e2eJob.indexOf("pnpm --filter @pi-finance/llm-contracts build")).toBeLessThan(
+      e2eJob.indexOf("bash apps/pwa/e2e/run-ci.sh"),
+    );
+  });
+});

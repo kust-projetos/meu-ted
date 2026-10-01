@@ -76,6 +76,8 @@ import {
   SqlUndoProposalStore,
   UndoProposalService,
   UNDO_DELEGATED_CAPABILITY,
+  UNDO_UUID_RE,
+  UNDO_VERIFY_READ_CAPABILITY,
   type UndoIdentity,
 } from "./mutations/undo-proposal.js";
 
@@ -1838,6 +1840,106 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /**
+   * closure-undo-verify: read-only target check
+   * (`POST /rpc/undo/:requestId/verify-target`). Strict
+   * `{ expectedEntity: { type: 'transaction', id: UUID } }` body, identity
+   * SOLELY from the gateway-verified headers, narrow `financial.read`
+   * delegation for the audit read. Answers `{ requestId, matches }` and
+   * persists nothing — never tools, never the model, never preview/decide.
+   */
+   private async handleUndoVerifyTarget(request: Request, proposalId: string): Promise<Response> {
+     const actorId = request.headers.get("x-agent-actor")?.trim();
+     const workspaceId = request.headers.get("x-agent-workspace")?.trim();
+     const deviceId = request.headers.get("x-agent-device")?.trim();
+     const secret = this.env?.AGENT_DELEGATION_SECRET?.trim();
+     if (!actorId || !workspaceId || !deviceId || !secret) {
+       return Response.json({ code: "agent.approval_context_required" }, { status: 401 });
+     }
+     if (!proposalId || proposalId.length > 128) {
+       return Response.json({ code: "agent.invalid_payload" }, { status: 400 });
+     }
+     let body: unknown;
+     try {
+       body = (await request.json()) as unknown;
+     } catch {
+       return Response.json({ code: "agent.invalid_payload" }, { status: 400 });
+     }
+     const record = (body ?? {}) as Record<string, unknown>;
+     const expected = record.expectedEntity as Record<string, unknown> | undefined;
+     const expectedKeys = expected && typeof expected === 'object' && !Array.isArray(expected) ? Object.keys(expected) : [];
+      if (
+        !expected || typeof expected !== 'object' || Array.isArray(expected) ||
+        Object.keys(record).length !== 1 || !('expectedEntity' in record) ||
+        expectedKeys.length !== 2 || !expectedKeys.includes('type') || !expectedKeys.includes('id') ||
+        expected.type !== 'transaction' ||
+        typeof expected.id !== 'string' || !UNDO_UUID_RE.test(expected.id)
+      ) {
+       return Response.json({ code: "agent.invalid_payload" }, { status: 400 });
+     }
+     const store = this.undoStoreForRequest();
+     if (!store) {
+       return Response.json({ code: "agent.persistence_unavailable", message: "Undo storage is not available" }, { status: 503 });
+     }
+     const role = request.headers.get("x-agent-role") === "owner" ? "owner" : "member";
+     const identity: UndoIdentity = { workspaceId, actorId, deviceId };
+     const service = new UndoProposalService({
+       store,
+       preview: () => {
+         throw Object.assign(new Error('agent.verify_read_only'), { code: 'agent.verify_read_only' });
+       },
+       api: {
+         undo: async () => {
+           throw Object.assign(new Error('agent.verify_read_only'), { code: 'agent.verify_read_only' });
+         },
+       },
+       audit: async (id) => {
+         const delegatedToken = await createDelegatedTurnToken({
+           actorId,
+           workspaceId,
+           role,
+           capabilities: [UNDO_VERIFY_READ_CAPABILITY],
+           requestId: crypto.randomUUID(),
+           deviceId,
+         }, secret);
+         const result = await requestPiApiJson<{ items?: Array<{ id?: unknown; workspaceId?: unknown; operation?: unknown; effectRef?: unknown; metadata?: unknown }> }>(
+           'GET',
+           '/audit-logs?limit=50',
+           { delegatedToken, apiOrigin: this.env?.API_ORIGIN },
+         );
+         void id;
+         return (Array.isArray(result.items) ? result.items : []).map((item) => ({
+           id: typeof item.id === 'string' ? item.id : '',
+           ...(typeof item.workspaceId === 'string' ? { workspaceId: item.workspaceId } : {}),
+           ...(typeof item.operation === 'string' ? { operation: item.operation } : {}),
+           ...(typeof item.effectRef === 'string' ? { effectRef: item.effectRef } : {}),
+           ...(item.metadata && typeof item.metadata === 'object' ? { metadata: item.metadata as Record<string, unknown> } : {}),
+         }));
+       },
+     });
+     try {
+       const outcome = await service.verify({
+         requestId: proposalId,
+         expectedEntity: { type: 'transaction', id: expected.id as string },
+         identity,
+       });
+       return Response.json({ requestId: proposalId, matches: outcome.matches });
+     } catch (error) {
+       const code = (error as { code?: string })?.code ?? 'agent.verify_failed';
+       if (code === 'undo.not_found') return Response.json({ code, message: 'Undo proposal not found.' }, { status: 404 });
+       if (code === 'undo.binding_mismatch') return Response.json({ code, message: 'Undo proposal belongs to another actor/device/workspace.' }, { status: 403 });
+       if (code === 'undo.context_required' || code === 'agent.approval_context_required') return Response.json({ code: 'agent.approval_context_required' }, { status: 401 });
+       if (code === 'agent.invalid_payload' || code === 'undo.invalid_target') return Response.json({ code: 'agent.invalid_payload' }, { status: 400 });
+       if (
+         code === 'undo.expired' || code === 'undo.terminal' || code === 'undo.executing' ||
+         code === 'undo.target_changed' || code === 'undo.target_missing' || code === 'undo.target_ambiguous' ||
+         code === 'undo.unsupported_operation' || code === 'undo.invalid_entity'
+       ) return Response.json({ code, message: 'Undo target could not be verified.' }, { status: 409 });
+       if (code === 'agent.audit_unavailable' || code === 'agent.persistence_unavailable') return Response.json({ code: 'agent.persistence_unavailable', message: 'Undo verification is not available.' }, { status: 503 });
+       return Response.json({ code: "agent.verify_failed", message: "Não foi possível verificar o alvo agora." }, { status: 502 });
+     }
+   }
+
+  /**
    * debt-undo-proposal-rehydration: read-only active-listing for chat
    * startup/workspace change (`GET /rpc/undo/active`). Identity SOLELY from
    * the gateway-verified headers; returns ONLY bound live summaries
@@ -1911,6 +2013,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     // {decision,requestId} body, identity from verified headers only).
     if (url.pathname === "/rpc/undo/decision" && request.method === "POST") {
       return this.handleUndoDecision(request);
+    }
+    // closure-undo-verify: read-only target check for a proposed undo
+    // (strict {expectedEntity} body, identity from verified headers only).
+    const undoVerifyMatch = url.pathname.match(/^\/rpc\/undo\/([^/]+)\/verify-target$/);
+    if (undoVerifyMatch && request.method === "POST") {
+      return this.handleUndoVerifyTarget(request, decodeURIComponent(undoVerifyMatch[1]!));
     }
     if (url.pathname === "/rpc/chat" && request.method === "POST") {
       const actorId = request.headers.get("x-agent-actor");

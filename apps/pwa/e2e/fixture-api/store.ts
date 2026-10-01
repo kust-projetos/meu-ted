@@ -4,6 +4,8 @@
  * Fixed clock: 2026-07-17T12:00:00.000Z (America/Sao_Paulo, pt-BR)
  */
 
+import { createHash } from "node:crypto";
+
 export interface JournalEntry {
   method: string;
   path: string;
@@ -195,6 +197,19 @@ export function getFixedClock(): Date {
 
 export function generateId(): string {
   return Math.random().toString(36).substring(2, 10);
+}
+
+/**
+ * Deterministic receipt entity id for the Agent-stub default confirm/retry
+ * decisions. Stable per (testId, operationId): the same call always yields
+ * the same well-formed UUID, always distinct from the pending operation id.
+ * The strict PWA client requires receipt.entity { type: 'transaction', id }
+ * to name the NEW transaction (never the pending id), so the default can no
+ * longer serve an entity-less receipt.
+ */
+export function deterministicReceiptEntityId(testId: string, operationId: string): string {
+  const hex = createHash("sha256").update(`receipt-entity:${testId}:${operationId}`).digest("hex").slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 export class StoreManager {

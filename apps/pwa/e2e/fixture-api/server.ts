@@ -28,9 +28,18 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
-import { StoreManager, SEEDS, generateId, type JournalEntry, type ScenarioRule, type TestStore, type AgentStubChatResponse } from "./store";
+import { StoreManager, SEEDS, generateId, deterministicReceiptEntityId, type JournalEntry, type ScenarioRule, type TestStore, type AgentStubChatResponse } from "./store";
 
-const ALLOWED_ORIGIN = "http://127.0.0.1:3000";
+function resolveHarnessPortForCors(): number {
+  const raw = process.env.E2E_HARNESS_PORT;
+  if (raw === undefined || raw === "") return 3000;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(`[e2e-ports] invalid E2E_HARNESS_PORT=${JSON.stringify(raw)}`);
+  }
+  return n;
+}
+const ALLOWED_ORIGIN = `http://127.0.0.1:${resolveHarnessPortForCors()}`;
 const ALLOWED_METHODS = "GET,POST,PATCH,DELETE,OPTIONS";
 const ALLOWED_HEADERS = "content-type,authorization,x-e2e-test-id,x-device-token,x-workspace-id,idempotency-key";
 const SESSION_COOKIE_NAME = "better-auth.session_token";
@@ -1322,6 +1331,11 @@ async function handleFixtureRequest(
           status: "succeeded",
           affectedTargets: ["transactions"],
           operationId,
+          // Canonical entity binding (strict client contract): a well-formed
+          // UUID naming the NEW transaction — deterministic per
+          // (testId, operationId), stable across repeats, never the pending
+          // id. Tests needing a malformed receipt must script one explicitly.
+          entity: { type: "transaction", id: deterministicReceiptEntityId(testId, operationId) },
         },
       });
       return;

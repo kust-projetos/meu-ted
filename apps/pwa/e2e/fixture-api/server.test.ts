@@ -881,6 +881,30 @@ describe("Fixture API protocol", () => {
     await request(server, "POST", "/__e2e/reset", { testId, seed: "populated" }, { "x-e2e-test-id": testId });
     const decisionPath = (op: string): string =>
       `/agents/finance-chat-agent/e2e-household-001/rpc/pending-operations/${op}/decision`;
+    type Receipt = {
+      mutationId?: unknown;
+      mutationKind?: unknown;
+      status?: unknown;
+      affectedTargets?: unknown;
+      operationId?: unknown;
+      entity?: { type?: unknown; id?: unknown };
+    };
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    // Canonical receipt binding (strict PWA client contract: operationId names
+    // the pending op; receipt.operationId matches it; entity { type:
+    // 'transaction', id } names the NEW transaction id — never the pending id).
+    const expectCanonicalReceipt = (body: Record<string, unknown>, op: string): string => {
+      expect(body.operationId).toBe(op);
+      expect(body.status).toBe("succeeded");
+      const receipt = body.receipt as Receipt;
+      expect(receipt.mutationId).toEqual(expect.any(String));
+      expect(receipt.operationId).toBe(op);
+      expect(receipt.entity?.type).toBe("transaction");
+      expect(typeof receipt.entity?.id).toBe("string");
+      expect(receipt.entity?.id as string).toMatch(UUID_RE);
+      expect(receipt.entity?.id).not.toBe(op);
+      return receipt.entity?.id as string;
+    };
 
     const confirm = await request(server, "POST", decisionPath("op-1"), { decision: "confirm", requestId: "r1" }, { "x-e2e-test-id": testId });
     expect(confirm.status).toBe(200);
@@ -895,9 +919,23 @@ describe("Fixture API protocol", () => {
         operationId: "op-1",
       },
     });
+    const confirmEntityId = expectCanonicalReceipt(responseData<Record<string, unknown>>(confirm), "op-1");
 
     const retry = await request(server, "POST", decisionPath("op-2"), { decision: "retry", requestId: "r2" }, { "x-e2e-test-id": testId });
     expect(responseData<Record<string, unknown>>(retry)).toMatchObject({ operationId: "op-2", status: "succeeded" });
+    const retryEntityId = expectCanonicalReceipt(responseData<Record<string, unknown>>(retry), "op-2");
+    // Keyed per operation: distinct ops mint distinct transaction ids.
+    expect(retryEntityId).not.toBe(confirmEntityId);
+
+    // Stable: repeating the same decision replays the same transaction id.
+    const confirmAgain = await request(server, "POST", decisionPath("op-1"), { decision: "confirm", requestId: "r1b" }, { "x-e2e-test-id": testId });
+    expect(expectCanonicalReceipt(responseData<Record<string, unknown>>(confirmAgain), "op-1")).toBe(confirmEntityId);
+
+    // Keyed per test: the same op in another test mints another id (no cross-test binding).
+    const otherTestId = "agent-decision-defaults-other";
+    await request(server, "POST", "/__e2e/reset", { testId: otherTestId, seed: "populated" }, { "x-e2e-test-id": otherTestId });
+    const other = await request(server, "POST", decisionPath("op-1"), { decision: "confirm", requestId: "r1" }, { "x-e2e-test-id": otherTestId });
+    expect(expectCanonicalReceipt(responseData<Record<string, unknown>>(other), "op-1")).not.toBe(confirmEntityId);
 
     const cancel = await request(server, "POST", decisionPath("op-3"), { decision: "cancel", requestId: "r3" }, { "x-e2e-test-id": testId });
     expect(responseData<Record<string, unknown>>(cancel)).toEqual({ operationId: "op-3", status: "cancelled" });
@@ -907,8 +945,8 @@ describe("Fixture API protocol", () => {
     expect(responseData<{ code: string }>(unknown).code).toBe("agent.unknown_decision");
 
     const entries = (await agentJournal(testId)).filter((e) => e.path.endsWith("/decision"));
-    expect(entries.map((e) => (e.body as { decision: string }).decision)).toEqual(["confirm", "retry", "cancel", "approve"]);
-    expect(entries.map((e) => e.status)).toEqual([200, 200, 200, 422]);
+    expect(entries.map((e) => (e.body as { decision: string }).decision)).toEqual(["confirm", "retry", "confirm", "cancel", "approve"]);
+    expect(entries.map((e) => e.status)).toEqual([200, 200, 200, 200, 422]);
   });
 
   it("scripted decisions override the defaults by <opId>:<decision> key", async () => {

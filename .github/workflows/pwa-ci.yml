@@ -162,6 +162,9 @@ jobs:
       - name: Run matrix gate
         run: pnpm --dir apps/pwa exec tsx --test e2e/support/matrix.test.ts
 
+      - name: Build shared contracts (workspace exports resolve dist)
+        run: pnpm --filter @pi-finance/llm-contracts build
+
       - name: Run comprehensive E2E
         run: bash apps/pwa/e2e/run-ci.sh
 
@@ -178,5 +181,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: playwright-report
-          path: apps/pwa/playwright-report/
+          # Per-gate html reports (run-ci.sh sets PLAYWRIGHT_HTML_OUTPUT_DIR
+          # per gate so gates never overwrite each other's report).
+          path: apps/pwa/test-results/report-*/
           retention-days: 7

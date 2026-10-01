@@ -52,6 +52,7 @@ const createTables = async (pool: Pool): Promise<void> => {
     CREATE TABLE accounts (
       id UUID PRIMARY KEY, household_id UUID NOT NULL, name TEXT NOT NULL,
       kind TEXT NOT NULL, balance_cents BIGINT NOT NULL DEFAULT 0,
+      initial_balance_cents BIGINT NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'active',
       deleted_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
