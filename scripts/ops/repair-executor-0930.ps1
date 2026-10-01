@@ -17,11 +17,14 @@
 # API stays stopped, NO RETRY. Restart happens ONLY on confirmed-rollback or
 # post-verified complete.
 # Roots/SSH are parameters (no new credentials). DEPLOYMENT IDENTITY IS
-# MANDATORY AND NEVER HARDCODED: pass -SshKey / -SshRemote explicitly, or
-# export PI_VPS_SSH_KEY / PI_VPS_SSH_REMOTE in the caller environment (loaded
-# by the caller from its private ../vps-hostinger.env). Values are never
-# printed and never committed. Missing/invalid identity fails closed (exit 13)
-# before any SSH, in every mode including read-only guard mode.
+# MANDATORY AND NEVER HARDCODED: precedence is explicit -SshKey/-SshRemote
+# params, then PI_VPS_SSH_KEY/PI_VPS_SSH_REMOTE environment, then the
+# caller-private env file (default: sibling ../vps-hostinger.env resolved from
+# the repo root; override with -VpsEnvFile). From that file ONLY VPS_IP +
+# VPS_SSH_USER (composed as user@host) and VPS_SSH_KEY_PATH are read
+# (docs/ops/vps-access.md contract). Values are never printed and never
+# committed. Missing/invalid identity fails closed (exit 13) before any SSH,
+# in every mode including read-only guard mode.
 # Real Planner invocation (values stay in the operator shell):
 #   $env:PI_VPS_SSH_KEY = '<from private env>'; $env:PI_VPS_SSH_REMOTE = '<user@host>'
 #   .\repair-executor-0930.ps1 -ExecuteRepair -RepairId <uuid> ...
@@ -47,7 +50,8 @@ param(
   [string]$ResolveLockTimeout = '30s',
   [string]$ExpectedLedgerHash = 'a153163d334bacc4d4f1dc9c90a8fe3b',
   [string]$ExpectedAccountsFinancialHash = '8d6b43de8b47ef657855c29877d58a56',
-  [string]$ExpectedAccountsStrippedHash = '086c71be201609cf1952a28788e7b31e'
+  [string]$ExpectedAccountsStrippedHash = '086c71be201609cf1952a28788e7b31e',
+  [string]$VpsEnvFile = ''
 )
 $ErrorActionPreference = 'Stop'
 
@@ -57,18 +61,59 @@ $ImplComp = Join-Path $PSScriptRoot 'anchor-backfill-20260930.compensate.sql'
 $ImplGuards = Join-Path $PSScriptRoot 'anchor-backfill-20260930.guards.sql'
 $ImplVerify = Join-Path $PSScriptRoot 'anchor-backfill-20260930.verify.sql'
 $ImplResolve = Join-Path $PSScriptRoot 'anchor-backfill-20260930.resolve.sql'
-$ProcVer = 'anchor-backfill-20260930.executor@v5'
+$ProcVer = 'anchor-backfill-20260930.executor@v6'
 $Reason = 'closure-infra-0930-approved-anchor-repair'
 $Sep = '~'
 if ($ManifestDir -eq '') { $ManifestDir = "$env:TEMP\opencode" }
 $isComp = $Compensate -ne ''
 if ($isComp) { $RepairId = $Compensate }
 
-# Mandatory deployment identity: explicit params win, else the named caller
-# environment. No defaults exist on purpose (fail-closed exit 13, values never
-# echoed). Every mode needs it, including read-only guard mode.
+# Mandatory deployment identity: explicit params win, then the named caller
+# environment, then the caller-private env file below. No defaults exist on
+# purpose (fail-closed exit 13, values never echoed). Every mode needs it,
+# including read-only guard mode. -VpsEnvFile overrides the auto-resolved
+# sibling file (tests point it at fakes or nowhere for hermetic runs).
+function Read-VpsEnvFile([string]$path) {
+  # Parses ONLY VPS_IP / VPS_SSH_USER / VPS_SSH_KEY_PATH from a KEY=VALUE
+  # file (docs/ops/vps-access.md contract). Comments, blanks and unknown
+  # keys are ignored; surrounding quotes are stripped. Missing/unreadable
+  # file => empty table (the caller then fails closed). Never logs values.
+  $found = @{}
+  try {
+    if ([string]::IsNullOrWhiteSpace($path)) { return $found }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $found }
+    foreach ($line in [System.IO.File]::ReadAllLines($path)) {
+      $t = $line.Trim()
+      if ($t -eq '' -or $t.StartsWith('#')) { continue }
+      $m = [regex]::Match($t, '^(VPS_IP|VPS_SSH_USER|VPS_SSH_KEY_PATH)\s*=\s*(.*)$')
+      if (-not $m.Success) { continue }
+      $v = $m.Groups[2].Value.Trim()
+      if ($v.Length -ge 2) {
+        $q0 = $v[0]; $q1 = $v[$v.Length - 1]
+        if (($q0 -eq '"' -and $q1 -eq '"') -or ($q0 -eq "'" -and $q1 -eq "'")) {
+          $v = $v.Substring(1, $v.Length - 2)
+        }
+      }
+      if ($v -ne '') { $found[$m.Groups[1].Value] = $v }
+    }
+  } catch { }
+  return $found
+}
 if ($SshKey -eq '') { $SshKey = $env:PI_VPS_SSH_KEY }
 if ($SshRemote -eq '') { $SshRemote = $env:PI_VPS_SSH_REMOTE }
+if ([string]::IsNullOrWhiteSpace($SshKey) -or [string]::IsNullOrWhiteSpace($SshRemote)) {
+  if ([string]::IsNullOrWhiteSpace($VpsEnvFile)) {
+    $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    $VpsEnvFile = Join-Path (Join-Path (Split-Path $repoRoot -Parent) 'vps-hostinger') '.env'
+  }
+  $fileVars = Read-VpsEnvFile $VpsEnvFile
+  if ([string]::IsNullOrWhiteSpace($SshRemote) -and $fileVars.ContainsKey('VPS_SSH_USER') -and $fileVars.ContainsKey('VPS_IP')) {
+    $SshRemote = "$($fileVars['VPS_SSH_USER'])@$($fileVars['VPS_IP'])"
+  }
+  if ([string]::IsNullOrWhiteSpace($SshKey) -and $fileVars.ContainsKey('VPS_SSH_KEY_PATH')) {
+    $SshKey = $fileVars['VPS_SSH_KEY_PATH']
+  }
+}
 if ([string]::IsNullOrWhiteSpace($SshKey) -or [string]::IsNullOrWhiteSpace($SshRemote)) {
   Write-Output 'REFUSED: deployment identity required: pass -SshKey/-SshRemote or set PI_VPS_SSH_KEY/PI_VPS_SSH_REMOTE (caller-private, never printed).'
   exit 13

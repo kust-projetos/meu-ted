@@ -114,7 +114,24 @@ export async function authenticate(
     await expect(page.getByTestId("root-boot-placeholder")).toHaveCount(0, { timeout });
     await emailInput.fill("test@example.com");
     await passwordInput.fill("password123");
-    await expect(loginBtn).toBeEnabled({ timeout });
+    // Self-healing fill (same timeout budget, no weakening): under load the
+    // login form can mount a second time AFTER the fill (proven locally
+    // under CPU throttle: two LoginForm mounts, the second wipes the filled
+    // values while React state stays empty → Entrar stuck disabled, remote
+    // PWA-03/05 + push-02/03/04). Re-fill until the values stick and Entrar
+    // enables; the click below still requires the enabled state, and the
+    // final shell poll still proves the login.
+    await expect
+      .poll(
+        async () => {
+          if (await loginBtn.isEnabled().catch(() => false)) return true;
+          await emailInput.fill("test@example.com").catch(() => undefined);
+          await passwordInput.fill("password123").catch(() => undefined);
+          return await loginBtn.isEnabled().catch(() => false);
+        },
+        { timeout },
+      )
+      .toBe(true);
     await loginBtn.click();
     await page.waitForLoadState("networkidle");
   }

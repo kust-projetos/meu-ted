@@ -120,11 +120,12 @@ function setScenario(name, responses) {
   for (const f of readdirSync(ctx.flags)) rmSync(join(ctx.flags, f), { force: true });
   writeFileSync(join(ctx.dir, 'ctr.txt'), '0');
 }
-function runExec(args, scenario, extraEnv = {}) {
+function runExec(args, scenario, extraEnv = {}, vpsEnvFile = null) {
   // Async: the child calls back into this process's health server.
   // Deployment identity is injected explicitly (fake key file + fake remote);
-  // pass { PI_VPS_SSH_KEY: null, PI_VPS_SSH_REMOTE: null } to simulate the
-  // missing-identity case (deleted from the child env, never inherited).
+  // pass nulls in extraEnv to simulate the missing-identity case.
+  // -VpsEnvFile defaults to a nonexistent path so runs never consult the
+  // real caller-private file (hermetic); tests pass an explicit fake file.
   const env = {
     ...process.env, FAKE_CTR: join(ctx.dir, 'ctr.txt'),
     FAKE_RESP: ctx.resp, FAKE_FLAGS: ctx.flags, FAKE_SCENARIO: scenario,
@@ -132,11 +133,12 @@ function runExec(args, scenario, extraEnv = {}) {
     ...extraEnv,
   };
   for (const k of Object.keys(env)) if (env[k] === null) delete env[k];
+  const vpsEnv = vpsEnvFile ?? join(ctx.dir, 'no-such-env-file');
   return new Promise((resolveP) => {
     execFile('powershell',
       ['-NoProfile', '-File', EXECUTOR, '-SshExe', ctx.shim,
         '-ApiHealthUrl', `http://127.0.0.1:${ctx.server.address().port}/health`,
-        '-ManifestDir', ctx.manifests, ...args],
+        '-ManifestDir', ctx.manifests, '-VpsEnvFile', vpsEnv, ...args],
       { encoding: 'utf8', env, timeout: 90000 },
       (err, stdout, stderr) => {
         // NOTE: on this Node/Windows combo the child exit code arrives as
@@ -388,4 +390,53 @@ test('malformed remote identity fails closed (exit 13)', async (t) => {
   const r = await runExec([], 'badremote', { PI_VPS_SSH_REMOTE: 'not-a-user-at-host' });
   assert.equal(r.exit, 13, r.out);
   assert.match(r.out, /must look like user@host/);
+});
+
+test('identity loads from caller-private env file (names only, values never printed)', async (t) => {
+  if (!winOnly(t)) return;
+  const envFile = join(ctx.dir, 'fake-vps.env');
+  writeFileSync(envFile, [
+    '# caller-private fixture (parser robustness: comments, blanks, quotes)',
+    '',
+    'VPS_SSH_USER=fileuser',
+    'VPS_IP="filehost.invalid"',
+    `VPS_SSH_KEY_PATH='${ctx.fakekey}'`,
+    'UNKNOWN_KEY=ignored-entirely',
+    'malformed line without equals',
+    '',
+  ].join('\n'));
+  setScenario('fileid', [{ text: GUARDS_OK }]);
+  const r = await runExec([], 'fileid',
+    { PI_VPS_SSH_KEY: null, PI_VPS_SSH_REMOTE: null }, envFile);
+  assert.equal(r.exit, 0, r.out);
+  assert.match(r.out, /READY \(guard-only mode\)/);
+  assert.ok(!r.out.includes('fileuser') && !r.out.includes('filehost'),
+    'loaded identity values must never appear in outputs');
+});
+
+test('explicit env identity wins over the file (precedence)', async (t) => {
+  if (!winOnly(t)) return;
+  const envFile = join(ctx.dir, 'fake-vps-ignored.env');
+  writeFileSync(envFile, [
+    `VPS_SSH_USER=ignoreduser`,
+    `VPS_IP=ignored.invalid`,
+    `VPS_SSH_KEY_PATH=${ctx.fakekey}`,
+    '',
+  ].join('\n'));
+  // Env key points nowhere: env wins over the good file identity => refuse.
+  setScenario('precedence', [{ text: GUARDS_OK }]);
+  const r = await runExec([], 'precedence',
+    { PI_VPS_SSH_KEY: join(ctx.dir, 'no-such-key') }, envFile);
+  assert.equal(r.exit, 13, r.out);
+  assert.match(r.out, /path does not exist/);
+});
+
+test('explicit params beat env identity', async (t) => {
+  if (!winOnly(t)) return;
+  setScenario('explicitparams', [{ text: GUARDS_OK }]);
+  const r = await runExec(
+    ['-SshKey', ctx.fakekey, '-SshRemote', 'explicit@test.invalid'],
+    'explicitparams', { PI_VPS_SSH_KEY: join(ctx.dir, 'no-such-key') });
+  assert.equal(r.exit, 0, r.out);
+  assert.match(r.out, /READY \(guard-only mode\)/);
 });
