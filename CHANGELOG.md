@@ -5,6 +5,31 @@ versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
 ## Unreleased (2026-10-01 — fechamento de aceite dos 4 itens, produção alinhada; sem release)
 
+### Release B (Rota A aprovada pelo operador): sink durável + nova janela de observação
+
+- **Problema provado**: o evento `auth.request.legacy_bearer_used` só ia para
+  logs pino do container (`legacyBearerAuditLog` nunca injetado em produção) e o
+  container foi recriado nos deploys de hoje — a janela D11 (vence 2026-10-02)
+  era inverificável; o SQL do `release-b-reminder.yml` contava tabela vazia por
+  construção (falso-zero).
+- **PR #51** (`fad863c`): sink durável `createLegacyBearerAuditSink` + wiring nos
+  4 boot paths PG de produção.
+- **PR #52** (`13ec135`): **descoberta em produção** — a API já roda
+  `DB_SCHEMA=canonical`/`pi_financeiro_canonical` (rota fresh que supersedes
+  F3–F5), onde `audit_logs` tem as colunas canônicas; sink corrigido para
+  dual-shape (canônico espelhando `writes/pending-idempotency.ts`).
+- **Deploys da API hoje**: `0b38535` → `29c015d` → `fad863c` → `13ec135`
+  (wrapper versionado, backups frescos `pi-canonical-prerelease-*`, rollback
+  tags preservadas, manifests na VPS; CI runs `36900550367`/`36914311011`/
+  `36918626014` atestados verdes).
+- **Smoke verificado**: 1 emissão controlada pousou em `audit_logs`
+  (`event_type=auth.request.legacy_bearer_used`, 2026-10-01T20:13:42Z).
+- **Nova janela de 14 dias declarada: 2026-10-01T20:14Z → 2026-10-15T20:14Z**
+  (o evento do smoke é pré-janela e documentado). Gate Release B ≈ 15/10/2026,
+  agora com evidência durável real. O `SESSION_BEARER_FALLBACK_ENABLED`
+  (flag server-side da Release B, default ON) segue documentado apenas em
+  código — flipar é env-only na VPS + rebuild do PWA para o flag client.
+
 ### Fixes de produção (3 causas raiz reais, encontradas pelo live closure E2E)
 
 - API: veto de escopo no undo delegado — o preHandler global exigia
