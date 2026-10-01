@@ -282,6 +282,8 @@ jobs:
         run: docker build -f apps/codex-broker/Dockerfile -t pi-finance-codex-broker:ci .
       - name: Smoke API and Codex Broker containers
         run: pnpm container:smoke
+      - name: Container smoke contract (bounded-fetch regression)
+        run: node --test scripts/container-smoke.test.mjs
 
   # ─── API image provenance (V4.1 closure SPEC REL-02) ──────────────────
   # Main pushes only: publishes the API image to GHCR tagged by git SHA

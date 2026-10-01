@@ -4,13 +4,43 @@ import { execFileSync } from 'node:child_process';
 const suffix = `${Date.now()}-${process.pid}`;
 const containers = [];
 
-const docker = (args, options = {}) => execFileSync('docker', args, {
-  encoding: 'utf8',
-  stdio: ['ignore', 'pipe', 'pipe'],
-  ...options,
-}).trim();
+const docker = (args, options = {}) => {
+  const bin = DOCKER_SHIM ? process.execPath : DOCKER_BIN;
+  const fullArgs = DOCKER_SHIM ? [DOCKER_SHIM, ...args] : args;
+  return execFileSync(bin, fullArgs, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    ...options,
+  }).trim();
+};
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const numEnv = (name, fallback) => {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+// Canonical CI window: 40 attempts x 500ms ~= 20s of polling per container.
+// A bare `await fetch(url)` can hang forever on an accepted-but-silent
+// socket (unsettled top-level await → Node 22 exit 13), so every request is
+// bounded by REQUEST_TIMEOUT_MS and the whole wait by DEADLINE_MS. The
+// per-request timer is a referenced setTimeout that aborts the fetch, then
+// is always cleared in `finally`; the response body is cancelled to free
+// the socket. SMOKE_* overrides exist only to keep hermetic tests fast.
+const REQUEST_TIMEOUT_MS = numEnv('SMOKE_FETCH_TIMEOUT_MS', 1000);
+const DEADLINE_MS = numEnv('SMOKE_DEADLINE_MS', 20000);
+const RETRY_INTERVAL_MS = numEnv('SMOKE_RETRY_INTERVAL_MS', 500);
+const MAX_ATTEMPTS = Math.floor(numEnv('SMOKE_MAX_ATTEMPTS', 40));
+
+// Test seam for hermetic tests (fake docker shim, no real images):
+// when SMOKE_DOCKER_SHIM points at a script, `docker()` shells out to
+// `node <shim> <args>` instead of the real `docker` binary. Production
+// behaviour is unchanged (both vars unset).
+const DOCKER_BIN = process.env.SMOKE_DOCKER_BIN ?? 'docker';
+const DOCKER_SHIM = process.env.SMOKE_DOCKER_SHIM ?? '';
 
 const start = (name, image, containerPort, env = []) => {
   const container = `${name}-${suffix}`;
@@ -29,19 +59,32 @@ const start = (name, image, containerPort, env = []) => {
 
 const waitForHealth = async (name, port) => {
   const url = `http://127.0.0.1:${port}/health`;
+  const deadline = Date.now() + DEADLINE_MS;
   let lastError = 'not started';
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS && Date.now() < deadline; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: controller.signal });
       if (response.ok) {
+        try { await response.body?.cancel?.(); } catch {}
         console.log(`${name} health GREEN (${url})`);
         return;
       }
       lastError = `HTTP ${response.status}`;
+      try { await response.body?.cancel?.(); } catch {}
     } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        lastError = `timeout after ${REQUEST_TIMEOUT_MS}ms`;
+      } else {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      clearTimeout(timer);
     }
-    await sleep(500);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(RETRY_INTERVAL_MS, remaining));
   }
   throw new Error(`${name} health RED: ${lastError}`);
 };
