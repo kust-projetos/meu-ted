@@ -26,7 +26,8 @@ versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
 ### Aceite verificado (evidência em `docs/reports/2026-10-01-acceptance-closure.md`)
 
-- **Live closure E2E PASS em produção** (28.1s): criar → editar →
+- **Live closure E2E PASS em produção** (RUN_ID `closure0930-muptyzne`,
+  29.4s total): criar → editar →
   confirmar → desfazer → cancelar → reload → excluir, guards de escopo
   fail-closed, cardinalidade exata (2 decisions + 1 undo + 1
   verify-target), reversão verificada no ledger.

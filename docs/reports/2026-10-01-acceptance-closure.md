@@ -27,7 +27,7 @@
 
 ## Item 4 — Validação real autenticada ponta a ponta — RESOLVIDO (live closure PASS)
 
-**`live-closure` PASS em produção: criar → editar → confirmar → desfazer → cancelar → reload → excluir (1 passed, 29.4s)** contra API `29c015d` + PWA/Agent `06c00c2`, com guards de escopo fail-closed, cardinalidade exata de decisões (2 decisions + 1 undo + 1 verify-target), zero writes fora do Test Family, zero erros de página/console/servidor e reversão verificada no ledger pós-reload.
+**`live-closure` PASS em produção: criar → editar → confirmar → desfazer → cancelar → reload → excluir (RUN_ID `closure0930-muptyzne`, conta criada 2026-10-01T17:51:21Z; saída Playwright: `ok 1 … (28.1s)` / `1 passed (29.4s)`)** contra API `29c015d` + PWA/Agent `06c00c2`, com guards de escopo fail-closed, cardinalidade exata de decisões (2 decisions + 1 undo + 1 verify-target), zero writes fora do Test Family, zero erros de página/console/servidor e reversão verificada no ledger pós-reload (leitura paginada pelo próprio spec, admin autenticado).
 
 A run só fechou após **3 causas raiz reais encontradas e corrigidas** (nenhuma era conhecida antes do live):
 
@@ -43,6 +43,59 @@ A run só fechou após **3 causas raiz reais encontradas e corrigidas** (nenhuma
 | API (VPS) | `29c015d` | `36900550367` | `/health` gitSha + manifest + rollback tag |
 | PWA (Cloudflare) | `06c00c2` | `36896164604` | `/api/build-info` gitSha |
 | Agent (Cloudflare) | `06c00c2` | `36896164604` | `/health` buildSha, `ready` |
+
+## Evidência e reprodutibilidade
+
+Sondagens executadas nesta sessão pelo Planner via túnel SSH SELECT-only
+(mesmo canal documentado em `scripts/ops/repair-executor-0930.ps1` e no
+precedente de reconciliação 2026-09-21), contra o banco
+`pi_financeiro_canonical` no container `pi-finance-postgres`. Qualquer
+auditor pode reexecutar os comandos abaixo e comparar.
+
+**Sonda do repair (2026-10-01 ~17:00–17:30 UTC):**
+
+```sql
+SELECT 'anchors_10000', count(*) FROM accounts WHERE initial_balance_cents = 10000
+UNION ALL SELECT 'repair_committed', count(*) FROM audit_logs
+  WHERE operation = 'financial_repair.anchor_backfill' AND event_type = 'financial_repair.committed'
+UNION ALL SELECT 'repair_compensated', count(*) FROM audit_logs
+  WHERE operation = 'financial_repair.anchor_backfill' AND event_type = 'financial_repair.compensated';
+-- saída observada: anchors_10000~32 | repair_committed~2 | repair_compensated~0
+```
+
+`anchors_10000` acima do esperado do target set (31) porque contas-fixture
+E2E rotuladas também nascem com âncora R$100,00 (ex.: `Conta E2E Closure
+closure0930-muptyzne`, criada 17:51:21Z) — conferido por
+`SELECT id, name, created_at FROM accounts WHERE initial_balance_cents = 10000 … ORDER BY created_at DESC`.
+
+**Sonda do residual (mesma janela):**
+
+```sql
+WITH delta AS (SELECT a.id, a.balance_cents, a.initial_balance_cents,
+  (SELECT COALESCE(sum(CASE WHEN t.kind = 'income' THEN t.amount_cents
+     WHEN t.kind = 'expense' THEN -t.amount_cents
+     WHEN t.kind = 'transfer' AND t.transfer_to_account_id = a.id THEN t.amount_cents
+     WHEN t.kind = 'transfer' THEN -t.amount_cents ELSE 0 END), 0)
+   FROM transactions t
+   WHERE (t.account_id = a.id OR t.transfer_to_account_id = a.id) AND t.deleted_at IS NULL) AS d
+  FROM accounts a WHERE a.deleted_at IS NULL)
+SELECT 'residual_count', (count(*))::text FROM delta WHERE balance_cents <> initial_balance_cents + d
+UNION ALL SELECT 'accounts_total', (count(*))::text FROM delta;
+-- saída observada: residual_count~0 | accounts_total~32
+```
+
+**Live closure PASS (RUN_ID `closure0930-muptyzne`):** executado localmente
+com Playwright 1.61.1 (`pnpm -C apps/pwa exec playwright test --config
+e2e/live-closure.config.ts`), opt-in `PWA_LIVE_E2E=1` +
+`PWA_LIVE_BASE_URL=https://pi-finance-pwa.walissonead.workers.dev` +
+credenciais admin de `.env.e2e.local` (fora do repo). Saída literal:
+`ok 1 e2e\specs\live-closure.spec.ts:197:7 › … › fechamento: criar →
+editar → confirmar → desfazer → cancelar → reload → excluir (28.1s)` /
+`1 passed (29.4s)` (28,1s é o teste; 29,4s inclui setup do worker). A
+identidade RUN_ID está nos nomes das entidades criadas no ledger (conta
+`Conta E2E Closure closure0930-muptyzne`, 17:51:21Z, verificada por
+SELECT read-only) e nas descrições das transações do run — o spec só
+decide/exclui entidades do próprio run (`isRunOwnedEntity`).
 
 ## Limites e o que continua aberto (sem claim)
 
