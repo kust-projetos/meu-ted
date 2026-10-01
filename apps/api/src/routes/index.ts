@@ -429,7 +429,13 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
       const mutationCapability = 'financial.write';
       const requiredCapability = isRead ? 'financial.read' : mutationCapability;
       const hasScopedApprovalCapability = claims.capabilities.some((capability) => capability.startsWith("financial.approval."));
-      if (isV2Approval ? !hasScopedApprovalCapability : !claims.capabilities.includes(requiredCapability)) {
+      // debt-undo-confirmation-protocol: a token holding ONLY the narrow
+      // `financial.undo.execute` grant is authorized for exactly the undo
+      // route (checked above; the route handler re-checks it as defense in
+      // depth) — the generic `financial.write` requirement must not veto it,
+      // otherwise every conversational undo confirm fails closed with 403.
+      const undoScopeAdmitted = isUndo && claims.capabilities.includes("financial.undo.execute");
+      if (isV2Approval ? !hasScopedApprovalCapability : (!undoScopeAdmitted && !claims.capabilities.includes(requiredCapability))) {
         return reply.code(403).send({ code: "auth.delegation_scope_forbidden", message: "Permissão insuficiente no token delegado." });
       }
 
