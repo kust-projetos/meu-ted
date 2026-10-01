@@ -7,9 +7,10 @@
 import { test, expect } from "@playwright/test";
 import { assertNoUndeclaredFailures } from "../support/failure-guard";
 import { prepareSpec, authenticate } from "../support/harness";
+import { harnessOrigin } from "../support/ports";
 
 const MOCK_CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "http://127.0.0.1:3000",
+  "Access-Control-Allow-Origin": harnessOrigin(),
   "Access-Control-Allow-Credentials": "true",
 };
 

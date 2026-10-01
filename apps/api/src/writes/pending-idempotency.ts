@@ -20,10 +20,12 @@
  */
 
 import type { Pool, PoolClient } from 'pg';
+import { randomUUID } from 'node:crypto';
 import type { Transaction } from '../types/domain.js';
 import { withTransaction } from '../db/pool.js';
 import { domainErrors } from './errors.js';
 import { hashPayloadV2, matchesPayloadHash } from './idempotency.js';
+import type { V2ToolAuditOperation } from './store.js';
 
 /** Namespace isolating V2 execution records inside `idempotency_keys`. */
 export const PENDING_V2_IDEMPOTENCY_PREFIX = 'pending-v2:';
@@ -58,6 +60,16 @@ const parseResponse = (response: unknown): { transaction: Transaction } => {
  * Runs a Postgres-backed mutation at most once per (household, key).
  * The record is written transactionally with the mutation; a claim-race
  * loser rolls back and replays the winner's recorded transaction.
+ *
+ * V2 execution audit (bounded): when `audit` is present, the SAME claim
+ * transaction additionally inserts ONE audit row (claim + effect + audit
+ * commit atomically — the claim client never leaks). The audit carries the
+ * explicit tool operation, the server-bound actor, and the committed
+ * transaction id as effect_ref. Replay paths (existing record, lost-race
+ * replay, recovery re-execution with the same key) NEVER insert — exactly
+ * one audit row per financial effect. Old completed rows without audit are
+ * NOT repaired. `schema` selects the audit table shape of the deployment
+ * (canonical vs legacy); an unknown operation fails closed.
  */
 export const runKeyedMutation = async (opts: {
   pool: Pool;
@@ -65,12 +77,34 @@ export const runKeyedMutation = async (opts: {
   idempotencyKey: string;
   payload: unknown;
   mutate: (client: PoolClient) => Promise<Transaction>;
+  audit?: { operation: V2ToolAuditOperation; actorId: string; schema: 'canonical' | 'legacy' };
 }): Promise<Transaction> => {
   const { pool, householdId, payload } = opts;
   const key = namespacedPendingV2Key(opts.idempotencyKey);
+  if (opts.audit !== undefined && opts.audit.operation !== 'transactions.expense.create' && opts.audit.operation !== 'transactions.income.create') {
+    throw new Error(`unsupported V2 audit operation: ${String((opts.audit as { operation?: unknown }).operation)}`);
+  }
   // V4.1 Phase 3 Tasks 3.6/3.7: new records hash V2; rows written by older
   // builds (v1-sha256 / legacy h*31) still replay via matchesPayloadHash.
   const payloadHash = hashPayloadV2(payload);
+  const insertAudit = async (client: PoolClient, txId: string): Promise<void> => {
+    if (opts.audit === undefined) return;
+    if (opts.audit.schema === 'canonical') {
+      await client.query(
+        `INSERT INTO audit_logs
+           (id, workspace_id, actor_id, operation, event_type, payload_hash, effect_ref, metadata)
+         VALUES (gen_random_uuid(), $1, $2, $3, 'financial_effect.committed', $4, $5, $6)`,
+        [householdId, opts.audit.actorId, opts.audit.operation, payloadHash, txId, JSON.stringify({ entityType: 'transaction' })],
+      );
+      return;
+    }
+    await client.query(
+      `INSERT INTO audit_logs
+         (id, household_id, user_id, action, entity_type, entity_id, before_json, after_json, created_at)
+       VALUES (gen_random_uuid(), $1, NULL, $2, 'transaction', $3, NULL, NULL, NOW())`,
+      [householdId, opts.audit.operation, txId],
+    );
+  };
   try {
     return await withTransaction(pool, async (client) => {
       const existing = await client.query<KeyRow>(SELECT_KEY, [householdId, key]);
@@ -87,6 +121,7 @@ export const runKeyedMutation = async (opts: {
         JSON.stringify({ transaction: result }),
       ]);
       if ((claimed.rowCount ?? 0) === 0) throw new KeyReplaySignal();
+      await insertAudit(client, result.id);
       return result;
     });
   } catch (err) {

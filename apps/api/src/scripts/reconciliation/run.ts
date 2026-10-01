@@ -19,6 +19,7 @@ import type {
   DuplicatesInput,
   GoalContributionRow,
   PayablePaymentRow,
+  ReconProvenance,
   ReconReport,
   StatementPaymentRow,
   StatementTotalRow,
@@ -43,6 +44,13 @@ export type ReconCliOptions = {
   householdId?: string;
   format: "json" | "text";
   failOnDrift: boolean;
+  /**
+   * Explicit database provenance (never inferred from layout).
+   * `historical` (default, baseline compat) expects the closed ADR-017/018/019
+   * sets on global/approved-household runs; `fresh` declares a database that
+   * never held them and expects zero known exceptions.
+   */
+  provenance: ReconProvenance;
 };
 
 type Row = Record<string, unknown>;
@@ -92,6 +100,7 @@ export const parseArgs = (argv: string[]): ReconCliOptions | { help: true } => {
     schema: "auto",
     format: "json",
     failOnDrift: false,
+    provenance: "historical",
   };
   for (const arg of argv) {
     if (arg === "--help" || arg === "-h") return { help: true };
@@ -104,6 +113,14 @@ export const parseArgs = (argv: string[]): ReconCliOptions | { help: true } => {
         );
       }
       opts.schema = value;
+    } else if (arg.startsWith("--provenance=")) {
+      const value = arg.slice("--provenance=".length);
+      if (value !== "historical" && value !== "fresh") {
+        throw new Error(
+          `invalid --provenance: ${value} (expected historical or fresh)`,
+        );
+      }
+      opts.provenance = value;
     } else if (
       arg.startsWith("--household=") ||
       arg.startsWith("--workspace=")
@@ -128,9 +145,10 @@ export const printHelp = (): string =>
   [
     "reconciliation — read-only financial reconciliation report",
     "",
-    "Usage: pnpm reconciliation [--schema=auto|legacy|canonical] [--household=<uuid>] [--format=json|text] [--fail-on-drift]",
+    "Usage: pnpm reconciliation [--schema=auto|legacy|canonical] [--provenance=historical|fresh] [--household=<uuid>] [--format=json|text] [--fail-on-drift]",
     "",
     "Only SELECT statements are executed. The connection sets default_transaction_read_only.",
+    "Provenance is explicit, never inferred: historical (default, baseline compat) expects the closed ADR-017/018/019 sets; fresh declares a database that never held them and expects zero known exceptions.",
     "Exit 0 normally, 1 when --fail-on-drift is set and any drift finding exists, 2 on usage or runtime errors.",
   ].join("\n");
 
@@ -282,6 +300,7 @@ export const runReconciliation = async (
   pool: ReconPool,
   layout: SchemaLayout,
   householdId?: string,
+  provenance: ReconProvenance = "historical",
 ): Promise<ReconReport> => {
   const scope = householdId === undefined ? {} : { householdId };
   const queries = buildReconciliationQueries(layout, scope);
@@ -352,6 +371,7 @@ export const runReconciliation = async (
       },
       APPROVED_HISTORICAL_ALLOWLIST_V2,
       householdId,
+      provenance,
     );
   // ADR-019 closed exception (legacy layout only): exact fingerprint matches
   // leave the active drift set and are reported separately under
@@ -389,12 +409,14 @@ export const runReconciliation = async (
       APPROVED_TEST_FIXTURE_ALLOWLIST,
       householdId,
       layout,
+      provenance,
     );
   const report: ReconReport = buildReport(finalChecks, {
     schema: layout,
     generatedAt: new Date().toISOString(),
     ...(householdId === undefined ? {} : { householdScope: householdId }),
   });
+  report.provenance = provenance;
   report.historicalExceptions = historicalSummary;
   report.testFixtures = testFixtureSummary;
   return report;
@@ -451,6 +473,7 @@ const buildDuplicatesInput = (
 export const formatTextReport = (report: ReconReport): string => {
   const lines = [
     `reconciliation schema=${report.schema} checked=${report.totals.checked} drifted=${report.totals.drifted} info=${report.totals.info}`,
+    `provenance=${report.provenance ?? "historical"}`,
   ];
   if (report.historicalExceptions !== undefined) {
     const historical = report.historicalExceptions;
@@ -525,7 +548,7 @@ export const main = async (
         async (text) => (await pool.query(text)).rows as Row[],
       );
     }
-    const report = await runReconciliation(pool, layout, opts.householdId);
+    const report = await runReconciliation(pool, layout, opts.householdId, opts.provenance);
     if (opts.format === "text") process.stdout.write(formatTextReport(report));
     else process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return opts.failOnDrift && report.totals.drifted > 0 ? 1 : 0;

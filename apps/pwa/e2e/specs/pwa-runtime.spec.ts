@@ -6,8 +6,11 @@
 
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { applyCspRewrite, resetFixture, authenticate } from "../support/harness";
+import { harnessOrigin } from "../support/ports";
 
 const FIXED_CLOCK = "2026-07-17T12:00:00.000Z";
+// Page origin of the SW harness (opt-in E2E_HARNESS_PORT, default :3000).
+const HARNESS_ORIGIN = harnessOrigin();
 
 
 test.afterEach(async ({ page }) => {
@@ -19,7 +22,7 @@ async function deploySw(
   context: BrowserContext,
   version: "legacy" | "current",
 ): Promise<void> {
-  const res = await context.request.post("http://127.0.0.1:3000/__e2e/sw/deploy", {
+  const res = await context.request.post(`${HARNESS_ORIGIN}/__e2e/sw/deploy`, {
     data: { version },
   });
   expect(res.ok()).toBeTruthy();
@@ -71,6 +74,23 @@ test("[PWA-01] install SW → offline shell renders on network failure", async (
   await deploySw(context, "current");
   await registerAndHome(page, id);
   await waitForController(page);
+
+  // Readiness gate (not a timeout bump): the offline fallback the SW itself
+  // serves must be precached before the network is cut. On a cold boot the
+  // first offline navigation otherwise races precache completion and the
+  // browser — not the SW — fails the navigation (chrome-error page).
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          const hit = await caches.match("/offline-shell.html", {
+            ignoreSearch: true,
+          });
+          return hit !== undefined && hit !== null;
+        }),
+      { timeout: 25000 },
+    )
+    .toBe(true);
 
   await context.setOffline(true);
   await page.goto("/registros", { waitUntil: "domcontentloaded" }).catch(() => undefined);
@@ -198,24 +218,54 @@ test("[PWA-04] clean form triggers waiting worker → activates once and reloads
   await registerAndHome(page, id);
   await waitForController(page);
 
-  const before = await page.evaluate(
-    () => navigator.serviceWorker.controller?.scriptURL ?? "",
+  // Clock-independent reload proof: page.clock.setFixedTime freezes
+  // performance.timeOrigin, so a document identity marker (a window property
+  // that dies with the document) is the only reliable reload signal. The
+  // controllerchange flag persists in localStorage across the reload, so
+  // observing both proves the activation caused the reload.
+  await page.evaluate(() => {
+    localStorage.removeItem("pwa04-cc");
+    (window as unknown as { __pwa04doc?: string }).__pwa04doc =
+      crypto.randomUUID();
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      localStorage.setItem("pwa04-cc", "1");
+    });
+  });
+  const docBefore = await page.evaluate(
+    () => (window as unknown as { __pwa04doc?: string }).__pwa04doc ?? "",
   );
+  expect(docBefore.length).toBeGreaterThan(0);
 
   await deploySw(context, "current");
   await forceUpdate(page);
 
-  // Clean page should activate waiting worker (scriptURL may stay /sw.js but controller changes)
-  await page.waitForFunction(
-    async (prev) => {
-      const reg = await navigator.serviceWorker.getRegistration();
-      const ctrl = navigator.serviceWorker.controller;
-      // Activation happened when waiting is gone and controller exists
-      return !!ctrl && !reg?.waiting && ctrl.scriptURL.length > 0 && prev.length >= 0;
-    },
-    before,
-    { timeout: 35000 },
-  );
+  // Clean page: the coordinator posts CLEAN_UPDATE to the waiting worker →
+  // skipWaiting → controllerchange → exactly one reload. Both the activation
+  // signal (persisted across the reload) and the reload itself (document
+  // identity lost) must be real — a vacuous predicate here would pass
+  // without any update. Callbacks tolerate the reload navigation in flight
+  // (evaluate rejects with "Execution context was destroyed" while the new
+  // document loads).
+  await expect
+    .poll(
+      async () =>
+        page
+          .evaluate(() => localStorage.getItem("pwa04-cc"))
+          .catch(() => "navigating"),
+      { timeout: 35000 },
+    )
+    .toBe("1");
+  await expect
+    .poll(
+      async () =>
+        page
+          .evaluate(
+            () => (window as unknown as { __pwa04doc?: string }).__pwa04doc ?? null,
+          )
+          .catch(() => docBefore),
+      { timeout: 35000 },
+    )
+    .not.toBe(docBefore);
 
   const after = await page.evaluate(async () => {
     const reg = await navigator.serviceWorker.getRegistration();
@@ -226,7 +276,28 @@ test("[PWA-04] clean form triggers waiting worker → activates once and reloads
     };
   });
   expect(after.hasActive).toBe(true);
+  expect(after.hasWaiting).toBe(false);
   expect(after.controller).toBe(true);
+
+  // Exactly one reload: mark the new document, then prove it stays current —
+  // a second reload would wipe the fresh marker.
+  const docAfter = await page.evaluate(() => {
+    const id = crypto.randomUUID();
+    (window as unknown as { __pwa04doc2?: string }).__pwa04doc2 = id;
+    return id;
+  });
+  await page.waitForTimeout(3000);
+  await expect
+    .poll(
+      async () =>
+        page
+          .evaluate(
+            () => (window as unknown as { __pwa04doc2?: string }).__pwa04doc2 ?? null,
+          )
+          .catch(() => "navigating"),
+      { timeout: 10000 },
+    )
+    .toBe(docAfter);
 });
 
 // ── PWA-05 ─────────────────────────────────────────────────────────────────

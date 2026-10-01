@@ -48,12 +48,13 @@ import {
   type GuardState,
 } from "../support/failure-guard";
 import { FIXTURE_URL, FIXED_CLOCK, E2E_TEST_ID_HEADER } from "../support/reset";
+import { harnessOrigin } from "../support/ports";
 
 // Cross-origin mocked API responses must carry CORS headers: the app calls
 // the absolute fixture origin with credentials:include, so a fulfill without
 // ACAO + ACA-Credentials is rejected by the browser (Failed to fetch).
 const MOCK_CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "http://127.0.0.1:3000",
+  "Access-Control-Allow-Origin": harnessOrigin(),
   "Access-Control-Allow-Credentials": "true",
 };
 

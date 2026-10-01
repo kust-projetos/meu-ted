@@ -143,6 +143,7 @@ const createCanonicalTables = async (pool: Pool): Promise<void> => {
     CREATE TABLE accounts (
       id UUID PRIMARY KEY, household_id UUID NOT NULL, name TEXT NOT NULL,
       kind TEXT NOT NULL, balance_cents BIGINT NOT NULL DEFAULT 0,
+      initial_balance_cents BIGINT NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'active',
       credit_limit_cents BIGINT, closing_day INTEGER, due_day INTEGER,
       deleted_at TIMESTAMPTZ,

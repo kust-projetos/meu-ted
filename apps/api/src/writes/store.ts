@@ -42,6 +42,29 @@ export type DeleteCategoryResult = {
  */
 export type WriteIdempotencyOptions = {
   idempotencyKey?: string;
+  /**
+   * TED Pending-V2 execution audit (bounded, server-side only).
+   *
+   * When present, the keyed mutation commits claim + financial effect +
+   * audit in ONE transaction. `operation` is a closed vocabulary (the two
+   * V2 TED tools — never client-derived), `actorId` comes from the
+   * server-persisted pending-operation record (never from normalizedArgs).
+   * Absent → previous behavior (ledger + record only), unkeyed writes
+   * never audit.
+   */
+  audit?: WriteAuditContext;
+};
+
+/**
+ * Closed V2 execution-audit vocabulary: exactly the two TED approval tools
+ * that execute through keyed writes. The undo reversal vocabulary matches
+ * these ids 1:1, so no receipt-kind mapping is needed on this path.
+ */
+export type V2ToolAuditOperation = 'transactions.expense.create' | 'transactions.income.create';
+
+export type WriteAuditContext = {
+  operation: V2ToolAuditOperation;
+  actorId: string;
 };
 
 export type WriteStore = {

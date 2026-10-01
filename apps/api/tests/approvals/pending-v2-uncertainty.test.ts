@@ -231,6 +231,7 @@ function defineUncertaintySuite(
             categoryId: randomUUID(),
           },
           idempotencyKey: 'k-uncertain',
+          actorId: 'actor-1',
         }),
       ).rejects.toMatchObject({ code: APPROVAL_EXECUTION_UNCERTAIN_CODE });
       expect(seen).toEqual(['k-uncertain']);

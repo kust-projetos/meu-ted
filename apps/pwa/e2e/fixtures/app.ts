@@ -28,7 +28,7 @@ export async function allowFixtureCsp(page: Page): Promise<void> {
     const csp = response.headers()["content-security-policy"];
     if (csp) {
       const modified = csp
-        .replace(/connect-src\s+([^;]+)/, "connect-src http://127.0.0.1:4010 $1")
+        .replace(/connect-src\s+([^;]+)/, `connect-src ${FIXTURE_URL} $1`)
         .replace(/script-src\s+([^;]+)/, "script-src 'unsafe-eval' $1");
       await route.fulfill({
         response,

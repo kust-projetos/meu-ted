@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   CheckResult,
   Finding,
+  ReconProvenance,
   TestFixtureExceptionSummary,
 } from "./detectors.js";
 
@@ -218,6 +219,10 @@ const pushGate = (
  * legacy-only coverage rows are absent by layout (not drift), and any
  * canonical payment_coverage_gap/missing_payment_transaction finding stays
  * as active drift. Active drift still fails in every scope.
+ *
+ * Provenance is explicit (default `historical` = baseline compat): `fresh`
+ * declares a database that never held the closed fixture set, so both
+ * classes expect zero on every layout/scope. Never inferred from layout.
  */
 export const applyTestFixtureExceptions = (
   checks: CheckResult[],
@@ -225,6 +230,7 @@ export const applyTestFixtureExceptions = (
   allowlist: TestFixtureAllowlist = APPROVED_TEST_FIXTURE_ALLOWLIST,
   householdScope?: string,
   layout: "legacy" | "canonical" = "legacy",
+  provenance: ReconProvenance = "historical",
 ): { checks: CheckResult[]; summary: TestFixtureExceptionSummary } => {
   const next = checks.map((check) => ({
     ...check,
@@ -256,13 +262,14 @@ export const applyTestFixtureExceptions = (
     householdScope !== undefined &&
     hashTestFixtureScope(householdScope) === approvedScopeHash;
   const isCanonicalLayout = layout === "canonical";
+  const isFresh = provenance === "fresh";
   const expectedCoverage =
-    isCanonicalLayout ||
+    isFresh || isCanonicalLayout ||
     (householdScope !== undefined && !isApprovedHouseholdScope)
       ? 0
       : allowlist.expectedCoverage;
   const expectedPayables =
-    isCanonicalLayout ||
+    isFresh || isCanonicalLayout ||
     (householdScope !== undefined && !isApprovedHouseholdScope)
       ? 0
       : allowlist.expectedPayables;

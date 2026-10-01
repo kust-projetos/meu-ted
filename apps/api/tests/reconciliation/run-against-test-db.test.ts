@@ -104,6 +104,7 @@ describe("reconciliation SQL safety (no database needed)", () => {
       schema: "auto",
       format: "json",
       failOnDrift: false,
+      provenance: "historical",
     });
     expect(
       parseArgs([
@@ -117,8 +118,13 @@ describe("reconciliation SQL safety (no database needed)", () => {
       format: "text",
       failOnDrift: true,
       householdId: "h1",
+      provenance: "historical",
+    });
+    expect(parseArgs(["--provenance=fresh"])).toMatchObject({
+      provenance: "fresh",
     });
     expect(() => parseArgs(["--schema=nope"])).toThrow();
+    expect(() => parseArgs(["--provenance=nope"])).toThrow();
     expect(() => parseArgs(["--bogus"])).toThrow();
   });
 });

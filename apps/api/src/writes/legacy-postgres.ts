@@ -620,6 +620,7 @@ export const createLegacyPostgresWriteStore = (opts: { pool: Pool }): WriteStore
         idempotencyKey: options.idempotencyKey,
         payload: input,
         mutate: (client) => createExpenseLegacyInTx(client, householdId, input),
+        ...(options.audit ? { audit: { ...options.audit, schema: 'legacy' as const } } : {}),
       });
     },
     async createIncome(householdId: string, input: CreateIncomeInput, options?: WriteIdempotencyOptions) {
@@ -633,6 +634,7 @@ export const createLegacyPostgresWriteStore = (opts: { pool: Pool }): WriteStore
         idempotencyKey: options.idempotencyKey,
         payload: input,
         mutate: (client) => createIncomeLegacyInTx(client, householdId, input),
+        ...(options.audit ? { audit: { ...options.audit, schema: 'legacy' as const } } : {}),
       });
     },
     async createTransfer(householdId: string, input: CreateTransferInput) {

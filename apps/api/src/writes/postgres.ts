@@ -575,10 +575,10 @@ export const createAccountInTx = async (
     throw domainErrors.invalid('initialBalanceCents', 'cartão de crédito não pode iniciar com saldo negativo');
   }
   const res = await client.query<Row>(
-    `INSERT INTO accounts (id, household_id, name, kind, balance_cents, status)
-      VALUES (gen_random_uuid(), $1, $2, $3, $4, 'active')
+    `INSERT INTO accounts (id, household_id, name, kind, balance_cents, initial_balance_cents, status)
+      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'active')
       RETURNING id, household_id, name, kind, balance_cents, status`,
-    [householdId, input.name, input.kind, input.initialBalanceCents],
+    [householdId, input.name, input.kind, input.initialBalanceCents, input.initialBalanceCents],
   );
   // Item 11: bootstrap the default set for households without categories.
   const existing = await client.query(
@@ -1069,13 +1069,15 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
       }
       // P1: V2 execution records (key → transaction) in the SAME tx as the
       // mutation, so a retry after partial failure replays instead of
-      // duplicating.
+      // duplicating. A server-side V2 audit context additionally commits
+      // the undo-eligible audit row in that same tx (never on replay).
       return runKeyedMutation({
         pool,
         householdId,
         idempotencyKey: options.idempotencyKey,
         payload: input,
         mutate: (client) => createExpenseInTx(client, householdId, input),
+        ...(options.audit ? { audit: { ...options.audit, schema: 'canonical' as const } } : {}),
       });
     },
 
@@ -1090,6 +1092,7 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
         idempotencyKey: options.idempotencyKey,
         payload: input,
         mutate: (client) => createIncomeInTx(client, householdId, input),
+        ...(options.audit ? { audit: { ...options.audit, schema: 'canonical' as const } } : {}),
       });
     },
 
@@ -1195,6 +1198,159 @@ const resolveLostClaimRace = async (
   throw domainErrors.idempotencyConflict();
 };
 
+/**
+ * Canonical audit effect_ref resolver (closure-audit-entity).
+ *
+ * Root cause: the claim-completion path derived `effect_ref` ONLY from
+ * `(response as { transactionId?: string }).transactionId`. Real canonical
+ * HTTP producers return `{ status, body }` where the body is the committed
+ * route DTO with an attached mutation receipt
+ * (`attachMutationReceipt(entity, kind, { type, id })`), so `effect_ref`
+ * was ALWAYS NULL for keyed financial writes. The audit row kept only
+ * `metadata.entityType`, and the undo resolver
+ * (`metadata.entityId > effectRef > metadata.after.id`) found nothing →
+ * `undoNothingToUndo` even though the preview/target existed.
+ *
+ * This resolver binds `effect_ref` from the COMMITTED response only — never
+ * from caller payload:
+ * 1. Legacy contract first: a top-level `transactionId` UUID (existing
+ *    containment/XLT fixtures) is preserved byte-for-byte.
+ * 2. Canonical HTTP envelope `{ status|statusCode, body }`: `body.id` must
+ *    be a UUID AND equal `body.receipt.entity.id`, with a `succeeded`
+ *    receipt carrying a non-empty `mutationKind` and a known reversible
+ *    entity type (`transaction` | `account` | `wallet` | `category`).
+ *    When the idempotency `operation` names a family (`transactions.*`,
+ *    `accounts.*`, `categories.*`), the entity type must belong to it;
+ *    generic `write` callers (HTTP string-form) accept any known type.
+ * 3. Anything else (mismatched ids, bare ids without a receipt, unknown
+ *    entity types, error statuses, non-objects) → NULL. No fake binding,
+ *    no foreign IDs, no raw payload in metadata (metadata stays
+ *    `{ entityType }`).
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const REVERSIBLE_ENTITY_TYPES = new Set(['transaction', 'account', 'wallet', 'category']);
+
+const operationAllowsEntityType = (operation: string, entityType: string): boolean => {
+  if (operation.startsWith('transactions.')) return entityType === 'transaction';
+  if (operation.startsWith('accounts.') || operation.startsWith('account.')) {
+    return entityType === 'account' || entityType === 'wallet';
+  }
+  if (operation.startsWith('categories.') || operation.startsWith('category.')) {
+    return entityType === 'category';
+  }
+  return REVERSIBLE_ENTITY_TYPES.has(entityType);
+};
+
+type VerifiedCanonicalReceipt = {
+  mutationKind: string;
+  entityType: string;
+  entityId: string;
+  bodyKind: unknown;
+};
+
+/**
+ * Parses the AUTHORITATIVE committed-response receipt: HTTP envelope
+ * `{ status|statusCode, body }` where `body` is the committed route DTO
+ * carrying `attachMutationReceipt` output. `body.id` must equal
+ * `body.receipt.entity.id` (DTO↔receipt match — a mismatched or invented
+ * receipt never binds). Returns null for anything else. Never reads caller
+ * payload — only the committed producer response.
+ */
+const parseVerifiedCanonicalReceipt = (response: unknown): VerifiedCanonicalReceipt | null => {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) return null;
+  const rec = response as Record<string, unknown>;
+  const status = rec['status'];
+  const statusCode = rec['statusCode'];
+  const numericStatus =
+    typeof status === 'number' ? status : typeof statusCode === 'number' ? statusCode : null;
+  if (numericStatus !== null && (numericStatus < 200 || numericStatus >= 300)) return null;
+  const bodyRaw = rec['body'];
+  if (!bodyRaw || typeof bodyRaw !== 'object' || Array.isArray(bodyRaw)) return null;
+  const body = bodyRaw as Record<string, unknown>;
+  const bodyId = body['id'];
+  if (typeof bodyId !== 'string' || !UUID_RE.test(bodyId)) return null;
+  const receiptRaw = body['receipt'];
+  if (!receiptRaw || typeof receiptRaw !== 'object' || Array.isArray(receiptRaw)) return null;
+  const receipt = receiptRaw as Record<string, unknown>;
+  if (receipt['status'] !== 'succeeded') return null;
+  if (typeof receipt['mutationKind'] !== 'string' || receipt['mutationKind'].length === 0) return null;
+  const entityRaw = receipt['entity'];
+  if (!entityRaw || typeof entityRaw !== 'object' || Array.isArray(entityRaw)) return null;
+  const entity = entityRaw as Record<string, unknown>;
+  if (typeof entity['id'] !== 'string' || typeof entity['type'] !== 'string') return null;
+  if (!UUID_RE.test(entity['id'])) return null;
+  if (entity['id'] !== bodyId) return null;
+  return {
+    mutationKind: receipt['mutationKind'],
+    entityType: entity['type'],
+    entityId: entity['id'],
+    bodyKind: body['kind'],
+  };
+};
+
+export const resolveCanonicalEffectRef = (response: unknown, operation?: string): string | null => {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) return null;
+  const legacy = (response as Record<string, unknown>)['transactionId'];
+  if (typeof legacy === 'string' && UUID_RE.test(legacy)) return legacy;
+  const verified = parseVerifiedCanonicalReceipt(response);
+  if (!verified) return null;
+  if (!REVERSIBLE_ENTITY_TYPES.has(verified.entityType)) return null;
+  if (operation && !operationAllowsEntityType(operation, verified.entityType)) return null;
+  return verified.entityId;
+};
+
+/**
+ * Canonical audit.operation derivation (closure-audit-entity followup).
+ *
+ * A default-`write` claim (every HTTP string-form keyed write) over a
+ * VERIFIED canonical receipt persists the undo reversal vocabulary so the
+ * undo preview/eligibility (`REVERSIBLE_OPERATIONS` in approvals/undo.ts)
+ * finds its target. Strict whitelist over the registry's ACTUAL normal-write
+ * receipt kinds (inspected in `@pi-finance/llm-contracts` types.ts +
+ * routes/* usage):
+ *
+ * - `transaction.create` + committed `body.kind: expense|income` →
+ *   `transactions.expense.create` / `transactions.income.create`
+ *   (the receipt kind alone is ambiguous — both routes attach
+ *   `transaction.create`; the committed DTO kind disambiguates. The TED
+ *   tool kinds `transactions.*.create` can NEVER appear here:
+ *   `mutationReceiptSchema` rejects a TED kind without `operationId`, so
+ *   `buildMutationReceipt` would throw at the route — no silent aliasing.)
+ * - `transfer.create` → `transactions.transfer.create`
+ * - `account.create` → `accounts.create`
+ * - `category.create` → `categories.create`
+ *
+ * Rules: `operation_records.operation` is NEVER touched (idempotency
+ * compat). An explicitly named claim operation (TED/request-form,
+ * e.g. `transactions.expense.create`, `invites.create`) is NEVER altered.
+ * Derivation requires the same verified receipt↔DTO binding as effectRef
+ * (unverified → `write`). Updates/deletes/non-financial kinds stay `write`
+ * — no reversible phantom. Nothing is inherited from caller kind or raw
+ * payload: only the committed receipt + committed DTO kind.
+ */
+export const resolveCanonicalAuditOperation = (response: unknown, operation?: string): string => {
+  const fallback = operation ?? 'write';
+  if (operation !== undefined && operation !== 'write') return fallback;
+  const verified = parseVerifiedCanonicalReceipt(response);
+  if (!verified) return fallback;
+  if (!REVERSIBLE_ENTITY_TYPES.has(verified.entityType)) return fallback;
+  switch (verified.mutationKind) {
+    case 'transaction.create':
+      if (verified.bodyKind === 'expense') return 'transactions.expense.create';
+      if (verified.bodyKind === 'income') return 'transactions.income.create';
+      return fallback;
+    case 'transfer.create':
+      return 'transactions.transfer.create';
+    case 'account.create':
+      return 'accounts.create';
+    case 'category.create':
+      return 'categories.create';
+    default:
+      return fallback;
+  }
+};
+
 export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: boolean }): import('./idempotency.js').IdempotencyStore => {
   const { pool, legacy } = opts;
   // V4.1 Phase 3 Tasks 3.6/3.7: new claims hash V2 (SHA-256 over canonical
@@ -1252,7 +1408,12 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
             // transaction and commits atomically with claim + completion.
             // Producers that ignore the argument keep their own boundary.
             const response = await producer(client);
-            const effectRef = (response as { transactionId?: string } | null)?.transactionId ?? null;
+            const effectRef = resolveCanonicalEffectRef(response, operation);
+            // Undo eligibility on legacy: derive the reversible action from
+            // the verified receipt (new rows only — old rows untouched);
+            // entity_id binds the financial entity when verified, else the
+            // record id as before (legacy consumer convention).
+            const legacyAuditAction = resolveCanonicalAuditOperation(response, operation);
             await client.query(
               `UPDATE operation_records
                   SET status = 'completed', response = $3, effect_ref = $4, completed_at = NOW()
@@ -1269,7 +1430,7 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
               `INSERT INTO audit_logs
                  (id, household_id, user_id, action, entity_type, entity_id, before_json, after_json, created_at)
                VALUES ($1, $2, $3, $4, 'operation', $5, $6, $7, NOW())`,
-[randomUUID(), resolvedHouseholdId, resolvedUserId, operation ?? 'write', recordId, null, JSON.stringify(response)],
+[randomUUID(), resolvedHouseholdId, resolvedUserId, legacyAuditAction, effectRef ?? recordId, null, JSON.stringify(response)],
             );
             return { response, replayed: false };
           }
@@ -1282,7 +1443,8 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
           {
             const recordId = lost.recordId;
             const response = await producer(client);
-            const effectRef = (response as { transactionId?: string } | null)?.transactionId ?? null;
+            const effectRef = resolveCanonicalEffectRef(response, operation);
+            const legacyAuditAction = resolveCanonicalAuditOperation(response, operation);
             await client.query(
               `UPDATE operation_records
                   SET status = 'completed', response = $3, effect_ref = $4, completed_at = NOW()
@@ -1295,7 +1457,7 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
               `INSERT INTO audit_logs
                  (id, household_id, user_id, action, entity_type, entity_id, before_json, after_json, created_at)
                VALUES ($1, $2, $3, $4, 'operation', $5, $6, $7, NOW())`,
-              [randomUUID(), resolvedHouseholdId, resolvedUserId, operation ?? 'write', recordId, null, JSON.stringify(response)],
+              [randomUUID(), resolvedHouseholdId, resolvedUserId, legacyAuditAction, effectRef ?? recordId, null, JSON.stringify(response)],
             );
             return { response, replayed: false };
           }
@@ -1303,7 +1465,9 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
 
         // Canonical path: claim + effect + completion + audit in one
         // transaction against operation_records (V013-V016 lifecycle).
-        const entityType = (operation ?? 'write').split('.')[0]!.replace(/s$/, '');
+        // NOTE: `operation` below stays the generic claim operation
+        // (idempotency compat); the AUDIT operation is derived from the
+        // verified receipt at each completion site.
         const claim = await client.query<{ id: string; status: string; response: unknown; effect_ref: string | null }>(
           `INSERT INTO operation_records
              (workspace_id, actor_id, operation, idempotency_key, payload_hash, status,
@@ -1320,7 +1484,12 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
           // FIX-UNDO: same claim-client passthrough as the legacy branch —
           // the undo reversal joins this transaction (SPEC §12 F3 opção 1).
           const response = await producer(client);
-          const effectRef = (response as { transactionId?: string } | null)?.transactionId ?? null;
+          const effectRef = resolveCanonicalEffectRef(response, operation);
+          // Undo eligibility: audit.operation derives the reversible
+          // vocabulary from the verified receipt when the claim is generic;
+          // metadata.entityType follows the audit operation (not the claim).
+          const auditOperation = resolveCanonicalAuditOperation(response, operation);
+          const auditEntityType = auditOperation.split('.')[0]!.replace(/s$/, '');
           await client.query(
             `UPDATE operation_records
                 SET status = 'completed', response = $3, effect_ref = $4, completed_at = NOW()
@@ -1336,10 +1505,10 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
               recordId,
               householdId,
               actorId ?? 'device',
-              operation ?? 'write',
+              auditOperation,
               payloadHash,
               effectRef,
-              JSON.stringify({ entityType }),
+              JSON.stringify({ entityType: auditEntityType }),
             ],
           );
           return { response, replayed: false };
@@ -1353,7 +1522,9 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
         {
           const recordId = lost.recordId;
           const response = await producer(client);
-          const effectRef = (response as { transactionId?: string } | null)?.transactionId ?? null;
+          const effectRef = resolveCanonicalEffectRef(response, operation);
+          const auditOperation = resolveCanonicalAuditOperation(response, operation);
+          const auditEntityType = auditOperation.split('.')[0]!.replace(/s$/, '');
           await client.query(
             `UPDATE operation_records
                 SET status = 'completed', response = $3, effect_ref = $4, completed_at = NOW()
@@ -1369,10 +1540,10 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
               recordId,
               householdId,
               actorId ?? 'device',
-              operation ?? 'write',
+              auditOperation,
               payloadHash,
               effectRef,
-              JSON.stringify({ entityType }),
+              JSON.stringify({ entityType: auditEntityType }),
             ],
           );
           return { response, replayed: false };

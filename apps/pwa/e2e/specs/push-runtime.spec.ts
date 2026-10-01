@@ -4,17 +4,20 @@ import {
   authenticate,
   resetFixture,
 } from "../support/harness";
+import { harnessOrigin } from "../support/ports";
 
 const FIXED_CLOCK = "2026-07-17T12:00:00.000Z";
 const IOS_USER_AGENT =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+// Page origin of the SW harness (opt-in E2E_HARNESS_PORT, default :3000).
+const HARNESS_ORIGIN = harnessOrigin();
 
 async function deploySw(
   context: BrowserContext,
   version: "legacy" | "current",
 ): Promise<void> {
   const response = await context.request.post(
-    "http://127.0.0.1:3000/__e2e/sw/deploy",
+    `${HARNESS_ORIGIN}/__e2e/sw/deploy`,
     { data: { version } },
   );
   expect(response.ok()).toBeTruthy();

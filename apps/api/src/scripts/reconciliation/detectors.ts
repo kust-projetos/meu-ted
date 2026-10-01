@@ -230,11 +230,24 @@ export type ReconReport = {
   checks: CheckResult[];
   totals: { checked: number; drifted: number; info: number };
   householdScope?: string;
+  /**
+   * Explicit database provenance for the historical/test-fixture gates.
+   * `historical` (default, baseline compat) expects the closed ADR-017/018/019
+   * sets on global/approved-household runs; `fresh` expects zero known
+   * exceptions. Never inferred from the layout — the caller declares it.
+   */
+  provenance?: ReconProvenance;
   /** Closed ADR-017 historical exception, when evaluated by the CLI runner. */
   historicalExceptions?: HistoricalExceptionSummary;
   /** Closed ADR-019 test-fixture exception, when evaluated by the CLI runner. */
   testFixtures?: TestFixtureExceptionSummary;
 };
+
+/**
+ * Explicit reconciliation provenance (fresh vs historical).
+ * Declared by the caller (CLI `--provenance=`); never inferred from layout.
+ */
+export type ReconProvenance = "historical" | "fresh";
 
 export type TestFixtureExceptionClassSummary = {
   expected: number;

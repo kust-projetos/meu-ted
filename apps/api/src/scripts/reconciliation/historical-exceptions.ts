@@ -3,6 +3,7 @@ import type {
   CheckResult,
   Finding,
   HistoricalExceptionSummary,
+  ReconProvenance,
 } from "./detectors.js";
 
 /**
@@ -354,6 +355,12 @@ const pushGate = (
  * (ADR-018 §17), while any unrelated household expects zero known exceptions
  * (the historical set lives elsewhere, so its absence is not a failure).
  * Active drift still fails in every scope.
+ *
+ * Provenance is explicit (default `historical` = baseline compat): `fresh`
+ * declares a database that never held the closed historical set, so all
+ * three classes expect zero. Suppression still applies per fingerprint, but
+ * any matched fingerprint under `fresh` trips the count gate fail-closed —
+ * a scoped record, never a broad ignore. Never inferred from layout.
  */
 export const applyHistoricalExceptions = (
   checks: CheckResult[],
@@ -364,6 +371,7 @@ export const applyHistoricalExceptions = (
   },
   allowlist: HistoricalAllowlist = APPROVED_HISTORICAL_ALLOWLIST,
   householdScope?: string,
+  provenance: ReconProvenance = "historical",
 ): { checks: CheckResult[]; summary: HistoricalExceptionSummary } => {
   const next = checks.map((check) => ({
     ...check,
@@ -402,16 +410,20 @@ export const applyHistoricalExceptions = (
   const isApprovedHouseholdScope =
     householdScope !== undefined &&
     hashHouseholdScope(householdScope) === approvedScopeHash;
-  const expectedOrphans =
-    householdScope === undefined || isApprovedHouseholdScope
+  const isFresh = provenance === "fresh";
+  const expectedOrphans = isFresh
+    ? 0
+    : householdScope === undefined || isApprovedHouseholdScope
       ? allowlist.expectedOrphanCardPurchases
       : 0;
-  const expectedStatements =
-    householdScope === undefined || isApprovedHouseholdScope
+  const expectedStatements = isFresh
+    ? 0
+    : householdScope === undefined || isApprovedHouseholdScope
       ? allowlist.expectedStatementTotals
       : 0;
-  const expectedNegativeCreditBalances =
-    householdScope === undefined || isApprovedHouseholdScope
+  const expectedNegativeCreditBalances = isFresh
+    ? 0
+    : householdScope === undefined || isApprovedHouseholdScope
       ? allowlist.expectedNegativeCreditBalances
       : 0;
 
