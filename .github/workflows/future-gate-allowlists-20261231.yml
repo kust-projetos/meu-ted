@@ -1,0 +1,100 @@
+name: Future Gate Reminder — security allowlists expiry (2026-12-31)
+
+# Future-dated gate: the scoped security allowlists created during V4.1 and
+# the 2026-10-01 CI unblock expire on 2026-12-31. This workflow NEVER touches
+# production; it only opens a single idempotent reminder issue.
+on:
+  schedule:
+    - cron: '41 12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  reminder:
+    name: Open future-gate reminder issue (2026-12-31)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Open reminder issue once the expiry date arrives
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const GATE_DATE = '2026-12-31';
+            const LABEL = 'future-gate-2026-12-31';
+            const TITLE = 'Future gate — allowlists de segurança expiram (2026-12-31)';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const today = new Date().toISOString().slice(0, 10);
+            core.info(`today=${today} gate=${GATE_DATE}`);
+            if (today < GATE_DATE) {
+              core.info('Expiry date not reached — exiting silently, no issue.');
+              return;
+            }
+
+            const { data: found } = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open label:"${LABEL}"`,
+              per_page: 10,
+            });
+            const alreadyOpen = found.items.some(
+              (issue) => issue.title === TITLE || issue.title.startsWith('Future gate — allowlists'),
+            );
+            if (alreadyOpen) {
+              core.info('Reminder issue already open — idempotent no-op.');
+              return;
+            }
+
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: LABEL });
+            } catch (error) {
+              if (error && error.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: LABEL,
+                  color: 'FBCA04',
+                  description: 'pwa-audit allowlist + .trivyignore expiry review (2026-12-31)',
+                });
+                core.info(`Created missing label '${LABEL}'.`);
+              } else {
+                throw error;
+              }
+            }
+
+            const body = [
+              'As allowlists de segurança com **expiração 2026-12-31** vencem hoje — renovar com justificativa ou corrigir de verdade.',
+              '',
+              '## Itens',
+              '',
+              '- `scripts/pwa-audit-allowlist.json` — todas as entradas expiram 2026-12-31:',
+              '  - `sharp` (runtime; pin 0.34.5 quebra o bundle OpenNext no Windows — retestar com opennextjs/sharp atualizados)',
+              '  - cadeia LHCI build-time (`@lhci/cli`, `@lhci/utils`, `lighthouse`, `puppeteer-core`, `@puppeteer/browsers`, `extract-zip` + shapes 2026-10-01: `basic-ftp`, `get-uri`, `pac-proxy-agent`, `proxy-agent`) — reavaliar o upgrade `@lhci/cli@0.13` (major) e se os advisories da cadeia já têm fix não-quebrando',
+              '- `.trivyignore` — entradas com expiração 2026-12-31',
+              '',
+              '## Como renovar',
+              '',
+              '1. Re-testar cada item contra as versões atuais (fix upstream disponível? → atualizar em vez de renovar).',
+              '2. Renovação só com justificativa nova + `expiresOn` novo + aprovação do mantenedor (mesmo padrão das entradas `pwa-2026-09-19-*`).',
+              '3. Gate de validação local: `pnpm public-safety --strict` + `node scripts/pwa-audit.mjs` + `node --test scripts/pwa-audit-policy.test.mjs scripts/pwa-audit-output.test.mjs scripts/pwa-audit-workspace.test.mjs`.',
+              '',
+              '## Referências',
+              '',
+              '- `docs/reports/v4.1-publication-readiness.md` (política de publicação/allowlist)',
+              '- `scripts/pwa-audit.mjs` (matcher estrito; precedentes de shape: `pwa-2026-09-21-sharp-audit-shape`, `pwa-2026-10-01-*-proxy-shape`)',
+              '',
+              '> Aberta automaticamente por `.github/workflows/future-gate-allowlists-20261231.yml` (somente leitura + issue).',
+            ].join('\n');
+
+            const { data: issue } = await github.rest.issues.create({
+              owner,
+              repo,
+              title: TITLE,
+              body,
+              labels: [LABEL],
+            });
+            core.info(`Created reminder issue #${issue.number}.`);

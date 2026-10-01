@@ -5,6 +5,15 @@ versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
 ## Unreleased (2026-10-01 — fechamento de aceite dos 4 itens, produção alinhada; sem release)
 
+### Gates abertos executados (sessão 2026-10-01b — `docs/reports/2026-10-01-open-gates-execution.md`)
+
+- **Recon canônico drifted=0** com `--provenance=fresh` (mecanismo já existente; o default `historical` gerava 3 falsos drifts de contagem no banco novo). Comando canônico de produção documentado.
+- **F2 rehearsal**: smoke sintético PASS (idempotente, dump pós sha256 `1603ce08…`); real-dump (legacy anonimizado, sha256 `29fce0f2…`) = **NO-GO documentado** — expense sem statement no legacy trava `balances` fail-closed (irrelevante: a API já serve o canônico, rota fresh concluída).
+- **`release-b-reminder.yml`** atualizado para D11-R2 (gate 2026-10-15, query canônica `event_type` + filtro de início de janela — a query antiga era falso-zero).
+- **Workflows future-gate** novos: 2026-12-01 (janela ADR-011/015 localStorage/bearer) e 2026-12-31 (allowlists pwa-audit + `.trivyignore`).
+- **`refs/pi-rewind/store`**: inventário (2 commits; snapshot de 1.934 arquivos de 24/09) + bundle de preservação `backups-local/pi-rewind-store-20261001.bundle`.
+- **Test Family cleanup**: 27 transações soft-delete + 17 contas desativadas via API cookie-only (0 erros; verificação 0 restante; janela Release B intacta).
+
 ### Release B (Rota A aprovada pelo operador): sink durável + nova janela de observação
 
 - **Problema provado**: o evento `auth.request.legacy_bearer_used` só ia para
