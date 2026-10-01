@@ -33,7 +33,7 @@ export const UNDO_VERIFY_ALLOWED_OPERATIONS: ReadonlySet<string> = new Set([
   'transactions.transfer.create',
 ]);
 
-const UNDO_INTENT_RE = /(desfaz|desfazer|\bundo\b)/i;
+const UNDO_INTENT_RE = /(desfaz|desfazer|desfaç|\bundo\b)/i;
 /** Natural-language negation: any "não"/"nao" fails the request closed. */
 const UNDO_NEGATION_RE = /\bn[aã]o\b/i;
 
