@@ -87,7 +87,8 @@ UNION ALL SELECT 'accounts_total', (count(*))::text FROM delta;
 **Live closure PASS (RUN_ID `closure0930-muptyzne`):** executado localmente
 com Playwright 1.61.1 (`pnpm -C apps/pwa exec playwright test --config
 e2e/live-closure.config.ts`), opt-in `PWA_LIVE_E2E=1` +
-`PWA_LIVE_BASE_URL=https://pi-finance-pwa.walissonead.workers.dev` +
+`PWA_LIVE_BASE_URL=<host de produção do PWA, fornecido pelo operador via
+env/GitHub Variable — hostname interno sanitizado por SPEC §13.4>` +
 credenciais admin de `.env.e2e.local` (fora do repo). Saída literal:
 `ok 1 e2e\specs\live-closure.spec.ts:197:7 › … › fechamento: criar →
 editar → confirmar → desfazer → cancelar → reload → excluir (28.1s)` /
