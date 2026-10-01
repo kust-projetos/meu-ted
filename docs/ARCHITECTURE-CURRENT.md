@@ -1,6 +1,6 @@
 # Meu Ted — Arquitetura atual
 
-**Last verified:** 2026-09-21
+**Last verified:** 2026-10-01
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 ## Topologia implementada
@@ -13,7 +13,7 @@ graph TD
     Proxy --> Agent[TED Agent V2<br/>Cloudflare Worker + DO]
     Agent --> API
     Agent -. provider isolado .-> Broker[Codex Broker opcional]
-    API --> Postgres[(PostgreSQL 16)]
+    API --> Postgres[(PostgreSQL 16<br/>schema canônico)]
 ```
 
 ## Responsabilidades e limites
@@ -71,6 +71,23 @@ O WhatsApp Bridge e a extensão Pi foram removidos dos workspaces, CI e
 runtime ativo. Na `main`, a imagem da API é publicada no GHCR por tag de
 SHA com o digest imutável registrado como saída do job, e o manifesto do
 Agent exige `lockfileHash` + `wranglerVersion` (deploy sem manifesto
-completo é recusado). A implementação V2 foi validada localmente em 2026-09-13;
-esta documentação não afirma deploy, migration ou alteração de segredos em
-produção.
+completo é recusado). A implementação V2 está em produção e verificada em 2026-10-01: a API na VPS
+rodava `29c015d` (build `36900550367`, `/health` + `/ready` 200, rollback tag
+e release manifest preservados) e a PWA/Agent na Cloudflare rodavam `06c00c2`
+(build `36896164604`), com live closure E2E PASS em produção
+([relatório](reports/2026-10-01-acceptance-closure.md)).
+
+## Dados e esquema
+
+- A API de produção serve o esquema canônico (`DB_SCHEMA=canonical`, banco
+  `pi_financeiro_canonical`); o banco legacy (`pi_financeiro`) permanece como
+  archive intocado.
+- O repair de âncoras foi commitado em produção (`repair_committed=2`,
+  `repair_compensated=0`) com residual zero sobre 32 contas vivas; a
+  reconciliação canônica roda com `--provenance=fresh`
+  (`checked=37 drifted=0`).
+- O uso de bearer legado é registrado em sink durável em `audit_logs`
+  (`auth.request.legacy_bearer_used`, PRs #51/#52); a janela Release B cobre
+  2026-10-01T20:14Z → 2026-10-15T20:14Z e o flip
+  (`SESSION_BEARER_FALLBACK_ENABLED=off` + rebuild do PWA com
+  `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`) permanece gate humano.
