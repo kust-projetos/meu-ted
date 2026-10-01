@@ -422,7 +422,27 @@ test.describe("TED pending operations", () => {
     await expect(confirmBtn).toBeEnabled();
     await expect(dialog.getByRole("button", { name: "Cancelar" })).toBeVisible();
 
+    // Single dispatch with response capture: the succeeded proof is the
+    // canonical receipt on the exact response the card consumed (not only
+    // the button disappearing — the succeeded terminal is transient because
+    // chat reloads history right after onResolved clears it).
+    const decisionResponse = page.waitForResponse(
+      (response) => response.request().method() === "POST" && response.url().includes("/decision"),
+      { timeout: 10000 },
+    );
     await confirmBtn.click();
+    const decisionResult = await decisionResponse;
+    expect(decisionResult.status()).toBe(200);
+    const decisionBody = await decisionResult.json() as {
+      operationId?: unknown;
+      status?: unknown;
+      receipt?: { entity?: { type?: unknown; id?: unknown } };
+    };
+    expect(decisionBody.operationId).toBe(opId);
+    expect(decisionBody.status).toBe("succeeded");
+    expect(decisionBody.receipt?.entity?.type).toBe("transaction");
+    expect(typeof decisionBody.receipt?.entity?.id).toBe("string");
+    expect(decisionBody.receipt?.entity?.id).not.toBe(opId);
 
     // Decide went through the agent proxy to the fixture with decision + requestId.
     const journal = await waitJournal(id, (e) => isDecisionPost(e) && bodyOf(e).decision === "confirm");
@@ -527,12 +547,32 @@ test.describe("TED pending operations", () => {
     await expect(retryBtn).toBeVisible();
     await expect(retryBtn).toBeEnabled();
 
+    // Single dispatch with response capture: the retry succeeded proof is the
+    // canonical receipt on the exact response consumed (deterministic — the
+    // succeeded terminal is transient under history reload).
+    const retryResponse = page.waitForResponse(
+      (response) => response.request().method() === "POST" && response.url().includes("/decision"),
+      { timeout: 10000 },
+    );
     await retryBtn.click();
+    const retryResult = await retryResponse;
+    expect(retryResult.status()).toBe(200);
+    const retryBody = await retryResult.json() as {
+      operationId?: unknown;
+      status?: unknown;
+      receipt?: { entity?: { type?: unknown; id?: unknown } };
+    };
+    expect(retryBody.operationId).toBe(opId);
+    expect(retryBody.status).toBe("succeeded");
+    expect(retryBody.receipt?.entity?.type).toBe("transaction");
+    expect(typeof retryBody.receipt?.entity?.id).toBe("string");
+    expect(retryBody.receipt?.entity?.id).not.toBe(opId);
 
     const journal = await waitJournal(id, (e) => isDecisionPost(e) && bodyOf(e).decision === "retry");
     const decisions = journal.filter(isDecisionPost);
     expect(decisions).toHaveLength(1);
     expect(decisions[0].status).toBe(200);
+    // No Retry offered again (a second retry would risk a duplicate effect).
     await expect(dialog.getByRole("button", { name: "Tentar novamente" })).toHaveCount(0);
 
     assertNoUndeclaredFailures(guard);

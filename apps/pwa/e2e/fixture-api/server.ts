@@ -28,7 +28,7 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
-import { StoreManager, SEEDS, generateId, type JournalEntry, type ScenarioRule, type TestStore, type AgentStubChatResponse } from "./store";
+import { StoreManager, SEEDS, generateId, deterministicReceiptEntityId, type JournalEntry, type ScenarioRule, type TestStore, type AgentStubChatResponse } from "./store";
 
 function resolveHarnessPortForCors(): number {
   const raw = process.env.E2E_HARNESS_PORT;
@@ -1331,6 +1331,11 @@ async function handleFixtureRequest(
           status: "succeeded",
           affectedTargets: ["transactions"],
           operationId,
+          // Canonical entity binding (strict client contract): a well-formed
+          // UUID naming the NEW transaction — deterministic per
+          // (testId, operationId), stable across repeats, never the pending
+          // id. Tests needing a malformed receipt must script one explicitly.
+          entity: { type: "transaction", id: deterministicReceiptEntityId(testId, operationId) },
         },
       });
       return;

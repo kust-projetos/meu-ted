@@ -20,7 +20,6 @@
  */
 
 import type { Pool, PoolClient } from 'pg';
-import { randomUUID } from 'node:crypto';
 import type { Transaction } from '../types/domain.js';
 import { withTransaction } from '../db/pool.js';
 import { domainErrors } from './errors.js';

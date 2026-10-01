@@ -16,7 +16,15 @@
 # confirmed commit (+ post-verify); lock timeout or anything else => BLOCKED,
 # API stays stopped, NO RETRY. Restart happens ONLY on confirmed-rollback or
 # post-verified complete.
-# Roots/SSH are parameters with safe defaults (no new credentials).
+# Roots/SSH are parameters (no new credentials). DEPLOYMENT IDENTITY IS
+# MANDATORY AND NEVER HARDCODED: pass -SshKey / -SshRemote explicitly, or
+# export PI_VPS_SSH_KEY / PI_VPS_SSH_REMOTE in the caller environment (loaded
+# by the caller from its private ../vps-hostinger.env). Values are never
+# printed and never committed. Missing/invalid identity fails closed (exit 13)
+# before any SSH, in every mode including read-only guard mode.
+# Real Planner invocation (values stay in the operator shell):
+#   $env:PI_VPS_SSH_KEY = '<from private env>'; $env:PI_VPS_SSH_REMOTE = '<user@host>'
+#   .\repair-executor-0930.ps1 -ExecuteRepair -RepairId <uuid> ...
 # Field separator for psql -F is a quoted tilde (a bare pipe breaks cmd/sh
 # quoting; a bare tilde would be $HOME-expanded by remote bash).
 param(
@@ -27,8 +35,8 @@ param(
   [string]$ExpectedBackupSha = '',
   [string]$ConfirmPhrase = '',
   [string]$SshExe = 'ssh.exe',
-  [string]$SshKey = 'C:\Users\walis\.ssh\id_ed25519_hostinger_vps',
-  [string]$SshRemote = 'deploy@187.77.249.47',
+  [string]$SshKey = '',
+  [string]$SshRemote = '',
   [string]$DbName = 'pi_financeiro_canonical',
   [string]$BackupId = 'pi-canonical-20260930T194523Z',
   [string]$BackupPath = '',
@@ -55,6 +63,24 @@ $Sep = '~'
 if ($ManifestDir -eq '') { $ManifestDir = "$env:TEMP\opencode" }
 $isComp = $Compensate -ne ''
 if ($isComp) { $RepairId = $Compensate }
+
+# Mandatory deployment identity: explicit params win, else the named caller
+# environment. No defaults exist on purpose (fail-closed exit 13, values never
+# echoed). Every mode needs it, including read-only guard mode.
+if ($SshKey -eq '') { $SshKey = $env:PI_VPS_SSH_KEY }
+if ($SshRemote -eq '') { $SshRemote = $env:PI_VPS_SSH_REMOTE }
+if ([string]::IsNullOrWhiteSpace($SshKey) -or [string]::IsNullOrWhiteSpace($SshRemote)) {
+  Write-Output 'REFUSED: deployment identity required: pass -SshKey/-SshRemote or set PI_VPS_SSH_KEY/PI_VPS_SSH_REMOTE (caller-private, never printed).'
+  exit 13
+}
+if ($SshRemote -notmatch '^[^@\s]+@[A-Za-z0-9.-]+$') {
+  Write-Output 'REFUSED: -SshRemote/PI_VPS_SSH_REMOTE must look like user@host.'
+  exit 13
+}
+if (-not (Test-Path -LiteralPath $SshKey -PathType Leaf)) {
+  Write-Output 'REFUSED: -SshKey/PI_VPS_SSH_KEY path does not exist.'
+  exit 13
+}
 
 function Redact([string]$s) {
   return ($s -replace '(?i)(password|secret|token|passwd|pwd)\s*=\s*\S+', '$1=<redacted>')

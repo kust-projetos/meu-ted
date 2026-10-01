@@ -6,9 +6,11 @@
  * lock against the LOCAL fixture with a controlled fault — never a random
  * production error:
  *
- * - The agent stub's DEFAULT confirm decision returns 200 WITHOUT a receipt
- *   entity (unscripted `decisions`), which the strict PWA client rejects with
- *   `agent.execution_outcome_unknown` (fail-closed, never success).
+ * - EXPLICIT controlled fault: the confirm decision is scripted with a
+ *   succeeded receipt MISSING `entity` (malformed by injection, never the
+ *   stub default — the default now serves a canonical receipt). The strict
+ *   PWA client rejects it with `agent.execution_outcome_unknown`
+ *   (fail-closed, never success).
  * - The approval card must then lock: "ainda não foi verificado" + NO
  *   Confirm/Cancel/Retry buttons, exactly ONE decision POST in the journal.
  *
@@ -233,11 +235,32 @@ test.describe("live closure uncertain (fixture fault control)", () => {
 
     await applyCspRewrite(page);
     await resetFixture(id);
-    // Controlled fault: chat proposes an actionable operation, but the
-    // decision reply is LEFT UNSCRIPTED — the stub default returns 200 with
-    // a receipt missing `entity`, which the strict client must reject
-    // (agent.execution_outcome_unknown) instead of resolving success.
-    await postAgentScript(id, { chat: [{ status: 200, body: proposedTurn(opId) }] });
+    // Controlled fault: chat proposes an actionable operation, and the
+    // confirm decision is EXPLICITLY scripted with a succeeded receipt
+    // missing `entity` (malformed by injection). The stub DEFAULT now serves
+    // a canonical receipt, so the fault must be scripted — relying on the
+    // default would silently become a success. The strict client must reject
+    // the malformed receipt (agent.execution_outcome_unknown) and the card
+    // must lock (expected lock below is unchanged).
+    await postAgentScript(id, {
+      chat: [{ status: 200, body: proposedTurn(opId) }],
+      decisions: {
+        [`${opId}:confirm`]: {
+          status: 200,
+          body: {
+            operationId: opId,
+            status: "succeeded",
+            receipt: {
+              mutationId: `rcpt-${opId}`,
+              mutationKind: "transactions.expense.create",
+              status: "succeeded",
+              affectedTargets: ["transactions"],
+              operationId: opId,
+            },
+          },
+        },
+      },
+    });
     await page.clock.setFixedTime(FIXED_CLOCK);
     await page.context().setExtraHTTPHeaders({ [E2E_TEST_ID_HEADER]: id });
 

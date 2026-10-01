@@ -14,7 +14,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool } from 'pg';
 import { runKeyedMutation } from '../../src/writes/pending-idempotency.js';
 import type { Transaction } from '../../src/types/domain.js';
 

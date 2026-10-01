@@ -88,6 +88,11 @@ test.before(() => {
   ctx.manifests = join(ctx.dir, 'manifests'); mkdirSync(ctx.manifests);
   ctx.shim = join(ctx.dir, 'fake-ssh.cmd');
   writeFileSync(ctx.shim, SHIM);
+  // Fake deployment identity: a real (empty) key FILE so the executor's
+  // Test-Path check passes without any genuine credential material.
+  ctx.fakekey = join(ctx.dir, 'fake-id-testonly');
+  writeFileSync(ctx.fakekey, 'fake-key-material-for-wrapper-tests-only\n');
+  ctx.fakeremote = 'testuser@testhost.invalid';
   ctx.server = createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', gitSha: API_SHA }));
@@ -115,12 +120,18 @@ function setScenario(name, responses) {
   for (const f of readdirSync(ctx.flags)) rmSync(join(ctx.flags, f), { force: true });
   writeFileSync(join(ctx.dir, 'ctr.txt'), '0');
 }
-function runExec(args, scenario) {
+function runExec(args, scenario, extraEnv = {}) {
   // Async: the child calls back into this process's health server.
+  // Deployment identity is injected explicitly (fake key file + fake remote);
+  // pass { PI_VPS_SSH_KEY: null, PI_VPS_SSH_REMOTE: null } to simulate the
+  // missing-identity case (deleted from the child env, never inherited).
   const env = {
     ...process.env, FAKE_CTR: join(ctx.dir, 'ctr.txt'),
     FAKE_RESP: ctx.resp, FAKE_FLAGS: ctx.flags, FAKE_SCENARIO: scenario,
+    PI_VPS_SSH_KEY: ctx.fakekey, PI_VPS_SSH_REMOTE: ctx.fakeremote,
+    ...extraEnv,
   };
+  for (const k of Object.keys(env)) if (env[k] === null) delete env[k];
   return new Promise((resolveP) => {
     execFile('powershell',
       ['-NoProfile', '-File', EXECUTOR, '-SshExe', ctx.shim,
@@ -356,4 +367,25 @@ test('compensate preflight READY and NOT-READY (read-only)', async (t) => {
   const bad = await runExec(['-Compensate', rid], 'comppre');
   assert.equal(bad.exit, 12, bad.out);
   assert.match(bad.out, /NOT-READY-COMPENSATE/);
+});
+
+test('missing deployment identity fails closed (exit 13) before any SSH', async (t) => {
+  if (!winOnly(t)) return;
+  // No -SshKey/-SshRemote flags AND no PI_VPS_SSH_* env (deleted, not
+  // inherited): even guard mode must refuse without touching SSH.
+  setScenario('noid', [{ text: GUARDS_OK }]);
+  const r = await runExec([], 'noid',
+    { PI_VPS_SSH_KEY: null, PI_VPS_SSH_REMOTE: null });
+  assert.equal(r.exit, 13, r.out);
+  assert.match(r.out, /deployment identity required/);
+  assert.ok(!r.out.includes('testuser') && !r.out.includes('fake-id'),
+    'refusal must not echo identity material');
+});
+
+test('malformed remote identity fails closed (exit 13)', async (t) => {
+  if (!winOnly(t)) return;
+  setScenario('badremote', [{ text: GUARDS_OK }]);
+  const r = await runExec([], 'badremote', { PI_VPS_SSH_REMOTE: 'not-a-user-at-host' });
+  assert.equal(r.exit, 13, r.out);
+  assert.match(r.out, /must look like user@host/);
 });
