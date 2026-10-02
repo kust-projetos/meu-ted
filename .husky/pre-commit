@@ -1,0 +1,13 @@
+# Fast local gates (~15s total). Heavy gates (typecheck, test, security:*) remain CI-authoritative
+# and are enforced by required checks (Gate — all checks + quality (22, 10)) on every PR.
+# Lint coverage note: CI runs lint only for API and PWA; Agent/Broker lint runs locally via `pnpm lint` (AGENTS.md rule 5).
+# Emergency bypass: git commit --no-verify (use sparingly and justify it in the PR description).
+set -e
+
+pnpm docs:lint
+pnpm action-pins:check
+pnpm test:skip-gate
+pnpm capabilities:check
+pnpm write-policy:check
+pnpm governance:check
+pnpm public-safety --strict
