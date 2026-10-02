@@ -5,7 +5,7 @@ import {
 } from '../../src/audit/events.js';
 
 describe('V4 observability contract (SPEC §24)', () => {
-  it('exposes the 8 canonical event types', () => {
+  it('exposes the 11 canonical event types (8 from SPEC §24 + 3 ADR-026 authorization events)', () => {
     expect([...OBSERVABILITY_EVENT_TYPES].sort()).toEqual(
       [
         'agent.workspace.legacy_access',
@@ -14,10 +14,40 @@ describe('V4 observability contract (SPEC §24)', () => {
         'csp.violation',
         'device.tokens.legacy_active',
         'mic.error',
+        'mutation.authorization.evaluated',
+        'mutation.autoauthorized',
+        'mutation.autoexecute.blocked',
         'mutation.reconcile.enqueued',
         'offline.locked',
       ].sort(),
     );
+  });
+
+  it('accepts sanitized payloads for the ADR-026 authorization events', () => {
+    expect(
+      buildObservabilityEvent('mutation.authorization.evaluated', {
+        tool: 'transactions.expense.create',
+        risk: 'low',
+        decision: 'auto_execute',
+        reason: 'explicit_low_risk',
+      }),
+    ).toMatchObject({ eventType: 'mutation.authorization.evaluated' });
+    expect(
+      buildObservabilityEvent('mutation.autoauthorized', {
+        tool: 'transactions.income.create',
+        risk: 'low',
+        decision: 'auto_execute',
+        reason: 'explicit_low_risk',
+      }),
+    ).toMatchObject({ eventType: 'mutation.autoauthorized' });
+    expect(
+      buildObservabilityEvent('mutation.autoexecute.blocked', {
+        tool: 'transactions.expense.create',
+        risk: 'high',
+        decision: 'require_confirmation',
+        reason: 'high_value',
+      }),
+    ).toMatchObject({ eventType: 'mutation.autoexecute.blocked' });
   });
 
   it('accepts a clean payload for each audit_logs-backed counter', () => {
