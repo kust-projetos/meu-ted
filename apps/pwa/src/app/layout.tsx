@@ -56,7 +56,9 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   // A5: zoom liberado (WCAG 1.4.4) — iOS só aplica pinch-zoom em inputs
-  // com font-size >= 16px; ver AuthGate (16px) e NewTransactionSheet/Input.
+  // com font-size >= 16px. Contrato global em `globals.css` (regra
+  // `pointer: coarse` cobre input/textarea/select em todo o app;
+  // AuthGate e NewTransactionSheet/Input já estavam 16px por componente).
   viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: dark)", color: "#1F2A27" },

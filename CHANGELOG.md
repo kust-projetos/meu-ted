@@ -3,6 +3,18 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-02 — sem auto-zoom no foco de form controls, sem release)
+
+- **Fim do auto-zoom do iOS ao focar caixas de texto**: regra global em
+  `globals.css` (`@media (pointer: coarse)`) força `font-size: 16px` em
+  `input`/`textarea`/`select` — o iOS só aplica pinch-zoom no foco quando
+  o controle computa < 16px, e vários componentes seguiam abaixo do limiar
+  (textarea do chat, convite, gerenciador de workspaces, payables,
+  registros, filtros). Zoom do usuário continua livre (WCAG 1.4.4, sem
+  `maximum-scale`); desktop (`pointer: fine`) não é afetado. Teste de pin
+  em `src/app/__tests__/globals-input-zoom.test.ts`; comentário do
+  `Viewport` em `layout.tsx` atualizado para apontar o contrato global.
+
 ## Unreleased (2026-10-01 — página dedicada do agente TED `/ted`, sem release)
 
 - **Chat do TED vira página `/ted` (sem semântica de modal)**: `TedChat`
