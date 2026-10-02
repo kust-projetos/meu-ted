@@ -16,6 +16,7 @@ import type { MutationReceipt } from '@pi-finance/llm-contracts';
 import { createExpenseInputSchema, createIncomeInputSchema } from '../writes/types.js';
 import type { WriteStore } from '../writes/store.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
+import { AUTOEXECUTION_ELIGIBLE_TOOLS } from './policy.js';
 
 export const APPROVAL_TOOL_IDS = [
   'transactions.expense.create',
@@ -47,6 +48,8 @@ export type ApprovalToolContract = {
   tool: ApprovalToolId;
   inputSchema: z.ZodTypeAny;
   approvalRequired: true;
+  authorizationPolicy: 'risk_based';
+  autoExecutionEligible: boolean;
   executor: ApprovalToolExecutor;
 };
 
@@ -175,13 +178,17 @@ const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
   'transactions.expense.create': {
     tool: 'transactions.expense.create',
     inputSchema: createExpenseInputSchema,
-    approvalRequired: true,
+    approvalRequired: true, // Legacy declarative metadata; human confirmation is conditional via ADR-026.
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('transactions.expense.create'),
     executor: executeExpenseCreate,
   },
   'transactions.income.create': {
     tool: 'transactions.income.create',
     inputSchema: createIncomeInputSchema,
-    approvalRequired: true,
+    approvalRequired: true, // Legacy declarative metadata; human confirmation is conditional via ADR-026.
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('transactions.income.create'),
     executor: executeIncomeCreate,
   },
 };

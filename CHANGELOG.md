@@ -3,6 +3,24 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-02 — SPEC/PLAN V5 de autorização por risco documentadas e revisadas; sem release)
+
+- **SPEC V5 — Autonomia por Risco e Inteligência Conversacional** documentada
+  (`docs/MEU-TED-SPEC-V5-AUTONOMIA-POR-RISCO.md`) com plano faseado
+  (`docs/MEU-TED-PLANO-V5-AUTONOMIA-POR-RISCO.md`) e revisão independente de
+  baseline (`docs/reports/2026-10-02-ted-risk-authorization-spec-review.md`).
+  Confirmação humana passa de universal a **condicional**: policy
+  determinística na API, allowlist restrita a
+  `transactions.{expense,income}.create`, R$500 segue exigindo confirmação,
+  destrutivos sempre manuais, shadow mode antes de ON. PR A (preparatório,
+  sem mudança de comportamento nos fluxos de autorização existentes):
+  `evaluateMutation` determinístico em `apps/api/src/approvals/policy.ts`
+  (matriz low/medium/high/destructive + `AUTOEXECUTION_ELIGIBLE_TOOLS`),
+  metadados aditivos `authorizationPolicy`/`autoExecutionEligible` no
+  tool registry, migration aditiva `V059__pending_operation_authorization.sql`
+  (colunas nullable de auditoria de autorização) e `ADR-026`. Endpoint de
+  autoautorização, capability, flag e rollout são PRs seguintes.
+
 ## Unreleased (2026-10-02 — sem auto-zoom no foco de form controls, sem release)
 
 - **Fim do auto-zoom do iOS ao focar caixas de texto**: regra global em
