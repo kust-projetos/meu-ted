@@ -81,7 +81,7 @@ const makeFakeApprovalApi = (initial: FakeOp[] = [], fakeOpts?: { executeReceipt
       (ops.get(id) as unknown as { key?: string }).key = key;
       return { id };
     }
-    const match = /^\/pending-operations\/v2\/([^/]+)\/(confirm|execute|cancel|retry)$/.exec(path);
+    const match = /^\/pending-operations\/v2\/([^/]+)\/(authorize|confirm|execute|cancel|retry)$/.exec(path);
     if (method === 'POST' && match) {
       const [, id, action] = match as unknown as [string, string, string];
       const op = ops.get(id);
@@ -95,6 +95,12 @@ const makeFakeApprovalApi = (initial: FakeOp[] = [], fakeOpts?: { executeReceipt
         op.status = 'confirmed';
         events.push(`confirm:${id}`);
         return { id, attestation: 'a'.repeat(40) };
+      }
+      if (action === 'authorize') {
+        if (op.status !== 'proposed') throw Object.assign(new Error('approval.autoexecute_not_eligible'), { statusCode: 409, code: 'approval.autoexecute_not_eligible' });
+        op.status = 'confirmed';
+        events.push(`authorize:${id}`);
+        return { id, status: 'confirmed', attestation: 'c'.repeat(40) };
       }
       if (action === 'execute') {
         if (op.status !== 'confirmed') throw Object.assign(new Error('approval.attestation_replayed'), { statusCode: 403 });
@@ -234,6 +240,15 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
         entity: { type: 'transaction', id: 'mut-op-1' },
       },
     });
+  });
+
+  it('auto-authorize executes through the coordinator and returns the validated receipt once', async () => {
+    const fake = makeFakeApprovalApi([expenseOp('op-auto')]);
+    const coordinator = new PendingOperationCoordinator({ client: fake.api });
+    const result = await coordinator.authorizeAndExecute('op-auto', { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! });
+    expect(result.status).toBe('succeeded');
+    expect(result.receipt?.operationId).toBe('op-auto');
+    expect(fake.events).toEqual(['authorize:op-auto', 'execute:op-auto']);
   });
 
   it('ignores client-declared pendingOperationIds as authority', async () => {

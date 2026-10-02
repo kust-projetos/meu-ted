@@ -53,8 +53,29 @@ export function formatDuplicateWarning(match: DuplicateMatch, newDesc: string): 
 
 export async function detectDuplicateViaApi(
   input: DuplicateCheckInput,
-  opts: { apiOrigin: string; workspaceId: string; delegatedToken: string },
+  opts: { apiOrigin: string; workspaceId: string; delegatedToken: string; strict?: boolean },
 ): Promise<DuplicateCheckResult> {
+  if (opts.strict) return detectDuplicateStrictResult(input, opts);
+  const res = await fetch(`${opts.apiOrigin.replace(/\/$/, "")}/transactions/detect-duplicate`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${opts.delegatedToken}`,
+      "X-Workspace-Id": opts.workspaceId,
+    },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) return { duplicate_detected: false };
+  const body = (await res.json()) as { duplicate_detected: boolean; match?: DuplicateMatch };
+  if (!body.duplicate_detected || !body.match) return { duplicate_detected: false };
+  return { duplicate_detected: true, match: body.match, warning: formatDuplicateWarning(body.match, input.description) };
+}
+
+const detectDuplicateStrictResult = async (
+  input: DuplicateCheckInput,
+  opts: { apiOrigin: string; workspaceId: string; delegatedToken: string },
+): Promise<DuplicateCheckResult> => {
+  try {
   const res = await fetch(`${opts.apiOrigin.replace(/\/$/, "")}/transactions/detect-duplicate`, {
     method: "POST",
     headers: {
@@ -65,17 +86,26 @@ export async function detectDuplicateViaApi(
     body: JSON.stringify(input),
   });
   if (!res.ok) {
-    // Fail-open: if detection fails, do not block creation. Log and return not-detected.
-    return { duplicate_detected: false };
+    return { duplicate_detected: true };
   }
-  const body = (await res.json()) as { duplicate_detected: boolean; match?: DuplicateMatch };
-  if (!body.duplicate_detected || !body.match) return { duplicate_detected: false };
+  const body = (await res.json()) as { duplicate_detected?: unknown; match?: DuplicateMatch };
+  if (typeof body.duplicate_detected !== 'boolean') return { duplicate_detected: true };
+  if (!body.duplicate_detected) return { duplicate_detected: false };
+  if (!body.match) return { duplicate_detected: true };
   return {
     duplicate_detected: true,
     match: body.match,
     warning: formatDuplicateWarning(body.match, input.description),
   };
+  } catch {
+    return { duplicate_detected: true };
+  }
 }
+
+export const detectDuplicateSuspectedStrict = async (
+  input: DuplicateCheckInput,
+  opts: Omit<Parameters<typeof detectDuplicateViaApi>[1], 'strict'>,
+): Promise<boolean> => (await detectDuplicateViaApi(input, { ...opts, strict: true })).duplicate_detected;
 
 /**
  * Agent tool spec for use with the generated HTTP tools pipeline.

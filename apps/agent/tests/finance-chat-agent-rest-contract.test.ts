@@ -314,6 +314,7 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
     // coordinator's confirm/cancel/retry/read — still narrowly approval-only,
     // device-bound, and bound to this turn's requestId.
     expect(claims.capabilities).toEqual([
+      "financial.read",
       "financial.approval.propose",
       "financial.approval.read",
       "financial.approval.confirm",

@@ -137,6 +137,19 @@ export class PendingOperationCoordinator {
   /** Confirm + execute exactly once (T2.2 re-emission and T2.3 TX split live in the API). */
   async confirm(operationId: string, identity: MutationIdentity): Promise<DecisionResult> {
     const confirmation = await this.dependencies.client.confirm(operationId, identity);
+    return this.executeAttested(confirmation, identity);
+  }
+
+  async authorizeAndExecute(operationId: string, identity: MutationIdentity): Promise<DecisionResult> {
+    const authorization = await this.dependencies.client.authorize(operationId, identity);
+    return this.executeAttested(authorization, identity);
+  }
+
+  async executeAuthorized(confirmation: { operationId: string; attestation: string }, identity: MutationIdentity): Promise<DecisionResult> {
+    return this.executeAttested(confirmation, identity);
+  }
+
+  private async executeAttested(confirmation: { operationId: string; attestation: string }, identity: MutationIdentity): Promise<DecisionResult> {
     const execution = await this.dependencies.client.execute({
       operationId: confirmation.operationId,
       attestation: confirmation.attestation,
@@ -164,16 +177,7 @@ export class PendingOperationCoordinator {
   /** Conversational retry (§8.2/§13): failed → confirmed (fresh attestation) → execute once. */
   async retry(operationId: string, identity: MutationIdentity): Promise<DecisionResult> {
     const confirmation = await this.dependencies.client.retry(operationId, identity);
-    const execution = await this.dependencies.client.execute({
-      operationId: confirmation.operationId,
-      attestation: confirmation.attestation,
-      identity,
-    });
-    return {
-      operationId: execution.operationId,
-      status: 'succeeded',
-      ...(execution.receipt ? { receipt: execution.receipt } : {}),
-    };
+    return this.executeAttested(confirmation, identity);
   }
 
   /**

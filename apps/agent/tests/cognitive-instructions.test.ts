@@ -37,8 +37,8 @@ describe('TED instructions (Part A, item 15)', () => {
     expect(TED_GOLDEN_RULE).toMatch(/sem autorização/i);
   });
 
-  it('mutation policy routes through the existing approval flow', () => {
-    expect(TED_MUTATION_POLICY).toMatch(/approval/i);
+  it('mutation policy keeps manual fallback on the confirmation card', () => {
+    expect(TED_MUTATION_POLICY).toMatch(/cartão/i);
     expect(TED_MUTATION_POLICY).toMatch(/confirmação/i);
   });
 

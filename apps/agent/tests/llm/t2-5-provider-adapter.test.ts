@@ -18,19 +18,23 @@ describe('T2.5 provider adapters', () => {
     const native: ProviderOutput = { toolCalls: [{ name: 'plan', arguments: JSON.stringify({ plan }) }] };
     const text: ProviderOutput = { text: JSON.stringify({ plan }) };
     expect(adaptProviderOutput(native)).toMatchObject({ plan: adaptProviderOutput(text).plan, response: adaptProviderOutput(text).response, policy: adaptProviderOutput(text).policy });
-    expect(adaptProviderOutput(native).policy).toEqual({ capability: 'financial.read', writeAuthorized: false, approvalRequired: true });
+    expect(adaptProviderOutput(native).policy).toEqual({ capability: 'financial.read', writeAuthorized: false, approvalRequired: true, authorizationMode: 'none' });
   });
 
   it('rejects invalid schema and authority fields', () => {
     expect(() => adaptProviderOutput({ text: JSON.stringify({ plan: { ...plan, version: '1' } }) })).toThrow('agent.invalid_provider_output');
     expect(() => adaptProviderOutput({ text: JSON.stringify({ plan, mutationApproved: true }) })).toThrow('agent.invalid_provider_output');
     expect(() => validateProviderOutput({ plan, capability: 'financial.write' } as unknown as ProviderOutput)).toThrow('agent.invalid_provider_output');
+    for (const field of ['authorizationMode', 'authorizationReason', 'risk', 'decision', 'autoExecute']) {
+      expect(() => adaptProviderOutput({ text: JSON.stringify({ plan, [field]: 'auto' }) })).toThrow('agent.invalid_provider_output');
+    }
+    expect(adaptProviderOutput({ text: JSON.stringify({ plan, response: { text: 'ok', reason: 'ordinary response metadata' } }) }).response.text).toBe('ok');
   });
 
   it('never returns provider-supplied authority fields', () => {
     const output = adaptProviderOutput({ text: JSON.stringify({ plan }) });
     expect(output).not.toHaveProperty('mutationApproved');
-    expect(output.policy).toEqual({ capability: 'financial.read', writeAuthorized: false, approvalRequired: true });
+    expect(output.policy).toEqual({ capability: 'financial.read', writeAuthorized: false, approvalRequired: true, authorizationMode: 'none' });
   });
 
   it('accepts OpenAI-compatible Broker completion output but never executes it', () => {

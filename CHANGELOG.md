@@ -3,6 +3,44 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-02 — PR C: Agent solicita autoautorização com guard determinístico; sem release)
+
+- **Guard de intenção explícita** (`hasExplicitMutationIntent` em
+  `apps/agent/src/safety/tool-approvals.ts`): detecção conservadora de
+  imperativos ("registre/adicione/lance/anote/inclua…" e inflexões testadas);
+  perguntas, condicionais ("e se…"), negações, relatos ("gastei") e texto
+  citado NUNCA elegem autoexecução.
+- **Minting elevado lazy**: o token base do turno permanece com as 6
+  capabilities (+ `financial.read`, exigida pelo detector de duplicidade —
+  contrato REST atualizado); um client elevado com
+  `financial.approval.autoexecute` só é mintado sob demanda, dentro do turno,
+  quando a elegibilidade determinística passa: tool allowlisted + args
+  completos + sem ambiguidade + intenção explícita + detector de duplicidade
+  estrito **fail-closed** (erro/503 ⇒ suspeita ⇒ sem autoexecução).
+- **Fast path no orquestrador**: propose → authorize → execute com os
+  mesmos primitivos de attestation/receipt (sem segunda máquina de execução);
+  `200` ⇒ turno `succeeded` com receipt, sem card; recusas definitivas
+  (409 disabled/not_eligible, 403) ⇒ fallback silencioso para o card manual;
+  erro de transporte/5xx no authorize ⇒ leitura autoritativa única: `proposed`
+  ⇒ card seguro, qualquer outro estado ⇒ resposta inconclusiva (nunca card,
+  nunca sucesso); incerteza pós-execute ⇒ caminho inconclusivo existente,
+  no máximo 1 efeito, sem re-autorização.
+- **MutationPolicy evolutiva** construída só por código determinístico
+  (`authorizationMode`/`authorizationReason`/`risk`); provider-adapter
+  rejeita os novos campos de autoridade vindos do modelo (`reason` genérico
+  preservado).
+- **Fix sistêmico pré-existente**: `POST /transactions/detect-duplicate`
+  deixou de responder `200 {duplicate_detected:false}` em falha
+  (pool indisponível/erro de busca) e passa a responder
+  `503 duplicate_detection_unavailable` — falha nunca é negativa definitiva.
+- **UX conversacional**: `TED_MUTATION_POLICY` e skill `registros`
+  alinhadas ao sucesso imediato (ação+resultado+undo, sem jargão interno,
+  sucesso só com receipt); `INSTRUCTIONS_VERSION` atualizada.
+- Testes: 13 cenários de fast-path (sucesso/mint lazy/kill switch/recusa
+  server-side/duplicata/lost-response/pós-falha/injeção de memória/sem
+  jargão), guard, detector estrito, contrato REST. Suítes: Agent 812, API
+  2448, broker 25, PWA 2280 — verdes.
+
 ## Unreleased (2026-10-02 — PR B: endpoint de autoautorização V2 com kill switch; sem release)
 
 - **`POST /pending-operations/v2/:id/authorize`** (capability estreita
