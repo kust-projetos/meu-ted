@@ -12,3 +12,15 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+  # Dependabot security updates consult this ecosystem entry (ignore rules
+  # are respected even with version updates disabled via limit 0). sharp
+  # stays on a deliberate future-dated pin until 2026-12-31 — allowlisted in
+  # pwa-audit + .trivyignore, see docs/security/pwa-audit-risk-acceptance.md
+  # — so grouped security PRs must not keep proposing 0.34.5 -> 0.35.x.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "sharp"

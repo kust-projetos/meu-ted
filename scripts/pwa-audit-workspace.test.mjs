@@ -148,6 +148,19 @@ test("multi-level parent chain nests correctly", () => {
   assert.deepEqual(translated, { a: { b: { c: "1.2.3" } } });
 });
 
+test("scoped package names pass through and nest correctly", () => {
+  const translated = translatePnpmOverridesToNpm({
+    "@modelcontextprotocol/sdk": ">=1.26.0",
+    "@scope/pkg@^1": "1.2.3",
+    "@ai-sdk/provider-utils>undici": ">=6.28.1 <7",
+  });
+  assert.deepEqual(translated, {
+    "@modelcontextprotocol/sdk": ">=1.26.0",
+    "@scope/pkg@^1": "1.2.3",
+    "@ai-sdk/provider-utils": { undici: ">=6.28.1 <7" },
+  });
+});
+
 test("unsupported pnpm selectors fail closed with explicit error", () => {
   for (const bad of ["next>", ">sharp", "a>>b", "", "foo(bar)", "foo@1 || bar@2", "a b>c"]) {
     assert.throws(() => translatePnpmOverridesToNpm({ [bad]: "1.0.0" }), /unsupported pnpm override selector/);

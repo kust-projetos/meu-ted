@@ -384,13 +384,17 @@ export function resolveWorkspaceDependency(root, packageName) {
 // - `pkg@spec: version` → verbatim (npm accepts `name@spec` keys)
 // - `parent>child: version` → `{ parent: { child: version } }`
 // - `a>b>c: version` → `{ a: { b: { c: version } } }`
-//   where each chain segment is a bare name or `name@spec`.
+//   where each chain segment is a bare name, a scoped name (`@scope/name`),
+//   or either form with an `@spec` suffix (`nanoid@^3`, `@scope/name@^1`).
+// - Scoped names are accepted in every position (`@modelcontextprotocol/sdk`,
+//   `@ai-sdk/provider-utils>undici`).
 //
 // Anything else (empty segments, `>>`, parens/braces/brackets/pipes/amps,
 // whitespace, globs, `peer(...)` syntax, non-string values) fails closed with
 // an explicit error so a pnpm-only selector can never leak verbatim into the
 // temporary npm manifest and silently stop enforcing a pin (e.g. the current
 // `next>sharp: 0.34.5` production pin).
+const OVERRIDE_NAME = /^(@[^@\s>]+\/[^@\s>]+|[^@\s>]+)(@\S+)?$/;
 export function translatePnpmOverridesToNpm(overrides = {}) {
   const npmOverrides = {};
   for (const [selector, version] of Object.entries(overrides)) {
@@ -400,7 +404,7 @@ export function translatePnpmOverridesToNpm(overrides = {}) {
       );
     }
     if (!selector.includes(">")) {
-      if (!/^[^@\s>]+(@\S+)?$/.test(selector) || /[()*|&:{}\[\],]/.test(selector)) {
+      if (!OVERRIDE_NAME.test(selector) || /[()*|&:{}\[\],]/.test(selector)) {
         throw new Error(
           `check-pwa-audit: FAIL — unsupported pnpm override selector "${selector}"`,
         );
@@ -412,7 +416,7 @@ export function translatePnpmOverridesToNpm(overrides = {}) {
     for (const part of parts) {
       if (
         !part ||
-        !/^[^@\s>]+(@\S+)?$/.test(part) ||
+        !OVERRIDE_NAME.test(part) ||
         /[()*|&:{}\[\],\s]/.test(part)
       ) {
         throw new Error(
