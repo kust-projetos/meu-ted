@@ -31,8 +31,13 @@ graph LR
    contexto não autoritativo.
 3. Provedores são adaptadores de texto/ferramenta e nunca são uma fonte de
    identidade, capability, aprovação ou valor financeiro.
-4. Uma mutação passa por proposta V2, confirmação exata e execução
-   idempotente na API. A PWA recebe apenas DTOs seguros de estado.
+4. Uma mutação passa por PendingOperation V2 e execução idempotente na API.
+   Confirmação humana é condicional: policy determinística autoriza apenas a
+   allowlist `transactions.{expense,income}.create` de baixo risco; R$ 500 ou
+   mais e operações destrutivas/incertas permanecem manuais. Receipt e
+   autoridade canônica da API não mudam; a PWA recebe apenas DTOs seguros de
+   estado. `TED_RISK_BASED_AUTOEXECUTE` (`off|shadow|on`) fica `off` por padrão,
+   com `off` como kill switch.
 5. CI executa API, Agent, Broker, PWA, Postgres descartável, containers,
    segurança, documentação e invariantes arquiteturais. Deploys PWA/Agent só
    são elegíveis após conclusão `success` do workflow `CI` no SHA aprovado.

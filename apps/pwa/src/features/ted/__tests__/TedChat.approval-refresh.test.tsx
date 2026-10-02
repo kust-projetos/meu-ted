@@ -419,4 +419,45 @@ describe("TedChat — post-approval reconciliation (T3.3)", () => {
       expect.objectContaining({ mutationKind: expect.anything() }),
     );
   });
+
+  it("autoauthorized succeeded turn renders success, reconciles its receipt and offers the structured undo", async () => {
+    const user = userEvent.setup();
+    const receipt: agentClient.PendingOperationReceipt = {
+      mutationId: "mut-auto-1",
+      mutationKind: "transactions.expense.create",
+      status: "succeeded",
+      affectedTargets: ["transactions", "accounts"],
+      operationId: "op-auto-1",
+      entity: { type: "transaction", id: "tx-auto-1" },
+    };
+    vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
+    vi.spyOn(agentClient, "sendAgentMessage").mockResolvedValue({
+      turnId: "turn-auto-1",
+      status: "completed",
+      output: "Despesa registrada com sucesso.",
+      pendingOperation: {
+        id: "op-auto-1",
+        status: "succeeded",
+        operation: "transactions.expense.create",
+        receipt,
+        // Additive server metadata is intentionally irrelevant to rendering.
+        authorizationMode: "auto",
+      } as agentClient.AgentTurn["pendingOperation"],
+      undoProposal: {
+        requestId: "undo-auto-1",
+        status: "proposed",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      },
+    });
+
+    render(<TedChat />);
+    await user.type(screen.getByLabelText("Mensagem para o assistente"), "registre despesa");
+    await user.click(screen.getByRole("button", { name: "Enviar mensagem" }));
+
+    expect(await screen.findByText("Despesa registrada com sucesso.")).toBeInTheDocument();
+    await waitFor(() => expect(reconcileMutation).toHaveBeenCalledWith({ receipt }));
+    expect(screen.queryByTestId("ted-approval-item")).toBeNull();
+    expect(screen.getByTestId("ted-undo-card")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirmar desfazer" })).toBeInTheDocument();
+  });
 });

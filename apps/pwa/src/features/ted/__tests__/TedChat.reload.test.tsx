@@ -143,6 +143,41 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
     expect(screen.queryByRole("button", { name: /aprovar|confirmar/i })).toBeNull();
   });
 
+  it("succeeded history after reload never renders a pending approval card", async () => {
+    vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
+      {
+        id: "msg-success",
+        actorId: "ted",
+        role: "assistant",
+        content: "Despesa registrada com sucesso.",
+        isOwn: false,
+        createdAt: undefined,
+        attachments: undefined,
+        pendingOperation: {
+          id: "pending-v2-1",
+          status: "succeeded",
+          operation: "transactions.expense.create",
+          receipt: {
+            mutationId: "mut-pending-v2-1",
+            mutationKind: "transactions.expense.create",
+            status: "succeeded",
+            affectedTargets: ["transactions"],
+            operationId: "pending-v2-1",
+            entity: { type: "transaction", id: "tx-pending-v2-1" },
+          },
+        },
+      },
+    ]);
+    // A completed operation cannot be in the authoritative live-active list.
+    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
+
+    render(<TedChat />);
+
+    expect(await screen.findByText("Despesa registrada com sucesso.")).toBeInTheDocument();
+    expect(screen.queryByTestId("ted-approval-item")).toBeNull();
+    expect(screen.queryByRole("button", { name: /confirmar|aprovar/i })).toBeNull();
+  });
+
   it("history fetch failure with no prior history shows error/empty state, never a fabricated card", async () => {
     vi.mocked(agentClient.fetchAgentHistory).mockRejectedValueOnce(new Error("boom"));
 

@@ -28,6 +28,15 @@ graph TD
   autoridade e o token de dispositivo não substitui a sessão online. A UX do
   TED envia apenas uma decisão e um `requestId`; nunca envia/recebe
   atestação. Rotas V1 de aprovação direta não são utilizadas.
+- **Autorização de mutações TED:** a confirmação humana é condicional, não
+  universal. A policy determinística da API pode autoautorizar somente
+  `transactions.expense.create` e `transactions.income.create` de baixo risco;
+  o limiar de R$ 500 exige confirmação e operações destrutivas/incertas ficam
+  sempre manuais. PendingOperation V2, idempotência e receipt permanecem
+  inalterados. `TED_RISK_BASED_AUTOEXECUTE` aceita `off|shadow|on`, default
+  `off`; kill switch = definir `off`. O modelo não concede autorização.
+  Consulte [ADR-026](adr/ADR-026-risk-based-mutation-authorization.md) e
+  [observabilidade](ops/ted-autoexecute-observability.md).
 - **Agent (`apps/agent`):** todos os canais passam por
   `ConversationOrchestrator` e `TurnInput`. Router, evidências, resposta
   grounded, memória e observabilidade são internos. A SQLite do Durable
@@ -41,9 +50,11 @@ graph TD
 ## Segurança operacional
 
 - Mutações financeiras exigem API autoritativa, capability estreita,
-  binding de workspace/ator/dispositivo, proposta válida e idempotência.
+  binding de workspace/ator/dispositivo, PendingOperation válida e
+  idempotência; a confirmação humana é exigida pela policy, salvo autoexecução
+  low-risk explicitamente autorizada para a allowlist inicial.
 - O sistema falha fechado se falta esquema, evidência, binding, capability,
-  confirmação ou autoridade do provider.
+  autorização técnica, receipt ou autoridade do provider.
 - O Agent revalida a configuração/epoch do provider antes de publicar uma
   resposta; falha de upstream não produz sucesso sintético.
 - O snapshot offline é V3: envelope com identidade opaca não-autenticadora

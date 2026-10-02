@@ -484,10 +484,26 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       }
       setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "sent" as const } : m)));
       await loadHistory();
+      // The Agent turn is itself authoritative for its user-facing response.
+      // History can briefly lag (or omit an autoexecuted result), so retain
+      // the returned text unless the refresh already contains that response.
+      if (turn.output?.trim()) {
+        setMessages((previous) => {
+          if (previous.some((message) => !message.isOwn && message.content === turn.output)) return previous;
+          return [...previous, {
+            id: turn.turnId,
+            actorId: "ted",
+            role: "assistant",
+            content: turn.output!,
+            createdAt: new Date().toISOString(),
+            isOwn: false,
+          }];
+        });
+      }
       // The turn response is authoritative too. Apply it AFTER the history
       // reload so an eventually consistent history read cannot erase the card
       // just returned by the Agent.
-      if (returnedPendingOperation) {
+      if (returnedPendingOperation && returnedPendingOperation.status !== "succeeded") {
         setPendingOps((previous) => [
           returnedPendingOperation,
           ...previous.filter((operation) => operation.id !== returnedPendingOperation.id),
