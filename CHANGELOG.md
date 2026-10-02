@@ -3,6 +3,25 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-02 — PR B: endpoint de autoautorização V2 com kill switch; sem release)
+
+- **`POST /pending-operations/v2/:id/authorize`** (capability estreita
+  `financial.approval.autoexecute`, só mintável server-side pelo Agent): a API
+  reavalia a risk policy determinística sobre os args canônicos armazenados e
+  só transita `proposed → confirmed` com attestation quando a decisão é
+  `auto_execute`; caso contrário responde `409 approval.autoexecute_not_eligible`
+  sem tocar o store. Kill switch `TED_RISK_BASED_AUTOEXECUTE`
+  (`off|shadow|on`, default `off` — parsing fail-closed): `shadow` registra
+  `mutation.authorization.evaluated` (dimensões sanitizadas tool/risk/decision/
+  reason) e recusa; `off` recusa antes de qualquer avaliação persistente.
+  Confirm manual persiste `authorization_mode='manual'` com reason/risk
+  derivados da policy (ex.: `high_value`/`high` em R$500); authorize persiste
+  `auto`/`explicit_low_risk`/`low`. Confirm rejeita corpo (cliente não força
+  `mode`); binding mismatch vira `403 approval.forbidden` opaco. Stores PG e
+  in-memory com transição atômica; auditoria ganha evento `authorize`; replay
+  de attestation continua fail-closed. Testes: 11 cenários de rota +
+  persistência PG real + replay + shadow/kill-switch.
+
 ## Unreleased (2026-10-02 — SPEC/PLAN V5 de autorização por risco documentadas e revisadas; sem release)
 
 - **SPEC V5 — Autonomia por Risco e Inteligência Conversacional** documentada

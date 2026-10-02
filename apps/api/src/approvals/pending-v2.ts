@@ -37,8 +37,13 @@ export type PendingOperationV2Record = PendingOperationV2 & {
    * false when a new row was created. Never persisted; absent on get/confirm.
    */
   existing?: boolean;
+  authorizationMode?: 'auto' | 'manual';
+  authorizationReason?: string;
+  riskTier?: 'low' | 'medium' | 'high' | 'destructive' | null;
+  authorizedAt?: string;
 };
-export type PendingAuditEvent = { operationId: string; event: 'propose' | 'confirm' | 'execute' | 'cancel' | 'expire' | 'fail'; actorId: string; at: string };
+export type PendingAuthorization = { mode: 'auto' | 'manual'; reason: string; riskTier: 'low' | 'medium' | 'high' | 'destructive' | null };
+export type PendingAuditEvent = { operationId: string; event: 'propose' | 'confirm' | 'authorize' | 'execute' | 'cancel' | 'expire' | 'fail'; actorId: string; at: string };
 export type PendingExecutor = (operation: PendingOperationV2) => Promise<unknown>;
 
 export class PendingOperationV2Error extends Error {
@@ -296,7 +301,8 @@ export type PendingOperationV2Store = {
    * client-declared ids. Read-only: no state transitions, no attestation.
    */
   listActive(identity: PendingIdentity): Promise<readonly PendingOperationV2Record[]>;
-  confirm(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
+  confirm(id: string, identity: PendingIdentity, authorization?: PendingAuthorization): Promise<PendingOperationV2Record>;
+  authorize(id: string, identity: PendingIdentity, authorization: PendingAuthorization): Promise<PendingOperationV2Record>;
   /**
    * Security P2 (v2-attestation-route-and-ttl): `expectedId` binds the URL
    * operation id to the claim. When supplied, the attestation only claims
@@ -374,6 +380,10 @@ const mapV2 = (row: PendingV2Row, token?: string): PendingOperationV2Record => {
     ...(executionLeaseExpiresAt !== undefined ? { executionLeaseExpiresAt } : {}),
     ...(failureCode !== undefined ? { failureCode } : {}),
     ...(mutationId !== undefined ? { mutationId } : {}),
+    ...(row.authorization_mode !== null && row.authorization_mode !== undefined ? { authorizationMode: String(row.authorization_mode) as 'auto' | 'manual' } : {}),
+    ...(row.authorization_reason !== null && row.authorization_reason !== undefined ? { authorizationReason: String(row.authorization_reason) } : {}),
+    ...(row.risk_tier !== undefined ? { riskTier: row.risk_tier === null ? null : String(row.risk_tier) as NonNullable<PendingOperationV2Record['riskTier']> } : {}),
+    ...(isoOrUndefined(row.authorized_at) ? { authorizedAt: isoOrUndefined(row.authorized_at)! } : {}),
   };
 };
 
@@ -433,7 +443,7 @@ export const createPostgresPendingOperationV2Store = (
       );
       return result.rows.map((row) => mapV2(row));
     },
-    async confirm(id, identity) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); const status = String(row.execution_status); if (Date.parse(String(row.expires_at)) <= Date.now()) { await client.query("UPDATE pending_operations SET execution_status='expired' WHERE id=$1", [id]); events.push({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return fail('approval.expired', 'A proposta expirou.'); } if (status === 'confirmed') {
+    async confirm(id, identity, authorization: PendingAuthorization = { mode: 'manual', reason: 'policy_required', riskTier: null }) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); const status = String(row.execution_status); if (Date.parse(String(row.expires_at)) <= Date.now()) { await client.query("UPDATE pending_operations SET execution_status='expired' WHERE id=$1", [id]); events.push({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return fail('approval.expired', 'A proposta expirou.'); } if (status === 'confirmed') {
       // SPEC §9 (H-03) recoverable confirm: lost confirm responses re-emit.
       // Unconsumed attestation rotates atomically in this same transaction:
       // new hash replaces the old (old token invalid), only the new token
@@ -443,7 +453,8 @@ export const createPostgresPendingOperationV2Store = (
       const reemitted = await client.query<PendingV2Row>("UPDATE pending_operations SET attestation_hash=$2, attestation_issued_at=NOW() WHERE id=$1 RETURNING *", [id, hashAttestation(reissued)]);
       events.push({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() });
       return mapV2(reemitted.rows[0]!, reissued);
-    } if (status !== 'proposed') return fail('approval.not_pending', 'A operação não está pendente.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_issued_at=NOW() WHERE id=$1 RETURNING *", [id, hashAttestation(token)]); events.push({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!, token); }); },
+     } if (status !== 'proposed') return fail('approval.not_pending', 'A operação não está pendente.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_issued_at=NOW(), authorization_mode=$3, authorization_reason=$4, risk_tier=$5, authorized_at=NOW() WHERE id=$1 RETURNING *", [id, hashAttestation(token), authorization.mode, authorization.reason, authorization.riskTier]); events.push({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!, token); }); },
+    async authorize(id, identity, authorization) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); const status = String(row.execution_status); if (Date.parse(String(row.expires_at)) <= Date.now()) { await client.query("UPDATE pending_operations SET execution_status='expired' WHERE id=$1", [id]); events.push({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return fail('approval.expired', 'A proposta expirou.'); } if (status !== 'proposed') return fail('approval.not_pending', 'A operação não está pendente.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_issued_at=NOW(), authorization_mode=$3, authorization_reason=$4, risk_tier=$5, authorized_at=NOW() WHERE id=$1 AND execution_status='proposed' RETURNING *", [id, hashAttestation(token), authorization.mode, authorization.reason, authorization.riskTier]); if (!updated.rows[0]) return fail('approval.not_pending', 'A operação não está pendente.'); events.push({ operationId: id, event: 'authorize', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0], token); }); },
     async execute(token, identity, executor, expectedId?) {
       // TX1 — claim. Consumes the attestation, marks `executing`, writes the
       // lease columns, and COMMITS before the executor runs: a failure after
@@ -753,7 +764,7 @@ export const createInMemoryPendingOperationV2Store = (
       // confirm/retry responses carry the newly issued token.
       return expose(resolve(id, identity));
     },
-    async confirm(id, identity) {
+    async confirm(id, identity, authorization: PendingAuthorization = { mode: 'manual', reason: 'policy_required', riskTier: null }) {
       const record = resolve(id, identity);
       if (record.status === 'expired') fail('approval.expired', 'A proposta expirou.');
       if (record.status === 'confirmed') {
@@ -772,10 +783,28 @@ export const createInMemoryPendingOperationV2Store = (
         return issued(record);
       }
       if (record.status !== 'proposed') fail('approval.not_pending', 'A proposta não está pendente.');
+      record.authorizationMode = authorization.mode;
+      record.authorizationReason = authorization.reason;
+      record.riskTier = authorization.riskTier;
+      record.authorizedAt = nowIso();
       record.status = 'confirmed';
       record.attestationIssuedAt = nowIso();
       issue(record);
       events.push({ operationId: id, event: 'confirm', actorId: record.actorId, at: nowIso() });
+      return issued(record);
+    },
+    async authorize(id, identity, authorization) {
+      const record = resolve(id, identity);
+      if (record.status === 'expired') fail('approval.expired', 'A proposta expirou.');
+      if (record.status !== 'proposed') fail('approval.not_pending', 'A operação não está pendente.');
+      record.authorizationMode = authorization.mode;
+      record.authorizationReason = authorization.reason;
+      record.riskTier = authorization.riskTier;
+      record.authorizedAt = nowIso();
+      record.status = 'confirmed';
+      record.attestationIssuedAt = nowIso();
+      issue(record);
+      events.push({ operationId: id, event: 'authorize', actorId: record.actorId, at: nowIso() });
       return issued(record);
     },
     async execute(token, identity, executor, expectedId?) {

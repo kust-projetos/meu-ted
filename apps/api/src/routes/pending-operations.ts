@@ -11,6 +11,9 @@ import type { ReadModelStore } from '../read-models/store.js';
 import { PendingOperationV2Error, PENDING_V2_MAX_TTL_MS, type PendingExecutor, type PendingOperationExecutor, type PendingOperationStore, type PendingOperationV2Store } from '../approvals/pending.js';
 import { createInMemoryPendingOperationStore } from '../approvals/pending.js';
 import type { UndoService } from '../approvals/undo.js';
+import { createApprovalPolicy, type ApprovalPolicy } from '../approvals/policy.js';
+import { getTedRiskBasedAutoexecute } from '../approvals/authorization-config.js';
+import { buildObservabilityEvent } from '../audit/events.js';
 
 export const pendingIdentitySchema = z.object({
   pendingOperationId: z.string().uuid().optional(),
@@ -28,14 +31,16 @@ export const V2_APPROVAL_CAPABILITIES = {
   reconcile: 'financial.approval.reconcile',
   retry: 'financial.approval.retry',
   cancel: 'financial.approval.cancel',
+  authorize: 'financial.approval.autoexecute',
 } as const;
 
-export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { store?: PendingOperationStore; resolveToken: AuthResolver; executor?: PendingOperationExecutor; undoService?: UndoService; v2Store?: PendingOperationV2Store; v2Executor?: PendingExecutor; v2Only?: boolean; readModel?: Pick<ReadModelStore, 'listAccounts' | 'listCategories'> }): void => {
+export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { store?: PendingOperationStore; resolveToken: AuthResolver; executor?: PendingOperationExecutor; undoService?: UndoService; v2Store?: PendingOperationV2Store; v2Executor?: PendingExecutor; v2Only?: boolean; readModel?: Pick<ReadModelStore, 'listAccounts' | 'listCategories'>; approvalPolicy?: ApprovalPolicy }): void => {
   // Phase 7 (V4.1 Task 7.3): the V1 store is optional. Production
   // composition (server/index.ts, v2Only) wires no V1 store at all — the
   // default below only serves dev/test compositions that still mount V1
   // for the Agent's generated V1 tools.
   const { resolveToken, executor, undoService, v2Store, v2Executor } = opts;
+  const approvalPolicy = opts.approvalPolicy ?? createApprovalPolicy();
   const store = opts.store ?? createInMemoryPendingOperationStore();
   const resolve = async (req: import('fastify').FastifyRequest): Promise<{ householdId: string; actorId: string; deviceId: string }> => {
     if (req.authenticatedContext) return req.authenticatedContext;
@@ -55,7 +60,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
       // approval.not_found as PendingOperationV2Error (404), and scoped
       // routes (get/confirm/execute/reconcile/...) must answer a foreign
       // or unknown id with 403 — never a 404 existence leak.
-      if (forbiddenOnMissing && error.code === 'approval.not_found') {
+      if (forbiddenOnMissing && (error.code === 'approval.not_found' || error.code === 'approval.binding_mismatch')) {
         return reply.code(403).send({ code: 'approval.forbidden', message: 'Operação pendente fora do workspace do ator.' });
       }
       const body: Record<string, unknown> = { code: error.code, message: error.message };
@@ -280,8 +285,63 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
         return reply.send({ items, total: items.length });
       } catch (error) { return handleError(error, reply); }
     });
-    const confirm = async (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.confirm)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); try { if (!(await requireActionablePresentation(params.data.id, ctx, 'proposed', reply))) return; return reply.send(await v2Store.confirm(params.data.id, identity(ctx))); } catch (error) { return handleError(error, reply, true); } };
+    const confirm = async (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
+      if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.confirm)) return;
+      let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
+      const params = idSchema.safeParse(req.params);
+      if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
+      const body = z.object({}).strict().safeParse(req.body ?? {});
+      if (!body.success) return reply.code(400).send({ code: 'validation.error', issues: body.error.issues });
+      try {
+        if (!(await requireActionablePresentation(params.data.id, ctx, 'proposed', reply))) return;
+        const record = await v2Store.get(params.data.id, identity(ctx));
+        const args = record.normalizedArgs as Record<string, unknown>;
+        const decision = approvalPolicy.evaluateMutation({ tool: record.tool, ...(typeof args.amountCents === 'number' ? { amountCents: args.amountCents } : {}), workspaceId: ctx.householdId, destructive: false, complete: true, ambiguousEntity: false, duplicateSuspected: false, explicitIntent: true });
+        const authorization = decision.reason === 'high_value'
+          ? { mode: 'manual' as const, reason: 'high_value', riskTier: 'high' as const }
+          : decision.reason === 'destructive'
+            ? { mode: 'manual' as const, reason: 'destructive', riskTier: 'destructive' as const }
+            : { mode: 'manual' as const, reason: 'policy_required', riskTier: decision.risk };
+        return reply.send(await v2Store.confirm(params.data.id, identity(ctx), authorization));
+      } catch (error) { return handleError(error, reply, true); }
+    };
     app.post('/pending-operations/v2/:id/confirm', confirm);
+    app.post('/pending-operations/v2/:id/authorize', async (req, reply) => {
+      if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.authorize)) return;
+      let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
+      const params = idSchema.safeParse(req.params);
+      if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
+      const body = z.object({}).strict().safeParse(req.body ?? {});
+      if (!body.success) return reply.code(400).send({ code: 'validation.error', issues: body.error.issues });
+      const mode = getTedRiskBasedAutoexecute();
+      if (mode === 'off') return reply.code(409).send({ code: 'approval.autoexecute_disabled' });
+      try {
+        const operationIdentity = identity(ctx);
+        const record = await v2Store.get(params.data.id, operationIdentity);
+        if (record.status !== 'proposed') {
+          return reply.send(await v2Store.authorize(params.data.id, operationIdentity, { mode: 'auto', reason: 'explicit_low_risk', riskTier: 'low' }));
+        }
+        const args = record.normalizedArgs as Record<string, unknown>;
+        // Stored args are registry-schema validated; V2 eligible tools are non-destructive; ambiguity/duplicate signals arrive in a later phase; explicit intent is bound to this server-side narrow capability (Agent guard is PR C).
+        const decision = approvalPolicy.evaluateMutation({ tool: record.tool, ...(typeof args.amountCents === 'number' ? { amountCents: args.amountCents } : {}), workspaceId: ctx.householdId, destructive: false, complete: true, ambiguousEntity: false, duplicateSuspected: false, explicitIntent: true });
+        const emitDecision = (eventType: 'mutation.authorization.evaluated' | 'mutation.autoauthorized' | 'mutation.autoexecute.blocked') => {
+          try {
+            const event = buildObservabilityEvent(eventType, { tool: record.tool, risk: decision.risk, decision: decision.action, reason: decision.reason });
+            console.info(JSON.stringify(event));
+          } catch { /* Observability is best-effort and never changes authorization. */ }
+        };
+        if (mode === 'shadow') {
+          emitDecision('mutation.authorization.evaluated');
+          return reply.code(409).send({ code: 'approval.autoexecute_disabled' });
+        }
+        if (decision.action !== 'auto_execute') {
+          emitDecision('mutation.autoexecute.blocked');
+          return reply.code(409).send({ code: 'approval.autoexecute_not_eligible', details: { decision: { action: decision.action, risk: decision.risk, reason: decision.reason } } });
+        }
+        emitDecision('mutation.autoauthorized');
+        return reply.send(await v2Store.authorize(params.data.id, operationIdentity, { mode: 'auto', reason: 'explicit_low_risk', riskTier: 'low' }));
+      } catch (error) { return handleError(error, reply, true); }
+    });
     app.get('/pending-operations/v2/:id', async (req, reply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.read)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); try { return reply.send(await v2Store.get(params.data.id, identity(ctx))); } catch (error) { return handleError(error, reply, true); } });
     app.get('/pending-operations/v2/:id/status', async (req, reply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.read)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); try { return reply.send(await v2Store.get(params.data.id, identity(ctx))); } catch (error) { return handleError(error, reply, true); } });
     const reject = async (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.cancel)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); try { return reply.send(await v2Store.cancel(params.data.id, identity(ctx))); } catch (error) { return handleError(error, reply, true); } };

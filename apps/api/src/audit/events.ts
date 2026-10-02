@@ -42,6 +42,9 @@ export const OBSERVABILITY_EVENT_TYPES = [
   'offline.locked',
   'audit-undo.replay',
   'mutation.reconcile.enqueued',
+  'mutation.authorization.evaluated',
+  'mutation.autoauthorized',
+  'mutation.autoexecute.blocked',
   'mic.error',
   'csp.violation',
 ] as const;
@@ -192,6 +195,9 @@ const EVENT_ALLOWLISTS: Record<ObservabilityEventType, readonly string[]> = {
   'device.tokens.legacy_active': ['legacyCount', 'vintage'],
   'offline.locked': ['offlineSubjectId', 'ageBand'],
   'mutation.reconcile.enqueued': ['workspaceId', 'operationId', 'reason'],
+  'mutation.authorization.evaluated': ['tool', 'risk', 'decision', 'reason'],
+  'mutation.autoauthorized': ['tool', 'risk', 'decision', 'reason'],
+  'mutation.autoexecute.blocked': ['tool', 'risk', 'decision', 'reason'],
   'mic.error': ['reason', 'capability'],
   'csp.violation': ['effectiveDirective', 'blockedURL', 'blockedUrl', 'blockedHost', 'disposition', 'statusCode'],
 };
@@ -338,6 +344,15 @@ const sanitizePayload = (
         reason: requireNonEmptyString(payload, 'reason', eventType),
       };
     }
+    case 'mutation.authorization.evaluated':
+    case 'mutation.autoauthorized':
+    case 'mutation.autoexecute.blocked':
+      return {
+        tool: requireNonEmptyString(payload, 'tool', eventType),
+        risk: requireNonEmptyString(payload, 'risk', eventType),
+        decision: requireNonEmptyString(payload, 'decision', eventType),
+        reason: requireNonEmptyString(payload, 'reason', eventType),
+      };
     case 'mic.error': {
       const reason = requireNonEmptyString(payload, 'reason', eventType);
       const capability = requireNonEmptyString(payload, 'capability', eventType);
