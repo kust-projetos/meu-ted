@@ -274,7 +274,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # V4.1 Phase 9 (Task 9.9): bake API release identity into the image.
       - name: Build API image
         run: |
@@ -497,7 +497,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm security:secrets
       - run: pnpm security:deps
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build API image for scan
         run: docker build -f apps/api/Dockerfile -t pi-finance-api:ci .
       - name: Build Codex Broker image for scan
