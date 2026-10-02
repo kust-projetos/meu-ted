@@ -33,6 +33,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build shared contracts (workspace exports resolve dist)
         run: pnpm --filter @pi-finance/llm-contracts build
+      - name: Contracts - typecheck + test
+        run: pnpm --filter @pi-finance/llm-contracts typecheck && pnpm --filter @pi-finance/llm-contracts test
       - run: pnpm --filter meu-ted-api --fail-if-no-match lint
       - run: pnpm --filter meu-ted-api --fail-if-no-match typecheck
       - run: pnpm --filter meu-ted-api --fail-if-no-match test
@@ -55,6 +57,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build shared contracts (workspace exports resolve dist)
         run: pnpm --filter @pi-finance/llm-contracts build
+      - run: pnpm --filter pi-finance-agent --fail-if-no-match lint
       - run: pnpm --filter pi-finance-agent --fail-if-no-match typecheck
       - run: pnpm --filter pi-finance-agent --fail-if-no-match test
       - run: pnpm --filter pi-finance-agent --fail-if-no-match eval:ted-v2
@@ -110,6 +113,7 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter pi-finance-codex-broker --fail-if-no-match lint
       - run: pnpm --filter pi-finance-codex-broker --fail-if-no-match typecheck
       - run: pnpm --filter pi-finance-codex-broker --fail-if-no-match test
       - run: pnpm --filter pi-finance-codex-broker --fail-if-no-match build
