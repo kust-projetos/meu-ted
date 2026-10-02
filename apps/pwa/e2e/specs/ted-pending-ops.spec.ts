@@ -282,6 +282,33 @@ function failedTurn(opId: string, opts: { presentation?: Record<string, unknown>
   };
 }
 
+function autoexecutedTurn(opId: string): Record<string, unknown> {
+  return {
+    turnId: `turn-${opId}`,
+    status: "completed",
+    output: "Despesa registrada com sucesso.",
+    pendingOperation: {
+      id: opId,
+      status: "succeeded",
+      operation: "transactions.expense.create",
+      authorizationMode: "auto",
+      receipt: {
+        mutationId: `mut-${opId}`,
+        mutationKind: "transactions.expense.create",
+        status: "succeeded",
+        affectedTargets: ["transactions", "accounts"],
+        operationId: opId,
+        entity: { type: "transaction", id: `tx-${opId}` },
+      },
+    },
+    undoProposal: {
+      requestId: `undo-${opId}`,
+      status: "proposed",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    },
+  };
+}
+
 // ─── Per-test wiring ─────────────────────────────────────────────────────────
 
 type OpSetup = {
@@ -409,6 +436,62 @@ const isDecisionPost = (e: JournalEntry): boolean => e.method === "POST" && e.pa
 // ─── OP-01: proposta com apresentação acionável → Confirm → recibo ───────────
 
 test.describe("TED pending operations", () => {
+  test("E2E-01: autoexecuted succeeded turn shows success and undo, never an approval card", async ({ page }) => {
+    const id = tid();
+    const opId = `op-${id}-auto`;
+    const { guard, dialog } = await prepareOpTest(page, id, {
+      chat: [{ status: 200, body: autoexecutedTurn(opId) }],
+    });
+
+    await sendTedMessage(dialog, "registre despesa mercado 850");
+
+    await expect(dialog.getByText("Despesa registrada com sucesso.", { exact: true })).toBeVisible();
+    await expect(dialog.getByTestId("ted-approval-item")).toHaveCount(0);
+    await expect(dialog.getByTestId("ted-undo-card")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Confirmar desfazer" })).toBeVisible();
+    assertNoUndeclaredFailures(guard);
+  });
+
+  test("E2E-02: high-value proposed turn shows approval and makes no success claim", async ({ page }) => {
+    const id = tid();
+    const opId = `op-${id}-high`;
+    const highValuePresentation = {
+      ...actionablePresentation(opId),
+      amountCents: 85000,
+    };
+    const turn = proposedTurn(opId, { presentation: highValuePresentation });
+    turn.output = "Revise os dados e confirme para registrar.";
+    const { guard, dialog } = await prepareOpTest(page, id, {
+      chat: [{ status: 200, body: turn }],
+    });
+
+    await sendTedMessage(dialog, "registre despesa mercado 850");
+
+    await expect(dialog.getByTestId("ted-approval-item")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: /Confirmar R\$ 850,00/ })).toBeVisible();
+    await expect(dialog.getByText("Revise os dados e confirme para registrar.", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("Despesa registrada com sucesso.", { exact: true })).toHaveCount(0);
+    assertNoUndeclaredFailures(guard);
+  });
+
+  test("E2E-03: clarifying question renders no executable card", async ({ page }) => {
+    const id = tid();
+    const { guard, dialog } = await prepareOpTest(page, id, {
+      chat: [{ status: 200, body: {
+        turnId: `turn-${id}-clarify`,
+        status: "completed",
+        output: "Qual conta devo usar para esse lançamento?",
+      } }],
+    });
+
+    await sendTedMessage(dialog, "registre uma despesa");
+
+    await expect(dialog.getByText("Qual conta devo usar para esse lançamento?", { exact: true })).toBeVisible();
+    await expect(dialog.getByTestId("ted-approval-item")).toHaveCount(0);
+    await expect(dialog.getByTestId("ted-undo-card")).toHaveCount(0);
+    assertNoUndeclaredFailures(guard);
+  });
+
   test("OP-01: proposal with actionable presentation confirms with receipt", async ({ page }) => {
     const id = tid();
     const opId = `op-${id}-01`;

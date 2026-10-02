@@ -3,6 +3,22 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-02 — PR D: UX TED para autorização por risco; sem release)
+
+- PWA caracteriza turnos `succeeded` com receipt: reconcilia a mutação,
+  apresenta sucesso sem card de aprovação e mostra Undo somente quando o Agent
+  fornece proposta estruturada elegível. Reload mantém sucesso fora da lista
+  de cards ativos; receipt continua obrigatório.
+- E2E fixture-only cobre autoexecução imediata, proposta de alto valor e
+  clarificação sem card executável. Workspace/device/uncertain permanecem
+  cobertos por testes da API nos PRs A/B, não por este harness.
+- Arquitetura/roadmap alinhados: confirmação humana condicional, policy
+  determinística, allowlist de despesas/receitas, R$500, destrutivas manuais,
+  PendingOperation V2/receipt preservados e flag `off|shadow|on` default off.
+- `docs/ops/ted-autoexecute-observability.md` mapeia métricas V5 aos três
+  eventos sanitizados e ao audit trail; sink persistente permanece gate de
+  operações. Fase 22 (deploy shadow) pendente; canary depende de telemetria.
+
 ## Unreleased (2026-10-02 — PR C: Agent solicita autoautorização com guard determinístico; sem release)
 
 - **Guard de intenção explícita** (`hasExplicitMutationIntent` em
