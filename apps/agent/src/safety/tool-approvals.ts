@@ -27,6 +27,21 @@ export const getApprovalRequirement = (toolName: string): ToolApprovalRequiremen
   return APPROVAL_REQUIRED_TOOLS.get(toolName);
 };
 
+const EXPLICIT_MUTATION_IMPERATIVE = /^(?:por favor,?\s+)?(?:registre|registrar|adicionar|adicione|lance|lançar|lancar|anote|anotar|inclua|incluir)\b/;
+const READ_OR_NONCOMMITTING_INTENT = /^(?:resuma|resumo|listar|mostre|consultar|ver|quais\b|me mostre|saldo|extrato|gastei\b|paguei\b|acho\b|talvez\b|e se\b|quanto\b|como\b|poderia\b|pode\b|não\b|nao\b|nunca\b|assistant\b|no resultado\b)/;
+
+/** True only when the latest actor message itself starts with a clear mutation imperative. */
+export const hasExplicitMutationIntent = (text: string): boolean => {
+  const normalized = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+  if (!normalized || /[?¿]/.test(normalized) || READ_OR_NONCOMMITTING_INTENT.test(normalized)) return false;
+  if (/\b(?:se|talvez|acho|caso)\b/.test(normalized)) return false;
+  return EXPLICIT_MUTATION_IMPERATIVE.test(normalized);
+};
+
 export const validateActorIntentForMutation = (
   lastActorMessage: string,
   toolName: string,

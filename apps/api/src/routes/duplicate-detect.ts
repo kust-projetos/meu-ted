@@ -39,7 +39,7 @@ export const registerDuplicateDetectRoutes = (
     const parsed = detectSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: "validation.error", issues: parsed.error.issues });
 
-    // In test/in-memory mode, pool may not be configured — treat as no duplicate
+    // Duplicate state is unknown without a database; never report a negative.
     let pool = opts.pool;
     if (!pool && process.env.DATABASE_URL) {
       try {
@@ -49,8 +49,7 @@ export const registerDuplicateDetectRoutes = (
       }
     }
     if (!pool) {
-      // Fallback for in-memory/test: no stored transactions => no duplicate
-      return reply.code(200).send({ duplicate_detected: false });
+      return reply.code(503).send({ code: "duplicate_detection_unavailable", message: "A verificação de duplicidade está indisponível." });
     }
 
     try {
@@ -71,9 +70,8 @@ export const registerDuplicateDetectRoutes = (
         match: { id: match.id, description: match.description, amount_cents: match.amount_cents, date: match.date, match_type: match.match_type, similarity: match.similarity },
       });
     } catch (err) {
-      // Fail open for detect: return not detected on error, but log
       req.log?.error?.(err);
-      return reply.code(200).send({ duplicate_detected: false });
+      return reply.code(503).send({ code: "duplicate_detection_unavailable", message: "A verificação de duplicidade está indisponível." });
     }
   });
 };

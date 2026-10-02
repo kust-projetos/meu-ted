@@ -52,6 +52,7 @@ import {
 } from "./migration/legacy-history.js";
 import { requestPiApiJson } from "./tools/api-client.js";
 import { createDelegatedTurnToken } from "./delegated-token.js";
+import { detectDuplicateSuspectedStrict } from './tools/duplicate-detector.js';
 import { verifyAgentConnectionToken } from "./auth/connection-token.js";
 import {
   ConversationOrchestrator,
@@ -1143,6 +1144,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
 
   private orchestratorForChannel(dependencies: {
     mutationApiClient?: MutationApiClient;
+    autoExecutionClient?: () => MutationApiClient | undefined;
     entityReader?: EntityReader;
     plan?: (input: TurnInput) => TurnPlan;
     evidenceProvider?: (input: TurnInput, plan: TurnPlan) => Promise<EvidenceEnvelope | null>;
@@ -1650,6 +1652,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       workspaceId: input.workspaceId,
       role: input.role,
       capabilities: [
+        'financial.read',
         'financial.approval.propose',
         'financial.approval.read',
         'financial.approval.confirm',
@@ -1658,10 +1661,39 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         'financial.approval.cancel',
       ],
       requestId: input.intentionId,
-      deviceId: input.deviceId,
+      deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
     }, secret);
     const request = async <T>(method: string, path: string, options: Parameters<typeof requestPiApiJson>[2] = {}) =>
       requestPiApiJson<T>(method, path, { ...options, delegatedToken, apiOrigin: this.env?.API_ORIGIN });
+    return new MutationApiClient({
+      request,
+      strictDuplicateCheck: (check) => detectDuplicateSuspectedStrict(check, {
+        apiOrigin: this.env?.API_ORIGIN ?? 'https://api.synkroo.com.br',
+        workspaceId: input.workspaceId,
+        delegatedToken,
+      }),
+    });
+  }
+
+  private elevatedMutationApiClientForTurn(input: TurnInput): MutationApiClient | undefined {
+    const secret = this.env?.AGENT_DELEGATION_SECRET?.trim();
+    if (!secret || !input.deviceId) return undefined;
+    let tokenPromise: Promise<string> | undefined;
+    const getToken = () => tokenPromise ??= createDelegatedTurnToken({
+      actorId: input.actorId,
+      workspaceId: input.workspaceId,
+      role: input.role,
+      capabilities: [
+        'financial.read', 'financial.approval.propose', 'financial.approval.read',
+        'financial.approval.confirm', 'financial.approval.execute',
+        'financial.approval.retry', 'financial.approval.cancel',
+        'financial.approval.autoexecute',
+      ],
+      requestId: input.intentionId,
+      deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+    }, secret);
+    const request = async <T>(method: string, path: string, options: Parameters<typeof requestPiApiJson>[2] = {}) =>
+      requestPiApiJson<T>(method, path, { ...options, delegatedToken: await getToken(), apiOrigin: this.env?.API_ORIGIN });
     return new MutationApiClient({ request });
   }
 
@@ -2115,6 +2147,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         const turnResult = await this.orchestratorForChannel({
           ...(mutationPlan ? { plan: () => mutationPlan } : {}),
           ...(mutationApiClient ? { mutationApiClient } : {}),
+          autoExecutionClient: () => this.elevatedMutationApiClientForTurn(restInput),
           ...(entityReader ? { entityReader } : {}),
           ...(draftStore ? { draftStore } : {}),
         }).runTurn(restInput);

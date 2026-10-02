@@ -3,6 +3,7 @@ import { requestPiApiJson } from '../tools/api-client.js';
 import { emitSanitizedEvent } from '../observability/events.js';
 import { createMutationProposal, type MutationProposal } from './mutation-proposal.js';
 import { MutationExecutor, type ApprovalDecisionInput, type ApprovalDecisionResult, type MutationExecution } from './mutation-executor.js';
+import type { DuplicateCheckInput } from '../tools/duplicate-detector.js';
 
 export type MutationIdentity = MutationExecution['identity'];
 export type MutationRequest = typeof requestPiApiJson;
@@ -35,10 +36,17 @@ export class MutationApiClient {
   private readonly request: MutationRequest;
   private readonly events: MutationEventSink;
 
-  constructor(deps: { request?: MutationRequest; events?: MutationEventSink } = {}) {
+  constructor(deps: { request?: MutationRequest; events?: MutationEventSink; strictDuplicateCheck?: (input: DuplicateCheckInput) => Promise<boolean> } = {}) {
     this.request = deps.request ?? requestPiApiJson;
     this.events = deps.events ?? emitSanitizedEvent;
     this.executor = new MutationExecutor({ request: this.request, events: this.events });
+    this.strictDuplicateCheck = deps.strictDuplicateCheck;
+  }
+
+  private readonly strictDuplicateCheck?: (input: DuplicateCheckInput) => Promise<boolean>;
+
+  duplicateSuspectedStrict(input: DuplicateCheckInput): Promise<boolean> {
+    return this.strictDuplicateCheck ? this.strictDuplicateCheck(input) : Promise.resolve(true);
   }
 
   /** Tool-call lifecycle events carry allowlisted fields only (name, status, latency) — never args or payloads. */
@@ -83,6 +91,20 @@ export class MutationApiClient {
 
   confirm(operationId: string, identity: MutationIdentity): Promise<{ operationId: string; attestation: string }> {
     return this.timed('transactions.confirm', () => this.executor.confirm(operationId, identity));
+  }
+
+  authorize(operationId: string, identity: MutationIdentity): Promise<{ operationId: string; attestation: string }> {
+    return this.timed('transactions.authorize', async () => {
+      const result = await this.request<{ id?: unknown; status?: unknown; attestation?: unknown }>(
+        'POST', `/pending-operations/v2/${encodeURIComponent(operationId)}/authorize`,
+        { headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId } },
+      );
+      this.assertPendingOperationId(result.id, operationId);
+      if (result.status !== 'confirmed') throw new Error('approval.authorize_not_confirmed');
+      if (typeof result.attestation !== 'string' || result.attestation.length < 32) throw new Error('approval.missing_attestation');
+      this.events('approval.confirmed', { status: 'confirmed' });
+      return { operationId, attestation: result.attestation };
+    });
   }
 
   /** T1.5 (SPEC §8.3): authoritative listing scoped by the turn identity. */

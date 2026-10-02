@@ -36,6 +36,7 @@ import {
 import { hasUndoIntent, isExplicitConfirmation } from '../agent-config/tools.js';
 import { UndoProposalService } from '../mutations/undo-proposal.js';
 import { isUndoNegation } from '../mutations/undo-proposal.js';
+import { isAutoExecutionEligible } from '../safety/auto-execution.js';
 
 export type ConversationChannel = 'pwa-rest' | 'sdk' | 'broker';
 
@@ -83,6 +84,9 @@ export type MutationPolicy = Readonly<{
   capability: 'financial.read';
   writeAuthorized: false;
   approvalRequired: true;
+  authorizationMode: 'none' | 'clarify' | 'auto' | 'manual';
+  authorizationReason?: string;
+  risk?: 'low' | 'medium' | 'high' | 'destructive';
 }>;
 
 export type TurnResult = Readonly<{
@@ -198,6 +202,7 @@ export class ConversationOrchestrator {
   constructor(private readonly dependencies: {
     plan?: (input: TurnInput) => TurnPlan;
     mutationApiClient?: MutationApiClient;
+    autoExecutionClient?: () => MutationApiClient | undefined;
     /**
      * T1.5 unified decision machine (SPEC §8). Injected by tests or the
      * channel adapter; otherwise built per turn from the mutation client
@@ -246,6 +251,36 @@ export class ConversationOrchestrator {
       (this.dependencies.events ?? emitSanitizedEvent)(eventType, fields);
     } catch {
       // Observability must never break the turn.
+    }
+  }
+
+  private async authorizeAutoExecution(
+    client: MutationApiClient,
+    operationId: string,
+    identity: MutationIdentity,
+  ): Promise<{ kind: 'authorized'; attestation: string } | { kind: 'refused' } | { kind: 'uncertain' }> {
+    try {
+      const authorization = await client.authorize(operationId, identity);
+      return { kind: 'authorized', attestation: authorization.attestation };
+    } catch (error) {
+      const statusCode = (error as { statusCode?: unknown })?.statusCode;
+      const code = (error as { code?: unknown })?.code;
+      this.emit('approval.autoexecute_blocked', {
+        operationId,
+        code: typeof code === 'string' ? code : 'authorization_failed',
+      });
+      if (statusCode === 403 || (
+        statusCode === 409 &&
+        (code === 'approval.autoexecute_disabled' || code === 'approval.autoexecute_not_eligible')
+      )) return { kind: 'refused' };
+
+      try {
+        const current = await client.listActive(identity);
+        const operation = current.items.find((item) => item.id === operationId);
+        return operation?.status === 'proposed' ? { kind: 'refused' } : { kind: 'uncertain' };
+      } catch {
+        return { kind: 'uncertain' };
+      }
     }
   }
 
@@ -388,7 +423,7 @@ export class ConversationOrchestrator {
       status: 'completed',
       latencyMs: Date.now() - startedAt,
     });
-    return freeze({ ...base, ...(extra.plan ? { plan: freeze(extra.plan) } : {}), ...('mutation' in extra && extra.mutation ? { mutation: freeze(extra.mutation) } : {}), ...('clarification' in extra && extra.clarification ? { clarification: freeze(extra.clarification) } : {}), ...('response' in extra && extra.response ? { response: freeze(extra.response) } : {}) });
+    return freeze({ ...base, ...(extra.plan ? { plan: freeze(extra.plan) } : {}), ...(extra.policy ? { policy: freeze(extra.policy) } : {}), ...('mutation' in extra && extra.mutation ? { mutation: freeze(extra.mutation) } : {}), ...('clarification' in extra && extra.clarification ? { clarification: freeze(extra.clarification) } : {}), ...('response' in extra && extra.response ? { response: freeze(extra.response) } : {}) });
   }
 
   private clarifyDraft(
@@ -752,7 +787,42 @@ export class ConversationOrchestrator {
       identity,
       idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool),
     });
+    const eligible = isAutoExecutionEligible({ tool, missingFields: [], ambiguity: plan.ambiguity, latestActorText: input.text });
+    if (eligible && !proposal.existing) {
+      const duplicateSuspected = await client.duplicateSuspectedStrict({
+        kind: parsed.kind, description: parsed.description, amountCents: parsed.amountCents,
+        date: parsed.date, accountId: resolution.accountId,
+      });
+      if (!duplicateSuspected) {
+        const elevated = this.dependencies.autoExecutionClient?.();
+        if (elevated) {
+          const authorization = await this.authorizeAutoExecution(elevated, proposal.id, identity);
+          if (authorization.kind === 'uncertain') {
+            return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) });
+          }
+          if (authorization.kind === 'authorized') {
+            try {
+              const executed = await new PendingOperationCoordinator({ client: elevated }).executeAuthorized({ operationId: proposal.id, attestation: authorization.attestation }, identity);
+              return this.completeTurn(input, plan, startedAt, base, {
+                policy: freeze({ ...base.policy, authorizationMode: 'auto' }),
+                mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}) }),
+                response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${resolution.accountName ? ` na conta ${resolution.accountName}` : ''}. Se quiser, posso desfazer.` }),
+              });
+            } catch {
+              try {
+                const current = await elevated.listActive(identity);
+                if (current.items.some((item) => item.id === proposal.id && item.status === 'failed')) {
+                  return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderMutationResult('failed') }) });
+                }
+              } catch { /* State remains uncertain; keep the inconclusive response. */ }
+              return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) });
+            }
+          }
+        }
+      }
+    }
     return this.completeTurn(input, plan, startedAt, base, {
+      policy: freeze({ ...base.policy, authorizationMode: 'manual' }),
       mutation: this.proposedMutation({
         operationId: proposal.id,
         tool,
@@ -1171,7 +1241,7 @@ export class ConversationOrchestrator {
       throw new Error('agent.invalid_turn_plan');
     }
     this.emit('plan.validated', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode });
-    const policy = freeze({ capability: 'financial.read' as const, writeAuthorized: false as const, approvalRequired: true as const });
+    const policy = freeze({ capability: 'financial.read' as const, writeAuthorized: false as const, approvalRequired: true as const, authorizationMode: 'none' as const });
     const result: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy; mutation?: { operationId: string; status: 'proposed' | 'succeeded'; receipt?: MutationReceipt }; response?: { text: string } } = { input, plan: freeze(plan), policy };
     // debt-undo-confirmation-protocol: free text only ever requests an undo
     // proposal (or fails closed). Textual confirmation NEVER executes undo —
@@ -1237,7 +1307,29 @@ export class ConversationOrchestrator {
         identity,
         idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool),
       });
-      return freeze({ ...result, mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, accountName: resolution.accountName, categoryName: resolution.categoryName, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
+      if (!proposal.existing && isAutoExecutionEligible({ tool, missingFields: [], ambiguity: plan.ambiguity, latestActorText: input.text }) &&
+        !(await client.duplicateSuspectedStrict({ kind: parsed.kind, description: parsed.description, amountCents: parsed.amountCents, date: parsed.date, accountId: resolution.accountId }))) {
+        const elevated = this.dependencies.autoExecutionClient?.();
+        if (elevated) {
+          const authorization = await this.authorizeAutoExecution(elevated, proposal.id, identity);
+          if (authorization.kind === 'uncertain') return freeze({ ...result, response: freeze({ text: renderInconclusive() }) });
+          if (authorization.kind === 'authorized') {
+            try {
+              const executed = await new PendingOperationCoordinator({ client: elevated }).executeAuthorized({ operationId: proposal.id, attestation: authorization.attestation }, identity);
+              return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'auto' }), mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}) }), response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${resolution.accountName ? ` na conta ${resolution.accountName}` : ''}. Se quiser, posso desfazer.` }) });
+            } catch {
+              try {
+                const current = await elevated.listActive(identity);
+                if (current.items.some((item) => item.id === proposal.id && item.status === 'failed')) {
+                  return freeze({ ...result, response: freeze({ text: renderMutationResult('failed') }) });
+                }
+              } catch { /* State remains uncertain; keep the inconclusive response. */ }
+              return freeze({ ...result, response: freeze({ text: renderInconclusive() }) });
+            }
+          }
+        }
+      }
+      return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, accountName: resolution.accountName, categoryName: resolution.categoryName, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
     }
     // SPEC §7.8 (ADR-014) with a draft store: the full multi-turn flow
     // (draft persistence, continuation, atomic consumption, recoverable

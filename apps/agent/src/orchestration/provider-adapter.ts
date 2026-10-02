@@ -19,6 +19,7 @@ export type ValidatedProviderOutput = Readonly<{
 const forbiddenAuthorityFields = new Set([
   ['mutation', 'Approved'].join(''), 'capability', 'workspace', 'workspaceId', 'actor', 'actorId',
   'device', 'deviceId', 'idempotencyKey', 'attestation', 'writeAuthorized', 'approvalRequired',
+  'authorizationMode', 'authorizationReason', 'risk', 'decision', 'autoExecute',
 ]);
 
 const invalid = (): never => { throw new Error('agent.invalid_provider_output'); };
@@ -86,7 +87,7 @@ export const validateProviderOutput = (raw: ProviderOutput): ValidatedProviderOu
   return Object.freeze({
     plan,
     response: Object.freeze({ text }),
-    policy: Object.freeze({ capability: 'financial.read', writeAuthorized: false, approvalRequired: true }),
+    policy: Object.freeze({ capability: 'financial.read', writeAuthorized: false, approvalRequired: true, authorizationMode: 'none' }),
     source,
   }) as ValidatedProviderOutput;
 };
