@@ -4,6 +4,7 @@
   "private": true,
   "description": "Pi Finance PWA, API and Agent monorepo.",
   "scripts": {
+    "prepare": "husky",
     "dev": "pnpm --filter pwa dev",
     "start": "pnpm --filter pwa start",
     "build": "pnpm --filter meu-ted-api build && pnpm --filter pi-finance-agent build && pnpm --filter pi-finance-codex-broker build && pnpm --filter pwa build",
@@ -46,6 +47,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "4.1.11",
+    "husky": "^9.1.7",
     "typescript": "^5.7.0",
     "vitest": "4.1.11"
   },

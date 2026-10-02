@@ -50,11 +50,15 @@ coverage/
 apps/pwa/.stryker-tmp/
 apps/pwa/.execution-log/
 apps/pwa/.tdd-log.tsv
+# Playwright output dirs (default output + dated live-E2E evidence captures)
+test-results*/
 
 # Local Pi runtime / secrets
 .env.pi
 .pnpm-store/
 backups/
+# Off-repo backup bundles (e.g. pi-rewind-store-*.bundle) - NEVER delete; preserve on disk and push off-machine
+backups-local/
 
 # Peer runtime state
 .pi/peers.json

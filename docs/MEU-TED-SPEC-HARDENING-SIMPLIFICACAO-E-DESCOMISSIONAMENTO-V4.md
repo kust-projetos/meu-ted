@@ -433,11 +433,11 @@ Adicionar teste semântico mínimo garantindo que documentação canônica não 
 
 ### J1. Separar lint de typecheck
 
-O gate deve possuir comandos semanticamente distintos: `typecheck` e `lint`. `lint` não pode ser apenas alias de `tsc`. Estado atual: `apps/api/package.json:9,18` — `lint` e `typecheck` são o mesmo comando.
+O gate deve possuir comandos semanticamente distintos: `typecheck` e `lint`. `lint` não pode ser apenas alias de `tsc`. Estado atual (2026-10-02): resolvido — `apps/api` tem `lint` = `biome check src tests` e `typecheck` = `tsc -p tsconfig.build.json --noEmit`, comandos semanticamente distintos.
 
 ### J2. Cobertura
 
-Aplicar analisador estático real a `apps/api`, `apps/agent`, `apps/codex-broker`. ESLint, Oxlint, Biome ou equivalente pode ser utilizado. A escolha da ferramenta não faz parte da arquitetura. Estado atual: só a PWA tem ESLint real; `@biomejs/biome` está em devDeps da API sem ser invocado.
+Aplicar analisador estático real a `apps/api`, `apps/agent`, `apps/codex-broker`. ESLint, Oxlint, Biome ou equivalente pode ser utilizado. A escolha da ferramenta não faz parte da arquitetura. Estado atual (2026-10-02): resolvido — Biome 2.2.4 ativo em `apps/api`, `apps/agent` e `apps/codex-broker` (`biome check src tests`; formatter/assist desligados; regras selecionadas em `biome.json` na raiz), PWA mantém ESLint 9 (`eslint-config-next` + TypeScript). Cobertura pendente: `packages/llm-contracts` não tem lint dedicado (ver `docs/reports/2026-10-02-repo-config-audit.md`).
 
 ### J3. Categorias mínimas
 
