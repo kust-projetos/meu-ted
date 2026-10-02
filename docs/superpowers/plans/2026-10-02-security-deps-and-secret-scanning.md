@@ -1,6 +1,6 @@
 # Security deps bump + secret scanning (2026-10-02)
 
-- **Data:** 2026-10-02 · **Status:** `APPROVED` (revisão independente integrada — 3 achados corrigidos; implementação autorizada pelo operador)
+- **Data:** 2026-10-02 · **Status:** `FINAL` — Fases 1-2 executadas (PR #68 + settings via API: secret scanning e push protection enabled; 9/9 alertas-alvo provados `fixed`); Fase 3 itens 1-2 (llm-contracts nos gates + CI lint agent/broker) neste PR; itens 3-4 (`@ai-sdk/*`/undici, mcp-sdk) permanecem follow-up. Revisão independente do plano integrada (3 achados).
 - **Baseline:** `main@9407bc4` (PR #66 mergeado; working tree limpo)
 - **Autorização:** operador — "faça o planejamento, documente, revise e depois inicie a implementação", no escopo das recomendações 1–2 da verificação de vulnerabilidades pós-merge (fase 3 listada como follow-up, fora deste ciclo)
 - **Origem:** verificação dos 43 alertas Dependabot do branch default + verificação pós-merge (conversa de 2026-10-02; resumo dos ranges em `docs/reports/2026-10-02-repo-config-audit.md` e no relatório de verificação desta data)

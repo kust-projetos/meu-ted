@@ -23,7 +23,7 @@ test('agent exposes typecheck, test and build', () => {
 });
 
 test('root gates all active apps', () => {
-  for (const packageName of ['meu-ted-api', 'pi-finance-agent', 'pi-finance-codex-broker', 'pwa']) {
+  for (const packageName of ['@pi-finance/llm-contracts', 'meu-ted-api', 'pi-finance-agent', 'pi-finance-codex-broker', 'pwa']) {
     assert.match(workspaceGate, new RegExp(packageName.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')));
   }
   for (const script of ['test', 'build']) {
