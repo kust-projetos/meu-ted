@@ -1,8 +1,9 @@
 /**
  * T5.3 deep-link (SPEC §22) — TED focuses the selected pending operation.
  *
- * - The launcher routes `openTedChat({ operationId })` into the single chat
- *   (no second executor).
+ * - `openTedChat({ operationId })` navigates to `/ted?operationId=…` (the
+ *   launcher owns the push; asserted in TedChatLauncher.test).
+ * - The page (`TedChatPage`) reads `?operationId=` into `focusedOperationId`.
  * - The chat highlights/focuses the matching approval card accessibly and
  *   never invents a card: an unknown id stays honest.
  */
@@ -10,7 +11,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import { TedChat } from "../TedChat";
-import { TedChatLauncher, OPEN_TED_CHAT_EVENT, openTedChat } from "../TedChatLauncher";
+import { TedChatPage } from "../TedChatPage";
+import { OPEN_TED_CHAT_EVENT } from "../TedChatLauncher";
 import * as agentClient from "@/lib/api/agent-client";
 
 vi.mock("@/lib/auth/workspace-context", async (importOriginal) => {
@@ -39,6 +41,14 @@ vi.mock("@/lib/state/app-state-context", async (importOriginal) => {
   return { ...actual, useAppState: () => ({ reconcileMutation: vi.fn() }) };
 });
 
+const navigation = vi.hoisted(() => ({
+  search: "",
+}));
+
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(navigation.search),
+}));
+
 vi.mock("next/image", () => ({
   default: ({ src, alt }: { src: string; alt: string }) => (
     // eslint-disable-next-line @next/next/no-img-element
@@ -56,6 +66,7 @@ const pendingOp = (id: string) => ({
 describe("TedChat deep-link focus (T5.3)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    navigation.search = "";
   });
 
   it("focuses/highlights the selected approval card without inventing state", async () => {
@@ -67,7 +78,7 @@ describe("TedChat deep-link focus (T5.3)", () => {
     });
 
     const user = userEvent.setup();
-    render(<TedChat open onClose={() => {}} focusedOperationId="op-1" />);
+    render(<TedChat focusedOperationId="op-1" />);
 
     await user.type(screen.getByLabelText("Mensagem para o assistente"), "registre mercado 850");
     await user.click(screen.getByRole("button", { name: "Enviar mensagem" }));
@@ -82,7 +93,7 @@ describe("TedChat deep-link focus (T5.3)", () => {
     vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
     vi.spyOn(agentClient, "sendAgentMessage").mockResolvedValue({ turnId: "t", status: "completed" });
 
-    render(<TedChat open onClose={() => {}} focusedOperationId="op-missing" />);
+    render(<TedChat focusedOperationId="op-missing" />);
 
     expect(
       await screen.findByText("Operação não encontrada nesta conversa."),
@@ -92,25 +103,24 @@ describe("TedChat deep-link focus (T5.3)", () => {
     expect(screen.queryByRole("button", { name: /^Aprovar$/i })).not.toBeInTheDocument();
   });
 
-  it("launcher routes openTedChat({ operationId }) into the single chat", async () => {
+  it("TedChatPage routes ?operationId= into the chat focus", async () => {
     vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
-
-    const user = userEvent.setup();
-    render(<TedChatLauncher />);
-
-    expect(screen.queryByRole("dialog", { name: "Chat com TED" })).not.toBeInTheDocument();
-    const { act } = await import("react");
-    act(() => {
-      openTedChat({ operationId: "op-9" });
+    vi.spyOn(agentClient, "sendAgentMessage").mockResolvedValue({
+      turnId: "turn-1",
+      status: "completed",
+      pendingOperation: pendingOp("op-9"),
     });
-    expect(await screen.findByRole("dialog", { name: "Chat com TED" })).toBeInTheDocument();
-    // Single executor: exactly one dialog, no parallel chat.
-    expect(screen.getAllByRole("dialog", { name: "Chat com TED" })).toHaveLength(1);
-    expect(OPEN_TED_CHAT_EVENT).toBe("pwa:open-ted");
-    // The selected id reaches the single chat: unknown ids stay honest.
+    navigation.search = "operationId=op-9";
+
+    render(<TedChatPage />);
+
+    // The page renders the page-bound chat…
+    expect(await screen.findByRole("region", { name: "Chat com TED" })).toBeInTheDocument();
+    // …and the routed id reaches it as the focus target: unknown ids stay
+    // honest until the authoritative card arrives.
     expect(
       await screen.findByText("Operação não encontrada nesta conversa."),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Fechar chat" }));
+    expect(OPEN_TED_CHAT_EVENT).toBe("pwa:open-ted");
   });
 });

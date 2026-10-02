@@ -43,8 +43,6 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
 });
 
 describe("TedChat Component – Canonical FinanceChatAgent REST", () => {
-  const onCloseMock = vi.fn();
-
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("mock-connection-token");
@@ -60,13 +58,18 @@ describe("TedChat Component – Canonical FinanceChatAgent REST", () => {
     });
   });
 
-  it("does not render dialog when open is false", () => {
-    const { container } = render(<TedChat open={false} onClose={onCloseMock} />);
-    expect(container.firstChild).toBeNull();
+  it("renders as a page region (not a dialog) with the TED name", async () => {
+    render(<TedChat />);
+
+    const region = await screen.findByRole("region", { name: "Chat com TED" });
+    expect(region).toBeInTheDocument();
+    expect(region).toHaveAttribute("data-testid", "ted-chat");
+    expect(screen.queryByRole("dialog", { name: "Chat com TED" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Olá TED, meu saldo?")).toBeInTheDocument();
   });
 
   it("renders messages using server isOwn, displays member name for other users and hides raw ID", async () => {
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     expect(await screen.findByText("Olá TED, meu saldo?")).toBeInTheDocument();
     expect(await screen.findByText("Seu saldo é R$ 2.000,00.")).toBeInTheDocument();
@@ -81,7 +84,7 @@ describe("TedChat Component – Canonical FinanceChatAgent REST", () => {
   });
 
   it("does not render export or delete controls without Finance contract", async () => {
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     expect(await screen.findByText("Olá TED, meu saldo?")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /exportar histórico/i })).not.toBeInTheDocument();
@@ -91,7 +94,7 @@ describe("TedChat Component – Canonical FinanceChatAgent REST", () => {
   it("shows a safe error when canonical history cannot be loaded", async () => {
     vi.mocked(agentClient.fetchAgentHistory).mockRejectedValueOnce(new Error("upstream token detail"));
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar o histórico.");
     expect(screen.queryByText("upstream token detail")).not.toBeInTheDocument();
@@ -100,7 +103,7 @@ describe("TedChat Component – Canonical FinanceChatAgent REST", () => {
   it("sends message and reloads canonical history from server instead of fabricating persistent local authorship", async () => {
     const user = userEvent.setup();
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     expect(await screen.findByText("Olá TED, meu saldo?")).toBeInTheDocument();
 
@@ -125,7 +128,7 @@ describe("TedChat Component – Canonical FinanceChatAgent REST", () => {
     const user = userEvent.setup();
     vi.mocked(agentClient.sendAgentMessage).mockRejectedValueOnce(new Error("upstream token detail"));
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
     await screen.findByText("Olá TED, meu saldo?");
 
     await user.type(screen.getByPlaceholderText("Pergunte sobre gastos, metas ou pagamentos…"), "Olá");
@@ -135,11 +138,10 @@ describe("TedChat Component – Canonical FinanceChatAgent REST", () => {
     expect(screen.queryByText("upstream token detail")).not.toBeInTheDocument();
   });
 
-  it("calls onClose when close button is clicked", async () => {
-    const user = userEvent.setup();
-    render(<TedChat open={true} onClose={onCloseMock} />);
+  it("has no close button (page navigation owns leaving via router/back)", async () => {
+    render(<TedChat />);
 
-    await user.click(screen.getByRole("button", { name: /fechar chat/i }));
-    expect(onCloseMock).toHaveBeenCalled();
+    expect(await screen.findByText("Olá TED, meu saldo?")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /fechar chat/i })).not.toBeInTheDocument();
   });
 });

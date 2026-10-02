@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import { TedChatLauncher, OPEN_TED_CHAT_EVENT } from "@/features/ted/TedChatLauncher";
@@ -7,8 +7,6 @@ import {
   releaseBodyScrollLock,
   bodyScrollLockCount,
 } from "@/lib/ui/overlay-a11y";
-import * as agentAuth from "@/lib/api/agent-auth";
-import * as agentClient from "@/lib/api/agent-client";
 
 vi.mock("@/lib/auth/workspace-context", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth/workspace-context")>();
@@ -35,34 +33,61 @@ vi.mock("@/lib/auth/workspace-context", async (importOriginal) => {
   };
 });
 
-describe("TedChatLauncher Component (Task 10)", () => {
-  it("renders floating launcher button and opens TedChat when clicked", async () => {
-    const user = userEvent.setup();
+const navigation = vi.hoisted(() => ({
+  push: vi.fn(),
+  pathname: "/",
+}));
 
-    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("mock-token");
-    vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: navigation.push }),
+  usePathname: () => navigation.pathname,
+}));
+
+describe("TedChatLauncher Component (page navigation)", () => {
+  beforeEach(() => {
+    navigation.push.mockClear();
+    navigation.pathname = "/";
+  });
+
+  it("renders floating launcher button and navigates to /ted when clicked", async () => {
+    const user = userEvent.setup();
 
     render(<TedChatLauncher />);
 
     const launcher = screen.getByRole("button", { name: /abrir assistente ted/i });
     expect(launcher).toBeInTheDocument();
+    expect(launcher).not.toHaveAttribute("aria-haspopup");
+    expect(launcher).not.toHaveAttribute("aria-expanded");
 
     // Click launcher
     await user.click(launcher);
-    expect(await screen.findByRole("dialog", { name: /chat com ted/i })).toBeInTheDocument();
+    expect(navigation.push).toHaveBeenCalledWith("/ted");
   });
 
-  it("opens TedChat when the public open event fires (empty Insights CTA)", async () => {
-    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("mock-token");
-    vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
-
+  it("navigates to /ted when the public open event fires (empty Insights CTA)", async () => {
     render(<TedChatLauncher />);
-    expect(screen.queryByRole("dialog", { name: /chat com ted/i })).not.toBeInTheDocument();
 
     await act(async () => {
       window.dispatchEvent(new CustomEvent(OPEN_TED_CHAT_EVENT));
     });
-    expect(await screen.findByRole("dialog", { name: /chat com ted/i })).toBeInTheDocument();
+    expect(navigation.push).toHaveBeenCalledWith("/ted");
+  });
+
+  it("navigates to /ted?operationId= when the event carries an operationId", async () => {
+    render(<TedChatLauncher />);
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(OPEN_TED_CHAT_EVENT, { detail: { operationId: "op-9" } }),
+      );
+    });
+    expect(navigation.push).toHaveBeenCalledWith("/ted?operationId=op-9");
+  });
+
+  it("hides the FAB on /ted", () => {
+    navigation.pathname = "/ted";
+    const { container } = render(<TedChatLauncher />);
+    expect(container.firstChild).toBeNull();
   });
 
   describe("overlay hiding (v2 A1)", () => {
@@ -87,21 +112,6 @@ describe("TedChatLauncher Component (Task 10)", () => {
       const restoredFab = screen.getByRole("button", { name: /abrir assistente ted/i });
       expect(restoredFab).not.toHaveClass("pointer-events-none", "opacity-0");
       expect(restoredFab).not.toHaveAttribute("tabindex");
-    });
-
-    it("hides the FAB while its own chat is open", async () => {
-      const user = userEvent.setup();
-
-      vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("mock-token");
-      vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
-
-      render(<TedChatLauncher />);
-      await user.click(screen.getByRole("button", { name: /abrir assistente ted/i }));
-      expect(await screen.findByRole("dialog", { name: /chat com ted/i })).toBeInTheDocument();
-      const hiddenFab = screen.getByRole("button", { name: /abrir assistente ted/i });
-      expect(hiddenFab).toHaveAttribute("aria-expanded", "true");
-      expect(hiddenFab).toHaveClass("pointer-events-none", "opacity-0");
-      expect(hiddenFab).toHaveAttribute("tabindex", "-1");
     });
   });
 

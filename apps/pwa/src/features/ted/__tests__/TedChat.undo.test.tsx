@@ -42,7 +42,6 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
 });
 
 describe("TedChat undo proposal card (debt-undo-confirmation-ui)", () => {
-  const onCloseMock = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -64,7 +63,7 @@ describe("TedChat undo proposal card (debt-undo-confirmation-ui)", () => {
       },
     });
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     await user.type(
       screen.getByPlaceholderText("Pergunte sobre gastos, metas ou pagamentos…"),
@@ -85,7 +84,7 @@ describe("TedChat undo proposal card (debt-undo-confirmation-ui)", () => {
       output: "Posso desfazer a última ação se você confirmar aqui no chat.",
     });
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     await user.type(
       screen.getByPlaceholderText("Pergunte sobre gastos, metas ou pagamentos…"),
@@ -115,7 +114,7 @@ describe("TedChat undo proposal card (debt-undo-confirmation-ui)", () => {
       status: "confirmed",
     });
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     await user.type(
       screen.getByPlaceholderText("Pergunte sobre gastos, metas ou pagamentos…"),

@@ -23,9 +23,8 @@ import { getChatAttachmentCapabilities } from "@/lib/capabilities";
 import { useOptionalAppState } from "@/lib/state/app-state-context";
 import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 import type { PendingOperationDecision, UndoDecision } from "@/lib/api/agent-client";
-import { useBodyScrollLock, useOverlayDialog } from "@/lib/ui/overlay-a11y";
 import { notifyPendingOperationsChanged } from "@/lib/state/use-pending-operations";
-import { Sparkles, X, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, Trash2, RefreshCw } from "lucide-react";
+import { Sparkles, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, Trash2, RefreshCw } from "lucide-react";
 
 const HISTORY_LOAD_ERROR = "Não foi possível carregar o histórico. Tente novamente.";
 const ACTIVE_LOAD_ERROR = "Não foi possível carregar as aprovações agora.";
@@ -71,19 +70,18 @@ const CONNECTION_STATUS_LABELS: Readonly<Record<TedChatStatus, string>> = {
 type ChatMessage = AgentMessage & { delivery?: TedDeliveryState };
 
 interface TedChatProps {
-  open: boolean;
-  onClose: () => void;
   /**
    * T5.3 (SPEC §22): deep-link target — the authoritative pending-operation
    * id to highlight/focus once the chat opens. Display routing only; the
    * Decision Service still owns every decision. `null`/absent = no focus.
+   * Routed via `/ted?operationId=` (page-bound chat, no dialog semantics).
    */
   focusedOperationId?: string | null;
 }
 
 export type TedAttachment = { type: "image" | "pdf" | "audio"; url: string; name: string; file?: File };
 
-export function TedChat({ open, onClose, focusedOperationId = null }: TedChatProps) {
+export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const ws = useWorkspaceSafe();
   const activeWorkspace = ws?.activeWorkspace ?? null;
   const members = ws?.members ?? [];
@@ -104,8 +102,6 @@ export function TedChat({ open, onClose, focusedOperationId = null }: TedChatPro
   const [status, setStatus] = useState<TedChatStatus>("ready");
   const [attachments, setAttachments] = useState<TedAttachment[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const modalRef = useRef<HTMLDivElement>(null);
-  const chatRootRef = useRef<HTMLDivElement>(null);
   const focusedCardRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -173,7 +169,7 @@ export function TedChat({ open, onClose, focusedOperationId = null }: TedChatPro
   }, [revokeAttachmentUrls]);
 
   // Unmount: revoga URLs restantes (cobre logout/expiração com rascunho
-  // pendente — esses caminhos desmontam o chat sem passar pelo onClose).
+  // pendente — esses caminhos desmontam a página do chat).
   useEffect(() => {
     return () => {
       revokeAttachmentUrls(attachmentsRef.current);
@@ -193,21 +189,9 @@ export function TedChat({ open, onClose, focusedOperationId = null }: TedChatPro
       if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
     };
   }, []);
-  // Full-screen overlay como as demais superfícies: trava o scroll do body
-  // (ref-counted, libera ao fechar/desmontar) e conta para useIsOverlayOpen.
-  useBodyScrollLock(open);
-  // SPEC §21: one shared dialog owner manages focus, Tab trapping, restore,
-  // background inert and Escape. Recording owns Escape so an active mic flow
-  // cannot be closed accidentally.
-  useOverlayDialog(chatRootRef, {
-    open,
-    initialFocus: () => messageInputRef.current,
-    onEscape: () => {
-      if (recordingState !== "recording" && recordingState !== "requesting" && recordingState !== "processing") {
-        onClose();
-      }
-    },
-  });
+  // Page-bound chat (`/ted`): no dialog shell, no scroll lock, no focus
+  // trap, no Escape-to-close. Recording flows keep their own keyboard
+  // behavior; navigation away unmounts the page.
 
   // debt-undo-rehydration-terminal-fix: the authoritative active list is
   // the SOURCE OF TRUTH. A successful refresh REPLACES local undo cards —
@@ -357,20 +341,14 @@ export function TedChat({ open, onClose, focusedOperationId = null }: TedChatPro
   }, [activeWorkspace?.id, cleanupRecordingMedia, clearAttachments, discardDrafts]);
 
   useEffect(() => {
-    if (open && activeWorkspace) {
+    if (activeWorkspace) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       void loadHistory();
       // T5.3 (SPEC §22): chat mount refreshes the external pending
       // reflections so indicators are never stale after in-chat decisions.
       notifyPendingOperationsChanged();
     }
-    if (!open) {
-      // Limpar estado sensível ao fechar (SPEC §17: cleanup único do microfone;
-      // SPEC §18/INV-08: revogar TODAS as object URLs locais de anexos).
-      cleanupRecordingMedia();
-      clearAttachments();
-    }
-  }, [open, activeWorkspace, loadHistory, cleanupRecordingMedia, clearAttachments]);
+  }, [activeWorkspace, loadHistory]);
 
   useEffect(() => {
     if (typeof messagesEndRef.current?.scrollIntoView === "function") {
@@ -385,10 +363,10 @@ export function TedChat({ open, onClose, focusedOperationId = null }: TedChatPro
     ? pendingOps.find((op) => op.id === focusedOperationId)
     : undefined;
   const showFocusedMissing =
-    open && focusedOperationId !== null && focusedOperationId !== undefined && historyLoaded && !focusedOperation;
+    focusedOperationId !== null && focusedOperationId !== undefined && historyLoaded && !focusedOperation;
 
   useEffect(() => {
-    if (!open || !focusedOperation) return;
+    if (!focusedOperation) return;
     const target = focusedCardRef.current;
     if (!target) return;
     try {
@@ -399,7 +377,7 @@ export function TedChat({ open, onClose, focusedOperationId = null }: TedChatPro
       /* scroll is best-effort — focus below is the accessible contract */
     }
     target.focus({ preventScroll: true });
-  }, [open, focusedOperation]);
+  }, [focusedOperation]);
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!caps.image) return;
@@ -622,20 +600,13 @@ export function TedChat({ open, onClose, focusedOperationId = null }: TedChatPro
     }
   };
 
-  if (!open) return null;
-
   return (
-    <div
-      ref={chatRootRef}
-      role="dialog"
-      aria-modal="true"
+    <section
+      role="region"
       aria-label="Chat com TED"
-      className="fixed inset-0 z-50 flex h-[100dvh] max-h-[100dvh] items-end justify-center bg-black/60 backdrop-blur-xs supports-[height:100dvh]:h-[100dvh] sm:bottom-6 sm:right-6 sm:top-auto sm:items-end sm:justify-end sm:bg-transparent sm:backdrop-blur-none sm:h-auto sm:max-h-none pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)]"
+      data-testid="ted-chat"
+      className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[22px] border border-border-subtle bg-surface-1"
     >
-      <div
-        ref={modalRef}
-        className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden rounded-t-[24px] border border-border-subtle bg-surface-1 shadow-modal sm:h-[640px] sm:max-h-[640px] sm:w-[420px] sm:rounded-[22px] max-sm:pb-[env(safe-area-inset-bottom)]"
-      >
         {/* Header */}
         <div className="relative flex items-center justify-between border-b border-border-subtle bg-surface-2/80 px-4 py-3.5 backdrop-blur-md">
           <div className="flex items-center gap-3">
@@ -665,14 +636,6 @@ export function TedChat({ open, onClose, focusedOperationId = null }: TedChatPro
               className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-surface-3 text-text-secondary shadow-xs transition-colors hover:bg-surface-4 hover:text-text-primary disabled:opacity-50 cursor-pointer"
             >
               <RefreshCw size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Fechar chat"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-surface-3 text-text-primary shadow-xs transition-colors hover:bg-surface-4 cursor-pointer"
-            >
-              <X size={15} />
             </button>
           </div>
         </div>
@@ -889,7 +852,6 @@ export function TedChat({ open, onClose, focusedOperationId = null }: TedChatPro
             <span>Pressione Enter para enviar • Shift+Enter para nova linha</span>
           </div>
         </form>
-      </div>
-    </div>
+    </section>
   );
 }

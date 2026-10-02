@@ -208,10 +208,18 @@ async function authenticate(page: Page, timeout = 15000): Promise<void> {
 }
 
 async function openTed(page: Page): Promise<Locator> {
+  // Page navigation: the FAB routes to /ted (hidden on /ted itself). After a
+  // reload on /ted the chat is already mounted — return the region directly.
+  if (page.url().includes("/ted")) {
+    const region = page.getByRole("region", { name: /chat com ted/i });
+    await expect(region).toBeVisible();
+    return region;
+  }
   const launcher = page.getByRole("button", { name: /abrir assistente ted/i }).last();
   await expect(launcher).toBeVisible();
   await launcher.click();
-  const dialog = page.getByRole("dialog", { name: /chat com ted/i });
+  await page.waitForURL(/\/ted/);
+  const dialog = page.getByRole("region", { name: /chat com ted/i });
   await expect(dialog).toBeVisible();
   return dialog;
 }

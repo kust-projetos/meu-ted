@@ -69,7 +69,7 @@ async function renderWithHistoryLoaded() {
   vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
     { id: "srv-1", actorId: "ted", role: "assistant", content: "Olá! Como posso ajudar?", isOwn: false, createdAt: undefined, attachments: undefined },
   ]);
-  render(<TedChat open={true} onClose={vi.fn()} />);
+  render(<TedChat />);
   await screen.findByText("Olá! Como posso ajudar?");
 }
 
@@ -192,7 +192,7 @@ describe("TedChat — §19.3 retry preserves the draft", () => {
       .mockResolvedValueOnce(okTurn);
 
     const imageInput = screen
-      .getByRole("dialog")
+      .getByRole("region", { name: "Chat com TED" })
       .querySelector('input[type="file"][accept*="image"]') as HTMLInputElement;
     await user.upload(imageInput, new File(["x"], "nota.png", { type: "image/png" }));
     await screen.findByRole("button", { name: /remover nota\.png/i });
@@ -230,7 +230,7 @@ describe("TedChat — §19.4 connection status in pt-BR", () => {
   it("maps connecting → 'conectando…' and ready → 'online'", async () => {
     const pending = deferred<agentClient.AgentMessage[]>();
     vi.mocked(agentClient.fetchAgentHistory).mockReturnValueOnce(pending.promise);
-    render(<TedChat open={true} onClose={vi.fn()} />);
+    render(<TedChat />);
 
     expect(await screen.findByText("conectando…")).toBeInTheDocument();
 
@@ -241,7 +241,7 @@ describe("TedChat — §19.4 connection status in pt-BR", () => {
 
   it("maps error → 'indisponível' (never raw English states)", async () => {
     vi.mocked(agentClient.fetchAgentHistory).mockRejectedValueOnce(new Error("boom"));
-    render(<TedChat open={true} onClose={vi.fn()} />);
+    render(<TedChat />);
 
     expect(await screen.findByText("indisponível")).toBeInTheDocument();
     expect(screen.queryByText(/^connecting$|^error$/)).toBeNull();
@@ -270,7 +270,7 @@ describe("TedChat — §19.5 keyboard hints hidden on touch", () => {
   });
 
   it("hint row carries the (hover:none) and (pointer:coarse) hidden variant and stays visible on desktop", async () => {
-    render(<TedChat open={true} onClose={vi.fn()} />);
+    render(<TedChat />);
     const hint = screen.getByText(/Pressione Enter para enviar/).closest("div");
     expect(hint).not.toBeNull();
     const className = hint?.className ?? "";

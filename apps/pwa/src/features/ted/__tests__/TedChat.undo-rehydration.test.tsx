@@ -43,7 +43,6 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
 });
 
 describe("TedChat undo rehydration (debt-undo-proposal-rehydration)", () => {
-  const onCloseMock = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -58,7 +57,7 @@ describe("TedChat undo rehydration (debt-undo-proposal-rehydration)", () => {
       { requestId: "proposal-reload", status: "proposed", expiresAt: "2099-01-01T12:00:00.000Z" },
     ]);
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     expect(await screen.findByTestId("ted-undo-card")).toBeInTheDocument();
     expect(agentClient.decideUndoProposal).not.toHaveBeenCalled();
@@ -81,7 +80,7 @@ describe("TedChat undo rehydration (debt-undo-proposal-rehydration)", () => {
       },
     });
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
     expect(await screen.findByTestId("ted-undo-card")).toBeInTheDocument();
 
     await user.type(
@@ -100,7 +99,7 @@ describe("TedChat undo rehydration (debt-undo-proposal-rehydration)", () => {
       { requestId: "proposal-exec", status: "executing", expiresAt: "2099-01-01T12:00:00.000Z" },
     ]);
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     expect(await screen.findByTestId("ted-undo-pending")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Confirmar desfazer" })).not.toBeInTheDocument();
@@ -112,7 +111,7 @@ describe("TedChat undo rehydration (debt-undo-proposal-rehydration)", () => {
       { requestId: "proposal-old", status: "proposed", expiresAt: "2020-01-01T00:00:00.000Z" },
     ]);
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     await waitFor(() => expect(agentClient.fetchActiveUndoProposals).toHaveBeenCalled());
     expect(screen.queryByTestId("ted-undo-card")).not.toBeInTheDocument();
@@ -121,7 +120,6 @@ describe("TedChat undo rehydration (debt-undo-proposal-rehydration)", () => {
 });
 
 describe("TedChat undo terminal reconciliation (debt-undo-rehydration-terminal-fix)", () => {
-  const onCloseMock = vi.fn();
   const FUTURE = "2099-01-01T12:00:00.000Z";
 
   beforeEach(() => {
@@ -142,7 +140,7 @@ describe("TedChat undo terminal reconciliation (debt-undo-rehydration-terminal-f
       status: "confirmed",
     });
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
     expect(await screen.findByTestId("ted-undo-card")).toBeInTheDocument();
 
     // Server-side the proposal is now terminal, so the authoritative list omits it.
@@ -174,7 +172,7 @@ describe("TedChat undo terminal reconciliation (debt-undo-rehydration-terminal-f
       output: "ok",
     });
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
     expect(await screen.findByTestId("ted-undo-card")).toBeInTheDocument();
     await user.click(await screen.findByRole("button", { name: "Cancelar" }));
     expect(await screen.findByTestId("ted-undo-cancelled")).toBeInTheDocument();
@@ -205,7 +203,7 @@ describe("TedChat undo terminal reconciliation (debt-undo-rehydration-terminal-f
       output: "ok",
     });
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
     expect(await screen.findByTestId("ted-undo-card")).toBeInTheDocument();
 
     // Server-side the proposal expired (omitted + marked expired); the next
@@ -234,7 +232,7 @@ describe("TedChat undo terminal reconciliation (debt-undo-rehydration-terminal-f
       undoProposal: { requestId: "proposal-fresh", status: "proposed", expiresAt: FUTURE },
     });
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
     await waitFor(() => expect(agentClient.fetchActiveUndoProposals).toHaveBeenCalled());
     expect(screen.queryByTestId("ted-undo-card")).not.toBeInTheDocument();
 
