@@ -234,6 +234,22 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ── A5 zoom follow-up (2026-10-02): no iOS auto-zoom on form controls ──
+ * iOS Safari zooms the viewport whenever a focused form control computes
+ * font-size < 16px. Per-component fixes (AuthGate, NewTransactionSheet/Input)
+ * left several surfaces below the threshold (chat textarea, convite,
+ * workspace manager, payables, records, filters...), so the contract lives
+ * here: ONE coarse-pointer rule. Zoom itself stays free (WCAG 1.4.4 — the
+ * viewport has no maximum-scale); we raise the control font on touch
+ * devices instead of blocking user zoom. Desktop (pointer: fine) untouched. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 /* ── Tabular numbers for mono font ── */
 .font-mono, [data-tabular-nums="true"] {
   font-variant-numeric: tabular-nums;
