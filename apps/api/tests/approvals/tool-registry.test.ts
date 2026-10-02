@@ -92,8 +92,10 @@ describe('T0.1: Approval Tool Contract registry', () => {
       const contract = requireApprovalToolContract(tool) as unknown as Record<string, unknown>;
       expect(contract).not.toHaveProperty('affectedTargets');
       expect(Object.keys(contract).sort()).toEqual(
-        ['approvalRequired', 'executor', 'inputSchema', 'tool'].sort(),
+        ['approvalRequired', 'authorizationPolicy', 'autoExecutionEligible', 'executor', 'inputSchema', 'tool'].sort(),
       );
+      expect(contract.authorizationPolicy).toBe('risk_based');
+      expect(contract.autoExecutionEligible).toBe(true);
     }
   });
 
