@@ -3,6 +3,19 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-01 — página dedicada do agente TED `/ted`, sem release)
+
+- **Chat do TED vira página `/ted` (sem semântica de modal)**: `TedChat`
+  passa a renderizar `role="region"` page-bound (sem `open`/`onClose`, sem
+  backdrop/scroll lock/focus trap/Escape/botão X); `TedChatLauncher` vira
+  navegação (`router.push("/ted")`, deep-link `/ted?operationId=…`,
+  oculto na própria `/ted`, A1 sob overlays mantido); nova página
+  `app/ted/page.tsx` (server fino + `Suspense`) com `TedChatPage` lendo
+  `?operationId=`; swipe direita em `/ted` faz `router.back()` (fora de
+  `SWIPE_ROUTES`). Testes migrados para `region`/`router.push` + suite nova
+  `TedChatPage`; E2E com `waitForURL(/\/ted/)` e seletor `region`. Emendas
+  datadas na SPEC V3 (§21/§22/§24).
+
 ## Unreleased (2026-10-01 — fechamento de aceite dos 4 itens, produção alinhada; sem release)
 
 ### Gates abertos executados (sessão 2026-10-01b — `docs/reports/2026-10-01-open-gates-execution.md`)

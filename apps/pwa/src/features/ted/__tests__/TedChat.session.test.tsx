@@ -40,7 +40,6 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
 });
 
 describe("TedChat — sessão renovável e memória (Parte B)", () => {
-  const onCloseMock = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -60,7 +59,7 @@ describe("TedChat — sessão renovável e memória (Parte B)", () => {
 
   it("renova a sessão: limpa o contexto, mantém o chat utilizável e avisa", async () => {
     const user = userEvent.setup();
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
     expect(await screen.findByText("Meu saldo?")).toBeInTheDocument();
 
     // Post-renew server history is empty; arrange it before clicking.
@@ -76,7 +75,7 @@ describe("TedChat — sessão renovável e memória (Parte B)", () => {
   it("mostra erro seguro quando a renovação falha", async () => {
     const user = userEvent.setup();
     vi.mocked(agentClient.renewAgentSession).mockRejectedValueOnce(new Error("boom"));
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
     expect(await screen.findByText("Meu saldo?")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /nova sessão/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/nova sessão/i);
@@ -89,7 +88,7 @@ describe("TedChat — sessão renovável e memória (Parte B)", () => {
       status: "completed",
       memorized: ["Prefiro resumos curtos"],
     });
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
     expect(await screen.findByText("Meu saldo?")).toBeInTheDocument();
 
     await user.type(screen.getByPlaceholderText("Pergunte sobre gastos, metas ou pagamentos…"), "Lembre que prefiro resumos curtos");
@@ -99,7 +98,7 @@ describe("TedChat — sessão renovável e memória (Parte B)", () => {
 
   it("contrato: reabrir após renovação carrega o histórico da sessão atual", async () => {
     const user = userEvent.setup();
-    const { unmount } = render(<TedChat open={true} onClose={onCloseMock} />);
+    const { unmount } = render(<TedChat />);
     expect(await screen.findByText("Meu saldo?")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /nova sessão/i }));
@@ -108,7 +107,7 @@ describe("TedChat — sessão renovável e memória (Parte B)", () => {
     // Current session is now empty server-side.
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([]);
     unmount();
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
     await waitFor(() => expect(agentClient.fetchAgentHistory).toHaveBeenCalled());
     expect(screen.queryByText("Meu saldo?")).not.toBeInTheDocument();
   });

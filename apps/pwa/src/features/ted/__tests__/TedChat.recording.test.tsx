@@ -131,7 +131,7 @@ describe("TedChat – ciclo de vida do microfone (SPEC §17, H-08)", () => {
   it("permissão negada nunca mostra gravando (vai para erro)", async () => {
     const user = userEvent.setup();
     mediaCtl.getUserMediaImpl = () => Promise.reject(new DOMException("denied", "NotAllowedError"));
-    render(<TedChat open={true} onClose={vi.fn()} />);
+    render(<TedChat />);
 
     await user.click(screen.getByRole("button", { name: /gravar áudio/i }));
 
@@ -147,7 +147,7 @@ describe("TedChat – ciclo de vida do microfone (SPEC §17, H-08)", () => {
       new Promise<MediaStream>((resolve) => {
         resolveGum = resolve;
       });
-    render(<TedChat open={true} onClose={vi.fn()} />);
+    render(<TedChat />);
 
     await user.click(screen.getByRole("button", { name: /gravar áudio/i }));
 
@@ -164,7 +164,7 @@ describe("TedChat – ciclo de vida do microfone (SPEC §17, H-08)", () => {
     mediaCtl.startImpl = () => {
       throw new Error("start failed");
     };
-    render(<TedChat open={true} onClose={vi.fn()} />);
+    render(<TedChat />);
 
     await user.click(screen.getByRole("button", { name: /gravar áudio/i }));
 
@@ -172,23 +172,9 @@ describe("TedChat – ciclo de vida do microfone (SPEC §17, H-08)", () => {
     expect(screen.queryByText(/gravando/i)).toBeNull();
   });
 
-  it("fechar o chat para o recorder e encerra as tracks", async () => {
-    const user = userEvent.setup();
-    const { rerender } = render(<TedChat open={true} onClose={vi.fn()} />);
-
-    await user.click(screen.getByRole("button", { name: /gravar áudio/i }));
-    await waitFor(() => expect(screen.queryByText(/gravando/i)).toBeInTheDocument());
-    expect(mediaCtl.instances).toHaveLength(1);
-
-    rerender(<TedChat open={false} onClose={vi.fn()} />);
-
-    await waitFor(() => expect(mediaCtl.instances[0].stop).toHaveBeenCalled());
-    expect(mediaCtl.trackStops[0]).toHaveBeenCalled();
-  });
-
   it("unmount para o recorder e encerra as tracks", async () => {
     const user = userEvent.setup();
-    const { unmount } = render(<TedChat open={true} onClose={vi.fn()} />);
+    const { unmount } = render(<TedChat />);
 
     await user.click(screen.getByRole("button", { name: /gravar áudio/i }));
     await waitFor(() => expect(screen.queryByText(/gravando/i)).toBeInTheDocument());
@@ -201,31 +187,30 @@ describe("TedChat – ciclo de vida do microfone (SPEC §17, H-08)", () => {
 
   it("troca de workspace encerra as tracks e sai do estado gravando", async () => {
     const user = userEvent.setup();
-    const { rerender } = render(<TedChat open={true} onClose={vi.fn()} />);
+    const { rerender } = render(<TedChat />);
 
     await user.click(screen.getByRole("button", { name: /gravar áudio/i }));
     await waitFor(() => expect(screen.queryByText(/gravando/i)).toBeInTheDocument());
 
     wsState.activeId = "ws-2";
-    rerender(<TedChat open={true} onClose={vi.fn()} />);
+    rerender(<TedChat />);
 
     await waitFor(() => expect(mediaCtl.trackStops[0]).toHaveBeenCalled());
     expect(screen.queryByText(/gravando/i)).toBeNull();
   });
 
-  it("cleanup duplo é seguro (parar + fechar + unmount sem exceção)", async () => {
+  it("cleanup duplo é seguro (parar + unmount sem exceção)", async () => {
     const user = userEvent.setup();
-    const { rerender, unmount } = render(<TedChat open={true} onClose={vi.fn()} />);
+    const { unmount } = render(<TedChat />);
 
     await user.click(screen.getByRole("button", { name: /gravar áudio/i }));
     await waitFor(() => expect(screen.queryByText(/gravando/i)).toBeInTheDocument());
 
-    // Parar via botão (gera anexo de áudio), depois fechar e desmontar.
+    // Parar via botão (gera anexo de áudio), depois desmontar a página.
     await user.click(screen.getByRole("button", { name: /parar gravação/i }));
     await waitFor(() => expect(screen.queryByText(/gravando/i)).toBeNull());
 
     expect(() => {
-      rerender(<TedChat open={false} onClose={vi.fn()} />);
       unmount();
     }).not.toThrow();
     expect(mediaCtl.trackStops[0]).toHaveBeenCalled();

@@ -95,7 +95,7 @@ describe("FIX-P1 RED: TedChat reload from active list", () => {
       },
     ]);
 
-    render(<TedChat open={true} onClose={() => {}} />);
+    render(<TedChat />);
 
     expect(await screen.findByText(/Confirmar despesa/)).toBeInTheDocument();
     expect(screen.getByText("R$ 850,00")).toBeInTheDocument();
@@ -125,7 +125,7 @@ describe("FIX-P1 RED: TedChat reload from active list", () => {
     ]);
     vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
 
-    render(<TedChat open={true} onClose={() => {}} />);
+    render(<TedChat />);
 
     await waitFor(() => expect(agentClient.fetchActivePendingOperations).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByText(/Confirmar despesa/)).not.toBeInTheDocument());
@@ -138,7 +138,7 @@ describe("FIX-P1 RED: TedChat reload from active list", () => {
     ]);
     vi.mocked(agentClient.fetchActivePendingOperations).mockRejectedValue(new Error("down"));
 
-    render(<TedChat open={true} onClose={() => {}} />);
+    render(<TedChat />);
 
     expect(await screen.findByText("Meu saldo?")).toBeInTheDocument();
     expect(await screen.findByRole("alert")).toBeInTheDocument();

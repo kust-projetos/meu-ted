@@ -172,7 +172,8 @@ async function openTed(page: Page): Promise<Locator> {
   const launcher = page.getByRole("button", { name: /abrir assistente ted/i }).last();
   await expect(launcher).toBeVisible();
   await launcher.click();
-  const dialog = page.getByRole("dialog", { name: /chat com ted/i });
+  await page.waitForURL(/\/ted/);
+  const dialog = page.getByRole("region", { name: /chat com ted/i });
   await expect(dialog).toBeVisible();
   return dialog;
 }

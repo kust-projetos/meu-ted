@@ -217,7 +217,8 @@ test.describe("TED Chat & Workspaces", () => {
 
     // Click launcher to open chat
     await launcher.click();
-    const dialog = page.getByRole("dialog", { name: /chat com ted/i });
+    await page.waitForURL(/\/ted/);
+    const dialog = page.getByRole("region", { name: /chat com ted/i });
     await expect(dialog).toBeVisible();
 
     // Send a message
@@ -232,8 +233,8 @@ test.describe("TED Chat & Workspaces", () => {
     await expect(dialog.getByText("Quanto gastei hoje?")).toBeVisible();
     await expect(page.getByText(GREETING)).toBeVisible();
 
-    // Close chat with close button
-    await page.getByRole("button", { name: /fechar chat/i }).click();
-    await expect(dialog).not.toBeVisible();
+    // The page-bound chat stays mounted (no close button — leaving the page
+    // is router navigation): the dedicated page URL owns the conversation.
+    await expect(page).toHaveURL(/\/ted/);
   });
 });

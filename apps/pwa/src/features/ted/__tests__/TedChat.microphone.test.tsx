@@ -58,7 +58,7 @@ describe("TedChat – microphone capability gate (T1.1, INV-08)", () => {
 
   it("caps.microphone=false -> record button is ABSENT from the render", async () => {
     vi.stubEnv("NEXT_PUBLIC_TED_MICROPHONE", "");
-    render(<TedChat open={true} onClose={vi.fn()} />);
+    render(<TedChat />);
     await screen.findByRole("button", { name: /enviar mensagem/i });
     expect(screen.queryByRole("button", { name: /gravar áudio/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /parar gravação/i })).toBeNull();
@@ -69,7 +69,7 @@ describe("TedChat – microphone capability gate (T1.1, INV-08)", () => {
 
   it("caps.microphone=true -> record button is present", async () => {
     vi.stubEnv("NEXT_PUBLIC_TED_MICROPHONE", "true");
-    render(<TedChat open={true} onClose={vi.fn()} />);
+    render(<TedChat />);
     expect(await screen.findByRole("button", { name: /gravar áudio/i })).toBeInTheDocument();
   });
 });

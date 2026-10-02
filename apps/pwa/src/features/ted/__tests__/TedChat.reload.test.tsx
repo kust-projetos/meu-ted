@@ -61,7 +61,6 @@ const serverPresentation = {
 };
 
 describe("TedChat — reload rehydration from authoritative active list (FIX-P1/T6.1/§25.4)", () => {
-  const onCloseMock = vi.fn();
 
   const activeItem = (overrides: Record<string, unknown> = {}) => ({
     id: "pending-v2-1",
@@ -109,7 +108,7 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
     ]);
     vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([activeItem()]);
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     // Card values come from the server payload (Valor/Conta/Categoria/Data).
     expect(await screen.findByText(/Confirmar despesa/)).toBeInTheDocument();
@@ -136,7 +135,7 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
       activeItem({ status: "executing", presentation: { ...serverPresentation, status: "executing" } }),
     ]);
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     expect(await screen.findByText(/processando operação/i)).toBeInTheDocument();
     expect(screen.queryByText(/Operação.*registrada/i)).toBeNull();
@@ -147,7 +146,7 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
   it("history fetch failure with no prior history shows error/empty state, never a fabricated card", async () => {
     vi.mocked(agentClient.fetchAgentHistory).mockRejectedValueOnce(new Error("boom"));
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar o histórico.");
     expect(screen.queryByRole("button", { name: /aprovar|confirmar/i })).toBeNull();
@@ -160,7 +159,7 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
       { id: "msg-1", actorId: "user-1", role: "user", content: "Meu saldo?", isOwn: true, createdAt: undefined, attachments: undefined },
     ]);
 
-    render(<TedChat open={true} onClose={onCloseMock} />);
+    render(<TedChat />);
     expect(await screen.findByText("Meu saldo?")).toBeInTheDocument();
 
     // Send fails AND the follow-up history reload fails: prior server

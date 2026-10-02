@@ -94,7 +94,7 @@ describe("TedChat – attachment capability gate (SPEC §18, H-09)", () => {
   it("default (sem pipeline, mic off): nenhum botão de anexo de arquivo nem file input alcançável; microfone T1.1 ausente", async () => {
     vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "");
     vi.stubEnv("NEXT_PUBLIC_TED_MICROPHONE", "");
-    const { container } = render(<TedChat open={true} onClose={vi.fn()} />);
+    const { container } = render(<TedChat />);
     await screen.findByRole("button", { name: /enviar mensagem/i });
     expect(screen.queryByRole("button", { name: /gravar áudio/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /anexar imagem/i })).toBeNull();
@@ -104,7 +104,7 @@ describe("TedChat – attachment capability gate (SPEC §18, H-09)", () => {
 
   it("com pipeline habilitado (flag=1): botões e inputs de imagem/PDF aparecem (gate é real, não remoção)", async () => {
     vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "1");
-    const { container } = render(<TedChat open={true} onClose={vi.fn()} />);
+    const { container } = render(<TedChat />);
     expect(await screen.findByRole("button", { name: /anexar imagem/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /anexar pdf/i })).toBeInTheDocument();
     const imageInput = container.querySelector('input[type="file"][accept*="image"]') as HTMLInputElement | null;
@@ -118,7 +118,7 @@ describe("TedChat – attachment capability gate (SPEC §18, H-09)", () => {
   it("com pipeline habilitado: selecionar imagem mostra preview; remover revoga a object URL", async () => {
     vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "1");
     const user = userEvent.setup();
-    const { container } = render(<TedChat open={true} onClose={vi.fn()} />);
+    const { container } = render(<TedChat />);
     const imageInput = container.querySelector('input[type="file"][accept*="image"]') as HTMLInputElement;
     expect(imageInput).not.toBeNull();
     const file = new File(["fake-image"], "foto.png", { type: "image/png" });
@@ -138,7 +138,7 @@ describe("TedChat – attachment capability gate (SPEC §18, H-09)", () => {
   it("envio com sucesso revoga as object URLs dos anexos", async () => {
     vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "1");
     const user = userEvent.setup();
-    const { container } = render(<TedChat open={true} onClose={vi.fn()} />);
+    const { container } = render(<TedChat />);
     const imageInput = container.querySelector('input[type="file"][accept*="image"]') as HTMLInputElement;
     await user.upload(imageInput, new File(["x"], "nota.png", { type: "image/png" }));
     await screen.findByRole("button", { name: /remover nota\.png/i });
@@ -151,39 +151,39 @@ describe("TedChat – attachment capability gate (SPEC §18, H-09)", () => {
     });
   });
 
-  it("fechar o chat revoga URLs e unmount revoga URLs restantes", async () => {
+  it("unmount (navegação para fora da página) revoga URLs restantes", async () => {
     vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "1");
     const user = userEvent.setup();
-    const { container, rerender, unmount } = render(<TedChat open={true} onClose={vi.fn()} />);
+    const { container, unmount } = render(<TedChat />);
     const imageInput = container.querySelector('input[type="file"][accept*="image"]') as HTMLInputElement;
     await user.upload(imageInput, new File(["x"], "a.png", { type: "image/png" }));
     await screen.findByRole("button", { name: /remover a\.png/i });
-    rerender(<TedChat open={false} onClose={vi.fn()} />);
+    // Page-bound: não há "fechar" — o teardown é o unmount (navegação).
+    unmount();
     await waitFor(() => {
       expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock-url");
     });
 
     // Segundo ciclo: anexo pendente no unmount também é revogado.
     vi.mocked(URL.revokeObjectURL).mockClear();
-    const second = render(<TedChat open={true} onClose={vi.fn()} />);
+    const second = render(<TedChat />);
     const secondInput = second.container.querySelector('input[type="file"][accept*="image"]') as HTMLInputElement;
     await user.upload(secondInput, new File(["y"], "b.png", { type: "image/png" }));
     await second.findByRole("button", { name: /remover b\.png/i });
     second.unmount();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock-url");
-    unmount();
   });
 
   it("troca de workspace e nova sessão revogam URLs pendentes", async () => {
     vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "1");
     const user = userEvent.setup();
-    const { container, rerender } = render(<TedChat open={true} onClose={vi.fn()} />);
+    const { container, rerender } = render(<TedChat />);
     const imageInput = container.querySelector('input[type="file"][accept*="image"]') as HTMLInputElement;
     await user.upload(imageInput, new File(["x"], "ws.png", { type: "image/png" }));
     await screen.findByRole("button", { name: /remover ws\.png/i });
 
     wsState.activeId = "ws-2";
-    rerender(<TedChat open={true} onClose={vi.fn()} />);
+    rerender(<TedChat />);
     await waitFor(() => {
       expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock-url");
     });
@@ -193,7 +193,7 @@ describe("TedChat – attachment capability gate (SPEC §18, H-09)", () => {
 
     // Nova sessão também limpa e revoga.
     wsState.activeId = "ws-1";
-    rerender(<TedChat open={true} onClose={vi.fn()} />);
+    rerender(<TedChat />);
     const freshInput = container.querySelector('input[type="file"][accept*="image"]') as HTMLInputElement;
     await user.upload(freshInput, new File(["z"], "sess.png", { type: "image/png" }));
     await screen.findByRole("button", { name: /remover sess\.png/i });

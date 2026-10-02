@@ -1649,6 +1649,12 @@ Aplicar a:
 - ConfirmActionDialog;
 - TED Chat.
 
+> **Emenda 2026-10-01:** o chat do TED deixou de ser dialog/overlay e passou
+> a ser a página dedicada `/ted` (`role="region"`, sem `aria-modal`, sem
+> scroll lock, sem focus trap/Escape/restore). O owner de overlay (§21) não
+> se aplica mais ao TED; BottomSheet, dialogs e ConfirmActionDialog seguem
+> cobertos.
+
 O BottomSheet atual já possui `role="dialog"`, `aria-modal`, Escape e scroll lock, mas não implementa todo o gerenciamento de foco.
 
 Não introduzir uma biblioteca UI inteira apenas para essa correção sem necessidade demonstrada.
@@ -1676,6 +1682,11 @@ Mostrar algo como:
 ```
 
 e permitir abrir o TED já focado nela.
+
+> **Emenda 2026-10-01:** o deep-link agora é a rota `/ted?operationId=…`
+> (navegação via `openTedChat({ operationId })` → `router.push`; a página lê
+> `?operationId=` como `focusedOperationId`). Display routing only,
+> inalterado: o Decision Service continua dono de confirm/cancel/retry.
 
 Não criar um segundo executor de aprovação na tela de Aprovações.
 
@@ -1737,6 +1748,10 @@ Podem ser implementados juntamente com os workstreams correspondentes:
 - revisar nomenclatura de "Minhas Contas" versus "Contas e Cartões";
 - esconder instruções de teclado em touch;
 - mapear todos os status visíveis para pt-BR.
+
+> **Emenda 2026-10-01:** o FAB do TED deixou de ser disclosure
+> (`aria-haspopup="dialog"`/`aria-expanded` removidos) e virou navegação
+> para `/ted` (oculto na própria `/ted` e sob overlays — A1 mantido).
 
 Nenhum deles sozinho bloqueia release.
 

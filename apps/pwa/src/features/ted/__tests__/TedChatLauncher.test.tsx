@@ -1,15 +1,21 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { TedChatLauncher } from "../TedChatLauncher";
+import { TedChatLauncher, OPEN_TED_CHAT_EVENT } from "../TedChatLauncher";
 
 // Overlay store is module-level (useSyncExternalStore); drive it with a
 // mutable flag so tests can simulate sheets/dialogs being open.
 const overlay = vi.hoisted(() => ({ open: false }));
 
-vi.mock("@/lib/ui/overlay-a11y", () => ({
-  useIsOverlayOpen: () => overlay.open,
+const navigation = vi.hoisted(() => ({
+  push: vi.fn(),
+  pathname: "/",
 }));
+
+vi.mock("@/lib/ui/overlay-a11y", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/ui/overlay-a11y")>();
+  return { ...actual, useIsOverlayOpen: () => overlay.open };
+});
 
 vi.mock("next/image", () => ({
   default: ({ src, alt }: { src: string; alt: string }) => (
@@ -18,30 +24,23 @@ vi.mock("next/image", () => ({
   ),
 }));
 
-// Launcher-owned chat is stubbed: this suite covers the launcher behavior
-// (disclosure semantics, overlay hiding), not the chat internals.
-vi.mock("../TedChat", () => ({
-  TedChat: ({ open, onClose }: { open: boolean; onClose: () => void }) =>
-    open ? (
-      <div data-testid="ted-chat-stub">
-        <button type="button" onClick={onClose}>
-          fechar chat
-        </button>
-      </div>
-    ) : null,
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: navigation.push }),
+  usePathname: () => navigation.pathname,
 }));
 
-describe("TedChatLauncher", () => {
+describe("TedChatLauncher (page navigation)", () => {
   beforeEach(() => {
     overlay.open = false;
+    navigation.push.mockClear();
+    navigation.pathname = "/";
   });
 
-  it("renders the FAB as a dialog disclosure with an accessible name", () => {
+  it("renders the FAB as navigation without dialog disclosure semantics", () => {
     render(<TedChatLauncher />);
     const fab = screen.getByRole("button", { name: "Abrir assistente TED" });
-    // SPEC §24: the FAB opens a dialog — announce it instead of pretending a
-    // menu pattern; its expanded state tracks the single dialog it controls.
-    expect(fab).toHaveAttribute("aria-haspopup", "dialog");
+    expect(fab).not.toHaveAttribute("aria-haspopup");
+    expect(fab).not.toHaveAttribute("aria-expanded");
   });
 
   it("keeps a >= 44px touch target (56px FAB)", () => {
@@ -51,24 +50,36 @@ describe("TedChatLauncher", () => {
     expect(fab.className).toMatch(/w-14/);
   });
 
-  it("opens the TED chat when the FAB is activated", async () => {
+  it("navigates to /ted when the FAB is activated", async () => {
     const user = userEvent.setup();
     render(<TedChatLauncher />);
     await user.click(screen.getByRole("button", { name: "Abrir assistente TED" }));
-    expect(screen.getByTestId("ted-chat-stub")).toBeInTheDocument();
-    const hiddenFab = screen.getByRole("button", { name: "Abrir assistente TED" });
-    expect(hiddenFab).toHaveAttribute("aria-expanded", "true");
-    expect(hiddenFab).toHaveClass("pointer-events-none", "opacity-0");
-    expect(hiddenFab).toHaveAttribute("tabindex", "-1");
+    expect(navigation.push).toHaveBeenCalledWith("/ted");
   });
 
-  it("returns to the FAB after the chat closes", async () => {
-    const user = userEvent.setup();
+  it("navigates to /ted?operationId= on openTedChat({ operationId })", async () => {
     render(<TedChatLauncher />);
-    await user.click(screen.getByRole("button", { name: "Abrir assistente TED" }));
-    await user.click(screen.getByText("fechar chat"));
-    expect(screen.getByRole("button", { name: "Abrir assistente TED" })).toBeInTheDocument();
-    expect(screen.queryByTestId("ted-chat-stub")).not.toBeInTheDocument();
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(OPEN_TED_CHAT_EVENT, { detail: { operationId: "op-9" } }),
+      );
+    });
+    expect(navigation.push).toHaveBeenCalledWith("/ted?operationId=op-9");
+    expect(OPEN_TED_CHAT_EVENT).toBe("pwa:open-ted");
+  });
+
+  it("navigates to /ted on openTedChat() without options", async () => {
+    render(<TedChatLauncher />);
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(OPEN_TED_CHAT_EVENT));
+    });
+    expect(navigation.push).toHaveBeenCalledWith("/ted");
+  });
+
+  it("hides the FAB on the /ted page itself", () => {
+    navigation.pathname = "/ted";
+    const { container } = render(<TedChatLauncher />);
+    expect(container.firstChild).toBeNull();
   });
 
   it("hides the FAB while any overlay is open (A1)", () => {
@@ -77,6 +88,5 @@ describe("TedChatLauncher", () => {
     const hiddenFab = screen.getByRole("button", { name: "Abrir assistente TED" });
     expect(hiddenFab).toHaveClass("pointer-events-none", "opacity-0");
     expect(hiddenFab).toHaveAttribute("tabindex", "-1");
-    expect(screen.queryByTestId("ted-chat-stub")).not.toBeInTheDocument();
   });
 });

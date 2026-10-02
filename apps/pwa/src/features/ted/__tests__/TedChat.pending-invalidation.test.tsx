@@ -101,7 +101,7 @@ describe("TedChat — pending-operations invalidation dispatch (T5.3)", () => {
         },
       });
 
-      render(<TedChat open onClose={() => {}} />);
+      render(<TedChat />);
 
       await user.type(
         screen.getByLabelText("Mensagem para o assistente"),

@@ -56,7 +56,8 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     const launcher = page.getByRole("button", { name: /abrir assistente ted/i }).last();
     await expect(launcher).toBeVisible({ timeout: 20000 });
     await launcher.click();
-    const dialog = page.getByRole("dialog", { name: /chat com ted/i });
+    await page.waitForURL(/\/ted/);
+    const dialog = page.getByRole("region", { name: /chat com ted/i });
     await expect(dialog).toBeVisible({ timeout: 15000 });
     return dialog;
   };
@@ -69,9 +70,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     // o bubble da mensagem com timeout e falha-se sem retry se não renderizar.
     for (let i = 0; i < 5; i++) {
       await page.evaluate(({ text }: { text: string }) => {
-        const dlg = [...document.querySelectorAll("[role=dialog]")].find((d) =>
-          (d.getAttribute("aria-label") || "").includes("Chat com TED"),
-        );
+        const dlg = document.querySelector("[data-testid=ted-chat]");
         if (!dlg) return;
         const ta = dlg.querySelector("textarea");
         if (!ta) return;
@@ -81,9 +80,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
       }, { text });
       await page.waitForTimeout(300);
       const enabled = await page.evaluate(() => {
-        const dlg = [...document.querySelectorAll("[role=dialog]")].find((d) =>
-          (d.getAttribute("aria-label") || "").includes("Chat com TED"),
-        );
+        const dlg = document.querySelector("[data-testid=ted-chat]");
         const btn = dlg && [...dlg.querySelectorAll("button")].find((b) =>
           (b.getAttribute("aria-label") || "").includes("Enviar mensagem"),
         );
@@ -95,9 +92,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     }
     // Único dispatch — a partir daqui, nenhum retry de clique.
     const dispatched = await page.evaluate(() => {
-      const dlg = [...document.querySelectorAll("[role=dialog]")].find((d) =>
-        (d.getAttribute("aria-label") || "").includes("Chat com TED"),
-      );
+      const dlg = document.querySelector("[data-testid=ted-chat]");
       const btn = dlg && [...dlg.querySelectorAll("button")].find((b) =>
         (b.getAttribute("aria-label") || "").includes("Enviar mensagem"),
       );

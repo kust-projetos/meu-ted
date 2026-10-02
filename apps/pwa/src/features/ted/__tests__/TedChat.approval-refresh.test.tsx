@@ -142,7 +142,7 @@ describe("TedChat — post-approval reconciliation (T3.3)", () => {
       receipt,
     });
 
-    render(<TedChat open onClose={() => {}} />);
+    render(<TedChat />);
 
     // Send a message that yields a pending approval (history still pending,
     // so the card stays mounted — loadHistory resets pendingOps on resolve).
@@ -206,7 +206,7 @@ describe("TedChat — post-approval reconciliation (T3.3)", () => {
         ...(decisionStatus === "failed" ? { retryable: true } : {}),
       });
 
-      render(<TedChat open onClose={() => {}} />);
+      render(<TedChat />);
       await user.click(await screen.findByRole("button", { name: buttonName }));
 
       await waitFor(() =>
@@ -273,7 +273,7 @@ describe("TedChat — post-approval reconciliation (T3.3)", () => {
       receipt,
     });
 
-    render(<TedChat open onClose={() => {}} />);
+    render(<TedChat />);
 
     await user.type(
       screen.getByLabelText("Mensagem para o assistente"),
@@ -359,7 +359,7 @@ describe("TedChat — post-approval reconciliation (T3.3)", () => {
     });
     reconcileMutation.mockRejectedValueOnce(new Error("refresh failed"));
 
-    render(<TedChat open onClose={() => {}} />);
+    render(<TedChat />);
 
     await user.type(
       screen.getByLabelText("Mensagem para o assistente"),
@@ -404,7 +404,7 @@ describe("TedChat — post-approval reconciliation (T3.3)", () => {
       },
     });
 
-    render(<TedChat open onClose={() => {}} />);
+    render(<TedChat />);
 
     await user.type(
       screen.getByLabelText("Mensagem para o assistente"),
