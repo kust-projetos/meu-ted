@@ -23,7 +23,7 @@ import { emitSanitizedEvent } from '../observability/events.js';
 import type { EvidenceEnvelope } from '../evidence/evidence-envelope.js';
 import { createGroundedResponseWithRetry } from '../responses/grounded-response.js';
 import { stripToolCallMarkup } from '../responses/tool-call-sanitizer.js';
-import { renderEmpty, renderInconclusive, renderMutationResult, renderStatement, renderUnavailable, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
+import { renderEmpty, renderInconclusive, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
 import { routeIntent } from './intent-router.js';
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
 import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
@@ -88,6 +88,17 @@ export type MutationPolicy = Readonly<{
   authorizationReason?: string;
   risk?: 'low' | 'medium' | 'high' | 'destructive';
 }>;
+
+/**
+ * A04/R04 — subject used by the deterministic read-absence copy, scoped to the
+ * turn's own domain. The read that proved the absence is never widened to
+ * another scope, and a global "workspace vazio" is never asserted (A09).
+ */
+const READ_ABSENCE_SUBJECT: Readonly<Record<string, string>> = {
+  accounts: 'contas',
+  transactions: 'lançamentos',
+  categories: 'categorias',
+};
 
 export type TurnResult = Readonly<{
   input: TurnInput;
@@ -302,14 +313,29 @@ export class ConversationOrchestrator {
     const accountsAnswer = renderAccountsAnswer(input.text, extractAccountsEvidence(envelope));
     if (accountsAnswer !== null) return accountsAnswer;
     const ok = envelope.items.filter((item) => item.status === 'ok').map((item) => item.data);
-    if (ok.length === 0) return null;
+    if (ok.length === 0) {
+      // A04/R04: a typed read absence is answered deterministically and names
+      // the reason — an empty query is not a failure and not a zero. Gated on a
+      // typed reason (and on NO failed read, see `runGroundedRead`), so a read
+      // without a proven reason keeps its previous grounded path.
+      const absence = envelope.items.find((item) => item.status === 'empty' && item.reason !== undefined);
+      if (absence && absence.status === 'empty' && absence.reason !== undefined) {
+        return renderReadAbsence(absence.reason, READ_ABSENCE_SUBJECT[plan.domain] ?? 'dados');
+      }
+      return null;
+    }
     const lists = ok.filter(Array.isArray);
     if (plan.domain === 'transactions' || lists.length > 0) {
       for (const list of lists) {
         const rendered = renderStatement(list as readonly unknown[], 'extrato');
         if (rendered !== renderEmpty('extrato')) return rendered;
       }
-      if (plan.domain === 'transactions') return renderEmpty('extrato');
+      // A04/R04: "sem dados" is only honest when every usable item is an EMPTY
+      // list. An `ok` record (e.g. a month summary with `totalCents = 0` but
+      // `transactionCount > 0`) carries data: claiming absence here is exactly
+      // the "zero ≠ sem lançamentos" confound, so it goes to the grounded path.
+      const hasInformativeRecord = ok.some((data) => !Array.isArray(data));
+      if (plan.domain === 'transactions' && !hasInformativeRecord) return renderEmpty('extrato');
     }
     // A balance-seeking turn with no usable account evidence must never
     // fall through to the generative provider (which could invent a
@@ -330,7 +356,12 @@ export class ConversationOrchestrator {
     } catch {
       envelope = null;
     }
-    if (!envelope || envelope.items.every((item) => item.status === 'error')) {
+    // A04/R04 (AC10): a FAILED read blocks any conclusive "nothing there"
+    // reading, so an envelope with a failure and NO usable evidence also fails
+    // closed — a forbidden/unavailable read must never be narrated as zero.
+    const usable = envelope?.items.some((item) => item.status === 'ok') ?? false;
+    const failed = envelope?.items.some((item) => item.status === 'error') ?? false;
+    if (!envelope || envelope.items.length === 0 || (!usable && failed)) {
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
       return freeze({ ...base, failClosed: true as const, response: freeze({ text: FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT }) });
     }

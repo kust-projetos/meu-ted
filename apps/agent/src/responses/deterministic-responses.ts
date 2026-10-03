@@ -1,8 +1,30 @@
 import { formatCents } from '../evidence/financial-formatters.js';
+import type { ReadAbsenceReason } from '../evidence/evidence-envelope.js';
 
 export const renderBalance = (value: { accountName: string; balanceCents: number }): string => `${value.accountName}: ${formatCents(value.balanceCents)}.`;
 export const renderEmpty = (subject: string): string => `Não há dados disponíveis para ${subject}.`;
 export const renderUnavailable = (subject: string): string => `Não foi possível consultar ${subject} agora. Tente novamente mais tarde.`;
+
+/**
+ * A04/R04 — deterministic reply for a read that SUCCEEDED and proved an
+ * absence in the requested scope. It states the reason, never turns an empty
+ * query into a failure ("não foi possível") and never presents absence as a
+ * zero figure. The requested period/category/filter is never widened silently:
+ * adjusting the scope is only OFFERED.
+ *
+ * `workspace_empty` has no producer until the A09 consistent snapshot exists
+ * (A04 block b); the wording stays scoped to what was actually consulted.
+ */
+export const renderReadAbsence = (reason: ReadAbsenceReason, subject: string): string => {
+  switch (reason) {
+    case 'setup_incomplete': return `Ainda não encontrei ${subject} aqui. Quer que eu te guie no cadastro?`;
+    case 'period_empty': return `Não há ${subject} no período que você consultou. Posso verificar outro período, se quiser.`;
+    case 'category_empty': return `Não há ${subject} nessa categoria. Posso consultar sem esse filtro.`;
+    case 'filter_empty': return `Nenhum item de ${subject} atende a esse filtro. Posso revisar o filtro com você.`;
+    case 'entity_not_found': return 'Não encontrei esse item entre os seus dados.';
+    case 'workspace_empty': return `Não encontrei ${subject} aqui ainda. Posso te mostrar como começar.`;
+  }
+};
 
 /**
  * TEDV3-003 remediation: deterministic clarification used when the tool-call

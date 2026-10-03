@@ -88,8 +88,14 @@ describe('onChatMessage cognitive wiring (Part A)', () => {
       OPENCODE_ZEN_API_KEY: 'zen-key-test',
     };
     withDurableSql(agent);
+    // A04/R04: every mocked read in this suite answers with the runtime
+    // snapshot body, so `list_accounts` proves NO accounts — a typed
+    // `setup_incomplete` absence, now answered deterministically WITHOUT the
+    // model (AC09). This case therefore asserts the provider wiring on a turn
+    // whose read is not a proven absence; the absence wording itself is
+    // covered by `tests/responses/read-grounding-wiring.test.ts`.
     const result = (await agent.onChatMessage({
-      text: 'Qual o meu saldo?',
+      text: 'Como está minha situação financeira?',
       intentionId: 'intent-wiring-1',
       actorId: 'actor-1',
     })) as { text?: string };
@@ -114,7 +120,7 @@ describe('onChatMessage cognitive wiring (Part A)', () => {
     expect(Object.keys(args.tools)).toContain('list_recent_transactions');
     expect(Object.keys(args.tools)).not.toContain('create_expense');
     // Compacted context travels as messages (last turn ends the array).
-    expect(args.messages[args.messages.length - 1]).toMatchObject({ role: 'user', content: 'Qual o meu saldo?' });
+    expect(args.messages[args.messages.length - 1]).toMatchObject({ role: 'user', content: 'Como está minha situação financeira?' });
     expect(args.stopWhen).toBeDefined();
   });
 
