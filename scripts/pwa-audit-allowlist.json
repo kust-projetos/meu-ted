@@ -241,6 +241,81 @@
     "range": ">=6.0.0"
   },
   {
+    "id": "pwa-2026-10-03-braces",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Dev lint toolchain only (braces via micromatch via fast-glob via @next/eslint-plugin-next in eslint-config-next; never bundled into the PWA runtime). Advisory GHSA-vfj7-8cjw-p6xm range extended on 2026-10-02 (after main's last green PWA CI); npm's only proposed resolution is the breaking eslint-config-next 14.2.35 major downgrade, which would break the Next 16 lint setup. Same accepted build-time chain governance as pwa-2026-09-19-*/pwa-2026-10-01-*.",
+    "expiresOn": "2026-12-31",
+    "name": "braces",
+    "severity": "high",
+    "via": [
+      {
+        "source": 1240992,
+        "name": "braces",
+        "dependency": "braces",
+        "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+        "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+        "severity": "high",
+        "cwe": ["CWE-674"],
+        "cvss": {
+          "score": 7.5,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "range": "<=3.0.3"
+      }
+    ],
+    "effects": ["micromatch"],
+    "range": "*"
+  },
+  {
+    "id": "pwa-2026-10-03-micromatch",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Dev lint toolchain only (micromatch via fast-glob via @next/eslint-plugin-next in eslint-config-next; never bundled into the PWA runtime). Effect of the extended braces advisory GHSA-vfj7-8cjw-p6xm (range updated 2026-10-02). Same accepted build-time chain governance.",
+    "expiresOn": "2026-12-31",
+    "name": "micromatch",
+    "severity": "high",
+    "via": ["braces"],
+    "effects": ["fast-glob"],
+    "range": ">=0.2.0"
+  },
+  {
+    "id": "pwa-2026-10-03-fast-glob",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Dev lint toolchain only (fast-glob via @next/eslint-plugin-next in eslint-config-next; never bundled into the PWA runtime). Effect of the extended braces advisory GHSA-vfj7-8cjw-p6xm (range updated 2026-10-02). Same accepted build-time chain governance.",
+    "expiresOn": "2026-12-31",
+    "name": "fast-glob",
+    "severity": "high",
+    "via": ["micromatch"],
+    "effects": ["@next/eslint-plugin-next"],
+    "range": "*"
+  },
+  {
+    "id": "pwa-2026-10-03-next-eslint-plugin",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Dev lint toolchain only (@next/eslint-plugin-next is a dependency of eslint-config-next; never bundled into the PWA runtime). Effect of the extended braces advisory GHSA-vfj7-8cjw-p6xm (range updated 2026-10-02). Same accepted build-time chain governance.",
+    "expiresOn": "2026-12-31",
+    "name": "@next/eslint-plugin-next",
+    "severity": "high",
+    "via": ["fast-glob"],
+    "effects": ["eslint-config-next"],
+    "range": ">=14.3.0-canary.0"
+  },
+  {
+    "id": "pwa-2026-10-03-eslint-config-next",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Dev lint toolchain only (eslint-config-next devDependency; never bundled into the PWA runtime). Effect of the extended braces advisory GHSA-vfj7-8cjw-p6xm (range updated 2026-10-02); npm's only proposed resolution is the breaking 14.2.35 major downgrade, incompatible with the Next 16 lint setup. Same accepted build-time chain governance.",
+    "expiresOn": "2026-12-31",
+    "name": "eslint-config-next",
+    "severity": "high",
+    "via": ["@next/eslint-plugin-next"],
+    "effects": [],
+    "range": ">=14.3.0-canary.0"
+  },
+  {
     "id": "pwa-2026-09-21-sharp-audit-shape",
     "scope": "runtime",
     "owner": "project-maintainer",
