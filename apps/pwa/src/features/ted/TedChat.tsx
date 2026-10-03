@@ -139,6 +139,18 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const prevWorkspaceIdRef = useRef<string | null>(null);
+  // A02/R02 (AC07): live authenticated scope, mirrored on every workspace
+  // change. An in-flight turn is bound to the scope that issued it — a result
+  // that arrives after a switch/logout belongs to the PREVIOUS scope and is
+  // discarded instead of being written into the chat now on screen.
+  const activeWorkspaceIdRef = useRef<string | null>(activeWorkspace?.id ?? null);
+  /**
+   * A02/R02 (AC07 HIGH): scope guard for ANY continuation that writes state
+   * after an await. A turn or a refresh belongs to the scope that issued it;
+   * once that scope is no longer the live one, the continuation writes
+   * nothing. Stable identity (no deps) so `loadHistory` keeps its own.
+   */
+  const isStaleScope = useCallback((scopeId: string) => activeWorkspaceIdRef.current !== scopeId, []);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Microphone lifecycle (SPEC §17, H-08): recording state only exists after
@@ -253,19 +265,31 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     setUndoProposals(next);
   }, []);
 
-  const loadHistory = useCallback(async (preserveError = false) => {
-    if (!activeWorkspace) return;
+  /**
+   * Returns the authoritative batch this refresh actually observed. Callers
+   * that must compare a turn result against the refreshed log (A02/R02 AC06)
+   * need the batch itself, never a conversation-wide text scan.
+   */
+  const loadHistory = useCallback(async (preserveError = false): Promise<AgentMessage[]> => {
+    if (!activeWorkspace) return [];
+    // A02/R02 (AC07 HIGH): this refresh belongs to the scope that started it.
+    const scopeId = activeWorkspace.id;
     let history: AgentMessage[];
     try {
       setStatus("connecting");
-      history = await fetchAgentHistory(activeWorkspace.id);
+      history = await fetchAgentHistory(scopeId);
     } catch {
+      // A failed refresh never writes another scope's error.
+      if (isStaleScope(scopeId)) return [];
       // SPEC §25.4: a failed reload keeps last-known server state and
       // signals staleness — never invents a card, never wipes history.
       setError(HISTORY_LOAD_ERROR);
       setStatus("error");
-      return;
+      return [];
     }
+    // The scope may have changed while the batch was in flight: this batch
+    // belongs to the previous conversation and must never reach the new one.
+    if (isStaleScope(scopeId)) return [];
     setMessages((prev) => [
       ...history,
       // SPEC §19.1/§19.3: local optimistic sends not yet confirmed by the
@@ -279,7 +303,9 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     // list (server-derived canonical presentation) — history NEVER mints a
     // card, even when a legacy turn still carries a pendingOperation.
     try {
-      const active = await fetchActivePendingOperations(activeWorkspace.id);
+      const active = await fetchActivePendingOperations(scopeId);
+      // Cards minted by another scope never enter this chat.
+      if (isStaleScope(scopeId)) return [];
       const cards = new Map<string, TedPendingOperation>();
       for (const item of active) {
         const card = toLiveCard(item);
@@ -289,6 +315,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       if (!preserveError) setError(null);
       setStatus("ready");
     } catch {
+      if (isStaleScope(scopeId)) return [];
       // Fail closed on first load (no cards invented) and honest afterwards:
       // last-known cards stay (untouched), staleness is signaled, history is
       // untouched.
@@ -299,13 +326,15 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     // cards from the authenticated active-list RPC (bound summaries only).
     // Read-only: failures keep last-known cards, never invent, never decide.
     try {
-      const activeUndo = await fetchActiveUndoProposals(activeWorkspace.id);
+      const activeUndo = await fetchActiveUndoProposals(scopeId);
+      if (isStaleScope(scopeId)) return [];
       applyActiveUndoProposals(activeUndo);
     } catch {
       // Last-known undo cards stay (untouched); staleness is already
       // signaled by the history/active error paths above when they fail.
     }
-  }, [activeWorkspace, applyActiveUndoProposals]);
+    return history;
+  }, [activeWorkspace, applyActiveUndoProposals, isStaleScope]);
 
   // Post-approval reconciliation (SPEC §15.4, T3.3): chat history AND
   // financial UI refresh. The REAL execution receipt (API-emitted, relayed
@@ -369,6 +398,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       setError(null);
       setStatus("ready");
     }
+    activeWorkspaceIdRef.current = newId;
     prevWorkspaceIdRef.current = newId;
   }, [activeWorkspace?.id, cleanupRecordingMedia, clearAttachments, discardDrafts]);
 
@@ -479,12 +509,20 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // failed (never silently discarded) with the draft intact for retry.
   const executeSend = async (send: PendingChatSend): Promise<void> => {
     if (!activeWorkspace) return;
+    // A02/R02 (AC07): the turn is bound to the scope that issued it.
+    const sendWorkspaceId = activeWorkspace.id;
+    // A02/R02 (AC06): assistant copies of THIS turn's answer that the
+    // conversation already shows before the refresh — the comparison anchor.
+    // Identity, never text: an identical reply from an earlier turn counts
+    // here and therefore can never suppress this turn's own answer.
+    const answerBefore = (text: string | undefined): number =>
+      text?.trim() ? messages.filter((m) => !m.isOwn && m.content === text).length : 0;
     setLoading(true);
     setError(null);
     setStatus("streaming");
     try {
       const turn = await sendAgentMessage(
-        activeWorkspace.id,
+        sendWorkspaceId,
         send.content,
         {
           ...(send.attachments ? { attachments: [...send.attachments] } : {}),
@@ -493,6 +531,10 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
           messageId: send.messageId,
         },
       );
+      // A02/R02 (AC07): a result that lands after a workspace switch or a
+      // logout belongs to the previous scope. It is dropped whole — never
+      // reconciled into the new conversation, never shown as its error.
+      if (isStaleScope(sendWorkspaceId)) return;
       if (turn.memorized && turn.memorized.length > 0) {
         flashNotice(`TED memorizou: ${turn.memorized.slice(0, 2).join(" · ")}`);
       }
@@ -514,23 +556,34 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
           // Reconciliation failure surfaces as stale in app-state.
         }
       }
+      // A02/R02 (AC07 HIGH): the scope may have changed during the financial
+      // reconciliation (an app-state refresh, deliberately NOT skipped — the
+      // mutation really happened and its receipt is authoritative). From here
+      // on, EVERY write below is chat state and belongs to the new scope only.
+      if (isStaleScope(sendWorkspaceId)) return;
       setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "sent" as const } : m)));
-      await loadHistory();
+      const copiesBefore = answerBefore(turn.output);
+      const freshHistory = await loadHistory();
+      // …and it may have changed again while the refresh was in flight.
+      if (isStaleScope(sendWorkspaceId)) return;
       // The Agent turn is itself authoritative for its user-facing response.
       // History can briefly lag (or omit an autoexecuted result), so retain
-      // the returned text unless the refresh already contains that response.
-      if (turn.output?.trim()) {
-        setMessages((previous) => {
-          if (previous.some((message) => !message.isOwn && message.content === turn.output)) return previous;
-          return [...previous, {
+      // the returned text — UNLESS this refresh already brought back a copy
+      // the conversation did not have yet (A02/R02 AC06: this turn produces
+      // exactly ONE answer; an identical one from an earlier turn never
+      // suppresses it).
+      if (turn.output?.trim() && freshHistory.filter((m) => !m.isOwn && m.content === turn.output).length <= copiesBefore) {
+        setMessages((previous) => [
+          ...previous,
+          {
             id: turn.turnId,
             actorId: "ted",
             role: "assistant",
             content: turn.output!,
             createdAt: new Date().toISOString(),
             isOwn: false,
-          }];
-        });
+          },
+        ]);
       }
       // The turn response is authoritative too. Apply it AFTER the history
       // reload so an eventually consistent history read cannot erase the card
@@ -558,6 +611,11 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       draftsRef.current.delete(send.messageId);
       revokeAttachmentUrls(send.attachments ?? []);
     } catch (err) {
+      // A02/R02 (AC07): a failure raised after the scope changed belongs to
+      // the previous conversation — never mark a bubble nor surface an error
+      // in the chat now on screen. The failed draft of the OLD scope was
+      // already dropped by the workspace-change teardown.
+      if (isStaleScope(sendWorkspaceId)) return;
       setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
       setError(sendErrorMessage(err));
       setStatus("error");
