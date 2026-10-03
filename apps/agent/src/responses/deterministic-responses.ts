@@ -48,12 +48,17 @@ export const renderStatement = (entries: readonly unknown[], subject = 'extrato'
 export type MutationOutcome = 'proposed' | 'succeeded' | 'failed' | 'cancelled' | 'expired';
 
 /**
- * Inconclusive handoff reply (SPEC §7.8/INV-10): the propose outcome is
- * unknown, so the turn claims neither success nor cancellation. Fixed
- * wording, never model text.
+ * Inconclusive handoff reply (SPEC §7.8/INV-10, R01): the write WAS SENT and
+ * its outcome is unknown — the effect may well have committed. The reply
+ * therefore claims neither success NOR the absence of any effect: "Nada foi
+ * criado/cancelado" is an unproven assertion of fact. It names what is
+ * unknown and points at the safe next step (check the transactions before
+ * retrying, so a committed-but-unanswered write is not duplicated). Fixed
+ * wording, never model text, and grammatically neutral: only the subject
+ * varies, so no participle can disagree with it.
  */
 export const renderInconclusive = (subject = 'operação'): string =>
-  `A ${subject} está em processamento e ainda não foi concluída. Nada foi criado ou cancelado ainda — tente novamente em instantes.`;
+  `${subject} em processamento: o resultado não pôde ser confirmado. Verifique seus lançamentos antes de tentar de novo.`;
 
 /** Deterministic mutation/approval result: fixed wording per outcome, never model text. */
 export const renderMutationResult = (outcome: MutationOutcome, subject = 'operação'): string => {  switch (outcome) {
