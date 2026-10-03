@@ -1,6 +1,6 @@
-# TED agente inteligente V1 — implementação A00 + A03 + A01 + A04-base (2026-10-03)
+# TED agente inteligente V1 — implementação P0 completa (A00, A03, A01, A04-base, A02, A05)
 
-**Branch:** `feat/ted-agent-inteligente-v1-p0` · **Base:** `be6ab11` · **Commits:** `c90b34d` (A03), `01ce028` (A00), `cb07951` (A01), `982e770` (A04-base).
+**Branch:** `feat/ted-agent-inteligente-v1-p0` · **Base:** `be6ab11` · **Commits:** `c90b34d` (A03), `01ce028` (A00), `cb07951` (A01), `900894f` (docs), `982e770` (A04-base), `ef656d3` (A02), `5371efe` (docs), `780db84` (A05).
 **Autorização:** operador autorizou o início da implementação da [SPEC](../MEU-TED-SPEC-AGENTE-INTELIGENTE-V1.md)/[PLAN](../MEU-TED-PLANO-AGENTE-INTELIGENTE-V1.md) nesta sessão. Orquestração: Planner (OpenCode) + MCP jev (gates/decisões) + subagents coder/tester/reviewer com participação observada por fatia.
 
 ## 1. A00 — Baseline (concluída)
@@ -29,14 +29,23 @@ Relatório dedicado: [2026-10-03-ted-inteligente-v1-a00-baseline.md](2026-10-03-
 - **Decisão de projeto documentada:** item `error` descarta payload residual (`data: null`) — evidência de falha nunca fundamenta claim (grounding/serializer só leem `ok`).
 - **Dívidas registradas:** `mapSingleton` (statements/payables/budgets/goals/categories) mantém o padrão antigo null→empty sem reason (cai no caminho grounded — menos perigoso; endurecer em A04(b)/A09); catch externo do coletor que converte rejeição em `unavailable` (inalcançável com tipos corretos hoje; follow-up A19).
 
+## 3d. A05 — Markdown seguro na PWA (concluída, commit `780db84`)
+
+- **Decisão (jev_decide 0.84):** renderer **in-house restrito** — SEM `react-markdown`/`remark-gfm` e sem dependência nova (postura de supply chain + bundle mobile + modo de falha cosmético: só elementos React, nunca innerHTML).
+- **Entrega:** `TedMarkdown.tsx` (novo) — subset: parágrafos, negrito/itálico, código inline/bloco, links, listas, headings, tabelas GFM; integração em `TedMessage.tsx` (apenas `role === "assistant"`; usuário/membro permanecem literais).
+- **Segurança (AC11):** whitelist de href exige http/https absoluto **com autoridade** (`https:relatorio` rejeitado — WHATVG resolve scheme especial sem base, descoberta do coder); `java\tscript:` rejeitado por rejeição de whitespace/controle; imagens markdown ficam inertes (zero tracking); HTML/script renderizam como texto escapado.
+- **Hardening DoS (5 findings do reviewer em 3 rodadas, todos RED→GREEN medidos):** inline com orçamento de varredura (`MAX_INLINE_SCAN`, estouro → texto literal preservado); TODOS os reconhecedores de bloco (fence, separador, fechamento, heading, listas) migrados para varredura linear — os regex tinham backtracking quadrático via `\s*`/`\s+` com U+2028/U+2029 (medidos: 518–729ms → <1ms). Equivalência provada por corpus diferencial (150k+ linhas, 0 mismatches); congelamento de `\s` (65.536 code points) fixado em teste.
+- **A11y:** headings via `role="heading"` + `aria-level` (outline limpo), tabelas em contêiner overflow-x-auto com break-words, foco visível em links.
+- **Suítes:** PWA 2310 → **2406** (79 testes do renderer); typecheck/lint 0 sem warning novo; agent sanitizer 35/35 intocado. Reviewer final: APPROVED (5.670 verificações independentes, zero divergências).
+
 ## 4. Estado final das suítes
 
 | Suíte | Antes | Depois |
 | --- | --- | --- |
 | Agent (completa) | 823 passed / 1 skipped | **889 passed / 1 skipped** (+66) |
-| PWA (completa) | 2310 passed | **2326 passed** (+16) |
+| PWA (completa) | 2310 passed | **2406 passed** (+96) |
 | typecheck / lint (agent + pwa) | exit 0 | exit 0 |
-| Gates do hook (7) | — | verdes nos 5 commits |
+| Gates do hook (7) | — | verdes nos 6 commits de código/docs |
 
 ## 3c. A02 — identidade de mensagem, reproduce-first (concluída, commit `ef656d3`)
 
@@ -58,7 +67,7 @@ Relatório dedicado: [2026-10-03-ted-inteligente-v1-a00-baseline.md](2026-10-03-
 
 ## 6. Próximas fatias (DAG do PLAN §5)
 
-**A05** (Markdown seguro na PWA — `TedMessage.tsx`/`TedMarkdown.tsx`) → A10 (ledger de budgets, fundacional para P1) → P1 (A06–A08) → A09-spike (analytics; não bloqueia P0).
+**P0 CONCLUÍDO (A01–A05).** Seguem, por dependência: A10 (ledger de budgets, fundacional para P1) → A06 (interpretação semântica) → A07 (metadados de goal; gates G01/G02) → A08 (resolução de entidades) → A09-spike (analytics; não bloqueia). Opção imediata: abrir o PR da branch `feat/ted-agent-inteligente-v1-p0` para CI/revisão humana.
 
 ## 7. Limites desta entrega
 
