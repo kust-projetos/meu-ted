@@ -1,6 +1,7 @@
 "use client";
 
 import type { AgentMessage } from "@/lib/api/agent-client";
+import { TedMarkdown } from "./TedMarkdown";
 
 /**
  * SPEC §19.1: local optimistic delivery lifecycle of a user message.
@@ -62,7 +63,11 @@ export function TedMessage({ message, isCurrentUser, senderName, delivery, onRet
                 : "rounded-bl-[4px] border border-border-subtle bg-surface-3 text-text-secondary"
           }`}
         >
-          <div className="whitespace-pre-wrap break-words">{message.content}</div>
+          {/* R05/AC11: markdown restrito SÓ para o assistente; usuário e
+              membro continuam texto literal (nada de interpretá-los). */}
+          <div className="whitespace-pre-wrap break-words">
+            {isAssistant ? <TedMarkdown content={message.content} /> : message.content}
+          </div>
           {Array.isArray((message as unknown as { attachments?: Array<{ type: string; url: string; name?: string }> }).attachments) &&
             (message as unknown as { attachments: Array<{ type: string; url: string; name?: string }> }).attachments.length > 0 && (
               <div className="mt-2 flex flex-col gap-2">
