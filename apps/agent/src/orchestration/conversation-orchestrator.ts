@@ -153,6 +153,16 @@ const freeze = <T>(value: T): T => {
   return value;
 };
 
+// SPEC R03: a bare answer to the category clarification ("categoria Carne
+// Bovina") states a category explicitly but carries no amount, so it is not a
+// parsable mutation and `parseFinancialMutation` returns `kind: 'none'`.
+// Mirrors the parser's category phrasing (the trailing "?" is a question mark,
+// not part of the name) so the answer can complete a draft that is pending
+// only the category.
+const CATEGORY_PHRASE = /\b(?:categoria|categoria de)\s+([^,.;?]+)/i;
+const categoryQueryFrom = (text: string): string | undefined =>
+  CATEGORY_PHRASE.exec(text)?.[1]?.trim() || undefined;
+
 const normalize = (body: Body, identity: AuthenticatedIdentity, channel: ConversationChannel): TurnInput => {
   const textValue = typeof body.text === 'string' ? body.text : typeof body.content === 'string' ? body.content : '';
   const text = scrubForPersistence(textValue.trim());
@@ -650,12 +660,22 @@ export class ConversationOrchestrator {
     // Resolve ONLY the missing field, then revalidate ALL args: the stored
     // financial fields are authoritative for this draft, the new text only
     // supplies entity hints (e.g. "Nubank" → account).
+    //
+    // SPEC R03: a draft pending only the category is completed by the category
+    // the user just named — without this the clarification asked for something
+    // the draft could never consume, since the stored description is not a
+    // category query. The turn's explicit statement wins over the stored one
+    // (a correction of the category is exactly what this turn is for).
+    const turnCategoryQuery = draft.missingFields.includes('categoryId')
+      ? categoryQueryFrom(input.text)
+      : undefined;
+    const categoryQuery = turnCategoryQuery ?? draft.resolvedArgs.categoryQuery;
     const merged = {
       kind: draft.resolvedArgs.kind,
       amountCents: draft.resolvedArgs.amountCents,
       description: draft.resolvedArgs.description,
       date: draft.resolvedArgs.date,
-      ...(draft.resolvedArgs.categoryQuery ? { categoryQuery: draft.resolvedArgs.categoryQuery } : {}),
+      ...(categoryQuery ? { categoryQuery } : {}),
     };
     const resolution = await resolveMutationEntities(
       merged,
@@ -664,7 +684,13 @@ export class ConversationOrchestrator {
     );
     const stamp = new Date(this.draftNowMs()).toISOString();
     if (!resolution.complete) {
+      // SPEC R03: an explicit category accepted in this turn must survive the
+      // draft while another field stays pending. Dropping it would make the
+      // next bare answer ("Nubank") re-ask the category the user just named,
+      // because the stored description is not a category query.
+      const adoptsCategory = !!categoryQuery && categoryQuery !== draft.resolvedArgs.categoryQuery;
       store.update(draft.draftId, {
+        ...(adoptsCategory ? { resolvedArgs: { ...draft.resolvedArgs, categoryQuery } } : {}),
         missingFields: [...resolution.missingFields],
         updatedAt: stamp,
         lastIntentionId: input.intentionId,

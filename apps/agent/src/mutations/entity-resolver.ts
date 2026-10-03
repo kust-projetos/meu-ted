@@ -152,11 +152,17 @@ export const resolveMutationEntities = async (
     sections.push(`Em qual conta devo registrar?${bulletList(accounts.map((a) => a.name))}`);
   }
 
-  // --- Category (§7.3): semantic candidate verified by authoritative lookup.
-  const query = (parsed.categoryQuery ?? parsed.description).trim();
-  const queryFold = foldEntityName(query);
-  if (UUID.test(query)) {
-    const verified = categories.find((category) => category.id.toLowerCase() === query.toLowerCase());
+  // --- Category (§7.3): the user's explicit category statement is the only
+  // semantic query. The transaction description is NOT a category query
+  // (SPEC R03): "gastei 50 de carne" keeps `carne` as the description, and
+  // matching the description fuzzily would turn every expense description into
+  // an inferred category. Without an explicit `categoryQuery`, only a literal
+  // fold-exact name match is legitimate — a real "Carne" category still
+  // resolves — while a contained/fuzzy hit stays a candidate that asks instead
+  // of selecting.
+  const categoryQuery = parsed.categoryQuery?.trim() ?? '';
+  if (categoryQuery.length > 0 && UUID.test(categoryQuery)) {
+    const verified = categories.find((category) => category.id.toLowerCase() === categoryQuery.toLowerCase());
     if (verified) {
       categoryId = verified.id;
       categoryName = verified.name;
@@ -164,7 +170,8 @@ export const resolveMutationEntities = async (
       missingFields.push('categoryId');
       sections.push(`Não encontrei a categoria informada. Qual categoria devo usar?${bulletList(categories.map((c) => c.name))}`);
     }
-  } else {
+  } else if (categoryQuery.length > 0) {
+    const queryFold = foldEntityName(categoryQuery);
     const exact = categories.filter((category) => foldEntityName(category.name) === queryFold);
     const candidates = exact.length > 0
       ? exact
@@ -177,10 +184,24 @@ export const resolveMutationEntities = async (
       categoryName = candidates[0]!.name;
     } else if (candidates.length > 1) {
       missingFields.push('categoryId');
-      sections.push(`Encontrei mais de uma categoria para "${query}". Qual delas devo usar?${bulletList(candidates.map((c) => c.name))}`);
+      sections.push(`Encontrei mais de uma categoria para "${categoryQuery}". Qual delas devo usar?${bulletList(candidates.map((c) => c.name))}`);
     } else {
       missingFields.push('categoryId');
-      sections.push(`Não encontrei a categoria "${query}". Qual categoria devo usar?${bulletList(categories.map((c) => c.name))}`);
+      sections.push(`Não encontrei a categoria "${categoryQuery}". Qual categoria devo usar?${bulletList(categories.map((c) => c.name))}`);
+    }
+  } else {
+    const descriptionFold = foldEntityName(parsed.description);
+    const exact = descriptionFold.length > 0
+      ? categories.filter((category) => foldEntityName(category.name) === descriptionFold)
+      : [];
+    if (exact.length === 1) {
+      categoryId = exact[0]!.id;
+      categoryName = exact[0]!.name;
+    } else {
+      missingFields.push('categoryId');
+      // Generic on purpose: no category was asked for, so reporting the
+      // description as a category that could not be found would be false.
+      sections.push(`Qual categoria devo usar?${bulletList(categories.map((c) => c.name))}`);
     }
   }
 

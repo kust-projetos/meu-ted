@@ -115,7 +115,9 @@ const setup = (options: { mode?: Mode; duplicate?: boolean; duplicateError?: boo
   return { run, request: typedRequest, requests, effects, state };
 };
 
-const affirmative = 'Registre R$ 35 de almoço no Nubank';
+// SPEC R03: the transaction description is not a category query, so these
+// turns name the category explicitly (the catalog entry is "Almoço").
+const affirmative = 'Registre R$ 35 de almoço no Nubank na categoria Almoço';
 
 describe('autoexecute proposal integration', () => {
   it('1, 9: authorizes and executes once, returns receipt without card or internal jargon', async () => {
@@ -157,7 +159,7 @@ describe('autoexecute proposal integration', () => {
 
   it.each(['disabled', 'ineligible'] as const)('3-4: %s server refusal returns manual card without error', async (mode) => {
     const h = setup({ mode });
-    const text = mode === 'ineligible' ? 'Registre R$ 50.000,00 de almoço no Nubank' : affirmative;
+    const text = mode === 'ineligible' ? 'Registre R$ 50.000,00 de almoço no Nubank na categoria Almoço' : affirmative;
     const result = await h.run(text, `intent-${mode}`);
     expect(result.mutation).toMatchObject({ status: 'proposed', presentation: expect.any(Object) });
     expect(result.policy.authorizationMode).toBe('manual');
@@ -225,7 +227,7 @@ describe('autoexecute proposal integration', () => {
 
   it('2: question-shaped mutation proposal stays manual and never constructs elevated client', async () => {
     const h = setup();
-    const result = await h.run('E se eu registrasse R$ 300 de almoço no Nubank?', 'intent-question');
+    const result = await h.run('E se eu registrasse R$ 300 de almoço na categoria Almoço no Nubank?', 'intent-question');
     expect(result.mutation?.status).toBe('proposed');
     expect(result.policy.authorizationMode).toBe('manual');
     expect(h.effects.mintElevated).toBe(0);

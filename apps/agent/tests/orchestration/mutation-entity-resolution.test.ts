@@ -105,4 +105,62 @@ describe('mutation entity resolution wiring (SPEC §7 H-01)', () => {
     expect(request).not.toHaveBeenCalled();
     expect(result.plan.missingFields).toContain('accountId');
   });
+
+  // R03 / AC08: the parsed description is "carne" and the user never named a
+  // category, so no category may be inferred from the description — the turn
+  // clarifies with the real catalog instead of proposing.
+  it('RED: "gastei 50 de carne" keeps the description and never infers the category from it', async () => {
+    const { api, request } = mockProposeClient();
+    const orchestrator = new ConversationOrchestrator({
+      mutationApiClient: api,
+      plan: () => mutationPlan(),
+      entityReader: reader([ACCOUNT_NUBANK], [{ id: '00000000-0000-4000-8000-000000000011', name: 'Carne' }]),
+    });
+    const result = await orchestrator.runTurn(
+      normalizeRestTurn({ text: 'gastei 50 de carne', intentionId: 'intent-r03-carne' }, identity),
+    );
+    expect(result.mutation?.operationId).toBe('pending-1');
+    const body = request.mock.calls[0]?.[2] as { body?: { normalizedArgs?: Record<string, unknown> } } | undefined;
+    expect(body?.body?.normalizedArgs).toMatchObject({
+      amountCents: 5000,
+      description: 'carne',
+      accountId: ACCOUNT_NUBANK.id,
+      categoryId: '00000000-0000-4000-8000-000000000011',
+    });
+  });
+
+  it('RED: "gastei 50 de carne" without a matching category clarifies with zero proposals', async () => {
+    const { api, request } = mockProposeClient();
+    const orchestrator = new ConversationOrchestrator({
+      mutationApiClient: api,
+      plan: () => mutationPlan(),
+      entityReader: reader([ACCOUNT_NUBANK], [CATEGORY_MERCADO]),
+    });
+    const result = await orchestrator.runTurn(
+      normalizeRestTurn({ text: 'gastei 50 de carne', intentionId: 'intent-r03-no-category' }, identity),
+    );
+    expect(result.mutation).toBeUndefined();
+    expect(request).not.toHaveBeenCalled();
+    expect(result.plan.missingFields).toContain('categoryId');
+    expect(result.plan.missingFields).not.toContain('accountId');
+    expect(result.response?.text).toMatch(/qual categoria/i);
+    expect(result.response?.text).toMatch(/Mercado/);
+    expect(result.response?.text).not.toMatch(/Não encontrei a categoria\s*"carne"/i);
+  });
+
+  it('RED: "gastei 50 em compras no mercado livre" never auto-selects a fuzzy category', async () => {
+    const { api, request } = mockProposeClient();
+    const orchestrator = new ConversationOrchestrator({
+      mutationApiClient: api,
+      plan: () => mutationPlan(),
+      entityReader: reader([ACCOUNT_NUBANK], [CATEGORY_MERCADO]),
+    });
+    const result = await orchestrator.runTurn(
+      normalizeRestTurn({ text: 'gastei 50 em compras no mercado livre', intentionId: 'intent-r03-fuzzy' }, identity),
+    );
+    expect(result.mutation).toBeUndefined();
+    expect(request).not.toHaveBeenCalled();
+    expect(result.plan.missingFields).toContain('categoryId');
+    expect(result.response?.text).toMatch(/qual categoria/i);
+  });
 });
