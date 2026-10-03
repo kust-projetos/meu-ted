@@ -157,6 +157,18 @@ export interface ApiClientOptions extends RequestInit {
   responseSchema?: ZodType<unknown>;
   /** Request timeout in milliseconds. Set to 0 to disable. Defaults to 15000ms. */
   timeoutMs?: number;
+  /**
+   * Suppresses the global `UNAUTHORIZED_EVENT` dispatch for THIS call only.
+   *
+   * Scoped use: a 401 that the caller can still recover from without ending
+   * the session. Used by the agent connection-token mint, whose 401 means
+   * "device inválido OU sessão expirada" and is retried after a fresh device
+   * registration — expiring the session there would abort its own recovery.
+   * The socket close is kept (the connection really was refused); only the
+   * session-expiry signal is suppressed. Default false: every other call
+   * keeps the central 401 contract unchanged.
+   */
+  skipUnauthorizedEvent?: boolean;
 }
 
 export class ApiError extends Error {
@@ -180,6 +192,19 @@ export class ApiError extends Error {
  * client or handling 401 per call-site.
  */
 export const UNAUTHORIZED_EVENT = "pi-finance:unauthorized";
+
+/**
+ * Broadcasts the central session-expiry signal. `apiFetch` calls this on every
+ * 401 unless the call opted out via `skipUnauthorizedEvent` — a caller that
+ * opted out stays responsible for announcing an expiry it ultimately
+ * confirms. Exported so those callers reuse the exact same event name and
+ * dispatch instead of re-implementing the semantics.
+ */
+export const announceUnauthorized = (): void => {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+  }
+};
 
 /**
  * Fired on `window` whenever apiFetch receives a membership-revocation 403
@@ -241,6 +266,7 @@ export async function apiFetch<T>(
     responseSchema,
     timeoutMs = DEFAULT_API_TIMEOUT_MS,
     signal: callerSignal,
+    skipUnauthorizedEvent = false,
     ...rest
   } = options;
   // T2.5 (ADR-015 Opção C, session-first): the device token is attached
@@ -304,9 +330,10 @@ export async function apiFetch<T>(
         }
       } catch { /* noop */ }
       closeAllSockets("session expired");
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
-      }
+      // A caller that opted out owns the recovery (see `skipUnauthorizedEvent`):
+      // the refused connection is still torn down, but the session-expiry
+      // signal is not broadcast behind its back.
+      if (!skipUnauthorizedEvent) announceUnauthorized();
       throw new ApiError(
         401,
         (body.code as string) ?? "auth.error",
@@ -377,9 +404,8 @@ export async function apiFetch<T>(
         // Demais casos (fetch pendente, 200/5xx travados) seguem 408.
         if (observedAuthStatus === 401) {
           closeAllSockets("session expired");
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
-          }
+          // Same opt-out as the body-parsed path above (see the option docs).
+          if (!skipUnauthorizedEvent) announceUnauthorized();
           reject(new ApiError(401, "auth.error", "Token inválido"));
           return;
         }

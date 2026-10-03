@@ -301,28 +301,33 @@ describe("clearSensitiveSession", () => {
     const apiSpy = vi
       .spyOn(client, "apiFetch")
       .mockResolvedValue({ token: "agent-token-h05", expiresIn: 120 });
+    // FIX-AGENT-MINT-SELF-HEAL: a mint with no stored device token first
+    // registers the device (its own apiFetch call), so the assertions below
+    // count the mint path only — the cache contract under test is unchanged.
+    const mintCalls = (): number =>
+      apiSpy.mock.calls.filter(([path]) => path === "/auth/agent-token").length;
     const ws = "ws-h05-session";
     agentAuth.clearAgentConnectionTokenCache();
 
     await agentAuth.fetchAgentConnectionToken(ws);
     await agentAuth.fetchAgentConnectionToken(ws);
-    expect(apiSpy).toHaveBeenCalledTimes(1);
+    expect(mintCalls()).toBe(1);
 
     // Logout / 401 path.
     await clearSensitiveSession({ clearToken: true });
     await agentAuth.fetchAgentConnectionToken(ws);
-    expect(apiSpy).toHaveBeenCalledTimes(2);
+    expect(mintCalls()).toBe(2);
 
     // Workspace-switch path.
     await clearSensitiveSession({ clearV1Snapshot: true, clearProfile: true });
     await agentAuth.fetchAgentConnectionToken(ws);
-    expect(apiSpy).toHaveBeenCalledTimes(3);
+    expect(mintCalls()).toBe(3);
 
     // No-op call still clears the agent session (H-13 central contract:
     // every session cleanup may imply a context change).
     await agentAuth.fetchAgentConnectionToken(ws);
     await clearSensitiveSession({});
     await agentAuth.fetchAgentConnectionToken(ws);
-    expect(apiSpy).toHaveBeenCalledTimes(4);
+    expect(mintCalls()).toBe(4);
   });
 });

@@ -462,12 +462,54 @@ export const fetchRelayJsonWithDeadline = async (
  */
 export const USAGE_QUOTA_EXCEEDED_CODE = 'agent.quota_exceeded';
 export const USAGE_UNAVAILABLE_CODE = 'agent.persistence_unavailable';
+/**
+ * FINDING 4: the sliding-window rate denial (20 requests / 60s) is NOT a daily
+ * quota exhaustion. Same 429 passthrough shape, distinct code so the client can
+ * say "wait a moment" instead of "come back tomorrow".
+ *
+ * NOT `agent.rate_limited`: that code already belongs to the PROVIDER rate
+ * limit emitted by the API relay (`/internal/agent/llm-relay`), which is
+ * fallback-ELIGIBLE by contract. The ledger gate keeps its own `usage` prefix,
+ * matching `agent.usage_unavailable` for the other usage-gate denial.
+ */
+export const USAGE_RATE_LIMITED_CODE = 'agent.usage_rate_limited';
+/**
+ * FINDING 4 (review, round 3): the per-request input cap is not a budget. The
+ * same oversized message can never be accepted later, so the client must not
+ * be told to "come back tomorrow" — it needs to shorten the message instead.
+ */
+export const USAGE_INPUT_CAP_CODE = 'agent.usage_input_cap';
+
+/**
+ * Prefixes owned by `reserveUsageAttempt` (and `checkUsageLimit`) for its
+ * non-budget denials. Matching is on these stable reason prefixes — the
+ * ledger's own classification — never on the numbers that vary per policy.
+ */
+const USAGE_RATE_LIMIT_REASON_PREFIX = 'Rate limit exceeded';
+const USAGE_INPUT_CAP_REASON_PREFIX = 'Message exceeds maximum';
+
+/**
+ * Maps an atomic reservation denial reason to its wire code. The rate window
+ * and the per-request input cap are reclassified because neither is a daily
+ * budget (the client guidance differs); every other denial — the daily
+ * workspace/actor budgets included — stays `agent.quota_exceeded`. An
+ * absent/unknown reason defaults to the quota code (fail closed on the more
+ * conservative message).
+ */
+export const usageReservationErrorCode = (reason?: string | null): string => {
+  const text = typeof reason === 'string' ? reason.trim() : '';
+  if (text.startsWith(USAGE_RATE_LIMIT_REASON_PREFIX)) return USAGE_RATE_LIMITED_CODE;
+  if (text.startsWith(USAGE_INPUT_CAP_REASON_PREFIX)) return USAGE_INPUT_CAP_CODE;
+  return USAGE_QUOTA_EXCEEDED_CODE;
+};
 
 const markUsageQuotaPassthrough = (err: Error): Error =>
   Object.assign(err, { __usageQuotaPassthrough: true });
 
 const quotaRelayError = (reason: string): Error =>
-  markUsageQuotaPassthrough(Object.assign(new Error(reason), { code: USAGE_QUOTA_EXCEEDED_CODE, status: 429 }));
+  markUsageQuotaPassthrough(
+    Object.assign(new Error(reason), { code: usageReservationErrorCode(reason), status: 429 }),
+  );
 
 const usageUnavailableRelayError = (reason: string): Error =>
   markUsageQuotaPassthrough(

@@ -7,13 +7,28 @@ export type UsagePolicy = {
   actorDailyBudget: number;
 };
 
+/**
+ * FIX-AGENT-QUOTA-SIZING — budget units are RELAY LEG reservations, not chat
+ * turns: before each dispatch every relay leg reserves
+ * `estimateTokens(system + prompt) + maxOutputTokens`, with the transmitted
+ * payload bounded at 7 900 system chars + 15 000 prompt chars (estimated
+ * input ≈ 5 725) plus the 2 000 max-output reservation — up to ≈ 7 725 tokens
+ * per leg. A single user turn can hold several legs (primary, fallback,
+ * grounding correction) and a dispatched failure retains the full reservation
+ * (unchanged policy), so the previous 10 000 / 20 000 budgets were exhausted
+ * by 1–2 user turns and every later turn answered 429
+ * `agent.quota_exceeded`. 200 000 ≈ 25 worst-case legs per actor per day and
+ * 400 000 per workspace: still a hard anti-DoS bound, and successful legs
+ * reconcile downward to real usage in `finalizeUsageAttempt`, so the counted
+ * day is bounded by actual consumption, not by the reservation ceiling.
+ */
 export const DEFAULT_POLICY: UsagePolicy = {
   maxInputTokens: 2000,
   maxOutputTokens: 2000,
   maxRequestsPerWindow: 20,
   windowSeconds: 60,
-  dailyBudget: 20000,
-  actorDailyBudget: 10000,
+  dailyBudget: 400_000,
+  actorDailyBudget: 200_000,
 };
 
 export const estimateTokens = (text: string): number => {

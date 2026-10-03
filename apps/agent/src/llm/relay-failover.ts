@@ -378,12 +378,24 @@ export type RelayAttemptsOutcome = {
  * The `__usageQuotaPassthrough` marker is authoritative; the code set is a
  * backstop so a cloned/rethrown quota error without the marker still skips
  * fallback. Production quota codes:
- * - `agent.quota_exceeded` (429): atomic reservation denied (budget/rate cap).
+ * - `agent.quota_exceeded` (429): atomic reservation denied (input cap or
+ *   daily budget).
+ * - `agent.usage_rate_limited` (429): the same atomic gate denied by the
+ *   sliding window (FINDING 4). Distinct code for accurate client guidance,
+ *   SAME passthrough semantics: no dispatch happened, so no retry/failover.
+ *   Deliberately NOT `agent.rate_limited` — that one is the PROVIDER 429 from
+ *   the API relay and MUST stay fallback-eligible (`isRelayFallbackEligible`).
+ * - `agent.usage_input_cap` (429): the same atomic gate denied by the
+ *   per-request input cap. Also nothing was dispatched — the oversized request
+ *   never left — so it must not fail over either; the client is told to
+ *   shorten the message instead of waiting for a budget to reset.
  * - `agent.usage_unavailable` / `agent.persistence_unavailable` (503):
  *   no atomic ledger (missing `transactionSync`) — fail closed pre-dispatch.
  */
 export const USAGE_QUOTA_PASSTHROUGH_CODES: ReadonlySet<string> = new Set([
   'agent.quota_exceeded',
+  'agent.usage_rate_limited',
+  'agent.usage_input_cap',
   'agent.usage_unavailable',
   'agent.persistence_unavailable',
 ]);

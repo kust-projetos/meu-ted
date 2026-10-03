@@ -155,8 +155,16 @@ export async function fetchSession(): Promise<SessionProbeResult> {
  * intentionally carries NO x-device-token. A stale stored device token must
  * never leak into this call; apiFetch only attaches the device header on the
  * explicit `token` option, which this flow deliberately omits.
+ *
+ * `opts.skipUnauthorizedEvent` is for callers that own the recovery of a 401
+ * (the agent mint self-heal): suppressing the global session-expiry signal
+ * lets them treat a denied registration as LOCAL instead of tearing down the
+ * session. The AuthGate login path omits it and keeps the default contract.
  */
-export async function registerDeviceToken(sessionToken?: string): Promise<RegisterDeviceResponse> {
+export async function registerDeviceToken(
+  sessionToken?: string,
+  opts?: { skipUnauthorizedEvent?: boolean },
+): Promise<RegisterDeviceResponse> {
   return apiFetch<RegisterDeviceResponse>("/auth/devices/register", {
     method: "POST",
     headers: {
@@ -164,6 +172,7 @@ export async function registerDeviceToken(sessionToken?: string): Promise<Regist
       ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
     },
     body: JSON.stringify({ deviceName: "PWA Web Device" }),
+    ...(opts?.skipUnauthorizedEvent ? { skipUnauthorizedEvent: true } : {}),
   });
 }
 

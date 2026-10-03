@@ -261,8 +261,10 @@ describe('relay usage attempts (RED)', () => {
     const { agent, store } = createChatAgent(SNAP_FALLBACK);
     vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({});
     const calls = stubEgress(() => okRelay());
-    // Exhaust the workspace/actor budgets on the legacy ledger.
-    recordUsage(store, 'user-1', 'seed-exhaust', 15000, 15000);
+    // Exhaust the actor/workspace budgets on the legacy ledger. The seed is
+    // derived from the LIVE policy constants (not hardcoded) so a budget
+    // recalibration cannot silently turn this "denied" case into a pass.
+    recordUsage(store, 'user-1', 'seed-exhaust', DEFAULT_POLICY.actorDailyBudget, 0);
 
     const res = await agent.fetch(chatRequest('Olá, como você está?', 'intent-quota-1'));
     expect(res.status).toBe(429);
