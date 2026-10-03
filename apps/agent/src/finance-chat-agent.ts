@@ -66,7 +66,7 @@ import { classifyError, emitSanitizedEvent } from "./observability/events.js";
 import { routeIntent } from "./orchestration/intent-router.js";
 import { createChannelGrounding } from "./orchestration/channel-evidence.js";
 import type { EvidenceEnvelope } from "./evidence/evidence-envelope.js";
-import { parseFinancialMutation, isClearlyMutating } from "./mutations/financial-parser.js";
+import { hasMutationIntentSignal, interpretMutationUtterance } from "./mutations/semantic-interpretation.js";
 import { toActiveOperationRecords } from "./mutations/active-operation-projection.js";
 import { createRequestEntityReader, type EntityReader } from "./mutations/entity-resolver.js";
 import { MutationApiClient } from "./mutations/mutation-api-client.js";
@@ -1655,8 +1655,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
 
   /** Builds the sole V2 mutation plan used by every channel adapter. */
   private mutationProposalPlan(input: TurnInput): TurnPlan | null {
-    const parsed = parseFinancialMutation(input.text);
-    if (parsed.kind === "none" || !isClearlyMutating(input.text)) return null;
+    // R06/A06: the interpretation layer is the single place that decides
+    // "this utterance is a mutation candidate" (clipped verbs included) and
+    // that refuses an ambiguous one (AC13) without registering anything. The
+    // intent gate stays exactly where it was.
+    if (!hasMutationIntentSignal(input.text)) return null;
+    const interpretation = interpretMutationUtterance(input.text);
+    if (interpretation.status !== "candidate") return null;
+    const parsed = interpretation.parsed;
 
     const routed = routeIntent(input.text);
     return {

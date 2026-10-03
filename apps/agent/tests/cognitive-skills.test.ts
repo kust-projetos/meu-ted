@@ -63,6 +63,14 @@ describe('skill selection heuristic', () => {
     expect(renderInjectedSkills(fit)).toBeNull();
   });
 
+  // A06/R06: the generative path reads the same informal language the
+  // deterministic parser does, through the same abbreviation table.
+  it('selects registros for the informal mutation utterance', () => {
+    const fit = fitSkills('gstei 50 d carne hj no nubnk', 100);
+    expect(fit.selected?.name).toBe('registros');
+    expect(fit.injected.map((s) => s.name)).toEqual(['registros']);
+  });
+
   it('injects everything when it fits the budget (size decision)', () => {
     const allBodies = ALL_SKILLS.map((s) => renderSkillBody(s)).join('\n\n');
     expect(allBodies.length).toBeGreaterThan(100); // sanity: realistic corpus
