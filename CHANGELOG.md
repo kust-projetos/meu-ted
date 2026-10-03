@@ -3,7 +3,28 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
-## Unreleased (2026-10-02 — PR D: UX TED para autorização por risco; sem release)
+## Unreleased (2026-10-03 - fix TED: self-heal do device token + recalibração da cota; sem release)
+
+- PWA: self-heal do device token no mint do connection token quando o store está
+  vazio (boot cookie-session nunca registra device → mint deviceless → 401 na
+  lista de aprovações). Single-flight com guard de geração; 1 retry de mint em 401
+  com device apresentado; announce de expiração de sessão somente em 401 definitivo
+  (5xx/timeout/rede nunca deslogam); `skipUnauthorizedEvent` no apiFetch para a
+  recuperação não derrubar a sessão viva.
+- Agent: `DEFAULT_POLICY` recalibrada para a unidade real de reserva
+  (`actorDailyBudget` 10000→200000, `dailyBudget` 20000→400000; ~7.7k por perna de
+  relay; sucessos reconciliam para baixo; retenção em falha inalterada). Denials
+  tipados com passthrough: `agent.usage_rate_limited` (janela 60s) e
+  `agent.usage_input_cap` (mensagem acima do teto); `agent.rate_limited` permanece
+  exclusivo do provider 429 (failover-eligible).
+- PWA: copy honesta para falha de envio (cota diária / rate limit / mensagem longa);
+  mensagens genéricas preservadas para os demais erros.
+- Segurança: allowlist build-time (expira 2026-12-31) para a cadeia
+  `eslint-config-next` bloqueada pelo scoped audit após extensão do advisory
+  GHSA-vfj7-8cjw-p6xm em 2026-10-02 (drift de advisory, não regressão de PR).
+- Evidência: `docs/reports/2026-10-03-ted-agent-device-quota-fix.md`.
+
+## Unreleased (2026-10-02 - PR D: UX TED para autorização por risco; sem release)
 
 - PWA caracteriza turnos `succeeded` com receipt: reconcilia a mutação,
   apresenta sucesso sem card de aprovação e mostra Undo somente quando o Agent
