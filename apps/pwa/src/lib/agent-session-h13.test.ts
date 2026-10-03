@@ -4,31 +4,55 @@ import { resetLocalSession } from "@/lib/reset-session";
 import * as client from "@/lib/api/client";
 import * as agentAuth from "@/lib/api/agent-auth";
 import { sendAgentMessage } from "@/lib/api/agent-client";
+import { setToken, clearToken } from "@/lib/auth/token-store";
 
+/**
+ * FIX-AGENT-MINT-SELF-HEAL: a mint with no stored device token first registers
+ * the device (its own apiFetch call), so a total-call count would blur the
+ * mint/cache contract asserted here. Count the mint path only.
+ */
+const mintCalls = (spy: { mock: { calls: unknown[][] } }): number =>
+  spy.mock.calls.filter(([path]) => path === "/auth/agent-token").length;
+
+/**
+ * Every test seeds a device token so the mint takes the device-bound path
+ * without a preceding registration round-trip.
+ */
 describe("H-13: limpeza central do agent no logout/401/troca (+ abort)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
     agentAuth.clearAgentConnectionTokenCache();
+    setToken("device-token-h13");
   });
 
   afterEach(() => {
+    clearToken();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
   it("logout -> login de outro usuário nunca reutiliza o bearer antigo", async () => {
+    // Logout clears the device token, so the next mint self-heals by
+    // registering the device first (FIX-AGENT-MINT-SELF-HEAL): the mock is
+    // path-aware so only the mint hands out a connection bearer.
+    let mints = 0;
     const apiSpy = vi
       .spyOn(client, "apiFetch")
-      .mockResolvedValueOnce({ token: "agent-token-user-1", expiresIn: 120 })
-      .mockResolvedValueOnce({ token: "agent-token-user-2", expiresIn: 120 });
+      .mockImplementation((path: string) =>
+        Promise.resolve(
+          path === "/auth/agent-token"
+            ? { token: `agent-token-user-${(mints += 1)}`, expiresIn: 120 }
+            : { token: "device-token-h13", deviceId: "dev-1", householdId: "hh-1" },
+        ) as never,
+      );
     const ws = "ws-h13-logout";
 
     await agentAuth.fetchAgentConnectionToken(ws);
     await resetLocalSession();
     const second = await agentAuth.fetchAgentConnectionToken(ws);
 
-    expect(apiSpy).toHaveBeenCalledTimes(2);
+    expect(mintCalls(apiSpy)).toBe(2);
     expect(second).toBe("agent-token-user-2");
   });
 
@@ -43,7 +67,7 @@ describe("H-13: limpeza central do agent no logout/401/troca (+ abort)", () => {
     await clearSensitiveSession({ clearV1Snapshot: true, clearProfile: true });
     const second = await agentAuth.fetchAgentConnectionToken("ws-a");
 
-    expect(apiSpy).toHaveBeenCalledTimes(2);
+    expect(mintCalls(apiSpy)).toBe(2);
     expect(second).toBe("agent-token-ws-b");
   });
 
@@ -78,7 +102,7 @@ describe("H-13: limpeza central do agent no logout/401/troca (+ abort)", () => {
 
     // Cache morto pelo próprio reset (sem clear manual): próximo mint busca de novo.
     await agentAuth.fetchAgentConnectionToken("ws-h13-401");
-    expect(apiSpy).toHaveBeenCalledTimes(2);
+    expect(mintCalls(apiSpy)).toBe(2);
   });
 
   it("tracked canonical agent flight in progress is aborted on session clear", async () => {
@@ -112,9 +136,9 @@ describe("H-13: limpeza central do agent no logout/401/troca (+ abort)", () => {
   it("chamada vazia também limpa o agent (contrato central único)", async () => {
     const apiSpy = vi.spyOn(client, "apiFetch").mockResolvedValue({ token: "agent-token-x", expiresIn: 120 });
     await agentAuth.fetchAgentConnectionToken("ws-h13-empty");
-    expect(apiSpy).toHaveBeenCalledTimes(1);
+    expect(mintCalls(apiSpy)).toBe(1);
     await clearSensitiveSession({});
     await agentAuth.fetchAgentConnectionToken("ws-h13-empty");
-    expect(apiSpy).toHaveBeenCalledTimes(2);
+    expect(mintCalls(apiSpy)).toBe(2);
   });
 });

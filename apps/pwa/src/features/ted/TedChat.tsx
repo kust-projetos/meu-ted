@@ -29,6 +29,38 @@ import { Sparkles, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, T
 const HISTORY_LOAD_ERROR = "Não foi possível carregar o histórico. Tente novamente.";
 const ACTIVE_LOAD_ERROR = "Não foi possível carregar as aprovações agora.";
 const MESSAGE_SEND_ERROR = "Não foi possível enviar a mensagem. Tente novamente.";
+/**
+ * FIX-AGENT-QUOTA-MESSAGE: the Agent relays the usage-gate denial verbatim as
+ * 429 `agent.quota_exceeded` (the daily token budget, reset on the 24h window)
+ * — not a transient failure. Telling the user to "try again" is misleading
+ * because retrying before the window resets cannot succeed.
+ */
+const MESSAGE_SEND_QUOTA_ERROR = "Cota diária do assistente atingida. Tente novamente amanhã.";
+/**
+ * FINDING 4: a sliding-window rate denial (also 429) clears in seconds, so
+ * the daily "try again tomorrow" copy would be wrong guidance. Same HTTP
+ * status, different code, different wait.
+ *
+ * The code is `agent.usage_rate_limited` (the usage ledger gate), NOT
+ * `agent.rate_limited` — that one is the provider/upstream 429 relayed by the
+ * Agent and means "the model throttled us", not "you sent too much".
+ */
+const MESSAGE_SEND_RATE_LIMIT_ERROR = "Muitas mensagens seguidas. Aguarde alguns instantes e tente de novo.";
+/**
+ * FINDING 4 (review, round 3): the per-request input cap is not a budget — the
+ * same message can never be accepted later, so the only useful guidance is to
+ * shorten it. No wait, no retry.
+ */
+const MESSAGE_SEND_INPUT_CAP_ERROR =
+  "Sua mensagem está longa demais para o assistente. Tente encurtar e enviar de novo.";
+
+/** Ledger denials get their own copy; every other failure is generic. */
+const sendErrorMessage = (err: unknown): string => {
+  const code = typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
+  if (code === "agent.usage_rate_limited") return MESSAGE_SEND_RATE_LIMIT_ERROR;
+  if (code === "agent.usage_input_cap") return MESSAGE_SEND_INPUT_CAP_ERROR;
+  return code === "agent.quota_exceeded" ? MESSAGE_SEND_QUOTA_ERROR : MESSAGE_SEND_ERROR;
+};
 
 /**
  * FIX-P1 (presentation rehydration): live cards come EXCLUSIVELY from the
@@ -525,9 +557,9 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // replaced the bubble, so the local blob URLs can be revoked now.
       draftsRef.current.delete(send.messageId);
       revokeAttachmentUrls(send.attachments ?? []);
-    } catch {
+    } catch (err) {
       setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
-      setError(MESSAGE_SEND_ERROR);
+      setError(sendErrorMessage(err));
       setStatus("error");
       // No history reload on failure: it would wipe the failed bubble.
       // The draft (messageId, content, live URLs) stays for retry.
