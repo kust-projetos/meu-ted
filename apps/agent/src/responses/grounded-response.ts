@@ -29,6 +29,13 @@ export type GroundedRetryOptions = Readonly<{
   sink?: GroundingEventSink;
   intentionId?: string;
   traceId?: string;
+  /**
+   * R10 (AC20): additive hook fired the moment the correction retry is
+   * actually invoked, so the caller can charge this attempt against the
+   * turn's shared recovery budget. Purely observational — it cannot alter
+   * grounding, and the retry itself is still invoked exactly once.
+   */
+  onRecoveryAttempted?: () => void;
 }>;
 
 /**
@@ -64,6 +71,15 @@ export const createGroundedResponseWithRetry = async (
   const first = validateGroundedClaims(sanitized.text, evidence);
   if (first.valid) return { text: sanitized.text, grounded: true, rejected: false };
   if (options.retry) {
+    // R10: the retry is about to run — charge it to the turn's budget before
+    // awaiting, so a quota denial still counts as the attempt. The hook is
+    // PURELY OBSERVATIONAL: it lives in its own try/catch so it can neither
+    // skip the retry nor be mistaken for a denial the retry itself raised.
+    try {
+      options.onRecoveryAttempted?.();
+    } catch {
+      /* Observational only: never affects grounding. */
+    }
     try {
       const revised = await options.retry(first.unsupportedClaims);
       if (typeof revised === 'string' && revised.trim().length > 0) {

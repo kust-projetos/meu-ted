@@ -25,6 +25,7 @@ import { createGroundedResponseWithRetry } from '../responses/grounded-response.
 import { stripToolCallMarkup } from '../responses/tool-call-sanitizer.js';
 import { renderEmpty, renderInconclusive, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
 import { routeIntent } from './intent-router.js';
+import { TurnBudget, type RecoveryPermit, type ResolutionRecoveryRequest } from './turn-budget.js';
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
 import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
 import {
@@ -99,6 +100,15 @@ const READ_ABSENCE_SUBJECT: Readonly<Record<string, string>> = {
   transactions: 'lançamentos',
   categories: 'categorias',
 };
+
+/**
+ * R10/AC20 — the honest reply when the shared per-turn recovery budget refuses
+ * another entity-resolution attempt. Same shape as
+ * `INVALID_PLAN_CLARIFICATION` (turn-plan.ts): it names the limit, never
+ * claims success, and asks the user instead of re-reading the same lists.
+ */
+const RESOLUTION_BUDGET_CLARIFICATION =
+  'Não consegui concluir a resolução com segurança dentro do limite do turno. Esclareça os dados, por favor.';
 
 export type TurnResult = Readonly<{
   input: TurnInput;
@@ -240,6 +250,11 @@ export class ConversationOrchestrator {
     /** Sanitized lifecycle event sink (defaults to emitSanitizedEvent). */
     events?: (eventType: string, fields: Record<string, unknown>) => void;
     /**
+     * R10 (AC20): per-turn shared recovery budget. Absent = a fresh TurnBudget
+     * per turn; injected so tests can pre-spend or observe the shared ceiling.
+     */
+    turnBudgetFactory?: () => TurnBudget;
+    /**
      * Multi-turn draft persistence (SPEC §7.8, ADR-014). Absent = legacy
      * single-turn behavior (incomplete args clarify without persistence).
      * Lives in DO storage of the conversation — never PWA, never API.
@@ -273,6 +288,85 @@ export class ConversationOrchestrator {
     } catch {
       // Observability must never break the turn.
     }
+  }
+
+  /**
+   * R10: the turn's shared recovery budget, keyed by the per-turn result
+   * object that every private step already threads through as `base`. This
+   * keeps concurrent turns on one orchestrator instance isolated (no shared
+   * mutable field) without widening the ~30 `completeTurn` call sites.
+   */
+  private readonly turnBudgets = new WeakMap<object, TurnBudget>();
+
+  private budgetFor(base: object): TurnBudget {
+    const existing = this.turnBudgets.get(base);
+    if (existing) return existing;
+    const created = this.dependencies.turnBudgetFactory?.() ?? new TurnBudget();
+    this.turnBudgets.set(base, created);
+    return created;
+  }
+
+  /**
+   * Numeric-only accounting for the turn (SPEC R10/AC30), emitted ONCE per
+   * turn at its terminal point. Counters only: no args, no user text, no
+   * technical ids. `clarification` records the deterministic stop of a turn
+   * that ended by asking the user, keeping `completed` for a settled read.
+   */
+  private emitTurnBudget(base: object, clarification = false): void {
+    const budget = this.budgetFor(base);
+    if (this.emittedBudgets.has(base)) return;
+    this.emittedBudgets.add(base);
+    if (clarification && budget.snapshot().stop === 'completed') budget.stopWith('clarification_needed');
+    this.emit('turn.budget', budget.snapshot() as unknown as Record<string, unknown>);
+  }
+
+  /** Idempotency guard so a terminal reached twice never double-counts. */
+  private readonly emittedBudgets = new WeakSet<object>();
+
+  /**
+   * R10/AC20 — gate for a READ-ONLY entity-resolution attempt. A refusal is a
+   * safe stop: the caller must not touch the authoritative lists again, must
+   * not throw, and must not fabricate a proposal. Returns the permit so the
+   * caller can hand the refusal straight to `stopResolutionRecovery`.
+   */
+  private permitResolutionRecovery(
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    request: ResolutionRecoveryRequest,
+  ): RecoveryPermit {
+    return this.budgetFor(base).tryResolutionRecovery(request);
+  }
+
+  /**
+   * R10/AC20 — the terminal for a refused resolution recovery. Records the
+   * refusal reason on the snapshot and asks the user; no re-read, no draft
+   * mutation, no proposal, no throw.
+   */
+  private stopResolutionRecovery(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    refusal: Extract<RecoveryPermit, { allowed: false }>,
+    missingFields: readonly string[],
+  ): TurnResult {
+    this.budgetFor(base).stopWith(refusal.stop);
+    // Only `accountId`/`categoryId` can ever be left unresolved by an entity
+    // resolution, so this never asserts a field the pipeline does not need.
+    const blockedPlan = freeze({ ...plan, missingFields: freeze([...missingFields]) });
+    this.emit('mutation.blocked', {
+      intentionId: input.intentionId,
+      traceId: input.traceId,
+      channel: input.channel,
+      domain: plan.domain,
+      mode: plan.mode,
+      status: 'blocked',
+      reason: refusal.stop,
+    });
+    return this.completeTurn(input, blockedPlan, startedAt, base, {
+      plan: blockedPlan,
+      clarification: freeze({ missingFields: blockedPlan.missingFields, text: RESOLUTION_BUDGET_CLARIFICATION }),
+      response: freeze({ text: RESOLUTION_BUDGET_CLARIFICATION }),
+    });
   }
 
   private async authorizeAutoExecution(
@@ -382,6 +476,9 @@ export class ConversationOrchestrator {
       sink: (eventType, fields) => this.emit(eventType, fields),
       intentionId: input.intentionId,
       traceId: input.traceId,
+      // R10: the ONE correction retry spends a slot of the shared per-turn
+      // recovery budget. The hook fires only when the retry actually runs.
+      onRecoveryAttempted: () => { this.budgetFor(base).noteGroundingRetry(); },
     });
     this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: grounded.grounded, latencyMs: Date.now() - startedAt });
     return freeze({ ...base, response: freeze({ text: grounded.text }) });
@@ -464,6 +561,9 @@ export class ConversationOrchestrator {
       status: 'completed',
       latencyMs: Date.now() - startedAt,
     });
+    // R10: `completeTurn` is the terminal every private step converges on, so
+    // the shared per-turn recovery snapshot is emitted exactly once here.
+    this.emitTurnBudget(base, 'clarification' in extra && !!extra.clarification);
     return freeze({ ...base, ...(extra.plan ? { plan: freeze(extra.plan) } : {}), ...(extra.policy ? { policy: freeze(extra.policy) } : {}), ...('mutation' in extra && extra.mutation ? { mutation: freeze(extra.mutation) } : {}), ...('clarification' in extra && extra.clarification ? { clarification: freeze(extra.clarification) } : {}), ...('response' in extra && extra.response ? { response: freeze(extra.response) } : {}) });
   }
 
@@ -574,6 +674,10 @@ export class ConversationOrchestrator {
           accountId: args.accountId!,
           categoryId: args.categoryId!,
         };
+        // R10 (AC30): account the attempt the moment it leaves — every
+        // iteration of the ≤2 propose attempts counts, and this axis never
+        // spends the shared recovery budget (ADR-014 owns its own ceiling).
+        this.budgetFor(base).noteProposeAttempt();
         const proposal = await client.propose({
           tool: draft.tool,
           normalizedArgs,
@@ -708,9 +812,37 @@ export class ConversationOrchestrator {
       date: draft.resolvedArgs.date,
       ...(categoryQuery ? { categoryQuery } : {}),
     };
+    // R10 (AC20): resolving the draft's missing entities IS a recovery —
+    // charge it to the shared per-turn budget BEFORE touching the
+    // authoritative lists, so a refusal never re-reads them. The fingerprint
+    // carries the SAME hint text the resolver matches accounts against, so a
+    // bare answer naming another account is a new strategy, not a repeat.
+    const resolutionHint = `${draft.resolvedArgs.description} ${input.text}`;
+    const permit = this.permitResolutionRecovery(base, {
+      kind: merged.kind,
+      args: {
+        amountCents: merged.amountCents,
+        description: merged.description,
+        date: merged.date,
+        ...(categoryQuery ? { categoryQuery } : {}),
+      },
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      resolutionHint,
+    });
+    if (!permit.allowed) {
+      return this.stopResolutionRecovery(
+        input,
+        plan,
+        startedAt,
+        base,
+        permit,
+        draft.missingFields.length > 0 ? draft.missingFields : ['accountId', 'categoryId'],
+      );
+    }
     const resolution = await resolveMutationEntities(
       merged,
-      `${draft.resolvedArgs.description} ${input.text}`,
+      resolutionHint,
       this.entityReaderOrClosed(),
     );
     const stamp = new Date(this.draftNowMs()).toISOString();
@@ -796,6 +928,26 @@ export class ConversationOrchestrator {
         response: freeze({ text }),
       });
     }
+    // R10 (AC20): the single resolution of this turn is a RECOVERY attempt —
+    // charge it to the shared budget BEFORE reading accounts/categories, so a
+    // refusal stops the turn safely instead of re-deriving the same answer.
+    // The fingerprint carries the SAME text the resolver matches accounts
+    // against, so naming another account is a new strategy, not a repeat.
+    const permit = this.permitResolutionRecovery(base, {
+      kind: parsed.kind,
+      args: {
+        amountCents: parsed.amountCents,
+        description: parsed.description,
+        date: parsed.date,
+        ...(parsed.categoryQuery ? { categoryQuery: parsed.categoryQuery } : {}),
+      },
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      resolutionHint: input.text,
+    });
+    if (!permit.allowed) {
+      return this.stopResolutionRecovery(input, plan, startedAt, base, permit, ['accountId', 'categoryId']);
+    }
     const resolution = await resolveMutationEntities(parsed, input.text, this.entityReaderOrClosed());
     if (!resolution.complete) {
       // Idempotent per turn (§7.7): same intentionId reuses the draft.
@@ -837,6 +989,8 @@ export class ConversationOrchestrator {
       accountId: resolution.accountId,
       categoryId: resolution.categoryId,
     };
+    // R10 (AC30): same accounting as the draft path — counted before it goes.
+    this.budgetFor(base).noteProposeAttempt();
     const proposal = await client.propose({
       tool,
       normalizedArgs,
@@ -1065,6 +1219,10 @@ export class ConversationOrchestrator {
     };
     const args = draft.resolvedArgs;
     try {
+      // Restart recovery re-emits ANOTHER intention's proposal (the current
+      // turn's own `proposing` draft is handled above with a response), so it
+      // is deliberately NOT charged to this turn's propose axis: the snapshot
+      // reports what THIS turn proposed.
       const proposal = await client.propose({
         tool: draft.tool,
         normalizedArgs: {
@@ -1357,6 +1515,10 @@ export class ConversationOrchestrator {
         accountId: resolution.accountId,
         categoryId: resolution.categoryId,
       };
+      // R10 (AC30): the legacy no-draft path has no `completeTurn` terminal,
+      // so the attempt is charged here and the snapshot is emitted explicitly
+      // on every propose terminal below (`result` is this turn's `base`).
+      this.budgetFor(result).noteProposeAttempt();
       const proposal = await client.propose({
         tool,
         normalizedArgs,
@@ -1369,23 +1531,27 @@ export class ConversationOrchestrator {
         const elevated = this.dependencies.autoExecutionClient?.();
         if (elevated) {
           const authorization = await this.authorizeAutoExecution(elevated, proposal.id, identity);
-          if (authorization.kind === 'uncertain') return freeze({ ...result, response: freeze({ text: renderInconclusive() }) });
+          if (authorization.kind === 'uncertain') { this.emitTurnBudget(result); return freeze({ ...result, response: freeze({ text: renderInconclusive() }) }); }
           if (authorization.kind === 'authorized') {
             try {
               const executed = await new PendingOperationCoordinator({ client: elevated }).executeAuthorized({ operationId: proposal.id, attestation: authorization.attestation }, identity);
+              this.emitTurnBudget(result);
               return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'auto' }), mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}) }), response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${resolution.accountName ? ` na conta ${resolution.accountName}` : ''}. Se quiser, posso desfazer.` }) });
             } catch {
               try {
                 const current = await elevated.listActive(identity);
                 if (current.items.some((item) => item.id === proposal.id && item.status === 'failed')) {
+                  this.emitTurnBudget(result);
                   return freeze({ ...result, response: freeze({ text: renderMutationResult('failed') }) });
                 }
               } catch { /* State remains uncertain; keep the inconclusive response. */ }
+              this.emitTurnBudget(result);
               return freeze({ ...result, response: freeze({ text: renderInconclusive() }) });
             }
           }
         }
       }
+      this.emitTurnBudget(result);
       return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, accountName: resolution.accountName, categoryName: resolution.categoryName, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
     }
     // SPEC §7.8 (ADR-014) with a draft store: the full multi-turn flow
@@ -1466,7 +1632,12 @@ export class ConversationOrchestrator {
     }
     if (plan.mode === 'read' && this.dependencies.evidenceProvider) {
       // Evidence-backed read: deterministic render or validated grounded text.
-      return this.runGroundedRead(input, plan, startedAt, result);
+      const read = await this.runGroundedRead(input, plan, startedAt, result);
+      // R10: the grounded read path terminates inside `runGroundedRead` (it
+      // never reaches `completeTurn`), so the shared snapshot is emitted here.
+      // A settled read is not a clarification: its stop stays `completed`.
+      this.emitTurnBudget(result);
+      return read;
     }
     // INV-06 fail-closed: an `unsupported` turn that still makes a financial
     // claim (amount pattern or finance noun + claim cue) would otherwise
