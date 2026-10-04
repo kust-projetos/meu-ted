@@ -1,11 +1,21 @@
 import { scrubForPersistence } from '../privacy/dlp.js';
-import { hasMutationIntentSignal, interpretMutationUtterance } from '../mutations/semantic-interpretation.js';
+import {
+  hasMutationIntentSignal,
+  interpretMutationUtterance,
+  ambiguityClarificationText,
+  hasNegation,
+  hasUnsupportedCurrency,
+  type SemanticInterpretation,
+} from '../mutations/semantic-interpretation.js';
+import { parseMoneyToCents, resolveRelativeDateFragment } from '../mutations/financial-parser.js';
 import { resolveMutationEntities, revalidateResolvedEntities, entityResolutionSignals, type EntityReader, type EntityResolutionTrace } from '../mutations/entity-resolver.js';
 import type { MutationApiClient, MutationIdentity } from '../mutations/mutation-api-client.js';
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
 import {
   DEFAULT_MAX_PROPOSE_ATTEMPTS,
   DEFAULT_DRAFT_TTL_MS,
+  appendDraftRelation,
+  appendOriginMessage,
   buildDraftRecord,
   isCancelText,
   isExpired,
@@ -14,7 +24,11 @@ import {
   toChannelMessage,
   validateCompleteArgs,
   type DraftContext,
+  type DraftFieldProvenance,
+  type DraftRecordPatch,
+  type DraftRelation,
   type MutationDraftRecord,
+  type MutationDraftResolvedArgs,
   type MutationDraftStore,
 } from '../mutations/mutation-draft.js';
 import type { MutationDraftChannelMessage, MutationReceipt, PendingOperationPresentation } from '@pi-finance/llm-contracts';
@@ -110,6 +124,30 @@ const READ_ABSENCE_SUBJECT: Readonly<Record<string, string>> = {
 const RESOLUTION_BUDGET_CLARIFICATION =
   'Não consegui concluir a resolução com segurança dentro do limite do turno. Esclareça os dados, por favor.';
 
+/**
+ * A07/RR — the honest copy for a turn whose value cannot become a correction
+ * deterministically (an alternative, or a write that lost its race). It names
+ * the missing field and asks for it; it never claims a value was applied.
+ */
+const CORRECTION_REFUSAL_TEXT = 'Não consegui aplicar o valor novo com segurança. Informe o valor correto.';
+
+/**
+ * A07/RR (review fix 4) — a date fragment that names more than one relative
+ * date reuses the A06 copy verbatim (one wording per ambiguity). A NEGATED
+ * date fragment gets its own sentence: "não foi ontem" is not a conflicting
+ * date, it is a denied one, and the A06 negation copy (which cancels the whole
+ * intention) would be a stronger claim than the turn supports.
+ */
+const DENIED_DATE_TEXT = 'Não identifiquei a data com segurança. Informe a data do lançamento.';
+
+/**
+ * A07/RR (review fix 1) — the honest copy when the draft could not be written
+ * even after the single deterministic retry. The intention survives; only this
+ * turn's write is refused.
+ */
+const DRAFT_WRITE_CONTENTION_TEXT =
+  'Não consegui atualizar o lançamento com segurança. Confirme os dados para eu tentar de novo.';
+
 export type TurnResult = Readonly<{
   input: TurnInput;
   plan: TurnPlan;
@@ -181,8 +219,120 @@ const freeze = <T>(value: T): T => {
 // not part of the name) so the answer can complete a draft that is pending
 // only the category.
 const CATEGORY_PHRASE = /\b(?:categoria|categoria de)\s+([^,.;?]+)/i;
-const categoryQueryFrom = (text: string): string | undefined =>
-  CATEGORY_PHRASE.exec(text)?.[1]?.trim() || undefined;
+
+// A07/AC14 — the CONTINUATION FRAGMENT. "de carne" answers a pending
+// category, because the phrase ("de carne") is the tail of the original
+// utterance and the draft already carries the rest. It is only ever consulted
+// through `categoryQueryFrom(text, { allowBareFragment })`, which the caller
+// enables EXCLUSIVELY for an active draft whose turn is not a candidate
+// interpretation. A description therefore still never becomes a category on
+// its own (R03/A03): the flag is structurally unavailable on the fresh path.
+const CATEGORY_FRAGMENT = /^\s*(?:e\s+)?de\s+([^,.;?]+?)\s*$/iu;
+// A fragment is a name, not a sentence: no digits, bounded length. Anything
+// else is not a category name and must fall back to the ordinary question.
+const CATEGORY_FRAGMENT_MAX = 40;
+
+const categoryQueryFrom = (
+  text: string,
+  options: Readonly<{ allowBareFragment?: boolean }> = {},
+): { query: string; fromFragment: boolean } | undefined => {
+  const explicit = CATEGORY_PHRASE.exec(text)?.[1]?.trim();
+  if (explicit) return explicit ? { query: explicit, fromFragment: false } : undefined;
+  if (!options.allowBareFragment) return undefined;
+  const fragment = CATEGORY_FRAGMENT.exec(text)?.[1]?.trim();
+  if (!fragment || fragment.length > CATEGORY_FRAGMENT_MAX || /\d/.test(fragment)) return undefined;
+  return { query: fragment, fromFragment: true };
+};
+
+/**
+ * A07/AC15 — a VALUE CORRECTION against an active draft. Only two shapes are
+ * accepted, both anchored at the start of the turn so a full utterance can
+ * never be mistaken for a correction:
+ *   "não, 500" / "não é 500" / "não, foi 500"  (negation + value)
+ *   "500 em vez de 50"                         (value + "em vez")
+ * A negation WITHOUT a value keeps its existing fail-closed clarification
+ * (R06/AC13): the user may be retracting the whole intention.
+ *
+ * A07/RR (review fix 2) — the shape is no longer enough to be a correction.
+ * The value must be read as ONE whole token and must be unambiguous, otherwise
+ * the turn is an honest clarification and the draft keeps its stored amount:
+ *   - the token must consume the WHOLE number the user wrote. `50,123` is
+ *     matched by the literal as `50,12`; a pt-BR thousand (`50.123`) is not a
+ *     truncated decimal, so the two can never be told apart by guessing
+ *     (`ambiguous_separator` — the A06 copy, reused verbatim);
+ *   - a non-BRL currency is never converted (`unsupported_currency`);
+ *   - "500 ou 50" offers two values and never picks one silently.
+ */
+const CORRECTION_VALUE = String.raw`(?:\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{1,12}(?:[.,]\d{1,2})?)`;
+/**
+ * The two shapes, each with what may follow the value token: the negation
+ * shape is closed (a correction IS the value — anything else qualifies it),
+ * while the "em vez" shape already consumed its own tail and is followed by
+ * the SUPERSEDED value ("500 em vez de 50"), which is not a qualifier.
+ */
+const CORRECTION_PATTERNS: readonly Readonly<{ pattern: RegExp; openTail: boolean }>[] = [
+  {
+    pattern: new RegExp(
+      String.raw`^\s*((?:n[aã]o|nunca)\s*,?\s*(?:(?:e|é|era)\s+)?(?:foi\s+)?(?:r\$\s*)?)(${CORRECTION_VALUE})`,
+      'iu',
+    ),
+    openTail: false,
+  },
+  {
+    pattern: new RegExp(
+      String.raw`^\s*((?:r\$\s*)?)(${CORRECTION_VALUE})\s*(?:reais|reals?|rs\.?)?\s+em\s+vez\b`,
+      'iu',
+    ),
+    openTail: true,
+  },
+];
+/** The numeric run exactly as typed; a trailing `.`/`,` is punctuation, not part of it. */
+const TYPED_NUMBER_RUN = /^\d[\d.,]*/;
+const DISJUNCTIVE_ALTERNATIVE = /\bou\b/iu;
+/** The ONLY unit a pt-BR correction may carry; anything else is a foreign currency. */
+const BRL_UNIT = /^(?:reais?|rs\.?)\b/iu;
+const LETTER = /\p{L}/u;
+
+type CorrectionOutcome =
+  | Readonly<{ kind: 'amount'; amountCents: number }>
+  | Readonly<{ kind: 'ambiguous'; clarification: string }>
+  | Readonly<{ kind: 'none' }>;
+
+const correctionOutcome = (text: string): CorrectionOutcome => {
+  for (const { pattern, openTail } of CORRECTION_PATTERNS) {
+    const match = pattern.exec(text);
+    const token = match?.[2];
+    if (!match || token === undefined) continue;
+    const tail = text.slice(match.index + match[0].length);
+    const currencyRefusal = ambiguityClarificationText('unsupported_currency');
+    // The A06 currency detector decides this, never a private currency list:
+    // "500 dólares" is 500 UNKNOWN reais, which is not a correction.
+    if (hasUnsupportedCurrency(text)) return { kind: 'ambiguous', clarification: currencyRefusal };
+    // The literal must consume the whole number: a truncated match means the
+    // user wrote a shape this parser cannot read with certainty.
+    const typed = (TYPED_NUMBER_RUN.exec(text.slice(match[1]!.length))?.[0] ?? '').replace(/[.,]+$/, '');
+    if (typed !== token) {
+      return { kind: 'ambiguous', clarification: ambiguityClarificationText('ambiguous_separator') };
+    }
+    // An alternative ("500 ou 50") is a question, not a value.
+    if (DISJUNCTIVE_ALTERNATIVE.test(tail)) {
+      return { kind: 'ambiguous', clarification: CORRECTION_REFUSAL_TEXT };
+    }
+    // Any other unit qualifies the value and is never converted or assumed to
+    // be BRL — including spellings A06's table does not carry (`dollars`).
+    const qualifier = tail.trimStart();
+    if (!openTail && LETTER.test(qualifier) && !BRL_UNIT.test(qualifier)) {
+      return { kind: 'ambiguous', clarification: currencyRefusal };
+    }
+    try {
+      const cents = parseMoneyToCents(token);
+      if (Number.isInteger(cents) && cents > 0) return { kind: 'amount', amountCents: cents };
+    } catch {
+      // Not a parseable literal for this parser; try the next shape.
+    }
+  }
+  return { kind: 'none' };
+};
 
 const normalize = (body: Body, identity: AuthenticatedIdentity, channel: ConversationChannel): TurnInput => {
   const textValue = typeof body.text === 'string' ? body.text : typeof body.content === 'string' ? body.content : '';
@@ -534,6 +684,18 @@ export class ConversationOrchestrator {
     return this.dependencies.draftNow?.() ?? Date.now();
   }
 
+  /**
+   * A07/AC14 — interprets a mutation utterance against THIS turn's clock, so
+   * "hoje"/"ontem" resolve from the same instant in the fresh path and in a
+   * continuation. Without it the fresh path would read the wall clock while a
+   * continuation read the injected one, and the same turn could date a draft
+   * two different ways. In production `draftNowMs()` IS `Date.now()`, so the
+   * resolved dates are unchanged.
+   */
+  private interpretTurn(text: string): SemanticInterpretation {
+    return interpretMutationUtterance(text, { now: new Date(this.draftNowMs()) });
+  }
+
   private hasRecoverableDraft(input: TurnInput): boolean {
     const store = this.dependencies.draftStore;
     if (!store) return false;
@@ -628,7 +790,7 @@ export class ConversationOrchestrator {
     if (isResetText(text)) return true;
     // R06/A06: an ambiguous or clipped-but-unparsable utterance is not a new
     // intention; it never inherits fields from the active draft.
-    const interpretation = interpretMutationUtterance(text);
+    const interpretation = this.interpretTurn(text);
     if (interpretation.status !== 'candidate') return false;
     const parsed = interpretation.parsed;
     return (
@@ -659,7 +821,7 @@ export class ConversationOrchestrator {
    */
   private ambiguousMutationClarification(text: string): Readonly<{ missingFields: readonly string[]; text: string }> | null {
     if (!hasMutationIntentSignal(text)) return null;
-    const interpretation = interpretMutationUtterance(text);
+    const interpretation = this.interpretTurn(text);
     return interpretation.status === 'clarify' ? this.ambiguousClarification(interpretation) : null;
   }
 
@@ -867,6 +1029,221 @@ export class ConversationOrchestrator {
     });
   }
 
+  /**
+   * A07/R07 — the per-field provenance snapshot carried by a draft. Reuses the
+   * A06 `FieldProvenance` objects verbatim (no second provenance shape) and
+   * drops `accountHint`, which is a resolver hint rather than a draft field.
+   */
+  private draftProvenance(interpretation: SemanticInterpretation): DraftFieldProvenance | undefined {
+    if (interpretation.status !== 'candidate') return undefined;
+    const { kind, amountCents, description, date, categoryQuery } = interpretation.provenance;
+    return {
+      kind,
+      amountCents,
+      description,
+      date,
+      ...(categoryQuery ? { categoryQuery } : {}),
+    };
+  }
+
+  /**
+   * A07/AC16 — the additive goal metadata every continuation write carries:
+   * the turn is recorded as an origin of the SAME goal (bounded), and the
+   * derived `draft_relation` is appended (bounded, at most once per kind).
+   * Pure metadata: it changes no identity, no propose key and no eligibility.
+   */
+  private turnMetadata(
+    input: TurnInput,
+    draft: MutationDraftRecord,
+    relation: DraftRelation,
+  ): Pick<import('../mutations/mutation-draft.js').DraftRecordPatch, 'originMessages' | 'relations'> {
+    return {
+      originMessages: appendOriginMessage(draft.originMessages, input.intentionId),
+      relations: appendDraftRelation(draft.relations, relation),
+    };
+  }
+
+  /**
+   * A07/R07 — the relation derived for a turn that neither corrected nor
+   * completed the draft. A negation that did NOT become a value correction
+   * keeps its R06/AC13 fail-closed behaviour untouched; the relation only
+   * records that the draft survived it.
+   */
+  private continuationRelation(input: TurnInput, corrected: boolean): DraftRelation {
+    if (corrected) return 'correction';
+    return /\b(?:n[aã]o|nunca|jamais)\b/iu.test(input.text) ? 'negation' : 'continuation';
+  }
+
+  /**
+   * A07/AC15 — applies a value correction to an ACTIVE draft, guarded by the
+   * `revision` read immediately before the write.
+   /**
+   * A07/RR (review fix 1) — the ONLY way a continuation writes the draft it
+   * resolved against. Every such write happens AFTER an awaited authoritative
+   * read, so the args it carries were built from a revision that may already be
+   * stale by the time it lands.
+   *
+   * Two guarantees, both structural:
+   * 1. `expectedRevision` is ALWAYS the revision read immediately before the
+   *    statement, so the store (not a later re-read) decides the write;
+   * 2. the patch is a FUNCTION of the record just read, so the deterministic
+   *    retry re-reads and REBUILDS instead of replaying values captured before
+   *    the await. A correction that landed while this turn was resolving is
+   *    therefore kept: the retry applies only THIS turn's contributions over
+   *    the fresh base.
+   *
+   * Two attempts, then a refusal: a lost race can neither loop nor clobber.
+   */
+  private writeDraftContinuation(
+    draftId: string,
+    build: (current: MutationDraftRecord) => DraftRecordPatch,
+  ): { ok: true; record: MutationDraftRecord } | { ok: false; current: MutationDraftRecord | undefined } {
+    const store = this.dependencies.draftStore!;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const current = store.get(draftId);
+      // Only an ACTIVE draft accepts a continuation write; a draft that moved
+      // on (frozen `proposing`, consumed, discarded) is answered from its own
+      // state by the caller, never patched.
+      if (!current || current.status !== 'active') return { ok: false, current };
+      const written = store.update(draftId, build(current), { expectedRevision: current.revision });
+      if (written) return { ok: true, record: written };
+    }
+    return { ok: false, current: store.get(draftId) };
+  }
+
+  /**
+   * A07/AC15 — applies a value correction to an ACTIVE draft, guarded by the
+   * `revision` read immediately before the write.
+   *
+   * Nothing is inherited: the correction REPLACES `amountCents` and leaves
+   * every other field exactly as it was, and the provenance records where the
+   * new value came from (A06 `FieldProvenance`, reused verbatim).
+   */
+  private applyDraftCorrection(
+    input: TurnInput,
+    draft: MutationDraftRecord,
+    amountCents: number,
+  ): { ok: true; record: MutationDraftRecord } | { ok: false; current: MutationDraftRecord | undefined } {
+    const stamp = new Date(this.draftNowMs()).toISOString();
+    return this.writeDraftContinuation(draft.draftId, (current) => ({
+      resolvedArgs: { ...current.resolvedArgs, amountCents },
+      updatedAt: stamp,
+      lastIntentionId: input.intentionId,
+      originMessages: appendOriginMessage(current.originMessages, input.intentionId),
+      relations: appendDraftRelation(current.relations, 'correction'),
+      fieldProvenance: {
+        ...(current.fieldProvenance ?? {}),
+        amountCents: {
+          source: 'token',
+          raw: input.text,
+          value: amountCents,
+        },
+      },
+    }));
+  }
+
+  /**
+   * A07/RR (review fix 1) — a continuation write that lost its race (twice, or
+   * to a draft that moved on). The refusal converges by the draft's CURRENT
+   * state: a frozen/closed draft is answered by {@link handleCasLoss}, and a
+   * still-ACTIVE draft is asked again, never written over.
+   */
+  private refuseDraftWrite(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    current: MutationDraftRecord | undefined,
+    question: string,
+  ): TurnResult {
+    if (!current || current.status !== 'active') {
+      return this.handleCasLoss(input, plan, startedAt, base, current);
+    }
+    return this.clarifyDraft(input, plan, startedAt, base, current, question);
+  }
+
+  /**
+   * A07/AC15 — the correction could not be applied without racing another
+   * write, or the turn's value was not a deterministic correction at all.
+   * Fail closed: nothing is proposed, the draft keeps what it had, and the
+   * user is asked to restate the amount.
+   */
+  private stopDraftCorrection(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    text: string = CORRECTION_REFUSAL_TEXT,
+  ): TurnResult {
+    this.emit('mutation.blocked', {
+      intentionId: input.intentionId,
+      traceId: input.traceId,
+      channel: input.channel,
+      domain: plan.domain,
+      mode: plan.mode,
+      status: 'blocked',
+    });
+    const blockedPlan = freeze({ ...plan, missingFields: freeze(['amount']) });
+    return this.completeTurn(input, blockedPlan, startedAt, base, {
+      plan: blockedPlan,
+      clarification: freeze({ missingFields: blockedPlan.missingFields, text, draft: toChannelMessage(draft, text) }),
+      response: freeze({ text }),
+    });
+  }
+
+  /**
+   * A07/RR (review fix 4) — the date fragment of this turn, or an honest
+   * ambiguity. Applied ONLY when the turn names exactly one relative date and
+   * does not negate it (A06 `hasNegation`, reused); "ontem ou hoje" and "não foi
+   * ontem" are questions, never a date.
+   */
+  private dateFragmentOf(
+    text: string,
+  ): { date?: string; ambiguous: boolean; clarification?: string } {
+    const fragment = resolveRelativeDateFragment(text, { now: new Date(this.draftNowMs()) });
+    if (fragment.status === 'ambiguous') {
+      return { ambiguous: true, clarification: ambiguityClarificationText('contradictory_dates') };
+    }
+    if (fragment.status === 'none') return { ambiguous: false };
+    if (hasNegation(text)) return { ambiguous: true, clarification: DENIED_DATE_TEXT };
+    return { date: fragment.date, ambiguous: false };
+  }
+
+  /**
+   * A07/RR (review fix 4) — an ambiguous or DENIED date fragment is a question,
+   * never a date. Nothing is written: the draft keeps its stored date and its
+   * pending fields, so the next unambiguous fragment ("ontem") still applies.
+   */
+  private stopDraftDate(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    text: string,
+  ): TurnResult {
+    this.emit('mutation.blocked', {
+      intentionId: input.intentionId,
+      traceId: input.traceId,
+      channel: input.channel,
+      domain: plan.domain,
+      mode: plan.mode,
+      status: 'blocked',
+      reason: 'ambiguous_relative_date',
+    });
+    const datePlan = freeze({ ...plan, missingFields: freeze(['date']) });
+    return this.completeTurn(input, datePlan, startedAt, base, {
+      plan: datePlan,
+      clarification: freeze({
+        missingFields: datePlan.missingFields,
+        text,
+        draft: toChannelMessage(draft, text),
+      }),
+      response: freeze({ text }),
+    });
+  }
+
   private async continueDraft(
     input: TurnInput,
     plan: TurnPlan,
@@ -876,6 +1253,49 @@ export class ConversationOrchestrator {
     client: MutationApiClient,
   ): Promise<TurnResult> {
     const store = this.dependencies.draftStore!;
+    // A07/AC15 — a value correction ("não, 500") against an ACTIVE draft
+    // replaces the stored amount instead of asking the pending question again.
+    // Applied through `update` + `revision` (never in place), with a
+    // deterministic single retry on a concurrent write, and nothing else in
+    // the turn inherits from the correction. Textual confirmation never
+    // executes: only this field substitution is reachable here.
+    //
+    // A07/RR (review fix 2): a turn whose value is NOT a deterministic
+    // correction (truncated thousand, foreign currency, alternative) is an
+    // honest amount clarification — the stored amount is left exactly as it was.
+    const correction = correctionOutcome(input.text);
+    if (correction.kind === 'ambiguous') {
+      return this.stopDraftCorrection(
+        input,
+        plan,
+        startedAt,
+        base,
+        store.get(draft.draftId) ?? draft,
+        correction.clarification,
+      );
+    }
+    const correctionCents = correction.kind === 'amount' ? correction.amountCents : undefined;
+    /**
+     * A07/FIX A — what this turn OBSERVED before any await, per contributed
+     * field. It is the guard that decides whether a contribution may still be
+     * written at the moment of the post-await write (see {@link argsOver}).
+     */
+    const observedBefore = {
+      amountCents: draft.resolvedArgs.amountCents,
+      date: draft.resolvedArgs.date,
+      categoryQuery: draft.resolvedArgs.categoryQuery,
+    };
+    let currentDraft = draft;
+    let relation: DraftRelation = this.continuationRelation(input, correctionCents !== undefined);
+    if (correctionCents !== undefined) {
+      const applied = this.applyDraftCorrection(input, draft, correctionCents);
+      if (!applied.ok) {
+        // A concurrent write won: refuse to overwrite it and clarify.
+        return this.stopDraftCorrection(input, plan, startedAt, base, applied.current ?? draft);
+      }
+      currentDraft = applied.record;
+      relation = 'correction';
+    }
     // Resolve ONLY the missing field, then revalidate ALL args: the stored
     // financial fields are authoritative for this draft, the new text only
     // supplies entity hints (e.g. "Nubank" → account).
@@ -885,17 +1305,67 @@ export class ConversationOrchestrator {
     // the draft could never consume, since the stored description is not a
     // category query. The turn's explicit statement wins over the stored one
     // (a correction of the category is exactly what this turn is for).
-    const turnCategoryQuery = draft.missingFields.includes('categoryId')
-      ? categoryQueryFrom(input.text)
+    //
+    // A07/AC14: the bare FRAGMENT "de carne" answers the same question, and is
+    // admitted ONLY when the turn carries no candidate interpretation of its
+    // own — a real utterance is still routed as a new/replacement intention.
+    const turnInterpretation = this.interpretTurn(input.text);
+    const allowBareFragment = turnInterpretation.status !== 'candidate';
+    const turnCategory = draft.missingFields.includes('categoryId')
+      ? categoryQueryFrom(input.text, { allowBareFragment })
       : undefined;
+    const turnCategoryQuery = turnCategory?.query;
     const categoryQuery = turnCategoryQuery ?? draft.resolvedArgs.categoryQuery;
+    // A07/AC14: "ontem"/"hoje" CORRECTS the stored date. Resolved through the
+    // parser's own `dateFor` against the injected clock — the same timezone
+    // the fresh path uses — instead of copying the stored date verbatim.
+    // A07/RR fix 4: only an UNAMBIGUOUS, unnegated fragment is applied; an
+    // ambiguous or denied date is a question and writes NOTHING to the draft.
+    const dateFragment = this.dateFragmentOf(input.text);
+    if (dateFragment.ambiguous) {
+      return this.stopDraftDate(input, plan, startedAt, base, currentDraft, dateFragment.clarification!);
+    }
+    const turnDate = dateFragment.date;
     const merged = {
       kind: draft.resolvedArgs.kind,
-      amountCents: draft.resolvedArgs.amountCents,
+      amountCents: currentDraft.resolvedArgs.amountCents,
       description: draft.resolvedArgs.description,
-      date: draft.resolvedArgs.date,
+      date: turnDate ?? draft.resolvedArgs.date,
       ...(categoryQuery ? { categoryQuery } : {}),
     };
+    /**
+     * A07/RR (review fix 1) — the args this turn WRITES are this turn's
+     * contributions applied over WHATEVER the draft holds at write time. A
+     * value read before the await (or a correction that landed during it) is
+     * never replayed, so the deterministic retry keeps the fresher record.
+     *
+     * A07/FIX A — the FRESH base is authoritative for every field it already
+     * carries. A contribution captured before the await (value correction,
+     * date fragment, category query) is re-applied ONLY where that base still
+     * holds exactly what THIS turn left behind — i.e. where nobody else wrote
+     * the field while this turn was resolving. Without this guard two
+     * corrections interleave (A corrects to R$500 and parks, B corrects to
+     * R$700) and A's older contribution would silently overwrite B's fresher
+     * one on the way out.
+     */
+    const argsOver = (base: MutationDraftRecord): MutationDraftResolvedArgs => {
+        const amountCents =
+          correctionCents !== undefined && base.resolvedArgs.amountCents === correctionCents
+            ? correctionCents
+            : base.resolvedArgs.amountCents;
+        const date = turnDate !== undefined && base.resolvedArgs.date === observedBefore.date ? turnDate : base.resolvedArgs.date;
+        const query =
+          turnCategoryQuery !== undefined && base.resolvedArgs.categoryQuery === observedBefore.categoryQuery
+            ? turnCategoryQuery
+            : base.resolvedArgs.categoryQuery;
+        return {
+          kind: base.resolvedArgs.kind,
+          amountCents,
+          description: base.resolvedArgs.description,
+          date,
+          ...(query ? { categoryQuery: query } : {}),
+        };
+      };
     // R10 (AC20): resolving the draft's missing entities IS a recovery —
     // charge it to the shared per-turn budget BEFORE touching the
     // authoritative lists, so a refusal never re-reads them. The fingerprint
@@ -906,10 +1376,17 @@ export class ConversationOrchestrator {
     // has one fingerprint whichever path it arrives by. Only a bare answer
     // (which has no interpretation of its own) keeps the draft description
     // in front, exactly as before.
-    const turnInterpretation = interpretMutationUtterance(input.text);
+    //
+    // A07/RR fix 5: a CATEGORIAL FRAGMENT ("de carne") answers the category
+    // question ONLY. Its text never enters the account haystack: with an
+    // account named "Carne" it would silently select it and propose without
+    // ever asking. The account therefore stays pending (and its homonyms stay
+    // visible) while the fragment only feeds `categoryQuery`.
     const resolutionHint = turnInterpretation.status === 'candidate'
       ? turnInterpretation.resolutionText
-      : `${draft.resolvedArgs.description} ${input.text}`;
+      : turnCategory?.fromFragment
+        ? draft.resolvedArgs.description
+        : `${draft.resolvedArgs.description} ${input.text}`;
     const permit = this.permitResolutionRecovery(base, {
       kind: merged.kind,
       args: {
@@ -953,35 +1430,58 @@ export class ConversationOrchestrator {
       // draft while another field stays pending. Dropping it would make the
       // next bare answer ("Nubank") re-ask the category the user just named,
       // because the stored description is not a category query.
-      const adoptsCategory = !!categoryQuery && categoryQuery !== draft.resolvedArgs.categoryQuery;
-      store.update(draft.draftId, {
-        ...(adoptsCategory ? { resolvedArgs: { ...draft.resolvedArgs, categoryQuery } } : {}),
-        missingFields: [...resolution.missingFields],
-        updatedAt: stamp,
-        lastIntentionId: input.intentionId,
-        lastQuestion: resolution.clarification,
+      //
+      // A07/AC14/AC15: the same rule covers EVERY field this turn contributed
+      // — the category fragment, the corrected date and the corrected amount.
+      // A value that only fed the resolution would be lost, and the next turn
+      // would silently resolve against the stale one.
+      const written = this.writeDraftContinuation(draft.draftId, (current) => {
+        // A07/FIX A: the SAME guard `argsOver` applies — the payload is written
+        // only when some contribution of this turn still has a field the fresh
+        // base left untouched.
+        const adoptsTurnArgs =
+          (correctionCents !== undefined && current.resolvedArgs.amountCents === correctionCents) ||
+          (turnDate !== undefined && current.resolvedArgs.date === observedBefore.date) ||
+          (turnCategoryQuery !== undefined && current.resolvedArgs.categoryQuery === observedBefore.categoryQuery);
+        return {
+          ...(adoptsTurnArgs ? { resolvedArgs: argsOver(current) } : {}),
+          missingFields: [...resolution.missingFields],
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+          lastQuestion: resolution.clarification,
+          ...this.turnMetadata(input, current, relation),
+        };
       });
-      const updated = store.get(draft.draftId) ?? draft;
-      return this.clarifyDraft(input, plan, startedAt, base, updated, resolution.clarification);
+      if (!written.ok) {
+        return this.refuseDraftWrite(input, plan, startedAt, base, written.current, resolution.clarification);
+      }
+      return this.clarifyDraft(input, plan, startedAt, base, written.record, resolution.clarification);
     }
-    const completeArgs = {
-      ...draft.resolvedArgs,
-      accountId: resolution.accountId,
-      categoryId: resolution.categoryId,
-      accountName: resolution.accountName,
-      categoryName: resolution.categoryName,
-    };
-    if (!validateCompleteArgs(completeArgs)) {
+    // A07/RR fix 1: the args the resolver validated are the ones written, built
+    // over the record read at write time (never over a pre-await snapshot).
+    const completeArgs = (
+      base: MutationDraftRecord,
+      verified: { accountId: string; categoryId: string; accountName: string | null; categoryName: string | null },
+    ): MutationDraftResolvedArgs => ({
+      ...base.resolvedArgs,
+      ...argsOver(base),
+      accountId: verified.accountId,
+      categoryId: verified.categoryId,
+      ...(verified.accountName ? { accountName: verified.accountName } : {}),
+      ...(verified.categoryName ? { categoryName: verified.categoryName } : {}),
+    });
+    if (!validateCompleteArgs(completeArgs(currentDraft, resolution))) {
       // Canonical gate failed agent-side: never propose, clarify again.
       const question = 'Não foi possível validar os dados com segurança. Descreva novamente o lançamento.';
-      store.update(draft.draftId, {
+      const written = this.writeDraftContinuation(draft.draftId, (current) => ({
         missingFields: ['accountId', 'categoryId'],
         updatedAt: stamp,
         lastIntentionId: input.intentionId,
         lastQuestion: question,
-      });
-      const updated = store.get(draft.draftId) ?? draft;
-      return this.clarifyDraft(input, plan, startedAt, base, updated, question);
+        ...this.turnMetadata(input, current, relation),
+      }));
+      if (!written.ok) return this.refuseDraftWrite(input, plan, startedAt, base, written.current, question);
+      return this.clarifyDraft(input, plan, startedAt, base, written.record, question);
     }
     // A08/R08: existence, activity and scope are re-checked IMMEDIATELY before
     // the write (the CAS below is what arms the propose). This is the SAME
@@ -990,27 +1490,30 @@ export class ConversationOrchestrator {
     const verified = await revalidateResolvedEntities(resolution, this.entityReaderOrClosed());
     this.emitEntityResolution(input, plan, verified.trace);
     if (!verified.complete) {
-      store.update(draft.draftId, {
+      const written = this.writeDraftContinuation(draft.draftId, (current) => ({
         missingFields: [...verified.missingFields],
         updatedAt: stamp,
         lastIntentionId: input.intentionId,
         lastQuestion: verified.clarification,
-      });
-      const updated = store.get(draft.draftId) ?? draft;
-      return this.clarifyDraft(input, plan, startedAt, base, updated, verified.clarification);
+        ...this.turnMetadata(input, current, relation),
+      }));
+      if (!written.ok) {
+        return this.refuseDraftWrite(input, plan, startedAt, base, written.current, verified.clarification);
+      }
+      return this.clarifyDraft(input, plan, startedAt, base, written.record, verified.clarification);
     }
-    store.update(draft.draftId, {
-      resolvedArgs: {
-        ...completeArgs,
-        accountId: verified.accountId,
-        categoryId: verified.categoryId,
-        accountName: verified.accountName,
-        categoryName: verified.categoryName,
-      },
+    const written = this.writeDraftContinuation(draft.draftId, (current) => ({
+      resolvedArgs: completeArgs(current, verified),
       missingFields: [],
       updatedAt: stamp,
       lastIntentionId: input.intentionId,
-    });
+      ...this.turnMetadata(input, current, relation),
+    }));
+    if (!written.ok) {
+      // The resolution is lost: converge by the draft's CURRENT state instead
+      // of proposing args this turn could not prove are still stored.
+      return this.refuseDraftWrite(input, plan, startedAt, base, written.current, DRAFT_WRITE_CONTENTION_TEXT);
+    }
     // Atomic consumption: exactly one continuation wins; losers converge.
     const cas = store.cas(draft.draftId, 'active', 'proposing', {
       updatedAt: stamp,
@@ -1032,7 +1535,7 @@ export class ConversationOrchestrator {
     // R06/A06: interpret once, then keep the historical flow. An ambiguous
     // utterance (AC13) stops before entity resolution: no read, no draft, no
     // proposal, and no invented value.
-    const interpretation = interpretMutationUtterance(input.text);
+    const interpretation = this.interpretTurn(input.text);
     if (interpretation.status === 'clarify') {
       const clarification = this.ambiguousClarification(interpretation);
       const blockedPlan = freeze({ ...plan, missingFields: freeze([...clarification.missingFields]) });
@@ -1123,6 +1626,9 @@ export class ConversationOrchestrator {
         question: verified.clarification,
         ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
         nowMs: now,
+        // A07/R07: snapshot the A06 provenance of the utterance that opened
+        // the goal, so a later correction has a baseline to point at.
+        fieldProvenance: this.draftProvenance(interpretation),
       });
       const { record } = store.getOrCreate(candidate);
       return this.clarifyDraft(input, plan, startedAt, base, record, record.lastQuestion);
@@ -1314,7 +1820,7 @@ export class ConversationOrchestrator {
 
     const actives = store.listActive(ctx, now);
     if (actives.length >= 2) {
-      const replacement = interpretMutationUtterance(input.text);
+      const replacement = this.interpretTurn(input.text);
       if (replacement.status === 'candidate' && actives.every((draft) => this.isReplacement(input.text, draft))) {
         const stamp = new Date(now).toISOString();
         for (const draft of actives) {
@@ -1456,6 +1962,9 @@ export class ConversationOrchestrator {
           discardReason: 'user_cancel',
           updatedAt: stamp,
           lastIntentionId: input.intentionId,
+          // A07/R07: the cancel is recorded as a relation of the goal it
+          // closed. Metadata only — the discard itself is unchanged.
+          ...this.turnMetadata(input, draft, 'cancel_ref'),
         });
       }
       if (store.listProposing(ctx, now).length > 0) {
