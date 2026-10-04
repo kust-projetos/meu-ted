@@ -40,12 +40,16 @@ export {
 export type { ToolExecutionContext, ExposedTool } from './tools.js';
 export {
   WEB_UNAVAILABLE_MESSAGE,
+  WEB_FETCH_ALLOWED_HOSTS_ENV,
   WEB_FETCH_TIMEOUT_MS,
   WEB_FETCH_MAX_CHARS,
+  WEB_FETCH_MAX_BYTES,
   WebFetchBlockedError,
   createWebSearchProvider,
   isBlockedFetchHost,
   assertFetchableUrl,
+  parseWebFetchAllowedHosts,
+  resolveWebFetchAllowedHosts,
   webFetchUrl,
 } from './web.js';
 export type { WebSearchProvider, WebSearchResult, WebSearchResultItem, WebEnv, WebFetchResult } from './web.js';
@@ -55,7 +59,7 @@ import { skillCatalogLines } from './skills/index.js';
 import { fitSkills, renderInjectedSkills } from './select-skill.js';
 import { PLAYBOOK_BODY } from './playbook.js';
 import { selectToolsFor, toolSkillLines } from './tools.js';
-import { createWebSearchProvider } from './web.js';
+import { createWebSearchProvider, resolveWebFetchAllowedHosts } from './web.js';
 import type { WebEnv } from './web.js';
 
 /**
@@ -88,15 +92,20 @@ export const assembleCognition = (
 ): AssembledCognition => {
   const fit = fitSkills(lastUserMessage, opts?.skillBudgetChars);
   const webAvailable = createWebSearchProvider(opts?.webEnv ?? {}).available;
+  // A11: `web_fetch` is restricted to the operator egress allowlist and is
+  // unavailable while it is empty — the prompt must not promise more.
+  const fetchHosts = resolveWebFetchAllowedHosts(opts?.webEnv).size;
   const toolNames = selectToolsFor(fit.injected.map((skill) => skill.name));
   const system = buildSystemPrompt({
     skillCatalog: skillCatalogLines(),
     activeSkillBody: renderInjectedSkills(fit),
     playbookBody: PLAYBOOK_BODY,
     toolCatalog: toolSkillLines(toolNames),
-    webStatusLine: webAvailable
-      ? 'disponível via web_search/web_fetch para dados externos atuais.'
-      : 'indisponível (sem chave configurada) — responda com os dados do workspace.',
+    webStatusLine: !webAvailable
+      ? 'indisponível (sem chave configurada) — responda com os dados do workspace.'
+      : fetchHosts > 0
+        ? 'busca disponível; leitura de páginas apenas nos domínios autorizados.'
+        : 'busca disponível; leitura de páginas indisponível (nenhum domínio autorizado) — só use web_search.',
     ...(opts?.hooks?.memoryContext ? { memoryContext: opts.hooks.memoryContext } : {}),
   });
   return {

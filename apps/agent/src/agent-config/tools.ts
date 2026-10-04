@@ -29,6 +29,7 @@ import { ALL_SKILLS } from './skills/index.js';
 import {
   WEB_UNAVAILABLE_MESSAGE,
   createWebSearchProvider,
+  resolveWebFetchAllowedHosts,
   webFetchUrl,
   type WebEnv,
 } from './web.js';
@@ -226,6 +227,9 @@ export const buildExposedTools = (
   const generated = generatedByName();
   const out: Record<string, ReturnType<typeof tool>> = {};
   const webProvider = createWebSearchProvider(ctx.webEnv ?? {}, ctx.fetchImpl ?? fetch);
+  // A11: the egress allowlist is resolved once per turn from the operator env
+  // and handed to the guard; empty (default) means `web_fetch` is unavailable.
+  const webFetchAllowedHosts = resolveWebFetchAllowedHosts(ctx.webEnv);
 
   for (const name of toolNames) {
     // Retired V1 pending tools are never built, even when requested
@@ -258,7 +262,8 @@ export const buildExposedTools = (
     }
     if (name === 'web_fetch') {
       out[name] = tool({
-        description: 'Lê o conteúdo de uma página http/https (bloqueia endereços internos).',
+        description:
+          'Lê o conteúdo de uma página http/https nos domínios autorizados (bloqueia endereços internos).',
         inputSchema: jsonSchema({
           type: 'object',
           properties: { url: { type: 'string', minLength: 1, maxLength: 2000 } },
@@ -266,7 +271,10 @@ export const buildExposedTools = (
         }),
         execute: async (params: Record<string, unknown>) => {
           try {
-            return await webFetchUrl(String(params.url ?? ''), { fetchImpl: ctx.fetchImpl });
+            return await webFetchUrl(String(params.url ?? ''), {
+              fetchImpl: ctx.fetchImpl,
+              allowedHosts: webFetchAllowedHosts,
+            });
           } catch (err) {
             return { ok: false, message: (err as Error)?.message ?? 'Não consegui ler esta página.' };
           }
