@@ -45,6 +45,14 @@ export type WebSearchResultItem = {
   title: string;
   url: string;
   snippet: string;
+  /**
+   * Provider publication date, when the provider actually supplies one
+   * (Tavily `published_date`). Absent stays ABSENT: the evidence envelope then
+   * declares "publicado: não informado" instead of inventing a date. Only a
+   * non-empty string is carried — a number/unparseable value is dropped at the
+   * boundary, not coerced into a date.
+   */
+  publishedAt?: string;
 };
 
 export type WebSearchResult = {
@@ -101,7 +109,7 @@ const tavilyProvider = (apiKey: string, fetchImpl: typeof fetch): WebSearchProvi
       throw Object.assign(new Error(`web search failed: HTTP ${res.status}`), { code: `http_${res.status}` });
     }
     const body = (await res.json().catch(() => null)) as {
-      results?: Array<{ title?: unknown; url?: unknown; content?: unknown }>;
+      results?: Array<{ title?: unknown; url?: unknown; content?: unknown; published_date?: unknown }>;
     } | null;
     const results = (Array.isArray(body?.results) ? body!.results! : [])
       .filter((r) => typeof r.url === 'string' && (r.url as string).length > 0)
@@ -110,6 +118,12 @@ const tavilyProvider = (apiKey: string, fetchImpl: typeof fetch): WebSearchProvi
         title: typeof r.title === 'string' ? r.title : String(r.url),
         url: String(r.url),
         snippet: typeof r.content === 'string' ? (r.content as string).slice(0, 500) : '',
+        // A12 follow-up: the provider already sends `published_date` per
+        // result and it was being dropped, so every rendered source claimed
+        // "publicado: não informado". Absent/non-string stays absent.
+        ...(typeof r.published_date === 'string' && r.published_date.trim() !== ''
+          ? { publishedAt: r.published_date.trim() }
+          : {}),
       }));
     return { provider: 'tavily', available: true, results };
   },

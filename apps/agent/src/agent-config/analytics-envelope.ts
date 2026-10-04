@@ -38,6 +38,8 @@
  *   agente vai para `agentEffectivePeriod` em vez de sobrescrever a da API.
  */
 
+import { truncateSafely } from '../dlp/redaction.js';
+
 export const ANALYTICS_BOUNDARY = 'inclusive' as const;
 
 /** G-A na vocabulary da API (o wire fala `liquidez`/`competencia`). */
@@ -266,6 +268,107 @@ export type DeclareAnalyticsEnvelopeOptions = Readonly<{
  * - `totalCentsExact`/`approximate`: preservados; o anotador local só completa
  *   o que falta.
  */
+/**
+ * A04/A09 pós-G03 — bloco de PROVA para o caminho de evidência.
+ *
+ * O envelope aditivo vive dentro do payload, mas o modelo precisa de uma linha
+ * curta que declare, ao lado de cada afirmação, QUE janela e QUE base a produziram.
+ * O bloco é derivado do MESMO envelope (nada é re-declarado aqui), então ele não
+ * pode afirmar mais do que a leitura provou:
+ *
+ * - base: a EFETIVA da API quando declarada; senão apenas o que o agente pediu
+ *   (`agentRequestedBasis`), com a ausência nomeada — nunca `competencia` sobre
+ *   uma leitura feita em `liquidez`;
+ * - totais: o decimal exato quando o `totalCents` saiu do safe integer (G-B),
+ *   marcado como double aproximado;
+ * - envelope ausente: uma linha de INDISPONIBILIDADE e nenhum número, porque
+ *   "não sei de qual janela veio" não pode virar um total assertado.
+ */
+export const ANALYTICS_EVIDENCE_CHARS = 600;
+export const ANALYTICS_EVIDENCE_UNAVAILABLE_PREFIX = 'PROVA ANALYTICS — indisponível:';
+export const ANALYTICS_EVIDENCE_PREFIX = 'PROVA ANALYTICS';
+
+export type RenderAnalyticsEvidenceOptions = Readonly<{
+  /** Tool que produziu a leitura (`analytics_kpis` / `analytics_category_breakdown`). */
+  tool?: string;
+  charBudget?: number;
+}>;
+
+const capWithMarker = (value: string, max: number): string => {
+  if (max <= 0) return '';
+  if (value.length <= max) return value;
+  const head = truncateSafely(value, max - 1);
+  return head === '' ? '…' : `${head}…`;
+};
+
+const readPeriod = (value: unknown): { from: string; to: string; toExclusive?: string } | null => {
+  const range = asRecord(value);
+  if (!range) return null;
+  const { from, to } = range;
+  if (typeof from !== 'string' || typeof to !== 'string') return null;
+  return {
+    from,
+    to,
+    ...(typeof range['toExclusive'] === 'string' ? { toExclusive: range['toExclusive'] } : {}),
+  };
+};
+
+/** pt-BR label of the declared boundary; the raw wire value stays on the payload. */
+const BOUNDARY_LABEL: Record<string, string> = { inclusive: 'inclusiva' };
+const boundaryLabel = (value: unknown): string =>
+  BOUNDARY_LABEL[String(value ?? ANALYTICS_BOUNDARY)] ?? String(value ?? ANALYTICS_BOUNDARY);
+
+const readNumber = (value: unknown): string | null =>
+  typeof value === 'number' && Number.isFinite(value) ? String(value) : null;
+
+/**
+ * Renders the proof line from an ALREADY declared envelope. Taking the
+ * declaration (instead of the raw payload) is what makes duplication
+ * impossible: there is exactly one place where the window/base is declared.
+ */
+export const renderAnalyticsEvidence = (
+  declared: AnalyticsEnvelopeResult,
+  options: RenderAnalyticsEvidenceOptions = {},
+): string => {
+  const budget = Number.isFinite(options.charBudget) ? Math.floor(options.charBudget as number) : ANALYTICS_EVIDENCE_CHARS;
+  if (!declared.ok) {
+    return capWithMarker(
+      `${ANALYTICS_EVIDENCE_UNAVAILABLE_PREFIX} ${declared.message} Nenhum número desta leitura pode ser afirmado.`,
+      budget,
+    );
+  }
+  const response = declared.response;
+  const period = readPeriod(response['effectivePeriod']);
+  // Um envelope `ok` sempre tem período; a checagem é a rede de segurança para
+  // um chamador que construiu o objeto à mão.
+  if (!period) {
+    return capWithMarker(
+      `${ANALYTICS_EVIDENCE_UNAVAILABLE_PREFIX} a resposta não traz a janela efetiva; nenhum envelope é declarado. Nenhum número desta leitura pode ser afirmado.`,
+      budget,
+    );
+  }
+  const declaredBasis = isAnalyticsBasis(response['basis']) ? response['basis'] : null;
+  const requestedBasis = isAnalyticsBasis(response['agentRequestedBasis']) ? response['agentRequestedBasis'] : null;
+  const exactTotal = typeof response['totalCentsExact'] === 'string' ? response['totalCentsExact'] : null;
+  const approximate = response['approximate'] === true;
+  const emptyReason = typeof response['emptyReason'] === 'string' && response['emptyReason'] !== ''
+    ? response['emptyReason']
+    : null;
+  const parts = [
+    options.tool ? `tool: ${options.tool}` : null,
+    `janela: ${period.from} a ${period.to}${period.toExclusive ? ` (limite exclusivo ${period.toExclusive}` : ''}, fronteira ${boundaryLabel(response['boundary'])}${period.toExclusive ? ')' : ''}`,
+    declaredBasis
+      ? `base efetiva: ${declaredBasis}`
+      : `base pedida: ${requestedBasis ?? DEFAULT_ANALYTICS_BASIS} (a leitura não declarou base efetiva)`,
+    readNumber(response['transactionCount']) === null ? null : `lançamentos: ${String(response['transactionCount'])}`,
+    typeof response['asOf'] === 'string' ? `apurado em: ${response['asOf']}` : null,
+    typeof response['semanticsVersion'] === 'string' ? `semântica: ${response['semanticsVersion']}` : null,
+    exactTotal === null ? null : `total exato: ${exactTotal}${approximate ? ' (double aproximado — o decimal é a prova)' : ''}`,
+    emptyReason === null ? null : `sem lançamentos: ${emptyReason}`,
+  ].filter((part): part is string => part !== null && part !== '');
+  return capWithMarker([`${ANALYTICS_EVIDENCE_PREFIX} —`, ...parts].join(' '), budget);
+};
+
 export const declareAnalyticsEnvelope = (
   response: unknown,
   options: DeclareAnalyticsEnvelopeOptions = {},

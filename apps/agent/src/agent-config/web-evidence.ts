@@ -262,8 +262,25 @@ const renderSource = (source: WebEvidenceSource): string => {
   return source.excerpt === '' ? head : `${head} | trecho: "${source.excerpt}"`;
 };
 
-/** Provider item shape handed back to the model; keys stay the caller's own. */
-export type ExternalResultItem = { title: string; url: string; snippet: string };
+/**
+ * Provider item shape handed back to the model; keys stay the caller's own plus
+ * the citation marker.
+ */
+export type ExternalResultItem = {
+  /** Citation marker the model quotes for this source (`[F1]`, `[F2]`, …). */
+  marker: string;
+  title: string;
+  url: string;
+  snippet: string;
+  /**
+   * Provider publication date, verbatim from the provider (absent when the
+   * provider did not supply one). It travels with the item so the envelope
+   * built from this very list declares `publicado: <data>` instead of losing
+   * the provider's answer to "não informado"; the envelope re-validates it and
+   * drops an unparseable value.
+   */
+  publishedAt?: string;
+};
 
 /**
  * The provider result set, filtered to what the envelope is willing to cite.
@@ -271,17 +288,28 @@ export type ExternalResultItem = { title: string; url: string; snippet: string }
  * envelope rejected (non-fetchable URL) must not come back through it, and a
  * page cannot forge `[F2]`/`AVISO:` in the fields the model reads first. Same
  * URL validation and same marker neutralisation as the envelope; keys/shape
- * unchanged for the existing consumers.
+ * unchanged for the existing consumers, plus the citation marker.
+ *
+ * **A12 follow-up — marcadores `[F1]`, `[F2]`…** The numbering is the SAME
+ * sequence the envelope assigns (same order, same validation), so the marker a
+ * claim carries and the provenance line it points at can never disagree. A
+ * rejected item does NOT consume a number: markers follow the SURVIVORS, which
+ * is what stops the model from citing a source that was dropped.
  */
 export const filterExternalResults = (items: readonly WebEvidenceSourceInput[]): ExternalResultItem[] => {
   const out: ExternalResultItem[] = [];
   for (const item of items ?? []) {
     const url = validatedUrl(item?.url);
     if (!url) continue;
+    const publishedAt = typeof item?.publishedAt === 'string' && item.publishedAt.trim() !== ''
+      ? item.publishedAt.trim()
+      : undefined;
     out.push({
+      marker: `[F${out.length + 1}]`,
       title: neutraliseMarkers(String(item?.title ?? '')),
       url: url.toString(),
       snippet: neutraliseMarkers(String(item?.snippet ?? '')),
+      ...(publishedAt === undefined ? {} : { publishedAt }),
     });
   }
   return out;

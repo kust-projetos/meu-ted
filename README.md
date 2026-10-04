@@ -9,7 +9,7 @@ capability, confirmação e idempotência.
 
 | Componente | Responsabilidade | Runtime |
 | --- | --- | --- |
-| `apps/api` | Fonte de verdade financeira, Better-Auth, autorização de workspace e pending operations V2 | Hostinger VPS + PostgreSQL 16 |
+| `apps/api` | Fonte de verdade financeira, Better-Auth, autorização de workspace e pending operations V2 | Contabo VPS (migrada em 2026-10-03) + PostgreSQL 16 |
 | `apps/pwa` | Cliente web/mobile canônico e proxies same-origin privados | Cloudflare Pages/Workers + OpenNext |
 | `apps/agent` | TED V2: orquestração, memória conversacional e decisão de aprovação delegada | Cloudflare Workers + Durable Objects |
 | `apps/codex-broker` | Broker isolado para provider Codex; sem capability financeira ou acesso a PostgreSQL | Container Node 22 |
@@ -35,7 +35,7 @@ não são componentes ativos nem fontes de produção.
 
 - **Borda (Cloudflare):** PWA (`apps/pwa`, OpenNext) e Agent (`apps/agent`,
   Workers + Durable Objects) deployados por workflows com gate same-SHA.
-- **Backend (Hostinger VPS):** `apps/api` em container com PostgreSQL 16 local,
+- **Backend (Contabo VPS):** `apps/api` em container com PostgreSQL 16 local,
   exposto sob HTTPS; API nunca roda no setup local de produção.
 - **Autenticação:** Better-Auth (email/senha com convites administrativos);
   resolução de workspace e permissões é integralmente server-side.
@@ -45,7 +45,7 @@ Detalhes em [Arquitetura atual](docs/ARCHITECTURE-CURRENT.md).
 ## Requisitos
 
 - Node.js `>= 22.12.0`
-- pnpm `>= 9.0.0` (o CI usa pnpm 10)
+- pnpm `>= 10` (mesma major que o CI fixa via `pnpm/action-setup`)
 - PostgreSQL 16 local descartável para `test:integration`
 
 ## Desenvolvimento local
@@ -109,8 +109,9 @@ scripts/                # Gates de qualidade, governança e validação
 - **PWA e Agent:** Cloudflare via `workflow_run` pós-CI em `main`
   (`.github/workflows/pwa-deploy.yml`, `.github/workflows/agent-deploy.yml`),
   com gates de fork fail-closed e same-SHA.
-- **API:** Hostinger VPS (`pi-stack`) — imagem publicada no GHCR por digest na
-  `main`, com backup pré-release e tags de rollback preservadas.
+- **API:** Contabo VPS (Docker + Compose + Traefik; migrada da Hostinger em
+  2026-10-03, que não mantém mais o pi-financeiro) — imagem publicada no GHCR
+  por digest na `main`, com backup pré-release e tags de rollback preservadas.
 - `../pi-finance-web` está **depreciado**: nunca usar para auditoria, deploy ou
   como origem de produção.
 

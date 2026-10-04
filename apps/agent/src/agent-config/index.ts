@@ -74,12 +74,15 @@ export type {
 export {
   ANALYTICS_BASES,
   ANALYTICS_BOUNDARY,
+  ANALYTICS_EVIDENCE_CHARS,
+  ANALYTICS_EVIDENCE_UNAVAILABLE_PREFIX,
   ANALYTICS_QUERY_REJECTIONS,
   DEFAULT_ANALYTICS_BASIS,
   MAX_SAFE_CENTS,
   PERIOD_IGNORING_TOOLS,
   declareAnalyticsEnvelope,
   normalizeAnalyticsQuery,
+  renderAnalyticsEvidence,
 } from './analytics-envelope.js';
 export type {
   AnalyticsBasis,
@@ -91,6 +94,7 @@ export type {
   NormalizeAnalyticsQueryResult,
   NormalizedAnalyticsQuery,
   PeriodIgnoringTool,
+  RenderAnalyticsEvidenceOptions,
 } from './analytics-envelope.js';
 
 import { buildSystemPrompt, INSTRUCTIONS_VERSION } from './instructions.js';

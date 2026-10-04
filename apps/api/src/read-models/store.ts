@@ -11,8 +11,19 @@ import { DEMO_ACCOUNTS, DEMO_CATEGORIES, DEMO_TRANSACTIONS, DEMO_HOUSEHOLD_ID } 
 import type { Account, Category, Transaction, TransactionFilters } from '../types/domain.js';
 import { transactionFiltersSchema, type ParsedTransactionFilters } from '../types/transactions.js';
 
+/**
+ * A08 (R08): availability opt-in for the account listing.
+ *
+ * `includeInactive` widens the READ to also return deactivated accounts
+ * (`status = 'inactive'`). Absent/false is the historical active-only read,
+ * byte for byte - the default never moves.
+ */
+export type ListAccountsOptions = {
+  includeInactive?: boolean;
+};
+
 export type ReadModelStore = {
-  listAccounts(householdId: string): Promise<Account[]>;
+  listAccounts(householdId: string, options?: ListAccountsOptions): Promise<Account[]>;
   listCategories(householdId: string): Promise<Category[]>;
   listTransactions(
     householdId: string,
@@ -46,8 +57,15 @@ export const createInMemoryReadModelStore = (seed?: {
   const deletedIds = seed?.deletedTransactionIds ?? new Set<string>();
 
   return {
-    async listAccounts(householdId) {
-      return accounts.filter((a) => a.householdId === householdId && a.status === 'active' && a.kind !== 'credit_card');
+    async listAccounts(householdId, options) {
+      // A08: the availability filter is the ONLY thing `includeInactive`
+      // relaxes. The workspace scope and the credit-card exclusion (cards are
+      // served by the CardStore, never borrowed into this surface) hold in
+      // both branches.
+      const includeInactive = options?.includeInactive === true;
+      return accounts.filter(
+        (a) => a.householdId === householdId && (includeInactive || a.status === 'active') && a.kind !== 'credit_card',
+      );
     },
     async listCategories(householdId) {
       return categories.filter((c) => c.householdId === householdId && c.status === 'active');

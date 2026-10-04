@@ -36,6 +36,10 @@ const stubReads = (accountsPayload: unknown): ChannelReadTools => {
     listBudgets: fail,
     listGoals: fail,
     listCategories: fail,
+    // A09-int: the analytics reads are their own evidence reads; none of these
+    // balance turns plans them.
+    analyticsKpis: fail,
+    analyticsCategoryBreakdown: fail,
   };
 };
 

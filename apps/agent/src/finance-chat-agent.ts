@@ -63,6 +63,7 @@ import {
   type TurnPlan,
 } from "./orchestration/conversation-orchestrator.js";
 import { classifyError, emitSanitizedEvent } from "./observability/events.js";
+import { judgmentProviderForDo, type JudgmentEnv, type JudgmentProvider } from "./judgment/provider.js";
 import { routeIntent } from "./orchestration/intent-router.js";
 import { createChannelGrounding } from "./orchestration/channel-evidence.js";
 import type { EvidenceEnvelope } from "./evidence/evidence-envelope.js";
@@ -604,6 +605,21 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // Drafts degrade to single-turn clarification without storage.
       }
     }
+  }
+
+  /**
+   * A16 follow-up — the ONE `JudgmentProvider` instance of THIS Durable Object.
+   *
+   * The breaker and the 1-call-per-turn cap live in the instance, so it is
+   * resolved once per DO and reused by every turn of the same workspace: a
+   * per-call factory would renew the turn budget and forget an open circuit on
+   * every turn. Two DOs never share state (the registry is keyed by the DO
+   * instance), and the provider stays DEFAULT-OFF — G04 is open, so this
+   * accessor is only the seam for the future wiring: no hot path calls it yet,
+   * and nothing here can grant permission.
+   */
+  judgmentProvider(): JudgmentProvider {
+    return judgmentProviderForDo(this, { env: (this.env ?? {}) as JudgmentEnv });
   }
 
   /** DO SQLite handle or null (tests, degraded storage). */

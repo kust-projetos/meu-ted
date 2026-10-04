@@ -26,7 +26,12 @@
 import { jsonSchema, tool } from 'ai';
 import { generatedHttpTools } from '../generated/http-tools.js';
 import { ALL_SKILLS } from './skills/index.js';
-import { declareAnalyticsEnvelope, normalizeAnalyticsQuery, type AnalyticsBasis } from './analytics-envelope.js';
+import {
+  declareAnalyticsEnvelope,
+  normalizeAnalyticsQuery,
+  renderAnalyticsEvidence,
+  type AnalyticsBasis,
+} from './analytics-envelope.js';
 import {
   WEB_UNAVAILABLE_MESSAGE,
   createWebSearchProvider,
@@ -410,8 +415,13 @@ export const buildExposedTools = (
           const enveloped = declareAnalyticsEnvelope(response, {
             ...(basisIntent.basis ? { requestedBasis: basisIntent.basis } : {}),
           });
-          if (!enveloped.ok) return { ok: false, reason: enveloped.reason, message: enveloped.message };
-          return enveloped.response;
+          // The proof block is ADDITIVE (the payload is untouched) and mirrors
+          // the web tools: whatever the model states about these numbers can be
+          // tied to the window/basis that produced them. A refusal carries the
+          // declared degradation instead of the numbers it refuses to vouch for.
+          const proof = renderAnalyticsEvidence(enveloped, { tool: name });
+          if (!enveloped.ok) return { ok: false, reason: enveloped.reason, message: enveloped.message, evidence: proof };
+          return { ...enveloped.response, evidence: proof };
         },
       });
       continue;

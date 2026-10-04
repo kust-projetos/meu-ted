@@ -199,7 +199,7 @@
     "/accounts": {
       "get": {
         "operationId": "list_accounts",
-        "summary": "List active accounts",
+        "summary": "List accounts (active only by default; includeInactive also returns deactivated ones)",
         "x-pi-tool": {
           "label": "List Accounts",
           "result": {
@@ -240,6 +240,20 @@
                 "cash",
                 "credit_card"
               ]
+            }
+          },
+          {
+            "name": "includeInactive",
+            "in": "query",
+            "required": false,
+            "x-pi-context": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ],
+              "description": "Opt-in: pass \"true\" to also return deactivated accounts (status inactive). Omitted or \"false\" keeps the active-only read. Workspace-scoped; credit cards are never included."
             }
           }
         ],

@@ -82,7 +82,7 @@ describe('H-14: revogação fail-closed + epoch comparado durante a resposta', (
       // serve usable-but-not-deterministically-renderable budget evidence so
       // this turn reaches the relay and the epoch check still applies.
       if (u.includes('/budgets')) {
-        return new Response(JSON.stringify({ budgets: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
+        return new Response(JSON.stringify({ items: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
       }
       return new Response('not found', { status: 404 });
     }) as unknown as typeof fetch;
@@ -138,7 +138,7 @@ describe('H-14: revogação fail-closed + epoch comparado durante a resposta', (
       // T3.1: evidence must be usable so the turn reaches inference (see
       // test 1); the authority failure under test happens after the relay.
       if (u.includes('/budgets')) {
-        return new Response(JSON.stringify({ budgets: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
+        return new Response(JSON.stringify({ items: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
       }
       return new Response('not found', { status: 404 });
     }) as unknown as typeof fetch;
@@ -163,7 +163,7 @@ describe('H-14: revogação fail-closed + epoch comparado durante a resposta', (
       // T3.1: evidence must be usable so the turn reaches inference (see
       // test 1); the disable under test happens after the relay.
       if (u.includes('/budgets')) {
-        return new Response(JSON.stringify({ budgets: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
+        return new Response(JSON.stringify({ items: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
       }
       return new Response('not found', { status: 404 });
     }) as unknown as typeof fetch;
@@ -192,7 +192,7 @@ describe('H-14: revogação fail-closed + epoch comparado durante a resposta', (
       // T3.1: evidence must be usable so the turn reaches inference (see
       // test 1); the relay failure under test happens after the read.
       if (u.includes('/budgets')) {
-        return new Response(JSON.stringify({ budgets: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
+        return new Response(JSON.stringify({ items: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
       }
       return new Response('not found', { status: 404 });
     }) as unknown as typeof fetch;

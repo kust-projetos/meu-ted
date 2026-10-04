@@ -276,7 +276,7 @@ describe('item5: /rpc/chat via relay com failover restrito', () => {
 
   it('primario 429 + fallback configurado => 1 fallback distinto, user persiste 1x, output final grounded', async () => {
     const { agent, persisted } = createChatAgent(SNAP_FALLBACK);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
     const relayCalls: Array<{ provider: string; model: string }> = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (info, init) => {
       const url = String(info);
@@ -313,7 +313,7 @@ describe('item5: /rpc/chat via relay com failover restrito', () => {
 
   it('403 model_not_allowlisted preserva code/status e nao tenta fallback', async () => {
     const { agent } = createChatAgent(SNAP_FALLBACK);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
     let relayCalls = 0;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (info) => {
       const url = String(info);
@@ -334,7 +334,7 @@ describe('item5: /rpc/chat via relay com failover restrito', () => {
 
   it('epoch muda entre pernas => 409 sem fallback nem output', async () => {
     const { agent, persisted } = createChatAgent(SNAP_FALLBACK);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
     let configCalls = 0;
     let relayCalls = 0;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (info) => {
@@ -361,7 +361,7 @@ describe('item5: /rpc/chat via relay com failover restrito', () => {
       fallback_model_id: null,
       fallback_model_name: null,
     });
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
     let relaySeen = false;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (info) => {
       const url = String(info);
@@ -380,7 +380,7 @@ describe('item5: /rpc/chat via relay com failover restrito', () => {
 
   it('ambas falham => 502 composto seguro, sem vazar provider', async () => {
     const { agent } = createChatAgent(SNAP_FALLBACK);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (info, init) => {
       const url = String(info);
       if (url.includes('/internal/agent/llm-config')) {

@@ -1,6 +1,6 @@
 {
   "version": "1.2.0",
-  "lastVerified": "2026-09-21",
+  "lastVerified": "2026-10-04",
   "activeWorkspaces": [
     "apps/api",
     "apps/pwa",
@@ -10,7 +10,7 @@
     "api": {
       "name": "meu-ted-api",
       "framework": "Fastify",
-      "runtime": "Node.js (Hostinger VPS)"
+      "runtime": "Node.js (Contabo VPS)"
     },
     "pwa": {
       "name": "pwa",
@@ -29,8 +29,8 @@
   },
   "counts": {
     "apiRoutes": 127,
-    "databaseMigrations": 55,
-    "latestMigration": "V057__statement_payment_household_fk.sql",
+    "databaseMigrations": 57,
+    "latestMigration": "V059__pending_operation_authorization.sql",
     "capabilitiesTotal": 72,
     "capabilitiesInApiMode": 51
   },
@@ -42,7 +42,7 @@
     "deprecatedOrigin": "../pi-finance-web"
   },
   "production": {
-    "vpsProvider": "Hostinger VPS",
+    "vpsProvider": "Contabo VPS",
     "edgeProvider": "Cloudflare",
     "database": "PostgreSQL 16+"
   }

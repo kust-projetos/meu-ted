@@ -11,9 +11,13 @@ export type EvidenceStatus = 'ok' | 'empty' | 'error';
  * - `EntityResolutionOutcome`: entity resolution (`found` / `ambiguous`), a
  *   different axis from read absence and from the mutation cycle.
  *
- * `workspace_empty` is part of the vocabulary but has NO producer yet: proving
- * a globally empty workspace needs the consistent multi-read snapshot of A09
- * (A04 block b). Until then a channel can only state its own scope.
+ * `workspace_empty` is the only reason that is about the WORKSPACE instead of
+ * the requested scope, so its producer is deliberately narrow (A04 block b):
+ * `createChannelGrounding`'s collector emits it ONLY when a consistent
+ * multi-read snapshot came back entirely empty — two or more distinct read
+ * sources, every item `empty`, no failure, and no scope-narrowing absence
+ * (`period_empty`/`category_empty`/`filter_empty`, which prove that data
+ * exists outside the consulted scope). A single read states its own scope.
  */
 export const READ_ABSENCE_REASONS = [
   'workspace_empty',
@@ -116,26 +120,49 @@ export const classifyReadFailure = (error: unknown): ReadFailureReason => {
   return 'unavailable';
 };
 
+/**
+ * A rejection of the ENVELOPE ITSELF (a collected item violated the contract,
+ * or the projection blew the payload cap) is deterministic: re-reading the same
+ * collection yields the same rejection, so it is a permanent failure and
+ * never a retryable transport symptom. The typed reason travels on the thrown
+ * error so a collector that catches it can preserve it instead of degrading
+ * every rejection into `unavailable`.
+ */
+const envelopeRejection = (message: string): Error =>
+  Object.assign(new Error(message), { reason: 'permanent_error' as const });
+
+/**
+ * A19 — reason for a REJECTED envelope. A rejection that already carries a
+ * typed failure reason keeps it; anything untyped degrades through the
+ * transport classifier, whose floor is `unavailable`. A reason from the
+ * absence axis is never adopted here: `resolveEnvelopeRejection` answers a
+ * FAILURE question, and crossing the axes is exactly what R04 forbids.
+ */
+export const resolveEnvelopeRejection = (error: unknown): ReadFailureReason => {
+  const reason = (error as { reason?: unknown } | null | undefined)?.reason;
+  return isFailureReason(reason) ? reason : classifyReadFailure(error);
+};
+
 export const createEvidenceEnvelope = (items: readonly EvidenceInput[], options: { allowedFields?: readonly string[] } = {}): EvidenceEnvelope => {
   const projected = items.map((item) => {
-    if (!item.ref || !item.source || Number.isNaN(Date.parse(item.retrievedAt))) throw new Error('evidence.invalid');
+    if (!item.ref || !item.source || Number.isNaN(Date.parse(item.retrievedAt))) throw envelopeRejection('evidence.invalid');
     const status = item.status ?? (item.data == null ? 'empty' : 'ok');
     const base = { ref: item.ref, source: item.source, retrievedAt: item.retrievedAt, data: project(item.data, options.allowedFields) };
     // Whitelist validation per axis: an unknown/off-axis reason (raw text
     // included) invalidates the item instead of reaching the prompt.
     if (status === 'ok') {
-      if (item.reason !== undefined) throw new Error('evidence.invalid');
+      if (item.reason !== undefined) throw envelopeRejection('evidence.invalid');
       return { ...base, status } satisfies EvidenceItem;
     }
     if (status === 'empty') {
-      if (!isAbsenceReason(item.reason) && item.reason !== undefined) throw new Error('evidence.invalid');
+      if (!isAbsenceReason(item.reason) && item.reason !== undefined) throw envelopeRejection('evidence.invalid');
       return { ...base, status, ...(item.reason === undefined ? {} : { reason: item.reason }) } satisfies EvidenceItem;
     }
-    if (status !== 'error' || (!isFailureReason(item.reason) && item.reason !== undefined)) throw new Error('evidence.invalid');
+    if (status !== 'error' || (!isFailureReason(item.reason) && item.reason !== undefined)) throw envelopeRejection('evidence.invalid');
     return { ...base, status, ...(item.reason === undefined ? {} : { reason: item.reason }) } satisfies EvidenceItem;
   });
   const envelope = { version: '1', items: projected } satisfies EvidenceEnvelope;
-  if (new TextEncoder().encode(JSON.stringify(envelope)).byteLength > MAX_PAYLOAD_BYTES) throw new Error('evidence.payload_too_large');
+  if (new TextEncoder().encode(JSON.stringify(envelope)).byteLength > MAX_PAYLOAD_BYTES) throw envelopeRejection('evidence.payload_too_large');
   return deepFreeze(envelope);
 };
 

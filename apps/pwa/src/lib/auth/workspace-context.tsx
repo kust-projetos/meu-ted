@@ -158,7 +158,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
    * Load generation: every boot/refresh captures `seq` + the principal seen
    * at start. After EACH await the callback must confirm it is still the
    * latest request for the same principal before ANY setState, header write,
-   * or preference write — otherwise a stale fetch (A) resolving after a
+   * or preference write — otherwise a stale request (A) resolving after a
    * logout/login (B) would apply A's list/header/preference under B.
    */
   const loadSeqRef = useRef(0);

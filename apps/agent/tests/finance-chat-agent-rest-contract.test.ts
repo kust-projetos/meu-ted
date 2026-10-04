@@ -162,7 +162,7 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
     // T3.1 (SPEC §14): "Quanto gastei este mês?" is a finance-seeking read,
     // so it requires evidence. Empty evidence keeps the grounded path: the
     // relay text carries no financial claim and passes validation unchanged.
-    vi.spyOn(apiClient, "requestPiApiJson").mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, "requestPiApiJson").mockResolvedValue({ items: [], total: 0 });
     // Claim-free relay text (no amounts/dates/names): grounded validation
     // passes it through verbatim, preserving this test's attribution focus.
     const RELAY_TEXT = "Aqui está o resumo das suas movimentações.";

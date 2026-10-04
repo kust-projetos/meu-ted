@@ -1,8 +1,11 @@
 name: Release B Gate Reminder
 
 # V4.1 closure follow-up: reminds the owner to verify the Release B (D11)
-# bearer-removal gate once the 14-day legacy_bearer_used window closes on
-# 2026-10-02. This workflow NEVER touches production (no SSH, no secrets);
+# bearer-removal gate once the 14-day legacy_bearer_used window closes.
+# The window restarted at the 2026-10-03 VPS migration cutover (last event
+# 2026-10-02T21:36:06Z), so the gate is 2026-10-16T21:36:06Z — see
+# docs/reports/2026-10-03-vps-migration-contabo.md.
+# This workflow NEVER touches production (no SSH, no secrets);
 # it only opens a single idempotent reminder issue.
 on:
   schedule:
@@ -26,16 +29,16 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const GATE_DATE = '2026-10-15';
-            const WINDOW_START = '2026-10-01T20:14:00Z';
+            const WINDOW_START = '2026-10-02T21:36:06Z';
+            const GATE_AT = '2026-10-16T21:36:06Z';
             const LABEL = 'release-b-gate';
             const TITLE = 'Release B gate — conferir janela D11-R2 (legacy_bearer_used)';
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
-            const today = new Date().toISOString().slice(0, 10);
-            core.info(`today=${today} gate=${GATE_DATE}`);
-            if (today < GATE_DATE) {
+            const now = new Date().toISOString();
+            core.info(`now=${now} window_start=${WINDOW_START} gate=${GATE_AT}`);
+            if (now < GATE_AT) {
               core.info('D11 window still open — exiting silently, no issue.');
               return;
             }
@@ -64,7 +67,7 @@ jobs:
                   repo,
                   name: LABEL,
                   color: 'B60205',
-                  description: 'Release B bearer-removal gate (D11 window)',
+                  description: 'Release B bearer-removal gate (D11 window closing 2026-10-16T21:36:06Z)',
                 });
                 core.info(`Created missing label '${LABEL}'.`);
               } else {
@@ -73,19 +76,19 @@ jobs:
             }
 
             const body = [
-              'A janela D11-R2 do gate Release B fechou em **2026-10-15** (14 dias desde 2026-10-01T20:14Z, reaberta após o sink durável dos PRs #51/#52).',
-              'A janela original (gate 2026-10-02) ficou INCONCLUSIVA: o evento só ia para logs pino do container, recriado nos deploys.',
+              'A janela D11-R2 do gate Release B (reiniciada) fecha em **2026-10-16T21:36:06Z** — 14 dias após o último evento `auth.request.legacy_bearer_used` em `2026-10-02T21:36:06Z`.',
+              'Reinício no corte de migração para a VPS Contabo (2026-10-03): 115 eventos na janela anterior (≥ `2026-10-01T20:14Z`), idênticos nas duas origens. Substitui o gate de 2026-10-15 (D11-R2 original) e o de 2026-10-02 (INCONCLUSIVO — o evento só ia para logs pino do container, recriados nos deploys).',
               '',
               '## Consulta read-only na VPS Contabo (somente SELECT; DB canônico, shape canônico)',
               '',
-              '**Rodar na Contabo `deploy@<ip-vps-contabo>`** — origem ativa do `pi-financeiro` desde a migração de 2026-10-03 (`docs/reports/2026-10-03-vps-migration-contabo.md`). A Hostinger está CONGELADA no instante do corte e retornaria 0 eventos = falso PASS.',
+              '**Rodar na Contabo `deploy@<ip-vps-contabo>`** — única origem do `pi-financeiro` desde a migração de 2026-10-03 (`docs/reports/2026-10-03-vps-migration-contabo.md`). O pi-financeiro foi REMOVIDO da Hostinger no mesmo dia: qualquer consulta lá não verifica a janela (0 eventos = falso PASS).',
               '',
               '```sh',
               'docker exec -i pi-finance-postgres psql -U postgres -d pi_financeiro_canonical \\',
-              '  -c "SELECT COUNT(*), MIN(created_at), MAX(created_at) FROM audit_logs WHERE event_type = \'auth.request.legacy_bearer_used\' AND created_at >= \'2026-10-01T20:14:00Z\';"',
+              '  -c "SELECT COUNT(*), MIN(created_at), MAX(created_at) FROM audit_logs WHERE event_type = \'auth.request.legacy_bearer_used\' AND created_at > \'2026-10-02T21:36:06Z\';"',
               '```',
               '',
-              '(O evento de 2026-10-01T20:13:42Z é o smoke pré-janela documentado — o filtro acima o exclui.)',
+              '(O filtro `> 2026-10-02T21:36:06Z` é EXCLUSIVO no evento âncora: exclui os 115 eventos da janela anterior, o smoke pré-janela de 2026-10-01T20:13:42Z E o próprio evento âncora que reiniciou a contagem — sem isso o gate nunca zeraria.)',
               '',
               '## Critério',
               '',
@@ -94,6 +97,8 @@ jobs:
               '',
               '## Referências',
               '',
+              '- `docs/reports/2026-10-03-vps-migration-contabo.md` (evidência da janela no corte)',
+              '- `docs/ARCHITECTURE-CURRENT.md` (janela Release B vigente)',
               '- `CHANGELOG.md` Unreleased 2026-10-01 (seção Release B)',
               '- `docs/reports/v4.1-decision-gates.md` (D11)',
               '',

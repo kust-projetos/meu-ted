@@ -12,7 +12,19 @@ import type { ApprovalPolicy } from '../approvals/policy.js';
 import type { PendingOperationStore } from '../approvals/pending.js';
 import { attachMutationReceipt } from '../reconciliation/effects-registry.js';
 
-export const accountQuerySchema = z.object({ kind: z.enum(['bank', 'cash', 'credit_card']).optional() });
+/**
+ * A08: opt-in widening flags are a CLOSED two-value enum on the wire, never
+ * `Boolean(raw)` — `Boolean('false')` is `true`, which would silently turn an
+ * explicit "off" into the widest read. Query params arrive as strings, so the
+ * contract is the string form (`kind` uses the same shape), and anything
+ * outside the enum is rejected with `validation.error`: a typo fails loudly
+ * instead of quietly widening or quietly hiding.
+ */
+export const accountQuerySchema = z.object({
+  kind: z.enum(['bank', 'cash', 'credit_card']).optional(),
+  /** Also return deactivated accounts (`true`). Default: active only. */
+  includeInactive: z.enum(['true', 'false']).optional(),
+});
 const querySchema = accountQuerySchema;
 
 export const registerAccountRoutes = (
@@ -56,7 +68,9 @@ export const registerAccountRoutes = (
     const parsed = querySchema.safeParse(req.query ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
     try {
-      let items = await opts.store.listAccounts(ctx.householdId);
+      // A08: the opt-in reaches the store only when explicitly true; the read
+      // stays workspace-scoped through `ctx.householdId` in both branches.
+      let items = await opts.store.listAccounts(ctx.householdId, { includeInactive: parsed.data.includeInactive === 'true' });
       if (parsed.data.kind) items = items.filter((a) => a.kind === parsed.data.kind);
       return reply.code(200).send({ items, total: items.length });
     } catch (e) { return handleError(e, reply); }

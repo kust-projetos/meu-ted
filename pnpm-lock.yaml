@@ -129,9 +129,6 @@ importers:
       '@types/web-push':
         specifier: ^3.6.4
         version: 3.6.4
-      prettier:
-        specifier: 3.6.2
-        version: 3.6.2
       tsx:
         specifier: ^4.19.2
         version: 4.22.3

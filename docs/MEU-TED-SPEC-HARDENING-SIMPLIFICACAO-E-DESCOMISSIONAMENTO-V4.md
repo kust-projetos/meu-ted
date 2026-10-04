@@ -437,7 +437,7 @@ O gate deve possuir comandos semanticamente distintos: `typecheck` e `lint`. `li
 
 ### J2. Cobertura
 
-Aplicar analisador estático real a `apps/api`, `apps/agent`, `apps/codex-broker`. ESLint, Oxlint, Biome ou equivalente pode ser utilizado. A escolha da ferramenta não faz parte da arquitetura. Estado atual (2026-10-02): resolvido — Biome 2.2.4 ativo em `apps/api`, `apps/agent` e `apps/codex-broker` (`biome check src tests`; formatter/assist desligados; regras selecionadas em `biome.json` na raiz), PWA mantém ESLint 9 (`eslint-config-next` + TypeScript). Cobertura pendente: `packages/llm-contracts` não tem lint dedicado (ver `docs/reports/2026-10-02-repo-config-audit.md`).
+Aplicar analisador estático real a `apps/api`, `apps/agent`, `apps/codex-broker`. ESLint, Oxlint, Biome ou equivalente pode ser utilizado. A escolha da ferramenta não faz parte da arquitetura. Estado atual (2026-10-02): resolvido — Biome 2.2.4 ativo em `apps/api`, `apps/agent` e `apps/codex-broker` (`biome check src tests`; formatter/assist desligados; regras selecionadas em `biome.json` na raiz), PWA mantém ESLint 9 (`eslint-config-next` + TypeScript). Cobertura de `packages/llm-contracts` também resolvida (2026-10-04): Biome 2.2.4 (`biome check src`), `tsc --noEmit` e `vitest run` (23 testes) ligados aos agregados da raiz (`lint`, `typecheck`, `test`) e ao job de CI (achado 2 de `docs/reports/2026-10-02-repo-config-audit.md`).
 
 ### J3. Categorias mínimas
 

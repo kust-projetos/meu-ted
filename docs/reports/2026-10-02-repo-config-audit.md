@@ -69,6 +69,14 @@ Levantamento read-only (explorer) sobre `package.json` (raiz + 6 workspaces), wo
 4. **Aposentadoria legacy** (achados 7-9) — já rastreada como cutover residual; não iniciada nesta sessão.
 5. *(resolvido nesta sessão, escopo "melhore o AGENTS.md")* Regra 5 agora inclui `pnpm lint` — resolve o achado 11 e passa a ser a ÚNICA cobertura de lint de Agent/Broker (o CI não roda lint desses workspaces; ver achado 13).
 
+### Encerramento 2026-10-04 (sessão de closure de pendências)
+
+- **Item 1 (llm-contracts)** — **RESOLVIDO** em `a42c0d5` (verificado ao vivo: `test`/`lint` agregados na raiz incluem o pacote, `run-workspace-gate.mjs` cobre typecheck, `ci.yml` executa; 23/23 testes). Doc stale do SPEC V4 corrigida.
+- **Item 2 (Prettier)** — **RESOLVIDO (remoção)**: scripts `format:check`/`format` e devDep removidos do `apps/api`; `format:reminders:check` + `scripts/check-reminder-format.mjs` (phantom dependency de prettier) removidos; `pnpm install --frozen-lockfile` consistente; 0 referências em gates/CI/manifests. Formatter ativo: Biome.
+- **Item 3 (floor de pnpm)** — **RESOLVIDO**: raiz, README, AGENTS.md e `apps/codex-broker` em `>=10` (CI fixa `version: '10'` nos 13 usos de `pnpm/action-setup`; lockfile 9.0 compatível).
+- **Item 4 (aposentadoria legacy)** — **PARCIAL**: allowlist morta do `whatsapp-bridge` removida do `check-pwa-audit` e a governança morta (`check-pwa-audit.mjs` + teste + 4 fixtures, inexecutável e órfã) removida; residual em disco (`apps/whatsapp-bridge/node_modules`) segue para a decisão de cutover (gate humano).
+- **Bônus do closure:** janela Release B realinhada em ROADMAP/ARCHITECTURE-CURRENT/`release-b-reminder.yml` (`WINDOW_START=2026-10-02T21:36:06Z`, gate `2026-10-16T21:36:06Z`, comparação por timestamp ISO); Hostinger→Contabo nos fatos canônicos (README, ARCHITECTURE-CURRENT, AGENTS.md, `runtime-facts.json` regenerado com V059 + contrato de fatos com asserções negativas); falso positivo do `check-pwa-command-boundary` corrigido (comentário com "fetch (" no texto).
+
 ## 8. Evidências e limites
 
 - Gates executados localmente (Windows, pnpm 10.34.1, Node 22): ver seção 4. Duração individual de cada gate rápido: segundos (fs/git walk, sem build). Gates finais desta sessão: `docs:lint` PASS (12/0), `governance:check` sem mudança D01–D19, `typecheck` 4/4 workspaces OK, `pnpm lint` exit 0 (warnings preexistentes em arquivos fora do diff: in-memory stores api 138, agent e2e 4, pwa eslint 27 — 0 erros), `pnpm test` PASS (API — chain `&&` provado; Agent 812/1skip; Broker 25/25; PWA 2282/2282).
