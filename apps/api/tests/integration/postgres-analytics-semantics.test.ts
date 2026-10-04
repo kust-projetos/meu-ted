@@ -31,7 +31,7 @@ import { createInMemoryReadModelStore } from '../../src/read-models/store.js';
 import { createInMemoryCardStore } from '../../src/cards/in-memory.js';
 import { createInMemoryStores } from '../../src/writes/in-memory.js';
 import type { Account, Category } from '../../src/types/domain.js';
-import { analyticsFixture, fixtureCase, fixtureTransactions } from '../fixtures/analytics-semantics-dataset.js';
+import { analyticsFixture, fixtureCase, fixtureTransactions, householdOf } from '../fixtures/analytics-semantics-dataset.js';
 
 const DB_URL = process.env.DATABASE_URL_TEST;
 const ENABLED = Boolean(DB_URL && process.env.DB_TEST_MARKER);
@@ -58,8 +58,7 @@ const uuidFor = (symbolic: string): string => {
 
 const expectedOf = <T = Record<string, any>>(id: string): T => fixtureCase(id).expected as T;
 
-async function seedHousehold(db: Pool): Promise<string> {
-  const id = randomUUID();
+async function seedHousehold(db: Pool, id: string): Promise<string> {
   const ownerId = randomUUID();
   await db.query(`INSERT INTO users (id, email, name, status) VALUES ($1, $2, 'G03 Fixture', 'active')`, [
     ownerId,
@@ -78,7 +77,13 @@ async function seedHousehold(db: Pool): Promise<string> {
 
 async function seedAll(db: Pool): Promise<{ a: string; b: string }> {
   // `hh-a`/`hh-b` become two real households so isolation (case J) is real.
-  const byFixture: Record<string, string> = { 'hh-a': await seedHousehold(db), 'hh-b': await seedHousehold(db) };
+  // The loader (`householdOf`) resolves symbolic ids to these exact UUIDs, so
+  // the transaction seed can use `tx.householdId` verbatim.
+  const a = householdOf('hh-a');
+  const b = householdOf('hh-b');
+  await seedHousehold(db, a);
+  await seedHousehold(db, b);
+  const byFixture: Record<string, string> = { 'hh-a': a, 'hh-b': b };
 
   for (const account of analyticsFixture.dataset.accounts) {
     await db.query(
