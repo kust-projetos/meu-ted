@@ -1,6 +1,6 @@
 import { scrubForPersistence } from '../privacy/dlp.js';
 import { hasMutationIntentSignal, interpretMutationUtterance } from '../mutations/semantic-interpretation.js';
-import { resolveMutationEntities, type EntityReader } from '../mutations/entity-resolver.js';
+import { resolveMutationEntities, revalidateResolvedEntities, entityResolutionSignals, type EntityReader, type EntityResolutionTrace } from '../mutations/entity-resolver.js';
 import type { MutationApiClient, MutationIdentity } from '../mutations/mutation-api-client.js';
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
 import {
@@ -288,6 +288,30 @@ export class ConversationOrchestrator {
     } catch {
       // Observability must never break the turn.
     }
+  }
+
+  /**
+   * A08/R08: makes the resolution trace OBSERVABLE without leaking it. The
+   * trace says which references were invalidated and which confirmed preference
+   * this turn overrode; only those reference-KIND names are emitted (never ids,
+   * UUIDs or labels), namespaced to this turn so a dead alias is diagnosable
+   * from telemetry alone. Silent (no event) when nothing was dropped.
+   */
+  private emitEntityResolution(
+    input: TurnInput,
+    plan: TurnPlan,
+    trace: EntityResolutionTrace,
+  ): void {
+    const signals = entityResolutionSignals(trace);
+    if (signals.length === 0) return;
+    this.emit('mutation.entity_resolution', {
+      intentionId: input.intentionId,
+      traceId: input.traceId,
+      channel: input.channel,
+      domain: plan.domain,
+      status: 'signalled',
+      signals,
+    });
   }
 
   /**
@@ -912,8 +936,18 @@ export class ConversationOrchestrator {
       merged,
       resolutionHint,
       this.entityReaderOrClosed(),
+      // A08/R08 tier 2: the ids this draft already had confirmed inside the
+      // scope. The turn's own explicit choice still outranks them, and an id
+      // that no longer verifies is invalidated by the resolver, never used.
+      {
+        confirmed: {
+          ...(draft.resolvedArgs.accountId ? { accountId: draft.resolvedArgs.accountId } : {}),
+          ...(draft.resolvedArgs.categoryId ? { categoryId: draft.resolvedArgs.categoryId } : {}),
+        },
+      },
     );
     const stamp = new Date(this.draftNowMs()).toISOString();
+    this.emitEntityResolution(input, plan, resolution.trace);
     if (!resolution.complete) {
       // SPEC R03: an explicit category accepted in this turn must survive the
       // draft while another field stays pending. Dropping it would make the
@@ -949,8 +983,30 @@ export class ConversationOrchestrator {
       const updated = store.get(draft.draftId) ?? draft;
       return this.clarifyDraft(input, plan, startedAt, base, updated, question);
     }
+    // A08/R08: existence, activity and scope are re-checked IMMEDIATELY before
+    // the write (the CAS below is what arms the propose). This is the SAME
+    // resolution attempt — no recovery slot, no second loop (A06×A10). The
+    // redelivery/recovery paths keep re-emitting their proposal untouched.
+    const verified = await revalidateResolvedEntities(resolution, this.entityReaderOrClosed());
+    this.emitEntityResolution(input, plan, verified.trace);
+    if (!verified.complete) {
+      store.update(draft.draftId, {
+        missingFields: [...verified.missingFields],
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        lastQuestion: verified.clarification,
+      });
+      const updated = store.get(draft.draftId) ?? draft;
+      return this.clarifyDraft(input, plan, startedAt, base, updated, verified.clarification);
+    }
     store.update(draft.draftId, {
-      resolvedArgs: completeArgs,
+      resolvedArgs: {
+        ...completeArgs,
+        accountId: verified.accountId,
+        categoryId: verified.categoryId,
+        accountName: verified.accountName,
+        categoryName: verified.categoryName,
+      },
       missingFields: [],
       updatedAt: stamp,
       lastIntentionId: input.intentionId,
@@ -1040,7 +1096,13 @@ export class ConversationOrchestrator {
     // R08/A08: the account hint is TEXT — the deterministic match still happens
     // here, against the authoritative account list.
     const resolution = await resolveMutationEntities(parsed, interpretation.resolutionText, this.entityReaderOrClosed());
-    if (!resolution.complete) {
+    // A08/R08: re-check existence/activity/scope IMMEDIATELY before the write.
+    // Same resolution attempt — no recovery slot, no second loop (A06×A10).
+    const verified = resolution.complete
+      ? await revalidateResolvedEntities(resolution, this.entityReaderOrClosed())
+      : resolution;
+    this.emitEntityResolution(input, plan, verified.trace);
+    if (!verified.complete) {
       // Idempotent per turn (§7.7): same intentionId reuses the draft.
       const tool = this.toolForKind(parsed.kind);
       const now = this.draftNowMs();
@@ -1057,8 +1119,8 @@ export class ConversationOrchestrator {
           date: parsed.date,
           ...(parsed.categoryQuery ? { categoryQuery: parsed.categoryQuery } : {}),
         },
-        missingFields: [...resolution.missingFields],
-        question: resolution.clarification,
+        missingFields: [...verified.missingFields],
+        question: verified.clarification,
         ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
         nowMs: now,
       });
@@ -1077,8 +1139,8 @@ export class ConversationOrchestrator {
       amountCents: parsed.amountCents,
       description: parsed.description,
       date: parsed.date,
-      accountId: resolution.accountId,
-      categoryId: resolution.categoryId,
+      accountId: verified.accountId,
+      categoryId: verified.categoryId,
     };
     // R10 (AC30): same accounting as the draft path — counted before it goes.
     this.budgetFor(base).noteProposeAttempt();
@@ -1093,7 +1155,7 @@ export class ConversationOrchestrator {
     if (eligible && !proposal.existing) {
       const duplicateSuspected = await client.duplicateSuspectedStrict({
         kind: parsed.kind, description: parsed.description, amountCents: parsed.amountCents,
-        date: parsed.date, accountId: resolution.accountId,
+        date: parsed.date, accountId: verified.accountId,
       });
       if (!duplicateSuspected) {
         const elevated = this.dependencies.autoExecutionClient?.();
@@ -1108,7 +1170,7 @@ export class ConversationOrchestrator {
               return this.completeTurn(input, plan, startedAt, base, {
                 policy: freeze({ ...base.policy, authorizationMode: 'auto' }),
                 mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}) }),
-                response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${resolution.accountName ? ` na conta ${resolution.accountName}` : ''}. Se quiser, posso desfazer.` }),
+                response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${verified.accountName ? ` na conta ${verified.accountName}` : ''}. Se quiser, posso desfazer.` }),
               });
             } catch {
               try {
@@ -1129,8 +1191,8 @@ export class ConversationOrchestrator {
         operationId: proposal.id,
         tool,
         normalizedArgs,
-        accountName: resolution.accountName,
-        categoryName: resolution.categoryName,
+        accountName: verified.accountName,
+        categoryName: verified.categoryName,
         expiresAt: proposal.operation.expiresAt,
       }),
       response: freeze({ text: renderMutationResult('proposed', proposal.summary) }),
@@ -1601,11 +1663,15 @@ export class ConversationOrchestrator {
         listCategories: async (): Promise<never> => { throw new Error('agent.entity_reader_missing'); },
       };
       const resolution = await resolveMutationEntities(parsed, interpretation.resolutionText, reader);
-      if (!resolution.complete) {
-        const incompletePlan = freeze({ ...plan, missingFields: freeze([...resolution.missingFields]) });
+      // A08/R08: re-check existence/activity/scope IMMEDIATELY before the write.
+      // Same resolution attempt — no recovery slot, no second loop (A06×A10).
+      const verified = resolution.complete ? await revalidateResolvedEntities(resolution, reader) : resolution;
+      this.emitEntityResolution(input, plan, verified.trace);
+      if (!verified.complete) {
+        const incompletePlan = freeze({ ...plan, missingFields: freeze([...verified.missingFields]) });
         this.emit('mutation.blocked', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'blocked' });
         this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
-        return freeze({ ...result, plan: incompletePlan, clarification: freeze({ missingFields: incompletePlan.missingFields, text: resolution.clarification }), response: freeze({ text: resolution.clarification }) });
+        return freeze({ ...result, plan: incompletePlan, clarification: freeze({ missingFields: incompletePlan.missingFields, text: verified.clarification }), response: freeze({ text: verified.clarification }) });
       }
       const identity: MutationIdentity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })() };
       // SPEC §7.7.1: the no-draft proposal key derives deterministically
@@ -1619,8 +1685,8 @@ export class ConversationOrchestrator {
         amountCents: parsed.amountCents,
         description: parsed.description,
         date: parsed.date,
-        accountId: resolution.accountId,
-        categoryId: resolution.categoryId,
+        accountId: verified.accountId,
+        categoryId: verified.categoryId,
       };
       // R10 (AC30): the legacy no-draft path has no `completeTurn` terminal,
       // so the attempt is charged here and the snapshot is emitted explicitly
@@ -1634,7 +1700,7 @@ export class ConversationOrchestrator {
         idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool),
       });
       if (!proposal.existing && isAutoExecutionEligible({ tool, missingFields: [], ambiguity: plan.ambiguity, latestActorText: input.text }) &&
-        !(await client.duplicateSuspectedStrict({ kind: parsed.kind, description: parsed.description, amountCents: parsed.amountCents, date: parsed.date, accountId: resolution.accountId }))) {
+        !(await client.duplicateSuspectedStrict({ kind: parsed.kind, description: parsed.description, amountCents: parsed.amountCents, date: parsed.date, accountId: verified.accountId }))) {
         const elevated = this.dependencies.autoExecutionClient?.();
         if (elevated) {
           const authorization = await this.authorizeAutoExecution(elevated, proposal.id, identity);
@@ -1643,7 +1709,7 @@ export class ConversationOrchestrator {
             try {
               const executed = await new PendingOperationCoordinator({ client: elevated }).executeAuthorized({ operationId: proposal.id, attestation: authorization.attestation }, identity);
               this.emitTurnBudget(result);
-              return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'auto' }), mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}) }), response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${resolution.accountName ? ` na conta ${resolution.accountName}` : ''}. Se quiser, posso desfazer.` }) });
+              return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'auto' }), mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}) }), response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${verified.accountName ? ` na conta ${verified.accountName}` : ''}. Se quiser, posso desfazer.` }) });
             } catch {
               try {
                 const current = await elevated.listActive(identity);
@@ -1659,7 +1725,7 @@ export class ConversationOrchestrator {
         }
       }
       this.emitTurnBudget(result);
-      return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, accountName: resolution.accountName, categoryName: resolution.categoryName, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
+      return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, accountName: verified.accountName, categoryName: verified.categoryName, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
     }
     // SPEC §7.8 (ADR-014) with a draft store: the full multi-turn flow
     // (draft persistence, continuation, atomic consumption, recoverable

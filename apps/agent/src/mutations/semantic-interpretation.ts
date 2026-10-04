@@ -129,6 +129,25 @@ const CANONICAL_DATE: Readonly<Record<string, string>> = {
 };
 
 /**
+ * The mutation lexicon as ONE read-only set, derived from the tables above (no
+ * new vocabulary, no second source of truth): every mutation verb spelling A06
+ * rewrites (clipped AND canonical), the preposition it expands and every
+ * relative-date spelling.
+ *
+ * Exported for the A08 entity resolver, which needs the SAME words as
+ * STRUCTURAL TERMINATORS when it decides how far a cited account name runs in
+ * the user's sentence. That consumer must not keep a private copy of this
+ * lexicon: a verb A06 learns to rewrite has to stop a name run on the same
+ * turn, or the canonical utterance it produces would read as a longer account
+ * name to the resolver.
+ */
+export const MUTATION_LEXICON_TERMINATORS: ReadonlySet<string> = new Set<string>([
+  ...VERB_ABBREVIATIONS.flatMap(({ from, to }) => [from, to]),
+  ...PREPOSITION_ABBREVIATIONS.map(({ to }) => to),
+  ...Object.keys(CANONICAL_DATE),
+]);
+
+/**
  * Account-hint spelling repairs. A hint is TEXT ONLY: the deterministic match
  * against the authoritative account list stays in `entity-resolver` (R08), so
  * nothing here can select or invent an account id. A08 owns real aliases.

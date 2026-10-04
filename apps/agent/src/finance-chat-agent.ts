@@ -1236,13 +1236,27 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * `GET /accounts` + `GET /categories` reads the evidence layer uses,
    * scoped by the turn's `financial.read` delegation. Unreadable lists fail
    * closed downstream (clarification, never a proposal).
+   *
+   * The reader is ALSO bound to the turn's workspace so a row reporting a
+   * different scope is never resolved, listed or named (R08 defensive axis).
+   * Safe by construction, not by assumption: `input.workspaceId` is the exact
+   * value carried as the `workspace` claim of the delegated token minted just
+   * above (`mintReadToken`), and the API turns that claim into
+   * `ctx.householdId` (`householdId: claims.workspace`), filters on it
+   * (`WHERE household_id = $1`) and echoes the same column back on the row —
+   * so a legitimate row's `householdId` IS this value, and scoping can only
+   * ever reject a genuinely foreign row, never a valid one.
    */
   private async entityReaderForTurn(input: TurnInput): Promise<EntityReader> {
     const delegatedToken = await this.mintReadToken(input);
     const apiOrigin = this.env?.API_ORIGIN;
     const request = <T>(method: string, path: string, options: Parameters<typeof requestPiApiJson>[2] = {}) =>
       requestPiApiJson<T>(method, path, { ...options, delegatedToken, ...(apiOrigin !== undefined ? { apiOrigin } : {}) });
-    return createRequestEntityReader(request);
+    const workspaceId = input.workspaceId?.trim();
+    return createRequestEntityReader(
+      request,
+      workspaceId ? { workspaceId } : undefined,
+    );
   }
 
   override async onChatMessage(messagePayload: unknown, ..._rest: unknown[]): Promise<unknown> {
