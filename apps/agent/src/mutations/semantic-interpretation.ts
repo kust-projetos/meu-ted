@@ -367,6 +367,23 @@ export const expandMutationVerbs = (text: string): string => {
 };
 
 /**
+ * A06/AC13 (review fix round A07) — the existing detector and copy, exported
+ * so the A07 continuation grammars REUSE them instead of keeping a private
+ * copy of the same table. Same semantics, one source of truth:
+ * - {@link hasNegation} gates the bare date fragment ("não foi ontem");
+ * - {@link hasUnsupportedCurrency} gates the value-correction grammar
+ *   ("não, 500 dólares" is never read as 500 reais);
+ * - {@link ambiguityClarificationText} hands the exact copy A06 already shows
+ *   the user, so no third wording exists for the same ambiguity.
+ */
+export const hasNegation = (text: string): boolean => NEGATION.test(text);
+
+export const hasUnsupportedCurrency = (text: string): boolean => UNSUPPORTED_CURRENCY.test(text);
+
+export const ambiguityClarificationText = (ambiguity: SemanticAmbiguity): string =>
+  CLARIFICATION[ambiguity].text;
+
+/**
  * The single entry point every mutation call site uses instead of calling the
  * parser directly. Returns a schema-validated interpretation; the caller keeps
  * owning proposal, clarification and authorization.

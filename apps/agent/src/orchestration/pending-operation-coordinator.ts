@@ -21,6 +21,8 @@ import type {
   MutationIdentity,
 } from '../mutations/mutation-api-client.js';
 import {
+  appendDraftRelation,
+  appendOriginMessage,
   isDefinitiveProposeError,
   type DraftContext,
   type MutationDraftStore,
@@ -291,6 +293,10 @@ export class PendingOperationCoordinator {
         discardReason: 'user_cancel',
         updatedAt: stamp,
         lastIntentionId: scope.intentionId,
+        // A07/R07: the cancel is recorded as a relation of the goal it
+        // closed. Metadata only — the discard itself is unchanged.
+        originMessages: appendOriginMessage(draft.originMessages, scope.intentionId),
+        relations: appendDraftRelation(draft.relations, 'cancel_ref'),
       });
     }
   }

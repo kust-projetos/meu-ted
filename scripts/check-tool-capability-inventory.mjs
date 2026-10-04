@@ -11,6 +11,17 @@ const REQUIRED_COLUMNS = ['ID', 'Tool', 'Semantic capability', 'Persona', 'Frequ
 const DESTINATIONS = new Set(['UI', 'chat', 'internal', 'retire']);
 const RISKS = new Set(['low', 'medium', 'high', 'critical']);
 
+/**
+ * Canonical registry expectations. Since the legacy `.pi` tool root was removed,
+ * the inventory is driven by `apps/agent/src/generated/http-tools.ts`, and it is
+ * deliberately a SUPERSET of the generated tools: `planned`/`internal`/`UI`
+ * capability rows have no generated adapter. Both numbers therefore have to be
+ * restated whenever the OpenAPI contract adds or removes a tool — a registered
+ * tool without a row is still rejected below by the name-level check.
+ */
+const CANONICAL_GENERATED_TOOLS = 54;
+const EXPECTED_CAPABILITY_ROWS = 74;
+
 const normalizeToolName = (value) => value.trim().replace(/^`|`$/g, '').replace(/_/g, '').toLowerCase().replace(/tool$/, '');
 
 export function collectRegisteredTools(indexPath = DEFAULT_INDEX, toolRoot = DEFAULT_TOOL_ROOT) {
@@ -83,11 +94,11 @@ export function validateInventory(inventoryPath, registeredTools) {
   }
 
   const rows = lines.filter((line) => /^\| CAP-\d{3} \|/.test(line)).map(splitTableRow);
-  const isCanonicalFallback = registeredTools.length === 52; // Task 6: canonical 52 api tools vs 72 caps
+  const isCanonicalFallback = registeredTools.length === CANONICAL_GENERATED_TOOLS;
   if (!isCanonicalFallback && registeredTools.length !== rows.length) {
     errors.push(`registered ${registeredTools.length} tools but inventory has ${rows.length}`);
   }
-  if (rows.length !== 72) errors.push(`inventory must contain 72 capability rows, found ${rows.length}`);
+  if (rows.length !== EXPECTED_CAPABILITY_ROWS) errors.push(`inventory must contain ${EXPECTED_CAPABILITY_ROWS} capability rows, found ${rows.length}`);
 
   const ids = rows.map((row) => row[0]);
   const expectedIds = Array.from({ length: rows.length }, (_, index) => `CAP-${String(index + 1).padStart(3, '0')}`);
@@ -102,7 +113,7 @@ export function validateInventory(inventoryPath, registeredTools) {
   const toolCounts = new Map();
   for (const tool of inventoryTools) toolCounts.set(tool, (toolCounts.get(tool) ?? 0) + 1);
   for (const [tool, count] of toolCounts) if (count > 1) errors.push(`inventory tool ${tool} is duplicated ${count}x`);
-  const isFallback = registeredTools.length === 52;
+  const isFallback = registeredTools.length === CANONICAL_GENERATED_TOOLS;
   if (!isFallback) for (const tool of registeredSet) if (!inventorySet.has(tool)) errors.push(`registered tool ${tool} has no inventory row`);
 
 

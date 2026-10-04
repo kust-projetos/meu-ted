@@ -105,6 +105,45 @@ export const parseMoneyToCents = (value: string): number => {
 };
 export const parseMutationRequest = parseFinancialMutation;
 
+/**
+ * A07/AC14: resolves a bare relative-date fragment ("hoje", "ontem",
+ * "anteontem") through the SAME `dateFor` the parser uses, so a
+ * continuation turn that only says "ontem" corrects the draft's date with
+ * one implementation and one timezone. Returns undefined when the text names
+ * no relative date — never a guess.
+ */
+export const resolveRelativeDate = (text: string, options: { now?: Date; timeZone?: string } = {}): string | undefined => {
+  const token = /\b(anteontem|ontem|hoje)\b/i.exec(text)?.[1];
+  if (!token) return undefined;
+  return dateFor(token, options.now, options.timeZone);
+};
+
+/**
+ * A07/AC14 (review fix 4) — the date FRAGMENT is only ever applied when the
+ * turn names EXACTLY ONE relative date. `resolveRelativeDate` used to take the
+ * FIRST token, so "ontem ou hoje" silently chose `ontem`; that is a guess, not
+ * a fragment, and it is now an honest `'ambiguous'` for the caller to clarify.
+ *
+ * The single date is still resolved through {@link resolveRelativeDate}, i.e.
+ * the parser's own `dateFor` and timezone — one implementation, one calendar.
+ */
+export type RelativeDateFragment = Readonly<
+  { status: 'date'; date: string } | { status: 'none' } | { status: 'ambiguous' }
+>;
+
+const RELATIVE_DATE_TOKENS = /\b(anteontem|ontem|hoje)\b/giu;
+
+export const resolveRelativeDateFragment = (
+  text: string,
+  options: { now?: Date; timeZone?: string } = {},
+): RelativeDateFragment => {
+  const distinct = new Set([...text.matchAll(RELATIVE_DATE_TOKENS)].map((match) => match[0]!.toLowerCase()));
+  if (distinct.size === 0) return Object.freeze({ status: 'none' as const });
+  if (distinct.size > 1) return Object.freeze({ status: 'ambiguous' as const });
+  const date = resolveRelativeDate(text, options);
+  return date ? Object.freeze({ status: 'date' as const, date }) : Object.freeze({ status: 'none' as const });
+};
+
 /** Shared mutation-utterance signal (SPEC §7.6): one definition for router + plan builder. */
 export const isClearlyMutating = (text: string): boolean =>
   /\b(gastei|gasto|paguei|compra|despesa|recebi|ganhei|renda|sal[aá]rio|receita|lancei|lancar|lançamento|lancamento)\b/i.test(text);

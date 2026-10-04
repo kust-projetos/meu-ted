@@ -26,6 +26,7 @@
 import { jsonSchema, tool } from 'ai';
 import { generatedHttpTools } from '../generated/http-tools.js';
 import { ALL_SKILLS } from './skills/index.js';
+import { declareAnalyticsEnvelope, normalizeAnalyticsQuery } from './analytics-envelope.js';
 import {
   WEB_UNAVAILABLE_MESSAGE,
   createWebSearchProvider,
@@ -69,6 +70,8 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_month_summary: 'resumo do mês (receitas, despesas, saldo)',
   spending_insights: 'agregados de gastos por categoria/período',
   budget_trends: 'evolução de orçamentos mês a mês',
+  analytics_kpis: 'KPIs do período: receitas, despesas, saldo e faturas em aberto',
+  analytics_category_breakdown: 'gastos ou receitas por categoria no período',
   list_categories: 'árvore de categorias (macros e subs)',
   create_category: 'criar macro ou subcategoria',
   update_category: 'renomear/ajustar categoria',
@@ -221,6 +224,23 @@ const sanitizeSchema = (parameters: unknown): Record<string, unknown> =>
   JSON.parse(JSON.stringify(parameters ?? { type: 'object', properties: {} })) as Record<string, unknown>;
 
 /**
+ * A09/FIX B1 — the analytics reads are the only generated tools whose QUERY and
+ * RESPONSE carry a contract of their own: `from`/`to` are silently dropped
+ * without `period=custom` (spike §3.1, armadilha 1) and `totalCents` can arrive
+ * as a lossy double (G-B). They therefore go through
+ * `analytics-envelope.ts` at the boundary — a refusal or an absent effective
+ * period is declared to the model instead of being papered over.
+ */
+const ANALYTICS_READ_TOOLS = new Set(['analytics_kpis', 'analytics_category_breakdown']);
+
+/** The range intent the model typed, whatever shape it used to express it. */
+const analyticsRangeIntent = (params: Record<string, unknown>) => ({
+  ...(typeof params['yearMonth'] === 'string' ? { yearMonth: params['yearMonth'] } : {}),
+  ...(typeof params['from'] === 'string' ? { from: params['from'] } : {}),
+  ...(typeof params['to'] === 'string' ? { to: params['to'] } : {}),
+});
+
+/**
  * Builds AI SDK tools bound to a turn context. Reads execute directly;
  * mutations first pass the safety utils (this is their first enforcement
  * point — previously dead code). Web tools resolve availability from env.
@@ -237,6 +257,15 @@ export const buildExposedTools = (
   // A11: the egress allowlist is resolved once per turn from the operator env
   // and handed to the guard; empty (default) means `web_fetch` is unavailable.
   const webFetchAllowedHosts = resolveWebFetchAllowedHosts(ctx.webEnv);
+  // Per-invocation credential: the turn's token travels as the tool `ctx`,
+  // forwarded explicitly per request by the generated client. The legacy
+  // module-global slot is never written here, so concurrent turns from
+  // different workspaces cannot observe each other's token; an absent token
+  // stays unauthenticated and fails closed downstream.
+  const invocationAuth = {
+    delegatedToken: typeof ctx.delegatedToken === 'string' && ctx.delegatedToken ? ctx.delegatedToken : undefined,
+    ...(typeof ctx.apiOrigin === 'string' && ctx.apiOrigin ? { apiOrigin: ctx.apiOrigin } : {}),
+  };
 
   for (const name of toolNames) {
     // Retired V1 pending tools are never built, even when requested
@@ -339,23 +368,48 @@ export const buildExposedTools = (
       });
       continue;
     }
+    if (ANALYTICS_READ_TOOLS.has(name)) {
+      const analyticsTool = generated.get(name);
+      if (!analyticsTool) continue;
+      out[name] = tool({
+        description: analyticsTool.description ?? name,
+        inputSchema: jsonSchema(sanitizeSchema(analyticsTool.parameters)),
+        execute: async (params: Record<string, unknown>) => {
+          // (a) QUERY: an exact window, or a declared refusal. A named range
+          // (yearMonth/from/to) outranks the typed preset — the API drops
+          // `from`/`to` unless `period=custom` is sent along, so the range is
+          // what this boundary makes authoritative. A typed preset with no
+          // range at all is passed through: the API resolves it deterministically
+          // and the response declares the window it really used.
+          const intent = analyticsRangeIntent(params);
+          const rangeNamed = Object.keys(intent).length > 0;
+          const period = typeof params['period'] === 'string' ? params['period'] : undefined;
+          const wantsExactWindow = rangeNamed || period === undefined || period === 'custom';
+          let query: Record<string, unknown> = params;
+          if (wantsExactWindow) {
+            const normalized = normalizeAnalyticsQuery({ tool: name, ...intent });
+            if (!normalized.ok) return { ok: false, reason: normalized.reason, message: normalized.message };
+            query = { ...params, ...normalized.query };
+          }
+          const response = await analyticsTool.execute('model-tool', query, undefined, undefined, invocationAuth);
+          // (b) RESPONSE: the effective period plus the lossy-total flag. A
+          // response without a usable period gets NO envelope — declaring a
+          // window the route did not use would invent proof (R04).
+          const enveloped = declareAnalyticsEnvelope(response);
+          if (!enveloped.ok) return { ok: false, reason: enveloped.reason, message: enveloped.message };
+          return enveloped.response;
+        },
+      });
+      continue;
+    }
     const generatedTool = generated.get(name);
     if (!generatedTool) continue;
     out[name] = tool({
       description: generatedTool.description ?? name,
       inputSchema: jsonSchema(sanitizeSchema(generatedTool.parameters)),
       execute: async (params: Record<string, unknown>) => {
-        // Per-invocation credential: the turn's token travels as the tool
-        // `ctx`, forwarded explicitly per request by the generated client.
-        // The legacy module-global slot is never written here, so concurrent
-        // turns from different workspaces cannot observe each other's token;
-        // an absent token stays unauthenticated and fails closed downstream.
-        const invocationAuth = {
-          delegatedToken: typeof ctx.delegatedToken === 'string' && ctx.delegatedToken ? ctx.delegatedToken : undefined,
-          ...(typeof ctx.apiOrigin === 'string' && ctx.apiOrigin ? { apiOrigin: ctx.apiOrigin } : {}),
-        };
         const isMutating = !CORE_READ_TOOLS.includes(name) && name !== 'web_search' && name !== 'web_fetch' &&
-          !['list_', 'get_', 'check_', 'spending_', 'detect_', 'budget_trends', 'audit_'].some((prefix) => name.startsWith(prefix));
+          !['list_', 'get_', 'check_', 'spending_', 'detect_', 'budget_trends', 'audit_', 'analytics_'].some((prefix) => name.startsWith(prefix));
         if (isMutating) {
           return { blocked: true, reason: 'Mutação bloqueada: somente MutationExecutor V2 pode executar escrita.' };
         }

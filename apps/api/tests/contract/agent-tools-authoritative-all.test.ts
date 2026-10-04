@@ -15,6 +15,7 @@ import { createAccountInputSchema, createCategoryInputSchema, createExpenseInput
 
 import { pendingIdentitySchema } from '../../src/routes/pending-operations.js';
 import { detectSchema } from '../../src/routes/duplicate-detect.js';
+import { analyticsQuerySchema, categoryBreakdownQuerySchema } from '../../src/analytics/types.js';
 
 const document = JSON.parse(readFileSync(new URL('../../openapi/agent-tools.openapi.json', import.meta.url), 'utf8'));
 const tools = new Map<string, { parameters: Array<{ name: string; in: string; required?: boolean; schema: Record<string, unknown> }> }>();
@@ -67,7 +68,26 @@ const authoritativeSchemas = {
   list_recurring_purchases: recurringQuerySchema,
   pay_statement: cardPaySchema,
   list_statements: cardStatementQuerySchema,
+  analytics_kpis: analyticsQuerySchema,
+  analytics_category_breakdown: categoryBreakdownQuerySchema,
 } as const;
+
+/**
+ * Tools whose OpenAPI entry is STRICTER than the API schema, field by field.
+ *
+ * The only divergence today is `period` on the two analytics reads: the API
+ * accepts `from`/`to` without `period` and then SILENTLY discards them
+ * (`resolveRange` falls back to `last30days` —
+ * `docs/reports/2026-10-04-ted-inteligente-v1-a09-spike.md` §3.1). A model
+ * tool that inherited the optionality could answer the wrong window with no
+ * error, so the tool requires the preset explicitly. The divergence is
+ * narrowing-only: a tool may be stricter than the route, never more permissive
+ * (the dangerous direction is still enforced below).
+ */
+const requiredOverrides: Record<string, Record<string, boolean>> = {
+  analytics_kpis: { period: true },
+  analytics_category_breakdown: { period: true },
+};
 
 type Schema = z.ZodTypeAny;
 const unwrap = (schema: Schema): Schema => {
@@ -118,11 +138,12 @@ const openApiFields = (name: string, schema: Schema) => {
   const inBody = tool.parameters.filter((parameter) => parameter.in === 'body');
   const inQuery = tool.parameters.filter((parameter) => parameter.in === 'query' && parameter.name !== 'householdId');
   const fields = Object.keys(schemaFields(schema));
-  const actual = new Set(['audit_logs', 'list_accounts', 'list_categories', 'get_month_summary', 'list_recent_transactions', 'list_accounts_payable', 'list_statements', 'spending_insights', 'budget_trends', 'list_recurring_purchases', 'auto_create_from_templates', 'get_pending_operation', 'confirm_pending_operation', 'cancel_pending_operation']).has(name) ? inQuery : inBody;
+  const actual = new Set(['audit_logs', 'list_accounts', 'list_categories', 'get_month_summary', 'list_recent_transactions', 'list_accounts_payable', 'list_statements', 'spending_insights', 'budget_trends', 'list_recurring_purchases', 'auto_create_from_templates', 'get_pending_operation', 'confirm_pending_operation', 'cancel_pending_operation', 'analytics_kpis', 'analytics_category_breakdown']).has(name) ? inQuery : inBody;
   expect(actual.map((parameter) => parameter.name).sort()).toEqual([...fields].sort());
   for (const [field, fieldSchema] of Object.entries(schemaFields(schema))) {
     const parameter = actual.find((candidate) => candidate.name === field)!;
-    expect(parameter.required ?? false, `${name}.${field} required`).toBe(!isOptional(fieldSchema));
+    const expectedRequired = requiredOverrides[name]?.[field] ?? !isOptional(fieldSchema);
+    expect(parameter.required ?? false, `${name}.${field} required`).toBe(expectedRequired);
     for (const [key, value] of Object.entries(zodConstraints(fieldSchema))) expect(parameter.schema[key], `${name}.${field}.${key}`).toEqual(value);
   }
 };
