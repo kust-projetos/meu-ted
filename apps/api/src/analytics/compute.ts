@@ -12,6 +12,7 @@ import type {
   BudgetConsumptionItem,
   CashflowSeries,
   CategoryBreakdown,
+  CategorySlice,
   DailyHeatmap,
   FixedVsDiscretionary,
   HeatmapDay,
@@ -19,6 +20,7 @@ import type {
   NetWorthPoint,
 } from './types.js';
 import type { AccountScope, CategorySum, DailySum, MonthlyFlow } from './source.js';
+import { exactCentsCompanion, mergeCents, type Cents } from './exact.js';
 
 export const toISODate = (date: Date): string => date.toISOString().slice(0, 10);
 
@@ -145,7 +147,7 @@ export const statementsDueSoon = <T extends Pick<Statement, 'status' | 'dueDate'
 };
 
 const accumulateDaily = (slot: AnalyticsRange, sums: DailySum[]): MoneyPoint[] => {
-  const byDay = new Map(sums.map((s) => [s.date, s.incomeCents - s.expenseCents]));
+  const byDay = new Map(sums.map((s) => [s.date, s.income.cents - s.expense.cents]));
   const points: MoneyPoint[] = [];
   let cumulative = 0;
   for (let cursor = slot.from; cursor <= slot.to; cursor = addDays(cursor, 1)) {
@@ -177,32 +179,53 @@ export const buildCategoryBreakdown = (
   maxSlices = DONUT_MAX_SLICES,
 ): CategoryBreakdown => {
   const byId = new Map(categories.map((c) => [c.id, c]));
-  const totals = new Map<string, number>();
-  let totalCents = 0;
+  // G-B: keep the aggregates per macro (not a running number total), so the
+  // exact decimal each one carries survives into the rollup and the total.
+  const addends = new Map<string, Cents[]>();
+  const overall: Cents[] = [];
   for (const sum of sums) {
     const cat = byId.get(sum.categoryId);
     const macroId = cat ? (cat.parentId ?? cat.id) : sum.categoryId;
-    totals.set(macroId, (totals.get(macroId) ?? 0) + sum.totalCents);
-    totalCents += sum.totalCents;
+    const bucket = addends.get(macroId);
+    if (bucket) bucket.push(sum.total);
+    else addends.set(macroId, [sum.total]);
+    overall.push(sum.total);
   }
-  const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+  const totals = new Map([...addends].map(([macroId, values]) => [macroId, mergeCents(values)]));
+  const total = mergeCents(overall);
+  const ranked = [...totals.entries()].sort((a, b) => b[1].cents - a[1].cents);
   const head = ranked.slice(0, Math.max(1, maxSlices));
-  const tailTotal = ranked.slice(Math.max(1, maxSlices)).reduce((acc, [, value]) => acc + value, 0);
-  const pctOf = (value: number): number => (totalCents > 0 ? Math.round((value / totalCents) * 1000) / 10 : 0);
-  const slices = head.map(([macroId, value], index) => {
+  const tail = ranked.slice(Math.max(1, maxSlices));
+  const tailTotal = mergeCents(tail.map(([, value]) => value));
+  const pctOf = (value: number): number => (total.cents > 0 ? Math.round((value / total.cents) * 1000) / 10 : 0);
+  const slices: CategorySlice[] = head.map(([macroId, value], index) => {
     const cat = byId.get(macroId);
     return {
       categoryId: macroId,
       name: cat?.name ?? 'Outras',
-      totalCents: value,
-      pct: pctOf(value),
+      totalCents: value.cents,
+      pct: pctOf(value.cents),
       color: cat?.color ?? MACRO_PALETTE[index % MACRO_PALETTE.length] ?? '#0E8C5A',
+      ...exactCentsCompanion('totalCents', value),
     };
   });
-  if (tailTotal > 0) {
-    slices.push({ categoryId: 'outras', name: 'Outras', totalCents: tailTotal, pct: pctOf(tailTotal), color: '#9AA5A0' });
+  if (tailTotal.cents > 0) {
+    slices.push({
+      categoryId: 'outras',
+      name: 'Outras',
+      totalCents: tailTotal.cents,
+      pct: pctOf(tailTotal.cents),
+      color: '#9AA5A0',
+      ...exactCentsCompanion('totalCents', tailTotal),
+    });
   }
-  return { period: range, kind, totalCents, slices };
+  return {
+    period: range,
+    kind,
+    totalCents: total.cents,
+    slices,
+    ...exactCentsCompanion('totalCents', total),
+  };
 };
 
 export const buildBudgetConsumption = (budgets: BudgetStatus[]): BudgetConsumptionItem[] =>
@@ -236,16 +259,27 @@ export const mondayOf = (iso: string): string => {
 };
 
 /**
+ * First day of the 4x7 grid that ends with the week of `endDate` — i.e. the
+ * earliest day `buildDailyHeatmap` can paint.
+ *
+ * Exported so the ROUTE reads exactly this window: the grid used to be painted
+ * from a wider read (`end - 34`), which made the envelope count rows the grid
+ * discarded (a payload with zero cells and `emptyReason: null`). One window,
+ * declared, read and painted by the same rule.
+ */
+export const heatmapWindowStart = (endDate: string): string => addDays(mondayOf(endDate), -21);
+
+/**
  * Last 4 Monday-first weeks ending with the week that contains `endDate`
  * (GitHub style, exactly 7x4). Cells outside [gridStart, endDate] render
  * empty; `sums` may cover a wider window and are clipped.
  */
 export const buildDailyHeatmap = (sums: DailySum[], endDate: string): DailyHeatmap => {
-  const gridStart = addDays(mondayOf(endDate), -21);
+  const gridStart = heatmapWindowStart(endDate);
   const byDay = new Map<string, number>();
   for (const sum of sums) {
     if (sum.date < gridStart || sum.date > endDate) continue;
-    byDay.set(sum.date, (byDay.get(sum.date) ?? 0) + sum.expenseCents);
+    byDay.set(sum.date, (byDay.get(sum.date) ?? 0) + sum.expense.cents);
   }
   let max = 0;
   for (const value of byDay.values()) max = Math.max(max, value);
@@ -289,7 +323,7 @@ export const buildNetWorthHistory = (
     const windowStart = monthStartOf(back - 1);
     let flowAfter = 0;
     for (const flow of flows) {
-      if (flow.month >= windowStart.slice(0, 7)) flowAfter += flow.incomeCents - flow.expenseCents;
+      if (flow.month >= windowStart.slice(0, 7)) flowAfter += flow.income.cents - flow.expense.cents;
     }
     points.push({ month: start.slice(0, 7), netWorthCents: currentNetWorthCents - flowAfter });
   }

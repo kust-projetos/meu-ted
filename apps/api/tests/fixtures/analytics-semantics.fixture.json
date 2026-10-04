@@ -206,14 +206,14 @@
       "readModelsUnderTest": ["GET /analytics/kpis", "GET /analytics/category-breakdown"],
       "request": { "path": "/analytics/kpis", "query": { "period": "custom", "from": "2026-06-01", "to": "2026-06-30" } },
       "expected": {
-        "totalCentsExact": "10000000000040001",
+        "totalCentsExact": "10000000000000001",
         "transactionCount": 3,
         "representableAsJsDouble": false,
         "closestDoublesDifferByCents": 1,
         "partialSumAfterTwoRows": "8000000000000000",
         "partialSumAfterTwoRowsRepresentable": true
       },
-      "expectedDerivation": "4000000000000000 + 4000000000000000 + 2000000000000001 = 10000000000040001. Esse valor e IMPAR e esta entre 2^53 (9007199254740992) e 2^54, logo nao e representavel: os dois doubles vizinhos sao N e N+2, ambos a 1 centavo do valor exato. Ja 8000000000000000 (2 linhas) e menor que 2^53 e e representavel. O PostgreSQL devolve exato (SUM(bigint) -> numeric, ::text); a perda e 100% no Number() do JavaScript. amount_cents e BIGINT sem teto alem de > 0, entao o dominio e realmente nao limitado.",
+      "expectedDerivation": "4000000000000000 + 4000000000000000 + 2000000000000001 = 10000000000000001. Esse valor e IMPAR e esta entre 2^53 (9007199254740992) e 2^54, logo nao e representavel: os dois doubles vizinhos sao N e N+2, ambos a 1 centavo do valor exato. Ja 8000000000000000 (2 linhas) e menor que 2^53 e e representavel. O PostgreSQL devolve exato (SUM(bigint) -> numeric, ::text); a perda e 100% no Number() do JavaScript. amount_cents e BIGINT sem teto alem de > 0, entao o dominio e realmente nao limitado. CORRECAO G03 (2026-10-04): o spike escreveu 10000000000040001; a soma aritmetica e 10000000000000001. O teste que importa esta fixture achou o erro de digito - o primeiro RED do G03 provou que a conta do spike estava errada, nao a implementacao.",
       "verdictToday": "FALHA CONFIRMADA: LACUNA NOMEADA G-B",
       "codeAnchors": ["apps/api/src/analytics/source.ts:198-210", "apps/api/src/analytics/source.ts:242", "apps/api/src/read-models/postgres-store.ts:51", "apps/api/src/analytics/types.ts:95"]
     },

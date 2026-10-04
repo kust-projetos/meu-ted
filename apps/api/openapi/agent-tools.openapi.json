@@ -510,6 +510,19 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "basis",
+            "in": "query",
+            "required": false,
+            "description": "Base do agregado de DESPESA. `liquidez` (default, omissão) é o comportamento atual: a compra no cartão e o pagamento da mesma fatura contam como duas despesas. `competencia` exclui do agregado as linhas que SÃO pagamento de fatura (statement_payment_id, V056) — a compra permanece na data da compra, então a fatura conta uma vez. Não afeta receita.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "liquidez",
+                "competencia"
+              ]
+            }
           }
         ],
         "responses": {
@@ -534,7 +547,13 @@
                     "expenseCents",
                     "previousIncomeCents",
                     "previousExpenseCents",
-                    "netWorthCents"
+                    "netWorthCents",
+                    "transactionCount",
+                    "asOf",
+                    "basis",
+                    "semanticsVersion",
+                    "effectiveFilter",
+                    "emptyReason"
                   ],
                   "properties": {
                     "period": {
@@ -665,6 +684,108 @@
                     },
                     "netWorthCents": {
                       "type": "integer"
+                    },
+                    "incomeCentsExact": {
+                      "type": "string",
+                      "pattern": "^-?\\d+$",
+                      "description": "G-B: decimal exato do agregado, presente SÓ quando passou de 2^53 (o number acima já perdeu centavos). `approximate: true` marca o objeto."
+                    },
+                    "expenseCentsExact": {
+                      "type": "string",
+                      "pattern": "^-?\\d+$",
+                      "description": "G-B: decimal exato do agregado, presente SÓ quando passou de 2^53."
+                    },
+                    "previousIncomeCentsExact": {
+                      "type": "string",
+                      "pattern": "^-?\\d+$",
+                      "description": "G-B: decimal exato do agregado, presente SÓ quando passou de 2^53."
+                    },
+                    "previousExpenseCentsExact": {
+                      "type": "string",
+                      "pattern": "^-?\\d+$",
+                      "description": "G-B: decimal exato do agregado, presente SÓ quando passou de 2^53."
+                    },
+                    "approximate": {
+                      "type": "boolean",
+                      "description": "G-B: algum agregado deste objeto passou de 2^53 e portanto é aproximado. Ausente quando todos são inteiros seguros."
+                    },
+                    "transactionCount": {
+                      "type": "integer",
+                      "description": "G-C: linhas de income+expense que o agregado realmente leu na janela (transferências nunca são somadas e por isso não são contadas). É o que separa \"total 0 com lançamentos\" de \"sem lançamentos\"."
+                    },
+                    "asOf": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "G-C: instante da leitura (ISO-8601)."
+                    },
+                    "basis": {
+                      "type": "string",
+                      "enum": [
+                        "liquidez",
+                        "competencia"
+                      ],
+                      "description": "G-C: base EFETIVA aplicada a este payload. `liquidez` quando a query omitiu o parâmetro."
+                    },
+                    "semanticsVersion": {
+                      "type": "string",
+                      "enum": [
+                        "1"
+                      ],
+                      "description": "G-C: versão da semântica declarada. Sobe quando o SIGNIFICADO de um campo muda; campos novos são aditivos e não alteram esta versão."
+                    },
+                    "effectiveFilter": {
+                      "type": "object",
+                      "required": [
+                        "period",
+                        "from",
+                        "to",
+                        "accountId"
+                      ],
+                      "properties": {
+                        "period": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Preset realmente aplicado; `last30days` quando omitido (a API descarta from/to sem period). null` quando a rota não aplica período."
+                        },
+                        "from": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date"
+                        },
+                        "to": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date"
+                        },
+                        "accountId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "uuid",
+                          "description": "null` = household inteiro."
+                        }
+                      },
+                      "description": "G-C: filtros REALMENTE aplicados. null` = não aplicado."
+                    },
+                    "emptyReason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "enum": [
+                        "no_transactions_in_period",
+                        "no_categorised_transactions_in_period",
+                        "no_budgets",
+                        null
+                      ],
+                      "description": "G-C: motivo conclusivo de vazio; null` quando há lançamentos na janela. Timeout/403 nunca viram zero."
                     }
                   }
                 }
@@ -757,6 +878,19 @@
                 "income"
               ]
             }
+          },
+          {
+            "name": "basis",
+            "in": "query",
+            "required": false,
+            "description": "Base do agregado de DESPESA. `liquidez` (default, omissão) é o comportamento atual: a compra no cartão e o pagamento da mesma fatura contam como duas despesas. `competencia` exclui do agregado as linhas que SÃO pagamento de fatura (statement_payment_id, V056) — a compra permanece na data da compra, então a fatura conta uma vez. Não afeta receita.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "liquidez",
+                "competencia"
+              ]
+            }
           }
         ],
         "responses": {
@@ -770,7 +904,13 @@
                     "period",
                     "kind",
                     "totalCents",
-                    "slices"
+                    "slices",
+                    "transactionCount",
+                    "asOf",
+                    "basis",
+                    "semanticsVersion",
+                    "effectiveFilter",
+                    "emptyReason"
                   ],
                   "properties": {
                     "period": {
@@ -823,6 +963,15 @@
                           "totalCents": {
                             "type": "integer"
                           },
+                          "totalCentsExact": {
+                            "type": "string",
+                            "pattern": "^-?\\d+$",
+                            "description": "G-B: decimal exato do slice, presente SÓ quando passou de 2^53."
+                          },
+                          "approximate": {
+                            "type": "boolean",
+                            "description": "G-B: este slice passou de 2^53 e o totalCents é aproximado."
+                          },
                           "pct": {
                             "type": "number"
                           },
@@ -834,6 +983,101 @@
                           }
                         }
                       }
+                    },
+                    "totalCentsExact": {
+                      "type": "string",
+                      "pattern": "^-?\\d+$",
+                      "description": "G-B: decimal exato do total, presente SÓ quando passou de 2^53 (o number acima já perdeu centavos)."
+                    },
+                    "approximate": {
+                      "type": "boolean",
+                      "description": "G-B: algum agregado deste objeto passou de 2^53 e portanto é aproximado."
+                    },
+                    "transactionCount": {
+                      "type": "integer",
+                      "description": "G-C: linhas de income+expense que o breakdown realmente leu. Só conta o que TEM categoria, então uma despesa sem categoria aparece no kpis e não aqui — a contagem torna essa divergência explícita."
+                    },
+                    "asOf": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "G-C: instante da leitura (ISO-8601)."
+                    },
+                    "basis": {
+                      "type": "string",
+                      "enum": [
+                        "liquidez",
+                        "competencia"
+                      ],
+                      "description": "G-C: base EFETIVA aplicada a este payload. `liquidez` quando a query omitiu o parâmetro."
+                    },
+                    "semanticsVersion": {
+                      "type": "string",
+                      "enum": [
+                        "1"
+                      ],
+                      "description": "G-C: versão da semântica declarada."
+                    },
+                    "effectiveFilter": {
+                      "type": "object",
+                      "required": [
+                        "period",
+                        "from",
+                        "to",
+                        "accountId",
+                        "kind"
+                      ],
+                      "properties": {
+                        "period": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Preset realmente aplicado; `last30days` quando omitido. null` quando a rota não aplica período."
+                        },
+                        "from": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date"
+                        },
+                        "to": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date"
+                        },
+                        "accountId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "uuid",
+                          "description": "null` = household inteiro."
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "expense",
+                            "income"
+                          ]
+                        }
+                      },
+                      "description": "G-C: filtros REALMENTE aplicados. null` = não aplicado."
+                    },
+                    "emptyReason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "enum": [
+                        "no_transactions_in_period",
+                        "no_categorised_transactions_in_period",
+                        "no_budgets",
+                        null
+                      ],
+                      "description": "G-C: motivo conclusivo de vazio; null` quando há lançamentos na janela. Timeout/403 nunca viram zero."
                     }
                   }
                 }

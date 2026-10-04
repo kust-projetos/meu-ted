@@ -34,8 +34,19 @@ Ciclo de review: A07 (tester PASS com 1 bug de robustez; reviewer 5 findings —
 5. **A16 sem integração real**: sem credencial inventada (401 = abstinência), sem hot path, sem dependência nova; breaker por `endpoint|model`; contagem in-memory (`stats()`) — ledger durável é A10.
 6. **Achado de ambiente**: `pnpm boundary:check` falha por arquivo PWA **não rastreado** (dívida local, fora do CI); scripts `.mjs` de schema-contract falham com ENOENT em `.pi/extensions/**` (árvore removida em P3 `f640e84`) — pré-existentes, fora do CI.
 
+## G03 — lacunas fechadas (adendo §11.1, pós-autorização)
+
+Com a autorização do operador, o adendo da SPEC (`cc48b9e`, patch ANTES do código) definiu a via conservadora e a implementação seguiu à risca:
+
+- **G-A**: `basis=competencia` opt-in nas 4 superfícies de despesa — exclui pagamentos de fatura do agregado (compra permanece na competência). Default `liquidez` **byte a byte inalterado** (locks A–E/I–K do fixture travam). Fonte legacy (V056 excluída) → **recusa tipada 400** antes de qualquer I/O.
+- **G-B**: `totalCentsExact: string` + `approximate: true` quando o total excede `Number.MAX_SAFE_INTEGER` (`analytics/exact.ts`; o `::text` do PG é a autoridade; `Number()` só dentro do safe). Breakdown/slices com companion por campo.
+- **G-C**: envelope de prova nas 6 rotas (`transactionCount`/`asOf`/`basis`/`semanticsVersion`/`effectiveFilter`/`emptyReason`) — aditivo; honestidade da janela verificada (heatmap alinhado à grade 4×7; net-worth declara `to: null`); recusa `analytics.basis_unsupported` fora das superfícies de despesa e no legado.
+- **Fixture do spike virou teste real** (22 + 9 novos): casos F/H/L RED→GREEN; o RED provou **erro aritmético na própria fixture** (soma correta `10000000000000001`) — corrigida com marca no relatório do spike.
+- Contagens: API **2479/56skip**, agent 1179/1skip; gerador 54 tools, capabilities 54/74.
+- **NÃO auto-deploya**: releases de API são via wrapper na VPS (gate humano) — produção segue `e86eae9` até o wrapper rodar com este SHA. PG twin roda no CI (`Postgres — integration tests`).
+
 ## Estado do plano
 
-- **Concluídas:** A00–A12, A16, A09-spike.
-- **Bloqueadas por gates humanos (não iniciadas):** A13–A15 (G05 — storage/modelos), A17–A18 (G06 — consentimento/compartilhamento), A07.2 `conversationId` (G02), A09 novas rotas/lacunas (G03 + patch de SPEC).
-- **Follow-ups:** ligar envelope analytics ao caminho de evidência (A04/A09 pós-G03); instância única do JudgmentProvider por DO no wiring futuro; V13 do plano (6 rotas).
+- **Concluídas:** A00–A12, A16, A09-spike, A09-integração (reuso), **G03** (G-A/G-B/G-C).
+- **Bloqueadas por gates humanos (não iniciadas):** A13–A15 (G05 — storage/modelos), A17–A18 (G06 — consentimento/compartilhamento), A07.2 `conversationId` (G02).
+- **Follow-ups:** ligar envelope analytics ao caminho de evidência (A04/A09 pós-G03); instância única do JudgmentProvider por DO no wiring futuro; V13 do plano (6 rotas); copy de produto para `competencia` "subtrair" em janelas de liquidação (o envelope já torna legível).
