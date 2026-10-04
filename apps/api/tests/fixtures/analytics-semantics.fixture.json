@@ -1,0 +1,298 @@
+{
+  "meta": {
+    "id": "analytics-semantics",
+    "specRef": "docs/MEU-TED-SPEC-AGENTE-INTELIGENTE-V1.md R09 (linhas 157-166)",
+    "planRef": "docs/MEU-TED-PLANO-AGENTE-INTELIGENTE-V1.md secao A09 (linhas 166-172)",
+    "status": "SPIKE-EVIDENCE-NOT-WIRED",
+    "purpose": "Fecha a semantica financeira de R09. NAO e teste: nenhum arquivo de teste importa este fixture. E insumo para a decisao G03 e para o RED pos-gate.",
+    "schemaNote": "Campos commented nao existem no ledger; cada expected tem expectedDerivation com a conta a mao.",
+    "authority": "Somente leitura. Nao autoriza rota nova, patch de SPEC nem mudanca de semantica.",
+    "schema": "transactions",
+    "schemaDialect": "canonical (DB_SCHEMA=canonical / pi_financeiro_canonical)",
+    "boundaryContract": "A API e INCLUSIVA: date >= from AND date <= to. O half-open (to-exclusive) vive apenas no envelope do Agent, nunca na query."
+  },
+  "pageSize": {
+    "filterMax": 200,
+    "filterDefault": 50,
+    "analyticsStoreLoop": 200,
+    "anchors": [
+      "apps/api/src/types/transactions.ts:23",
+      "apps/api/src/analytics/source.ts:101-111"
+    ],
+    "note": "O source SQL de producao agrega no banco e nao pagina; o caso I protege o source store-backed e qualquer read model novo que materialize linhas."
+  },
+  "dataset": {
+    "accounts": [
+      { "id": "acc-a-bank", "householdId": "hh-a", "name": "Itau", "kind": "bank", "status": "active" },
+      { "id": "acc-a-bank2", "householdId": "hh-a", "name": "Nubank", "kind": "bank", "status": "active" },
+      { "id": "acc-a-card", "householdId": "hh-a", "name": "Nubank Card", "kind": "credit_card", "status": "active", "creditLimitCents": 500000 },
+      { "id": "acc-b-bank", "householdId": "hh-b", "name": "Bradesco", "kind": "bank", "status": "active" }
+    ],
+    "categories": [
+      { "id": "cat-food", "householdId": "hh-a", "name": "Alimentacao", "kind": "expense", "status": "active", "parentId": null },
+      { "id": "cat-meat", "householdId": "hh-a", "name": "Carne", "kind": "expense", "status": "active", "parentId": "cat-food" },
+      { "id": "cat-produce", "householdId": "hh-a", "name": "Hortifruti", "kind": "expense", "status": "active", "parentId": "cat-food" },
+      { "id": "cat-transport", "householdId": "hh-a", "name": "Transporte", "kind": "expense", "status": "active", "parentId": null },
+      { "id": "cat-utilities", "householdId": "hh-a", "name": "Contas", "kind": "expense", "status": "active", "parentId": null },
+      { "id": "cat-food-archived", "householdId": "hh-a", "name": "Mercado feirinha", "kind": "expense", "status": "inactive", "parentId": null },
+      { "id": "cat-salary", "householdId": "hh-a", "name": "Salario", "kind": "income", "status": "active", "parentId": null },
+      { "id": "cat-b-food", "householdId": "hh-b", "name": "Alimentos", "kind": "expense", "status": "active", "parentId": null },
+      { "id": "cat-b-salary", "householdId": "hh-b", "name": "Salario B", "kind": "income", "status": "active", "parentId": null }
+    ],
+    "statements": [
+      { "id": "stmt-a-2026-01", "householdId": "hh-a", "accountId": "acc-a-card", "cycleYearMonth": "2026-01", "closingDate": "2026-01-25", "dueDate": "2026-02-05", "totalCents": 30000, "paidCents": 30000, "status": "paid" },
+      { "id": "stmt-a-2026-02", "householdId": "hh-a", "accountId": "acc-a-card", "cycleYearMonth": "2026-02", "closingDate": "2026-02-25", "dueDate": "2026-03-05", "totalCents": 15000, "paidCents": 15000, "status": "paid" }
+    ],
+    "payablesNotCounted": [
+      { "id": "pay-a-pending", "householdId": "hh-a", "accountId": "acc-a-bank", "description": "Conta de luz", "amountCents": 9000, "dueDate": "2026-01-25", "status": "pending", "categoryId": "cat-utilities", "note": "NUNCA entra em analytics: nao existe linha em transactions." }
+    ],
+    "transactions": [
+      { "id": "tx-a-inc-2026-01", "householdId": "hh-a", "kind": "income", "date": "2026-01-05", "accountId": "acc-a-bank", "categoryId": "cat-salary", "amountCents": 500000, "deletedAt": null },
+      { "id": "tx-a-inc-2026-01-undone", "householdId": "hh-a", "kind": "income", "date": "2026-01-05", "accountId": "acc-a-bank", "categoryId": "cat-salary", "amountCents": 999000, "deletedAt": "2026-01-06T10:00:00Z", "note": "undo: a reversao e softDeleteTransaction, nao entrada compensatoria" },
+      { "id": "tx-a-inc-2026-02", "householdId": "hh-a", "kind": "income", "date": "2026-02-05", "accountId": "acc-a-bank", "categoryId": "cat-salary", "amountCents": 500000, "deletedAt": null },
+      { "id": "tx-a-exp-2026-01-08-food-macro", "householdId": "hh-a", "kind": "expense", "date": "2026-01-08", "accountId": "acc-a-bank", "categoryId": "cat-food", "subcategoryId": null, "amountCents": 6000, "deletedAt": null, "note": "macro direto (sem sub)" },
+      { "id": "tx-a-exp-2026-01-10-meat-macro-sub", "householdId": "hh-a", "kind": "expense", "date": "2026-01-10", "accountId": "acc-a-bank", "categoryId": "cat-food", "subcategoryId": "cat-meat", "amountCents": 5000, "deletedAt": null, "note": "forma canonica: macro em category_id, sub em subcategory_id" },
+      { "id": "tx-a-exp-2026-01-12-meat-flat", "householdId": "hh-a", "kind": "expense", "date": "2026-01-12", "accountId": "acc-a-bank", "categoryId": "cat-meat", "subcategoryId": null, "amountCents": 3000, "deletedAt": null, "note": "forma flat: sub ocupa category_id" },
+      { "id": "tx-a-exp-2026-01-13-archived-cat", "householdId": "hh-a", "kind": "expense", "date": "2026-01-13", "accountId": "acc-a-bank", "categoryId": "cat-food-archived", "subcategoryId": null, "amountCents": 7000, "deletedAt": null, "note": "categoria INATIVA mas transacao ativa: prova o mismatch ID/rotulo" },
+      { "id": "tx-a-exp-2026-01-15-utilities", "householdId": "hh-a", "kind": "expense", "date": "2026-01-15", "accountId": "acc-a-bank", "categoryId": "cat-utilities", "amountCents": 20000, "deletedAt": null },
+      { "id": "tx-a-exp-2026-01-12-transport-undone", "householdId": "hh-a", "kind": "expense", "date": "2026-01-12", "accountId": "acc-a-bank", "categoryId": "cat-transport", "amountCents": 12000, "deletedAt": "2026-01-13T09:00:00Z", "note": "soft-delete puro" },
+      { "id": "tx-a-card-2026-01-20-purchase", "householdId": "hh-a", "kind": "expense", "date": "2026-01-20", "accountId": "acc-a-card", "categoryId": "cat-food", "subcategoryId": "cat-meat", "amountCents": 30000, "statementId": "stmt-a-2026-01", "deletedAt": null, "note": "COMPETENCIA janeiro; pagamento so em 2026-02-05" },
+      { "id": "tx-a-pay-2026-02-05-stmt01", "householdId": "hh-a", "kind": "expense", "date": "2026-02-05", "accountId": "acc-a-bank", "categoryId": null, "statementPaymentId": "stmt-a-2026-01", "amountCents": 30000, "deletedAt": null, "note": "PAGAMENTO da MESMA fatura da compra de janeiro" },
+      { "id": "tx-a-card-2026-02-10-purchase", "householdId": "hh-a", "kind": "expense", "date": "2026-02-10", "accountId": "acc-a-card", "categoryId": "cat-transport", "amountCents": 15000, "statementId": "stmt-a-2026-02", "deletedAt": null },
+      { "id": "tx-a-exp-2026-02-12-uncategorized", "householdId": "hh-a", "kind": "expense", "date": "2026-02-12", "accountId": "acc-a-bank", "categoryId": null, "amountCents": 9500, "deletedAt": null, "note": "sem categoria: prova a divergencia breakdown vs kpis" },
+      { "id": "tx-a-pay-2026-03-05-stmt02", "householdId": "hh-a", "kind": "expense", "date": "2026-03-05", "accountId": "acc-a-bank", "categoryId": null, "statementPaymentId": "stmt-a-2026-02", "amountCents": 15000, "deletedAt": null },
+      { "id": "tx-a-transfer-2026-01-16", "householdId": "hh-a", "kind": "transfer", "date": "2026-01-16", "accountId": "acc-a-bank", "transferToAccountId": "acc-a-bank2", "categoryId": null, "amountCents": 40000, "deletedAt": null },
+      { "id": "tx-a-big-2026-06-25", "householdId": "hh-a", "kind": "expense", "date": "2026-06-25", "accountId": "acc-a-bank", "categoryId": "cat-utilities", "amountCents": 4000000000000000, "deletedAt": null, "note": "abaixo de 2^53: representavel" },
+      { "id": "tx-a-big-2026-06-26", "householdId": "hh-a", "kind": "expense", "date": "2026-06-26", "accountId": "acc-a-bank", "categoryId": "cat-utilities", "amountCents": 4000000000000000, "deletedAt": null },
+      { "id": "tx-a-big-2026-06-27", "householdId": "hh-a", "kind": "expense", "date": "2026-06-27", "accountId": "acc-a-bank", "categoryId": "cat-utilities", "amountCents": 2000000000000001, "deletedAt": null, "note": "soma final IMPAR acima de 2^53: nao representavel como double" },
+      { "id": "tx-b-exp-2026-01-11", "householdId": "hh-b", "kind": "expense", "date": "2026-01-11", "accountId": "acc-b-bank", "categoryId": "cat-b-food", "amountCents": 7777, "deletedAt": null },
+      { "id": "tx-b-inc-2026-01-11", "householdId": "hh-b", "kind": "income", "date": "2026-01-11", "accountId": "acc-b-bank", "categoryId": "cat-b-salary", "amountCents": 8888, "deletedAt": null }
+    ],
+    "generatedTransactions": [
+      { "id": "g1", "householdId": "hh-a", "kind": "expense", "accountId": "acc-a-bank", "categoryId": "cat-transport", "count": 250, "idPattern": "g1-tx-{i:04d}", "iRange": "1..250", "dateFormula": "2026-04-01 + ((i - 1) mod 28) dias", "amountCentsFormula": "1000 + i", "deletedAt": null, "note": "250 linhas > page size 200: exige 2 paginas" },
+      { "id": "g2", "householdId": "hh-a", "kind": "expense", "accountId": "acc-a-bank", "categoryId": "cat-transport", "count": 200, "idPattern": "g2-tx-{i:04d}", "iRange": "1..200", "dateFormula": "2026-05-01 + ((i - 1) mod 31) dias", "amountCentsFormula": "7000", "deletedAt": null, "note": "exatamente 1 pagina: pega o bug classico do break na borda" }
+    ]
+  },
+  "cases": [
+    {
+      "id": "A-competencia-vs-pagamento",
+      "specCase": "(a)",
+      "question": "Quanto gastei em janeiro/2026 com Alimentacao (incluindo descendentes)?",
+      "readModelsUnderTest": ["GET /analytics/category-breakdown", "GET /analytics/kpis"],
+      "request": { "path": "/analytics/category-breakdown", "query": { "period": "custom", "from": "2026-01-01", "to": "2026-01-31", "kind": "expense" } },
+      "expected": {
+        "effectivePeriod": { "from": "2026-01-01", "to": "2026-01-31", "toExclusive": "2026-02-01" },
+        "totalCents": 71000,
+        "transactionCount": 6,
+        "slices": [
+          { "categoryId": "cat-food", "name": "Alimentacao", "totalCents": 44000, "pct": 62.0 },
+          { "categoryId": "cat-utilities", "name": "Contas", "totalCents": 20000, "pct": 28.2 },
+          { "categoryId": "cat-food-archived", "name": "Outras", "totalCents": 7000, "pct": 9.9, "defect": "rotulo Outras com categoryId real: mismatch ID/rotulo" }
+        ],
+        "kpisExpenseCents": 71000,
+        "kpisIncomeCents": 500000
+      },
+      "expectedDerivation": "Janeiro: 6000 + 5000 + 3000 + 7000 + 20000 + 30000 (cartao) = 71000 em 6 linhas. As 2 linhas deletadas (12000 despesa, 999000 receita) nao entram. Macro cat-food = 6000 + 5000 + 3000 (cat-meat e filho) + 30000 = 44000; pct 44000/71000 = 61.97 arredonda 62.0. A compra de cartao de 20/jan entra por COMPETENCIA; o pagamento de 05/fev NAO entra.",
+      "verdictToday": "TOTAL_CORRETO; envelope ausente (sem asOf, basis, semanticsVersion, transactionCount)",
+      "codeAnchors": ["apps/api/src/analytics/compute.ts:184", "apps/api/src/analytics/source.ts:201", "apps/api/src/analytics/compute.ts:196"]
+    },
+    {
+      "id": "B-status-pending-vs-confirmed",
+      "specCase": "(b)",
+      "question": "O que conta como despesa: pending tambem?",
+      "readModelsUnderTest": ["GET /analytics/kpis"],
+      "request": { "path": "/analytics/kpis", "query": { "period": "custom", "from": "2026-01-01", "to": "2026-01-31" } },
+      "expected": {
+        "totalCents": 71000,
+        "transactionCount": 6,
+        "pendingPayableExcludedCents": 9000,
+        "basis": "somente transactions ja lancadas; pending_operations e accounts_payable fora"
+      },
+      "expectedDerivation": "transactions nao tem coluna status (V001__init.sql:42-65 e types/domain.ts:75-89). accounts_payable.status = pending (V005__payables.sql:15) nao e lido por nenhum read model de analytics. Logo pending = 0 de contribuicao por exclusao implicita, sem basis declarado.",
+      "verdictToday": "SEMANTICA_OK_MAS_IMPLICITA; impossivel responder quanto esta pendente",
+      "codeAnchors": ["apps/api/src/analytics/source.ts:195-212", "apps/api/src/types/domain.ts:75-89", "apps/api/src/read-models/sql/V005__payables.sql:15"]
+    },
+    {
+      "id": "C-soft-delete",
+      "specCase": "(c)",
+      "question": "Linha desfeita some das agregacoes?",
+      "readModelsUnderTest": ["GET /analytics/kpis"],
+      "request": { "path": "/analytics/kpis", "query": { "period": "custom", "from": "2026-01-01", "to": "2026-01-31" } },
+      "expected": { "expenseCents": 71000, "incomeCents": 500000, "excludedCents": 1011000, "excludedCount": 2 },
+      "expectedDerivation": "999000 (receita undo) + 12000 (despesa soft-delete) = 1011000 fora. Sem isso a receita de janeiro seria 1499000 e a despesa 83000.",
+      "verdictToday": "PASSA",
+      "codeAnchors": ["apps/api/src/analytics/source.ts:200", "apps/api/src/analytics/source.ts:236", "apps/api/src/read-models/sql/V001__init.sql:54"]
+    },
+    {
+      "id": "D-undo-estorno",
+      "specCase": "(d)",
+      "question": "Distinguir undo de linha que nunca existiu?",
+      "readModelsUnderTest": ["GET /analytics/kpis"],
+      "request": { "path": "/analytics/kpis", "query": { "period": "custom", "from": "2026-01-01", "to": "2026-01-31" } },
+      "expected": { "expenseCents": 71000, "undoneCentsObservable": 0, "note": "analytics nao expoe sinal de undo: a linha desaparece e e indistinguivel de nunca ter existido" },
+      "expectedDerivation": "undo chama softDeleteTransaction (writes/postgres.ts:1027) e nao cria entrada compensatoria. Nao existe campo undoneAt nem auditoria no read model. Um estorno (reversao explicita) e um delete do usuario produzem o mesmo agregado.",
+      "verdictToday": "TOTAIS_CORRETOS_MAS_OPACOS: impossivel responder quanto foi desfeito",
+      "codeAnchors": ["apps/api/src/writes/postgres.ts:1027", "apps/api/src/approvals/undo.ts:186"]
+    },
+    {
+      "id": "E-transferencia",
+      "specCase": "(e)",
+      "question": "Transferencia interna conta como despesa e receita?",
+      "readModelsUnderTest": ["GET /analytics/kpis", "GET /analytics/category-breakdown", "GET /analytics/daily-heatmap"],
+      "request": { "path": "/analytics/kpis", "query": { "period": "custom", "from": "2026-01-01", "to": "2026-01-31" } },
+      "expected": { "incomeCents": 500000, "expenseCents": 71000, "transferCountedAs": "nenhum", "destinationAccountScopedTotalCents": 0 },
+      "expectedDerivation": "kind=transfer e ignorado em sumByKind (GROUP BY kind, so le income/expense), em dailySums (CASE so income/expense) e em categorySums (kind = expense). No dialeto canonical o filtro de conta casa so account_id de origem, entao acc-a-bank2 como destino retorna 0; o dialeto legacy faz OR em from/to (source.ts:188) e DIVERGE.",
+      "verdictToday": "PASSA (transfer nunca vira despesa+receita); ressalva de assimetria de escopo legacy vs canonical",
+      "codeAnchors": ["apps/api/src/analytics/source.ts:198-210", "apps/api/src/analytics/source.ts:216-222", "apps/api/src/analytics/source.ts:188"]
+    },
+    {
+      "id": "F-cartao-vs-fatura",
+      "specCase": "(f)",
+      "question": "Compra no cartao e pagamento da MESMA fatura contam como duas despesas?",
+      "readModelsUnderTest": ["GET /analytics/kpis", "GET /analytics/cashflow-series", "GET /analytics/category-breakdown"],
+      "request": { "path": "/analytics/kpis", "query": { "period": "custom", "from": "2026-01-01", "to": "2026-03-31" } },
+      "expected": {
+        "naiveExpenseCents": 140500,
+        "invoiceDoubleCountedCents": 45000,
+        "competenciaExpenseCents": 95500,
+        "transactionCount": 10,
+        "categoryBreakdownTotalCents": 86000
+      },
+      "expectedDerivation": "T1 = 71000 + 54500 (fev) + 15000 (mar) = 140500. stmt-a-2026-01: compra 30000 em jan + pagamento 30000 em fev, ambos na janela. stmt-a-2026-02: compra 15000 em fev + pagamento 15000 em mar. Inflation = 45000. Por competencia (excluindo statement_payment_id) = 95500. Breakdown = 86000 porque os 2 pagamentos e a linha sem categoria nao tem category_id.",
+      "verdictToday": "FALHA CONFIRMADA: LACUNA NOMEADA G-A",
+      "codeAnchors": ["apps/api/src/cards/postgres.ts:429-431", "apps/api/src/cards/postgres.ts:649-653", "apps/api/src/analytics/source.ts:198-202", "apps/api/src/read-models/sql/V056__statement_payment_link.sql:24"]
+    },
+    {
+      "id": "G-ancestral-descendentes",
+      "specCase": "(g)",
+      "question": "Total da categoria ancestra incluindo descendentes, sem duplicar?",
+      "readModelsUnderTest": ["GET /analytics/category-breakdown"],
+      "request": { "path": "/analytics/category-breakdown", "query": { "period": "custom", "from": "2026-01-01", "to": "2026-01-31", "kind": "expense" } },
+      "expected": {
+        "subtree": ["cat-food", "cat-meat", "cat-produce"],
+        "subtreeTotalCents": 44000,
+        "subtreeTransactionCount": 4,
+        "duplicatedCents": 0,
+        "canFilterByCategoryId": false,
+        "hasIncludeDescendants": false,
+        "maxSlices": 5
+      },
+      "expectedDerivation": "6000 + 5000 + 3000 + 30000 = 44000 em 4 linhas; cada linha contada 1 vez. cat-produce tem 0 linhas em janeiro. A forma flat (category_id = cat-meat) e a forma canonica (category_id = macro + subcategory_id = sub) rolam para o mesmo ancestral. Rollup atual e cat.parentId ?? cat.id: exatamente 1 nivel, sem parametro. Categoria inactive nao esta em lists.categories e cai em cat?.name ?? Outras.",
+      "verdictToday": "PARCIAL: total correto ate profundidade 2; sem categoryId, sem includeDescendants, cap 5, profundidade 3+ nao atribui ao ancestral, mismatch ID/rotulo",
+      "codeAnchors": ["apps/api/src/analytics/compute.ts:184", "apps/api/src/analytics/compute.ts:189-204", "apps/api/src/analytics/compute.ts:196", "apps/api/src/read-models/store.ts:53", "apps/api/src/writes/postgres.ts:913", "apps/api/src/writes/postgres.ts:954-962"]
+    },
+    {
+      "id": "G2-ciclo-e-travessia",
+      "specCase": "(g) ciclo",
+      "question": "includeDescendants com arvore ciclica: trava ou duplica?",
+      "readModelsUnderTest": ["read model novo (pos-gate)"],
+      "request": { "path": null, "query": null },
+      "expected": {
+        "currentTraversalDepth": 1,
+        "currentInfiniteLoopRisk": false,
+        "dbEnforcesAcyclicity": false,
+        "codeEnforcesDepthAtMostTwo": true,
+        "codeEnforcesParentImmutable": true,
+        "requiredGuardsForFutureTraversal": ["visited set", "teto de profundidade", "fallback fail-closed em ciclo"]
+      },
+      "expectedDerivation": "Hoje nao ha travessia: e lookup de 1 nivel, entao nao ha loop infinito. Invariantes sao de CODIGO, nao de constraint: create/update rejeita pai que ja tem pai (profundidade <= 2) e updateCategory nunca escreve parent_id (imutavel), logo ciclo e impossivel via API. O banco nao tem CHECK nem FK composta anti-ciclo. Um includeDescendants novo DEVE levar visited + teto mesmo assim.",
+      "verdictToday": "SEM RISCO HOJE; RISCO FUTURO NAO COBERTO",
+      "codeAnchors": ["apps/api/src/writes/postgres.ts:910-915", "apps/api/src/writes/postgres.ts:954-962", "apps/api/src/read-models/sql/V009__categories_parent_subscriptions.sql:11"]
+    },
+    {
+      "id": "H-safe-integers",
+      "specCase": "(h)",
+      "question": "Soma acima de 2^53 permanece exata?",
+      "readModelsUnderTest": ["GET /analytics/kpis", "GET /analytics/category-breakdown"],
+      "request": { "path": "/analytics/kpis", "query": { "period": "custom", "from": "2026-06-01", "to": "2026-06-30" } },
+      "expected": {
+        "totalCentsExact": "10000000000040001",
+        "transactionCount": 3,
+        "representableAsJsDouble": false,
+        "closestDoublesDifferByCents": 1,
+        "partialSumAfterTwoRows": "8000000000000000",
+        "partialSumAfterTwoRowsRepresentable": true
+      },
+      "expectedDerivation": "4000000000000000 + 4000000000000000 + 2000000000000001 = 10000000000040001. Esse valor e IMPAR e esta entre 2^53 (9007199254740992) e 2^54, logo nao e representavel: os dois doubles vizinhos sao N e N+2, ambos a 1 centavo do valor exato. Ja 8000000000000000 (2 linhas) e menor que 2^53 e e representavel. O PostgreSQL devolve exato (SUM(bigint) -> numeric, ::text); a perda e 100% no Number() do JavaScript. amount_cents e BIGINT sem teto alem de > 0, entao o dominio e realmente nao limitado.",
+      "verdictToday": "FALHA CONFIRMADA: LACUNA NOMEADA G-B",
+      "codeAnchors": ["apps/api/src/analytics/source.ts:198-210", "apps/api/src/analytics/source.ts:242", "apps/api/src/read-models/postgres-store.ts:51", "apps/api/src/analytics/types.ts:95"]
+    },
+    {
+      "id": "I-dataset-maior-que-uma-pagina",
+      "specCase": "(i)",
+      "question": "Dataset maior que uma pagina perde linhas?",
+      "readModelsUnderTest": ["createStoreAnalyticsSource.rangeTransactions", "createSqlAnalyticsSource"],
+      "request": { "path": "/analytics/kpis", "query": { "period": "custom", "from": "2026-04-01", "to": "2026-04-30" } },
+      "expected": {
+        "g1": { "rows": 250, "pageSize": 200, "pages": [200, 50], "totalCents": 281375, "transactionCount": 250, "lostRows": 0 },
+        "g2": { "rows": 200, "pageSize": 200, "pages": [200, 0], "totalCents": 1400000, "transactionCount": 200, "lostRows": 0 }
+      },
+      "expectedDerivation": "g1: soma de (1000 + i) para i de 1 a 250 = 250*1000 + 250*251/2 = 250000 + 31375 = 281375. Paginar com page size 200 da 200 + 50 linhas. Uma pagina unica perderia 50; o default 50 sem laco perderia 200. g2 tem exatamente 1 pagina: o laco so quebra quando items.length < 200, entao a 2a chamada devolve 0 e para. Com break em <= 200 o g1 ainda passaria, mas um break incorreto na borda trava em loop.",
+      "verdictToday": "PASSA (store-backed pagina corretamente; o source SQL de producao agrega no banco e nao pagina)",
+      "codeAnchors": ["apps/api/src/analytics/source.ts:98-113", "apps/api/src/types/transactions.ts:23-24"]
+    },
+    {
+      "id": "J-dois-workspaces",
+      "specCase": "(j)",
+      "question": "Dois workspaces nao se enxergam?",
+      "readModelsUnderTest": ["GET /analytics/kpis", "GET /analytics/category-breakdown"],
+      "request": { "path": "/analytics/kpis", "query": { "period": "custom", "from": "2026-01-01", "to": "2026-01-31" } },
+      "expected": {
+        "workspaceA": { "expenseCents": 71000, "incomeCents": 500000, "transactionCount": 7 },
+        "workspaceB": { "expenseCents": 7777, "incomeCents": 8888, "transactionCount": 2 },
+        "crossLeakCents": 0,
+        "workspaceIdAcceptedFromQuery": false
+      },
+      "expectedDerivation": "Todo agregado filtra por t.household_id = $1 e o householdId vem do token resolvido no servidor; analyticsBaseSchema nao aceita workspaceId nem householdId (types.ts:14-21). hh-b tem 7777 de despesa e 8888 de receita em 2026-01-11 e nunca aparece para hh-a.",
+      "verdictToday": "PASSA",
+      "codeAnchors": ["apps/api/src/analytics/source.ts:200", "apps/api/src/analytics/types.ts:14-21", "apps/api/src/routes/analytics.ts:42-46"]
+    },
+    {
+      "id": "K-comparacao-entre-meses",
+      "specCase": "(3) matriz",
+      "question": "Janeiro foi mais caro que fevereiro?",
+      "readModelsUnderTest": ["GET /analytics/kpis"],
+      "request": { "path": "/analytics/kpis", "query": { "period": "custom", "from": "2026-01-01", "to": "2026-01-31" } },
+      "expected": {
+        "januaryExpenseCents": 71000,
+        "februaryExpenseCents": 54500,
+        "deltaCents": -16500,
+        "deltaPct": -23.2,
+        "requiresTwoCalls": true
+      },
+      "expectedDerivation": "54500 = 30000 (pagamento fatura jan) + 15000 (compra cartao fev) + 9500 (sem categoria). Duas chamadas com period=custom. previousPeriod do kpis cobre so a janela imediatamente anterior de mesmo tamanho (2025-12-01 a 2025-12-31, vazia), nao serve para comparar meses escolhidos. pct calculado pelo Agent: (54500-71000)/71000 = -0.232394, vezes 1000 = -232, dividido por 10 = -23.2.",
+      "verdictToday": "PASSA com 2 chamadas; nao ha serie month-over-month de despesa nem de categoria",
+      "codeAnchors": ["apps/api/src/analytics/compute.ts:51-55", "apps/api/src/routes/analytics.ts:67-73"]
+    },
+    {
+      "id": "L-envelope-ausente",
+      "specCase": "R09 linha 161",
+      "question": "A resposta carrega periodo efetivo, timezone/basis, versao semantica, filtro efetivo, totalCents, transactionCount, asOf e motivo de vazio?",
+      "readModelsUnderTest": ["todas as 6 rotas de analytics"],
+      "request": { "path": "/analytics/kpis", "query": { "period": "custom", "from": "2026-02-01", "to": "2026-02-28" } },
+      "expected": {
+        "period": { "present": true, "from": "2026-02-01", "to": "2026-02-28", "toExclusiveDeclared": false },
+        "timezoneOrBasis": false,
+        "semanticsVersion": false,
+        "effectiveFilter": false,
+        "transactionCount": false,
+        "asOf": false,
+        "emptyReason": false
+      },
+      "expectedDerivation": "kpis responde period, previousPeriod e *_Cents; cashflow-series responde period; category-breakdown responde period e kind; nenhum responde basis, asOf, semanticsVersion, transactionCount ou motivo de vazio. Divergencia Fev: kpis.expenseCents 54500 contra categoryBreakdown.totalCents 15000, porque categorySums filtra category_id IS NOT NULL e a linha de 9500 nao tem categoria.",
+      "verdictToday": "FALHA CONFIRMADA: LACUNA NOMEADA G-C (envolve A04 period_empty)",
+      "codeAnchors": ["apps/api/src/analytics/source.ts:237-239", "apps/api/src/analytics/types.ts:55-71", "apps/api/src/routes/analytics.ts:95-121"]
+    }
+  ],
+  "replayAgainstCurrentReadModel": {
+    "pass": ["C", "E", "I", "J", "K"],
+    "passTotalsButOpaque": ["B", "D"],
+    "partial": ["A", "G", "G2"],
+    "fail": ["F", "H", "L"]
+  },
+  "openForGate": {
+    "blocker": "Nenhuma rota nova aberta. G03 decide.",
+    "requiredBeforeAnyNewApi": ["patch da SPEC", "schema/OpenAPI", "capability de leitura estreita", "regeneracao via scripts/generate-agent-tools.mjs"],
+    "migration": "Nenhuma migration e necessaria para os findings F/H/L: todos se resolvem em camada de leitura."
+  }
+}
