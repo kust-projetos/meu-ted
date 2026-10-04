@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  ANALYTICS_BASIS,
+  ANALYTICS_BASES,
   ANALYTICS_BOUNDARY,
+  DEFAULT_ANALYTICS_BASIS,
   MAX_SAFE_CENTS,
   declareAnalyticsEnvelope,
   normalizeAnalyticsQuery,
@@ -19,8 +20,12 @@ import { generatedHttpTools } from '../src/generated/http-tools.js';
 
 const ANALYTICS_TOOLS = ['analytics_kpis', 'analytics_category_breakdown'] as const;
 
-/** kpis payload shape as really sent by `GET /analytics/kpis` (routes/analytics.ts:95). */
-const kpisResponse = (from: string, to: string) => ({
+/**
+ * kpis payload shape as really sent by `GET /analytics/kpis` (routes/analytics.ts),
+ * INCLUDING the G03 proof envelope: `basis` is the EFFECTIVE basis the API
+ * applied, and it is the agent's job to propagate it, not to replace it.
+ */
+const kpisResponse = (from: string, to: string, basis: 'liquidez' | 'competencia' = 'liquidez') => ({
   period: { from, to },
   previousPeriod: { from: '2025-12-01', to: '2025-12-31' },
   netLiquidBalanceCents: 120000,
@@ -42,6 +47,12 @@ const kpisResponse = (from: string, to: string) => ({
   previousIncomeCents: 200000,
   previousExpenseCents: 192000,
   netWorthCents: 105000,
+  transactionCount: 18,
+  asOf: '2026-02-01T12:00:00.000Z',
+  basis,
+  semanticsVersion: '1',
+  effectiveFilter: { period: 'custom', from, to, accountId: null },
+  emptyReason: null,
 });
 
 describe('normalizeAnalyticsQuery (A09/R09 — spike §3.1 armadilha 1)', () => {
@@ -95,14 +106,34 @@ describe('normalizeAnalyticsQuery (A09/R09 — spike §3.1 armadilha 1)', () => 
     });
   });
 
+  it('G-A: `basis` só vai na wire quando pedido, e um valor fora do contrato é recusado', () => {
+    // Omissão = liquidez: NADA é enviado, a API aplica o default dela.
+    const omitted = normalizeAnalyticsQuery({ yearMonth: '2026-01' });
+    expect(omitted.ok).toBe(true);
+    if (!omitted.ok) return;
+    expect(omitted.query).not.toHaveProperty('basis');
+    // Pedido explícito: viaja, e viaja junto do período custom.
+    expect(normalizeAnalyticsQuery({ yearMonth: '2026-01', basis: 'competencia' })).toEqual({
+      ok: true,
+      query: { period: 'custom', from: '2026-01-01', to: '2026-01-31', basis: 'competencia' },
+    });
+    expect(ANALYTICS_BASES).toEqual(['liquidez', 'competencia']);
+    expect(DEFAULT_ANALYTICS_BASIS).toBe('liquidez');
+    // Base inválida é recusada, nunca descartada: cair para liquidez responderia
+    // a janela certa com a SEMÂNTICA errada.
+    const invalid = normalizeAnalyticsQuery({ yearMonth: '2026-01', basis: 'caixa' as never });
+    expect(invalid).toMatchObject({ ok: false, reason: 'invalid_basis' });
+    expect('query' in invalid).toBe(false);
+  });
+
   it('recusa daily-heatmap no caminho custom (a rota ignora period/from — armadilha 2)', () => {
     const rejected = normalizeAnalyticsQuery({
       tool: 'analytics_daily_heatmap',
       yearMonth: '2026-01',
     });
     expect(rejected).toMatchObject({ ok: false, reason: 'daily_heatmap_ignores_period' });
-    // Nenhum período é devolvido: a janela da rota é fixa em 35 dias e não
-    // pode ser declarada como a janela pedida.
+    // Nenhum período é devolvido: a janela da rota é a grade fixa (4 semanas
+    // terminando em `to`) e não pode ser declarada como a janela pedida.
     expect('query' in rejected).toBe(false);
     // As duas tools expostas aceitam o caminho custom normalmente.
     for (const tool of ANALYTICS_TOOLS) {
@@ -122,10 +153,58 @@ describe('declareAnalyticsEnvelope (A09/R09 — fronteira inclusiva → exclusiv
       toExclusive: '2026-02-01',
     });
     expect(result.response.boundary).toBe(ANALYTICS_BOUNDARY);
-    expect(result.response.basis).toBe(ANALYTICS_BASIS);
+    // G-A: a base EFETIVA é a da API, propagada verbatim.
+    expect(result.response.basis).toBe('liquidez');
     // O corpo original permanece intacto (o envelope é aditivo).
     expect(result.response.incomeCents).toBe(240000);
     expect(result.response.previousPeriod).toEqual({ from: '2025-12-01', to: '2025-12-31' });
+  });
+
+  it('G03: a base da API vence a intenção do agente, nos dois sentidos', () => {
+    // A API aplicou `liquidez`; o agente pediu `competencia`. O que vale é o que
+    // a leitura fez - mentir sobre a base seria inventar prova.
+    const declared = declareAnalyticsEnvelope(kpisResponse('2026-01-01', '2026-01-31', 'liquidez'), {
+      requestedBasis: 'competencia',
+    });
+    expect(declared.ok).toBe(true);
+    if (!declared.ok) return;
+    expect(declared.response.basis).toBe('liquidez');
+    expect(declared.response).not.toHaveProperty('agentRequestedBasis');
+
+    // E quando a API declara `competencia`, ela é propagada.
+    const competencia = declareAnalyticsEnvelope(kpisResponse('2026-01-01', '2026-01-31', 'competencia'));
+    expect(competencia.ok).toBe(true);
+    if (!competencia.ok) return;
+    expect(competencia.response.basis).toBe('competencia');
+  });
+
+  it('G03: sem base declarada pela API o agente NÃO afirma base nenhuma', () => {
+    const { basis: _ignored, ...withoutBasis } = kpisResponse('2026-01-01', '2026-01-31');
+    const result = declareAnalyticsEnvelope(withoutBasis);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Afirmar `competencia` sobre uma leitura sem base declarada seria invenção.
+    expect(result.response).not.toHaveProperty('basis');
+    expect(result.response.agentRequestedBasis).toBe(DEFAULT_ANALYTICS_BASIS);
+  });
+
+  it('G03: um effectivePeriod vindo da API é preservado e o do agente fica ao lado', () => {
+    const result = declareAnalyticsEnvelope({
+      ...kpisResponse('2026-01-01', '2026-01-31'),
+      effectivePeriod: { from: '2026-01-01', to: '2026-01-31', toExclusive: '2026-02-01' },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.response.effectivePeriod).toEqual({
+      from: '2026-01-01',
+      to: '2026-01-31',
+      toExclusive: '2026-02-01',
+    });
+    expect(result.response.agentEffectivePeriod).toEqual({
+      from: '2026-01-01',
+      to: '2026-01-31',
+      toExclusive: '2026-02-01',
+    });
   });
 
   it('calcula toExclusive em virada de ano e ano bissexto', () => {
@@ -181,6 +260,22 @@ describe('declareAnalyticsEnvelope (A09/R09 — fronteira inclusiva → exclusiv
     expect(result.response.totalCents).toBe(281375);
     expect(result.response).not.toHaveProperty('totalCentsExact');
     expect(result.response).not.toHaveProperty('approximate');
+  });
+
+  it('G03: o decimal exato da API NUNCA é sobrescrito pelo double local', () => {
+    // G-B na API: o banco devolve o decimal exato; o number já perdeu centavos.
+    // Trocar a prova da API pelo `String(double)` traria a perda de volta.
+    const result = declareAnalyticsEnvelope({
+      period: { from: '2026-06-01', to: '2026-06-30' },
+      totalCents: 10000000000000000,
+      totalCentsExact: '10000000000000001',
+      approximate: true,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.response.totalCentsExact).toBe('10000000000000001');
+    expect(result.response.approximate).toBe(true);
+    expect(BigInt(result.response.totalCentsExact as string)).not.toBe(BigInt(result.response.totalCents as number));
   });
 });
 
@@ -288,7 +383,13 @@ describe('borda executável das tools de analytics (A09/FIX B1)', () => {
   it('RED: totalCents fora do safe integer chega ao modelo com approximate:true', async () => {
     const unsafe = 10_000_000_000_040_000;
     const result = await withFetch(
-      { period: { from: '2026-01-01', to: '2026-01-31' }, totalCents: unsafe, slices: [] },
+      {
+        period: { from: '2026-01-01', to: '2026-01-31' },
+        kind: 'expense',
+        basis: 'liquidez',
+        totalCents: unsafe,
+        slices: [],
+      },
       () => call('analytics_category_breakdown', {
         period: 'custom',
         from: '2026-01-01',
@@ -301,8 +402,55 @@ describe('borda executável das tools de analytics (A09/FIX B1)', () => {
       totalCentsExact: String(unsafe),
       effectivePeriod: { from: '2026-01-01', to: '2026-01-31', toExclusive: '2026-02-01' },
       boundary: ANALYTICS_BOUNDARY,
-      basis: ANALYTICS_BASIS,
+      basis: 'liquidez',
     });
+  });
+
+  it('G03: basis=competencia sai na wire e a base declarada pela API volta no payload', async () => {
+    const realFetch = globalThis.fetch;
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(kpisResponse('2026-01-01', '2026-01-31', 'competencia')), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const result = await call('analytics_kpis', {
+        period: 'custom',
+        from: '2026-01-01',
+        to: '2026-01-31',
+        basis: 'competencia',
+      });
+      const url = String(fetchMock.mock.calls[0]?.[0] as unknown);
+      expect(url).toContain('basis=competencia');
+      // E a resposta é o que a APIsays: o envelope do agente não a contradiz.
+      expect(result.basis).toBe('competencia');
+      expect(result.transactionCount).toBe(18);
+      expect(result.semanticsVersion).toBe('1');
+    } finally {
+      globalThis.fetch = realFetch;
+      apiClient.clearGlobalApiContext();
+    }
+  });
+
+  it('G03: um basis inválido é recusado ANTES da rede (fail-closed no parâmetro)', async () => {
+    const realFetch = globalThis.fetch;
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const result = await call('analytics_kpis', {
+        period: 'custom',
+        from: '2026-01-01',
+        to: '2026-01-31',
+        basis: 'caixa',
+      });
+      expect(result).toMatchObject({ ok: false, reason: 'invalid_basis' });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = realFetch;
+      apiClient.clearGlobalApiContext();
+    }
   });
 
   it('RED: uma janela incompleta/inválida é recusada ANTES da rede (fail-closed no parâmetro)', async () => {

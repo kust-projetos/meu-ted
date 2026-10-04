@@ -72,19 +72,22 @@ export type {
   ExternalResultItem,
 } from './web-evidence.js';
 export {
-  ANALYTICS_BASIS,
+  ANALYTICS_BASES,
   ANALYTICS_BOUNDARY,
   ANALYTICS_QUERY_REJECTIONS,
+  DEFAULT_ANALYTICS_BASIS,
   MAX_SAFE_CENTS,
   PERIOD_IGNORING_TOOLS,
   declareAnalyticsEnvelope,
   normalizeAnalyticsQuery,
 } from './analytics-envelope.js';
 export type {
+  AnalyticsBasis,
   AnalyticsEffectivePeriod,
   AnalyticsEnvelopeResult,
   AnalyticsQueryInput,
   AnalyticsQueryRejection,
+  DeclareAnalyticsEnvelopeOptions,
   NormalizeAnalyticsQueryResult,
   NormalizedAnalyticsQuery,
   PeriodIgnoringTool,

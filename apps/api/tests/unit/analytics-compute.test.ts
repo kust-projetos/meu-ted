@@ -9,6 +9,7 @@ import {
   savingsRatePct,
   statementsDueSoon,
 } from '../../src/analytics/compute.js';
+import type { CategorySum, MonthlyFlow } from '../../src/analytics/source.js';
 
 describe('analytics ranges', () => {
   it('resolves presets against the injected today', () => {
@@ -54,9 +55,15 @@ describe('category breakdown', () => {
       { id: 's1', name: 'Aluguel', parentId: 'm1', color: null },
       ...[2, 3, 4, 5, 6, 7].map((n) => ({ id: `m${n}`, name: `Macro ${n}`, parentId: undefined, color: null })),
     ];
-    const sums = [
-      { categoryId: 's1', totalCents: 1000 },
-      ...[2, 3, 4, 5, 6, 7].map((n, i) => ({ categoryId: `m${n}`, totalCents: 100 * (i + 1) })),
+    // G-B: each aggregate carries its own exact decimal (`total`), which is what
+    // the rollup re-sums. Values are unchanged by that shape.
+    const sums: CategorySum[] = [
+      { categoryId: 's1', total: { cents: 1000, exactText: '1000' }, transactionCount: 1 },
+      ...[2, 3, 4, 5, 6, 7].map((n, i) => ({
+        categoryId: `m${n}`,
+        total: { cents: 100 * (i + 1), exactText: String(100 * (i + 1)) },
+        transactionCount: 1,
+      })),
     ];
     const result = buildCategoryBreakdown(sums, categories, { from: '2026-09-01', to: '2026-09-30' }, 'expense');
     expect(result.totalCents).toBe(1000 + 100 + 200 + 300 + 400 + 500 + 600);
@@ -68,6 +75,9 @@ describe('category breakdown', () => {
     expect(Math.abs(pctSum - 100)).toBeLessThan(0.2);
     // Sub rolled up: no slice keeps the sub id.
     expect(result.slices.some((s) => s.categoryId === 's1')).toBe(false);
+    // G-B: a total inside the safe integer gains no exact companion.
+    expect(result).not.toHaveProperty('totalCentsExact');
+    expect(result).not.toHaveProperty('approximate');
   });
 });
 
@@ -75,8 +85,8 @@ describe('heatmap', () => {
   it('builds 4 Monday-first weeks ending with the week of endDate', () => {
     const result = buildDailyHeatmap(
       [
-        { date: '2026-09-07', incomeCents: 0, expenseCents: 400 },
-        { date: '2026-09-06', incomeCents: 9999, expenseCents: 100 },
+        { date: '2026-09-07', income: { cents: 0 }, expense: { cents: 400 }, transactionCount: 1 },
+        { date: '2026-09-06', income: { cents: 9999 }, expense: { cents: 100 }, transactionCount: 2 },
       ],
       '2026-09-07',
     );
@@ -96,9 +106,9 @@ describe('heatmap', () => {
 
 describe('net worth history', () => {
   it('reconstructs monthly positions backwards from today', () => {
-    const flows = [
-      { month: '2026-08', incomeCents: 0, expenseCents: 2000 },
-      { month: '2026-09', incomeCents: 5000, expenseCents: 0 },
+    const flows: MonthlyFlow[] = [
+      { month: '2026-08', income: { cents: 0 }, expense: { cents: 2000 }, transactionCount: 1 },
+      { month: '2026-09', income: { cents: 5000 }, expense: { cents: 0 }, transactionCount: 1 },
     ];
     const points = buildNetWorthHistory(10_000, flows, '2026-09-07', 3);
     expect(points.map((p) => p.month)).toEqual(['2026-07', '2026-08', '2026-09']);

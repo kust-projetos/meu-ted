@@ -26,7 +26,7 @@
 import { jsonSchema, tool } from 'ai';
 import { generatedHttpTools } from '../generated/http-tools.js';
 import { ALL_SKILLS } from './skills/index.js';
-import { declareAnalyticsEnvelope, normalizeAnalyticsQuery } from './analytics-envelope.js';
+import { declareAnalyticsEnvelope, normalizeAnalyticsQuery, type AnalyticsBasis } from './analytics-envelope.js';
 import {
   WEB_UNAVAILABLE_MESSAGE,
   createWebSearchProvider,
@@ -241,6 +241,15 @@ const analyticsRangeIntent = (params: Record<string, unknown>) => ({
 });
 
 /**
+ * G-A: the base intent, kept separate from the range because it is a different
+ * decision. Absent = `liquidez` (the API default, and nothing is sent).
+ * Choosing `competencia` from the question wording is POST-G03 intent wiring —
+ * until then the parameter is available, validated and propagated.
+ */
+const analyticsBasisIntent = (params: Record<string, unknown>) =>
+  typeof params['basis'] === 'string' ? { basis: params['basis'] as AnalyticsBasis } : {};
+
+/**
  * Builds AI SDK tools bound to a turn context. Reads execute directly;
  * mutations first pass the safety utils (this is their first enforcement
  * point — previously dead code). Web tools resolve availability from env.
@@ -382,20 +391,25 @@ export const buildExposedTools = (
           // range at all is passed through: the API resolves it deterministically
           // and the response declares the window it really used.
           const intent = analyticsRangeIntent(params);
+          const basisIntent = analyticsBasisIntent(params);
           const rangeNamed = Object.keys(intent).length > 0;
           const period = typeof params['period'] === 'string' ? params['period'] : undefined;
           const wantsExactWindow = rangeNamed || period === undefined || period === 'custom';
           let query: Record<string, unknown> = params;
           if (wantsExactWindow) {
-            const normalized = normalizeAnalyticsQuery({ tool: name, ...intent });
+            const normalized = normalizeAnalyticsQuery({ tool: name, ...intent, ...basisIntent });
             if (!normalized.ok) return { ok: false, reason: normalized.reason, message: normalized.message };
             query = { ...params, ...normalized.query };
           }
           const response = await analyticsTool.execute('model-tool', query, undefined, undefined, invocationAuth);
-          // (b) RESPONSE: the effective period plus the lossy-total flag. A
-          // response without a usable period gets NO envelope — declaring a
+          // (b) RESPONSE: the effective period plus the lossy-total flag. The
+          // API's own proof (G-C: basis, transactionCount, asOf, exact cents)
+          // is preserved verbatim — the agent only completes what is missing.
+          // A response without a usable period gets NO envelope: declaring a
           // window the route did not use would invent proof (R04).
-          const enveloped = declareAnalyticsEnvelope(response);
+          const enveloped = declareAnalyticsEnvelope(response, {
+            ...(basisIntent.basis ? { requestedBasis: basisIntent.basis } : {}),
+          });
           if (!enveloped.ok) return { ok: false, reason: enveloped.reason, message: enveloped.message };
           return enveloped.response;
         },

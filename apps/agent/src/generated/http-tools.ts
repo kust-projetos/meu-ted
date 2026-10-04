@@ -535,6 +535,19 @@ const specs = [
           "type": "string",
           "format": "uuid"
         }
+      },
+      {
+        "name": "basis",
+        "in": "query",
+        "required": false,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "liquidez",
+            "competencia"
+          ]
+        }
       }
     ]
   },
@@ -613,6 +626,19 @@ const specs = [
           "enum": [
             "expense",
             "income"
+          ]
+        }
+      },
+      {
+        "name": "basis",
+        "in": "query",
+        "required": false,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "liquidez",
+            "competencia"
           ]
         }
       }
@@ -3673,6 +3699,7 @@ function createTool(spec: ToolSpec) {
     "from": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
     "to": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
     "accountId": Type.Optional(Type.String({"format":"uuid"})),
+    "basis": Type.Optional(Type.Union([Type.Literal("liquidez"), Type.Literal("competencia")])),
   }),
   "analytics_category_breakdown": Type.Object({
     "householdId": Type.Optional(Type.String({"format":"uuid"})),
@@ -3681,6 +3708,7 @@ function createTool(spec: ToolSpec) {
     "to": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
     "accountId": Type.Optional(Type.String({"format":"uuid"})),
     "kind": Type.Optional(Type.Union([Type.Literal("expense"), Type.Literal("income")])),
+    "basis": Type.Optional(Type.Union([Type.Literal("liquidez"), Type.Literal("competencia")])),
   }),
   "get_month_summary": Type.Object({
     "householdId": Type.String({"format":"uuid"}),
