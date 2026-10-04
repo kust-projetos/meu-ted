@@ -98,6 +98,8 @@ export type Env = {
   CODEX_BROKER_REQUEST_SIGNING_KEY?: string;
   TAVILY_API_KEY?: string;
   BRAVE_API_KEY?: string;
+  /** A11: CSV of exact hostnames `web_fetch` may read (default-off). */
+  TED_WEB_FETCH_ALLOWED_HOSTS?: string;
 };
 
 /**

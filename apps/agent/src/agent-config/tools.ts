@@ -29,9 +29,17 @@ import { ALL_SKILLS } from './skills/index.js';
 import {
   WEB_UNAVAILABLE_MESSAGE,
   createWebSearchProvider,
+  resolveWebFetchAllowedHosts,
   webFetchUrl,
   type WebEnv,
 } from './web.js';
+import {
+  WEB_EVIDENCE_QUERY_REDACTED_MESSAGE,
+  buildWebEvidenceEnvelope,
+  filterExternalResults,
+  renderEvidenceForPrompt,
+  sanitizeExternalQuery,
+} from './web-evidence.js';
 
 export type ToolExecutionContext = {
   delegatedToken?: string;
@@ -226,6 +234,9 @@ export const buildExposedTools = (
   const generated = generatedByName();
   const out: Record<string, ReturnType<typeof tool>> = {};
   const webProvider = createWebSearchProvider(ctx.webEnv ?? {}, ctx.fetchImpl ?? fetch);
+  // A11: the egress allowlist is resolved once per turn from the operator env
+  // and handed to the guard; empty (default) means `web_fetch` is unavailable.
+  const webFetchAllowedHosts = resolveWebFetchAllowedHosts(ctx.webEnv);
 
   for (const name of toolNames) {
     // Retired V1 pending tools are never built, even when requested
@@ -246,11 +257,42 @@ export const buildExposedTools = (
           required: ['query'],
         }),
         execute: async (params: Record<string, unknown>) => {
-          if (!webProvider.available) return { available: false, message: WEB_UNAVAILABLE_MESSAGE, results: [] };
+          // A12 (R14): the text that crosses the egress boundary is the
+          // MINIMISED text — the minimisation does not depend on the model's
+          // good will. Every answer carries dated provenance (`evidence`) or
+          // an honest declared limitation; nothing is ever invented.
+          const query = sanitizeExternalQuery(String(params.query ?? ''));
+          const evidence = (message: string): string =>
+            renderEvidenceForPrompt(buildWebEvidenceEnvelope({ query, items: [], limitation: message }));
+          const unavailable = (message: string) => ({
+            available: false,
+            message,
+            results: [],
+            evidence: evidence(message),
+          });
+          if (!webProvider.available) return unavailable(WEB_UNAVAILABLE_MESSAGE);
+          // Nothing but personal data survived minimisation: no outbound search.
+          if (query === '') return unavailable(WEB_EVIDENCE_QUERY_REDACTED_MESSAGE);
           try {
-            return await webProvider.search(String(params.query ?? ''));
+            const result = await webProvider.search(query);
+            // The provider list reaches the model next to `evidence`, so it is
+            // filtered to the same items the envelope is willing to cite: a
+            // rejected URL and a forged `[F2]`/`AVISO:` must not survive in
+            // the fields the model reads first.
+            const results = filterExternalResults(result.results);
+            return {
+              ...result,
+              results,
+              evidence: renderEvidenceForPrompt(
+                buildWebEvidenceEnvelope({
+                  query,
+                  items: results,
+                  ...(result.available ? {} : { limitation: WEB_UNAVAILABLE_MESSAGE }),
+                }),
+              ),
+            };
           } catch (_err) {
-            return { available: false, message: 'A busca web falhou agora — sigo com os dados do workspace.', results: [] };
+            return unavailable('A busca web falhou agora — sigo com os dados do workspace.');
           }
         },
       });
@@ -258,7 +300,8 @@ export const buildExposedTools = (
     }
     if (name === 'web_fetch') {
       out[name] = tool({
-        description: 'Lê o conteúdo de uma página http/https (bloqueia endereços internos).',
+        description:
+          'Lê o conteúdo de uma página http/https nos domínios autorizados (bloqueia endereços internos).',
         inputSchema: jsonSchema({
           type: 'object',
           properties: { url: { type: 'string', minLength: 1, maxLength: 2000 } },
@@ -266,9 +309,31 @@ export const buildExposedTools = (
         }),
         execute: async (params: Record<string, unknown>) => {
           try {
-            return await webFetchUrl(String(params.url ?? ''), { fetchImpl: ctx.fetchImpl });
+            const result = await webFetchUrl(String(params.url ?? ''), {
+              fetchImpl: ctx.fetchImpl,
+              allowedHosts: webFetchAllowedHosts,
+            });
+            // A12: single-source provenance (origin + date). The page body is
+            // never copied into the evidence block — it already travels in
+            // `text`.
+            return {
+              ...result,
+              evidence: renderEvidenceForPrompt(
+                buildWebEvidenceEnvelope({ query: '', items: [{ url: result.url }] }),
+              ),
+            };
           } catch (err) {
-            return { ok: false, message: (err as Error)?.message ?? 'Não consegui ler esta página.' };
+            // Unavailability is DECLARED like every other web answer: an
+            // `unavailable` envelope carrying the A11 message, instead of a
+            // bare error with no provenance. No network call happens here.
+            const message = (err as Error)?.message ?? 'Não consegui ler esta página.';
+            return {
+              ok: false,
+              message,
+              evidence: renderEvidenceForPrompt(
+                buildWebEvidenceEnvelope({ query: '', items: [], limitation: message }),
+              ),
+            };
           }
         },
       });

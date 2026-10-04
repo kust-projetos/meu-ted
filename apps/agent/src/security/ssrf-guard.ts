@@ -2,16 +2,25 @@
  * SSRF guard (V4.1 Phase 8, tasks 8.4-8.5, SPEC §15.4).
  *
  * Complements the hostname-pattern checks with:
- * - resolved-IP validation (DNS rebinding): every address a hostname
- *   resolves to must be public — IPv4/IPv6 private, loopback, link-local,
- *   multicast, unspecified and IPv4-mapped ranges are blocked;
+ * - an operator egress allowlist (A11 routing ii): the effective fetch target
+ *   cannot be pinned on the Workers runtime (no per-hop DNS resolution, no
+ *   SNI/IP separation), so the guard fails closed unless the caller passes an
+ *   explicit `allowedHosts` set. The check is exact-hostname and
+ *   DNS-independent, and runs before any fetch — a non-allowlisted hostname
+ *   never reaches the network, on the first hop nor on a redirect;
+ * - resolved-IP validation (DNS rebinding): when a `lookup` resolver IS
+ *   injected, every address a hostname resolves to must be public —
+ *   IPv4/IPv6 private, loopback, link-local, multicast, unspecified and
+ *   IPv4-mapped ranges are blocked;
  * - port allowlist (default 80/443);
- * - per-hop re-validation on redirects with a redirect cap.
+ * - per-hop re-validation on redirects with a redirect cap;
+ * - a byte budget applied while the body stream is read (A11/V8).
  *
  * The module has no runtime imports: DNS resolution is always injected
- * (`HostResolver`), so the same guard runs in Cloudflare Workers (platform
- * egress + hostname/port checks) and in Node/test contexts (full
- * resolved-IP validation). DNS failures fail closed.
+ * (`HostResolver`) and the allowlist is always resolved by the caller, so the
+ * same guard runs in Cloudflare Workers (platform egress + hostname/port
+ * checks) and in Node/test contexts (full resolved-IP validation). Both the
+ * allowlist and DNS failures fail closed.
  */
 
 export class SsrfBlockedError extends Error {
@@ -28,6 +37,48 @@ export const DEFAULT_ALLOWED_PORTS = [80, 443] as const;
 export const DEFAULT_MAX_REDIRECTS = 3;
 export const FETCH_TIMEOUT_MS = 10_000;
 export const FETCH_MAX_CHARS = 50_000;
+/**
+ * Hard cap on how many bytes of a response body are read (A11/V8: the body was
+ * fully materialised by `res.text()` before the char cap applied). 2 MiB is
+ * comfortably above any page excerpt TED needs (an HTML page of a few hundred
+ * kB) while bounding memory and transfer per call; `FETCH_MAX_CHARS` still
+ * applies on top of it.
+ */
+export const FETCH_MAX_BYTES = 2 * 1024 * 1024;
+
+/** Honest user-facing copy: no egress allowlist is configured at all. */
+export const EGRESS_DISABLED_MESSAGE =
+  'A leitura de páginas externas está desativada neste ambiente — respondo com os dados do workspace.';
+/** Honest user-facing copy: an allowlist exists but this host is not on it. */
+export const EGRESS_NOT_ALLOWED_MESSAGE = 'Domínio não autorizado para leitura web.';
+
+/**
+ * Canonical hostname form for the allowlist: trimmed, lowercased, without the
+ * DNS root dot and without IPv6 brackets.
+ */
+const normalizeHostname = (hostname: string): string =>
+  hostname.trim().toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
+
+/**
+ * Egress allowlist gate. Exact hostname match (no wildcard, no subdomain
+ * expansion: an allowlisted `exemplo.test` must not authorise
+ * `sub.exemplo.test`, which widens the surface for whoever controls it).
+ * Fails closed when no allowlist is supplied or it is empty. Entries are
+ * expected pre-folded (see `parseWebFetchAllowedHosts` for the env form);
+ * the incoming hostname is always folded before matching.
+ */
+export const isAllowedEgressHost = (hostname: string, allowedHosts?: ReadonlySet<string>): boolean => {
+  if (!allowedHosts || allowedHosts.size === 0) return false;
+  return allowedHosts.has(normalizeHostname(hostname));
+};
+
+const assertAllowedEgressHost = (rawUrl: string, allowedHosts?: ReadonlySet<string>): void => {
+  const { hostname } = new URL(rawUrl);
+  if (isAllowedEgressHost(hostname, allowedHosts)) return;
+  throw new SsrfBlockedError(
+    !allowedHosts || allowedHosts.size === 0 ? EGRESS_DISABLED_MESSAGE : EGRESS_NOT_ALLOWED_MESSAGE,
+  );
+};
 
 const stripBrackets = (ip: string): string =>
   ip.trim().toLowerCase().replace(/^\[|\]$/g, '');
@@ -182,16 +233,91 @@ export type GuardedFetchResult = {
 export type GuardedFetchOptions = {
   fetchImpl?: typeof fetch;
   lookup?: HostResolver;
+  /**
+   * Operator egress allowlist (exact hostnames). Omitted or empty blocks every
+   * fetch — production resolves it from env (`TED_WEB_FETCH_ALLOWED_HOSTS`).
+   */
+  allowedHosts?: ReadonlySet<string>;
   allowedPorts?: number[];
   timeoutMs?: number;
   maxChars?: number;
+  /** Byte budget applied while reading the body (default 2 MiB). */
+  maxBytes?: number;
   maxRedirects?: number;
 };
 
 /**
- * SSRF-guarded fetch: sync URL checks + (when `lookup` is provided)
- * resolved-IP validation on the initial URL and on every redirect hop,
- * manual redirect following with a cap, timeout and truncated body.
+ * Reads at most `maxBytes` from the response stream, decoding incrementally so
+ * neither the chunk list nor the raw bytes are ever retained, and cancelling
+ * the stream the moment the budget is exhausted (A11/V8). Falls back to
+ * `text()` for platforms/mocks that carry no body stream.
+ *
+ * The loop stops on `total >= maxBytes` rather than waiting for one more chunk:
+ * a body that delivers exactly the budget and then holds the connection open
+ * would otherwise leave `read()` pending until the fetch timeout, and would
+ * pull an extra chunk off the wire. `truncated` is set conservatively in that
+ * case — an exhausted budget means the body cannot be claimed complete.
+ *
+ * Known limitation: the budget is enforced in bytes, so cutting a multibyte
+ * character mid-sequence leaves it to be flushed as U+FFFD at the cut point.
+ * Characters split across *chunk* boundaries (not the budget) are unaffected:
+ * the decoder runs in stream mode, so they are reassembled.
+ */
+const readBodyWithByteBudget = async (
+  res: Response,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean }> => {
+  const body = res.body;
+  if (!body || typeof body.getReader !== 'function') {
+    const raw = await res.text().catch(() => '');
+    return { text: raw, truncated: new TextEncoder().encode(raw).byteLength > maxBytes };
+  }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  // Only the decoded string accumulates; each byte chunk is released as soon as
+  // it has been decoded, so a flood of tiny chunks costs no retained objects.
+  let text = '';
+  let total = 0;
+  let truncated = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      const remaining = maxBytes - total;
+      const kept = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      text += decoder.decode(kept, { stream: true });
+      total += kept.byteLength;
+      if (total >= maxBytes) {
+        truncated = true;
+        break;
+      }
+    }
+  } catch {
+    // The body stream broke mid-read: keep what was already read, but never
+    // report a partial body as complete.
+    truncated = true;
+  } finally {
+    // Flush whatever the decoder still holds (including a character cut by the
+    // byte budget, which surfaces as U+FFFD).
+    text += decoder.decode();
+    if (truncated) {
+      try {
+        if (typeof reader.cancel === 'function') await reader.cancel();
+        else await body.cancel();
+      } catch {
+        /* already errored or released: nothing left to interrupt */
+      }
+    }
+  }
+  return { text, truncated };
+};
+
+/**
+ * SSRF-guarded fetch: egress allowlist + sync URL checks + (when `lookup` is
+ * provided) resolved-IP validation on the initial URL and on every redirect
+ * hop, manual redirect following with a cap, timeout and a body bounded in
+ * both bytes and chars.
  */
 export const fetchWithSsrfGuard = async (
   rawUrl: string,
@@ -200,8 +326,13 @@ export const fetchWithSsrfGuard = async (
   const fetchImpl = opts?.fetchImpl ?? fetch;
   const timeoutMs = opts?.timeoutMs ?? FETCH_TIMEOUT_MS;
   const maxChars = opts?.maxChars ?? FETCH_MAX_CHARS;
+  const maxBytes =
+    typeof opts?.maxBytes === 'number' && Number.isInteger(opts.maxBytes) && opts.maxBytes > 0
+      ? opts.maxBytes
+      : FETCH_MAX_BYTES;
   const maxRedirects = opts?.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
   let current = assertSafeUrl(rawUrl, { allowedPorts: opts?.allowedPorts }).toString();
+  assertAllowedEgressHost(current, opts?.allowedHosts);
   if (opts?.lookup) {
     await resolveAndValidateHost(new URL(current).hostname, opts.lookup);
   }
@@ -220,6 +351,7 @@ export const fetchWithSsrfGuard = async (
       const next = assertSafeUrl(new URL(location, current).toString(), {
         allowedPorts: opts?.allowedPorts,
       }).toString();
+      assertAllowedEgressHost(next, opts?.allowedHosts);
       if (opts?.lookup) {
         await resolveAndValidateHost(new URL(next).hostname, opts.lookup);
       }
@@ -232,8 +364,8 @@ export const fetchWithSsrfGuard = async (
       });
     }
     const contentType = res.headers.get('content-type') ?? '';
-    const raw = await res.text().catch(() => '');
-    const truncated = raw.length > maxChars;
+    const { text: raw, truncated: bytesTruncated } = await readBodyWithByteBudget(res, maxBytes);
+    const truncated = bytesTruncated || raw.length > maxChars;
     return { url: current, status: res.status, contentType, text: truncated ? raw.slice(0, maxChars) : raw, truncated };
   }
   throw new SsrfBlockedError('Muitos redirecionamentos na leitura web.');
