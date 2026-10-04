@@ -440,6 +440,409 @@
         }
       }
     },
+    "/analytics/kpis": {
+      "get": {
+        "operationId": "analytics_kpis",
+        "summary": "KPIs of a period: income, expense, balance, open invoices and savings rate",
+        "description": "Leitura agregada de um período (competência em transactions.date). `period` é obrigatório nesta tool: a API aceita `from`/`to` sem `period` e os ignora silenciosamente (cai em last30days), então a tool exige o parâmetro para que a janela pedida nunca seja trocada em silêncio. householdId é derivado do token no servidor e nunca vai na wire.",
+        "x-pi-tool": {
+          "name": "analytics_kpis",
+          "label": "Analytics KPIs",
+          "description": "KPIs de um período (receitas, despesas, saldo, faturas em aberto e taxa de poupança). Use period=custom com from/to para uma janela exata.",
+          "method": "GET",
+          "path": "/analytics/kpis",
+          "idempotency": false,
+          "shadow": true,
+          "result": null
+        },
+        "parameters": [
+          {
+            "name": "householdId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "x-pi-context": true
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": true,
+            "description": "Preset do período. `custom` exige from e to. Obrigatório de propósito: sem ele a API descarta from/to.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "last30days",
+                "lastMonth",
+                "thisYear",
+                "custom"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "Primeiro dia do período (inclusivo), YYYY-MM-DD. Usado apenas com period=custom.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Último dia do período (INCLUSIVO), YYYY-MM-DD. Usado apenas com period=custom.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "accountId",
+            "in": "query",
+            "required": false,
+            "description": "Restringe o cálculo a uma conta. householdId continua derivado do token.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "KPIs da janela pedida (competência em transactions.date)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "period",
+                    "previousPeriod",
+                    "netLiquidBalanceCents",
+                    "accountsTotalCents",
+                    "dueSoonCents",
+                    "openInvoices",
+                    "savingsRatePct",
+                    "savingsRateTargetPct",
+                    "previousSavingsRatePct",
+                    "fixedVsDiscretionary",
+                    "incomeCents",
+                    "expenseCents",
+                    "previousIncomeCents",
+                    "previousExpenseCents",
+                    "netWorthCents"
+                  ],
+                  "properties": {
+                    "period": {
+                      "type": "object",
+                      "required": [
+                        "from",
+                        "to"
+                      ],
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "format": "date"
+                        },
+                        "to": {
+                          "type": "string",
+                          "format": "date"
+                        }
+                      }
+                    },
+                    "previousPeriod": {
+                      "type": "object",
+                      "required": [
+                        "from",
+                        "to"
+                      ],
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "format": "date"
+                        },
+                        "to": {
+                          "type": "string",
+                          "format": "date"
+                        }
+                      }
+                    },
+                    "netLiquidBalanceCents": {
+                      "type": "integer"
+                    },
+                    "accountsTotalCents": {
+                      "type": "integer"
+                    },
+                    "dueSoonCents": {
+                      "type": "integer"
+                    },
+                    "openInvoices": {
+                      "type": "object",
+                      "required": [
+                        "committedCents",
+                        "limitCents",
+                        "utilizationPct"
+                      ],
+                      "properties": {
+                        "committedCents": {
+                          "type": "integer"
+                        },
+                        "limitCents": {
+                          "type": "integer"
+                        },
+                        "utilizationPct": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      }
+                    },
+                    "savingsRatePct": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "savingsRateTargetPct": {
+                      "type": "integer"
+                    },
+                    "previousSavingsRatePct": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "fixedVsDiscretionary": {
+                      "type": "object",
+                      "required": [
+                        "scope",
+                        "fixedCents",
+                        "discretionaryCents",
+                        "fixedPctOfIncome",
+                        "subscriptionsCents"
+                      ],
+                      "properties": {
+                        "scope": {
+                          "type": "string",
+                          "enum": [
+                            "household",
+                            "account"
+                          ]
+                        },
+                        "fixedCents": {
+                          "type": "integer"
+                        },
+                        "discretionaryCents": {
+                          "type": "integer"
+                        },
+                        "fixedPctOfIncome": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "subscriptionsCents": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "incomeCents": {
+                      "type": "integer"
+                    },
+                    "expenseCents": {
+                      "type": "integer"
+                    },
+                    "previousIncomeCents": {
+                      "type": "integer"
+                    },
+                    "previousExpenseCents": {
+                      "type": "integer"
+                    },
+                    "netWorthCents": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analytics/category-breakdown": {
+      "get": {
+        "operationId": "analytics_category_breakdown",
+        "summary": "Expense or income totals per category (one-level macro rollup) for a period",
+        "description": "Rollup de exatamente 1 nível (parentId ?? id) sobre transactions.date, limitado a 5 slices + 'Outras'. `period` é obrigatório nesta tool pela mesma razão de /analytics/kpis: sem ele a API ignora from/to. householdId é derivado do token e nunca vai na wire.",
+        "x-pi-tool": {
+          "name": "analytics_category_breakdown",
+          "label": "Analytics Category Breakdown",
+          "description": "Totais por categoria (macros) em um período, com peso percentual e o total da janela. Use period=custom com from/to para uma janela exata.",
+          "method": "GET",
+          "path": "/analytics/category-breakdown",
+          "idempotency": false,
+          "shadow": true,
+          "result": null
+        },
+        "parameters": [
+          {
+            "name": "householdId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "x-pi-context": true
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": true,
+            "description": "Preset do período. `custom` exige from e to. Obrigatório de propósito: sem ele a API descarta from/to.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "last30days",
+                "lastMonth",
+                "thisYear",
+                "custom"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "Primeiro dia do período (inclusivo), YYYY-MM-DD. Usado apenas com period=custom.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Último dia do período (INCLUSIVO), YYYY-MM-DD. Usado apenas com period=custom.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "accountId",
+            "in": "query",
+            "required": false,
+            "description": "Restringe o cálculo a uma conta. householdId continua derivado do token.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "description": "Natureza agregada; padrão 'expense' na API.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "expense",
+                "income"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Breakdown por macro da janela pedida",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "period",
+                    "kind",
+                    "totalCents",
+                    "slices"
+                  ],
+                  "properties": {
+                    "period": {
+                      "type": "object",
+                      "required": [
+                        "from",
+                        "to"
+                      ],
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "format": "date"
+                        },
+                        "to": {
+                          "type": "string",
+                          "format": "date"
+                        }
+                      }
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "expense",
+                        "income"
+                      ]
+                    },
+                    "totalCents": {
+                      "type": "integer"
+                    },
+                    "slices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "categoryId",
+                          "name",
+                          "totalCents",
+                          "pct",
+                          "color"
+                        ],
+                        "properties": {
+                          "categoryId": {
+                            "type": "string",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|outras)$",
+                            "description": "UUID da macro, ou o literal sintético \"outras\" que agrega a cauda das macros além do corte de 5."
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "totalCents": {
+                            "type": "integer"
+                          },
+                          "pct": {
+                            "type": "number"
+                          },
+                          "color": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/dashboard/month-summary": {
       "get": {
         "operationId": "get_month_summary",

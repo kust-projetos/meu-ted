@@ -472,6 +472,153 @@ const specs = [
     ]
   },
   {
+    "name": "analytics_kpis",
+    "label": "Analytics KPIs",
+    "description": "KPIs de um período (receitas, despesas, saldo, faturas em aberto e taxa de poupança). Use period=custom com from/to para uma janela exata.",
+    "method": "GET",
+    "path": "/analytics/kpis",
+    "idempotency": false,
+    "shadow": true,
+    "result": null,
+    "parameters": [
+      {
+        "name": "householdId",
+        "in": "query",
+        "required": false,
+        "context": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      {
+        "name": "period",
+        "in": "query",
+        "required": true,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "last30days",
+            "lastMonth",
+            "thisYear",
+            "custom"
+          ]
+        }
+      },
+      {
+        "name": "from",
+        "in": "query",
+        "required": false,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+      },
+      {
+        "name": "to",
+        "in": "query",
+        "required": false,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+      },
+      {
+        "name": "accountId",
+        "in": "query",
+        "required": false,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    ]
+  },
+  {
+    "name": "analytics_category_breakdown",
+    "label": "Analytics Category Breakdown",
+    "description": "Totais por categoria (macros) em um período, com peso percentual e o total da janela. Use period=custom com from/to para uma janela exata.",
+    "method": "GET",
+    "path": "/analytics/category-breakdown",
+    "idempotency": false,
+    "shadow": true,
+    "result": null,
+    "parameters": [
+      {
+        "name": "householdId",
+        "in": "query",
+        "required": false,
+        "context": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      {
+        "name": "period",
+        "in": "query",
+        "required": true,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "last30days",
+            "lastMonth",
+            "thisYear",
+            "custom"
+          ]
+        }
+      },
+      {
+        "name": "from",
+        "in": "query",
+        "required": false,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+      },
+      {
+        "name": "to",
+        "in": "query",
+        "required": false,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+      },
+      {
+        "name": "accountId",
+        "in": "query",
+        "required": false,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      {
+        "name": "kind",
+        "in": "query",
+        "required": false,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "expense",
+            "income"
+          ]
+        }
+      }
+    ]
+  },
+  {
     "name": "get_month_summary",
     "label": "Monthly Summary",
     "description": "Get income/expense totals and transaction count for a given year-month",
@@ -3520,6 +3667,21 @@ function createTool(spec: ToolSpec) {
     "sortOrder": Type.Optional(Type.Integer({"minimum":0,"maximum":9999})),
     "isDefault": Type.Optional(Type.Boolean({})),
   }),
+  "analytics_kpis": Type.Object({
+    "householdId": Type.Optional(Type.String({"format":"uuid"})),
+    "period": Type.Union([Type.Literal("last30days"), Type.Literal("lastMonth"), Type.Literal("thisYear"), Type.Literal("custom")]),
+    "from": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
+    "to": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
+    "accountId": Type.Optional(Type.String({"format":"uuid"})),
+  }),
+  "analytics_category_breakdown": Type.Object({
+    "householdId": Type.Optional(Type.String({"format":"uuid"})),
+    "period": Type.Union([Type.Literal("last30days"), Type.Literal("lastMonth"), Type.Literal("thisYear"), Type.Literal("custom")]),
+    "from": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
+    "to": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
+    "accountId": Type.Optional(Type.String({"format":"uuid"})),
+    "kind": Type.Optional(Type.Union([Type.Literal("expense"), Type.Literal("income")])),
+  }),
   "get_month_summary": Type.Object({
     "householdId": Type.String({"format":"uuid"}),
     "yearMonth": Type.String({"pattern":"^\\d{4}-(0[1-9]|1[0-2])$"}),
@@ -3892,6 +4054,8 @@ export const listAccountsTool = generatedHttpTools.find((tool) => tool.name === 
 export const createAccountTool = generatedHttpTools.find((tool) => tool.name === "create_account")!;
 export const listCategoriesTool = generatedHttpTools.find((tool) => tool.name === "list_categories")!;
 export const createCategoryTool = generatedHttpTools.find((tool) => tool.name === "create_category")!;
+export const analyticsKpisTool = generatedHttpTools.find((tool) => tool.name === "analytics_kpis")!;
+export const analyticsCategoryBreakdownTool = generatedHttpTools.find((tool) => tool.name === "analytics_category_breakdown")!;
 export const getMonthSummaryTool = generatedHttpTools.find((tool) => tool.name === "get_month_summary")!;
 export const listRecentTransactionsTool = generatedHttpTools.find((tool) => tool.name === "list_recent_transactions")!;
 export const createExpenseTool = generatedHttpTools.find((tool) => tool.name === "create_expense")!;

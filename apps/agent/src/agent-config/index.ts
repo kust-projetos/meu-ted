@@ -71,6 +71,24 @@ export type {
   WebEvidenceSourceInput,
   ExternalResultItem,
 } from './web-evidence.js';
+export {
+  ANALYTICS_BASIS,
+  ANALYTICS_BOUNDARY,
+  ANALYTICS_QUERY_REJECTIONS,
+  MAX_SAFE_CENTS,
+  PERIOD_IGNORING_TOOLS,
+  declareAnalyticsEnvelope,
+  normalizeAnalyticsQuery,
+} from './analytics-envelope.js';
+export type {
+  AnalyticsEffectivePeriod,
+  AnalyticsEnvelopeResult,
+  AnalyticsQueryInput,
+  AnalyticsQueryRejection,
+  NormalizeAnalyticsQueryResult,
+  NormalizedAnalyticsQuery,
+  PeriodIgnoringTool,
+} from './analytics-envelope.js';
 
 import { buildSystemPrompt, INSTRUCTIONS_VERSION } from './instructions.js';
 import { skillCatalogLines } from './skills/index.js';
