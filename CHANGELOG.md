@@ -3,6 +3,16 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-04 - closure de pendências: A08, follow-ups Agent V1, config/docs; sem release)
+
+- API: listagem de contas aceita `includeInactive` opt-in (enum fechado `'true'|'false'`, default fail-closed; relaxa SOMENTE o filtro de status — soft-delete, cards e escopo de household inalterados; `GET /accounts/:id` segue active-only). OpenAPI + contratos gerados alinhados.
+- Agent: envelope de prova de analytics (G03) ligado ao caminho de evidência (`analytics_kpis`/`analytics_category_breakdown` como leituras próprias, fail-closed, teto `MAX_EVIDENCE_READS=2` travado por teste); `JudgmentProvider` com instância única por Durable Object (WeakMap, state do breaker preserva entre turnos); web-search mapeia `published_date` e passa a citar fontes com marcadores `[F1]`.
+- Agent (fail-closed de evidência): payloads fora do contrato (sem `items` array / null / primitivo) viram `permanent_error` em vez de "lista vazia"; `workspace_empty` agora é produzido somente com ≥2 leituras reais vazias e nenhuma falha/escopo-estreito; listas singleton (statements/payables/budgets/goals/categories) emitem reason `setup_incomplete` na shape real `{items, total}`; catch externo do coletor preserva reasons tipadas (`permanent_error`) com `unavailable` só como piso. 23 fixtures que passavam com payload fora do contrato foram corrigidas para shapes reais.
+- Config: janela Release B realinhada pós-migração (docs canônicas + `release-b-reminder.yml` com `WINDOW_START=2026-10-02T21:36:06Z`, gate `2026-10-16T21:36:06Z`, filtro EXCLUSIVO no evento âncora — `>=` contaria o evento que reiniciou a janela para sempre).
+- Config: Prettier removido (devDep, scripts mortos e `check-reminder-format.mjs` phantom dep); floor `pnpm >=10` alinhado (raiz, README, AGENTS.md, codex-broker); governança morta `check-pwa-audit` removida (script TS-em-.mjs inexecutável + teste órfão + fixtures); falso positivo do `boundary:check` corrigido (comentário com "fetch (" no texto).
+- Docs: Hostinger→Contabo nos fatos canônicos (README, ARCHITECTURE-CURRENT, AGENTS.md, `runtime-facts.json` regenerado — V059, Contabo, 127 rotas) com contrato de fatos usando asserções negativas; CHANGELOG da Fase 22 corrigido (executada, não pendente); plano V13 com 6 rotas de analytics; auditoria de config com addendum de encerramento.
+- Evidência: `docs/reports/2026-10-04-pendencias-closure.md`.
+
 ## Unreleased (2026-10-03 - fix TED: self-heal do device token + recalibração da cota; sem release)
 
 - PWA: self-heal do device token no mint do connection token quando o store está
@@ -38,7 +48,10 @@ versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
   PendingOperation V2/receipt preservados e flag `off|shadow|on` default off.
 - `docs/ops/ted-autoexecute-observability.md` mapeia métricas V5 aos três
   eventos sanitizados e ao audit trail; sink persistente permanece gate de
-  operações. Fase 22 (deploy shadow) pendente; canary depende de telemetria.
+  operações. Fase 22 (deploy shadow) executada em 2026-10-02 (`37b9f47`, API
+  via wrapper com V059 aplicada e rollback tag preservado; PWA/Agent via
+  Cloudflare); canary (`on`) continua dependente de telemetria suficiente
+  (undo-after-autoexecute).
 
 ## Unreleased (2026-10-02 — PR C: Agent solicita autoautorização com guard determinístico; sem release)
 
