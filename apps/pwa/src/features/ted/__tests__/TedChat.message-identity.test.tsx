@@ -565,7 +565,7 @@ describe("TedChat — AC07 (HIGH): a troca de escopo em QUALQUER await da cadeia
     histories["ws-1"] = [userMsg("ws1-msg", "conversa do ws 1")];
     histories["ws-2"] = [userMsg("ws2-msg", "conversa do ws 2")];
     const reconcileFlight = deferred<unknown>();
-    appStateMock.reconcileMutation.mockReturnValueOnce(reconcileFlight.promise);
+    appStateMock.reconcileMutation.mockReturnValueOnce(reconcileFlight.promise as Promise<undefined>);
     const view = await renderReady();
 
     // Turno com execução real no mesmo round-trip: o reconciliador financeiro

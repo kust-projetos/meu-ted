@@ -403,7 +403,7 @@ describe("R05 — helpers do renderer", () => {
 
       expect(blocks).toHaveLength(1);
       expect(blocks[0]?.kind).toBe("paragraph");
-      const children = (blocks[0] as { children: Array<{ kind: string }> }).children;
+      const children = (blocks[0] as { children: Array<{ kind: string; value?: string }> }).children;
       // Só `break` pode introduzir nós além de texto; nenhum marcador é engolido.
       const nonText = children.filter((node) => node.kind !== "text");
       expect(nonText, `nós não-texto inesperados: ${JSON.stringify(nonText.map((n) => n.kind))}`).toHaveLength(0);
