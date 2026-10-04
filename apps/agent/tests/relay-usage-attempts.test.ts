@@ -277,7 +277,7 @@ describe('relay usage attempts (RED)', () => {
 
   it('primary failure + fallback dispatch reserves two independent attempts', async () => {
     const { agent, store } = createChatAgent(SNAP_FALLBACK);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
     const calls = stubEgress((call) =>
       call.provider === 'opencode-zen'
         ? new Response(JSON.stringify({ code: 'agent.rate_limited', message: 'slow', providerAttempted: true }), {
@@ -300,7 +300,7 @@ describe('relay usage attempts (RED)', () => {
 
   it('grounding correction reentry reserves a separate attempt', async () => {
     const { agent, store } = createChatAgent(SNAP_FALLBACK);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
     const calls = stubEgress((_call, index) =>
       index === 1
         ? new Response(
@@ -441,7 +441,7 @@ describe('relay usage attempts (RED)', () => {
     }) as typeof store.exec;
     const failing = { ...store, exec: failingExec };
     attachRelayUsageStorage(agent, failing);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
     const calls = stubEgress((_call, index) =>
       index === 1
         ? new Response(

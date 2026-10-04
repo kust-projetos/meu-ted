@@ -75,9 +75,18 @@ describe('onChatMessage cognitive wiring (Part A)', () => {
     // Fresh Response per call: a body can be consumed only once, and each
     // turn fetches the authority snapshot 2+ times (resolve + H-03/H-14
     // re-verification, fail-closed when unreachable).
-    vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async () => new Response(JSON.stringify(snapshotBody), { status: 200 }),
-    );
+    // Route-aware: the runtime snapshot body answers the config/authority
+    // reads, while LIST routes answer the shape the API really declares
+    // (`{items, total}`). Returning the snapshot body for a list route is an
+    // out-of-contract payload, and the evidence layer fails closed on it —
+    // which would short-circuit the turn before the provider, hiding exactly
+    // what these two tests guard.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: unknown) => {
+      const target = String(url);
+      const listRead = ['/accounts', '/transactions', '/categories', '/budgets', '/goals', '/payables', '/cards/statements']
+        .some((path) => target.includes(path));
+      return new Response(JSON.stringify(listRead ? { items: [], total: 0 } : snapshotBody), { status: 200 });
+    });
   });
 
   it('passes tools, stopWhen and the assembled system prompt to streamText', async () => {

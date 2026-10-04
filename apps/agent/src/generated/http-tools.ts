@@ -210,7 +210,7 @@ const specs = [
   {
     "name": "list_accounts",
     "label": "List Accounts",
-    "description": "List active accounts",
+    "description": "List accounts (active only by default; includeInactive also returns deactivated ones)",
     "method": "GET",
     "path": "/accounts",
     "idempotency": false,
@@ -252,6 +252,20 @@ const specs = [
             "cash",
             "credit_card"
           ]
+        }
+      },
+      {
+        "name": "includeInactive",
+        "in": "query",
+        "required": false,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "true",
+            "false"
+          ],
+          "description": "Opt-in: pass \"true\" to also return deactivated accounts (status inactive). Omitted or \"false\" keeps the active-only read. Workspace-scoped; credit cards are never included."
         }
       }
     ]
@@ -3670,6 +3684,7 @@ function createTool(spec: ToolSpec) {
   "list_accounts": Type.Object({
     "householdId": Type.String({"format":"uuid"}),
     "kind": Type.Optional(Type.Union([Type.Literal("bank"), Type.Literal("cash"), Type.Literal("credit_card")])),
+    "includeInactive": Type.Optional(Type.Union([Type.Literal("true"), Type.Literal("false")])),
   }),
   "create_account": Type.Object({
     "householdId": Type.Optional(Type.String({})),

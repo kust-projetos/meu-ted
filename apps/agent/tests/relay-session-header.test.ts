@@ -62,7 +62,7 @@ const stubWorkerEgress = () => {
     }
     // T3.1 (SPEC §14): usable evidence so the turn reaches the relay.
     if (u.includes('/budgets')) {
-      return new Response(JSON.stringify({ budgets: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
+      return new Response(JSON.stringify({ items: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
     }
     return new Response('not found', { status: 404 });
   }) as unknown as typeof fetch;
@@ -121,7 +121,7 @@ describe('FIX-AGENT-RELAY-SESSION-ID: relay body carries a stable x-opencode-ses
       }
       // T3.1 (SPEC §14): usable evidence so the turn reaches the relay.
       if (u.includes('/budgets')) {
-        return new Response(JSON.stringify({ budgets: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
+        return new Response(JSON.stringify({ items: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
       }
       return new Response('not found', { status: 404 });
     }) as unknown as typeof fetch;
@@ -150,7 +150,7 @@ describe('FIX-AGENT-RELAY-SESSION-ID: relay body carries a stable x-opencode-ses
         return new Response(JSON.stringify({ text: 'ok', providerAttempted: true }), { status: 200 });
       }
       if (u.includes('/budgets')) {
-        return new Response(JSON.stringify({ budgets: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
+        return new Response(JSON.stringify({ items: [{ id: 'b1', name: 'Alimentação', limitCents: 100000 }] }), { status: 200 });
       }
       return new Response('not found', { status: 404 });
     }) as unknown as typeof fetch;

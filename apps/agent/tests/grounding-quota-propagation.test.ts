@@ -288,7 +288,7 @@ describe('relay receipt gating (RED)', () => {
 
   it('end-to-end: grounding failure + denied correction reservation returns 429 with no fallback and no second dispatch', async () => {
     const { agent, persisted, store } = createChatAgent(SNAP_SINGLE);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
     // Size one reservation so the initial dispatch fits but the grounding
     // correction redispatch is denied: remaining budget covers exactly one
     // more attempt. The correction input is longer than the initial input,

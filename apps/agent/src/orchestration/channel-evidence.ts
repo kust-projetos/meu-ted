@@ -17,7 +17,8 @@
  *   is enforced by the orchestrator/grounded-response, not here).
  */
 
-import { classifyReadFailure, createEvidenceEnvelope, type EvidenceEnvelope, type EvidenceInput, type ReadAbsenceReason } from '../evidence/evidence-envelope.js';
+import { declareAnalyticsEnvelope, normalizeAnalyticsQuery } from '../agent-config/analytics-envelope.js';
+import { classifyReadFailure, createEvidenceEnvelope, resolveEnvelopeRejection, type EvidenceEnvelope, type EvidenceInput, type ReadAbsenceReason } from '../evidence/evidence-envelope.js';
 import { generatedHttpTools, type ToolRequestAuth } from '../generated/http-tools.js';
 import { isUsageQuotaPassthroughError } from '../llm/relay-failover.js';
 import { emitSanitizedEvent } from '../observability/events.js';
@@ -42,6 +43,13 @@ export type ChannelReadTools = {
   listBudgets: ChannelReadFn;
   listGoals: ChannelReadFn;
   listCategories: ChannelReadFn;
+  /**
+   * A09-int: the analytics reads (A04 follow-up). They go through the SAME
+   * boundary the model tool uses (`analytics-envelope.ts`), so the evidence the
+   * turn presents carries the proof envelope the API declared.
+   */
+  analyticsKpis: ChannelReadFn;
+  analyticsCategoryBreakdown: ChannelReadFn;
 };
 
 const bindGenerated = (name: string): ChannelReadFn => {
@@ -62,6 +70,8 @@ export const defaultChannelReadTools = (): ChannelReadTools => ({
   listBudgets: bindGenerated('list_budgets'),
   listGoals: bindGenerated('list_goals'),
   listCategories: bindGenerated('list_categories'),
+  analyticsKpis: bindGenerated('analytics_kpis'),
+  analyticsCategoryBreakdown: bindGenerated('analytics_category_breakdown'),
 });
 
 export type ChannelGroundingDeps = {
@@ -105,7 +115,9 @@ type ReadKind =
   | 'payables'
   | 'budgets'
   | 'goals'
-  | 'categories';
+  | 'categories'
+  | 'analytics-kpis'
+  | 'analytics-breakdown';
 
 /** Planned operation name → canonical read (intent-router aliases included). */
 const OPERATION_TO_READ: Record<string, ReadKind> = {
@@ -126,6 +138,11 @@ const OPERATION_TO_READ: Record<string, ReadKind> = {
   budget_trends: 'budgets',
   list_goals: 'goals',
   list_categories: 'categories',
+  // A09-int: the analytics tools are their OWN read. They were not mapped here,
+  // so a turn planning them had no evidence at all — the proof envelope existed
+  // only on the tool payload the model path sees.
+  analytics_kpis: 'analytics-kpis',
+  analytics_category_breakdown: 'analytics-breakdown',
 };
 
 /** Domain fallback when no planned operation maps to a read. Null = no evidence (legacy pass-through). */
@@ -151,6 +168,8 @@ const READ_SOURCE: Record<ReadKind, string> = {
   budgets: 'api.budgets',
   goals: 'api.goals',
   categories: 'api.categories',
+  'analytics-kpis': 'api.analytics.kpis',
+  'analytics-breakdown': 'api.analytics.category-breakdown',
 };
 
 /** Generated tool name behind each read kind (used for lifecycle events). */
@@ -163,6 +182,8 @@ const READ_TOOL_NAME: Record<ReadKind, string> = {
   budgets: 'list_budgets',
   goals: 'list_goals',
   categories: 'list_categories',
+  'analytics-kpis': 'analytics_kpis',
+  'analytics-breakdown': 'analytics_category_breakdown',
 };
 
 const selectReads = (plan: TurnPlan): readonly ReadKind[] => {
@@ -198,17 +219,63 @@ const toCents = (value: unknown): number | null =>
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   !!value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 
-/** Projected tool payloads carry the rows under a named key (or `items`). */
-const pickRows = (result: unknown, keys: readonly string[]): readonly unknown[] => {
-  if (Array.isArray(result)) return result;
+/**
+ * F2 — SHAPE GATE do payload de uma leitura de LISTA, rodado no channel-evidence
+ * sobre o payload que o cliente devolveu, ANTES de qualquer mapeamento.
+ *
+ * Por que aqui e não no cliente gerado: `project()`
+ * (`generated/http-tools.ts`) é deliberadamente lossy por contrato — um
+ * `response.items` ausente ou inválido vira `[]`, e o `result: 'items'`
+ * MANUFATURA a chave projetada (`accounts`/`categories`/`transactions`) como
+ * array mesmo quando o corpo não tinha `items`. O gerado não se edita à mão;
+ * a verificação morde no último ponto onde o payload cru ainda é inspecionável.
+ *
+ * Por que SOMENTE a chave `items`: é a chave que TODAS as rotas de lista
+ * declaram — `/accounts` (`{items,total}`), `/transactions`
+ * (`{items,total,limit,offset}`), `/goals`, `/budgets`, `/payables`,
+ * `/categories`, `/cards/statements` (todas `{items,total}`) — e o
+ * `project()` a preserva verbatim via `...response`. Aceitar também a chave
+ * projetada reabriria o buraco: um corpo `{}` chega como
+ * `{success:true, accounts: []}`, que é exatamente o payload que fazia o
+ * workspace parecer vazio.
+ *
+ * Três saídas, e só três:
+ * - objeto com `items` ARRAY → lista válida (vazia = ausência real);
+ * - objeto sem `items`, ou com `items` não-array → FALHA da leitura;
+ * - `null`/`undefined`/primitivo/array no topo → FALHA da leitura.
+ *
+ * A FALHA usa `permanent_error`, o motivo do eixo FECHADO que já significa
+ * "a API respondeu e o payload é inutilizável" (mesmo precedente de
+ * `mapAccounts` e `mapMonthSummary`). O vocabulário NÃO é expandido: um
+ * `malformed_payload` novo teria de atravessar a dedupe de
+ * `serializeEvidenceForPrompt`, o renderizador e cada consumidor para
+ * carregar a mesma informação, e NENHUMA reason de ausência pode ser
+ * derivada de um payload fora do contrato (R04).
+ */
+type ListPayload =
+  | { readonly ok: true; readonly rows: readonly unknown[] }
+  | { readonly ok: false };
+
+const readListPayload = (result: unknown): ListPayload => {
   const record = asRecord(result);
-  if (!record) return [];
-  for (const key of keys) {
-    const value = record[key];
-    if (Array.isArray(value)) return value;
-  }
-  return [];
+  if (record === null) return { ok: false };
+  const items = record['items'];
+  return Array.isArray(items) ? { ok: true, rows: items } : { ok: false };
 };
+
+/**
+ * Uma linha de entidade que não é objeto (`null`, string, número) é fora de
+ * contrato. Nas leituras que NÃO projetam a linha (statements/payables/
+ * budgets/goals/categories — o payload viaja inteiro dentro de `data` e dali
+ * para o prompt), a única tratativa honesta é derrubar a leitura: descartar a
+ * linha exigiria moldar o payload, mudando o contrato que o modelo lê, e sem
+ * moldar a linha quebrada chegaria intacta ao prompt como se fosse válida.
+ *
+ * `accounts`/`transactions` NÃO usam este predicado: elas projetam cada linha
+ * no shape do renderizador e já tratam o caso honesta (contar e declarar a
+ * partialidade, ou `permanent_error` quando nenhuma linha serve).
+ */
+const rowsAreEntityRecords = (rows: readonly unknown[]): boolean => rows.every((row) => asRecord(row) !== null);
 
 const now = (): string => new Date().toISOString();
 
@@ -236,15 +303,62 @@ const emptyItem = (kind: ReadKind, ref: string, reason?: ReadAbsenceReason): Evi
   data: [],
 });
 
+/**
+ * A09/A04(b) — the `workspace_empty` producer. It is the only claim about the
+ * WORKSPACE rather than about the requested scope, so it is emitted ONLY from a
+ * consistent MULTI-READ snapshot, and only when every collected item proves the
+ * same thing:
+ *
+ * - two or more DISTINCT read sources (one read states its own scope only —
+ *   the A04 block b block on a single unfiltered list);
+ * - EVERY item `empty`: a failure proves nothing, and R04 forbids turning "the
+ *   read broke" into "there is nothing there";
+ * - no scope-narrowing absence (`period_empty` / `category_empty` /
+ *   `filter_empty`), because each of them proves that data EXISTS outside the
+ *   consulted scope — the exact opposite of a globally empty workspace.
+ *
+ * The claim is ADDITIVE: a per-read reason is never rewritten into a global
+ * one, so the more specific scope copy keeps winning in the deterministic
+ * renderer while `workspace_empty` travels in the envelope and in the prompt
+ * absences the model sees.
+ */
+const WORKSPACE_EMPTY_MIN_SOURCES = 2;
+const SCOPE_NARROWING_ABSENCE: ReadonlySet<string> = new Set<ReadAbsenceReason>(['period_empty', 'category_empty', 'filter_empty']);
+
+const withWorkspaceEmptyAggregate = (items: readonly EvidenceInput[]): readonly EvidenceInput[] => {
+  if (items.length === 0) return items;
+  if (!items.every((item) => item.status === 'empty')) return items;
+  if (items.some((item) => item.reason !== undefined && SCOPE_NARROWING_ABSENCE.has(item.reason))) return items;
+  if (new Set(items.map((item) => item.source)).size < WORKSPACE_EMPTY_MIN_SOURCES) return items;
+  return [
+    ...items,
+    {
+      ref: 'workspace',
+      source: 'agent.evidence-aggregate',
+      retrievedAt: now(),
+      status: 'empty',
+      reason: 'workspace_empty',
+      data: [],
+    } satisfies EvidenceInput,
+  ];
+};
+
 /** Account kinds authored by the API (ADR-018). Anything else stays unknown downstream — never inferred. */
 const KNOWN_ACCOUNT_KINDS: ReadonlySet<string> = new Set(['bank', 'cash', 'credit_card']);
 
 const mapAccounts = (result: unknown): EvidenceInput[] => {
-  const rows = pickRows(result, ['accounts', 'items']);
+  const payload = readListPayload(result);
+  if (!payload.ok) {
+    // F2: a API respondeu fora do contrato. Isso não prova que o workspace
+    // não tem contas — prova que a leitura não produziu conclusão alguma.
+    return [errorItem('accounts', 'accounts', 'permanent_error')];
+  }
+  const rows = payload.rows;
   if (rows.length === 0) {
     // The read SUCCEEDED and this workspace has no accounts: a setup state of
-    // THIS scope. `workspace_empty` is NOT claimed here — it needs the A09
-    // consistent snapshot (A04 block b).
+    // THIS scope. `workspace_empty` is NOT claimed here — a single read is not
+    // a snapshot; the aggregate claim lives in `withWorkspaceEmptyAggregate`
+    // (A09/A04 block b), which needs two independent empty sources.
     return [emptyItem('accounts', 'accounts', 'setup_incomplete')];
   }
   const items: EvidenceInput[] = [];
@@ -297,7 +411,13 @@ const mapAccounts = (result: unknown): EvidenceInput[] => {
 };
 
 const mapTransactions = (result: unknown): EvidenceInput[] => {
-  const rows = pickRows(result, ['transactions', 'items']);
+  const payload = readListPayload(result);
+  if (!payload.ok) {
+    // F2: idem `mapAccounts` — payload fora do contrato nunca vira "sem
+    // lançamentos no período".
+    return [errorItem('transactions', 'statement', 'permanent_error')];
+  }
+  const rows = payload.rows;
   const entries: Array<{ description: string; date: string; amountCents: number }> = [];
   for (const row of rows.slice(0, MAX_STATEMENT_ENTRIES)) {
     const record = asRecord(row);
@@ -311,7 +431,7 @@ const mapTransactions = (result: unknown): EvidenceInput[] => {
     // Rows that existed but could not be projected are a failure; no rows at
     // all is a real absence of THIS read — left unclassified, because an
     // unfiltered list proves neither period, category nor filter (A09 owns the
-    // global "workspace vazio" diagnosis).
+    // global "workspace vazio" diagnosis, via the multi-read aggregate).
     if (rows.length > 0) return [errorItem('transactions', 'statement', 'permanent_error')];
     return [emptyItem('transactions', 'statement')];
   }
@@ -341,12 +461,71 @@ const mapMonthSummary = (result: unknown): EvidenceInput[] => {
   return [{ ref: 'month-summary', source: READ_SOURCE['month-summary'], retrievedAt: now(), status: 'ok', data: result }];
 };
 
-/** Single-object reads (month summary, statements, payables, budgets, goals, categories). */
-const mapSingleton = (kind: ReadKind, ref: string, result: unknown): EvidenceInput[] => {
-  if (result === null || result === undefined) {
-    return [{ ref, source: READ_SOURCE[kind], retrievedAt: now(), status: 'empty', data: [] }];
-  }
+/**
+ * A19 + F3 — the UNFILTERED, workspace-scoped entity list reads (statements,
+ * payables, budgets, goals, categories), aligned with the shape the routes
+ * ACTUALLY answer.
+ *
+ * F3 (o defeito): o mapper anterior só produzia `setup_incomplete` para
+ * `null`/`undefined` — uma forma ARTIFICIAL que o cliente gerado nunca
+ * produz. As rotas respondem `{items: [...], total: n}`, então a lista vazia
+ * REAL não recebia reason alguma: o item chegava ao prompt e ao renderizador
+ * como um "não-claim" genérico, indistinguível de uma ausência nunca
+ * classificada, e a agregação `workspace_empty` (A04 bloco b) nunca era
+ * exercitada no caminho real.
+ *
+ * F3 + F2 (o comportamento único, agora):
+ *
+ * - payload fora do contrato (`null`, `{}`, `items` não-array) → FALHA
+ *   `permanent_error`: nenhuma ausência pode ser derivada dele (R04);
+ * - `items` vazio → `empty`/`setup_incomplete`: a leitura FUNCIONOU e este
+ *   escopo não tem nada configurado — o mesmo estado de setup que
+ *   `mapAccounts` já declara, e que agora sobe à agregação `workspace_empty`;
+ * - `items` preenchido → `ok` com o payload preservado (o modelo lê a mesma
+ *   forma que a rota devolveu).
+ */
+const mapEntityList = (kind: ReadKind, ref: string, result: unknown): EvidenceInput[] => {
+  const payload = readListPayload(result);
+  if (!payload.ok) return [errorItem(kind, ref, 'permanent_error')];
+  if (!rowsAreEntityRecords(payload.rows)) return [errorItem(kind, ref, 'permanent_error')];
+  if (payload.rows.length === 0) return [emptyItem(kind, ref, 'setup_incomplete')];
   return [{ ref, source: READ_SOURCE[kind], retrievedAt: now(), status: 'ok', data: result }];
+};
+
+/**
+ * A09-int pós-G03 — a leitura de analytics entra na evidência COM o envelope de
+ * prova que a API declarou (`effectivePeriod`/`boundary`/`basis`/`asOf`/
+ * `semanticsVersion` e o decimal exato de G-B). As três saídas são as únicas
+ * honestas, e nenhuma delas carrega um número que a leitura não provou:
+ *
+ * 1. **Envelope ausente** (a resposta não traz a janela que produziu os
+ *    totais) → `error`/`permanent_error` com `data: null`. Declarar uma janela
+ *    seria inventar prova, e ancorar os totais sem a fonte é pior que não ter
+ *    resposta.
+ * 2. **Janela vazia declarada pela API** (`transactionCount === 0` /
+ *    `emptyReason` / breakdown sem slices) → `empty`/`period_empty`: a leitura
+ *    FUNCIONOU e o período não tem lançamentos, o que nunca pode ser narrado
+ *    como "ok com zeros" (R04).
+ * 3. **Envelope utilizável** → `ok` com o payload envelopado, prova incluída.
+ */
+const mapAnalytics = (kind: ReadKind, ref: string, result: unknown): EvidenceInput[] => {
+  const declared = declareAnalyticsEnvelope(result);
+  if (!declared.ok) {
+    return [errorItem(kind, ref, 'permanent_error')];
+  }
+  const payload = asRecord(declared.response);
+  // A ausência é provada pelo que a API DECLARA: a contagem zero dos KPIs, o
+  // `emptyReason`, ou o breakdown que voltou com a lista de categorias vazia.
+  // Um payload sem nenhum desses sinais é `ok` — a ausência nunca é inferida
+  // de um campo que a leitura não preencheu.
+  const entries = toCents(payload?.['transactionCount']);
+  const emptyReason = typeof payload?.['emptyReason'] === 'string' && payload['emptyReason'] !== '' ? payload['emptyReason'] : null;
+  const slices = Array.isArray(payload?.['slices']) ? (payload['slices'] as readonly unknown[]) : null;
+  const provenEmpty = (entries !== null && entries === 0) || emptyReason !== null || (slices !== null && slices.length === 0);
+  if (provenEmpty) {
+    return [{ ref, source: READ_SOURCE[kind], retrievedAt: now(), status: 'empty', reason: 'period_empty', data: [] }];
+  }
+  return [{ ref, source: READ_SOURCE[kind], retrievedAt: now(), status: 'ok', data: declared.response }];
 };
 
 export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGrounding => {
@@ -377,17 +556,47 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
       ...(deps.apiOrigin !== undefined ? { apiOrigin: deps.apiOrigin } : {}),
     };
     const householdId = input.workspaceId;
+    /**
+     * A09-int: the analytics reads are period-bounded, and `from`/`to` are
+     * silently DROPPED by the API without `period=custom` (spike §3.1) — the
+     * same normalization the model-tool boundary applies, so the evidence and
+     * the tool can never disagree about the window. The current month is the
+     * default window, exactly like `getMonthSummary` above.
+     *
+     * FAIL-CLOSED: an unusable window THROWS instead of degrading to an empty
+     * query, because a query without `period` is silently resolved by the API
+     * as `last30days` — an undeclared window under grounding evidence.
+     */
+    const analyticsWindow = (): Record<string, unknown> => {
+      const normalized = normalizeAnalyticsQuery({
+        yearMonth: new Date().toISOString().slice(0, 7),
+      });
+      if (!normalized.ok) throw new Error(`agent.analytics_window:${normalized.reason}`);
+      return normalized.query;
+    };
     const fetchers: Record<ReadKind, () => Promise<EvidenceInput[]>> = {
       accounts: async () => mapAccounts(await tools.listAccounts({ householdId }, auth)),
       transactions: async () => mapTransactions(await tools.listRecentTransactions({ householdId, limit: 20 }, auth)),
       'month-summary': async () => mapMonthSummary(
         await tools.getMonthSummary({ householdId, yearMonth: new Date().toISOString().slice(0, 7) }, auth),
       ),
-      statements: async () => mapSingleton('statements', 'statements', await tools.listStatements({ householdId }, auth)),
-      payables: async () => mapSingleton('payables', 'payables', await tools.listAccountsPayable({ householdId }, auth)),
-      budgets: async () => mapSingleton('budgets', 'budgets', await tools.listBudgets({ householdId }, auth)),
-      goals: async () => mapSingleton('goals', 'goals', await tools.listGoals({ householdId }, auth)),
-      categories: async () => mapSingleton('categories', 'categories', await tools.listCategories({ householdId }, auth)),
+      statements: async () => mapEntityList('statements', 'statements', await tools.listStatements({ householdId }, auth)),
+      payables: async () => mapEntityList('payables', 'payables', await tools.listAccountsPayable({ householdId }, auth)),
+      budgets: async () => mapEntityList('budgets', 'budgets', await tools.listBudgets({ householdId }, auth)),
+      goals: async () => mapEntityList('goals', 'goals', await tools.listGoals({ householdId }, auth)),
+      categories: async () => mapEntityList('categories', 'categories', await tools.listCategories({ householdId }, auth)),
+      'analytics-kpis': async () => mapAnalytics(
+        'analytics-kpis',
+        'analytics-kpis',
+        await tools.analyticsKpis({ householdId, ...analyticsWindow() }, auth),
+      ),
+      'analytics-breakdown': async () => mapAnalytics(
+        'analytics-breakdown',
+        'analytics-breakdown',
+        // `kind` is required by the route; `expense` is the read this evidence
+        // answers ("para onde foi o dinheiro"), and the envelope declares it.
+        await tools.analyticsCategoryBreakdown({ householdId, kind: 'expense', ...analyticsWindow() }, auth),
+      ),
     };
     const settled = await Promise.all(kinds.map(async (kind) => {
       const toolName = READ_TOOL_NAME[kind];
@@ -420,14 +629,19 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
       }
     }));
     try {
-      return createEvidenceEnvelope(settled.flat(), {});
-    } catch {
+      return createEvidenceEnvelope(withWorkspaceEmptyAggregate(settled.flat()), {});
+    } catch (error) {
+      // A19: the rejection's OWN reason is preserved when it is typed (an
+      // item that violated the contract, or a payload past the cap — both are
+      // permanent failures of the projection, not transport symptoms).
+      // `unavailable` stays the fallback for an untyped rejection only; the
+      // previous hard-coded value erased a known fact on every path.
       return createEvidenceEnvelope([{
         ref: 'unavailable',
         source: 'tool',
         retrievedAt: now(),
         status: 'error',
-        reason: 'unavailable',
+        reason: resolveEnvelopeRejection(error),
         data: null,
       }], {});
     }

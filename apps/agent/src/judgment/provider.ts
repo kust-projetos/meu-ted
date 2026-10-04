@@ -139,18 +139,23 @@ const parseAllowedModels = (raw: string | undefined): readonly string[] =>
     .map((entry) => entry.trim())
     .filter((entry) => entry !== '');
 
-/**
- * `createJudgmentProvider` — a ÚNICA porta de entrada registrada (A16).
- * `available: false` é o estado default do Worker hoje.
- */
-export const createJudgmentProvider = (deps: {
+export type JudgmentProviderDeps = Readonly<{
   env?: JudgmentEnv;
   fetchImpl?: typeof fetch;
   now?: () => number;
   timeoutMs?: number;
   /** Store compartilhado opcional: duas instâncias da MESMA config compartilham breaker. */
   breakers?: BreakerStore;
-} = {}): JudgmentProvider => {
+}>;
+
+/**
+ * `createJudgmentProvider` — a ÚNICA porta de entrada registrada (A16).
+ * `available: false` é o estado default do Worker hoje.
+ *
+ * Esta é a FÁBRICA PURA: cada chamada devolve uma instância nova, com breaker e
+ * teto por turno próprios. Use `judgmentProviderForDo` no wiring por DO.
+ */
+export const createJudgmentProvider = (deps: JudgmentProviderDeps = {}): JudgmentProvider => {
   const endpoint = blank(deps.env?.[JUDGMENT_ENDPOINT_ENV]);
   const models = parseAllowedModels(deps.env?.[JUDGMENT_ALLOWED_MODELS_ENV]);
   const model = models[0] ?? '';
@@ -371,6 +376,32 @@ export type JudgmentResolution<T> = Readonly<{
   source: 'deterministic' | 'judgment_advisory';
   judgment: JudgmentOutcome;
 }>;
+
+/**
+ * A16 follow-up — UMA instância por Durable Object.
+ *
+ * O breaker e o teto de `JUDGMENT_MAX_CALLS_PER_TURN` por turno são ESTADO, e
+ * o estado mora na instância. Uma instância por chamada os tornaria inócuos: o
+ * teto se renovaria a cada avaliação e um circuito aberto seria esquecido no
+ * turno seguinte (o judge que falha voltaria a ser chamado indefinidamente).
+ *
+ * O escopo é a INSTÂNCIA DO DO (um por workspace), nunca um singleton de
+ * módulo: `WeakMap` por objeto de DO isola o teto e o breaker entre workspaces
+ * e não sobrevive à reciclagem do DO (o estado é reconstruído do zero, que é a
+ * postura fail-closed certa: sem histórico, o judge volta a ser consultado).
+ *
+ * `deps` valem na PRIMEIRA chamada: a config é resolvida uma vez por DO, como
+ * qualquer config de runtime do Worker.
+ */
+const PROVIDERS_BY_DO = new WeakMap<object, JudgmentProvider>();
+
+export const judgmentProviderForDo = (scope: object, deps: JudgmentProviderDeps = {}): JudgmentProvider => {
+  const existing = PROVIDERS_BY_DO.get(scope);
+  if (existing) return existing;
+  const created = createJudgmentProvider(deps);
+  PROVIDERS_BY_DO.set(scope, created);
+  return created;
+};
 
 /**
  * Consumidor-exemplo mínimo: prefere o determinístico e só consulta o judge

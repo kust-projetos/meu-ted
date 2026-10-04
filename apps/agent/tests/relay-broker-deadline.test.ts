@@ -487,7 +487,7 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
     // serialized /rpc/chat would queue the second turn behind the hung
     // first relay fetch and hit the test-local guard below.
     const { agent } = createChatAgent('5000');
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
     const hungGate = deferred<Response>();
     // Deterministic barrier: resolved when the first relay fetch actually
     // starts (HUNG-TURN prompt reaches agent.fetch), not via sleep().
@@ -562,7 +562,7 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
 
   it('first hung relay times out with typed 504 and no assistant persistence, then second turn succeeds while provider promise stays pending', async () => {
     const { agent, persisted } = createChatAgent();
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ transactions: [] });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
     // Never-resolved provider promise: the first leg stays hung forever.
     const hungGate = deferred<Response>();
     let hungSettled = false;

@@ -80,12 +80,18 @@ export const createPostgresReadModelStore = (opts: { pool: Pool }): ReadModelSto
   };
 
   return {
-    async listAccounts(householdId) {
+    async listAccounts(householdId, options) {
+      // A08: `includeInactive` drops ONLY the `status = 'active'` predicate.
+      // `household_id` stays the first bind and the card/soft-delete
+      // exclusions stay put, so the opt-in can never widen the workspace or
+      // turn the generic account surface into a card surface. The fragment is
+      // a literal chosen by a boolean - never interpolated input.
+      const activeFilter = options?.includeInactive === true ? '' : "AND status = 'active'";
       const rows = await query<Row>(
         `SELECT id, household_id, name, kind, balance_cents, status
            FROM accounts
           WHERE household_id = $1
-            AND status = 'active'
+            ${activeFilter}
             AND kind <> 'credit_card'
             AND deleted_at IS NULL`,
         [householdId],

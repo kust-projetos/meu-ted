@@ -89,7 +89,11 @@ export const createLegacyPostgresReadModelStore = (opts: { pool: Pool }): ReadMo
   };
 
   return {
-    async listAccounts(householdId: string) {
+    async listAccounts(householdId: string, options) {
+      // A08 parity with the canonical store: the opt-in drops ONLY the
+      // availability predicate (`a.active`), keeping the household bind, the
+      // soft-delete guard and the card exclusion.
+      const activeFilter = options?.includeInactive === true ? '' : 'AND a.active = true';
       const rows = await query<Row>(
         `SELECT a.id, a.household_id, a.name, a.initial_balance_cents,
                 COALESCE(a.initial_balance_cents, 0)
@@ -110,7 +114,7 @@ export const createLegacyPostgresReadModelStore = (opts: { pool: Pool }): ReadMo
              WHERE t.household_id = $1 AND t.deleted_at IS NULL
            ) totals ON true
 
-            WHERE a.household_id = $1 AND a.active = true AND a.deleted_at IS NULL
+            WHERE a.household_id = $1 ${activeFilter} AND a.deleted_at IS NULL
               AND a.is_credit_card IS NOT TRUE`,
         [householdId],
       );

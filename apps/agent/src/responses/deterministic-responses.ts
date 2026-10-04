@@ -12,8 +12,10 @@ export const renderUnavailable = (subject: string): string => `Não foi possíve
  * zero figure. The requested period/category/filter is never widened silently:
  * adjusting the scope is only OFFERED.
  *
- * `workspace_empty` has no producer until the A09 consistent snapshot exists
- * (A04 block b); the wording stays scoped to what was actually consulted.
+ * `workspace_empty` is the workspace-level claim, produced by the turn
+ * collector only from a consistent multi-read snapshot that came back entirely
+ * empty (A09/A04 block b); a narrower read keeps the wording scoped to what
+ * was actually consulted.
  */
 export const renderReadAbsence = (reason: ReadAbsenceReason, subject: string): string => {
   switch (reason) {

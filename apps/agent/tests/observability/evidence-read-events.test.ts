@@ -40,6 +40,9 @@ const stubTools = (overrides: Partial<ChannelReadTools> = {}): ChannelReadTools 
   listBudgets: failingBudgets,
   listGoals: hangingGoals,
   listCategories: async () => ({}),
+  // A09-int: never planned by the lifecycle events under test.
+  analyticsKpis: async () => ({}),
+  analyticsCategoryBreakdown: async () => ({}),
   ...overrides,
 });
 
