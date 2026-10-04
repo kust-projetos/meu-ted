@@ -314,6 +314,16 @@ Todos os casos seguintes são **futuros testes de aceite**, não resultados dest
 
 Pendências não impedem P0 local depois de sua autorização; bloqueiam apenas as fatias dependentes. Esta SPEC não inventa consenso nem exige ativar todos os opcionais para liberar correções independentes.
 
+### 11.1 Adendo (2026-10-04) — semântica de `basis` e envelope de prova (G03)
+
+Patch de SPEC exigido pelo PLAN A09 ("patch da SPEC antes de nova API"). Autorizado pelo operador ("pode continuar com o restante") após o [spike](reports/2026-10-04-ted-inteligente-v1-a09-spike.md) provar as três lacunas. Define a implementação como **aditiva na camada de leitura**, sem rota nova e **sem alterar o comportamento default** de nenhuma resposta existente:
+
+1. **G-A — `basis` opt-in.** Nova query param `basis` nas agregações de despesa (`kpis`, `cashflow-series`, `category-breakdown`, `daily-heatmap`): `liquidez` (default, comportamento atual byte a byte — compras e pagamentos de fatura contam como estão hoje) e `competencia` (exclui linhas com `statement_payment_id IS NOT NULL` do agregado de despesa; a compra permanece na data da compra). Omissão = `liquidez`. Nenhuma resposta muda sem o parâmetro explícito.
+2. **G-B — inteiro exato.** Quando `totalCents` (ou total de slice) exceder `Number.MAX_SAFE_INTEGER`, a resposta passa a incluir `totalCentsExact: string` (valor decimal exato do banco) e `approximate: true` no campo afetado; `totalCents: number` permanece para compatibilidade, documentado como aproximado nesse caso.
+3. **G-C — envelope de prova.** Toda resposta de analytics ganha campos aditivos: `transactionCount` (inteiro, linhas consideradas), `asOf` (instante da leitura, ISO-8601), `basis` (efetivo, string), `semanticsVersion` (`"1"`), `effectiveFilter` (objeto com os filtros realmente aplicados) e `emptyReason` (motivo de vazio conclusivo, `null` quando há dados). Timeout/403 continuam **nunca** convertidos em zero (R04/R09).
+4. **Fixture obrigatória:** `apps/api/tests/fixtures/analytics-semantics.fixture.json` passa a ser importada por teste real de agregação (PG), com os casos F (dupla contagem), H (safe integers) e L (envelope) como RED pós-implementação dos itens 1–3; os casos de comportamento default (A–E, I–K) travam que o default não mudou.
+5. **Fora do escopo deste adendo:** filtro `categoryId`/`includeDescendants` (lacuna de filtro, read model futuro), rota `/analytics/spending-summary` (só se G03 decidir por ela), e qualquer mudança em `daily-heatmap` além do envelope.
+
 ## 12. Rastreabilidade da origem
 
 | Seções da origem | Destino / disposição |
