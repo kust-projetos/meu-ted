@@ -19,7 +19,10 @@ describe("TedChat – isolamento de histórico por workspace", () => {
 
   it("fetchAgentHistory é chamado com workspace isolado e loadHistory depende de activeWorkspace", () => {
     const content = readFileSync(tedChatPath, "utf8");
-    expect(content).toContain("fetchAgentHistory(activeWorkspace.id)");
+    // A02/R02 (AC07 HIGH): o refresh captura o escopo no início e busca pelo
+    // id congelado (`scopeId`), revalidando-o após cada await.
+    expect(content).toContain("const scopeId = activeWorkspace.id;");
+    expect(content).toContain("fetchAgentHistory(scopeId)");
     expect(content).toContain("loadHistory");
     expect(content).toContain("activeWorkspace");
     expect(content).toMatch(/useCallback/);

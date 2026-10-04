@@ -94,6 +94,39 @@ describe('MutationExecutor strict execute validation (RED)', () => {
     await expect(executor.execute(input)).rejects.toThrow('approval.incomplete_result');
   });
 
+  // A01/AC02 barrier: the receipt is the ONLY proof a `succeeded` claim rests
+  // on, so it must stay a pure, closed projection of the executed mutation —
+  // never a channel for authority material or for a partial linkage.
+  //
+  // Two limitations are ACCEPTED here, deliberately untested (follow-ups):
+  //  (a) `mutationKind` is not cross-checked against the requested tool — only
+  //      operationId / entity / mutationId are linked. That defense lives in the
+  //      API, which emits the receipt from the executing tool.
+  //  (b) The receipt carries NO workspace/scope field. Scope binding is
+  //      transport + authentication (identity headers, validated server-side
+  //      against the authenticated context), never a receipt property.
+  it('fails closed when the receipt carries authority material (unknown key)', async () => {
+    const leakyReceipt = { ...faithfulReceipt, attestation: 'a'.repeat(40) };
+    const request = vi.fn().mockResolvedValueOnce({
+      id: pendingId,
+      status: 'succeeded',
+      execution: { status: 'succeeded', operationId: transactionId, receipt: leakyReceipt },
+    });
+    const executor = new MutationExecutor({ request });
+    await expect(executor.execute(input)).rejects.toThrow('approval.incomplete_result');
+  });
+
+  it('fails closed when the receipt omits the entity linkage entirely', async () => {
+    const { entity: _entity, ...receiptWithoutEntity } = faithfulReceipt;
+    const request = vi.fn().mockResolvedValueOnce({
+      id: pendingId,
+      status: 'succeeded',
+      execution: { status: 'succeeded', operationId: transactionId, receipt: receiptWithoutEntity },
+    });
+    const executor = new MutationExecutor({ request });
+    await expect(executor.execute(input)).rejects.toThrow('approval.incomplete_result');
+  });
+
   it('fails closed when execution.status is not succeeded', async () => {
     const request = vi.fn().mockResolvedValueOnce({
       id: pendingId,

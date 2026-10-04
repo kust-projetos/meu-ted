@@ -1,6 +1,6 @@
 import { scrubForPersistence } from '../privacy/dlp.js';
-import { parseFinancialMutation } from '../mutations/financial-parser.js';
-import { resolveMutationEntities, type EntityReader } from '../mutations/entity-resolver.js';
+import { hasMutationIntentSignal, interpretMutationUtterance } from '../mutations/semantic-interpretation.js';
+import { resolveMutationEntities, revalidateResolvedEntities, entityResolutionSignals, type EntityReader, type EntityResolutionTrace } from '../mutations/entity-resolver.js';
 import type { MutationApiClient, MutationIdentity } from '../mutations/mutation-api-client.js';
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
 import {
@@ -23,8 +23,9 @@ import { emitSanitizedEvent } from '../observability/events.js';
 import type { EvidenceEnvelope } from '../evidence/evidence-envelope.js';
 import { createGroundedResponseWithRetry } from '../responses/grounded-response.js';
 import { stripToolCallMarkup } from '../responses/tool-call-sanitizer.js';
-import { renderEmpty, renderInconclusive, renderMutationResult, renderStatement, renderUnavailable, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
+import { renderEmpty, renderInconclusive, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
 import { routeIntent } from './intent-router.js';
+import { TurnBudget, type RecoveryPermit, type ResolutionRecoveryRequest } from './turn-budget.js';
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
 import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
 import {
@@ -89,6 +90,26 @@ export type MutationPolicy = Readonly<{
   risk?: 'low' | 'medium' | 'high' | 'destructive';
 }>;
 
+/**
+ * A04/R04 — subject used by the deterministic read-absence copy, scoped to the
+ * turn's own domain. The read that proved the absence is never widened to
+ * another scope, and a global "workspace vazio" is never asserted (A09).
+ */
+const READ_ABSENCE_SUBJECT: Readonly<Record<string, string>> = {
+  accounts: 'contas',
+  transactions: 'lançamentos',
+  categories: 'categorias',
+};
+
+/**
+ * R10/AC20 — the honest reply when the shared per-turn recovery budget refuses
+ * another entity-resolution attempt. Same shape as
+ * `INVALID_PLAN_CLARIFICATION` (turn-plan.ts): it names the limit, never
+ * claims success, and asks the user instead of re-reading the same lists.
+ */
+const RESOLUTION_BUDGET_CLARIFICATION =
+  'Não consegui concluir a resolução com segurança dentro do limite do turno. Esclareça os dados, por favor.';
+
 export type TurnResult = Readonly<{
   input: TurnInput;
   plan: TurnPlan;
@@ -152,6 +173,16 @@ const freeze = <T>(value: T): T => {
   }
   return value;
 };
+
+// SPEC R03: a bare answer to the category clarification ("categoria Carne
+// Bovina") states a category explicitly but carries no amount, so it is not a
+// parsable mutation and `parseFinancialMutation` returns `kind: 'none'`.
+// Mirrors the parser's category phrasing (the trailing "?" is a question mark,
+// not part of the name) so the answer can complete a draft that is pending
+// only the category.
+const CATEGORY_PHRASE = /\b(?:categoria|categoria de)\s+([^,.;?]+)/i;
+const categoryQueryFrom = (text: string): string | undefined =>
+  CATEGORY_PHRASE.exec(text)?.[1]?.trim() || undefined;
 
 const normalize = (body: Body, identity: AuthenticatedIdentity, channel: ConversationChannel): TurnInput => {
   const textValue = typeof body.text === 'string' ? body.text : typeof body.content === 'string' ? body.content : '';
@@ -219,6 +250,11 @@ export class ConversationOrchestrator {
     /** Sanitized lifecycle event sink (defaults to emitSanitizedEvent). */
     events?: (eventType: string, fields: Record<string, unknown>) => void;
     /**
+     * R10 (AC20): per-turn shared recovery budget. Absent = a fresh TurnBudget
+     * per turn; injected so tests can pre-spend or observe the shared ceiling.
+     */
+    turnBudgetFactory?: () => TurnBudget;
+    /**
      * Multi-turn draft persistence (SPEC §7.8, ADR-014). Absent = legacy
      * single-turn behavior (incomplete args clarify without persistence).
      * Lives in DO storage of the conversation — never PWA, never API.
@@ -252,6 +288,109 @@ export class ConversationOrchestrator {
     } catch {
       // Observability must never break the turn.
     }
+  }
+
+  /**
+   * A08/R08: makes the resolution trace OBSERVABLE without leaking it. The
+   * trace says which references were invalidated and which confirmed preference
+   * this turn overrode; only those reference-KIND names are emitted (never ids,
+   * UUIDs or labels), namespaced to this turn so a dead alias is diagnosable
+   * from telemetry alone. Silent (no event) when nothing was dropped.
+   */
+  private emitEntityResolution(
+    input: TurnInput,
+    plan: TurnPlan,
+    trace: EntityResolutionTrace,
+  ): void {
+    const signals = entityResolutionSignals(trace);
+    if (signals.length === 0) return;
+    this.emit('mutation.entity_resolution', {
+      intentionId: input.intentionId,
+      traceId: input.traceId,
+      channel: input.channel,
+      domain: plan.domain,
+      status: 'signalled',
+      signals,
+    });
+  }
+
+  /**
+   * R10: the turn's shared recovery budget, keyed by the per-turn result
+   * object that every private step already threads through as `base`. This
+   * keeps concurrent turns on one orchestrator instance isolated (no shared
+   * mutable field) without widening the ~30 `completeTurn` call sites.
+   */
+  private readonly turnBudgets = new WeakMap<object, TurnBudget>();
+
+  private budgetFor(base: object): TurnBudget {
+    const existing = this.turnBudgets.get(base);
+    if (existing) return existing;
+    const created = this.dependencies.turnBudgetFactory?.() ?? new TurnBudget();
+    this.turnBudgets.set(base, created);
+    return created;
+  }
+
+  /**
+   * Numeric-only accounting for the turn (SPEC R10/AC30), emitted ONCE per
+   * turn at its terminal point. Counters only: no args, no user text, no
+   * technical ids. `clarification` records the deterministic stop of a turn
+   * that ended by asking the user, keeping `completed` for a settled read.
+   */
+  private emitTurnBudget(base: object, clarification = false): void {
+    const budget = this.budgetFor(base);
+    if (this.emittedBudgets.has(base)) return;
+    this.emittedBudgets.add(base);
+    if (clarification && budget.snapshot().stop === 'completed') budget.stopWith('clarification_needed');
+    this.emit('turn.budget', budget.snapshot() as unknown as Record<string, unknown>);
+  }
+
+  /** Idempotency guard so a terminal reached twice never double-counts. */
+  private readonly emittedBudgets = new WeakSet<object>();
+
+  /**
+   * R10/AC20 — gate for a READ-ONLY entity-resolution attempt. A refusal is a
+   * safe stop: the caller must not touch the authoritative lists again, must
+   * not throw, and must not fabricate a proposal. Returns the permit so the
+   * caller can hand the refusal straight to `stopResolutionRecovery`.
+   */
+  private permitResolutionRecovery(
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    request: ResolutionRecoveryRequest,
+  ): RecoveryPermit {
+    return this.budgetFor(base).tryResolutionRecovery(request);
+  }
+
+  /**
+   * R10/AC20 — the terminal for a refused resolution recovery. Records the
+   * refusal reason on the snapshot and asks the user; no re-read, no draft
+   * mutation, no proposal, no throw.
+   */
+  private stopResolutionRecovery(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    refusal: Extract<RecoveryPermit, { allowed: false }>,
+    missingFields: readonly string[],
+  ): TurnResult {
+    this.budgetFor(base).stopWith(refusal.stop);
+    // Only `accountId`/`categoryId` can ever be left unresolved by an entity
+    // resolution, so this never asserts a field the pipeline does not need.
+    const blockedPlan = freeze({ ...plan, missingFields: freeze([...missingFields]) });
+    this.emit('mutation.blocked', {
+      intentionId: input.intentionId,
+      traceId: input.traceId,
+      channel: input.channel,
+      domain: plan.domain,
+      mode: plan.mode,
+      status: 'blocked',
+      reason: refusal.stop,
+    });
+    return this.completeTurn(input, blockedPlan, startedAt, base, {
+      plan: blockedPlan,
+      clarification: freeze({ missingFields: blockedPlan.missingFields, text: RESOLUTION_BUDGET_CLARIFICATION }),
+      response: freeze({ text: RESOLUTION_BUDGET_CLARIFICATION }),
+    });
   }
 
   private async authorizeAutoExecution(
@@ -292,14 +431,29 @@ export class ConversationOrchestrator {
     const accountsAnswer = renderAccountsAnswer(input.text, extractAccountsEvidence(envelope));
     if (accountsAnswer !== null) return accountsAnswer;
     const ok = envelope.items.filter((item) => item.status === 'ok').map((item) => item.data);
-    if (ok.length === 0) return null;
+    if (ok.length === 0) {
+      // A04/R04: a typed read absence is answered deterministically and names
+      // the reason — an empty query is not a failure and not a zero. Gated on a
+      // typed reason (and on NO failed read, see `runGroundedRead`), so a read
+      // without a proven reason keeps its previous grounded path.
+      const absence = envelope.items.find((item) => item.status === 'empty' && item.reason !== undefined);
+      if (absence && absence.status === 'empty' && absence.reason !== undefined) {
+        return renderReadAbsence(absence.reason, READ_ABSENCE_SUBJECT[plan.domain] ?? 'dados');
+      }
+      return null;
+    }
     const lists = ok.filter(Array.isArray);
     if (plan.domain === 'transactions' || lists.length > 0) {
       for (const list of lists) {
         const rendered = renderStatement(list as readonly unknown[], 'extrato');
         if (rendered !== renderEmpty('extrato')) return rendered;
       }
-      if (plan.domain === 'transactions') return renderEmpty('extrato');
+      // A04/R04: "sem dados" is only honest when every usable item is an EMPTY
+      // list. An `ok` record (e.g. a month summary with `totalCents = 0` but
+      // `transactionCount > 0`) carries data: claiming absence here is exactly
+      // the "zero ≠ sem lançamentos" confound, so it goes to the grounded path.
+      const hasInformativeRecord = ok.some((data) => !Array.isArray(data));
+      if (plan.domain === 'transactions' && !hasInformativeRecord) return renderEmpty('extrato');
     }
     // A balance-seeking turn with no usable account evidence must never
     // fall through to the generative provider (which could invent a
@@ -320,7 +474,12 @@ export class ConversationOrchestrator {
     } catch {
       envelope = null;
     }
-    if (!envelope || envelope.items.every((item) => item.status === 'error')) {
+    // A04/R04 (AC10): a FAILED read blocks any conclusive "nothing there"
+    // reading, so an envelope with a failure and NO usable evidence also fails
+    // closed — a forbidden/unavailable read must never be narrated as zero.
+    const usable = envelope?.items.some((item) => item.status === 'ok') ?? false;
+    const failed = envelope?.items.some((item) => item.status === 'error') ?? false;
+    if (!envelope || envelope.items.length === 0 || (!usable && failed)) {
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
       return freeze({ ...base, failClosed: true as const, response: freeze({ text: FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT }) });
     }
@@ -341,6 +500,9 @@ export class ConversationOrchestrator {
       sink: (eventType, fields) => this.emit(eventType, fields),
       intentionId: input.intentionId,
       traceId: input.traceId,
+      // R10: the ONE correction retry spends a slot of the shared per-turn
+      // recovery budget. The hook fires only when the retry actually runs.
+      onRecoveryAttempted: () => { this.budgetFor(base).noteGroundingRetry(); },
     });
     this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: grounded.grounded, latencyMs: Date.now() - startedAt });
     return freeze({ ...base, response: freeze({ text: grounded.text }) });
@@ -423,6 +585,9 @@ export class ConversationOrchestrator {
       status: 'completed',
       latencyMs: Date.now() - startedAt,
     });
+    // R10: `completeTurn` is the terminal every private step converges on, so
+    // the shared per-turn recovery snapshot is emitted exactly once here.
+    this.emitTurnBudget(base, 'clarification' in extra && !!extra.clarification);
     return freeze({ ...base, ...(extra.plan ? { plan: freeze(extra.plan) } : {}), ...(extra.policy ? { policy: freeze(extra.policy) } : {}), ...('mutation' in extra && extra.mutation ? { mutation: freeze(extra.mutation) } : {}), ...('clarification' in extra && extra.clarification ? { clarification: freeze(extra.clarification) } : {}), ...('response' in extra && extra.response ? { response: freeze(extra.response) } : {}) });
   }
 
@@ -461,11 +626,71 @@ export class ConversationOrchestrator {
     draft: MutationDraftRecord,
   ): boolean {
     if (isResetText(text)) return true;
-    const parsed = parseFinancialMutation(text);
-    if (parsed.kind === 'none') return false;
+    // R06/A06: an ambiguous or clipped-but-unparsable utterance is not a new
+    // intention; it never inherits fields from the active draft.
+    const interpretation = interpretMutationUtterance(text);
+    if (interpretation.status !== 'candidate') return false;
+    const parsed = interpretation.parsed;
     return (
       parsed.kind !== draft.resolvedArgs.kind || parsed.amountCents !== draft.resolvedArgs.amountCents
     );
+  }
+
+  /**
+   * R06/A06: the deterministic stop for an ambiguous mutation utterance
+   * (AC13). Never proposes, never rounds, never registers: it only names the
+   * fields that make the request answerable.
+   */
+  private ambiguousClarification(
+    interpretation: Readonly<{ missingFields: readonly string[]; clarification: string }>,
+  ): Readonly<{ missingFields: readonly string[]; text: string }> {
+    return freeze({ missingFields: freeze([...interpretation.missingFields]), text: interpretation.clarification });
+  }
+
+  /**
+   * R06/A06 (AC13), review fix 1/2: an ambiguous utterance that carries a
+   * MUTATION INTENT signal is never answerable as anything else — not a read,
+   * not a draft continuation, not a proposal. Returns the clarification to
+   * answer with, or null when the turn is not ambiguous.
+   *
+   * The intent signal is required on purpose: "uns 80" alone is not a mutation
+   * (inventing the intent is exactly what R06 forbids), while "gastei uns 80 no
+   * mercado" is one and must therefore be asked about.
+   */
+  private ambiguousMutationClarification(text: string): Readonly<{ missingFields: readonly string[]; text: string }> | null {
+    if (!hasMutationIntentSignal(text)) return null;
+    const interpretation = interpretMutationUtterance(text);
+    return interpretation.status === 'clarify' ? this.ambiguousClarification(interpretation) : null;
+  }
+
+  /**
+   * The single terminal every ambiguous mutation turn converges on: no
+   * authoritative read, no provider, no proposal, no draft write. It runs
+   * BEFORE the draft continuation/recovery, so an active draft survives the
+   * turn untouched and no recovery slot is spent.
+   */
+  private stopAmbiguousMutation(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    clarification: Readonly<{ missingFields: readonly string[]; text: string }>,
+  ): TurnResult {
+    const blockedPlan = freeze({ ...plan, missingFields: freeze([...clarification.missingFields]) });
+    this.emit('mutation.blocked', {
+      intentionId: input.intentionId,
+      traceId: input.traceId,
+      channel: input.channel,
+      domain: plan.domain,
+      mode: plan.mode,
+      status: 'blocked',
+      reason: 'ambiguous_mutation_intent',
+    });
+    return this.completeTurn(input, blockedPlan, startedAt, base, {
+      plan: blockedPlan,
+      clarification: freeze({ missingFields: blockedPlan.missingFields, text: clarification.text }),
+      response: freeze({ text: clarification.text }),
+    });
   }
 
   private toolForKind(kind: 'expense' | 'income'): 'transactions.expense.create' | 'transactions.income.create' {
@@ -533,6 +758,10 @@ export class ConversationOrchestrator {
           accountId: args.accountId!,
           categoryId: args.categoryId!,
         };
+        // R10 (AC30): account the attempt the moment it leaves — every
+        // iteration of the ≤2 propose attempts counts, and this axis never
+        // spends the shared recovery budget (ADR-014 owns its own ceiling).
+        this.budgetFor(base).noteProposeAttempt();
         const proposal = await client.propose({
           tool: draft.tool,
           normalizedArgs,
@@ -650,21 +879,83 @@ export class ConversationOrchestrator {
     // Resolve ONLY the missing field, then revalidate ALL args: the stored
     // financial fields are authoritative for this draft, the new text only
     // supplies entity hints (e.g. "Nubank" → account).
+    //
+    // SPEC R03: a draft pending only the category is completed by the category
+    // the user just named — without this the clarification asked for something
+    // the draft could never consume, since the stored description is not a
+    // category query. The turn's explicit statement wins over the stored one
+    // (a correction of the category is exactly what this turn is for).
+    const turnCategoryQuery = draft.missingFields.includes('categoryId')
+      ? categoryQueryFrom(input.text)
+      : undefined;
+    const categoryQuery = turnCategoryQuery ?? draft.resolvedArgs.categoryQuery;
     const merged = {
       kind: draft.resolvedArgs.kind,
       amountCents: draft.resolvedArgs.amountCents,
       description: draft.resolvedArgs.description,
       date: draft.resolvedArgs.date,
-      ...(draft.resolvedArgs.categoryQuery ? { categoryQuery: draft.resolvedArgs.categoryQuery } : {}),
+      ...(categoryQuery ? { categoryQuery } : {}),
     };
+    // R10 (AC20): resolving the draft's missing entities IS a recovery —
+    // charge it to the shared per-turn budget BEFORE touching the
+    // authoritative lists, so a refusal never re-reads them. The fingerprint
+    // carries the SAME hint text the resolver matches accounts against, so a
+    // bare answer naming another account is a new strategy, not a repeat.
+    // A06xA10: when the turn carries its own interpretation, the hint is that
+    // SAME resolution base `freshMutationFlow` uses, so one logical attempt
+    // has one fingerprint whichever path it arrives by. Only a bare answer
+    // (which has no interpretation of its own) keeps the draft description
+    // in front, exactly as before.
+    const turnInterpretation = interpretMutationUtterance(input.text);
+    const resolutionHint = turnInterpretation.status === 'candidate'
+      ? turnInterpretation.resolutionText
+      : `${draft.resolvedArgs.description} ${input.text}`;
+    const permit = this.permitResolutionRecovery(base, {
+      kind: merged.kind,
+      args: {
+        amountCents: merged.amountCents,
+        description: merged.description,
+        date: merged.date,
+        ...(categoryQuery ? { categoryQuery } : {}),
+      },
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      resolutionHint,
+    });
+    if (!permit.allowed) {
+      return this.stopResolutionRecovery(
+        input,
+        plan,
+        startedAt,
+        base,
+        permit,
+        draft.missingFields.length > 0 ? draft.missingFields : ['accountId', 'categoryId'],
+      );
+    }
     const resolution = await resolveMutationEntities(
       merged,
-      `${draft.resolvedArgs.description} ${input.text}`,
+      resolutionHint,
       this.entityReaderOrClosed(),
+      // A08/R08 tier 2: the ids this draft already had confirmed inside the
+      // scope. The turn's own explicit choice still outranks them, and an id
+      // that no longer verifies is invalidated by the resolver, never used.
+      {
+        confirmed: {
+          ...(draft.resolvedArgs.accountId ? { accountId: draft.resolvedArgs.accountId } : {}),
+          ...(draft.resolvedArgs.categoryId ? { categoryId: draft.resolvedArgs.categoryId } : {}),
+        },
+      },
     );
     const stamp = new Date(this.draftNowMs()).toISOString();
+    this.emitEntityResolution(input, plan, resolution.trace);
     if (!resolution.complete) {
+      // SPEC R03: an explicit category accepted in this turn must survive the
+      // draft while another field stays pending. Dropping it would make the
+      // next bare answer ("Nubank") re-ask the category the user just named,
+      // because the stored description is not a category query.
+      const adoptsCategory = !!categoryQuery && categoryQuery !== draft.resolvedArgs.categoryQuery;
       store.update(draft.draftId, {
+        ...(adoptsCategory ? { resolvedArgs: { ...draft.resolvedArgs, categoryQuery } } : {}),
         missingFields: [...resolution.missingFields],
         updatedAt: stamp,
         lastIntentionId: input.intentionId,
@@ -692,8 +983,30 @@ export class ConversationOrchestrator {
       const updated = store.get(draft.draftId) ?? draft;
       return this.clarifyDraft(input, plan, startedAt, base, updated, question);
     }
+    // A08/R08: existence, activity and scope are re-checked IMMEDIATELY before
+    // the write (the CAS below is what arms the propose). This is the SAME
+    // resolution attempt — no recovery slot, no second loop (A06×A10). The
+    // redelivery/recovery paths keep re-emitting their proposal untouched.
+    const verified = await revalidateResolvedEntities(resolution, this.entityReaderOrClosed());
+    this.emitEntityResolution(input, plan, verified.trace);
+    if (!verified.complete) {
+      store.update(draft.draftId, {
+        missingFields: [...verified.missingFields],
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        lastQuestion: verified.clarification,
+      });
+      const updated = store.get(draft.draftId) ?? draft;
+      return this.clarifyDraft(input, plan, startedAt, base, updated, verified.clarification);
+    }
     store.update(draft.draftId, {
-      resolvedArgs: completeArgs,
+      resolvedArgs: {
+        ...completeArgs,
+        accountId: verified.accountId,
+        categoryId: verified.categoryId,
+        accountName: verified.accountName,
+        categoryName: verified.categoryName,
+      },
       missingFields: [],
       updatedAt: stamp,
       lastIntentionId: input.intentionId,
@@ -716,13 +1029,33 @@ export class ConversationOrchestrator {
   ): Promise<TurnResult> {
     const store = this.dependencies.draftStore!;
     const ctx = this.draftContext(input);
-    const parsed = parseFinancialMutation(input.text);
-    if (parsed.kind === 'none') {
+    // R06/A06: interpret once, then keep the historical flow. An ambiguous
+    // utterance (AC13) stops before entity resolution: no read, no draft, no
+    // proposal, and no invented value.
+    const interpretation = interpretMutationUtterance(input.text);
+    if (interpretation.status === 'clarify') {
+      const clarification = this.ambiguousClarification(interpretation);
+      const blockedPlan = freeze({ ...plan, missingFields: freeze([...clarification.missingFields]) });
+      this.emit('mutation.blocked', {
+        intentionId: input.intentionId,
+        traceId: input.traceId,
+        channel: input.channel,
+        domain: plan.domain,
+        mode: plan.mode,
+        status: 'blocked',
+      });
+      return this.completeTurn(input, blockedPlan, startedAt, base, {
+        plan: blockedPlan,
+        clarification,
+        response: freeze({ text: clarification.text }),
+      });
+    }
+    if (interpretation.status !== 'candidate') {
       // SPEC §7.6: missing amount/date is a real missing field, never [].
-      const missing = parsed.reason === 'missing_amount' ? ['amount'] : [...plan.missingFields];
+      const missing = interpretation.status === 'unparsed' && interpretation.reason === 'missing_amount' ? ['amount'] : [...plan.missingFields];
       const blockedPlan = freeze({ ...plan, missingFields: freeze([...missing]) });
       const text =
-        parsed.reason === 'missing_amount'
+        interpretation.status === 'unparsed' && interpretation.reason === 'missing_amount'
           ? 'Não identifiquei o valor a registrar. Informe o valor e a descrição.'
           : 'Não foi possível preparar a mutação com segurança. Esclareça valor e descrição.';
       this.emit('mutation.blocked', {
@@ -739,8 +1072,37 @@ export class ConversationOrchestrator {
         response: freeze({ text }),
       });
     }
-    const resolution = await resolveMutationEntities(parsed, input.text, this.entityReaderOrClosed());
-    if (!resolution.complete) {
+    const parsed = interpretation.parsed;
+    // R10 (AC20): the single resolution of this turn is a RECOVERY attempt —
+    // charge it to the shared budget BEFORE reading accounts/categories, so a
+    // refusal stops the turn safely instead of re-deriving the same answer.
+    // The fingerprint carries the SAME text the resolver matches accounts
+    // against, so naming another account is a new strategy, not a repeat.
+    const permit = this.permitResolutionRecovery(base, {
+      kind: parsed.kind,
+      args: {
+        amountCents: parsed.amountCents,
+        description: parsed.description,
+        date: parsed.date,
+        ...(parsed.categoryQuery ? { categoryQuery: parsed.categoryQuery } : {}),
+      },
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      resolutionHint: interpretation.resolutionText,
+    });
+    if (!permit.allowed) {
+      return this.stopResolutionRecovery(input, plan, startedAt, base, permit, ['accountId', 'categoryId']);
+    }
+    // R08/A08: the account hint is TEXT — the deterministic match still happens
+    // here, against the authoritative account list.
+    const resolution = await resolveMutationEntities(parsed, interpretation.resolutionText, this.entityReaderOrClosed());
+    // A08/R08: re-check existence/activity/scope IMMEDIATELY before the write.
+    // Same resolution attempt — no recovery slot, no second loop (A06×A10).
+    const verified = resolution.complete
+      ? await revalidateResolvedEntities(resolution, this.entityReaderOrClosed())
+      : resolution;
+    this.emitEntityResolution(input, plan, verified.trace);
+    if (!verified.complete) {
       // Idempotent per turn (§7.7): same intentionId reuses the draft.
       const tool = this.toolForKind(parsed.kind);
       const now = this.draftNowMs();
@@ -757,8 +1119,8 @@ export class ConversationOrchestrator {
           date: parsed.date,
           ...(parsed.categoryQuery ? { categoryQuery: parsed.categoryQuery } : {}),
         },
-        missingFields: [...resolution.missingFields],
-        question: resolution.clarification,
+        missingFields: [...verified.missingFields],
+        question: verified.clarification,
         ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
         nowMs: now,
       });
@@ -777,9 +1139,11 @@ export class ConversationOrchestrator {
       amountCents: parsed.amountCents,
       description: parsed.description,
       date: parsed.date,
-      accountId: resolution.accountId,
-      categoryId: resolution.categoryId,
+      accountId: verified.accountId,
+      categoryId: verified.categoryId,
     };
+    // R10 (AC30): same accounting as the draft path — counted before it goes.
+    this.budgetFor(base).noteProposeAttempt();
     const proposal = await client.propose({
       tool,
       normalizedArgs,
@@ -791,7 +1155,7 @@ export class ConversationOrchestrator {
     if (eligible && !proposal.existing) {
       const duplicateSuspected = await client.duplicateSuspectedStrict({
         kind: parsed.kind, description: parsed.description, amountCents: parsed.amountCents,
-        date: parsed.date, accountId: resolution.accountId,
+        date: parsed.date, accountId: verified.accountId,
       });
       if (!duplicateSuspected) {
         const elevated = this.dependencies.autoExecutionClient?.();
@@ -806,7 +1170,7 @@ export class ConversationOrchestrator {
               return this.completeTurn(input, plan, startedAt, base, {
                 policy: freeze({ ...base.policy, authorizationMode: 'auto' }),
                 mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}) }),
-                response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${resolution.accountName ? ` na conta ${resolution.accountName}` : ''}. Se quiser, posso desfazer.` }),
+                response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${verified.accountName ? ` na conta ${verified.accountName}` : ''}. Se quiser, posso desfazer.` }),
               });
             } catch {
               try {
@@ -827,8 +1191,8 @@ export class ConversationOrchestrator {
         operationId: proposal.id,
         tool,
         normalizedArgs,
-        accountName: resolution.accountName,
-        categoryName: resolution.categoryName,
+        accountName: verified.accountName,
+        categoryName: verified.categoryName,
         expiresAt: proposal.operation.expiresAt,
       }),
       response: freeze({ text: renderMutationResult('proposed', proposal.summary) }),
@@ -950,8 +1314,8 @@ export class ConversationOrchestrator {
 
     const actives = store.listActive(ctx, now);
     if (actives.length >= 2) {
-      const replacement = parseFinancialMutation(input.text);
-      if (replacement.kind !== 'none' && actives.every((draft) => this.isReplacement(input.text, draft))) {
+      const replacement = interpretMutationUtterance(input.text);
+      if (replacement.status === 'candidate' && actives.every((draft) => this.isReplacement(input.text, draft))) {
         const stamp = new Date(now).toISOString();
         for (const draft of actives) {
           store.update(draft.draftId, { status: 'replaced', updatedAt: stamp, lastIntentionId: input.intentionId });
@@ -1008,6 +1372,10 @@ export class ConversationOrchestrator {
     };
     const args = draft.resolvedArgs;
     try {
+      // Restart recovery re-emits ANOTHER intention's proposal (the current
+      // turn's own `proposing` draft is handled above with a response), so it
+      // is deliberately NOT charged to this turn's propose axis: the snapshot
+      // reports what THIS turn proposed.
       const proposal = await client.propose({
         tool: draft.tool,
         normalizedArgs: {
@@ -1250,6 +1618,13 @@ export class ConversationOrchestrator {
     // V2-confirmation path.
     const undoTurn = await this.runUndoTurn(input, plan, startedAt, result);
     if (undoTurn) return undoTurn;
+    // R06/A06 (AC13), review fix 1/2: an ambiguous mutation intent is answered
+    // here, BEFORE the draft continuation, before any authoritative read and
+    // before the provider. It runs after the undo turn (an explicit undo stays
+    // an undo) and after the decision modes below are reached only for their
+    // own texts. An active draft is preserved untouched: no CAS, no write.
+    const ambiguous = this.ambiguousMutationClarification(input.text);
+    if (ambiguous) return this.stopAmbiguousMutation(input, plan, startedAt, result, ambiguous);
     const client = this.dependencies.mutationApiClient;
     // A proposal may never fall through to a generative response when the
     // channel was unable to construct its narrowly-scoped API client (for
@@ -1259,12 +1634,20 @@ export class ConversationOrchestrator {
       return freeze({ ...result, response: freeze({ text: 'Não foi possível preparar a operação com segurança. A sessão precisa de um dispositivo autenticado.' }) });
     }
     if (plan.mode === 'mutation-proposal' && client && !this.dependencies.draftStore) {
-      const parsed = parseFinancialMutation(input.text);
-      if (parsed.kind === 'none') {
+      const interpretation = interpretMutationUtterance(input.text);
+      if (interpretation.status === 'clarify') {
+        // R06/A06 (AC13): ambiguous input stops before any authoritative read.
+        const clarification = this.ambiguousClarification(interpretation);
+        const blockedPlan = freeze({ ...plan, missingFields: clarification.missingFields });
+        this.emit('mutation.blocked', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'blocked' });
+        this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
+        return freeze({ ...result, plan: blockedPlan, clarification, response: freeze({ text: clarification.text }) });
+      }
+      if (interpretation.status !== 'candidate') {
         // SPEC §7.6: missing amount/date is a real missing field, never [].
-        const missing = parsed.reason === 'missing_amount' ? ['amount'] : [...plan.missingFields];
+        const missing = interpretation.status === 'unparsed' && interpretation.reason === 'missing_amount' ? ['amount'] : [...plan.missingFields];
         const blockedPlan = freeze({ ...plan, missingFields: freeze([...missing]) });
-        const text = parsed.reason === 'missing_amount'
+        const text = interpretation.status === 'unparsed' && interpretation.reason === 'missing_amount'
           ? 'Não identifiquei o valor a registrar. Informe o valor e a descrição.'
           : 'Não foi possível preparar a mutação com segurança. Esclareça valor e descrição.';
         this.emit('mutation.blocked', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'blocked' });
@@ -1274,16 +1657,21 @@ export class ConversationOrchestrator {
       // SPEC §7.1/§7.2/§7.3 (H-01): resolve accountId/categoryId against
       // authoritative reads BEFORE any proposal. Incomplete args clarify;
       // no pending operation is created on this path (T1.3 persists drafts).
+      const parsed = interpretation.parsed;
       const reader = this.dependencies.entityReader ?? {
         listAccounts: async (): Promise<never> => { throw new Error('agent.entity_reader_missing'); },
         listCategories: async (): Promise<never> => { throw new Error('agent.entity_reader_missing'); },
       };
-      const resolution = await resolveMutationEntities(parsed, input.text, reader);
-      if (!resolution.complete) {
-        const incompletePlan = freeze({ ...plan, missingFields: freeze([...resolution.missingFields]) });
+      const resolution = await resolveMutationEntities(parsed, interpretation.resolutionText, reader);
+      // A08/R08: re-check existence/activity/scope IMMEDIATELY before the write.
+      // Same resolution attempt — no recovery slot, no second loop (A06×A10).
+      const verified = resolution.complete ? await revalidateResolvedEntities(resolution, reader) : resolution;
+      this.emitEntityResolution(input, plan, verified.trace);
+      if (!verified.complete) {
+        const incompletePlan = freeze({ ...plan, missingFields: freeze([...verified.missingFields]) });
         this.emit('mutation.blocked', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'blocked' });
         this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
-        return freeze({ ...result, plan: incompletePlan, clarification: freeze({ missingFields: incompletePlan.missingFields, text: resolution.clarification }), response: freeze({ text: resolution.clarification }) });
+        return freeze({ ...result, plan: incompletePlan, clarification: freeze({ missingFields: incompletePlan.missingFields, text: verified.clarification }), response: freeze({ text: verified.clarification }) });
       }
       const identity: MutationIdentity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })() };
       // SPEC §7.7.1: the no-draft proposal key derives deterministically
@@ -1297,9 +1685,13 @@ export class ConversationOrchestrator {
         amountCents: parsed.amountCents,
         description: parsed.description,
         date: parsed.date,
-        accountId: resolution.accountId,
-        categoryId: resolution.categoryId,
+        accountId: verified.accountId,
+        categoryId: verified.categoryId,
       };
+      // R10 (AC30): the legacy no-draft path has no `completeTurn` terminal,
+      // so the attempt is charged here and the snapshot is emitted explicitly
+      // on every propose terminal below (`result` is this turn's `base`).
+      this.budgetFor(result).noteProposeAttempt();
       const proposal = await client.propose({
         tool,
         normalizedArgs,
@@ -1308,28 +1700,32 @@ export class ConversationOrchestrator {
         idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool),
       });
       if (!proposal.existing && isAutoExecutionEligible({ tool, missingFields: [], ambiguity: plan.ambiguity, latestActorText: input.text }) &&
-        !(await client.duplicateSuspectedStrict({ kind: parsed.kind, description: parsed.description, amountCents: parsed.amountCents, date: parsed.date, accountId: resolution.accountId }))) {
+        !(await client.duplicateSuspectedStrict({ kind: parsed.kind, description: parsed.description, amountCents: parsed.amountCents, date: parsed.date, accountId: verified.accountId }))) {
         const elevated = this.dependencies.autoExecutionClient?.();
         if (elevated) {
           const authorization = await this.authorizeAutoExecution(elevated, proposal.id, identity);
-          if (authorization.kind === 'uncertain') return freeze({ ...result, response: freeze({ text: renderInconclusive() }) });
+          if (authorization.kind === 'uncertain') { this.emitTurnBudget(result); return freeze({ ...result, response: freeze({ text: renderInconclusive() }) }); }
           if (authorization.kind === 'authorized') {
             try {
               const executed = await new PendingOperationCoordinator({ client: elevated }).executeAuthorized({ operationId: proposal.id, attestation: authorization.attestation }, identity);
-              return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'auto' }), mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}) }), response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${resolution.accountName ? ` na conta ${resolution.accountName}` : ''}. Se quiser, posso desfazer.` }) });
+              this.emitTurnBudget(result);
+              return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'auto' }), mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}) }), response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${verified.accountName ? ` na conta ${verified.accountName}` : ''}. Se quiser, posso desfazer.` }) });
             } catch {
               try {
                 const current = await elevated.listActive(identity);
                 if (current.items.some((item) => item.id === proposal.id && item.status === 'failed')) {
+                  this.emitTurnBudget(result);
                   return freeze({ ...result, response: freeze({ text: renderMutationResult('failed') }) });
                 }
               } catch { /* State remains uncertain; keep the inconclusive response. */ }
+              this.emitTurnBudget(result);
               return freeze({ ...result, response: freeze({ text: renderInconclusive() }) });
             }
           }
         }
       }
-      return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, accountName: resolution.accountName, categoryName: resolution.categoryName, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
+      this.emitTurnBudget(result);
+      return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, accountName: verified.accountName, categoryName: verified.categoryName, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
     }
     // SPEC §7.8 (ADR-014) with a draft store: the full multi-turn flow
     // (draft persistence, continuation, atomic consumption, recoverable
@@ -1409,7 +1805,12 @@ export class ConversationOrchestrator {
     }
     if (plan.mode === 'read' && this.dependencies.evidenceProvider) {
       // Evidence-backed read: deterministic render or validated grounded text.
-      return this.runGroundedRead(input, plan, startedAt, result);
+      const read = await this.runGroundedRead(input, plan, startedAt, result);
+      // R10: the grounded read path terminates inside `runGroundedRead` (it
+      // never reaches `completeTurn`), so the shared snapshot is emitted here.
+      // A settled read is not a clarification: its stop stays `completed`.
+      this.emitTurnBudget(result);
+      return read;
     }
     // INV-06 fail-closed: an `unsupported` turn that still makes a financial
     // claim (amount pattern or finance noun + claim cue) would otherwise

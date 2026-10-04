@@ -1,8 +1,30 @@
 import { formatCents } from '../evidence/financial-formatters.js';
+import type { ReadAbsenceReason } from '../evidence/evidence-envelope.js';
 
 export const renderBalance = (value: { accountName: string; balanceCents: number }): string => `${value.accountName}: ${formatCents(value.balanceCents)}.`;
 export const renderEmpty = (subject: string): string => `Não há dados disponíveis para ${subject}.`;
 export const renderUnavailable = (subject: string): string => `Não foi possível consultar ${subject} agora. Tente novamente mais tarde.`;
+
+/**
+ * A04/R04 — deterministic reply for a read that SUCCEEDED and proved an
+ * absence in the requested scope. It states the reason, never turns an empty
+ * query into a failure ("não foi possível") and never presents absence as a
+ * zero figure. The requested period/category/filter is never widened silently:
+ * adjusting the scope is only OFFERED.
+ *
+ * `workspace_empty` has no producer until the A09 consistent snapshot exists
+ * (A04 block b); the wording stays scoped to what was actually consulted.
+ */
+export const renderReadAbsence = (reason: ReadAbsenceReason, subject: string): string => {
+  switch (reason) {
+    case 'setup_incomplete': return `Ainda não encontrei ${subject} aqui. Quer que eu te guie no cadastro?`;
+    case 'period_empty': return `Não há ${subject} no período que você consultou. Posso verificar outro período, se quiser.`;
+    case 'category_empty': return `Não há ${subject} nessa categoria. Posso consultar sem esse filtro.`;
+    case 'filter_empty': return `Nenhum item de ${subject} atende a esse filtro. Posso revisar o filtro com você.`;
+    case 'entity_not_found': return 'Não encontrei esse item entre os seus dados.';
+    case 'workspace_empty': return `Não encontrei ${subject} aqui ainda. Posso te mostrar como começar.`;
+  }
+};
 
 /**
  * TEDV3-003 remediation: deterministic clarification used when the tool-call
@@ -48,12 +70,17 @@ export const renderStatement = (entries: readonly unknown[], subject = 'extrato'
 export type MutationOutcome = 'proposed' | 'succeeded' | 'failed' | 'cancelled' | 'expired';
 
 /**
- * Inconclusive handoff reply (SPEC §7.8/INV-10): the propose outcome is
- * unknown, so the turn claims neither success nor cancellation. Fixed
- * wording, never model text.
+ * Inconclusive handoff reply (SPEC §7.8/INV-10, R01): the write WAS SENT and
+ * its outcome is unknown — the effect may well have committed. The reply
+ * therefore claims neither success NOR the absence of any effect: "Nada foi
+ * criado/cancelado" is an unproven assertion of fact. It names what is
+ * unknown and points at the safe next step (check the transactions before
+ * retrying, so a committed-but-unanswered write is not duplicated). Fixed
+ * wording, never model text, and grammatically neutral: only the subject
+ * varies, so no participle can disagree with it.
  */
 export const renderInconclusive = (subject = 'operação'): string =>
-  `A ${subject} está em processamento e ainda não foi concluída. Nada foi criado ou cancelado ainda — tente novamente em instantes.`;
+  `${subject} em processamento: o resultado não pôde ser confirmado. Verifique seus lançamentos antes de tentar de novo.`;
 
 /** Deterministic mutation/approval result: fixed wording per outcome, never model text. */
 export const renderMutationResult = (outcome: MutationOutcome, subject = 'operação'): string => {  switch (outcome) {

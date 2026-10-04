@@ -30,6 +30,7 @@ const identity: AuthenticatedIdentity = {
 const NUBANK = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
 const ITAU = { id: '00000000-0000-4000-8000-000000000002', name: 'Itaú' };
 const MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' };
+const CARNE_BOVINA = { id: '00000000-0000-4000-8000-000000000021', name: 'Carne Bovina' };
 
 const reader = (
   accounts = [NUBANK, ITAU],
@@ -180,6 +181,65 @@ describe('SPEC §25.3.1 — MutationDraft multi-turno', () => {
     });
     expect(body?.body?.normalizedArgs).not.toHaveProperty('categoryQuery');
     expect(second.response?.text).toMatch(/Proposta/);
+  });
+
+  // R03/AC08: the category clarification is only usable if answering it
+  // completes the draft — "carne" stays the description and the category the
+  // user names in the answer is the explicit category statement.
+  it('R03: answering the category clarification completes the draft with the named category', async () => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const orchestrator = setup(fake, store, { entityReader: reader([NUBANK], [CARNE_BOVINA]) });
+
+    const first = await turn(orchestrator, 'gastei 50 de carne', 'msg-draft-category-1');
+    expect(first.mutation).toBeUndefined();
+    expect(fake.proposePosts()).toBe(0);
+    expect(first.clarification?.missingFields).toEqual(['categoryId']);
+    expect(first.response?.text).toMatch(/qual categoria/i);
+
+    const second = await turn(orchestrator, 'categoria Carne Bovina', 'msg-draft-category-2');
+    expect(fake.proposePosts()).toBe(1);
+    expect(second.mutation?.operationId).toMatch(/^pending-/);
+    const body = fake.request.mock.calls[0]?.[2] as { body?: { normalizedArgs?: Record<string, unknown> } };
+    expect(body?.body?.normalizedArgs).toMatchObject({
+      amountCents: 5000,
+      description: 'carne',
+      accountId: NUBANK.id,
+      categoryId: CARNE_BOVINA.id,
+    });
+  });
+
+  // R03: the explicit category survives while another field stays pending —
+  // answering the remaining question must not lose the accepted choice.
+  it('R03: an accepted category is kept while the account is still pending', async () => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const orchestrator = setup(fake, store, { entityReader: reader([NUBANK, ITAU], [CARNE_BOVINA]) });
+
+    const first = await turn(orchestrator, 'gastei 50 de carne', 'msg-draft-keep-category-1');
+    expect(first.mutation).toBeUndefined();
+    expect(fake.proposePosts()).toBe(0);
+    expect(first.clarification?.missingFields).toEqual(['accountId', 'categoryId']);
+
+    // The category is accepted and only the account is asked for now.
+    const second = await turn(orchestrator, 'categoria Carne Bovina', 'msg-draft-keep-category-2');
+    expect(second.mutation).toBeUndefined();
+    expect(fake.proposePosts()).toBe(0);
+    expect(second.clarification?.missingFields).toEqual(['accountId']);
+    expect(second.response?.text).toMatch(/conta/i);
+    expect(second.response?.text).not.toMatch(/qual categoria/i);
+
+    const third = await turn(orchestrator, 'Nubank', 'msg-draft-keep-category-3');
+    expect(third.clarification?.missingFields ?? []).not.toContain('categoryId');
+    expect(fake.proposePosts()).toBe(1);
+    expect(third.mutation?.operationId).toMatch(/^pending-/);
+    const body = fake.request.mock.calls[0]?.[2] as { body?: { normalizedArgs?: Record<string, unknown> } };
+    expect(body?.body?.normalizedArgs).toMatchObject({
+      amountCents: 5000,
+      description: 'carne',
+      accountId: NUBANK.id,
+      categoryId: CARNE_BOVINA.id,
+    });
   });
 
   it('expired draft: short answer executes nothing', async () => {

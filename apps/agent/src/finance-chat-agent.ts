@@ -66,7 +66,7 @@ import { classifyError, emitSanitizedEvent } from "./observability/events.js";
 import { routeIntent } from "./orchestration/intent-router.js";
 import { createChannelGrounding } from "./orchestration/channel-evidence.js";
 import type { EvidenceEnvelope } from "./evidence/evidence-envelope.js";
-import { parseFinancialMutation, isClearlyMutating } from "./mutations/financial-parser.js";
+import { hasMutationIntentSignal, interpretMutationUtterance } from "./mutations/semantic-interpretation.js";
 import { toActiveOperationRecords } from "./mutations/active-operation-projection.js";
 import { createRequestEntityReader, type EntityReader } from "./mutations/entity-resolver.js";
 import { MutationApiClient } from "./mutations/mutation-api-client.js";
@@ -1236,13 +1236,27 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * `GET /accounts` + `GET /categories` reads the evidence layer uses,
    * scoped by the turn's `financial.read` delegation. Unreadable lists fail
    * closed downstream (clarification, never a proposal).
+   *
+   * The reader is ALSO bound to the turn's workspace so a row reporting a
+   * different scope is never resolved, listed or named (R08 defensive axis).
+   * Safe by construction, not by assumption: `input.workspaceId` is the exact
+   * value carried as the `workspace` claim of the delegated token minted just
+   * above (`mintReadToken`), and the API turns that claim into
+   * `ctx.householdId` (`householdId: claims.workspace`), filters on it
+   * (`WHERE household_id = $1`) and echoes the same column back on the row —
+   * so a legitimate row's `householdId` IS this value, and scoping can only
+   * ever reject a genuinely foreign row, never a valid one.
    */
   private async entityReaderForTurn(input: TurnInput): Promise<EntityReader> {
     const delegatedToken = await this.mintReadToken(input);
     const apiOrigin = this.env?.API_ORIGIN;
     const request = <T>(method: string, path: string, options: Parameters<typeof requestPiApiJson>[2] = {}) =>
       requestPiApiJson<T>(method, path, { ...options, delegatedToken, ...(apiOrigin !== undefined ? { apiOrigin } : {}) });
-    return createRequestEntityReader(request);
+    const workspaceId = input.workspaceId?.trim();
+    return createRequestEntityReader(
+      request,
+      workspaceId ? { workspaceId } : undefined,
+    );
   }
 
   override async onChatMessage(messagePayload: unknown, ..._rest: unknown[]): Promise<unknown> {
@@ -1655,8 +1669,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
 
   /** Builds the sole V2 mutation plan used by every channel adapter. */
   private mutationProposalPlan(input: TurnInput): TurnPlan | null {
-    const parsed = parseFinancialMutation(input.text);
-    if (parsed.kind === "none" || !isClearlyMutating(input.text)) return null;
+    // R06/A06: the interpretation layer is the single place that decides
+    // "this utterance is a mutation candidate" (clipped verbs included) and
+    // that refuses an ambiguous one (AC13) without registering anything. The
+    // intent gate stays exactly where it was.
+    if (!hasMutationIntentSignal(input.text)) return null;
+    const interpretation = interpretMutationUtterance(input.text);
+    if (interpretation.status !== "candidate") return null;
+    const parsed = interpretation.parsed;
 
     const routed = routeIntent(input.text);
     return {

@@ -109,3 +109,104 @@ describe('SPEC §7.7/§7.7.1: stable per-turn idempotency (Agent)', () => {
     ).rejects.toMatchObject({ code: 'idempotency.conflict' });
   });
 });
+
+/**
+ * A02 (R02/AC06) — dedup is by identity, never by text. The report of a
+ * "message that disappears" is a HYPOTHESIS (SPEC §2.1/F13): the proposal key
+ * derives from (workspace, intentionId, toolCallId) and never from the message
+ * content, so two IDENTICAL texts under distinct intentionIds are two distinct
+ * intentions and two distinct proposals.
+ */
+describe('SPEC R02/AC06: dedup is by identity, never by text (Agent)', () => {
+  it('normalizes two identical texts under distinct intentionIds into two distinct intentions', () => {
+    const first = normalizeRestTurn({ text: 'Gastei R$ 50 no mercado', intentionId: 'msg-A' }, identity);
+    const second = normalizeRestTurn({ text: 'Gastei R$ 50 no mercado', intentionId: 'msg-B' }, identity);
+
+    expect(first.text).toBe(second.text);
+    expect(first.intentionId).toBe('msg-A');
+    expect(second.intentionId).toBe('msg-B');
+  });
+
+  it('derives DIFFERENT idempotency keys for the same text under different intentionIds', () => {
+    const first = deriveIdempotencyKey(identity.workspaceId, 'msg-A', 'transactions.expense.create');
+    const second = deriveIdempotencyKey(identity.workspaceId, 'msg-B', 'transactions.expense.create');
+
+    expect(first).not.toBe(second);
+  });
+
+  it('proposes TWO distinct operations for identical text under distinct intentionIds', async () => {
+    const { api, request } = mockClient();
+    // Server-side dedup emulates the API: the SAME idempotency key returns the
+    // SAME operation, a different key creates a different one.
+    const byKey = new Map<string, string>();
+    request.mockImplementation(async (_method: string, path: string, opts?: { idempotencyKey?: string }) => {
+      if (path !== '/pending-operations/v2/propose') {
+        throw new Error(`unexpected ${path}`);
+      }
+      const key = opts?.idempotencyKey ?? '';
+      const existing = byKey.get(key);
+      if (existing) return { id: existing, existing: true };
+      const id = `pending-${byKey.size + 1}`;
+      byKey.set(key, id);
+      return { id, existing: false };
+    });
+
+    const orchestrator = new ConversationOrchestrator({
+      mutationApiClient: api,
+      plan: mutationPlan,
+      entityReader: reader,
+    });
+
+    const first = await orchestrator.runTurn(
+      normalizeRestTurn({ text: 'Gastei R$ 50 no mercado', intentionId: 'msg-A' }, identity),
+    );
+    const second = await orchestrator.runTurn(
+      normalizeRestTurn({ text: 'Gastei R$ 50 no mercado', intentionId: 'msg-B' }, identity),
+    );
+
+    // Same text, different identity: two effects, never silently merged.
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(first.mutation?.operationId).toBe('pending-1');
+    expect(second.mutation?.operationId).toBe('pending-2');
+    const seenKeys = request.mock.calls.map(
+      (call) => (call[2] as { idempotencyKey?: string } | undefined)?.idempotencyKey,
+    );
+    expect(seenKeys[0]).toBe(deriveIdempotencyKey(identity.workspaceId, 'msg-A', 'transactions.expense.create'));
+    expect(seenKeys[1]).toBe(deriveIdempotencyKey(identity.workspaceId, 'msg-B', 'transactions.expense.create'));
+  });
+
+  it('redelivery of the SAME intentionId still collapses to one effect after other turns ran', async () => {
+    const { api, request } = mockClient();
+    const byKey = new Map<string, string>();
+    request.mockImplementation(async (_method: string, path: string, opts?: { idempotencyKey?: string }) => {
+      if (path !== '/pending-operations/v2/propose') {
+        throw new Error(`unexpected ${path}`);
+      }
+      const key = opts?.idempotencyKey ?? '';
+      const existing = byKey.get(key);
+      if (existing) return { id: existing, existing: true };
+      const id = `pending-${byKey.size + 1}`;
+      byKey.set(key, id);
+      return { id, existing: false };
+    });
+
+    const orchestrator = new ConversationOrchestrator({
+      mutationApiClient: api,
+      plan: mutationPlan,
+      entityReader: reader,
+    });
+
+    const first = await orchestrator.runTurn(
+      normalizeRestTurn({ text: 'Gastei R$ 50 no mercado', intentionId: 'msg-A' }, identity),
+    );
+    await orchestrator.runTurn(normalizeRestTurn({ text: 'Gastei R$ 80 no mercado', intentionId: 'msg-B' }, identity));
+    const redelivered = await orchestrator.runTurn(
+      normalizeRestTurn({ text: 'Gastei R$ 50 no mercado', intentionId: 'msg-A' }, identity),
+    );
+
+    // The retry of msg-A reuses msg-A's operation — a redelivery is never a
+    // second effect, no matter how many turns ran in between.
+    expect(redelivered.mutation?.operationId).toBe(first.mutation?.operationId);
+    expect(byKey.size).toBe(2);
+  });
+});

@@ -8,6 +8,7 @@
  */
 
 import { ALL_SKILLS, renderSkillBody, type Skill } from './skills/index.js';
+import { expandMutationVerbs } from '../mutations/semantic-interpretation.js';
 
 /** Char budget above which only the winning skill is injected whole. */
 export const SKILL_BUDGET_CHARS = 6000;
@@ -38,7 +39,10 @@ export type SkillFit = {
 };
 
 export const fitSkills = (lastUserMessage: string, budgetChars = SKILL_BUDGET_CHARS): SkillFit => {
-  const haystack = normalize(lastUserMessage ?? '');
+  // R06/A06: the generative path reads the same informal language the
+  // deterministic parser does — one shared abbreviation table, not a second
+  // private copy of it. Well-formed messages are returned unchanged.
+  const haystack = normalize(expandMutationVerbs(lastUserMessage ?? ''));
   let selected: Skill | null = null;
   let best = 0;
   for (const skill of ALL_SKILLS) {

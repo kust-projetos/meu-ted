@@ -129,6 +129,81 @@ describe('AGENT-005 read-path grounding wiring', () => {
     expect(result.response?.text).toContain('Salário');
   });
 
+  /**
+   * A04(a) / R04 (AC09, AC10): an absence and a failure are different answers.
+   * A typed read absence is answered deterministically (Empty ≠ Error), and a
+   * failed required read blocks any "nothing there" conclusion instead of
+   * letting the model narrate a forbidden/failed read as zero.
+   */
+  it('AC09: a proven empty period is answered as an absence, without the model', async () => {
+    const responseProvider = vi.fn(async () => 'Você não gastou nada em setembro.');
+    const orchestrator = new ConversationOrchestrator({
+      plan: () => ({ ...readPlan(), domain: 'general' as const, requestedOperations: [{ name: 'get_month_summary', kind: 'read' as const }] }),
+      evidenceProvider: async () => ({
+        version: '1',
+        items: [{
+          ref: 'month-summary', source: 'api.month-summary', retrievedAt: new Date().toISOString(),
+          status: 'empty', reason: 'period_empty', data: [],
+        }],
+      }),
+      responseProvider,
+      events: () => undefined,
+    });
+    const result = await orchestrator.runTurn(normalizeRestTurn({ text: 'como foi o mês?', intentionId: 'intent-empty-period' }, identity));
+    expect(responseProvider).not.toHaveBeenCalled();
+    expect(result.response?.text).toMatch(/período/i);
+    // AC09: an empty query is never reported as a failure, nor as a zero figure.
+    expect(result.response?.text).not.toMatch(/Não foi possível consultar|R\$\s*0,00/);
+  });
+
+  it('AC09: zero totals with existing entries are never answered as "no data"', async () => {
+    // `totalCents = 0` com lançamentos existentes (ex.: mês só com
+    // transferências) não pode virar "Não há dados disponíveis para extrato."
+    const responseProvider = vi.fn(async () => 'resposta do modelo');
+    const orchestrator = new ConversationOrchestrator({
+      plan: () => ({ ...readPlan(), domain: 'transactions' as const, requestedOperations: [{ name: 'spending_insights', kind: 'read' as const }] }),
+      evidenceProvider: async () => ({
+        version: '1',
+        items: [{
+          ref: 'month-summary', source: 'api.month-summary', retrievedAt: new Date().toISOString(),
+          status: 'ok', data: { yearMonth: '2026-09', incomeCents: 0, expenseCents: 5000, balanceCents: -5000, transactionCount: 12 },
+        }],
+      }),
+      responseProvider,
+      events: () => undefined,
+    });
+    const result = await orchestrator.runTurn(normalizeRestTurn({ text: 'como foram meus gastos?', intentionId: 'intent-zero-with-entries' }, identity));
+    expect(result.response?.text).not.toMatch(/Não há dados disponíveis/);
+  });
+
+  it('AC10: an empty read plus a forbidden read never reaches the model as "no data"', async () => {
+    const responseProvider = vi.fn(async () => 'Não há lançamentos no período.');
+    const orchestrator = new ConversationOrchestrator({
+      plan: () => ({
+        ...readPlan(),
+        domain: 'general' as const,
+        requestedOperations: [
+          { name: 'get_month_summary', kind: 'read' as const },
+          { name: 'list_recent_transactions', kind: 'read' as const },
+        ],
+      }),
+      evidenceProvider: async () => ({
+        version: '1',
+        items: [
+          { ref: 'statement', source: 'api.transactions', retrievedAt: new Date().toISOString(), status: 'empty', data: [] },
+          { ref: 'month-summary', source: 'api.month-summary', retrievedAt: new Date().toISOString(), status: 'error', reason: 'forbidden', data: null },
+        ],
+      }),
+      responseProvider,
+      events: () => undefined,
+    });
+    const result = await orchestrator.runTurn(normalizeRestTurn({ text: 'como foi o mês?', intentionId: 'intent-forbidden' }, identity));
+    expect(responseProvider).not.toHaveBeenCalled();
+    expect(result.failClosed).toBe(true);
+    expect(result.response?.text).not.toMatch(/Não há lançamentos/);
+    expect(result.response?.text).toMatch(/Não consegui acessar seus dados/);
+  });
+
   it('keeps legacy pass-through when no evidence provider is wired', async () => {
     const orchestrator = new ConversationOrchestrator({
       plan: readPlan,

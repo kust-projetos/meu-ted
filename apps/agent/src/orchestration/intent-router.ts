@@ -1,5 +1,5 @@
 import type { PlannedOperation } from './conversation-orchestrator.js';
-import { parseFinancialMutation, isClearlyMutating } from '../mutations/financial-parser.js';
+import { hasMutationIntentSignal, interpretMutationUtterance } from '../mutations/semantic-interpretation.js';
 import { findSkillsFor, toolsForSkills } from './skill-inventory.js';
 import { validateTurnPlan, type TurnPlanV2 } from './turn-plan.js';
 
@@ -54,10 +54,14 @@ export const routeIntent = (text: string): TurnPlanV2 => {
   // from the start — accountId/categoryId always pending authoritative
   // resolution (§7.2/§7.3). Never []. Amount-less or negated utterances keep
   // the legacy read/unsupported routing below (no proposal either way).
-  if (isClearlyMutating(text)) {
-    const parsed = parseFinancialMutation(text);
-    if (parsed.kind !== 'none') {
-      const tool = parsed.kind === 'income' ? 'transactions.income.create' : 'transactions.expense.create';
+  // R06/A06: the interpretation layer decides "this is a mutation candidate",
+  // so clipped verbs ("gstei") route exactly like their canonical form and an
+  // ambiguous amount (AC13) plans no mutation operation at all. The intent
+  // gate itself is unchanged — only clipped verbs were added to it.
+  if (hasMutationIntentSignal(text)) {
+    const interpretation = interpretMutationUtterance(text);
+    if (interpretation.status === 'candidate') {
+      const tool = interpretation.parsed.kind === 'income' ? 'transactions.income.create' : 'transactions.expense.create';
       const skills = findSkillsFor('transactions').slice(0, 2).map((skill) => skill.name);
       return makePlan(
         'mutation-proposal',
@@ -67,6 +71,15 @@ export const routeIntent = (text: string): TurnPlanV2 => {
         undefined,
         ['accountId', 'categoryId'],
       );
+    }
+    // AC13: an ambiguous mutation intent must NOT fall through to the read
+    // heuristics below — "gastei uns 80 no mercado" is not a transactions
+    // query, it is a mutation the assistant refuses to guess. This plan
+    // carries NO operation (no mutation, no authoritative read, no tool) and
+    // is answered by the orchestrator's existing deterministic
+    // `ambiguousClarification` terminal.
+    if (interpretation.status === 'clarify') {
+      return ambiguityPlan(interpretation.missingFields, interpretation.ambiguities);
     }
   }
   const operations: PlannedOperation[] = [];
@@ -93,3 +106,30 @@ const makePlan = (mode: TurnPlanV2['mode'], domain: TurnPlanV2['domain'], reques
 };
 
 const fallbackPlan = (): TurnPlanV2 => ({ version: '2', mode: 'unsupported', domain: 'general', skillNames: ['conversation'], requestedOperations: [], requestedTools: [], missingFields: ['intent'], ambiguity: 'unsupported', confidence: 0, correctionCount: 0 });
+
+/**
+ * R06/A06 (AC13): the deterministic plan for an AMBIGUOUS mutation intent.
+ *
+ * It declares no operation at all — no mutation, no read, no tool — and names
+ * the real missing fields plus the ambiguities, so the turn can only be
+ * answered by asking the user. `confidence: 0` mirrors `fallbackPlan`: nothing
+ * about this utterance is actionable yet.
+ */
+const ambiguityPlan = (
+  missingFields: readonly string[],
+  ambiguities: readonly string[],
+): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'transactions',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: [...missingFields],
+    ambiguity: `ambiguous:${ambiguities.join(',')}`,
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};

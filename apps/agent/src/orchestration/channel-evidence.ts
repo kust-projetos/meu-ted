@@ -17,7 +17,7 @@
  *   is enforced by the orchestrator/grounded-response, not here).
  */
 
-import { createEvidenceEnvelope, type EvidenceEnvelope, type EvidenceInput } from '../evidence/evidence-envelope.js';
+import { classifyReadFailure, createEvidenceEnvelope, type EvidenceEnvelope, type EvidenceInput, type ReadAbsenceReason } from '../evidence/evidence-envelope.js';
 import { generatedHttpTools, type ToolRequestAuth } from '../generated/http-tools.js';
 import { isUsageQuotaPassthroughError } from '../llm/relay-failover.js';
 import { emitSanitizedEvent } from '../observability/events.js';
@@ -212,12 +212,28 @@ const pickRows = (result: unknown, keys: readonly string[]): readonly unknown[] 
 
 const now = (): string => new Date().toISOString();
 
-const errorItem = (kind: ReadKind, ref: string): EvidenceInput => ({
+/**
+ * A04/R04: a failed read carries a typed FAILURE reason (never an absence
+ * reason, so it can never be narrated as "nothing there"). `error` overrides
+ * the reason of a transport/shape failure that produced one.
+ */
+const errorItem = (kind: ReadKind, ref: string, reason: ReturnType<typeof classifyReadFailure>): EvidenceInput => ({
   ref,
   source: READ_SOURCE[kind],
   retrievedAt: now(),
   status: 'error',
+  reason,
   data: null,
+});
+
+/** A read that SUCCEEDED with no rows in the requested scope (A04/R04). */
+const emptyItem = (kind: ReadKind, ref: string, reason?: ReadAbsenceReason): EvidenceInput => ({
+  ref,
+  source: READ_SOURCE[kind],
+  retrievedAt: now(),
+  status: 'empty',
+  ...(reason === undefined ? {} : { reason }),
+  data: [],
 });
 
 /** Account kinds authored by the API (ADR-018). Anything else stays unknown downstream — never inferred. */
@@ -226,7 +242,10 @@ const KNOWN_ACCOUNT_KINDS: ReadonlySet<string> = new Set(['bank', 'cash', 'credi
 const mapAccounts = (result: unknown): EvidenceInput[] => {
   const rows = pickRows(result, ['accounts', 'items']);
   if (rows.length === 0) {
-    return [{ ref: 'accounts', source: READ_SOURCE.accounts, retrievedAt: now(), status: 'empty', data: [] }];
+    // The read SUCCEEDED and this workspace has no accounts: a setup state of
+    // THIS scope. `workspace_empty` is NOT claimed here — it needs the A09
+    // consistent snapshot (A04 block b).
+    return [emptyItem('accounts', 'accounts', 'setup_incomplete')];
   }
   const items: EvidenceInput[] = [];
   let omittedCount = 0;
@@ -262,7 +281,9 @@ const mapAccounts = (result: unknown): EvidenceInput[] => {
       data: { accountName, balanceCents, ...(kind !== undefined ? { kind } : {}) },
     });
   }
-  if (items.length === 0) return [errorItem('accounts', 'accounts')];
+  // Rows that all failed validation are a FAILURE of the read projection, never
+  // an absence: the API answered and the payload is unusable.
+  if (items.length === 0) return [errorItem('accounts', 'accounts', 'permanent_error')];
   if (omittedCount > 0) {
     items.push({
       ref: 'accounts:incomplete',
@@ -287,15 +308,37 @@ const mapTransactions = (result: unknown): EvidenceInput[] => {
     entries.push({ description: record.description, date: record.date, amountCents });
   }
   if (entries.length === 0) {
-    return [{
-      ref: 'statement',
-      source: READ_SOURCE.transactions,
-      retrievedAt: now(),
-      status: rows.length === 0 ? 'empty' : 'error',
-      data: rows.length === 0 ? [] : null,
-    }];
+    // Rows that existed but could not be projected are a failure; no rows at
+    // all is a real absence of THIS read — left unclassified, because an
+    // unfiltered list proves neither period, category nor filter (A09 owns the
+    // global "workspace vazio" diagnosis).
+    if (rows.length > 0) return [errorItem('transactions', 'statement', 'permanent_error')];
+    return [emptyItem('transactions', 'statement')];
   }
   return [{ ref: 'statement', source: READ_SOURCE.transactions, retrievedAt: now(), status: 'ok', data: entries }];
+};
+
+/**
+ * A04/R04: the analytics read (`get_month_summary` / `spending_insights`) is
+ * period-bounded by construction and returns
+ * `{incomeCents, expenseCents, balanceCents, transactionCount}`.
+ *
+ * - `transactionCount === 0` on a WELL-FORMED payload is a REAL `period_empty`:
+ *   the query succeeded and the requested period has no entries.
+ * - An invalid shape is `error`/`permanent_error`: absence is never inferred
+ *   from a payload that does not match the contract.
+ * - Zero totals WITH entries stay `ok` and the row count travels with the
+ *   evidence: `totalCents = 0` never means "no entries".
+ */
+const mapMonthSummary = (result: unknown): EvidenceInput[] => {
+  const record = asRecord(result);
+  // An invalid shape (undefined/null/string/array) proves NOTHING about the
+  // period: it is a read failure, never `period_empty`. Only a well-formed
+  // payload with an explicit zero count proves absence.
+  if (record === null) return [errorItem('month-summary', 'month-summary', 'permanent_error')];
+  const entries = toCents(record.transactionCount) ?? toCents(record.entryCount) ?? toCents(record.count);
+  if (entries === 0) return [emptyItem('month-summary', 'month-summary', 'period_empty')];
+  return [{ ref: 'month-summary', source: READ_SOURCE['month-summary'], retrievedAt: now(), status: 'ok', data: result }];
 };
 
 /** Single-object reads (month summary, statements, payables, budgets, goals, categories). */
@@ -337,9 +380,7 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
     const fetchers: Record<ReadKind, () => Promise<EvidenceInput[]>> = {
       accounts: async () => mapAccounts(await tools.listAccounts({ householdId }, auth)),
       transactions: async () => mapTransactions(await tools.listRecentTransactions({ householdId, limit: 20 }, auth)),
-      'month-summary': async () => mapSingleton(
-        'month-summary',
-        'month-summary',
+      'month-summary': async () => mapMonthSummary(
         await tools.getMonthSummary({ householdId, yearMonth: new Date().toISOString().slice(0, 7) }, auth),
       ),
       statements: async () => mapSingleton('statements', 'statements', await tools.listStatements({ householdId }, auth)),
@@ -375,7 +416,7 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
         } catch {
           // Best effort.
         }
-        return [errorItem(kind, kind)];
+        return [errorItem(kind, kind, classifyReadFailure(error))];
       }
     }));
     try {
@@ -386,6 +427,7 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
         source: 'tool',
         retrievedAt: now(),
         status: 'error',
+        reason: 'unavailable',
         data: null,
       }], {});
     }

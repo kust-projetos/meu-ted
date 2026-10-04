@@ -9,7 +9,7 @@
  * §19.4 connection status is always pt-BR.
  * §19.5 keyboard hints do not occupy space on touch devices.
  */
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import { TedChat } from "../TedChat";
@@ -260,6 +260,29 @@ describe("TedChat — §19.4 connection status in pt-BR", () => {
 
     pending.resolve(okTurn);
     await waitFor(() => expect(screen.getByText("online")).toBeInTheDocument());
+  });
+
+  // A05/R05 (AC11) — CHARACTERIZAÇÃO do estado parcial: hoje NÃO existe
+  // streaming de texto no PWA. O turno resolve inteiro (fetch único) e só
+  // então a mensagem do assistente entra no log; enquanto isso o único sinal
+  // é "escrevendo…". Nenhum fragmento (nem claim) da resposta futura aparece
+  // antes da verificação do turno. Comportamento REAL, não aspiracional.
+  it("não mostra texto parcial da resposta enquanto o turno não resolve (resposta inteira)", async () => {
+    const user = userEvent.setup();
+    await renderWithHistoryLoaded();
+
+    const pending = deferred<agentClient.AgentTurn>();
+    vi.mocked(agentClient.sendAgentMessage).mockReturnValueOnce(pending.promise);
+    await user.type(screen.getByPlaceholderText(INPUT_PLACEHOLDER), "Quanto gastei?");
+    await user.click(screen.getByRole("button", { name: /enviar mensagem/i }));
+
+    expect(await screen.findByText("escrevendo…")).toBeInTheDocument();
+    expect(screen.queryByText("Total", { selector: "strong" })).toBeNull();
+
+    pending.resolve({ turnId: "t-partial", status: "completed", output: "**Total**: R$ 10,00" });
+    await waitFor(() => expect(screen.getByText("online")).toBeInTheDocument());
+    // A resposta chega inteira e já entra renderizada como markdown.
+    expect(await screen.findByText("Total", { selector: "strong" })).toBeInTheDocument();
   });
 });
 

@@ -41,7 +41,13 @@ const neutralFiniteVerb = /\b(?:lancei|lancar)\b/i;
 const incomeNoun = /\b(?:renda|sal[aá]rio|receita)\b/i;
 const expenseNoun = /\b(?:compra|despesa)\b/i;
 const negation = /\b(n[aã]o|nunca|jamais)\b/i;
-const dateFor = (text: string, now = new Date(), timeZone = 'America/Sao_Paulo'): string => {
+/**
+ * Timezone assumed when the caller supplies no authorized one (SPEC R06: a
+ * default is a visible fallback, never an authorization — callers report it as
+ * `timeZoneSource: 'default'` instead of pretending it came from the user).
+ */
+export const DEFAULT_FINANCIAL_TIME_ZONE = 'America/Sao_Paulo';
+const dateFor = (text: string, now = new Date(), timeZone = DEFAULT_FINANCIAL_TIME_ZONE): string => {
   const base = new Date(new Intl.DateTimeFormat('en-CA', { timeZone }).format(now) + 'T12:00:00Z');
   if (/anteontem/i.test(text)) base.setUTCDate(base.getUTCDate() - 2);
   else if (/ontem/i.test(text)) base.setUTCDate(base.getUTCDate() - 1);

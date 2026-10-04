@@ -57,6 +57,64 @@ describe('AGENT-005 hardened grounding validator', () => {
     expect(events).toHaveLength(0);
   });
 
+  // R10: `onRecoveryAttempted` is purely OBSERVATIONAL (it charges the turn's
+  // shared recovery budget). A throwing hook must never skip the correction
+  // retry nor be mistaken for a usage denial raised by the retry itself.
+  it('still runs the correction retry when the observational hook throws', async () => {
+    const env = envelope({ balanceCents: 12345, accountName: 'Conta principal' });
+    const retry = vi.fn(async () => 'Seu saldo é R$ 123,45 na Conta principal.');
+    let hookCalls = 0;
+    const result = await createGroundedResponseWithRetry('Seu saldo é R$ 999,99 na Conta principal.', env, {
+      retry,
+      onRecoveryAttempted: () => {
+        hookCalls += 1;
+        throw new Error('budget.sink_unavailable');
+      },
+      sink: () => {},
+    });
+    expect(hookCalls).toBe(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ grounded: true, rejected: false });
+    expect(result.text).toContain('123,45');
+  });
+
+  it('swallows a quota-shaped hook failure instead of turning it into a passthrough', async () => {
+    const env = envelope({ balanceCents: 12345, accountName: 'Conta principal' });
+    const retry = vi.fn(async () => 'Seu saldo é R$ 123,45 na Conta principal.');
+    const result = await createGroundedResponseWithRetry('Seu saldo é R$ 999,99 na Conta principal.', env, {
+      retry,
+      onRecoveryAttempted: () => {
+        throw Object.assign(new Error('agent.quota_exceeded'), {
+          code: 'agent.quota_exceeded',
+          status: 429,
+          __usageQuotaPassthrough: true,
+        });
+      },
+      sink: () => {},
+    });
+    // The denial came from the hook, not from a reservation the retry asked
+    // for: the turn keeps the retry's own (successful) outcome.
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ grounded: true, rejected: false });
+  });
+
+  it('preserves the usage-quota passthrough raised by the retry itself', async () => {
+    const env = envelope({ balanceCents: 12345, accountName: 'Conta principal' });
+    await expect(
+      createGroundedResponseWithRetry('Seu saldo é R$ 999,99 na Conta principal.', env, {
+        retry: async () => {
+          throw Object.assign(new Error('agent.quota_exceeded'), {
+            code: 'agent.quota_exceeded',
+            status: 429,
+            __usageQuotaPassthrough: true,
+          });
+        },
+        onRecoveryAttempted: () => {},
+        sink: () => {},
+      }),
+    ).rejects.toMatchObject({ code: 'agent.quota_exceeded', status: 429 });
+  });
+
   it('emits agent.grounding.rejected without raw payload when the retry still fails', async () => {
     const env = envelope({ balanceCents: 12345, accountName: 'Conta principal' });
     const events: Array<{ type: string; fields: Record<string, unknown> }> = [];
