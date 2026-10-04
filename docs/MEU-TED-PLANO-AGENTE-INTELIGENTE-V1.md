@@ -48,7 +48,7 @@ Vigentes por ADR e SPEC — este plano apenas os preserva:
 | V10 | `apps/pwa/src/lib/api/agent-client.ts:280,294,470` | Anexos trafegam como `{type,url,name}`; sem binário |
 | V11 | `apps/agent/src/privacy/dlp.ts:25,149,162` | `REDACTED`, `ScrubAttachmentsResult`, `scrubAttachments` |
 | V12 | `apps/api/src/analytics/types.ts:12,23-28,34` | `period = last30days\|lastMonth\|thisYear\|custom`; `custom` exige `from`/`to`; `from` não pode ser após `to`; `AnalyticsRange = {from,to}` |
-| V13 | `apps/api/src/routes/analytics.ts:56,127,150,172` | 4 rotas; `resolveRange` de `analytics/compute.ts`; escopo por `analytics/source.ts:scopeFromQuery`. **Sem `yearMonth` público** |
+| V13 | `apps/api/src/routes/analytics.ts:56,127,150,172,200,219` | 6 rotas (`kpis`, `cashflow-series`, `category-breakdown`, `budget-consumption`, `daily-heatmap`, `net-worth-history`); `resolveRange` de `analytics/compute.ts`; escopo por `analytics/source.ts:scopeFromQuery`. **Sem `yearMonth` público**; `from`/`to` são silenciosamente ignorados sem `period=custom` |
 | V14 | `apps/agent/src/agent-config/memory/store.ts:300,309` | Recall inclui compartilhadas de workspace: `item.actor === input.actor \|\| (includeShared && item.actor === '')` |
 | V15 | `apps/agent/src/agent-config/memory/store.ts:266,316,318,322` | `isCurrentFinancialState` já filtra estado financeiro atual; decay `Math.exp(-ageDays/180)`; `MEMORY_BUDGET_CHARS = 1200`; `scored.slice(0, limit)` |
 | V16 | `apps/agent/src/agent-config/memory/learn.ts:16,80` | `LEARN_EVERY_TURNS = 5` |
@@ -165,7 +165,7 @@ Roteiro: **RED** (falha observável) → **GREEN** → **Gates** → **Review/Te
 
 ### A09 — Analytics: SPIKE primeiro, implementação condicional (R09)
 - **Não arbitrário:** A09 não bloqueia ingestão. Depende apenas de A00; a **integração** com o resto depende de A04/A08.
-- **Spike (sem alterar código de produção):** (1) matriz pergunta × read model existente (`analytics/source.ts`, `compute.ts`, 4 rotas); (2) semântica financeira fechada por fixtures — competência vs. pagamento, status, soft-delete, estorno/undo, transferências, compra de cartão nunca somada com pagamento da mesma fatura, ancestrais sem duplicação, safe integers, dataset maior que uma página sem perder linhas; (3) `includeDescendants` com travessia limitada e ciclo tratado; (4) conclusão: reuso ou rota nova com a lacuna nomeada.
+- **Spike (sem alterar código de produção):** (1) matriz pergunta × read model existente (`analytics/source.ts`, `compute.ts`, 6 rotas); (2) semântica financeira fechada por fixtures — competência vs. pagamento, status, soft-delete, estorno/undo, transferências, compra de cartão nunca somada com pagamento da mesma fatura, ancestrais sem duplicação, safe integers, dataset maior que uma página sem perder linhas; (3) `includeDescendants` com travessia limitada e ciclo tratado; (4) conclusão: reuso ou rota nova com a lacuna nomeada.
 - **Prioridade de forma:** `period=custom` com `from`/`to` normalizados (V12 já valida `from`/`to` e `from <= to`) e serviço reutilizado. **`yearMonth` só se o spike provar lacuna** — nesse caso **patch da SPEC antes de nova API** (G03).
 - O range atual da API é inclusivo. O intervalo normalizado de resposta proposto na SPEC termina de forma exclusiva: adaptar a fronteira no contrato/metadata e em fixtures sem trocar silenciosamente a semântica existente de `from`/`to` ou incluir o primeiro dia do mês seguinte.
 - **Aceite:** AC18, AC19. Bloqueio: sem fixtures e sem conclusão, rota nova **não** é aberta.

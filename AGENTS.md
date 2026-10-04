@@ -14,10 +14,10 @@
 - **Detalhamento**: Não execute sequências longas de ferramentas em silêncio; mantenha o usuário informado sobre o progresso em tempo real no terminal.
 
 ## Stack & Workspaces
-- **Monorepo**: Gerenciado via `pnpm` (`pnpm-workspace.yaml`), `Node.js >= 22.12.0`, `pnpm >= 9.0.0`.
+- **Monorepo**: Gerenciado via `pnpm` (`pnpm-workspace.yaml`), `Node.js >= 22.12.0`, `pnpm >= 10` (floor alinhado à major que o CI fixa).
 - **`apps/api` (Backend Autoritativo)**:
   - Framework: Fastify 5, TypeScript, Kysely, PostgreSQL (`pg`), Zod, Better-Auth (`better-auth`).
-  - Runtime: Node.js hospedado na Hostinger VPS (`pi-stack`).
+  - Runtime: Node.js hospedado na VPS Contabo (container Docker + Compose/Traefik; migrado da Hostinger em 2026-10-03).
   - Responsabilidade: Única fonte da verdade para dados financeiros, autenticação, autorização por workspace, integridade referencial e auditoria.
 - **`apps/pwa` (Cliente Canônico Web/Mobile)**:
   - Framework: Next.js 16, React 19, Tailwind CSS v4, Serwist (Service Worker PWA).

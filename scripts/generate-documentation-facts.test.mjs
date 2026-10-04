@@ -10,7 +10,7 @@ test("runtime documentation facts generator", async (t) => {
     assert.ok(facts.counts.databaseMigrations >= 30, "Must count database migrations up to V030");
     assert.equal(facts.architecture.canonicalPwaPath, "apps/pwa");
     assert.equal(facts.architecture.deprecatedOrigin, "../pi-finance-web");
-    assert.equal(facts.production.vpsProvider, "Hostinger VPS");
+    assert.equal(facts.production.vpsProvider, "Contabo VPS");
     assert.equal(facts.production.edgeProvider, "Cloudflare");
   });
 });

@@ -1,6 +1,6 @@
 # Meu Ted — Roadmap
 
-**Last verified:** 2026-10-01
+**Last verified:** 2026-10-04
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 | Marco | Status | Evidência/limite |
@@ -13,7 +13,7 @@
 | Hardening V4 / V4.1 closure | Concluído | PR #11 (merge 2026-09-22, `4e4e83c`); rollout completo de API, PWA e Agent na mesma release `2d7bdf8` com rollback tagado. |
 | CI, containers e deploys gateados | Concluído | Billing do GitHub Actions resolvido (repo público, 2026-09-25); branch protection em `main` (sem push direto); deploys verificam `head_repository` e `workflow_run.event == push`; falso-verde do comprehensive E2E provado corrigido (2026-10-01). |
 | Dados canônicos (conversor + cutover) | Em andamento — gate humano | A API de produção serve o esquema canônico `pi_financeiro_canonical` (rota fresh concluída); repair commitado com residual zero (32 contas vivas) e reconciliação `--provenance=fresh` drifted=0; conversor pronto ([ADR-025](adr/ADR-025-canonical-converter.md)) com F2 smoke PASS e real-dump NO-GO documentado (irrelevante para produção). A aposentadoria do legacy/archive (F3–F5) é gate humano por design ([ADR-024](adr/ADR-024-legacy-canonical-conversion-policy.md)). |
-| Release B (descomissionamento do bearer legado) | Em andamento — gate humano | Sink durável `auth.request.legacy_bearer_used` em produção (PRs #51/#52); janela de observação de 14 dias: 2026-10-01T20:14Z → 2026-10-15T20:14Z; flip somente com contagem zero. |
+| Release B (descomissionamento do bearer legado) | Em andamento — gate humano | Sink durável `auth.request.legacy_bearer_used` em produção (PRs #51/#52); **janela de 14 dias reiniciada** em 2026-10-02T21:36:06Z (último evento; 115 eventos idênticos nas duas origens no corte Hostinger → Contabo) → **2026-10-16T21:36:06Z**; flip somente com contagem zero desde a migração (evidência: [`reports/2026-10-03-vps-migration-contabo.md`](reports/2026-10-03-vps-migration-contabo.md)). |
 | Itens future-dated | Planejado | Compat localStorage/bearer em 2026-12-01 (ADR-011/015) e allowlists (`pwa-audit` + `.trivyignore`) em 2026-12-31; workflows-lembrete ativos e idempotentes. |
 
 ## Próximos passos (gates humanos)
@@ -21,10 +21,12 @@
 Nenhum trabalho de engenharia está pendente ou bloqueando o time. Os passos
 restantes são gates humanos com data:
 
-1. **2026-10-15 — gate Release B:** com zero eventos
-   `auth.request.legacy_bearer_used` na janela, flipar
-   `SESSION_BEARER_FALLBACK_ENABLED=off` na VPS e rebuild do PWA com
-   `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`.
+1. **2026-10-16 - gate Release B:** com zero eventos
+   `auth.request.legacy_bearer_used` desde 2026-10-02T21:36:06Z (janela
+   reiniciada no corte para a Contabo; ver
+   [`reports/2026-10-03-vps-migration-contabo.md`](reports/2026-10-03-vps-migration-contabo.md)),
+   flipar `SESSION_BEARER_FALLBACK_ENABLED=off` na VPS Contabo e rebuild do PWA
+   com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`.
 2. **Quando o operador decidir — cutover residual:** aposentar o legacy/archive
    (a API já serve o canônico). A transação ambígua `49c01613…` do legacy só
    exige decisão humana se o caminho legacy→canonical for reanimado

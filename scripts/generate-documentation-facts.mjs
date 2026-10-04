@@ -35,7 +35,7 @@ export function generateRuntimeFacts() {
       api: {
         name: apiPkg.name || "@pi-financeiro/api",
         framework: "Fastify",
-        runtime: "Node.js (Hostinger VPS)",
+        runtime: "Node.js (Contabo VPS)",
       },
       pwa: {
         name: pwaPkg.name || "@pi-financeiro/pwa",
@@ -65,7 +65,7 @@ export function generateRuntimeFacts() {
       deprecatedOrigin: "../pi-finance-web",
     },
     production: {
-      vpsProvider: "Hostinger VPS",
+      vpsProvider: "Contabo VPS",
       edgeProvider: "Cloudflare",
       database: "PostgreSQL 16+",
     },

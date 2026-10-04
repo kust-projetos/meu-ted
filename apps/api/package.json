@@ -15,7 +15,6 @@
     "test:integration:all": "vitest run tests/integration",
     "test:concurrency": "vitest run --config vitest.concurrency.config.ts",
     "test:xlt": "vitest run tests/xlt",
-
     "test:integration:adoption": "node ../../scripts/require-adoption-integration-env.mjs && vitest run tests/integration/postgres-adoption.test.ts",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
@@ -25,30 +24,26 @@
     "convert:canonical:dry": "tsx src/scripts/canonical-converter/canonical-convert.ts --dry-run",
     "reconciliation": "tsx src/scripts/reconciliation/run.ts",
     "probe:prod-schema": "tsx src/scripts/prod-schema-probe.ts",
-    "reminders:run": "tsx src/scripts/reminder-job.ts",
-    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "format:reminders:check": "node ../../scripts/check-reminder-format.mjs",
-    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\""
+    "reminders:run": "tsx src/scripts/reminder-job.ts"
   },
   "dependencies": {
     "@pi-finance/llm-contracts": "workspace:*",
+    "better-auth": "1.6.30",
     "fastify": "5.12.5",
+    "kysely": "^0.29.5",
+    "nodemailer": "^10.0.9",
     "pg": "^8.21.0",
     "web-push": "^3.6.7",
-    "better-auth": "1.6.30",
-    "kysely": "^0.29.5",
-    "zod": "^3.24.1",
-    "nodemailer": "^10.0.9"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.2.4",
     "@types/node": "^22.10.0",
     "@types/pg": "^8.20.0",
     "@types/web-push": "^3.6.4",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vitest": "4.1.11",
-    "prettier": "3.6.2",
-    "@biomejs/biome": "2.2.4"
+    "vitest": "4.1.11"
   },
   "engines": {
     "node": ">=22.12.0"

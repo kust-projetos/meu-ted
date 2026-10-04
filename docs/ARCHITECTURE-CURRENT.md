@@ -1,6 +1,6 @@
 # Meu Ted — Arquitetura atual
 
-**Last verified:** 2026-10-01
+**Last verified:** 2026-10-04
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 ## Topologia implementada
@@ -9,7 +9,7 @@
 graph TD
     User([Usuário]) --> PWA[PWA canônica<br/>Cloudflare/OpenNext]
     PWA --> Proxy[Proxies same-origin<br/>/api/backend e /api/agent]
-    Proxy --> API[API Fastify autoritativa<br/>Hostinger VPS]
+    Proxy --> API[API Fastify autoritativa<br/>Contabo VPS]
     Proxy --> Agent[TED Agent V2<br/>Cloudflare Worker + DO]
     Agent --> API
     Agent -. provider isolado .-> Broker[Codex Broker opcional]
@@ -98,7 +98,9 @@ e release manifest preservados) e a PWA/Agent na Cloudflare rodavam `06c00c2`
   reconciliação canônica roda com `--provenance=fresh`
   (`checked=37 drifted=0`).
 - O uso de bearer legado é registrado em sink durável em `audit_logs`
-  (`auth.request.legacy_bearer_used`, PRs #51/#52); a janela Release B cobre
-  2026-10-01T20:14Z → 2026-10-15T20:14Z e o flip
-  (`SESSION_BEARER_FALLBACK_ENABLED=off` + rebuild do PWA com
+  (`auth.request.legacy_bearer_used`, PRs #51/#52); a janela Release B foi
+  **reiniciada** no corte para a VPS Contabo — contagem a partir de
+  2026-10-02T21:36:06Z (115 eventos, idênticos nas duas origens), fechando em
+  **2026-10-16T21:36:06Z** ([`reports/2026-10-03-vps-migration-contabo.md`](reports/2026-10-03-vps-migration-contabo.md)).
+  O flip (`SESSION_BEARER_FALLBACK_ENABLED=off` + rebuild do PWA com
   `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`) permanece gate humano.

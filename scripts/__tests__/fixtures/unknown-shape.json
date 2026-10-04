@@ -1,6 +1,0 @@
-{
-  "error": {
-    "code": "ERR_PNPM_OUTDATED_LOCKFILE",
-    "message": "lockfile needs update"
-  }
-}
