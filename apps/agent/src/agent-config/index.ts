@@ -53,6 +53,24 @@ export {
   webFetchUrl,
 } from './web.js';
 export type { WebSearchProvider, WebSearchResult, WebSearchResultItem, WebEnv, WebFetchResult } from './web.js';
+export {
+  WEB_EVIDENCE_PROMPT_CHARS,
+  WEB_EVIDENCE_EXCERPT_MAX_CHARS,
+  WEB_EVIDENCE_MAX_SOURCES,
+  WEB_EVIDENCE_NOTICE,
+  WEB_EVIDENCE_NO_SOURCE_MESSAGE,
+  WEB_EVIDENCE_QUERY_REDACTED_MESSAGE,
+  buildWebEvidenceEnvelope,
+  filterExternalResults,
+  renderEvidenceForPrompt,
+  sanitizeExternalQuery,
+} from './web-evidence.js';
+export type {
+  WebEvidenceEnvelope,
+  WebEvidenceSource,
+  WebEvidenceSourceInput,
+  ExternalResultItem,
+} from './web-evidence.js';
 
 import { buildSystemPrompt, INSTRUCTIONS_VERSION } from './instructions.js';
 import { skillCatalogLines } from './skills/index.js';
