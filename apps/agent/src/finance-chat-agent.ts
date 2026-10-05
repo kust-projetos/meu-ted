@@ -1663,7 +1663,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         await this.recordPostTurnLearning({
           workspaceId: sdkWorkspace,
           actorId,
-          userText: text,
+          // Same DLP guarantee as the REST leg (round-2 review): the learning
+          // input feeds the extractor prompt on due turns, so it must be
+          // scrubbed even though this leg cannot carry attachment-derived text.
+          userText: scrubForPersistence(text),
           assistantText: turnResult.response.text,
           intentionId,
         });
@@ -2843,7 +2846,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             await this.recordPostTurnLearning({
               workspaceId: identity.workspaceId,
               actorId: identity.actorId,
-              userText: unredactedText,
+              // Round-2 review: typed text (F2) AND scrubbed — the pre-fix
+              // argument went through the DLP funnel, so the learning input
+              // (which feeds the extractor prompt on due turns) keeps the same
+              // scrub guarantee instead of regressing to raw user text.
+              userText: scrubForPersistence(unredactedText),
               assistantText: turnResult.response.text,
               intentionId,
             });

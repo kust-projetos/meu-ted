@@ -194,6 +194,9 @@ describe("A19/A17 — memória de ponta a ponta (SQL real)", () => {
       }),
     );
     expect(res.status).toBe(200);
+    // A extração PRECISA ter acontecido, senão o teste passaria vazio.
+    const states = (await res.clone().json()) as { attachmentStates?: Array<{ state: string }> };
+    expect(states.attachmentStates?.[0]?.state).toBe("processed");
     const stored = JSON.stringify(
       recallMemories(sql, { workspaceId: "ws-1", actor: "actor-1", query: "Nubank" }),
     );
