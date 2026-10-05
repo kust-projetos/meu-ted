@@ -22,6 +22,8 @@ jobs:
     permissions:
       contents: read
       actions: read
+    outputs:
+      deploy_ready: ${{ steps.checks.outputs.deploy_ready }}
     steps:
       # V4.1 closure (SPEC CI-03): explicit same-repository origin check.
       # Fork-originated workflow_run events must never satisfy the deploy
@@ -43,6 +45,7 @@ jobs:
             core.info(`Repository-origin gate passed for ${headRepo}.`);
 
       - name: Require CI and PWA CI success for the deployed SHA
+        id: checks
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -62,23 +65,37 @@ jobs:
               if (runs.length === 0) {
                 // Fail closed: a missing run for this SHA means the
                 // "CI + PWA CI must both succeed" requirement is NOT met
-                // (e.g. PWA CI path filters unmatched, or this gate fired on
-                // the other workflow's completion before this one finished).
-                // The remaining workflow's completion re-triggers this
-                // workflow, so the gate passes once both runs exist and are green.
+                // (e.g. PWA CI path filters unmatched, or the run was never
+                // created). A run that exists but is still in progress is a
+                // different case, handled by the not-ready skip below — this
+                // check is never relaxed to accommodate it.
                 core.setFailed(`Deploy blocked: no ${name} run found for ${sha}. Re-run ${name} for this SHA before deploying.`);
                 return;
               }
               const latest = runs.sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-              core.info(`${name}: latest run #${latest.run_number} conclusion=${latest.conclusion}`);
+              core.info(`${name}: latest run #${latest.run_number} status=${latest.status} conclusion=${latest.conclusion}`);
+              // CI and PWA CI start together on a push to main, so the first
+              // completion fires this gate while the other workflow is still
+              // running. "Still running" means NOT READY (skip, green), never
+              // a failure: that workflow's own completion fires a new
+              // workflow_run event and re-evaluates this deploy.
+              if (latest.status !== 'completed' || latest.conclusion == null) {
+                core.notice(`Deploy not ready: ${name} run #${latest.run_number} is still in progress (status=${latest.status}, conclusion=${latest.conclusion}) for ${sha}. This run will deploy only if ${name} completes successfully; its completion re-evaluates the deploy.`);
+                core.setOutput('deploy_ready', 'false');
+                return;
+              }
               if (latest.conclusion !== 'success') {
                 core.setFailed(`Deploy blocked: ${name} latest conclusion for ${sha} is '${latest.conclusion}'.`);
                 return;
               }
             }
+            core.setOutput('deploy_ready', 'true');
             core.info(`Deploy gate passed for ${sha}.`);
 
+      # Only meaningful when something will actually deploy — a not-ready run
+      # (the other workflow still in progress) skips this check instead.
       - name: Reject stale deployment (candidate must equal current main)
+        if: steps.checks.outputs.deploy_ready == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -97,6 +114,11 @@ jobs:
 
   deploy:
     needs: [gate]
+    # Skip (not fail) when the gate found the other CI still in progress:
+    # that workflow's completion fires a new workflow_run event that
+    # re-evaluates this deploy. Failures are never skipped — the gate result
+    # must be 'success'.
+    if: needs.gate.result == 'success' && needs.gate.outputs.deploy_ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

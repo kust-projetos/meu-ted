@@ -197,7 +197,7 @@ describe('F2: elemento inválido dentro de uma lista no contrato', () => {
 
   it('RED: elemento não-objeto entre linhas VÁLIDAS também derruba (não passa adiante)', async () => {
     const envelope = await envelopeFor(planFor(['list_categories']), {
-      listCategories: async () => ({ items: [{ id: 'c-1', name: 'Mercado', kind: 'expense' }, 'lixo'], total: 2 }),
+      listCategories: async () => ({ items: [{ id: 'c-1', householdId: 'ws-1', name: 'Mercado', kind: 'expense', status: 'active' }, 'lixo'], total: 2 }),
     });
     expect(envelope.items[0]?.status).toBe('error');
     expect(envelope.items[0]?.reason).toBe('permanent_error');

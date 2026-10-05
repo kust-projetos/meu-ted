@@ -183,6 +183,28 @@ describe('web evidence envelope (R14)', () => {
     );
   });
 
+  it('numbers the survivors only, never past the shared cap when rejected items come first', () => {
+    const envelope = buildWebEvidenceEnvelope({
+      query: 'selic',
+      items: [
+        { url: 'javascript:alert(1)', title: 'x', snippet: 'y' },
+        { url: 'http://169.254.169.254/latest/meta-data', title: 'meta', snippet: 'y' },
+        ...Array.from({ length: WEB_EVIDENCE_MAX_SOURCES + 2 }, (_, index) => ({
+          ...searchItem,
+          url: `https://exemplo${index}.test/selic`,
+        })),
+      ],
+      now,
+    });
+    expect(envelope.sources).toHaveLength(WEB_EVIDENCE_MAX_SOURCES);
+    expect(envelope.sources.map((source) => source.ref)).toEqual(['F1', 'F2', 'F3']);
+    expect(envelope.sources.map((source) => source.host)).toEqual([
+      'exemplo0.test',
+      'exemplo1.test',
+      'exemplo2.test',
+    ]);
+  });
+
   it('is frozen so a caller cannot rewrite provenance after the fact', () => {
     const envelope = buildWebEvidenceEnvelope({ query: 'selic', items: [searchItem], now });
     expect(Object.isFrozen(envelope)).toBe(true);

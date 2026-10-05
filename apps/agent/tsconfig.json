@@ -9,5 +9,13 @@
     "types": ["node"],
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "worker-configuration.d.ts", "worker-configuration.generated.d.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "worker-configuration.d.ts", "worker-configuration.generated.d.ts"],
+  // The executable API<->agent contract test boots the REAL api composition
+  // (`apps/api/tests/test-app.ts` -> `src/routes/index.ts`), so typechecking it
+  // in this program pulls the whole api route tree in — and two api files
+  // (`auth/delegated-token.ts`, `push/vapid.ts`) do not compile under the
+  // agent's `lib`/`types`, although they are green under the api's own
+  // `tsc -p tsconfig.build.json`. The file still RUNS (vitest transforms it) and
+  // is linted by `biome check tests`; only `tsc` skips it.
+  "exclude": ["tests/contract/api-evidence-contract.test.ts"]
 }

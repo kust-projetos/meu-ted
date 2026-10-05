@@ -23,12 +23,33 @@ const inputFor = (text: string, intentionId: string): TurnInput =>
 
 const planFor = (input: TurnInput): TurnPlan => routeIntent(input.text) as unknown as TurnPlan;
 
+/**
+ * `GET /accounts` answers `{ items, total }` and every row carries the
+ * `householdId` the read was scoped to. The call sites below inject the ROWS a
+ * turn cares about; the route envelope (and the workspace stamp) is assembled
+ * here, at the seam, so no call site can assert a payload shape the route never
+ * sends — and so `householdId`/`total` are stated once instead of on ~40 inline
+ * row objects. `tests/contract/api-evidence-contract.test.ts` proves the REAL
+ * route produces exactly this shape.
+ */
+const WORKSPACE_ID = 'ws-test';
+
+const routeAccountsPayload = (payload: unknown): unknown => {
+  const injected = (typeof payload === 'object' && payload !== null ? payload : {}) as { items?: unknown };
+  const rows = Array.isArray(injected.items) ? injected.items : [];
+  return {
+    ...injected,
+    items: rows.map((row) => ({ householdId: WORKSPACE_ID, ...(row as Record<string, unknown>) })),
+    total: rows.length,
+  };
+};
+
 const stubReads = (accountsPayload: unknown): ChannelReadTools => {
   const fail = async () => {
     throw new Error('agent.evidence_tool_missing:unused-in-test');
   };
   return {
-    listAccounts: async () => accountsPayload,
+    listAccounts: async () => routeAccountsPayload(accountsPayload),
     listRecentTransactions: fail,
     getMonthSummary: fail,
     listStatements: async () => ({ items: [] }),
@@ -63,6 +84,16 @@ const runBalanceTurn = async (text: string, accountsPayload: unknown, intentionI
 
 const bankIta = { id: 'a1', name: 'Itaú', kind: 'bank', balanceCents: 10000, status: 'active' };
 const bankNubank = { id: 'a2', name: 'Nubank', kind: 'bank', balanceCents: 20000, status: 'active' };
+/**
+ * A `credit_card` row is NOT reachable through `GET /accounts` today: the read
+ * model excludes cards in BOTH `includeInactive` branches (cards are served by
+ * the CardStore — see `read-models/store.ts` and the executable proof in
+ * `tests/contract/api-evidence-contract.test.ts`). The row stays here on
+ * purpose: these suites pin the RENDERER semantics a card-shaped row would need
+ * if it ever reached grounding (`kind` is carried from the row's origin, never
+ * inferred from the name) — a debt row must be labelled as debt and must never
+ * be summed with available balances. Deleting it would silently drop that guard.
+ */
 const cardNubank = { id: 'c1', name: 'Nubank', kind: 'credit_card', balanceCents: 56000, status: 'active' };
 
 describe('W1-TED-ACCOUNT-GROUNDING RED: multi-account balance grounding', () => {

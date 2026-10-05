@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  normalizeEntities,
   resolveMutationEntities,
   revalidateResolvedEntities,
   type EntityReader,
@@ -888,5 +889,208 @@ it('RED: "gastei 50 de carne" sem hint de conta segue o fluxo de sempre', async 
       expect(result.trace.category.source).toBe('clarification');
       expect(result.clarification).not.toMatch(/quiser dizer/i);
     }
+  });
+});
+
+/**
+ * P1/P2 — `normalizeEntities` is FAIL-CLOSED on a payload it does not
+ * understand.
+ *
+ * A broken contract (renamed key, truncated envelope, an error object that
+ * reached the reader as a 200) used to normalize to `[]`, i.e. an EMPTY
+ * WORKSPACE. That is indistinguishable from "this workspace really has no
+ * accounts", so a contract break could quietly degrade into a clarification
+ * about a non-existent account instead of a read failure. An empty collection
+ * is legitimate ONLY when the payload actually IS a collection; anything else
+ * must raise, and the callers already turn a rejected read into the existing
+ * `readFailure()` terminal.
+ */
+describe('normalizeEntities (fail-closed contract)', () => {
+  /** Captures what was thrown (or `undefined` when the call silently returned). */
+  const thrownBy = (payload: unknown): unknown => {
+    try {
+      normalizeEntities(payload);
+      return undefined;
+    } catch (error) {
+      return error;
+    }
+  };
+
+  const expectContractError = (payload: unknown): void => {
+    const error = thrownBy(payload);
+    expect(error, `payload ${JSON.stringify(payload) ?? String(payload)} must not normalize`).toBeInstanceOf(Error);
+    expect((error as { code?: unknown }).code).toBe('entity.payload_contract');
+  };
+
+  it('keeps normalizing the LEGITIMATE empty collections of every accepted shape', () => {
+    expect(normalizeEntities([])).toEqual([]);
+    expect(normalizeEntities({ items: [] })).toEqual([]);
+    expect(normalizeEntities({ data: [] })).toEqual([]);
+    expect(normalizeEntities({ accounts: [] })).toEqual([]);
+    expect(normalizeEntities({ categories: [] })).toEqual([]);
+    // The real API envelope (`{ items, total }`) with an empty page.
+    expect(normalizeEntities({ items: [], total: 0 })).toEqual([]);
+  });
+
+  it('normalizes the raw API shape and carries the scope into `scopeId` (workspace isolation intact)', () => {
+    const householdId = '11111111-1111-4111-8111-111111111111';
+    expect(
+      normalizeEntities({ items: [{ id: ACCOUNT_NUBANK.id, name: 'Nubank', householdId }], total: 1 }),
+    ).toEqual([{ id: ACCOUNT_NUBANK.id, name: 'Nubank', scopeId: householdId }]);
+  });
+
+  it('keeps the `status`/`isActive` passthrough of a legitimate row', () => {
+    expect(
+      normalizeEntities({
+        accounts: [
+          { id: ACCOUNT_NUBANK.id, name: 'Nubank', status: 'inactive', isActive: false },
+          { id: ACCOUNT_ITAU.id, name: 'Itaú', status: 'active', isActive: true },
+        ],
+      }),
+    ).toEqual([
+      { id: ACCOUNT_NUBANK.id, name: 'Nubank', status: 'inactive', isActive: false },
+      { id: ACCOUNT_ITAU.id, name: 'Itaú', status: 'active', isActive: true },
+    ]);
+  });
+
+  it('still flattens nested category nodes (`subcategories` and `children`)', () => {
+    expect(
+      normalizeEntities({
+        categories: [
+          {
+            id: CATEGORY_ALIMENTACAO.id,
+            name: 'Alimentação',
+            subcategories: [{ id: CATEGORY_CARNE.id, name: 'Carne' }],
+          },
+          { id: CATEGORY_MERCADO.id, name: 'Mercado', children: [{ id: CATEGORY_CARNE_BOVINA.id, name: 'Carne Bovina' }] },
+        ],
+      }).map((entity) => entity.name),
+    ).toEqual(['Alimentação', 'Carne', 'Mercado', 'Carne Bovina']);
+  });
+
+  it('fails closed on `null`, `undefined` and primitives (no contract reads those as empty)', () => {
+    expectContractError(null);
+    expectContractError(undefined);
+    expectContractError('string');
+    expectContractError(42);
+    expectContractError(true);
+  });
+
+  it('fails closed on an unknown record shape (no known collection key)', () => {
+    expectContractError({ unexpected: 'payload' });
+    expectContractError({});
+    // A response that never became a list at all (error envelope, HTML, ...).
+    expectContractError({ message: 'Bad Request', statusCode: 400 });
+  });
+
+  it('fails closed on a KNOWN key holding a non-array value (partially corrupted shape)', () => {
+    expectContractError({ items: 'corrupt' });
+    expectContractError({ items: null });
+    expectContractError({ data: {} });
+    expectContractError({ accounts: 'nubank' });
+    expectContractError({ categories: 3 });
+  });
+
+  it('fails closed when a valid collection carries a NON-OBJECT element', () => {
+    expectContractError({ items: [null] });
+    expectContractError({ items: ['x'] });
+    expectContractError({ items: [{ id: ACCOUNT_NUBANK.id, name: 'Nubank' }, null] });
+    // Also on a flattened nested child: the tree is read as a whole.
+    expectContractError({ categories: [{ id: CATEGORY_MERCADO.id, name: 'Mercado', subcategories: [null] }] });
+  });
+
+  it('still drops an OBJECT row without id/name instead of raising (documented leniency)', () => {
+    expect(normalizeEntities({ items: [{ note: 'no id' }, { id: ACCOUNT_NUBANK.id, name: 'Nubank' }, { id: '  ' }] })).toEqual([
+      { id: ACCOUNT_NUBANK.id, name: 'Nubank' },
+    ]);
+  });
+
+  it('surfaces a contract violation through `resolveMutationEntities` as a READ FAILURE, never an empty workspace', async () => {
+    const contractError = Object.assign(new Error('entity payload contract violation'), {
+      code: 'entity.payload_contract',
+    });
+    const result = await resolveMutationEntities(
+      parsed(),
+      'Gastei R$ 50 no mercado',
+      {
+        listAccounts: async () => {
+          throw contractError;
+        },
+        listCategories: async () => [CATEGORY_MERCADO],
+      },
+    );
+    expect(result.complete).toBe(false);
+    if (!result.complete) {
+      expect(result.missingFields).toContain('accountId');
+      expect(result.clarification).toMatch(/não consegui acessar seus dados financeiros/i);
+      // An empty workspace would have asked WHICH account; the read failure
+      // must not pretend there is a list to choose from.
+      expect(result.clarification).not.toMatch(/em qual conta/i);
+    }
+  });
+
+  /**
+   * A reader is INJECTED at this boundary, so its `listAccounts`/`listCategories`
+   * are not obliged to normalize: an implementation that FULFILS with a corrupt
+   * collection (`[null]`, `{ unexpected: 1 }`) hands back something the
+   * `EntitySummary[]` contract does not describe. The resolver renormalizes
+   * what it received, so that violation must reach the SAME fail-closed
+   * `readFailure()` terminal a rejected read reaches — for EVERY reader, not
+   * only for `createRequestEntityReader` (whose own `normalizeEntities` happens
+   * to throw first). A rejection escaping here would be neither a proposal nor
+   * a clarification: the turn would blow up instead of failing closed.
+   */
+  describe('a reader that FULFILS with a payload outside the contract', () => {
+    const corruptAccounts: EntityReader = {
+      listAccounts: async () => [null] as unknown as EntitySummary[],
+      listCategories: async () => [CATEGORY_MERCADO],
+    };
+    const corruptCategories: EntityReader = {
+      listAccounts: async () => [ACCOUNT_NUBANK],
+      listCategories: async () => ({ unexpected: 1 }) as unknown as EntitySummary[],
+    };
+
+    const expectReadFailure = (result: EntityResolution, field: string): void => {
+      expect(result.complete).toBe(false);
+      if (result.complete) return;
+      expect(result.missingFields).toContain(field);
+      expect(result.clarification).toMatch(/não consegui acessar seus dados financeiros/i);
+      // An empty workspace would have asked WHICH account/category; the read
+      // failure must not pretend there is a list to choose from.
+      expect(result.clarification).not.toMatch(/em qual conta|qual categoria/i);
+    };
+
+    it('resolveMutationEntities converges a corrupt account read into `readFailure()`, never a rejection', async () => {
+      const result = await resolveMutationEntities(parsed(), 'Gastei R$ 50 no mercado', corruptAccounts);
+      expectReadFailure(result, 'accountId');
+    });
+
+    it('resolveMutationEntities converges a corrupt category read into `readFailure()`, never a rejection', async () => {
+      const result = await resolveMutationEntities(parsed(), 'Gastei R$ 50 no mercado', corruptCategories);
+      expectReadFailure(result, 'categoryId');
+    });
+
+    it('revalidateResolvedEntities converges a corrupt account read into `readFailure()`, never a rejection', async () => {
+      const resolved = await resolveMutationEntities(parsed(), 'Gastei R$ 50 no mercado', reader([ACCOUNT_NUBANK], [CATEGORY_MERCADO]));
+      if (!resolved.complete) throw new Error('expected a complete resolution');
+      expectReadFailure(await revalidateResolvedEntities(resolved, corruptAccounts), 'accountId');
+    });
+
+    it('revalidateResolvedEntities converges a corrupt category read into `readFailure()`, never a rejection', async () => {
+      const resolved = await resolveMutationEntities(parsed(), 'Gastei R$ 50 no mercado', reader([ACCOUNT_NUBANK], [CATEGORY_MERCADO]));
+      if (!resolved.complete) throw new Error('expected a complete resolution');
+      expectReadFailure(await revalidateResolvedEntities(resolved, corruptCategories), 'categoryId');
+    });
+  });
+
+  it('routes a corrupt payload read through `createRequestEntityReader` into the same read failure', async () => {
+    const { createRequestEntityReader } = await import('../../src/mutations/entity-resolver.js');
+    const readerFrom = (payload: unknown): EntityReader =>
+      createRequestEntityReader(async () => payload, { workspaceId: '11111111-1111-4111-8111-111111111111' });
+    await expect(readerFrom({ unexpected: 'payload' }).listAccounts()).rejects.toThrow();
+    // The legitimate raw envelope still works end to end.
+    await expect(
+      readerFrom({ items: [{ id: ACCOUNT_NUBANK.id, name: 'Nubank' }], total: 1 }).listAccounts(),
+    ).resolves.toEqual([{ id: ACCOUNT_NUBANK.id, name: 'Nubank' }]);
   });
 });

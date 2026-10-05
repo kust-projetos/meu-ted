@@ -150,20 +150,66 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
     ? (value as Record<string, unknown>)
     : null;
 
-/** Normalize the shapes authoritative reads actually return. */
+/**
+ * Envelope keys an authoritative read may carry its rows under, in the
+ * existing precedence order: the API's own `{ items, total }`
+ * (`GET /accounts`, `GET /categories`), the generic `{ data }` envelope, and
+ * the generated client's projected `accounts`/`categories` keys.
+ */
+const COLLECTION_KEYS = ['items', 'data', 'accounts', 'categories'] as const;
+
+/**
+ * A payload this module cannot read as a collection. Fail-closed by contract:
+ * an unreadable authoritative read must NEVER look like an empty workspace,
+ * because "the workspace has no accounts" and "the contract broke" lead to
+ * opposite user-facing outcomes. The message carries only the SHAPE that
+ * failed, never row content — it can reach logs.
+ */
+export const createEntityPayloadContractError = (detail: string): Error =>
+  Object.assign(
+    new Error(`entity payload contract violation: ${detail}`),
+    { code: 'entity.payload_contract' as const },
+  );
+
+/** Shape-only label of a rejected payload (never its content). */
+const payloadShape = (value: unknown): string =>
+  value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+
+/**
+ * Normalize the shapes authoritative reads actually return, and RAISE on
+ * anything else.
+ *
+ * An empty collection is a legitimate answer ONLY when the payload really is a
+ * collection (`[]`, `{ items: [] }`, `{ items: [], total: 0 }`). A payload the
+ * contract does not describe (`null`, a primitive, `{}`, a known key holding a
+ * non-array, a non-object element) used to fall through the fallback chain as
+ * `[]`, which silently turned a contract break into "this workspace is empty"
+ * and then into a clarification about an account that does exist. It now throws
+ * a typed error instead, and the callers (`Promise.allSettled` +
+ * `readFailure()`) surface it as a READ FAILURE — never as an empty workspace.
+ *
+ * Kept leniency: an OBJECT row lacking `id`/`name` is dropped silently.
+ */
 export const normalizeEntities = (response: unknown): EntitySummary[] => {
-  const record = asRecord(response);
-  const top: readonly unknown[] = Array.isArray(response)
-    ? response
-    : record && Array.isArray(record.items)
-      ? (record.items as readonly unknown[])
-      : record && Array.isArray(record.data)
-        ? (record.data as readonly unknown[])
-        : record && Array.isArray(record.accounts)
-          ? (record.accounts as readonly unknown[])
-          : record && Array.isArray(record.categories)
-            ? (record.categories as readonly unknown[])
-            : [];
+  let top: readonly unknown[];
+  if (Array.isArray(response)) {
+    top = response;
+  } else {
+    const record = asRecord(response);
+    if (!record) throw createEntityPayloadContractError(`expected a collection, received ${payloadShape(response)}`);
+    const present = COLLECTION_KEYS.filter((key) => record[key] !== undefined);
+    const corrupt = present.filter((key) => !Array.isArray(record[key]));
+    if (corrupt.length > 0) {
+      throw createEntityPayloadContractError(`expected an array under "${corrupt.join('", "')}"`);
+    }
+    const key = present[0];
+    if (key === undefined) {
+      throw createEntityPayloadContractError(
+        `no collection key found (expected one of "${COLLECTION_KEYS.join('", "')}")`,
+      );
+    }
+    top = record[key] as readonly unknown[];
+  }
   const flattened: unknown[] = [];
   for (const entry of top) {
     flattened.push(entry);
@@ -174,24 +220,28 @@ export const normalizeEntities = (response: unknown): EntitySummary[] => {
   }
   const entities: EntitySummary[] = [];
   for (const entry of flattened) {
+    // A non-object element means the collection is not what the contract says
+    // it is: dropping just that element would report a PARTIAL list as a
+    // complete one, so the whole read fails instead.
     const row = asRecord(entry);
-    const id = row && typeof row.id === 'string' ? row.id.trim() : '';
-    const rawName = row && typeof row.name === 'string' ? row.name : row && typeof row.accountName === 'string' ? row.accountName : '';
+    if (!row) throw createEntityPayloadContractError('collection holds a non-object row');
+    const id = typeof row.id === 'string' ? row.id.trim() : '';
+    const rawName = typeof row.name === 'string' ? row.name : typeof row.accountName === 'string' ? row.accountName : '';
     const name = rawName.trim();
     if (id && name) {
-      const status = row && typeof row.status === 'string' ? row.status : undefined;
-      const isActive = row && typeof row.isActive === 'boolean' ? row.isActive : undefined;
+      const status = typeof row.status === 'string' ? row.status : undefined;
+      const isActive = typeof row.isActive === 'boolean' ? row.isActive : undefined;
       // IDEMPOTENT NORMALIZATION (R08 scope axis). The raw reads carry
       // `householdId`/`workspaceId`; an `EntitySummary` that already went
       // through this function carries `scopeId`. Both forms reach here — the
       // resolver normalizes whatever the reader returned, a second time — so
       // dropping `scopeId` would silently disarm the `isOutOfScope` check and
       // let a foreign row be resolved, listed and named to the user.
-      const scopeId = row && typeof row.householdId === 'string'
+      const scopeId = typeof row.householdId === 'string'
         ? row.householdId
-        : row && typeof row.workspaceId === 'string'
+        : typeof row.workspaceId === 'string'
           ? row.workspaceId
-          : row && typeof row.scopeId === 'string'
+          : typeof row.scopeId === 'string'
             ? row.scopeId
             : undefined;
       entities.push({
@@ -211,6 +261,12 @@ export const normalizeEntities = (response: unknown): EntitySummary[] => {
  * entity-resolution helper uses (`GET /accounts`, `GET /categories`) —
  * authoritative workspace reads, never guesses. `workspaceId` is the scope the
  * delegated token is bound to; it is never taken from the caller's body/query.
+ *
+ * A payload the entity contract does not describe rejects the returned promise
+ * (see {@link normalizeEntities}); callers already wrap these reads in
+ * `Promise.allSettled` and turn a rejection into the existing read-failure
+ * terminal, so a contract violation can never reach the user as "your
+ * workspace has no accounts/categories".
  */
 export const createRequestEntityReader = (request: RequestFn, scope?: Readonly<{ workspaceId?: string }>): EntityReader => ({
   ...(scope?.workspaceId ? { scope: { workspaceId: scope.workspaceId } } : {}),
@@ -437,12 +493,18 @@ export const resolveMutationEntities = async (
   reader: EntityReader,
   options: EntityResolutionOptions = {},
 ): Promise<EntityResolution> => {
+  // The reader is INJECTED, so it is not obliged to have normalized: whatever it
+  // FULFILS with is normalized HERE, inside the settled promises. A payload the
+  // contract does not describe (`[null]`, `{ unexpected: 1 }`) therefore raises
+  // as a REJECTED read and converges on `readFailure()` — the same fail-closed
+  // terminal as a rejected one, for EVERY reader. Normalizing outside
+  // `allSettled` would let the violation escape as a thrown rejection instead.
   const [accountsSettled, categoriesSettled] = await Promise.allSettled([
-    reader.listAccounts(),
-    reader.listCategories(),
+    reader.listAccounts().then(normalizeEntities),
+    reader.listCategories().then(normalizeEntities),
   ]);
-  const accounts = accountsSettled.status === 'fulfilled' ? normalizeEntities(accountsSettled.value) : null;
-  const categories = categoriesSettled.status === 'fulfilled' ? normalizeEntities(categoriesSettled.value) : null;
+  const accounts = accountsSettled.status === 'fulfilled' ? accountsSettled.value : null;
+  const categories = categoriesSettled.status === 'fulfilled' ? categoriesSettled.value : null;
 
   if (accounts === null || categories === null) return readFailure(accounts, categories);
 
@@ -697,12 +759,16 @@ export const revalidateResolvedEntities = async (
   resolution: Extract<EntityResolution, { complete: true }>,
   reader: EntityReader,
 ): Promise<EntityResolution> => {
+  // Same seam as `resolveMutationEntities`: normalization happens INSIDE the
+  // settled promises, so a reader that fulfils with a payload outside the
+  // contract is a rejected read here too — an unreadable list fails closed at
+  // this point as well, instead of throwing past the propose boundary.
   const [accountsSettled, categoriesSettled] = await Promise.allSettled([
-    reader.listAccounts(),
-    reader.listCategories(),
+    reader.listAccounts().then(normalizeEntities),
+    reader.listCategories().then(normalizeEntities),
   ]);
-  const accounts = accountsSettled.status === 'fulfilled' ? normalizeEntities(accountsSettled.value) : null;
-  const categories = categoriesSettled.status === 'fulfilled' ? normalizeEntities(categoriesSettled.value) : null;
+  const accounts = accountsSettled.status === 'fulfilled' ? accountsSettled.value : null;
+  const categories = categoriesSettled.status === 'fulfilled' ? categoriesSettled.value : null;
   if (accounts === null || categories === null) return readFailure(accounts, categories);
 
   const scope = reader.scope?.workspaceId;
