@@ -20,8 +20,63 @@ export type { ContextTurn, CompactionResult, SummarizeFn } from './memory/compac
 export { LEARN_EVERY_TURNS, extractLearningsHeuristic, isDuplicateLearning, learnFromTurn } from './memory/learn.js';
 export type { LearningCandidate, LearnTurnInput } from './memory/learn.js';
 export { buildMemoryTools, MEMORY_TOOL_NAMES } from './memory/tools.js';
-export { fitSkills, renderInjectedSkills, SKILL_BUDGET_CHARS } from './select-skill.js';
+export {
+  fitSkills,
+  renderInjectedSkills,
+  renderSkillBodyBounded,
+  SKILL_BUDGET_CHARS,
+  SKILL_TRUNCATION_MARKER,
+} from './select-skill.js';
 export type { SkillFit } from './select-skill.js';
+// A18/R17: restricted declarative user skills + promotion candidates.
+export {
+  USER_SKILL_RULE_FIELDS,
+  USER_SKILL_FORBIDDEN_FIELDS,
+  USER_SKILL_MERCHANT_MAX,
+  USER_SKILL_CATEGORY_MAX,
+  USER_SKILL_NOTE_MAX,
+  UserSkillRuleError,
+  parseUserSkillRule,
+  assertUserSkillRule,
+} from './user-skills/schema.js';
+export type { UserSkillRule, UserSkillRuleErrorCode, UserSkillRuleParseResult } from './user-skills/schema.js';
+export {
+  initializeUserSkillsSchema,
+  isCoreSkillName,
+  recordSkillCandidate,
+  recordReplayEvidence,
+  recordSafetyReport,
+  getSkillCandidate,
+  listSkillCandidates,
+  listActiveUserSkills,
+  listUserSkillVersions,
+  deactivateUserSkillVersion,
+  revokeUserSkillVersion,
+  userSkillKeywords,
+} from './user-skills/store.js';
+export type {
+  ReplayEvidence,
+  SkillSafetyReport,
+  PromotionEvidence,
+  SkillCandidate,
+  SkillCandidateStatus,
+  UserSkillScope,
+  UserSkillVersion,
+  UserSkillsSql,
+  UserSkillWriteResult,
+  UserSkillWriteErrorCode,
+  RevokeResult,
+} from './user-skills/store.js';
+export { promoteSkillCandidate, runPeriodicUserSkillSweep } from './user-skills/promotion.js';
+export type { PromotionResult, PromotionRejection, UserSkillSweepResult } from './user-skills/promotion.js';
+export {
+  resolveUserSkillCategory,
+  toSelectableSkill,
+  toSelectableSkills,
+  USER_SKILL_CATALOG_MAX_CHARS,
+  USER_SKILL_DATA_MARKER,
+} from './user-skills/resolve.js';
+export type { CategoryCatalogEntry, UserSkillResolution } from './user-skills/resolve.js';
 export { PLAYBOOK_BODY, PLAYBOOK_SUMMARY_TOOLS } from './playbook.js';
 export {
   TOOL_DESCRIPTIONS,
@@ -99,6 +154,7 @@ export type {
 
 import { buildSystemPrompt, INSTRUCTIONS_VERSION } from './instructions.js';
 import { skillCatalogLines } from './skills/index.js';
+import type { Skill } from './skills/index.js';
 import { fitSkills, renderInjectedSkills } from './select-skill.js';
 import { PLAYBOOK_BODY } from './playbook.js';
 import { selectToolsFor, toolSkillLines } from './tools.js';
@@ -131,9 +187,21 @@ export type AssembledCognition = {
 
 export const assembleCognition = (
   lastUserMessage: string,
-  opts?: { webEnv?: WebEnv; hooks?: CognitiveHooks; skillBudgetChars?: number },
+  opts?: {
+    webEnv?: WebEnv;
+    hooks?: CognitiveHooks;
+    skillBudgetChars?: number;
+    /**
+     * A18 (R17): active user skills, already projected to the `Skill` shape
+     * by `toSelectableSkills`. They compete in the same keyword score and the
+     * same budget; they never reach the tool catalog (`selectToolsFor` only
+     * resolves names that exist in the core catalog) nor the skill catalog
+     * lines, so core skills and capabilities stay exactly as they were.
+     */
+    userSkills?: readonly Skill[];
+  },
 ): AssembledCognition => {
-  const fit = fitSkills(lastUserMessage, opts?.skillBudgetChars);
+  const fit = fitSkills(lastUserMessage, opts?.skillBudgetChars, opts?.userSkills);
   const webAvailable = createWebSearchProvider(opts?.webEnv ?? {}).available;
   // A11: `web_fetch` is restricted to the operator egress allowlist and is
   // unavailable while it is empty — the prompt must not promise more.
