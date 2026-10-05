@@ -9,15 +9,17 @@
  *
  * O escopo é por DO (workspace), nunca global: dois workspaces não podem
  * compartilhar teto de turno nem breaker.
+ *
+ * Issue #86: este arquivo cobre a FRONTEIRA JEV, que continua reutilizada como
+ * adapter. A instância por DO da camada neutra (e o accessor do
+ * `FinanceChatAgent`) vive em `tests/decision-provider-per-do.test.ts`.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { FinanceChatAgent } from '../src/finance-chat-agent.js';
 import {
   JUDGMENT_BREAKER_COOLDOWN_MS,
   createJudgmentProvider,
   judgmentProviderForDo,
   type JudgmentEnv,
-  type JudgmentProvider,
 } from '../src/judgment/provider.js';
 
 const request = (turnId: string) => ({
@@ -121,43 +123,5 @@ describe('instância única do JudgmentProvider por DO (A16 follow-up)', () => {
     const a = createJudgmentProvider({ env: enabledEnv, fetchImpl: vi.fn() as unknown as typeof fetch });
     const b = createJudgmentProvider({ env: enabledEnv, fetchImpl: vi.fn() as unknown as typeof fetch });
     expect(a).not.toBe(b);
-  });
-});
-
-describe('wiring no DO (FinanceChatAgent)', () => {
-  const createTestAgent = () => {
-    const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent;
-    Object.defineProperty(agent, 'state', { value: { storage: {} }, writable: true, configurable: true });
-    Object.defineProperty(agent, 'env', {
-      value: { API_ORIGIN: 'https://api.test.local' },
-      writable: true,
-      configurable: true,
-    });
-    return agent;
-  };
-
-  const providerOf = (agent: FinanceChatAgent): JudgmentProvider =>
-    (agent as unknown as { judgmentProvider: () => JudgmentProvider }).judgmentProvider();
-
-  it('RED: o DO expõe UM provider, estável entre turnos', () => {
-    const agent = createTestAgent();
-    const first = providerOf(agent);
-    const second = providerOf(agent);
-    expect(first).toBe(second);
-    // Default-off (G04 aberto): sem endpoint no env, a instância é indisponível
-    // e nenhuma chamada sai.
-    expect(first.available).toBe(false);
-  });
-
-  it('RED: cada DO tem a SUA instância', () => {
-    expect(providerOf(createTestAgent())).not.toBe(providerOf(createTestAgent()));
-  });
-
-  it('RED: o provider do DO lê o env do operator uma vez e o respeita', () => {
-    const agent = createTestAgent();
-    (agent as unknown as { env: Record<string, string> }).env = {
-      ...enabledEnv,
-    };
-    expect(providerOf(agent).available).toBe(true);
   });
 });

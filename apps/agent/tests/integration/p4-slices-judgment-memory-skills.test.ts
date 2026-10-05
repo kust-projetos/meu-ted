@@ -1,14 +1,16 @@
 /**
- * P4 slices A16/A17/A18 (integration) — judgment, memory and user skills in the
- * SAME process and on the SAME workspace, in the same turn flow.
+ * P4 slices A16/A17/A18 (integration) — the decision layer, memory and user
+ * skills in the SAME process and on the SAME workspace, in the same turn flow.
  *
  * The unit suites prove each slice in isolation. This file proves they compose
  * without leaking into each other:
  *
  * 1. default-off: the negotiation turn is byte for byte the pre-wiring turn, no
- *    `judgment.consulted` event, no network;
- * 2. with a judge stub answering AGAINST the deterministic relation, the
- *    deterministic value still wins (AC25);
+ *    `decision.consulted` event, no network;
+ * 2. with a provider stub answering AGAINST the deterministic relation, the
+ *    deterministic value still wins (AC25) — here through the JEV adapter, so
+ *    the A16 transport keeps working behind the neutral seam and the emitted
+ *    event still carries the domain operation, never `jev_decide`;
  * 3. a memory derived from a correction (learning, non-promotable, requiring
  *    revalidation when it cites an account) is present in the recall block of a
  *    real turn;
@@ -22,7 +24,7 @@ import {
   normalizeRestTurn,
   type AuthenticatedIdentity,
 } from '../../src/orchestration/conversation-orchestrator.js';
-import { createJudgmentProvider, type JudgmentEnv, type JudgmentProvider } from '../../src/judgment/provider.js';
+import { createDecisionProvider, type DecisionEnv, type DecisionProvider } from '../../src/decision/provider.js';
 import { assembleCognition } from '../../src/agent-config/index.js';
 import { fitSkills, renderInjectedSkills } from '../../src/agent-config/select-skill.js';
 import {
@@ -69,7 +71,11 @@ const reader: EntityReader = {
   ],
 };
 
-const enabledEnv: JudgmentEnv = {
+// The JEV adapter, selected through the neutral seam: it reuses A16's own envs,
+// which is why the A16 integration case keeps its transport while the domain
+// keeps its vendor-free vocabulary.
+const enabledEnv: DecisionEnv = {
+  TED_DECISION_PROVIDER: 'jev',
   TED_JUDGMENT_ENDPOINT: 'https://judgment.example.test/evaluate',
   TED_JUDGMENT_ALLOWED_MODELS: 'judgment-model-v1',
 };
@@ -88,7 +94,7 @@ const judgeAnswer = (choice: unknown) =>
 
 type Events = Array<{ eventType: string; fields: Record<string, unknown> }>;
 
-const runNegotiation = async (options: { provider?: JudgmentProvider } = {}) => {
+const runNegotiation = async (options: { provider?: DecisionProvider } = {}) => {
   const store = new InMemoryMutationDraftStore();
   const writes: string[] = [];
   const events: Events = [];
@@ -109,7 +115,7 @@ const runNegotiation = async (options: { provider?: JudgmentProvider } = {}) => 
     events: (eventType, fields) => {
       events.push({ eventType, fields });
     },
-    ...(options.provider ? { judgmentProvider: () => options.provider } : {}),
+    ...(options.provider ? { decisionProvider: () => options.provider } : {}),
   });
   const run = (text: string, intentionId: string) =>
     orchestrator.runTurn(normalizeRestTurn({ text, intentionId }, identity));
@@ -120,29 +126,31 @@ const runNegotiation = async (options: { provider?: JudgmentProvider } = {}) => 
 };
 
 describe('P4 A16/A17/A18 integration on one workspace', () => {
-  it('default-off is byte for byte the pre-wiring turn and emits no judgment event', async () => {
+  it('default-off is byte for byte the pre-wiring turn and emits no decision event', async () => {
     const defaultOff = await runNegotiation();
-    // The provider exists but has no endpoint: identical to no provider at all.
+    // The provider exists but no provider is selected: identical to none at all.
     const configured = await runNegotiation({
-      provider: createJudgmentProvider({ fetchImpl: vi.fn() as unknown as typeof fetch }),
+      provider: createDecisionProvider({ fetchImpl: vi.fn() as unknown as typeof fetch }),
     });
 
     expect(JSON.stringify(defaultOff.first)).toBe(JSON.stringify(configured.first));
     expect(JSON.stringify(defaultOff.second)).toBe(JSON.stringify(configured.second));
-    expect(defaultOff.events.filter((event) => event.eventType === 'judgment.consulted')).toEqual([]);
+    expect(defaultOff.events.filter((event) => event.eventType === 'decision.consulted')).toEqual([]);
     expect(defaultOff.writes).toEqual([]);
     expect(defaultOff.draft.relations).toContain('negation');
   });
 
-  it('a judge answering AGAINST the deterministic relation does not change the turn (AC25)', async () => {
+  it('a provider answering AGAINST the deterministic relation does not change the turn (AC25)', async () => {
     const fetchImpl = vi.fn().mockImplementation(async () => judgeAnswer('continuation'));
     const state = await runNegotiation({
-      provider: createJudgmentProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch }),
+      provider: createDecisionProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch }),
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const consult = state.events.find((event) => event.eventType === 'judgment.consulted');
+    const consult = state.events.find((event) => event.eventType === 'decision.consulted');
     expect(consult?.fields).toMatchObject({
-      operation: 'jev_decide',
+      // The DOMAIN operation, even though the transport that answered was Jev.
+      operation: 'continuation_relation',
+      source: 'decision_advisory',
       choice: 'continuation',
       deterministicRelation: 'negation',
     });

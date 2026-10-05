@@ -1,0 +1,211 @@
+{
+  "version": "2026-10-05",
+  "operation": "continuation_relation",
+  "oracle": "The deterministic heuristic that runs BEFORE the layer: a negation marker in the turn text means 'negation', otherwise 'continuation'. Each case records that outcome as `deterministicRelation`.",
+  "honesty": "Replay accuracy against this oracle is 100% BY CONSTRUCTION and therefore NOT a measure of model quality: resolveWithDecision returns the deterministic value on every path, so the number proves the layer cannot change an outcome, nothing more. What the replay does measure is (a) advisory agreement/disagreement, (b) fallback rates (threshold, abstention, unavailability) and (c) that the request never carries user content. Accuracy, calibration, latency and cost against a REAL provider remain PENDING configuration — the layer is default-off, there is no credential in the repo and no `AI` binding deployed. No such number is invented here.",
+  "dimensions": {
+    "covered": ["typo", "incomplete", "fragmented", "ambiguous_description", "required_clarification"],
+    "pendingNewOperation": ["category_ranking", "subcategory_ranking", "intent_routing"],
+    "note": "`category_ranking`, `subcategory_ranking` and `intent_routing` are uses the issue lists but NOT operations this repo implements. They are declared pending rather than simulated here: the closed `DECISION_ALLOWED_OPERATIONS` enum contains only `continuation_relation`, and a case that claimed to cover them would be measuring nothing."
+  },
+  "realProvider": {
+    "status": "pending",
+    "requires": ["TED_DECISION_PROVIDER=jev|clef|strands", "TED_JUDGMENT_ENDPOINT + TED_JUDGMENT_ALLOWED_MODELS (jev)", "the `AI` binding in wrangler.jsonc (clef)", "TED_DECISION_STRANDS_URL (strands)"],
+    "blockedBy": "Default-off by design (issue #86): no credential provisioned, no AI binding added, no local Strands deployment.",
+    "command": "pnpm --filter pi-finance-agent exec vitest run tests/evals/decision-dataset.test.ts"
+  },
+  "cases": [
+    {
+      "id": "DEC-001",
+      "dimension": "fragmented",
+      "text": "não, era 70",
+      "note": "Fragmento com negação e valor corrigido; a escrita continua travada pela revisão.",
+      "draftStatus": "proposing",
+      "pendingFieldCount": 1,
+      "negationMarker": true,
+      "deterministicRelation": "negation",
+      "advisoryProbe": "negation",
+      "advisoryConfidence": 0.94
+    },
+    {
+      "id": "DEC-002",
+      "dimension": "typo",
+      "text": "nao foi isso, foi 90",
+      "note": "Negação sem acento: o regex `n[aã]o` pega o typo; um classificador treinado em texto limpo erraria aqui.",
+      "draftStatus": "active",
+      "pendingFieldCount": 1,
+      "negationMarker": true,
+      "deterministicRelation": "negation",
+      "advisoryProbe": "negation",
+      "advisoryConfidence": 0.88
+    },
+    {
+      "id": "DEC-003",
+      "dimension": "typo",
+      "text": "gastej 50 na padaria",
+      "note": "Verbo com typo e valor sem símbolo: continuação pura, sem marcador de negação.",
+      "draftStatus": "active",
+      "pendingFieldCount": 2,
+      "negationMarker": false,
+      "deterministicRelation": "continuation",
+      "advisoryProbe": "continuation",
+      "advisoryConfidence": 0.81
+    },
+    {
+      "id": "DEC-004",
+      "dimension": "incomplete",
+      "text": "não",
+      "note": "Resposta mínima de negação; continua sendo negação.",
+      "draftStatus": "proposing",
+      "pendingFieldCount": 1,
+      "negationMarker": true,
+      "deterministicRelation": "negation",
+      "advisoryProbe": "negation",
+      "advisoryConfidence": 0.9
+    },
+    {
+      "id": "DEC-005",
+      "dimension": "incomplete",
+      "text": "só isso",
+      "note": "Turno sem verbo e sem negação: continuação.",
+      "draftStatus": "active",
+      "pendingFieldCount": 3,
+      "negationMarker": false,
+      "deterministicRelation": "continuation",
+      "advisoryProbe": "continuation",
+      "advisoryConfidence": 0.62
+    },
+    {
+      "id": "DEC-006",
+      "dimension": "fragmented",
+      "text": "era de carne",
+      "note": "Fragmento que completa o rascunho: continuação, com destaque pendente.",
+      "draftStatus": "active",
+      "pendingFieldCount": 1,
+      "negationMarker": false,
+      "deterministicRelation": "continuation",
+      "advisoryProbe": "continuation",
+      "advisoryConfidence": 0.83
+    },
+    {
+      "id": "DEC-007",
+      "dimension": "ambiguous_description",
+      "text": "jamais comprei aquilo",
+      "note": "Negação forte com descrição ambígua: o marcador decide, a descrição não entra no pedido.",
+      "draftStatus": "active",
+      "pendingFieldCount": 2,
+      "negationMarker": true,
+      "deterministicRelation": "negation",
+      "advisoryProbe": "negation",
+      "advisoryConfidence": 0.77
+    },
+    {
+      "id": "DEC-008",
+      "dimension": "ambiguous_description",
+      "text": "aquilo foi 30",
+      "note": "Sem negação e sem verbo claro: continuação pelo determinístico.",
+      "draftStatus": "active",
+      "pendingFieldCount": 2,
+      "negationMarker": false,
+      "deterministicRelation": "continuation",
+      "advisoryProbe": "continuation",
+      "advisoryConfidence": 0.58
+    },
+    {
+      "id": "DEC-009",
+      "dimension": "required_clarification",
+      "text": "não, isso é outro lugar",
+      "note": "Negação que exige nova pergunta de esclarecimento (3 campos pendentes).",
+      "draftStatus": "proposing",
+      "pendingFieldCount": 3,
+      "negationMarker": true,
+      "deterministicRelation": "negation",
+      "advisoryProbe": "continuation",
+      "advisoryConfidence": 0.86
+    },
+    {
+      "id": "DEC-010",
+      "dimension": "required_clarification",
+      "text": "deixa pra depois",
+      "note": "Adiamento sem negação: continuação; a confirmação continua obrigatória.",
+      "draftStatus": "active",
+      "pendingFieldCount": 3,
+      "negationMarker": false,
+      "deterministicRelation": "continuation",
+      "advisoryProbe": "continuation",
+      "advisoryConfidence": 0.7
+    },
+    {
+      "id": "DEC-011",
+      "dimension": "fragmented",
+      "text": "não muda nada",
+      "note": "Negação que NÃO nega o lançamento: o determinístico ainda diz negação e a heurística erra com frequência — caso de divergência advisory.",
+      "draftStatus": "active",
+      "pendingFieldCount": 1,
+      "negationMarker": true,
+      "deterministicRelation": "negation",
+      "advisoryProbe": "continuation",
+      "advisoryConfidence": 0.91
+    },
+    {
+      "id": "DEC-012",
+      "dimension": "typo",
+      "text": "nunca mais isso",
+      "note": "Negação com sinônimo forte.",
+      "draftStatus": "proposing",
+      "pendingFieldCount": 1,
+      "negationMarker": true,
+      "deterministicRelation": "negation",
+      "advisoryProbe": "negation",
+      "advisoryConfidence": 0.95
+    },
+    {
+      "id": "DEC-013",
+      "dimension": "fragmented",
+      "text": "mais 30 no mercado",
+      "note": "Continuação com valor e merchant no texto do usuário — nada disso vai no pedido.",
+      "draftStatus": "active",
+      "pendingFieldCount": 1,
+      "negationMarker": false,
+      "deterministicRelation": "continuation",
+      "advisoryProbe": "continuation",
+      "advisoryConfidence": 0.89
+    },
+    {
+      "id": "DEC-014",
+      "dimension": "ambiguous_description",
+      "text": "foi essa parte",
+      "note": "Referência vaga: continuação pelo determinístico, esclarecimento fica com o fluxo atual.",
+      "draftStatus": "active",
+      "pendingFieldCount": 2,
+      "negationMarker": false,
+      "deterministicRelation": "continuation",
+      "advisoryProbe": "negation",
+      "advisoryConfidence": 0.55
+    },
+    {
+      "id": "DEC-015",
+      "dimension": "incomplete",
+      "text": "isso",
+      "note": "Turno de uma palavra; sem marcador de negação.",
+      "draftStatus": "active",
+      "pendingFieldCount": 3,
+      "negationMarker": false,
+      "deterministicRelation": "continuation",
+      "advisoryProbe": "continuation",
+      "advisoryConfidence": 0.49
+    },
+    {
+      "id": "DEC-016",
+      "dimension": "required_clarification",
+      "text": "não era essa categoria",
+      "note": "Negação que também corrige a categoria: continua sendo negação; a classificação de categoria é operação futura, não simulada aqui.",
+      "draftStatus": "proposing",
+      "pendingFieldCount": 2,
+      "negationMarker": true,
+      "deterministicRelation": "negation",
+      "advisoryProbe": "negation",
+      "advisoryConfidence": 0.93
+    }
+  ]
+}
