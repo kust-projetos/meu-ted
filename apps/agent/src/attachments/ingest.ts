@@ -21,7 +21,7 @@
  * from a non-existent one.
  */
 
-import type { AttachmentStorage } from './storage.js';
+import type { AttachmentCleanupCheckpoint, AttachmentStorage } from './storage.js';
 import {
   ATTACHMENT_LIMITS,
   ATTACHMENT_NAME_MAX_CHARS,
@@ -306,6 +306,14 @@ export type IngestInput = {
   bytes: ArrayBuffer;
   /** Optional HMAC secret for the opaque ref (agent connection-token secret). */
   refSecret?: string;
+  /**
+   * A19 — durable position of the piggybacked TTL sweep. When present, the
+   * cleanup resumes from the last persisted cursor instead of always restarting
+   * at the prefix (which starved expired objects living behind more than
+   * `ATTACHMENT_CLEANUP_MAX_PAGES` pages of live ones). Best-effort on both
+   * ends: checkpoint failures never fail the upload.
+   */
+  cleanupCheckpoint?: AttachmentCleanupCheckpoint;
   now?: number;
 };
 
@@ -436,7 +444,7 @@ export const ingestAttachment = async (input: IngestInput): Promise<AttachmentUp
   await storage.put(record, bytes);
   // Cheap TTL sweep piggybacked on the upload: best-effort and silent, so an
   // unreachable bucket never fails an otherwise valid upload.
-  await cleanupExpiredAttachments(storage, now);
+  await cleanupExpiredAttachments(storage, now, input.cleanupCheckpoint ? { checkpoint: input.cleanupCheckpoint } : undefined);
   return { ref: record.ref, kind: record.kind, name: record.name, size: record.size, expiresAt: record.expiresAt };
 };
 
@@ -484,15 +492,35 @@ export const CLEANUP_BATCH_LIMIT = 50;
 /**
  * Idempotent TTL sweep. Every storage failure is swallowed and reported as
  * `failed: true` — cleanup never breaks the upload/turn that triggered it.
+ *
+ * A19 — when `checkpoint` is present the sweep RESUMES from the last persisted
+ * cursor instead of always restarting at the prefix: with more than
+ * `ATTACHMENT_CLEANUP_MAX_PAGES` pages of live objects ahead of the expired
+ * ones, a restart-at-prefix sweep never reached them (deterministic
+ * starvation). The cursor of the last page consumed is persisted after the
+ * deletes; reaching the END of the listing clears the checkpoint (wrap-around),
+ * which is what keeps the whole space convergent. Checkpoint I/O is best-effort
+ * on both ends: a failing checkpoint degrades to the legacy restart behavior
+ * and never fails the caller.
  */
 export const cleanupExpiredAttachments = async (
   storage: AttachmentStorage,
   now: number = Date.now(),
+  options?: { checkpoint?: AttachmentCleanupCheckpoint },
 ): Promise<CleanupReport> => {
   try {
-    const expired = await storage.listByExpiry(now, CLEANUP_BATCH_LIMIT);
+    const checkpoint = options?.checkpoint;
+    let startCursor: string | undefined;
+    if (checkpoint) {
+      try {
+        startCursor = await checkpoint.get();
+      } catch {
+        startCursor = undefined;
+      }
+    }
+    const sweep = await storage.sweepByExpiry(now, CLEANUP_BATCH_LIMIT, startCursor);
     let deleted = 0;
-    for (const record of expired) {
+    for (const record of sweep.records) {
       try {
         await storage.delete(record.ref);
         deleted += 1;
@@ -500,7 +528,30 @@ export const cleanupExpiredAttachments = async (
         // Keep sweeping: one undeletable object must not hide the others.
       }
     }
-    return { scanned: expired.length, deleted, failed: false };
+    if (checkpoint) {
+      try {
+        if (deleted < sweep.records.length) {
+          // A19 — a delete failed inside this window: HOLD the previous
+          // position so the next sweep re-reads the same pages (deletes are
+          // idempotent, so the retry is free). Advancing past a failure would
+          // strand the object until a full wrap-around cycle — a wasted cycle
+          // at best, a leak at worst. Residual: an object that fails to delete
+          // PERSISTENTLY pins its window until the failure clears (an R2
+          // delete outage is transient by nature; a poisoned object degrades
+          // cleanup throughput, never correctness of the objects behind it
+          // once the failure clears).
+        } else if (sweep.nextCursor === undefined) {
+          // Wrap (end of listing) ⇒ the next sweep starts at the prefix again.
+          await checkpoint.clear();
+        } else {
+          // Persist the resume point so the tail is eventually reached.
+          await checkpoint.put(sweep.nextCursor);
+        }
+      } catch {
+        // Losing the position costs one revisited cycle; it must never throw.
+      }
+    }
+    return { scanned: sweep.records.length, deleted, failed: false };
   } catch {
     return { scanned: 0, deleted: 0, failed: true };
   }

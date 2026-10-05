@@ -43,14 +43,48 @@ export type R2BucketLike = {
 
 /**
  * The storage contract. `put` stores metadata + bytes; `get` is a miss-or-hit
- * read (never a throw for "absent"); `listByExpiry` is the cheap TTL sweep
- * cursor used by cleanup.
+ * read (never a throw for "absent"); `sweepByExpiry` is the cheap TTL sweep
+ * cursor used by cleanup, and `listByExpiry` is its records-only projection
+ * (kept for callers that never care where the sweep stopped).
  */
 export type AttachmentStorage = {
   put: (record: AttachmentRecord, bytes: ArrayBuffer) => Promise<void>;
   get: (ref: string) => Promise<{ record: AttachmentRecord; bytes: ArrayBuffer } | null>;
   delete: (ref: string) => Promise<void>;
-  listByExpiry: (before: number, limit: number) => Promise<AttachmentRecord[]>;
+  listByExpiry: (before: number, limit: number, startCursor?: string) => Promise<AttachmentRecord[]>;
+  sweepByExpiry: (before: number, limit: number, startCursor?: string) => Promise<ExpirySweep>;
+};
+
+/**
+ * A19 — durable position of the TTL sweep.
+ *
+ * The position is durable state, but it must NOT be owned by the storage
+ * adapter: `ingest` and the DO know nothing about each other's storage. These
+ * three methods are the whole contract — the DO backs them with its KV storage
+ * and tests back them with a Map. Every call is best-effort at the caller.
+ */
+export interface AttachmentCleanupCheckpoint {
+  get(): Promise<string | undefined>;
+  put(cursor: string): Promise<void>;
+  clear(): Promise<void>;
+}
+
+/** Key the DO persists the cleanup cursor under. */
+export const ATTACHMENT_CLEANUP_CURSOR_KEY = 'ted.attachments.cleanup.cursor';
+
+/**
+ * Result of ONE bounded sweep.
+ *
+ * `nextCursor` is the continuation of the LAST PAGE CONSUMED, so the next sweep
+ * resumes exactly where this one stopped. `undefined` means the listing was
+ * read to its end (the sweep wrapped) and any persisted checkpoint must be
+ * cleared — that wrap is what keeps the sweep convergent, since an object is
+ * never skipped for good: the worst case is that a page is revisited once per
+ * full cycle.
+ */
+export type ExpirySweep = {
+  records: AttachmentRecord[];
+  nextCursor?: string;
 };
 
 /** Namespaced prefix so a bucket can host other object families. */
@@ -60,10 +94,15 @@ export const ATTACHMENT_KEY_PREFIX = 'ted/attachments/v1/';
  * Page ceiling for ONE cleanup sweep.
  *
  * R2 lists 1000 keys per page. A sweep is triggered by an upload and must stay
- * cheap, so it walks at most this many pages and stops — the remaining pages
- * are picked up by the next sweep instead of one unbounded scan. Resumable by
- * construction: the sweep always restarts at the prefix, and deletions are
- * idempotent.
+ * cheap, so it walks at most this many pages and stops.
+ *
+ * A19 — stopping early is only safe BECAUSE the sweep is resumable: the caller
+ * persists the cursor of the last page consumed (`ExpirySweep.nextCursor`) and
+ * the next sweep continues from there. A sweep that simply restarted at the
+ * prefix would starve forever: with more than this many pages of LIVE objects
+ * ahead of the expired ones, the expired objects are never reached. The wrap
+ * (reaching the end of the listing) clears the checkpoint so the cycle restarts
+ * at the prefix, and deletions stay idempotent, so nothing is lost either way.
  */
 export const ATTACHMENT_CLEANUP_MAX_PAGES = 10;
 
@@ -129,6 +168,70 @@ const decodeRecord = (raw: Record<string, string> | undefined): AttachmentRecord
 };
 
 /**
+ * A19 — the bounded, RESUMABLE TTL sweep over the R2 listing.
+ *
+ * F3: TWO properties the real R2 API forces and a naive listing gets wrong.
+ * 1. `include: ['customMetadata']` — a listing WITHOUT it carries no metadata,
+ *    so every record decodes to null and NOTHING is ever swept.
+ * 2. `cursor`/`truncated` — the listing is paginated, so a single call only ever
+ *    sees the first page. The sweep follows the cursor up to the page ceiling
+ *    and REPORTS where it stopped, so the next sweep resumes there instead of
+ *    re-reading the same first pages (which is what starved the tail forever).
+ *
+ * Fail-safe on a stale cursor: R2 may reject a continuation token that aged out,
+ * so a first page fetch that throws with `startCursor` is retried ONCE from the
+ * prefix. Losing the position costs one sweep; failing the upload costs the
+ * user's attachment.
+ */
+const sweepR2ByExpiry = async (
+  bucket: R2BucketLike,
+  before: number,
+  limit: number,
+  startCursor?: string,
+): Promise<ExpirySweep> => {
+  const expired: AttachmentRecord[] = [];
+  let cursor: string | undefined = startCursor;
+  // Continuation of the last page fully consumed — the resume point.
+  let nextCursor: string | undefined;
+  for (let page = 0; page < ATTACHMENT_CLEANUP_MAX_PAGES; page += 1) {
+    let listed: { objects: Array<{ key: string; customMetadata?: Record<string, string> }>; truncated?: boolean; cursor?: string };
+    try {
+      listed = await bucket.list({
+        prefix: ATTACHMENT_KEY_PREFIX,
+        include: ['customMetadata'],
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+    } catch (error) {
+      // Only the FIRST page can carry a cursor persisted by a previous sweep.
+      // If it is rejected the sweep restarts from the prefix; anything else is
+      // a real listing failure and propagates to the caller's best-effort catch.
+      if (page !== 0 || startCursor === undefined) throw error;
+      listed = await bucket.list({
+        prefix: ATTACHMENT_KEY_PREFIX,
+        include: ['customMetadata'],
+      });
+    }
+    for (const object of listed.objects) {
+      if (expired.length >= limit) {
+        // The record budget is spent mid-page: the page's own continuation is
+        // the pending resume point (its tail is revisited on the next cycle).
+        return { records: expired, ...(typeof listed.cursor === 'string' ? { nextCursor: listed.cursor } : {}) };
+      }
+      const record = decodeRecord(object.customMetadata);
+      if (!record) continue;
+      if (record.expiresAt > before) continue;
+      expired.push(record);
+    }
+    // End of the listing (or no usable continuation) ⇒ the sweep wrapped.
+    if (!listed.truncated || typeof listed.cursor !== 'string') return { records: expired };
+    nextCursor = listed.cursor;
+    cursor = listed.cursor;
+  }
+  // Page ceiling reached: `nextCursor` resumes right after the last page read.
+  return { records: expired, ...(nextCursor !== undefined ? { nextCursor } : {}) };
+};
+
+/**
  * Production adapter. Keys are opaque refs (never workspace/actor/raw), so a
  * bucket listing leaks no tenant structure beyond the random ref itself, and
  * the ownership keys live in the object metadata where every read re-checks.
@@ -151,32 +254,11 @@ export const createR2AttachmentStorage = (bucket: R2BucketLike): AttachmentStora
   async delete(ref) {
     await bucket.delete(keyFor(ref));
   },
-  async listByExpiry(before, limit) {
-    const expired: AttachmentRecord[] = [];
-    let cursor: string | undefined;
-    // F3: TWO properties the real R2 API forces and a naive listing gets wrong.
-    // 1. `include: ['customMetadata']` — a listing WITHOUT it carries no
-    //    metadata, so every record decodes to null and NOTHING is ever swept.
-    // 2. `cursor`/`truncated` — the listing is paginated, so a single call only
-    //    ever sees the first page. The sweep follows the cursor up to the page
-    //    ceiling and leaves the rest to the next sweep.
-    for (let page = 0; page < ATTACHMENT_CLEANUP_MAX_PAGES; page += 1) {
-      const listed = await bucket.list({
-        prefix: ATTACHMENT_KEY_PREFIX,
-        include: ['customMetadata'],
-        ...(cursor !== undefined ? { cursor } : {}),
-      });
-      for (const object of listed.objects) {
-        if (expired.length >= limit) return expired;
-        const record = decodeRecord(object.customMetadata);
-        if (!record) continue;
-        if (record.expiresAt > before) continue;
-        expired.push(record);
-      }
-      if (!listed.truncated || typeof listed.cursor !== 'string') return expired;
-      cursor = listed.cursor;
-    }
-    return expired;
+  async sweepByExpiry(before, limit, startCursor) {
+    return sweepR2ByExpiry(bucket, before, limit, startCursor);
+  },
+  async listByExpiry(before, limit, startCursor) {
+    return (await sweepR2ByExpiry(bucket, before, limit, startCursor)).records;
   },
 });
 
@@ -184,6 +266,17 @@ export const createR2AttachmentStorage = (bucket: R2BucketLike): AttachmentStora
 export const createMemoryAttachmentStorage = (): AttachmentStorage => {
   const records = new Map<string, AttachmentRecord>();
   const blobs = new Map<string, ArrayBuffer>();
+  const sweepByExpiry = async (before: number, limit: number): Promise<ExpirySweep> => {
+    const expired: AttachmentRecord[] = [];
+    for (const record of records.values()) {
+      if (record.expiresAt > before) continue;
+      expired.push(record);
+      if (expired.length >= limit) break;
+    }
+    // A full in-memory scan always reaches the end, so it always wraps: there
+    // is no pagination to resume from and never a cursor to persist.
+    return { records: expired };
+  };
   return {
     async put(record, bytes) {
       records.set(record.ref, record);
@@ -200,14 +293,9 @@ export const createMemoryAttachmentStorage = (): AttachmentStorage => {
       records.delete(ref);
       blobs.delete(ref);
     },
+    sweepByExpiry,
     async listByExpiry(before, limit) {
-      const expired: AttachmentRecord[] = [];
-      for (const record of records.values()) {
-        if (record.expiresAt > before) continue;
-        expired.push(record);
-        if (expired.length >= limit) break;
-      }
-      return expired;
+      return (await sweepByExpiry(before, limit)).records;
     },
   };
 };

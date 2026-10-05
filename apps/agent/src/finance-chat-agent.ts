@@ -68,7 +68,55 @@ import { decisionProviderForDo, type DecisionEnv, type DecisionProvider } from "
 // TED_ATTACHMENTS_BUCKET binding). Everything here is default-off: without
 // that binding the byte pipeline is unavailable and every `ref` is reported
 // as such. wrangler.jsonc is intentionally untouched (rollout step A19).
-import { getAttachmentStorage } from "./attachments/storage.js";
+import {
+  ATTACHMENT_CLEANUP_CURSOR_KEY,
+  getAttachmentStorage,
+  type AttachmentCleanupCheckpoint,
+} from "./attachments/storage.js";
+
+/**
+ * A19 — DO-storage-backed checkpoint for the piggybacked attachment TTL sweep.
+ *
+ * The cursor is plain durable KV state on the Durable Object: one string under
+ * `ATTACHMENT_CLEANUP_CURSOR_KEY`. A missing or unreadable checkpoint degrades
+ * cleanup to the legacy restart-at-prefix behavior; it can never fail the
+ * upload. `state?.storage` is optional so prototype-level test doubles (which
+ * build agents via `Object.create(FinanceChatAgent.prototype)`) without KV
+ * simply yield `undefined`.
+ */
+const createAttachmentCleanupCheckpoint = (
+  storage: unknown,
+): AttachmentCleanupCheckpoint | undefined => {
+  const kv = storage as
+    | { get?: unknown; put?: unknown; delete?: unknown }
+    | undefined
+    | null;
+  if (
+    !kv ||
+    typeof kv.get !== "function" ||
+    typeof kv.put !== "function" ||
+    typeof kv.delete !== "function"
+  ) {
+    return undefined;
+  }
+  const ops = kv as unknown as {
+    get(key: string): Promise<unknown>;
+    put(key: string, value: unknown): Promise<unknown>;
+    delete(key: string): Promise<unknown>;
+  };
+  return {
+    get: async () => {
+      const value = (await ops.get(ATTACHMENT_CLEANUP_CURSOR_KEY)) as string | undefined;
+      return typeof value === "string" && value.length > 0 ? value : undefined;
+    },
+    put: async (cursor) => {
+      await ops.put(ATTACHMENT_CLEANUP_CURSOR_KEY, cursor);
+    },
+    clear: async () => {
+      await ops.delete(ATTACHMENT_CLEANUP_CURSOR_KEY);
+    },
+  };
+};
 import { ingestAttachment } from "./attachments/ingest.js";
 import {
   createAttachmentProcessingMemo,
@@ -1739,6 +1787,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // Ref derivation is keyed by the agent secret when present, so a ref is
         // stable per (workspace, actor, sha256) but unguessable across tenants.
         refSecret: this.env?.AGENT_CONNECTION_TOKEN_SECRET,
+        // A19 — the piggybacked TTL sweep resumes from the last persisted
+        // cursor instead of restarting at the prefix forever (starvation).
+        // DO storage is the checkpoint; the sweep treats it as best-effort.
+        cleanupCheckpoint: createAttachmentCleanupCheckpoint(this.state?.storage),
       });
       return Response.json(uploaded, { status: 200 });
     } catch (error) {

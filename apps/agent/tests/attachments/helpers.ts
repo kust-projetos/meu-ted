@@ -62,10 +62,12 @@ export type AttachmentTestAgent = {
   agent: FinanceChatAgent;
   persisted: UIMessage[];
   bucket: FakeBucket;
+  /** Present only with `withKvStorage: true` — the fake DO KV the checkpoint uses. */
+  kv?: Map<string, unknown>;
 };
 
 export const createAttachmentTestAgent = (
-  options: { withBucket?: boolean; extraEnv?: Record<string, string> } = {},
+  options: { withBucket?: boolean; withKvStorage?: boolean; extraEnv?: Record<string, string> } = {},
 ): AttachmentTestAgent => {
   const persisted: UIMessage[] = [];
   const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent & {
@@ -76,7 +78,21 @@ export const createAttachmentTestAgent = (
   agent.persistMessages = vi.fn(async (msgs: UIMessage[]) => {
     persisted.push(...msgs);
   });
-  Object.defineProperty(agent, "state", { value: { storage: {} }, writable: true, configurable: true });
+  // A19: `withKvStorage` turns `state.storage` into a Map-backed fake of the DO
+  // KV surface (`get`/`put`/`delete`) the attachment cleanup checkpoint uses.
+  const kv = new Map<string, unknown>();
+  const stateStorage = options.withKvStorage === true
+    ? {
+        get: async (key: string) => kv.get(key),
+        put: async (key: string, value: unknown) => {
+          kv.set(key, value);
+        },
+        delete: async (key: string) => {
+          kv.delete(key);
+        },
+      }
+    : {};
+  Object.defineProperty(agent, "state", { value: { storage: stateStorage }, writable: true, configurable: true });
   attachRelayUsageStorage(agent);
 
   const bucket = createFakeBucket();
@@ -108,7 +124,7 @@ export const createAttachmentTestAgent = (
     created_at: new Date().toISOString(),
   });
 
-  return { agent, persisted, bucket };
+  return { agent, persisted, bucket, ...(options.withKvStorage === true ? { kv } : {}) };
 };
 
 /**
