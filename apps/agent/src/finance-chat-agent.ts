@@ -63,7 +63,7 @@ import {
   type TurnPlan,
 } from "./orchestration/conversation-orchestrator.js";
 import { classifyError, emitSanitizedEvent } from "./observability/events.js";
-import { judgmentProviderForDo, type JudgmentEnv, type JudgmentProvider } from "./judgment/provider.js";
+import { decisionProviderForDo, type DecisionEnv, type DecisionProvider } from "./decision/provider.js";
 // A13/R11: binary ingestion with identity (G05 = private R2 via the OPTIONAL
 // TED_ATTACHMENTS_BUCKET binding). Everything here is default-off: without
 // that binding the byte pipeline is unavailable and every `ref` is reported
@@ -729,18 +729,21 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /**
-   * A16 follow-up — the ONE `JudgmentProvider` instance of THIS Durable Object.
+   * Issue #86 — the ONE `DecisionProvider` instance of THIS Durable Object.
    *
    * The breaker and the 1-call-per-turn cap live in the instance, so it is
    * resolved once per DO and reused by every turn of the same workspace: a
    * per-call factory would renew the turn budget and forget an open circuit on
    * every turn. Two DOs never share state (the registry is keyed by the DO
-   * instance), and the provider stays DEFAULT-OFF — G04 is open, so this
-   * accessor is only the seam for the future wiring: no hot path calls it yet,
-   * and nothing here can grant permission.
+   * instance).
+   *
+   * The provider stays DEFAULT-OFF: with no `TED_DECISION_PROVIDER` the factory
+   * builds no transport at all, so this accessor performs no network call and no
+   * binding read, and the hot path takes the deterministic branch with no await.
+   * Nothing reachable from here can grant permission or create financial truth.
    */
-  judgmentProvider(): JudgmentProvider {
-    return judgmentProviderForDo(this, { env: (this.env ?? {}) as JudgmentEnv });
+  decisionProvider(): DecisionProvider {
+    return decisionProviderForDo(this, { env: (this.env ?? {}) as DecisionEnv });
   }
 
   /** DO SQLite handle or null (tests, degraded storage). */
@@ -1334,8 +1337,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     events?: (eventType: string, fields: Record<string, unknown>) => void;
     /** SPEC §7.8 draft store (DO storage). Absent = legacy single-turn flow. */
     draftStore?: SqlMutationDraftStore;
-    /** A16/R15 judgment seam override (tests). Absent = this DO's own provider. */
-    judgmentProvider?: () => JudgmentProvider | undefined;
+    /** Issue #86 decision seam override (tests). Absent = this DO's own provider. */
+    decisionProvider?: () => DecisionProvider | undefined;
     /** debt-undo-confirmation-protocol override (tests). Absent = DO store + authoritative preview. */
     undoProposals?: ConstructorParameters<typeof ConversationOrchestrator>[0] extends { undoProposals?: infer U } ? U : never;
   } = {}): ConversationOrchestrator {
@@ -1359,12 +1362,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       responseProvider: (input, plan) => this.provideUnifiedResponse(input, plan),
       evidenceProvider: dependencies.evidenceProvider ?? grounding.evidenceProvider,
       correctionProvider: dependencies.correctionProvider ?? grounding.correctionProvider,
-      // A16/R15: every channel reaches the optional judge through THIS DO's
-      // single provider instance, so the breaker and the 1-call-per-turn cap are
-      // per workspace and survive across turns. Default-off (G04): with no
-      // endpoint in the env the provider is `unavailable`, the wiring costs no
+      // Issue #86: every channel reaches the optional decision layer through THIS
+      // DO's single provider instance, so the breaker and the 1-call-per-turn cap
+      // are per workspace and survive across turns. Default-off: with no
+      // `TED_DECISION_PROVIDER` the provider is `unavailable`, the wiring costs no
       // network and the turn is indistinguishable from the pre-wiring one.
-      judgmentProvider: dependencies.judgmentProvider ?? (() => this.judgmentProvider()),
+      decisionProvider: dependencies.decisionProvider ?? (() => this.decisionProvider()),
       // debt-undo-confirmation-protocol: every channel proposes through the
       // same persistent DO store + authoritative preview. Tests may override
       // the pair; production always resolves it here (absent store = the

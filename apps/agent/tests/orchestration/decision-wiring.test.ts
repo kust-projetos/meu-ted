@@ -1,32 +1,20 @@
 /**
- * A16/R15 follow-up — o `JudgmentProvider` LIGADO no hot path (G04 default-off).
+ * Issue #86 — the decision layer WIRED into the hot path (moved from the A16 seam).
  *
- * A fronteira de `judgment/provider.ts` existia sem NENHUM consumidor real: o
- * accessor `FinanceChatAgent.judgmentProvider()` era só a costura. G04 foi
- * resolvido como "default-off com wiring completo"
- * (docs/reports/2026-10-04-ted-inteligente-gates-g04-g05-g06-resolution.md §1),
- * e este arquivo fecha a última metade: um ponto de decisão DELIMITADO do
- * orquestrador consulta o judge, e o valor determinístico continua autoritativo
- * em todos os caminhos.
+ * Same behaviour as the A16 suite it replaces, proven through the NEUTRAL seam:
+ * the orchestrator asks for a `DecisionProvider` and knows nothing about which one
+ * it gets. Every case below used to be about "the judge" — the names changed, the
+ * guarantees did not:
  *
- * O ponto escolhido é a relação de continuação do rascunho
- * (`continuationRelation`: "correção" | "negação" | "continuação"), uma
- * classificação puramente COMPORTAMENTAL resolvida hoje por heurística de
- * regex. O pedido ao judge é montado a partir de FATOS ESTRUTURAIS (o rascunho
- * está ativo, quantos campos faltam, se o texto tinha marcador de negação, o que
- * a heurística decidiu) — nunca do texto do usuário, valor, data, descrição,
- * categoria ou id de conta. O que o judge devolve é `advisory: true` por
- * construção e só muda `source`: o valor gravado é sempre o determinístico.
- *
- * O que estes testes provam, por ordem de risco:
- * - default-off (envs ausentes) ⇒ turno BYTE A BYTE idêntico ao de hoje,
- *   zero rede, zero evento novo;
- * - o payload ao judge não carrega estado financeiro;
- * - timeout / 401 / malformado / escolha fora da allowlist / circuito aberto /
- *   teto por turno ⇒ fallback determinístico, sem conceder sucesso ou
- *   permissão (AC25);
- * - uma resposta do judge CONTRÁRIA ao determinístico não muda o resultado;
- * - a escrita financeira guarded (correção de valor) não espera o judge.
+ * - default-off (no `TED_DECISION_PROVIDER`) ⇒ turn BYTE A BYTE identical to the
+ *   pre-issue turn, zero network, zero new event;
+ * - the request carries STRUCTURAL facts only — never user text, amount, date,
+ *   description, category or account id;
+ * - timeout / 401 / malformed / value outside the allowlist / open circuit /
+ *   turn budget ⇒ deterministic fallback, granting no success or permission;
+ * - a decision CONTRARY to the deterministic heuristic changes nothing (AC25);
+ * - a guarded financial write (value correction) never waits for the layer;
+ * - the wiring is provider-agnostic: the same event shape arrives from Clef.
  */
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -35,14 +23,15 @@ import {
   type AuthenticatedIdentity,
 } from '../../src/orchestration/conversation-orchestrator.js';
 import {
-  createJudgmentProvider,
-  type JudgmentEnv,
-  type JudgmentProvider,
-} from '../../src/judgment/provider.js';
+  DECISION_DEFAULT_MIN_CONFIDENCE,
+  createDecisionProvider,
+  type DecisionEnv,
+  type DecisionProvider,
+} from '../../src/decision/provider.js';
 import {
   CONTINUATION_RELATION_QUESTION,
-  continuationRelationJudgmentRequest,
-} from '../../src/judgment/wiring.js';
+  continuationRelationDecisionRequest,
+} from '../../src/decision/wiring.js';
 import { MutationApiClient } from '../../src/mutations/mutation-api-client.js';
 import {
   InMemoryMutationDraftStore,
@@ -69,13 +58,18 @@ const reader: EntityReader = {
   listCategories: async () => [MERCADO],
 };
 
-const enabledEnv: JudgmentEnv = {
-  TED_JUDGMENT_ENDPOINT: 'https://judgment.example.test/evaluate',
-  TED_JUDGMENT_ALLOWED_MODELS: 'judgment-model-v1',
+/**
+ * Strands is the transport used by most cases here ON PURPOSE: the domain suite
+ * must pass with a provider the issue's authors did not build for it. A Jev case
+ * lives in `tests/decision-provider.test.ts`, where the vendor mapping belongs.
+ */
+const enabledEnv: DecisionEnv = {
+  TED_DECISION_PROVIDER: 'strands',
+  TED_DECISION_STRANDS_URL: 'http://127.0.0.1:8000',
 };
 
-const okResponse = (choice: unknown) =>
-  new Response(JSON.stringify({ choice, rationale: 'parece continuação', confidence: 0.9 }), {
+const okResponse = (relation: string, noul = 0.9) =>
+  new Response(JSON.stringify({ response: { answers: { relation: { choice: relation, noul } } } }), {
     status: 200,
     headers: { 'content-type': 'application/json' },
   });
@@ -111,7 +105,7 @@ type Harness = Readonly<{
   draft: () => MutationDraftRecord;
   writes: string[];
   events: Array<{ eventType: string; fields: Record<string, unknown> }>;
-  judgmentEvents: () => Array<{ eventType: string; fields: Record<string, unknown> }>;
+  decisionEvents: () => Array<{ eventType: string; fields: Record<string, unknown> }>;
   first: Awaited<ReturnType<ConversationOrchestrator['runTurn']>>;
   second: Awaited<ReturnType<ConversationOrchestrator['runTurn']>>;
   run: (text: string, intentionId: string, traceId?: string) => Promise<unknown>;
@@ -119,7 +113,7 @@ type Harness = Readonly<{
 
 const NEGATION_TEXT = 'não';
 
-const harness = async (options: { provider?: JudgmentProvider } = {}): Promise<Harness> => {
+const harness = async (options: { provider?: DecisionProvider } = {}): Promise<Harness> => {
   const store = new InMemoryMutationDraftStore();
   const fake = readOnlyApi();
   const events: Array<{ eventType: string; fields: Record<string, unknown> }> = [];
@@ -131,30 +125,30 @@ const harness = async (options: { provider?: JudgmentProvider } = {}): Promise<H
     events: (eventType, fields) => {
       events.push({ eventType, fields });
     },
-    // Ausente = nenhum judge é consultado (accessor não instalado).
+    // Absent = no provider is consulted (accessor not installed).
     ...(options.provider
-      ? { judgmentProvider: () => options.provider }
+      ? { decisionProvider: () => options.provider }
       : {}),
   });
   const run = async (text: string, intentionId: string, traceId?: string) =>
     orchestrator.runTurn(normalizeRestTurn({ text, intentionId, ...(traceId ? { traceId } : {}) }, identity));
-  const first = await run('Gastei R$ 50 no mercado', 'jw-open-1');
+  const first = await run('Gastei R$ 50 no mercado', 'dw-open-1');
   const draftId = store.listActive(ctxOf(), NOW_MS)[0]!.draftId;
-  const second = await run(NEGATION_TEXT, 'jw-neg-1');
+  const second = await run(NEGATION_TEXT, 'dw-neg-1');
   return {
     store,
     draftId,
     draft: () => store.get(draftId)!,
     writes: fake.writes,
     events,
-    judgmentEvents: () => events.filter((event) => event.eventType === 'judgment.consulted'),
+    decisionEvents: () => events.filter((event) => event.eventType === 'decision.consulted'),
     first,
     second,
     run,
   };
 };
 
-/** The negotiation turn is the deterministic value under judgment in every case. */
+/** The negotiation turn is the deterministic value under the layer in every case. */
 const expectDeterministicNegation = (state: Harness): void => {
   const record = state.draft();
   expect(record.relations).toContain('negation');
@@ -166,54 +160,84 @@ const expectDeterministicNegation = (state: Harness): void => {
   expect(state.writes).toEqual([]);
 };
 
-describe('A16/R15 — JudgmentProvider ligado ao hot path do orquestrador', () => {
-  it('default-off: envs ausentes ⇒ turno BYTE A BYTE idêntico ao de hoje e zero rede', async () => {
+describe('issue #86 — DecisionProvider wired into the orchestrator hot path', () => {
+  it('default-off: no selector env ⇒ turn BYTE A BYTE identical and zero network', async () => {
     const fetchImpl = vi.fn();
     const baseline = await harness();
-    const wired = await harness({ provider: createJudgmentProvider({ fetchImpl: fetchImpl as unknown as typeof fetch }) });
+    const wired = await harness({ provider: createDecisionProvider({ fetchImpl: fetchImpl as unknown as typeof fetch }) });
 
     expect(JSON.stringify(wired.first)).toBe(JSON.stringify(baseline.first));
     expect(JSON.stringify(wired.second)).toBe(JSON.stringify(baseline.second));
     expect(JSON.stringify(wired.draft())).toBe(JSON.stringify(baseline.draft()));
-    // Nenhum evento novo: nem sequer o registro do judge, porque ele não existe.
+    // No new event: not even the consult record, because the consult never existed.
     expect(wired.events.map((event) => event.eventType)).toEqual(baseline.events.map((event) => event.eventType));
-    expect(wired.judgmentEvents()).toEqual([]);
+    expect(wired.decisionEvents()).toEqual([]);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('consulta o judge no desempate da relação do rascunho', async () => {
+  it('consults the layer on the draft-relation tie-break', async () => {
     const fetchImpl = vi.fn().mockImplementation(async () => okResponse('continuation'));
-    const provider = createJudgmentProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const provider = createDecisionProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
     const state = await harness({ provider });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(state.judgmentEvents()).toHaveLength(1);
-    expect(state.judgmentEvents()[0]!.fields).toMatchObject({
-      operation: 'jev_decide',
+    expect(state.decisionEvents()).toHaveLength(1);
+    expect(state.decisionEvents()[0]!.fields).toMatchObject({
+      operation: 'continuation_relation',
       status: 'decision',
-      source: 'judgment_advisory',
+      source: 'decision_advisory',
       choice: 'continuation',
       deterministicRelation: 'negation',
     });
+    // The domain event carries NO vendor vocabulary, whatever the provider is.
+    expect(JSON.stringify(state.decisionEvents()[0]!.fields)).not.toMatch(/jev|clef|strands/i);
   });
 
-  it('resposta CONTRÁRIA do judge não muda o valor determinístico (AC25)', async () => {
+  it('the same wiring works through a DIFFERENT provider, with the same event shape', async () => {
+    const run = vi.fn().mockResolvedValue({ response: { answers: { relation: { choice: 'continuation', noul: 0.86 } } } });
+    const clef = createDecisionProvider({ env: { TED_DECISION_PROVIDER: 'clef', AI: { run } } });
+    const state = await harness({ provider: clef });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(state.decisionEvents()[0]!.fields).toMatchObject({
+      operation: 'continuation_relation',
+      status: 'decision',
+      source: 'decision_advisory',
+      choice: 'continuation',
+    });
+    expectDeterministicNegation(state);
+  });
+
+  it('a CONTRARY answer does not change the deterministic value (AC25)', async () => {
     const fetchImpl = vi.fn().mockImplementation(async () => okResponse('continuation'));
-    const provider = createJudgmentProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const provider = createDecisionProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
     expectDeterministicNegation(await harness({ provider }));
   });
 
-  it('o pedido ao judge NÃO carrega estado financeiro', async () => {
+  it('an answer BELOW the confidence threshold falls back to the deterministic path', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async () => okResponse('correction', 0.2));
+    const provider = createDecisionProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const state = await harness({ provider });
+
+    expect(provider.minConfidence).toBe(DECISION_DEFAULT_MIN_CONFIDENCE);
+    expect(state.decisionEvents()[0]!.fields).toMatchObject({
+      status: 'abstained',
+      reason: 'low_confidence',
+      source: 'deterministic',
+    });
+    // The dropped answer is NOT in the event either — telemetry cannot launder it.
+    expect(state.decisionEvents()[0]!.fields).not.toHaveProperty('choice');
+    expectDeterministicNegation(state);
+  });
+
+  it('the request carries NO financial state', async () => {
     const fetchImpl = vi.fn().mockImplementation(async () => okResponse('negation'));
-    const provider = createJudgmentProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const provider = createDecisionProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
     const state = await harness({ provider });
 
     const [, init] = fetchImpl.mock.calls[0] as [string, { body: string }];
     const body = JSON.parse(init.body) as Record<string, unknown>;
-    expect(body.operation).toBe('jev_decide');
-    expect(body.model).toBe('judgment-model-v1');
-    expect(body.options).toEqual(['correction', 'negation', 'continuation']);
-    // Estado estrutural: chaves fechadas, sem texto, valor, data ou entidade.
+    // Structural state: closed keys, no text, amount, date or entity.
     expect(Object.keys(JSON.parse(body.state as string) as Record<string, unknown>).sort()).toEqual([
       'activeDraft',
       'deterministicRelation',
@@ -221,36 +245,37 @@ describe('A16/R15 — JudgmentProvider ligado ao hot path do orquestrador', () =
       'negationMarker',
       'pendingFieldCount',
     ]);
+    const questions = body.questions as Record<string, { instructions: string }>;
+    expect(questions.relation!.instructions).toBe(CONTINUATION_RELATION_QUESTION);
     const serialized = JSON.stringify(body);
     expect(serialized).not.toMatch(/nubank|ita[uú]|mercado|carne|5000|r\$/i);
     expect(serialized).not.toMatch(/amountCents|accountId|categoryId|description|date/i);
-    // Nem o texto do usuário, nem o identificador do rascunho ou da operação.
-    // A pergunta é a CONSTANTE do wiring (não deriva do turno), e o estado
-    // estrutural não carrega nenhuma palavra do usuário.
-    expect(body.question).toBe(CONTINUATION_RELATION_QUESTION);
+    // Neither the user text nor the draft/operation identifier.
+    // The question is a wiring CONSTANT (it does not derive from the turn), and
+    // the structural state carries no word of the user.
     const stateText = body.state as string;
     expect(stateText).not.toContain(NEGATION_TEXT);
     expect(stateText).not.toContain('Gastei');
     expect(stateText).not.toMatch(/mercado|nubank|5000/i);
     expect(state.writes).toEqual([]);
-    // A chave do TURNO (que é o que o teto por turno mede) fica no pedido, mas
-    // NÃO vai para a rede: ela é a identidade local do turno, não conteúdo.
-    expect(continuationRelationJudgmentRequest({
-      turnId: 'jw-neg-1',
+    // The TURN key (what the per-turn cap measures) is in the request but never
+    // goes to the network: it is local turn identity, not content.
+    expect(continuationRelationDecisionRequest({
+      turnId: 'dw-neg-1',
       draftStatus: 'active',
       pendingFieldCount: 2,
       negationMarker: true,
       deterministicRelation: 'negation',
-    })).toMatchObject({ turnId: 'jw-neg-1', operation: 'jev_decide' });
+    })).toMatchObject({ turnId: 'dw-neg-1', op: 'continuation_relation' });
   });
 
-  it('uma escrita financeira guarded (correção de valor) não espera o judge', async () => {
+  it('a guarded financial write (value correction) does not wait for the layer', async () => {
     const fetchImpl = vi.fn().mockImplementation(async () => okResponse('continuation'));
-    const provider = createJudgmentProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const provider = createDecisionProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
     const state = await harness({ provider });
-    // Turno de correção: a relação determinística já é `correction` e a escrita
-    // do rascunho é o caminho com trava de revisão — o judge não entra nele.
-    await state.run('não, 500', 'jw-neg-2');
+    // Correction turn: the deterministic relation is already `correction` and the
+    // draft write is the revision-guarded path — the layer is not part of it.
+    await state.run('não, 500', 'dw-neg-2');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(state.draft().resolvedArgs.amountCents).toBe(50000);
     expect(state.writes).toEqual([]);
@@ -263,22 +288,22 @@ describe('A16/R15 — JudgmentProvider ligado ao hot path do orquestrador', () =
     reason: string;
   }>[] = [
     {
-      name: '401 (credencial recusada)',
+      name: '401 (credential refused)',
       fetchImpl: async () => new Response('{}', { status: 401 }),
       reason: 'unauthorized',
     },
     {
-      name: 'resposta malformada',
-      fetchImpl: async () => new Response('<html>não é json</html>', { status: 200, headers: { 'content-type': 'application/json' } }),
+      name: 'malformed response',
+      fetchImpl: async () => new Response('<html>not json</html>', { status: 200, headers: { 'content-type': 'application/json' } }),
       reason: 'malformed_response',
     },
     {
-      name: 'escolha fora da allowlist',
+      name: 'value outside the allowlist',
       fetchImpl: async () => okResponse('aprovar_lancamento'),
-      reason: 'choice_outside_allowlist',
+      reason: 'value_outside_allowlist',
     },
     {
-      name: 'erro de transporte',
+      name: 'transport error',
       fetchImpl: async () => {
         throw new Error('fetch failed');
       },
@@ -293,16 +318,16 @@ describe('A16/R15 — JudgmentProvider ligado ao hot path do orquestrador', () =
   ];
 
   for (const failure of failureCases) {
-    it(`fallback determinístico com ${failure.name}`, async () => {
+    it(`deterministic fallback on ${failure.name}`, async () => {
       const fetchImpl = vi.fn().mockImplementation(failure.fetchImpl);
-      const provider = createJudgmentProvider({
+      const provider = createDecisionProvider({
         env: enabledEnv,
         fetchImpl: fetchImpl as unknown as typeof fetch,
         ...(failure.timeoutMs !== undefined ? { timeoutMs: failure.timeoutMs } : {}),
       });
       const state = await harness({ provider });
       expectDeterministicNegation(state);
-      expect(state.judgmentEvents()[0]!.fields).toMatchObject({
+      expect(state.decisionEvents()[0]!.fields).toMatchObject({
         status: 'abstained',
         reason: failure.reason,
         source: 'deterministic',
@@ -310,45 +335,46 @@ describe('A16/R15 — JudgmentProvider ligado ao hot path do orquestrador', () =
     });
   }
 
-  it('o teto de 1 chamada por turno é ligado pelo wiring (mesmo turnId não gasta duas)', async () => {
+  it('the one-call-per-turn cap is enforced BY the wiring (same turnId never buys twice)', async () => {
     const fetchImpl = vi.fn().mockImplementation(async () => okResponse('continuation'));
-    const provider = createJudgmentProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const provider = createDecisionProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
     const state = await harness({ provider });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    // Segundo turno com a MESMA chave de turno: o provider recusa, o wiring não contorna.
-    await state.run(NEGATION_TEXT, 'jw-neg-3', 'jw-neg-1');
+    // Second turn with the SAME turn key: the provider refuses, the wiring does
+    // not route around it.
+    await state.run(NEGATION_TEXT, 'dw-neg-3', 'dw-neg-1');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const last = state.judgmentEvents().at(-1)!;
+    const last = state.decisionEvents().at(-1)!;
     expect(last.fields).toMatchObject({ status: 'unavailable', reason: 'turn_budget_exhausted' });
     expectDeterministicNegation(state);
   });
 
-  it('o breaker interrompe a consulta depois de 2 falhas consecutivas', async () => {
+  it('the breaker stops the consultation after 2 consecutive failures', async () => {
     const fetchImpl = vi.fn().mockImplementation(async () => new Response('{}', { status: 500 }));
-    const provider = createJudgmentProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const provider = createDecisionProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
     const state = await harness({ provider });
-    await state.run(NEGATION_TEXT, 'jw-neg-4');
-    await state.run(NEGATION_TEXT, 'jw-neg-5');
+    await state.run(NEGATION_TEXT, 'dw-neg-4');
+    await state.run(NEGATION_TEXT, 'dw-neg-5');
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    // Terceiro turno do MESMO DO: circuito aberto, nenhuma chamada nova.
-    await state.run(NEGATION_TEXT, 'jw-neg-6');
+    // Third turn of the SAME DO: open circuit, no new call.
+    await state.run(NEGATION_TEXT, 'dw-neg-6');
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(state.judgmentEvents().at(-1)!.fields).toMatchObject({
+    expect(state.decisionEvents().at(-1)!.fields).toMatchObject({
       status: 'unavailable',
       reason: 'circuit_open',
     });
     expectDeterministicNegation(state);
   });
 
-  it('o accessor ausente é fail-closed: nenhum judge, nenhum desvio', async () => {
+  it('an absent accessor is fail-closed: no provider, no deviation', async () => {
     const state = await harness();
-    expect(state.judgmentEvents()).toEqual([]);
+    expect(state.decisionEvents()).toEqual([]);
     expectDeterministicNegation(state);
   });
 
-  it('o accessor do DO é chamado uma vez por turno e a instância é reutilizada', async () => {
+  it('the DO accessor is called once per turn and the instance is reused', async () => {
     const fetchImpl = vi.fn().mockImplementation(async () => okResponse('continuation'));
-    const provider = createJudgmentProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const provider = createDecisionProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
     const accessor = vi.fn(() => provider);
     const store = new InMemoryMutationDraftStore();
     const fake = readOnlyApi();
@@ -358,15 +384,16 @@ describe('A16/R15 — JudgmentProvider ligado ao hot path do orquestrador', () =
       draftStore: store,
       draftNow: () => NOW_MS,
       events: () => undefined,
-      judgmentProvider: accessor,
+      decisionProvider: accessor,
     });
     const run = (text: string, intentionId: string) =>
       orchestrator.runTurn(normalizeRestTurn({ text, intentionId }, identity));
-    await run('Gastei R$ 50 no mercado', 'jw-do-1');
-    await run(NEGATION_TEXT, 'jw-do-2');
-    await run(NEGATION_TEXT, 'jw-do-3');
-    // Um acesso por consulta e NENHUMA instanciação dentro do wiring: o judge que
-    // vale é sempre a instância do DO (teto e breaker por workspace).
+    await run('Gastei R$ 50 no mercado', 'dw-do-1');
+    await run(NEGATION_TEXT, 'dw-do-2');
+    await run(NEGATION_TEXT, 'dw-do-3');
+    // One accessor call per consultation and NO instantiation inside the wiring:
+    // the provider that counts is always the DO's instance (cap and breaker per
+    // workspace).
     expect(accessor).toHaveBeenCalledTimes(2);
     expect(accessor.mock.results.every((result) => result.value === provider)).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(2);

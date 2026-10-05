@@ -1,12 +1,14 @@
 /**
- * A16/F6 — default-off must not add an AWAIT to the hot path.
+ * Issue #86 — default-off must not add an AWAIT to the hot path.
  *
- * `continuationRelation` awaited `resolveContinuationRelation` even when the
- * judge was absent or default-off, so every negotiation turn gained a promise
- * (and a microtask hop) for a decision nobody could take. The deterministic
- * relation is now computed synchronously and the provider is consulted only when
- * it is actually available; when it is, `evaluate` is still awaited exactly once
- * and stays advisory.
+ * The A16/F6 invariant survives the generalization: `continuationRelation` is
+ * SYNCHRONOUS whenever no provider is available, so a negotiation turn with the
+ * layer default-off gains no promise and no microtask hop. The provider is
+ * consulted only when it is actually available, and when it is, `evaluate` is
+ * awaited exactly once and stays advisory.
+ *
+ * The turn output is compared BYTE FOR BYTE against a run with no accessor, so
+ * this suite fails if the generalization ever puts an await on the default path.
  */
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -14,8 +16,8 @@ import {
   normalizeRestTurn,
   type AuthenticatedIdentity,
 } from '../../src/orchestration/conversation-orchestrator.js';
-import type { JudgmentProvider, JudgmentEnv } from '../../src/judgment/provider.js';
-import { createJudgmentProvider } from '../../src/judgment/provider.js';
+import type { DecisionOutcome, DecisionProvider } from '../../src/decision/provider.js';
+import { createDecisionProvider } from '../../src/decision/provider.js';
 import { MutationApiClient } from '../../src/mutations/mutation-api-client.js';
 import { InMemoryMutationDraftStore } from '../../src/mutations/mutation-draft.js';
 import type { EntityReader } from '../../src/mutations/entity-resolver.js';
@@ -39,13 +41,13 @@ const reader: EntityReader = {
   listCategories: async () => [{ id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' }],
 };
 
-const enabledEnv: JudgmentEnv = {
-  TED_JUDGMENT_ENDPOINT: 'https://judgment.example.test/evaluate',
-  TED_JUDGMENT_ALLOWED_MODELS: 'judgment-model-v1',
-};
+const enabledEnv = {
+  TED_DECISION_PROVIDER: 'strands',
+  TED_DECISION_STRANDS_URL: 'http://127.0.0.1:8000',
+} as const;
 
-const okResponse = (choice: unknown) =>
-  new Response(JSON.stringify({ choice, rationale: 'continuação', confidence: 0.9 }), {
+const okResponse = () =>
+  new Response(JSON.stringify({ response: { answers: { relation: { choice: 'continuation', noul: 0.9 } } } }), {
     status: 200,
     headers: { 'content-type': 'application/json' },
   });
@@ -72,7 +74,7 @@ const ctxOf = () => ({
   deviceId: identity.deviceId ?? null,
 });
 
-const runTurns = async (options: { provider?: JudgmentProvider; withAccessor?: boolean }) => {
+const runTurns = async (options: { provider?: DecisionProvider; withAccessor?: boolean }) => {
   const store = new InMemoryMutationDraftStore();
   const fake = readOnlyApi();
   const events: Events = [];
@@ -84,25 +86,33 @@ const runTurns = async (options: { provider?: JudgmentProvider; withAccessor?: b
     events: (eventType, fields) => {
       events.push({ eventType, fields });
     },
-    ...(options.withAccessor ? { judgmentProvider: () => options.provider } : {}),
+    ...(options.withAccessor ? { decisionProvider: () => options.provider } : {}),
   });
   const run = (text: string, intentionId: string) =>
     orchestrator.runTurn(normalizeRestTurn({ text, intentionId }, identity));
-  const first = await run('Gastei R$ 50 no mercado', 'f6-open-1');
-  const second = await run('não', 'f6-neg-1');
+  const first = await run('Gastei R$ 50 no mercado', 'no-await-open-1');
+  const second = await run('não', 'no-await-neg-1');
   return { first, second, draft: store.listActive(ctxOf(), NOW_MS)[0]!, events, writes: fake.writes };
 };
 
-const negativeSpyProvider = (available: boolean): JudgmentProvider => {
-  const evaluate = vi.fn(async () => ({ status: 'unavailable' as const, reason: 'not_configured' as const }));
-  return { available, evaluate, stats: () => ({ calls: 0, decisions: 0, abstentions: 0, unavailables: 0, breakerOpens: 0 }) };
-};
+const negativeSpyProvider = (available: boolean): DecisionProvider => ({
+  provider: 'none',
+  available,
+  minConfidence: 0.7,
+  evaluate: vi.fn(async (): Promise<DecisionOutcome> => ({
+    provider: 'none',
+    status: 'unavailable',
+    reason: 'not_configured',
+    advisory: true,
+  })),
+  stats: () => ({ calls: 0, decisions: 0, abstentions: 0, unavailables: 0, breakerOpens: 0 }),
+});
 
-describe('A16/F6 default-off adds no await and no provider call', () => {
+describe('issue #86 — default-off adds no await and no provider call', () => {
   it('with NO accessor the negotiation turn never touches a provider promise', async () => {
     const baseline = await runTurns({});
     expect(baseline.draft!.relations).toContain('negation');
-    expect(baseline.events.filter((event) => event.eventType === 'judgment.consulted')).toEqual([]);
+    expect(baseline.events.filter((event) => event.eventType === 'decision.consulted')).toEqual([]);
     expect(baseline.writes).toEqual([]);
   });
 
@@ -128,10 +138,10 @@ describe('A16/F6 default-off adds no await and no provider call', () => {
       draftNow: () => NOW_MS,
       events: () => undefined,
     });
-    await orchestrator.runTurn(normalizeRestTurn({ text: 'Gastei R$ 50 no mercado', intentionId: 'f6-sync-1' }, identity));
+    await orchestrator.runTurn(normalizeRestTurn({ text: 'Gastei R$ 50 no mercado', intentionId: 'no-await-sync-1' }, identity));
     const draftId = store.listActive(ctxOf(), NOW_MS)[0]!.draftId;
     const draft = store.get(draftId)!;
-    const input = normalizeRestTurn({ text: 'não', intentionId: 'f6-sync-2' }, identity);
+    const input = normalizeRestTurn({ text: 'não', intentionId: 'no-await-sync-2' }, identity);
     // The private helper is synchronous by contract: it returns the relation,
     // not a promise, when there is no provider to await.
     const result = (orchestrator as unknown as {
@@ -145,14 +155,14 @@ describe('A16/F6 default-off adds no await and no provider call', () => {
   });
 
   it('an AVAILABLE provider is still consulted exactly once and stays advisory', async () => {
-    const fetchImpl = vi.fn().mockImplementation(async () => okResponse('continuation'));
-    const provider = createJudgmentProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const fetchImpl = vi.fn().mockImplementation(async () => okResponse());
+    const provider = createDecisionProvider({ env: enabledEnv, fetchImpl: fetchImpl as unknown as typeof fetch });
     const state = await runTurns({ provider, withAccessor: true });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const consult = state.events.find((event) => event.eventType === 'judgment.consulted');
+    const consult = state.events.find((event) => event.eventType === 'decision.consulted');
     expect(consult?.fields).toMatchObject({
       status: 'decision',
-      source: 'judgment_advisory',
+      source: 'decision_advisory',
       choice: 'continuation',
       deterministicRelation: 'negation',
     });

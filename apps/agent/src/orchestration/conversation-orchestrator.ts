@@ -52,13 +52,15 @@ import { hasUndoIntent, isExplicitConfirmation } from '../agent-config/tools.js'
 import { UndoProposalService } from '../mutations/undo-proposal.js';
 import { isUndoNegation } from '../mutations/undo-proposal.js';
 import { isAutoExecutionEligible } from '../safety/auto-execution.js';
-import type { JudgmentProvider } from '../judgment/provider.js';
+import { unavailableResolution, type DecisionProvider, type DecisionResolution } from '../decision/provider.js';
 import {
-  isJudgmentDefaultOff,
-  judgmentConsultFields,
+  isDecisionDefaultOff,
+  isDecisionMisconfigured,
+  decisionConsultFields,
+  decisionProviderErrorResolution,
   resolveContinuationRelation,
   type ContinuationRelationChoice,
-} from '../judgment/wiring.js';
+} from '../decision/wiring.js';
 
 export type ConversationChannel = 'pwa-rest' | 'sdk' | 'broker';
 
@@ -438,13 +440,14 @@ export class ConversationOrchestrator {
     /** Authoritative entity lists (accounts/categories). Absent = fail closed. */
     entityReader?: EntityReader;
     /**
-     * A16/R15 — the DO-scoped `JudgmentProvider` accessor (G04 default-off).
-     * Absent = no judge is consulted at all. The injected accessor must return
+     * Issue #86 — the DO-scoped `DecisionProvider` accessor (default-off).
+     * Absent = no provider is consulted at all. The injected accessor must return
      * the SAME instance per Durable Object (breaker and the 1-call-per-turn cap
      * live in it); the wiring never instantiates a provider of its own and
-     * never creates one per turn.
+     * never creates one per turn. The orchestrator does not know WHICH provider
+     * it gets — Jev, Clef or a local one are interchangeable here.
      */
-    judgmentProvider?: () => JudgmentProvider | undefined;
+    decisionProvider?: () => DecisionProvider | undefined;
     responseProvider?: TurnResponseProvider;
     /** Read-path evidence source (EvidenceCollector). Absent = legacy pass-through. */
     evidenceProvider?: (input: TurnInput, plan: TurnPlan) => Promise<EvidenceEnvelope | null>;
@@ -1140,13 +1143,48 @@ export class ConversationOrchestrator {
   ): DraftRelation | Promise<DraftRelation> {
     const negationMarker = NEGATION_MARKER.test(input.text);
     const deterministic: ContinuationRelationChoice = negationMarker ? 'negation' : 'continuation';
-    // F6: the heuristic relation is SYNCHRONOUS. The judge is consulted only
+    // F6: the heuristic relation is SYNCHRONOUS. The layer is consulted only
     // when a provider exists AND is available; default-off (no accessor, no
-    // endpoint) creates no promise and adds no await to the turn, keeping the
-    // output byte for byte identical to the pre-wiring path.
-    const provider = this.dependencies.judgmentProvider?.();
-    if (!provider?.available) return deterministic;
+    // selector env) creates no promise and adds no await to the turn, keeping
+    // the output byte for byte identical to the pre-wiring path.
+    let provider: DecisionProvider | undefined;
+    try {
+      provider = this.dependencies.decisionProvider?.();
+    } catch (_error) {
+      // A throwing accessor is an adapter bug, not a turn failure: the
+      // consultation is advisory, so it degrades to the deterministic relation.
+      this.emitDecisionConsult(input, decisionProviderErrorResolution(deterministic));
+      return deterministic;
+    }
+    if (!provider) return deterministic;
+    if (!provider.available) {
+      // Nothing was consulted, but WHY matters: a provider the operator selected
+      // and that cannot work (a typo'd name, a binding never deployed, a config
+      // it did not get) is a rollout mistake, and an invisible rollout mistake is
+      // indistinguishable from a feature that was never turned on. Default-off
+      // stays silent, so this turn keeps the pre-wiring shape byte for byte.
+      if (isDecisionMisconfigured(provider)) {
+        this.emitDecisionConsult(input, unavailableResolution(deterministic, provider));
+      }
+      return deterministic;
+    }
     return this.consultContinuationRelation(deterministic, input, draft, negationMarker, provider);
+  }
+
+  /**
+   * `decision.consulted`, fields built by the wiring's own sanitizer: enums and
+   * booleans only, so no turn content and no provider prose can ride along.
+   */
+  private emitDecisionConsult(
+    input: TurnInput,
+    resolution: DecisionResolution<ContinuationRelationChoice>,
+  ): void {
+    this.emit('decision.consulted', {
+      intentionId: input.intentionId,
+      traceId: input.traceId,
+      channel: input.channel,
+      ...decisionConsultFields(resolution),
+    });
   }
 
   private async consultContinuationRelation(
@@ -1154,29 +1192,32 @@ export class ConversationOrchestrator {
     input: TurnInput,
     draft: MutationDraftRecord,
     negationMarker: boolean,
-    provider: JudgmentProvider,
+    provider: DecisionProvider,
   ): Promise<DraftRelation> {
-    const resolution = await resolveContinuationRelation(deterministic, {
-      provider,
-      facts: {
-        // The per-TURN key is what `JUDGMENT_MAX_CALLS_PER_TURN` measures, so a
-        // redelivered turn reuses its own budget instead of buying a new call.
-        turnId: input.traceId,
-        draftStatus: draft.status,
-        pendingFieldCount: draft.missingFields.length,
-        negationMarker,
-        deterministicRelation: deterministic,
-      },
-    });
-    // Default-off must be invisible: with no endpoint the turn emits exactly the
-    // same events it emitted before the wiring existed.
-    if (!isJudgmentDefaultOff(resolution.judgment)) {
-      this.emit('judgment.consulted', {
-        intentionId: input.intentionId,
-        traceId: input.traceId,
-        channel: input.channel,
-        ...judgmentConsultFields(resolution),
+    let resolution: DecisionResolution<ContinuationRelationChoice>;
+    try {
+      resolution = await resolveContinuationRelation(deterministic, {
+        provider,
+        facts: {
+          // The per-TURN key is what `DECISION_MAX_CALLS_PER_TURN` measures, so a
+          // redelivered turn reuses its own budget instead of buying a new call.
+          turnId: input.traceId,
+          draftStatus: draft.status,
+          pendingFieldCount: draft.missingFields.length,
+          negationMarker,
+          deterministicRelation: deterministic,
+        },
       });
+    } catch (_error) {
+      // Same posture as a throwing accessor: the heuristic stays authoritative and
+      // the turn never learns that the optional layer misbehaved.
+      this.emitDecisionConsult(input, decisionProviderErrorResolution(deterministic));
+      return deterministic;
+    }
+    // Default-off must be invisible: with no selector the turn emits exactly the
+    // same events it emitted before the wiring existed.
+    if (!isDecisionDefaultOff(resolution.decision)) {
+      this.emitDecisionConsult(input, resolution);
     }
     return resolution.value;
   }
