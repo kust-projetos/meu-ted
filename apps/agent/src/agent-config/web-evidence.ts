@@ -23,6 +23,10 @@
  *   credentials, no internal/metadata host, port 80/443. A rejected item is
  *   dropped — it never fails the whole search and never reaches the prompt
  *   NOR the raw provider list handed to the model (`filterExternalResults`).
+ * - **ONE validated collection, both views.** The envelope and the result list
+ *   the model reads first are two renderings of the SAME ordered, validated,
+ *   capped collection (`validatedSources`), so a claim can never quote a marker
+ *   that the provenance block does not carry — the two sides cannot drift.
  * - **Bounded excerpts.** Titles and excerpts are scrubbed with the same
  *   minimisation and hard-capped (cut on a Unicode boundary, so a truncated
  *   emoji never leaves a lone surrogate); the rendered block has its own
@@ -209,33 +213,67 @@ const publicationDate = (value: unknown): string | undefined =>
 
 const freeze = <T>(value: T): T => Object.freeze(value);
 
+/** A validated candidate of the ONE shared collection, in sequence order. */
+type ValidatedSource = Readonly<{
+  /** Claim ref the envelope renders (`F1`); the sequence number is assigned HERE only. */
+  ref: string;
+  /** The same number as the model cites it (`[F1]`). */
+  marker: string;
+  /** Validated final URL (http/https, public host, port 80/443). */
+  url: URL;
+  /** RAW provider publication date; each consumer applies its own rule to it. */
+  publishedAt: unknown;
+  /** Raw provider item — title/snippet are bounded/neutralised per consumer. */
+  item: WebEvidenceSourceInput;
+}>;
+
+/**
+ * THE single canonical collection: ordered, validated and capped. Both the
+ * envelope and the result list the model reads first map over this very list, so
+ * the model can never receive a marker that has no line in the provenance block.
+ *
+ * - `WEB_EVIDENCE_MAX_SOURCES` is applied HERE and nowhere else; the sequence
+ *   numbers are assigned HERE and nowhere else.
+ * - Survivors-only numbering: a rejected item is skipped and does NOT consume a
+ *   number, so the markers stay contiguous and always point at a cited source.
+ * - `publishedAt` travels RAW: the envelope parse-validates it, the result list
+ *   passes the trimmed string through. Idempotent by construction, which is why
+ *   the caller may feed an already-filtered list back into the envelope.
+ */
+const validatedSources = (items: readonly WebEvidenceSourceInput[] | undefined): ValidatedSource[] => {
+  const out: ValidatedSource[] = [];
+  for (const item of items ?? []) {
+    if (out.length >= WEB_EVIDENCE_MAX_SOURCES) break;
+    const url = validatedUrl(item?.url);
+    if (!url) continue;
+    const ref = `F${out.length + 1}`;
+    out.push(freeze({ ref, marker: `[${ref}]`, url, publishedAt: item?.publishedAt, item }));
+  }
+  return out;
+};
+
 /**
  * Builds the envelope from results already in hand. Invalid items are dropped
  * silently (the search itself succeeded); with no valid source the envelope is
  * `unavailable` and carries the DECLARED limitation — never a fabricated one.
+ * The sources come from the SAME canonical collection `filterExternalResults`
+ * reads, so `[F1]` here and `[F1]` there are the same source by construction.
  */
 export const buildWebEvidenceEnvelope = (input: WebEvidenceEnvelopeInput): WebEvidenceEnvelope => {
   const retrievedAt = (input.now?.() ?? new Date()).toISOString();
   const query = sanitizeExternalQuery(input.query);
-  const sources: WebEvidenceSource[] = [];
-  for (const item of input.items ?? []) {
-    if (sources.length >= WEB_EVIDENCE_MAX_SOURCES) break;
-    const url = validatedUrl(item?.url);
-    if (!url) continue;
-    const title = boundedText(item?.title, WEB_EVIDENCE_TITLE_MAX_CHARS) || url.toString();
-    const publishedAt = publicationDate(item?.publishedAt);
-    sources.push(
-      freeze({
-        ref: `F${sources.length + 1}`,
-        url: url.toString(),
-        host: url.hostname,
-        title,
-        excerpt: boundedText(item?.snippet, WEB_EVIDENCE_EXCERPT_MAX_CHARS),
-        retrievedAt,
-        ...(publishedAt === undefined ? {} : { publishedAt }),
-      }),
-    );
-  }
+  const sources: WebEvidenceSource[] = validatedSources(input.items).map((validated) => {
+    const publishedAt = publicationDate(validated.publishedAt);
+    return freeze({
+      ref: validated.ref,
+      url: validated.url.toString(),
+      host: validated.url.hostname,
+      title: boundedText(validated.item?.title, WEB_EVIDENCE_TITLE_MAX_CHARS) || validated.url.toString(),
+      excerpt: boundedText(validated.item?.snippet, WEB_EVIDENCE_EXCERPT_MAX_CHARS),
+      retrievedAt,
+      ...(publishedAt === undefined ? {} : { publishedAt }),
+    });
+  });
   const status = sources.length > 0 ? 'ok' : 'unavailable';
   const limitation =
     status === 'ok' ? undefined : (input.limitation?.trim() || WEB_EVIDENCE_NO_SOURCE_MESSAGE);
@@ -290,30 +328,31 @@ export type ExternalResultItem = {
  * URL validation and same marker neutralisation as the envelope; keys/shape
  * unchanged for the existing consumers, plus the citation marker.
  *
- * **A12 follow-up — marcadores `[F1]`, `[F2]`…** The numbering is the SAME
- * sequence the envelope assigns (same order, same validation), so the marker a
- * claim carries and the provenance line it points at can never disagree. A
- * rejected item does NOT consume a number: markers follow the SURVIVORS, which
- * is what stops the model from citing a source that was dropped.
+ * **A12 follow-up — marcadores `[F1]`, `[F2]`…** Built from the SAME canonical
+ * collection as the envelope (`validatedSources`): same order, same validation,
+ * same `WEB_EVIDENCE_MAX_SOURCES` cap, same sequence numbers. So a marker the
+ * model can quote is, by construction, a marker that EXISTS in the provenance
+ * block — a result above the cap is dropped here exactly as it is there, and a
+ * rejected item does NOT consume a number (markers follow the SURVIVORS). What
+ * stops the model from citing a source that was dropped, or one that was never
+ * rendered.
  */
-export const filterExternalResults = (items: readonly WebEvidenceSourceInput[]): ExternalResultItem[] => {
-  const out: ExternalResultItem[] = [];
-  for (const item of items ?? []) {
-    const url = validatedUrl(item?.url);
-    if (!url) continue;
-    const publishedAt = typeof item?.publishedAt === 'string' && item.publishedAt.trim() !== ''
-      ? item.publishedAt.trim()
-      : undefined;
-    out.push({
-      marker: `[F${out.length + 1}]`,
-      title: neutraliseMarkers(String(item?.title ?? '')),
-      url: url.toString(),
-      snippet: neutraliseMarkers(String(item?.snippet ?? '')),
+export const filterExternalResults = (items: readonly WebEvidenceSourceInput[]): ExternalResultItem[] =>
+  validatedSources(items).map((validated) => {
+    // Raw provider string, trimmed: the envelope re-validates it and drops an
+    // unparseable value, so the two views cannot disagree about the date.
+    const publishedAt =
+      typeof validated.publishedAt === 'string' && validated.publishedAt.trim() !== ''
+        ? validated.publishedAt.trim()
+        : undefined;
+    return {
+      marker: validated.marker,
+      title: neutraliseMarkers(String(validated.item?.title ?? '')),
+      url: validated.url.toString(),
+      snippet: neutraliseMarkers(String(validated.item?.snippet ?? '')),
       ...(publishedAt === undefined ? {} : { publishedAt }),
-    });
-  }
-  return out;
-};
+    };
+  });
 
 /**
  * Claim→source block for the prompt: sanitised query, numbered sources with

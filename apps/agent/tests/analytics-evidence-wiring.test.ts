@@ -71,13 +71,38 @@ const readTools = (overrides: Partial<ChannelReadTools>): ChannelReadTools => {
   } as ChannelReadTools;
 };
 
+/**
+ * The REAL `GET /analytics/kpis` body (plus the `success: true` the generated
+ * projection adds for a spec with no `result`). Flat by construction: the route
+ * spreads `period`, the totals and the G03 proof envelope on the same object —
+ * there is no nested `proof` object, and NO `balanceCents` (net worth is
+ * `netLiquidBalanceCents`/`netWorthCents`). The old fixture carried a
+ * `balanceCents` the API never sends and omitted every field it does.
+ */
 const kpisPayload = (basis: 'liquidez' | 'competencia' = 'competencia') => ({
   success: true,
   period: { from: '2026-01-01', to: '2026-01-31' },
-  previousPeriod: { from: '2025-12-01', to: '2025-12-31' },
+  previousPeriod: { from: '2025-12-02', to: '2025-12-31' },
+  accountsTotalCents: 180000,
+  dueSoonCents: 0,
+  openInvoices: { committedCents: 0, limitCents: 500000, utilizationPct: 0 },
+  netLiquidBalanceCents: 180000,
+  savingsRatePct: 12.5,
+  savingsRateTargetPct: 20,
+  previousSavingsRatePct: 5,
+  fixedVsDiscretionary: {
+    scope: 'household',
+    fixedCents: 90000,
+    discretionaryCents: 120000,
+    fixedPctOfIncome: 37.5,
+    subscriptionsCents: 90000,
+  },
   incomeCents: 240000,
   expenseCents: 210000,
-  balanceCents: 30000,
+  previousIncomeCents: 200000,
+  previousExpenseCents: 190000,
+  netWorthCents: 180000,
+  // Proof envelope (G03), flat on the same object.
   transactionCount: 18,
   asOf: '2026-02-01T12:00:00.000Z',
   basis,
@@ -86,6 +111,7 @@ const kpisPayload = (basis: 'liquidez' | 'competencia' = 'competencia') => ({
   emptyReason: null,
 });
 
+/** The REAL `GET /analytics/category-breakdown` body: `slices` + the same proof. */
 const breakdownPayload = (totalCents: number) => ({
   success: true,
   period: { from: '2026-01-01', to: '2026-01-31' },
@@ -94,6 +120,12 @@ const breakdownPayload = (totalCents: number) => ({
   slices: [
     { categoryId: '00000000-0000-4000-8000-000000000001', name: 'Alimentação', totalCents: 100000, pct: 50, color: '#0E8C5A' },
   ],
+  transactionCount: 1,
+  asOf: '2026-02-01T12:00:00.000Z',
+  basis: 'liquidez' as const,
+  semanticsVersion: '1',
+  effectiveFilter: { period: 'custom', from: '2026-01-01', to: '2026-01-31', accountId: null, kind: 'expense' },
+  emptyReason: null,
 });
 
 const envelopeFor = async (operation: string, tools: Partial<ChannelReadTools>) => {
@@ -157,7 +189,9 @@ describe('envelope de analytics no caminho de evidência do turno (A04/A09 pós-
         incomeCents: 0,
         expenseCents: 0,
         transactionCount: 0,
-        emptyReason: 'no_entries_in_period',
+        // Closed enum (apps/api/src/analytics/types.ts): 'no_transactions_in_period'
+        // is what `kpis` declares for an empty window.
+        emptyReason: 'no_transactions_in_period',
       }),
     });
     const item = envelope.items[0];

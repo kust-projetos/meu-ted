@@ -120,6 +120,7 @@ describe('marcadores de citação [F1]/[F2] nos resultados (A12 follow-up)', () 
     }));
     const results = filterExternalResults(many);
     const rendered = renderEvidenceForPrompt(buildWebEvidenceEnvelope({ query: 'selic', items: many }));
+    expect(results).toHaveLength(WEB_EVIDENCE_MAX_SOURCES);
     for (const source of [1, 2, 3]) {
       expect(results[source - 1]?.marker).toBe(`[F${source}]`);
       expect(rendered).toContain(`[F${source}] | f${source - 1}.test`);
@@ -144,6 +145,99 @@ describe('marcadores de citação [F1]/[F2] nos resultados (A12 follow-up)', () 
     };
     expect(result.results?.map((item) => item.marker)).toEqual(['[F1]', '[F2]']);
     expect(result.evidence).toContain('[F1]');
+    expect(result.evidence).toContain('publicado: 2026-10-01');
+  });
+});
+
+describe('os marcadores nunca ultrapassam a proveniência (teto único de fontes)', () => {
+  const many = Array.from({ length: WEB_EVIDENCE_MAX_SOURCES + 2 }, (_, index) => ({
+    title: `Fonte ${index}`,
+    url: `https://f${index}.test/x`,
+    snippet: `trecho ${index}`,
+  }));
+  const rejected = [
+    { title: 'javascript', url: 'javascript:alert(1)', snippet: 'x' },
+    { title: 'metadados', url: 'http://169.254.169.254/latest', snippet: 'y' },
+  ];
+  /** Marcadores `[Fn]` realmente presentes num texto qualquer. */
+  const markersIn = (value: string): string[] => value.match(/\[F\d+\]/g) ?? [];
+
+  it('RED: 5 fontes válidas ⇒ a lista entregue ao modelo tem exatamente o teto', () => {
+    const results = filterExternalResults(many);
+    expect(results).toHaveLength(WEB_EVIDENCE_MAX_SOURCES);
+    expect(results.map((item) => item.marker)).toEqual(['[F1]', '[F2]', '[F3]']);
+  });
+
+  it('RED: todo marcador da lista existe na proveniência renderizada', () => {
+    const results = filterExternalResults(many);
+    const rendered = renderEvidenceForPrompt(buildWebEvidenceEnvelope({ query: 'selic', items: many }));
+    for (const item of results) {
+      expect(rendered).toContain(item.marker);
+    }
+  });
+
+  it('RED: nenhum marcador acima do teto existe — nem na lista, nem na evidência', () => {
+    const results = filterExternalResults(many);
+    const rendered = renderEvidenceForPrompt(buildWebEvidenceEnvelope({ query: 'selic', items: many }));
+    const beyond = `[F${WEB_EVIDENCE_MAX_SOURCES + 1}]`;
+    expect(markersIn(JSON.stringify(results))).not.toContain(beyond);
+    expect(markersIn(rendered)).not.toContain(beyond);
+    expect(rendered).not.toMatch(/\[F4\]/);
+    // Varredura explícita: nenhum `[Fn]` acima do teto em nenhum dos dois lados.
+    for (const marker of markersIn(`${JSON.stringify(results)}\n${rendered}`)) {
+      expect(Number(marker.slice(2, -1))).toBeLessThanOrEqual(WEB_EVIDENCE_MAX_SOURCES);
+    }
+  });
+
+  it('RED: rejeitados não consomem número NEM roubam a cota das 5 válidas', () => {
+    const results = filterExternalResults([...rejected, ...many]);
+    expect(results).toHaveLength(WEB_EVIDENCE_MAX_SOURCES);
+    expect(results.map((item) => item.marker)).toEqual(['[F1]', '[F2]', '[F3]']);
+    expect(results.map((item) => item.url)).toEqual(['https://f0.test/x', 'https://f1.test/x', 'https://f2.test/x']);
+  });
+
+  it('RED: a data do provedor sobrevive ao teto nos DOIS lados (item + publicado:)', () => {
+    const dated = [
+      { title: 'Fonte com data', url: 'https://com-data.test/a', snippet: 'x', publishedAt: '2026-10-01T09:00:00Z' },
+      ...many,
+    ];
+    const results = filterExternalResults(dated);
+    expect(results).toHaveLength(WEB_EVIDENCE_MAX_SOURCES);
+    expect(results[0]?.publishedAt).toBe('2026-10-01T09:00:00Z');
+    const rendered = renderEvidenceForPrompt(buildWebEvidenceEnvelope({ query: 'selic', items: dated }));
+    expect(rendered).toContain('publicado: 2026-10-01T09:00:00Z');
+  });
+
+  it('RED: envelope montado a partir da lista JÁ filtrada é o mesmo (validação idempotente)', () => {
+    const results = filterExternalResults(many);
+    const envelope = buildWebEvidenceEnvelope({ query: 'selic', items: results });
+    expect(envelope.sources).toHaveLength(results.length);
+    expect(envelope.sources.map((source) => `[${source.ref}]`)).toEqual(results.map((item) => item.marker));
+  });
+
+  it('RED: a tool exposta não entrega marcador órfão quando o provider devolve mais que o teto', async () => {
+    const fetchImpl = tavilyFetch(
+      many.map((item, index) => ({
+        title: item.title,
+        url: item.url,
+        content: item.snippet,
+        published_date: index === 0 ? '2026-10-01' : undefined,
+      })),
+    );
+    const tools = buildExposedTools(['web_search'], {
+      ...baseCtx,
+      webEnv: { TAVILY_API_KEY: 'tv-test' },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = (await (
+      tools['web_search'] as { execute: (p: unknown) => Promise<unknown> }
+    ).execute({ query: 'taxa selic hoje' })) as {
+      results?: Array<{ marker?: string }>;
+      evidence?: string;
+    };
+    expect(result.results).toHaveLength(WEB_EVIDENCE_MAX_SOURCES);
+    for (const item of result.results ?? []) expect(result.evidence).toContain(item.marker ?? '');
+    expect(result.evidence).not.toMatch(/\[F4\]/);
     expect(result.evidence).toContain('publicado: 2026-10-01');
   });
 });
