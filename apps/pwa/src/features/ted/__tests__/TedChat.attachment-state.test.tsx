@@ -132,7 +132,10 @@ describe("TedChat — anexo pendente nunca some em silêncio (F6)", () => {
 
   it("com upload EM VOO o envio é bloqueado (o anexo não é descartado em silêncio)", async () => {
     vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "1");
-    let releaseUpload: (() => void) | null = null;
+    // Typed as the union at the initializer: TS control-flow does not track
+    // the assignment inside the mock closure below, and a `null`-narrowed
+    // variable makes the optional call at the release step fail (TS2349).
+    let releaseUpload = null as (() => void) | null;
     vi.mocked(agentClient.uploadAttachment).mockImplementation(
       () => new Promise((resolve) => {
         releaseUpload = () => resolve({ ref: "att_1111111111111111", kind: "image", name: "nota.png", size: 3 });
