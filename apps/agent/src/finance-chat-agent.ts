@@ -15,12 +15,15 @@ import {
   TED_SYSTEM_PROMPT_LEGACY,
   initializeMemorySchema,
   initializeSessionSchema,
+  initializeUserSkillsSchema,
   isMemoryEnabled,
+  listActiveUserSkills,
   recallMemories,
   renderMemoryBlock,
   compactContext,
   extractiveSummary,
   toContextTurns,
+  toSelectableSkills,
   learnFromTurn,
   buildMemoryTools,
   bumpTurnCount,
@@ -29,7 +32,9 @@ import {
   setMemoryEnabled,
   currentSession,
   endSession,
+  type CategoryCatalogEntry,
   type MemorySql,
+  type Skill,
 } from "./agent-config/index.js";
 import {
   checkUsageLimit,
@@ -794,6 +799,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     return decisionProviderForDo(this, { env: (this.env ?? {}) as DecisionEnv });
   }
 
+  // A18 — one-time schema init guard and the per-DO category catalog cache
+  // used by user-skill projection (see `loadUserSkills`). NOTE: deliberately
+  // NOT field-initialized — prototype-built test agents never run the class
+  // constructor, so the accessor below lazily creates them (`undefined`
+  // is a valid resting state for both).
+  private userSkillsSchemaReady?: boolean;
+  private userSkillCatalogCache?: Map<string, CategoryCatalogEntry[]>;
+
   /** DO SQLite handle or null (tests, degraded storage). */
   private durableSql(): { exec<T>(query: string, ...bindings: unknown[]): Iterable<T> } | null {
     // Agents SDK: durable SQLite lives on the DO context (ctx.storage.sql).
@@ -845,6 +858,63 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       return renderMemoryBlock(items);
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * A18 — active user skills of the workspace, projected into the core
+   * `Skill` shape. This is the RUNTIME wiring the cognition seam was missing:
+   * `assembleCognition({ userSkills })` existed but no call site fed it.
+   *
+   * Cost discipline: zero SQL work beyond one SELECT when the workspace has no
+   * active skills (the overwhelming default), and the prompt stays byte-for-
+   * byte identical in that case. The category catalog (needed only to project
+   * an existing rule) is fetched once per DO instance per workspace — rules
+   * instruct the model to re-confirm the category via `list_categories`
+   * before informing a launch, so a stale cache can never write anything.
+   *
+   * Safety shape (unchanged from A18): a user skill is DELIMITED DATA with
+   * `tools: []` — it can never add a tool, capability or policy; candidate,
+   * revoked and inactive versions never load; promotion still requires
+   * replay + safety + human approval. Best-effort: any failure degrades to no
+   * user skills and never breaks the turn.
+   */
+  private async loadUserSkills(input: { workspaceId: string; actorId: string; intentionId: string }): Promise<Skill[]> {
+    const sql = this.memorySql();
+    if (!sql) return [];
+    try {
+      if (this.userSkillsSchemaReady !== true) {
+        initializeUserSkillsSchema(sql as unknown as Parameters<typeof initializeUserSkillsSchema>[0]);
+        this.userSkillsSchemaReady = true;
+      }
+      const versions = listActiveUserSkills(sql as unknown as Parameters<typeof listActiveUserSkills>[0], input.workspaceId);
+      if (versions.length === 0) return [];
+      if (!this.userSkillCatalogCache) this.userSkillCatalogCache = new Map<string, CategoryCatalogEntry[]>();
+      let catalog = this.userSkillCatalogCache.get(input.workspaceId);
+      if (!catalog) {
+        const reader = await this.entityReaderForTurn({
+          workspaceId: input.workspaceId,
+          actorId: input.actorId,
+          role: "member",
+          deviceId: null,
+          intentionId: input.intentionId,
+          text: "",
+          channel: "pwa-rest",
+        } as unknown as TurnInput);
+        const categories = await reader.listCategories();
+        const projected: CategoryCatalogEntry[] = [];
+        for (const category of categories) {
+          const id = typeof (category as { id?: unknown }).id === "string" ? (category as { id: string }).id : "";
+          const name = typeof (category as { name?: unknown }).name === "string" ? (category as { name: string }).name : "";
+          if (id && name) projected.push({ id, name });
+        }
+        if (projected.length === 0) return [];
+        catalog = projected;
+        this.userSkillCatalogCache.set(input.workspaceId, catalog);
+      }
+      return toSelectableSkills(versions, catalog);
+    } catch {
+      return [];
     }
   }
 
@@ -1085,8 +1155,16 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       actorId: input.actorId,
       intentionId: input.intentionId,
     });
+    // A18: active user skills compete for the SAME skill budget as core
+    // skills. Empty (the default workspace) keeps the prompt byte-identical.
+    const userSkills = await this.loadUserSkills({
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      intentionId: input.intentionId,
+    });
     const cognition = assembleCognition(input.text, {
       webEnv: (this.env ?? {}) as Record<string, string | undefined>,
+      ...(userSkills.length > 0 ? { userSkills } : {}),
     });
 
     // REST keeps the buffered relay as a provider transport. It is invoked
@@ -1615,13 +1693,20 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         const modelId = target.modelName;
         // Cognitive layer (Parts A+B, item 15): versioned persona + skills +
         // playbook + workspace memory assembled per turn, with the model's
-        // tools actually wired.
+        // tools actually wired. A18: active user skills compete for the SAME
+        // budget; empty keeps the prompt byte-identical.
         const sql = this.memorySql();
         const memoryWorkspace = sdkWorkspace;
         const memoryContext = sql ? this.loadMemoryContext(memoryWorkspace, actorId, text) : null;
+        const userSkills = await this.loadUserSkills({
+          workspaceId: memoryWorkspace,
+          actorId,
+          intentionId,
+        });
         const cognition = assembleCognition(text, {
           webEnv: (this.env ?? {}) as Record<string, string | undefined>,
           ...(memoryContext ? { hooks: { memoryContext } } : {}),
+          ...(userSkills.length > 0 ? { userSkills } : {}),
         });
         if (isCodexProviderId(providerId)) {
           const brokerText = await runCodexBrokerText((this.env ?? {}) as CodexBrokerEnv, {
