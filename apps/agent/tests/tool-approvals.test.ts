@@ -54,7 +54,7 @@ describe('explicit mutation intent', () => {
 });
 
 describe('deterministic auto-execution eligibility', () => {
-  const eligible = { tool: 'transactions.expense.create', missingFields: [], ambiguity: null, latestActorText: 'Registre almoço por R$ 30' };
+  const eligible = { tool: 'transactions.expense.create', missingFields: [], ambiguity: null, latestActorText: 'Registre almoço por R$ 30', attachments: [] as readonly unknown[] };
   it('depends only on the structured tool, completion, ambiguity, and latest actor text', () => {
     expect(isAutoExecutionEligible(eligible)).toBe(true);
     expect(isAutoExecutionEligible({ ...eligible, tool: 'transactions.card_purchase.create' })).toBe(false);

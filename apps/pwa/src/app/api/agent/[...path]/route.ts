@@ -33,7 +33,18 @@ async function readProxyEnv(): Promise<ProxyEnv> {
 
 /** Upstream budget: generous for streaming/LLM agent responses. */
 const UPSTREAM_TIMEOUT_MS = 120_000;
+/** Chat/JSON RPC budget (unchanged): short text plus metadata-only attachments. */
 const MAX_BODY_BYTES = 2_097_152;
+/**
+ * A19: the A13 binary attachment upload route gets its OWN ceiling, mirroring
+ * the per-kind ceilings of `ATTACHMENT_LIMITS` (apps/agent/src/attachments/
+ * types.ts) — 10 MB image, 10 MB audio, 15 MB pdf. The Worker derives the same
+ * value from that contract; this copy exists because the PWA workspace has no
+ * dependency on the agent workspace, so a literal here would silently drift.
+ * The proxy only bounds memory: the per-kind validation stays in the DO.
+ */
+const ATTACHMENT_KIND_MAX_BYTES = { image: 10_485_760, pdf: 15_728_640, audio: 10_485_760 } as const;
+const MAX_ATTACHMENT_BODY_BYTES = Math.max(...Object.values(ATTACHMENT_KIND_MAX_BYTES));
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -45,6 +56,11 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 
 type RouteContext = { params: Promise<{ path: string[] }> };
+
+/** The A13 binary upload route is the only path with the attachment ceiling. */
+function isAttachmentUploadPath(path: string[]): boolean {
+  return path.length >= 2 && path[path.length - 1] === "attachments" && path[path.length - 2] === "rpc";
+}
 
 function upstreamUrl(agentOrigin: string, path: string[], search: string): string {
   const encodedPath = path.map((segment) => encodeURIComponent(segment)).join("/");
@@ -61,6 +77,11 @@ function forwardHeaders(request: Request, env: ProxyEnv): Headers {
     "x-workspace-id",
     "x-agent-connection-token",
     "cache-control",
+    // A19: the A13 upload route carries the kind and display name as claims;
+    // they are validated server-side against the sniffed bytes and never used
+    // as a storage key. Identity headers are still stripped (not listed).
+    "x-ted-attachment-kind",
+    "x-ted-attachment-name",
   ]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
@@ -108,13 +129,18 @@ async function proxy(request: Request, context: RouteContext): Promise<NextRespo
   if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !hasValidBrowserOrigin(request, env)) {
     return upstreamErrorResponse(403, "csrf.origin_mismatch", "Origem da requisição não autorizada.");
   }
+  const { path } = await context.params;
+  // A19: the ceiling is PER ROUTE. The A13 binary upload carries real bytes
+  // (10/15 MB per the agent contract), so it gets the attachment budget;
+  // every other route keeps the small chat budget. The Worker applies the same
+  // split on its side — both hops must agree or a valid upload is rejected.
+  const maxBodyBytes = isAttachmentUploadPath(path) ? MAX_ATTACHMENT_BODY_BYTES : MAX_BODY_BYTES;
   const declaredLength = Number(request.headers.get("content-length") ?? 0);
-  if (declaredLength > MAX_BODY_BYTES) {
+  if (declaredLength > maxBodyBytes) {
     return upstreamErrorResponse(413, "request.body_too_large", "O corpo da requisição excede o limite permitido.");
   }
-  const { path } = await context.params;
   const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
-  if (body && body.byteLength > MAX_BODY_BYTES) {
+  if (body && body.byteLength > maxBodyBytes) {
     return upstreamErrorResponse(413, "request.body_too_large", "O corpo da requisição excede o limite permitido.");
   }
   let upstream: Response;

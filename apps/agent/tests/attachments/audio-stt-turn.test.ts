@@ -326,6 +326,7 @@ it("no n√≠vel do orquestrador, o MESMO texto transcrito nunca autoriza/executa ‚
         missingFields: [],
         ambiguity: null,
         latestActorText: composed,
+        attachments: [],
       }),
     ).toBe(false);
   });
@@ -347,6 +348,7 @@ it("no n√≠vel do orquestrador, o MESMO texto transcrito nunca autoriza/executa ‚
         missingFields: [],
         ambiguity: null,
         latestActorText: negacao,
+        attachments: [],
       }),
     ).toBe(false);
   });

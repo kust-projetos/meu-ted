@@ -377,11 +377,20 @@ describe("A13 — expiração/cleanup idempotente", () => {
     expect(await storage.get(live.ref)).not.toBeNull();
     expect(await storage.get(doomed.ref)).toBeNull();
 
-    // Best-effort: uma falha de storage NÃO escapa para o caller.
+    // Best-effort: uma falha de storage NÃO escapa para o caller. A19: o seam
+    // do sweep agora é `sweepByExpiry` (que reporta onde parou), então é ele
+    // que o double quebra.
     const broken: AttachmentStorage = {
       ...createMemoryAttachmentStorage(),
-      listByExpiry: async () => { throw new Error("r2 down"); },
-      delete: async () => { throw new Error("r2 down"); },
+      sweepByExpiry: async () => {
+        throw new Error("r2 down");
+      },
+      listByExpiry: async () => {
+        throw new Error("r2 down");
+      },
+      delete: async () => {
+        throw new Error("r2 down");
+      },
     };
     await expect(cleanupExpiredAttachments(broken, now)).resolves.toEqual({ scanned: 0, deleted: 0, failed: true });
   });

@@ -12,6 +12,7 @@
  */
 
 import {
+  isContentForgotten,
   isFingerprintTombstoned,
   isMemoryEnabled,
   memoryFingerprint,
@@ -96,6 +97,16 @@ export const learnFromTurn = async (sql: MemorySql, input: LearnTurnInput): Prom
     ?? normalizeMemoryScope({ workspaceId: input.workspaceId, actor: input.actorId, shared: false });
   const learned: MemoryItem[] = [];
   const persist = (candidate: LearningCandidate): void => {
+    // A19/AC26b — a forgotten item's content is never re-taught by the job.
+    if (
+      isContentForgotten(sql, {
+        workspaceId: input.workspaceId,
+        actor: input.actorId,
+        content: candidate.content,
+      })
+    ) {
+      return;
+    }
     const result = rememberFact(sql, {
       workspaceId: input.workspaceId,
       actor: input.actorId,

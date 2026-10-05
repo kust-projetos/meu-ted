@@ -381,3 +381,66 @@ para outro domínio sobre o mesmo trio nunca é reutilizável como ref. Como o r
 `constantTimeEquals` (`storage.ts`), que percorre o comprimento inteiro em vez
 de sair no primeiro byte diferente; divergência entre o ref da chave e o ref dos
 metadados continua sendo um **miss**, nunca um hit cross-identity.
+
+## Closure A19 (2026-10-05, issue #89) — caminho real, tetos, imunidade estrutural, cleanup, A17/A18
+
+- **`/rpc/attachments` no gateway real.** `isRestRpc` inclui a rota: o upload
+  atravessa Worker (auth → workspace canônico → tetos → stamping) → DO →
+  ingest. Identidade vem EXCLUSIVAMENTE da autenticação do Worker — headers
+  `x-agent-*` do cliente são sobrescritos, nunca confiados. Teto de corpo
+  **por rota**: chat/RPC JSON mantém 2 MB (`MAX_RPC_BODY_BYTES`); o upload tem
+  teto próprio `MAX_ATTACHMENT_BODY_BYTES`, derivado de `ATTACHMENT_LIMITS`
+  (nunca literal). O proxy same-origin da PWA (`api/agent/[...path]`) aplica o
+  MESMO split — os dois hops têm de concordar. Binding R2 continua passo de
+  rollout: sem ele, 503 fail-closed.
+- **Texto tipado × metadata é contrato estrutural.** `body.text` carrega
+  SOMENTE o que o humano digitou (a PWA não concatena mais `[tipo: nome]`);
+  o anexo viaja exclusivamente como `{type, ref, name}` no array `attachments`.
+  Servidor: `decisionText` continua nascendo server-side (`typedText`) e
+  `body.decisionText` segue ignorado.
+- **Imunidade de autoexecute é ESTRUTURAL.** `isAutoExecutionEligible` recebe
+  os anexos do turno (`attachments`) e recusa QUALQUER presença — antes de
+  tipo, estado, provider, texto ou confiança; os dois pontos de entrada do
+  orquestrador passam `input.attachments`; e o cliente elevado nem é construído
+  quando o turno tem anexo (gate por PRESENÇA, não por dado extraído — o gate
+  antigo por `attachmentData.length` deixava o fast path alcançável quando a
+  extração era vazia, ex. capability off). Invariante fixada em teste
+  (`channel-invariant.test.ts`): assinatura com veto e todo call site passando
+  os anexos.
+- **Cleanup TTL retomável.** O sweep persiste o cursor da última página
+  consumida no KV do DO via `ctx.storage` (`AttachmentCleanupCheckpoint` — o
+  MESMO accessor de `durableSql()`; `state` nunca carrega storage no Agents
+  SDK): sem isso cada varredura recomeçava no prefixo e expirados além de
+  `ATTACHMENT_CLEANUP_MAX_PAGES` páginas de objetos vivos NUNCA eram
+  alcançados. Wrap-around limpa o checkpoint; delete falho SEGURA a posição
+  (deletes são idempotentes); cursor inválido cai no prefixo sem quebrar o
+  upload; sem checkpoint, o comportamento antigo permanece. Continua
+  piggyback no upload (alarm é decisão de rollout).
+- **A17 no runtime.** O learning pós-turno roda SÓ depois de resposta
+  publicada e com o texto real — o USUÁRIO digitado (`unredactedText`), nunca
+  o composto com dado extraído de anexo (conteúdo de anexo é DADO e não vira
+  memória), nos caminhos REST e SDK; erro/abort/fail-closed/vazio não ensinam.
+  Tombstone DUPLO: fingerprint (correções) e `isContentForgotten` (conteúdo,
+  por similaridade ≥0.55, escopo por ator) — o job não re-ensaia o esquecido
+  no escopo consultado; residuais honestos: paráfrase abaixo do threshold pode
+  ser re-aprendida e o tombstone de conteúdo não cobre a camada shared
+  (nenhum writer de runtime usa `actor=''` hoje). O tool explícito
+  `remember_fact` pode recriar por declaração deliberada. Budgets intocados
+  (heurística todo turno, LLM 1/5, extractor com timeout próprio de 10 s).
+- **`forget_memory` existe.** "Esqueça isso" resolve candidatos pelo RECALL do
+  chamador (workspace + actor + shared visível): memória privada de outro ator
+  é indistinguível de inexistente; cross-workspace é inalcançável; ambiguidade
+  recusa pedindo especificidade; respostas nunca carregam ids internos; o
+  esquecimento aplica invalidate + cascade + tombstone. Residual: `forgetMemory`
+  no store é workspace-scoped — a fronteira de ator vive na RESOLUÇÃO pelo
+  recall; qualquer chamador futuro que passe um id de outra fonte precisaria
+  endurecer o próprio store.
+- **A18 no runtime.** `loadUserSkills` carrega skills ativas do workspace e
+  projeta via `toSelectableSkills` nos DOIS call sites de `assembleCognition`.
+  Workspace sem skills: um SELECT e prompt byte a byte idêntico (sem leitura
+  de catálogo). Skill de usuário é DADO delimitado com `tools: []` — nunca
+  capability; candidate/revogada/inativa nunca carregam; promoção exige replay
+  + safety + humano (intocado). Catálogo de categorias cacheado por DO
+  (a regra manda reconfirmar com `list_categories`).
+
+

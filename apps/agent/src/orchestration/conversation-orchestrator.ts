@@ -1819,7 +1819,12 @@ export class ConversationOrchestrator {
       identity,
       idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool),
     });
-    const eligible = isAutoExecutionEligible({ tool, missingFields: [], ambiguity: plan.ambiguity, latestActorText: input.text });
+    // A19 (F1): the turn's attachments are passed as an INPUT. Presence alone
+    // vetoes eligibility — no state, type, provider or text is consulted, so an
+    // attachment whose extraction came back empty (capability off, provider
+    // down, `skipped_budget`) can never reach the fast path on a bare typed
+    // imperative. The no-attachment path is byte-for-byte unchanged.
+    const eligible = isAutoExecutionEligible({ tool, missingFields: [], ambiguity: plan.ambiguity, latestActorText: input.text, attachments: input.attachments });
     if (eligible && !proposal.existing) {
       const duplicateSuspected = await client.duplicateSuspectedStrict({
         kind: parsed.kind, description: parsed.description, amountCents: parsed.amountCents,
@@ -2377,7 +2382,9 @@ export class ConversationOrchestrator {
         identity,
         idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool),
       });
-      if (!proposal.existing && isAutoExecutionEligible({ tool, missingFields: [], ambiguity: plan.ambiguity, latestActorText: input.text }) &&
+      // A19 (F1): same attachment veto as the draft path — the two autoexecute entry
+      // points must not disagree about what counts as an ineligible turn.
+      if (!proposal.existing && isAutoExecutionEligible({ tool, missingFields: [], ambiguity: plan.ambiguity, latestActorText: input.text, attachments: input.attachments }) &&
         !(await client.duplicateSuspectedStrict({ kind: parsed.kind, description: parsed.description, amountCents: parsed.amountCents, date: parsed.date, accountId: verified.accountId }))) {
         const elevated = this.dependencies.autoExecutionClient?.();
         if (elevated) {

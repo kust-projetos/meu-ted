@@ -271,6 +271,7 @@ describe("A15/AC23 — injeção via conteúdo no PDF (dado, nunca instrução)"
         missingFields: [],
         ambiguity: null,
         latestActorText: composed,
+        attachments: [],
       }),
     ).toBe(false);
   });
@@ -286,6 +287,7 @@ describe("A15/AC23 — injeção via conteúdo no PDF (dado, nunca instrução)"
         missingFields: [],
         ambiguity: null,
         latestActorText: fromPdf,
+        attachments: [],
       }),
     ).toBe(false);
   });

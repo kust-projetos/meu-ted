@@ -629,6 +629,40 @@ export const isFingerprintTombstoned = (
 };
 
 /**
+ * A19/AC26b — CONTENT-level tombstone for the learning job.
+ *
+ * `isFingerprintTombstoned` only protects rows that carry a correction
+ * fingerprint. Heuristic/LLM learnings have `fingerprint: null`, and
+ * `rememberFact`'s dedup deliberately skips invalidated rows (it must not bump
+ * a forgotten row back to life) — which means the NEXT heuristic turn would
+ * re-insert the very content the user just asked to forget. This check closes
+ * that resurrection: the JOB refuses to teach content similar to a forgotten
+ * row. The explicit `remember_fact` tool path does NOT consult this — a
+ * deliberate user declaration overrides a past forget.
+ */
+export const isContentForgotten = (
+  sql: MemorySql,
+  input: { workspaceId: string; actor: string; content: string },
+): boolean => {
+  try {
+    const rows = [
+      ...sql.exec<Record<string, unknown>>(
+        `SELECT * FROM agent_memory WHERE workspace_id = ? AND actor = ?`,
+        input.workspaceId,
+        input.actor,
+      ),
+    ].map(mapRow);
+    return rows.some(
+      (row) =>
+        row.invalidatedAt != null &&
+        textSimilarity(row.content, input.content) >= MEMORY_SIMILARITY_THRESHOLD,
+    );
+  } catch {
+    return false;
+  }
+};
+
+/**
  * A17: a repeated correction is stored as a DERIVED learning.
  *
  * G06.1 — persisting a correction is not a durable rule: the row is always

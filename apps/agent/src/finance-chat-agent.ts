@@ -15,12 +15,15 @@ import {
   TED_SYSTEM_PROMPT_LEGACY,
   initializeMemorySchema,
   initializeSessionSchema,
+  initializeUserSkillsSchema,
   isMemoryEnabled,
+  listActiveUserSkills,
   recallMemories,
   renderMemoryBlock,
   compactContext,
   extractiveSummary,
   toContextTurns,
+  toSelectableSkills,
   learnFromTurn,
   buildMemoryTools,
   bumpTurnCount,
@@ -29,7 +32,9 @@ import {
   setMemoryEnabled,
   currentSession,
   endSession,
+  type CategoryCatalogEntry,
   type MemorySql,
+  type Skill,
 } from "./agent-config/index.js";
 import {
   checkUsageLimit,
@@ -68,7 +73,56 @@ import { decisionProviderForDo, type DecisionEnv, type DecisionProvider } from "
 // TED_ATTACHMENTS_BUCKET binding). Everything here is default-off: without
 // that binding the byte pipeline is unavailable and every `ref` is reported
 // as such. wrangler.jsonc is intentionally untouched (rollout step A19).
-import { getAttachmentStorage } from "./attachments/storage.js";
+import {
+  ATTACHMENT_CLEANUP_CURSOR_KEY,
+  getAttachmentStorage,
+  type AttachmentCleanupCheckpoint,
+} from "./attachments/storage.js";
+
+/**
+ * A19 — DO-storage-backed checkpoint for the piggybacked attachment TTL sweep.
+ *
+ * The cursor is plain durable KV state on the Durable Object: one string under
+ * `ATTACHMENT_CLEANUP_CURSOR_KEY`. It is read from `ctx.storage` — the SAME
+ * accessor `durableSql()` uses (`state` never carries storage in the Agents
+ * SDK; a request-path `state.storage` read masked a production 503 once).
+ * A missing or unreadable checkpoint degrades cleanup to the legacy
+ * restart-at-prefix behavior; it can never fail the upload. Test doubles
+ * install the KV surface on `ctx.storage` next to the SQL mock.
+ */
+const createAttachmentCleanupCheckpoint = (
+  storage: unknown,
+): AttachmentCleanupCheckpoint | undefined => {
+  const kv = storage as
+    | { get?: unknown; put?: unknown; delete?: unknown }
+    | undefined
+    | null;
+  if (
+    !kv ||
+    typeof kv.get !== "function" ||
+    typeof kv.put !== "function" ||
+    typeof kv.delete !== "function"
+  ) {
+    return undefined;
+  }
+  const ops = kv as unknown as {
+    get(key: string): Promise<unknown>;
+    put(key: string, value: unknown): Promise<unknown>;
+    delete(key: string): Promise<unknown>;
+  };
+  return {
+    get: async () => {
+      const value = (await ops.get(ATTACHMENT_CLEANUP_CURSOR_KEY)) as string | undefined;
+      return typeof value === "string" && value.length > 0 ? value : undefined;
+    },
+    put: async (cursor) => {
+      await ops.put(ATTACHMENT_CLEANUP_CURSOR_KEY, cursor);
+    },
+    clear: async () => {
+      await ops.delete(ATTACHMENT_CLEANUP_CURSOR_KEY);
+    },
+  };
+};
 import { ingestAttachment } from "./attachments/ingest.js";
 import {
   createAttachmentProcessingMemo,
@@ -746,6 +800,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     return decisionProviderForDo(this, { env: (this.env ?? {}) as DecisionEnv });
   }
 
+  // A18 — one-time schema init guard and the per-DO category catalog cache
+  // used by user-skill projection (see `loadUserSkills`). NOTE: deliberately
+  // NOT field-initialized — prototype-built test agents never run the class
+  // constructor, so the accessor below lazily creates them (`undefined`
+  // is a valid resting state for both).
+  private userSkillsSchemaReady?: boolean;
+  private userSkillCatalogCache?: Map<string, CategoryCatalogEntry[]>;
+
   /** DO SQLite handle or null (tests, degraded storage). */
   private durableSql(): { exec<T>(query: string, ...bindings: unknown[]): Iterable<T> } | null {
     // Agents SDK: durable SQLite lives on the DO context (ctx.storage.sql).
@@ -797,6 +859,129 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       return renderMemoryBlock(items);
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * A18 — active user skills of the workspace, projected into the core
+   * `Skill` shape. This is the RUNTIME wiring the cognition seam was missing:
+   * `assembleCognition({ userSkills })` existed but no call site fed it.
+   *
+   * Cost discipline: zero SQL work beyond one SELECT when the workspace has no
+   * active skills (the overwhelming default), and the prompt stays byte-for-
+   * byte identical in that case. The category catalog (needed only to project
+   * an existing rule) is fetched once per DO instance per workspace — rules
+   * instruct the model to re-confirm the category via `list_categories`
+   * before informing a launch, so a stale cache can never write anything.
+   *
+   * Safety shape (unchanged from A18): a user skill is DELIMITED DATA with
+   * `tools: []` — it can never add a tool, capability or policy; candidate,
+   * revoked and inactive versions never load; promotion still requires
+   * replay + safety + human approval. Best-effort: any failure degrades to no
+   * user skills and never breaks the turn.
+   */
+  private async loadUserSkills(input: { workspaceId: string; actorId: string; intentionId: string }): Promise<Skill[]> {
+    const sql = this.memorySql();
+    if (!sql) return [];
+    try {
+      if (this.userSkillsSchemaReady !== true) {
+        initializeUserSkillsSchema(sql as unknown as Parameters<typeof initializeUserSkillsSchema>[0]);
+        this.userSkillsSchemaReady = true;
+      }
+      const versions = listActiveUserSkills(sql as unknown as Parameters<typeof listActiveUserSkills>[0], input.workspaceId);
+      if (versions.length === 0) return [];
+      if (!this.userSkillCatalogCache) this.userSkillCatalogCache = new Map<string, CategoryCatalogEntry[]>();
+      let catalog = this.userSkillCatalogCache.get(input.workspaceId);
+      if (!catalog) {
+        const reader = await this.entityReaderForTurn({
+          workspaceId: input.workspaceId,
+          actorId: input.actorId,
+          role: "member",
+          deviceId: null,
+          intentionId: input.intentionId,
+          text: "",
+          channel: "pwa-rest",
+        } as unknown as TurnInput);
+        const categories = await reader.listCategories();
+        const projected: CategoryCatalogEntry[] = [];
+        for (const category of categories) {
+          const id = typeof (category as { id?: unknown }).id === "string" ? (category as { id: string }).id : "";
+          const name = typeof (category as { name?: unknown }).name === "string" ? (category as { name: string }).name : "";
+          if (id && name) projected.push({ id, name });
+        }
+        // Cache the EMPTY catalog too (review F5): a workspace with active
+        // skills but zero categories must not re-issue an upstream read every
+        // turn. Empty projection degrades to no user skills either way.
+        catalog = projected;
+        this.userSkillCatalogCache.set(input.workspaceId, catalog);
+      }
+      if (catalog.length === 0) return [];
+      return toSelectableSkills(versions, catalog);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * A17 — post-turn learning wired to the REAL outcome.
+   *
+   * The old hook ran with `assistantText: ''` behind an early return the
+   * production wiring always took, so it never learned anything (and its
+   * `bumpTurnCount` never advanced). The hook now runs ONLY after the turn has
+   * a published response, and feeds the actual response text: an errored,
+   * aborted, fail-closed or empty turn never teaches durable memory
+   * (learnFromTurn's own guard repeats the empty check).
+   *
+   * Budgets are unchanged: the heuristic runs every turn, the LLM extractor
+   * every `LEARN_EVERY_TURNS` turns — the model is resolved lazily inside the
+   * callback from the runtime snapshot, so non-due turns pay nothing extra.
+   * Best-effort by contract: learning never breaks the turn.
+   */
+  private async recordPostTurnLearning(input: {
+    workspaceId: string;
+    actorId: string;
+    userText: string;
+    assistantText: string;
+    intentionId: string;
+  }): Promise<void> {
+    const learnSql = this.memorySql();
+    if (!learnSql) return;
+    try {
+      const turnCount = bumpTurnCount(learnSql, input.workspaceId);
+      await learnFromTurn(learnSql, {
+        workspaceId: input.workspaceId,
+        actorId: input.actorId,
+        userText: input.userText,
+        assistantText: input.assistantText,
+        turnCount,
+        llmExtract: async (transcript) => {
+          try {
+            const snapshot = await this.resolveIntentionSnapshot(input.intentionId);
+            if (!snapshot) return [];
+            const learnModel = createLanguageModel(
+              snapshot.provider_id,
+              snapshot.model_id,
+              snapshot.protocol as Protocol,
+              (this.env ?? {}) as Record<string, string | undefined>,
+            );
+            const extracted = await generateText({
+              model: learnModel.model,
+              system: 'Extraia até 2 aprendizados duráveis sobre a pessoa (preferências, contas, categorias, metas). Responda só com os itens, um por linha, em pt-BR. Se não houver nada durável, responda vazio.',
+              prompt: transcript,
+              maxOutputTokens: 300,
+              // Review F4: the extractor is awaited on the response path — a
+              // hung provider must not stall the turn (same budget class as a
+              // relay attempt, no fallback).
+              abortSignal: AbortSignal.timeout(10_000),
+            });
+            return extracted.text.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 2);
+          } catch {
+            return [];
+          }
+        },
+      });
+    } catch {
+      // Learning is best-effort.
     }
   }
 
@@ -978,8 +1163,16 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       actorId: input.actorId,
       intentionId: input.intentionId,
     });
+    // A18: active user skills compete for the SAME skill budget as core
+    // skills. Empty (the default workspace) keeps the prompt byte-identical.
+    const userSkills = await this.loadUserSkills({
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      intentionId: input.intentionId,
+    });
     const cognition = assembleCognition(input.text, {
       webEnv: (this.env ?? {}) as Record<string, string | undefined>,
+      ...(userSkills.length > 0 ? { userSkills } : {}),
     });
 
     // REST keeps the buffered relay as a provider transport. It is invoked
@@ -1411,10 +1604,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
 
   override async onChatMessage(messagePayload: unknown, ..._rest: unknown[]): Promise<unknown> {
     // C-06 trust boundary: the SDK direct leg carries NO transport identity.
-    // `payload.actorId` is a gateway-stamped hint, NEVER a source of
-    // identity — the Worker gateway compares any client-supplied actorId
-    // against the authenticated actor (403 on mismatch) before this code is
-    // reachable, and the REST legs derive identity from verified headers.
+    // `payload.actorId`/`payload.workspaceId` are gateway-stamped HINTS, never
+    // a source of identity: this leg is reachable only from inside the DO (the
+    // Worker allowlist never forwards SDK-message subpaths), the REST legs
+    // derive identity from verified headers, and the learning/reads below are
+    // additionally scoped by those verified identities. (Review F10: an older
+    // comment claimed the gateway 403-compares client actorId on this path —
+    // it does not; the protection is that this leg is not externally
+    // reachable. Do not rely on client-supplied identity here.)
     const payload = (messagePayload ?? {}) as { text?: string; intentionId?: string; messageId?: string; actorId?: string; workspaceId?: string };
     const text = typeof payload.text === "string" ? payload.text.trim() : "";
     // SPEC §7.7: no Date.now()/random fallback — the caller owns the turn
@@ -1458,7 +1655,24 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       }
       throw error;
     }
-    if (turnResult.response) return { text: turnResult.response.text };
+    if (turnResult.response) {
+      // A17 — learning runs only on a COMPLETED interaction: the published
+      // response is the evidence the turn actually finished. Fail-closed
+      // replies (evidence unavailable) are refusals, not knowledge.
+      if (!turnResult.failClosed) {
+        await this.recordPostTurnLearning({
+          workspaceId: sdkWorkspace,
+          actorId,
+          // Same DLP guarantee as the REST leg (round-2 review): the learning
+          // input feeds the extractor prompt on due turns, so it must be
+          // scrubbed even though this leg cannot carry attachment-derived text.
+          userText: scrubForPersistence(text),
+          assistantText: turnResult.response.text,
+          intentionId,
+        });
+      }
+      return { text: turnResult.response.text };
+    }
 
     const estimatedTokens = estimateTokens(text);
     const usageSql = this.durableSql();
@@ -1494,13 +1708,20 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         const modelId = target.modelName;
         // Cognitive layer (Parts A+B, item 15): versioned persona + skills +
         // playbook + workspace memory assembled per turn, with the model's
-        // tools actually wired.
+        // tools actually wired. A18: active user skills compete for the SAME
+        // budget; empty keeps the prompt byte-identical.
         const sql = this.memorySql();
         const memoryWorkspace = sdkWorkspace;
         const memoryContext = sql ? this.loadMemoryContext(memoryWorkspace, actorId, text) : null;
+        const userSkills = await this.loadUserSkills({
+          workspaceId: memoryWorkspace,
+          actorId,
+          intentionId,
+        });
         const cognition = assembleCognition(text, {
           webEnv: (this.env ?? {}) as Record<string, string | undefined>,
           ...(memoryContext ? { hooks: { memoryContext } } : {}),
+          ...(userSkills.length > 0 ? { userSkills } : {}),
         });
         if (isCodexProviderId(providerId)) {
           const brokerText = await runCodexBrokerText((this.env ?? {}) as CodexBrokerEnv, {
@@ -1603,44 +1824,6 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         recordUsage(recordSql, actorId, intentionId, estimatedTokens, estimatedTokens);
       }
 
-      // Part B: post-turn learning (heuristic every turn, cheap LLM
-      // extraction every 5th). Never breaks the turn; assistant text is
-      // unavailable before streaming, so the heuristic reads the user turn.
-      const learnSql = this.memorySql();
-      if (learnSql) {
-        try {
-          const turnCount = bumpTurnCount(learnSql, sdkWorkspace);
-          await learnFromTurn(learnSql, {
-            workspaceId: sdkWorkspace,
-            actorId,
-            userText: text,
-            assistantText: '',
-            turnCount,
-            llmExtract: async (transcript) => {
-              try {
-                const learnModel = createLanguageModel(
-                  outcome.primary.providerId,
-                  outcome.primary.modelName,
-                  activeSnapshot.protocol as Protocol,
-                  (this.env ?? {}) as Record<string, string | undefined>,
-                );
-                const extracted = await generateText({
-                  model: learnModel.model,
-                  system: 'Extraia até 2 aprendizados duráveis sobre a pessoa (preferências, contas, categorias, metas). Responda só com os itens, um por linha, em pt-BR. Se não houver nada durável, responda vazio.',
-                  prompt: transcript,
-                  maxOutputTokens: 300,
-                });
-                return extracted.text.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 2);
-              } catch {
-                return [];
-              }
-            },
-          });
-        } catch {
-          // Learning is best-effort.
-        }
-      }
-
       return result;
     } catch (err) {
       if ((err as { code?: string })?.code === 'agent.provider_not_configured') {
@@ -1739,6 +1922,15 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // Ref derivation is keyed by the agent secret when present, so a ref is
         // stable per (workspace, actor, sha256) but unguessable across tenants.
         refSecret: this.env?.AGENT_CONNECTION_TOKEN_SECRET,
+        // A19 — the piggybacked TTL sweep resumes from the last persisted
+        // cursor instead of restarting at the prefix forever (starvation).
+        // The checkpoint lives on ctx.storage — the SAME accessor durableSql()
+        // uses: `state` never carries storage in the Agents SDK (a request-path
+        // read of state.storage masked a production 503 once before). The
+        // sweep treats the checkpoint as best-effort.
+        cleanupCheckpoint: createAttachmentCleanupCheckpoint(
+          (this as unknown as { ctx?: { storage?: unknown } }).ctx?.storage,
+        ),
       });
       return Response.json(uploaded, { status: 200 });
     } catch (error) {
@@ -2622,19 +2814,47 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         const turnResult = await this.orchestratorForChannel({
           ...(mutationPlan ? { plan: () => mutationPlan } : {}),
           ...(mutationApiClient ? { mutationApiClient } : {}),
-          // AC22 (A14): a turn whose text carries a transcription NEVER gets an
+          // AC22 (A14) / A19 (F1): a turn carrying an attachment NEVER gets an
           // elevated client, so the orchestrator cannot reach the autoexecute
           // fast path at all — the only way out is the proposal/draft the human
-          // confirms. Belt on suspenders over the provenance marker: a
-          // mistranscribed amount or negation still lands in the same manual
-          // confirmation flow as any typed value.
-          ...(attachmentData.length === 0
+          // confirms. Belt on suspenders over the provenance marker, and over
+          // the `isAutoExecutionEligible` attachment veto.
+          //
+          // The gate is ATTACHMENT PRESENCE, not extracted data. `attachmentData`
+          // only covers ACCEPTED extractions: when the multimodal capability is
+          // off (the production default), the provider is down, or the item is
+          // `unsupported`/`skipped_budget`/refused, the array is EMPTY, no marker
+          // opens the turn text, and a typed leading imperative passed the gate —
+          // with the autoexecute-capable transport already minted. A mistranscribed
+          // amount or negation, and an attachment named `sim confirmo.pdf`, both
+          // landed in the same manual confirmation flow as any typed value from
+          // here on.
+          ...(incomingAttachments.length === 0
             ? { autoExecutionClient: () => this.elevatedMutationApiClientForTurn(restInput) }
             : {}),
           ...(entityReader ? { entityReader } : {}),
           ...(draftStore ? { draftStore } : {}),
         }).runTurn(restInput);
         if (turnResult.response) {
+          // A17 — learning runs only on a COMPLETED interaction with a real
+          // response; fail-closed replies are refusals, never knowledge.
+          // `userText` is the TYPED text (`unredactedText`), never the composed
+          // turn text: the composed form carries extracted attachment data, and
+          // attachment content is DADO — it must never be promoted into
+          // durable memory through the heuristic/LLM extractors (review F2).
+          if (!turnResult.failClosed) {
+            await this.recordPostTurnLearning({
+              workspaceId: identity.workspaceId,
+              actorId: identity.actorId,
+              // Round-2 review: typed text (F2) AND scrubbed — the pre-fix
+              // argument went through the DLP funnel, so the learning input
+              // (which feeds the extractor prompt on due turns) keeps the same
+              // scrub guarantee instead of regressing to raw user text.
+              userText: scrubForPersistence(unredactedText),
+              assistantText: turnResult.response.text,
+              intentionId,
+            });
+          }
           // Persist the FINAL grounded/deterministic response (never the raw
           // relay text: grounding may have rejected or replaced the provider
           // output, and /rpc/history serves exactly what is persisted here).

@@ -62,10 +62,12 @@ export type AttachmentTestAgent = {
   agent: FinanceChatAgent;
   persisted: UIMessage[];
   bucket: FakeBucket;
+  /** Present only with `withKvStorage: true` — the fake DO KV the checkpoint uses. */
+  kv?: Map<string, unknown>;
 };
 
 export const createAttachmentTestAgent = (
-  options: { withBucket?: boolean; extraEnv?: Record<string, string> } = {},
+  options: { withBucket?: boolean; withKvStorage?: boolean; extraEnv?: Record<string, string> } = {},
 ): AttachmentTestAgent => {
   const persisted: UIMessage[] = [];
   const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent & {
@@ -76,8 +78,32 @@ export const createAttachmentTestAgent = (
   agent.persistMessages = vi.fn(async (msgs: UIMessage[]) => {
     persisted.push(...msgs);
   });
-  Object.defineProperty(agent, "state", { value: { storage: {} }, writable: true, configurable: true });
+  // A19: `withKvStorage` installs a Map-backed fake of the DO KV surface
+  // (`get`/`put`/`delete`) on ctx.storage — the SAME accessor production reads
+  // (ctx.storage, not state.storage; review F1). The SQL mock from
+  // `attachRelayUsageStorage` is preserved alongside.
+  const kv = new Map<string, unknown>();
   attachRelayUsageStorage(agent);
+  Object.defineProperty(agent, "state", { value: { storage: {} }, writable: true, configurable: true });
+  if (options.withKvStorage === true) {
+    const existingCtx = (agent as unknown as { ctx?: { storage?: Record<string, unknown> } }).ctx ?? {};
+    Object.defineProperty(agent, "ctx", {
+      value: {
+        ...existingCtx,
+        storage: {
+          ...(existingCtx.storage ?? {}),
+          get: async (key: string) => kv.get(key),
+          put: async (key: string, value: unknown) => {
+            kv.set(key, value);
+          },
+          delete: async (key: string) => {
+            kv.delete(key);
+          },
+        },
+      },
+      configurable: true,
+    });
+  }
 
   const bucket = createFakeBucket();
   Object.defineProperty(agent, "env", {
@@ -108,7 +134,7 @@ export const createAttachmentTestAgent = (
     created_at: new Date().toISOString(),
   });
 
-  return { agent, persisted, bucket };
+  return { agent, persisted, bucket, ...(options.withKvStorage === true ? { kv } : {}) };
 };
 
 /**
