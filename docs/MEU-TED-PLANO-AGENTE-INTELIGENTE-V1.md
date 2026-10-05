@@ -256,6 +256,7 @@ Roteiro: **RED** (falha observável) → **GREEN** → **Gates** → **Review/Te
 - Integração documental futura: o relatório de migração referenciado na SPEC é trabalho preexistente ainda não rastreado nesta baseline. Antes de um PR, verificar que todas as referências estarão presentes no checkout publicado; aguardar integração aprovada pelo owner ou escolher fonte versionada. Não incluir/commitar silenciosamente aquele relatório, `AGENTS.md` ou o workflow preexistente apenas para fazer links passarem.
 - Gates repo por PR: `pnpm typecheck`, `pnpm test`, `pnpm lint`, `pnpm docs:lint` + lint sob demanda (§4.1), `pnpm governance:check`. Hook = 7 gates (V24).
 - **G01–G08 (SPEC §11) permanecem abertos.** Este plano não fecha nenhum. P0 (A01–A05) não depende de serviço externo.
+- **Atualização 2026-10-04b:** G04, G05 e G06 foram formalmente resolvidos com condições (SPEC §11.2; [reports/2026-10-04-ted-inteligente-gates-g04-g05-g06-resolution.md](reports/2026-10-04-ted-inteligente-gates-g04-g05-g06-resolution.md)) — **A13–A18 desbloqueadas** para implementação com flags default-off; habilitação em produção continua rollout por fatia (A19). G01/G02/G07/G08 permanecem abertos.
 - Review/Tester em **toda** mudança significativa; 🔴 exige revisor adversarial adicional.
 
 ## 9. Riscos
