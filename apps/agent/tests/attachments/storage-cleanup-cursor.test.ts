@@ -213,7 +213,7 @@ describe("A19 — cursor de varredura: a inanição determinística dos expirado
   });
 
   it("(3) wrap-around: ao alcançar o FIM da listagem o checkpoint é LIMPO e a próxima recomeça no prefixo", async () => {
-    const { bucket, objects, listCalls } = createR2LikeBucket();
+    const { bucket, listCalls } = createR2LikeBucket();
     const storage = createR2AttachmentStorage(bucket);
     await seed(storage, starvationCounts);
     const { checkpoint, read } = createCheckpoint();

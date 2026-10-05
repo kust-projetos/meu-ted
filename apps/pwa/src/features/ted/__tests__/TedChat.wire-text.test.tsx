@@ -100,7 +100,7 @@ function deferred<T>() {
 const okTurn = { turnId: "t1", status: "completed" } as const;
 
 async function uploadPdf(user: ReturnType<typeof userEvent.setup>, container: HTMLElement, name: string) {
-  const pdfInput = container.querySelector('input[type="file"][accept*="pdf"]') as HTMLFileElement;
+  const pdfInput = container.querySelector('input[type="file"][accept*="pdf"]') as HTMLInputElement;
   expect(pdfInput).not.toBeNull();
   await user.upload(pdfInput, new File(["%PDF-1.7"], name, { type: "application/pdf" }));
   await screen.findByRole("button", { name: new RegExp(`remover ${name.replace(/\./g, "\\.")}`, "i") });

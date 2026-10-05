@@ -127,6 +127,13 @@ export const MAX_RPC_BODY_BYTES = 2 * 1024 * 1024;
 export const MAX_ATTACHMENT_BODY_BYTES = Math.max(
   ...Object.values(ATTACHMENT_LIMITS).map((limit) => limit.maxBytes),
 );
+// Review F3: a contract entry missing `maxBytes` would make the spread yield
+// NaN, and `total > NaN` is ALWAYS false — the streaming ceiling would never
+// trip and the worker would buffer without bound. A malformed contract is a
+// load-time failure, never a silent unbounded read.
+if (!Number.isFinite(MAX_ATTACHMENT_BODY_BYTES)) {
+  throw new Error("ATTACHMENT_LIMITS is malformed: no finite maxBytes entry");
+}
 
 const bodyTooLarge = (limit: number): Response =>
   Response.json(

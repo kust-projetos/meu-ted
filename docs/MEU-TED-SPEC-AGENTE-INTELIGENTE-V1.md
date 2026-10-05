@@ -334,6 +334,15 @@ Resolução com condições, autorizada pelo operador nesta data; decisão compl
 
 Efeito: **A13–A18 desbloqueadas para implementação com flags default-off.** Nenhum deploy/credencial/ativação em produção é autorizado por este adendo; habilitação é rollout por fatia (A19). G01, G02, G07 e G08 permanecem abertos.
 
+### 11.3 Adendo (2026-10-05) — closure A19 final (issue #89)
+
+Implementação das fatias A13–A18 revisada adversarialmente e fechada por TDD (relatório: [reports/2026-10-05-ted-agent-inteligente-a19-final-closure.md](reports/2026-10-05-ted-agent-inteligente-a19-final-closure.md)). Estado real pós-closure:
+
+- **A17 (R16) EFETIVA no runtime:** learning pós-turno roda com a resposta real publicada (nunca em erro/abort/fail-closed/vazio), budgets preservados (heuristic toda turno, LLM 1 a cada 5); correção com fingerprint (dedup/supersede) permanece store-level testada; esquecimento exposto via tool `forget_memory` com resolução pelo recall do chamador (privado de outro ator = inexistente; cross-workspace inalcançável) e tombstone DUPLO (fingerprint + conteúdo) impedindo ressurreição pelo job — o tool explícito `remember_fact` continua podendo recriar por declaração deliberada. Saldo/valor atual continua proibido de virar memória (AGENT-008, persistência + recall).
+- **A18 (R17) EFETIVA no runtime:** skills ativas do workspace competem no MESMO budget do `assembleCognition` (dado delimitado, `tools: []`); workspace sem skills = um SELECT e prompt byte a byte idêntico; candidate/revogada/inativa nunca carregam; promoção (replay offline + safety + humano), rollback e proibição de auto-promoção intocados.
+- **A19 (hardening/rollout) com caminho real provado:** `/rpc/attachments` atravessa o gateway (identidade exclusiva da autenticação do Worker), tetos de corpo por rota coerentes com `ATTACHMENT_LIMITS` (Worker e proxy PWA), `body.text` exclusivamente o digitado (anexo só como metadado estruturado), veto estrutural de autoexecute por PRESENÇA de anexo (assinatura + call sites + cliente elevado não construído), cleanup TTL retomável (cursor no DO, wrap, fail-safe). E2E Worker→DO cobre os cenários de segurança do briefing.
+- **Continua bloqueando produção:** binding R2 + credenciais + ZDR + flags (rollout), provider de decisão (G07), canary autoexecute (G08), Release B, cutover. G01/G02 seguem decisão de produto e não bloqueiam nenhuma capacidade desta closure. Nenhum gate foi alterado para ficar verde.
+
 ## 12. Rastreabilidade da origem
 
 | Seções da origem | Destino / disposição |

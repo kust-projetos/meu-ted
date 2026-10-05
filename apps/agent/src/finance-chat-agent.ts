@@ -83,11 +83,12 @@ import {
  * A19 — DO-storage-backed checkpoint for the piggybacked attachment TTL sweep.
  *
  * The cursor is plain durable KV state on the Durable Object: one string under
- * `ATTACHMENT_CLEANUP_CURSOR_KEY`. A missing or unreadable checkpoint degrades
- * cleanup to the legacy restart-at-prefix behavior; it can never fail the
- * upload. `state?.storage` is optional so prototype-level test doubles (which
- * build agents via `Object.create(FinanceChatAgent.prototype)`) without KV
- * simply yield `undefined`.
+ * `ATTACHMENT_CLEANUP_CURSOR_KEY`. It is read from `ctx.storage` — the SAME
+ * accessor `durableSql()` uses (`state` never carries storage in the Agents
+ * SDK; a request-path `state.storage` read masked a production 503 once).
+ * A missing or unreadable checkpoint degrades cleanup to the legacy
+ * restart-at-prefix behavior; it can never fail the upload. Test doubles
+ * install the KV surface on `ctx.storage` next to the SQL mock.
  */
 const createAttachmentCleanupCheckpoint = (
   storage: unknown,
@@ -908,10 +909,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           const name = typeof (category as { name?: unknown }).name === "string" ? (category as { name: string }).name : "";
           if (id && name) projected.push({ id, name });
         }
-        if (projected.length === 0) return [];
+        // Cache the EMPTY catalog too (review F5): a workspace with active
+        // skills but zero categories must not re-issue an upstream read every
+        // turn. Empty projection degrades to no user skills either way.
         catalog = projected;
         this.userSkillCatalogCache.set(input.workspaceId, catalog);
       }
+      if (catalog.length === 0) return [];
       return toSelectableSkills(versions, catalog);
     } catch {
       return [];
@@ -965,6 +969,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
               system: 'Extraia até 2 aprendizados duráveis sobre a pessoa (preferências, contas, categorias, metas). Responda só com os itens, um por linha, em pt-BR. Se não houver nada durável, responda vazio.',
               prompt: transcript,
               maxOutputTokens: 300,
+              // Review F4: the extractor is awaited on the response path — a
+              // hung provider must not stall the turn (same budget class as a
+              // relay attempt, no fallback).
+              abortSignal: AbortSignal.timeout(10_000),
             });
             return extracted.text.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 2);
           } catch {
@@ -1596,10 +1604,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
 
   override async onChatMessage(messagePayload: unknown, ..._rest: unknown[]): Promise<unknown> {
     // C-06 trust boundary: the SDK direct leg carries NO transport identity.
-    // `payload.actorId` is a gateway-stamped hint, NEVER a source of
-    // identity — the Worker gateway compares any client-supplied actorId
-    // against the authenticated actor (403 on mismatch) before this code is
-    // reachable, and the REST legs derive identity from verified headers.
+    // `payload.actorId`/`payload.workspaceId` are gateway-stamped HINTS, never
+    // a source of identity: this leg is reachable only from inside the DO (the
+    // Worker allowlist never forwards SDK-message subpaths), the REST legs
+    // derive identity from verified headers, and the learning/reads below are
+    // additionally scoped by those verified identities. (Review F10: an older
+    // comment claimed the gateway 403-compares client actorId on this path —
+    // it does not; the protection is that this leg is not externally
+    // reachable. Do not rely on client-supplied identity here.)
     const payload = (messagePayload ?? {}) as { text?: string; intentionId?: string; messageId?: string; actorId?: string; workspaceId?: string };
     const text = typeof payload.text === "string" ? payload.text.trim() : "";
     // SPEC §7.7: no Date.now()/random fallback — the caller owns the turn
@@ -1909,8 +1921,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         refSecret: this.env?.AGENT_CONNECTION_TOKEN_SECRET,
         // A19 — the piggybacked TTL sweep resumes from the last persisted
         // cursor instead of restarting at the prefix forever (starvation).
-        // DO storage is the checkpoint; the sweep treats it as best-effort.
-        cleanupCheckpoint: createAttachmentCleanupCheckpoint(this.state?.storage),
+        // The checkpoint lives on ctx.storage — the SAME accessor durableSql()
+        // uses: `state` never carries storage in the Agents SDK (a request-path
+        // read of state.storage masked a production 503 once before). The
+        // sweep treats the checkpoint as best-effort.
+        cleanupCheckpoint: createAttachmentCleanupCheckpoint(
+          (this as unknown as { ctx?: { storage?: unknown } }).ctx?.storage,
+        ),
       });
       return Response.json(uploaded, { status: 200 });
     } catch (error) {
@@ -2818,11 +2835,15 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         if (turnResult.response) {
           // A17 — learning runs only on a COMPLETED interaction with a real
           // response; fail-closed replies are refusals, never knowledge.
+          // `userText` is the TYPED text (`unredactedText`), never the composed
+          // turn text: the composed form carries extracted attachment data, and
+          // attachment content is DADO — it must never be promoted into
+          // durable memory through the heuristic/LLM extractors (review F2).
           if (!turnResult.failClosed) {
             await this.recordPostTurnLearning({
               workspaceId: identity.workspaceId,
               actorId: identity.actorId,
-              userText: restInput.text,
+              userText: unredactedText,
               assistantText: turnResult.response.text,
               intentionId,
             });

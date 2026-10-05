@@ -78,22 +78,32 @@ export const createAttachmentTestAgent = (
   agent.persistMessages = vi.fn(async (msgs: UIMessage[]) => {
     persisted.push(...msgs);
   });
-  // A19: `withKvStorage` turns `state.storage` into a Map-backed fake of the DO
-  // KV surface (`get`/`put`/`delete`) the attachment cleanup checkpoint uses.
+  // A19: `withKvStorage` installs a Map-backed fake of the DO KV surface
+  // (`get`/`put`/`delete`) on ctx.storage — the SAME accessor production reads
+  // (ctx.storage, not state.storage; review F1). The SQL mock from
+  // `attachRelayUsageStorage` is preserved alongside.
   const kv = new Map<string, unknown>();
-  const stateStorage = options.withKvStorage === true
-    ? {
-        get: async (key: string) => kv.get(key),
-        put: async (key: string, value: unknown) => {
-          kv.set(key, value);
-        },
-        delete: async (key: string) => {
-          kv.delete(key);
-        },
-      }
-    : {};
-  Object.defineProperty(agent, "state", { value: { storage: stateStorage }, writable: true, configurable: true });
   attachRelayUsageStorage(agent);
+  Object.defineProperty(agent, "state", { value: { storage: {} }, writable: true, configurable: true });
+  if (options.withKvStorage === true) {
+    const existingCtx = (agent as unknown as { ctx?: { storage?: Record<string, unknown> } }).ctx ?? {};
+    Object.defineProperty(agent, "ctx", {
+      value: {
+        ...existingCtx,
+        storage: {
+          ...(existingCtx.storage ?? {}),
+          get: async (key: string) => kv.get(key),
+          put: async (key: string, value: unknown) => {
+            kv.set(key, value);
+          },
+          delete: async (key: string) => {
+            kv.delete(key);
+          },
+        },
+      },
+      configurable: true,
+    });
+  }
 
   const bucket = createFakeBucket();
   Object.defineProperty(agent, "env", {

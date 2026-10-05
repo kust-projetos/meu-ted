@@ -21,7 +21,6 @@
 
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { FinanceChatAgent } from "../src/finance-chat-agent.js";
 import { createAttachmentTestAgent } from "./attachments/helpers.js";
 import { createMemorySql, type MemorySqlMock } from "./helpers/memory-sql.js";
 import { initializeMemorySchema, initializeUserSkillsSchema } from "../src/agent-config/index.js";
@@ -84,7 +83,7 @@ const agentWithSkills = (seed: (sql: MemorySqlMock) => void) => {
 
 describe("A19/A18 — loadUserSkills projeta somente skills ativas", () => {
   it("skill ativa vira Skill de dados (tools: []); candidate/inativa/revogada não", async () => {
-    const { agent, sql } = agentWithSkills((s) => {
+    const { agent } = agentWithSkills((s) => {
       insertActiveUserSkillVersion(s as never, {
         workspaceId: WORKSPACE,
         name: "alias-padaria",
