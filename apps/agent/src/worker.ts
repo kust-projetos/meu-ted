@@ -1,4 +1,5 @@
 import { FinanceChatAgent } from "./finance-chat-agent.js";
+import { ATTACHMENT_LIMITS } from "./attachments/types.js";
 import { authorizeWorkspaceMembership } from "./index.js";
 import { probeProvider } from "./llm/provider-probe.js";
 import { FIXED_ENDPOINTS } from "./llm/provider-registry.js";
@@ -48,6 +49,14 @@ type Env = {
   BUILD_SHA?: string;
   BUILD_ID?: string;
   BUILD_TIME?: string;
+  /**
+   * A13/R11 — optional R2 binding for attachment bytes. Declared here for
+   * typing honesty only: the Durable Object OWNS the capability switch
+   * (`getAttachmentStorage(this.env)`), so an absent binding keeps answering
+   * `attachment_storage_unavailable` (fail-closed 503) and the Worker never
+   * reads it. Wiring the binding is a separate rollout step.
+   */
+  TED_ATTACHMENTS_BUCKET?: unknown;
 };
 
 /**
@@ -107,30 +116,45 @@ export function isExpectedPwaOrigin(value: string): boolean {
  */
 export const MAX_RPC_BODY_BYTES = 2 * 1024 * 1024;
 
-const rpcPayloadTooLarge = (): Response =>
+/**
+ * A19: the attachment upload route has its OWN ceiling, derived STRUCTURALLY
+ * from the A13 contract (`ATTACHMENT_LIMITS`) — never a literal here, so this
+ * can never drift below what `ingestAttachment` accepts (image/audio 10 MB,
+ * pdf 15 MB). The Worker only rejects bodies above the contract ceiling; the
+ * per-kind bound stays enforced by the DO's ingestion validator, so a valid
+ * 10 MB PNG reaches it while a body above 15 MB never gets buffered.
+ */
+export const MAX_ATTACHMENT_BODY_BYTES = Math.max(
+  ...Object.values(ATTACHMENT_LIMITS).map((limit) => limit.maxBytes),
+);
+
+const bodyTooLarge = (limit: number): Response =>
   Response.json(
-    { code: "agent.payload_too_large", message: `Request body exceeds ${MAX_RPC_BODY_BYTES} bytes` },
+    { code: "agent.payload_too_large", message: `Request body exceeds ${limit} bytes` },
     { status: 413 },
   );
 
 /**
- * Reads the request body up to MAX_RPC_BODY_BYTES. A declared
- * Content-Length above the ceiling is rejected up front; otherwise the
- * stream is consumed in chunks and aborted the moment the ceiling is
- * crossed — the worker never buffers an unbounded body. GET/HEAD requests
- * carry no body and resolve to an empty result.
+ * Reads the request body up to `limit` bytes. A declared Content-Length above
+ * the ceiling is rejected up front; otherwise the stream is consumed in
+ * chunks and aborted the moment the ceiling is crossed — the worker never
+ * buffers an unbounded body. GET/HEAD requests carry no body and resolve to an
+ * empty result.
  */
-async function readBoundedBody(request: Request): Promise<{ body?: ArrayBuffer } | { response: Response }> {
+async function readBoundedBody(
+  request: Request,
+  limit: number,
+): Promise<{ body?: ArrayBuffer } | { response: Response }> {
   if (request.method === "GET" || request.method === "HEAD") return {};
   const declared = request.headers.get("content-length");
   if (declared !== null) {
     const length = Number(declared);
-    if (Number.isFinite(length) && length > MAX_RPC_BODY_BYTES) return { response: rpcPayloadTooLarge() };
+    if (Number.isFinite(length) && length > limit) return { response: bodyTooLarge(limit) };
   }
   const stream = request.body;
   if (!stream) {
     const buffered = await request.arrayBuffer();
-    if (buffered.byteLength > MAX_RPC_BODY_BYTES) return { response: rpcPayloadTooLarge() };
+    if (buffered.byteLength > limit) return { response: bodyTooLarge(limit) };
     return buffered.byteLength === 0 ? {} : { body: buffered };
   }
   const reader = stream.getReader();
@@ -141,9 +165,9 @@ async function readBoundedBody(request: Request): Promise<{ body?: ArrayBuffer }
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_RPC_BODY_BYTES) {
+      if (total > limit) {
         await reader.cancel().catch(() => {});
-        return { response: rpcPayloadTooLarge() };
+        return { response: bodyTooLarge(limit) };
       }
       chunks.push(value);
     }
@@ -234,7 +258,8 @@ export default {
       "access-control-allow-origin": isAllowedOrigin ? requestOrigin : "null",
       "access-control-allow-credentials": "true",
       "access-control-allow-methods": "GET, POST, OPTIONS, DELETE",
-      "access-control-allow-headers": "content-type, x-workspace-id, x-agent-connection-token, authorization",
+      "access-control-allow-headers":
+        "content-type, x-workspace-id, x-agent-connection-token, authorization, x-ted-attachment-kind, x-ted-attachment-name",
       "access-control-max-age": "600",
     });
 
@@ -316,7 +341,7 @@ export default {
       // T4.3 (SPEC section 11 E4): the retired legacy-agent migration gate
       // is gone — the canonical RPC surface talks to FinanceChatAgent
       // directly (INV-07, single runtime).
-      const isRestRpc = subPath === "/rpc/chat" || subPath === "/rpc/history" || subPath === "/rpc/session/new" || subPath === "/rpc/memory/prefs" || subPath === "/rpc/pending-operations/active" || subPath === "/rpc/undo/active" || subPath === "/rpc/undo/decision" || /^\/rpc\/undo\/[^/]+\/verify-target$/.test(subPath) || /^\/rpc\/pending-operations\/[^/]+\/decision$/.test(subPath);
+      const isRestRpc = subPath === "/rpc/chat" || subPath === "/rpc/history" || subPath === "/rpc/session/new" || subPath === "/rpc/memory/prefs" || subPath === "/rpc/pending-operations/active" || subPath === "/rpc/undo/active" || subPath === "/rpc/undo/decision" || subPath === "/rpc/attachments" || /^\/rpc\/undo\/[^/]+\/verify-target$/.test(subPath) || /^\/rpc\/pending-operations\/[^/]+\/decision$/.test(subPath);
 
       if (isRestRpc) {
         const financeAgent = env.FINANCE_CHAT_AGENT.get(env.FINANCE_CHAT_AGENT.idFromName(canonicalId));
@@ -336,8 +361,14 @@ export default {
         // throws outside the Workers runtime (Node requires duplex) and
         // after any prior read — an ArrayBuffer forwards safely on both.
         // Bounded (FIX-FINAL-2 FINDING 2): the body is read with a byte
-        // ceiling and rejected with 413 before reaching the DO.
-        const bounded = await readBoundedBody(request);
+        // ceiling and rejected with 413 before reaching the DO. The ceiling is
+        // PER ROUTE: A19 gives the binary attachment upload the A13 contract
+        // ceiling (ATTACHMENT_LIMITS) while every chat/JSON RPC keeps the
+        // small 2 MB budget — a shared 2 MB cap would reject valid uploads.
+        const bounded = await readBoundedBody(
+          request,
+          subPath === "/rpc/attachments" ? MAX_ATTACHMENT_BODY_BYTES : MAX_RPC_BODY_BYTES,
+        );
         if ("response" in bounded) return bounded.response;
         const rpcBody = bounded.body;
         return financeAgent.fetch(
