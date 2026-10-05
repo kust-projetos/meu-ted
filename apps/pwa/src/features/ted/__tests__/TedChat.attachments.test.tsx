@@ -40,7 +40,16 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
     fetchAgentHistory: vi.fn().mockResolvedValue([]),
     sendAgentMessage: vi.fn().mockResolvedValue({ turnId: "t", status: "completed" }),
     renewAgentSession: vi.fn().mockResolvedValue({ ok: true, sessionId: "s2" }),
-    uploadAttachment: vi.fn().mockResolvedValue({ url: "https://cdn.test/img.png" }),
+    // A13: the REAL upload returns an opaque ref (never a CDN URL). Tests that
+    // only exercise the local preview override this per case.
+    uploadAttachment: vi
+      .fn()
+      .mockImplementation(async (_ws: string, input: { kind: string; name?: string }) => ({
+        ref: `att_${(input.kind ?? "x").padEnd(20, "0").slice(0, 20)}`,
+        kind: input.kind,
+        name: input.name ?? "anexo",
+        size: 33,
+      })),
   };
 });
 
@@ -205,6 +214,83 @@ describe("TedChat – attachment capability gate (SPEC §18, H-09)", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: /remover sess\.png/i })).toBeNull();
     });
+  });
+});
+
+/**
+ * A13/P3 — capability por tipo: a UI anuncia exatamente os tipos cujo backend
+ * está disponível, e o envio carrega a REFERÊNCIA opaca (nunca uma URL).
+ */
+describe("TedChat – capability por tipo + envio por referência (A13/P3)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    wsState.activeId = "ws-1";
+    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("mock-token");
+    installMediaMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("só a imagem habilitada anuncia o botão de imagem e NÃO o de PDF", async () => {
+    vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "");
+    vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_IMAGE", "1");
+    render(<TedChat />);
+    expect(await screen.findByRole("button", { name: /anexar imagem/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /anexar pdf/i })).toBeNull();
+  });
+
+  it("só o PDF habilitado anuncia o botão de PDF e NÃO o de imagem", async () => {
+    vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "");
+    vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_PDF", "1");
+    render(<TedChat />);
+    expect(await screen.findByRole("button", { name: /anexar pdf/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /anexar imagem/i })).toBeNull();
+  });
+
+  it("selecionar arquivo faz upload real e envia {type, ref, name} — sem URL de CDN", async () => {
+    vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "1");
+    const user = userEvent.setup();
+    const { container } = render(<TedChat />);
+    const imageInput = container.querySelector('input[type="file"][accept*="image"]') as HTMLInputElement;
+    await user.upload(imageInput, new File(["fake-image"], "foto.png", { type: "image/png" }));
+    await screen.findByRole("button", { name: /remover foto\.png/i });
+    await waitFor(() => {
+      expect(agentClient.uploadAttachment).toHaveBeenCalled();
+    });
+    await user.click(screen.getByRole("button", { name: /enviar mensagem/i }));
+    await waitFor(() => {
+      expect(agentClient.sendAgentMessage).toHaveBeenCalled();
+    });
+    const sent = vi.mocked(agentClient.sendAgentMessage).mock.calls[0]?.[2];
+    expect(sent?.attachments?.[0]).toMatchObject({ type: "image", name: "foto.png" });
+    expect((sent?.attachments?.[0] as { ref?: string })?.ref).toMatch(/^att_/);
+    expect(JSON.stringify(sent)).not.toContain("blob:mock-url");
+  });
+
+  it("falha de upload deixa estado explícito de erro e o anexo NÃO entra no envio", async () => {
+    vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "1");
+    const uploadError = Object.assign(new Error("O conteúdo não corresponde ao tipo."), {
+      code: "attachment_mime_mismatch",
+    });
+    vi.mocked(agentClient.uploadAttachment).mockRejectedValueOnce(uploadError);
+    const user = userEvent.setup();
+    const { container } = render(<TedChat />);
+    const imageInput = container.querySelector('input[type="file"][accept*="image"]') as HTMLInputElement;
+    await user.upload(imageInput, new File(["fake"], "falso.png", { type: "image/png" }));
+
+    // Estado de falha EXPLÍCITO com copy própria (a mensagem crua do servidor
+    // não é ecoada), e o anexo fica sem ref.
+    expect(await screen.findByText(/não foi possível enviar o anexo/i)).toBeInTheDocument();
+    expect(screen.queryByText(/não corresponde ao tipo/i)).toBeNull();
+    await user.type(screen.getByRole("textbox", { name: /mensagem/i }), "olá");
+    await user.click(screen.getByRole("button", { name: /enviar mensagem/i }));
+    await waitFor(() => {
+      expect(agentClient.sendAgentMessage).toHaveBeenCalled();
+    });
+    const sent = vi.mocked(agentClient.sendAgentMessage).mock.calls[0]?.[2];
+    expect(sent?.attachments ?? []).toHaveLength(0);
   });
 });
 

@@ -9,6 +9,7 @@ import {
   sendAgentMessage,
   renewAgentSession,
   composeChatSend,
+  uploadAttachment,
   PENDING_OPERATION_STATUS,
   type ActivePendingOperation,
   type ActiveUndoProposal,
@@ -111,7 +112,26 @@ interface TedChatProps {
   focusedOperationId?: string | null;
 }
 
-export type TedAttachment = { type: "image" | "pdf" | "audio"; url: string; name: string; file?: File };
+export type TedAttachment = {
+  type: "image" | "pdf" | "audio";
+  /** Local-only preview URL (object URL). It is NEVER sent to the Agent. */
+  url: string;
+  name: string;
+  file?: File | Blob;
+  /**
+   * A13: opaque server-side reference returned by the upload RPC. When present
+   * the send carries `{type, ref, name}` instead of a URL; until the upload
+   * resolves, the attachment is still shown locally but is not sent.
+   */
+  ref?: string;
+  /**
+   * F6: per-attachment upload state. `uploading` BLOCKS the send (the
+   * attachment is not silently dropped when the message goes out mid-upload),
+   * `failed` keeps the chip visible with an explicit reason, and `ready` is the
+   * only state whose reference crosses the wire.
+   */
+  uploadState?: "uploading" | "ready" | "failed";
+};
 
 export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const ws = useWorkspaceSafe();
@@ -153,20 +173,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const isStaleScope = useCallback((scopeId: string) => activeWorkspaceIdRef.current !== scopeId, []);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Microphone lifecycle (SPEC §17, H-08): recording state only exists after
-  // getUserMedia + MediaRecorder + start; single idempotent cleanup.
-  // (start/stop expostos de forma estável; cleanupMedia é useCallback estável.)
-  const recordingCtl = useRecordingState({
-    onAudioBlob: (blob) => {
-      const url = URL.createObjectURL(blob);
-      setAttachments((prev) => [...prev, { type: "audio", url, name: `audio-${Date.now()}.webm` }]);
-    },
-    onError: (message) => setError(message),
-  });
-  const { state: recordingState, cleanupMedia: cleanupRecordingMedia } = recordingCtl;
-  const isRecording = recordingState === "recording";
-  const isRequestingMic = recordingState === "requesting";
-
   // SPEC §18 (H-09): sem pipeline de ingestão real, anexos de arquivo ficam
   // indisponíveis — botões e file inputs nem são renderizados (default: tudo
   // false; `NEXT_PUBLIC_TED_ATTACHMENT_INGESTION=1` libera quando o pipeline
@@ -175,7 +181,44 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // segue o mesmo padrão atrás de `caps.microphone`
   // (`NEXT_PUBLIC_TED_MICROPHONE=1|true`) — a mesma flag que a
   // Permissions-Policy do middleware lê.
+  // F7: `caps.audio` decide se a gravação tem para onde ir — sem ele o blob
+  // não vira anexo (nada é upado, nada é enviado).
   const caps = getChatAttachmentCapabilities();
+  // F7: nome do arquivo de áudio por contador, não por `Date.now()` — relógio é
+  // função impura e o React Compiler recusa chamá-lo no corpo do callback de
+  // render. O nome é cosmético: a identidade do anexo é o `ref` do servidor.
+  const audioSeqRef = useRef(0);
+
+  // Microphone lifecycle (SPEC §17, H-08): recording state only exists after
+  // getUserMedia + MediaRecorder + start; single idempotent cleanup.
+  // (start/stop expostos de forma estável; cleanupMedia é useCallback estável.)
+  const recordingCtl = useRecordingState({
+    onAudioBlob: (blob) => {
+      // F7: the recorded blob goes through the SAME upload pipeline as a picked
+      // file — without it the attachment never gets a `ref` and the send filter
+      // drops it. With no audio capability there is nowhere to upload it, so
+      // the recording is refused EXPLICITLY instead of becoming a phantom chip
+      // that silently disappears at send time.
+      if (!caps.audio) {
+        setError("O envio de áudio não está disponível.");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const attachment: TedAttachment = {
+        type: "audio",
+        url,
+        name: `audio-${(audioSeqRef.current += 1)}.webm`,
+        file: blob,
+        uploadState: "uploading",
+      };
+      setAttachments((prev) => [...prev, attachment]);
+      if (activeWorkspace) void uploadSelected(activeWorkspace.id, [attachment]);
+    },
+    onError: (message) => setError(message),
+  });
+  const { state: recordingState, cleanupMedia: cleanupRecordingMedia } = recordingCtl;
+  const isRecording = recordingState === "recording";
+  const isRequestingMic = recordingState === "requesting";
 
   // Registro de object URLs (INV-08): espelho dos anexos para revogar em
   // todos os gatilhos de teardown, inclusive unmount com rascunho pendente.
@@ -184,8 +227,17 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     attachmentsRef.current = attachments;
   }, [attachments]);
 
-  const revokeAttachmentUrls = useCallback((list: ReadonlyArray<{ url: string }>) => {
+  /**
+   * A13: object URLs são estritamente LOCAIS (o que cruza a rede é a
+   * referência opaca). Como o rascunho do envio carrega só a referência, o
+   * revoke dos previews é rastreado por messageId aqui — preservando INV-08
+   * (nenhum object URL sobrevive ao sucesso, retry ou teardown).
+   */
+  const draftPreviewUrlsRef = useRef<Map<string, string[]>>(new Map());
+
+  const revokeAttachmentUrls = useCallback((list: ReadonlyArray<{ url?: string }>) => {
     for (const att of list) {
+      if (typeof att.url !== "string" || att.url === "") continue;
       try {
         URL.revokeObjectURL(att.url);
       } catch {
@@ -210,6 +262,11 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       revokeAttachmentUrls(draft.attachments ?? []);
     }
     draftsRef.current.clear();
+    // A13: previews locais registrados por messageId também são revogados.
+    for (const urls of draftPreviewUrlsRef.current.values()) {
+      revokeAttachmentUrls(urls.map((url) => ({ url })));
+    }
+    draftPreviewUrlsRef.current.clear();
   }, [revokeAttachmentUrls]);
 
   // Unmount: revoga URLs restantes (cobre logout/expiração com rascunho
@@ -441,6 +498,47 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     target.focus({ preventScroll: true });
   }, [focusedOperation]);
 
+  /**
+   * A13: upload real por tipo (o botão/file input já respeita `caps.<tipo>`).
+   *
+   * O preview local (object URL) é apenas para o usuário; o QUE SAI para o
+   * Agent é a referência opaca devolvida pelo upload. Falha de upload vira um
+   * estado explícito na UI e o anexo fica SEM ref — logo não entra no envio
+   * (nunca um envio "degradado" com URL local).
+   */
+  const uploadSelected = useCallback(
+    async (workspaceId: string, pending: ReadonlyArray<TedAttachment>) => {
+      for (const attachment of pending) {
+        if (!attachment.file) continue;
+        try {
+          const uploaded = await uploadAttachment(workspaceId, {
+            kind: attachment.type,
+            file: attachment.file,
+            name: attachment.name,
+          });
+          // A02/R02 (AC07): o ref pertence ao escopo que o emitiu; após troca
+          // de workspace/logout ele é descartado em vez de vazar para o novo.
+          if (activeWorkspaceIdRef.current !== workspaceId) return;
+          // F6: `ready` is the only state whose reference crosses the wire.
+          setAttachments((prev) =>
+            prev.map((item) =>
+              item.url === attachment.url ? { ...item, ref: uploaded.ref, uploadState: "ready" } : item,
+            ),
+          );
+        } catch {
+          if (activeWorkspaceIdRef.current !== workspaceId) return;
+          // F6: the failure is EXPLICIT on the chip itself (`failed`), so the
+          // message can still go out without it — visibly, never silently.
+          setAttachments((prev) =>
+            prev.map((item) => (item.url === attachment.url ? { ...item, uploadState: "failed" } : item)),
+          );
+          setError("Não foi possível enviar o anexo. Verifique o formato e tente novamente.");
+        }
+      }
+    },
+    [],
+  );
+
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!caps.image) return;
     const files = e.target.files;
@@ -449,10 +547,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     for (const file of Array.from(files)) {
       if (!file.type.startsWith("image/")) continue;
       const url = URL.createObjectURL(file);
-      newAttachments.push({ type: "image", url, name: file.name, file });
+      // F6: the chip starts as `uploading`, which BLOCKS the send until the
+      // reference resolves (or the failure is made visible).
+      newAttachments.push({ type: "image", url, name: file.name, file, uploadState: "uploading" });
     }
     if (newAttachments.length > 0) {
       setAttachments((prev) => [...prev, ...newAttachments]);
+      if (activeWorkspace) void uploadSelected(activeWorkspace.id, newAttachments);
     }
     // reset input to allow re-selecting same file
     e.target.value = "";
@@ -466,13 +567,18 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     for (const file of Array.from(files)) {
       if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) continue;
       const url = URL.createObjectURL(file);
-      newAttachments.push({ type: "pdf", url, name: file.name, file });
+      newAttachments.push({ type: "pdf", url, name: file.name, file, uploadState: "uploading" });
     }
     if (newAttachments.length > 0) {
       setAttachments((prev) => [...prev, ...newAttachments]);
+      if (activeWorkspace) void uploadSelected(activeWorkspace.id, newAttachments);
     }
     e.target.value = "";
   };
+
+  // F6: any attachment still uploading blocks the send. `failed` does NOT: the
+  // message goes out without it, with the failure already visible on the chip.
+  const uploadingAttachments = attachments.some((a) => a.uploadState === "uploading");
 
   const handleRemoveAttachment = (index: number) => {
     setAttachments((prev) => {
@@ -608,8 +714,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       }
       // §19.3: success consumed the draft — the authoritative history
       // replaced the bubble, so the local blob URLs can be revoked now.
+      // A13: os previews são locais (o wire leva só a referência), então o
+      // revoke vem do registro local do rascunho, não do payload enviado.
       draftsRef.current.delete(send.messageId);
-      revokeAttachmentUrls(send.attachments ?? []);
+      revokeAttachmentUrls(
+        (draftPreviewUrlsRef.current.get(send.messageId) ?? []).map((url) => ({ url })),
+      );
+      draftPreviewUrlsRef.current.delete(send.messageId);
     } catch (err) {
       // A02/R02 (AC07): a failure raised after the scope changed belongs to
       // the previous conversation — never mark a bubble nor surface an error
@@ -630,19 +741,33 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     e.preventDefault();
     const hasText = input.trim().length > 0;
     const hasAttachments = attachments.length > 0;
+    // F6: sending while an upload is in flight would drop that attachment
+    // silently (no `ref` yet). The send waits for the reference instead.
+    if (uploadingAttachments) return;
     if ((!hasText && !hasAttachments) || !activeWorkspace || loading) return;
 
     const userText = input.trim() || (hasAttachments ? attachments.map((a) => `[${a.type}: ${a.name}]`).join(" ") : "");
     // §19.1: EVERY message renders immediately (optimistic), text included —
-    // not only messages carrying attachments.
+    // not only messages carrying attachments. The bubble keeps the LOCAL
+    // object URL (render-only; never sent).
     const localAttachments = attachments.map((a) => ({ type: a.type, url: a.url, name: a.name }));
+    // A13: what CROSSES the wire is the opaque reference. An attachment whose
+    // upload did not resolve has no ref and is not sent at all — the failure is
+    // already surfaced as an explicit error state (never a silent degradation).
+    const wireAttachments = attachments
+      .filter((a) => Boolean(a.ref))
+      .map((a) => ({ type: a.type, url: "", name: a.name, ref: a.ref as string }));
     const textWithAttachments = hasAttachments
       ? `${userText} ${localAttachments.map((a) => `[${a.type}: ${a.name}]`).join(" ")}`.trim()
       : userText;
     // SPEC §7.7: the send identity is minted ONCE at composition; retries
     // reuse it via the draft record below.
-    const send = composeChatSend(textWithAttachments, localAttachments.length > 0 ? { attachments: localAttachments } : undefined);
+    const send = composeChatSend(textWithAttachments, wireAttachments.length > 0 ? { attachments: wireAttachments } : undefined);
     draftsRef.current.set(send.messageId, send);
+    draftPreviewUrlsRef.current.set(
+      send.messageId,
+      localAttachments.map((a) => a.url).filter((url) => url.startsWith("blob:")),
+    );
 
     const optimistic: ChatMessage = {
       id: send.messageId,
@@ -675,8 +800,14 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       stored ??
       composeChatSend(failed.content, {
         messageId,
+        // Fallback (rascunho perdido): só reanexo o que ainda tem URL real —
+        // um anexo sem URL não pode virar um envio vazio.
         ...(Array.isArray(failed.attachments) && failed.attachments.length > 0
-          ? { attachments: failed.attachments.map((a) => ({ type: a.type, url: a.url, name: a.name ?? "" })) }
+          ? {
+              attachments: failed.attachments
+                .filter((a) => typeof a.url === "string" && a.url !== "")
+                .map((a) => ({ type: a.type, url: a.url, name: a.name ?? "" })),
+            }
           : {}),
       });
     draftsRef.current.set(messageId, send);
@@ -874,6 +1005,14 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
                   {att.type === "audio" && <Mic size={18} className="text-primary" />}
                   <span className="max-w-[100px] truncate text-[11px] font-medium text-text-secondary">{att.name}</span>
                   <span className="text-[10px] text-text-muted">{att.type}</span>
+                  {/* F6: the upload state is VISIBLE on the chip — a pending
+                      upload blocks the send, a failure never hides itself. */}
+                  {att.uploadState === "uploading" && (
+                    <span className="text-[10px] font-medium text-text-muted">enviando…</span>
+                  )}
+                  {att.uploadState === "failed" && (
+                    <span className="text-[10px] font-medium text-danger">falha no envio</span>
+                  )}
                   <button type="button" aria-label={`Remover ${att.name}`} onClick={() => handleRemoveAttachment(idx)} className="ml-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-surface-3 text-text-muted hover:text-danger">
                     <Trash2 size={12} />
                   </button>
@@ -944,7 +1083,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
             />
             <button
               type="submit"
-              disabled={loading || (!input.trim() && attachments.length === 0)}
+              disabled={loading || uploadingAttachments || (!input.trim() && attachments.length === 0)}
               aria-label="Enviar mensagem"
               className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-primary text-white shadow-fab transition-all hover:bg-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none cursor-pointer"
             >

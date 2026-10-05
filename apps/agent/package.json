@@ -21,7 +21,8 @@
     "@ai-sdk/anthropic": "^2.0.0",
     "@ai-sdk/google": "^2.0.0",
     "@ai-sdk/openai-compatible": "^1.0.0",
-    "@sinclair/typebox": "^0.34.0"
+    "@sinclair/typebox": "^0.34.0",
+    "unpdf": "1.8.1"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.4",

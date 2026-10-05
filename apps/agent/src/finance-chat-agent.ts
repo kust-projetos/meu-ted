@@ -64,6 +64,39 @@ import {
 } from "./orchestration/conversation-orchestrator.js";
 import { classifyError, emitSanitizedEvent } from "./observability/events.js";
 import { judgmentProviderForDo, type JudgmentEnv, type JudgmentProvider } from "./judgment/provider.js";
+// A13/R11: binary ingestion with identity (G05 = private R2 via the OPTIONAL
+// TED_ATTACHMENTS_BUCKET binding). Everything here is default-off: without
+// that binding the byte pipeline is unavailable and every `ref` is reported
+// as such. wrangler.jsonc is intentionally untouched (rollout step A19).
+import { getAttachmentStorage } from "./attachments/storage.js";
+import { ingestAttachment } from "./attachments/ingest.js";
+import {
+  createAttachmentProcessingMemo,
+  createAttachmentProcessorRegistry,
+  processAttachmentOnce,
+  type AttachmentProcessingMemo,
+  type AttachmentProcessingOutcome,
+  type AttachmentProcessor,
+} from "./attachments/processors.js";
+import {
+  attachmentStatusFor,
+  isAttachmentError,
+  isAttachmentKind,
+  isAttachmentRef,
+  type AttachmentIdentity,
+  type AttachmentKind,
+} from "./attachments/types.js";
+// A14/R12: STT de áudio via Groq (G05) — default-off com trava dupla. Sem as
+// duas envs, `audioSttProcessorOverride` devolve `undefined` e o áudio segue no
+// `unsupported` fail-closed da A13, sem qualquer chamada de rede.
+import { AUDIO_TRANSCRIPT_NOTICE, audioSttProcessorOverride, composeTurnTextWithTranscript } from "./multimodal/groq-stt.js";
+// A15/R13: visão de imagem via Groq (G05, mesmo vendor do STT — nenhum vendor
+// novo) — default-off com trava dupla. Sem as duas envs, `imageVisionProcessorOverride`
+// devolve `undefined` e a imagem segue no `unsupported` fail-closed da A13.
+import { VISION_EXTRACT_NOTICE, imageVisionProcessorOverride } from "./multimodal/groq-vision.js";
+// A15/R13: PDF text-layer local (spike aprovado para `unpdf`). Sem egress e sem
+// credencial, não há trava dupla; o que ele não consegue ler vira estado tipado.
+import { PDF_TEXT_NOTICE, pdfTextProcessorOverride } from "./multimodal/pdf-text.js";
 import { routeIntent } from "./orchestration/intent-router.js";
 import { createChannelGrounding } from "./orchestration/channel-evidence.js";
 import type { EvidenceEnvelope } from "./evidence/evidence-envelope.js";
@@ -101,6 +134,36 @@ export type Env = {
   BRAVE_API_KEY?: string;
   /** A11: CSV of exact hostnames `web_fetch` may read (default-off). */
   TED_WEB_FETCH_ALLOWED_HOSTS?: string;
+  /**
+   * A13/G05: OPTIONAL private R2 binding for attachment bytes. Absent ⇒ the
+   * ingestion pipeline is UNAVAILABLE (fail-closed) and the upload RPC answers
+   * `attachment_storage_unavailable`. Declared as the adapter's minimal bucket
+   * interface so this program keeps its current `types` (no workers-types).
+   */
+  TED_ATTACHMENTS_BUCKET?: unknown;
+  /**
+   * A14/R12: STT de áudio via Groq (G05) — default-off com TRAVA DUPLA.
+   * `GROQ_API_KEY` é a credencial (lida no call time, nunca logada) e
+   * `TED_AUDIO_STT_ENABLED=1` é o opt-in do rollout: sem as duas, a
+   * capacidade permanece `unsupported` e nada muda. `TED_AUDIO_STT_MODEL`
+   * (allowlist Groq Whisper) e `TED_AUDIO_STT_TIMEOUT_MS` (default 20 s) são
+   * opcionais; não há fallback automático de modelo.
+   */
+  GROQ_API_KEY?: string;
+  TED_AUDIO_STT_ENABLED?: string;
+  TED_AUDIO_STT_MODEL?: string;
+  TED_AUDIO_STT_TIMEOUT_MS?: string;
+  /**
+   * A15/R13: visão de imagem via Groq (G05 — MESMO vendor do STT, nenhum vendor
+   * novo) — default-off com TRAVA DUPLA. `GROQ_API_KEY` é a credencial (lida no
+   * call time, nunca logada) e `TED_VISION_ENABLED=1` é o opt-in do rollout: sem
+   * as duas, a imagem permanece `unsupported` e nada muda.
+   * `TED_VISION_MODEL` (allowlist fechada de visão) e `TED_VISION_TIMEOUT_MS`
+   * (default 30 s) são opcionais; não há fallback automático de modelo.
+   */
+  TED_VISION_ENABLED?: string;
+  TED_VISION_MODEL?: string;
+  TED_VISION_TIMEOUT_MS?: string;
 };
 
 /**
@@ -112,6 +175,64 @@ export type Env = {
  */
 export const MAX_CHAT_TEXT_CHARS = 32_000;
 export const MAX_CHAT_ATTACHMENTS = 10;
+
+/**
+ * F8 — composes the TURN TEXT from the user's own text plus EVERY accepted
+ * extraction of the turn.
+ *
+ * One carrier notice per item, all notices FIRST so the message still OPENS
+ * with a provenance marker (that is what keeps the composed text structurally
+ * ineligible for autoexecution), then the typed text, then the data blocks.
+ * For a single item this is byte-identical to the A14/A15 composers.
+ *
+ * Attachment-derived data is DATA: it can complete a proposal, and it can never
+ * decide — the decision routing reads the typed text alone (F1).
+ */
+export const composeTurnTextWithAttachmentData = (input: {
+  userText: string;
+  data: ReadonlyArray<{ kind: AttachmentKind; text: string }>;
+}): string => {
+  const items = input.data.filter((item) => typeof item.text === "string" && item.text.trim() !== "");
+  if (items.length === 0) return "";
+  const userText = input.userText.trim();
+  const parts: string[] = items.map((item) => ATTACHMENT_DATA_NOTICE[item.kind]);
+  if (userText !== "") parts.push(userText);
+  for (const item of items) parts.push(item.text);
+  return scrubForPersistence(parts.join("\n"));
+};
+
+/** The carrier that keeps each extracted family visibly labelled as data. */
+const ATTACHMENT_DATA_NOTICE: Record<AttachmentKind, string> = {
+  audio: AUDIO_TRANSCRIPT_NOTICE,
+  image: VISION_EXTRACT_NOTICE,
+  pdf: PDF_TEXT_NOTICE,
+};
+
+/**
+ * A13: headers carrying the upload intent. `kind` and `name` are DECLARED
+ * claims only — the real media type always comes from magic bytes in
+ * `ingestAttachment`, and a mismatch is rejected.
+ */
+export const ATTACHMENT_KIND_HEADER = "x-ted-attachment-kind";
+export const ATTACHMENT_NAME_HEADER = "x-ted-attachment-name";
+
+/** Echoed reference cap — an echoed ref is metadata, never unbounded input. */
+const ATTACHMENT_REF_ECHO_MAX_CHARS = 80;
+
+/** Turn-level attachment state: explicit evidence, never a silent empty. */
+type TurnAttachmentState = {
+  ref: string;
+  /** F9/F13: the SERVER record's kind, or `unknown` when nothing was read. */
+  kind: string;
+  state: AttachmentProcessingOutcome['state'];
+  detail: string;
+};
+
+/**
+ * F8: one accepted extraction entering the turn, with the carrier kind taken
+ * from the SERVER record. A turn can carry several (one per type budget).
+ */
+type TurnAttachmentData = { kind: AttachmentKind; text: string };
 
 export type IntentionSnapshotRow = {
   intention_id: string;
@@ -1213,6 +1334,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     events?: (eventType: string, fields: Record<string, unknown>) => void;
     /** SPEC §7.8 draft store (DO storage). Absent = legacy single-turn flow. */
     draftStore?: SqlMutationDraftStore;
+    /** A16/R15 judgment seam override (tests). Absent = this DO's own provider. */
+    judgmentProvider?: () => JudgmentProvider | undefined;
     /** debt-undo-confirmation-protocol override (tests). Absent = DO store + authoritative preview. */
     undoProposals?: ConstructorParameters<typeof ConversationOrchestrator>[0] extends { undoProposals?: infer U } ? U : never;
   } = {}): ConversationOrchestrator {
@@ -1236,6 +1359,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       responseProvider: (input, plan) => this.provideUnifiedResponse(input, plan),
       evidenceProvider: dependencies.evidenceProvider ?? grounding.evidenceProvider,
       correctionProvider: dependencies.correctionProvider ?? grounding.correctionProvider,
+      // A16/R15: every channel reaches the optional judge through THIS DO's
+      // single provider instance, so the breaker and the 1-call-per-turn cap are
+      // per workspace and survive across turns. Default-off (G04): with no
+      // endpoint in the env the provider is `unavailable`, the wiring costs no
+      // network and the turn is indistinguishable from the pre-wiring one.
+      judgmentProvider: dependencies.judgmentProvider ?? (() => this.judgmentProvider()),
       // debt-undo-confirmation-protocol: every channel proposes through the
       // same persistent DO store + authoritative preview. Tests may override
       // the pair; production always resolves it here (absent store = the
@@ -1536,6 +1665,216 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * misconfigured gateway ever forwarded them. Returns null when the check
    * passes (or does not apply: cookie-authenticated callers carry no token).
    */
+  /**
+   * A13: per-DO processing guard. Lazily created (a getter, not a field
+   * initializer) so the guard is always present even on instances built
+   * without running the constructor. Instance state — never a module global —
+   * so each workspace DO memoises only its own `(attachmentId, turnId)`.
+   */
+  private attachmentMemoInstance?: AttachmentProcessingMemo;
+  private get attachmentProcessingMemo(): AttachmentProcessingMemo {
+    this.attachmentMemoInstance ??= createAttachmentProcessingMemo();
+    return this.attachmentMemoInstance;
+  }
+
+  /**
+   * A13/R11 — `POST /rpc/attachments`.
+   *
+   * Auth mirrors `/rpc/chat` and `/rpc/memory/prefs`: the gateway-verified
+   * `x-agent-actor`/`x-agent-workspace` headers are the ONLY identity (any
+   * body/header claiming an actor is ignored). The answer is exactly
+   * `{ref, kind, name, size, expiresAt}` — no URL, no base64, no local path.
+   *
+   * Default-off: with no `TED_ATTACHMENTS_BUCKET` binding the route answers
+   * 503 `attachment_storage_unavailable` and stores nothing.
+   */
+  private async handleAttachmentUpload(request: Request): Promise<Response> {
+    const actorId = request.headers.get("x-agent-actor")?.trim();
+    const workspaceId = request.headers.get("x-agent-workspace")?.trim();
+    if (!actorId || !workspaceId) {
+      return Response.json(
+        { code: "agent.unauthorized", message: "Missing authenticated actor or workspace" },
+        { status: 401 },
+      );
+    }
+    const storage = getAttachmentStorage(this.env);
+    if (!storage) {
+      // Fail-closed: the capability is OFF, never "degraded but working".
+      return Response.json(
+        {
+          code: "attachment_storage_unavailable",
+          message: "O envio de anexos não está disponível no momento.",
+        },
+        { status: 503 },
+      );
+    }
+    const declaredKind = request.headers.get(ATTACHMENT_KIND_HEADER) ?? "";
+    const declaredName = request.headers.get(ATTACHMENT_NAME_HEADER) ?? "";
+    if (!isAttachmentKind(declaredKind)) {
+      return Response.json(
+        { code: "attachment_unsupported_kind", message: "Tipo de anexo não suportado." },
+        { status: 400 },
+      );
+    }
+    let bytes: ArrayBuffer;
+    try {
+      bytes = await request.arrayBuffer();
+    } catch {
+      return Response.json(
+        { code: "attachment_bad_request", message: "Corpo do anexo ilegível." },
+        { status: 400 },
+      );
+    }
+    const identity: AttachmentIdentity = { workspaceId, actorId };
+    try {
+      const uploaded = await ingestAttachment({
+        storage,
+        identity,
+        kind: declaredKind as AttachmentKind,
+        name: declaredName,
+        bytes,
+        // Ref derivation is keyed by the agent secret when present, so a ref is
+        // stable per (workspace, actor, sha256) but unguessable across tenants.
+        refSecret: this.env?.AGENT_CONNECTION_TOKEN_SECRET,
+      });
+      return Response.json(uploaded, { status: 200 });
+    } catch (error) {
+      if (isAttachmentError(error)) {
+        // Sanitized, typed failure: no raw name, no bytes, no stack.
+        return Response.json(
+          { code: error.code, message: redactTranscript(error.message) },
+          { status: error.status || attachmentStatusFor(error.code) },
+        );
+      }
+      return Response.json(
+        { code: "attachment_bad_request", message: "Não foi possível receber o anexo." },
+        { status: 400 },
+      );
+    }
+  }
+
+  /**
+   * A13 — resolves every attachment that carries a `ref` BEFORE the turn is
+   * processed, and returns one explicit state per reference.
+   *
+   * It reads the RAW client items (not the DLP output) on purpose: a
+   * MALFORMED ref is dropped by `scrubAttachments` (it is not opaque metadata),
+   * and an invalid reference must still surface as an explicit failure instead
+   * of vanishing. Only `type`/`ref` are read here — never a raw name, never
+   * bytes — and the echoed ref is sanitised + capped.
+   *
+   * Possession is re-validated (workspace + actor + expiry + kind). An
+   * unreadable reference becomes an explicit `unavailable` state on the turn —
+   * never a raw 500, never a silent drop. Bytes stay inside the processor call.
+   *
+   * Legacy `{type, url, name}` items have no `ref` and therefore produce no
+   * state at all: their behaviour is untouched.
+   */
+  private async resolveTurnAttachmentRefs(
+    rawAttachments: unknown,
+    identity: AttachmentIdentity,
+    turnId: string,
+  ): Promise<{ states: TurnAttachmentState[]; datas: TurnAttachmentData[] }> {
+    if (!Array.isArray(rawAttachments)) return { states: [], datas: [] };
+    const storage = getAttachmentStorage(this.env);
+    // A14: the audio processor replaces the `unsupported` entry ONLY when the
+    // STT double lock is on (`GROQ_API_KEY` + `TED_AUDIO_STT_ENABLED`). The
+    // registry — and the per-turn transcription budget carried by the processor
+    // — is built HERE, once per turn: no state leaks across turns/workspaces.
+    // A15: same contract for the image (vision, double lock) and for the PDF
+    // (local text-layer parse — no egress, no credential, so no double lock).
+    // With every lock off, the registry is byte-for-byte the A13 one.
+    const audioProcessor = audioSttProcessorOverride(this.env);
+    const imageProcessor = imageVisionProcessorOverride(this.env);
+    // F4: the PDF text-layer parse is behind `TED_PDF_TEXT_ENABLED=1`
+    // (default-off). Without it NO extractor is built and the PDF stays the
+    // A13 `unsupported` entry — zero parse, zero bytes read.
+    const pdfProcessor = pdfTextProcessorOverride(this.env as { TED_PDF_TEXT_ENABLED?: string });
+    const overrides: Partial<Record<AttachmentKind, AttachmentProcessor>> = {
+      ...(audioProcessor ? { audio: audioProcessor } : {}),
+      ...(imageProcessor ? { image: imageProcessor } : {}),
+      ...(pdfProcessor ? { pdf: pdfProcessor } : {}),
+    };
+    const registry = createAttachmentProcessorRegistry(overrides);
+    const states: TurnAttachmentState[] = [];
+    // F8: EVERY accepted outcome of the turn is kept, each with its own
+    // provenance. Dropping all but the first meant a PDF sent together with an
+    // audio note silently lost one of the two.
+    const datas: TurnAttachmentData[] = [];
+    // F8: the per-turn budget is one unit of WORK PER TYPE, marked
+    // `skipped_budget` BEFORE the processor runs — an excess attachment is
+    // never read and then discarded.
+    const budgetSpent = new Set<AttachmentKind>();
+    for (const item of rawAttachments.slice(0, MAX_CHAT_ATTACHMENTS)) {
+      if (!item || typeof item !== "object") continue;
+      const record = item as Record<string, unknown>;
+      const declaredRef = record["ref"];
+      if (typeof declaredRef !== "string") continue;
+      const type = typeof record["type"] === "string" ? record["type"].slice(0, 32) : "file";
+      const safeRef = declaredRef.slice(0, ATTACHMENT_REF_ECHO_MAX_CHARS).replace(/[^\w.:-]/g, "");
+      // F9: the DECLARED kind is a claim; it is checked against the server
+      // record and never used as the source of truth for state or provenance.
+      const expectedKind: AttachmentKind | undefined = type === "image" || type === "pdf" || type === "audio" ? type : undefined;
+      // Malformed ref ⇒ explicit failure; possession is never attempted.
+      if (!isAttachmentRef(declaredRef)) {
+        states.push({
+          ref: safeRef,
+          kind: "unknown",
+          state: "unavailable",
+          detail: "Não foi possível ler o anexo enviado.",
+        });
+        continue;
+      }
+      // F8: the budget is spent by TYPE, and checked before any processing.
+      if (expectedKind !== undefined && budgetSpent.has(expectedKind)) {
+        states.push({
+          ref: safeRef,
+          // F13: the record is NEVER read on this path, so the server cannot
+          // vouch for a kind — reporting the client's claim here would let it
+          // label any object as any type. `unknown` is the honest answer; the
+          // budget itself still keys off the declared claim (which is later
+          // validated against the record on every processed attachment).
+          kind: "unknown",
+          state: "skipped_budget",
+          detail: "Só processamos um anexo deste tipo por mensagem. Este ficou para trás.",
+        });
+        continue;
+      }
+      // No binding ⇒ every reference is unavailable (fail-closed, default-off).
+      const outcome: AttachmentProcessingOutcome = storage
+        ? await processAttachmentOnce({
+            storage,
+            registry,
+            identity,
+            ref: declaredRef,
+            turnId,
+            memo: this.attachmentProcessingMemo,
+            ...(expectedKind !== undefined ? { expectedKind } : {}),
+          })
+        : { state: "unavailable", detail: "Não foi possível ler o anexo enviado.", ref: declaredRef };
+      // F9/F13: the reported kind is the SERVER RECORD's kind (or `unknown`
+      // when nothing was read) — never the client's claim.
+      states.push({
+        ref: outcome.ref,
+        kind: outcome.kind ?? "unknown",
+        state: outcome.state,
+        detail: outcome.detail,
+      });
+      // The budget is only consumed by a real attempt: an unreadable or
+      // capability-off attachment must not burn the slot of the next one.
+      if (expectedKind !== undefined && outcome.state !== "unavailable" && outcome.state !== "unsupported") {
+        budgetSpent.add(expectedKind);
+      }
+      // A14/A15: EVERY extracted item enters the turn, each labelled with the
+      // carrier that matches its SERVER kind, so a vision extraction is never
+      // labelled as a transcription and no item is discarded.
+      if (typeof outcome.transcript === "string" && outcome.kind !== undefined) {
+        datas.push({ kind: outcome.kind, text: outcome.transcript });
+      }
+    }
+    return { states, datas };
+  }
+
   private async assertConnectionBinding(request: Request): Promise<Response | null> {
     const connToken = request.headers.get("x-agent-connection-token")?.trim();
     const secret = this.env?.AGENT_CONNECTION_TOKEN_SECRET;
@@ -2108,6 +2447,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       const bindingError = await this.assertConnectionBinding(request);
       if (bindingError) return bindingError;
     }
+    // A13/R11: binary upload. Same auth contract as every other rpc route
+    // (gateway-stamped identity, connection-token binding above) — the bytes
+    // are validated by magic bytes server-side and never become a URL.
+    if (url.pathname === "/rpc/attachments" && request.method === "POST") {
+      return this.handleAttachmentUpload(request);
+    }
     const activeMatch = url.pathname === "/rpc/pending-operations/active" && request.method === "GET";
     if (activeMatch) {
       return this.handleActivePendingOperations(request);
@@ -2174,11 +2519,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       const unredactedText = rawText.trim();
       // H-09: attachments persist as METADATA ONLY — inline content and
       // data: URLs are dropped before anything becomes durable.
+      // A13: the metadata shape additionally carries the optional OPAQUE `ref`
+      // (validated format, never a URL/path); raw bytes never reach this
+      // funnel — the DLP byte semantics are unchanged.
       const { attachments: incomingAttachments } = scrubAttachments(body.attachments);
       if (!unredactedText && incomingAttachments.length === 0) return Response.json({ code: "agent.invalid_message" }, { status: 400 });
-      // H-09: central DLP scrub before the text becomes durable (transcript,
-      // memory, summary, learning, export all read this value downstream).
-      const text = unredactedText ? scrubForPersistence(unredactedText) : incomingAttachments.length > 0 ? `[anexo ${incomingAttachments.map((a) => a.name).join(", ")}]` : "";
       // SPEC §7.7/§7.7.1: the intentionId derives deterministically from the
       // PWA messageId (intentionId field, or messageId alias). No
       // Date.now()/random fallback: a redelivery after a lost response
@@ -2189,6 +2534,45 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       if (!intentionId || intentionId.length > 128) {
         return Response.json({ code: "agent.invalid_message" }, { status: 400 });
       }
+      // A13: resolve every `{type, ref, name?}` reference BEFORE the turn input
+      // is built. Possession (workspace + actor), expiry and kind are
+      // re-validated here; an unreadable reference becomes an explicit state on
+      // the turn instead of a raw 500 or a silent drop. Legacy
+      // `{type,url,name}` items are not referenced and therefore produce no
+      // state at all (unchanged behaviour).
+      // A14: this is also where an audio transcript (when the STT double lock
+      // is on) becomes available, so it must run BEFORE the turn text exists.
+      const { states: attachmentStates, datas: attachmentData } = await this.resolveTurnAttachmentRefs(
+        body.attachments,
+        { workspaceId: identity.workspaceId, actorId: identity.actorId },
+        intentionId,
+      );
+      // H-09: central DLP scrub before the text becomes durable (transcript,
+      // memory, summary, learning, export all read this value downstream).
+      // A14: with a transcript, the turn text is the provenance-marked
+      // transcription (plus whatever the user typed); without one it is
+      // byte-for-byte the previous value.
+      // A15: the SAME structural immunity, with the carrier that matches the
+      // source (audio transcription / vision extraction / PDF text layer). All
+      // three OPEN the turn with a provenance marker, so the composed text can
+      // never satisfy the mutational-intent gate at its head.
+      const attachmentPlaceholder =
+        incomingAttachments.length > 0
+          ? `[anexo ${incomingAttachments.map((a) => a.name).join(", ")}]`
+          : undefined;
+      // F8: EVERY accepted extraction enters the turn, each behind its own carrier
+      // notice. With none, the text is byte-for-byte the previous value.
+      const composedAttachmentText = composeTurnTextWithAttachmentData({
+        userText: unredactedText,
+        data: attachmentData,
+      });
+      const text =
+        composedAttachmentText !== ""
+          ? composedAttachmentText
+          : composeTurnTextWithTranscript({
+              userText: unredactedText,
+              ...(attachmentPlaceholder ? { attachmentPlaceholder } : {}),
+            });
 
       const restInput = normalizeRestTurn(
         { ...body, text, intentionId, attachments: incomingAttachments },
@@ -2198,6 +2582,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           role: identity.role,
           deviceId,
         } satisfies AuthenticatedIdentity,
+        // F1 (BLOCKER): the DECISION text is what the human TYPED. It is passed
+        // as a server-side option and never read from the body, so attachment-
+        // derived data (a PDF saying "sim confirmo", an STT transcript) can
+        // never reach the confirmation/cancel/retry/undo routing.
+        { typedText: unredactedText },
       );
       if (typeof this.persistMessages !== 'function') {
         return Response.json({ code: 'agent.persistence_unavailable', message: 'SDK persistence is not available' }, { status: 503 });
@@ -2218,16 +2607,27 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // T1.5 (SPEC §8): decision turns (confirmation/cancel/retry) build
         // the same MutationApiClient as proposals — the orchestrator's
         // coordinator needs the transport even when no draft exists.
-        const routed = routeIntent(text);
+        // F1: the decision-capable transport is gated by the TYPED text only, so an
+        // attachment that says "confirmo" never even gets a decision-capable client.
+        const decisionText = unredactedText;
+        const routed = routeIntent(text, decisionText);
         const needsMutation = mutationPlan !== null || hasPendingDraft
           || routed.mode === 'confirmation' || routed.mode === 'cancel'
-          || isRetryText(text);
+          || isRetryText(decisionText);
         const mutationApiClient = await this.mutationApiClientForTurn(restInput, needsMutation);
         const entityReader = needsMutation ? await this.entityReaderForTurn(restInput) : undefined;
         const turnResult = await this.orchestratorForChannel({
           ...(mutationPlan ? { plan: () => mutationPlan } : {}),
           ...(mutationApiClient ? { mutationApiClient } : {}),
-          autoExecutionClient: () => this.elevatedMutationApiClientForTurn(restInput),
+          // AC22 (A14): a turn whose text carries a transcription NEVER gets an
+          // elevated client, so the orchestrator cannot reach the autoexecute
+          // fast path at all — the only way out is the proposal/draft the human
+          // confirms. Belt on suspenders over the provenance marker: a
+          // mistranscribed amount or negation still lands in the same manual
+          // confirmation flow as any typed value.
+          ...(attachmentData.length === 0
+            ? { autoExecutionClient: () => this.elevatedMutationApiClientForTurn(restInput) }
+            : {}),
           ...(entityReader ? { entityReader } : {}),
           ...(draftStore ? { draftStore } : {}),
         }).runTurn(restInput);
@@ -2290,6 +2690,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
               }
             : undefined;
           return Response.json({ status: "completed", output: turnResult.response.text, ...(pendingOperation ? { pendingOperation } : {}),
+            // A13: per-reference processing state as EXPLICIT turn evidence —
+            // an unreadable/unsupported attachment is reported, never swallowed.
+            ...(attachmentStates.length > 0 ? { attachmentStates } : {}),
             // debt-undo-confirmation-protocol: separate undo proposal relay
             // (requestId for the decision RPC; the fixed target never leaves
             // the DO). Re-validated shape — unknown keys are dropped.

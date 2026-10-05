@@ -17,10 +17,17 @@
  *
  * Attachments are METADATA-ONLY: inline content (`data`/`content`/base64
  * fields, `data:` URLs) is never persisted — it is dropped and counted.
+ *
+ * A13: the metadata shape additionally carries an OPTIONAL opaque `ref` (the
+ * server-side attachment reference). This module only VALIDATES the opaque
+ * format — it never resolves a reference, and no byte ever traverses this
+ * funnel (bytes live in the private storage pipeline). Name scrubbing and
+ * inline-content dropping are unchanged.
  */
 
 import { sanitizeForPersistence } from './history.js';
 import { redactTranscript } from '../transcript-safety.js';
+import { ATTACHMENT_REF_PATTERN } from '../attachments/types.js';
 
 export const REDACTED = '[REDACTED]';
 
@@ -144,7 +151,13 @@ export const scrubForPersistence = (value: string): string => {
   return redactTranscript(scrubDocuments(scrubCvv(scrubPan(secretsFirst))));
 };
 
-export type ScrubbedAttachment = { type: string; url: string; name: string };
+/**
+ * A13: `ref` is the opaque server-side attachment reference. It is METADATA —
+ * never a URL, a local path or content — and is only carried when it matches
+ * the opaque format, so a caller cannot smuggle an arbitrary string into the
+ * durable transcript through this field.
+ */
+export type ScrubbedAttachment = { type: string; url: string; name: string; ref?: string };
 
 export type ScrubAttachmentsResult = {
   attachments: ScrubbedAttachment[];
@@ -155,9 +168,10 @@ export type ScrubAttachmentsResult = {
 const INLINE_CONTENT_KEYS = ['data', 'content', 'base64', 'blob', 'buffer', 'file'];
 
 /**
- * Attachments persist as METADATA ONLY ({type, url, name}). Inline content
- * fields and `data:` URLs are dropped — never persisted raw. Names are
- * scrubbed (a file named after a card number must not leak either).
+ * Attachments persist as METADATA ONLY ({type, url, name, ref?}). Inline
+ * content fields and `data:` URLs are dropped - never persisted raw. Names are
+ * scrubbed (a file named after a card number must not leak either). A `ref`
+ * survives ONLY in the opaque format; anything else is dropped silently.
  */
 export const scrubAttachments = (items: unknown): ScrubAttachmentsResult => {
   if (!Array.isArray(items)) return { attachments: [], droppedInlineContent: 0 };
@@ -183,7 +197,14 @@ export const scrubAttachments = (items: unknown): ScrubAttachmentsResult => {
       dropped = true;
     }
     if (dropped) droppedInlineContent += 1;
-    attachments.push({ type, url, name: scrubForPersistence(rawName).slice(0, 200) });
+    const rawRef = record['ref'];
+    const ref = typeof rawRef === 'string' && ATTACHMENT_REF_PATTERN.test(rawRef) ? rawRef : undefined;
+    attachments.push({
+      type,
+      url,
+      name: scrubForPersistence(rawName).slice(0, 200),
+      ...(ref ? { ref } : {}),
+    });
   }
   return { attachments, droppedInlineContent };
 };

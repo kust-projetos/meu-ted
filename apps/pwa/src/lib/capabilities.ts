@@ -1,13 +1,19 @@
 /**
  * Chat attachment + microphone capability gates (SPEC §18, H-09; V4 §7 A1/A2; INV-08).
  *
- * Multimodal is OUT of scope (SPEC §33): no real ingestion pipeline exists,
- * so the UI must not offer image/PDF/audio attachments. This module is the
- * single source of truth for those capabilities.
+ * A13/P3: attachments are now gated PER TYPE. Each kind has its own
+ * default-off flag (`NEXT_PUBLIC_TED_ATTACHMENT_IMAGE|_PDF|_AUDIO`), so the UI
+ * announces exactly the kinds whose backend pipeline is actually available —
+ * a kind whose backend ingestion is off is never offered.
  *
- * Default is ALL FALSE. When a real ingestion pipeline lands, enable it by
- * setting `NEXT_PUBLIC_TED_ATTACHMENT_INGESTION=1`. Absence or any other
- * value keeps every attachment capability disabled.
+ * The pre-A13 flag `NEXT_PUBLIC_TED_ATTACHMENT_INGESTION=1` is kept as a
+ * LEGACY MASTER: when it is on it enables the three types at once (backwards
+ * compatibility for a deploy that has not yet split them). The per-type flags
+ * UNION with the master — turning one type on never requires the master.
+ *
+ * Everything defaults to FALSE: an absent flag, or any value other than "1",
+ * keeps that capability disabled (fail-closed). The backend enforces the
+ * same contract server-side; these flags only decide what the UI advertises.
  *
  * The microphone gate (V4 T1.1) follows the same call-time pattern: default
  * false, enabled by `NEXT_PUBLIC_TED_MICROPHONE=1` or `=true`. The deploy
@@ -55,15 +61,49 @@ export function isMicrophoneEnabled(env?: EnvLike): boolean {
   return value === "1" || value === "true";
 }
 
-/** Live read so tests can toggle via `vi.stubEnv` without re-imports. */
-export function getChatAttachmentCapabilities(env?: EnvLike): ChatAttachmentCapabilities {
-  const enabled =
-    (env !== undefined
+/**
+ * A13/P3 — legacy master flag. Kept as a compatibility switch: when it is
+ * exactly "1" it enables image, pdf and audio together, so a deploy that has
+ * not split the types yet behaves exactly as before.
+ */
+function isLegacyAttachmentIngestionEnabled(env?: EnvLike): boolean {
+  const value =
+    env !== undefined
       ? readEnv(env, "NEXT_PUBLIC_TED_ATTACHMENT_INGESTION")
       : typeof process !== "undefined"
         ? process.env.NEXT_PUBLIC_TED_ATTACHMENT_INGESTION
-        : undefined) === "1";
-  return { image: enabled, pdf: enabled, audio: enabled, microphone: isMicrophoneEnabled(env) };
+        : undefined;
+  return value === "1";
+}
+
+/**
+ * A13/P3 — per-kind attachment gate. A kind is advertised when its OWN flag
+ * is exactly "1" OR the legacy master is on. Anything else (absent, "0",
+ * "true", "yes", "") stays disabled — default-off and fail-closed.
+ */
+function isAttachmentKindEnabled(env: EnvLike | undefined, kindFlag: string): boolean {
+  if (isLegacyAttachmentIngestionEnabled(env)) return true;
+  const value =
+    env !== undefined
+      ? readEnv(env, kindFlag)
+      : typeof process !== "undefined"
+        ? kindFlag === "NEXT_PUBLIC_TED_ATTACHMENT_IMAGE"
+          ? process.env.NEXT_PUBLIC_TED_ATTACHMENT_IMAGE
+          : kindFlag === "NEXT_PUBLIC_TED_ATTACHMENT_PDF"
+            ? process.env.NEXT_PUBLIC_TED_ATTACHMENT_PDF
+            : process.env.NEXT_PUBLIC_TED_ATTACHMENT_AUDIO
+        : undefined;
+  return value === "1";
+}
+
+/** Live read so tests can toggle via `vi.stubEnv` without re-imports. */
+export function getChatAttachmentCapabilities(env?: EnvLike): ChatAttachmentCapabilities {
+  return {
+    image: isAttachmentKindEnabled(env, "NEXT_PUBLIC_TED_ATTACHMENT_IMAGE"),
+    pdf: isAttachmentKindEnabled(env, "NEXT_PUBLIC_TED_ATTACHMENT_PDF"),
+    audio: isAttachmentKindEnabled(env, "NEXT_PUBLIC_TED_ATTACHMENT_AUDIO"),
+    microphone: isMicrophoneEnabled(env),
+  };
 }
 
 /**

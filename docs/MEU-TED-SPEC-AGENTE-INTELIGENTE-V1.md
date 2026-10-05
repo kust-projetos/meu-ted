@@ -324,6 +324,16 @@ Patch de SPEC exigido pelo PLAN A09 ("patch da SPEC antes de nova API"). Autoriz
 4. **Fixture obrigatória:** `apps/api/tests/fixtures/analytics-semantics.fixture.json` passa a ser importada por teste real de agregação (PG), com os casos F (dupla contagem), H (safe integers) e L (envelope) como RED pós-implementação dos itens 1–3; os casos de comportamento default (A–E, I–K) travam que o default não mudou.
 5. **Fora do escopo deste adendo:** filtro `categoryId`/`includeDescendants` (lacuna de filtro, read model futuro), rota `/analytics/spending-summary` (só se G03 decidir por ela), e qualquer mudança em `daily-heatmap` além do envelope.
 
+### 11.2 Adendo (2026-10-04b) — resolução formal de G04, G05 e G06
+
+Resolução com condições, autorizada pelo operador nesta data; decisão completa e evidências em [reports/2026-10-04-ted-inteligente-gates-g04-g05-g06-resolution.md](reports/2026-10-04-ted-inteligente-gates-g04-g05-g06-resolution.md). Síntese:
+
+- **G04 → default-off com wiring completo.** Jev permanece DESLIGADO em produção (oferta/modelo/training/retention/custo não validados — desfecho previsto no próprio gate). A16 libera o wiring no hot path com o determinístico autoritativo, tetos e breaker já existentes; habilitação futura exige validação documentada do provider + G07.
+- **G05 → seleção registrada, flags default-off.** STT: Groq `whisper-large-v3-turbo`, `language=pt`, tetos server-side próprios, ZDR ativado antes de produção (docs Groq: sem treino com dados do cliente; retenção de inferência ≤30 dias; ZDR elegível). Storage: R2 privado via binding opcional, referência opaca, sem URL pública, TTL idempotente; sem binding = pipeline de bytes fail-closed. Imagem/PDF: adapters default-off condicionados a spike bounded; PDF escaneado sem provider validado = `unsupported` explícito (subfatia própria). Capability por tipo (P3).
+- **G06 → regra durável só com consentimento explícito.** Inferência permanece candidata/advisory; esquecimento é cascata (derivados não ressuscitam); escopo explícito incluindo a camada compartilhada; user skills = regras declarativas restritas com promoção por replay offline + safety + aprovação humana.
+
+Efeito: **A13–A18 desbloqueadas para implementação com flags default-off.** Nenhum deploy/credencial/ativação em produção é autorizado por este adendo; habilitação é rollout por fatia (A19). G01, G02, G07 e G08 permanecem abertos.
+
 ## 12. Rastreabilidade da origem
 
 | Seções da origem | Destino / disposição |

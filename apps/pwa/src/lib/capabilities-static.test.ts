@@ -33,6 +33,22 @@ describe("capabilities static NEXT_PUBLIC reads (SPEC §12.3)", () => {
     expect(getMaxOfflineAuthAgeHours()).toBe(48);
   });
 
+  /**
+   * A13/P3: the per-type flags are read through literal references too, so a
+   * deploy can announce exactly the types whose backend pipeline is ready.
+   */
+  it("resolve as flags por tipo a partir do env estático real", () => {
+    vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "");
+    vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_IMAGE", "1");
+    vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_PDF", "");
+    vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_AUDIO", "1");
+    expect(getChatAttachmentCapabilities()).toMatchObject({
+      image: true,
+      pdf: false,
+      audio: true,
+    });
+  });
+
   it("falls back to the 72h default when the static env is absent", () => {
     vi.stubEnv("NEXT_PUBLIC_MAX_OFFLINE_AUTH_AGE_HOURS", undefined as unknown as string);
     expect(getMaxOfflineAuthAgeHours()).toBe(72);
@@ -50,6 +66,9 @@ describe("capabilities static NEXT_PUBLIC reads (SPEC §12.3)", () => {
     for (const key of [
       "NEXT_PUBLIC_TED_MICROPHONE",
       "NEXT_PUBLIC_TED_ATTACHMENT_INGESTION",
+      "NEXT_PUBLIC_TED_ATTACHMENT_IMAGE",
+      "NEXT_PUBLIC_TED_ATTACHMENT_PDF",
+      "NEXT_PUBLIC_TED_ATTACHMENT_AUDIO",
       "NEXT_PUBLIC_MAX_OFFLINE_AUTH_AGE_HOURS",
       "NEXT_PUBLIC_DISABLE_OFFLINE_SNAPSHOT",
     ]) {

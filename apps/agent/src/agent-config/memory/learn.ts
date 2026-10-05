@@ -11,11 +11,36 @@
  *   before persisting. Card numbers are never stored.
  */
 
-import { isMemoryEnabled, rememberFact, textSimilarity, type MemoryItem, type MemorySql } from './store.js';
+import {
+  isFingerprintTombstoned,
+  isMemoryEnabled,
+  memoryFingerprint,
+  normalizeMemoryScope,
+  rememberCorrection,
+  rememberFact,
+  textSimilarity,
+  type MemoryItem,
+  type MemoryScope,
+  type MemorySql,
+} from './store.js';
 
 export const LEARN_EVERY_TURNS = 5;
 export const MAX_LEARNINGS_PER_TURN = 2;
 export const LEARN_DEDUP_THRESHOLD = 0.6;
+
+/**
+ * G06.2: behavioral inference stays a CANDIDATE. A correction observed in a
+ * turn is persisted as a derived `learning`, never promoted to a durable
+ * `fact`/`preference` without an explicit user declaration.
+ */
+export type LearningCorrection = {
+  /** Stable identity of what was corrected (entity/alias being fixed). */
+  target: string;
+  /** Which field of the target the correction applies to. */
+  field: string;
+  /** Identity of the correcting turn; makes redelivery idempotent. */
+  turnFingerprint?: string;
+};
 
 export type LearningCandidate = {
   kind: 'preference' | 'fact' | 'learning';
@@ -53,6 +78,13 @@ export type LearnTurnInput = {
   turnCount: number;
   /** Optional cheap-LLM extractor used only when the turn is due. */
   llmExtract?: (transcript: string) => Promise<string[]>;
+  /** G06.4: explicit scope; without it the current behavior is unchanged. */
+  scope?: MemoryScope;
+  /**
+   * A17: a correction observed in this turn. Persisted as a derived learning
+   * with a deterministic fingerprint (AC26a), never as a durable rule.
+   */
+  correction?: LearningCorrection;
 };
 
 export const learnFromTurn = async (sql: MemorySql, input: LearnTurnInput): Promise<MemoryItem[]> => {
@@ -60,6 +92,8 @@ export const learnFromTurn = async (sql: MemorySql, input: LearnTurnInput): Prom
   // A failed/empty assistant turn is not an actual response and must not
   // teach durable memory from an uncompleted interaction.
   if (typeof input.assistantText !== 'string' || input.assistantText.trim().length === 0) return [];
+  const scope = input.scope
+    ?? normalizeMemoryScope({ workspaceId: input.workspaceId, actor: input.actorId, shared: false });
   const learned: MemoryItem[] = [];
   const persist = (candidate: LearningCandidate): void => {
     const result = rememberFact(sql, {
@@ -68,9 +102,39 @@ export const learnFromTurn = async (sql: MemorySql, input: LearnTurnInput): Prom
       kind: candidate.kind,
       content: candidate.content,
       salience: candidate.salience,
+      scope,
     });
     if (result.stored && !result.deduped) learned.push(result.item);
   };
+
+  // A17: an explicit correction takes the derived path. It is stored as a
+  // `learning` with provenance, and a tombstoned identity is refused so the
+  // job cannot resurrect what the user forgot (AC26b).
+  if (input.correction) {
+    const fingerprint = memoryFingerprint({
+      scope,
+      target: input.correction.target,
+      field: input.correction.field,
+    });
+    if (!isFingerprintTombstoned(sql, { workspaceId: input.workspaceId, actor: input.actorId, fingerprint })) {
+      const content = input.userText.trim().slice(0, 280);
+      if (content.length > 0) {
+        const result = rememberCorrection(sql, {
+          workspaceId: input.workspaceId,
+          actor: input.actorId,
+          target: input.correction.target,
+          field: input.correction.field,
+          turnFingerprint: input.correction.turnFingerprint,
+          content,
+          scope,
+        });
+        if (result.stored && !result.deduped) learned.push(result.item);
+      }
+    }
+    // A correction turn teaches exactly one derived candidate: never run the
+    // heuristic/LLM extractors on it, which could promote a durable rule.
+    return learned;
+  }
 
   for (const candidate of extractLearningsHeuristic(input.userText, input.assistantText)) {
     if (learned.length >= MAX_LEARNINGS_PER_TURN) break;
