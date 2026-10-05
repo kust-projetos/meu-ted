@@ -49,6 +49,15 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
     fetchAgentHistory: vi.fn(),
     sendAgentMessage: vi.fn(),
     renewAgentSession: vi.fn(),
+    // A13: o upload devolve a referência opaca; o wire NUNCA leva o object URL.
+    uploadAttachment: vi
+      .fn()
+      .mockImplementation(async (_ws: string, input: { kind: string; name?: string }) => ({
+        ref: "att_0000000000000000aaaa",
+        kind: input.kind,
+        name: input.name ?? "anexo",
+        size: 33,
+      })),
   };
 });
 
@@ -206,13 +215,18 @@ describe("TedChat — §19.3 retry preserves the draft", () => {
     await waitFor(() => expect(agentClient.sendAgentMessage).toHaveBeenCalledTimes(2));
 
     const firstAtts = (vi.mocked(agentClient.sendAgentMessage).mock.calls[0]?.[2] as {
-      attachments?: Array<{ url: string; name: string; type: string }>;
+      attachments?: Array<{ url?: string; ref?: string; name: string; type: string }>;
     }).attachments;
     const secondAtts = (vi.mocked(agentClient.sendAgentMessage).mock.calls[1]?.[2] as {
-      attachments?: Array<{ url: string; name: string; type: string }>;
+      attachments?: Array<{ url?: string; ref?: string; name: string; type: string }>;
     }).attachments;
+    // O retry reenvia o MESMO rascunho (mesma referência, sem re-upload).
     expect(secondAtts).toEqual(firstAtts);
-    expect(secondAtts?.[0]).toMatchObject({ url: "blob:mock-url", name: "nota.png", type: "image" });
+    // A13: o anexo cruza a rede como REFERÊNCIA opaca — o object URL é
+    // estritamente local e nunca é enviado.
+    expect(secondAtts?.[0]).toMatchObject({ name: "nota.png", type: "image" });
+    expect(secondAtts?.[0]?.ref).toMatch(/^att_/);
+    expect(JSON.stringify(secondAtts)).not.toContain("blob:mock-url");
 
     // Success consumes the draft: local object URLs are revoked afterwards.
     await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock-url"));

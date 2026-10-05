@@ -80,6 +80,19 @@ export type TurnInput = Readonly<{
   channel: ConversationChannel;
   pendingOperationIds?: readonly string[];
   /**
+   * F1 (BLOCKER): the text the HUMAN TYPED, before any attachment-derived data
+   * was composed into `text`.
+   *
+   * The DECISION modes (`confirmation`, `cancel`) and the conversational retry
+   * read THIS field only — a PDF/statement that says "sim confirmo" is DATA and
+   * can never decide. It is constructed by `normalize` from an explicit
+   * server-side argument and NEVER from the request body, so a client-supplied
+   * same-named field is ignored exactly like `internalCorrection`. Absent means
+   * "the turn text IS the typed text", i.e. every channel without attachment
+   * data — unchanged behaviour.
+   */
+  decisionText?: string;
+  /**
    * FIX-AGENT-RELAY-FAILOVER-HARDENING (A): internal-only marker for the
    * structured grounding-correction retry. Set EXCLUSIVELY by the internal
    * `correctionProvider` (channel-evidence.ts); `normalize` always builds it
@@ -349,7 +362,18 @@ const correctionOutcome = (text: string): CorrectionOutcome => {
   return { kind: 'none' };
 };
 
-const normalize = (body: Body, identity: AuthenticatedIdentity, channel: ConversationChannel): TurnInput => {
+/**
+ * Internal-only construction options. They are passed by the SERVER adapter, not
+ * read from `body`: a client-supplied `decisionText`/`typedText` is ignored.
+ */
+export type NormalizeOptions = Readonly<{ typedText?: string }>;
+
+const normalize = (
+  body: Body,
+  identity: AuthenticatedIdentity,
+  channel: ConversationChannel,
+  options?: NormalizeOptions,
+): TurnInput => {
   const textValue = typeof body.text === 'string' ? body.text : typeof body.content === 'string' ? body.content : '';
   const text = scrubForPersistence(textValue.trim());
   if (!text) throw new Error('agent.invalid_message');
@@ -371,6 +395,11 @@ const normalize = (body: Body, identity: AuthenticatedIdentity, channel: Convers
   const pendingOperationIds = Array.isArray(body.pendingOperationIds)
     ? body.pendingOperationIds.filter((id): id is string => typeof id === 'string' && id.trim() !== '').map((id) => id.trim())
     : undefined;
+  // F1: the DECISION text is the text the human typed. It comes from the
+  // server-side `typedText` option and is NEVER read from `body`, so a client
+  // that sends its own `decisionText`/`typedText` changes nothing.
+  const typedText = typeof options?.typedText === 'string' ? scrubForPersistence(options.typedText.trim()) : text;
+  const decisionText = typedText === text ? undefined : typedText;
   return freeze({
     intentionId,
     traceId,
@@ -381,6 +410,7 @@ const normalize = (body: Body, identity: AuthenticatedIdentity, channel: Convers
     deviceId: identity.deviceId ?? null,
     attachments: freeze(attachments),
     channel,
+    ...(decisionText !== undefined ? { decisionText } : {}),
     // FIX-AGENT-RELAY-FAILOVER-HARDENING (A): the internal correction flag
     // is constructed here as `false` — any client-supplied `internalCorrection`
     // / `isInternalCorrectionRetry` field in `body` is deliberately NOT read,
@@ -390,9 +420,9 @@ const normalize = (body: Body, identity: AuthenticatedIdentity, channel: Convers
   });
 };
 
-export const normalizeRestTurn = (body: Body, identity: AuthenticatedIdentity): TurnInput => normalize(body, identity, 'pwa-rest');
-export const normalizeSdkTurn = (body: Body, identity: AuthenticatedIdentity): TurnInput => normalize(body, identity, 'sdk');
-export const normalizeBrokerTurn = (body: Body, identity: AuthenticatedIdentity): TurnInput => normalize(body, identity, 'broker');
+export const normalizeRestTurn = (body: Body, identity: AuthenticatedIdentity, options?: NormalizeOptions): TurnInput => normalize(body, identity, 'pwa-rest', options);
+export const normalizeSdkTurn = (body: Body, identity: AuthenticatedIdentity, options?: NormalizeOptions): TurnInput => normalize(body, identity, 'sdk', options);
+export const normalizeBrokerTurn = (body: Body, identity: AuthenticatedIdentity, options?: NormalizeOptions): TurnInput => normalize(body, identity, 'broker', options);
 
 export class ConversationOrchestrator {
   constructor(private readonly dependencies: {
@@ -1808,8 +1838,11 @@ export class ConversationOrchestrator {
     plan: TurnPlan,
     startedAt: number,
     base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    decisionText?: string,
   ): Promise<TurnResult | null> {
-    const text = input.text ?? '';
+    // F1: undo intent/negation/confirmation are read from the TYPED text only —
+    // attachment-derived data never proposes, negates or confirms an undo.
+    const text = decisionText ?? input.text ?? '';
     if (!hasUndoIntent(text)) return null;
     // Natural-language negation fails closed: no proposal, no execution.
     if (isUndoNegation(text)) {
@@ -2202,7 +2235,11 @@ export class ConversationOrchestrator {
   async runTurn(input: TurnInput): Promise<TurnResult> {
     const startedAt = Date.now();
     this.emit('turn.started', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel });
-    const plan = this.dependencies.plan?.(input) ?? routeIntent(input.text);
+    // F1 (BLOCKER): the DECISION surface of the turn is the text the human
+    // typed. `decisionText` is never attachment-derived data, so a document (or
+    // a transcription) that says "sim confirmo" cannot reach `confirmation`.
+    const decisionText = input.decisionText ?? input.text;
+    const plan = this.dependencies.plan?.(input) ?? routeIntent(input.text, decisionText);
     if (plan.version !== '2' || plan.skillNames.length > 2 || plan.requestedOperations.length > 4 || plan.requestedOperations.some((operation) => plan.mode === 'read' && operation.kind === 'mutation')) {
       this.emit('plan.rejected', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, status: 'rejected' });
       this.emit('turn.failed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, status: 'failed', error: 'agent.invalid_turn_plan' });
@@ -2216,7 +2253,7 @@ export class ConversationOrchestrator {
     // only the authenticated PWA RPC decides. This check runs before every
     // V2 path so an undo turn can never fall through to a generative or
     // V2-confirmation path.
-    const undoTurn = await this.runUndoTurn(input, plan, startedAt, result);
+    const undoTurn = await this.runUndoTurn(input, plan, startedAt, result, decisionText);
     if (undoTurn) return undoTurn;
     // R06/A06 (AC13), review fix 1/2: an ambiguous mutation intent is answered
     // here, BEFORE the draft continuation, before any authoritative read and
@@ -2397,7 +2434,7 @@ export class ConversationOrchestrator {
     // turn — recoverable drafts keep their own re-emission path above.
     if (
       client &&
-      isRetryText(input.text) &&
+      isRetryText(decisionText) &&
       (plan.mode === 'unsupported' || plan.mode === 'conversation' || plan.mode === 'confirmation') &&
       !this.hasDraftForTurn(input)
     ) {

@@ -273,11 +273,23 @@ function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"]
  * Agent's `intentionId`, so a lost HTTP response can never produce a second
  * proposal. Never regenerate on retry; a new message composes a new id.
  */
+/**
+ * A13: an outgoing attachment is EITHER an opaque server-side `ref` (the
+ * reference flow) OR the legacy `url` shape. The local preview URL never
+ * crosses the wire, so a sent attachment carries `ref` instead.
+ */
+export type OutgoingAttachment = Readonly<{
+  type: string;
+  url?: string;
+  ref?: string;
+  name: string;
+}>;
+
 export type PendingChatSend = Readonly<{
   messageId: string;
   content: string;
   createdAt: string;
-  attachments?: ReadonlyArray<Readonly<{ type: string; url: string; name: string }>>;
+  attachments?: ReadonlyArray<OutgoingAttachment>;
 }>;
 
 export function createChatMessageId(): string {
@@ -291,7 +303,7 @@ export function createChatMessageId(): string {
 export function composeChatSend(
   content: string,
   opts?: {
-    attachments?: Array<{ type: string; url: string; name: string }>;
+    attachments?: Array<OutgoingAttachment>;
     messageId?: string;
   },
 ): PendingChatSend {
@@ -442,10 +454,80 @@ async function fetchWithAgentAuth(workspaceId: string, url: string, init: Reques
   return res;
 }
 
+/**
+ * A13 — attachment upload result. The Agent answers with an OPAQUE server-side
+ * reference; there is no public URL and no base64 in this shape.
+ */
+export const uploadedAttachmentSchema = z.object({
+  ref: z.string().regex(/^att_[A-Za-z0-9_-]{16,64}$/),
+  kind: z.enum(["image", "pdf", "audio"]),
+  name: z.string(),
+  size: z.number().int().nonnegative(),
+});
+
+export type UploadedAttachment = z.infer<typeof uploadedAttachmentSchema>;
+
+export type AttachmentUploadKind = "image" | "pdf" | "audio";
+
+/**
+ * A13 — REAL upload against the Agent's `POST /rpc/attachments`.
+ *
+ * The bytes go out as a raw binary body with the DECLARED kind/name in headers;
+ * the server re-derives the real media type from magic bytes, so a lying
+ * client is rejected there. The answer is validated: a payload without a
+ * well-formed `ref` throws instead of inventing a reference (fail-closed).
+ * Failures carry the typed `code` so the UI can render an explicit state.
+ */
+export async function uploadAttachment(
+  workspaceId: string,
+  input: { kind: AttachmentUploadKind; file: File | Blob; name?: string },
+): Promise<UploadedAttachment> {
+  const baseUrl = agentBaseUrl();
+  const name = input.name ?? (input.file instanceof File ? input.file.name : "anexo");
+  const response = await fetchWithAgentAuth(
+    workspaceId,
+    `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/attachments`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "content-type": input.file.type || "application/octet-stream",
+        "X-Workspace-Id": workspaceId,
+        "x-ted-attachment-kind": input.kind,
+        "x-ted-attachment-name": name,
+      },
+      body: await input.file.arrayBuffer(),
+    },
+  );
+  if (!response.ok) {
+    let errorMsg = "Não foi possível enviar o anexo.";
+    let errorCode: string | undefined;
+    try {
+      const errBody = (await response.json()) as { message?: string; code?: string };
+      if (errBody?.message) errorMsg = errBody.message;
+      if (typeof errBody?.code === "string") errorCode = errBody.code;
+    } catch {
+      /* keep the default message */
+    }
+    const err = new Error(errorMsg) as Error & { code?: string; status?: number };
+    err.status = response.status;
+    err.code = errorCode ?? "attachment_upload_failed";
+    throw err;
+  }
+  const parsed = uploadedAttachmentSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    // Never fabricate a reference the Agent did not issue.
+    const err = new Error("O anexo não pôde ser identificado.") as Error & { code?: string };
+    err.code = "attachment_upload_invalid_response";
+    throw err;
+  }
+  return parsed.data;
+}
+
 export async function sendAgentMessage(
   workspaceId: string,
   content: string,
-  opts?: { attachments?: Array<{ type: string; url: string; name: string }>; messageId?: string },
+  opts?: { attachments?: Array<OutgoingAttachment>; messageId?: string },
 ): Promise<AgentTurn> {
   const baseUrl = agentBaseUrl();
   // SPEC §7.7: the send identity is fixed ONCE here; retries pass the same

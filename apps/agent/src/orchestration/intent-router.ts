@@ -41,15 +41,33 @@ export const classifyFastPath = (text: string, options: FastPathOptions = {}): F
   };
 };
 
-export const routeIntent = (text: string): TurnPlanV2 => {
+/**
+ * F1 (BLOCKER) — decision routing is driven by what the HUMAN TYPED.
+ *
+ * `routeIntent` receives the composed turn text, which may carry attachment-derived
+ * data (a PDF text layer, an STT transcript, a vision extraction). That data is
+ * DATA: a document whose text says "sim confirmo" must never confirm a pending
+ * operation. `decisionText` is the user-typed text and is the ONLY source for the
+ * DECISION modes (`confirmation` / `cancel`); when it is omitted it defaults to
+ * `text`, so every channel without attachment data behaves exactly as before.
+ *
+ * Read/proposal routing keeps reading the full composed text — an extracted
+ * document may legitimately complete a proposal (which still requires the
+ * human confirmation flow).
+ */
+export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => {
   const normalized = typoNormalize(fold(text));
+  // The decision surface: never attachment-derived data.
+  const decision = decisionText === undefined ? normalized : typoNormalize(fold(decisionText));
   if (!normalized) return fallbackPlan();
-  if (/\bnao\b/.test(normalized) && /\b(registre|registrar|lance|lancar|crie|criar|apague|apagar|exclua|excluir|transfira|transferir)\b/.test(normalized)) {
+  if (/\bnao\b/.test(decision) && /\b(registre|registrar|lance|lancar|crie|criar|apague|apagar|exclua|excluir|transfira|transferir)\b/.test(decision)) {
     return makePlan('cancel', 'general', [], [], ['conversation']);
   }
-  const fastPath = classifyFastPath(normalized);
-  if (fastPath.kind === 'confirm') return makePlan('confirmation', 'general', [], [], ['conversation']);
-  if (fastPath.kind === 'cancel') return makePlan('cancel', 'general', [], [], ['conversation']);
+  const decisionFastPath = classifyFastPath(decision);
+  // ONLY these two kinds are decision modes; `balance`/`recent_transactions`
+  // are reads and stay on the full text below.
+  if (decisionFastPath.kind === 'confirm') return makePlan('confirmation', 'general', [], [], ['conversation']);
+  if (decisionFastPath.kind === 'cancel') return makePlan('cancel', 'general', [], [], ['conversation']);
   // SPEC §7.6: a parseable mutation attempt carries its real missing fields
   // from the start — accountId/categoryId always pending authoritative
   // resolution (§7.2/§7.3). Never []. Amount-less or negated utterances keep
