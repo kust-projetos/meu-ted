@@ -70,7 +70,19 @@
 
 ## 7. Review independente
 
-Reviewer adversarial independente executado sobre o diff completo (foco: bypass por metadata/attachment, cross-actor, cross-workspace, idempotência, corrida, cache, stale state, oversized, streaming, fallback silencioso, falso sucesso, aprendizado indevido, ressurreição, skill elevando capability). Resultado consolidado no fim da sessão (§16).
+Review adversarial independente em duas rodadas (subagentes read-only, verificação por leitura de código):
+
+- **Round 1 — `CHANGES REQUIRED`** (2 majors + 3 minors + 5 notes):
+  - **F1 (MAJOR):** o checkpoint do cleanup lia `this.state?.storage` — `state` nunca carrega storage no Agents SDK (documentado no próprio `durableSql()` após um 503 de produção passado), então o sweep retomável estaria INERTE em produção com CI verde (o double do teste estava instalado no mesmo accessor errado). **Corrigido:** checkpoint via `ctx.storage` (mesmo accessor de `durableSql()`), double do teste movido para o ctx (o `state` do harness ficou deliberadamente sem KV — regressão falha alto).
+  - **F2 (MAJOR):** o hook de A17 recebia o texto COMPOSTO (marcador + digitado + dado extraído) — um anexo cuja extração casasse com heurística ("Lembre-se...") viraria memória durável, canal conteúdo→estado-durável. **Corrigido:** hook recebe o texto DIGITADO; regressão real com extração de visão provando que nada é aprendido.
+  - **F3 (MINOR):** `Math.max` sobre contrato malformado rende NaN e `total > NaN` é sempre falso → buffering ilimitado silencioso. **Corrigido:** falha em load.
+  - **F4 (MINOR):** extractor LLM sem timeout, awaited no caminho de resposta. **Corrigido:** `AbortSignal.timeout(10_000)`.
+  - **F5 (MINOR):** catálogo vazio não era cacheado (re-read upstream por turno). **Corrigido.**
+  - **F10 (comentário):** comentário C-06 reivindicava comparação 403 no gateway que não existe. **Corrigido** com a fronteira real.
+- **Round 2 — `APPROVED`**, com 1 minor novo: o fix do F2 passou a receber `unredactedText` cru onde o caminho antigo recebia texto scrubbed (o input de learning alimenta o prompt do extractor a cada 5 turnos). **Corrigido:** `scrubForPersistence(unredactedText)` nas duas pernas + asserção de estado `processed` no teste F2 (não pode passar vazio).
+- Residuais aceitos e documentados (NOTES do review): `forgetMemory` no store é workspace-scoped (a fronteira de ator vive na resolução pelo recall — qualquer novo chamador com id de outra fonte precisa endurecer o store); tombstone de conteúdo é por similaridade e não cobre a camada shared (nenhum writer usa `actor=''` hoje); teto de anexo da PWA é mapa duplicado do contrato (drift guard sugerido); DO bufferiza o corpo sem teto prévio (não endereçável externamente; defesa nos 2 hops anteriores).
+
+Veredito final: **sem finding aberto P0/P1** relacionado a esta entrega.
 
 ## 8. Flags e capacidade — estado real
 
@@ -106,9 +118,10 @@ Reviewer adversarial independente executado sobre o diff completo (foco: bypass 
 
 **READY WITH CONTROLLED ROLLOUT.** O código da closure está pronto para merge; a habilitação das capacidades continua gateada por rollout (binding R2, credenciais+ZDR, flags, smoke `workerd`) e pelos gates humanos existentes (G07 para provider, G08 para canary autoexecute, Release B, cutover). Nenhuma pendência foi maquiada: A17 e A18 estão EFETIVAMENTE conectados ao runtime (com provas de caminho real), A19 deixa de ser "por fatia no papel" e passa a ter o caminho real provado por E2E.
 
-## 13. Build da PWA
+## 13. Build da PWA e CI remoto
 
-Resultado do `pnpm build` na PWA: ver seção de validação da sessão (executado no fim; verde/ver §16).
+- `pnpm build` (PWA): **ok** (compiled successfully; typecheck do build inclui os novos testes).
+- **CI remoto (PR #90): 16/16 checks PASS**, incluindo os required checks `Gate — all checks` e `quality (22, 10)`; Agent, PWA (test+build), API, Postgres, Broker, e2e, Security, Public safety, Governance, Docs, Write policy, Capability inventory, Docker. Obs.: a primeira tentativa teve 10 jobs cancelados em fila por incidente de capacidade do GitHub (cancelados aos 15m02s sem runner atribuído, sem steps) — rerun Verde; o e2e flakou 1× no spec conhecido `[UI-05]` (mesma classe do histórico 2026-10-04, resolvido por rerun) e passou na repetição.
 
 ## 14. Estado A17 / A18 / A19 (resumo pedido)
 
