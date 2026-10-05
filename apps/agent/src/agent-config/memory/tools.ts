@@ -8,7 +8,12 @@
 
 import { tool, jsonSchema } from 'ai';
 import { listPastSessions, getSessionSummary } from './sessions.js';
-import { recallMemories, rememberFact, type MemorySql } from './store.js';
+import {
+  forgetMemory,
+  recallMemories,
+  rememberFact,
+  type MemorySql,
+} from './store.js';
 
 export type MemoryToolContext = {
   sql: MemorySql;
@@ -112,6 +117,62 @@ export const buildMemoryTools = (ctx: MemoryToolContext): Record<string, ReturnT
       };
     },
   }),
+
+  /**
+   * A19 — "esqueça isso". The forget path is SCOPED BY RESOLUTION: candidates
+   * come from `recallMemories` (the caller's workspace + actor + visible
+   * shared layer), so another actor's PRIVATE memory is indistinguishable from
+   * a nonexistent one (no existence oracle), and another workspace is out of
+   * reach structurally. Forgetting applies invalidate + derivedFrom cascade +
+   * a tombstone the learning job consults (AC26b). Responses never carry
+   * internal ids.
+   */
+  forget_memory: tool({
+    description:
+      'Esquece uma memória específica a pedido da pessoa ("esqueça isso", "não lembre mais disso"). Busca pela consulta; se houver mais de uma memória possível, peça para a pessoa especificar melhor. Nunca use para saldos ou valores atuais (isso não é memória).',
+    inputSchema: jsonSchema({
+      type: 'object',
+      properties: { query: { type: 'string', minLength: 1, maxLength: 300 } },
+      required: ['query'],
+    }),
+    execute: async (params: Record<string, unknown>) => {
+      const query = String(params.query ?? '').trim();
+      if (query.length === 0) {
+        return { forgot: false, message: 'Diga o que devo esquecer.' };
+      }
+      const candidates = recallMemories(ctx.sql, {
+        workspaceId: ctx.workspaceId,
+        actor: ctx.actorId,
+        query,
+        limit: 5,
+      });
+      if (candidates.length === 0) {
+        return { forgot: false, message: 'Não encontrei nada com esse conteúdo na memória.' };
+      }
+      if (candidates.length > 1) {
+        return {
+          forgot: false,
+          ambiguous: true,
+          message: `Encontrei ${candidates.length} memórias parecidas com isso. Especifique melhor qual devo esquecer.`,
+        };
+      }
+      const target = candidates[0]!;
+      const { invalidated, cascaded } = forgetMemory(ctx.sql, {
+        workspaceId: ctx.workspaceId,
+        id: target.id,
+      });
+      if (invalidated.length === 0) {
+        return { forgot: false, message: 'Não consegui esquecer isso agora. Tente de novo.' };
+      }
+      return {
+        forgot: true,
+        cascaded: cascaded.length,
+        message: cascaded.length > 0
+          ? 'Esquecido — e também o que dependia disso.'
+          : 'Esquecido. Não vou lembrar mais disso.',
+      };
+    },
+  }),
 });
 
-export const MEMORY_TOOL_NAMES: readonly string[] = ['remember_fact', 'recall', 'list_past_sessions', 'get_session_summary'];
+export const MEMORY_TOOL_NAMES: readonly string[] = ['remember_fact', 'recall', 'list_past_sessions', 'get_session_summary', 'forget_memory'];
