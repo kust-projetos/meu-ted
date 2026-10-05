@@ -2622,13 +2622,22 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         const turnResult = await this.orchestratorForChannel({
           ...(mutationPlan ? { plan: () => mutationPlan } : {}),
           ...(mutationApiClient ? { mutationApiClient } : {}),
-          // AC22 (A14): a turn whose text carries a transcription NEVER gets an
+          // AC22 (A14) / A19 (F1): a turn carrying an attachment NEVER gets an
           // elevated client, so the orchestrator cannot reach the autoexecute
           // fast path at all — the only way out is the proposal/draft the human
-          // confirms. Belt on suspenders over the provenance marker: a
-          // mistranscribed amount or negation still lands in the same manual
-          // confirmation flow as any typed value.
-          ...(attachmentData.length === 0
+          // confirms. Belt on suspenders over the provenance marker, and over
+          // the `isAutoExecutionEligible` attachment veto.
+          //
+          // The gate is ATTACHMENT PRESENCE, not extracted data. `attachmentData`
+          // only covers ACCEPTED extractions: when the multimodal capability is
+          // off (the production default), the provider is down, or the item is
+          // `unsupported`/`skipped_budget`/refused, the array is EMPTY, no marker
+          // opens the turn text, and a typed leading imperative passed the gate —
+          // with the autoexecute-capable transport already minted. A mistranscribed
+          // amount or negation, and an attachment named `sim confirmo.pdf`, both
+          // landed in the same manual confirmation flow as any typed value from
+          // here on.
+          ...(incomingAttachments.length === 0
             ? { autoExecutionClient: () => this.elevatedMutationApiClientForTurn(restInput) }
             : {}),
           ...(entityReader ? { entityReader } : {}),

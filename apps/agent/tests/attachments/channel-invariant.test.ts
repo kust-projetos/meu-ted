@@ -91,3 +91,53 @@ describe("channel invariant — `decisionText` is wired at every attachment call
     expect(source).toContain("const decisionText = unredactedText;");
   });
 });
+
+/**
+ * A19 — the SAME structural argument, applied to AUTOEXECUTION instead of
+ * DECISION routing.
+ *
+ * `decisionText` protects the confirm/cancel surface. `isAutoExecutionEligible`
+ * had NO such field: its immunity was LEXICAL, resting on the provenance
+ * marker occupying the head of the composed turn text. That immunity only
+ * holds when an attachment actually produced an accepted extraction — when the
+ * extraction is empty (capability off, which is the production default;
+ * `unsupported`; provider down; STT/vision/PDF failure; `skipped_budget`; a
+ * refused upload) nothing is composed, the turn text is byte-for-byte the typed
+ * text, no marker opens the message, and the gate accepts a leading imperative.
+ *
+ * So the veto is pinned in the SIGNATURE, not only in the behaviour: the
+ * eligibility function must carry an `attachments` input, and every call site
+ * must pass the turn's real attachments. A future refactor that drops the
+ * parameter — or a new call site that forgets it — fails here.
+ */
+describe("A19 invariant — autoexecution eligibility carries an attachment veto", () => {
+  const readSource = (relative: string): string =>
+    readFileSync(new URL(relative, import.meta.url), "utf8");
+
+  it("`isAutoExecutionEligible` takes `attachments` and refuses on PRESENCE alone", () => {
+    const safety = readSource("../../src/safety/auto-execution.ts");
+    // The parameter exists in the signature (typed, optional-free) ...
+    expect(safety).toMatch(/isAutoExecutionEligible = \(input: \{[^}]*attachments[^}]*\}\)/);
+    // ... and the veto reads the LENGTH, so an empty-name/null item still vetoes.
+    expect(safety).toContain("input.attachments.length === 0");
+  });
+
+  it("EVERY `isAutoExecutionEligible` call site passes the turn's attachments", () => {
+    const orchestrator = readSource("../../src/orchestration/conversation-orchestrator.ts");
+    const calls = orchestrator.match(/isAutoExecutionEligible\(\{/g) ?? [];
+    // Both the draft path and the no-draft path are autoexecute entry points.
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    const passed = orchestrator.match(/isAutoExecutionEligible\(\{[^}]*attachments: input\.attachments/g) ?? [];
+    // An omitted argument means "no attachment", i.e. the veto silently off.
+    expect(passed).toHaveLength(calls.length);
+  });
+
+  it("the elevated client is gated on ATTACHMENT PRESENCE, not on extracted data", () => {
+    const source = readAgentSource();
+    // Gating on `attachmentData.length` (extracted data) left the fast path
+    // reachable whenever extraction was empty — the exact hole. Presence is the
+    // only honest gate.
+    expect(source).toContain("incomingAttachments.length === 0");
+    expect(source).not.toContain("attachmentData.length === 0");
+  });
+});

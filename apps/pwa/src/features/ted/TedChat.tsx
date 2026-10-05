@@ -746,7 +746,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     if (uploadingAttachments) return;
     if ((!hasText && !hasAttachments) || !activeWorkspace || loading) return;
 
-    const userText = input.trim() || (hasAttachments ? attachments.map((a) => `[${a.type}: ${a.name}]`).join(" ") : "");
+    // F1: `text` is ONLY what the human typed. It used to be composed from the
+    // attachment names (`[pdf: sim confirmo.pdf]`), which put an untrusted,
+    // user-supplied string into the exact field the server routes DECISIONS and
+    // the autoexecute imperative from — a file named "sim confirmo.pdf" decided
+    // pending operations. The attachment travels in its OWN field; the server
+    // renders the `[anexo …]` placeholder from that array.
+    const userText = input.trim();
     // §19.1: EVERY message renders immediately (optimistic), text included —
     // not only messages carrying attachments. The bubble keeps the LOCAL
     // object URL (render-only; never sent).
@@ -757,12 +763,11 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     const wireAttachments = attachments
       .filter((a) => Boolean(a.ref))
       .map((a) => ({ type: a.type, url: "", name: a.name, ref: a.ref as string }));
-    const textWithAttachments = hasAttachments
-      ? `${userText} ${localAttachments.map((a) => `[${a.type}: ${a.name}]`).join(" ")}`.trim()
-      : userText;
     // SPEC §7.7: the send identity is minted ONCE at composition; retries
-    // reuse it via the draft record below.
-    const send = composeChatSend(textWithAttachments, wireAttachments.length > 0 ? { attachments: wireAttachments } : undefined);
+    // reuse it via the draft record below. Because `content` IS the typed text,
+    // the §19.3 retry path re-sends exactly what was typed — the old divergence
+    // (markers on the first attempt, plain text on retry) is gone by construction.
+    const send = composeChatSend(userText, wireAttachments.length > 0 ? { attachments: wireAttachments } : undefined);
     draftsRef.current.set(send.messageId, send);
     draftPreviewUrlsRef.current.set(
       send.messageId,
