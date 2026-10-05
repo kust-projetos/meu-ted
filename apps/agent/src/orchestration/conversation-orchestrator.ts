@@ -52,6 +52,13 @@ import { hasUndoIntent, isExplicitConfirmation } from '../agent-config/tools.js'
 import { UndoProposalService } from '../mutations/undo-proposal.js';
 import { isUndoNegation } from '../mutations/undo-proposal.js';
 import { isAutoExecutionEligible } from '../safety/auto-execution.js';
+import type { JudgmentProvider } from '../judgment/provider.js';
+import {
+  isJudgmentDefaultOff,
+  judgmentConsultFields,
+  resolveContinuationRelation,
+  type ContinuationRelationChoice,
+} from '../judgment/wiring.js';
 
 export type ConversationChannel = 'pwa-rest' | 'sdk' | 'broker';
 
@@ -293,6 +300,14 @@ const DISJUNCTIVE_ALTERNATIVE = /\bou\b/iu;
 const BRL_UNIT = /^(?:reais?|rs\.?)\b/iu;
 const LETTER = /\p{L}/u;
 
+/**
+ * A07/R07 — the negation MARKER (not the negation decision): it classifies a
+ * turn that did not become a value correction as a relation label. A16/R15 also
+ * reports it to the optional judge as a structural FACT (`negationMarker`), so
+ * the heuristic's own signal is visible to it without the text ever leaving.
+ */
+const NEGATION_MARKER = /\b(?:n[aã]o|nunca|jamais)\b/iu;
+
 type CorrectionOutcome =
   | Readonly<{ kind: 'amount'; amountCents: number }>
   | Readonly<{ kind: 'ambiguous'; clarification: string }>
@@ -392,6 +407,14 @@ export class ConversationOrchestrator {
     coordinator?: PendingOperationCoordinator;
     /** Authoritative entity lists (accounts/categories). Absent = fail closed. */
     entityReader?: EntityReader;
+    /**
+     * A16/R15 — the DO-scoped `JudgmentProvider` accessor (G04 default-off).
+     * Absent = no judge is consulted at all. The injected accessor must return
+     * the SAME instance per Durable Object (breaker and the 1-call-per-turn cap
+     * live in it); the wiring never instantiates a provider of its own and
+     * never creates one per turn.
+     */
+    judgmentProvider?: () => JudgmentProvider | undefined;
     responseProvider?: TurnResponseProvider;
     /** Read-path evidence source (EvidenceCollector). Absent = legacy pass-through. */
     evidenceProvider?: (input: TurnInput, plan: TurnPlan) => Promise<EvidenceEnvelope | null>;
@@ -1068,10 +1091,64 @@ export class ConversationOrchestrator {
    * completed the draft. A negation that did NOT become a value correction
    * keeps its R06/AC13 fail-closed behaviour untouched; the relation only
    * records that the draft survived it.
+   *
+   * A16/R15 — THIS is the bounded ambiguity wired to the optional judge
+   * (default-off): "negação" vs "continuação" is a BEHAVIOURAL classification,
+   * so the request to the judge carries only structural facts — never the user
+   * text, amount, date, description, category or account id. The deterministic
+   * relation stays authoritative in EVERY path, including when the judge answers
+   * the opposite: a decision only changes the reported `source`.
+   *
+   * It runs AFTER the guarded value-correction write on purpose: that write is
+   * revision-guarded, and no optional consultation may open a window before a
+   * financial field is written. A correction turn never reaches this method —
+   * its relation is already determined (`correction`).
    */
-  private continuationRelation(input: TurnInput, corrected: boolean): DraftRelation {
-    if (corrected) return 'correction';
-    return /\b(?:n[aã]o|nunca|jamais)\b/iu.test(input.text) ? 'negation' : 'continuation';
+  private continuationRelation(
+    input: TurnInput,
+    draft: MutationDraftRecord,
+  ): DraftRelation | Promise<DraftRelation> {
+    const negationMarker = NEGATION_MARKER.test(input.text);
+    const deterministic: ContinuationRelationChoice = negationMarker ? 'negation' : 'continuation';
+    // F6: the heuristic relation is SYNCHRONOUS. The judge is consulted only
+    // when a provider exists AND is available; default-off (no accessor, no
+    // endpoint) creates no promise and adds no await to the turn, keeping the
+    // output byte for byte identical to the pre-wiring path.
+    const provider = this.dependencies.judgmentProvider?.();
+    if (!provider?.available) return deterministic;
+    return this.consultContinuationRelation(deterministic, input, draft, negationMarker, provider);
+  }
+
+  private async consultContinuationRelation(
+    deterministic: ContinuationRelationChoice,
+    input: TurnInput,
+    draft: MutationDraftRecord,
+    negationMarker: boolean,
+    provider: JudgmentProvider,
+  ): Promise<DraftRelation> {
+    const resolution = await resolveContinuationRelation(deterministic, {
+      provider,
+      facts: {
+        // The per-TURN key is what `JUDGMENT_MAX_CALLS_PER_TURN` measures, so a
+        // redelivered turn reuses its own budget instead of buying a new call.
+        turnId: input.traceId,
+        draftStatus: draft.status,
+        pendingFieldCount: draft.missingFields.length,
+        negationMarker,
+        deterministicRelation: deterministic,
+      },
+    });
+    // Default-off must be invisible: with no endpoint the turn emits exactly the
+    // same events it emitted before the wiring existed.
+    if (!isJudgmentDefaultOff(resolution.judgment)) {
+      this.emit('judgment.consulted', {
+        intentionId: input.intentionId,
+        traceId: input.traceId,
+        channel: input.channel,
+        ...judgmentConsultFields(resolution),
+      });
+    }
+    return resolution.value;
   }
 
   /**
@@ -1286,7 +1363,6 @@ export class ConversationOrchestrator {
       categoryQuery: draft.resolvedArgs.categoryQuery,
     };
     let currentDraft = draft;
-    let relation: DraftRelation = this.continuationRelation(input, correctionCents !== undefined);
     if (correctionCents !== undefined) {
       const applied = this.applyDraftCorrection(input, draft, correctionCents);
       if (!applied.ok) {
@@ -1294,7 +1370,22 @@ export class ConversationOrchestrator {
         return this.stopDraftCorrection(input, plan, startedAt, base, applied.current ?? draft);
       }
       currentDraft = applied.record;
-      relation = 'correction';
+    }
+    /**
+     * A16/R15 — the ONLY optional consultation in the turn, and it sits AFTER
+     * the guarded write above: a value correction IS the relation (`correction`)
+     * and never waits for a judge, so no consultation window can open before a
+     * financial field is written. Every other turn classifies itself between
+     * "negação" and "continuação" and may ask the judge, default-off, for a
+     * second opinion that stays advisory.
+     */
+    // F6: a value correction IS the relation and never consults the judge; every
+    // other turn resolves the heuristic relation synchronously (default-off:
+    // no promise, no await) and only awaits when a provider is available.
+    let relation: DraftRelation = 'correction';
+    if (correctionCents === undefined) {
+      const resolved = this.continuationRelation(input, draft);
+      relation = typeof resolved === 'string' ? resolved : await resolved;
     }
     // Resolve ONLY the missing field, then revalidate ALL args: the stored
     // financial fields are authoritative for this draft, the new text only

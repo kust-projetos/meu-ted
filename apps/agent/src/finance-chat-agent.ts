@@ -1213,6 +1213,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     events?: (eventType: string, fields: Record<string, unknown>) => void;
     /** SPEC §7.8 draft store (DO storage). Absent = legacy single-turn flow. */
     draftStore?: SqlMutationDraftStore;
+    /** A16/R15 judgment seam override (tests). Absent = this DO's own provider. */
+    judgmentProvider?: () => JudgmentProvider | undefined;
     /** debt-undo-confirmation-protocol override (tests). Absent = DO store + authoritative preview. */
     undoProposals?: ConstructorParameters<typeof ConversationOrchestrator>[0] extends { undoProposals?: infer U } ? U : never;
   } = {}): ConversationOrchestrator {
@@ -1236,6 +1238,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       responseProvider: (input, plan) => this.provideUnifiedResponse(input, plan),
       evidenceProvider: dependencies.evidenceProvider ?? grounding.evidenceProvider,
       correctionProvider: dependencies.correctionProvider ?? grounding.correctionProvider,
+      // A16/R15: every channel reaches the optional judge through THIS DO's
+      // single provider instance, so the breaker and the 1-call-per-turn cap are
+      // per workspace and survive across turns. Default-off (G04): with no
+      // endpoint in the env the provider is `unavailable`, the wiring costs no
+      // network and the turn is indistinguishable from the pre-wiring one.
+      judgmentProvider: dependencies.judgmentProvider ?? (() => this.judgmentProvider()),
       // debt-undo-confirmation-protocol: every channel proposes through the
       // same persistent DO store + authoritative preview. Tests may override
       // the pair; production always resolves it here (absent store = the
