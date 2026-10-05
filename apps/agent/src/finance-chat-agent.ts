@@ -848,6 +848,65 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     }
   }
 
+  /**
+   * A17 — post-turn learning wired to the REAL outcome.
+   *
+   * The old hook ran with `assistantText: ''` behind an early return the
+   * production wiring always took, so it never learned anything (and its
+   * `bumpTurnCount` never advanced). The hook now runs ONLY after the turn has
+   * a published response, and feeds the actual response text: an errored,
+   * aborted, fail-closed or empty turn never teaches durable memory
+   * (learnFromTurn's own guard repeats the empty check).
+   *
+   * Budgets are unchanged: the heuristic runs every turn, the LLM extractor
+   * every `LEARN_EVERY_TURNS` turns — the model is resolved lazily inside the
+   * callback from the runtime snapshot, so non-due turns pay nothing extra.
+   * Best-effort by contract: learning never breaks the turn.
+   */
+  private async recordPostTurnLearning(input: {
+    workspaceId: string;
+    actorId: string;
+    userText: string;
+    assistantText: string;
+    intentionId: string;
+  }): Promise<void> {
+    const learnSql = this.memorySql();
+    if (!learnSql) return;
+    try {
+      const turnCount = bumpTurnCount(learnSql, input.workspaceId);
+      await learnFromTurn(learnSql, {
+        workspaceId: input.workspaceId,
+        actorId: input.actorId,
+        userText: input.userText,
+        assistantText: input.assistantText,
+        turnCount,
+        llmExtract: async (transcript) => {
+          try {
+            const snapshot = await this.resolveIntentionSnapshot(input.intentionId);
+            if (!snapshot) return [];
+            const learnModel = createLanguageModel(
+              snapshot.provider_id,
+              snapshot.model_id,
+              snapshot.protocol as Protocol,
+              (this.env ?? {}) as Record<string, string | undefined>,
+            );
+            const extracted = await generateText({
+              model: learnModel.model,
+              system: 'Extraia até 2 aprendizados duráveis sobre a pessoa (preferências, contas, categorias, metas). Responda só com os itens, um por linha, em pt-BR. Se não houver nada durável, responda vazio.',
+              prompt: transcript,
+              maxOutputTokens: 300,
+            });
+            return extracted.text.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 2);
+          } catch {
+            return [];
+          }
+        },
+      });
+    } catch {
+      // Learning is best-effort.
+    }
+  }
+
   /** SDK history as plain turns for compaction/context building. */
   private sdkTurns(): Array<{ role: 'user' | 'assistant'; content: string }> {
     return toContextTurns(
@@ -1506,7 +1565,21 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       }
       throw error;
     }
-    if (turnResult.response) return { text: turnResult.response.text };
+    if (turnResult.response) {
+      // A17 — learning runs only on a COMPLETED interaction: the published
+      // response is the evidence the turn actually finished. Fail-closed
+      // replies (evidence unavailable) are refusals, not knowledge.
+      if (!turnResult.failClosed) {
+        await this.recordPostTurnLearning({
+          workspaceId: sdkWorkspace,
+          actorId,
+          userText: text,
+          assistantText: turnResult.response.text,
+          intentionId,
+        });
+      }
+      return { text: turnResult.response.text };
+    }
 
     const estimatedTokens = estimateTokens(text);
     const usageSql = this.durableSql();
@@ -1649,44 +1722,6 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       const recordSql = this.durableSql();
       if (recordSql) {
         recordUsage(recordSql, actorId, intentionId, estimatedTokens, estimatedTokens);
-      }
-
-      // Part B: post-turn learning (heuristic every turn, cheap LLM
-      // extraction every 5th). Never breaks the turn; assistant text is
-      // unavailable before streaming, so the heuristic reads the user turn.
-      const learnSql = this.memorySql();
-      if (learnSql) {
-        try {
-          const turnCount = bumpTurnCount(learnSql, sdkWorkspace);
-          await learnFromTurn(learnSql, {
-            workspaceId: sdkWorkspace,
-            actorId,
-            userText: text,
-            assistantText: '',
-            turnCount,
-            llmExtract: async (transcript) => {
-              try {
-                const learnModel = createLanguageModel(
-                  outcome.primary.providerId,
-                  outcome.primary.modelName,
-                  activeSnapshot.protocol as Protocol,
-                  (this.env ?? {}) as Record<string, string | undefined>,
-                );
-                const extracted = await generateText({
-                  model: learnModel.model,
-                  system: 'Extraia até 2 aprendizados duráveis sobre a pessoa (preferências, contas, categorias, metas). Responda só com os itens, um por linha, em pt-BR. Se não houver nada durável, responda vazio.',
-                  prompt: transcript,
-                  maxOutputTokens: 300,
-                });
-                return extracted.text.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 2);
-              } catch {
-                return [];
-              }
-            },
-          });
-        } catch {
-          // Learning is best-effort.
-        }
       }
 
       return result;
@@ -2696,6 +2731,17 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           ...(draftStore ? { draftStore } : {}),
         }).runTurn(restInput);
         if (turnResult.response) {
+          // A17 — learning runs only on a COMPLETED interaction with a real
+          // response; fail-closed replies are refusals, never knowledge.
+          if (!turnResult.failClosed) {
+            await this.recordPostTurnLearning({
+              workspaceId: identity.workspaceId,
+              actorId: identity.actorId,
+              userText: restInput.text,
+              assistantText: turnResult.response.text,
+              intentionId,
+            });
+          }
           // Persist the FINAL grounded/deterministic response (never the raw
           // relay text: grounding may have rejected or replaced the provider
           // output, and /rpc/history serves exactly what is persisted here).
