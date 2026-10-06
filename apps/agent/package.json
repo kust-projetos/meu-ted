@@ -14,7 +14,7 @@
   "dependencies": {
     "@pi-finance/llm-contracts": "workspace:*",
     "zod": "^3.24.1",
-    "agents": "^0.2.0",
+    "agents": "^0.3.10",
     "ai": "^5.0.0",
     "@cloudflare/ai-chat": "^0.1.0",
     "@ai-sdk/openai": "^2.0.0",
