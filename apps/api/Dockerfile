@@ -23,6 +23,12 @@ RUN pnpm build
 # Ship only api prod deps (excludes root dev/peer-only subtrees like next/sharp
 # pulled in via better-auth's optional framework peers at monorepo install time).
 RUN pnpm deploy --legacy --filter meu-ted-api --prod /runtime
+# CVE-2026-93749: the legacy deploy copies stale virtual-store entries into the
+# runtime layer. The API production graph declares NO source-map-js dependency
+# (verified against every package.json in the tree - only root dev tooling uses
+# it), so the orphaned 1.2.1 copy is unreachable by node resolution (pnpm
+# isolated mode) and is removed so the image ships only declared packages.
+RUN rm -rf /runtime/node_modules/.pnpm/source-map-js@1.2.1
 
 FROM node:24-alpine AS runner
 
