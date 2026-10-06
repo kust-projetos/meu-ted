@@ -133,6 +133,34 @@ a correção de código é o finding F2 desta closure.
   skills, veto estrutural de autoexecute, tetos por rota, overrides de dependências
   (`proxy-addr`, `source-map-js`) e allowlists com expiração.
 
+### 7.1 Quarto drift de advisory da rodada (Scoped audit da PWA — sharp + cadeia)
+
+O primeiro run de CI do PR #97 falhou no `quality (22, 10) → Scoped audit` com
+QUATRO BLOCKED novos — o npm publicou um TERCEIRO advisory de sharp
+(GHSA-wq5f-xc86-pv6w, librsvg CVE-2026-96889, estendendo o range vulnerável para
+`<=0.35.5-rc.1`), e a mesma vulnerabilidade projetou-se pela cadeia de
+dependências (`miniflare→sharp`, `wrangler→miniflare`,
+`@opennextjs/cloudflare→wrangler`). Diagnóstico (§14 do briefing):
+
+- **`sharp` (runtime):** o "fix" `0.35.5` JÁ É conhecido e RECUSADO pelo repo — a
+  allowlist existente (`pwa-2026-09-19-sharp`) documenta que sharp 0.35.x **quebra o
+  bundle OpenNext Cloudflare no Windows**; o pin scoped `next>sharp@0.34.5` é
+  deliberado, aceito com expiração 2026-12-31. O drift é apenas de RANGE: a nova
+  record (`effects: [miniflare, next]`, range estendido, 3 advisories via) não casa
+  mais com as entradas antigas do matcher canônico exato.
+- **`miniflare`/`wrangler`/`@opennextjs/cloudflare` (build-time):** afetados EXCLUSIVAMENTE
+  via sharp; os "fixAvailable" do npm são **downgrades em cascata** (wrangler
+  4.135.0→4.15.2, @opennextjs 1.20.2→1.1.0) que regrediriam a toolchain de build/deploy.
+  Nenhum roda em produção Cloudflare.
+- **Mitigação mínima correta** (precedente §7.2 do relatório pós-merge — mecanismo
+  projetado do gate): 4 entradas ADITIVAS em `scripts/pwa-audit-allowlist.json` com
+  as records canônicas exatas do audit vivo, owner, justificativa por pacote e
+  expiração **2026-12-31** (a revisão já agendada no workflow
+  `future-gate-allowlists-20261231`). Nenhum Critical escondido (todos HIGH);
+  nenhuma entrada antiga removida (passam a reportar `RESOLVED`, casando de novo se
+  a shape do npm reverter). Gate local: `ACCEPTED — 23 accepted, 6 resolved, zero
+  BLOCKED`; policy tests 12/12.
+
 ## 8. Limitações residuais reais (classificadas)
 
 1. **Orçamento de propagação (35 s de espera + 40 s de requests) não tem

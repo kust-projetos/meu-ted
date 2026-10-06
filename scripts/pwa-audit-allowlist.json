@@ -430,5 +430,96 @@
     ],
     "effects": ["argparse"],
     "range": "*"
+  },
+  {
+    "id": "pwa-2026-10-06-sharp-librsvg-extension",
+    "scope": "runtime",
+    "owner": "project-maintainer",
+    "justification": "Same accepted sharp@0.34.5 pin as pwa-2026-09-19-sharp: sharp@0.35.x is fixed but fails the OpenNext Cloudflare bundle on Windows (see that entry's justification). npm extended the vulnerable range past 0.35.4 with a third advisory (librsvg CVE-2026-96889, GHSA-wq5f-xc86-pv6w) after the pin was accepted, so the strict canonical matcher no longer matches the older entries (advisory drift 2026-10-06, surfaced after PR #92's merge). Scoped next>sharp pin stays until upstream OpenNext compatibility; deferred to the 2026-12-31 allowlist review.",
+    "expiresOn": "2026-12-31",
+    "name": "sharp",
+    "severity": "high",
+    "via": [
+      {
+        "source": 1124066,
+        "name": "sharp",
+        "dependency": "sharp",
+        "title": "sharp inherited vulnerabilities in libvips: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591",
+        "url": "https://github.com/advisories/GHSA-f88m-g3jw-g9cj",
+        "severity": "high",
+        "cwe": ["CWE-1395"],
+        "cvss": {
+          "score": 0,
+          "vectorString": null
+        },
+        "range": "<0.35.0"
+      },
+      {
+        "source": 1193725,
+        "name": "sharp",
+        "dependency": "sharp",
+        "title": "sharp: Vulnerabilities in libheif: GHSA-g89c-p67h-r497 and GHSA-2jg2-4ch7-h545",
+        "url": "https://github.com/advisories/GHSA-rgj7-g3m4-5g8c",
+        "severity": "high",
+        "cwe": ["CWE-122"],
+        "cvss": {
+          "score": 0,
+          "vectorString": null
+        },
+        "range": "<0.35.4"
+      },
+      {
+        "source": 1241331,
+        "name": "sharp",
+        "dependency": "sharp",
+        "title": "sharp : Vulnerability in librsvg dependency CVE-2026-96889",
+        "url": "https://github.com/advisories/GHSA-wq5f-xc86-pv6w",
+        "severity": "high",
+        "cwe": ["CWE-416", "CWE-1395"],
+        "cvss": {
+          "score": 0,
+          "vectorString": null
+        },
+        "range": "<0.35.5"
+      }
+    ],
+    "effects": ["miniflare", "next"],
+    "range": "<=0.35.5-rc.1"
+  },
+  {
+    "id": "pwa-2026-10-06-miniflare-via-sharp",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Wrangler dev/bundle toolchain only (miniflare is the local Workers runtime used by wrangler; never shipped to Cloudflare production). Affected solely via the accepted sharp pin above; npm's only proposed resolution is the wrangler 4.135.0 -> 4.15.2 downgrade, which would regress the deploy toolchain. Fixed when the sharp pin resolves (2026-12-31 allowlist review).",
+    "expiresOn": "2026-12-31",
+    "name": "miniflare",
+    "severity": "high",
+    "via": ["sharp"],
+    "effects": ["wrangler"],
+    "range": "<=0.0.0-fec45ed61 || >=4.20250508.3"
+  },
+  {
+    "id": "pwa-2026-10-06-wrangler-via-miniflare",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Build/deploy toolchain only (wrangler builds and uploads the PWA worker; it never runs in production). Affected solely via miniflare <- sharp; npm's only proposed resolution is the wrangler 4.135.0 -> 4.15.2 downgrade, which would regress the deploy toolchain. Fixed when the sharp pin resolves (2026-12-31 allowlist review).",
+    "expiresOn": "2026-12-31",
+    "name": "wrangler",
+    "severity": "high",
+    "via": ["miniflare"],
+    "effects": ["@opennextjs/cloudflare"],
+    "range": "<=0.0.0-7ae5dd357 || >=4.16.0"
+  },
+  {
+    "id": "pwa-2026-10-06-opennextjs-via-wrangler",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Build toolchain only (@opennextjs/cloudflare converts the Next.js build into the Cloudflare Worker during pwa:build; it never runs in production). Affected solely via wrangler <- miniflare <- sharp; npm's only proposed resolution is the @opennextjs/cloudflare 1.20.2 -> 1.1.0 downgrade, which would regress the build pipeline. Fixed when the sharp pin resolves (2026-12-31 allowlist review).",
+    "expiresOn": "2026-12-31",
+    "name": "@opennextjs/cloudflare",
+    "severity": "high",
+    "via": ["wrangler"],
+    "effects": [],
+    "range": ">=1.2.0"
   }
 ]
