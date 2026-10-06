@@ -9,6 +9,7 @@
 import { tool, jsonSchema } from 'ai';
 import { listPastSessions, getSessionSummary } from './sessions.js';
 import {
+  extractForgetQueryDiscriminators,
   forgetMemory,
   listForgetCandidates,
   recallMemories,
@@ -141,6 +142,13 @@ export const buildMemoryTools = (ctx: MemoryToolContext): Record<string, ReturnT
    * the cut makes a real ambiguity look unique — and a unique-looking request
    * deletes. Uniqueness for a destructive operation is proven over the whole
    * visible scope, never over the top-N.
+   *
+   * Generic coverage is NOT authorization either (definitive closure, issue
+   * #96): only a DISCRIMINATIVE match authorizes deletion. Structural/generic
+   * tokens name the domain category or possession, never the target, so a
+   * query with no discriminative token (e.g. "esqueça minha preferência de
+   * banco") authorizes nothing and the tool asks for specifics instead of
+   * deleting by category.
    */
   forget_memory: tool({
     description:
@@ -166,6 +174,12 @@ export const buildMemoryTools = (ctx: MemoryToolContext): Record<string, ReturnT
       });
       const relevant = selectRelevantForgetCandidates(candidates, query);
       if (relevant.length === 0) {
+        // No discriminative token names a target: fail closed by asking for
+        // specifics (e.g. the bank, card or category name). A query WITH
+        // discriminators but no match keeps the honest not-found response.
+        if (extractForgetQueryDiscriminators(query).size === 0) {
+          return { forgot: false, message: 'Diga mais especificamente o que devo esquecer — por exemplo, o nome do banco, cartão ou categoria.' };
+        }
         return { forgot: false, message: 'Não encontrei uma memória claramente correspondente.' };
       }
       if (relevant.length > 1) {

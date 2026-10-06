@@ -292,3 +292,157 @@ describe("A19 — forget_memory só apaga alvo CLARAMENTE correspondente", () =>
     expect(recallMemories(store, { workspaceId, actor: "actor-1", query: "Nubank" })).toHaveLength(1);
   });
 });
+
+/**
+ * Definitive closure (#96): only a DISCRIMINATIVE match authorizes forgetting.
+ *
+ * Generic coverage ("minha", "preferência", "banco", "conta") names the
+ * domain category or possession — never the target. A candidate is
+ * forgettable only with at least one discriminative query token; a query
+ * with none authorizes nothing and the tool asks for specifics.
+ */
+describe("Closure definitiva (#96): só correspondência discriminante autoriza esquecimento", () => {
+  it("Caso A runtime: só o Nubank é esquecido, Banco do Brasil fica intacto", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere usar Nubank" });
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Minha conta favorita é Banco do Brasil" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "esqueça minha preferência do banco Nubank");
+
+    expect(result.forgot).toBe(true);
+    // Post-state is asserted over `listForgetCandidates` (full visibility, no
+    // ranking): `recallMemories` returns the best available items even with
+    // zero overlap, so a recall-based "Nubank has 0 results" assertion could
+    // never pass while ANY memory survives. What proves the fix: the Nubank
+    // memory is gone and exactly the Banco do Brasil one survives intact.
+    const alive = listForgetCandidates(store, { workspaceId, actor: "actor-1" });
+    expect(alive.map((item) => item.content)).toEqual(['Minha conta favorita é Banco do Brasil']);
+    expect(alive[0]?.invalidatedAt).toBeNull();
+  });
+
+  it("Caso B runtime: conta/preferência genéricas nunca apagam Banco do Brasil", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere usar Nubank" });
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Minha conta principal é Banco do Brasil" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "remova minha conta/preferência do banco Nubank");
+
+    expect(result.forgot).toBe(true);
+    // Same visibility-based assertion as Caso A: the survivor must be the
+    // Banco do Brasil memory itself (a content check — recall would return
+    // the wrong survivor with overlap 0 and pass vacuously).
+    const alive = listForgetCandidates(store, { workspaceId, actor: "actor-1" });
+    expect(alive.map((item) => item.content)).toEqual(['Minha conta principal é Banco do Brasil']);
+    expect(alive[0]?.invalidatedAt).toBeNull();
+  });
+
+  it("Caso C runtime: query sem discriminante pede especificação e nada é invalidado", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere usar Nubank" });
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere o Itaú" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "esqueça minha preferência de banco");
+
+    expect(result.forgot).toBe(false);
+    expect(String(result.message)).toMatch(/especif/i);
+    const alive = listForgetCandidates(store, { workspaceId, actor: "actor-1" });
+    expect(alive.map((item) => item.content).sort()).toEqual(
+      ['Prefere o Itaú', 'Prefere usar Nubank'].sort(),
+    );
+    expect(alive.every((item) => item.invalidatedAt === null)).toBe(true);
+  });
+
+  it("Caso E runtime: discriminante de outro banco não toca no Nubank", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere usar Nubank" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "esqueça Banco Inter");
+
+    expect(result.forgot).toBe(false);
+    const alive = listForgetCandidates(store, { workspaceId, actor: "actor-1" });
+    expect(alive.map((item) => item.content)).toEqual(['Prefere usar Nubank']);
+    expect(alive[0]?.invalidatedAt).toBeNull();
+  });
+
+  it("Caso F runtime: só a memória do Nubank é apagada, Alimentação fica intacta", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Banco principal é Nubank" });
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Categoria principal é Alimentação" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "esqueça minha principal preferência de banco Nubank");
+
+    expect(result.forgot).toBe(true);
+    const alive = listForgetCandidates(store, { workspaceId, actor: "actor-1" });
+    expect(alive.map((item) => item.content)).toEqual(['Categoria principal é Alimentação']);
+    expect(alive[0]?.invalidatedAt).toBeNull();
+  });
+
+  /**
+   * Review #96 round 2 (P1): function words (politeness, connectives,
+   * remember/forget verb family, deictics) leaked into authorization because
+   * "discriminative = not listed". Both traps run through the REAL tool flow
+   * and assert NO invalidation happened (survivors by exact content).
+   */
+  it("Cortesia não autoriza: '…do banco Nu, por favor' não apaga a memória que contém 'por'", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere usar Nu" });
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere pagar por Pix" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "esqueça minha preferência do banco Nu, por favor");
+
+    expect(result.forgot).toBe(false);
+    expect(result.ambiguous).toBeUndefined();
+    expect(String(result.message)).toMatch(/especif/i);
+    const alive = listForgetCandidates(store, { workspaceId, actor: "actor-1" });
+    expect(alive.map((item) => item.content).sort()).toEqual(['Prefere pagar por Pix', 'Prefere usar Nu'].sort());
+    expect(alive.every((item) => item.invalidatedAt === null)).toBe(true);
+  });
+
+  it("Deíticos/negação não autorizam: 'não lembre mais disso' não apaga 'Não gosta de café'", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "fact", content: "Não gosta de café" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "não lembre mais disso");
+
+    expect(result.forgot).toBe(false);
+    expect(String(result.message)).toMatch(/especif/i);
+    const alive = listForgetCandidates(store, { workspaceId, actor: "actor-1" });
+    expect(alive.map((item) => item.content)).toEqual(['Não gosta de café']);
+    expect(alive[0]?.invalidatedAt).toBeNull();
+  });
+
+  it("Contração não autoriza: 'pela conta Nu' não apaga 'Prefere caminhar pela manhã' (re-review 2b)", async () => {
+    // Literal reviewer reproduction, round 2b: "nu" is dropped (2 chars),
+    // "conta" is generic, "pela" is a contraction — discriminators = {} and
+    // the tool must ask for specifics instead of deleting the morning-walk
+    // memory (which contained "pela" and was the sole match before the fix).
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere usar Nu" });
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "fact", content: "Prefere caminhar pela manhã" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "esqueça minha preferência pela conta Nu");
+
+    expect(result.forgot).toBe(false);
+    expect(result.ambiguous).toBeUndefined();
+    expect(String(result.message)).toMatch(/especif/i);
+    const alive = listForgetCandidates(store, { workspaceId, actor: "actor-1" });
+    expect(alive.map((item) => item.content).sort()).toEqual(['Prefere caminhar pela manhã', 'Prefere usar Nu'].sort());
+    expect(alive.every((item) => item.invalidatedAt === null)).toBe(true);
+  });
+});

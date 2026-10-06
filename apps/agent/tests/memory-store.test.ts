@@ -14,7 +14,6 @@ import {
   listForgetCandidates,
   selectRelevantForgetCandidates,
   FORGET_QUERY_STOP_TOKENS,
-  FORGET_RELEVANCE_MIN_COVERAGE,
   type MemoryItem,
   type MemoryScope,
 } from '../src/agent-config/memory/store.js';
@@ -202,30 +201,36 @@ describe('selectRelevantForgetCandidates (o ranking nunca decide o que é apagad
     ]);
   });
 
-  it('query multi-token aceita cobertura parcial (0.5) e descarta o sem match', () => {
+  it('discriminante autoriza: preferencia é genérico, nubank decide o alvo', () => {
     const candidates = candidatesFrom(['Prefere usar Nubank', 'Usa o cartão de crédito']);
-    // {preferencia, nubank}: 1 de 2 = 0.5 => alvo provável.
+    // Discriminators of "esqueça a preferência do Nubank" = {nubank}
+    // ("preferencia" is structural/generic). The candidate containing the
+    // discriminative token is the target; noise without it is discarded.
     expect(contentsOf(selectRelevantForgetCandidates(candidates, 'esqueça a preferência do Nubank'))).toEqual([
       'Prefere usar Nubank',
     ]);
   });
 
-  it('cobertura abaixo do piso não qualifica: assunto de 3 tokens com 1 match é recusado', () => {
+  it('ruído temporal não desqualifica: discriminante presente autoriza o alvo', () => {
     const candidates = candidatesFrom(['Prefere usar Nubank']);
-    // {nubank, amanhã, cedo}: 1 de 3 = 0.33 < FORGET_RELEVANCE_MIN_COVERAGE.
-    expect(selectRelevantForgetCandidates(candidates, 'esqueça Nubank amanhã cedo')).toEqual([]);
+    // Old coverage policy rejected this correct target (1/3 < 0.5) — the
+    // mirror of the #96 bug. Under the discriminant policy, "nubank" is
+    // discriminative and temporal noise ("amanha", "cedo") never disqualifies.
+    expect(contentsOf(selectRelevantForgetCandidates(candidates, 'esqueça Nubank amanhã cedo'))).toEqual([
+      'Prefere usar Nubank',
+    ]);
   });
 
-  it('termo comum e vago devolve AMBOS: a ambiguidade honesta é do tool, não do gate', () => {
-    // Conteúdos distintos o bastante para NÃO colidirem no dedup por
-    // similaridade (0.55) do `rememberFact`, mas unidos pelo termo vago.
+  it('termo estrutural sozinho nunca autoriza: "esqueça banco" devolve []', () => {
+    // Distinct enough not to collide in `rememberFact` similarity dedup
+    // (0.55), but united by the structural term "banco" — which names the
+    // domain category, never the target, so it authorizes nothing.
     const candidates = candidatesFrom([
       'Usa o banco do Brasil para a conta corrente',
       'Prefere o banco Inter no dia do pagamento',
     ]);
     expect(candidates).toHaveLength(2);
-    expect(FORGET_RELEVANCE_MIN_COVERAGE).toBe(0.5);
-    expect(contentsOf(selectRelevantForgetCandidates(candidates, 'esqueça banco'))).toHaveLength(2);
+    expect(selectRelevantForgetCandidates(candidates, 'esqueça banco')).toEqual([]);
   });
 
   it('query só com stopwords não tem assunto: nenhum alvo provável', () => {
@@ -242,6 +247,209 @@ describe('selectRelevantForgetCandidates (o ranking nunca decide o que é apagad
     expect(selectRelevantForgetCandidates(candidates, '')).toEqual([]);
     expect(selectRelevantForgetCandidates(candidates, '   ')).toEqual([]);
     expect(selectRelevantForgetCandidates(candidates, 'a de o em um')).toEqual([]);
+  });
+});
+
+/**
+ * Definitive closure (#96): only a DISCRIMINATIVE match authorizes forgetting.
+ *
+ * "Ranking does not authorize; generic coverage does not authorize; only a
+ * discriminative match authorizes deletion." Structural/generic tokens name
+ * the domain category or possession — never the target — so a candidate is
+ * forgettable only if it contains at least one discriminative query token.
+ */
+describe('selectRelevantForgetCandidates (só correspondência discriminante autoriza)', () => {
+  let sql: ReturnType<typeof createSql>;
+  beforeEach(() => {
+    sql = createSql();
+  });
+
+  /** Real candidates through the real recall, so ordering/content are honest. */
+  const candidatesFrom = (contents: string[]): MemoryItem[] => {
+    contents.forEach((content, index) => {
+      rememberFact(sql, { workspaceId: 'ws-1', actor: 'u-1', content, salience: 0.9 - index * 0.05 });
+    });
+    return recallMemories(sql, { workspaceId: 'ws-1', actor: 'u-1', limit: 10 });
+  };
+
+  const contentsOf = (items: MemoryItem[]): string[] => items.map((item) => item.content);
+
+  it('Caso A (o bug): genéricos não elegem o alvo errado, o discriminante elege o certo', () => {
+    const candidates = candidatesFrom(['Prefere usar Nubank', 'Minha conta favorita é Banco do Brasil']);
+    expect(candidates).toHaveLength(2);
+    // "minha/preferencia/banco" are generic; only "nubank" discriminates.
+    expect(
+      contentsOf(selectRelevantForgetCandidates(candidates, 'esqueça minha preferência do banco Nubank')),
+    ).toEqual(['Prefere usar Nubank']);
+  });
+
+  it('Caso B: conta/preferência genéricas nunca elegem Banco do Brasil', () => {
+    const candidates = candidatesFrom(['Prefere usar Nubank', 'Minha conta principal é Banco do Brasil']);
+    expect(candidates).toHaveLength(2);
+    expect(
+      contentsOf(selectRelevantForgetCandidates(candidates, 'remova minha conta/preferência do banco Nubank')),
+    ).toEqual(['Prefere usar Nubank']);
+  });
+
+  it('Caso C: query sem discriminante autoriza NADA (falha conservadora)', () => {
+    const candidates = candidatesFrom(['Prefere usar Nubank', 'Prefere o Itaú']);
+    // Similarity-dedup check first: {prefere} / max(3, 2) = 0.33 < 0.55,
+    // so both memories are stored and the [] below is the gate, not the dedup.
+    expect(candidates).toHaveLength(2);
+    expect(selectRelevantForgetCandidates(candidates, 'esqueça minha preferência de banco')).toEqual([]);
+  });
+
+  it('Caso E: discriminante ausente do candidato autoriza NADA', () => {
+    const candidates = candidatesFrom(['Prefere usar Nubank']);
+    // Discriminator is {inter}; the Nubank memory does not contain it.
+    expect(selectRelevantForgetCandidates(candidates, 'esqueça Banco Inter')).toEqual([]);
+  });
+
+  it('Caso F: "principal" genérico não ajuda o candidato errado', () => {
+    const candidates = candidatesFrom(['Banco principal é Nubank', 'Categoria principal é Alimentação']);
+    expect(candidates).toHaveLength(2);
+    expect(
+      contentsOf(
+        selectRelevantForgetCandidates(candidates, 'esqueça minha principal preferência de banco Nubank'),
+      ),
+    ).toEqual(['Banco principal é Nubank']);
+  });
+
+  it('marca curta descartada pelo tokenizer é conservadora: "esqueça XP" devolve []', () => {
+    // Known residual: `normalizeTokens` drops tokens ≤ 2 chars, so "xp"
+    // never becomes a discriminator. Failing closed (ask for specifics)
+    // instead of deleting by generic coverage.
+    const candidates = candidatesFrom(['Prefere usar Nubank']);
+    expect(selectRelevantForgetCandidates(candidates, 'esqueça XP')).toEqual([]);
+  });
+
+  it('deítico/negação/família de lembrar não viram discriminantes: "não lembre mais disso" não apaga nada', () => {
+    // "nao"/"lembre"/"mais"/"disso" are all function/command tokens; the
+    // memory whose content STARTS with "Não" must never be picked by it.
+    const candidates = candidatesFrom(['Não gosta de café']);
+    expect(selectRelevantForgetCandidates(candidates, 'não lembre mais disso')).toEqual([]);
+  });
+
+  /**
+   * Review #96 round 2 (P1): "discriminative = not listed" leaked FUNCTION
+   * words into authorization. Politeness ("por"), connectives ("mais") and
+   * the remember/forget verb family infest ANY content, so they must never
+   * authorize a deletion. Pinned by the literal traps the reviewer found.
+   */
+  it('cortesia não vira discriminante: "…do banco Nu, por favor" não apaga a memória com "por"', () => {
+    // "nu" (2 chars) is dropped; "por" is a function word; discriminators = {}.
+    const candidates = candidatesFrom(['Prefere usar Nu', 'Prefere pagar por Pix']);
+    expect(candidates).toHaveLength(2);
+    expect(selectRelevantForgetCandidates(candidates, 'esqueça minha preferência do banco Nu, por favor')).toEqual([]);
+  });
+
+  /**
+   * Review #96 round 2b (re-review): the function-word class must cover the
+   * pt-BR stopword standard (contractions, pronouns, modals, frozen
+   * locutions). Each row is a literal reviewer reproduction: the function
+   * token appears in an unrelated memory's content and must never authorize.
+   */
+  it('stopwords padrão (contrações/pronomes/modais) não autorizam exclusão nenhuma', () => {
+    const candidates = candidatesFrom([
+      'Prefere caminhar pela manhã',
+      'Prefere pagar pra receber desconto',
+      'Quer que TED responda curto',
+      'Quero viajar nas férias',
+      'Pode usar Nubank para compras',
+      'Não gosta de nada doce',
+      'Gosta das cores do aplicativo',
+    ]);
+    expect(candidates).toHaveLength(7);
+    for (const query of [
+      'esqueça minha preferência pela conta Nu', // pela
+      'esqueça minha conta Nu pra mim', // pra, mim
+      'esqueça tudo que sabe', // que
+      'quero esquecer isso', // quero
+      'pode esquecer isso', // pode
+      'não lembre nada', // nada
+      'esqueça minha preferência das contas', // das
+    ]) {
+      expect(selectRelevantForgetCandidates(candidates, query)).toEqual([]);
+    }
+  });
+
+  /**
+   * Review #96 round 3 (re-review 2b): the function-word class must also
+   * cover locutions ("acerca de", "além de", "por causa de", "a propósito"),
+   * inclusive-frame adverbs, volition modals and interjections. Literal
+   * reviewer reproductions — each token appears in an unrelated memory's
+   * content and must never authorize.
+   */
+  it('locuções congeladas, advérbios de moldura, modais e interjeições não autorizam exclusão', () => {
+    const candidates = candidatesFrom([
+      'Gosta de conversar acerca de viagens',
+      'Usa Pix inclusive aos domingos',
+      'Prefere viajar além do Brasil',
+      'Evita café por causa da insônia',
+      'Busca propósito no trabalho',
+      'Podemos dividir despesas da casa',
+      'Gostaria de viajar nas férias',
+      'Costuma dizer hmm quando pensa',
+    ]);
+    expect(candidates).toHaveLength(8);
+    for (const query of [
+      'esqueça minha preferência acerca da conta Nu', // acerca
+      'inclusive esqueça isso', // inclusive
+      'esqueça minha conta Nu além disso', // alem
+      'esqueça minha conta Nu por causa disso', // causa
+      'a propósito esqueça isso', // proposito
+      'podemos esquecer isso', // podemos
+      'gostaria de esquecer isso', // gostaria
+      'hmm esqueça isso', // hmm
+    ]) {
+      expect(selectRelevantForgetCandidates(candidates, query)).toEqual([]);
+    }
+  });
+
+  /**
+   * Review #96 round 3 (APPROVED with non-blocking hardening): the literal
+   * terms the reviewer tested beyond the list — discourse adverbs, frozen
+   * comparatives and acknowledgements — pinned so each is a proven fix, not
+   * an open trap.
+   */
+  it('advérbios de discurso e reconhecimentos de moldura não autorizam exclusão', () => {
+    const candidates = candidatesFrom([
+      'Prefere Pix aliás evita cartões',
+      'Viaja conforme o calendário da família',
+      'Comenta através do aplicativo',
+      'Diz enfim que quer poupar',
+      'Pergunta afinal sobre o saldo',
+      'Responde obviamente nas conversas',
+      'Confirma certamente os lançamentos',
+      'Costuma dizer entendido nas conversas',
+    ]);
+    expect(candidates).toHaveLength(8);
+    for (const query of [
+      'aliás esqueça isso', // alias
+      'esqueça conforme a conta Nu', // conforme
+      'através disso esqueça', // atraves
+      'enfim esqueça isso', // enfim
+      'afinal esqueça isso', // afinal
+      'obviamente esqueça isso', // obviamente
+      'certamente esqueça isso', // certamente
+      'entendido, esqueça isso', // entendido
+    ]) {
+      expect(selectRelevantForgetCandidates(candidates, query)).toEqual([]);
+    }
+  });
+
+  it('termo estrutural não listado: alvo único AUTO-DESCRITO é esquecível (decisão fixada)', () => {
+    // "instituicao"/"financeira" are domain structure missing from the list:
+    // the candidate whose content literally uses the term is the single
+    // self-describing match, and the user asked to forget exactly that term.
+    // Planner decision (issue #96 round 2): acceptable — over-listing domain
+    // vocabulary is unbounded; a query the content does not use authorizes
+    // nothing (conservative), and multiple self-described matches stay
+    // ambiguous.
+    const candidates = candidatesFrom(['Prefere Nubank como instituição financeira']);
+    expect(
+      contentsOf(selectRelevantForgetCandidates(candidates, 'esqueça minha instituição financeira')),
+    ).toEqual(['Prefere Nubank como instituição financeira']);
   });
 });
 

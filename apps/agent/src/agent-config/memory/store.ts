@@ -248,16 +248,363 @@ export const FORGET_QUERY_STOP_TOKENS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Minimum share of the SUBJECT tokens a candidate must contain to count as a
- * plausible forget target. Measured against the subject tokens (never against
- * the candidate's length) so a long memory is not disqualified by its own
- * verbosity, and 0.5 lets a two-token subject ("preferência do Nubank") be
- * matched by a single shared token ("Prefere usar Nubank").
+ * Structural/generic tokens: they name the DOMAIN category or possession —
+ * never the target — so they can neither authorize a forget nor promote a
+ * candidate from "unrelated" to "authorized".
+ *
+ * Possessives ("minha", "seu") mark ownership, not identity; domain nouns
+ * ("banco", "conta", "categoria", "preferencia") name the KIND of thing the
+ * user talks about, which every same-kind memory shares. Only the REMAINDER
+ * (the discriminative tokens, e.g. "nubank") can single out one memory.
+ *
+ * This list is NOT load-bearing for safety against DOMAIN vocabulary: a
+ * structural word missing here (e.g. "instituicao") degrades to ambiguity or
+ * to a UNIQUE self-describing target (a candidate whose content literally
+ * uses the term — pinned by test as acceptable behavior), and an over-broad
+ * entry (a discriminative word listed here) degrades to "not found / ask for
+ * specifics". Both are conservative. The safety invariant is "only a
+ * discriminative token authorizes", and it does not depend on this list.
+ * Function words are a DIFFERENT hazard (they infest any content) and get
+ * their own closed class in `FORGET_FUNCTION_TOKENS`.
+ *
+ * Entries are normalized forms (`normalizeTokens` lowercases, strips accents
+ * and drops tokens of 2 chars or fewer), with plurals included.
  */
-export const FORGET_RELEVANCE_MIN_COVERAGE = 0.5;
+export const FORGET_GENERIC_STRUCTURE_TOKENS: ReadonlySet<string> = new Set([
+  // possessives: ownership, never identity
+  'minha',
+  'meu',
+  'minhas',
+  'meus',
+  'sua',
+  'seu',
+  'suas',
+  'seus',
+  // domain structure: the KIND of thing, shared by every same-kind memory
+  'preferencia',
+  'preferencias',
+  'prefere',
+  'banco',
+  'bancos',
+  'conta',
+  'contas',
+  'cartao',
+  'cartoes',
+  'categoria',
+  'categorias',
+  'informacao',
+  'informacoes',
+  'dado',
+  'dados',
+  'memoria',
+  'memorias',
+  'coisa',
+  'coisas',
+  'uso',
+  'usar',
+  'usado',
+  'usada',
+  'principal',
+  'principais',
+  'favorita',
+  'favorito',
+  'favoritas',
+  'favoritos',
+]);
 
 /**
- * Relevance gate for the DESTRUCTIVE forget path (A19 post-merge closure).
+ * Function words: the pt-BR standard stopword class (snowball/NLTK base,
+ * extended with contractions, demonstratives, modals/volition verbs and the
+ * remember/forget verb family). Grammatical FUNCTION never identifies a
+ * subject, and unlike domain vocabulary these words infest ANY content
+ * ("Prefere pagar por Pix", "Gosta das cores do aplicativo"), so a missed
+ * entry would leak into authorization — the class is therefore deliberately
+ * broad over the CLOSED set of grammatical function words (normalized forms,
+ * >2 chars, which `normalizeTokens` keeps).
+ *
+ * Safety analysis (issue #96 review rounds 1-3): a missed function word only
+ * authorizes a deletion if a candidate's CONTENT contains it AND it is the
+ * sole RESOLVED target (multiple resolved targets stay ambiguous; the
+ * deletion then cascades to that target's derived descendants, which the
+ * forget invariant covers — the bounded-damage statement is about the direct
+ * target, not the cascade size). Every reviewer-found trap is pinned by
+ * regression ("por favor", "não lembre mais disso", "pela manhã", "pra mim",
+ * "quero/pode/nada/das/que", "a respeito", "acerca/alem/inclusive/causa/
+ * proposito/podemos/gostaria/hmm", "atraves/conforme/alias/enfim/afinal/
+ * obviamente/certamente/entendido"). Residual, honest: an UNLISTED function
+ * word appearing in exactly one memory's content and in a query that names
+ * no real subject could still authorize that single match — inherent to
+ * deterministic, LLM-free resolution over an open language; the failure
+ * stays bounded (single self-describing direct target + cascade, multiple =
+ * ambiguity).
+ */
+export const FORGET_FUNCTION_TOKENS: ReadonlySet<string> = new Set([
+  // prepositions / contractions with article (pt-BR standard stopword base)
+  'por',
+  'para',
+  'pra',
+  'pro',
+  'com',
+  'sem',
+  'sobre',
+  'entre',
+  'desde',
+  'ate',
+  'apos',
+  'contra',
+  'perante',
+  'tras',
+  'diante',
+  'mediante',
+  'durante',
+  'pela',
+  'pelo',
+  'pelas',
+  'pelos',
+  'das',
+  'dos',
+  'da',
+  'do',
+  'numa',
+  'num',
+  'nuns',
+  'duma',
+  'dum',
+  'dumas',
+  'duns',
+  // demonstratives / determiners
+  'este',
+  'esta',
+  'estes',
+  'estas',
+  'isto',
+  'esse',
+  'essa',
+  'esses',
+  'essas',
+  'aquele',
+  'aquela',
+  'aqueles',
+  'aquelas',
+  'tal',
+  // pronouns
+  'mim',
+  'ele',
+  'ela',
+  'eles',
+  'elas',
+  'quem',
+  'cujo',
+  'cuja',
+  'nosso',
+  'nossa',
+  'nos',
+  'voce',
+  'voces',
+  'lhe',
+  'lhes',
+  'ninguem',
+  'algo',
+  'algum',
+  'alguma',
+  'alguns',
+  'algumas',
+  'nenhum',
+  'nenhuma',
+  'cada',
+  'qualquer',
+  'quaisquer',
+  'respeito', // frozen locution "a respeito (de)"
+  // connectives
+  'mas',
+  'porem',
+  'todavia',
+  'contudo',
+  'entretanto',
+  'portanto',
+  'porque',
+  'pois',
+  'embora',
+  'senao',
+  'caso',
+  'que',
+  'como',
+  'quando',
+  'enquanto',
+  'onde',
+  'qual',
+  'quais',
+  'embora',
+  // politeness / courtesy formulas
+  'favor', // (also in STOP; duplicated harmlessly — Set)
+  'obrigado',
+  'obrigada',
+  'porfavor',
+  'gentileza',
+  // deictics / discourse
+  'disso',
+  'desse',
+  'dessa',
+  'disto',
+  'deste',
+  'desta',
+  'nisso',
+  'nisto',
+  'aqui',
+  'ali',
+  'la',
+  'agora',
+  'depois',
+  'antes',
+  'hoje',
+  'amanha',
+  'ontem',
+  'cedo',
+  'tarde',
+  'ja',
+  'ainda',
+  'sempre',
+  'talvez',
+  'tambem',
+  'realmente',
+  'tipo',
+  'coisa',
+  'verdade',
+  'assim',
+  'entao',
+  // negation / affirmation
+  'nao',
+  'sim',
+  'jamais',
+  'nem',
+  'tampouco',
+  'nada',
+  // quantifiers / comparatives
+  'mais',
+  'menos',
+  'muito',
+  'muita',
+  'pouco',
+  'pouca',
+  'bastante',
+  'varios',
+  'varias',
+  'todo',
+  'toda',
+  'todos',
+  'todas',
+  'outro',
+  'outra',
+  'outros',
+  'outras',
+  'mesmo',
+  'mesma',
+  'mesmos',
+  'mesmas',
+  'tanto',
+  'tanta',
+  // modals / volition / high-frequency support verbs
+  'quero',
+  'quer',
+  'queria',
+  'quero',
+  'queremos',
+  'gostaria',
+  'gostariamos',
+  'gostamos',
+  'pode',
+  'podem',
+  'podia',
+  'poderia',
+  'poderiam',
+  'podemos',
+  'preciso',
+  'precisa',
+  'precisam',
+  'vamos',
+  'vou',
+  'vai',
+  'vao',
+  'foi',
+  'foram',
+  'era',
+  'eram',
+  'sao',
+  'sou',
+  'somos',
+  'estou',
+  'estamos',
+  'estao',
+  'tem',
+  'tinha',
+  'tinham',
+  'tera',
+  'deve',
+  'devem',
+  'deveria',
+  // discourse frames / interjections / frozen locutions
+  'acerca', // "acerca de"
+  'alem', // "além de"
+  'inclusive',
+  'apenas',
+  'somente',
+  'quase',
+  'logo',
+  'dentro',
+  'fora',
+  'perto',
+  'longe',
+  'junto',
+  'causa', // "por causa (de)"
+  'proposito', // "a propósito"
+  'hmm',
+  'bem',
+  'certo',
+  'claro',
+  'beleza',
+  'ops',
+  'atraves', // "através de"
+  'conforme',
+  'alias', // "aliás"
+  'enfim',
+  'afinal',
+  'obviamente',
+  'certamente',
+  'entendido', // request-frame acknowledgement
+  // remember/forget verb family (the act, never the subject)
+  'lembre',
+  'lembra',
+  'lembrar',
+  'lembrando',
+  'lembro',
+  'sabe',
+  'saber',
+]);
+
+/**
+ * Discriminative query tokens: normalized query tokens minus the COMMAND
+ * class (`FORGET_QUERY_STOP_TOKENS`), minus the STRUCTURAL/GENERIC class
+ * (`FORGET_GENERIC_STRUCTURE_TOKENS`) and minus the FUNCTION-word class
+ * (`FORGET_FUNCTION_TOKENS`). What remains names the target itself
+ * (e.g. "nubank") and only it can authorize a deletion. An empty set means
+ * the query names no target — the caller must fail closed.
+ */
+export const extractForgetQueryDiscriminators = (query: string): Set<string> =>
+  new Set(
+    [...normalizeTokens(query)].filter(
+      (token) =>
+        !FORGET_QUERY_STOP_TOKENS.has(token) &&
+        !FORGET_GENERIC_STRUCTURE_TOKENS.has(token) &&
+        !FORGET_FUNCTION_TOKENS.has(token),
+    ),
+  );
+
+/**
+ * Relevance gate for the DESTRUCTIVE forget path (A19 definitive closure,
+ * issue #96).
+ *
+ * "Ranking does not authorize; generic coverage does not authorize; only a
+ * discriminative match authorizes deletion."
  *
  * `recallMemories` is a CONTEXT ranking: its score is
  * `salience × recency-decay + overlap × 0.5` with NO overlap>0 requirement, so
@@ -267,12 +614,20 @@ export const FORGET_RELEVANCE_MIN_COVERAGE = 0.5;
  * by a forget request that never mentioned it, and two candidates would fake
  * an ambiguity that the user can trivially resolve.
  *
- * The rule is pure, deterministic and LLM-free:
- *   - subject tokens = normalized query tokens minus `FORGET_QUERY_STOP_TOKENS`;
- *   - no subject tokens ⇒ NO target (`[]`, conservative: an all-imperative
- *     request like "esqueça isso" must never delete something);
- *   - a candidate is RELEVANT iff it matches ≥ 1 subject token and
- *     `matched / subjectTokens.size >= FORGET_RELEVANCE_MIN_COVERAGE`.
+ * Generic coverage cannot authorize either: structural tokens ("banco",
+ * "conta", "preferencia", "minha") are shared by every same-kind memory, so
+ * counting them lets a WRONG memory outscore the right one
+ * ("esqueça minha preferência do banco Nubank" matched {minha, banco} on
+ * "Minha conta favorita é Banco do Brasil" and deleted it). The rule is pure,
+ * deterministic and LLM-free:
+ *   - discriminators = normalized query tokens minus COMMAND stopwords minus
+ *     STRUCTURAL/GENERIC tokens (`extractForgetQueryDiscriminators`);
+ *   - no discriminators ⇒ NO target (`[]`, conservative: a query that names
+ *     no target, like "esqueça minha preferência de banco", must never delete
+ *     something);
+ *   - a candidate is RELEVANT iff its normalized content contains at least
+ *     one discriminator (exact normalized-token match via `normalizeTokens`,
+ *     no stemming).
  *
  * The caller (`forget_memory`) keeps the recall's ordering, and decides between
  * forgetting the single relevant candidate and reporting honest ambiguity.
@@ -281,16 +636,12 @@ export const selectRelevantForgetCandidates = (
   candidates: MemoryItem[],
   query: string,
 ): MemoryItem[] => {
-  const subjectTokens = new Set(
-    [...normalizeTokens(query)].filter((token) => !FORGET_QUERY_STOP_TOKENS.has(token)),
-  );
-  if (subjectTokens.size === 0) return [];
+  const discriminators = extractForgetQueryDiscriminators(query);
+  if (discriminators.size === 0) return [];
   return candidates.filter((candidate) => {
     const contentTokens = normalizeTokens(candidate.content);
-    let matched = 0;
-    for (const token of subjectTokens) if (contentTokens.has(token)) matched += 1;
-    if (matched === 0) return false;
-    return matched / subjectTokens.size >= FORGET_RELEVANCE_MIN_COVERAGE;
+    for (const token of discriminators) if (contentTokens.has(token)) return true;
+    return false;
   });
 };
 

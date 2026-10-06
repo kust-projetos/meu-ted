@@ -233,12 +233,14 @@ jobs:
           curl -fsS "$AGENT_PROD_URL/health" | grep -q '"status":"ready"'
           curl -fsS "$AGENT_PROD_URL/health/agent" | grep -q '"status":"ready"'
       # V4.1 Phase 9 (Task 9.10): the deployed worker must report the SHA
-      # this workflow deployed — fail closed on mismatch.
-      - name: Agent release identity matches deployed SHA
+      # this workflow deployed — fail closed on mismatch. Bounded retry
+      # (issue #96): Workers version propagation is eventually consistent,
+      # so a single curl can observe the previous SHA right after deploy; a
+      # genuine mismatch still fails after the budget runs out.
+      - name: Agent release identity matches deployed SHA (bounded propagation retry)
         env:
           EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          curl -fsS "$AGENT_PROD_URL/health" | grep -q "\"buildSha\":\"$EXPECTED_SHA\""
+        run: node scripts/agent-release-smoke.mjs --url "$AGENT_PROD_URL" --expected-sha "$EXPECTED_SHA"
       - name: API health (public GET only)
         run: |
           curl -fsS "$API_PROD_URL/health"

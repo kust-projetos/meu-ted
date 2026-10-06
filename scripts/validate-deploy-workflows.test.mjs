@@ -107,3 +107,15 @@ test("smoke curls use only the quoted canonical env values", () => {
     }
   }
 });
+
+test("agent-deploy.yml: release identity uses the bounded propagation-retry helper (issue #96)", () => {
+  const smoke = smokeRegion(readWorkflow("agent-deploy.yml"));
+  assert.ok(
+    smoke.includes('node scripts/agent-release-smoke.mjs --url "$AGENT_PROD_URL" --expected-sha "$EXPECTED_SHA"'),
+    "release-identity step must call agent-release-smoke.mjs with the quoted canonical env values",
+  );
+  assert.ok(
+    !smoke.includes('grep -q "\\"buildSha\\"'),
+    "single-curl buildSha grep must be gone (false failure on eventual propagation)",
+  );
+});
