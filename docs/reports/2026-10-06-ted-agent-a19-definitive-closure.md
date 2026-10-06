@@ -188,9 +188,53 @@ dependências (`miniflare→sharp`, `wrangler→miniflare`,
 
 ## 10. CI remoto, deploy e attestation
 
-*(preenchido antes do merge — runs do PR, merge, Agent Deploy, PWA Deploy e smoke
-real com `buildSha` esperado vs observado)*
+**CI do PR #97 (4 rodadas — as duas primeiras com drift de advisory):**
+
+| Rodada | Commit | Resultado |
+| --- | --- | --- |
+| 1 | `17c5986`/`383acba`/`2fe73a1` | FAIL — `quality (22, 10) → Scoped audit`: npm publicou 3º advisory de sharp (GHSA-wq5f-xc86-pv6w, librsvg, range estendido a `<=0.35.5-rc.1`) projetado pela cadeia `miniflare→wrangler→@opennextjs` (§7.1) |
+| 2 | `e19deb9` | FAIL — mesmo step: a shape do grafo npm do CI resolve `effects:[miniflare]` (sem `next`), e o matcher canônico exato não casou com a entrada local (`[miniflare, next]`) |
+| 3 | `1b8afcd` | **ALL GREEN** — 17/17 checks, incluindo required `Gate — all checks` + `quality (22, 10)` |
+
+**Merge:** PR #97 mergeado como **`98fe4038b73c5a16eaad2d560ddf9869fb3122c5`** (`main`).
+
+**Deploys pós-merge (workflows automáticos, ambos success):**
+
+| Pipeline | Run | Resultado |
+| --- | --- | --- |
+| Agent Deploy (1º evento, par skip "not ready") | `37507379938` | success (deploy skipped — CI/PWA CI ainda em progresso) |
+| PWA Deploy (1º evento) | `37507379986` | success |
+| **Agent Deploy (deploy real)** | `37507687738` | **success — Gate + deploy + Post-deploy smoke** |
+| **PWA Deploy (deploy real)** | `37507687738`-par | success |
+
+**Attestation de release (o teste real do fix F2):** o job `Post-deploy smoke
+(read-only)` executou o novo smoke e o log do CI registra
+`[agent-release-smoke] attempt 1/8: PASS — buildSha matches expected` — convergência
+na primeira tentativa, com retry bounded disponível caso a propagação atrasasse.
+
+**Cadeia autoritativa provada:** HEAD mergeado (`98fe403…`) = run de CI
+(`37506599337`, o `buildId` reportado) = SHA implantado (`--var BUILD_SHA`) =
+`buildSha` retornado pelo `/health` de produção (verificação read-only independente
+pós-deploy: `{"status":"ready","schemaVersion":5,"buildSha":"98fe4038b73c5a16eaad2d560ddf9869fb3122c5",...}`;
+`/health/agent` `ready`).
 
 ## 11. Conclusão
 
-*(veredito final preenchido após attestation pós-merge)*
+**READY WITH CONTROLLED ROLLOUT.**
+
+1. `forget_memory` exige correspondência discriminante ✓
+2. Palavras genéricas (estrutura/domínio + função) não autorizam exclusão ✓
+3. Caso `Nubank × Banco do Brasil` protegido por regressão (RED provado na lógica antiga) ✓
+4. Nenhuma memória incorreta apagável por cobertura lexical genérica ✓ (invariantes 1-5 do round 3)
+5. CI verde (PR 17/17; main via required checks) ✓
+6. Review sem P0/P1 (deploy APPROVED round 2; memória APPROVED round 3; tester PASS) ✓
+7. Deploy Agent concluído ✓
+8. `/health` ready ✓
+9. `/health/agent` ready ✓
+10. `buildSha` em produção == SHA mergeado (`98fe403`) ✓ — atestado pelo novo smoke com retry bounded
+11. Documentação reflete o deploy real (correção auditável §13 do relatório pós-merge + este relatório) ✓
+12. Flags default-off ✓
+
+Gates pendentes (intocados, fora do escopo): Release B (2026-10-16T21:36:06Z),
+cutover F3–F5, canary autoexecute (G08), provider de decisão (G07), G01/G02,
+rollout A19 (binding R2, credenciais+ZDR, flags), future-dated 2026-12-01/2026-12-31.
