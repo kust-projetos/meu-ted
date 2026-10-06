@@ -427,14 +427,35 @@ metadados continua sendo um **miss**, nunca um hit cross-identity.
   (nenhum writer de runtime usa `actor=''` hoje). O tool explícito
   `remember_fact` pode recriar por declaração deliberada. Budgets intocados
   (heurística todo turno, LLM 1/5, extractor com timeout próprio de 10 s).
-- **`forget_memory` existe.** "Esqueça isso" resolve candidatos pelo RECALL do
-  chamador (workspace + actor + shared visível): memória privada de outro ator
-  é indistinguível de inexistente; cross-workspace é inalcançável; ambiguidade
-  recusa pedindo especificidade; respostas nunca carregam ids internos; o
-  esquecimento aplica invalidate + cascade + tombstone. Residual: `forgetMemory`
-  no store é workspace-scoped — a fronteira de ator vive na RESOLUÇÃO pelo
-  recall; qualquer chamador futuro que passe um id de outra fonte precisaria
-  endurecer o próprio store.
+  **Learning exige evidência definitiva do canal** (closure pós-merge do
+  PR #90, issue #91): no caminho REST, o hook roda SÓ depois de
+  `persistMessages` confirmado (falha de persistência devolve 502 e NADA
+  ensina — nem memória, nem contador, nem extractor); turno com INTENÇÃO
+  mutacional (`needsMutation`: plano de mutação, rascunho recuperável,
+  confirmação/cancel, retry) só ensina com `turnResult.mutation` materializado
+  (retry de sucesso produz mutation; alvo ausente, desambiguação, erro do
+  coordinator e recusas devolvem resposta SEM mutation e não ensinam; cancel
+  nunca materializa mutation no contrato atual, então nunca ensina —
+  conservador por desenho; dúvida → não ensina). No caminho SDK não há
+  persistência intermediária visível (o framework `AIChatAgent` persiste
+  pós-retorno): a evidência do canal é a resposta completa não-fail-closed de
+  `runTurn` — residual documentado, mesma regra, sem divergência.
+- **`forget_memory` existe.** "Esqueça isso" resolve candidatos por
+  `listForgetCandidates` (workspace + ator + shared visível + expiração +
+  invalidação, o MESMO filtro de visibilidade do recall): memória privada de
+  outro ator é indistinguível de inexistente; cross-workspace é inalcançável;
+  ambiguidade recusa pedindo especificidade; respostas nunca carregam ids
+  internos; o esquecimento aplica invalidate + cascade + tombstone. Duas
+  travas destrutivas independentes: o ranking do recall
+  (`salience × recência + overlap × 0.5`) NÃO pode decidir o que é apagado
+  (`selectRelevantForgetCandidates` cobra cobertura dos tokens do ASSUNTO, sem
+  LLM), e a resolução NÃO trunca (o `limit` do recall corta ANTES do filtro e
+  esconderia uma segunda memória plausível, transformando ambiguidade real em
+  unicidade deletada); a resolução também não faz bookkeeping de
+  `last_seen_at`.
+  Residual: `forgetMemory` no store é workspace-scoped — a fronteira de ator
+  vive na RESOLUÇÃO; qualquer chamador futuro que passe um id de outra fonte
+  precisaria endurecer o próprio store.
 - **A18 no runtime.** `loadUserSkills` carrega skills ativas do workspace e
   projeta via `toSelectableSkills` nos DOIS call sites de `assembleCognition`.
   Workspace sem skills: um SELECT e prompt byte a byte idêntico (sem leitura

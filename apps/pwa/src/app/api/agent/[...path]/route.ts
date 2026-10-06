@@ -105,6 +105,69 @@ function upstreamErrorResponse(status: number, code: string, message: string): N
   );
 }
 
+/** The single 413 shape of this route: over the per-route ceiling, not upstream. */
+function bodyTooLarge(): NextResponse {
+  return upstreamErrorResponse(413, "request.body_too_large", "O corpo da requisição excede o limite permitido.");
+}
+
+/**
+ * Reads the request body up to `limit` bytes. A declared Content-Length above
+ * the ceiling is rejected up front; otherwise the stream is consumed in chunks
+ * and aborted the moment the ceiling is crossed, so the proxy never buffers an
+ * unbounded body. GET/HEAD carry no body and resolve to an empty result.
+ *
+ * A19 closure (issue #91): this mirrors `readBoundedBody` on the Worker hop
+ * (apps/agent/src/worker.ts). Both hops apply the same ceiling and the same
+ * interruption rule, so a body is rejected identically on either side — and a
+ * missing or lying Content-Length can no longer buy an unbounded buffer.
+ */
+async function readBoundedBody(
+  request: Request,
+  limit: number,
+): Promise<{ body?: ArrayBuffer } | { response: NextResponse }> {
+  if (request.method === "GET" || request.method === "HEAD") return {};
+  const declared = request.headers.get("content-length");
+  if (declared !== null) {
+    const length = Number(declared);
+    if (Number.isFinite(length) && length > limit) return { response: bodyTooLarge() };
+  }
+  const stream = request.body;
+  if (!stream) {
+    // Fallback only: some runtimes hand over a Request without an exposed
+    // body stream. The ceiling is re-checked after buffering so the fallback
+    // never becomes a hole in it.
+    const buffered = await request.arrayBuffer();
+    if (buffered.byteLength > limit) return { response: bodyTooLarge() };
+    return buffered.byteLength === 0 ? {} : { body: buffered };
+  }
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) {
+        // Stop reading NOW: cancel the source instead of draining the rest.
+        await reader.cancel().catch(() => {});
+        return { response: bodyTooLarge() };
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (total === 0) return {};
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { body: merged.buffer as ArrayBuffer };
+}
+
 function hasValidBrowserOrigin(request: Request, env: ProxyEnv): boolean {
   return isBrowserOriginAllowed(request.headers.get("origin"), request.url, env);
 }
@@ -135,14 +198,12 @@ async function proxy(request: Request, context: RouteContext): Promise<NextRespo
   // every other route keeps the small chat budget. The Worker applies the same
   // split on its side — both hops must agree or a valid upload is rejected.
   const maxBodyBytes = isAttachmentUploadPath(path) ? MAX_ATTACHMENT_BODY_BYTES : MAX_BODY_BYTES;
-  const declaredLength = Number(request.headers.get("content-length") ?? 0);
-  if (declaredLength > maxBodyBytes) {
-    return upstreamErrorResponse(413, "request.body_too_large", "O corpo da requisição excede o limite permitido.");
-  }
-  const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
-  if (body && body.byteLength > maxBodyBytes) {
-    return upstreamErrorResponse(413, "request.body_too_large", "O corpo da requisição excede o limite permitido.");
-  }
+  // The ceiling is enforced WHILE the body is read, not after buffering it: a
+  // missing or lying Content-Length used to let the whole body land in memory
+  // before the 413.
+  const bounded = await readBoundedBody(request, maxBodyBytes);
+  if ("response" in bounded) return bounded.response;
+  const body = bounded.body;
   let upstream: Response;
   try {
     upstream = await fetch(upstreamUrl(agentOrigin, path, new URL(request.url).search), {

@@ -343,6 +343,54 @@ Implementação das fatias A13–A18 revisada adversarialmente e fechada por TDD
 - **A19 (hardening/rollout) com caminho real provado:** `/rpc/attachments` atravessa o gateway (identidade exclusiva da autenticação do Worker), tetos de corpo por rota coerentes com `ATTACHMENT_LIMITS` (Worker e proxy PWA), `body.text` exclusivamente o digitado (anexo só como metadado estruturado), veto estrutural de autoexecute por PRESENÇA de anexo (assinatura + call sites + cliente elevado não construído), cleanup TTL retomável (cursor no DO, wrap, fail-safe). E2E Worker→DO cobre os cenários de segurança do briefing.
 - **Continua bloqueando produção:** binding R2 + credenciais + ZDR + flags (rollout), provider de decisão (G07), canary autoexecute (G08), Release B, cutover. G01/G02 seguem decisão de produto e não bloqueiam nenhuma capacidade desta closure. Nenhum gate foi alterado para ficar verde.
 
+### 11.4 Adendo (2026-10-05) — closure pós-merge do PR #90 (issue #91)
+
+O PR #90 foi mergeado documentado como "sem finding aberto P0/P1"; reviews
+posteriores (Codex no PR + review adversarial independente desta closure)
+identificaram três findings reais, corrigidos aqui com TDD RED→GREEN e três
+rodadas de review independente (relatório:
+[reports/2026-10-05-ted-agent-inteligente-a19-post-merge-closure.md](reports/2026-10-05-ted-agent-inteligente-a19-post-merge-closure.md)).
+Esta sequência fica registrada — a nota do PR #90 refletia o alcance do review
+daquela época, não um estado definitivo. Comportamento normativo a partir desta
+closure:
+
+- **`forget_memory` só esquece alvo provado.** O ranking do recall gera
+  candidatos, mas NUNCA decide a exclusão: `selectRelevantForgetCandidates`
+  (determinístico, sem LLM) exige que a query normalizada menos stopwords do
+  imperativo cubra ≥ 0.5 dos tokens do assunto em ≥ 1 token; 0 relevantes →
+  "não encontrei" (conservador), 1 relevante → esquece, 2+ → ambiguidade com o
+  número de relevantes. A resolução usa `listForgetCandidates` — o MESMO filtro
+  de visibilidade do recall (workspace, expiração, invalidação, ator/shared,
+  `isCurrentFinancialState`) SEM o truncamento top-5/budget: o `limit` do recall
+  corta ANTES do filtro e esconderia uma segunda memória plausível, transformando
+  ambiguidade real em unicidade deletada. Unicidade é provada sobre TODAS as
+  memórias visíveis; escopos, cascade, tombstone e ausência de ids internos
+  intocados.
+- **Learning exige evidência definitiva do canal.** Um turno que falhou para o
+  usuário não ensina estado durável. REST: `recordPostTurnLearning` roda SÓ
+  depois de `persistMessages` confirmado — persistência que falha devolve 502
+  sem criar memória, sem avançar contador, sem executar extractor. Turno com
+  intenção mutacional (`needsMutation`: plano, rascunho recuperável,
+  confirmação/cancel, retry) só ensina com `turnResult.mutation` materializado —
+  retry de sucesso produz mutation; recusa/alvo ausente/desambiguação/erro do
+  coordinator não; cancel nunca materializa mutation e nunca ensina (conservador
+  por desenho); continuação de rascunho sem operação materializada não ensina.
+  SDK: sem persistência intermediária visível (o framework persiste pós-retorno);
+  a evidência do canal é a resposta completa não-fail-closed de `runTurn` —
+  residual documentado, mesma regra. Budgets intocados (heurística todo turno,
+  LLM 1/5, timeout 10 s, DLP scrubbed).
+- **Proxy da PWA sem buffering ilimitado.** O proxy same-origin lê o corpo
+  incrementalmente com teto por rota (chat/RPC 2 MB; attachment = teto máximo
+  A13) e cancela o stream no instante em que o teto é cruzado (413) —
+  `Content-Length` ausente, mentiroso ou menor que o real não contorna mais o
+  limite; tetos inalterados, validação por kind continua no Agent/DO.
+
+Residual classificado nesta closure (follow-up, não bloqueia): redelivery do
+mesmo `intentionId` avança o contador de learning sem dedup por intenção
+(preexistente); cancel nunca ensinar é conservador (mudar exigiria
+`runCancelTurn` materializar `mutation` — mudança de contrato fora de escopo).
+
+
 ## 12. Rastreabilidade da origem
 
 | Seções da origem | Destino / disposição |

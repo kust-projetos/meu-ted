@@ -213,6 +213,87 @@ export const textSimilarity = (a: string, b: string): number => {
   return intersection / Math.max(setA.size, setB.size);
 };
 
+/**
+ * Imperative/command wording that NEVER identifies a memory subject. Derived
+ * from the forget command families pt-BR actually uses ("esqueça Nubank",
+ * "apagar isso", "remover a preferência do cartão") plus the vague deictics they
+ * travel with. `normalizeTokens` already lowercases, strips accents and drops
+ * tokens ≤ 2 chars, so the entries here are the normalized forms ("esqueça" is
+ * matched as "esqueca").
+ *
+ * Minimum and justified: every token here is part of the IMPERATIVE or is a
+ * deictic, never a subject. No domain vocabulary belongs in this set — a real
+ * subject word ("Nubank", "Alimentação") must survive so it can carry the
+ * coverage test below.
+ */
+export const FORGET_QUERY_STOP_TOKENS: ReadonlySet<string> = new Set([
+  // imperative of forgetting
+  'esqueca',
+  'esquece',
+  'esquecer',
+  'apagar',
+  'apague',
+  'remover',
+  'remova',
+  'excluir',
+  'exclua',
+  'limpar',
+  'limpe',
+  // nouns/deictics that name the ACT of forgetting, not its subject
+  'memoria',
+  'favor',
+  'isso',
+  'aquilo',
+  'tudo',
+]);
+
+/**
+ * Minimum share of the SUBJECT tokens a candidate must contain to count as a
+ * plausible forget target. Measured against the subject tokens (never against
+ * the candidate's length) so a long memory is not disqualified by its own
+ * verbosity, and 0.5 lets a two-token subject ("preferência do Nubank") be
+ * matched by a single shared token ("Prefere usar Nubank").
+ */
+export const FORGET_RELEVANCE_MIN_COVERAGE = 0.5;
+
+/**
+ * Relevance gate for the DESTRUCTIVE forget path (A19 post-merge closure).
+ *
+ * `recallMemories` is a CONTEXT ranking: its score is
+ * `salience × recency-decay + overlap × 0.5` with NO overlap>0 requirement, so
+ * it returns the best AVAILABLE items whether or not they relate to the query.
+ * Ranking may therefore produce CANDIDATES, but it can never decide what gets
+ * deleted — a lone irrelevant memory ranked top-1 would otherwise be destroyed
+ * by a forget request that never mentioned it, and two candidates would fake
+ * an ambiguity that the user can trivially resolve.
+ *
+ * The rule is pure, deterministic and LLM-free:
+ *   - subject tokens = normalized query tokens minus `FORGET_QUERY_STOP_TOKENS`;
+ *   - no subject tokens ⇒ NO target (`[]`, conservative: an all-imperative
+ *     request like "esqueça isso" must never delete something);
+ *   - a candidate is RELEVANT iff it matches ≥ 1 subject token and
+ *     `matched / subjectTokens.size >= FORGET_RELEVANCE_MIN_COVERAGE`.
+ *
+ * The caller (`forget_memory`) keeps the recall's ordering, and decides between
+ * forgetting the single relevant candidate and reporting honest ambiguity.
+ */
+export const selectRelevantForgetCandidates = (
+  candidates: MemoryItem[],
+  query: string,
+): MemoryItem[] => {
+  const subjectTokens = new Set(
+    [...normalizeTokens(query)].filter((token) => !FORGET_QUERY_STOP_TOKENS.has(token)),
+  );
+  if (subjectTokens.size === 0) return [];
+  return candidates.filter((candidate) => {
+    const contentTokens = normalizeTokens(candidate.content);
+    let matched = 0;
+    for (const token of subjectTokens) if (contentTokens.has(token)) matched += 1;
+    if (matched === 0) return false;
+    return matched / subjectTokens.size >= FORGET_RELEVANCE_MIN_COVERAGE;
+  });
+};
+
 const parseJsonColumn = <T>(raw: unknown, fallback: T): T => {
   if (typeof raw !== 'string' || raw.length === 0) return fallback;
   try {
@@ -587,6 +668,53 @@ export const recallMemoriesSafe = (
   input: Parameters<typeof recallMemories>[1],
 ): MemoryItem[] => {
   try { return recallMemories(sql, input); } catch { return []; }
+};
+
+/**
+ * Candidate resolution for the DESTRUCTIVE forget path (A19 post-merge closure,
+ * issue #91 review round 2).
+ *
+ * WHY THIS EXISTS — the forget path may NOT resolve through `recallMemories`:
+ * recall is a CONTEXT ranking that scores `salience × recency-decay + overlap ×
+ * 0.5` with no relevance requirement, and it returns at most `limit` items
+ * (default 5). Truncation happens BEFORE the relevance gate, so the uniqueness a
+ * destructive turn relies on would be decided over a truncated slice: two
+ * relevant memories at salience 1.0 and 0.1 against four irrelevant ones at 0.9
+ * score 1.25 / 0.90×4 / 0.35 — the second relevant one falls out of the top-5,
+ * the gate sees a single plausible target, and the agent deletes the one thing
+ * the user named. Uniqueness that authorizes a deletion must be proven over EVERY
+ * visible memory in scope, never over a context budget.
+ *
+ * WHAT THIS IS — the recall VISIBILITY contract, nothing else, byte for byte
+ * the same scope: `isMemoryEnabled` (opt-out ⇒ `[]`), `workspace_id` +
+ * non-expired rows, `invalidated_at IS NULL` (a forgotten memory and its
+ * cascade never come back), actor-private rows plus the shared layer
+ * (`actor === ''`) gated by `includeShared` derived from `scope` exactly as
+ * recall derives it, and the same `isCurrentFinancialState` filter — forgettable
+ * is what recall can see, so this introduces no new existence oracle.
+ *
+ * WHAT THIS IS NOT — a recall: no score, no sort, no limit, no budget, and NO
+ * `last_seen_at` bookkeeping. Touching recency is a side effect of reading
+ * context, and a destructive resolution is not a read of context.
+ */
+export const listForgetCandidates = (
+  sql: MemorySql,
+  input: { workspaceId: string; actor: string; scope?: MemoryScope },
+): MemoryItem[] => {
+  if (!isMemoryEnabled(sql, input.workspaceId)) return [];
+  const includeShared = input.scope ? input.scope.includeShared : true;
+  return [
+    ...sql.exec<Record<string, unknown>>(
+      `SELECT * FROM agent_memory WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?)`,
+      input.workspaceId,
+      nowIso(),
+    ),
+  ]
+    .map(mapRow)
+    // AC26b: a forgotten memory (and its cascaded derived rows) is not a target.
+    .filter((item) => item.invalidatedAt == null)
+    .filter((item) => item.actor === input.actor || (includeShared && item.actor === ''))
+    .filter((item) => !isCurrentFinancialState(item.content));
 };
 
 /** Compact `MEMÓRIA DO USUÁRIO` block for system-prompt injection. */

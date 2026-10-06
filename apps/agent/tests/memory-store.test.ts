@@ -9,7 +9,16 @@ import {
   containsCardNumber,
   textSimilarity,
   bumpTurnCount,
+  forgetMemory,
+  isCurrentFinancialState,
+  listForgetCandidates,
+  selectRelevantForgetCandidates,
+  FORGET_QUERY_STOP_TOKENS,
+  FORGET_RELEVANCE_MIN_COVERAGE,
+  type MemoryItem,
+  type MemoryScope,
 } from '../src/agent-config/memory/store.js';
+import { createMemorySql, type MemorySqlMock } from './helpers/memory-sql.js';
 
 type Row = Record<string, unknown>;
 
@@ -156,5 +165,245 @@ describe('memory store (Part B)', () => {
   it('measures text similarity sanely', () => {
     expect(textSimilarity('prefiro resumos curtos', 'prefiro resumos curtos')).toBe(1);
     expect(textSimilarity('nubank conta principal', 'itau conta reserva')).toBeLessThan(0.55);
+  });
+});
+
+/**
+ * Relevance gate for the DESTRUCTIVE forget path (A19 post-merge closure).
+ *
+ * Recall is a CONTEXT ranking — it happily returns items that share nothing
+ * with the query, because salience × recency alone is a valid score. Ranking
+ * may produce candidates; it may never authorize a deletion. These cases pin
+ * the deterministic, LLM-free rule that decides what is a plausible target.
+ */
+describe('selectRelevantForgetCandidates (o ranking nunca decide o que é apagado)', () => {
+  let sql: ReturnType<typeof createSql>;
+  beforeEach(() => {
+    sql = createSql();
+  });
+
+  /** Real candidates through the real recall, so ordering/content are honest. */
+  const candidatesFrom = (contents: string[]): MemoryItem[] => {
+    contents.forEach((content, index) => {
+      rememberFact(sql, { workspaceId: 'ws-1', actor: 'u-1', content, salience: 0.9 - index * 0.05 });
+    });
+    return recallMemories(sql, { workspaceId: 'ws-1', actor: 'u-1', limit: 10 });
+  };
+
+  const contentsOf = (items: MemoryItem[]): string[] => items.map((item) => item.content);
+
+  it('case e acento não criam nem escondem o alvo óbvio', () => {
+    const candidates = candidatesFrom(['Prefere usar Nubank', 'Prefere categoria Alimentação']);
+    expect(contentsOf(selectRelevantForgetCandidates(candidates, 'esqueça nubank'))).toEqual([
+      'Prefere usar Nubank',
+    ]);
+    expect(contentsOf(selectRelevantForgetCandidates(candidates, 'ESQUEÇA NUBANK'))).toEqual([
+      'Prefere usar Nubank',
+    ]);
+  });
+
+  it('query multi-token aceita cobertura parcial (0.5) e descarta o sem match', () => {
+    const candidates = candidatesFrom(['Prefere usar Nubank', 'Usa o cartão de crédito']);
+    // {preferencia, nubank}: 1 de 2 = 0.5 => alvo provável.
+    expect(contentsOf(selectRelevantForgetCandidates(candidates, 'esqueça a preferência do Nubank'))).toEqual([
+      'Prefere usar Nubank',
+    ]);
+  });
+
+  it('cobertura abaixo do piso não qualifica: assunto de 3 tokens com 1 match é recusado', () => {
+    const candidates = candidatesFrom(['Prefere usar Nubank']);
+    // {nubank, amanhã, cedo}: 1 de 3 = 0.33 < FORGET_RELEVANCE_MIN_COVERAGE.
+    expect(selectRelevantForgetCandidates(candidates, 'esqueça Nubank amanhã cedo')).toEqual([]);
+  });
+
+  it('termo comum e vago devolve AMBOS: a ambiguidade honesta é do tool, não do gate', () => {
+    // Conteúdos distintos o bastante para NÃO colidirem no dedup por
+    // similaridade (0.55) do `rememberFact`, mas unidos pelo termo vago.
+    const candidates = candidatesFrom([
+      'Usa o banco do Brasil para a conta corrente',
+      'Prefere o banco Inter no dia do pagamento',
+    ]);
+    expect(candidates).toHaveLength(2);
+    expect(FORGET_RELEVANCE_MIN_COVERAGE).toBe(0.5);
+    expect(contentsOf(selectRelevantForgetCandidates(candidates, 'esqueça banco'))).toHaveLength(2);
+  });
+
+  it('query só com stopwords não tem assunto: nenhum alvo provável', () => {
+    const candidates = candidatesFrom(['Prefere usar Nubank']);
+    expect(selectRelevantForgetCandidates(candidates, 'esqueça isso')).toEqual([]);
+    expect(FORGET_QUERY_STOP_TOKENS.has('esqueca')).toBe(true);
+    expect(FORGET_QUERY_STOP_TOKENS.has('isso')).toBe(true);
+    // O imperativo normalizado ("esqueca") é stopword; o assunto (" Nubank") não.
+    expect(FORGET_QUERY_STOP_TOKENS.has('nubank')).toBe(false);
+  });
+
+  it('query sem nenhum token aproveitável (vazia ou só scraps) é recusada', () => {
+    const candidates = candidatesFrom(['Prefere usar Nubank']);
+    expect(selectRelevantForgetCandidates(candidates, '')).toEqual([]);
+    expect(selectRelevantForgetCandidates(candidates, '   ')).toEqual([]);
+    expect(selectRelevantForgetCandidates(candidates, 'a de o em um')).toEqual([]);
+  });
+});
+
+/**
+ * Regression P1-1 (review round 2): a RESOLUÇÃO destrutiva não pode herdar o
+ * corte do recall.
+ *
+ * `recallMemories` é ranqueamento de CONTEXTO: limita a 5 (`limit`), ordena por
+ * score e ainda faz bookkeeping (`last_seen_at`). Para escolher o que apagar,
+ * nenhuma das duas coisas serve: a unicidade que autoriza o esquecimento precisa
+ * ser provada sobre TODAS as memórias visíveis no escopo, e um SELECT que
+ * resolve candidatos não é um recall.
+ *
+ * `listForgetCandidates` é, por isso, o MESMO filtro de visibilidade do recall
+ * (workspace + expiração + invalidação + ator/shared + current-financial-state)
+ * sem score, sem sort, sem limite, sem budget e sem o UPDATE de bookkeeping.
+ * Estes casos usam o interpretador de schema real (`createMemorySql`) porque a
+ * visibilidade completa — expires_at, invalidated_at e o log de SQL — é
+ * justamente o que o mock de linha deste arquivo não representa.
+ */
+describe('listForgetCandidates (visibilidade sem truncamento)', () => {
+  const NEW_STORE = () => {
+    const store = createMemorySql();
+    initializeMemorySchema(store);
+    return store;
+  };
+
+  /** Row cru: representa uma linha que o writer hoje não criaria (defesa). */
+  const insertRaw = (store: MemorySqlMock, row: Record<string, unknown>): void => {
+    store.rows('agent_memory').push({
+      source: 'user',
+      confidence: 0.5,
+      fingerprint: null,
+      provenance: '{}',
+      catalog_references: '[]',
+      invalidated_at: null,
+      expires_at: null,
+      kind: 'fact',
+      salience: 0.5,
+      ...row,
+    });
+  };
+
+  const contentsOf = (items: MemoryItem[]): string[] => items.map((item) => item.content);
+  const AT = { workspaceId: 'ws-1', actor: 'u-1' };
+
+  it('sem opt-out: devolve o escopo inteiro, sem score nem limite (6+ linhas)', () => {
+    const store = NEW_STORE();
+    for (const content of [
+      'Prefere registrar as despesas no Nubank',
+      'Quer que eu pare de citar o Nubank por aqui',
+      'Abre o aplicativo do banco pela manhã',
+      'Gosta de caminhar no parque aos domingos',
+      'Usa caneca térmica no trabalho',
+      'Prefere assistir filmes em casa no fim de semana',
+    ]) {
+      rememberFact(store, { workspaceId: 'ws-1', actor: 'u-1', content });
+    }
+    // O recall de contexto trunca em 5 (limit padrão); a resolução destrutiva
+    // NÃO pode herdar esse corte.
+    expect(recallMemories(store, { ...AT, query: 'Nubank' })).toHaveLength(5);
+    expect(listForgetCandidates(store, AT)).toHaveLength(6);
+  });
+
+  it('opt-out do workspace: nenhum candidato (o forget não é caminho de contorno)', () => {
+    // O interpretador de schema não lê `agent_prefs`; o mock de linha deste
+    // arquivo é o que suporta o SELECT de opt-out — mesmo store, mesmo contrato.
+    const store = createSql();
+    rememberFact(store, { workspaceId: 'ws-1', actor: 'u-1', content: 'Prefere usar Nubank' });
+    expect(isMemoryEnabled(store, 'ws-1')).toBe(true);
+    expect(listForgetCandidates(store, AT)).toHaveLength(1);
+    setMemoryEnabled(store, 'ws-1', false);
+    expect(isMemoryEnabled(store, 'ws-1')).toBe(false);
+    expect(listForgetCandidates(store, AT)).toEqual([]);
+  });
+
+  it('camada shared: visível por default, ausente quando o escopo a exclui', () => {
+    const store = NEW_STORE();
+    rememberFact(store, { workspaceId: 'ws-1', actor: 'u-1', content: 'Prefere usar Nubank' });
+    rememberFact(store, { workspaceId: 'ws-1', actor: '', content: 'A casa usa conta de luz compartilhada' });
+    // Sem escopo explícito, o default do recall (shared incluído) vale.
+    expect(contentsOf(listForgetCandidates(store, AT))).toHaveLength(2);
+    const actorOnly: MemoryScope = {
+      workspaceId: 'ws-1',
+      actor: 'u-1',
+      layer: 'actor',
+      includeShared: false,
+    };
+    expect(contentsOf(listForgetCandidates(store, { ...AT, scope: actorOnly }))).toEqual([
+      'Prefere usar Nubank',
+    ]);
+    const withShared: MemoryScope = { ...actorOnly, layer: 'shared', includeShared: true };
+    expect(listForgetCandidates(store, { ...AT, scope: withShared })).toHaveLength(2);
+  });
+
+  it('privada de outro ator e de outro workspace: fora (sem oráculo de existência)', () => {
+    const store = NEW_STORE();
+    rememberFact(store, { workspaceId: 'ws-1', actor: 'u-2', content: 'Segredo privado do ator 2' });
+    rememberFact(store, { workspaceId: 'ws-2', actor: 'u-1', content: 'Prefere o banco Santander' });
+    expect(listForgetCandidates(store, AT)).toEqual([]);
+  });
+
+  it('invalidada (esquecida) e expirada: fora do alcance', () => {
+    const store = NEW_STORE();
+    const kept = rememberFact(store, { workspaceId: 'ws-1', actor: 'u-1', content: 'Prefere usar Nubank' });
+    const gone = rememberFact(store, { workspaceId: 'ws-1', actor: 'u-1', content: 'Quer parar de citar o Nubank' });
+    const expired = rememberFact(store, {
+      workspaceId: 'ws-1',
+      actor: 'u-1',
+      content: 'Usa a caneca térmica da vovó',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    // Controle: a MESMA memória com expiração no futuro continua alcançável —
+    // o que some é o timestamp, não o conteúdo nem o ator.
+    const live = rememberFact(store, {
+      workspaceId: 'ws-1',
+      actor: 'u-1',
+      content: 'Gosta de café coado à tarde',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    if (!gone.stored || !kept.stored || !expired.stored || !live.stored) throw new Error('fixture falhou');
+    forgetMemory(store, { workspaceId: 'ws-1', id: gone.item.id });
+    expect(contentsOf(listForgetCandidates(store, AT)).sort()).toEqual(
+      ['Gosta de café coado à tarde', 'Prefere usar Nubank'].sort(),
+    );
+    // A expirada e a esquecida não estão no resultado, e as duas linhas seguem
+    // no banco (o filtro é de VISIBILIDADE, nunca de remoção).
+    const contents = store.rows('agent_memory').map((row) => row['content']);
+    expect(contents).toHaveLength(4);
+    expect(contents).toContain('Usa a caneca térmica da vovó');
+  });
+
+  it('current financial state: fora, igual ao recall (o esquecível é o visível)', () => {
+    const store = NEW_STORE();
+    rememberFact(store, { workspaceId: 'ws-1', actor: 'u-1', content: 'Prefere usar Nubank' });
+    insertRaw(store, {
+      id: 'raw-financial-state',
+      workspace_id: 'ws-1',
+      actor: 'u-1',
+      content: 'O saldo da conta Nubank hoje está baixo',
+      created_at: new Date().toISOString(),
+      last_seen_at: new Date().toISOString(),
+    });
+    expect(isCurrentFinancialState('O saldo da conta Nubank hoje está baixo')).toBe(true);
+    expect(contentsOf(listForgetCandidates(store, AT))).toEqual(['Prefere usar Nubank']);
+    // Mesma visibilidade: o recall de contexto também não a devolve.
+    expect(recallMemories(store, { ...AT, query: 'Nubank' }).map((item) => item.content)).toEqual([
+      'Prefere usar Nubank',
+    ]);
+  });
+
+  it('NÃO é recall: nenhum UPDATE de bookkeeping (last_seen_at fica intacto)', () => {
+    const store = NEW_STORE();
+    rememberFact(store, { workspaceId: 'ws-1', actor: 'u-1', content: 'Prefere usar Nubank' });
+    const before = store.rows('agent_memory').map((row) => row['last_seen_at']);
+    listForgetCandidates(store, AT);
+    expect(store.queries.some((query) => query.startsWith('UPDATE agent_memory SET last_seen_at'))).toBe(false);
+    expect(store.rows('agent_memory').map((row) => row['last_seen_at'])).toEqual(before);
+    // Prova de que a asserção acima tem força: o recall de contexto FAZ esse
+    // UPDATE — é exatamente o bookkeeping que a resolução destrutiva não herda.
+    store.queries.length = 0;
+    recallMemories(store, { ...AT, query: 'Nubank' });
+    expect(store.queries.some((query) => query.startsWith('UPDATE agent_memory SET last_seen_at'))).toBe(true);
   });
 });

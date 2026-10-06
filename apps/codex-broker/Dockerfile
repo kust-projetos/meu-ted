@@ -13,6 +13,12 @@ COPY apps/codex-broker/src/ apps/codex-broker/src/
 WORKDIR /monorepo/apps/codex-broker
 RUN pnpm build
 RUN pnpm deploy --legacy --filter pi-finance-codex-broker --prod /runtime
+# CVE-2026-93749: the legacy deploy copies stale virtual-store entries into the
+# runtime layer. The broker production graph (fastify, zod) declares NO
+# source-map-js dependency, so an orphaned 1.2.1 copy is unreachable by node
+# resolution (pnpm isolated mode) and is removed so the image ships only
+# declared packages.
+RUN rm -rf /runtime/node_modules/.pnpm/source-map-js@1.2.1
 
 FROM node:24-alpine AS runner
 
