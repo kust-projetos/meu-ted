@@ -185,9 +185,46 @@ revisão da allowlist. Validado localmente contra o audit VIVO: gate
 `ACCEPTED — 20 accepted, 5 resolved`, zero BLOCKED; policy tests 37/37
 (`7f2df87` → deps; `70d4f99` → allowlist).
 
+### 7.3 Terceiro drift da mesma rodada (Trivy nas imagens — source-map-js)
+
+Com o audit limpo, a segunda rodada de CI passou a falhar no
+`security:containers` (Trivy com DB baixado no momento do job):
+**CVE-2026-93749** (HIGH, DoS via source maps malformados) contra
+`source-map-js 1.2.1` (fix `1.2.2`, patch) dentro da imagem da API. O
+override `>=1.2.2` no workspace corrigiu o lockfile, mas a imagem continuou
+trazendo 1.2.1: o `pnpm deploy --legacy` (fallback default do pnpm 10 com
+shared lockfile) **re-resolve** a árvore filtrada SEM os overrides do root e
+copia entradas órfãs do virtual store para `/runtime`. A verificação de
+grafos provou que o órfão é inofensivo por construção: NENHUM package.json
+da árvore de produção da API/broker declara `source-map-js` (apenas tooling
+dev do root: postcss/css-tree/magicast/tailwind, todos satisfeitos com 1.2.2
+no lockfile) — em pnpm isolado, pacote não declarado é inalcançável pelo
+resolver do Node. A correção segue o padrão já estabelecido no próprio
+Dockerfile (prune de `next@*`/`sharp@*`): remover o diretório órfão no
+builder, sobre `/runtime`, nas duas imagens (`3435fd2`). O inventário Trivy
+com DB fresco também confirmou que `fastify 5.12.5` (atual) já cobre os CVEs
+fastify da mesma janela (fixes ≤ 5.12.2) e que `fast-uri` está coberto pelo
+override existente (`>=4.1.5`) — nenhuma ação adicional necessária. Nota
+honesta: imagens locais de 6 dias atrás produziram leituras enganosas
+(stale) durante o diagnóstico; a validação autoritativa é o job de CI.
+
 ## 12. CI remoto
 
-(preenchido após o run remoto)
+Quatro rodadas de CI no PR #92, todas documentadas (a sequência é a própria
+evidência do drift):
+
+| Rodada | Commit | Resultado |
+| --- | --- | --- |
+| 1 | `b2b0fb5` | FAIL — Security (`pnpm audit`: critical GHSA-jqcg-44mw-7w3h em `proxy-addr`, publicado pós-CI-verde do PR #90) + PWA CI quality (Scoped audit: ranges da cadeia lighthouse estendidos + GHSA-hp3w-g68c-fv3c em `sprintf-js`) |
+| 2 | `7f2df87` | FAIL — Security `security:containers` (Trivy com DB fresco: CVE-2026-93749 em `source-map-js 1.2.1` na imagem da API); quality ainda sem o allowlist (push subsequente) |
+| 3 | `0e02de1` | FAIL — Security: o override não alcança o `deploy --legacy` (re-resolve sem overrides do root e copia o órfão 1.2.1) — corrigido com prune no builder |
+| 4 | `3435fd2` | **ALL GREEN** — Security, quality (22,10), Gate — all checks, e2e, API, Agent, PWA (test+Cloudflare build), Postgres, Docker, Broker, Governance, Docs, Write policy, Capability inventory, Public safety: **todos pass** |
+
+Rodada final (commit de documentação): ver nota abaixo. Os três blocos de
+correção de CI (§7.1, §7.2, §7.3) são **drift de advisory/infra — nenhum foi
+causado pelas mudanças desta closure**; todos foram resolvidos com o mecanismo
+mais forte disponível (override do transitive patched, allowlist expiring do
+próprio gate, prune cirúrgico do órfão inalcançável) e documentados.
 
 
 ## 8. Limitações residuais reais (classificadas)
