@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { containsCardPan, containsSensitiveDocument, scrubForPersistence } from '../../privacy/dlp.js';
 
 export type MemorySql = {
@@ -149,6 +150,7 @@ export const initializeMemorySchema = (sql: MemorySql): void => {
       turns INTEGER NOT NULL DEFAULT 0
     );
   `);
+  initializeForgetProposalSchema(sql);
 };
 
 /** Monotonic per-workspace turn counter (drives periodic learning). */
@@ -322,21 +324,14 @@ export const FORGET_GENERIC_STRUCTURE_TOKENS: ReadonlySet<string> = new Set([
  * broad over the CLOSED set of grammatical function words (normalized forms,
  * >2 chars, which `normalizeTokens` keeps).
  *
- * Safety analysis (issue #96 review rounds 1-3): a missed function word only
- * authorizes a deletion if a candidate's CONTENT contains it AND it is the
- * sole RESOLVED target (multiple resolved targets stay ambiguous; the
- * deletion then cascades to that target's derived descendants, which the
- * forget invariant covers — the bounded-damage statement is about the direct
- * target, not the cascade size). Every reviewer-found trap is pinned by
- * regression ("por favor", "não lembre mais disso", "pela manhã", "pra mim",
- * "quero/pode/nada/das/que", "a respeito", "acerca/alem/inclusive/causa/
- * proposito/podemos/gostaria/hmm", "atraves/conforme/alias/enfim/afinal/
- * obviamente/certamente/entendido"). Residual, honest: an UNLISTED function
- * word appearing in exactly one memory's content and in a query that names
- * no real subject could still authorize that single match — inherent to
- * deterministic, LLM-free resolution over an open language; the failure
- * stays bounded (single self-describing direct target + cascade, multiple =
- * ambiguity).
+ * Safety analysis (issue #96 review rounds 1-3, superseded by issue #99):
+ * a missed function word ONCE authorized a deletion when a candidate's
+ * CONTENT contained it as the sole resolved target. Since the two-step
+ * closure, NO token authorizes deletion — resolution is discovery-only and
+ * the delete requires explicit confirmation of the exact preview. This list
+ * therefore tunes discovery precision (propose vs. ask-for-specifics), not
+ * destructive authority; its classes stay CLOSED grammatical sets
+ * (articles, report verbs, courtesy formulas…), never domain vocabulary.
  */
 export const FORGET_FUNCTION_TOKENS: ReadonlySet<string> = new Set([
   // prepositions / contractions with article (pt-BR standard stopword base)
@@ -387,6 +382,11 @@ export const FORGET_FUNCTION_TOKENS: ReadonlySet<string> = new Set([
   'aqueles',
   'aquelas',
   'tal',
+  // indefinite articles (closed class: 'um' already drops at the
+  // normalizeTokens ≤2-char cut; the 3 remaining 3-4-char forms live here)
+  'uma',
+  'umas',
+  'uns',
   // pronouns
   'mim',
   'ele',
@@ -579,15 +579,37 @@ export const FORGET_FUNCTION_TOKENS: ReadonlySet<string> = new Set([
   'lembro',
   'sabe',
   'saber',
+  // report verbs (closed class: "aquilo que eu falei/disse" frames the
+  // UTTERANCE, never the subject — issue #99 review r4198359793)
+  'falei',
+  'fala',
+  'falo',
+  'falar',
+  'falou',
+  'disse',
+  'digo',
+  'diz',
+  'dizer',
+  'contei',
+  'contar',
+  'mencionei',
+  'mencionar',
+  'comentei',
+  'comentar',
+  'citei',
+  'citar',
 ]);
 
 /**
  * Discriminative query tokens: normalized query tokens minus the COMMAND
  * class (`FORGET_QUERY_STOP_TOKENS`), minus the STRUCTURAL/GENERIC class
  * (`FORGET_GENERIC_STRUCTURE_TOKENS`) and minus the FUNCTION-word class
- * (`FORGET_FUNCTION_TOKENS`). What remains names the target itself
- * (e.g. "nubank") and only it can authorize a deletion. An empty set means
- * the query names no target — the caller must fail closed.
+ * (`FORGET_FUNCTION_TOKENS`). What remains is the DISCOVERY signal
+ * (e.g. "nubank").
+ *
+ * Issue #99: this set is discovery-only — it locates candidates for a
+ * PROPOSAL, never authorizes a deletion. An empty set means the query names
+ * no target — the caller must fail closed (ask for specifics).
  */
 export const extractForgetQueryDiscriminators = (query: string): Set<string> =>
   new Set(
@@ -600,11 +622,11 @@ export const extractForgetQueryDiscriminators = (query: string): Set<string> =>
   );
 
 /**
- * Relevance gate for the DESTRUCTIVE forget path (A19 definitive closure,
- * issue #96).
+ * Relevance gate for the forget DISCOVERY path (issue #99: two-step forget).
  *
- * "Ranking does not authorize; generic coverage does not authorize; only a
- * discriminative match authorizes deletion."
+ * "Ranking does not authorize; generic coverage does not authorize; the
+ * discriminative match only LOCATES a proposal candidate — the delete
+ * requires explicit user confirmation of the exact preview."
  *
  * `recallMemories` is a CONTEXT ranking: its score is
  * `salience × recency-decay + overlap × 0.5` with NO overlap>0 requirement, so
@@ -630,7 +652,8 @@ export const extractForgetQueryDiscriminators = (query: string): Set<string> =>
  *     no stemming).
  *
  * The caller (`forget_memory`) keeps the recall's ordering, and decides between
- * forgetting the single relevant candidate and reporting honest ambiguity.
+ * forgetting the single relevant candidate and proposing it (never deleting:
+  confirmation in a later turn revalidates everything first).
  */
 export const selectRelevantForgetCandidates = (
   candidates: MemoryItem[],
@@ -1232,4 +1255,343 @@ export const forgetMemory = (
     }
   }
   return { invalidated, cascaded };
+};
+
+/**
+ * Issue #99 — `forget_memory` em duas etapas: NENHUMA heurística lexical
+ * autoriza exclusão. A busca (recall/ranking/discriminantes) é só DISCOVERY;
+ * a AUTORIZAÇÃO migrou para confirmação explícita do usuário em turno
+ * posterior, materializada como proposta pendente nesta tabela.
+ *
+ * Desenho espelhado em `undo_proposals` (convenção existente, sem acoplamento
+ * ao financeiro): TTL de 10 min, CAS por status, escopo (workspace, actor) em
+ * TODA leitura/escrita, expiração preguiçosa no caminho de leitura.
+ *
+ * Visibilidade = resolvibilidade: propostas são lidas SEMPRE com o par
+ * (workspace_id, actor_id) exato — pending de outro ator é invisível (sem
+ * oráculo de existência) e outro workspace é inalcançável estruturalmente.
+ * Nenhum id interno é exposto ao usuário: a UX usa só `memory_preview`.
+ */
+export const FORGET_PROPOSAL_TTL_MS = 10 * 60 * 1000;
+
+export type ForgetProposalStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'executed'
+  | 'cancelled'
+  | 'expired'
+  | 'superseded';
+
+export type ForgetProposalRecord = Readonly<{
+  id: string;
+  workspaceId: string;
+  actorId: string;
+  memoryId: string;
+  /** sha256 do conteúdo EXATO no momento da proposta (revalidação anti-race). */
+  contentHash: string;
+  /** Preview humano (≤120 chars); o ÚNICO vínculo exibível ao usuário. */
+  memoryPreview: string;
+  sourceIntentionId: string;
+  status: ForgetProposalStatus;
+  createdAt: string;
+  expiresAt: string;
+  decidedAt?: string;
+  resultJson?: string;
+}>;
+
+/** Identidade forte do alvo no momento da proposta (anti-race §18). */
+export const forgetContentHash = (content: string): string =>
+  createHash('sha256').update(content ?? '', 'utf8').digest('hex');
+
+export const makeForgetPreview = (content: string, maxChars = 120): string => {
+  const singleLine = (content ?? '').replace(/\s+/g, ' ').trim();
+  return singleLine.length > maxChars ? `${singleLine.slice(0, maxChars)}…` : singleLine;
+};
+
+export const initializeForgetProposalSchema = (sql: MemorySql): void => {
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS agent_memory_forget_proposals (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      actor_id TEXT NOT NULL DEFAULT '',
+      memory_id TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      memory_preview TEXT NOT NULL DEFAULT '',
+      source_intention_id TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      decided_at TEXT,
+      result_json TEXT
+    );
+  `);
+  sql.exec(`CREATE INDEX IF NOT EXISTS agent_memory_forget_proposals_context_idx ON agent_memory_forget_proposals (workspace_id, actor_id, status);`);
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS agent_memory_forget_decisions (
+      intention_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      actor_id TEXT NOT NULL DEFAULT '',
+      outcome TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  sql.exec(`CREATE INDEX IF NOT EXISTS agent_memory_forget_decisions_context_idx ON agent_memory_forget_decisions (workspace_id, actor_id);`);
+};
+
+/**
+ * Janela de um recibo de decisão: redelivery dentro dela repete o outcome
+ * registrado sem re-resolver contra pendings posteriores. Fora dela o
+ * recibo é ignorado (leases curtas não viram estado permanente; a tabela
+ * nunca é varrida por DELETE — leitura filtra por idade, como o lazy-expire
+ * das propostas).
+ */
+export const FORGET_DECISION_TTL_MS = 24 * 60 * 60 * 1000;
+
+export type ForgetDecisionOutcome = 'none' | 'expired' | 'ambiguous' | 'revalidation_failed' | 'failed' | 'cancelled' | 'already_done';
+
+export const recordForgetDecision = (
+  sql: MemorySql,
+  input: { workspaceId: string; actorId: string; intentionId: string; outcome: ForgetDecisionOutcome; createdAt: string },
+): void => {
+  if (!input.intentionId) return;
+  const existing = [...sql.exec<Record<string, unknown>>(
+    `SELECT * FROM agent_memory_forget_decisions WHERE intention_id = ? AND workspace_id = ? AND actor_id = ?`,
+    input.intentionId,
+    input.workspaceId,
+    input.actorId,
+  )];
+  if (existing.length > 0) return;
+  sql.exec(
+    `INSERT INTO agent_memory_forget_decisions (intention_id, workspace_id, actor_id, outcome, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    input.intentionId,
+    input.workspaceId,
+    input.actorId,
+    input.outcome,
+    input.createdAt,
+  );
+};
+
+export const findForgetDecision = (
+  sql: MemorySql,
+  input: { workspaceId: string; actorId: string; intentionId: string },
+  nowMs: number = Date.now(),
+): ForgetDecisionOutcome | undefined => {
+  if (!input.intentionId) return undefined;
+  const cutoff = new Date(nowMs - FORGET_DECISION_TTL_MS).toISOString();
+  const rows = [...sql.exec<Record<string, unknown>>(
+    `SELECT * FROM agent_memory_forget_decisions WHERE intention_id = ? AND workspace_id = ? AND actor_id = ?`,
+    input.intentionId,
+    input.workspaceId,
+    input.actorId,
+  )];
+  const row = rows[0];
+  if (!row) return undefined;
+  if (String(row['created_at'] ?? '') < cutoff) return undefined;
+  return String(row['outcome'] ?? 'none') as ForgetDecisionOutcome;
+};
+
+/**
+ * Compensação §40: a pergunta publicada é a evidência do turno — se a
+ * persistência da resposta falhou (502), pendings criados POR ESTE turno
+ * (source_intention_id) viram `expired/publish_failed` e nunca serão
+ * confirmáveis. Registros publish_failed são invisíveis para o fluxo
+ * futuro (redelivery re-propõe do zero), mas permanecem para auditoria.
+ */
+export const revertUnpublishedForgetProposals = (
+  sql: MemorySql,
+  input: { workspaceId: string; actorId: string; intentionId: string; decidedAt: string },
+): number => {
+  if (!input.intentionId) return 0;
+  let count = 0;
+  for (const proposal of listForgetProposalsForActor(sql, input)) {
+    if (proposal.status !== 'pending') continue;
+    if (proposal.sourceIntentionId !== input.intentionId) continue;
+    const moved = casForgetProposalStatus(sql, {
+      id: proposal.id,
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      from: 'pending',
+      to: 'expired',
+      decidedAt: input.decidedAt,
+      resultJson: JSON.stringify({ reason: 'publish_failed' }),
+    });
+    if (moved) count += 1;
+  }
+  return count;
+};
+
+/** Motivos de expiração invisíveis para o fluxo futuro (só auditoria). */
+export const isUnpublishedForgetExpiry = (proposal: ForgetProposalRecord): boolean => {
+  if (proposal.status !== 'expired' || !proposal.resultJson) return false;
+  try {
+    return (JSON.parse(proposal.resultJson) as { reason?: unknown }).reason === 'publish_failed';
+  } catch {
+    return false;
+  }
+};
+
+const mapForgetProposalRow = (row: Record<string, unknown>): ForgetProposalRecord =>
+  Object.freeze({
+    id: String(row['id'] ?? ''),
+    workspaceId: String(row['workspace_id'] ?? ''),
+    actorId: String(row['actor_id'] ?? ''),
+    memoryId: String(row['memory_id'] ?? ''),
+    contentHash: String(row['content_hash'] ?? ''),
+    memoryPreview: String(row['memory_preview'] ?? ''),
+    sourceIntentionId: String(row['source_intention_id'] ?? ''),
+    status: String(row['status'] ?? 'pending') as ForgetProposalStatus,
+    createdAt: String(row['created_at'] ?? ''),
+    expiresAt: String(row['expires_at'] ?? ''),
+    ...(row['decided_at'] != null ? { decidedAt: String(row['decided_at']) } : {}),
+    ...(row['result_json'] != null ? { resultJson: String(row['result_json']) } : {}),
+  });
+
+export const insertForgetProposal = (
+  sql: MemorySql,
+  record: ForgetProposalRecord,
+): void => {
+  sql.exec(
+    `INSERT INTO agent_memory_forget_proposals (id, workspace_id, actor_id, memory_id, content_hash, memory_preview, source_intention_id, status, created_at, expires_at, decided_at, result_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    record.id,
+    record.workspaceId,
+    record.actorId,
+    record.memoryId,
+    record.contentHash,
+    record.memoryPreview,
+    record.sourceIntentionId,
+    record.status,
+    record.createdAt,
+    record.expiresAt,
+    record.decidedAt ?? null,
+    record.resultJson ?? null,
+  );
+};
+
+export const getForgetProposal = (sql: MemorySql, id: string): ForgetProposalRecord | undefined => {
+  const rows = [...sql.exec<Record<string, unknown>>(
+    `SELECT * FROM agent_memory_forget_proposals WHERE id = ?`,
+    id,
+  )];
+  return rows.length > 0 && rows[0] ? mapForgetProposalRow(rows[0]) : undefined;
+};
+
+/**
+ * Leitura bruta SEMPRE vinculada ao par (workspace, actor) exato. Nunca um
+ * scan cross-identity: o chamador não recebe nada fora do próprio vínculo.
+ */
+export const listForgetProposalsForActor = (
+  sql: MemorySql,
+  input: { workspaceId: string; actorId: string },
+): ForgetProposalRecord[] => {
+  const rows = [...sql.exec<Record<string, unknown>>(
+    `SELECT * FROM agent_memory_forget_proposals WHERE workspace_id = ? AND actor_id = ?`,
+    input.workspaceId,
+    input.actorId,
+  )];
+  return rows.map(mapForgetProposalRow);
+};
+
+/**
+ * Propostas confirmáveis: status pending E dentro do TTL. Vencidas são
+ * marcadas `expired` preguiçosamente (transição terminal, só de pending) e
+ * excluídas do retorno. Comparação por ISO-8601 (ordem lexicográfica =
+ * cronológica).
+ */
+export const listActiveForgetProposals = (
+  sql: MemorySql,
+  input: { workspaceId: string; actorId: string },
+  nowMs: number = Date.now(),
+): ForgetProposalRecord[] => {
+  const nowIso = new Date(nowMs).toISOString();
+  const active: ForgetProposalRecord[] = [];
+  for (const proposal of listForgetProposalsForActor(sql, input)) {
+    if (proposal.status !== 'pending') continue;
+    if (proposal.expiresAt <= nowIso) {
+      markForgetProposalExpired(sql, proposal.id, nowIso);
+      continue;
+    }
+    active.push(proposal);
+  }
+  return active;
+};
+
+/**
+ * Compare-and-set atômico: a transição só acontece quando o status atual é
+ * EXATAMENTE `from`. Duas confirmações concorrentes elegem UMA vencedora no
+ * motor de storage; a perdedora observa o estado final (idempotência §19,
+ * concorrência §34). O vínculo (workspace, actor) participa do predicado:
+ * CAS cross-identity é estruturalmente impossível.
+ *
+ * Autoria (round 2): a releitura exige TAMBÉM `result_json` idêntico ao desta
+ * tentativa — sem contador de linhas afetadas no `MemorySql`, só o claimer
+ * cujo payload venceu reconhece a transição. Chamadores passam payload com
+ * intentionId único por turno (ou reason estável em transições sem dono,
+ * onde duplo "sucesso" é inofensivo por idempotência do estado terminal).
+ */
+export const casForgetProposalStatus = (
+  sql: MemorySql,
+  input: {
+    id: string;
+    workspaceId: string;
+    actorId: string;
+    from: ForgetProposalStatus;
+    to: ForgetProposalStatus;
+    decidedAt: string;
+    resultJson: string;
+  },
+): ForgetProposalRecord | undefined => {
+  sql.exec(
+    `UPDATE agent_memory_forget_proposals SET status = ?, decided_at = ?, result_json = ? WHERE id = ? AND workspace_id = ? AND actor_id = ? AND status = ?`,
+    input.to,
+    input.decidedAt,
+    input.resultJson,
+    input.id,
+    input.workspaceId,
+    input.actorId,
+    input.from,
+  );
+  const current = getForgetProposal(sql, input.id);
+  return current && current.status === input.to && current.resultJson === input.resultJson ? current : undefined;
+};
+
+export const markForgetProposalExpired = (sql: MemorySql, id: string, decidedAt: string, reason = 'ttl'): void => {
+  const current = getForgetProposal(sql, id);
+  if (!current || current.status !== 'pending') return;
+  sql.exec(
+    `UPDATE agent_memory_forget_proposals SET status = ?, decided_at = ?, result_json = ? WHERE id = ? AND status = ?`,
+    'expired',
+    decidedAt,
+    JSON.stringify({ reason }),
+    id,
+    'pending',
+  );
+};
+
+/**
+ * Nova solicitação substitui a anterior (§22): pendings ativos do vínculo são
+ * marcados `superseded` (terminal) antes da nova inserção. Só o mais recente
+ * pode ser confirmado; o antigo nunca mais é confirmável.
+ */
+export const supersedeActiveForgetProposals = (
+  sql: MemorySql,
+  input: { workspaceId: string; actorId: string; intentionId?: string },
+  decidedAt: string,
+): number => {
+  let count = 0;
+  for (const proposal of listForgetProposalsForActor(sql, input)) {
+    if (proposal.status !== 'pending') continue;
+    const moved = casForgetProposalStatus(sql, {
+      id: proposal.id,
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      from: 'pending',
+      to: 'superseded',
+      decidedAt,
+      resultJson: JSON.stringify({ reason: 'superseded', intentionId: input.intentionId ?? '' }),
+    });
+    if (moved) count += 1;
+  }
+  return count;
 };

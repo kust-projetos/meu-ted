@@ -9,19 +9,20 @@
 import { tool, jsonSchema } from 'ai';
 import { listPastSessions, getSessionSummary } from './sessions.js';
 import {
-  extractForgetQueryDiscriminators,
-  forgetMemory,
-  listForgetCandidates,
   recallMemories,
   rememberFact,
-  selectRelevantForgetCandidates,
   type MemorySql,
 } from './store.js';
+import { proposeForgetMemory } from './forget-proposals.js';
 
 export type MemoryToolContext = {
   sql: MemorySql;
   workspaceId: string;
   actorId: string;
+  /** Proveniência da proposta (auditoria); ausente = proposta sem turno vinculado. */
+  intentionId?: string;
+  /** Relógio injetável (testes); ausente = Date.now(). */
+  nowMs?: number;
 };
 
 export const buildMemoryTools = (ctx: MemoryToolContext): Record<string, ReturnType<typeof tool>> => ({
@@ -122,37 +123,21 @@ export const buildMemoryTools = (ctx: MemoryToolContext): Record<string, ReturnT
   }),
 
   /**
-   * A19 — "esqueça isso". The forget path is SCOPED BY RESOLUTION: candidates
-   * come from `listForgetCandidates` (the caller's workspace + actor + visible
-   * shared layer, exactly the recall visibility), so another actor's PRIVATE
-   * memory is indistinguishable from a nonexistent one (no existence oracle),
-   * and another workspace is out of reach structurally. Forgetting applies
-   * invalidate + derivedFrom cascade + a tombstone the learning job consults
-   * (AC26b). Responses never carry internal ids.
+   * Issue #99 — "esqueça isso" em DUAS etapas. Este tool só PROPÕE: resolve
+   * candidatos dentro do escopo do chamador (workspace + ator + shared
+   * visível, o MESMO filtro de visibilidade do recall — sem oráculo de
+   * existência, cross-workspace inalcançável), persiste uma proposta pendente
+   * com TTL e pergunta ao usuário. NENHUMA resolução automática exclui:
+   * mesmo 1 candidato com 100% de match produz SÓ pending. A exclusão
+   * acontece exclusivamente via confirmação explícita em turno posterior
+   * (`confirmForgetMemory`, caminho determinístico do orquestrador).
    *
-   * Ranking is NOT authorization (post-merge closure, issue #91): recall is a
-   * context ranking that returns unrelated items when nothing better exists, so
-   * `selectRelevantForgetCandidates` decides which candidates are PLAUSIBLE
-   * TARGETS. Zero relevant ⇒ nothing is touched (an irrelevant lone memory
-   * must never be deleted just for ranking first); two or more ⇒ the ambiguity
-   * count is the number of RELEVANT memories, not of ranked candidates.
-   *
-   * Ranking is also NOT the candidate set (review round 2, P1-1): recall
-   * truncates to a context budget BEFORE relevance, so a plausible target below
-   * the cut makes a real ambiguity look unique — and a unique-looking request
-   * deletes. Uniqueness for a destructive operation is proven over the whole
-   * visible scope, never over the top-N.
-   *
-   * Generic coverage is NOT authorization either (definitive closure, issue
-   * #96): only a DISCRIMINATIVE match authorizes deletion. Structural/generic
-   * tokens name the domain category or possession, never the target, so a
-   * query with no discriminative token (e.g. "esqueça minha preferência de
-   * banco") authorizes nothing and the tool asks for specifics instead of
-   * deleting by category.
+   * A busca continua automática (recall/ranking/discriminantes = discovery),
+   * mas discovery NÃO é autorização. Respostas nunca carregam ids internos.
    */
   forget_memory: tool({
     description:
-      'Esquece uma memória específica a pedido da pessoa ("esqueça isso", "não lembre mais disso"). Busca pela consulta; se houver mais de uma memória possível, peça para a pessoa especificar melhor. Nunca use para saldos ou valores atuais (isso não é memória).',
+      'Propõe esquecer uma memória específica a pedido da pessoa ("esqueça isso", "não lembre mais disso"). Nunca apaga de imediato: se houver um alvo claro, pergunta antes de esquecer. Se houver mais de uma memória possível, peça para a pessoa especificar melhor. Nunca use para saldos ou valores atuais (isso não é memória).',
     inputSchema: jsonSchema({
       type: 'object',
       properties: { query: { type: 'string', minLength: 1, maxLength: 300 } },
@@ -163,47 +148,25 @@ export const buildMemoryTools = (ctx: MemoryToolContext): Record<string, ReturnT
       if (query.length === 0) {
         return { forgot: false, message: 'Diga o que devo esquecer.' };
       }
-      // Candidates come from the DESTUCTIVE resolution, not from recall: same
-      // visibility (workspace + actor + visible shared layer), but no ranking and
-      // no `limit` — the ambiguity that authorizes a deletion must be counted
-      // over every visible memory, not over a truncated context slice (issue
-      // #91 review round 2). No `last_seen_at` bookkeeping either.
-      const candidates = listForgetCandidates(ctx.sql, {
+      // Discovery, não autorização: a decisão de apagar vive na confirmação
+      // posterior. Mesma visibilidade da resolução destrutiva antiga
+      // (workspace + ator + shared visível), sem ranking truncado e sem
+      // bookkeeping de `last_seen_at`.
+      const outcome = proposeForgetMemory(ctx.sql, {
         workspaceId: ctx.workspaceId,
-        actor: ctx.actorId,
+        actorId: ctx.actorId,
+        query,
+        ...(ctx.intentionId ? { intentionId: ctx.intentionId } : {}),
+        ...(ctx.nowMs !== undefined ? { nowMs: ctx.nowMs } : {}),
       });
-      const relevant = selectRelevantForgetCandidates(candidates, query);
-      if (relevant.length === 0) {
-        // No discriminative token names a target: fail closed by asking for
-        // specifics (e.g. the bank, card or category name). A query WITH
-        // discriminators but no match keeps the honest not-found response.
-        if (extractForgetQueryDiscriminators(query).size === 0) {
-          return { forgot: false, message: 'Diga mais especificamente o que devo esquecer — por exemplo, o nome do banco, cartão ou categoria.' };
-        }
-        return { forgot: false, message: 'Não encontrei uma memória claramente correspondente.' };
+      switch (outcome.outcome) {
+        case 'proposed':
+          return { forgot: false, proposed: true, message: outcome.message };
+        case 'ambiguous':
+          return { forgot: false, ambiguous: true, message: outcome.message };
+        default:
+          return { forgot: false, message: outcome.message };
       }
-      if (relevant.length > 1) {
-        return {
-          forgot: false,
-          ambiguous: true,
-          message: `Encontrei ${relevant.length} memórias parecidas com isso. Especifique melhor qual devo esquecer.`,
-        };
-      }
-      const target = relevant[0]!;
-      const { invalidated, cascaded } = forgetMemory(ctx.sql, {
-        workspaceId: ctx.workspaceId,
-        id: target.id,
-      });
-      if (invalidated.length === 0) {
-        return { forgot: false, message: 'Não consegui esquecer isso agora. Tente de novo.' };
-      }
-      return {
-        forgot: true,
-        cascaded: cascaded.length,
-        message: cascaded.length > 0
-          ? 'Esquecido — e também o que dependia disso.'
-          : 'Esquecido. Não vou lembrar mais disso.',
-      };
     },
   }),
 });

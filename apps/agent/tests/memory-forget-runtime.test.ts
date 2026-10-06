@@ -1,22 +1,25 @@
 /**
  * A19 — `forget_memory` exposto ao runtime (o pedido "esqueça isso").
  *
- * `forgetMemory` sempre existiu no store (invalidate + cascade transitiva +
- * tombstone via invalidated_at), mas NENHUM caminho do agente o expunha — o
- * usuário pedia "esqueça isso" e não havia nada para atender. O tool novo:
+ * Issue #99 (two-step): NENHUMA resolução automática exclui. O tool SÓ
+ * PROPÕE (persiste pending + pergunta); a exclusão exige confirmação
+ * explícita em turno posterior (`confirmForgetMemory`, via orquestrador).
+ * Os testes abaixo dirigem o fluxo completo tool→proposta→confirmação:
  *
- *   - resolve candidatos DENTRO do escopo do chamador via `recallMemories`
- *     (workspace + ator + shared visível): memória privada de OUTRO ator é
- *     invisível e inesquecível (sem oráculo de existência);
+ *   - resolve candidatos DENTRO do escopo do chamador via
+ *     `listForgetCandidates` (workspace + ator + shared visível): memória
+ *     privada de OUTRO ator é invisível e inesquecível (sem oráculo de
+ *     existência);
  *   - ambiguidade (vários candidatos) recusa e pede especificação — nunca
  *     vaza id interno;
- *   - esquecer aplica invalidate + cascade + tombstone (o job não ressuscita —
- *     coberto em memory-runtime-wiring.test.ts);
- *   - responde com o que foi esquecido, nunca com ids técnicos.
+ *   - a confirmação aplica invalidate + cascade + tombstone (o job não
+ *     ressuscita — coberto em memory-runtime-wiring.test.ts);
+ *   - respostas nunca carregam ids técnicos.
  */
 
 import { describe, expect, it } from "vitest";
 import { buildMemoryTools, MEMORY_TOOL_NAMES } from "../src/agent-config/memory/tools.js";
+import { confirmForgetMemory } from "../src/agent-config/memory/forget-proposals.js";
 import {
   initializeMemorySchema,
   listForgetCandidates,
@@ -47,37 +50,61 @@ describe("A19 — forget_memory", () => {
     expect(MEMORY_TOOL_NAMES).toContain("forget_memory");
   });
 
-  it("escopo próprio: esquece a memória e responde sem expor id interno", async () => {
+  it("escopo próprio: propõe a memória e, após confirmação, esquece sem expor id interno", async () => {
     const workspaceId = "ws-1";
     const store = sql();
     rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefiro registrar no Nubank" });
     const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
     const result = await runForget(tools, "Nubank");
-    expect(result.forgot).toBe(true);
+    // Primeiro turno: SÓ proposta, nada apagado.
+    expect(result.forgot).toBe(false);
+    expect(result.proposed).toBe(true);
     expect(JSON.stringify(result)).not.toMatch(/att_|[0-9a-f]{8}-[0-9a-f]{4}/i);
+    expect(recallMemories(store, { workspaceId, actor: "actor-1", query: "Nubank" })).toHaveLength(1);
+    // Turno posterior com confirmação explícita: executa.
+    const done = confirmForgetMemory(store, { workspaceId, actorId: "actor-1" });
+    expect(done.outcome).toBe("executed");
     expect(recallMemories(store, { workspaceId, actor: "actor-1", query: "Nubank" })).toHaveLength(0);
   });
 
   it("cascade: esquecer o pai invalida o learning derivado", async () => {
     const workspaceId = "ws-1";
     const store = sql();
-    rememberCorrection(store, {
+    const parent = rememberFact(store, {
       workspaceId,
       actor: "actor-1",
-      target: "merchant:padaria",
-      field: "account",
-      turnFingerprint: "t-1",
-      content: "Padaria usa a conta X",
-      scope: undefined as never,
+      kind: "preference",
+      content: "Padaria preferida no bairro",
     });
-    const parent = recallMemories(store, { workspaceId, actor: "actor-1", query: "padaria" });
-    // O learning derivado (derivedFrom) existe além do pai.
-    expect(parent.length).toBeGreaterThanOrEqual(1);
+    expect(parent.stored).toBe(true);
+    const parentId =
+      parent.stored && !parent.deduped
+        ? parent.item.id
+        : recallMemories(store, { workspaceId, actor: "actor-1", query: "padaria" })[0]!.id;
+    // Descendente REAL (derivedFrom = pai), com conteúdo que NÃO casa a query
+    // "padaria" — prova que a cascata é estrutural, não lexical.
+    const child = rememberCorrection(store, {
+      workspaceId,
+      actor: "actor-1",
+      target: "padaria",
+      field: "nota",
+      content: "Pão integral no café da manhã",
+      derivedFrom: { sourceId: parentId },
+    });
+    expect(child.stored).toBe(true);
     const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
     const result = await runForget(tools, "padaria");
-    expect(result.forgot).toBe(true);
-    expect(Number(result.cascaded ?? 0)).toBeGreaterThanOrEqual(0);
+    expect(result.forgot).toBe(false);
+    expect(result.proposed).toBe(true);
+    const done = confirmForgetMemory(store, { workspaceId, actorId: "actor-1" });
+    expect(done.outcome).toBe("executed");
+    if (done.outcome === "executed") {
+      expect(done.cascaded).toBe(1);
+    }
     expect(recallMemories(store, { workspaceId, actor: "actor-1", query: "padaria" })).toHaveLength(0);
+    const rows = (store as unknown as MemorySqlMock).rows("agent_memory");
+    expect(rows.length).toBe(2);
+    expect(rows.every((row) => row["invalidated_at"] != null)).toBe(true);
   });
 
   it("memória compartilhada do workspace é esquecível por outro membro (visível ⇒ esquecível)", async () => {
@@ -86,7 +113,10 @@ describe("A19 — forget_memory", () => {
     rememberFact(store, { workspaceId, actor: "", kind: "fact", content: "A família divide o orçamento da casa" });
     const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-2" });
     const result = await runForget(tools, "orçamento da casa");
-    expect(result.forgot).toBe(true);
+    expect(result.forgot).toBe(false);
+    expect(result.proposed).toBe(true);
+    const done = confirmForgetMemory(store, { workspaceId, actorId: "actor-2" });
+    expect(done.outcome).toBe("executed");
   });
 
   it("tentativa cross-actor: memória PRIVADA de outro ator é inexistente para o chamador", async () => {
@@ -150,10 +180,13 @@ describe("A19 — forget_memory só apaga alvo CLARAMENTE correspondente", () =>
 
     const result = await runForget(tools, "esqueça Nubank");
 
-    expect(result.forgot).toBe(true);
+    expect(result.forgot).toBe(false);
+    expect(result.proposed).toBe(true);
     expect(result.ambiguous).toBeUndefined();
-    // A irrelevante continua de pé: só o alvo foi derrubado. (O recall NÃO
-    // exige overlap — por isso a verificação é sobre o conjunto efetivo.)
+    // A confirmação executa SÓ o alvo proposto. (O recall NÃO exige
+    // overlap — por isso a verificação é sobre o conjunto efetivo.)
+    const done = confirmForgetMemory(store, { workspaceId, actorId: "actor-1" });
+    expect(done.outcome).toBe("executed");
     const survivors = recallMemories(store, { workspaceId, actor: "actor-1", query: "Prefere" });
     expect(survivors).toHaveLength(1);
     expect(survivors[0]?.content).toContain("Alimentação");
@@ -294,12 +327,14 @@ describe("A19 — forget_memory só apaga alvo CLARAMENTE correspondente", () =>
 });
 
 /**
- * Definitive closure (#96): only a DISCRIMINATIVE match authorizes forgetting.
+ * Definitive closure (#96), superseded by two-step (#99): the discriminative
+ * match LOCATES the proposal candidate (discovery-only) — deletion requires
+ * explicit confirmation in a later turn.
  *
  * Generic coverage ("minha", "preferência", "banco", "conta") names the
  * domain category or possession — never the target. A candidate is
- * forgettable only with at least one discriminative query token; a query
- * with none authorizes nothing and the tool asks for specifics.
+ * proposable only with at least one discriminative query token; a query
+ * with none gets specifics asked.
  */
 describe("Closure definitiva (#96): só correspondência discriminante autoriza esquecimento", () => {
   it("Caso A runtime: só o Nubank é esquecido, Banco do Brasil fica intacto", async () => {
@@ -311,7 +346,10 @@ describe("Closure definitiva (#96): só correspondência discriminante autoriza 
 
     const result = await runForget(tools, "esqueça minha preferência do banco Nubank");
 
-    expect(result.forgot).toBe(true);
+    expect(result.forgot).toBe(false);
+    expect(result.proposed).toBe(true);
+    const done = confirmForgetMemory(store, { workspaceId, actorId: "actor-1" });
+    expect(done.outcome).toBe("executed");
     // Post-state is asserted over `listForgetCandidates` (full visibility, no
     // ranking): `recallMemories` returns the best available items even with
     // zero overlap, so a recall-based "Nubank has 0 results" assertion could
@@ -331,7 +369,10 @@ describe("Closure definitiva (#96): só correspondência discriminante autoriza 
 
     const result = await runForget(tools, "remova minha conta/preferência do banco Nubank");
 
-    expect(result.forgot).toBe(true);
+    expect(result.forgot).toBe(false);
+    expect(result.proposed).toBe(true);
+    const done = confirmForgetMemory(store, { workspaceId, actorId: "actor-1" });
+    expect(done.outcome).toBe("executed");
     // Same visibility-based assertion as Caso A: the survivor must be the
     // Banco do Brasil memory itself (a content check — recall would return
     // the wrong survivor with overlap 0 and pass vacuously).
@@ -381,7 +422,10 @@ describe("Closure definitiva (#96): só correspondência discriminante autoriza 
 
     const result = await runForget(tools, "esqueça minha principal preferência de banco Nubank");
 
-    expect(result.forgot).toBe(true);
+    expect(result.forgot).toBe(false);
+    expect(result.proposed).toBe(true);
+    const done = confirmForgetMemory(store, { workspaceId, actorId: "actor-1" });
+    expect(done.outcome).toBe("executed");
     const alive = listForgetCandidates(store, { workspaceId, actor: "actor-1" });
     expect(alive.map((item) => item.content)).toEqual(['Categoria principal é Alimentação']);
     expect(alive[0]?.invalidatedAt).toBeNull();

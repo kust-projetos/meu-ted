@@ -433,6 +433,34 @@ como alvo único. Comportamento normativo a partir desta closure (relatório:
   mergeado = run de CI = `BUILD_SHA` implantado = `buildSha` do `/health`.
 
 
+### 11.6 Adendo (2026-10-06) — `forget_memory` em duas etapas (issue #99)
+
+Não é possível provar identidade de alvo em vocabulário aberto apenas por
+heurística lexical determinística com segurança suficiente para uma ação
+destrutiva (prova: review `r4198359793` — qualquer token residual não
+catalogado virava autorização; duas regras lexicais positivas alternativas
+também rejeitadas por review). Comportamento normativo a partir desta
+closure (relatório:
+[reports/2026-10-06-ted-agent-a19-definitive-closure.md](reports/2026-10-06-ted-agent-a19-definitive-closure.md)
+§13):
+
+- **Nenhuma resolução automática exclui.** `forget_memory` (tool exposto ao
+  modelo) só PROPÕE: persiste `agent_memory_forget_proposals` (TTL 10 min) e
+  pergunta com o preview exato. A exclusão exige confirmação explícita em
+  turno posterior, decidida deterministicamente pelo orquestrador
+  (`runForgetDecisionTurn`, SDK e REST) a partir do texto digitado, com veto
+  por presença de anexo e precedência do financeiro; sem pending válido,
+  "sim" não executa nada. Revalidação pré-delete (status/TTL/vínculo +
+  memória viva + hash) + pós-validação; redelivery idempotente; cancel/
+  supersede terminais; auditoria só com ids/hash; turnos do fluxo não
+  ensinam. A busca (discriminantes) continua automática como discovery —
+  nunca como autoridade; ontologia positiva segue descartada como
+  autoridade de exclusão. Round 2: confirmação só afirmativa fechada com
+  veto de negação; claim sem execução libera para `pending`; falha de
+  publicação expira os pendings do turno; redelivery nunca cria nem autoriza
+  (dedupe + recibos de decisão); CAS com prova de autoria.
+
+
 ## 12. Rastreabilidade da origem
 
 | Seções da origem | Destino / disposição |

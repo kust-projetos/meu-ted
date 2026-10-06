@@ -205,7 +205,7 @@ dependências (`miniflare→sharp`, `wrangler→miniflare`,
 | Agent Deploy (1º evento, par skip "not ready") | `37507379938` | success (deploy skipped — CI/PWA CI ainda em progresso) |
 | PWA Deploy (1º evento) | `37507379986` | success |
 | **Agent Deploy (deploy real)** | `37507687738` | **success — Gate + deploy + Post-deploy smoke** |
-| **PWA Deploy (deploy real)** | `37507687738`-par | success |
+| **PWA Deploy (deploy real)** | `37507687900` | **success — Gate + deploy + Post-deploy smoke** |
 
 **Attestation de release (o teste real do fix F2):** o job `Post-deploy smoke
 (read-only)` executou o novo smoke e o log do CI registra
@@ -238,3 +238,119 @@ pós-deploy: `{"status":"ready","schemaVersion":5,"buildSha":"98fe4038b73c5a16ea
 Gates pendentes (intocados, fora do escopo): Release B (2026-10-16T21:36:06Z),
 cutover F3–F5, canary autoexecute (G08), provider de decisão (G07), G01/G02,
 rollout A19 (binding R2, credenciais+ZDR, flags), future-dated 2026-12-01/2026-12-31.
+
+## 12. Auditoria pós-merge em `e946c2d` e micro-closure #99
+
+Esta seção preserva a conclusão histórica do PR #97 acima e registra a
+evidência posterior, sem reescrever o que era conhecido no momento daquela
+closure.
+
+- **PWA Deploy de `98fe403` confirmado:** run real `37507687900` — Gate,
+  deploy e post-deploy smoke `success`. A referência sintética anterior
+  `37507687738-par` foi corrigida; `37507687738` é o Agent Deploy, não um par
+  do PWA.
+- **Agent Deploy de `e946c2d` confirmado:** run `37511794922` (`success`). O
+  log do bounded smoke comprova o teste de ouro: `attempt 1/8: RETRY — observed
+  buildSha=98fe4038b73c5a16eaad2d560ddf9869fb3122c5` e, em seguida,
+  `attempt 2/8: PASS — buildSha matches expected` (`attempts=2`). O mecanismo
+  de retry não foi alterado nesta micro-closure.
+- **PWA para `e946c2d`:** run `37511794852` falhou no gate com
+  `Deploy blocked: no CI run found for e946c2ddc7e91d2ecb809e758f500e7142b6e9e5`;
+  deploy e post-deploy smoke foram `skipped`. Isto é o gate fail-closed, não
+  evidência de que o PWA de `98fe403` estava quebrado. O último deploy PWA
+  funcional confirmado permanece `37507687900` em `98fe403`.
+- **Micro-closure issue #99 — P1 ainda aberto, A19 não pode ser declarada
+  encerrada:** o review posterior do PR #97 (`discussion_r4198359793`) provou
+  que a regra de subtração de listas ainda transforma qualquer token residual
+  não catalogado em autorização. O caso `por gentileza, esqueça uma coisa que
+  eu falei` pode deixar `uma`/`falei` e apagar a única memória `Prefere uma
+  caminhada pela manhã`. Duas tentativas de regra lexical positiva também
+  foram rejeitadas por review independente: frequência/partição do corpus,
+  capitalização, siglas em caixa alta e frases contíguas não provam identidade
+  em vocabulário aberto. Sem ontologia mantida ou confirmação explícita do
+  usuário, uma heurística determinística não consegue distinguir com segurança
+  um nome próprio de uma palavra comum usada como alvo. Não foi feita merge nem
+  deploy desta tentativa.
+- **P2 documental resolvido:** a referência do PWA Deploy agora aponta para o
+  run real `37507687900`.
+- **Decisão de escopo pendente:** manter auto-delete lexical exigiria definir
+  uma ontologia positiva mantida e seus limites; a alternativa conservadora é
+  propor o alvo e exigir confirmação explícita em uma segunda etapa. Essa
+  alteração de interação/API não foi autorizada nesta micro-closure. Até uma
+  decisão e correção validadas, estado final: **NOT READY; A19 permanece
+  aberta por P1**.
+
+## 13. Closure two-step do `forget_memory` (issue #99 — esta sessão)
+
+Decisão arquitetural aprovada e implementada: **abandonar qualquer tentativa
+de usar heurística lexical para AUTORIZAR um `forget`.** Não é possível provar
+identidade de alvo em vocabulário aberto apenas por heurística lexical
+determinística com segurança suficiente para uma ação destrutiva. A busca
+continua automática, mas a autorização migrou para confirmação explícita em
+duas etapas. A alternativa de ontologia positiva está descartada para esta
+closure (futuramente, só para melhorar discovery/classificação — nunca como
+autoridade única de exclusão).
+
+Fluxo: pedido → resolução de candidato(s) → proposta pendente → confirmação
+explícita em turno posterior → revalidação → `forgetMemory()` → confirmação
+do resultado. Nenhum pedido em linguagem natural apaga memória no mesmo
+turno em que o alvo foi inferido — mesmo com 1 candidato e 100% de match.
+
+Implementação (`apps/agent`):
+- `store.ts`: tabela `agent_memory_forget_proposals` (id, workspace, actor,
+  memoryId, contentHash sha256, preview ≤120 chars, intentionId, status,
+  createdAt/expiresAt/decidedAt, resultJson) + TTL 10 min (convenção
+  `undo_proposals`, sem acoplamento ao financeiro) + CAS por status +
+  expiração preguiçosa + supersede; leitura sempre vinculada ao par
+  (workspace, actor).
+- `forget-proposals.ts` (serviço, único caminho de decisão): propose
+  (discovery-only, supersede anterior), confirm (exige exatamente 1 pending
+  válido + revalidação status/TTL/vínculo + memória viva + hash + pós-
+  validação; idempotente por intentionId e por CAS), cancel; matchers sobre
+  texto digitado (imperativo puro = pedido §10, nunca confirmação);
+  auditoria `forget.proposed/confirmed/executed/cancelled/expired/
+  revalidation_failed` só com ids/hash.
+- `tools.ts`: `forget_memory` virou propose-only (sem tools de
+  confirm/cancel expostas ao modelo).
+- `conversation-orchestrator.ts`: `runForgetDecisionTurn` determinístico
+  (SDK e REST convergem em `runTurn`): veto por presença de anexo,
+  `decisionText`-only, precedência do financeiro com alvo decidível e de
+  rascunho recuperável; sem pending, o legado responde.
+- `learn.ts`: turnos de proposta/confirmação/cancel/falha não ensinam (§30).
+- Completude gramatical da discovery (classes fechadas, sem valor de
+  segurança — a garantia é o two-step): artigos `uma/umas/uns` + verbos de
+  relato (`falei/disse/contei/…`).
+
+Validação: RED provado na lógica antiga (3 falhas, incl. o caso exato do
+review); GREEN 53/53 nas 4 suítes de forget; suíte Agent completa
+1816 passed/1 skipped (164 arquivos, zero regressão); typecheck verde; lint
+verde (286 arquivos, só 4 warnings pré-existentes em teste não relacionado);
+`scripts/agent-release-smoke.mjs` intocado.
+
+Round 2 de review (code + security, 6 achados, todos corrigidos com
+regressão): (1) matcher de confirmação fechado + veto de negação +
+cancel-first — "sim, pode não apagar" e "confirmado, pode cancelar" nunca
+executam; (2) falha entre claim e delete libera o claim de volta para
+`pending` (só `executed` é evidência de efeito; replay encontra o recibo
+`failed`, nunca "já foi esquecido"); (3) rollback de publicação —
+`revertUnpublishedForgetProposals` expira pendings do turno cujo
+`persistMessages` falhou (redelivery re-propõe do zero); (4) dedupe de
+proposta por `sourceIntentionId` — redelivery não cria/renova/supersede
+(cancel/supersede terminais); (5) vínculo de consumo do turno de decisão
+(`agent_memory_forget_decisions`, 24 h) — "sim"/"não" consumido sem executar
+nunca autoriza proposta posterior em replay; (6) CAS com prova de autoria
+(releitura exige `result_json` do claimer — pego por teste em SQLite real;
+o mock ignora literais em WHERE). Cascade com descendente real provado
+(`cascaded === 1` estrutural, não lexical). Round 2b (2 P1 restantes,
+corrigidos com regressão): (7) `already_done` observado também consome o
+turno (recibo) — replay de "sim" antigo nunca autoriza proposta posterior;
+(8) compensação nos 3 pontos de falha pré-publicação (relay generativo,
+direct leg SDK, persist REST) — preview nunca visto nunca é confirmável;
+teste R2b com falha injetada pós-claim prova release + retry. Suíte final
+verde; typecheck/lint/docs/governance verdes.
+
+Estado A19 após esta closure: A17/A18 preservadas (tombstone/cascade
+inalterados); P1 encerrado pelo desenho (heurística sem autoridade
+destrutiva); P2 documental resolvido (run real `37507687900`). Veredito
+final após review adversarial + CI: **READY WITH CONTROLLED ROLLOUT** se
+P0=0 e P1=0.

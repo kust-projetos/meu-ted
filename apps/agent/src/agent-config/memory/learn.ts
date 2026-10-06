@@ -24,6 +24,7 @@ import {
   type MemoryScope,
   type MemorySql,
 } from './store.js';
+import { isForgetManagementTurn } from './forget-proposals.js';
 
 export const LEARN_EVERY_TURNS = 5;
 export const MAX_LEARNINGS_PER_TURN = 2;
@@ -93,6 +94,10 @@ export const learnFromTurn = async (sql: MemorySql, input: LearnTurnInput): Prom
   // A failed/empty assistant turn is not an actual response and must not
   // teach durable memory from an uncompleted interaction.
   if (typeof input.assistantText !== 'string' || input.assistantText.trim().length === 0) return [];
+  // Issue #99 §30 — turnos de proposta/confirmação/cancelamento/falha do
+  // fluxo de forget obedecem à filosofia A17: intenção mutacional só aprende
+  // com evidência materializada válida. Na dúvida: não ensina.
+  if (isForgetManagementTurn(input.userText, input.assistantText)) return [];
   const scope = input.scope
     ?? normalizeMemoryScope({ workspaceId: input.workspaceId, actor: input.actorId, shared: false });
   const learned: MemoryItem[] = [];

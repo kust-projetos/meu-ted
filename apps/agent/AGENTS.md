@@ -440,36 +440,37 @@ metadados continua sendo um **miss**, nunca um hit cross-identity.
   persistência intermediária visível (o framework `AIChatAgent` persiste
   pós-retorno): a evidência do canal é a resposta completa não-fail-closed de
   `runTurn` — residual documentado, mesma regra, sem divergência.
-- **`forget_memory` existe.** "Esqueça isso" resolve candidatos por
-  `listForgetCandidates` (workspace + ator + shared visível + expiração +
-  invalidação, o MESMO filtro de visibilidade do recall): memória privada de
-  outro ator é indistinguível de inexistente; cross-workspace é inalcançável;
-  ambiguidade recusa pedindo especificidade; respostas nunca carregam ids
-  internos; o esquecimento aplica invalidate + cascade + tombstone. Duas
-  travas destrutivas independentes: o ranking do recall
-  (`salience × recência + overlap × 0.5`) NÃO pode decidir o que é apagado, e
-  a resolução NÃO trunca (o `limit` do recall corta ANTES do filtro e
-  esconderia uma segunda memória plausível, transformando ambiguidade real em
-  unicidade deletada); a resolução também não faz bookkeeping de
-  `last_seen_at`.
-  **Só correspondência DISCRIMINANTE autoriza exclusão** (closure definitiva,
-  issue #96): a cobertura lexical ≥ 0.5 anterior ainda apagava a memória
-  errada ("esqueça minha preferência do banco Nubank" casava `minha`+`banco`
-  em "Minha conta favorita é Banco do Brasil" e rejeitava o alvo correto).
-  `extractForgetQueryDiscriminators` separa os tokens da query em comando
-  (`FORGET_QUERY_STOP_TOKENS`) + estrutural/genérico
-  (`FORGET_GENERIC_STRUCTURE_TOKENS`: possessivos e substantivos de
-  estrutura/domínio — banco, conta, cartão, categoria, preferência,
-  principal, favorita…; nomeiam a CATEGORIA, nunca o alvo) + discriminante
-  (o resto). Um candidato só é esquecível se contiver ≥ 1 discriminante;
-  query sem discriminante não apaga nada e o tool pede especificação
-  concreta; a lista genérica não é load-bearing para segurança (omissão →
-  ambiguidade/alvo único legítimo; excesso → "não encontrado"; ambos
-  conservadores). Residual fail-closed: tokens ≤ 2 chars ("XP") viram pedido
-  de especificação, nunca exclusão.
-  Residual: `forgetMemory` no store é workspace-scoped — a fronteira de ator
-  vive na RESOLUÇÃO; qualquer chamador futuro que passe um id de outra fonte
-  precisaria endurecer o próprio store.
+- **`forget_memory` em duas etapas (issue #99).** "Esqueça isso" NUNCA apaga
+  no mesmo turno: o tool só PROPÕE (resolve candidatos por
+  `listForgetCandidates` — workspace + ator + shared visível + expiração +
+  invalidação, o MESMO filtro de visibilidade do recall — persiste uma
+  proposta pendente com TTL de 10 min e pergunta com o preview exato).
+  A exclusão exige confirmação explícita em turno posterior ("sim", "pode
+  esquecer"), decidida deterministicamente pelo orquestrador a partir do
+  texto DIGITADO (`decisionText`), com veto por presença de anexo
+  (attachment turn != confirmação) e precedência do financeiro quando houver
+  alvo decidível. Sem pending válido, "sim" não executa nada.
+  Decisão arquitetural: **nenhuma heurística lexical autoriza delete** —
+  busca/ranking/discriminantes são só discovery; a autorização é a
+  confirmação do preview. Revalidação pré-delete (status/TTL/vínculo +
+  memória viva + hash do conteúdo); race/alteração aborta sem apagar;
+  redelivery do mesmo turno é idempotente; cancel/supersede são terminais;
+  memória privada de outro ator é indistinguível de inexistente;
+  cross-workspace é inalcançável; respostas nunca carregam ids internos; o
+  esquecimento confirmado aplica invalidate + cascade + tombstone.
+  `extractForgetQueryDiscriminators` separa comando + estrutural/genérico +
+  função (incl. artigos indefinidos e verbos de relato — classes gramaticais
+  fechadas) do resto; sem discriminante o tool pede especificação. As listas
+  afetam só a precisão da discovery, nunca autoridade destrutiva.
+  Turnos de proposta/confirmação/cancel/falha não ensinam (A17).
+  Round 2: confirmação só afirmativa fechada com veto de negação
+  (cancel-first); claim sem execução verificada libera para `pending`;
+  falha de publicação do turno expira seus pendings (redelivery re-propõe);
+  redelivery de pedido/decisão nunca cria nem autoriza (dedupe por
+  intentionId + recibos de decisão); CAS com prova de autoria.
+  Residual fail-closed: tokens ≤ 2 chars ("XP") viram pedido de
+  especificação, nunca exclusão; `forgetMemory` no store é
+  workspace-scoped — a fronteira de ator vive na resolução/proposta.
 - **A18 no runtime.** `loadUserSkills` carrega skills ativas do workspace e
   projeta via `toSelectableSkills` nos DOIS call sites de `assembleCognition`.
   Workspace sem skills: um SELECT e prompt byte a byte idêntico (sem leitura

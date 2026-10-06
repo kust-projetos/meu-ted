@@ -49,6 +49,15 @@ import {
   renderDisambiguation,
 } from './pending-operation-coordinator.js';
 import { hasUndoIntent, isExplicitConfirmation } from '../agent-config/tools.js';
+import {
+  cancelForgetMemory,
+  confirmForgetMemory,
+  isForgetCancellationText,
+  isForgetConfirmationText,
+  isForgetRequestText,
+  proposeForgetMemory,
+} from '../agent-config/memory/forget-proposals.js';
+import type { MemorySql } from '../agent-config/memory/store.js';
 import { UndoProposalService } from '../mutations/undo-proposal.js';
 import { isUndoNegation } from '../mutations/undo-proposal.js';
 import { isAutoExecutionEligible } from '../safety/auto-execution.js';
@@ -485,6 +494,16 @@ export class ConversationOrchestrator {
       api?: import('../mutations/undo-proposal.js').UndoApi;
       now?: () => number;
       ttlMs?: number;
+    };
+    /**
+     * Issue #99 — two-step forget determinístico. Superfície SQL da memória
+     * (SQLite do DO). Ausente = turnos de forget caem no caminho do tool LLM
+     * (propose-only, ainda seguro). Presente = pedido/confirmação/
+     * cancelamento decididos aqui, do texto DIGITADO com veto de anexo.
+     */
+    forgetMemory?: {
+      sql: MemorySql;
+      now?: () => number;
     };
   } = {}) {}
 
@@ -2090,6 +2109,92 @@ export class ConversationOrchestrator {
   }
 
   /**
+   * Issue #99 — forget em duas etapas, turno de decisão determinístico.
+   *
+   * NENHUMA heurística lexical autoriza exclusão: o pedido só PROPÕE
+   * (persiste pending + pergunta), e SÓ a confirmação explícita em turno
+   * posterior executa — após revalidação completa. Retorna null quando este
+   * turno não é do fluxo forget (o pipeline legado/financeiro é dono).
+   *
+   * Precedências (todas fail-closed):
+   * - sem dep injetada ⇒ null (comportamento anterior intacto);
+   * - turno COM anexo ⇒ null (attachment turn != confirmação; veto por
+   *   presença, antes de tipo/estado/texto — §9 + imunidade A19-F1);
+   * - decisão lida SÓ de `decisionText` (texto digitado server-side);
+   * - rascunho financeiro recuperável ⇒ null (não rouba "sim" de outro fluxo);
+   * - `mutation-proposal` ⇒ null (o financeiro é dono do texto);
+   * - confirmação/cancelamento com alvo financeiro decidível ⇒ null
+   *   (financeiro primeiro; só o `none` cai no forget);
+   * - cancel/confirmação SEM pending forget ⇒ null (o legado responde).
+   *
+   * Estado durável ↔ publicado (§40): todo caminho que persiste pending
+   * responde na MESMA decisão com a pergunta publicada; caminhos sem
+   * escrita nunca criam confirmação invisível.
+   */
+  private async runForgetDecisionTurn(
+    input: TurnInput,
+    plan: TurnPlan,
+    client: MutationApiClient | undefined,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    decisionText: string,
+  ): Promise<TurnResult | null> {
+    const dep = this.dependencies.forgetMemory;
+    if (!dep) return null;
+    if (input.attachments.length > 0) return null;
+    // Cancelamento primeiro: negação/cancelamento nunca autoriza exclusão —
+    // em caso de sobreposição textual, a direção segura (não apagar) vence.
+    const wantsCancel = isForgetCancellationText(decisionText);
+    const wantsConfirm = !wantsCancel && isForgetConfirmationText(decisionText);
+    const wantsPropose = !wantsCancel && !wantsConfirm && isForgetRequestText(decisionText);
+    if (!wantsConfirm && !wantsCancel && !wantsPropose) return null;
+    if (plan.mode === 'mutation-proposal') return null;
+    if ((wantsConfirm || wantsCancel) && this.hasDraftForTurn(input)) return null;
+    if (client && (wantsConfirm || wantsCancel)) {
+      try {
+        const identity: MutationIdentity = {
+          workspaceId: input.workspaceId,
+          actorId: input.actorId,
+          deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+        };
+        const target = await this.coordinatorFor(client).resolveDecisionTarget(identity, 'decidable', this.draftContext(input));
+        if (target.kind !== 'none') return null;
+      } catch (err) {
+        // Sem dispositivo o financeiro é impossível (SDK): o forget prossegue.
+        // Qualquer outra falha de sondagem falha fechado para o legado.
+        if ((err as Error)?.message !== 'mutation.device_required') return null;
+      }
+    }
+    const emit = (eventType: string, fields: Record<string, unknown>): void => this.emit(eventType, fields);
+    const sql = dep.sql;
+    const nowMs = dep.now?.() ?? this.draftNowMs();
+    const identity = { workspaceId: input.workspaceId, actorId: input.actorId };
+    if (wantsPropose) {
+      const outcome = proposeForgetMemory(sql, {
+        ...identity,
+        query: decisionText,
+        intentionId: input.intentionId,
+        nowMs,
+        emit,
+      });
+      const text = outcome.message;
+      const extra =
+        outcome.outcome === 'ambiguous'
+          ? { clarification: freeze({ missingFields: freeze(['intent']), text }) }
+          : {};
+      return this.completeTurn(input, plan, startedAt, base, { ...extra, response: freeze({ text }) });
+    }
+    if (wantsCancel) {
+      const outcome = cancelForgetMemory(sql, { ...identity, intentionId: input.intentionId, nowMs, emit });
+      if (outcome.outcome === 'none') return null;
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: outcome.message }) });
+    }
+    const outcome = confirmForgetMemory(sql, { ...identity, intentionId: input.intentionId, nowMs, emit });
+    if (outcome.outcome === 'none') return null;
+    return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: outcome.message }) });
+  }
+
+  /**
    * T1.5 (SPEC §8.5, INV-10): every cancel resolves through the coordinator.
    * Proposing handoffs settle by the SAME key, actives are discarded, and
    * "cancelado" is only answered after the API persisted the cancel — or
@@ -2309,6 +2414,12 @@ export class ConversationOrchestrator {
     const ambiguous = this.ambiguousMutationClarification(input.text);
     if (ambiguous) return this.stopAmbiguousMutation(input, plan, startedAt, result, ambiguous);
     const client = this.dependencies.mutationApiClient;
+    // Issue #99 — forget em duas etapas: pedido/confirmação/cancelamento de
+    // esquecimento decididos deterministicamente (texto digitado + veto de
+    // anexo), com precedência do financeiro quando houver alvo decidível.
+    // Null = o pipeline legado/financeiro abaixo é dono do turno.
+    const forgetTurn = await this.runForgetDecisionTurn(input, plan, client, startedAt, result, decisionText);
+    if (forgetTurn) return forgetTurn;
     // A proposal may never fall through to a generative response when the
     // channel was unable to construct its narrowly-scoped API client (for
     // example, a missing device binding). This keeps every mutation intent on
