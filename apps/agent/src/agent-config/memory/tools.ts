@@ -10,8 +10,10 @@ import { tool, jsonSchema } from 'ai';
 import { listPastSessions, getSessionSummary } from './sessions.js';
 import {
   forgetMemory,
+  listForgetCandidates,
   recallMemories,
   rememberFact,
+  selectRelevantForgetCandidates,
   type MemorySql,
 } from './store.js';
 
@@ -120,12 +122,25 @@ export const buildMemoryTools = (ctx: MemoryToolContext): Record<string, ReturnT
 
   /**
    * A19 — "esqueça isso". The forget path is SCOPED BY RESOLUTION: candidates
-   * come from `recallMemories` (the caller's workspace + actor + visible
-   * shared layer), so another actor's PRIVATE memory is indistinguishable from
-   * a nonexistent one (no existence oracle), and another workspace is out of
-   * reach structurally. Forgetting applies invalidate + derivedFrom cascade +
-   * a tombstone the learning job consults (AC26b). Responses never carry
-   * internal ids.
+   * come from `listForgetCandidates` (the caller's workspace + actor + visible
+   * shared layer, exactly the recall visibility), so another actor's PRIVATE
+   * memory is indistinguishable from a nonexistent one (no existence oracle),
+   * and another workspace is out of reach structurally. Forgetting applies
+   * invalidate + derivedFrom cascade + a tombstone the learning job consults
+   * (AC26b). Responses never carry internal ids.
+   *
+   * Ranking is NOT authorization (post-merge closure, issue #91): recall is a
+   * context ranking that returns unrelated items when nothing better exists, so
+   * `selectRelevantForgetCandidates` decides which candidates are PLAUSIBLE
+   * TARGETS. Zero relevant ⇒ nothing is touched (an irrelevant lone memory
+   * must never be deleted just for ranking first); two or more ⇒ the ambiguity
+   * count is the number of RELEVANT memories, not of ranked candidates.
+   *
+   * Ranking is also NOT the candidate set (review round 2, P1-1): recall
+   * truncates to a context budget BEFORE relevance, so a plausible target below
+   * the cut makes a real ambiguity look unique — and a unique-looking request
+   * deletes. Uniqueness for a destructive operation is proven over the whole
+   * visible scope, never over the top-N.
    */
   forget_memory: tool({
     description:
@@ -140,23 +155,27 @@ export const buildMemoryTools = (ctx: MemoryToolContext): Record<string, ReturnT
       if (query.length === 0) {
         return { forgot: false, message: 'Diga o que devo esquecer.' };
       }
-      const candidates = recallMemories(ctx.sql, {
+      // Candidates come from the DESTUCTIVE resolution, not from recall: same
+      // visibility (workspace + actor + visible shared layer), but no ranking and
+      // no `limit` — the ambiguity that authorizes a deletion must be counted
+      // over every visible memory, not over a truncated context slice (issue
+      // #91 review round 2). No `last_seen_at` bookkeeping either.
+      const candidates = listForgetCandidates(ctx.sql, {
         workspaceId: ctx.workspaceId,
         actor: ctx.actorId,
-        query,
-        limit: 5,
       });
-      if (candidates.length === 0) {
-        return { forgot: false, message: 'Não encontrei nada com esse conteúdo na memória.' };
+      const relevant = selectRelevantForgetCandidates(candidates, query);
+      if (relevant.length === 0) {
+        return { forgot: false, message: 'Não encontrei uma memória claramente correspondente.' };
       }
-      if (candidates.length > 1) {
+      if (relevant.length > 1) {
         return {
           forgot: false,
           ambiguous: true,
-          message: `Encontrei ${candidates.length} memórias parecidas com isso. Especifique melhor qual devo esquecer.`,
+          message: `Encontrei ${relevant.length} memórias parecidas com isso. Especifique melhor qual devo esquecer.`,
         };
       }
-      const target = candidates[0]!;
+      const target = relevant[0]!;
       const { invalidated, cascaded } = forgetMemory(ctx.sql, {
         workspaceId: ctx.workspaceId,
         id: target.id,

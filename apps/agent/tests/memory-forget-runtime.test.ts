@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import { buildMemoryTools, MEMORY_TOOL_NAMES } from "../src/agent-config/memory/tools.js";
 import {
   initializeMemorySchema,
+  listForgetCandidates,
   recallMemories,
   rememberFact,
   rememberCorrection,
@@ -125,5 +126,169 @@ describe("A19 — forget_memory", () => {
     expect(result.forgot).toBe(false);
     expect(recallMemories(store, { workspaceId, actor: "actor-1", query: "Nubank" })).toHaveLength(2);
     expect(String(result.message)).toMatch(/especif/i);
+  });
+});
+
+/**
+ * Closure pós-PR #90 (issue #91, Finding 1): o RANKING do recall passa a gerar
+ * candidatos, não a decidir o que é apagado.
+ *
+ * `recallMemories` pontua por salience × recência + overlap, SEM exigir overlap
+ * > 0 — ele devolve o que for o melhor disponível, relacionado ou não. Como
+ * alvo único, isso produzia duas falhas: memória ÚNICA e IRRELEVANTE apagada por
+ * ser top-1, e ambiguidade falsa com memória obviamente correspondente na lista.
+ * O gate determinístico abaixo (cobertura dos tokens do ASSUNTO sobre os
+ * stopwords do imperativo) decide a relevância; o ranking só ordena.
+ */
+describe("A19 — forget_memory só apaga alvo CLARAMENTE correspondente", () => {
+  it("relevância vence a contagem: só a memória sobre Nubank é esquecida, sem falsa ambiguidade", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere usar Nubank" });
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere categoria Alimentação" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "esqueça Nubank");
+
+    expect(result.forgot).toBe(true);
+    expect(result.ambiguous).toBeUndefined();
+    // A irrelevante continua de pé: só o alvo foi derrubado. (O recall NÃO
+    // exige overlap — por isso a verificação é sobre o conjunto efetivo.)
+    const survivors = recallMemories(store, { workspaceId, actor: "actor-1", query: "Prefere" });
+    expect(survivors).toHaveLength(1);
+    expect(survivors[0]?.content).toContain("Alimentação");
+    expect(survivors[0]?.invalidatedAt).toBeNull();
+  });
+
+  it("memória única e IRRELEVANTE não é apagada por ser top-1 (o caso perigoso)", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere categoria Alimentação" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "esqueça Nubank");
+
+    expect(result.forgot).toBe(false);
+    expect(String(result.message)).toBe("Não encontrei uma memória claramente correspondente.");
+    // A memória não mencionada pelo pedido segue INTACTA.
+    const intact = recallMemories(store, { workspaceId, actor: "actor-1", query: "Alimentação" });
+    expect(intact).toHaveLength(1);
+    expect(intact[0]?.invalidatedAt).toBeNull();
+  });
+
+  it("2+ realmente correspondentes: ambiguidade honesta e NADA apagado (guard de regressão)", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere pagar contas pelo Nubank" });
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere cartão Nubank para compras" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "esqueça Nubank");
+
+    expect(result.forgot).toBe(false);
+    expect(result.ambiguous).toBe(true);
+    // A contagem é a dos RELEVANTES, não a dos candidatos do ranking.
+    expect(String(result.message)).toContain("2");
+    expect(String(result.message)).toMatch(/especif/i);
+    expect(recallMemories(store, { workspaceId, actor: "actor-1", query: "Nubank" })).toHaveLength(2);
+    expect(JSON.stringify(result)).not.toMatch(/att_|[0-9a-f]{8}-[0-9a-f]{4}/i);
+  });
+
+  it("a memória RELEVANTE de outro ator não é esquecida nem REPORTADA (sem oráculo de existência)", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere usar Nubank" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-2" });
+
+    const result = await runForget(tools, "esqueça Nubank");
+
+    expect(result.forgot).toBe(false);
+    expect(result.ambiguous).toBeUndefined();
+    // A resposta é a mesma de "não existe": nunca insinua que existe em outro ator.
+    expect(String(result.message)).toBe("Não encontrei uma memória claramente correspondente.");
+    expect(JSON.stringify(result)).not.toMatch(/nubank/i);
+    expect(recallMemories(store, { workspaceId, actor: "actor-1", query: "Nubank" })).toHaveLength(1);
+  });
+
+  /**
+   * Regression P1-1 (review round 2): o RANKING TRUNCA, o filtro não pode
+   * herdar esse corte.
+   *
+   * `recallMemories(limit: 5)` ordena por score e devolve só o top-5. Duas
+   * memórias RELEVANTES com salience 1.0 e 0.1, contra quatro irrelevantes com
+   * salience 0.9 (todas do mesmo instante ⇒ recência igual), dão
+   * `salience × exp(-age/180) + overlap × 0.5`:
+   *
+   *   relevante  salience 1.0 → 1.0 + 0.25 = 1.25   (top-1)
+   *   irrelevante salience 0.9 → 0.9 + 0     = 0.90   (×4, ocupam 2..5)
+   *   relevante  salience 0.1 → 0.1 + 0.25 = 0.35   (FICA DE FORA do top-5)
+   *
+   * O relevance gate via só a relevante #1, acha "unicidade" e APAGA a única
+   * coisa que a pessoa pediu para esquecer. Unicidade de operação destrutiva
+   * precisa ser provada sobre TODAS as memórias visíveis no escopo, nunca
+   * sobre o recorte de contexto.
+   */
+  it("o corte do top-5 NÃO pode esconder a ambiguidade: 2 relevantes = nada apagado", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    const actor = "actor-1";
+    // Relevantes (contêm o assunto "Nubank"): salience 1.0 e 0.1.
+    const strong = rememberFact(store, {
+      workspaceId,
+      actor,
+      kind: "preference",
+      content: "Prefere registrar as despesas no Nubank",
+      salience: 1.0,
+    });
+    const weak = rememberFact(store, {
+      workspaceId,
+      actor,
+      kind: "fact",
+      content: "Quer que eu pare de citar o Nubank por aqui",
+      salience: 0.1,
+    });
+    // Irrelevantes com salience ALTA: sem nenhum token do assunto.
+    for (const content of [
+      "Abre o aplicativo do banco pela manhã",
+      "Gosta de caminhar no parque aos domingos",
+      "Usa caneca térmica no trabalho",
+      "Prefere assistir filmes em casa no fim de semana",
+    ]) {
+      rememberFact(store, { workspaceId, actor, kind: "fact", content, salience: 0.9 });
+    }
+    expect(strong.stored).toBe(true);
+    expect(weak.stored).toBe(true);
+
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: actor });
+    const result = await runForget(tools, "esqueça Nubank");
+
+    // A segunda relevante é a que o top-5 escondia: sem ela, o tool apagava a
+    // primeira achando unicidade. Ambiguidade honesta, NADA esquecido.
+    expect(result.forgot).toBe(false);
+    expect(result.ambiguous).toBe(true);
+    expect(String(result.message)).toContain("2");
+    // As DUAS RELEVANTES seguem vivas. A verificação usa a resolução sem
+    // truncamento de propósito: o recall de contexto devolveria as 5 primeiras
+    // e esconderia justamente a de salience 0.1 que este caso existe para provar.
+    const alive = listForgetCandidates(store, { workspaceId, actor }).filter((item) => /nubank/i.test(item.content));
+    expect(alive).toHaveLength(2);
+    expect(alive.every((item) => item.invalidatedAt === null)).toBe(true);
+    // E nada foi invalidado no store, nem as irrelevantes.
+    const rows = (store as unknown as MemorySqlMock).rows("agent_memory");
+    expect(rows.length).toBe(6);
+    expect(rows.every((row) => row["invalidated_at"] == null)).toBe(true);
+  });
+
+  it("query vazia continua pedindo especificação, sem tocar em nada", async () => {
+    const workspaceId = "ws-1";
+    const store = sql();
+    rememberFact(store, { workspaceId, actor: "actor-1", kind: "preference", content: "Prefere usar Nubank" });
+    const tools = buildMemoryTools({ sql: store, workspaceId, actorId: "actor-1" });
+
+    const result = await runForget(tools, "   ");
+
+    expect(result.forgot).toBe(false);
+    expect(String(result.message)).toBe("Diga o que devo esquecer.");
+    expect(recallMemories(store, { workspaceId, actor: "actor-1", query: "Nubank" })).toHaveLength(1);
   });
 });
