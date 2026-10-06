@@ -1659,6 +1659,17 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       // A17 — learning runs only on a COMPLETED interaction: the published
       // response is the evidence the turn actually finished. Fail-closed
       // replies (evidence unavailable) are refusals, not knowledge.
+      //
+      // Post-merge closure (issue #91) — this channel's "turn published"
+      // evidence is the NON-FAIL-CLOSED completed response of `runTurn`.
+      // There is no intermediate `persistMessages` to await here: the
+      // framework (`AIChatAgent`) owns message persistence and performs it
+      // AFTER this hook returns `{ text }`, so a persistence failure on this
+      // channel is not observable from the hook. Same rule, applied to the
+      // definitive evidence this channel actually has — no divergence in
+      // policy, and an honestly documented residual rather than a false
+      // guarantee. The REST leg awaits its own persistence and therefore
+      // learns strictly later than this one.
       if (!turnResult.failClosed) {
         await this.recordPostTurnLearning({
           workspaceId: sdkWorkspace,
@@ -2836,25 +2847,24 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           ...(draftStore ? { draftStore } : {}),
         }).runTurn(restInput);
         if (turnResult.response) {
-          // A17 — learning runs only on a COMPLETED interaction with a real
-          // response; fail-closed replies are refusals, never knowledge.
-          // `userText` is the TYPED text (`unredactedText`), never the composed
-          // turn text: the composed form carries extracted attachment data, and
-          // attachment content is DADO — it must never be promoted into
-          // durable memory through the heuristic/LLM extractors (review F2).
-          if (!turnResult.failClosed) {
-            await this.recordPostTurnLearning({
-              workspaceId: identity.workspaceId,
-              actorId: identity.actorId,
-              // Round-2 review: typed text (F2) AND scrubbed — the pre-fix
-              // argument went through the DLP funnel, so the learning input
-              // (which feeds the extractor prompt on due turns) keeps the same
-              // scrub guarantee instead of regressing to raw user text.
-              userText: scrubForPersistence(unredactedText),
-              assistantText: turnResult.response.text,
-              intentionId,
-            });
-          }
+          // A17 (post-merge closure, issue #91) — learning is conditioned on
+          // the turn's DEFINITIVE evidence, and it must run only AFTER that
+          // evidence exists. The payload is captured here, before any branch,
+          // because the guards are unchanged: fail-closed replies are refusals
+          // (never knowledge), and `userText` is the TYPED text
+          // (`unredactedText`), never the composed turn text — the composed
+          // form carries extracted attachment data, and attachment content is
+          // DADO, which must never be promoted into durable memory through the
+          // heuristic/LLM extractors (review F2). It is also scrubbed: the
+          // learning input feeds the extractor prompt on due turns, so it keeps
+          // the DLP guarantee instead of regressing to raw user text.
+          const learningPayload = {
+            workspaceId: identity.workspaceId,
+            actorId: identity.actorId,
+            userText: scrubForPersistence(unredactedText),
+            assistantText: turnResult.response.text,
+            intentionId,
+          };
           // Persist the FINAL grounded/deterministic response (never the raw
           // relay text: grounding may have rejected or replaced the provider
           // output, and /rpc/history serves exactly what is persisted here).
@@ -2883,6 +2893,46 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
               metadata: { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: new Date().toISOString() },
             } as unknown as UIMessage;
             await this.persistMessages([assistantMessage]);
+            // The durable turn evidence now EXISTS (it was just persisted).
+            // A persistence failure above propagates to the 502 below having
+            // written no memory and advanced no turn counter — a turn that
+            // failed for the user never teaches durable state.
+            //
+            // A17/A19 — THE RULE, uniform across both branches: learning
+            // requires definitive evidence from the channel. A pure READ turn
+            // teaches on its persisted message; a turn with MUTATIONAL INTENT
+            // (`needsMutation`, computed before `runTurn`) teaches ONLY with
+            // `turnResult.mutation`; anything uncertain teaches nothing. It is
+            // deliberately NOT an enumeration of plan modes: the conversational
+            // retry is served by `runRetryTurn` under `plan.mode ===
+            // 'unsupported'`, so it arrives here as a read while being a
+            // mutational attempt (review round 3, P1).
+            if (!turnResult.failClosed && (!needsMutation || turnResult.mutation)) {
+              await this.recordPostTurnLearning(learningPayload);
+            }
+          } else if (!turnResult.failClosed && turnResult.mutation) {
+            // Mutation modes do not persist chat messages (historical
+            // behavior, unchanged). Their durable turn evidence is the pending
+            // operation / receipt materialized by the coordinator inside
+            // `runTurn`, which already happened before this point — so learning
+            // is owed the same evidence, with the same guards.
+            //
+            // `turnResult.mutation` IS that evidence (review round 2, P1-2):
+            // the pending operation the coordinator actually materialized — a
+            // proposal with `operationId`, a confirmation/retry with `receipt`.
+            // The orchestrator answers a mutation-mode turn with NO mutation on
+            // real paths — no pending target, disambiguation between several
+            // pendings, and a captured coordinator error
+            // (`renderMutationResult('failed')`) — and a refusal, a block or a
+            // failed confirmation is not knowledge. Those turns teach nothing
+            // and advance no turn counter; learning happens again on the turn
+            // that carries the operation.
+            //
+            // Conservative by design (review round 3, P1): `runCancelTurn` does
+            // not materialize `mutation` in the current contract, so cancel
+            // turns — and any other mode whose coordinator does not — do not
+            // teach. Losing a little learning is the safe direction here.
+            await this.recordPostTurnLearning(learningPayload);
           }
           const pendingOperation = turnResult.mutation
             ? {

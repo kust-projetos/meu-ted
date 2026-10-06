@@ -92,6 +92,17 @@ const evaluate = (
     }
     return [false, index];
   }
+  // `IS [NOT] NULL` consumes NO binding — the store's memory reads filter
+  // expiry as `(expires_at IS NULL OR expires_at > ?)`. Without this branch the
+  // null-test fell through to the generic "unknown predicate" case, the cursor
+  // stayed put, and the `> ?` branch compared `expires_at` against the
+  // PREVIOUS binding (the workspace id) instead of the timestamp: every expired
+  // row silently survived, and the expiry filter could not be tested at all.
+  const nullCheck = predicate.match(/^(\w+)\s+IS\s+(NOT\s+)?NULL$/i);
+  if (nullCheck) {
+    const isNull = row[nullCheck[1]!] == null;
+    return [nullCheck[2] ? !isNull : isNull, cursor];
+  }
   const comparison = predicate.match(/^(\w+)\s*(=|!=|<>|>=|<=|>|<)\s*(NULL|\?)$/i);
   if (!comparison) return [true, cursor];
   const [, column, operator, literal] = comparison;
