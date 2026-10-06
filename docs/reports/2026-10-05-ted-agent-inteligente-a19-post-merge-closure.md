@@ -140,12 +140,55 @@ cruzam o teto, cancel do stream, anexo válido no teto (exact-fit `>` vs `>=`), 
   (gate 2026-10-16T21:36:06Z), cutover canônico F3–F5, G01/G02/G07/G08, A18 user skills,
   veto estrutural de autoexecute por anexo, tetos por rota.
 
-## 7. CI remoto e commits
+## 7. Commits e CI remoto
 
-- Commits na branch (um por unidade, revert seletivo possível): implementação agent
-  (F1+F2), implementação pwa (F3), correções do round 1 (F4+F5), correção do round 2 (F6),
-  docs (SPEC §11.4 + PLAN + CHANGELOG + AGENTS.md + este relatório).
-- CI do PR: ver §13 abaixo (preenchido após o run remoto).
+- Commits na branch (um por unidade, revert seletivo possível):
+  1. `4b917ea` — fix(agent): forget_memory com resolução segura de alvo (F1+F4).
+  2. `7d62e14` — fix(agent): learning com evidência definitiva do canal (F2+F5+F6) + fix latente do mock SQL.
+  3. `9d323b5` — fix(pwa): leitura bounded no proxy (F3).
+  4. `b2b0fb5` — docs: relatório, SPEC §11.4, PLAN, CHANGELOG, AGENTS.md.
+  5. `7f2df87` — fix(deps): override do transitive `proxy-addr` para a patched `>=2.0.8` (ver §7.1).
+- CI do PR #92: ver §12 abaixo (preenchido após o run remoto).
+
+### 7.1 Drift de advisory pós-merge (GHSA-jqcg-44mw-7w3h, crítico)
+
+O primeiro run de CI do PR falhou no job **Security** (`pnpm audit
+--audit-level=critical`): o advisory **GHSA-jqcg-44mw-7w3h** (crítico — IP
+spoofing via IPv4-mapped IPv6 trust subnet em `proxy-addr` `>=1.1.0 <2.0.8`,
+patched `>=2.0.8`) foi publicado **depois** do CI verde do PR #90 (2026-10-05) —
+mesma classe do episódio `eslint-config-next` de 2026-10-03 (drift de advisory,
+não regressão do PR). Cadeia: `apps/agent > agents > @modelcontextprotocol/sdk >
+express > proxy-addr`. O bump do SDK `agents` é bloqueado pela issue #87 e o
+gate não possui mecanismo de allowlist, então a correção foi um **override pnpm
+do transitive** para a versão patched (`express` declara `~2.0.7`, portanto
+`2.0.8` é resolução compatível) — fix real, não permissão. Validado: audit sem
+critical, lockfile diff mínimo (6+/5−), suíte agent inalterada (1765/1skip).
+Os 17 advisories restantes (13 high, 4 moderate) NÃO falham o gate
+(`--audit-level=critical`) e permanecem inventariados para follow-up.
+
+### 7.2 Segundo drift da mesma rodada (Scoped audit da PWA)
+
+A primeira rodada de CI também falhou no job **PWA CI → Scoped audit**
+(`scripts/pwa-audit.mjs`, gate com allowlist própria
+`scripts/pwa-audit-allowlist.json`): o npm estendeu os ranges vulneráveis da
+MESMA cadeia lighthouse (`@lhci/cli` agora `<=0.1.1-alpha.5 || >=0.3.6` com
+`via` incluindo `proxy-agent`; `@lhci/utils` agora `>=0.3.6` com `via`
+incluindo `js-yaml`) e publicou **GHSA-hp3w-g68c-fv3c** (moderate, DoS em
+`sprintf-js`) cascateando `js-yaml` → `argparse`. Os cinco pacotes são
+exclusivamente tooling build-time do Lighthouse CI (sem uso em runtime). A
+correção seguiu o mecanismo projetado da allowlist: **entradas aditivas**
+com a forma build-time estabelecida (owner, justificativa e expiração
+2026-12-31 — a revisão já agendada no workflow `future-gate-allowlists-20261231`);
+as entradas antigas permanecem e passam a reportar como `RESOLVED`. O bump
+`@lhci/cli@0.13.0` (semver-major) é a resolução de fundo e fica para a
+revisão da allowlist. Validado localmente contra o audit VIVO: gate
+`ACCEPTED — 20 accepted, 5 resolved`, zero BLOCKED; policy tests 37/37
+(`7f2df87` → deps; `70d4f99` → allowlist).
+
+## 12. CI remoto
+
+(preenchido após o run remoto)
+
 
 ## 8. Limitações residuais reais (classificadas)
 
