@@ -391,6 +391,48 @@ mesmo `intentionId` avança o contador de learning sem dedup por intenção
 `runCancelTurn` materializar `mutation` — mudança de contrato fora de escopo).
 
 
+### 11.5 Adendo (2026-10-06) — closure definitiva da A19 (issue #96)
+
+A cobertura lexical da §11.4 ainda autorizava exclusão errada: na query
+"esqueça minha preferência do banco Nubank", a memória correta ("Prefere usar
+Nubank") cobria 1/4 do assunto (rejeitada) e a memória ERRADA ("Minha conta
+favorita é Banco do Brasil") cobria 2/4 = 0.5 (`minha` + `banco`) — era apagada
+como alvo único. Comportamento normativo a partir desta closure (relatório:
+[reports/2026-10-06-ted-agent-a19-definitive-closure.md](reports/2026-10-06-ted-agent-a19-definitive-closure.md)):
+
+- **`forget_memory`: só correspondência discriminante autoriza exclusão.** Os
+  tokens da query separados em três classes conceituais: COMANDO
+  (`FORGET_QUERY_STOP_TOKENS`, imperativos/deíticos), ESTRUTURAL/GENÉRICO
+  (`FORGET_GENERIC_STRUCTURE_TOKENS` — possessivos e substantivos de
+  estrutura/domínio: banco, conta, cartão, categoria, preferência, principal,
+  favorita…; nomeiam a CATEGORIA, nunca o alvo) e DISCRIMINANTE
+  (`extractForgetQueryDiscriminators` = o resto — marca, nome, identificador
+  específico). Um candidato só é esquecível se contiver PELO MENOS UM token
+  discriminante (match exato de token normalizado, sem stemming); cobertura
+  genérica não soma, ranking não autoriza, sem LLM. Query sem nenhum
+  discriminante não autoriza NADA e o tool pede especificação concreta; 0
+  correspondentes com discriminantes → "não encontrei" honesto; 1 → esquece;
+  2+ → ambiguidade. Unicidade continua provada sobre TODAS as memórias
+  visíveis (`listForgetCandidates`, sem truncamento). A lista genérica NÃO é
+  load-bearing para segurança: omissão degrada para ambiguidade/alvo-único
+  legítimo; inclusão excessiva degrada para "não encontrado" — ambos
+  conservadores; o invariante de segurança ("só discriminante autoriza") não
+  depende dela. Residual fail-closed conhecido: tokens ≤ 2 caracteres ("XP")
+  são descartados pela normalização → o pedido vira pedido de especificação,
+  nunca exclusão.
+- **Attestation de release do Agent com retry bounded.** A propagação
+  de versão do Cloudflare Workers é eventualmente consistente: um único curl
+  logo após o deploy pode observar o SHA anterior (prova: run `37453906796`
+  — deploy 11:04:31Z, smoke falho ~13 s depois, produção convergida depois).
+  O step de attestation agora usa `scripts/agent-release-smoke.mjs`: 404 →
+  FAIL imediato; erro de rede/non-JSON/status ≠ ready → retry; `ready` sem
+  `buildSha` → FAIL imediato (violação de contrato); `buildSha == expected` →
+  PASS; diferente → retry com backoff limitado (8 × 5 s ≈ 35 s) e FAIL com o
+  último SHA observado ao esgotar. Falha verdadeira continua falhando — o
+  retry só acomoda a convergência. Cadeia autoritativa preservada: HEAD
+  mergeado = run de CI = `BUILD_SHA` implantado = `buildSha` do `/health`.
+
+
 ## 12. Rastreabilidade da origem
 
 | Seções da origem | Destino / disposição |

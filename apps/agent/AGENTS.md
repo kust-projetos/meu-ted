@@ -447,12 +447,26 @@ metadados continua sendo um **miss**, nunca um hit cross-identity.
   ambiguidade recusa pedindo especificidade; respostas nunca carregam ids
   internos; o esquecimento aplica invalidate + cascade + tombstone. Duas
   travas destrutivas independentes: o ranking do recall
-  (`salience × recência + overlap × 0.5`) NÃO pode decidir o que é apagado
-  (`selectRelevantForgetCandidates` cobra cobertura dos tokens do ASSUNTO, sem
-  LLM), e a resolução NÃO trunca (o `limit` do recall corta ANTES do filtro e
+  (`salience × recência + overlap × 0.5`) NÃO pode decidir o que é apagado, e
+  a resolução NÃO trunca (o `limit` do recall corta ANTES do filtro e
   esconderia uma segunda memória plausível, transformando ambiguidade real em
   unicidade deletada); a resolução também não faz bookkeeping de
   `last_seen_at`.
+  **Só correspondência DISCRIMINANTE autoriza exclusão** (closure definitiva,
+  issue #96): a cobertura lexical ≥ 0.5 anterior ainda apagava a memória
+  errada ("esqueça minha preferência do banco Nubank" casava `minha`+`banco`
+  em "Minha conta favorita é Banco do Brasil" e rejeitava o alvo correto).
+  `extractForgetQueryDiscriminators` separa os tokens da query em comando
+  (`FORGET_QUERY_STOP_TOKENS`) + estrutural/genérico
+  (`FORGET_GENERIC_STRUCTURE_TOKENS`: possessivos e substantivos de
+  estrutura/domínio — banco, conta, cartão, categoria, preferência,
+  principal, favorita…; nomeiam a CATEGORIA, nunca o alvo) + discriminante
+  (o resto). Um candidato só é esquecível se contiver ≥ 1 discriminante;
+  query sem discriminante não apaga nada e o tool pede especificação
+  concreta; a lista genérica não é load-bearing para segurança (omissão →
+  ambiguidade/alvo único legítimo; excesso → "não encontrado"; ambos
+  conservadores). Residual fail-closed: tokens ≤ 2 chars ("XP") viram pedido
+  de especificação, nunca exclusão.
   Residual: `forgetMemory` no store é workspace-scoped — a fronteira de ator
   vive na RESOLUÇÃO; qualquer chamador futuro que passe um id de outra fonte
   precisaria endurecer o próprio store.

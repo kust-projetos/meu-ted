@@ -282,3 +282,34 @@ e fechados nas rodadas 1-2). Nenhum invariante do PR #90 foi enfraquecido; nenhu
 capacidade foi habilitada; nenhum gate mudou. O rollout continua gateado exatamente como
 na closure anterior (binding R2, credenciais+ZDR Groq, flags por ambiente, G07/G08,
 Release B, cutover).
+
+## 13. Pós-escrito (2026-10-06) — correção auditável do status de deploy
+
+O status deste relatório e o §9 afirmam "**nada deployado**". Essa afirmação era
+verdadeira PARA O ESCOPO da frase — nenhum flag de capacidade, nenhum binding,
+nenhuma env, nenhum gate — mas tornou-se literalmente INCORRETA para o deploy de
+código: após o merge do PR #92 (`0cb7a72`), os workflows automáticos de deploy
+rodaram em 2026-10-06. Sequência real, registrada sem maquiagem:
+
+1. CI main (`37453076114`) e PWA CI main (`37453076129`) — **verdes** (10:56:15Z).
+2. **PWA Deploy** (`37453906849`) — **verde**, com smoke verde.
+3. **Agent Deploy** (`37453677938`) — skip legítimo ("not ready": PWA CI ainda em
+   andamento no primeiro evento `workflow_run`).
+4. **Agent Deploy** (`37453906796`) — deploy EXECUTADO: `wrangler deploy --var
+   BUILD_SHA:0cb7a72…` publicou a versão às 11:04:31Z; `/health` e `/health/agent`
+   responderam `ready`; o step de attestation `buildSha == EXPECTED_SHA` — um único
+   `curl` sem retry, ~13 s após o upload — **falhou**, e o run terminou `failure`.
+
+Investigação posterior (issue #96) provou a root cause: **propagação de versão
+eventualmente consistente do Cloudflare Workers**. O `--var BUILD_SHA` funcionou — a
+produção convergiu para `0cb7a72` (verificado no `/health`: `buildSha=0cb7a72…`,
+`buildId=37453076114` = o run do CI main). Deploys anteriores haviam passado no smoke
+por sorte de timing; o de 2026-10-06 perdeu a corrida. A correção (smoke com retry
+bounded + testes de contrato) está na closure definitiva:
+[2026-10-06-ted-agent-a19-definitive-closure.md](2026-10-06-ted-agent-a19-definitive-closure.md).
+
+Portanto, lendo este relatório hoje: **houve deploy real do Agent e do PWA em
+2026-10-06** (código do PR #92 em produção, ainda com TODAS as capacidades
+default-off); o Agent Deploy só voltou a ser considerado validado após a attestation
+de SHA convergir — e o smoke do workflow só voltou a ser confiável com a correção da
+issue #96.
