@@ -460,6 +460,20 @@ closure (relatório:
   publicação expira os pendings do turno; redelivery nunca cria nem autoriza
   (dedupe + recibos de decisão); CAS com prova de autoria.
 
+### 11.7 Adendo (2026-10-07) — `forget_memory` transacional: atomicidade, idempotência e escopo de recibos (issue #102)
+
+Sem redesenhar o two-step (§11.6): a confirmação passa a executar numa ÚNICA
+transação SQLite (`executeConfirmedForgetTransaction`: revalidação final +
+claim + invalidação + cascade + `confirmed→executed` + recibo — COMMIT total
+ou ROLLBACK total; primitiva real `ctx.storage.transactionSync`, fallback
+`BEGIN IMMEDIATE` para testes). Recibos têm identidade canônica
+`(workspace, actor, intentionId)` (PK composta com migração preservadora),
+renewal de vencidos, e vínculo durável intenção→proposta — redelivery nunca
+re-resolve contra pending posterior (a confirmação autoriza UM preview
+específico). Cancel (`cancel+receipt`) e propose (`supersede+insert`) também
+atômicos. Relatório:
+[reports/2026-10-07-forget-transactional-closure.md](reports/2026-10-07-forget-transactional-closure.md).
+
 
 ## 12. Rastreabilidade da origem
 

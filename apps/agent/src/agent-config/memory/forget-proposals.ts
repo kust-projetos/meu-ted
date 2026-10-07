@@ -33,11 +33,14 @@
 import { randomUUID } from 'node:crypto';
 import {
   casForgetProposalStatus,
+  ensureForgetBinding,
   extractForgetQueryDiscriminators,
   findForgetDecision,
+  findForgetDecisionRow,
   forgetContentHash,
   FORGET_PROPOSAL_TTL_MS,
-  forgetMemory,
+  forgetMemoryInTransaction,
+  getForgetBinding,
   getForgetProposal,
   insertForgetProposal,
   isUnpublishedForgetExpiry,
@@ -47,6 +50,7 @@ import {
   makeForgetPreview,
   markForgetProposalExpired,
   recordForgetDecision,
+  runMemoryTransaction,
   selectRelevantForgetCandidates,
   supersedeActiveForgetProposals,
   type ForgetDecisionOutcome,
@@ -168,6 +172,26 @@ const readResultJson = (proposal: ForgetProposalRecord): Record<string, unknown>
 };
 
 /**
+ * Issue #102 — escrita de recibo FORA de transação é best-effort: a fonte da
+ * verdade do `executed` é o terminal da proposta + intentionId
+ * (`findTerminalByIntention`); o recibo é hint de replay. Se o storage
+ * rejeita o recibo, o estado destrutivo já está seguro (rollback ou terminal
+ * não-destrutivo) e repetir a MESMA intenção continua seguro — engolir o
+ * erro aqui nunca autoriza delete. Dentro da transação o recibo é estrito
+ * (faz parte do COMMIT).
+ */
+const recordDecisionBestEffort = (
+  sql: MemorySql,
+  input: { workspaceId: string; actorId: string; intentionId: string; outcome: ForgetDecisionOutcome; createdAt: string; nowMs: number; proposalId?: string | null },
+): void => {
+  try {
+    recordForgetDecision(sql, input);
+  } catch {
+    // Best-effort fora da transação (ver acima).
+  }
+};
+
+/**
  * Discovery (recall/ranking/discriminantes servem SÓ para localizar) +
  * persistência da proposta. NUNCA deleta. Nova solicitação substitui a
  * anterior (§22): pendings ativos do vínculo viram `superseded`.
@@ -198,7 +222,10 @@ export const proposeForgetMemory = (
       return { outcome: 'proposed', proposal: activePrior, message: renderForgetProposalQuestion(activePrior.memoryPreview) };
     }
     if (prior.length > 0) {
-      const executed = prior.some((p) => p.status === 'executed' || p.status === 'confirmed');
+      // Issue #102 — só `executed` é evidência de efeito: `confirmed` sem
+      // execução verificada (órfão legado de crash pré-transacional) nunca
+      // vira "já foi esquecido" em replay.
+      const executed = prior.some((p) => p.status === 'executed');
       return {
         outcome: 'already_handled',
         message: executed ? FORGET_COPY.alreadyDone : FORGET_COPY.noPending,
@@ -219,7 +246,8 @@ export const proposeForgetMemory = (
   }
 
   const target = relevant[0]!;
-  supersedeActiveForgetProposals(sql, input, nowIso);
+  // Issue #102 §23 — supersede da anterior + inserção da nova na MESMA
+  // transação: falha no meio nunca deixa `old superseded + new ausente`.
   const record: ForgetProposalRecord = Object.freeze({
     id: randomUUID(),
     workspaceId: input.workspaceId,
@@ -232,7 +260,10 @@ export const proposeForgetMemory = (
     createdAt: nowIso,
     expiresAt: new Date(nowMs + FORGET_PROPOSAL_TTL_MS).toISOString(),
   });
-  insertForgetProposal(sql, record);
+  runMemoryTransaction(sql, () => {
+    supersedeActiveForgetProposals(sql, input, nowIso);
+    insertForgetProposal(sql, record);
+  });
   emit('forget.proposed', auditBase(input, { memoryId: target.id, contentHash: record.contentHash }));
   return { outcome: 'proposed', proposal: record, message: renderForgetProposalQuestion(record.memoryPreview) };
 };
@@ -289,14 +320,139 @@ const findRecentTtlExpiry = (
 };
 
 /**
- * Confirmação em turno posterior: exige EXATAMENTE 1 pending válido,
- * revalida tudo (status/TTL/vínculo + memória viva + hash) e só então
- * executa `forgetMemory()` + valida o pós-estado. Qualquer falha = NO DELETE.
+ * Issue #102 — erro terminal DENTRO da transação confirmada. Qualquer throw
+ * aborta `runMemoryTransaction` com ROLLBACK total (nada apagado, proposta de
+ * volta a estado seguro); o chamador traduz em outcome + recibo FORA da
+ * transação (o recibo de falha não pode ser desfeito pelo rollback).
+ */
+export class ForgetTransactionError extends Error {
+  readonly outcome: 'none' | 'expired' | 'ambiguous' | 'revalidation_failed' | 'failed';
+  constructor(outcome: ForgetTransactionError['outcome'], message: string) {
+    super(message);
+    this.name = 'ForgetTransactionError';
+    this.outcome = outcome;
+  }
+}
+
+export type ConfirmedForgetResult = Readonly<{ cascaded: number }>;
+
+/**
+ * Issue #102 (P1) — operação autoritativa da execução confirmada. Encapsula
+ * na MESMA transação SQLite: revalidação final + claim `pending→confirmed` +
+ * invalidação do alvo + cascade + transição terminal `confirmed→executed` +
+ * recibo de decisão. Sucesso = COMMIT total; qualquer falha = ROLLBACK
+ * total. Invariante: ou tudo acontece, ou nada acontece — nunca estado
+ * intermediário (alvo apagado com UX de falha, cascade parcial, claim
+ * travado, `executed` sem recibo).
+ *
+ * Não-aninhável: `forgetMemoryInTransaction` e os CAS participam da
+ * transação externa via `exec` cru (o depth-guard de `runMemoryTransaction`
+ * impede nesting no primitivo do DO).
+ */
+export const executeConfirmedForgetTransaction = (
+  sql: MemorySql,
+  input: ForgetIdentity & { proposalId: string; intentionId: string; nowMs: number },
+): ConfirmedForgetResult => {
+  try {
+    return runMemoryTransaction(sql, () => {
+    const nowIso = new Date(input.nowMs).toISOString();
+    // 1. Leitura autoritativa do pending (vínculo exato, sem oráculo).
+    const proposal = getForgetProposal(sql, input.proposalId);
+    if (!proposal || proposal.workspaceId !== input.workspaceId || proposal.actorId !== input.actorId) {
+      throw new ForgetTransactionError('none', FORGET_COPY.noPending);
+    }
+    if (proposal.status !== 'pending') {
+      throw new ForgetTransactionError('none', proposal.status === 'executed' ? FORGET_COPY.alreadyDone : FORGET_COPY.noPending);
+    }
+    if (proposal.expiresAt <= nowIso) {
+      throw new ForgetTransactionError('expired', FORGET_COPY.expired);
+    }
+    // 2. Revalidação §17: a memória precisa existir, viva e idêntica —
+    // visível pelo MESMO filtro de escopo da resolução (sem oráculo
+    // cross-actor). Só leitura aqui; a marcação `expired` acontece fora da
+    // transação (não pode ser desfeita pelo rollback que ela mesma causaria).
+    const current = listForgetCandidates(sql, { workspaceId: input.workspaceId, actor: input.actorId }).find(
+      (item) => item.id === proposal.memoryId,
+    );
+    if (!current) {
+      throw new ForgetTransactionError('revalidation_failed', FORGET_COPY.changed);
+    }
+    if (forgetContentHash(current.content) !== proposal.contentHash) {
+      throw new ForgetTransactionError('revalidation_failed', FORGET_COPY.changed);
+    }
+    // 3. Claim atômico pending→confirmed: UMA vencedora (CAS com autoria).
+    const resultJson = JSON.stringify({ intentionId: input.intentionId, cascaded: 0 });
+    const claimed = casForgetProposalStatus(sql, {
+      id: proposal.id,
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      from: 'pending',
+      to: 'confirmed',
+      decidedAt: nowIso,
+      resultJson,
+    });
+    if (!claimed) {
+      throw new ForgetTransactionError('none', FORGET_COPY.noPending);
+    }
+    // 4. Invalidação do alvo + cascade (participam desta transação).
+    const { invalidated, cascaded } = forgetMemoryInTransaction(sql, {
+      workspaceId: input.workspaceId,
+      id: proposal.memoryId,
+    });
+    if (invalidated.length === 0) {
+      throw new ForgetTransactionError('failed', FORGET_COPY.failed);
+    }
+    // 5. Pós-validação §41: o alvo não pode continuar visível.
+    const stillVisible = listForgetCandidates(sql, { workspaceId: input.workspaceId, actor: input.actorId }).some(
+      (item) => item.id === proposal.memoryId,
+    );
+    if (stillVisible) {
+      throw new ForgetTransactionError('failed', FORGET_COPY.failed);
+    }
+    // 6. Transição terminal + recibo na MESMA transação: o COMMIT os persiste
+    // juntos. O recibo representa o CONSUMO da intenção de decisão (replay
+    // observa `already_done` sem mutar — §27/§28).
+    const done = casForgetProposalStatus(sql, {
+      id: proposal.id,
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      from: 'confirmed',
+      to: 'executed',
+      decidedAt: nowIso,
+      resultJson: JSON.stringify({ intentionId: input.intentionId, cascaded: cascaded.length }),
+    });
+    if (!done) {
+      throw new ForgetTransactionError('failed', FORGET_COPY.failed);
+    }
+    recordForgetDecision(sql, {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      intentionId: input.intentionId,
+      outcome: 'already_done',
+      createdAt: nowIso,
+      nowMs: input.nowMs,
+      proposalId: input.proposalId,
+    });
+    return { cascaded: cascaded.length };
+    });
+  } catch (err) {
+    // Falha NÃO-terminal (SQLite, cascade, CAS inesperado): o ROLLBACK já
+    // restaurou tudo — traduz em terminal `failed` para o recibo fail-closed.
+    if (err instanceof ForgetTransactionError) throw err;
+    throw new ForgetTransactionError('failed', FORGET_COPY.failed);
+  }
+};
+
+/**
+ * Confirmação em turno posterior: exige EXATAMENTE 1 pending válido e delega
+ * a execução a `executeConfirmedForgetTransaction` (fronteira ACID §6:
+ * COMMIT total ou ROLLBACK total). Qualquer falha = NO DELETE.
  *
  * Vínculo de consumo: o turno de decisão é consumido UMA vez — redelivery da
  * MESMA intenção nunca re-resolve contra pendings posteriores (reproduz o
- * outcome registrado). Só `executed` é evidência de efeito; claim sem
- * execução verificada libera o claim (`pending`) em vez de virar sucesso.
+ * outcome registrado). Só `executed` é evidência de efeito; falha com
+ * rollback restaura `pending` (nova confirmação com NOVA intenção pode
+ * repetir; a MESMA intenção encontra o recibo `failed`).
  */
 export const confirmForgetMemory = (
   sql: MemorySql,
@@ -312,7 +468,7 @@ export const confirmForgetMemory = (
   // (recibo): observar execução anterior também consome o turno — replay
   // nunca re-resolve contra pendings posteriores.
   if (intentionId && findTerminalByIntention(sql, input, intentionId)) {
-    if (intentionId) recordForgetDecision(sql, { ...input, intentionId, outcome: 'already_done', createdAt: nowIso });
+    if (intentionId) recordDecisionBestEffort(sql, { ...input, intentionId, outcome: 'already_done', createdAt: nowIso, nowMs });
     return { outcome: 'already_done', message: FORGET_COPY.alreadyDone };
   }
   // Turno de decisão já consumido sem executar: reproduz o outcome, sem
@@ -323,10 +479,53 @@ export const confirmForgetMemory = (
     // "este turno não executou nada" → none (nunca autoriza).
     if (prior && prior !== 'cancelled') return { outcome: prior, message: decisionOutcomeMessage(prior) };
     if (prior) return { outcome: 'none', message: FORGET_COPY.noPending };
+    // Issue #102 — vínculo durável intenção→proposta (tabela própria,
+    // permanente, sem TTL): a confirmação autoriza UM preview específico.
+    // Intenção vinculada (a QUALQUER proposta, ou ao sentinela '' =
+    // "resolveu contra nada") NUNCA re-resolve contra pendings posteriores —
+    // reproduz o consumo sem escrever nada. Defesa em profundidade: recibo
+    // físico com `proposal_id` também barra (cobre falha seletiva de escrita
+    // do vínculo quando o recibo persistiu). Sem vínculo e sem recibo
+    // vinculado (resolveu contra nada pré-closure), segue o renewal §15.
+    const bound = getForgetBinding(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
+    if (bound !== undefined) {
+      const row = findForgetDecisionRow(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
+      if (row) {
+        if (row.outcome === 'cancelled') return { outcome: 'none', message: FORGET_COPY.noPending };
+        return { outcome: row.outcome, message: decisionOutcomeMessage(row.outcome) } as ConfirmForgetOutcome;
+      }
+      return { outcome: 'failed', message: FORGET_COPY.failed };
+    }
+    const boundReceipt = findForgetDecisionRow(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
+    if (boundReceipt?.proposalId != null) {
+      if (boundReceipt.outcome === 'cancelled') return { outcome: 'none', message: FORGET_COPY.noPending };
+      return { outcome: boundReceipt.outcome, message: decisionOutcomeMessage(boundReceipt.outcome) } as ConfirmForgetOutcome;
+    }
   }
 
+  // Proposta vinculada a esta intenção quando a resolução alcança UMA
+  // proposta (o recibo carrega o vínculo mesmo em falha — redelivery futuro
+  // encontra o alvo original, nunca um pending posterior). NULL = sem alvo
+  // único ainda (none/ambiguous): o fail() vincula ao sentinela ''.
+  let boundProposalId: string | null = null;
   const fail = (outcome: Exclude<ForgetDecisionOutcome, 'cancelled'>, message: string): ConfirmForgetOutcome => {
-    if (intentionId) recordForgetDecision(sql, { ...input, intentionId, outcome, createdAt: nowIso });
+    if (intentionId) {
+      if (boundProposalId == null) {
+        // Consumo sem alvo único: vincula ao sentinela para que redelivery
+        // futuro recuse em vez de resolver contra pending posterior.
+        // Best-effort: falha aqui = storage quebrado = nenhum pending novo
+        // possível no mesmo motor (residual documentado).
+        try {
+          ensureForgetBinding(sql, { ...input, intentionId, proposalId: '', createdAt: nowIso });
+        } catch {
+          // Sem vínculo: fail-closed abaixo sem autorizar nada.
+        }
+      }
+      // Round 4: o recibo carrega o sentinela '' (distinto de NULL pré-closure):
+      // o fallback de barreira distingue "vinculado a nada" (recusa) de
+      // "nunca vinculado" (renewal §15-A livre).
+      recordDecisionBestEffort(sql, { ...input, intentionId, outcome, createdAt: nowIso, nowMs, proposalId: boundProposalId ?? '' });
+    }
     return { outcome, message } as ConfirmForgetOutcome;
   };
 
@@ -338,12 +537,35 @@ export const confirmForgetMemory = (
     const recent = latestTerminal(sql, input, nowMs);
     if (recent) {
       emit('forget.confirmed', auditBase(input, { observed: true, memoryId: recent.memoryId }));
-      if (intentionId) recordForgetDecision(sql, { ...input, intentionId, outcome: 'already_done', createdAt: nowIso });
+      if (intentionId) {
+        // Round 4: observar execução alheia também consome PERMANENTEMENTE —
+        // vincula à proposta observada, senão o replay vencido resolveria
+        // contra um pending posterior sem nunca ter confirmado aquele preview.
+        try {
+          ensureForgetBinding(sql, { ...input, intentionId, proposalId: recent.id, createdAt: nowIso });
+        } catch {
+          // Sem vínculo: fail-closed abaixo sem autorizar nada.
+        }
+        recordDecisionBestEffort(sql, { ...input, intentionId, outcome: 'already_done', createdAt: nowIso, nowMs, proposalId: recent.id });
+      }
       return { outcome: 'already_done', message: FORGET_COPY.alreadyDone };
     }
     // TTL vencido (§21): "sim" não executa, mas a resposta distingue
-    // expiração real de ausência de proposta.
-    if (findRecentTtlExpiry(sql, input, nowMs)) {
+    // expiração real de ausência de proposta. Vincula a intenção à proposta
+    // expirada resolvida: redelivery futuro nunca opera sobre pending
+    // posterior (review rodada 2). Sem vínculo aqui, o reuse expirado
+    // re-resolveria e apagaria o alvo novo.
+    const ttlExpired = findRecentTtlExpiry(sql, input, nowMs);
+    if (ttlExpired) {
+      if (intentionId) {
+        try {
+          ensureForgetBinding(sql, { ...input, intentionId, proposalId: ttlExpired.id, createdAt: nowIso });
+        } catch {
+          // Sem vínculo: fail-closed abaixo sem autorizar nada (o recibo
+          // com proposal_id abaixo continua barreira via fallback).
+        }
+      }
+      boundProposalId = ttlExpired.id;
       return fail('expired', FORGET_COPY.expired);
     }
     return fail('none', FORGET_COPY.noPending);
@@ -354,59 +576,34 @@ export const confirmForgetMemory = (
   }
 
   const proposal = active[0]!;
-  // Revalidação §17: a memória precisa existir, viva e idêntica — visível
-  // pelo MESMO filtro de escopo da resolução (sem oráculo cross-actor).
-  const current = listForgetCandidates(sql, { workspaceId: input.workspaceId, actor: input.actorId }).find(
-    (item) => item.id === proposal.memoryId,
-  );
-  if (!current) {
-    markForgetProposalExpired(sql, proposal.id, nowIso, 'revalidation_failed');
-    emit('forget.revalidation_failed', auditBase(input, { reason: 'target_gone', memoryId: proposal.memoryId }));
-    emit('forget.expired', auditBase(input, { memoryId: proposal.memoryId }));
-    return fail('revalidation_failed', FORGET_COPY.changed);
-  }
-  if (forgetContentHash(current.content) !== proposal.contentHash) {
-    markForgetProposalExpired(sql, proposal.id, nowIso, 'revalidation_failed');
-    emit('forget.revalidation_failed', auditBase(input, { reason: 'hash_mismatch', memoryId: proposal.memoryId }));
-    emit('forget.expired', auditBase(input, { memoryId: proposal.memoryId }));
-    return fail('revalidation_failed', FORGET_COPY.changed);
-  }
-
-  // Claim atômico pending→confirmed: UMA vencedora; a perdedora cai no
-  // already_done/none acima na releitura (nunca duplo delete).
-  const resultJson = JSON.stringify({ intentionId, cascaded: 0 });
-  const claimed = casForgetProposalStatus(sql, {
-    id: proposal.id,
-    workspaceId: input.workspaceId,
-    actorId: input.actorId,
-    from: 'pending',
-    to: 'confirmed',
-    decidedAt: nowIso,
-    resultJson,
-  });
-  if (!claimed) {
-    const reread = getForgetProposal(sql, proposal.id);
-    if (reread && reread.status === 'executed') {
-      if (intentionId) recordForgetDecision(sql, { ...input, intentionId, outcome: 'already_done', createdAt: nowIso });
-      return { outcome: 'already_done', message: FORGET_COPY.alreadyDone };
+  // Issue #102 — vínculo PRÉ-tentativa (tabela própria, commit independente,
+  // sobrevive ao rollback da execução): sem vínculo durável, sem autoridade
+  // destrutiva. Falha de escrita ou vínculo com outra proposta = fail-closed.
+  if (intentionId) {
+    try {
+      const winner = ensureForgetBinding(sql, { ...input, intentionId, proposalId: proposal.id, createdAt: nowIso });
+      if (winner !== proposal.id) return fail('failed', FORGET_COPY.failed);
+    } catch {
+      return fail('failed', FORGET_COPY.failed);
     }
-    emit('forget.revalidation_failed', auditBase(input, { reason: 'claim_lost', memoryId: proposal.memoryId }));
-    return fail('none', FORGET_COPY.noPending);
   }
-  emit('forget.confirmed', auditBase(input, { memoryId: proposal.memoryId }));
+  boundProposalId = proposal.id;
 
-  // Execução guardada: qualquer falha libera o claim de volta para `pending`
-  // (nova confirmação pode repetir); replay da MESMA intenção encontra o
-  // recibo `failed` registrado abaixo — nunca "já foi esquecido".
+  // Issue #102 — fronteira ACID: revalidação + claim + delete + cascade +
+  // terminal + recibo numa ÚNICA transação (COMMIT total ou ROLLBACK total).
+  // Defesa em profundidade para o fallback sem transação (mocks): se o
+  // rollback não cobriu um claim `confirmed` órfão, libera para `pending`.
   const releaseClaim = (reason: string): void => {
     try {
+      const reread = getForgetProposal(sql, proposal.id);
+      if (!reread || reread.status !== 'confirmed') return;
       casForgetProposalStatus(sql, {
         id: proposal.id,
         workspaceId: input.workspaceId,
         actorId: input.actorId,
         from: 'confirmed',
         to: 'pending',
-        decidedAt: new Date().toISOString(),
+        decidedAt: nowIso,
         resultJson: JSON.stringify({ intentionId, reason }),
       });
     } catch {
@@ -414,40 +611,42 @@ export const confirmForgetMemory = (
     }
     emit('forget.revalidation_failed', auditBase(input, { reason, memoryId: proposal.memoryId }));
   };
-  let invalidated: string[] = [];
-  let cascaded: string[] = [];
+
   try {
-    const result = forgetMemory(sql, { workspaceId: input.workspaceId, id: proposal.memoryId });
-    invalidated = result.invalidated;
-    cascaded = result.cascaded;
-  } catch {
+    const { cascaded } = executeConfirmedForgetTransaction(sql, {
+      ...input,
+      proposalId: proposal.id,
+      intentionId,
+      nowMs,
+    });
+    emit('forget.confirmed', auditBase(input, { memoryId: proposal.memoryId }));
+    emit('forget.executed', auditBase(input, { memoryId: proposal.memoryId, contentHash: proposal.contentHash }));
+    return { outcome: 'executed', cascaded, message: FORGET_COPY.executed(cascaded) };
+  } catch (err) {
+    if (!(err instanceof ForgetTransactionError)) throw err;
+    if (err.outcome === 'expired') {
+      markForgetProposalExpired(sql, proposal.id, nowIso, 'ttl', input);
+      emit('forget.expired', auditBase(input, { memoryId: proposal.memoryId }));
+      return fail('expired', FORGET_COPY.expired);
+    }
+    if (err.outcome === 'revalidation_failed') {
+      markForgetProposalExpired(sql, proposal.id, nowIso, 'revalidation_failed', input);
+      emit('forget.revalidation_failed', auditBase(input, { reason: 'target_changed', memoryId: proposal.memoryId }));
+      emit('forget.expired', auditBase(input, { memoryId: proposal.memoryId }));
+      return fail('revalidation_failed', FORGET_COPY.changed);
+    }
+    if (err.outcome === 'none') {
+      const reread = getForgetProposal(sql, proposal.id);
+      if (reread && reread.status === 'executed') {
+        if (intentionId) recordDecisionBestEffort(sql, { ...input, intentionId, outcome: 'already_done', createdAt: nowIso, nowMs });
+        return { outcome: 'already_done', message: FORGET_COPY.alreadyDone };
+      }
+      emit('forget.revalidation_failed', auditBase(input, { reason: 'claim_lost', memoryId: proposal.memoryId }));
+      return fail('none', FORGET_COPY.noPending);
+    }
     releaseClaim('execution_error');
     return fail('failed', FORGET_COPY.failed);
   }
-  if (invalidated.length === 0) {
-    releaseClaim('delete_noop');
-    return fail('failed', FORGET_COPY.failed);
-  }
-  // Pós-validação §41: o alvo não pode continuar visível.
-  const stillVisible = listForgetCandidates(sql, { workspaceId: input.workspaceId, actor: input.actorId }).some(
-    (item) => item.id === proposal.memoryId,
-  );
-  if (stillVisible) {
-    releaseClaim('post_state');
-    return fail('failed', FORGET_COPY.failed);
-  }
-
-  casForgetProposalStatus(sql, {
-    id: proposal.id,
-    workspaceId: input.workspaceId,
-    actorId: input.actorId,
-    from: 'confirmed',
-    to: 'executed',
-    decidedAt: new Date().toISOString(),
-    resultJson: JSON.stringify({ intentionId, cascaded: cascaded.length }),
-  });
-  emit('forget.executed', auditBase(input, { memoryId: proposal.memoryId, contentHash: proposal.contentHash }));
-  return { outcome: 'executed', cascaded: cascaded.length, message: FORGET_COPY.executed(cascaded.length) };
 };
 
 const decisionOutcomeMessage = (outcome: ForgetDecisionOutcome): string => {
@@ -479,10 +678,41 @@ export const cancelForgetMemory = (
       const message = prior === 'cancelled' ? FORGET_COPY.cancelled : decisionOutcomeMessage(prior);
       return { outcome: prior === 'cancelled' ? 'cancelled' : 'none', message };
     }
+    // Issue #102 — vínculo durável: cancelamento consumido (contra proposta
+    // ou sentinela '') nunca cancela proposta futura, mesmo com a janela
+    // vencida. Fallback no recibo com proposal_id (falha seletiva do vínculo).
+    const bound = getForgetBinding(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
+    if (bound !== undefined) {
+      const row = findForgetDecisionRow(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
+      if (row) {
+        const message = row.outcome === 'cancelled' ? FORGET_COPY.cancelled : decisionOutcomeMessage(row.outcome);
+        return { outcome: row.outcome === 'cancelled' ? 'cancelled' : 'none', message };
+      }
+      const target = getForgetProposal(sql, bound);
+      const result = target ? readResultJson(target) : {};
+      if (target?.status === 'cancelled' && result['intentionId'] === intentionId) {
+        return { outcome: 'cancelled', message: FORGET_COPY.cancelled };
+      }
+      return { outcome: 'none', message: FORGET_COPY.noPending };
+    }
+    const boundReceipt = findForgetDecisionRow(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
+    if (boundReceipt?.proposalId != null) {
+      const message = boundReceipt.outcome === 'cancelled' ? FORGET_COPY.cancelled : decisionOutcomeMessage(boundReceipt.outcome);
+      return { outcome: boundReceipt.outcome === 'cancelled' ? 'cancelled' : 'none', message };
+    }
   }
   const record = (outcome: 'none' | 'ambiguous' | 'cancelled'): void => {
     if (intentionId) {
-      recordForgetDecision(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId, outcome, createdAt: nowIso });
+      if (outcome !== 'cancelled') {
+        // Consumo sem alvo único: sentinela (ver fail() do confirm).
+        try {
+          ensureForgetBinding(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId, proposalId: '', createdAt: nowIso });
+        } catch {
+          // Sem vínculo: fail-closed sem autorizar nada.
+        }
+      }
+      // Round 4: sentinela '' no recibo (distinto de NULL): barreira permanente.
+      recordDecisionBestEffort(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId, outcome, createdAt: nowIso, nowMs, proposalId: '' });
     }
   };
 
@@ -497,18 +727,42 @@ export const cancelForgetMemory = (
     return { outcome: 'ambiguous', message: FORGET_COPY.multiplePending };
   }
   const proposal = active[0]!;
-  const cancelled = casForgetProposalStatus(sql, {
-    id: proposal.id,
-    workspaceId: input.workspaceId,
-    actorId: input.actorId,
-    from: 'pending',
-    to: 'cancelled',
-    decidedAt: nowIso,
-    resultJson: JSON.stringify({ reason: 'user_cancel', intentionId }),
-  });
-  if (!cancelled) return { outcome: 'none', message: FORGET_COPY.noPending };
+  // Issue #102 §22 — `cancel + receipt` na MESMA transação (+ vínculo
+  // pré-tentativa como no confirm: sem vínculo, sem autoridade).
+  if (intentionId) {
+    try {
+      const winner = ensureForgetBinding(sql, { ...input, intentionId, proposalId: proposal.id, createdAt: nowIso });
+      if (winner !== proposal.id) return { outcome: 'none', message: FORGET_COPY.noPending };
+    } catch {
+      return { outcome: 'none', message: FORGET_COPY.noPending };
+    }
+  }
+  // Issue #102 §22 — `cancel + receipt` na MESMA transação: o recibo faz
+  // parte da proteção contra replay, então nunca persiste `cancelled` sem
+  // recibo (nem recibo sem `cancelled`). Falha = nada aplicado (proposta
+  // segue `pending`, retry possível) e retorno `none` fail-closed.
+  try {
+    const cancelled = runMemoryTransaction(sql, () => {
+      const moved = casForgetProposalStatus(sql, {
+        id: proposal.id,
+        workspaceId: input.workspaceId,
+        actorId: input.actorId,
+        from: 'pending',
+        to: 'cancelled',
+        decidedAt: nowIso,
+        resultJson: JSON.stringify({ reason: 'user_cancel', intentionId }),
+      });
+      if (!moved) return undefined;
+      if (intentionId) {
+        recordForgetDecision(sql, { ...input, intentionId, outcome: 'cancelled', createdAt: nowIso, nowMs, proposalId: proposal.id });
+      }
+      return moved;
+    });
+    if (!cancelled) return { outcome: 'none', message: FORGET_COPY.noPending };
+  } catch {
+    return { outcome: 'none', message: FORGET_COPY.noPending };
+  }
   emit('forget.cancelled', auditBase(input, { memoryId: proposal.memoryId }));
-  if (intentionId) recordForgetDecision(sql, { ...input, intentionId, outcome: 'cancelled', createdAt: nowIso });
   return { outcome: 'cancelled', message: FORGET_COPY.cancelled };
 };
 

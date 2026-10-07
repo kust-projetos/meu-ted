@@ -471,6 +471,14 @@ metadados continua sendo um **miss**, nunca um hit cross-identity.
   Residual fail-closed: tokens ≤ 2 chars ("XP") viram pedido de
   especificação, nunca exclusão; `forgetMemory` no store é
   workspace-scoped — a fronteira de ator vive na resolução/proposta.
+- **`forget_memory` transacional (issue #102).** A execução confirmada roda
+  numa ÚNICA transação (`executeConfirmedForgetTransaction`: revalidação +
+  claim + invalidação + cascade + terminal + recibo — COMMIT ou ROLLBACK;
+  primitiva `ctx.storage.transactionSync` ligada em `memorySql()`). Recibos
+  com identidade `(workspace, actor, intentionId)` (PK composta + migração),
+  renewal de vencidos e vínculo durável intenção→proposta (`proposal_id`):
+  redelivery nunca re-resolve contra pending posterior. Cancel e propose
+  atômicos. Invariante: ou tudo acontece, ou nada acontece.
 - **A18 no runtime.** `loadUserSkills` carrega skills ativas do workspace e
   projeta via `toSelectableSkills` nos DOIS call sites de `assembleCognition`.
   Workspace sem skills: um SELECT e prompt byte a byte idêntico (sem leitura

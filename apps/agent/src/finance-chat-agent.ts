@@ -849,7 +849,22 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
 
   /** DO SQLite handle typed for the memory layer (null when unavailable). */
   private memorySql(): MemorySql | null {
-    return this.durableSql() as unknown as MemorySql | null;
+    const raw = this.durableSql();
+    if (!raw) return null;
+    // Issue #102 — o layer de memória precisa da fronteira atômica real do
+    // DO (`ctx.storage.transactionSync`) para o forget confirmado (mesmo
+    // padrão de `usageAttemptStorage` acima: exec + transactionSync, com o
+    // receiver preservado via closure). Sem o primitivo, o layer cai para
+    // `BEGIN IMMEDIATE` via `exec`/`runMemoryTransaction` (testes).
+    const storage = (this as unknown as { ctx?: DurableObjectState }).ctx?.storage as unknown as {
+      transactionSync?: <T>(fn: () => T) => T;
+    } | undefined;
+    const tx = storage?.transactionSync;
+    if (typeof tx !== 'function') return raw as unknown as MemorySql;
+    return {
+      exec: <T>(query: string, ...bindings: unknown[]): Iterable<T> => raw.exec<T>(query, ...bindings),
+      transactionSync: <T>(fn: () => T): T => (tx as <T>(fn: () => T) => T).call(storage, fn) as T,
+    };
   }
 
   /**
