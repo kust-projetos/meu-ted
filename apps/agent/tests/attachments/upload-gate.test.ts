@@ -114,6 +114,15 @@ describe("F1 PR-A — matriz zero-write do gate de upload (rota real do DO)", ()
     const res = await agent.fetch(uploadPng());
     expect(res.status).toBe(200);
   });
+
+  it("curinga '*' elege qualquer workspace/actor (decisão do operador: rollout geral)", async () => {
+    const { agent, bucket } = createAttachmentTestAgent({
+      extraEnv: { ...ENABLED, TED_ATTACHMENTS_COHORT: "*" },
+    });
+    const res = await agent.fetch(uploadPng());
+    expect(res.status).toBe(200);
+    expect(bucket.objects.size).toBe(1);
+  });
 });
 
 describe("F1 PR-A — unidade do gate (sem I/O)", () => {
@@ -190,11 +199,13 @@ describe("F1 PR-A — unidade do gate (sem I/O)", () => {
     ).toMatchObject({ code: "attachment_storage_unavailable", status: 503 });
   });
 
-  it("membro da coorte casa por workspace OU actor; estranho nega", () => {
+  it("membro da coorte casa por workspace OU actor; estranho nega; '*' casa com todos", () => {
     const env = { TED_ATTACHMENTS_COHORT: " ws-a ,actor-b " };
     expect(isAttachmentUploadCohortMember(env, "ws-a", "actor-x")).toBe(true);
     expect(isAttachmentUploadCohortMember(env, "ws-x", "actor-b")).toBe(true);
     expect(isAttachmentUploadCohortMember(env, "ws-x", "actor-x")).toBe(false);
+    expect(isAttachmentUploadCohortMember({ TED_ATTACHMENTS_COHORT: "*" }, "ws-x", "actor-x")).toBe(true);
+    expect(isAttachmentUploadCohortMember({ TED_ATTACHMENTS_COHORT: "*, ws-a" }, "ws-x", "actor-x")).toBe(true);
   });
 
   it("turnos LLM intactos: selectRolloutCohort comporta-se como antes", () => {
