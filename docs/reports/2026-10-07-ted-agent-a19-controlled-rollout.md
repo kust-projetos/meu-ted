@@ -152,3 +152,78 @@ Trilha preservada: #90 → #92 → #97/#98 → #100/#101 → #103/#104 → este 
 - **Tentativa live (sem tokens/valores):** comandos `npx wrangler r2 bucket list` → erro de autenticação código 10000; `wrangler secret list --name pi-finance-agent` → erro de autenticação código 10000 + token de acesso inválido código 9109. Inventário live pendente.
 - **Refs de código (só arquivo:linhas, sem mudança):** `apps/agent/src/attachments/storage.ts:getAttachmentStorage` (L319-323); `apps/agent/src/finance-chat-agent.ts:handleAttachmentUpload` L1970-2042; `apps/agent/src/finance-chat-agent.ts:Env` L199; `apps/agent/wrangler.jsonc` L1-21; `apps/agent/src/agent-config/web.ts` L168-175 + `resolveWebFetchAllowedHosts/parseWebFetchAllowedHosts`; `apps/agent/src/agent-config/tools.ts:buildExposedTools` L270-273; `apps/agent/src/observability/events.ts:emitSanitizedEvent`; `apps/api/src/audit/legacy-bearer-sink.ts`; `attachments/types.ts`; convenção `TED_AUDIO_STT_ENABLED=1`, `TED_VISION_ENABLED=1`, `TED_PDF_TEXT_ENABLED=1` (travas `=== '1'`); `TED_WEB_FETCH_ALLOWED_HOSTS`, `TED_DECISION_PROVIDER`, `TED_RISK_BASED_AUTOEXECUTE`; G07 (`docs/MEU-TED-SPEC-AGENTE-INTELIGENTE-V1.md:312-313`, abertas `:335`).
 - **Regra de ouro:** `infra provisionada != capability habilitada`; `repo config != live runtime`; `binding presence != passive infrastructure`.
+
+## Addendum 2026-10-07 — PR-B sink durável Agent-local (F1, issue #107)
+
+Implementação em working tree (branch do PR-B; **nada em produção, nenhuma
+capability ativada, nenhuma flag alterada** — A19 segue NOT READY).
+
+- **Módulo:** `apps/agent/src/attachments/observability.ts` — schema
+  idempotente + sanitizer/allowlist próprio + emissão best-effort + poda
+  TTL/cap + agregação G07. Wiring mínimo: `finance-chat-agent.ts` (emissões
+  no upload + `GET /rpc/attachments/observability` read-only) e
+  `attachments/ingest.ts` (repassa o sink ao sweep piggyback).
+- **Tabela** `attachment_observability_events` (DO SQLite; mapeamento do §6):
+  `ts, event, capability, count, success, latency_ms, storage_result,
+  provider_failure, fallback, workspace_id, actor_id, cohort, name_size_band`.
+  `count` = 1 por evento de upload, = deletados no cleanup; success rate =
+  `succeeded/(succeeded+failed)` só sobre outcomes terminais (denials ficam
+  em `byEvent`, fora do denominador do SLO). Sem `audit_logs` (mirror
+  fase-2), sem CF Analytics (binding novo + custo), sem `sanitizeForEvent`
+  cego (redacta workspace/actor/ids — o sink precisa deles como técnicos).
+- **Eventos:** `requested` (pós-gate-pass), `blocked` (gate 503 + validações
+  400/413), `succeeded/failed` (pós-ingest), `cleanup.succeeded/failed`
+  (sweep). Sink falhando nunca quebra o upload (fault injection em teste).
+- **Retenção:** 90 dias + teto de 5000 linhas, podados no caminho do sweep
+  existente (`pruneAttachmentObservabilityEvents`).
+- **Query de baseline G07** (via RPC read-only, escopo por workspace; exemplo
+  direto no SQLite do DO):
+  `SELECT event, capability, success, latency_ms, cohort
+     FROM attachment_observability_events WHERE workspace_id = ?
+     [AND capability = ?]` — agregação em JS
+  (`queryAttachmentObservabilityBaseline`): counts, success rate, P50/P95 de
+  latência por capability/cohort. Sem bytes/conteúdo/ref/filename (a tabela
+  nem tem essas colunas; nome cru vira só banda de tamanho).
+- **Validação local (repo, sem live):** suite nova
+  `tests/attachments/observability-sink.test.ts` 16/16 (RED antes do GREEN);
+  `tests/attachments` 233/233; suite Agent 1897 passed/1 skipped (skip
+  pré-existente); `typecheck` agent verde. Lint local (biome) não concluiu
+  (intermitente conhecido) — coberto pelo CI do PR.
+
+## Addendum 2026-10-07b — PR-B fixes do review REV-F1-PRB-SINK (COD-F1-PRB-FIX)
+
+Seis findings corrigidos com testes de regressão (TDD: RED 9 falhas →
+GREEN), sem ativar capability, sem binding R2, sem tocar API/PWA/workflows.
+Semânticas finais do sink (valem sobre o addendum anterior):
+
+- **Denominador (inalterado, reafirmado):** `successRate =
+  succeeded/(succeeded+failed)` — "sucesso condicionado à ingestão aceita".
+  Denials (`blocked`), `requested` e cleanup contam em `byEvent`, nunca no
+  denominador do SLO.
+- **Percentis terminais [P2-d]:** P50/P95 (global e por capability) cobrem SÓ
+  `succeeded`/`failed`; latência de `blocked` não entra. Denials têm métricas
+  próprias: `blockedCount`/`blockedRate` (global: `blocked/total`; por
+  capability: `blocked/total` da capability), fora do success rate.
+- **Escopo por ator [P2-b]:** a baseline filtra `(workspace_id, actor_id)` do
+  ator autenticado (índice `idx_attachment_obs_ws_actor`); não existe leitura
+  workspace-wide — baseline operacional ampla é passo futuro explícito, fora
+  deste PR.
+- **Leitura degradada [P2-c]:** escrita continua best-effort (upload nunca
+  quebra pelo sink), mas leitura com sink ilegível responde **503
+  `agent.observability_unavailable`** (nunca 200 com baseline vazia). Init do
+  schema marca pronto só após sucesso e retenta na próxima chamada; envelope
+  carrega `degraded: boolean` (tabela vazia saudável = `total 0, degraded
+  false`).
+- **Poda em todo caminho persistente [P2-a]:** `pruneAttachmentObservabilityEvents`
+  (TTL 90d + teto 5000) roda também nos 4 denials antecipados (gate, sem
+  storage, kind inválido, corpo ilegível); `options.maxRows` permite exercitar
+  o teto em teste sem 5000 linhas.
+- **Dedup rotulado [P3]:** hit de idempotência emite `succeeded/dedup_hit`
+  (antes: `written`); o sinal viaja por observer interno `onIngestOutcome` —
+  o contrato público (`AttachmentUploadResult`, 5 campos HTTP) está intacto.
+- **Gateway [P1]:** `GET /rpc/attachments/observability` incluído no
+  `isRestRpc` do Worker (GET-only imposto pelo DO; mesmos headers de
+  identidade stampados; teto 2 MB da rota JSON).
+- **Validação local:** `tests/attachments` 240/240; `typecheck` agent verde;
+  testes Worker→DO do gateway verdes. Suite Agent completa + `docs:lint` no
+  relatório do coder.
