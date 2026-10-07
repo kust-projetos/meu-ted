@@ -7,14 +7,15 @@ separando bloqueadores reais de backlog pós-v1.
 F0–F9). Esta revisão não muda a intenção — fixa baseline verificável, referencia
 as issues reais (#105, #107) e torna o DoD mensurável.
 
-## 1. Baseline normativa (revisão)
+## 1. Baseline normativa (revisão — corrigida pós-rebase: `main` remota = `71df281`)
 
 | Item | Valor vigente em 07/10/2026 |
 |---|---|
-| `main` | `e1cf1bb` (prod Cloudflare vigente, build `37631044197`) |
+| `main` (remota) | `71df281` (PR #106 mergeado durante esta sessão; a SPEC original estava CORRETA) |
 | API produção (Contabo) | `bd1ed9b` (independente, inalterada) |
-| Branch de trabalho | `docs/a19-rollout-inventory-fase-a` @ `3215ad6` (5 commits à frente de `main`) |
-| `71df281` citado na SPEC original | head original do PR #106 (docs-only A19 inventory); **stale** — não usar como âncora de attestation |
+| Cloudflare vigente (Agent+PWA) | `e1cf1bb` (build `37631044197`) — deploy anterior ao merge do #106 |
+| Branch de trabalho | `docs/a19-rollout-inventory-fase-a` rebased sobre `71df281` (PR #108) |
+| Nota de correção | revisão anterior desta SPEC chamou `71df281` de "stale" a partir de `main` local desatualizada (`e1cf1bb`) — ERRADO; vale o SHA vivo da remota |
 | PRs Dependabot abertos | #93 (agents 0.2.35→0.3.10), #94 (group 2 dirs) — ambos cobertos pela #87, deferir |
 | Issues abertas | #87 (épico SDK, POST-V1), #95 (keepalive spike, POST-V1), #105 (golden, GATE), #107 (A19 Phase A, blocker) |
 

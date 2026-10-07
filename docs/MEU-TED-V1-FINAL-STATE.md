@@ -8,9 +8,10 @@ encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 | Camada | SHA vigente | Evidência |
 |---|---|---|
 | API (Contabo) | `bd1ed9b` | `/health` + `/ready` verdes; `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` |
-| Agent (Cloudflare) | `e1cf1bb` (build `37631044197`) | `/health` ready + `buildSha` |
+| Agent (Cloudflare) | `e1cf1bb` (build `37631044197`) | `/health` ready + `buildSha` (deploy anterior ao merge do #106) |
 | PWA (Cloudflare) | `e1cf1bb` (build `37631044197`) | `/api/build-info` + `/api/backend/health` |
-| Branch de trabalho | `docs/a19-rollout-inventory-fase-a` @ `3215ad6` (5 à frente de `main@e1cf1bb`) | PR #106 follow-ups (docs-only, sem ativação) |
+| `main` (remota) | `71df281` (PR #106 mergeado em 07/10/2026) | correção: revisão anterior dizia `e1cf1bb` a partir de clone desatualizado |
+| Branch de trabalho | `docs/a19-rollout-inventory-fase-a` rebased sobre `71df281` | PR #108 (F1 PR-A/B/C + F4 Golden-start) |
 
 ## 2. Matriz de capabilities (config-de-deploy; live runtime = UNKNOWN sem credencial)
 
