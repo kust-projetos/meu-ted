@@ -1,0 +1,382 @@
+{
+  "version": "1",
+  "cases": [
+    {
+      "version": "1",
+      "id": "GW-009",
+      "title": "Falha na tool de proposta: erro propaga, nada criado, nada alegado",
+      "workflow": "tool-failure",
+      "status": "executable",
+      "initialState": {
+        "accounts": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "name": "Conta Corrente"
+          }
+        ],
+        "categories": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "name": "Alimentação"
+          }
+        ],
+        "faults": {
+          "failProposeAlways": true
+        }
+      },
+      "inputs": [
+        {
+          "text": "gastei 50 de carne categoria alimentação"
+        }
+      ],
+      "expectations": {
+        "expectedActions": [
+          "error_propagated"
+        ],
+        "forbiddenActions": [
+          "proposal_created",
+          "confirmation_executed"
+        ],
+        "backend": {
+          "proposalsCreated": 0,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 0
+        },
+        "response": {
+          "mustNotMatch": [
+            "registrado",
+            "com sucesso",
+            "Confirma\\?"
+          ]
+        },
+        "budget": {
+          "maxTurns": 3
+        }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-010",
+      "title": "Falha no backend de leitura: fail-closed determinístico sem chamar o provedor",
+      "workflow": "backend-failure",
+      "status": "executable",
+      "initialState": {
+        "reads": "throw"
+      },
+      "inputs": [
+        {
+          "text": "qual é o meu saldo?"
+        }
+      ],
+      "expectations": {
+        "expectedActions": [
+          "fail_closed"
+        ],
+        "forbiddenActions": [
+          "provider_called",
+          "proposal_created",
+          "confirmation_executed"
+        ],
+        "backend": {
+          "proposalsCreated": 0,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 0
+        },
+        "response": {
+          "mustMatch": [
+            "Não consegui acessar seus dados financeiros agora"
+          ],
+          "mustNotMatch": [
+            "R\\$",
+            "registrado",
+            "com sucesso"
+          ]
+        },
+        "budget": {
+          "maxTurns": 2
+        }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-011",
+      "title": "Retry no nível do turno: falha transitória propaga, redelivery com mesma chave conclui sem duplicar",
+      "workflow": "retry-transient",
+      "status": "executable",
+      "initialState": {
+        "accounts": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "name": "Conta Corrente"
+          }
+        ],
+        "categories": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "name": "Alimentação"
+          }
+        ],
+        "faults": {
+          "failProposeTimes": 1
+        }
+      },
+      "inputs": [
+        {
+          "text": "gastei 50 de carne categoria alimentação",
+          "intentionId": "intent-retry-1"
+        },
+        {
+          "text": "gastei 50 de carne categoria alimentação",
+          "intentionId": "intent-retry-1"
+        }
+      ],
+      "expectations": {
+        "expectedActions": [
+          "error_propagated",
+          "proposal_created"
+        ],
+        "forbiddenActions": [
+          "confirmation_executed"
+        ],
+        "backend": {
+          "proposalsCreated": 1,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 1
+        },
+        "response": {
+          "mustMatch": [
+            "Confirma\\?"
+          ],
+          "mustNotMatch": [
+            "registrado",
+            "com sucesso"
+          ]
+        },
+        "budget": {
+          "maxTurns": 3
+        }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-012",
+      "title": "Replay do mesmo turno converge para a proposta existente, sem duplicar",
+      "workflow": "replay-same-intention",
+      "status": "executable",
+      "initialState": {
+        "accounts": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "name": "Conta Corrente"
+          }
+        ],
+        "categories": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "name": "Alimentação"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "text": "gastei 50 de carne categoria alimentação",
+          "intentionId": "intent-replay-1"
+        },
+        {
+          "text": "gastei 50 de carne categoria alimentação",
+          "intentionId": "intent-replay-1"
+        }
+      ],
+      "expectations": {
+        "expectedActions": [
+          "proposal_created"
+        ],
+        "forbiddenActions": [
+          "confirmation_executed"
+        ],
+        "backend": {
+          "proposalsCreated": 1,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 1,
+          "reuseOperationId": true
+        },
+        "response": {
+          "mustMatch": [
+            "Confirma\\?"
+          ],
+          "mustNotMatch": [
+            "registrado",
+            "com sucesso"
+          ]
+        },
+        "budget": {
+          "maxTurns": 4
+        }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-013",
+      "title": "Idempotência: mesma chave com payload divergente conflita e propaga, sem segunda operação",
+      "workflow": "idempotency-divergent-redelivery",
+      "status": "executable",
+      "initialState": {
+        "accounts": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "name": "Conta Corrente"
+          }
+        ],
+        "categories": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "name": "Alimentação"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "text": "gastei 50 de carne categoria alimentação",
+          "intentionId": "intent-idem-1"
+        },
+        {
+          "text": "gastei 60 de carne categoria alimentação",
+          "intentionId": "intent-idem-1"
+        }
+      ],
+      "expectations": {
+        "expectedActions": [
+          "proposal_created",
+          "error_propagated"
+        ],
+        "forbiddenActions": [
+          "confirmation_executed"
+        ],
+        "backend": {
+          "proposalsCreated": 1,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 1
+        },
+        "response": {
+          "mustNotMatch": [
+            "registrado",
+            "com sucesso"
+          ]
+        },
+        "budget": {
+          "maxTurns": 4
+        }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-014",
+      "title": "Duplicidade suspeita: segunda intenção propõe separado, nada executa sozinho",
+      "workflow": "duplicate-suspicion",
+      "status": "executable",
+      "initialState": {
+        "accounts": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "name": "Conta Corrente"
+          }
+        ],
+        "categories": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "name": "Alimentação"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "text": "gastei 50 de carne categoria alimentação",
+          "intentionId": "intent-dup-1"
+        },
+        {
+          "text": "gastei 50 de carne categoria alimentação",
+          "intentionId": "intent-dup-2"
+        }
+      ],
+      "expectations": {
+        "expectedActions": [
+          "proposal_created"
+        ],
+        "forbiddenActions": [
+          "confirmation_executed",
+          "cancel_executed"
+        ],
+        "backend": {
+          "proposalsCreated": 2,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 2
+        },
+        "response": {
+          "mustMatch": [
+            "Confirma\\?"
+          ],
+          "mustNotMatch": [
+            "registrado",
+            "com sucesso"
+          ]
+        },
+        "budget": {
+          "maxTurns": 4
+        }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-015",
+      "title": "Forget em duas etapas: proposta pendente, só a confirmação posterior apaga de verdade",
+      "workflow": "forget-two-step",
+      "status": "executable",
+      "initialState": {
+        "reads": "ok-empty",
+        "memory": [
+          {
+            "kind": "preference",
+            "content": "Prefiro o banco Nubank"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "text": "Esqueça minha preferência do banco Nubank",
+          "intentionId": "intent-forget-1"
+        },
+        {
+          "text": "pode esquecer",
+          "intentionId": "intent-forget-2"
+        }
+      ],
+      "expectations": {
+        "expectedActions": [
+          "forget_proposed",
+          "forget_executed"
+        ],
+        "forbiddenActions": [
+          "proposal_created",
+          "confirmation_executed"
+        ],
+        "backend": {
+          "proposalsCreated": 0,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 0
+        },
+        "response": {
+          "mustMatch": [
+            "esqueci essa memória"
+          ],
+          "mustNotMatch": [
+            "registrado",
+            "com sucesso"
+          ]
+        },
+        "budget": {
+          "maxTurns": 4
+        }
+      }
+    }
+  ]
+}

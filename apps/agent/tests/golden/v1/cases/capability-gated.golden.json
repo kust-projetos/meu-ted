@@ -1,0 +1,134 @@
+{
+  "version": "1",
+  "cases": [
+    {
+      "version": "1",
+      "id": "GW-016",
+      "title": "Anexo genérico: ingestão exige gate de rollout + binding R2",
+      "workflow": "attachment-ingest",
+      "status": "pending-capability",
+      "pendingReason": {
+        "capability": "attachments.ingest",
+        "reason": "Gate da Fase A (issue #107) ainda OFF: sem TED_ATTACHMENTS_ENABLED=1, sem binding R2 e sem coorte, o upload é 503 fail-closed. O runner não simula bytes.",
+        "requires": ["TED_ATTACHMENTS_ENABLED=1", "binding TED_ATTACHMENTS_BUCKET no wrangler.jsonc", "coorte attachment-specific", "Fase A concluída"]
+      },
+      "initialState": {},
+      "inputs": [{ "text": "segue o comprovante", "attachments": [{ "name": "comprovante.pdf", "type": "application/pdf" }] }],
+      "expectations": {
+        "expectedActions": [],
+        "forbiddenActions": ["confirmation_executed"],
+        "backend": { "proposalsCreated": 0, "executionsSucceeded": 0, "maxLedgerEntries": 0 },
+        "response": {},
+        "budget": { "maxTurns": 2 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-017",
+      "title": "PDF textual: parse local atrás de flag default-off",
+      "workflow": "pdf-text",
+      "status": "pending-capability",
+      "pendingReason": {
+        "capability": "attachments.pdf_text",
+        "reason": "TED_PDF_TEXT_ENABLED ainda não é 1 neste ambiente; sem a flag nenhum extractor é construído e o PDF é unsupported fail-closed.",
+        "requires": ["TED_PDF_TEXT_ENABLED=1", "F2.1 (PDF) com canary aprovado"]
+      },
+      "initialState": {},
+      "inputs": [{ "text": "quanto deu a fatura no PDF?", "attachments": [{ "name": "fatura.pdf", "type": "application/pdf" }] }],
+      "expectations": {
+        "expectedActions": [],
+        "forbiddenActions": ["confirmation_executed"],
+        "backend": { "proposalsCreated": 0, "executionsSucceeded": 0, "maxLedgerEntries": 0 },
+        "response": {},
+        "budget": { "maxTurns": 2 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-018",
+      "title": "Áudio: STT exige chave + segunda trava + ZDR",
+      "workflow": "audio-stt",
+      "status": "pending-capability",
+      "pendingReason": {
+        "capability": "attachments.audio_stt",
+        "reason": "Sem GROQ_API_KEY provisionada, sem TED_AUDIO_STT_ENABLED=1 e sem ZDR elegível; áudio é unsupported fail-closed com zero egress.",
+        "requires": ["GROQ_API_KEY como secret", "TED_AUDIO_STT_ENABLED=1", "ZDR elegível na organização", "F2.2 (STT) com canary aprovado"]
+      },
+      "initialState": {},
+      "inputs": [{ "text": "transcreva o áudio", "attachments": [{ "name": "nota.m4a", "type": "audio/mp4" }] }],
+      "expectations": {
+        "expectedActions": [],
+        "forbiddenActions": ["confirmation_executed"],
+        "backend": { "proposalsCreated": 0, "executionsSucceeded": 0, "maxLedgerEntries": 0 },
+        "response": {},
+        "budget": { "maxTurns": 2 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-019",
+      "title": "Imagem: visão exige chave + segunda trava + ZDR, modelo a confirmar",
+      "workflow": "image-vision",
+      "status": "pending-capability",
+      "pendingReason": {
+        "capability": "attachments.vision",
+        "reason": "Sem GROQ_API_KEY provisionada, sem TED_VISION_ENABLED=1 e sem ZDR elegível; imagem é unsupported fail-closed com zero egress.",
+        "requires": ["GROQ_API_KEY como secret", "TED_VISION_ENABLED=1", "ZDR elegível na organização", "modelo default confirmado no rollout", "F2.3 (Vision) com canary aprovado"]
+      },
+      "initialState": {},
+      "inputs": [{ "text": "leia o valor da nota na foto", "attachments": [{ "name": "nota.jpg", "type": "image/jpeg" }] }],
+      "expectations": {
+        "expectedActions": [],
+        "forbiddenActions": ["confirmation_executed"],
+        "backend": { "proposalsCreated": 0, "executionsSucceeded": 0, "maxLedgerEntries": 0 },
+        "response": {},
+        "budget": { "maxTurns": 2 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-020",
+      "title": "Web: busca/fetch exigem provider com chave + allowlist de hosts",
+      "workflow": "web-search-fetch",
+      "status": "pending-capability",
+      "pendingReason": {
+        "capability": "web.search_fetch",
+        "reason": "Sem TAVILY_API_KEY nem BRAVE_API_KEY e sem TED_WEB_FETCH_ALLOWED_HOSTS; web é indisponível com mensagem graciosa. O runner nunca faz egress externo.",
+        "requires": ["TAVILY_API_KEY ou BRAVE_API_KEY", "TED_WEB_FETCH_ALLOWED_HOSTS aprovado", "F2.4 (Web) com inventário live + canary aprovado"]
+      },
+      "initialState": {},
+      "inputs": [{ "text": "qual a cotação do dólar hoje?" }],
+      "expectations": {
+        "expectedActions": [],
+        "forbiddenActions": ["confirmation_executed"],
+        "backend": { "proposalsCreated": 0, "executionsSucceeded": 0, "maxLedgerEntries": 0 },
+        "response": {},
+        "budget": { "maxTurns": 2 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-021",
+      "title": "Autoexecute low-risk: exige flag on + sink + telemetria de canary",
+      "workflow": "autoexecute-low-risk",
+      "status": "pending-capability",
+      "pendingReason": {
+        "capability": "autoexecute.low_risk",
+        "reason": "TED_RISK_BASED_AUTOEXECUTE está em shadow em produção; on exige sink persistente + telemetria undo-after-autoexecute + canary aprovado (F3). O runner nunca autoexecuta.",
+        "requires": ["TED_RISK_BASED_AUTOEXECUTE=on", "sink persistente de autoexecuções", "telemetria undo-after-autoexecute", "F3 com canary aprovado"]
+      },
+      "initialState": {
+        "accounts": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }],
+        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }]
+      },
+      "inputs": [{ "text": "gastei 20 de carne" }],
+      "expectations": {
+        "expectedActions": [],
+        "forbiddenActions": ["confirmation_executed"],
+        "backend": { "proposalsCreated": 0, "executionsSucceeded": 0, "maxLedgerEntries": 0 },
+        "response": {},
+        "budget": { "maxTurns": 2 }
+      }
+    }
+  ]
+}
