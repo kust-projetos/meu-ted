@@ -61,6 +61,25 @@ const splitTopLevelAnd = (raw: string): string[] => {
   return parts.filter((part) => part.length > 0);
 };
 
+/** Splits a DDL body on top-level commas (parens-aware: PK constraints intact). */
+const splitTopLevelCommas = (raw: string): string[] => {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const char of raw) {
+    if (char === '(') depth += 1;
+    if (char === ')') depth = Math.max(0, depth - 1);
+    if (char === ',' && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim().length > 0) parts.push(current);
+  return parts;
+};
+
 const stripOuterParens = (raw: string): string => {
   const text = raw.trim();
   if (!text.startsWith('(') || !text.endsWith(')')) return text;
@@ -168,11 +187,15 @@ export const createMemorySql = (): MemorySqlMock => {
         if (!name) return [] as T[];
         const body = q.slice(q.indexOf('(', q.indexOf(name)) + 1, q.lastIndexOf(')'));
         table(name);
-        for (const definition of body.split(',')) {
-          const column = definition.trim().split(/\s+/)[0];
-          if (!column) continue;
-          assertNotKeyword(column);
-          columns.get(name)!.add(column);
+        // Issue #102: definições separadas por vírgula DENTRO de parênteses
+        // (ex. `PRIMARY KEY (workspace_id, actor_id, intention_id)`) não são
+        // colunas — split paren-aware + skip de constraints de tabela.
+        for (const definition of splitTopLevelCommas(body)) {
+          const first = definition.trim().split(/\s+/)[0];
+          if (!first) continue;
+          if (/^(PRIMARY|UNIQUE|FOREIGN|CHECK|CONSTRAINT|KEY)$/i.test(first)) continue;
+          assertNotKeyword(first);
+          columns.get(name)!.add(first);
         }
         return [] as T[];
       }

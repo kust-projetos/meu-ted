@@ -19,6 +19,65 @@ import { containsCardPan, containsSensitiveDocument, scrubForPersistence } from 
 
 export type MemorySql = {
   exec<T = Record<string, unknown>>(query: string, ...bindings: unknown[]): Iterable<T>;
+  /**
+   * Issue #102 — fronteira atômica opcional (DO `ctx.storage.transactionSync`).
+   * Ausente nos mocks unitários e nos shims `node:sqlite` sem o primitivo:
+   * `runMemoryTransaction` cai para `BEGIN IMMEDIATE` via `exec` (nunca
+   * `BEGIN` cru em código de produção — `sql.exec` do DO rejeita statements
+   * de transação; só `transactionSync` é a primitiva real).
+   */
+  transactionSync?<T>(fn: () => T): T;
+};
+
+/**
+ * Issue #102 — executa `fn` dentro de UMA transação SQLite, com ROLLBACK em
+ * qualquer throw. Preferência: `transactionSync` (primitiva real do DO);
+ * fallback: `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK` via `exec` (cobre
+ * `node:sqlite` nos testes); último recurso: execução direta (mocks que
+ * rejeitam `BEGIN` — sem atomicidade ali; o rollback é provado na suite
+ * SQLite real `memory-forget-transactional.test.ts`).
+ *
+ * Não-aninhável por desenho (o DO não documenta nesting): chamada interna
+ * roda direto, coberta pela transação externa.
+ */
+let memoryTransactionDepth = 0;
+
+export const runMemoryTransaction = <T>(sql: MemorySql, fn: () => T): T => {
+  if (memoryTransactionDepth > 0) return fn();
+  if (typeof sql.transactionSync === 'function') {
+    memoryTransactionDepth += 1;
+    try {
+      return sql.transactionSync(fn);
+    } finally {
+      memoryTransactionDepth -= 1;
+    }
+  }
+  try {
+    sql.exec('BEGIN IMMEDIATE');
+  } catch (err) {
+    // Só a AUSÊNCIA do statement (mocks unitários) degrada para execução
+    // direta — sem atomicidade ali, provada na suite SQLite real. Falha REAL
+    // de abertura (lock, IO) propaga: nunca escrever sem a fronteira.
+    if (err instanceof Error && /unhandled query/i.test(err.message)) return fn();
+    throw err;
+  }
+  memoryTransactionDepth += 1;
+  let committed = false;
+  try {
+    const result = fn();
+    sql.exec('COMMIT');
+    committed = true;
+    return result;
+  } finally {
+    memoryTransactionDepth -= 1;
+    if (!committed) {
+      try {
+        sql.exec('ROLLBACK');
+      } catch {
+        // Best-effort: o erro original é o que importa.
+      }
+    }
+  }
 };
 
 export type MemoryKind = 'fact' | 'preference' | 'learning' | 'summary';
@@ -1220,8 +1279,14 @@ export const rememberCorrection = (
  * AC26b: forgetting is a CASCADE. The forgotten memory is invalidated and so
  * are every memory derived from it (transitively), each one marked with the
  * invalidation timestamp so recall can never return it again.
+ *
+ * Issue #102 — esta é a variante CRUA: só `exec`, sem abrir transação.
+ * O chamador que precisa de atomicidade com claim/transição/recibo usa
+ * `executeConfirmedForgetTransaction` (forget-proposals.ts), que envolve
+ * tudo em `runMemoryTransaction`. `forgetMemory` (abaixo) mantém o wrapper
+ * transacional para callers isolados.
  */
-export const forgetMemory = (
+export const forgetMemoryInTransaction = (
   sql: MemorySql,
   input: { workspaceId: string; id: string },
 ): { invalidated: string[]; cascaded: string[] } => {
@@ -1256,6 +1321,18 @@ export const forgetMemory = (
   }
   return { invalidated, cascaded };
 };
+
+/**
+ * Issue #102 — wrapper transacional de `forgetMemoryInTransaction` para
+ * callers isolados (fora do caminho confirmado, que já possui a transação
+ * externa via `executeConfirmedForgetTransaction` — o depth-guard de
+ * `runMemoryTransaction` impede nesting).
+ */
+export const forgetMemory = (
+  sql: MemorySql,
+  input: { workspaceId: string; id: string },
+): { invalidated: string[]; cascaded: string[] } =>
+  runMemoryTransaction(sql, () => forgetMemoryInTransaction(sql, input));
 
 /**
  * Issue #99 — `forget_memory` em duas etapas: NENHUMA heurística lexical
@@ -1326,16 +1403,111 @@ export const initializeForgetProposalSchema = (sql: MemorySql): void => {
     );
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS agent_memory_forget_proposals_context_idx ON agent_memory_forget_proposals (workspace_id, actor_id, status);`);
+  migrateForgetDecisionsToCompositeKey(sql);
+  sql.exec(`CREATE INDEX IF NOT EXISTS agent_memory_forget_decisions_context_idx ON agent_memory_forget_decisions (workspace_id, actor_id);`);
+  // Issue #102 (vínculo pré-tentativa) — tabela NOVA, sem migração: a
+  // autorização (intenção→proposta) vive separada dos recibos de replay, de
+  // modo que uma regressão de schema nos recibos nunca destrói o vínculo.
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS agent_memory_forget_decisions (
-      intention_id TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS agent_memory_forget_bindings (
       workspace_id TEXT NOT NULL,
       actor_id TEXT NOT NULL DEFAULT '',
-      outcome TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      intention_id TEXT NOT NULL,
+      proposal_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, actor_id, intention_id)
     );
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS agent_memory_forget_decisions_context_idx ON agent_memory_forget_decisions (workspace_id, actor_id);`);
+};
+
+/**
+ * Issue #102 (P2 uniqueness) — identidade canônica do receipt:
+ * `(workspace_id, actor_id, intention_id)`, nunca `intention_id` global.
+ *
+ * O schema do PR #100 usava `intention_id TEXT PRIMARY KEY`: dois atores do
+ * mesmo workspace com o mesmo `intentionId` (client-owned) colidiam com
+ * `UNIQUE constraint failed`, e o cancel — que move a proposta ANTES do
+ * insert do recibo — ficava parcialmente aplicado. A tabela já pode existir
+ * em produção, então a migração reescreve preservando linhas:
+ * `CREATE new → INSERT SELECT → DROP old → RENAME new`, tudo em UMA
+ * transação (a PK antiga garantia `intention_id` único global, logo nenhum
+ * triplo novo colide e nenhuma linha é descartada; contagem antes/depois é
+ * verificada e qualquer divergência aborta com ROLLBACK).
+ */
+const FORGET_DECISIONS_NEW_DDL = `
+    CREATE TABLE IF NOT EXISTS agent_memory_forget_decisions (
+      workspace_id TEXT NOT NULL,
+      actor_id TEXT NOT NULL DEFAULT '',
+      intention_id TEXT NOT NULL,
+      proposal_id TEXT,
+      outcome TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, actor_id, intention_id)
+    );
+  `;
+
+export const migrateForgetDecisionsToCompositeKey = (sql: MemorySql): void => {
+  let existingSql: string | null = null;
+  try {
+    const rows = [
+      ...sql.exec<Record<string, unknown>>(
+        `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_memory_forget_decisions'`,
+      ),
+    ];
+    existingSql = rows.length > 0 ? String(rows[0]!['sql'] ?? '') : null;
+  } catch {
+    // Motores sem `sqlite_master` legível (mocks unitários, que tampouco
+    // impõem PK): garante a tabela nova e retorna — sem crash, sem migração.
+    try {
+      sql.exec(FORGET_DECISIONS_NEW_DDL);
+    } catch {
+      // Best-effort no mock.
+    }
+    return;
+  }
+  if (existingSql === null) {
+    sql.exec(FORGET_DECISIONS_NEW_DDL);
+    return;
+  }
+  const normalized = existingSql.replace(/\s+/g, ' ').toUpperCase();
+  if (normalized.includes('PRIMARY KEY (WORKSPACE_ID')) {
+    // Defesa: schema composto SEM a coluna (nenhum caminho atual o cria,
+    // mas sem ela toda escrita de recibo falharia enquanto deletes
+    // funcionam — exatamente a falha seletiva que o vínculo precisa
+    // sobreviver). Aditiva, sem reescrever.
+    try {
+      sql.exec(`SELECT proposal_id FROM agent_memory_forget_decisions LIMIT 0`);
+    } catch {
+      sql.exec(`ALTER TABLE agent_memory_forget_decisions ADD COLUMN proposal_id TEXT`);
+    }
+    return;
+  }
+  runMemoryTransaction(sql, () => {
+    const before = [
+      ...sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM agent_memory_forget_decisions`),
+    ][0]?.n ?? -1;
+    sql.exec(`
+      CREATE TABLE agent_memory_forget_decisions_new (
+        workspace_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL DEFAULT '',
+        intention_id TEXT NOT NULL,
+        proposal_id TEXT,
+        outcome TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, actor_id, intention_id)
+      );
+    `);
+    sql.exec(`
+      INSERT INTO agent_memory_forget_decisions_new (workspace_id, actor_id, intention_id, proposal_id, outcome, created_at)
+      SELECT workspace_id, actor_id, intention_id, NULL, outcome, created_at FROM agent_memory_forget_decisions
+    `);
+    sql.exec(`DROP TABLE agent_memory_forget_decisions`);
+    sql.exec(`ALTER TABLE agent_memory_forget_decisions_new RENAME TO agent_memory_forget_decisions`);
+    const after = [
+      ...sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM agent_memory_forget_decisions`),
+    ][0]?.n ?? -2;
+    if (before !== after) throw new Error(`forget decisions migration lost rows (${before} → ${after})`);
+  });
 };
 
 /**
@@ -1349,24 +1521,156 @@ export const FORGET_DECISION_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type ForgetDecisionOutcome = 'none' | 'expired' | 'ambiguous' | 'revalidation_failed' | 'failed' | 'cancelled' | 'already_done';
 
+/**
+ * Issue #102 — vínculo durável intenção→proposta: a confirmação autoriza UM
+ * preview específico (hash-bound a UMA proposta). Sem vínculo, o reuse de um
+ * `intentionId` com recibo vencido re-resolvia contra um pending POSTERIOR e
+ * o deletava sem confirmação nova daquele preview. `proposal_id` registra
+ * contra QUAL proposta a intenção foi resolvida (NULL = resolveu contra
+ * nada — `none` sem pendings, `ambiguous`); o vínculo nunca expira mesmo
+ * quando a janela de replay (TTL) expira. Linhas pré-closure têm NULL
+ * (semântica transitória de renewal, §15-A).
+ */
+export type ForgetDecisionRecord = Readonly<{
+  workspaceId: string;
+  actorId: string;
+  intentionId: string;
+  proposalId: string | null;
+  outcome: ForgetDecisionOutcome;
+  createdAt: string;
+}>;
+
+const mapForgetDecisionRow = (row: Record<string, unknown>): ForgetDecisionRecord =>
+  Object.freeze({
+    workspaceId: String(row['workspace_id'] ?? ''),
+    actorId: String(row['actor_id'] ?? ''),
+    intentionId: String(row['intention_id'] ?? ''),
+    proposalId: row['proposal_id'] == null ? null : String(row['proposal_id']),
+    outcome: String(row['outcome'] ?? 'none') as ForgetDecisionOutcome,
+    createdAt: String(row['created_at'] ?? ''),
+  });
+
+/** Leitura FÍSICA do recibo (ignora TTL): base do vínculo intenção→proposta. */
+export const findForgetDecisionRow = (
+  sql: MemorySql,
+  input: { workspaceId: string; actorId: string; intentionId: string },
+): ForgetDecisionRecord | undefined => {
+  if (!input.intentionId) return undefined;
+  const rows = [...sql.exec<Record<string, unknown>>(
+    `SELECT * FROM agent_memory_forget_decisions WHERE intention_id = ? AND workspace_id = ? AND actor_id = ?`,
+    input.intentionId,
+    input.workspaceId,
+    input.actorId,
+  )];
+  const row = rows[0];
+  return row ? mapForgetDecisionRow(row) : undefined;
+};
+
+/**
+ * Issue #102 (vínculo pré-tentativa) — autorização durável intenção→proposta,
+ * em tabela PRÓPRIA: "esta intenção já resolveu contra ESTA proposta".
+ *
+ * - Primeira resolução vincula (INSERT); redelivery nunca re-vincula (o
+ *   primeiro vínculo vence — audita-se, não se reescreve);
+ * - UNIQUE em corrida (impossível em JS síncrono, defesa mesmo assim):
+ *   re-lê e devolve o vínculo vencedor;
+ * - Falha REAL de escrita propaga: sem vínculo durável não há autoridade
+ *   para a tentativa destrutiva (fail-closed no chamador).
+ */
+export const ensureForgetBinding = (
+  sql: MemorySql,
+  input: { workspaceId: string; actorId: string; intentionId: string; proposalId: string; createdAt: string },
+): string => {
+  const existing = [...sql.exec<Record<string, unknown>>(
+    `SELECT * FROM agent_memory_forget_bindings WHERE intention_id = ? AND workspace_id = ? AND actor_id = ?`,
+    input.intentionId,
+    input.workspaceId,
+    input.actorId,
+  )];
+  if (existing.length > 0) return String(existing[0]!['proposal_id'] ?? '');
+  try {
+    sql.exec(
+      `INSERT INTO agent_memory_forget_bindings (workspace_id, actor_id, intention_id, proposal_id, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      input.workspaceId,
+      input.actorId,
+      input.intentionId,
+      input.proposalId,
+      input.createdAt,
+    );
+    return input.proposalId;
+  } catch {
+    const winner = [...sql.exec<Record<string, unknown>>(
+      `SELECT * FROM agent_memory_forget_bindings WHERE intention_id = ? AND workspace_id = ? AND actor_id = ?`,
+      input.intentionId,
+      input.workspaceId,
+      input.actorId,
+    )];
+    if (winner.length > 0) return String(winner[0]!['proposal_id'] ?? '');
+    throw new Error('forget binding write failed');
+  }
+};
+
+/** Vínculo existente (undefined = intenção ainda livre). Sem TTL: permanente. */
+export const getForgetBinding = (
+  sql: MemorySql,
+  input: { workspaceId: string; actorId: string; intentionId: string },
+): string | undefined => {
+  if (!input.intentionId) return undefined;
+  const rows = [...sql.exec<Record<string, unknown>>(
+    `SELECT * FROM agent_memory_forget_bindings WHERE intention_id = ? AND workspace_id = ? AND actor_id = ?`,
+    input.intentionId,
+    input.workspaceId,
+    input.actorId,
+  )];
+  if (rows.length === 0) return undefined;
+  return String(rows[0]!['proposal_id'] ?? '');
+};
+
+/**
+ * Issue #102 (P2 renewal) — recibo com renovação: a identidade é
+ * `(workspace_id, actor_id, intention_id)`.
+ * - recibo ainda válido (dentro de `FORGET_DECISION_TTL_MS`): não altera;
+ * - recibo expirado: SUBSTITUI outcome + created_at — a nova decisão sempre
+ *   ganha uma janela de replay válida (o bug anterior retornava cedo e a
+ *   nova decisão ficava sem proteção, permitindo redelivery deletar um
+ *   pending posterior);
+ * - ausente: insere.
+ */
 export const recordForgetDecision = (
   sql: MemorySql,
-  input: { workspaceId: string; actorId: string; intentionId: string; outcome: ForgetDecisionOutcome; createdAt: string },
+  input: { workspaceId: string; actorId: string; intentionId: string; outcome: ForgetDecisionOutcome; createdAt: string; nowMs?: number; proposalId?: string | null },
 ): void => {
   if (!input.intentionId) return;
+  const nowMs = input.nowMs ?? Date.now();
+  const cutoff = new Date(nowMs - FORGET_DECISION_TTL_MS).toISOString();
   const existing = [...sql.exec<Record<string, unknown>>(
     `SELECT * FROM agent_memory_forget_decisions WHERE intention_id = ? AND workspace_id = ? AND actor_id = ?`,
     input.intentionId,
     input.workspaceId,
     input.actorId,
   )];
-  if (existing.length > 0) return;
+  if (existing.length > 0) {
+    const current = mapForgetDecisionRow(existing[0]!);
+    if (current.createdAt >= cutoff) return;
+    sql.exec(
+      `UPDATE agent_memory_forget_decisions SET outcome = ?, created_at = ?, proposal_id = ? WHERE intention_id = ? AND workspace_id = ? AND actor_id = ?`,
+      input.outcome,
+      input.createdAt,
+      input.proposalId ?? current.proposalId,
+      input.intentionId,
+      input.workspaceId,
+      input.actorId,
+    );
+    return;
+  }
   sql.exec(
-    `INSERT INTO agent_memory_forget_decisions (intention_id, workspace_id, actor_id, outcome, created_at)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO agent_memory_forget_decisions (intention_id, workspace_id, actor_id, proposal_id, outcome, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
     input.intentionId,
     input.workspaceId,
     input.actorId,
+    input.proposalId ?? null,
     input.outcome,
     input.createdAt,
   );
@@ -1509,7 +1813,7 @@ export const listActiveForgetProposals = (
   for (const proposal of listForgetProposalsForActor(sql, input)) {
     if (proposal.status !== 'pending') continue;
     if (proposal.expiresAt <= nowIso) {
-      markForgetProposalExpired(sql, proposal.id, nowIso);
+      markForgetProposalExpired(sql, proposal.id, nowIso, 'ttl', input);
       continue;
     }
     active.push(proposal);
@@ -1556,9 +1860,32 @@ export const casForgetProposalStatus = (
   return current && current.status === input.to && current.resultJson === input.resultJson ? current : undefined;
 };
 
-export const markForgetProposalExpired = (sql: MemorySql, id: string, decidedAt: string, reason = 'ttl'): void => {
+export const markForgetProposalExpired = (
+  sql: MemorySql,
+  id: string,
+  decidedAt: string,
+  reason = 'ttl',
+  scope?: { workspaceId: string; actorId: string },
+): void => {
   const current = getForgetProposal(sql, id);
   if (!current || current.status !== 'pending') return;
+  // Issue #102 — o vínculo participa do predicado quando conhecido (mesma
+  // disciplina do CAS canônico); sem scope, a releitura por id já valeu o
+  // vínculo no caminho legado.
+  if (scope && (current.workspaceId !== scope.workspaceId || current.actorId !== scope.actorId)) return;
+  if (scope) {
+    sql.exec(
+      `UPDATE agent_memory_forget_proposals SET status = ?, decided_at = ?, result_json = ? WHERE id = ? AND workspace_id = ? AND actor_id = ? AND status = ?`,
+      'expired',
+      decidedAt,
+      JSON.stringify({ reason }),
+      id,
+      scope.workspaceId,
+      scope.actorId,
+      'pending',
+    );
+    return;
+  }
   sql.exec(
     `UPDATE agent_memory_forget_proposals SET status = ?, decided_at = ?, result_json = ? WHERE id = ? AND status = ?`,
     'expired',
