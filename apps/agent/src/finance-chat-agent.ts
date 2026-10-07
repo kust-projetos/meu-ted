@@ -730,6 +730,32 @@ export const parseRelayAttemptReceipt = (body: unknown): RelayAttemptReceipt => 
 };
 
 /**
+ * Issue #102 — adapter transacional ÚNICO para o layer de memória: `exec` +
+ * `transactionSync` do DO. A primitiva real é obrigatória porque
+ * `sql.exec` do DO REJEITA statements de transação (`BEGIN`/`COMMIT`):
+ * sem ela, `runMemoryTransaction` cai no fallback e a migração de schema
+ * no boot QUEBRA em DOs reais com a tabela antiga (P1 do review do PR
+ * #103: init abortado no meio, sem `agent_memory_forget_bindings`, e todo
+ * confirm/cancel posterior falhando). Sem o primitivo, devolve só `exec`
+ * (testes/mocks — o fallback `BEGIN` cobre `node:sqlite`).
+ */
+export const toMemorySql = (storage: unknown): MemorySql | null => {
+  const handle = storage as {
+    sql?: { exec<T>(query: string, ...bindings: unknown[]): Iterable<T> };
+    transactionSync?: <T>(fn: () => T) => T;
+  } | undefined;
+  const sql = handle?.sql;
+  if (!sql || typeof sql.exec !== 'function') return null;
+  const tx = handle?.transactionSync;
+  if (typeof tx !== 'function') return sql as unknown as MemorySql;
+  const exec = sql.exec.bind(sql);
+  return {
+    exec: <T>(query: string, ...bindings: unknown[]): Iterable<T> => exec(query, ...bindings) as Iterable<T>,
+    transactionSync: <T>(fn: () => T): T => (tx as (fn: () => T) => T).call(handle, fn),
+  };
+};
+
+/**
  * Regra de ouro da camada cognitiva (ver agent-config/instructions.ts):
  * sempre utilize a ferramenta adequada em vez de responder "sem autorização"
  * ou "não tenho acesso" — a partir de dados reais do workspace via tools.
@@ -768,8 +794,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // Ignored if table already exists or mock storage
       }
       // Part B: memory, sessions, prefs and turn counters (idempotent).
+      // Issue #102: via `toMemorySql` (COM `transactionSync`) — o adapter
+      // cru quebrava a migração de recibos no boot de DOs com tabela antiga.
       try {
-        initializeMemorySchema(state.storage.sql as unknown as MemorySql);
+        const bootSql = toMemorySql(state.storage);
+        if (!bootSql) throw new Error('memory storage unavailable');
+        initializeMemorySchema(bootSql);
         initializeSessionSchema(state.storage.sql as unknown as MemorySql);
       } catch {
         // Memory is best-effort: turns work without it.
@@ -849,22 +879,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
 
   /** DO SQLite handle typed for the memory layer (null when unavailable). */
   private memorySql(): MemorySql | null {
-    const raw = this.durableSql();
-    if (!raw) return null;
-    // Issue #102 — o layer de memória precisa da fronteira atômica real do
-    // DO (`ctx.storage.transactionSync`) para o forget confirmado (mesmo
-    // padrão de `usageAttemptStorage` acima: exec + transactionSync, com o
-    // receiver preservado via closure). Sem o primitivo, o layer cai para
-    // `BEGIN IMMEDIATE` via `exec`/`runMemoryTransaction` (testes).
-    const storage = (this as unknown as { ctx?: DurableObjectState }).ctx?.storage as unknown as {
-      transactionSync?: <T>(fn: () => T) => T;
-    } | undefined;
-    const tx = storage?.transactionSync;
-    if (typeof tx !== 'function') return raw as unknown as MemorySql;
-    return {
-      exec: <T>(query: string, ...bindings: unknown[]): Iterable<T> => raw.exec<T>(query, ...bindings),
-      transactionSync: <T>(fn: () => T): T => (tx as <T>(fn: () => T) => T).call(storage, fn) as T,
-    };
+    // Issue #102 — via o adapter único (com a fronteira atômica real do DO).
+    return toMemorySql((this as unknown as { ctx?: DurableObjectState }).ctx?.storage);
   }
 
   /**

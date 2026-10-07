@@ -1159,8 +1159,7 @@ describe('issue #102 — uniqueness por actor/workspace (RED)', () => {
     ).toBe('none');
   });
 
-  it('migração composta sem coluna ganha ADD COLUMN (defesa)', () => {
-    const { sql } = createRealSql();
+  it('migração composta sem coluna ganha ADD COLUMN (defesa)', () => {    const { sql } = createRealSql();
     // Schema composto SEM proposal_id (nenhum caminho atual o cria; defesa).
     (sql as unknown as { exec: (q: string, ...b: unknown[]) => Iterable<never> }).exec(
       `CREATE TABLE agent_memory_forget_decisions (
@@ -1201,6 +1200,82 @@ describe('issue #102 — uniqueness por actor/workspace (RED)', () => {
       ),
     ][0]!;
     expect(String(row['proposal_id'])).toBe('p-x');
+  });
+
+  it('R15. migração via adapter DO (transactionSync; exec rejeita BEGIN)', () => {
+    // Regressão do P1 do review do PR #103: o boot passa o adapter COM
+    // transactionSync; o exec estilo DO rejeita statements de transação.
+    // Sem o primitivo no adapter, o BEGIN do fallback estouraria no DO real
+    // e o init abortaria sem criar `agent_memory_forget_bindings`.
+    const { db } = createRealSql();
+    const setup: SqlShim = {
+      exec<T>(query: string, ...bindings: unknown[]): Iterable<T> {
+        const statement = db.prepare(query);
+        if (/^\s*(SELECT|PRAGMA|WITH)/i.test(query)) return statement.all(...(bindings as never[])) as T[];
+        statement.run(...(bindings as never[]));
+        return [] as T[];
+      },
+    } as SqlShim;
+    setup.exec(
+      `CREATE TABLE agent_memory_forget_decisions (
+        intention_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL DEFAULT '',
+        outcome TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )`,
+    );
+    setup.exec(
+      `INSERT INTO agent_memory_forget_decisions (intention_id, workspace_id, actor_id, outcome, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      'do-old-1',
+      WS,
+      ACTOR,
+      'cancelled',
+      new Date(T0).toISOString(),
+    );
+    let txUsed = false;
+    const doLikeExec = <T>(query: string, ...bindings: unknown[]): Iterable<T> => {
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT)/i.test(query)) {
+        throw new Error('SqlStorage: transaction statements rejected, use transactionSync');
+      }
+      return (setup as unknown as { exec<T>(q: string, ...b: unknown[]): Iterable<T> }).exec<T>(query, ...bindings);
+    };
+    const adapter = {
+      exec: doLikeExec,
+      transactionSync: <T>(fn: () => T): T => {
+        txUsed = true;
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          const result = fn();
+          db.exec('COMMIT');
+          return result;
+        } catch (err) {
+          try {
+            db.exec('ROLLBACK');
+          } catch {
+            // Best-effort.
+          }
+          throw err;
+        }
+      },
+    };
+    expect(() => initializeMemorySchema(adapter as never)).not.toThrow();
+    expect(txUsed).toBe(true);
+    expect(findForgetDecision(adapter as never, { workspaceId: WS, actorId: ACTOR, intentionId: 'do-old-1' }, T0)).toBe(
+      'cancelled',
+    );
+    // Bindings utilizável no mesmo adapter (init não abortou no meio).
+    recordForgetDecision(adapter as never, {
+      workspaceId: WS,
+      actorId: ACTOR,
+      intentionId: 'do-new-1',
+      outcome: 'none',
+      createdAt: new Date(T0).toISOString(),
+    });
+    expect(findForgetDecision(adapter as never, { workspaceId: WS, actorId: ACTOR, intentionId: 'do-new-1' }, T0)).toBe(
+      'none',
+    );
   });
 });
 
