@@ -83,7 +83,7 @@ import {
 // F1 PR-A (issue #107): server-side gate do RPC de upload — binding E flag
 // `TED_ATTACHMENTS_ENABLED === '1'` E coorte `TED_ATTACHMENTS_COHORT`.
 // Recusa (503 tipado) acontece ANTES de qualquer leitura de corpo/bytes.
-import { attachmentUploadDenial } from "./attachments/upload-gate.js";
+import { attachmentUploadDenial, isAttachmentUploadAllowed } from "./attachments/upload-gate.js";
 // F1 PR-B (issue #107) — durable observability sink Agent-local (DO SQLite)
 // + baseline G07. Emissão best-effort no RPC de upload; leitura via RPC
 // read-only. Sem binding novo, sem flag nova, sem capability nova.
@@ -2309,6 +2309,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   ): Promise<{ states: TurnAttachmentState[]; datas: TurnAttachmentData[] }> {
     if (!Array.isArray(rawAttachments)) return { states: [], datas: [] };
     const storage = getAttachmentStorage(this.env);
+    // F1 PR-A fix (finding REV-PRC-GOLDEN P2) — zero-mutação global com o gate
+    // negado: o MESMO gate do upload (`isAttachmentUploadAllowed`) condiciona
+    // os deletes do caminho de chat. Com o gate negado, uma ref expirada da
+    // própria identidade é reportada `unavailable` SEM deletar o objeto (o
+    // delete é mutação R2); o expirado aguarda a capability ligada ou um
+    // janitor dedicado. Com o gate permitido, o valor é `true` e o
+    // comportamento atual é preservado byte a byte.
+    const attachmentDeleteAllowed = isAttachmentUploadAllowed(this.env, identity.workspaceId, identity.actorId);
     // A14: the audio processor replaces the `unsupported` entry ONLY when the
     // STT double lock is on (`GROQ_API_KEY` + `TED_AUDIO_STT_ENABLED`). The
     // registry — and the per-turn transcription budget carried by the processor
@@ -2381,6 +2389,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             ref: declaredRef,
             turnId,
             memo: this.attachmentProcessingMemo,
+            allowDelete: attachmentDeleteAllowed,
             ...(expectedKind !== undefined ? { expectedKind } : {}),
           })
         : { state: "unavailable", detail: "Não foi possível ler o anexo enviado.", ref: declaredRef };

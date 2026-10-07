@@ -17,7 +17,12 @@
  * objeto é escrito quando o gate recusa (zero-write). Nota honesta de escopo:
  * no caminho real o Worker faz buffer limitado do corpo (teto por rota) antes
  * de repassar ao DO — a garantia aqui é zero-write no bucket, não zero-read
- * end-to-end. O gate é SÓ do RPC de upload — os turnos
+ * end-to-end. O gate é o mesmo do RPC de upload E dos deletes (F1 PR-A fix,
+ * finding REV-PRC-GOLDEN P2): com o gate negado, a limpeza de ref expirada no
+ * chat (`resolveAttachmentRef` com `allowDelete: false`) e o sweep
+ * (`cleanupExpiredAttachments` com `allowDelete: false`) são pulados — zero
+ * MUTAÇÃO global (nem `put`, nem `delete`); expirados aguardam a capability
+ * ligada ou um janitor dedicado. Os turnos
  * LLM continuam regidos por `selectRolloutCohort` (llm/rollout.ts), intacto.
  */
 

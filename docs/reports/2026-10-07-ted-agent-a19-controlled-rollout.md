@@ -227,3 +227,59 @@ Semânticas finais do sink (valem sobre o addendum anterior):
 - **Validação local:** `tests/attachments` 240/240; `typecheck` agent verde;
   testes Worker→DO do gateway verdes. Suite Agent completa + `docs:lint` no
   relatório do coder.
+
+## Addendum 2026-10-07c — PR-C binding R2 com flag OFF (F1, issue #107)
+
+Implementação em working tree (branch do PR-C; **nada em produção, nenhuma
+capability ativada, nenhuma flag criada** — A19 segue NOT READY). Pré-requisitos
+PR-A (gate) e PR-B (sink) já mergeados, intocados.
+
+- **Manifesto:** `apps/agent/wrangler.jsonc` ganha SOMENTE
+  `r2_buckets: [{ binding: "TED_ATTACHMENTS_BUCKET",
+  bucket_name: "pi-finance-ted-attachments" }]`. `vars` intocada (só
+  `API_ORIGIN`), sem `TED_ATTACHMENTS_ENABLED`, sem coorte, sem binding `AI`,
+  DO único preservado. `wrangler deploy --dry-run` (sem credencial, sem
+  deploy) lista exatamente: DO `FINANCE_CHAT_AGENT` + R2
+  `TED_ATTACHMENTS_BUCKET (pi-finance-ted-attachments)` + `API_ORIGIN`.
+- **Prova `binding + OFF = zero write`:** suite nova
+  `tests/attachments/r2-binding-off-proof.test.ts` 4/4 (RED 2 falhas antes do
+  GREEN): binding declarado com nomes exatos + `vars` sem ativação + sem `AI` +
+  elo config→behavior (nome do binding lido DO manifesto, sem literal
+  duplicado; rota real com binding + flag OFF ⇒ 503
+  `attachment_upload_disabled`, `bucket.objects.size === 0`,
+  `bodyUsed === false` — caso (c) da matriz PR-A, agora ancorado no manifesto).
+- **Validação local:** `tests/attachments` 244/244; suite Agent completa 1911
+  passed/1 skipped (skip pré-existente, sem skip novo); `typecheck` agent
+  verde; `capabilities:check` verde (54/74); manifesto parseado também pelos
+  consumidores (`generate-documentation-facts`, só lê `durable_objects` —
+  intacto). Lint local (biome) não concluiu (intermitente conhecido) —
+  coberto pelo CI do PR.
+- **Residual:** `worker-configuration.generated.d.ts` não regenerado (fora do
+  escopo mínimo; `getAttachmentStorage` não depende do tipo gerado) —
+  regenerar com `wrangler types` em passo futuro, sem urgência.
+
+## Addendum 2026-10-07c-fix — PR-A fix: zero-mutação global com gate negado (finding P2 REV-PRC-GOLDEN)
+
+A prova PR-C acima cobria zero-write de *upload* com flag OFF, mas dois
+`bucket.delete` seguiam alcançáveis com o gate negando (binding presente,
+flag OFF): (a) limpeza de ref expirada no caminho de chat
+(`resolveAttachmentRef` apagava o objeto expirado da própria identidade);
+(b) sweep de cleanup (`cleanupExpiredAttachments`).
+
+- **Fix fail-closed (sem ativar capability, sem binding/vars novos):** o MESMO
+  gate PR-A (`isAttachmentUploadAllowed`) agora condiciona os deletes —
+  `ResolveInput`/`ProcessAttachmentInput`/`cleanupExpiredAttachments` ganham
+  `allowDelete?: boolean` (default omitido = comportamento atual); o caminho
+  de chat passa o valor do gate. Com o gate negado, NENHUMA mutação R2
+  executa (nem `put`, nem `delete`): ref expirada vira `unavailable` honesto
+  (resposta tipada inalterada) e o sweep é pulado sem I/O; expirados aguardam
+  a capability ligada ou um janitor dedicado. Com o gate permitido, tudo
+  preservado byte a byte (incluindo os deletes). O piggyback do
+  `ingestAttachment` herda o gate da rota de upload (que nega antes do
+  ingest) e segue intocado — contrato do ingest inalterado.
+- **Prova:** suite nova `tests/attachments/upload-gate-zero-mutation.test.ts`
+  4/4 (RED 3 falhas antes do GREEN: chat+OFF com storage instrumentado ⇒
+  0 deletes; sweep+OFF ⇒ `{scanned:0,deleted:0}` com expirados preservados;
+  `resolveAttachmentRef` com `allowDelete:false`; preservação com gate ON).
+- **Escopo honesto atualizado:** a garantia com OFF é zero-mutação global
+  (nem `put`, nem `delete`), não só zero-write de upload.

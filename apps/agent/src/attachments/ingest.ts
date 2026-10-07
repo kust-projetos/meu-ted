@@ -504,6 +504,16 @@ export type ResolveInput = {
   ref: string;
   expectedKind?: AttachmentKind;
   now?: number;
+  /**
+   * F1 PR-A fix (finding REV-PRC-GOLDEN P2) — zero-mutação global com o gate
+   * negado. Quando `false`, um objeto expirado é REPORTADO (`attachment_expired`)
+   * mas NÃO é deletado: o delete é uma mutação R2 e, com a capability desligada,
+   * nenhum `bucket.delete` pode executar. O objeto expirado aguarda a capability
+   * ligada ou um janitor dedicado. Default (omitido) preserva o comportamento
+   * atual byte a byte (deleta best-effort); o caminho de chat passa aqui o
+   * mesmo gate do upload (`isAttachmentUploadAllowed`).
+   */
+  allowDelete?: boolean;
 };
 
 /**
@@ -524,8 +534,13 @@ export const resolveAttachmentRef = async (input: ResolveInput): Promise<Resolve
     throw attachmentError('attachment_not_found', 'Anexo não encontrado.', 404);
   }
   if (found.record.expiresAt <= (input.now ?? Date.now())) {
-    // Best-effort delete of an expired object; never throws to the caller.
-    await storage.delete(ref).catch(() => undefined);
+    // F1 PR-A fix: com o gate negado (`allowDelete === false`) o objeto
+    // expirado NÃO é deletado — zero-mutação R2 com a capability desligada.
+    // A resposta tipada é inalterada (`attachment_expired`).
+    if (input.allowDelete !== false) {
+      // Best-effort delete of an expired object; never throws to the caller.
+      await storage.delete(ref).catch(() => undefined);
+    }
     throw attachmentError('attachment_expired', 'Anexo expirado.', 404);
   }
   if (input.expectedKind && found.record.kind !== input.expectedKind) {
@@ -564,8 +579,22 @@ export const cleanupExpiredAttachments = async (
      * A emissão nunca quebra o sweep.
      */
     observability?: { emit: (input: AttachmentObservabilityInput) => void };
+    /**
+     * F1 PR-A fix (finding REV-PRC-GOLDEN P2) — zero-mutação global com o gate
+     * negado. Quando `false`, o sweep é PULADO sem nenhum I/O no storage
+     * (nem list, nem deletes) e sem evento no sink: nada executou, então nada
+     * há a reportar. Os expirados aguardam a capability ligada ou um janitor
+     * dedicado. Default (omitido) preserva o comportamento atual byte a byte;
+     * o chamador passa aqui o mesmo gate do upload (`isAttachmentUploadAllowed`).
+     * O piggyback do `ingestAttachment` herda o gate da rota de upload (que
+     * nega antes do ingest), então segue intocado.
+     */
+    allowDelete?: boolean;
   },
 ): Promise<CleanupReport> => {
+  if (options?.allowDelete === false) {
+    return { scanned: 0, deleted: 0, failed: false };
+  }
   const notify = (input: AttachmentObservabilityInput): void => {
     try {
       options?.observability?.emit(input);
