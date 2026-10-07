@@ -1,7 +1,7 @@
 # Rollout controlado da A19 — inventário real + Fase A (2026-10-07)
 
-**HEAD inicial:** `e1cf1bb2058219bbd93f5fca7423a7cd68830762` (= `origin/main` no início da sessão de inventário, working tree clean).
-**HEAD final:** `<commit corretivo desta sessão, a registrar>` (branch `docs/a19-rollout-inventory-fase-a`; PR #106 aberto, mergeable, head `63bd555`, docs-only — este relatório é o único arquivo alterado).
+**HEAD inicial:** `e1cf1bb2058219bbd93f5fca7423a7cd68830762` (= `origin/main` no início da sessão de inventário, working tree clean). Corretivo-1 `cfbb7cd`.
+**HEAD final:** `<commit corretivo-2, a registrar>` (branch `docs/a19-rollout-inventory-fase-a`; PR #106 aberto, mergeable, head `cfbb7cd`, docs-only — este relatório + a entrada da sessão 2026-10-07b no `AGENTS.md` são os únicos arquivos alterados).
 **Issues/PRs:** #102 fechada; #103 (`bbdc948`) e #104 (`e1cf1bb`) mergeados. PR #106 aberto (docs-only, corretivo deste relatório).
 **Escopo:** inventário real + prontidão Fase A. Nenhuma flag alterada, nenhum secret provisionado ou lido, nenhum deploy executado, nenhum binding declarado.
 
@@ -16,9 +16,9 @@
 
 Deploy attestation preservado (sem alteração em `scripts/agent-release-smoke.mjs`).
 
-**CI remoto autoritativo (fonte de verdade para este PR docs-only):** `CI completo = PASS`, `run = 37649649680`, `Gate — all checks = success`, `PWA CI 37649649654 success`, ambos no mesmo SHA `63bd555`. Jobs com `success` no run `37649649680`: `Codex Broker — typecheck + test + build`, `Security — secrets + dependencies + containers`, `API — lint + typecheck + test`, `PWA — lint + typecheck + test`, `PWA — Cloudflare build + headers + JS budget`, `Public safety — secrets + prohibited metadata (strict)`, `Docker — API + Codex Broker images`, `Agent — typecheck + test + deterministic eval + architecture`, `Postgres — integration tests`, `Documentation — lint + facts + plans`, `Governance — ADR decision gate`, `Capability inventory — 72 registered tools classified`, `Write policy`, `Gate — all checks`.
+**CI remoto autoritativo (fonte de verdade para este PR docs-only):** `CI completo = PASS`, `run = 37654520900`, `Gate — all checks = success`, `PWA CI 37654521051 success`, ambos no SHA final `cfbb7cd`. Jobs com `success` no run `37654520900`: `Codex Broker — typecheck + test + build`, `Security — secrets + dependencies + containers`, `API — lint + typecheck + test`, `PWA — lint + typecheck + test`, `PWA — Cloudflare build + headers + JS budget`, `Public safety — secrets + prohibited metadata (strict)`, `Docker — API + Codex Broker images`, `Agent — typecheck + test + deterministic eval + architecture`, `Postgres — integration tests`, `Documentation — lint + facts + plans`, `Governance — ADR decision gate`, `Capability inventory — 72 registered tools classified`, `Write policy`, `Gate — all checks`. Histórico: run `37649649680` cobria o parent `63bd555`.
 
-**Gates locais (complementares, sem rerun só para satisfazer texto):** `capabilities:check` PASS (54 tools / 74 rows), `docs:lint` PASS (12 docs, 0 issues), `governance:check` PASS (sem mudança D01–D19). Não houve rerun local nesta sessão corretiva apenas para reescrever este parágrafo — o veredito de CI acima é o remoto autoritativo.
+**Gates locais (complementares):** `capabilities:check` PASS (54 tools / 74 rows), `docs:lint` PASS (12 docs, 0 issues), `governance:check` PASS (sem mudança D01–D19) — rodados no commit do hook; CI remoto do SHA final verde acima.
 
 ## 2. Por que produção está com opcionais desligados em config-de-deploy (prova limitada ao repo/workflow)
 
@@ -84,6 +84,8 @@ Princípio a implementar no PR técnico (PR A): `binding presente + flag server-
 
 Teste crítico do PR A: com `TED_ATTACHMENTS_BUCKET` configurado e flag `false`, `POST /rpc/attachments` autenticado retorna `503`, com zero bytes escritos e contagem de objetos inalterada.
 
+**Cohort gate por workspace/actor (exigência do PR A):** flag ON sozinha não basta — o RPC de upload deve checar coorte por workspace/actor via allowlist server-side; fora da coorte ⇒ `503` + zero write. Teste non-cohort obrigatório no PR A (workspace/actor fora da allowlist recebe `503`, sem escrita). Registro: `selectRolloutCohort` atual cobre só execução de turnos LLM, não o RPC de upload — o check attachment-specific é requisito novo do PR A, não comportamento existente.
+
 Regra: **`UI flag != capability gate`** — esconder o botão no PWA (`NEXT_PUBLIC_TED_ATTACHMENT_*`) é insuficiente; o bloqueio precisa ser server-side, com RPC direto também bloqueado.
 
 Estados observáveis alvo (proposta de observabilidade — o enum **ainda não existe no código**): `UNCONFIGURED` (sem bucket/flag) / `CONFIGURED_DISABLED` (bucket presente, flag OFF) / `CANARY` (bucket + flag ON em coorte restrita) / `ACTIVE` (generalizado) / `BLOCKED` (gate privacy/provider/infra). Mapeamento bucket×flag conforme a matriz acima; instrumentação a definir no PR B.
@@ -92,11 +94,11 @@ Estados observáveis alvo (proposta de observabilidade — o enum **ainda não e
 
 Ordem corrigida (uma fatia por vez; rollback = flag OFF / remover binding). **Removido o "binding primeiro"** da versão anterior:
 
-1. **Server-side capability gate + tests (PR A):** implementar gate `TED_ATTACHMENTS_ENABLED` (nome conceitual a confirmar contra a convenção `TED_*_ENABLED=1`: `TED_AUDIO_STT_ENABLED`, `TED_VISION_ENABLED`, `TED_PDF_TEXT_ENABLED` usam trava exata `=== '1'`) + matriz do §4.1 + teste crítico `503` com zero write. Sem binding nesta sessão/PR; sem flag nova neste PR docs-only.
+1. **Server-side capability gate + cohort check + tests (PR A):** implementar gate `TED_ATTACHMENTS_ENABLED` (nome conceitual a confirmar contra a convenção `TED_*_ENABLED=1`: `TED_AUDIO_STT_ENABLED`, `TED_VISION_ENABLED`, `TED_PDF_TEXT_ENABLED` usam trava exata `=== '1'`) + matriz do §4.1 + cohort check attachment-specific por workspace/actor (allowlist server-side; non-cohort ⇒ `503` zero-write) + teste crítico `503` com zero write + teste non-cohort obrigatório. Sem binding nesta sessão/PR; sem flag nova neste PR docs-only.
 2. **Durable observability sink / required telemetry (PR B; ou A+B se acoplados):** sink mínimo do §6 + eventos ainda inexistentes + baseline G07 antes de qualquer tráfego externo. Sem sink, canary `on` continua bloqueado.
 3. **Configure R2 binding com flag ainda OFF (PR C):** só então declarar `TED_ATTACHMENTS_BUCKET` em `wrangler.jsonc` + lifecycle/quota no dashboard, com a flag do PR A ainda OFF.
 4. **Provar binding+flag OFF permanece disabled:** RPC direto bloqueado, contagem de objetos inalterada, `503` observável — evidência antes de qualquer canary.
-5. **Operator-only canary:** só após (1)–(4) verdes + G07/G08 aplicáveis. Depois: PDF local como primeiro candidato (revalidação do §3), Groq (STT→vision) SOMENTE após ZDR evidenciado + secret via `wrangler secret put` + confirmação do modelo vision, decision/web após G07.
+5. **Operator-only canary (coorte explícita):** só após (1)–(4) verdes + G07/G08 aplicáveis, restrito à coorte explícita de workspace/actor do PR A. Depois: PDF local como primeiro candidato (revalidação do §3), Groq (STT→vision) SOMENTE após ZDR evidenciado + secret via `wrangler secret put` + confirmação do modelo vision, decision/web após G07.
 
 **Bloqueadores que exigem o operador (nada disto é executável por agente):**
 B1 bucket `pi-finance-ted-attachments` existe (ENAM/Standard/vazio/privado); **binding adiado para o PR C** (após gate + sink). B2 `GROQ_API_KEY` + prova ZDR — operador providencia (STT/vision seguem BLOCKED). B3 binding `AI` (clef indisponível por desenho); B4 sink durável p/ canary; B5 confirmação do modelo vision; B6 `TAVILY/BRAVE_API_KEY` se web entrar no escopo (live UNKNOWN até lá). Token Cloudflare local ausente — provisionamento é via dashboard ou com credencial fornecida pelo mecanismo oficial.
@@ -139,9 +141,14 @@ Trilha preservada: #90 → #92 → #97/#98 → #100/#101 → #103/#104 → este 
 - **P1 web search ⇒ `claim OFF removed; state now UNKNOWN until live secret inventory`.** A afirmação "web OFF" foi removida: `web_search` agora é `UNKNOWN` até inventário live de secrets (tentativa live nesta sessão falhou por auth — códigos acima, sem valores); `web_fetch` documentado separadamente (config-de-deploy OFF, live pendente).
 - **P1 R2 binding ⇒ `binding step postponed; server-side gate required first`.** O "binding primeiro" foi removido: ordem corrigida para gate (PR A) → sink (PR B) → binding com flag OFF (PR C) → prova disabled → canary operador-only; princípio e matriz do capability gate no §4.1.
 
+**Round-2 (review 5445520268 no PR #106, commit `cfbb7cd`) — 3 novos P1, respostas literais:**
+- `final-SHA CI runs 37654520900 + PWA 37654521051, Gate success, sem rerun-pendente` — §1 agora cita os runs do SHA final `cfbb7cd`; `37649649680` mantido só como histórico do parent `63bd555`; frase "sem rerun" removida.
+- `AGENTS.md session entry synced` — entrada da sessão 2026-10-07b reescrita (config-de-deploy OFF + runtime live UNKNOWN; tentativa live falhou por auth; ordem gate→sink→binding→prova→canary; CI runs citados; NOT READY).
+- `attachment cohort gate added to PR A plan` — §4.1 exige cohort check attachment-specific por workspace/actor (allowlist server-side; non-cohort ⇒ `503` zero-write) + teste non-cohort obrigatório no PR A; registrado que `selectRolloutCohort` atual cobre só turnos LLM, não o upload RPC; §5 passos 1 e 5 atualizados (PR A com cohort; canary = coorte explícita).
+
 ## Apêndice A — Evidências
 
-- **CI remoto:** run `37649649680` (`completed`, `success`, `headSha 63bd555`); jobs success listados no §1; PWA CI run `37649649654` success no mesmo SHA.
+- **CI remoto:** run `37654520900` (`completed`, `success`, `headSha cfbb7cd`, `Gate — all checks success`); PWA CI run `37654521051` success no mesmo SHA. Histórico: run `37649649680` cobria o parent `63bd555`.
 - **Tentativa live (sem tokens/valores):** comandos `npx wrangler r2 bucket list` → erro de autenticação código 10000; `wrangler secret list --name pi-finance-agent` → erro de autenticação código 10000 + token de acesso inválido código 9109. Inventário live pendente.
 - **Refs de código (só arquivo:linhas, sem mudança):** `apps/agent/src/attachments/storage.ts:getAttachmentStorage` (L319-323); `apps/agent/src/finance-chat-agent.ts:handleAttachmentUpload` L1970-2042; `apps/agent/src/finance-chat-agent.ts:Env` L199; `apps/agent/wrangler.jsonc` L1-21; `apps/agent/src/agent-config/web.ts` L168-175 + `resolveWebFetchAllowedHosts/parseWebFetchAllowedHosts`; `apps/agent/src/agent-config/tools.ts:buildExposedTools` L270-273; `apps/agent/src/observability/events.ts:emitSanitizedEvent`; `apps/api/src/audit/legacy-bearer-sink.ts`; `attachments/types.ts`; convenção `TED_AUDIO_STT_ENABLED=1`, `TED_VISION_ENABLED=1`, `TED_PDF_TEXT_ENABLED=1` (travas `=== '1'`); `TED_WEB_FETCH_ALLOWED_HOSTS`, `TED_DECISION_PROVIDER`, `TED_RISK_BASED_AUTOEXECUTE`; G07 (`docs/MEU-TED-SPEC-AGENTE-INTELIGENTE-V1.md:312-313`, abertas `:335`).
 - **Regra de ouro:** `infra provisionada != capability habilitada`; `repo config != live runtime`; `binding presence != passive infrastructure`.
