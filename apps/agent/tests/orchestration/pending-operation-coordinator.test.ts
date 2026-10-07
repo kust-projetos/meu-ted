@@ -12,6 +12,7 @@ import {
   type AuthenticatedIdentity,
 } from '../../src/orchestration/conversation-orchestrator.js';
 import {
+  NO_PENDING_CANCEL_TEXT,
   PendingOperationCoordinator,
   isRetryText,
 } from '../../src/orchestration/pending-operation-coordinator.js';
@@ -353,7 +354,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
     expect(fake.events).toEqual(['listActive']);
   });
 
-  it('cancel with zero ops and an active draft: draft discarded, cancelled reply', async () => {
+  it('cancel with zero ops and an active draft: draft discarded, deterministic no-op copy (INV-03)', async () => {
     const fake = makeFakeApprovalApi([]);
     const store = new InMemoryMutationDraftStore();
     const draft = buildDraftRecord({
@@ -370,7 +371,8 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
     const orchestrator = setup(fake, store);
 
     const result = await turn(orchestrator, 'cancela', 'intent-cancel-draft-1');
-    expect(result.response?.text).toBe('Operação cancelada com segurança.');
+    expect(result.response?.text).toBe(NO_PENDING_CANCEL_TEXT);
+    expect(result.response?.text).not.toMatch(/cancelada|registrado|com sucesso/);
     expect(store.get(draft.draftId)?.status).toBe('discarded');
     expect(fake.events).not.toContain('confirm:op-1');
   });
@@ -440,7 +442,8 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
     const orchestrator = new ConversationOrchestrator({ mutationApiClient: api, draftStore: store });
 
     const result = await turn(orchestrator, 'cancela', 'intent-cancel-proposing-2');
-    expect(result.response?.text).toBe('Operação cancelada com segurança.');
+    expect(result.response?.text).toBe(NO_PENDING_CANCEL_TEXT);
+    expect(result.response?.text).not.toMatch(/cancelada|registrado|com sucesso/);
     expect(store.get(draft.draftId)?.status).toBe('discarded');
   });
 
