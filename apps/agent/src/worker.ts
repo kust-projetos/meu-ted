@@ -348,7 +348,7 @@ export default {
       // T4.3 (SPEC section 11 E4): the retired legacy-agent migration gate
       // is gone — the canonical RPC surface talks to FinanceChatAgent
       // directly (INV-07, single runtime).
-      const isRestRpc = subPath === "/rpc/chat" || subPath === "/rpc/history" || subPath === "/rpc/session/new" || subPath === "/rpc/memory/prefs" || subPath === "/rpc/pending-operations/active" || subPath === "/rpc/undo/active" || subPath === "/rpc/undo/decision" || subPath === "/rpc/attachments" || /^\/rpc\/undo\/[^/]+\/verify-target$/.test(subPath) || /^\/rpc\/pending-operations\/[^/]+\/decision$/.test(subPath);
+      const isRestRpc = subPath === "/rpc/chat" || subPath === "/rpc/history" || subPath === "/rpc/session/new" || subPath === "/rpc/memory/prefs" || subPath === "/rpc/pending-operations/active" || subPath === "/rpc/undo/active" || subPath === "/rpc/undo/decision" || subPath === "/rpc/attachments" || subPath === "/rpc/attachments/observability" || /^\/rpc\/undo\/[^/]+\/verify-target$/.test(subPath) || /^\/rpc\/pending-operations\/[^/]+\/decision$/.test(subPath);
 
       if (isRestRpc) {
         const financeAgent = env.FINANCE_CHAT_AGENT.get(env.FINANCE_CHAT_AGENT.idFromName(canonicalId));

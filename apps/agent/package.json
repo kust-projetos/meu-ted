@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "test": "vitest run",
+    "test:golden": "vitest run tests/golden",
     "lint": "biome check src tests",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",

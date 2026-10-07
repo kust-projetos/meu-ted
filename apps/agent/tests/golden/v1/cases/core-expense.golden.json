@@ -1,0 +1,103 @@
+{
+  "version": "1",
+  "cases": [
+    {
+      "version": "1",
+      "id": "GW-001",
+      "title": "Caminho feliz canônico: gastei 50 de carne vira proposta, nunca execução direta",
+      "workflow": "expense-happy-path",
+      "status": "executable",
+      "initialState": {
+        "accounts": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }],
+        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }]
+      },
+      "inputs": [{ "text": "gastei 50 de carne categoria alimentação" }],
+      "expectations": {
+        "expectedActions": ["proposal_created"],
+        "forbiddenActions": ["confirmation_executed", "cancel_executed", "forget_proposed", "forget_executed"],
+        "backend": { "proposalsCreated": 1, "executionsSucceeded": 0, "maxLedgerEntries": 1 },
+        "response": { "mustMatch": ["Confirma\\?"], "mustNotMatch": ["registrado", "com sucesso"] },
+        "budget": { "maxTurns": 3 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-002",
+      "title": "Typo suportado no verbo (gstei) roteia como o canônico, sem adivinhar valor",
+      "workflow": "expense-typo",
+      "status": "executable",
+      "initialState": {
+        "accounts": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }],
+        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }]
+      },
+      "inputs": [{ "text": "gstei 50 de carne categoria alimentação" }],
+      "expectations": {
+        "expectedActions": ["proposal_created"],
+        "forbiddenActions": ["confirmation_executed", "cancel_executed"],
+        "backend": { "proposalsCreated": 1, "executionsSucceeded": 0, "maxLedgerEntries": 1 },
+        "response": { "mustMatch": ["Confirma\\?"], "mustNotMatch": ["registrado", "com sucesso"] },
+        "budget": { "maxTurns": 3 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-003",
+      "title": "Fragmento completa o rascunho ativo: pergunta a categoria, resposta vira proposta",
+      "workflow": "fragmented-draft-continuation",
+      "status": "executable",
+      "initialState": {
+        "accounts": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }],
+        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }]
+      },
+      "inputs": [
+        { "text": "gastei 50 de carne", "intentionId": "intent-frag-1" },
+        { "text": "categoria alimentação", "intentionId": "intent-frag-2" }
+      ],
+      "expectations": {
+        "expectedActions": ["clarification_asked", "proposal_created"],
+        "forbiddenActions": ["confirmation_executed"],
+        "backend": { "proposalsCreated": 1, "executionsSucceeded": 0, "maxLedgerEntries": 1 },
+        "response": { "mustMatch": ["Confirma\\?"], "mustNotMatch": ["registrado", "com sucesso"] },
+        "budget": { "maxTurns": 4 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-004",
+      "title": "Valor ambíguo (uns 80) para antes de qualquer leitura autoritativa",
+      "workflow": "missing-fields",
+      "status": "executable",
+      "initialState": {
+        "accounts": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }],
+        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }]
+      },
+      "inputs": [{ "text": "gastei uns 80 no mercado" }],
+      "expectations": {
+        "expectedActions": ["clarification_asked"],
+        "forbiddenActions": ["proposal_created", "confirmation_executed"],
+        "backend": { "proposalsCreated": 0, "executionsSucceeded": 0, "maxLedgerEntries": 0 },
+        "response": { "mustMatch": ["valor"], "mustNotMatch": ["registrado", "com sucesso"] },
+        "budget": { "maxTurns": 2 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-022",
+      "title": "Valor alto continua manual: propõe, nunca executa sem confirmação",
+      "workflow": "high-risk-manual",
+      "status": "executable",
+      "initialState": {
+        "accounts": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }],
+        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }]
+      },
+      "inputs": [{ "text": "gastei 600 de carne categoria alimentação" }],
+      "expectations": {
+        "expectedActions": ["proposal_created"],
+        "forbiddenActions": ["confirmation_executed", "cancel_executed"],
+        "backend": { "proposalsCreated": 1, "executionsSucceeded": 0, "maxLedgerEntries": 1 },
+        "response": { "mustMatch": ["Confirma\\?"], "mustNotMatch": ["registrado", "com sucesso"] },
+        "budget": { "maxTurns": 3 }
+      }
+    }
+  ]
+}

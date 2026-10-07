@@ -300,7 +300,12 @@ describe("A19 — cursor de varredura: a inanição determinística dos expirado
 
 describe("A19 — o DO persiste o cursor do sweep e o apaga no wrap", () => {
   it("(7) upload persiste o cursor truncado; o upload seguinte conclui e limpa", async () => {
-    const { agent, bucket, kv } = createAttachmentTestAgent({ withKvStorage: true });
+    // F1 PR-A: a rota de upload exige o gate (flag + coorte) — opt-in
+    // explícito; o fail-closed default-off é pinado em upload-gate.test.ts.
+    const { agent, bucket, kv } = createAttachmentTestAgent({
+      withKvStorage: true,
+      extraEnv: { TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: "ws-1,actor-1" },
+    });
     if (!kv) throw new Error("withKvStorage: true must return the kv map");
     const objects = bucket.objects;
     const storage = getAttachmentStorage((agent as unknown as { env: unknown }).env)!;

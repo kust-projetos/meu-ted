@@ -1,6 +1,6 @@
 # Meu Ted — Visão de produto
 
-**Last verified:** 2026-09-13
+**Last verified:** 2026-10-07
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 ## Propósito
@@ -27,6 +27,15 @@ vinculada; a interface informa sucesso exclusivamente após `succeeded`.
 Memória conversacional melhora contexto, mas nunca substitui saldos, extratos,
 identidade ou permissões atuais. Na ausência de evidência, confirmação ou
 capability, o TED falha fechado e pede esclarecimento.
+
+## Autorização TED por risco (V5) e topologia vigente
+
+A confirmação humana é condicional: somente `transactions.expense.create` e
+`transactions.income.create` de baixo risco podem autoexecutar (valores a
+partir de R$ 500 seguem manuais). `TED_RISK_BASED_AUTOEXECUTE` aceita
+`off|shadow|on` (default `off`); `shadow` roda em produção desde 2026-10-02.
+Topologia vigente: API autoritativa + PostgreSQL 15 na VPS Contabo; PWA e
+Agent TED na Cloudflare.
 
 ## Recursos
 

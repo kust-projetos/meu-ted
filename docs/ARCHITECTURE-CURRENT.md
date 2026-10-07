@@ -1,6 +1,6 @@
 # Meu Ted — Arquitetura atual
 
-**Last verified:** 2026-10-04
+**Last verified:** 2026-10-07
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 ## Topologia implementada
@@ -13,7 +13,7 @@ graph TD
     Proxy --> Agent[TED Agent V2<br/>Cloudflare Worker + DO]
     Agent --> API
     Agent -. provider isolado .-> Broker[Codex Broker opcional]
-    API --> Postgres[(PostgreSQL 16<br/>schema canônico)]
+    API --> Postgres[(PostgreSQL 15<br/>schema canônico)]
 ```
 
 ## Responsabilidades e limites
@@ -87,6 +87,13 @@ rodava `29c015d` (build `36900550367`, `/health` + `/ready` 200, rollback tag
 e release manifest preservados) e a PWA/Agent na Cloudflare rodavam `06c00c2`
 (build `36896164604`), com live closure E2E PASS em produção
 ([relatório](reports/2026-10-01-acceptance-closure.md)).
+
+Estado vigente: API `bd1ed9b` na VPS Contabo (release 2026-10-04 via wrapper,
+`TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`,
+`DB_SCHEMA=canonical`; ver
+[relatório](reports/2026-10-04-pendencias-closure.md)) e PWA/Agent `e1cf1bb`
+na Cloudflare (deploy 2026-10-07, build `37631044197`; ver
+[relatório](reports/2026-10-07-ted-agent-a19-controlled-rollout.md)).
 
 ## Dados e esquema
 

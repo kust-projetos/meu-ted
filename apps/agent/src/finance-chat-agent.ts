@@ -80,6 +80,21 @@ import {
   getAttachmentStorage,
   type AttachmentCleanupCheckpoint,
 } from "./attachments/storage.js";
+// F1 PR-A (issue #107): server-side gate do RPC de upload — binding E flag
+// `TED_ATTACHMENTS_ENABLED === '1'` E coorte `TED_ATTACHMENTS_COHORT`.
+// Recusa (503 tipado) acontece ANTES de qualquer leitura de corpo/bytes.
+import { attachmentUploadDenial, isAttachmentUploadAllowed } from "./attachments/upload-gate.js";
+// F1 PR-B (issue #107) — durable observability sink Agent-local (DO SQLite)
+// + baseline G07. Emissão best-effort no RPC de upload; leitura via RPC
+// read-only. Sem binding novo, sem flag nova, sem capability nova.
+import {
+  createSqlAttachmentObservabilitySink,
+  emitAttachmentObservabilityEvent,
+  initializeAttachmentObservabilitySchema,
+  pruneAttachmentObservabilityEvents,
+  queryAttachmentObservabilityBaseline,
+  resolveAttachmentCohort,
+} from "./attachments/observability.js";
 
 /**
  * A19 — DO-storage-backed checkpoint for the piggybacked attachment TTL sweep.
@@ -197,6 +212,21 @@ export type Env = {
    * interface so this program keeps its current `types` (no workers-types).
    */
   TED_ATTACHMENTS_BUCKET?: unknown;
+  /**
+   * F1 PR-A (issue #107): gate server-side do RPC de upload — default-off,
+   * fail-closed. Novas envs (nenhuma ativa capacidade sozinha):
+   * - `TED_ATTACHMENTS_ENABLED`: precisa ser exatamente `1` (trava ESTRITA,
+   *   `=== '1'` sem trim — whitespace nega; difere de STT/vision/PDF, que dão
+   *   trim, por contrato do relatório A19 §4.1); ausente/outro ⇒ o upload
+   *   responde 503 `attachment_upload_disabled` sem escrever bytes/objetos.
+   * - `TED_ATTACHMENTS_COHORT`: CSV de workspace/actor ids elegíveis SÓ para
+   *   o upload (os turnos LLM seguem em `selectRolloutCohort`, intacto);
+   *   vazia/ausente = ninguém (fail-closed).
+   * O binding R2 continua passo de rollout (sem ele, 503
+   * `attachment_storage_unavailable`); `wrangler.jsonc` intocado aqui.
+   */
+  TED_ATTACHMENTS_ENABLED?: string;
+  TED_ATTACHMENTS_COHORT?: string;
   /**
    * A14/R12: STT de áudio via Groq (G05) — default-off com TRAVA DUPLA.
    * `GROQ_API_KEY` é a credencial (lida no call time, nunca logada) e
@@ -811,6 +841,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       } catch {
         // Drafts degrade to single-turn clarification without storage.
       }
+      // F1 PR-B: attachment observability sink (idempotent; best-effort —
+      // the request-path accessor below lazily re-inits on ctx.storage).
+      try {
+        initializeAttachmentObservabilitySchema(state.storage.sql);
+      } catch {
+        // Turns/uploads work without the sink.
+      }
     }
   }
 
@@ -881,6 +918,30 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   private memorySql(): MemorySql | null {
     // Issue #102 — via o adapter único (com a fronteira atômica real do DO).
     return toMemorySql((this as unknown as { ctx?: DurableObjectState }).ctx?.storage);
+  }
+
+  /**
+   * F1 PR-B — DO SQLite handle for the attachment observability sink, with
+   * lazy one-time idempotent init (prototype-built test agents never run the
+   * class constructor, so the ctor init above is not enough). Best-effort:
+   * null when storage is unavailable, and the sink calls themselves never
+   * throw — the upload/turn never break because of observability.
+   *
+   * REV-F1-PRB-SINK [P2-c]: ready is marked ONLY after a successful init — a
+   * swallowed init failure retries on the next call instead of serving a
+   * healthy-looking empty baseline over a broken sink.
+   */
+  private attachmentObsSchemaReady?: boolean;
+
+  private attachmentObservabilitySql(): {
+    exec<T>(query: string, ...bindings: unknown[]): Iterable<T>;
+  } | null {
+    const sql = this.durableSql();
+    if (!sql) return null;
+    if (!this.attachmentObsSchemaReady) {
+      this.attachmentObsSchemaReady = initializeAttachmentObservabilitySchema(sql);
+    }
+    return sql;
   }
 
   /**
@@ -1964,8 +2025,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * body/header claiming an actor is ignored). The answer is exactly
    * `{ref, kind, name, size, expiresAt}` — no URL, no base64, no local path.
    *
-   * Default-off: with no `TED_ATTACHMENTS_BUCKET` binding the route answers
-   * 503 `attachment_storage_unavailable` and stores nothing.
+   * Default-off em TRÊS camadas (F1 PR-A, issue #107): sem binding
+   * (`TED_ATTACHMENTS_BUCKET`) a rota responde 503
+   * `attachment_storage_unavailable`; com binding mas sem
+   * `TED_ATTACHMENTS_ENABLED === '1'` ou fora da coorte
+   * `TED_ATTACHMENTS_COHORT`, 503 `attachment_upload_disabled`. A recusa
+   * acontece ANTES de qualquer leitura de corpo/bytes: nada é guardado.
    */
   private async handleAttachmentUpload(request: Request): Promise<Response> {
     const actorId = request.headers.get("x-agent-actor")?.trim();
@@ -1976,9 +2041,58 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         { status: 401 },
       );
     }
+    // F1 PR-B — sink de observabilidade (best-effort; nunca quebra o upload)
+    // e coorte attachment-specific para a baseline G07.
+    const obsSql = this.attachmentObservabilitySql();
+    const cohort = resolveAttachmentCohort(this.env, workspaceId, actorId);
+    const obsBase = { workspaceId, actorId, cohort };
+    const startedAt = Date.now();
+    // Header reads are metadata only (no body/bytes) — done before the gate
+    // so denial events carry the declared capability for the G07 baseline.
+    const declaredKind = request.headers.get(ATTACHMENT_KIND_HEADER) ?? "";
+    const declaredName = request.headers.get(ATTACHMENT_NAME_HEADER) ?? "";
+    const declaredCapability = isAttachmentKind(declaredKind) ? declaredKind : "unknown";
+    // F1 PR-A: gate server-side (binding E flag E coorte) antes de tocar no
+    // corpo — fail-closed 503 tipado, zero write por construção.
+    const denial = attachmentUploadDenial(this.env, workspaceId, actorId);
+    if (denial) {
+      emitAttachmentObservabilityEvent(obsSql, {
+        ...obsBase,
+        event: "blocked",
+        capability: declaredCapability,
+        success: false,
+        storageResult: denial.code === "attachment_storage_unavailable" ? "unavailable" : "disabled",
+        providerFailure: "none",
+        fallback: "none",
+        nameLength: declaredName.length,
+      });
+      // REV-F1-PRB-SINK [P2-a]: prune on EVERY persisting path — an
+      // early-denial-only traffic mix must not grow the sink unbounded.
+      pruneAttachmentObservabilityEvents(obsSql, Date.now());
+      return Response.json(
+        {
+          code: denial.code,
+          message: "O envio de anexos não está disponível no momento.",
+        },
+        { status: denial.status },
+      );
+    }
     const storage = getAttachmentStorage(this.env);
     if (!storage) {
-      // Fail-closed: the capability is OFF, never "degraded but working".
+      // Inalcançável quando o gate acima nega sem binding — mantido como
+      // defesa em profundidade (a capacidade continua OFF, nunca degradada).
+      emitAttachmentObservabilityEvent(obsSql, {
+        ...obsBase,
+        event: "blocked",
+        capability: declaredCapability,
+        success: false,
+        storageResult: "unavailable",
+        providerFailure: "none",
+        fallback: "none",
+        nameLength: declaredName.length,
+      });
+      // REV-F1-PRB-SINK [P2-a]: prune on EVERY persisting path.
+      pruneAttachmentObservabilityEvents(obsSql, Date.now());
       return Response.json(
         {
           code: "attachment_storage_unavailable",
@@ -1987,18 +2101,50 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         { status: 503 },
       );
     }
-    const declaredKind = request.headers.get(ATTACHMENT_KIND_HEADER) ?? "";
-    const declaredName = request.headers.get(ATTACHMENT_NAME_HEADER) ?? "";
     if (!isAttachmentKind(declaredKind)) {
+      emitAttachmentObservabilityEvent(obsSql, {
+        ...obsBase,
+        event: "blocked",
+        capability: "unknown",
+        success: false,
+        storageResult: "rejected",
+        providerFailure: "validation",
+        fallback: "none",
+        nameLength: declaredName.length,
+      });
+      // REV-F1-PRB-SINK [P2-a]: prune on EVERY persisting path.
+      pruneAttachmentObservabilityEvents(obsSql, Date.now());
       return Response.json(
         { code: "attachment_unsupported_kind", message: "Tipo de anexo não suportado." },
         { status: 400 },
       );
     }
+    // Gate passou: o upload foi pedido (evento ainda inexistente antes do PR-B).
+    emitAttachmentObservabilityEvent(obsSql, {
+      ...obsBase,
+      event: "requested",
+      capability: declaredKind,
+      storageResult: "unknown",
+      providerFailure: "none",
+      fallback: "none",
+      nameLength: declaredName.length,
+    });
     let bytes: ArrayBuffer;
     try {
       bytes = await request.arrayBuffer();
     } catch {
+      emitAttachmentObservabilityEvent(obsSql, {
+        ...obsBase,
+        event: "blocked",
+        capability: declaredKind,
+        success: false,
+        storageResult: "rejected",
+        providerFailure: "validation",
+        fallback: "none",
+        nameLength: declaredName.length,
+      });
+      // REV-F1-PRB-SINK [P2-a]: prune on EVERY persisting path.
+      pruneAttachmentObservabilityEvents(obsSql, Date.now());
       return Response.json(
         { code: "attachment_bad_request", message: "Corpo do anexo ilegível." },
         { status: 400 },
@@ -2006,12 +2152,18 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     }
     const identity: AttachmentIdentity = { workspaceId, actorId };
     try {
+      // REV-F1-PRB-SINK [P3]: the internal dedup signal travels via the
+      // ingest observer — the public answer keeps exactly the 5 fields.
+      let deduped = false;
       const uploaded = await ingestAttachment({
         storage,
         identity,
         kind: declaredKind as AttachmentKind,
         name: declaredName,
         bytes,
+        onIngestOutcome: (outcome) => {
+          deduped = outcome.deduped;
+        },
         // Ref derivation is keyed by the agent secret when present, so a ref is
         // stable per (workspace, actor, sha256) but unguessable across tenants.
         refSecret: this.env?.AGENT_CONNECTION_TOKEN_SECRET,
@@ -2024,21 +2176,113 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         cleanupCheckpoint: createAttachmentCleanupCheckpoint(
           (this as unknown as { ctx?: { storage?: unknown } }).ctx?.storage,
         ),
+        // F1 PR-B — o sweep piggyback emite `cleanup.succeeded/failed` no
+        // sink (best-effort; nunca quebra o upload).
+        observability: createSqlAttachmentObservabilitySink(obsSql, obsBase),
       });
+      emitAttachmentObservabilityEvent(obsSql, {
+        ...obsBase,
+        event: "succeeded",
+        capability: declaredKind,
+        success: true,
+        latencyMs: Date.now() - startedAt,
+        // REV-F1-PRB-SINK [P3]: a dedup hit writes nothing — label it
+        // `dedup_hit`, never `written`.
+        storageResult: deduped ? "dedup_hit" : "written",
+        providerFailure: "none",
+        fallback: "none",
+        nameLength: declaredName.length,
+      });
+      // F1 PR-B — poda TTL/cap do sink no caminho do sweep existente.
+      pruneAttachmentObservabilityEvents(obsSql, Date.now());
       return Response.json(uploaded, { status: 200 });
     } catch (error) {
       if (isAttachmentError(error)) {
         // Sanitized, typed failure: no raw name, no bytes, no stack.
+        // Validações 400/413 do ingest são denials (`blocked`), não `failed`.
+        emitAttachmentObservabilityEvent(obsSql, {
+          ...obsBase,
+          event: "blocked",
+          capability: declaredKind,
+          success: false,
+          latencyMs: Date.now() - startedAt,
+          storageResult: "rejected",
+          providerFailure: "validation",
+          fallback: "none",
+          nameLength: declaredName.length,
+        });
+        pruneAttachmentObservabilityEvents(obsSql, Date.now());
         return Response.json(
           { code: error.code, message: redactTranscript(error.message) },
           { status: error.status || attachmentStatusFor(error.code) },
         );
       }
+      // Falha inesperada pós-ingest (ex. storage): `failed`, nunca 500 cru.
+      emitAttachmentObservabilityEvent(obsSql, {
+        ...obsBase,
+        event: "failed",
+        capability: declaredKind,
+        success: false,
+        latencyMs: Date.now() - startedAt,
+        storageResult: "unknown",
+        providerFailure: "storage",
+        fallback: "none",
+        nameLength: declaredName.length,
+      });
+      pruneAttachmentObservabilityEvents(obsSql, Date.now());
       return Response.json(
         { code: "attachment_bad_request", message: "Não foi possível receber o anexo." },
         { status: 400 },
       );
     }
+  }
+
+  /**
+   * F1 PR-B — baseline G07 read-only (`GET /rpc/attachments/observability`).
+   *
+   * Identidade SOMENTE dos headers verificados pelo gateway; escopo por
+   * (workspace, actor) — um ator nunca lê eventos de outro (REV-F1-PRB-SINK
+   * [P2-b]; baseline workspace-wide é passo futuro, fora deste PR). Devolve
+   * SÓ agregados (counts, success rate, P50/P95 por capability/cohort) — a
+   * tabela nem sequer tem colunas de bytes/conteúdo/ref/filename. Filtro
+   * opcional `?capability=image|pdf|audio`.
+   *
+   * REV-F1-PRB-SINK [P2-c]: sink ilegível ⇒ 503 tipado (nunca 200 com baseline
+   * vazia "saudável"). A escrita do sink continua best-effort.
+   */
+  private async handleAttachmentObservability(request: Request): Promise<Response> {
+    const actorId = request.headers.get("x-agent-actor")?.trim();
+    const workspaceId = request.headers.get("x-agent-workspace")?.trim();
+    if (!actorId || !workspaceId) {
+      return Response.json(
+        { code: "agent.unauthorized", message: "Missing authenticated actor or workspace" },
+        { status: 401 },
+      );
+    }
+    const sql = this.attachmentObservabilitySql();
+    if (!sql) {
+      return Response.json(
+        { code: "agent.persistence_unavailable", message: "Attachment observability is not available" },
+        { status: 503 },
+      );
+    }
+    const url = new URL(request.url);
+    const capability = url.searchParams.get("capability") ?? undefined;
+    const baseline = queryAttachmentObservabilityBaseline(
+      sql,
+      capability ? { workspaceId, actorId, capability } : { workspaceId, actorId },
+    );
+    if (baseline.degraded) {
+      return Response.json(
+        { code: "agent.observability_unavailable", message: "Attachment observability is not available" },
+        { status: 503 },
+      );
+    }
+    return Response.json({
+      workspaceId,
+      cohort: resolveAttachmentCohort(this.env, workspaceId, actorId),
+      baseline,
+    });
   }
 
   /**
@@ -2065,6 +2309,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   ): Promise<{ states: TurnAttachmentState[]; datas: TurnAttachmentData[] }> {
     if (!Array.isArray(rawAttachments)) return { states: [], datas: [] };
     const storage = getAttachmentStorage(this.env);
+    // F1 PR-A fix (finding REV-PRC-GOLDEN P2) — zero-mutação global com o gate
+    // negado: o MESMO gate do upload (`isAttachmentUploadAllowed`) condiciona
+    // os deletes do caminho de chat. Com o gate negado, uma ref expirada da
+    // própria identidade é reportada `unavailable` SEM deletar o objeto (o
+    // delete é mutação R2); o expirado aguarda a capability ligada ou um
+    // janitor dedicado. Com o gate permitido, o valor é `true` e o
+    // comportamento atual é preservado byte a byte.
+    const attachmentDeleteAllowed = isAttachmentUploadAllowed(this.env, identity.workspaceId, identity.actorId);
     // A14: the audio processor replaces the `unsupported` entry ONLY when the
     // STT double lock is on (`GROQ_API_KEY` + `TED_AUDIO_STT_ENABLED`). The
     // registry — and the per-turn transcription budget carried by the processor
@@ -2137,6 +2389,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             ref: declaredRef,
             turnId,
             memo: this.attachmentProcessingMemo,
+            allowDelete: attachmentDeleteAllowed,
             ...(expectedKind !== undefined ? { expectedKind } : {}),
           })
         : { state: "unavailable", detail: "Não foi possível ler o anexo enviado.", ref: declaredRef };
@@ -2740,6 +2993,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     // are validated by magic bytes server-side and never become a URL.
     if (url.pathname === "/rpc/attachments" && request.method === "POST") {
       return this.handleAttachmentUpload(request);
+    }
+    // F1 PR-B — baseline G07 read-only do sink de attachments (agregados,
+    // sem bytes/conteúdo; escopo por workspace).
+    if (url.pathname === "/rpc/attachments/observability" && request.method === "GET") {
+      return this.handleAttachmentObservability(request);
     }
     const activeMatch = url.pathname === "/rpc/pending-operations/active" && request.method === "GET";
     if (activeMatch) {

@@ -14,6 +14,9 @@
     { "tag": "v2", "new_sqlite_classes": ["FinanceChatAgent"] },
     { "tag": "v3", "deleted_classes": ["WorkspaceAgent"] }
   ],
+  "r2_buckets": [
+    { "binding": "TED_ATTACHMENTS_BUCKET", "bucket_name": "pi-finance-ted-attachments" }
+  ],
   "vars": {
     "API_ORIGIN": "https://api.synkroo.com.br"
   },

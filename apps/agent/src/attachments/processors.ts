@@ -227,6 +227,13 @@ export type ProcessAttachmentInput = {
   expectedKind?: AttachmentKind;
   /** Injectable clock, so expiry is testable without waiting for the TTL. */
   now?: number;
+  /**
+   * F1 PR-A fix (finding REV-PRC-GOLDEN P2): threaded into the mediated read —
+   * with the upload gate denied the expired-object delete is skipped
+   * (zero-mutation R2). Default (omitted) preserves current behavior; the chat
+   * path passes the same upload gate here.
+   */
+  allowDelete?: boolean;
 };
 
 /**
@@ -255,6 +262,7 @@ export const processAttachmentOnce = async (
         ref,
         ...(expectedKind !== undefined ? { expectedKind } : {}),
         ...(now !== undefined ? { now } : {}),
+        ...(input.allowDelete !== undefined ? { allowDelete: input.allowDelete } : {}),
       });
     } catch {
       return unavailableOutcome(ref);
@@ -287,6 +295,7 @@ const runOnce = async (input: ProcessAttachmentInput): Promise<AttachmentProcess
       ref,
       ...(expectedKind !== undefined ? { expectedKind } : {}),
       ...(now !== undefined ? { now } : {}),
+      ...(input.allowDelete !== undefined ? { allowDelete: input.allowDelete } : {}),
     });
   } catch {
     // A reference that cannot be read is a real, explicit state. It is not

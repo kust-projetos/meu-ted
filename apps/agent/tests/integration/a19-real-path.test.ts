@@ -30,7 +30,11 @@ const WORKSPACE = "ws-e2e";
 const ACTOR = "actor-e2e";
 
 const realAgentDo = () => {
-  const { agent } = createAttachmentTestAgent({});
+  // F1 PR-A (issue #107): a rota de upload exige o gate server-side — opt-in
+  // explícito; o fail-closed default-off é pinado em upload-gate.test.ts.
+  const { agent } = createAttachmentTestAgent({
+    extraEnv: { TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: `${WORKSPACE},${ACTOR}` },
+  });
   return { agent, fetch: agent.fetch.bind(agent) };
 };
 

@@ -7,8 +7,6 @@ dist
 backups
 data
 *.log
-bridge-log.txt
-whatsapp-bridge.log
 .env
 .env.local
 .env.pi

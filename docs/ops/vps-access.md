@@ -43,9 +43,12 @@ ssh -i "$VPS_SSH_KEY_PATH" "$VPS_SSH_USER@$VPS_IP" \
   'hostname; uptime; docker ps; docker compose ls; systemctl --failed'
 ```
 
-## Pi-stack
+## Pi-stack (histórico — Hostinger)
 
-Backend de produção roda na Hostinger VPS. `pi-stack` é o ambiente operacional real; não suba cópia local para substituir produção.
+O `pi-stack` da Hostinger foi o ambiente operacional real até 2026-10-03. O
+pi-financeiro foi removido da Hostinger nessa data (containers, volume e
+imagens) e a produção atual roda na VPS Contabo; o `pi-stack` permanece aqui
+apenas como referência histórica, não como destino de deploy ou auditoria.
 
 ```bash
 ssh -t -i "$VPS_SSH_KEY_PATH" "$VPS_SSH_USER@$VPS_IP" \
@@ -66,9 +69,18 @@ ssh -i "$VPS_SSH_KEY_PATH" "$VPS_SSH_USER@$VPS_IP" \
 - Deploy/rollback: identifique release, faça backup, execute uma mudança e valide healthcheck.
 - Logs: nunca reproduza tokens, cookies, senhas, URLs de banco ou chaves.
 
-## Topologia conhecida
+## Topologia vigente
 
-WhatsApp → Evolution API → bridge → Pi RPC → Evolution API. PWA canônica deploya para Cloudflare; backend e `pi-stack` rodam na VPS.
+Backend de produção roda na VPS Contabo. PWA canônica na Cloudflare →
+API autoritativa na Contabo; Agent TED na Cloudflare → mesma API. (O caminho
+antigo WhatsApp → Evolution API → bridge → Pi RPC foi removido em `f640e84`
+e permanece apenas como histórico.)
+
+## Topologia conhecida (histórico)
+
+Registro antigo (pré-2026-10-03): WhatsApp → Evolution API → bridge → Pi RPC →
+Evolution API; PWA na Cloudflare e backend com `pi-stack` na Hostinger. Não
+usar como topologia vigente — ver "Topologia vigente" acima.
 
 ## Operações destrutivas
 
