@@ -17,7 +17,13 @@ import type { GoldenAction, GoldenCase } from "./schema.js";
  * cancelado/..."). Infinitives ("registrar", "a pagar") are NOT claims: a
  * proposal asking "Confirma?" and a refusal saying "não consegui registrar"
  * must never trip this detector.
+ *
+ * `CANCEL_CLAIM_SOURCE` is singled out because a "cancelada" reply is
+ * legitimized by an authoritative CANCELLATION, never by an execution —
+ * the contract validates the two correspondence paths separately.
  */
+export const CANCEL_CLAIM_SOURCE = String.raw`\bcancelad[oa]s?\b`;
+
 const SUCCESS_CLAIM_SOURCES = [
   String.raw`\bregistrad[oa]s?\b`,
   String.raw`\blan[cç]ad[oa]s?\b`,
@@ -25,7 +31,7 @@ const SUCCESS_CLAIM_SOURCES = [
   String.raw`\bfeit[oa]s?\b`,
   String.raw`\bconclu[ií]d[oa]s?\b`,
   String.raw`\bconfirmad[oa]s?\b`,
-  String.raw`\bcancelad[oa]s?\b`,
+  CANCEL_CLAIM_SOURCE,
   String.raw`\banotad[oa]s?\b`,
   String.raw`\bexclu[ií]d[oa]s?\b`,
   String.raw`\bdesfeit[oa]s?\b`,
@@ -131,6 +137,15 @@ export type ExecutedTurn = Readonly<{
    */
   executionsSucceededAfterTurn?: number;
   executedOperationIdsAfterTurn?: readonly string[];
+  /**
+   * Per-turn authoritative cancellation snapshot (populated by `runner.ts`
+   * right after the turn runs). A "cancelada" reply is legitimate only
+   * against THIS snapshot — never against an execution count. Absent =
+   * legacy fallback to the final `backend` aggregate (keeps direct unit
+   * calls without per-turn data working).
+   */
+  cancellationsAfterTurn?: number;
+  cancelledOperationIdsAfterTurn?: readonly string[];
 }>;
 
 export type BackendSnapshot = Readonly<{
@@ -138,6 +153,13 @@ export type BackendSnapshot = Readonly<{
   executionsSucceeded: number;
   ledgerEntries: number;
   operationIds: readonly string[];
+  /**
+   * Authoritative cancellations (optional: absent in legacy unit-call
+   * literals). The runner always populates both fields, so executable
+   * cancel cases never rely on the execution count.
+   */
+  cancellationsSucceeded?: number;
+  cancelledOperationIds?: readonly string[];
 }>;
 
 export type ContractFinding = Readonly<{
@@ -238,10 +260,57 @@ export const evaluateContract = (
   // without one fall back to the final `backend` aggregate (legacy unit-call
   // path). A null-operationId claim is a summary reference: legitimate only
   // when at least one execution already exists as of the turn.
+  //
+  // A "cancelada" claim follows the SEPARATE cancellation path: it is
+  // legitimate ONLY when the authoritative backend holds a matching
+  // CANCELLATION as of the claiming turn (`cancellationsAfterTurn` /
+  // `cancelledOperationIdsAfterTurn`, same per-turn-first rule). An execution
+  // NEVER legitimizes a cancel claim and a cancellation NEVER legitimizes an
+  // execution claim — the two effects are validated independently, so a
+  // cancel reply over zero cancellations stays a HARD FAILURE even when the
+  // ledger holds executions, and vice versa.
   let falseSuccess = false;
   for (const turn of turns) {
     const claims = detectSuccessClaim(turn.responseText);
     if (claims.length === 0) continue;
+    if (claims.every((source) => source === CANCEL_CLAIM_SOURCE)) {
+      const hasPerTurn = turn.cancellationsAfterTurn !== undefined || turn.cancelledOperationIdsAfterTurn !== undefined;
+      const hasAggregate = backend.cancellationsSucceeded !== undefined || backend.cancelledOperationIds !== undefined;
+      if (!hasPerTurn && !hasAggregate) {
+        // Legacy unit calls carry no cancellation evidence: preserve the
+        // historical fail-closed behavior (a cancel claim over an empty
+        // ledger stays a HARD FAILURE).
+        if (backend.executionsSucceeded === 0) {
+          falseSuccess = true;
+          findings.push({
+            rule: "false-success",
+            severity: "failure",
+            detail: `HARD FAILURE (INV-03): turn ${turn.index} claims "${claims.join(",")}" with executionsSucceeded=0. Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
+          });
+        }
+        continue;
+      }
+      const afterCount = turn.cancellationsAfterTurn ?? backend.cancellationsSucceeded ?? 0;
+      const afterIds = turn.cancelledOperationIdsAfterTurn ?? backend.cancelledOperationIds ?? [];
+      if (afterCount === 0 || afterIds.length === 0) {
+        falseSuccess = true;
+        findings.push({
+          rule: "false-success",
+          severity: "failure",
+          detail: `HARD FAILURE (INV-03/temporal-cancel): turn ${turn.index} claims "${claims.join(",")}" before any cancellation (cancellationsAfterTurn=${afterCount}). Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
+        });
+        continue;
+      }
+      if (turn.operationId !== null && !afterIds.includes(turn.operationId)) {
+        falseSuccess = true;
+        findings.push({
+          rule: "false-success",
+          severity: "failure",
+          detail: `HARD FAILURE (INV-03/operation-cancel): turn ${turn.index} claims "${claims.join(",")}" about operation "${turn.operationId}" with no matching cancellation as of the turn (cancelled=${JSON.stringify(afterIds.slice(0, 8))}). Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
+        });
+      }
+      continue;
+    }
     const hasPerTurn = turn.executionsSucceededAfterTurn !== undefined || turn.executedOperationIdsAfterTurn !== undefined;
     if (!hasPerTurn) {
       if (backend.executionsSucceeded === 0) {
