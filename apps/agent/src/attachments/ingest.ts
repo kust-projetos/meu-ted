@@ -22,6 +22,7 @@
  */
 
 import type { AttachmentCleanupCheckpoint, AttachmentStorage } from './storage.js';
+import type { AttachmentObservabilityInput } from './observability.js';
 import {
   ATTACHMENT_LIMITS,
   ATTACHMENT_NAME_MAX_CHARS,
@@ -307,6 +308,14 @@ export type IngestInput = {
   /** Optional HMAC secret for the opaque ref (agent connection-token secret). */
   refSecret?: string;
   /**
+   * REV-F1-PRB-SINK [P3]: internal outcome observer — called exactly once per
+   * successful ingest with `{ deduped: true }` when an unexpired record
+   * already existed (nothing written) or `{ deduped: false }` after a fresh
+   * write. Best-effort and never throwing (a throwing observer must not fail
+   * the upload). The public `AttachmentUploadResult` contract is unchanged.
+   */
+  onIngestOutcome?: (outcome: { deduped: boolean }) => void;
+  /**
    * A19 — durable position of the piggybacked TTL sweep. When present, the
    * cleanup resumes from the last persisted cursor instead of always restarting
    * at the prefix (which starved expired objects living behind more than
@@ -314,6 +323,12 @@ export type IngestInput = {
    * ends: checkpoint failures never fail the upload.
    */
   cleanupCheckpoint?: AttachmentCleanupCheckpoint;
+  /**
+   * F1 PR-B — sink de observabilidade do DO (best-effort). Quando presente, o
+   * sweep piggyback emite `cleanup.succeeded/failed` por ele; a emissão nunca
+   * quebra o upload (o sink já é non-throwing e a chamada é blindada aqui).
+   */
+  observability?: { emit: (input: AttachmentObservabilityInput) => void };
   now?: number;
 };
 
@@ -413,6 +428,7 @@ export const ingestAttachment = async (input: IngestInput): Promise<AttachmentUp
   const existing = await storage.get(ref).catch(() => null);
   if (existing && existing.record.expiresAt > now) {
     const record = existing.record;
+    notifyIngestOutcome(input.onIngestOutcome, true);
     return {
       ref: record.ref,
       kind: record.kind,
@@ -444,8 +460,42 @@ export const ingestAttachment = async (input: IngestInput): Promise<AttachmentUp
   await storage.put(record, bytes);
   // Cheap TTL sweep piggybacked on the upload: best-effort and silent, so an
   // unreachable bucket never fails an otherwise valid upload.
-  await cleanupExpiredAttachments(storage, now, input.cleanupCheckpoint ? { checkpoint: input.cleanupCheckpoint } : undefined);
-  return { ref: record.ref, kind: record.kind, name: record.name, size: record.size, expiresAt: record.expiresAt };
+  await cleanupExpiredAttachments(
+    storage,
+    now,
+    input.cleanupCheckpoint || input.observability
+      ? {
+          ...(input.cleanupCheckpoint ? { checkpoint: input.cleanupCheckpoint } : {}),
+          ...(input.observability ? { observability: input.observability } : {}),
+        }
+      : undefined,
+  );
+  // REV-F1-PRB-SINK [P3]: fresh write — the internal outcome signal for the
+  // DO handler's sink label (`written` vs `dedup_hit`).
+  notifyIngestOutcome(input.onIngestOutcome, false);
+  return {
+    ref: record.ref,
+    kind: record.kind,
+    name: record.name,
+    size: record.size,
+    expiresAt: record.expiresAt,
+  };
+};
+
+/**
+ * REV-F1-PRB-SINK [P3]: delivers the internal ingest outcome to the optional
+ * observer. Best-effort by construction — a throwing observer never fails
+ * the upload it observes.
+ */
+const notifyIngestOutcome = (
+  observer: IngestInput['onIngestOutcome'],
+  deduped: boolean,
+): void => {
+  try {
+    observer?.({ deduped });
+  } catch {
+    // The upload result stands regardless of observer failure.
+  }
 };
 
 export type ResolveInput = {
@@ -506,8 +556,23 @@ export const CLEANUP_BATCH_LIMIT = 50;
 export const cleanupExpiredAttachments = async (
   storage: AttachmentStorage,
   now: number = Date.now(),
-  options?: { checkpoint?: AttachmentCleanupCheckpoint },
+  options?: {
+    checkpoint?: AttachmentCleanupCheckpoint;
+    /**
+     * F1 PR-B — sink de observabilidade do DO (best-effort): recebe
+     * `cleanup.succeeded` (com `count` = deletados) ou `cleanup.failed`.
+     * A emissão nunca quebra o sweep.
+     */
+    observability?: { emit: (input: AttachmentObservabilityInput) => void };
+  },
 ): Promise<CleanupReport> => {
+  const notify = (input: AttachmentObservabilityInput): void => {
+    try {
+      options?.observability?.emit(input);
+    } catch {
+      // O sweep nunca quebra por causa do sink.
+    }
+  };
   try {
     const checkpoint = options?.checkpoint;
     let startCursor: string | undefined;
@@ -540,19 +605,27 @@ export const cleanupExpiredAttachments = async (
           // delete outage is transient by nature; a poisoned object degrades
           // cleanup throughput, never correctness of the objects behind it
           // once the failure clears).
+          notify({ event: 'cleanup.succeeded', capability: 'cleanup', success: true, count: deleted, storageResult: 'sweep_partial' });
         } else if (sweep.nextCursor === undefined) {
           // Wrap (end of listing) ⇒ the next sweep starts at the prefix again.
           await checkpoint.clear();
+          notify({ event: 'cleanup.succeeded', capability: 'cleanup', success: true, count: deleted, storageResult: 'swept' });
         } else {
           // Persist the resume point so the tail is eventually reached.
           await checkpoint.put(sweep.nextCursor);
+          notify({ event: 'cleanup.succeeded', capability: 'cleanup', success: true, count: deleted, storageResult: 'swept' });
         }
       } catch {
         // Losing the position costs one revisited cycle; it must never throw.
       }
+    } else {
+      // F1 PR-B — sem checkpoint o sweep continua legado, mas o evento de
+      // observabilidade ainda é emitido (o sink não depende do cursor).
+      notify({ event: 'cleanup.succeeded', capability: 'cleanup', success: true, count: deleted, storageResult: 'swept' });
     }
     return { scanned: sweep.records.length, deleted, failed: false };
   } catch {
+    notify({ event: 'cleanup.failed', capability: 'cleanup', success: false, providerFailure: 'storage' });
     return { scanned: 0, deleted: 0, failed: true };
   }
 };

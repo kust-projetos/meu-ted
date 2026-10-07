@@ -502,3 +502,64 @@ describe("A19 slice 1: attachment headers are CORS-allowlisted", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("REV-F1-PRB-SINK [P1]: Worker gateway for GET /rpc/attachments/observability", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const observabilityPath = (workspaceId = WORKSPACE_ID) =>
+    `https://agent.test.local/agents/finance-chat-agent/${workspaceId}/rpc/attachments/observability`;
+
+  const observabilityRequest = async (headers: Record<string, string> = {}): Promise<Request> =>
+    new Request(observabilityPath(), {
+      method: "GET",
+      headers: {
+        "x-agent-connection-token": await tokenFor(),
+        origin: PWA_ORIGIN,
+        ...headers,
+      },
+    });
+
+  it("routes an authenticated GET through the real DO (200, was 404) with stamped identity", async () => {
+    mockAuthUpstream();
+    const { env, doCalls } = harness();
+    const res = await worker.fetch(await observabilityRequest(), env);
+    expect(res.status).toBe(200);
+    expect(doCalls).toHaveLength(1);
+    const body = (await res.json()) as { workspaceId: string; baseline: { total: number } };
+    expect(body.workspaceId).toBe(WORKSPACE_ID);
+    expect(typeof body.baseline.total).toBe("number");
+    // Identity comes SOLELY from the verified token: client-sent x-agent-*
+    // headers are overwritten, never trusted.
+    const forwarded = doCalls[0]!;
+    expect(forwarded.headers.get("x-agent-actor")).toBe(ACTOR_ID);
+    expect(forwarded.headers.get("x-agent-workspace")).toBe(WORKSPACE_ID);
+  });
+
+  it("overrides spoofed client identity headers on the observability route", async () => {
+    mockAuthUpstream();
+    const { env, doCalls } = harness();
+    const res = await worker.fetch(
+      await observabilityRequest({
+        "x-agent-actor": "attacker",
+        "x-agent-workspace": "other-ws",
+        "x-agent-device": "attacker-device",
+      }),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const forwarded = doCalls[0]!;
+    expect(forwarded.headers.get("x-agent-actor")).toBe(ACTOR_ID);
+    expect(forwarded.headers.get("x-agent-workspace")).toBe(WORKSPACE_ID);
+    expect(forwarded.headers.get("x-agent-device")).not.toBe("attacker-device");
+  });
+
+  it("rejects an unauthenticated observability read before any DO hop", async () => {
+    mockAuthUpstream({ consumed: false });
+    const { env, doCalls } = harness();
+    const res = await worker.fetch(await observabilityRequest(), env);
+    expect(res.status).toBe(401);
+    expect(doCalls).toHaveLength(0);
+  });
+});
