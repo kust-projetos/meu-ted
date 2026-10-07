@@ -24,7 +24,7 @@ machine-readable. Coração: `false-success = HARD FAILURE` (INV-03).
 - `v1/reporters/json.ts` — relatório machine-readable. `tokens`/`cost` são
   `"unknown"` de propósito: o stub é determinístico, nenhuma chamada de
   modelo acontece, então não há nada para contar — nunca inventar.
-- `v1/cases/*.golden.json` — o catálogo como DADOS (16 executáveis +
+- `v1/cases/*.golden.json` — o catálogo como DADOS (19 executáveis +
   6 `pending-capability`).
 - `golden.test.ts` — a suíte: schema + controles negativos do detector +
   subset executável + relatório.
@@ -42,7 +42,7 @@ Saída machine-readable: `apps/agent/test-results/golden-report.json`
 (diretório gitignored — evidência, não fonte). Resumo no console:
 
 ```text
-golden v1: total=22 pass=16 fail=0 skipped-pending=6 falseSuccess=0 tokens=unknown cost=unknown
+golden v1: total=25 pass=19 fail=0 skipped-pending=6 falseSuccess=0 tokens=unknown cost=unknown
 ```
 
 Casos `pending-capability` (anexo, PDF, áudio, imagem, web, autoexecute
@@ -66,7 +66,7 @@ nunca como `pass`. Executá-los exige a capability provisionada (ver
    `pendingReason: { capability, reason, requires }` — o runner pula e
    reporta; fingir cobertura com caso falso é proibido.
 4. Rode `pnpm test:golden` e ajuste as contagens pinadas na suíte
-   (22/16/6) se o catálogo cresceu de verdade.
+   (25/19/6) se o catálogo cresceu de verdade.
 
 ## Regras do harness
 
@@ -101,3 +101,11 @@ nunca como `pass`. Executá-los exige a capability provisionada (ver
   que um turno posterior confirma NÃO é legitimada retroativamente).
 - Proposta NÃO é execução: só `executionsSucceeded > 0` legitima
   "Lançamento registrado com sucesso."
+- Cancelamento tem via PRÓPRIA: "Operação cancelada com segurança." só é
+  legítima com cancelamento autoritativo correspondente
+  (`cancellationsAfterTurn > 0`) — execução NUNCA legitima "cancelada" e
+  cancelamento NUNCA legitima "registrado". Casos da matriz
+  confirmação/cancel (`confirmation-cancel.golden.json`): GW-023
+  (propor→confirmar→executar, claim legítima), GW-024
+  (propor→cancelar, zero execuções) e GW-025 (confirmar-sem-proposta,
+  resposta determinística sem efeito).

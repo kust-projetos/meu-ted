@@ -112,9 +112,11 @@ export const runGoldenCase = async (goldenCase: GoldenCase): Promise<GoldenCaseR
     }
     const turnInput = normalizeRestTurn(body, IDENTITY, input.decisionText !== undefined ? { typedText: input.decisionText } : undefined);
     const providerCallsBefore = backend.providerCalls.length;
-    const perTurnEffects = (): Pick<GoldenTurnRecord, "executionsSucceededAfterTurn" | "executedOperationIdsAfterTurn"> => ({
+    const perTurnEffects = (): Pick<GoldenTurnRecord, "executionsSucceededAfterTurn" | "executedOperationIdsAfterTurn" | "cancellationsAfterTurn" | "cancelledOperationIdsAfterTurn"> => ({
       executionsSucceededAfterTurn: backend.executionsSucceeded,
       executedOperationIdsAfterTurn: backend.ops.filter((op) => op.status === "executed").map((op) => op.id),
+      cancellationsAfterTurn: backend.ops.filter((op) => op.status === "cancelled").length,
+      cancelledOperationIdsAfterTurn: backend.ops.filter((op) => op.status === "cancelled").map((op) => op.id),
     });
     try {
       const result = await orchestrator.runTurn(turnInput);
@@ -177,6 +179,8 @@ export const runGoldenCase = async (goldenCase: GoldenCase): Promise<GoldenCaseR
     executionsSucceeded: backend.executionsSucceeded,
     ledgerEntries: backend.ops.length,
     operationIds: backend.ops.map((op) => op.id),
+    cancellationsSucceeded: backend.ops.filter((op) => op.status === "cancelled").length,
+    cancelledOperationIds: backend.ops.filter((op) => op.status === "cancelled").map((op) => op.id),
   };
   const verdict = evaluateContract(goldenCase, turns, snapshot);
   const findings = [...verdict.findings, ...extraFindings];

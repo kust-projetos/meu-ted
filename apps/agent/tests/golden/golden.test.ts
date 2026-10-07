@@ -40,10 +40,10 @@ const loadCases = (): GoldenCase[] => {
 describe("F4 golden — catalog is versioned, well-formed data", () => {
   it("every case file validates against the v1 schema with unique ids", () => {
     const cases = loadCases();
-    expect(cases.length).toBe(22);
+    expect(cases.length).toBe(25);
     const executable = cases.filter((entry) => entry.status === "executable");
     const pending = cases.filter((entry) => entry.status === "pending-capability");
-    expect(executable.length).toBe(16);
+    expect(executable.length).toBe(19);
     expect(pending.length).toBe(6);
     for (const entry of pending) {
       expect(entry.pendingReason?.capability, entry.id).toMatch(/\S/);
@@ -284,6 +284,71 @@ describe("F4 golden — claim/execution correspondence is temporal and per-opera
         },
       ],
       { proposalsCreated: 1, executionsSucceeded: 1, ledgerEntries: 1, operationIds: ["golden-op-1"] },
+    );
+    expect(verdict.falseSuccess).toBe(false);
+    expect(verdict.passed).toBe(true);
+  });
+
+  it("a cancel claim is NOT legitimized by an execution without a cancellation", () => {
+    const verdict = evaluateContract(
+      { ...baseCase },
+      [
+        {
+          index: 0,
+          intentionId: "corr-cancel-1",
+          mode: "confirmation",
+          actions: ["confirmation_executed"],
+          responseText: "ok",
+          operationId: "golden-op-1",
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 1,
+          executedOperationIdsAfterTurn: ["golden-op-1"],
+          cancellationsAfterTurn: 0,
+          cancelledOperationIdsAfterTurn: [],
+        },
+        {
+          index: 1,
+          intentionId: "corr-cancel-2",
+          mode: "cancel",
+          actions: ["cancel_executed"],
+          responseText: "Operação cancelada com segurança.",
+          operationId: null,
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 1,
+          executedOperationIdsAfterTurn: ["golden-op-1"],
+          cancellationsAfterTurn: 0,
+          cancelledOperationIdsAfterTurn: [],
+        },
+      ],
+      { proposalsCreated: 1, executionsSucceeded: 1, ledgerEntries: 1, operationIds: ["golden-op-1"], cancellationsSucceeded: 0, cancelledOperationIds: [] },
+    );
+    expect(verdict.falseSuccess).toBe(true);
+    expect(verdict.passed).toBe(false);
+    expect(verdict.findings.some((finding) => finding.rule === "false-success")).toBe(true);
+  });
+
+  it("a cancel claim with a matching cancellation passes with zero executions", () => {
+    const verdict = evaluateContract(
+      { ...baseCase },
+      [
+        {
+          index: 0,
+          intentionId: "corr-cancel-1",
+          mode: "confirmation",
+          actions: ["cancel_executed"],
+          responseText: "Operação cancelada com segurança.",
+          operationId: null,
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 0,
+          executedOperationIdsAfterTurn: [],
+          cancellationsAfterTurn: 1,
+          cancelledOperationIdsAfterTurn: ["golden-op-1"],
+        },
+      ],
+      { proposalsCreated: 1, executionsSucceeded: 0, ledgerEntries: 1, operationIds: ["golden-op-1"], cancellationsSucceeded: 1, cancelledOperationIds: ["golden-op-1"] },
     );
     expect(verdict.falseSuccess).toBe(false);
     expect(verdict.passed).toBe(true);
