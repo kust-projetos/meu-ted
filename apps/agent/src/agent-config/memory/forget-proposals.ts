@@ -479,27 +479,23 @@ export const confirmForgetMemory = (
     // "este turno não executou nada" → none (nunca autoriza).
     if (prior && prior !== 'cancelled') return { outcome: prior, message: decisionOutcomeMessage(prior) };
     if (prior) return { outcome: 'none', message: FORGET_COPY.noPending };
-    // Issue #102 — vínculo durável intenção→proposta (tabela própria,
-    // permanente, sem TTL): a confirmação autoriza UM preview específico.
-    // Intenção vinculada (a QUALQUER proposta, ou ao sentinela '' =
-    // "resolveu contra nada") NUNCA re-resolve contra pendings posteriores —
-    // reproduz o consumo sem escrever nada. Defesa em profundidade: recibo
-    // físico com `proposal_id` também barra (cobre falha seletiva de escrita
-    // do vínculo quando o recibo persistiu). Sem vínculo e sem recibo
-    // vinculado (resolveu contra nada pré-closure), segue o renewal §15.
+    // Issue #102 — consumo permanente: a confirmação autoriza UM preview
+    // específico, então redelivery NUNCA re-resolve contra pendings
+    // posteriores. Barras (nesta ordem, todas sem writes):
+    // 1. vínculo na tabela própria (qualquer valor, incl. sentinela '');
+    // 2. recibo físico — QUALQUER linha, inclusive `proposal_id` NULL
+    //    pré-closure: após o TTL, o reuse do mesmo intentionId é redelivery
+    //    (turno novo = messageId novo), nunca decisão nova; reproduz o
+    //    consumo em vez de resolver. Livre só quem nunca foi consumido
+    //    (sem linha e sem vínculo).
     const bound = getForgetBinding(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
-    if (bound !== undefined) {
-      const row = findForgetDecisionRow(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
-      if (row) {
-        if (row.outcome === 'cancelled') return { outcome: 'none', message: FORGET_COPY.noPending };
-        return { outcome: row.outcome, message: decisionOutcomeMessage(row.outcome) } as ConfirmForgetOutcome;
+    const physical = findForgetDecisionRow(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
+    if (bound !== undefined || physical) {
+      if (physical) {
+        if (physical.outcome === 'cancelled') return { outcome: 'none', message: FORGET_COPY.noPending };
+        return { outcome: physical.outcome, message: decisionOutcomeMessage(physical.outcome) } as ConfirmForgetOutcome;
       }
       return { outcome: 'failed', message: FORGET_COPY.failed };
-    }
-    const boundReceipt = findForgetDecisionRow(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
-    if (boundReceipt?.proposalId != null) {
-      if (boundReceipt.outcome === 'cancelled') return { outcome: 'none', message: FORGET_COPY.noPending };
-      return { outcome: boundReceipt.outcome, message: decisionOutcomeMessage(boundReceipt.outcome) } as ConfirmForgetOutcome;
     }
   }
 
@@ -678,29 +674,24 @@ export const cancelForgetMemory = (
       const message = prior === 'cancelled' ? FORGET_COPY.cancelled : decisionOutcomeMessage(prior);
       return { outcome: prior === 'cancelled' ? 'cancelled' : 'none', message };
     }
-    // Issue #102 — vínculo durável: cancelamento consumido (contra proposta
-    // ou sentinela '') nunca cancela proposta futura, mesmo com a janela
-    // vencida. Fallback no recibo com proposal_id (falha seletiva do vínculo).
+    // Issue #102 — consumo permanente (espelho do confirm): QUALQUER vínculo
+    // ou recibo físico recusa sem tocar em pendings posteriores.
     const bound = getForgetBinding(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
-    if (bound !== undefined) {
-      const row = findForgetDecisionRow(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
-      if (row) {
-        const message = row.outcome === 'cancelled' ? FORGET_COPY.cancelled : decisionOutcomeMessage(row.outcome);
-        return { outcome: row.outcome === 'cancelled' ? 'cancelled' : 'none', message };
+    const physical = findForgetDecisionRow(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
+    if (bound !== undefined || physical) {
+      if (physical) {
+        const message = physical.outcome === 'cancelled' ? FORGET_COPY.cancelled : decisionOutcomeMessage(physical.outcome);
+        return { outcome: physical.outcome === 'cancelled' ? 'cancelled' : 'none', message };
       }
-      const target = getForgetProposal(sql, bound);
+      const target = getForgetProposal(sql, bound ?? '');
       const result = target ? readResultJson(target) : {};
       if (target?.status === 'cancelled' && result['intentionId'] === intentionId) {
         return { outcome: 'cancelled', message: FORGET_COPY.cancelled };
       }
       return { outcome: 'none', message: FORGET_COPY.noPending };
     }
-    const boundReceipt = findForgetDecisionRow(sql, { workspaceId: input.workspaceId, actorId: input.actorId, intentionId });
-    if (boundReceipt?.proposalId != null) {
-      const message = boundReceipt.outcome === 'cancelled' ? FORGET_COPY.cancelled : decisionOutcomeMessage(boundReceipt.outcome);
-      return { outcome: boundReceipt.outcome === 'cancelled' ? 'cancelled' : 'none', message };
-    }
   }
+
   const record = (outcome: 'none' | 'ambiguous' | 'cancelled'): void => {
     if (intentionId) {
       if (outcome !== 'cancelled') {

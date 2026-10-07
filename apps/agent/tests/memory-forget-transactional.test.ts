@@ -433,15 +433,11 @@ describe('issue #102 — vínculo intenção→proposta (review P1)', () => {
     expect(aliveIds(sql).has(interId)).toBe(false);
   });
 
-  it('R4. renewal de linha pré-closure vincula: depois recusa', () => {
-    // Linha antiga sem vínculo (pré-closure): primeira reuse renova (§15-A).
-    let faults = 1;
-    const { sql } = createRealSql((query) => {
-      if (faults > 0 && /^UPDATE agent_memory SET invalidated_at/i.test(query.trim())) {
-        faults -= 1;
-        throw new Error('fault: delete once');
-      }
-    });
+  it('R4. linha pré-closure vencida: consumo reproduzido, nunca re-resolve', () => {
+    // Linha antiga sem vínculo (pré-closure, recibo vencido): o reuse do
+    // mesmo intentionId é redelivery (turno novo = id novo) — reproduz o
+    // consumo registrado em vez de resolver contra o pending atual.
+    const { sql } = createRealSql();
     initializeMemorySchema(sql as never);
     recordForgetDecision(sql as never, {
       workspaceId: WS,
@@ -450,7 +446,7 @@ describe('issue #102 — vínculo intenção→proposta (review P1)', () => {
       outcome: 'none',
       createdAt: new Date(T0 - FORGET_DECISION_TTL_MS - 1000).toISOString(),
     });
-    seedChain(sql);
+    const { rootId } = seedChain(sql);
     const p2 = proposeNubank(sql, 'p-bind4');
     expect(p2.outcome).toBe('proposed');
     const first = confirmForgetMemory(sql as never, {
@@ -459,19 +455,13 @@ describe('issue #102 — vínculo intenção→proposta (review P1)', () => {
       intentionId: 'c-bind4',
       nowMs: T0,
     });
-    expect(first.outcome).toBe('failed');
-    const row = [
-      ...sql.exec<Record<string, unknown>>(
-        `SELECT * FROM agent_memory_forget_decisions WHERE intention_id = ? AND workspace_id = ? AND actor_id = ?`,
-        'c-bind4',
-        WS,
-        ACTOR,
-      ),
-    ][0]!;
-    expect(String(row['created_at'])).toBe(new Date(T0).toISOString());
-    expect(row['proposal_id']).toBeTruthy();
+    expect(first.outcome).toBe('none');
+    expect(aliveIds(sql).has(rootId)).toBe(true);
+    if (p2.outcome === 'proposed') {
+      expect(getForgetProposal(sql as never, p2.proposal.id)?.status).toBe('pending');
+    }
 
-    // 25h depois, pending novo: redelivery recusa (vínculo permanente).
+    // 25h depois, pending novo: redelivery recusa do mesmo jeito.
     const T2 = T1 + FORGET_DECISION_TTL_MS;
     const interId = seedInter(sql);
     const p3 = proposeForgetMemory(sql as never, {
@@ -488,9 +478,8 @@ describe('issue #102 — vínculo intenção→proposta (review P1)', () => {
       intentionId: 'c-bind4',
       nowMs: T2,
     });
-    expect(replay.outcome).toBe('failed');
+    expect(replay.outcome).toBe('none');
     expect(aliveIds(sql).has(interId)).toBe(true);
-    void p2;
   });
 });
 
@@ -985,7 +974,7 @@ describe('issue #102 — runMemoryTransaction (review)', () => {
 });
 
 describe('issue #102 — receipt renewal', () => {
-  it('6. receipt expirado é renovado pela nova decisão', () => {
+  it('6. recibo vencido é consumo permanente: reuse recusa, nunca executa', () => {
     const { sql } = createRealSql();
     initializeMemorySchema(sql as never);
     const old = new Date(T0 - (FORGET_DECISION_TTL_MS + 60 * 60 * 1000)).toISOString();
@@ -996,42 +985,64 @@ describe('issue #102 — receipt renewal', () => {
       outcome: 'none',
       createdAt: old,
     });
-    // Expirado: leitura ignora.
+    // Expirado: leitura com TTL ignora (janela de replay fechada).
     expect(
       findForgetDecision(sql as never, { workspaceId: WS, actorId: ACTOR, intentionId: 'c-renew' }, T0),
     ).toBeUndefined();
 
-    seedChain(sql);
-    expect(proposeNubank(sql, 'p-renew').outcome).toBe('proposed');
+    // Mesmo assim, o reuse do intentionId NÃO resolve contra o pending atual:
+    // turno novo = messageId novo; mesmo id = redelivery do consumo antigo.
+    const { rootId } = seedChain(sql);
+    const p = proposeNubank(sql, 'p-renew');
+    expect(p.outcome).toBe('proposed');
     const c = confirmForgetMemory(sql as never, {
       workspaceId: WS,
       actorId: ACTOR,
       intentionId: 'c-renew',
       nowMs: T0,
     });
-    expect(c.outcome).toBe('executed');
+    expect(c.outcome).toBe('none');
+    expect(aliveIds(sql).has(rootId)).toBe(true);
+    if (p.outcome === 'proposed') {
+      expect(getForgetProposal(sql as never, p.proposal.id)?.status).toBe('pending');
+    }
+  });
 
-    // A nova decisão ganhou janela nova: o recibo foi RENOVADO (created_at
-    // novo, não o timestamp vencido) e replay dentro do TTL observa.
+  it('6b. renewal técnico do store: linha vencida é atualizada (defesa)', () => {
+    const { sql } = createRealSql();
+    initializeMemorySchema(sql as never);
+    const old = new Date(T0 - (FORGET_DECISION_TTL_MS + 60 * 60 * 1000)).toISOString();
+    recordForgetDecision(sql as never, {
+      workspaceId: WS,
+      actorId: ACTOR,
+      intentionId: 'c-renew-u',
+      outcome: 'none',
+      createdAt: old,
+    });
+    recordForgetDecision(sql as never, {
+      workspaceId: WS,
+      actorId: ACTOR,
+      intentionId: 'c-renew-u',
+      outcome: 'failed',
+      createdAt: new Date(T0).toISOString(),
+      nowMs: T0,
+      proposalId: 'p-x',
+    });
     const rows = [
       ...sql.exec<Record<string, unknown>>(
         `SELECT * FROM agent_memory_forget_decisions WHERE intention_id = ? AND workspace_id = ? AND actor_id = ?`,
-        'c-renew',
+        'c-renew-u',
         WS,
         ACTOR,
       ),
     ];
     expect(rows.length).toBe(1);
     expect(String(rows[0]!['created_at'])).toBe(new Date(T0).toISOString());
-    // Renewal vincula: o recibo renovado carrega a proposta resolvida.
-    expect(rows[0]!['proposal_id']).toBeTruthy();
-    const replay = confirmForgetMemory(sql as never, {
-      workspaceId: WS,
-      actorId: ACTOR,
-      intentionId: 'c-renew',
-      nowMs: T0,
-    });
-    expect(replay.outcome).toBe('already_done');
+    expect(String(rows[0]!['outcome'])).toBe('failed');
+    expect(String(rows[0]!['proposal_id'])).toBe('p-x');
+    expect(
+      findForgetDecision(sql as never, { workspaceId: WS, actorId: ACTOR, intentionId: 'c-renew-u' }, T0),
+    ).toBe('failed');
   });
 
   it('7. receipt válido é reutilizado (redelivery não re-executa)', () => {
