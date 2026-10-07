@@ -82,7 +82,14 @@ const harness = (options: { withBucket?: boolean; consumed?: boolean; canonicalI
   // stamped identity.
   const created = createAttachmentTestAgent({
     ...(options.withBucket === false ? { withBucket: false } : {}),
-    extraEnv: { AGENT_CONNECTION_TOKEN_SECRET: SECRET },
+    // F1 PR-A (issue #107): a rota de upload exige o gate server-side —
+    // opt-in explícito do harness (flag + coorte do par de teste); o
+    // fail-closed default-off é pinado em upload-gate.test.ts.
+    extraEnv: {
+      AGENT_CONNECTION_TOKEN_SECRET: SECRET,
+      TED_ATTACHMENTS_ENABLED: "1",
+      TED_ATTACHMENTS_COHORT: `${WORKSPACE_ID},${ACTOR_ID}`,
+    },
   });
   const doCalls: Request[] = [];
   const env = {

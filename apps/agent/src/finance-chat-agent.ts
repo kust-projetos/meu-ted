@@ -80,6 +80,10 @@ import {
   getAttachmentStorage,
   type AttachmentCleanupCheckpoint,
 } from "./attachments/storage.js";
+// F1 PR-A (issue #107): server-side gate do RPC de upload — binding E flag
+// `TED_ATTACHMENTS_ENABLED === '1'` E coorte `TED_ATTACHMENTS_COHORT`.
+// Recusa (503 tipado) acontece ANTES de qualquer leitura de corpo/bytes.
+import { attachmentUploadDenial } from "./attachments/upload-gate.js";
 
 /**
  * A19 — DO-storage-backed checkpoint for the piggybacked attachment TTL sweep.
@@ -197,6 +201,21 @@ export type Env = {
    * interface so this program keeps its current `types` (no workers-types).
    */
   TED_ATTACHMENTS_BUCKET?: unknown;
+  /**
+   * F1 PR-A (issue #107): gate server-side do RPC de upload — default-off,
+   * fail-closed. Novas envs (nenhuma ativa capacidade sozinha):
+   * - `TED_ATTACHMENTS_ENABLED`: precisa ser exatamente `1` (trava ESTRITA,
+   *   `=== '1'` sem trim — whitespace nega; difere de STT/vision/PDF, que dão
+   *   trim, por contrato do relatório A19 §4.1); ausente/outro ⇒ o upload
+   *   responde 503 `attachment_upload_disabled` sem escrever bytes/objetos.
+   * - `TED_ATTACHMENTS_COHORT`: CSV de workspace/actor ids elegíveis SÓ para
+   *   o upload (os turnos LLM seguem em `selectRolloutCohort`, intacto);
+   *   vazia/ausente = ninguém (fail-closed).
+   * O binding R2 continua passo de rollout (sem ele, 503
+   * `attachment_storage_unavailable`); `wrangler.jsonc` intocado aqui.
+   */
+  TED_ATTACHMENTS_ENABLED?: string;
+  TED_ATTACHMENTS_COHORT?: string;
   /**
    * A14/R12: STT de áudio via Groq (G05) — default-off com TRAVA DUPLA.
    * `GROQ_API_KEY` é a credencial (lida no call time, nunca logada) e
@@ -1964,8 +1983,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * body/header claiming an actor is ignored). The answer is exactly
    * `{ref, kind, name, size, expiresAt}` — no URL, no base64, no local path.
    *
-   * Default-off: with no `TED_ATTACHMENTS_BUCKET` binding the route answers
-   * 503 `attachment_storage_unavailable` and stores nothing.
+   * Default-off em TRÊS camadas (F1 PR-A, issue #107): sem binding
+   * (`TED_ATTACHMENTS_BUCKET`) a rota responde 503
+   * `attachment_storage_unavailable`; com binding mas sem
+   * `TED_ATTACHMENTS_ENABLED === '1'` ou fora da coorte
+   * `TED_ATTACHMENTS_COHORT`, 503 `attachment_upload_disabled`. A recusa
+   * acontece ANTES de qualquer leitura de corpo/bytes: nada é guardado.
    */
   private async handleAttachmentUpload(request: Request): Promise<Response> {
     const actorId = request.headers.get("x-agent-actor")?.trim();
@@ -1976,9 +1999,22 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         { status: 401 },
       );
     }
+    // F1 PR-A: gate server-side (binding E flag E coorte) antes de tocar no
+    // corpo — fail-closed 503 tipado, zero write por construção.
+    const denial = attachmentUploadDenial(this.env, workspaceId, actorId);
+    if (denial) {
+      return Response.json(
+        {
+          code: denial.code,
+          message: "O envio de anexos não está disponível no momento.",
+        },
+        { status: denial.status },
+      );
+    }
     const storage = getAttachmentStorage(this.env);
     if (!storage) {
-      // Fail-closed: the capability is OFF, never "degraded but working".
+      // Inalcançável quando o gate acima nega sem binding — mantido como
+      // defesa em profundidade (a capacidade continua OFF, nunca degradada).
       return Response.json(
         {
           code: "attachment_storage_unavailable",

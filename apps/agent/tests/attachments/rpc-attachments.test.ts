@@ -13,6 +13,16 @@ import {
 const KIND_HEADER = "x-ted-attachment-kind";
 const NAME_HEADER = "x-ted-attachment-name";
 
+/**
+ * F1 PR-A (issue #107): a rota de upload agora exige o gate (flag + coorte).
+ * Os testes de mecânica do upload optam explicitamente (`actor-1`/`ws-1`,
+ * mesma identidade do `uploadRequest`); o default-off fail-closed é pinado
+ * em `upload-gate.test.ts` + no teste (4) abaixo.
+ */
+const GATE_OPT_IN = {
+  extraEnv: { TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: "ws-1,actor-1" },
+};
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -39,7 +49,7 @@ describe("A13 — POST /rpc/attachments (mesmo padrão auth das rotas rpc)", () 
   });
 
   it("(2) upload válido devolve SOMENTE {ref,kind,name,size,expiresAt} — sem URL, sem bytes", async () => {
-    const { agent } = createAttachmentTestAgent();
+    const { agent } = createAttachmentTestAgent(GATE_OPT_IN);
     const bytes = pngBytes(10, 5);
     const res = await agent.fetch(
       uploadRequest(bytesOf(bytes), { [KIND_HEADER]: "image", [NAME_HEADER]: "comprovante.png" }),
@@ -59,7 +69,7 @@ describe("A13 — POST /rpc/attachments (mesmo padrão auth das rotas rpc)", () 
   });
 
   it("(3) erros tipados: kind inválido, corpo vazio, MIME falso e oversized", async () => {
-    const { agent } = createAttachmentTestAgent();
+    const { agent } = createAttachmentTestAgent(GATE_OPT_IN);
 
     const badKind = await agent.fetch(uploadRequest(bytesOf(pngBytes(4, 4)), { [KIND_HEADER]: "video" }));
     expect(badKind.status).toBe(400);
@@ -98,7 +108,7 @@ describe("A13 — POST /rpc/attachments (mesmo padrão auth das rotas rpc)", () 
   });
 
   it("(5) idempotência: mesmo (workspace, actor, sha256) devolve o MESMO ref e não duplica objeto", async () => {
-    const { agent, bucket } = createAttachmentTestAgent();
+    const { agent, bucket } = createAttachmentTestAgent(GATE_OPT_IN);
     const bytes = bytesOf(pngBytes(6, 6));
     const first = await (await agent.fetch(uploadRequest(bytes, { [KIND_HEADER]: "image" }))).json() as { ref: string };
     const second = await (await agent.fetch(uploadRequest(bytes, { [KIND_HEADER]: "image" }))).json() as { ref: string };
@@ -107,7 +117,7 @@ describe("A13 — POST /rpc/attachments (mesmo padrão auth das rotas rpc)", () 
   });
 
   it("(6) o nome cru NUNCA é logado nem devolvido sem scrub (nome com PAN é redigido)", async () => {
-    const { agent } = createAttachmentTestAgent();
+    const { agent } = createAttachmentTestAgent(GATE_OPT_IN);
     const logs: string[] = [];
     vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { logs.push(args.map(String).join(" ")); });
     vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => { logs.push(args.map(String).join(" ")); });
@@ -121,7 +131,7 @@ describe("A13 — POST /rpc/attachments (mesmo padrão auth das rotas rpc)", () 
   });
 
   it("(7) o storage efetivo é o binding R2 opcional, com TTL de 24 h", async () => {
-    const { agent, bucket } = createAttachmentTestAgent();
+    const { agent, bucket } = createAttachmentTestAgent(GATE_OPT_IN);
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const res = await agent.fetch(
