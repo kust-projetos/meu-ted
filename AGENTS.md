@@ -42,7 +42,8 @@
    - Autenticação via Better-Auth (email e senha com convites administrativos).
    - Resolução de workspace e permissões feita integralmente server-side na API autoritativa (`ADR-003`, `ADR-004`).
 
-## Orquestração Orca & Comunicação Inter-Agentes
+## Orquestração Orca & Comunicação Inter-Agentes (exemplo histórico de sessão — terminais/run efêmeros, não origem viva)
+- **Nota:** os terminais e o `run` abaixo são registro histórico de uma sessão específica; não representam origem viva nem estado atual de produção.
 - **Supervisor / Planner**: Muse Spark via OpenCode (terminal `term_6d06e683-02d5-4967-b140-0706f32e8c44`).
 - **Coder Operacional**: Antigravity agy (terminal `term_bb42c5b8-2688-474e-9026-3e98cb6434b8`).
 - **Run Ativa**: `run_46965e431ba5`.
@@ -84,7 +85,7 @@
 - **ai-memory (memória de longo prazo):** bloco canônico marcado no fim deste arquivo; skills gerenciadas 6/6 no root global `~/.agents/skills` (sem cópias project-local nem `CLAUDE.md` — decisão do operador; outras máquinas: `ai-memory install-skills`). Resgatar contexto: pedir "onde ficamos" (handoff); persistir: apenas com pedido explícito do operador.
 - **Documentação de configuração:** auditorias e mudanças de config geram relatório em `docs/reports/` (atual: `docs/reports/2026-10-02-repo-config-audit.md` — 12 inconsistências mapeadas e decisões humanas pendentes).
 
-## Estado Atual e Histórico (atualizado em 2026-10-04 `main@bd1ed9b`; detalhes completos em `docs/reports/`)
+## Estado Atual e Histórico (atualizado em 2026-10-07 — API `main@bd1ed9b` na Contabo; PWA/Agent `e1cf1bb` na Cloudflare, build `37631044197`; A19 = NOT READY; detalhes completos em `docs/reports/`)
 
 ### Sessões recentes
 - **Sessão 2026-10-07b (rollout controlado da A19 — inventário real + Fase A, sem ativação):** HEAD inicial `e1cf1bb` (= origin/main; PRs #103/#104 mergeados, issue #102 fechada); corretivo-1 `cfbb7cd`, corretivo-2 em curso (branch `docs/a19-rollout-inventory-fase-a`, PR #106). Produção viva verificada read-only: Agent `/health` + PWA `/api/build-info` em `e1cf1bb` (build `37631044197`), API Contabo em `bd1ed9b` (independente, inalterada). Config-de-deploy OFF (`wrangler.jsonc` sem R2/AI bindings; deploys injetam só `BUILD_*`+origens; flags PWA de anexos ausentes) + runtime live UNKNOWN (tentativa live falhou por auth — códigos 10000/9109, sem valores — gate pendente). Plano Fase A em `docs/reports/2026-10-07-ted-agent-a19-controlled-rollout.md`, ordem gate→sink→binding→prova→canary (coorte explícita; PR A exige cohort check attachment-specific + teste non-cohort). CI: `37654520900` success + Gate success, PWA CI `37654521051` success (SHA `cfbb7cd`). Veredito: **A19 = NOT READY**; core em prod (texto, memória/A17, skills/A18, forget) READY e estável.

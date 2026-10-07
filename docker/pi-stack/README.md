@@ -1,11 +1,13 @@
+> HISTÓRICO — pi-stack/bridge NÃO é produção do pi-financeiro desde 2026-08-25 (removido em `f640e84`) e o pi-financeiro saiu da Hostinger em 2026-10-03 (Contabo vigente).
+
 # Pi Stack — Pi + WhatsApp Bridge no mesmo container
 
 Container com bridge Node.js + Pi agent rodando juntos.
 O Pi é invocado pelo bridge via `RpcClient` (subprocess stdin/stdout).
 
-**Desde 2026-06-21, este stack roda na VPS Hostinger (<VPS_IP>)**, junto com o
+**Histórico: desde 2026-06-21, este stack rodou na VPS Hostinger (<VPS_IP>)**, junto com o
 Evolution GO e o Postgres (`pi_financeiro`). O que está documentado aqui serve para
-rodar uma cópia local pontual (debug), não é mais o ambiente principal.
+rodar uma cópia local pontual (debug), não é o ambiente principal nem produção.
 
 ## Requisitos (para rodar local)
 
@@ -151,7 +153,9 @@ container (pi-stack)
 └── https://<EVO_HOST>        → Evolution API (HTTPS público, na VPS)
 ```
 
-**Em produção, este mesmo container roda direto na VPS** (`~/infra/pi-stack` em
-`<VPS_IP>`), na mesma rede Docker do Evolution GO — lá ele acessa
+**Histórico (não é produção vigente):** em produção até 2026-08-25 (antes da remoção
+em `f640e84`), este mesmo container rodava direto na VPS (`~/infra/pi-stack` em
+`<VPS_IP>`), na mesma rede Docker do Evolution GO — lá ele acessava
 `evolution-postgres:5432` e `evolution-go:4000` direto pela rede interna, sem
-túnel nem HTTPS.
+túnel nem HTTPS. A produção vigente do pi-financeiro é outra: API + Postgres 15
+na VPS Contabo e PWA + Agent na Cloudflare.

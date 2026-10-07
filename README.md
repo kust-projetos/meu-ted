@@ -9,7 +9,7 @@ capability, confirmação e idempotência.
 
 | Componente | Responsabilidade | Runtime |
 | --- | --- | --- |
-| `apps/api` | Fonte de verdade financeira, Better-Auth, autorização de workspace e pending operations V2 | Contabo VPS (migrada em 2026-10-03) + PostgreSQL 16 |
+| `apps/api` | Fonte de verdade financeira, Better-Auth, autorização de workspace e pending operations V2 | Contabo VPS (migrada em 2026-10-03) + PostgreSQL 15 |
 | `apps/pwa` | Cliente web/mobile canônico e proxies same-origin privados | Cloudflare Pages/Workers + OpenNext |
 | `apps/agent` | TED V2: orquestração, memória conversacional e decisão de aprovação delegada | Cloudflare Workers + Durable Objects |
 | `apps/codex-broker` | Broker isolado para provider Codex; sem capability financeira ou acesso a PostgreSQL | Container Node 22 |
@@ -35,7 +35,7 @@ não são componentes ativos nem fontes de produção.
 
 - **Borda (Cloudflare):** PWA (`apps/pwa`, OpenNext) e Agent (`apps/agent`,
   Workers + Durable Objects) deployados por workflows com gate same-SHA.
-- **Backend (Contabo VPS):** `apps/api` em container com PostgreSQL 16 local,
+- **Backend (Contabo VPS):** `apps/api` em container com PostgreSQL 15 local,
   exposto sob HTTPS; API nunca roda no setup local de produção.
 - **Autenticação:** Better-Auth (email/senha com convites administrativos);
   resolução de workspace e permissões é integralmente server-side.
@@ -46,7 +46,7 @@ Detalhes em [Arquitetura atual](docs/ARCHITECTURE-CURRENT.md).
 
 - Node.js `>= 22.12.0`
 - pnpm `>= 10` (mesma major que o CI fixa via `pnpm/action-setup`)
-- PostgreSQL 16 local descartável para `test:integration`
+- PostgreSQL 16 local descartável para `test:integration` (prod=15, teste=16)
 
 ## Desenvolvimento local
 
@@ -125,4 +125,4 @@ scripts/                # Gates de qualidade, governança e validação
 - [Regras de agente e estado do projeto](AGENTS.md)
 - [Runbook de migration V2](docs/runbooks/api-migration-v2.md)
 - [Runbook de backup/restore](docs/runbooks/backup-restore.md)
-- [Relatórios de sessão](docs/reports/2026-10-02-repo-config-audit.md) (último: auditoria de configuração do repositório)
+- [Relatórios de sessão](docs/reports/) (exemplo: auditoria de configuração do repositório em `docs/reports/2026-10-02-repo-config-audit.md`)

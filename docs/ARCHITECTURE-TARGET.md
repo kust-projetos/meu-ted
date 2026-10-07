@@ -1,6 +1,6 @@
 # Meu Ted — Arquitetura alvo
 
-**Last verified:** 2026-10-01
+**Last verified:** 2026-10-07
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 ## Estado alvo consolidado
@@ -19,7 +19,7 @@ graph LR
     PWA --> Agent[TED V2]
     PWA --> API[API autoritativa]
     Agent --> API
-    API --> DB[(PostgreSQL)]
+    API --> DB[(PostgreSQL 15 Contabo — DB canônico)]
     Agent -. opcional, sem write .-> Broker[Codex Broker]
 ```
 
