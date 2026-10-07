@@ -12,6 +12,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
+import { toMemorySql } from '../src/finance-chat-agent.js';
 import {
   FORGET_DECISION_TTL_MS,
   findForgetDecision,
@@ -1202,9 +1203,10 @@ describe('issue #102 — uniqueness por actor/workspace (RED)', () => {
     expect(String(row['proposal_id'])).toBe('p-x');
   });
 
-  it('R15. migração via adapter DO (transactionSync; exec rejeita BEGIN)', () => {
+  it('R15. migração via toMemorySql (transactionSync; exec rejeita BEGIN)', () => {
     // Regressão do P1 do review do PR #103: o boot passa o adapter COM
     // transactionSync; o exec estilo DO rejeita statements de transação.
+    // Este teste exercita o helper REAL (removê-lo do boot quebra aqui).
     // Sem o primitivo no adapter, o BEGIN do fallback estouraria no DO real
     // e o init abortaria sem criar `agent_memory_forget_bindings`.
     const { db } = createRealSql();
@@ -1241,8 +1243,8 @@ describe('issue #102 — uniqueness por actor/workspace (RED)', () => {
       }
       return (setup as unknown as { exec<T>(q: string, ...b: unknown[]): Iterable<T> }).exec<T>(query, ...bindings);
     };
-    const adapter = {
-      exec: doLikeExec,
+    const storage = {
+      sql: { exec: doLikeExec },
       transactionSync: <T>(fn: () => T): T => {
         txUsed = true;
         db.exec('BEGIN IMMEDIATE');
@@ -1260,6 +1262,12 @@ describe('issue #102 — uniqueness por actor/workspace (RED)', () => {
         }
       },
     };
+    const adapter = toMemorySql(storage);
+    expect(adapter).not.toBeNull();
+    expect(typeof adapter?.transactionSync).toBe('function');
+    // Sem primitivo: só exec (fallback cobre node:sqlite, nunca o DO).
+    expect(toMemorySql({ sql: { exec: doLikeExec } })?.transactionSync).toBeUndefined();
+    expect(toMemorySql(undefined)).toBeNull();
     expect(() => initializeMemorySchema(adapter as never)).not.toThrow();
     expect(txUsed).toBe(true);
     expect(findForgetDecision(adapter as never, { workspaceId: WS, actorId: ACTOR, intentionId: 'do-old-1' }, T0)).toBe(
