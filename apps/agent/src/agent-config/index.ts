@@ -20,6 +20,42 @@ export type { ContextTurn, CompactionResult, SummarizeFn } from './memory/compac
 export { LEARN_EVERY_TURNS, extractLearningsHeuristic, isDuplicateLearning, learnFromTurn } from './memory/learn.js';
 export type { LearningCandidate, LearnTurnInput } from './memory/learn.js';
 export { buildMemoryTools, MEMORY_TOOL_NAMES } from './memory/tools.js';
+export type { MemoryToolContext } from './memory/tools.js';
+export {
+  FORGET_PROPOSAL_TTL_MS,
+  FORGET_DECISION_TTL_MS,
+  casForgetProposalStatus,
+  findForgetDecision,
+  forgetContentHash,
+  getForgetProposal,
+  initializeForgetProposalSchema,
+  insertForgetProposal,
+  isUnpublishedForgetExpiry,
+  listActiveForgetProposals,
+  listForgetProposalsForActor,
+  makeForgetPreview,
+  markForgetProposalExpired,
+  recordForgetDecision,
+  revertUnpublishedForgetProposals,
+  supersedeActiveForgetProposals,
+} from './memory/store.js';
+export type { ForgetDecisionOutcome, ForgetProposalRecord, ForgetProposalStatus } from './memory/store.js';
+export {
+  cancelForgetMemory,
+  confirmForgetMemory,
+  FORGET_COPY,
+  isForgetCancellationText,
+  isForgetConfirmationText,
+  isForgetManagementTurn,
+  isForgetRequestText,
+  proposeForgetMemory,
+  renderForgetProposalQuestion,
+} from './memory/forget-proposals.js';
+export type {
+  CancelForgetOutcome,
+  ConfirmForgetOutcome,
+  ProposeForgetOutcome,
+} from './memory/forget-proposals.js';
 export {
   fitSkills,
   renderInjectedSkills,
