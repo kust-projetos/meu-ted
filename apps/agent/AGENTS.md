@@ -247,7 +247,7 @@ distinto do session user.id, por isso a coorte usa o workspaceId do turno. ZDR a
 provisionada como secret no Worker; tráfego de usuário pendente da prova
 sintética.
 
-## Visão (imagem) — R13, default-off com trava dupla (provider selecionável)
+## Visão (imagem) — R13, default-off com trava tripla (provider selecionável)
 
 `multimodal/groq-vision.ts` (Groq, legado) e `multimodal/gemini-vision.ts`
 (Google AI Studio, decisão do operador) implementam o mesmo contrato AC23. A
@@ -258,13 +258,24 @@ continua sendo o `unsupported` fail-closed da A13.
 Envs (todas opcionais, **default-off**):
 
 - `GROQ_API_KEY` — credencial, lida no call time e nunca logada. Ausente ⇒
-  provider indisponível.
+  provider indisponível no caminho Groq.
+- `GOOGLE_AI_STUDIO_KEY` — credencial do caminho Gemini, lida no call time e
+  nunca logada. Ausente ⇒ provider indisponível no caminho Gemini.
 - `TED_VISION_ENABLED` — precisa ser exatamente `1`. É a **segunda trava**: a
   chave sozinha não habilita egress de imagem.
+- `TED_VISION_COHORT` — CSV de workspace/actor ids elegíveis (**terceira
+  trava**, A19-VISION-COHORT, espelhando o STT): vazia/ausente = NINGUÉM
+  (fail-closed); `'*'` = todos (rollout geral, decisão do operador). Flag +
+  chave sem coorte NÃO autorizam egress — vale para os DOIS providers (parser
+  único em `groq-vision.ts`, sem divergência).
 - `TED_VISION_MODEL` — opcional, **allowlist fechada** de visão. Qualquer valor
-  fora dela volta ao default, que é `meta-llama/llama-4-scout-17b-16e-instruct`
-  **marcado como "confirmar no rollout"** (trocar de modelo é decisão humana,
-  nunca um default silencioso).
+  fora dela volta ao default do provider ativo: Groq
+  (`meta-llama/llama-4-scout-17b-16e-instruct`) ou Gemini (`gemini-3.8-flash`).
+  No caminho Gemini, `gemini-2.5-flash` está admitido por decisão do operador
+  (2026-10-08, extração exata provada live). Trocar de modelo é decisão humana,
+  nunca um default silencioso.
+- `TED_VISION_PROVIDER` — `groq` (default, preserva o legado) ou `gemini`
+  (opt-in explícito para o Google AI Studio). Desconhecido cai no default.
 - `TED_VISION_TIMEOUT_MS` — opcional, default 30 s. Teto **deste** serviço; não
   tem relação com o STT (20 s) nem com o judgment (2 s).
 
@@ -297,9 +308,21 @@ mutacionais — um turno com imagem extraída jamais entra em autoexecute. Itens
 múltiplos permanecem **um bloco de dados delimitado** para revisão manual, nunca
 um lote para escrita; a escrita continua exigindo a confirmação vigente.
 
-**Rollout**: exige `GROQ_API_KEY` como secret **e** `TED_VISION_ENABLED=1`, com
-**ZDR elegível ativado na organização da Groq antes de qualquer tráfego real**
-(mesma condição de G05 da A14). Modelo default a confirmar no rollout.
+**Rollout**: exige a credencial do provider ativo como secret (`GROQ_API_KEY` ou
+`GOOGLE_AI_STUDIO_KEY`) **e** `TED_VISION_ENABLED=1` **e** a identidade na
+`TED_VISION_COHORT` (trava tripla, A19-VISION-COHORT).
+
+**Estado live (2026-10-08, A19-VISION-CANARY):** `TED_VISION_ENABLED=1` +
+`TED_VISION_PROVIDER=gemini` + `TED_VISION_MODEL=gemini-2.5-flash` no manifesto,
+com coorte = test workspace junio `d36cb649-4462-486d-940a-47128ad329f2`
+(canary restritivo single-workspace, mesmo alvo do STT). Modelo `gemini-2.5-flash`
+por decisão do operador (extração exata provada live: valor 42.50, moeda R$,
+nulls honestos); `gemini-3.8-flash` segue o default e o caminho de 503-demand.
+`GOOGLE_AI_STUDIO_KEY` provisionada como secret no Worker. Fetch com
+`redirect: 'manual'` (3xx vira `provider_error`, sem reenvio — espelha o fix P2
+do STT). Equivalente-ZDR: política de dados do AI Studio para uso via API
+aceita pelo operador para o canary (revalidar antes de tráfego geral). Prova
+live pendente: recuperação do relay do turno + canary sintético com imagem.
 
 ## PDF (camada de texto) — R13, local, sem egress, **default-off**
 
