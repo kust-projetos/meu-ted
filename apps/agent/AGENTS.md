@@ -187,6 +187,10 @@ Envs (todas opcionais, **default-off**):
   provider indisponível.
 - `TED_AUDIO_STT_ENABLED` — precisa ser exatamente `1`. É a **segunda trava**:
   chave sozinha não habilita nada (uma chave vazada não ativa egress de áudio).
+- `TED_AUDIO_STT_COHORT` — CSV de workspace/actor ids elegíveis (**terceira
+  trava**, A19-STT-COHORT): vazia/ausente = NINGUÉM (fail-closed); `'*'` =
+  todos (rollout geral, decisão do operador). Flag + chave sem coorte NÃO
+  autorizam egress.
 - `TED_AUDIO_STT_MODEL` — opcional, **allowlist** dos dois deployments Whisper
   da Groq; qualquer outro valor volta ao default.
 - `TED_AUDIO_STT_TIMEOUT_MS` — opcional, default 20 s. É o teto **deste**
@@ -227,10 +231,19 @@ tem duração desconhecida e cai no mesmo teto de bytes (nunca é tratado como
 curto).
 
 **Rollout**: habilitar exige `GROQ_API_KEY` como secret **e**
-`TED_AUDIO_STT_ENABLED=1`, com **ZDR elegível ativado na organização da Groq
-antes de qualquer tráfego real** (condição de G05; a retenção residual padrão
+`TED_AUDIO_STT_ENABLED=1` **e** a identidade na `TED_AUDIO_STT_COHORT`, com
+**ZDR elegível ativado na organização da Groq antes de qualquer tráfego real** (condição de G05; a retenção residual padrão
 do provider é de 30 dias e não é ZDR). Nenhuma credencial foi provisionada
 nesta fatia.
+
+**Estado live (2026-10-08):** `TED_AUDIO_STT_ENABLED=1` em produção, mas o
+rollout é SEQUENCIADO por coorte (`TED_AUDIO_STT_COHORT`, CSV de
+workspace/actor ids, `'*'` = todos — A19-STT-COHORT): flag sozinha NÃO
+autoriza egress — coorte vazia/ausente = NINGUÉM (fail-closed). Coorte
+inicial `""`; a identidade de teste do canary vem do operador em PR
+follow-up. ZDR ativo por decisão do operador (2026-10-08); `GROQ_API_KEY`
+provisionada como secret no Worker; tráfego de usuário pendente da prova
+sintética.
 
 ## Visão (imagem) — R13, default-off com trava dupla (provider selecionável)
 

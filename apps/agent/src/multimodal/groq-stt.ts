@@ -9,10 +9,13 @@
  *
  * Princípios (AC22):
  *
- * 1. **Default-off com trava dupla.** O provider só fica disponível quando
- *    `TED_AUDIO_STT_ENABLED=1` **e** `GROQ_API_KEY` estão presentes. Sem as
- *    duas, `available` é `false`, nenhuma requisição sai e o processor de áudio
- *    permanece o `unsupported` fail-closed da A13 — nada muda no comportamento.
+ * 1. **Default-off com trava tripla.** O provider só fica disponível quando
+ *    `TED_AUDIO_STT_ENABLED=1` **e** `GROQ_API_KEY` **e** a coorte
+ *    `TED_AUDIO_STT_COHORT` (CSV de workspace/actor ids, `'*'` = todos;
+ *    vazia/ausente = ninguém — A19-STT-COHORT) incluem a identidade do turno.
+ *    Sem os três, `available` é `false`, nenhuma requisição sai e o processor
+ *    de áudio permanece o `unsupported` fail-closed da A13 — nada muda no
+ *    comportamento.
  * 2. **Minimização do payload.** Vai ao provider: os bytes, o modelo, o idioma
  *    e o formato da resposta. NÃO vai: `prompt` (nenhum contexto financeiro,
  *    nenhum resumo de conversa), nome do arquivo do usuário (o nome da parte
@@ -70,6 +73,7 @@ export const AUDIO_TRANSCRIPTIONS_PER_TURN = 1;
 export type GroqSttEnv = {
   GROQ_API_KEY?: string;
   TED_AUDIO_STT_ENABLED?: string;
+  TED_AUDIO_STT_COHORT?: string;
   TED_AUDIO_STT_MODEL?: string;
   TED_AUDIO_STT_TIMEOUT_MS?: string;
 };
@@ -101,15 +105,59 @@ export type GroqSttProvider = {
   transcribe: (request: SttRequest) => Promise<SttOutcome>;
 };
 
+/** Nome da env da allowlist de coorte do STT (CSV, documentado no DO). */
+export const AUDIO_STT_COHORT_ENV = 'TED_AUDIO_STT_COHORT';
+
 /**
- * The double lock. `TED_AUDIO_STT_ENABLED` alone is not enough (a leaked key
- * must not silently enable audio egress) and the key alone is not enough (the
- * rollout stays opt-in).
+ * A19-STT-COHORT — parse da coorte do STT: CSV com trim, vazios descartados.
+ * Ausente/vazia/não-string ⇒ []. Espelha `parseAttachmentUploadCohort`
+ * (`attachments/upload-gate.ts`), DUPLICADO de propósito: o upload gate tem
+ * contrato próprio e nenhum dos dois pode mudar o comportamento do outro.
  */
-export const isGroqSttAvailable = (env: GroqSttEnv | undefined): boolean => {
+export const parseAudioSttCohort = (env: unknown): string[] => {
+  const raw = (env as GroqSttEnv | undefined)?.TED_AUDIO_STT_COHORT;
+  if (typeof raw !== 'string') return [];
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+};
+
+/**
+ * Coorte STT: casa por workspaceId OU actorId. Lista vazia (env
+ * ausente/vazia) = ninguém — fail-closed por construção, sem caso especial
+ * no chamador. Entrada curinga `'*'` = TODOS (decisão do operador para
+ * rollout geral). Qualquer outra entrada segue casamento exato,
+ * case-sensitive. Nunca lança.
+ */
+export const isAudioSttCohortMember = (
+  env: unknown,
+  workspaceId?: string,
+  actorId?: string,
+): boolean => {
+  const allow = parseAudioSttCohort(env);
+  if (allow.length === 0) return false;
+  if (allow.includes('*')) return true;
+  return allow.includes(workspaceId ?? '') || allow.includes(actorId ?? '');
+};
+
+/**
+ * The triple lock. `TED_AUDIO_STT_ENABLED` alone is not enough (a leaked key
+ * must not silently enable audio egress), the key alone is not enough (the
+ * rollout stays opt-in), and NEITHER enables egress without cohort membership
+ * (`TED_AUDIO_STT_COHORT`: CSV of workspace/actor ids, `'*'` = everyone;
+ * empty/missing = NOBODY — A19-STT-COHORT, the sequenced rollout
+ * operator-only → internal → small canary → active).
+ */
+export const isGroqSttAvailable = (
+  env: GroqSttEnv | undefined,
+  workspaceId?: string,
+  actorId?: string,
+): boolean => {
   const enabled = env?.TED_AUDIO_STT_ENABLED?.trim();
   const key = env?.GROQ_API_KEY?.trim();
-  return enabled === '1' && typeof key === 'string' && key.length > 0;
+  if (!(enabled === '1' && typeof key === 'string' && key.length > 0)) return false;
+  return isAudioSttCohortMember(env, workspaceId, actorId);
 };
 
 const DEFAULT_TIMEOUT_MIN_MS = 1;
@@ -160,16 +208,18 @@ const clampTranscript = (text: string): string => {
  */
 export const createGroqSttProvider = (input: {
   env?: GroqSttEnv;
+  workspaceId?: string;
+  actorId?: string;
   fetchImpl?: typeof fetch;
 }): GroqSttProvider => {
   const resolveFetch = (): typeof fetch => input.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
 
   return {
     provider: 'groq',
-    available: isGroqSttAvailable(input.env),
+    available: isGroqSttAvailable(input.env, input.workspaceId, input.actorId),
     transcribe: async (request: SttRequest): Promise<SttOutcome> => {
       const env = input.env;
-      if (!isGroqSttAvailable(env)) return { state: 'unavailable' };
+      if (!isGroqSttAvailable(env, input.workspaceId, input.actorId)) return { state: 'unavailable' };
       // Call-time read: the key is never captured at module load and never logged.
       const apiKey = env?.GROQ_API_KEY?.trim() ?? '';
       const timeoutMs = resolveSttTimeoutMs(env);
@@ -193,9 +243,19 @@ export const createGroqSttProvider = (input: {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}` },
           body: form,
+          // Never follow a redirect with audio bytes + Authorization in
+          // flight: a 3xx (or the opaque redirect the edge produces for
+          // 'manual' cross-origin) is a typed provider error below, never a
+          // second request to a host the operator never named.
+          redirect: 'manual',
           signal: controller.signal,
         });
 
+        // Refuse redirects outright — never followed, never resent off the
+        // approved endpoint. Maps to the existing typed provider-error path.
+        if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+          return { state: 'provider_error' };
+        }
         if (response.status === 401 || response.status === 403) return { state: 'unauthorized' };
         if (response.status === 429) return { state: 'rate_limited' };
         if (!response.ok) return { state: 'provider_error' };
@@ -334,8 +394,15 @@ export const composeTurnTextWithTranscript = (input: {
 };
 
 /** Convenience: the per-turn registry override, or `undefined` when off. */
-export const audioSttProcessorOverride = (env: GroqSttEnv | undefined): AttachmentProcessor | undefined => {
-  const provider = createGroqSttProvider({ env });
+export const audioSttProcessorOverride = (
+  env: GroqSttEnv | undefined,
+  identity?: { workspaceId?: string; actorId?: string },
+): AttachmentProcessor | undefined => {
+  const provider = createGroqSttProvider({
+    env,
+    workspaceId: identity?.workspaceId,
+    actorId: identity?.actorId,
+  });
   if (!provider.available) return undefined;
   return createAudioSttProcessor({ provider, budget: createAudioSttBudget() });
 };
