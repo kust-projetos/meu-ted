@@ -12,6 +12,7 @@ import {
   type AuthenticatedIdentity,
 } from '../../src/orchestration/conversation-orchestrator.js';
 import {
+  DRAFTS_DISCARDED_NO_OP_TEXT,
   NO_PENDING_CANCEL_TEXT,
   PendingOperationCoordinator,
   isRetryText,
@@ -371,7 +372,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
     const orchestrator = setup(fake, store);
 
     const result = await turn(orchestrator, 'cancela', 'intent-cancel-draft-1');
-    expect(result.response?.text).toBe(NO_PENDING_CANCEL_TEXT);
+    expect(result.response?.text).toBe(DRAFTS_DISCARDED_NO_OP_TEXT);
     expect(result.response?.text).not.toMatch(/cancelada|registrado|com sucesso/);
     expect(store.get(draft.draftId)?.status).toBe('discarded');
     expect(fake.events).not.toContain('confirm:op-1');
@@ -535,5 +536,144 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
     ).rejects.toThrow('approval.cancel_not_confirmed');
     expect(fake.request).toHaveBeenCalledTimes(1);
     expect(fake.events).not.toContain('cancel:op-1');
+  });
+});
+
+describe('P1-5.3 resolveCancel — five distinguishable cancel outcomes (§5.3)', () => {
+  const ctxOf = { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null };
+  const cancelIdentity = { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! };
+
+  const seedActiveDraft = (store: InMemoryMutationDraftStore, intentionId: string) => {
+    const draft = buildDraftRecord({
+      workspaceId: identity.workspaceId,
+      actorId: identity.actorId,
+      deviceId: identity.deviceId ?? null,
+      intentionId,
+      tool: 'transactions.expense.create',
+      resolvedArgs: { kind: 'expense', amountCents: 5000, description: 'Mercado', date: '2026-09-14' },
+      missingFields: ['accountId', 'categoryId'],
+      question: 'Em qual conta devo registrar?',
+    });
+    store.getOrCreate(draft);
+    return draft;
+  };
+
+  it('only local active drafts discarded, no authoritative op → drafts-discarded (never cancelled)', async () => {
+    const fake = makeFakeApprovalApi([]);
+    const store = new InMemoryMutationDraftStore();
+    const draft = seedActiveDraft(store, 'intent-seed-dd-1');
+    const coordinator = new PendingOperationCoordinator({ client: fake.api });
+
+    const resolution = await coordinator.resolveCancel(cancelIdentity, {
+      store,
+      ctx: ctxOf,
+      intentionId: 'intent-cancel-dd-1',
+      deviceId: identity.deviceId ?? null,
+      nowMs: Date.now(),
+    });
+
+    expect(resolution).toEqual({ kind: 'drafts-discarded', discardedDrafts: 1 });
+    expect(store.get(draft.draftId)?.status).toBe('discarded');
+    expect(fake.events).not.toContainEqual(expect.stringMatching(/^cancel:/));
+  });
+
+  it('nothing pending anywhere → empty', async () => {
+    const fake = makeFakeApprovalApi([]);
+    const store = new InMemoryMutationDraftStore();
+    const coordinator = new PendingOperationCoordinator({ client: fake.api });
+
+    const resolution = await coordinator.resolveCancel(cancelIdentity, {
+      store,
+      ctx: ctxOf,
+      intentionId: 'intent-cancel-empty-1',
+      deviceId: identity.deviceId ?? null,
+      nowMs: Date.now(),
+    });
+
+    expect(resolution).toEqual({ kind: 'empty' });
+  });
+
+  it('single authoritative op → cancelled with evidence', async () => {
+    const fake = makeFakeApprovalApi([expenseOp('op-1')]);
+    const store = new InMemoryMutationDraftStore();
+    const coordinator = new PendingOperationCoordinator({ client: fake.api });
+
+    const resolution = await coordinator.resolveCancel(cancelIdentity, {
+      store,
+      ctx: ctxOf,
+      intentionId: 'intent-cancel-single-1',
+      deviceId: identity.deviceId ?? null,
+      nowMs: Date.now(),
+    });
+
+    expect(resolution).toEqual({ kind: 'cancelled', operationId: 'op-1' });
+    expect(fake.events).toContain('cancel:op-1');
+  });
+
+  it('multiple ops → ambiguous, nothing cancelled', async () => {
+    const fake = makeFakeApprovalApi([expenseOp('op-1'), expenseOp('op-2')]);
+    const store = new InMemoryMutationDraftStore();
+    const coordinator = new PendingOperationCoordinator({ client: fake.api });
+
+    const resolution = await coordinator.resolveCancel(cancelIdentity, {
+      store,
+      ctx: ctxOf,
+      intentionId: 'intent-cancel-amb-1',
+      deviceId: identity.deviceId ?? null,
+      nowMs: Date.now(),
+    });
+
+    expect(resolution.kind).toBe('ambiguous');
+    expect(fake.events).not.toContainEqual(expect.stringMatching(/^cancel:/));
+  });
+
+  it('unknown propose outcome → inconclusive, never cancelled', async () => {
+    const store = new InMemoryMutationDraftStore();
+    const draft = buildDraftRecord({
+      workspaceId: identity.workspaceId,
+      actorId: identity.actorId,
+      deviceId: identity.deviceId ?? null,
+      intentionId: 'intent-proposing-unknown-1',
+      tool: 'transactions.expense.create',
+      resolvedArgs: { kind: 'expense', amountCents: 5000, description: 'Mercado', date: '2026-09-14' },
+      missingFields: [],
+      question: 'q',
+    });
+    store.getOrCreate(draft);
+    store.update(draft.draftId, {
+      status: 'proposing',
+      resolvedArgs: {
+        kind: 'expense', amountCents: 5000, description: 'Mercado', date: '2026-09-14',
+        accountId: ACCOUNT_ID, categoryId: CATEGORY_ID,
+      },
+      missingFields: [],
+    });
+    const request = vi.fn();
+    request.mockImplementation(async (method: string, path: string) => {
+      if (method === 'GET' && path === '/pending-operations/v2/active') {
+        return { items: [], total: 0 };
+      }
+      throw Object.assign(new Error('golden.transient_propose_failure'), { statusCode: 503 });
+    });
+    const api = new MutationApiClient({ request });
+    const coordinator = new PendingOperationCoordinator({ client: api });
+
+    const resolution = await coordinator.resolveCancel(cancelIdentity, {
+      store,
+      ctx: ctxOf,
+      intentionId: 'intent-cancel-unknown-1',
+      deviceId: identity.deviceId ?? null,
+      nowMs: Date.now(),
+    });
+
+    expect(resolution).toEqual({ kind: 'inconclusive' });
+    const cancelCalls = request.mock.calls.filter((call) => typeof call[1] === 'string' && (call[1] as string).endsWith('/cancel'));
+    expect(cancelCalls).toEqual([]);
+  });
+
+  it('the drafts-discarded copy is deterministic, distinct and claim-free', () => {
+    expect(DRAFTS_DISCARDED_NO_OP_TEXT).not.toBe(NO_PENDING_CANCEL_TEXT);
+    expect(DRAFTS_DISCARDED_NO_OP_TEXT).not.toMatch(/cancelad/i);
+    expect(DRAFTS_DISCARDED_NO_OP_TEXT).toMatch(/rascunho/i);
   });
 });

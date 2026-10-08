@@ -24,7 +24,7 @@ import {
   type MutationDraftStore,
 } from '../../src/mutations/mutation-draft.js';
 import type { EntityReader } from '../../src/mutations/entity-resolver.js';
-import { NO_PENDING_CANCEL_TEXT } from '../../src/orchestration/pending-operation-coordinator.js';
+import { DRAFTS_DISCARDED_NO_OP_TEXT } from '../../src/orchestration/pending-operation-coordinator.js';
 
 const identity: AuthenticatedIdentity = {
   actorId: 'actor-authenticated',
@@ -297,7 +297,7 @@ describe('SPEC §25.3.1 — MutationDraft multi-turno', () => {
     await turn(orchestrator, 'Gastei R$ 85 no mercado', 'msg-cancel-1');
     const cancelled = await turn(orchestrator, 'cancela', 'msg-cancel-2');
     expect(fake.proposePosts()).toBe(0);
-    expect(cancelled.response?.text).toBe(NO_PENDING_CANCEL_TEXT);
+    expect(cancelled.response?.text).toBe(DRAFTS_DISCARDED_NO_OP_TEXT);
     expect(cancelled.response?.text).not.toMatch(/cancelada|registrado|com sucesso/);
     const ctx = ctxOf();
     expect(store.listActive(ctx, Date.now())).toHaveLength(0);
@@ -424,9 +424,9 @@ describe('SPEC §25.3.1 — MutationDraft multi-turno', () => {
       expect(fake.opStatus(opId)).toBe('cancelled');
       expect(cancel.response?.text).toMatch(/cancelada|processamento/);
     } else {
-      // Cancel won before any proposal: nothing was created — deterministic
-      // no-op copy (INV-03), never "cancelada" without evidence.
-      expect(cancel.response?.text).toBe(NO_PENDING_CANCEL_TEXT);
+      // Cancel won before any proposal: only the local draft was discarded —
+      // drafts-discarded copy (P1-5.3), never "cancelada" without evidence.
+      expect(cancel.response?.text).toBe(DRAFTS_DISCARDED_NO_OP_TEXT);
     }
   });
 
@@ -693,7 +693,7 @@ describe('A07/R07 — goal metadata, fragments and corrections', () => {
     const draftId = store.listActive(ctxOf(), NOW_MS)[0]!.draftId;
     await turn(orchestrator, 'não, 500', 'ac15-cancel-2');
     const cancelled = await turn(orchestrator, 'cancela', 'ac15-cancel-3');
-    expect(cancelled.response?.text).toBe(NO_PENDING_CANCEL_TEXT);
+    expect(cancelled.response?.text).toBe(DRAFTS_DISCARDED_NO_OP_TEXT);
     expect(fake.proposePosts()).toBe(0);
     expect(fake.ops.size).toBe(0);
     const closed = draftOf(store, draftId);

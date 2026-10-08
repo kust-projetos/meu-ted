@@ -20,6 +20,10 @@ import { describe, expect, it } from "vitest";
 
 import { assertValidGoldenFile, type GoldenCase } from "./v1/schema.js";
 import { detectSuccessClaim, evaluateContract } from "./v1/contract.js";
+import {
+  DRAFTS_DISCARDED_NO_OP_TEXT,
+  NO_PENDING_CANCEL_TEXT,
+} from "../../src/orchestration/pending-operation-coordinator.js";
 import { runGoldenCases } from "./v1/runner.js";
 import { buildGoldenReport } from "./v1/reporters/json.js";
 
@@ -40,10 +44,10 @@ const loadCases = (): GoldenCase[] => {
 describe("F4 golden — catalog is versioned, well-formed data", () => {
   it("every case file validates against the v1 schema with unique ids", () => {
     const cases = loadCases();
-    expect(cases.length).toBe(27);
+    expect(cases.length).toBe(29);
     const executable = cases.filter((entry) => entry.status === "executable");
     const pending = cases.filter((entry) => entry.status === "pending-capability");
-    expect(executable.length).toBe(21);
+    expect(executable.length).toBe(23);
     expect(pending.length).toBe(6);
     for (const entry of pending) {
       expect(entry.pendingReason?.capability, entry.id).toMatch(/\S/);
@@ -352,6 +356,244 @@ describe("F4 golden — claim/execution correspondence is temporal and per-opera
     );
     expect(verdict.falseSuccess).toBe(false);
     expect(verdict.passed).toBe(true);
+  });
+});
+
+describe("F4 golden — cancel/execution claims validated independently (P1-5.3/5.4)", () => {
+  const baseCase = {
+    version: "1",
+    id: "GW-CANCEL-BIND",
+    title: "cancel binding control",
+    workflow: "negative-control",
+    status: "executable",
+    initialState: {},
+    inputs: [{ text: "x" }, { text: "y" }, { text: "z" }],
+    expectations: {
+      expectedActions: [],
+      forbiddenActions: [],
+      backend: {},
+      response: {},
+      budget: { maxTurns: 3 },
+    },
+  } as const;
+
+  it("mixed claims are validated independently: an execution cannot legitimize the cancel half", () => {
+    const verdict = evaluateContract(
+      { ...baseCase },
+      [
+        {
+          index: 0,
+          intentionId: "mix-1",
+          mode: "confirmation",
+          actions: ["confirmation_executed"],
+          responseText: "ok",
+          operationId: "golden-op-1",
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 1,
+          executedOperationIdsAfterTurn: ["golden-op-1"],
+          cancellationsAfterTurn: 0,
+          cancelledOperationIdsAfterTurn: [],
+        },
+        {
+          index: 1,
+          intentionId: "mix-2",
+          mode: "cancel",
+          actions: [],
+          responseText: "Lançamento registrado com sucesso. Operação cancelada com segurança.",
+          operationId: null,
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 1,
+          executedOperationIdsAfterTurn: ["golden-op-1"],
+          cancellationsAfterTurn: 0,
+          cancelledOperationIdsAfterTurn: [],
+        },
+      ],
+      { proposalsCreated: 1, executionsSucceeded: 1, ledgerEntries: 1, operationIds: ["golden-op-1"], cancellationsSucceeded: 0, cancelledOperationIds: [] },
+    );
+    expect(verdict.falseSuccess).toBe(true);
+    expect(verdict.passed).toBe(false);
+    expect(verdict.findings.some((finding) => finding.rule === "false-success")).toBe(true);
+  });
+
+  it("mixed claims are validated independently: a cancellation cannot legitimize the exec half", () => {
+    const verdict = evaluateContract(
+      { ...baseCase },
+      [
+        {
+          index: 0,
+          intentionId: "mix-1",
+          mode: "cancel",
+          actions: ["cancel_executed"],
+          responseText: "Operação cancelada com segurança. Lançamento registrado com sucesso.",
+          operationId: null,
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 0,
+          executedOperationIdsAfterTurn: [],
+          cancellationsAfterTurn: 1,
+          cancelledOperationIdsAfterTurn: ["golden-op-1"],
+        },
+      ],
+      { proposalsCreated: 1, executionsSucceeded: 0, ledgerEntries: 1, operationIds: ["golden-op-1"], cancellationsSucceeded: 1, cancelledOperationIds: ["golden-op-1"] },
+    );
+    expect(verdict.falseSuccess).toBe(true);
+    expect(verdict.passed).toBe(false);
+    expect(verdict.findings.some((finding) => finding.rule === "false-success")).toBe(true);
+  });
+
+  it("a later cancel claim with no new cancellation is a HARD FAILURE even with prior exec+cancel", () => {
+    const verdict = evaluateContract(
+      { ...baseCase },
+      [
+        {
+          index: 0,
+          intentionId: "stale-1",
+          mode: "confirmation",
+          actions: ["confirmation_executed"],
+          responseText: "ok",
+          operationId: "golden-op-a",
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 1,
+          executedOperationIdsAfterTurn: ["golden-op-a"],
+          cancellationsAfterTurn: 0,
+          cancelledOperationIdsAfterTurn: [],
+        },
+        {
+          index: 1,
+          intentionId: "stale-2",
+          mode: "cancel",
+          actions: ["cancel_executed"],
+          responseText: "Operação cancelada com segurança.",
+          operationId: null,
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 1,
+          executedOperationIdsAfterTurn: ["golden-op-a"],
+          cancellationsAfterTurn: 1,
+          cancelledOperationIdsAfterTurn: ["golden-op-b"],
+        },
+        {
+          index: 2,
+          intentionId: "stale-3",
+          mode: "cancel",
+          actions: [],
+          responseText: "Operação cancelada com segurança.",
+          operationId: null,
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 1,
+          executedOperationIdsAfterTurn: ["golden-op-a"],
+          cancellationsAfterTurn: 1,
+          cancelledOperationIdsAfterTurn: ["golden-op-b"],
+        },
+      ],
+      { proposalsCreated: 2, executionsSucceeded: 1, ledgerEntries: 2, operationIds: ["golden-op-a", "golden-op-b"], cancellationsSucceeded: 1, cancelledOperationIds: ["golden-op-b"] },
+    );
+    expect(verdict.falseSuccess).toBe(true);
+    expect(verdict.passed).toBe(false);
+    expect(verdict.findings.some((finding) => finding.rule === "false-success")).toBe(true);
+  });
+
+  it("an idempotent cancel redelivery (same intentionId) stays legitimate", () => {
+    const verdict = evaluateContract(
+      { ...baseCase },
+      [
+        {
+          index: 0,
+          intentionId: "redelivery-1",
+          mode: "cancel",
+          actions: ["cancel_executed"],
+          responseText: "Operação cancelada com segurança.",
+          operationId: null,
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 0,
+          executedOperationIdsAfterTurn: [],
+          cancellationsAfterTurn: 1,
+          cancelledOperationIdsAfterTurn: ["golden-op-1"],
+        },
+        {
+          index: 1,
+          intentionId: "redelivery-1",
+          mode: "cancel",
+          actions: ["cancel_executed"],
+          responseText: "Operação cancelada com segurança.",
+          operationId: null,
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 0,
+          executedOperationIdsAfterTurn: [],
+          cancellationsAfterTurn: 1,
+          cancelledOperationIdsAfterTurn: ["golden-op-1"],
+        },
+      ],
+      { proposalsCreated: 1, executionsSucceeded: 0, ledgerEntries: 1, operationIds: ["golden-op-1"], cancellationsSucceeded: 1, cancelledOperationIds: ["golden-op-1"] },
+    );
+    expect(verdict.falseSuccess).toBe(false);
+    expect(verdict.passed).toBe(true);
+  });
+
+  it("a cross-intention cancel effect never excuses a replay claim under an intentionId that never cancelled", () => {
+    const verdict = evaluateContract(
+      { ...baseCase },
+      [
+        {
+          index: 0,
+          intentionId: "cross-x",
+          mode: "cancel",
+          actions: [],
+          responseText: "ok",
+          operationId: null,
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 0,
+          executedOperationIdsAfterTurn: [],
+          cancellationsAfterTurn: 0,
+          cancelledOperationIdsAfterTurn: [],
+        },
+        {
+          index: 1,
+          intentionId: "cross-y",
+          mode: "cancel",
+          actions: ["cancel_executed"],
+          responseText: "Operação cancelada com segurança.",
+          operationId: null,
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 0,
+          executedOperationIdsAfterTurn: [],
+          cancellationsAfterTurn: 1,
+          cancelledOperationIdsAfterTurn: ["golden-op-b"],
+        },
+        {
+          index: 2,
+          intentionId: "cross-x",
+          mode: "cancel",
+          actions: [],
+          responseText: "Operação cancelada com segurança.",
+          operationId: null,
+          latencyMs: 1,
+          planSkills: [],
+          executionsSucceededAfterTurn: 0,
+          executedOperationIdsAfterTurn: [],
+          cancellationsAfterTurn: 1,
+          cancelledOperationIdsAfterTurn: ["golden-op-b"],
+        },
+      ],
+      { proposalsCreated: 2, executionsSucceeded: 0, ledgerEntries: 2, operationIds: ["golden-op-a", "golden-op-b"], cancellationsSucceeded: 1, cancelledOperationIds: ["golden-op-b"] },
+    );
+    expect(verdict.falseSuccess).toBe(true);
+    expect(verdict.passed).toBe(false);
+    expect(verdict.findings.some((finding) => finding.rule === "false-success" && finding.detail.includes("redelivery-mismatch"))).toBe(true);
+  });
+
+  it("the drafts-discarded copy carries no success claim and never the cancelled wording", () => {
+    expect(detectSuccessClaim(DRAFTS_DISCARDED_NO_OP_TEXT)).toEqual([]);
+    expect(DRAFTS_DISCARDED_NO_OP_TEXT).not.toMatch(/cancelad/i);
+    expect(DRAFTS_DISCARDED_NO_OP_TEXT).not.toBe(NO_PENDING_CANCEL_TEXT);
   });
 });
 

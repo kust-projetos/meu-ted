@@ -9,8 +9,8 @@
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.ingest",
-        "reason": "Gate da Fase A (issue #107) ainda OFF: sem TED_ATTACHMENTS_ENABLED=1, sem binding R2 e sem coorte, o upload é 503 fail-closed. O runner não simula bytes.",
-        "requires": ["TED_ATTACHMENTS_ENABLED=1", "binding TED_ATTACHMENTS_BUCKET no wrangler.jsonc", "coorte attachment-specific", "Fase A concluída"]
+        "reason": "Ingestão ON em produção desde a ativação de flag+coorte (23d1485/d5f7143), mas o runner isolado não prova o caminho ON offline: sem binding R2, sem simulação de bytes e sem egress — o runner nunca carrega bytes de anexo. O caminho OFF (zero efeito financeiro, zero alegação) é provado de forma executável pelo GW-016a.",
+        "requires": ["prova live de ingestão com bytes via binding R2 + coorte (fora do runner isolado)", "evidência de canary attachment-specific da Fase A"]
       },
       "initialState": {},
       "inputs": [{ "text": "segue o comprovante", "attachments": [{ "name": "comprovante.pdf", "type": "application/pdf" }] }],
@@ -20,6 +20,23 @@
         "backend": { "proposalsCreated": 0, "executionsSucceeded": 0, "maxLedgerEntries": 0 },
         "response": {},
         "budget": { "maxTurns": 2 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-016a",
+      "title": "Anexo sem capability no runner: turno com anexo não tem efeito financeiro nem alegação",
+      "workflow": "attachment-ingest",
+      "status": "executable",
+      "initialState": {},
+      "inputs": [{ "text": "segue o comprovante", "attachments": [{ "name": "comprovante.pdf", "type": "application/pdf" }] }],
+      "expectations": {
+        "expectedActions": [],
+        "forbiddenActions": ["confirmation_executed"],
+        "backend": { "proposalsCreated": 0, "executionsSucceeded": 0, "maxLedgerEntries": 0 },
+        "response": { "mustNotMatch": ["\\bregistrad[oa]s?\\b", "\\bcom sucesso\\b", "\\bcancelad[oa]s?\\b"] },
+        "budget": { "maxTurns": 2 },
+        "plan": { "skillsContain": ["conversation"] }
       }
     },
     {

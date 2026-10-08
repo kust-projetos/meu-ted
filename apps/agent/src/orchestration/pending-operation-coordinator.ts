@@ -44,6 +44,7 @@ export type DecisionTarget =
 export type CancelResolution =
   | Readonly<{ kind: 'cancelled'; operationId?: string }>
   | Readonly<{ kind: 'empty' }>
+  | Readonly<{ kind: 'drafts-discarded'; discardedDrafts: number }>
   | Readonly<{ kind: 'inconclusive' }>
   | Readonly<{ kind: 'ambiguous'; operations: readonly ActiveOperationRecord[] }>;
 
@@ -75,6 +76,17 @@ export const NO_FAILED_OPERATION_TEXT = 'Não há nenhuma operação com falha p
  * turno alegava "Operação cancelada com segurança." com zero evidência.
  */
 export const NO_PENDING_CANCEL_TEXT = 'Não há nenhuma operação pendente para cancelar.';
+
+/**
+ * P1-5.3 (§5.3, outcome ii): ONLY local active drafts were discarded and no
+ * authoritative operation ever existed — a distinct deterministic no-op copy
+ * that states a draft was discarded and that NO authoritative operation was
+ * cancelled. It deliberately carries no "cancelada" wording (the Golden
+ * false-success detector stays silent on it) so a drafts-only discard can
+ * never read as an authoritative cancellation.
+ */
+export const DRAFTS_DISCARDED_NO_OP_TEXT =
+  'Descartei o rascunho em andamento: nada foi criado e não havia operação pendente para cancelar.';
 
 /** Conversational retry (§8.2): "tenta de novo" / "refaz" over a failed op. Kept tight — bare "tenta" never matches. */
 const RETRY_RE = /\b(tenta? (de novo|novamente)|tentar (de novo|novamente)|tente (de novo|novamente)|refa[zç](a|er)?|repet(e|ir|a|indo))\b/i;
@@ -209,9 +221,12 @@ export class PendingOperationCoordinator {
    * handoffs are settled by the SAME proposalIdempotencyKey first —
    * existing operation → authoritative cancel; definitive rejection →
    * discard; unknown → inconclusive (never "cancelado"). Then actives are
-   * discarded and the authoritative listing decides: none → 'empty'
-   * (deterministic no-op copy, never a "cancelada" claim — INV-03/GW-027);
-   * one → cancelled; several → ambiguous (nothing cancelled).
+   * discarded and the authoritative listing decides: none → 'empty' when
+   * nothing local was discarded either (deterministic no-op copy, never a
+   * "cancelada" claim — INV-03/GW-027), or 'drafts-discarded' when ONLY
+   * local active drafts were discarded and no authoritative operation ever
+   * existed (P1-5.3: distinct copy, never the 'cancelled' claim); one →
+   * cancelled; several → ambiguous (nothing cancelled).
    */
   async resolveCancel(
     identity: MutationIdentity,
@@ -276,10 +291,12 @@ export class PendingOperationCoordinator {
         }
       }
     }
-    this.discardActiveDrafts({ store, ctx, intentionId, nowMs: now });
+    const discardedDrafts = this.discardActiveDrafts({ store, ctx, intentionId, nowMs: now });
     if (outcomeUnknown) return { kind: 'inconclusive' };
     const target = await this.resolveDecisionTarget(identity, 'decidable');
-    if (target.kind === 'none') return { kind: 'empty' };
+    if (target.kind === 'none') {
+      return discardedDrafts > 0 ? { kind: 'drafts-discarded', discardedDrafts } : { kind: 'empty' };
+    }
     if (target.kind === 'multiple') return { kind: 'ambiguous', operations: target.operations };
     const result = await this.dependencies.client.cancel(target.operation.id, identity);
     return { kind: 'cancelled', operationId: result.operationId };
@@ -290,10 +307,21 @@ export class PendingOperationCoordinator {
     return renderInconclusive();
   }
 
-  private discardActiveDrafts(scope?: { store: MutationDraftStore; ctx: DraftContext; intentionId: string; nowMs?: number }): void {
-    if (!scope) return;
+  /**
+   * P1-5.3 drafts-discarded reply: ONLY local active drafts were discarded,
+   * no authoritative operation was cancelled. Callers (the orchestrator's
+   * cancel turn) must answer exactly this copy — never the 'cancelled'
+   * claim — for a `drafts-discarded` resolution.
+   */
+  renderDraftsDiscarded(): string {
+    return DRAFTS_DISCARDED_NO_OP_TEXT;
+  }
+
+  private discardActiveDrafts(scope?: { store: MutationDraftStore; ctx: DraftContext; intentionId: string; nowMs?: number }): number {
+    if (!scope) return 0;
     const now = scope.nowMs ?? this.nowMs();
     const stamp = new Date(now).toISOString();
+    let discarded = 0;
     for (const draft of scope.store.listActive(scope.ctx, now)) {
       scope.store.update(draft.draftId, {
         status: 'discarded',
@@ -305,6 +333,8 @@ export class PendingOperationCoordinator {
         originMessages: appendOriginMessage(draft.originMessages, scope.intentionId),
         relations: appendDraftRelation(draft.relations, 'cancel_ref'),
       });
+      discarded += 1;
     }
+    return discarded;
   }
 }

@@ -103,6 +103,12 @@ export const runGoldenCase = async (goldenCase: GoldenCase): Promise<GoldenCaseR
   for (const [index, input] of inputs.entries()) {
     const turnStartedAt = Date.now();
     const intentionId = input.intentionId ?? `${goldenCase.id}-t${index + 1}`;
+    // Cancel↔operation binding (P1-5.4): `runCancelTurn` returns no mutation,
+    // so a cancel turn's operationId would always be null and skip the
+    // contract's per-operation check. Bind harness-observed evidence instead:
+    // the cancellations already recorded by the previous turn's snapshot.
+    const cancelledBefore: readonly string[] =
+      turns.length > 0 ? (turns[turns.length - 1]?.cancelledOperationIdsAfterTurn ?? []) : [];
     const pendingOperationIds =
       input.pendingOperationIds === "from-previous" && lastOperationId ? [lastOperationId] : Array.isArray(input.pendingOperationIds) ? [...input.pendingOperationIds] : undefined;
     const body: Record<string, unknown> = { text: input.text, intentionId };
@@ -134,13 +140,24 @@ export const runGoldenCase = async (goldenCase: GoldenCase): Promise<GoldenCaseR
       if (/Pronto, esqueci essa mem[oó]ria/.test(responseText)) actions.push("forget_executed");
       if (backend.providerCalls.length > providerCallsBefore) actions.push("provider_called");
       if (result.mutation) lastOperationId = result.mutation.operationId;
+      const cancelledAfter: readonly string[] = backend.ops.filter((op) => op.status === "cancelled").map((op) => op.id);
+      // A "cancelada" reply with no mutation but exactly one fresh
+      // cancellation this turn is bound to that operation, so the contract's
+      // per-operation check applies. Zero or several fresh cancellations
+      // keep operationId null (the per-turn delta check still governs).
+      const freshCancellations = cancelledAfter.filter((id) => !cancelledBefore.includes(id));
+      const turnOperationId =
+        result.mutation?.operationId ??
+        (responseText === renderMutationResult("cancelled") && freshCancellations.length === 1 && freshCancellations[0] !== undefined
+          ? freshCancellations[0]
+          : null);
       turns.push({
         index,
         intentionId,
         mode: result.plan.mode,
         actions,
         responseText,
-        operationId: result.mutation?.operationId ?? null,
+        operationId: turnOperationId,
         latencyMs: Date.now() - turnStartedAt,
         planSkills: [...result.plan.skillNames],
         ...perTurnEffects(),
