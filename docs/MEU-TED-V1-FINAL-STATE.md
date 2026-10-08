@@ -8,20 +8,20 @@ encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 | Camada | SHA vigente | Evidência |
 |---|---|---|
 | API (Contabo) | `bd1ed9b` | `/health` + `/ready` verdes; `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` |
-| Agent (Cloudflare) | `e1cf1bb` (build `37631044197`) | `/health` ready + `buildSha` (deploy anterior ao merge do #106) |
-| PWA (Cloudflare) | `e1cf1bb` (build `37631044197`) | `/api/build-info` + `/api/backend/health` |
-| `main` (remota) | `71df281` (PR #106 mergeado em 07/10/2026) | correção: revisão anterior dizia `e1cf1bb` a partir de clone desatualizado |
-| Branch de trabalho | `docs/a19-rollout-inventory-fase-a` rebased sobre `71df281` | PR #108 (F1 PR-A/B/C + F4 Golden-start) |
+| Agent (Cloudflare) | `23d1485` (build `37775414425`) | `/health` ready + `buildSha` atestado; **attachments ACTIVE** via env |
+| PWA (Cloudflare) | `23d1485` | `/api/build-info` + `/api/backend/health` |
+| `main` (remota) | `23d1485` (PRs #111–#115 mergeados em 07–08/10/2026) | correção: revisão inicial citou `e1cf1bb`/`71df281` (clones desatualizados) |
+| Credencial demo (E2E/prova) | `demo@clinicademo.com` | criada em 08/10 via fluxo de convite; membership owner no household E2E `550e8400…` (dados sintéticos); senha só no env do operador |
 
 ## 2. Matriz de capabilities (config-de-deploy; live runtime = UNKNOWN sem credencial)
 
 | Capability | Código | Config-de-deploy | Live | Gate para avançar |
 |---|---|---|---|---|
 | Chat texto, memória/A17, skills/A18, forget two-step transacional | ACTIVE | ACTIVE | ACTIVE | — (baseline V1) |
-| Attachments (upload/R2) | disponível | DISABLED (sem binding em `wrangler.jsonc`) | UNKNOWN | #107 PR A→B→C |
+| Attachments (upload/R2) | ACTIVE | **ACTIVE** (`TED_ATTACHMENTS_ENABLED=1` + coorte `*`) | ACTIVE (upload 200 + objeto no R2) | PDF/STT/vision/web seguem OFF |
 | PDF textual | disponível | DISABLED (`TED_PDF_TEXT_ENABLED` ausente) | UNKNOWN | F2.1 + flag + canary |
-| STT (Groq whisper-large-v3-turbo) | disponível | DISABLED | BLOCKED sem `GROQ_API_KEY` + ZDR (operador) | F2.2 |
-| Vision (default `llama-4-scout-17b-16e-instruct` a confirmar) | disponível | DISABLED | BLOCKED sem key + ZDR + confirmação de modelo | F2.3 |
+| STT (Groq whisper-large-v3-turbo) | disponível | DISABLED (`GROQ_API_KEY` provisionada, flag ausente) | OFF (flag) | F2.2 + ZDR (operador) |
+| Vision (Gemini `gemini-3.8-flash`, default; Groq alternativo) | ACTIVE (código) | DISABLED (`TED_VISION_PROVIDER` ausente ⇒ provider `groq`; flag ausente) | OFF (flag) | F2.3 + ZDR/data-use (operador) |
 | web_search | disponível | UNKNOWN (key fora do repo) | UNKNOWN (inventário pendente) | F2.4 |
 | web_fetch | disponível | DISABLED (allowlist ausente) | pendente | F2.4 |
 | Decision provider (Jev/Clef/Strands) | disponível | DISABLED (default-off) | DISABLED | POST-V1 / OPTIONAL |
@@ -71,5 +71,30 @@ performance tuning, novos providers/agents/features, refactors cosméticos.
 
 ## 8. Trilha recente
 
-#90→#92→#97→#100→#103/#104→#106→(esta SPEC, #105/#107). A19 = NOT READY por
-desenho; core em prod READY e estável.
+#90→#92→#97→#100→#103/#104→#106→#108→#110–#115. A19: gate/sink/binding em
+produção desde 08/10/2026; attachments ACTIVE; PDF/STT/vision/web OFF.
+
+## 9. Ativação de attachments (08/10/2026) — evidência e achados
+
+- **Config live** (Cloudflare API, `settings`): `TED_ATTACHMENTS_ENABLED=1`,
+  `TED_ATTACHMENTS_COHORT=*`, `TED_ATTACHMENTS_BUCKET` (R2), `BUILD_SHA=23d1485`.
+- **Prova autenticada** (usuário demo): `POST /rpc/attachments` → `200` + `ref`;
+  objeto relido do R2 (`wrangler r2 object get .../ted/attachments/v1/<ref>`)
+  ⇒ upload grava de verdade. `GET /rpc/attachments/observability` → `200`
+  (`baseline.total` cresce) ⇒ sink G07 ativo.
+- **Fail-closed preservado**: matriz OFF/non-cohort → `503` + zero-write segue
+  provada em `tests/attachments/upload-gate.test.ts`; zero-mutação global com
+  gate negado (deletes de cleanup/ref-expirada) provada em
+  `upload-gate-zero-mutation.test.ts`.
+- **Achado operacional (corrida de deploy `workflow_run`)**: o merge de #115
+  teve o job `deploy` **pulado** (duas execuções da corrida gate↔CI) e só foi
+  publicado após `gh run rerun`; adicionalmente o E2E da PWA falhou por flake
+  Playwright conhecido (`PWA-03`), resolvido por `rerun --failed`. Estes dois
+  passos (rerun do deploy + rerun do flake) são hoje manuais; candidatos a
+  follow-up (gatilho de deploy mais robusto). `object_count` do
+  `wrangler r2 bucket info` é métrica periódica — não usar como prova imediata;
+  a prova é reler o objeto.
+- **Credencial demo**: `demo@clinicademo.com` (senha somente no env do
+  operador) — criada via fluxo real de convite (`account_invites` → sign-up →
+  `users` canônico → membership owner no household E2E `550e8400…`, dados
+  sintéticos). E-mail/validade registrados aqui; **senha nunca vai ao git**.
