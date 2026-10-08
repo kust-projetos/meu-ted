@@ -6,8 +6,8 @@
  * `TED_ATTACHMENTS_BUCKET` (bucket `pi-finance-ted-attachments`) E ativa
  * o upload (`TED_ATTACHMENTS_ENABLED === '1'` + coorte geral `'*'`) MAIS o
  * canary STT (`TED_AUDIO_STT_ENABLED === '1'`, operador 2026-10-08, ZDR ativo)
- * com rollout SEQUENCIADO por coorte (`TED_AUDIO_STT_COHORT` = test actor,
- * canary restritivo single-actor — A19-STT-COHORT).
+ * com rollout SEQUENCIADO por coorte (`TED_AUDIO_STT_COHORT` = test workspace,
+ * canary restritivo single-workspace — A19-STT-COHORT).
  * Nenhum binding novo além do R2, nenhuma outra env `TED_*` além das listadas
  * no teste de vars. A prova tem
  * duas pernas:
@@ -56,21 +56,24 @@ describe("F1 activation manifest — binding R2 declarado, upload ATIVO (flag + 
     ]);
   });
 
-  it("vars: upload ativo (flag '1' + coorte '*') + STT canary (flag '1' + coorte = test actor)", () => {
+  it("vars: upload ativo (flag '1' + coorte '*') + STT canary (flag '1' + coorte = test workspace)", () => {
     expect(manifest.vars).toEqual({
       API_ORIGIN: "https://api.synkroo.com.br",
       TED_ATTACHMENTS_ENABLED: "1",
       TED_ATTACHMENTS_COHORT: "*",
       // A19 STT canary (operador 2026-10-08, ZDR ativo): segunda trava ligada,
-      // rollout sequenciado por coorte (A19-STT-COHORT): coorte = test actor
-      // (canary restritivo, single actor). Rastrear qualquer nova var TED_* aqui.
+      // rollout sequenciado por coorte (A19-STT-COHORT): coorte = test workspace
+      // junio (canary restritivo, single workspace). O gate por actor nunca
+      // casaria: o token delegado não carrega actorId e o `sub` delegado vive
+      // em namespace distinto do session user.id — documentado. Rastrear
+      // qualquer nova var TED_* aqui.
       TED_AUDIO_STT_ENABLED: "1",
-      TED_AUDIO_STT_COHORT: "9f8d5408-ebc6-4210-9cac-d0faa9a3d9af",
+      TED_AUDIO_STT_COHORT: "d36cb649-4462-486d-940a-47128ad329f2",
     });
     expect(manifest.vars?.TED_ATTACHMENTS_ENABLED).toBe("1");
     expect(manifest.vars?.TED_ATTACHMENTS_COHORT).toBe("*");
     expect(manifest.vars?.TED_AUDIO_STT_ENABLED).toBe("1");
-    expect(manifest.vars?.TED_AUDIO_STT_COHORT).toBe("9f8d5408-ebc6-4210-9cac-d0faa9a3d9af");
+    expect(manifest.vars?.TED_AUDIO_STT_COHORT).toBe("d36cb649-4462-486d-940a-47128ad329f2");
   });
 
   it("nenhuma capability nova: sem binding AI, DO único preservado", () => {

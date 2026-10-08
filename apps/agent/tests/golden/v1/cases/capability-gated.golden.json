@@ -68,7 +68,7 @@
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.audio_stt",
-        "reason": "TED_AUDIO_STT_ENABLED=1 em produção (operador, 2026-10-08) com GROQ_API_KEY provisionada como secret e ZDR elegível ativo; coorte preenchida com o test actor (canary restritivo single-actor, A19-STT-COHORT) — flag+coorte autorizam egress só para essa identidade. Prova live pendente: relay do turn com flapping no upstream LLM (incidente externo, 502s) + canary sintético com áudio ainda não executado; o runner isolado nunca faz egress, então o caminho ON segue offline-unprovable.",
+        "reason": "TED_AUDIO_STT_ENABLED=1 em produção (operador, 2026-10-08) com GROQ_API_KEY provisionada como secret e ZDR elegível ativo; coorte preenchida com o test workspace junio d36cb649-4462-486d-940a-47128ad329f2 (canary restritivo single-workspace, A19-STT-COHORT) — flag+coorte autorizam egress só para turnos desse workspace. O gate por actor nunca casaria: o token de conexão delegado não carrega actorId e o `sub` delegado vive em namespace distinto do session user.id, por isso a coorte usa o workspaceId do turno. Prova live pendente: relay do turn com flapping no upstream LLM (incidente externo, 502s) + canary sintético com áudio ainda não executado; o runner isolado nunca faz egress, então o caminho ON segue offline-unprovable.",
         "requires": ["GROQ_API_KEY como secret", "TED_AUDIO_STT_ENABLED=1", "TED_AUDIO_STT_COHORT com identidade canary (operador)", "ZDR elegível na organização", "F2.2 (STT) com canary aprovado"]
       },
       "initialState": {},
