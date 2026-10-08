@@ -576,5 +576,29 @@
     "via": ["wrangler"],
     "effects": [],
     "range": ">=1.2.0"
+  },
+  {
+    "id": "pwa-2026-10-08-miniflare-via-sharp",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-10-08: npm re-reported the miniflare chain with a bounded range (upper 5.20261006.0-alpha) and fix wrangler 4.149.0; upgrading wrangler to an unpinned minor in CI is refused (deploy toolchain stability). Same build-time-only exposure as pwa-2026-10-06-miniflare-via-sharp; re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "miniflare",
+    "severity": "high",
+    "via": ["sharp"],
+    "effects": ["wrangler"],
+    "range": "<=0.0.0-fec45ed61 || 4.20250508.3 - 5.20261006.0-alpha"
+  },
+  {
+    "id": "pwa-2026-10-08-wrangler-via-miniflare",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-10-08: npm re-reported the wrangler chain with effects [] (was [@opennextjs/cloudflare]) and bounded range 4.16.0 - 4.148.0, fix 4.149.0; upgrading wrangler to an unpinned minor in CI is refused. Same build-time-only exposure as pwa-2026-10-06-wrangler-via-miniflare; re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "wrangler",
+    "severity": "high",
+    "via": ["miniflare"],
+    "effects": [],
+    "range": "<=0.0.0-7ae5dd357 || 4.16.0 - 4.148.0"
   }
 ]

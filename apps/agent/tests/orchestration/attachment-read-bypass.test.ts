@@ -34,18 +34,6 @@ const readPlan = (domain: 'accounts' | 'transactions' = 'accounts') => ({
   confidence: 1,
 });
 
-/** Deterministic-render envelope: a balance that renders without the model. */
-const balanceEnvelope: EvidenceEnvelope = {
-  version: '1',
-  items: [{
-    ref: 'account:acc-1',
-    source: 'api.accounts',
-    retrievedAt: new Date().toISOString(),
-    status: 'ok',
-    data: { balanceCents: 12345, accountName: 'Conta principal' },
-  }],
-};
-
 /**
  * Live-case envelope (A19-READ-BYPASS root cause): finance tools return NO
  * usable rows, so the old code answered deterministically ("sem dados")
