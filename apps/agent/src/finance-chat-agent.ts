@@ -157,8 +157,9 @@ import {
   type AttachmentIdentity,
   type AttachmentKind,
 } from "./attachments/types.js";
-// A14/R12: STT de áudio via Groq (G05) — default-off com trava dupla. Sem as
-// duas envs, `audioSttProcessorOverride` devolve `undefined` e o áudio segue no
+// A14/R12: STT de áudio via Groq (G05) — default-off com trava tripla. Sem as
+// três envs (flag + key + coorte com a identidade do turno),
+// `audioSttProcessorOverride` devolve `undefined` e o áudio segue no
 // `unsupported` fail-closed da A13, sem qualquer chamada de rede.
 import { AUDIO_TRANSCRIPT_NOTICE, audioSttProcessorOverride, composeTurnTextWithTranscript } from "./multimodal/groq-stt.js";
 // A15/R13: visão de imagem via Groq (G05, mesmo vendor do STT — nenhum vendor
@@ -229,15 +230,18 @@ export type Env = {
   TED_ATTACHMENTS_ENABLED?: string;
   TED_ATTACHMENTS_COHORT?: string;
   /**
-   * A14/R12: STT de áudio via Groq (G05) — default-off com TRAVA DUPLA.
-   * `GROQ_API_KEY` é a credencial (lida no call time, nunca logada) e
-   * `TED_AUDIO_STT_ENABLED=1` é o opt-in do rollout: sem as duas, a
+   * A14/R12: STT de áudio via Groq (G05) — default-off com TRAVA TRIPLA.
+   * `GROQ_API_KEY` é a credencial (lida no call time, nunca logada),
+   * `TED_AUDIO_STT_ENABLED=1` é o opt-in do rollout e `TED_AUDIO_STT_COHORT`
+   * (CSV de workspace/actor ids, `'*'` = todos; vazia/ausente = ninguém —
+   * A19-STT-COHORT) é o sequenciamento: sem os três, a
    * capacidade permanece `unsupported` e nada muda. `TED_AUDIO_STT_MODEL`
    * (allowlist Groq Whisper) e `TED_AUDIO_STT_TIMEOUT_MS` (default 20 s) são
    * opcionais; não há fallback automático de modelo.
    */
   GROQ_API_KEY?: string;
   TED_AUDIO_STT_ENABLED?: string;
+  TED_AUDIO_STT_COHORT?: string;
   TED_AUDIO_STT_MODEL?: string;
   TED_AUDIO_STT_TIMEOUT_MS?: string;
   /**
@@ -2323,13 +2327,15 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     // comportamento atual é preservado byte a byte.
     const attachmentDeleteAllowed = isAttachmentUploadAllowed(this.env, identity.workspaceId, identity.actorId);
     // A14: the audio processor replaces the `unsupported` entry ONLY when the
-    // STT double lock is on (`GROQ_API_KEY` + `TED_AUDIO_STT_ENABLED`). The
+    // STT triple lock is on (`GROQ_API_KEY` + `TED_AUDIO_STT_ENABLED` + the
+    // turn identity in `TED_AUDIO_STT_COHORT` — A19-STT-COHORT: flag alone
+    // never enables egress). The
     // registry — and the per-turn transcription budget carried by the processor
     // — is built HERE, once per turn: no state leaks across turns/workspaces.
     // A15: same contract for the image (vision, double lock) and for the PDF
     // (local text-layer parse — no egress, no credential, so no double lock).
     // With every lock off, the registry is byte-for-byte the A13 one.
-    const audioProcessor = audioSttProcessorOverride(this.env);
+    const audioProcessor = audioSttProcessorOverride(this.env, identity);
     // Visão: Groq legado por default; Gemini (decisão do operador) via
     // TED_VISION_PROVIDER=gemini (setado no rollout, nunca aqui).
     const imageProcessor =

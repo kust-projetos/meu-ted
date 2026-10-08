@@ -365,7 +365,7 @@ describe("A19/F1 — o cliente elevado não é construído com anexo presente (o
     },
     {
       label: "STT falhou",
-      env: { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1", TED_AUDIO_STT_TIMEOUT_MS: "1" },
+      env: { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1", TED_AUDIO_STT_COHORT: "*", TED_AUDIO_STT_TIMEOUT_MS: "1" },
       kind: "audio" as const,
       name: "nota-de-voz.webm",
       bytes: () => audioBytes(),

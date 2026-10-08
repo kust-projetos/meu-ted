@@ -6,7 +6,7 @@
  *
  * - the request carries the bytes and NOTHING else (no `prompt`, no user file
  *   name, no financial context);
- * - the double lock (`GROQ_API_KEY` + `TED_AUDIO_STT_ENABLED`) gates the whole
+ * - the triple lock (`GROQ_API_KEY` + `TED_AUDIO_STT_ENABLED` + `TED_AUDIO_STT_COHORT`) gates the whole
  *   capability — absent either, the audio processor stays `unsupported`;
  * - every failure is a TYPED state (timeout / unauthorized / rate_limited /
  *   provider_error / bad_response), never a raw throw and never silence;
@@ -26,9 +26,12 @@ import {
   composeTurnTextWithTranscript,
   createAudioSttProcessor,
   createGroqSttProvider,
+  isAudioSttCohortMember,
   isGroqSttAvailable,
+  parseAudioSttCohort,
   type AudioSttBudget,
 } from "../../src/multimodal/groq-stt.js";
+import { UNSUPPORTED_DETAIL } from "../../src/attachments/processors.js";
 import { ATTACHMENT_LIMITS } from "../../src/attachments/types.js";
 import { createMemoryAttachmentStorage } from "../../src/attachments/storage.js";
 import { ingestAttachment } from "../../src/attachments/ingest.js";
@@ -41,6 +44,7 @@ const IDENTITY: AttachmentIdentity = { workspaceId: "ws-1", actorId: "actor-1" }
 const ENABLED_ENV = {
   GROQ_API_KEY: "gsk-test-key",
   TED_AUDIO_STT_ENABLED: "1",
+  TED_AUDIO_STT_COHORT: "*",
 } as const;
 
 const bytesOf = (bytes: Uint8Array): ArrayBuffer =>
@@ -71,7 +75,7 @@ describe("A14/AC22 — capability gate (default-off duplo)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("com a key mas SEM TED_AUDIO_STT_ENABLED continua indisponível (trava dupla)", () => {
+  it("com a key mas SEM TED_AUDIO_STT_ENABLED continua indisponível (trava tripla)", () => {
     expect(isGroqSttAvailable({ GROQ_API_KEY: "gsk-test-key" })).toBe(false);
     expect(isGroqSttAvailable({ GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "0" })).toBe(false);
     expect(isGroqSttAvailable(ENABLED_ENV)).toBe(true);
@@ -207,8 +211,29 @@ describe("A14/AC22 — estados de falha explícitos (AC22)", () => {
     ).resolves.toMatchObject({ state: "provider_error" });
   });
 
-  it("NÃO existe fallback de modelo: uma falha nunca vira uma segunda chamada", async () => {
-    const { calls, fetchImpl } = recordingFetch(async () => jsonResponse({ error: "boom" }, 500));
+  it("nunca segue redirect: usa redirect manual e trata 307 como 'provider_error' sem segunda chamada", async () => {
+    const { calls, fetchImpl } = recordingFetch(
+      async () => new Response(null, { status: 307, headers: { location: "https://evil.example/steal" } }),
+    );
+    const provider = createGroqSttProvider({ env: ENABLED_ENV, fetchImpl });
+    const outcome = await provider.transcribe({ bytes: bytesOf(webmBytes()), mime: "audio/webm" });
+    expect(outcome.state).toBe("provider_error");
+    // Never followed, never resent: exactly one outbound call.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init.redirect).toBe("manual");
+  });
+
+  it("redirect opaco do edge ('opaqueredirect') vira 'provider_error' sem segunda chamada", async () => {
+    const opaqueRedirect = { type: "opaqueredirect", status: 0, ok: false } as unknown as Response;
+    const { calls, fetchImpl } = recordingFetch(async () => opaqueRedirect);
+    const provider = createGroqSttProvider({ env: ENABLED_ENV, fetchImpl });
+    const outcome = await provider.transcribe({ bytes: bytesOf(webmBytes()), mime: "audio/webm" });
+    expect(outcome.state).toBe("provider_error");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init.redirect).toBe("manual");
+  });
+
+  it("NÃO existe fallback de modelo: uma falha nunca vira uma segunda chamada", async () => {    const { calls, fetchImpl } = recordingFetch(async () => jsonResponse({ error: "boom" }, 500));
     const provider = createGroqSttProvider({ env: { ...ENABLED_ENV, TED_AUDIO_STT_MODEL: "whisper-large-v3" }, fetchImpl });
     const outcome = await provider.transcribe({ bytes: bytesOf(webmBytes()), mime: "audio/webm" });
     expect(outcome.state).toBe("provider_error");
@@ -354,5 +379,84 @@ describe("A14/AC22 — texto do turno com proveniência", () => {
   it("sem transcrição o texto do turno é o MESMO texto do usuário (byte a byte)", () => {
     expect(composeTurnTextWithTranscript({ userText: "  olá  ", transcript: undefined })).toBe("olá");
     expect(composeTurnTextWithTranscript({ userText: "", transcript: "   ", attachmentPlaceholder: "[anexo audio]" })).toBe("[anexo audio]");
+  });
+});
+
+describe("A19-STT-COHORT — rollout sequenciado (flag + coorte)", () => {
+  const KEY_ENV = {
+    GROQ_API_KEY: "gsk-test-key",
+    TED_AUDIO_STT_ENABLED: "1",
+  } as const;
+
+  it("parse: CSV com trim, vazios descartados; ausente/não-string ⇒ [] e nunca lança", () => {
+    expect(parseAudioSttCohort({ TED_AUDIO_STT_COHORT: " ws-1 , ,actor-1 " })).toEqual(["ws-1", "actor-1"]);
+    expect(parseAudioSttCohort({ TED_AUDIO_STT_COHORT: " , ," })).toEqual([]);
+    expect(parseAudioSttCohort({})).toEqual([]);
+    expect(parseAudioSttCohort(undefined)).toEqual([]);
+    expect(parseAudioSttCohort({ TED_AUDIO_STT_COHORT: 42 })).toEqual([]);
+    expect(parseAudioSttCohort({ TED_AUDIO_STT_COHORT: null })).toEqual([]);
+    expect(() => parseAudioSttCohort(undefined)).not.toThrow();
+    expect(() => isAudioSttCohortMember(undefined, "ws-1", "actor-1")).not.toThrow();
+  });
+
+  it("'*' casa qualquer identidade; explícita casa por workspace OU actor; resto nega", () => {
+    expect(isAudioSttCohortMember({ TED_AUDIO_STT_COHORT: "*" }, "any-ws", "any-actor")).toBe(true);
+    expect(isAudioSttCohortMember({ TED_AUDIO_STT_COHORT: "ws-1" }, "ws-1", "other")).toBe(true);
+    expect(isAudioSttCohortMember({ TED_AUDIO_STT_COHORT: "actor-9" }, "ws-x", "actor-9")).toBe(true);
+    expect(isAudioSttCohortMember({ TED_AUDIO_STT_COHORT: "ws-1" }, "ws-2", "actor-1")).toBe(false);
+    expect(isAudioSttCohortMember({}, "ws-1", "actor-1")).toBe(false);
+    expect(isAudioSttCohortMember({ TED_AUDIO_STT_COHORT: "" }, "ws-1", "actor-1")).toBe(false);
+    expect(isAudioSttCohortMember({ TED_AUDIO_STT_COHORT: " , ," }, "ws-1", "actor-1")).toBe(false);
+  });
+
+  it("flag+key SEM coorte ⇒ indisponível (flag sozinha não autoriza egress)", () => {
+    expect(isGroqSttAvailable(KEY_ENV, "ws-1", "actor-1")).toBe(false);
+    expect(isGroqSttAvailable(KEY_ENV)).toBe(false);
+  });
+
+  it("'*' restaura a disponibilidade geral (flag+key+curinga)", () => {
+    expect(
+      isGroqSttAvailable({ ...KEY_ENV, TED_AUDIO_STT_COHORT: "*" }, "ws-qualquer", "actor-qualquer"),
+    ).toBe(true);
+  });
+
+  it("fora da coorte: transcribe devolve 'unavailable' com ZERO chamadas de rede", async () => {
+    const { calls, fetchImpl } = recordingFetch(async () => jsonResponse({ text: "nunca chamado" }));
+    const provider = createGroqSttProvider({
+      env: KEY_ENV,
+      workspaceId: "ws-1",
+      actorId: "actor-1",
+      fetchImpl,
+    });
+    expect(provider.available).toBe(false);
+    const outcome = await provider.transcribe({ bytes: bytesOf(webmBytes()), mime: "audio/webm" });
+    expect(outcome.state).toBe("unavailable");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("fora da coorte: processor devolve 'unsupported' (copy do fail-closed), sem egress", async () => {
+    const { calls, fetchImpl } = recordingFetch(async () => jsonResponse({ text: "nunca chamado" }));
+    const provider = createGroqSttProvider({
+      env: KEY_ENV,
+      workspaceId: "ws-1",
+      actorId: "actor-1",
+      fetchImpl,
+    });
+    const processor = createAudioSttProcessor({ provider, budget: freshBudget() });
+    const result = await processor({
+      record: {
+        ref: "att_AAAAAAAAAAAAAAAAAAAAAA",
+        kind: "audio",
+        name: "nota.webm",
+        size: 10,
+        sha256: "0".repeat(64),
+        mime: "audio/webm",
+      },
+      bytes: bytesOf(webmBytes()),
+      identity: IDENTITY,
+    });
+    expect(result.state).toBe("unsupported");
+    expect(result.detail).toBe(UNSUPPORTED_DETAIL);
+    expect(calls).toHaveLength(0);
   });
 });
