@@ -344,7 +344,15 @@ export const isDefinitiveProposeError = (error: unknown): boolean => {
   return status >= 400 && status < 500;
 };
 
-const CANCEL_RE = /\b(cancela|cancelar|desist)/i;
+/**
+ * "desfaz" cancela (decisão do operador): mesmo stem set do undo
+ * (`desfaz|desfazer|desfaç`, sem o "z" das formas com ç) comporta-se como
+ * "cancela" aqui. Sem guarda de "não" — igual a "cancela": a proteção contra
+ * texto não-ditado vive no roteamento (decisionText), não neste matcher.
+ * O vocabulário de cancel do forget two-step é propositalmente outro
+ * (ambiguidade com undo) e NÃO muda aqui.
+ */
+const CANCEL_RE = /\b(cancela|cancelar|desist|desfaz|desfazer|desfaç)/i;
 const RESET_RE = /esquece|deixa (pra l[aá]|quieto|isso)|na verdade|come[cç]a|recome[cç]a|nova inten/i;
 
 export const isCancelText = (text: string): boolean => CANCEL_RE.test(text);

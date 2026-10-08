@@ -1,0 +1,58 @@
+{
+  "version": "1",
+  "cases": [
+    {
+      "version": "1",
+      "id": "GW-026",
+      "title": "Cancelamento ambíguo: duas propostas + 'cancela' pede desambiguação, nada é cancelado",
+      "workflow": "manual-cancel-ambiguous",
+      "status": "executable",
+      "initialState": {
+        "accounts": [
+          { "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }
+        ],
+        "categories": [
+          { "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }
+        ]
+      },
+      "inputs": [
+        { "text": "gastei 50 de carne categoria alimentação", "intentionId": "intent-amb-1" },
+        { "text": "gastei 30 de pao categoria alimentação", "intentionId": "intent-amb-2" },
+        { "text": "cancela", "intentionId": "intent-amb-3" }
+      ],
+      "expectations": {
+        "expectedActions": ["proposal_created", "clarification_asked"],
+        "forbiddenActions": ["confirmation_executed", "cancel_executed", "forget_proposed", "forget_executed"],
+        "backend": { "proposalsCreated": 2, "executionsSucceeded": 0, "maxLedgerEntries": 2 },
+        "response": { "mustNotMatch": ["registrado", "cancelada", "com sucesso"] },
+        "budget": { "maxTurns": 5 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-027",
+      "title": "Cancela sem nada pendente: resposta determinística sem efeito e sem claim",
+      "workflow": "manual-cancel-empty",
+      "status": "executable",
+      "initialState": {
+        "accounts": [
+          { "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }
+        ],
+        "categories": [
+          { "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }
+        ]
+      },
+      "inputs": [{ "text": "cancela", "intentionId": "intent-empty-1" }],
+      "expectations": {
+        "expectedActions": [],
+        "forbiddenActions": ["confirmation_executed", "cancel_executed", "forget_proposed", "forget_executed", "proposal_created"],
+        "backend": { "proposalsCreated": 0, "executionsSucceeded": 0, "maxLedgerEntries": 0 },
+        "response": {
+          "mustMatch": ["Não há nenhuma operação pendente"],
+          "mustNotMatch": ["registrado", "cancelada", "com sucesso"]
+        },
+        "budget": { "maxTurns": 3 }
+      }
+    }
+  ]
+}
