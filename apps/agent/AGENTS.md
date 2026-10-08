@@ -342,6 +342,13 @@ marcador é load-bearing e é testada contra o `routeIntent` real: uma versão
 anterior ("NÃO são um lote; registre um por vez") casava com a heurística de
 negação e roteava todo turno com dado para `cancel`.
 
+**Estado (A19-PDF-FLAG, configurado para próximo deploy — ainda NÃO em
+produção):** `TED_PDF_TEXT_ENABLED=1` no manifesto para canary pós-deploy.
+Extração **local-only** (unpdf, zero egress, zero credencial);
+flag-global por desenho (sem mecanismo de coorte para PDF; coorte geral de
+anexos já live) — blast radius é CPU-only, com tetos testados (10 páginas /
+20k chars / 10s por evento, early-exit).
+
 ## Anexos: identidade, decisão e proveniência (A13 + correções F1–F3, F5, F8, F9, F11)
 
 **F1 — conteúdo de anexo NUNCA decide (BLOCKER).** O texto do turno é composto

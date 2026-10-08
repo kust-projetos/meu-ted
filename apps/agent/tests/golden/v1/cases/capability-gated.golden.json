@@ -47,7 +47,7 @@
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.pdf_text",
-        "reason": "TED_PDF_TEXT_ENABLED ainda não é 1 neste ambiente; sem a flag nenhum extractor é construído e o PDF é unsupported fail-closed.",
+        "reason": "TED_PDF_TEXT_ENABLED=1 configurado no manifesto para canary pós-deploy (A19-PDF-FLAG; extração local unpdf, zero egress, zero credencial; tetos 10 páginas/20k chars/10s por evento com early-exit; flag-global por desenho, sem coorte PDF — coorte geral de anexos já live). O runner isolado nunca constrói o extractor nem lê bytes de PDF, então o caminho ON segue offline-unprovable; prova live via canary sintético com PDF pós-deploy.",
         "requires": ["TED_PDF_TEXT_ENABLED=1", "F2.1 (PDF) com canary aprovado"]
       },
       "initialState": {},

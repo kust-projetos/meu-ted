@@ -69,11 +69,17 @@ describe("F1 activation manifest — binding R2 declarado, upload ATIVO (flag + 
       // qualquer nova var TED_* aqui.
       TED_AUDIO_STT_ENABLED: "1",
       TED_AUDIO_STT_COHORT: "d36cb649-4462-486d-940a-47128ad329f2",
+      // A19 PDF canary (A19-PDF-FLAG): extração local da camada de texto
+      // (unpdf, zero egress, zero credencial), flag-global por desenho
+      // (sem mecanismo de coorte para PDF; coorte geral de anexos já live).
+      // Tetos testados: 10 páginas / 20k chars / 10s por evento, early-exit.
+      TED_PDF_TEXT_ENABLED: "1",
     });
     expect(manifest.vars?.TED_ATTACHMENTS_ENABLED).toBe("1");
     expect(manifest.vars?.TED_ATTACHMENTS_COHORT).toBe("*");
     expect(manifest.vars?.TED_AUDIO_STT_ENABLED).toBe("1");
     expect(manifest.vars?.TED_AUDIO_STT_COHORT).toBe("d36cb649-4462-486d-940a-47128ad329f2");
+    expect(manifest.vars?.TED_PDF_TEXT_ENABLED).toBe("1");
   });
 
   it("nenhuma capability nova: sem binding AI, DO único preservado", () => {
