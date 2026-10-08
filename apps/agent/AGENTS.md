@@ -229,8 +229,14 @@ curto).
 **Rollout**: habilitar exige `GROQ_API_KEY` como secret **e**
 `TED_AUDIO_STT_ENABLED=1`, com **ZDR elegível ativado na organização da Groq
 antes de qualquer tráfego real** (condição de G05; a retenção residual padrão
-do provider é de 30 dias e não é ZDR). Nenhuma credencial foi provisionada
-nesta fatia.
+do provider é de 30 dias e não é ZDR). Validação live 2026-10-08
+(`docs/reports/2026-10-08-a19-provider-validation.md`, bytes sintéticos, zero
+PII): chave (1ª de 3 em `GROQ_API_KEYS` do projeto telegran, salva no `.env`
+gitignored da raiz) autentica — `whisper-large-v3-turbo` listado e transcreve
+(200 em 463 ms, campo `text` presente); tráfego de usuário segue bloqueado em
+ZDR + flag. Secret `GROQ_API_KEY` **presente no Worker** (verificado 2026-10-08
+via `wrangler secret list`); flag segue default-off. Precisão em fala real
+pt-BR pendente de canary.
 
 ## Visão (imagem) — R13, default-off com trava dupla (provider selecionável)
 
@@ -285,6 +291,12 @@ um lote para escrita; a escrita continua exigindo a confirmação vigente.
 **Rollout**: exige `GROQ_API_KEY` como secret **e** `TED_VISION_ENABLED=1`, com
 **ZDR elegível ativado na organização da Groq antes de qualquer tráfego real**
 (mesma condição de G05 da A14). Modelo default a confirmar no rollout.
+Validação live 2026-10-08 (`docs/reports/2026-10-08-a19-provider-validation.md`):
+`meta-llama/llama-4-scout-17b-16e-instruct` **não consta no catálogo da conta**
+(404 `model_not_found`, 11 modelos listados, nenhum de visão) — caminho Groq
+BLOQUEADO até o modelo voltar ao catálogo; caminho Gemini BLOQUEADO (sem
+`GOOGLE_AI_STUDIO_KEY` em nenhum projeto consultado). Defaults mantidos sem
+alteração. Capacidade segue OFF.
 
 ## PDF (camada de texto) — R13, local, sem egress, **default-off**
 
