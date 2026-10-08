@@ -1,51 +1,42 @@
-# A19 — Validação de providers com dados sintéticos (2026-10-08)
+# A19 — Validação de providers e canaries live (2026-10-08)
 
 Decisões do operador nesta data: chaves Groq/Google obtidas de `D:\projetos\telegran`;
-Tavily/Brave recusados (APIs pagas — web search segue sem provider); restante por
-decisão do agente. NENHUM segredo neste relatório (só presença/forma/resposta).
+Tavily/Brave recusados (APIs pagas — web search segue sem provider); ZDR ativo;
+STT ligado; modelo Vision `gemini-2.5-flash`; credenciais de teste; nova chave
+OpenCode para o relay; restante por decisão do agente.
+NENHUM segredo neste relatório (só presença/forma/resposta).
 
 ## 1. Proveniência das credenciais
 
-- `D:\projetos\telegran\.env`: `GROQ_API_KEYS` com **3 chaves** (formato `gsk_…`);
-  **nenhuma** `GOOGLE_AI_STUDIO_KEY` no projeto (grep em `*.env*`, configs e
-  `AIza|GEMINI|GOOGLE` — zero matches). `LLM_API_KEY` (`AQ.Ab8…`) é chave
-  OpenCode Zen, **não** AI Studio — não reutilizada.
-- Salvo em `D:\projetos\pi-financeiro\.env`: `GROQ_API_KEY=<primeira chave>`
-  (gitignored — provado via `git check-ignore`; nunca commitado). Demais chaves
-  mantidas só no telegran (rotação de reserva).
+- `D:\projetos\telegran\.env`: `GROQ_API_KEYS` com **3 chaves** (formato `gsk_…`).
+- Chave Google AI Studio fornecida pelo operador (válida: 50 modelos listados).
+- Salvas em `D:\projetos\pi-financeiro\.env` (gitignored — provado via
+  `git check-ignore`; nunca commitado): `GROQ_API_KEY` (1ª), `GOOGLE_AI_STUDIO_KEY`,
+  `TEST_USER_EMAIL/PASSWORD/WORKSPACE_NAME`, `OPENCODE_CANDIDATE_KEY`.
 
-## 2. Provas live (script `groq_probes.py`, bytes 100% sintéticos, zero PII)
+## 2. Provas live de provider (bytes 100% sintéticos, zero PII)
 
 | Probe | Resultado | Evidência |
 |---|---|---|
-| `GET /openai/v1/models` | **200**, 11 modelos, 268 ms | chave válida; `whisper-large-v3-turbo` ✓, `whisper-large-v3` ✓, `meta-llama/llama-4-scout-17b-16e-instruct` ✗ |
-| STT tom 440 Hz 3 s WAV | **200**, 463 ms, campo `text` presente | contrato do adapter (multipart `file+model+language+response_format=json`) válido; ≪ teto 20 s |
-| Vision BMP sintético `R$ 42,50` | **404** `model_not_found` | `The model … does not exist or you do not have access to it` — modelo fora de catálogo nesta conta |
-| Gemini AI Studio | **bloqueado** | sem chave — nenhuma chamada feita |
+| Groq `GET /models` | **200**, 11 modelos | chave válida; `whisper-large-v3-turbo` ✓ + `whisper-large-v3` ✓; `llama-4-scout` ✗ (fora do catálogo) |
+| STT tom 440 Hz 3 s WAV | **200**, 463 ms, `text` presente | contrato do adapter válido; ≪ teto 20 s |
+| Vision BMP `R$ 42,50` (Groq) | **404** `model_not_found` | modelo indisponível nesta conta |
+| Gemini `models` + `generateContent` | **200**; `2.5-flash` extrai exato (valor 42.50, moeda R$, nulls honestos) | `3.8-flash` em 503-demanda persistente; `2.5-flash` aprovado pelo operador |
 
 Nota operacional: `python-urllib` sem User-Agent recebe **403 error 1010**
-(bloqueio de borda Cloudflare); com UA de browser, 200. Não é erro de auth.
+(bloqueio de borda); com UA de browser, 200. Não é erro de auth.
 
 ## 3. Decisões (agente, autorizado pelo operador)
 
-- **STT/Groq: provider+modelo PROVADOS ao vivo** (auth, shape, latência).
-  Tráfego de usuário segue bloqueado em **ZDR** (não verificável por API —
-  só dashboard da org Groq) + flag `TED_AUDIO_STT_ENABLED` + secret no Worker.
-  Residual: precisão de conteúdo em fala real pt-BR pendente de canary.
-- **Vision/Groq: BLOQUEADO** — modelo default indisponível no catálogo
-  (responde à pergunta "modelo a confirmar no rollout": NÃO disponível).
-  **Vision/Gemini: BLOQUEADO** — sem chave. Capacidade Vision segue OFF.
-  Defaults mantidos sem alteração (nenhuma troca silenciosa de modelo).
-- **Web search: sem provider** (decisão do operador) — segue `pending-capability`
-  com comportamento gracioso existente; nenhuma mudança de código.
-- **Web fetch: DISABLED aprovado** (decisão do agente) — allowlist vazia,
-  fail-closed; sem egress implícito. Estado terminal explícito, não pendência.
-- **PDF: local, sem egress** — suites 96/96 verdes (abaixo); canary de flag
-  (`TED_PDF_TEXT_ENABLED=1`) liberado para sequência (sem dependência externa).
-- **R2 live + provisionamento de secrets: BLOQUEADO** — sem
-  `CLOUDFLARE_API_TOKEN` local. Comandos para o operador (apps/agent):
-  `wrangler secret put GROQ_API_KEY`, `wrangler secret put GOOGLE_AI_STUDIO_KEY`
-  (quando existir), `wrangler r2 bucket list` (conf. `pi-finance-ted-attachments`).
+- **STT/Groq: provider+modelo PROVADOS ao vivo**; ZDR ativo (operador).
+  Residual: precisão em fala real pt-BR (requer voz do operador).
+- **Vision/Groq: BLOQUEADO** (modelo fora do catálogo).
+  **Vision/Gemini `2.5-flash`: APROVADO** (decisão do operador) — flag+coorte
+  deployados; extração exata provada off-box; turno com conteúdo pendente
+  (cota diária, abaixo).
+- **Web search: sem provider** — `pending-capability` permanente, gracioso.
+- **Web fetch: DISABLED aprovado** — allowlist vazia, fail-closed.
+- **PDF: local, sem egress** — canary aceito (seção 10).
 
 ## 4. Suites multimodais (offline, mocks)
 
@@ -53,70 +44,63 @@ Nota operacional: `python-urllib` sem User-Agent recebe **403 error 1010**
 gemini-vision,vision-pdf-turn,audio-stt-turn,audio-duration}` →
 **8 files, 96/96 passed**.
 
-## 6. Verificação Cloudflare (2026-10-08, token de `D:\projetos\cloudflare\.env`)
-
-- Conta autenticada via `wrangler whoami` (token válido).
-- Bucket `pi-finance-ted-attachments` **existe** (criado 2026-10-07T16:06:35Z,
-  Fase A) + `painel-admin-logs` (outro uso, intocado).
-- Secrets do Worker: `GROQ_API_KEY` ✓ presente, `AGENT_RUNTIME_ADMIN_TOKEN` ✓,
-  `OPENCODE_ZEN_API_KEY` ✓; `GOOGLE_AI_STUDIO_KEY` ✗ ausente.
-- Round-trip de upload ao vivo e leitura do sink G07 pendentes de **auth de
-  workspace de teste** (credencial demo é do operador).
-
-## 8. Canary STT sintético ao vivo (2026-10-08, coorte workspace `bf13df8`)
-
-- Upload áudio 200 (`att_*`, WAV 440 Hz sintético) + turno 200 no workspace
-  junio (coorte): `attachment_states=audio:processed` — **primeiro egress STT
-  real em prod** (Groq, test actor); sem marcador de transcrição no tom
-  (esperado — tom puro), sem mutação/pending/undo.
-- Prova negativa: workspace Test Family (fora da coorte) → `audio:unsupported`,
-  sem transcrição — gate restritivo provado nas duas direções.
-- Relay LLM instável em janelas de minutos (502 `http_502` intermitente em
-  turnos de texto e áudio; A/B 200/200/200 prova sanidade do caminho quando o
-  relay está up) — incidente externo ao A19, a escalar separadamente.
-- Identidades: token delegado NÃO carrega `actorId`; `sub` ≠ session user.id
-  (namespaces distintos) — coorte por actor jamais casaria; coorte por
-  workspace é o mecanismo correto (PR #124).
-- Residual: precisão em fala real pt-BR (requer voz do operador); telemetria
-  STT no sink (só ingest hoje).
-
-## 7. Deploy do canary STT (2026-10-08, PR #122 → `abb58e9`, ATTESTED)
-
-- Flag `TED_AUDIO_STT_ENABLED=1` + coorte `TED_AUDIO_STT_COHORT=""` (fail-closed)
-  deployados via fluxo autorizado; attestation `ATTESTED reason=deploy-smoke-pass
-  sha=abb58e9`; `/health` live `ready` com `buildSha=abb58e9`.
-- Gate triplo + `redirect:'manual'` revisados (APPROVED P0=P1=P2=0).
-- Próximo: PR follow-up preenche a coorte com identidade de teste (operador)
-  → canary sintético → expansão.
-
-## 9. Incidente: relay LLM 100% down (2026-10-08, externo ao A19)
-
-- **Prova:** turnos modo conversation/texto puro (`ola, como voce esta?`,
-  `me conte uma dica de economia`) → 502 `http_502` ~2.6 s; turnos
-  determinísticos (`qual meu saldo?`) → 200. Split limpo: todo caminho que
-  chama o provider falha; todo render determinístico passa. "Flapping"
-  anterior era leitura errada (determinístico vs provider, não instabilidade
-  intermitente) — com a correção, o padrão é 100% consistente.
-- **Escopo:** afeta TODO turno generativo do TED em produção (chat
-  conversacional parado; leituras determinísticas OK). Independente das
-  mudanças A19 (turnos sem anexo também falham).
-- **Causa provável:** upstream do relay na API (opencode-go/deepseek —
-  sessões anteriores registram OpenRouter sem créditos e Zen sem fundos).
-  Verificação API/Contabo fora do alcance desta sessão.
-- **Gap de processo:** o smoke pós-deploy (`/health` + checks read-only)
-  NUNCA exercita um turno generativo — um relay morto passa no deploy como
-  verde. Recomendação: smoke com turno `conversation` sintético (conta de
-  teste) como gate pós-deploy.
-- **Impacto A19:** provas de RESPOSTA (transcrição útil, citação de PDF)
-  bloqueadas até a recuperação; pipeline até a chamada do modelo 100% provado
-  (upload→R2→extract→composed→relay-attempt).
+## 5. Matriz A19 pós-canaries
 
 | Capacidade | IMPLEMENTED | CONFIGURED | TESTED | CANARY | PROD VERIFIED | ROLLBACK | Bloqueio |
 |---|---|---|---|---|---|---|---|
-| Attachments/R2 upload | sim | sim (repo) | sim | parcial (live ativado antes) | parcial | redeploy SHA | R2 live + secret no Worker (operador) |
-| PDF texto | sim | não (flag off) | sim (96) | não | não | n/a local | nenhum — liberado p/ canary |
-| STT | sim | sim (flag+coorte ws) | sim (unit + live sintético ±) | sim (processed + negativo; utilidade da transcrição pendente relay) | parcial (membro; precisão fala real pendente) | revert PR | relay LLM down (incidente §9); voz do operador p/ precisão; telemetria STT no sink |
-| Vision | sim | não | sim (unit; live 404) | não | não | n/a | modelo Groq indisponível + sem chave Gemini |
-| Web search | sim (sem provider) | n/a | sim (gracioso) | n/a | n/a | n/a | sem provider (decisão operador) — pendente permanente |
+| Attachments/R2 upload | sim | sim | sim | sim (200 + sink) | sim | redeploy SHA | nenhum |
+| PDF texto | sim | sim (flag) | sim (96 + local exato) | sim (citação §10) | sim | revert PR | nenhum |
+| STT | sim | sim (flag+coorte ws) | sim | sim (processed + negativo; utilidade pendente) | parcial | revert PR | voz do operador p/ precisão; telemetria STT no sink |
+| Vision/Gemini 2.5 | sim | sim (flag+coorte ws) | sim | parcial (upload 200; turno pendente) | não | revert PR | cota diária p/ turno; relay (resolvido §10) |
+| Web search | sim (sem provider) | n/a | sim (gracioso) | n/a | n/a | n/a | sem provider — pendente permanente |
 | Web fetch | sim | sim (allowlist vazia) | sim | n/a | DISABLED aprovado | n/a | nenhum |
-| G07 sink | sim | sim | sim | baseline parcial | não | n/a | leitura live pós-tráfego |
+| G07 sink | sim | sim | sim | sim (ingest real) | parcial | n/a | telemetria STT/transcrição no sink |
+
+## 6. Verificação Cloudflare (token de `D:\projetos\cloudflare\.env`)
+
+- Conta autenticada via `wrangler whoami` (token válido).
+- Bucket `pi-finance-ted-attachments` **existe** (criado 2026-10-07).
+- Secrets do Worker: `GROQ_API_KEY` ✓, `GOOGLE_AI_STUDIO_KEY` ✓ (provisionado
+  nesta sessão), `AGENT_RUNTIME_ADMIN_TOKEN` ✓, `OPENCODE_ZEN_API_KEY` ✓.
+- Round-trip de upload ao vivo provado (200 + `att_*` + sink `successRate=1`).
+
+## 7. Deploy do canary STT (PR #122 → `abb58e9`, ATTESTED)
+
+- Flag `TED_AUDIO_STT_ENABLED=1` + coorte `""` (fail-closed) deployados;
+  attestation `ATTESTED reason=deploy-smoke-pass`; `/health` `ready`.
+- Gate triplo + `redirect:'manual'` revisados (APPROVED P0=P1=P2=0).
+- Coorte preenchida com test workspace junio via PRs #123/#124 (JWT provou
+  que coorte por actor jamais casaria: token delegado sem `actorId`).
+
+## 8. Canary STT sintético ao vivo (coorte workspace)
+
+- Upload áudio 200 + turno 200: `attachment_states=audio:processed` —
+  **primeiro egress STT real em prod** (Groq); sem mutação/pending/undo.
+- Prova negativa: workspace Test Family → `audio:unsupported` — gate
+  restritivo nas duas direções.
+- Identidades: token delegado sem `actorId`; `sub` ≠ session user.id.
+
+## 9. Incidente do relay LLM — CAUSA ENCONTRADA E CORRIGIDA
+
+- **Sintoma:** todo turno generativo 502 `http_502` ~2.6 s; determinísticos 200.
+  Split limpo e 100% consistente (teoria de "flapping" refutada por A/B).
+- **Causa:** `OPENCODE_GO_API_KEY` antiga devolvia 403
+  `An active OpenCode Go subscription is required` no upstream
+  `opencode.ai/zen/go` (DeepSeek API operacional — status oficial verde).
+- **Correção:** nova chave do operador (válida em zen+go) rotacionada no
+  `.env` da API na Contabo (backup `.env.bak-pre-gokey-rotate-20261008`) +
+  recreate só do container api (DB intocado) → turnos generativos 200.
+- **Gap de processo:** smoke pós-deploy nunca exercita turno generativo —
+  recomendo gate com turno `conversation` sintético.
+
+## 10. Citação de PDF ao vivo (cadeia completa provada)
+
+- Turno com PDF fatura → `pdf:processed` → bypass (#127) → precedência (#126)
+  → grounding admite bloco (#129) → resposta cita **R$ 42,50** com
+  proveniência ("bloco do anexo… não fatura registrada"), sem mutação.
+- Mudanças necessárias no caminho: bypass do render determinístico,
+  precedência DATA-sobre-tools, grounding com evidência de anexo,
+  hardening de formatos (reais/unidades) — todas revisadas e deployadas.
+- **Cota de uso provada ao vivo:** turnos com imagem retornaram 429
+  `agent.quota_exceeded` (ator 200k, consumido pelo dia de canary); governor
+  nega com erro tipado. Canary de imagem com conteúdo pendente da janela.
