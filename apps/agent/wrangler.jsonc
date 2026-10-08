@@ -22,7 +22,7 @@
     "TED_ATTACHMENTS_ENABLED": "1",
     "TED_ATTACHMENTS_COHORT": "*",
     "TED_AUDIO_STT_ENABLED": "1",
-    "TED_AUDIO_STT_COHORT": ""
+    "TED_AUDIO_STT_COHORT": "9f8d5408-ebc6-4210-9cac-d0faa9a3d9af"
   },
   "observability": { "enabled": true }
 }
