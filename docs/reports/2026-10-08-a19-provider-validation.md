@@ -63,6 +63,23 @@ gemini-vision,vision-pdf-turn,audio-stt-turn,audio-duration}` →
 - Round-trip de upload ao vivo e leitura do sink G07 pendentes de **auth de
   workspace de teste** (credencial demo é do operador).
 
+## 8. Canary STT sintético ao vivo (2026-10-08, coorte workspace `bf13df8`)
+
+- Upload áudio 200 (`att_*`, WAV 440 Hz sintético) + turno 200 no workspace
+  junio (coorte): `attachment_states=audio:processed` — **primeiro egress STT
+  real em prod** (Groq, test actor); sem marcador de transcrição no tom
+  (esperado — tom puro), sem mutação/pending/undo.
+- Prova negativa: workspace Test Family (fora da coorte) → `audio:unsupported`,
+  sem transcrição — gate restritivo provado nas duas direções.
+- Relay LLM instável em janelas de minutos (502 `http_502` intermitente em
+  turnos de texto e áudio; A/B 200/200/200 prova sanidade do caminho quando o
+  relay está up) — incidente externo ao A19, a escalar separadamente.
+- Identidades: token delegado NÃO carrega `actorId`; `sub` ≠ session user.id
+  (namespaces distintos) — coorte por actor jamais casaria; coorte por
+  workspace é o mecanismo correto (PR #124).
+- Residual: precisão em fala real pt-BR (requer voz do operador); telemetria
+  STT no sink (só ingest hoje).
+
 ## 7. Deploy do canary STT (2026-10-08, PR #122 → `abb58e9`, ATTESTED)
 
 - Flag `TED_AUDIO_STT_ENABLED=1` + coorte `TED_AUDIO_STT_COHORT=""` (fail-closed)
@@ -76,7 +93,7 @@ gemini-vision,vision-pdf-turn,audio-stt-turn,audio-duration}` →
 |---|---|---|---|---|---|---|---|
 | Attachments/R2 upload | sim | sim (repo) | sim | parcial (live ativado antes) | parcial | redeploy SHA | R2 live + secret no Worker (operador) |
 | PDF texto | sim | não (flag off) | sim (96) | não | não | n/a local | nenhum — liberado p/ canary |
-| STT | sim | não | sim (unit + live sintético) | não | não | n/a | secret Worker + ZDR + flag |
+| STT | sim | sim (flag+coorte ws) | sim (unit + live sintético ±) | sim (processed + negativo) | parcial (membro; precisão fala real pendente) | revert PR | voz do operador p/ precisão; telemetria STT no sink |
 | Vision | sim | não | sim (unit; live 404) | não | não | n/a | modelo Groq indisponível + sem chave Gemini |
 | Web search | sim (sem provider) | n/a | sim (gracioso) | n/a | n/a | n/a | sem provider (decisão operador) — pendente permanente |
 | Web fetch | sim | sim (allowlist vazia) | sim | n/a | DISABLED aprovado | n/a | nenhum |
