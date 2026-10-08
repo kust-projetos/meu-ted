@@ -68,7 +68,7 @@
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.audio_stt",
-        "reason": "TED_AUDIO_STT_ENABLED=1 em produção (operador, 2026-10-08) com GROQ_API_KEY provisionada como secret e ZDR elegível ativo, MAS o rollout é sequenciado por coorte (A19-STT-COHORT): flag sozinha não autoriza egress — TED_AUDIO_STT_COHORT vazia = ninguém (fail-closed), canary pendente da identidade de teste do operador; o runner isolado nunca faz egress, então o caminho ON é offline-unprovable — a prova é live via canary com áudio sintético, e o tráfego de usuário segue pendente dessa prova.",
+        "reason": "TED_AUDIO_STT_ENABLED=1 em produção (operador, 2026-10-08) com GROQ_API_KEY provisionada como secret e ZDR elegível ativo; coorte preenchida com o test actor (canary restritivo single-actor, A19-STT-COHORT) — flag+coorte autorizam egress só para essa identidade. Prova live pendente: relay do turn com flapping no upstream LLM (incidente externo, 502s) + canary sintético com áudio ainda não executado; o runner isolado nunca faz egress, então o caminho ON segue offline-unprovable.",
         "requires": ["GROQ_API_KEY como secret", "TED_AUDIO_STT_ENABLED=1", "TED_AUDIO_STT_COHORT com identidade canary (operador)", "ZDR elegível na organização", "F2.2 (STT) com canary aprovado"]
       },
       "initialState": {},

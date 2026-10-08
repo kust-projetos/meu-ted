@@ -240,8 +240,8 @@ nesta fatia.
 rollout é SEQUENCIADO por coorte (`TED_AUDIO_STT_COHORT`, CSV de
 workspace/actor ids, `'*'` = todos — A19-STT-COHORT): flag sozinha NÃO
 autoriza egress — coorte vazia/ausente = NINGUÉM (fail-closed). Coorte
-inicial `""`; a identidade de teste do canary vem do operador em PR
-follow-up. ZDR ativo por decisão do operador (2026-10-08); `GROQ_API_KEY`
+inicial `""`; coorte = test actor `9f8d5408-ebc6-4210-9cac-d0faa9a3d9af` desde A19-STT-COHORT-FILL
+(canary restritivo single-actor). ZDR ativo por decisão do operador (2026-10-08); `GROQ_API_KEY`
 provisionada como secret no Worker; tráfego de usuário pendente da prova
 sintética.
 
