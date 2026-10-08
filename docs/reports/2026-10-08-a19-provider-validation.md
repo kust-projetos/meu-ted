@@ -63,6 +63,15 @@ gemini-vision,vision-pdf-turn,audio-stt-turn,audio-duration}` →
 - Round-trip de upload ao vivo e leitura do sink G07 pendentes de **auth de
   workspace de teste** (credencial demo é do operador).
 
+## 7. Deploy do canary STT (2026-10-08, PR #122 → `abb58e9`, ATTESTED)
+
+- Flag `TED_AUDIO_STT_ENABLED=1` + coorte `TED_AUDIO_STT_COHORT=""` (fail-closed)
+  deployados via fluxo autorizado; attestation `ATTESTED reason=deploy-smoke-pass
+  sha=abb58e9`; `/health` live `ready` com `buildSha=abb58e9`.
+- Gate triplo + `redirect:'manual'` revisados (APPROVED P0=P1=P2=0).
+- Próximo: PR follow-up preenche a coorte com identidade de teste (operador)
+  → canary sintético → expansão.
+
 | Capacidade | IMPLEMENTED | CONFIGURED | TESTED | CANARY | PROD VERIFIED | ROLLBACK | Bloqueio |
 |---|---|---|---|---|---|---|---|
 | Attachments/R2 upload | sim | sim (repo) | sim | parcial (live ativado antes) | parcial | redeploy SHA | R2 live + secret no Worker (operador) |
