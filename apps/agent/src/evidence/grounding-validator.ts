@@ -5,8 +5,6 @@ type GroundingResult = Readonly<{ valid: boolean; unsupportedClaims: readonly st
 const fold = (value: string): string =>
   (value ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-const money = (text: string): number[] => [...text.matchAll(/R\$\s*([\d.]+),([\d]{2})/g)].map((match) => Number(`${match[1]!.replaceAll('.', '')}.${match[2]!}`) * 100);
-
 /**
  * A19-GROUND-FORMATS: a detected money figure in BOTH units the envelope
  * may hold it in — `cents` (tool payloads such as `balanceCents`) and
