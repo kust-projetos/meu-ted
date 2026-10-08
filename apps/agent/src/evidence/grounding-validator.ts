@@ -183,7 +183,11 @@ const collectUnitNumbers = (value: unknown, key: string | null, out: { cents: nu
   }
 };
 
-export const validateGroundedClaims = (text: string, envelope: EvidenceEnvelope): GroundingResult => {
+export const validateGroundedClaims = (
+  text: string,
+  envelope: EvidenceEnvelope,
+  attachmentTexts: readonly string[] = [],
+): GroundingResult => {
   const okData = envelope.items.filter((item) => item.status === 'ok').map((item) => item.data);
   const values = flatten(okData);
   const supportedMoney = new Set(values.flatMap(moneyCentsIn));
@@ -195,6 +199,21 @@ export const validateGroundedClaims = (text: string, envelope: EvidenceEnvelope)
   const supportedReaisNumbers = new Set(unitNumbers.reais.map((n) => Math.round(n * 100) / 100));
   const supportedStrings = values.filter((value): value is string => typeof value === 'string');
   const foldedStrings = supportedStrings.map(fold);
+  // A19-GROUND-EVIDENCE: admitted attachment support for READ narration.
+  // Server-side attachment-extracted texts ONLY (never typed text, never
+  // client input — the caller plumbs them from the turn's accepted
+  // extractions). A SEPARATE support set: a money/name/date claim is
+  // accepted when it matches EITHER tool evidence OR admitted block text,
+  // with the SAME matchers on both sides (exact cents, reais unit rule,
+  // alternate formats, support-side BR-decimal superset). A figure present
+  // in NEITHER still fails. Read-narration only: no mutation/approval path
+  // consumes this validator (only grounded-response does).
+  const admitted = attachmentTexts.filter(
+    (item): item is string => typeof item === 'string' && item.trim() !== '',
+  );
+  const admittedMoney = new Set(admitted.flatMap(moneyCentsIn));
+  const admittedFolded = admitted.map(fold);
+  const admittedText = fold(admitted.join(' | '));
   const unsupportedClaims: string[] = [];
   for (const claim of moneyClaims(text)) {
     // A figure is supported when its cents match tool money (or a raw tool
@@ -202,7 +221,10 @@ export const validateGroundedClaims = (text: string, envelope: EvidenceEnvelope)
     // holding reais (e.g. an invoice total `999` against "999 reais").
     // A19-GROUND-FIX2: the reais arm consults ONLY reais-denominated
     // fields — a `*cents` field never grounds a reais reading.
-    if (!supportedMoney.has(claim.cents) && !supportedNumbers.has(claim.cents) && !supportedReaisNumbers.has(claim.reais)) {
+    // A19-GROUND-EVIDENCE: OR its cents match money parsed from admitted
+    // block text with the same string-support matchers — the cents
+    // comparison keeps the FIX2 unit discipline on the attachment side.
+    if (!supportedMoney.has(claim.cents) && !supportedNumbers.has(claim.cents) && !supportedReaisNumbers.has(claim.reais) && !admittedMoney.has(claim.cents)) {
       unsupportedClaims.push(`R$ ${claim.cents}`);
     }
   }
@@ -213,22 +235,31 @@ export const validateGroundedClaims = (text: string, envelope: EvidenceEnvelope)
   for (const date of dates(text)) {
     const compact = date.replace(/-/g, '');
     const slashDayMonth = date.startsWith('--') ? date.slice(2).split('-').reverse().join('/') : null;
-    const matched =
+    const toolMatched =
       envelopeText.includes(fold(date)) ||
       envelopeText.includes(compact) ||
       (date.startsWith('--') && envelopeText.includes(date.slice(2))) ||
       (slashDayMonth !== null && envelopeText.includes(slashDayMonth));
-    if (!matched) unsupportedClaims.push(date);
+    // A19-GROUND-EVIDENCE: the same date shapes match admitted block text.
+    const admittedMatched =
+      admittedText.includes(fold(date)) ||
+      admittedText.includes(compact) ||
+      (date.startsWith('--') && admittedText.includes(date.slice(2))) ||
+      (slashDayMonth !== null && admittedText.includes(slashDayMonth));
+    if (!toolMatched && !admittedMatched) unsupportedClaims.push(date);
   }
   for (const name of names(text)) {
     const folded = fold(name);
     if (foldedStrings.some((candidate) => candidate.includes(folded) || folded.includes(candidate))) continue;
+    // A19-GROUND-EVIDENCE: the same name matchers consult admitted block text.
+    if (admittedFolded.some((candidate) => candidate.includes(folded) || folded.includes(candidate))) continue;
     // Fallback for keyword-led captures with trailing context ("conta
     // principal está…"): the claim is supported when its leading nominal
     // token appears in evidence. Unknown proper names still fail.
     const tokens = folded.split(/[^a-z0-9]+/).filter((token) => token.length > 2);
     const head = tokens[0];
     if (head && tokens.length > 1 && envelopeText.includes(head)) continue;
+    if (head && tokens.length > 1 && admittedText.includes(head)) continue;
     unsupportedClaims.push(name);
   }
   return { valid: unsupportedClaims.length === 0, unsupportedClaims };

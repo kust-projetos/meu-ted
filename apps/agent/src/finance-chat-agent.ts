@@ -3162,7 +3162,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // A19-READ-BYPASS: the attachment-data flag is computed from the
         // ACCEPTED extractions only (same non-empty filter as the composer
         // above) and passed server-side — never from the body.
-        { typedText: unredactedText, hasAttachmentData: hasAcceptedAttachmentData(attachmentData) },
+        // A19-GROUND-EVIDENCE: the accepted extraction texts travel
+        // server-side as admitted grounding support for READ narration
+        // (attachment-extracted ONLY — never typed text, never client
+        // input; empties are dropped by `normalize`, not trusted here).
+        { typedText: unredactedText, hasAttachmentData: hasAcceptedAttachmentData(attachmentData), attachmentTexts: attachmentData.map((item) => item.text) },
       );
       if (typeof this.persistMessages !== 'function') {
         return Response.json({ code: 'agent.persistence_unavailable', message: 'SDK persistence is not available' }, { status: 503 });
