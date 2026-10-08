@@ -47,7 +47,7 @@
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.pdf_text",
-        "reason": "TED_PDF_TEXT_ENABLED ainda não é 1 neste ambiente; sem a flag nenhum extractor é construído e o PDF é unsupported fail-closed.",
+        "reason": "TED_PDF_TEXT_ENABLED=1 configurado no manifesto para canary pós-deploy (A19-PDF-FLAG; extração local unpdf, zero egress, zero credencial; tetos 10 páginas/20k chars/10s por evento com early-exit; flag-global por desenho, sem coorte PDF — coorte geral de anexos já live). O runner isolado nunca constrói o extractor nem lê bytes de PDF, então o caminho ON segue offline-unprovable; prova live via canary sintético com PDF pós-deploy.",
         "requires": ["TED_PDF_TEXT_ENABLED=1", "F2.1 (PDF) com canary aprovado"]
       },
       "initialState": {},
@@ -63,13 +63,13 @@
     {
       "version": "1",
       "id": "GW-018",
-      "title": "Áudio: STT exige chave + segunda trava + ZDR",
+      "title": "Áudio: STT exige chave + flag + coorte + ZDR (rollout sequenciado)",
       "workflow": "audio-stt",
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.audio_stt",
-        "reason": "Sem GROQ_API_KEY provisionada, sem TED_AUDIO_STT_ENABLED=1 e sem ZDR elegível; áudio é unsupported fail-closed com zero egress.",
-        "requires": ["GROQ_API_KEY como secret", "TED_AUDIO_STT_ENABLED=1", "ZDR elegível na organização", "F2.2 (STT) com canary aprovado"]
+        "reason": "TED_AUDIO_STT_ENABLED=1 em produção (operador, 2026-10-08) com GROQ_API_KEY provisionada como secret e ZDR elegível ativo; coorte preenchida com o test workspace junio d36cb649-4462-486d-940a-47128ad329f2 (canary restritivo single-workspace, A19-STT-COHORT) — flag+coorte autorizam egress só para turnos desse workspace. O gate por actor nunca casaria: o token de conexão delegado não carrega actorId e o `sub` delegado vive em namespace distinto do session user.id, por isso a coorte usa o workspaceId do turno. Prova live pendente: relay do turn com flapping no upstream LLM (incidente externo, 502s) + canary sintético com áudio ainda não executado; o runner isolado nunca faz egress, então o caminho ON segue offline-unprovable.",
+        "requires": ["GROQ_API_KEY como secret", "TED_AUDIO_STT_ENABLED=1", "TED_AUDIO_STT_COHORT com identidade canary (operador)", "ZDR elegível na organização", "F2.2 (STT) com canary aprovado"]
       },
       "initialState": {},
       "inputs": [{ "text": "transcreva o áudio", "attachments": [{ "name": "nota.m4a", "type": "audio/mp4" }] }],
@@ -84,13 +84,13 @@
     {
       "version": "1",
       "id": "GW-019",
-      "title": "Imagem: visão exige chave + segunda trava + ZDR, modelo a confirmar",
+      "title": "Imagem: visão Gemini 2.5-flash em canary (trava tripla + coorte ws)",
       "workflow": "image-vision",
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.vision",
-        "reason": "Sem GROQ_API_KEY provisionada, sem TED_VISION_ENABLED=1 e sem ZDR elegível; imagem é unsupported fail-closed com zero egress.",
-        "requires": ["GROQ_API_KEY como secret", "TED_VISION_ENABLED=1", "ZDR elegível na organização", "modelo default confirmado no rollout", "F2.3 (Vision) com canary aprovado"]
+        "reason": "Canary A19-VISION-CANARY configurado no manifesto (TED_VISION_ENABLED=1, provider gemini, modelo gemini-2.5-flash admitido na allowlist por decisão do operador 2026-10-08 com extração exata provada live, coorte = test workspace junio d36cb649-4462-486d-940a-47128ad329f2; GOOGLE_AI_STUDIO_KEY provisionada como secret; redirect manual com 3xx para provider_error; política de dados do AI Studio aceita pelo operador para o canary). Prova live pendente: recuperação do relay do turno (flapping no upstream LLM) + canary sintético com imagem ainda não executado; o runner isolado nunca faz egress, então o caminho ON segue offline-unprovable.",
+        "requires": ["GOOGLE_AI_STUDIO_KEY como secret (provisionada)", "TED_VISION_ENABLED=1 + TED_VISION_PROVIDER=gemini + TED_VISION_MODEL=gemini-2.5-flash (manifesto)", "TED_VISION_COHORT com identidade canary (operador)", "política de dados do AI Studio aceita (revalidar antes de tráfego geral)", "F2.3 (Vision) com canary aprovado: relay recuperado + prova sintética com imagem"]
       },
       "initialState": {},
       "inputs": [{ "text": "leia o valor da nota na foto", "attachments": [{ "name": "nota.jpg", "type": "image/jpeg" }] }],

@@ -15,8 +15,8 @@ import { bytesOf, createAttachmentTestAgent, installRelayMock } from "./helpers.
 
 const IDENTITY = { workspaceId: "ws-1", actorId: "actor-1" };
 const PDF_ENV = { TED_PDF_TEXT_ENABLED: "1" } as const;
-const STT_ENV = { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1" } as const;
-const VISION_ENV = { GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "1" } as const;
+const STT_ENV = { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1", TED_AUDIO_STT_COHORT: "*" } as const;
+const VISION_ENV = { GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "1", TED_VISION_COHORT: "*" } as const;
 
 const chatRequest = (body: unknown): Request =>
   new Request("https://agent.test.local/rpc/chat", {

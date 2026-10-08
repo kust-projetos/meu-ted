@@ -191,6 +191,7 @@ describe("A19/A17 — memória de ponta a ponta (SQL real)", () => {
         ...previousEnv,
         GROQ_API_KEY: "gsk-test-key",
         TED_VISION_ENABLED: "1",
+        TED_VISION_COHORT: "*",
       },
       writable: true,
       configurable: true,

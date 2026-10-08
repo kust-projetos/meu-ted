@@ -39,7 +39,7 @@ const imageBytes = (): Uint8Array => {
   return bytes;
 };
 
-const VISION_ENV = { GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "1" } as const;
+const VISION_ENV = { GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "1", TED_VISION_COHORT: "*" } as const;
 
 /**
  * The provider's answer carries an INSTRUCTION the user "put in the image".

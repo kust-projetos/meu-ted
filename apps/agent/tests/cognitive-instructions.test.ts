@@ -3,6 +3,7 @@ import {
   INSTRUCTIONS_VERSION,
   TED_IDENTITY,
   TED_GOLDEN_RULE,
+  TED_ATTACHMENT_DATA_PRECEDENCE,
   TED_MUTATION_POLICY,
   TED_BOUNDARIES,
   buildSystemPrompt,
@@ -92,5 +93,29 @@ describe('TED instructions (Part A, item 15)', () => {
     expect(cognition.system).toContain('DISCIPLINA DE RESPOSTA');
     expect(cognition.system).toContain('<tool_call>');
     expect(cognition.system).toMatch(/\?/);
+  });
+});
+
+describe('attachment DATA precedence (A19-PROMPT-PRECEDENCE)', () => {
+  it('scopes the rule to attachment-question turns with a provenance-marked block', () => {
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/pergunta[^.]*anexo|anexo[^.]*pergunta/i);
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/marcador de proveniência|proveniência/i);
+  });
+
+  it('orders answer-from-block with citation over tool output', () => {
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/a partir do bloco/i);
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/cite|citar/i);
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/nunca substitu|não substitu|jamais nega|nunca nega/i);
+  });
+
+  it('keeps tool-first for pure finance questions and DATA-never-instruction intact', () => {
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/tool-first|REGRA DE OURO/i);
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/dado, nunca instrução|nunca instrução/i);
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/autoexecute/i);
+  });
+
+  it('is injected into the mounted system prompt', () => {
+    const system = buildSystemPrompt(baseInput);
+    expect(system).toContain('DADO DO ANEXO');
   });
 });

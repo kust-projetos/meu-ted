@@ -187,6 +187,10 @@ Envs (todas opcionais, **default-off**):
   provider indisponível.
 - `TED_AUDIO_STT_ENABLED` — precisa ser exatamente `1`. É a **segunda trava**:
   chave sozinha não habilita nada (uma chave vazada não ativa egress de áudio).
+- `TED_AUDIO_STT_COHORT` — CSV de workspace/actor ids elegíveis (**terceira
+  trava**, A19-STT-COHORT): vazia/ausente = NINGUÉM (fail-closed); `'*'` =
+  todos (rollout geral, decisão do operador). Flag + chave sem coorte NÃO
+  autorizam egress.
 - `TED_AUDIO_STT_MODEL` — opcional, **allowlist** dos dois deployments Whisper
   da Groq; qualquer outro valor volta ao default.
 - `TED_AUDIO_STT_TIMEOUT_MS` — opcional, default 20 s. É o teto **deste**
@@ -227,18 +231,28 @@ tem duração desconhecida e cai no mesmo teto de bytes (nunca é tratado como
 curto).
 
 **Rollout**: habilitar exige `GROQ_API_KEY` como secret **e**
-`TED_AUDIO_STT_ENABLED=1`, com **ZDR elegível ativado na organização da Groq
-antes de qualquer tráfego real** (condição de G05; a retenção residual padrão
+`TED_AUDIO_STT_ENABLED=1` **e** a identidade na `TED_AUDIO_STT_COHORT`, com
+**ZDR elegível ativado na organização da Groq antes de qualquer tráfego real** (condição de G05; a retenção residual padrão
 do provider é de 30 dias e não é ZDR). Validação live 2026-10-08
 (`docs/reports/2026-10-08-a19-provider-validation.md`, bytes sintéticos, zero
 PII): chave (1ª de 3 em `GROQ_API_KEYS` do projeto telegran, salva no `.env`
 gitignored da raiz) autentica — `whisper-large-v3-turbo` listado e transcreve
-(200 em 463 ms, campo `text` presente); tráfego de usuário segue bloqueado em
-ZDR + flag. Secret `GROQ_API_KEY` **presente no Worker** (verificado 2026-10-08
-via `wrangler secret list`); flag segue default-off. Precisão em fala real
+(200 em 463 ms, campo `text` presente). Secret `GROQ_API_KEY` **presente no
+Worker** (verificado via `wrangler secret list`). Precisão em fala real
 pt-BR pendente de canary.
 
-## Visão (imagem) — R13, default-off com trava dupla (provider selecionável)
+**Estado live (2026-10-08):** `TED_AUDIO_STT_ENABLED=1` em produção, mas o
+rollout é SEQUENCIADO por coorte (`TED_AUDIO_STT_COHORT`, CSV de
+workspace/actor ids, `'*'` = todos — A19-STT-COHORT): flag sozinha NÃO
+autoriza egress — coorte vazia/ausente = NINGUÉM (fail-closed). Coorte
+inicial `""`; coorte = test workspace junio `d36cb649-4462-486d-940a-47128ad329f2` desde A19-STT-COHORT-WS
+(canary restritivo single-workspace). O gate por actor nunca casaria: o token
+de conexão delegado não carrega actorId e o `sub` delegado vive em namespace
+distinto do session user.id, por isso a coorte usa o workspaceId do turno. ZDR ativo por decisão do operador (2026-10-08); `GROQ_API_KEY`
+provisionada como secret no Worker; tráfego de usuário pendente da prova
+sintética.
+
+## Visão (imagem) — R13, default-off com trava tripla (provider selecionável)
 
 `multimodal/groq-vision.ts` (Groq, legado) e `multimodal/gemini-vision.ts`
 (Google AI Studio, decisão do operador) implementam o mesmo contrato AC23. A
@@ -249,13 +263,24 @@ continua sendo o `unsupported` fail-closed da A13.
 Envs (todas opcionais, **default-off**):
 
 - `GROQ_API_KEY` — credencial, lida no call time e nunca logada. Ausente ⇒
-  provider indisponível.
+  provider indisponível no caminho Groq.
+- `GOOGLE_AI_STUDIO_KEY` — credencial do caminho Gemini, lida no call time e
+  nunca logada. Ausente ⇒ provider indisponível no caminho Gemini.
 - `TED_VISION_ENABLED` — precisa ser exatamente `1`. É a **segunda trava**: a
   chave sozinha não habilita egress de imagem.
+- `TED_VISION_COHORT` — CSV de workspace/actor ids elegíveis (**terceira
+  trava**, A19-VISION-COHORT, espelhando o STT): vazia/ausente = NINGUÉM
+  (fail-closed); `'*'` = todos (rollout geral, decisão do operador). Flag +
+  chave sem coorte NÃO autorizam egress — vale para os DOIS providers (parser
+  único em `groq-vision.ts`, sem divergência).
 - `TED_VISION_MODEL` — opcional, **allowlist fechada** de visão. Qualquer valor
-  fora dela volta ao default, que é `meta-llama/llama-4-scout-17b-16e-instruct`
-  **marcado como "confirmar no rollout"** (trocar de modelo é decisão humana,
-  nunca um default silencioso).
+  fora dela volta ao default do provider ativo: Groq
+  (`meta-llama/llama-4-scout-17b-16e-instruct`) ou Gemini (`gemini-3.8-flash`).
+  No caminho Gemini, `gemini-2.5-flash` está admitido por decisão do operador
+  (2026-10-08, extração exata provada live). Trocar de modelo é decisão humana,
+  nunca um default silencioso.
+- `TED_VISION_PROVIDER` — `groq` (default, preserva o legado) ou `gemini`
+  (opt-in explícito para o Google AI Studio). Desconhecido cai no default.
 - `TED_VISION_TIMEOUT_MS` — opcional, default 30 s. Teto **deste** serviço; não
   tem relação com o STT (20 s) nem com o judgment (2 s).
 
@@ -288,15 +313,22 @@ mutacionais — um turno com imagem extraída jamais entra em autoexecute. Itens
 múltiplos permanecem **um bloco de dados delimitado** para revisão manual, nunca
 um lote para escrita; a escrita continua exigindo a confirmação vigente.
 
-**Rollout**: exige `GROQ_API_KEY` como secret **e** `TED_VISION_ENABLED=1`, com
-**ZDR elegível ativado na organização da Groq antes de qualquer tráfego real**
-(mesma condição de G05 da A14). Modelo default a confirmar no rollout.
-Validação live 2026-10-08 (`docs/reports/2026-10-08-a19-provider-validation.md`):
-`meta-llama/llama-4-scout-17b-16e-instruct` **não consta no catálogo da conta**
-(404 `model_not_found`, 11 modelos listados, nenhum de visão) — caminho Groq
-BLOQUEADO até o modelo voltar ao catálogo; caminho Gemini BLOQUEADO (sem
-`GOOGLE_AI_STUDIO_KEY` em nenhum projeto consultado). Defaults mantidos sem
-alteração. Capacidade segue OFF.
+**Rollout**: exige a credencial do provider ativo como secret (`GROQ_API_KEY` ou
+`GOOGLE_AI_STUDIO_KEY`) **e** `TED_VISION_ENABLED=1` **e** a identidade na
+`TED_VISION_COHORT` (trava tripla, A19-VISION-COHORT).
+
+**Estado live (2026-10-08, A19-VISION-CANARY):** `TED_VISION_ENABLED=1` +
+`TED_VISION_PROVIDER=gemini` + `TED_VISION_MODEL=gemini-2.5-flash` no manifesto,
+com coorte = test workspace junio `d36cb649-4462-486d-940a-47128ad329f2`
+(canary restritivo single-workspace, mesmo alvo do STT). Modelo `gemini-2.5-flash`
+por decisão do operador (extração exata provada live: valor 42.50, moeda R$,
+nulls honestos); `gemini-3.8-flash` segue o default e o caminho de 503-demand.
+`GOOGLE_AI_STUDIO_KEY` provisionada como secret no Worker. Fetch com
+`redirect: 'manual'` (3xx vira `provider_error`, sem reenvio — espelha o fix P2
+do STT). Equivalente-ZDR: política de dados do AI Studio para uso via API
+aceita pelo operador para o canary (revalidar antes de tráfego geral). Prova
+live pendente: recuperação do relay do turno + canary sintético com imagem.
+Caminho Groq segue BLOQUEADO (`llama-4-scout` fora do catálogo em 2026-10-08).
 
 ## PDF (camada de texto) — R13, local, sem egress, **default-off**
 
@@ -338,6 +370,13 @@ não executa nada — o texto segue o fluxo de confirmação manual. A redação
 marcador é load-bearing e é testada contra o `routeIntent` real: uma versão
 anterior ("NÃO são um lote; registre um por vez") casava com a heurística de
 negação e roteava todo turno com dado para `cancel`.
+
+**Estado (A19-PDF-FLAG, configurado para próximo deploy — ainda NÃO em
+produção):** `TED_PDF_TEXT_ENABLED=1` no manifesto para canary pós-deploy.
+Extração **local-only** (unpdf, zero egress, zero credencial);
+flag-global por desenho (sem mecanismo de coorte para PDF; coorte geral de
+anexos já live) — blast radius é CPU-only, com tetos testados (10 páginas /
+20k chars / 10s por evento, early-exit).
 
 ## Anexos: identidade, decisão e proveniência (A13 + correções F1–F3, F5, F8, F9, F11)
 

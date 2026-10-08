@@ -157,12 +157,13 @@ import {
   type AttachmentIdentity,
   type AttachmentKind,
 } from "./attachments/types.js";
-// A14/R12: STT de áudio via Groq (G05) — default-off com trava dupla. Sem as
-// duas envs, `audioSttProcessorOverride` devolve `undefined` e o áudio segue no
+// A14/R12: STT de áudio via Groq (G05) — default-off com trava tripla. Sem as
+// três envs (flag + key + coorte com a identidade do turno),
+// `audioSttProcessorOverride` devolve `undefined` e o áudio segue no
 // `unsupported` fail-closed da A13, sem qualquer chamada de rede.
 import { AUDIO_TRANSCRIPT_NOTICE, audioSttProcessorOverride, composeTurnTextWithTranscript } from "./multimodal/groq-stt.js";
 // A15/R13: visão de imagem via Groq (G05, mesmo vendor do STT — nenhum vendor
-// novo) — default-off com trava dupla. Sem as duas envs, `imageVisionProcessorOverride`
+// novo) — default-off com trava tripla (A19-VISION-COHORT). Sem as três travas, `imageVisionProcessorOverride`
 // devolve `undefined` e a imagem segue no `unsupported` fail-closed da A13.
 import { VISION_EXTRACT_NOTICE, imageVisionProcessorOverride } from "./multimodal/groq-vision.js";
 import { imageGeminiVisionProcessorOverride, resolveVisionProviderKind } from "./multimodal/gemini-vision.js";
@@ -229,28 +230,32 @@ export type Env = {
   TED_ATTACHMENTS_ENABLED?: string;
   TED_ATTACHMENTS_COHORT?: string;
   /**
-   * A14/R12: STT de áudio via Groq (G05) — default-off com TRAVA DUPLA.
-   * `GROQ_API_KEY` é a credencial (lida no call time, nunca logada) e
-   * `TED_AUDIO_STT_ENABLED=1` é o opt-in do rollout: sem as duas, a
+   * A14/R12: STT de áudio via Groq (G05) — default-off com TRAVA TRIPLA.
+   * `GROQ_API_KEY` é a credencial (lida no call time, nunca logada),
+   * `TED_AUDIO_STT_ENABLED=1` é o opt-in do rollout e `TED_AUDIO_STT_COHORT`
+   * (CSV de workspace/actor ids, `'*'` = todos; vazia/ausente = ninguém —
+   * A19-STT-COHORT) é o sequenciamento: sem os três, a
    * capacidade permanece `unsupported` e nada muda. `TED_AUDIO_STT_MODEL`
    * (allowlist Groq Whisper) e `TED_AUDIO_STT_TIMEOUT_MS` (default 20 s) são
    * opcionais; não há fallback automático de modelo.
    */
   GROQ_API_KEY?: string;
   TED_AUDIO_STT_ENABLED?: string;
+  TED_AUDIO_STT_COHORT?: string;
   TED_AUDIO_STT_MODEL?: string;
   TED_AUDIO_STT_TIMEOUT_MS?: string;
   /**
    * A15/R13: visão de imagem — Groq legado por default, Gemini (Google AI
    * Studio, decisão do operador) via `TED_VISION_PROVIDER=gemini` — default-off
-   * com TRAVA DUPLA. Credencial do provider ativo (`GROQ_API_KEY` ou
+   * com TRAVA TRIPLA (A19-VISION-COHORT). Credencial do provider ativo (`GROQ_API_KEY` ou
    * `GOOGLE_AI_STUDIO_KEY`, lida no call time, nunca logada) +
-   * `TED_VISION_ENABLED=1`: sem as duas, a imagem permanece `unsupported` e
+   * `TED_VISION_ENABLED=1` + coorte `TED_VISION_COHORT`: sem as três travas, a imagem permanece `unsupported` e
    * nada muda. `TED_VISION_MODEL` (allowlist fechada do provider ativo) e
    * `TED_VISION_TIMEOUT_MS` (default 30 s) são opcionais; não há fallback
    * automático de modelo nem de provider.
    */
   TED_VISION_ENABLED?: string;
+  TED_VISION_COHORT?: string;
   TED_VISION_MODEL?: string;
   TED_VISION_TIMEOUT_MS?: string;
   TED_VISION_PROVIDER?: string;
@@ -298,6 +303,16 @@ const ATTACHMENT_DATA_NOTICE: Record<AttachmentKind, string> = {
   image: VISION_EXTRACT_NOTICE,
   pdf: PDF_TEXT_NOTICE,
 };
+
+/**
+ * A19-READ-BYPASS: true ONLY when the turn carries accepted NON-EMPTY
+ * extraction. `unsupported`/`skipped_budget`/refused/unavailable items
+ * produce states but no `datas` entry, and an empty transcript composes to
+ * nothing — all of those read `false`, exactly like a turn with no
+ * attachment at all.
+ */
+export const hasAcceptedAttachmentData = (datas: ReadonlyArray<{ kind?: string; text: string }>): boolean =>
+  datas.some((item) => typeof item.text === "string" && item.text.trim() !== "");
 
 /**
  * A13: headers carrying the upload intent. `kind` and `name` are DECLARED
@@ -2323,19 +2338,21 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     // comportamento atual é preservado byte a byte.
     const attachmentDeleteAllowed = isAttachmentUploadAllowed(this.env, identity.workspaceId, identity.actorId);
     // A14: the audio processor replaces the `unsupported` entry ONLY when the
-    // STT double lock is on (`GROQ_API_KEY` + `TED_AUDIO_STT_ENABLED`). The
+    // STT triple lock is on (`GROQ_API_KEY` + `TED_AUDIO_STT_ENABLED` + the
+    // turn identity in `TED_AUDIO_STT_COHORT` — A19-STT-COHORT: flag alone
+    // never enables egress). The
     // registry — and the per-turn transcription budget carried by the processor
     // — is built HERE, once per turn: no state leaks across turns/workspaces.
-    // A15: same contract for the image (vision, double lock) and for the PDF
+    // A15: same contract for the image (vision, triple lock A19-VISION-COHORT) and for the PDF
     // (local text-layer parse — no egress, no credential, so no double lock).
     // With every lock off, the registry is byte-for-byte the A13 one.
-    const audioProcessor = audioSttProcessorOverride(this.env);
+    const audioProcessor = audioSttProcessorOverride(this.env, identity);
     // Visão: Groq legado por default; Gemini (decisão do operador) via
     // TED_VISION_PROVIDER=gemini (setado no rollout, nunca aqui).
     const imageProcessor =
       resolveVisionProviderKind(this.env) === "gemini"
-        ? imageGeminiVisionProcessorOverride(this.env)
-        : imageVisionProcessorOverride(this.env);
+        ? imageGeminiVisionProcessorOverride(this.env, identity)
+        : imageVisionProcessorOverride(this.env, identity);
     // F4: the PDF text-layer parse is behind `TED_PDF_TEXT_ENABLED=1`
     // (default-off). Without it NO extractor is built and the PDF stays the
     // A13 `unsupported` entry — zero parse, zero bytes read.
@@ -3142,7 +3159,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // as a server-side option and never read from the body, so attachment-
         // derived data (a PDF saying "sim confirmo", an STT transcript) can
         // never reach the confirmation/cancel/retry/undo routing.
-        { typedText: unredactedText },
+        // A19-READ-BYPASS: the attachment-data flag is computed from the
+        // ACCEPTED extractions only (same non-empty filter as the composer
+        // above) and passed server-side — never from the body.
+        { typedText: unredactedText, hasAttachmentData: hasAcceptedAttachmentData(attachmentData) },
       );
       if (typeof this.persistMessages !== 'function') {
         return Response.json({ code: 'agent.persistence_unavailable', message: 'SDK persistence is not available' }, { status: 503 });

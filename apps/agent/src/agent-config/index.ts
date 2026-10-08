@@ -6,7 +6,7 @@
  * `memoryContext` into the prompt — nothing here reads or writes memory.
  */
 
-export { INSTRUCTIONS_VERSION, TED_IDENTITY, TED_GOLDEN_RULE, TED_MUTATION_POLICY, TED_BOUNDARIES, TED_RESPONSE_DISCIPLINE, buildSystemPrompt, TED_SYSTEM_PROMPT_LEGACY } from './instructions.js';
+export { INSTRUCTIONS_VERSION, TED_IDENTITY, TED_GOLDEN_RULE, TED_ATTACHMENT_DATA_PRECEDENCE, TED_MUTATION_POLICY, TED_BOUNDARIES, TED_RESPONSE_DISCIPLINE, buildSystemPrompt, TED_SYSTEM_PROMPT_LEGACY } from './instructions.js';
 export type { SystemPromptInput } from './instructions.js';
 export { ALL_SKILLS, skillByName, skillCatalogLines } from './skills/index.js';
 export type { Skill } from './skills/index.js';
