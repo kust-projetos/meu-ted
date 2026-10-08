@@ -240,8 +240,10 @@ nesta fatia.
 rollout é SEQUENCIADO por coorte (`TED_AUDIO_STT_COHORT`, CSV de
 workspace/actor ids, `'*'` = todos — A19-STT-COHORT): flag sozinha NÃO
 autoriza egress — coorte vazia/ausente = NINGUÉM (fail-closed). Coorte
-inicial `""`; coorte = test actor `9f8d5408-ebc6-4210-9cac-d0faa9a3d9af` desde A19-STT-COHORT-FILL
-(canary restritivo single-actor). ZDR ativo por decisão do operador (2026-10-08); `GROQ_API_KEY`
+inicial `""`; coorte = test workspace junio `d36cb649-4462-486d-940a-47128ad329f2` desde A19-STT-COHORT-WS
+(canary restritivo single-workspace). O gate por actor nunca casaria: o token
+de conexão delegado não carrega actorId e o `sub` delegado vive em namespace
+distinto do session user.id, por isso a coorte usa o workspaceId do turno. ZDR ativo por decisão do operador (2026-10-08); `GROQ_API_KEY`
 provisionada como secret no Worker; tráfego de usuário pendente da prova
 sintética.
 
