@@ -106,6 +106,19 @@ export type TurnInput = Readonly<{
    */
   decisionText?: string;
   /**
+   * A19-READ-BYPASS: true ONLY when the turn carries accepted NON-EMPTY
+   * attachment extraction (F8 `attachmentData` with real text). Set
+   * EXCLUSIVELY by the server adapter via `NormalizeOptions`; `normalize`
+   * never reads it from `body`, so a client-supplied same-named field is
+   * ignored exactly like `decisionText`. Absent means "no attachment data"
+   * — every channel without accepted extraction, unchanged behaviour. A
+   * read turn with the flag skips the deterministic evidence render and
+   * goes straight to the provider path with the composed text (which
+   * already carries the carrier-marked block); all fail-closed paths are
+   * untouched.
+   */
+  hasAttachmentData?: boolean;
+  /**
    * FIX-AGENT-RELAY-FAILOVER-HARDENING (A): internal-only marker for the
    * structured grounding-correction retry. Set EXCLUSIVELY by the internal
    * `correctionProvider` (channel-evidence.ts); `normalize` always builds it
@@ -426,7 +439,7 @@ const correctionOutcome = (text: string): CorrectionOutcome => {
  * Internal-only construction options. They are passed by the SERVER adapter, not
  * read from `body`: a client-supplied `decisionText`/`typedText` is ignored.
  */
-export type NormalizeOptions = Readonly<{ typedText?: string }>;
+export type NormalizeOptions = Readonly<{ typedText?: string; hasAttachmentData?: boolean }>;
 
 const normalize = (
   body: Body,
@@ -460,6 +473,11 @@ const normalize = (
   // that sends its own `decisionText`/`typedText` changes nothing.
   const typedText = typeof options?.typedText === 'string' ? scrubForPersistence(options.typedText.trim()) : text;
   const decisionText = typedText === text ? undefined : typedText;
+  // A19-READ-BYPASS: the attachment-data flag is server-side only — a
+  // client-supplied `hasAttachmentData` field in `body` is deliberately NOT
+  // read, so untrusted input can never route its own turn past the
+  // deterministic render.
+  const hasAttachmentData = options?.hasAttachmentData === true ? true as const : undefined;
   return freeze({
     intentionId,
     traceId,
@@ -471,6 +489,7 @@ const normalize = (
     attachments: freeze(attachments),
     channel,
     ...(decisionText !== undefined ? { decisionText } : {}),
+    ...(hasAttachmentData !== undefined ? { hasAttachmentData } : {}),
     // FIX-AGENT-RELAY-FAILOVER-HARDENING (A): the internal correction flag
     // is constructed here as `false` — any client-supplied `internalCorrection`
     // / `isInternalCorrectionRetry` field in `body` is deliberately NOT read,
@@ -757,10 +776,20 @@ export class ConversationOrchestrator {
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
       return freeze({ ...base, failClosed: true as const, response: freeze({ text: FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT }) });
     }
-    const deterministic = this.renderDeterministicFromEvidence(input, plan, envelope);
-    if (deterministic !== null) {
-      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
-      return freeze({ ...base, response: freeze({ text: deterministic }) });
+    // A19-READ-BYPASS: a read turn carrying accepted attachment extraction
+    // MUST consult the model — the composed text already carries the
+    // carrier-marked block plus the DATA-precedence instruction, and the
+    // deterministic render below would answer from (empty) tool evidence
+    // without ever consulting it. Skipped ONLY on the explicit server-side
+    // flag; every fail-closed path above (null/error envelopes) and below
+    // (no provider, grounding rejection) is preserved.
+    const hasAttachmentData = input.hasAttachmentData === true;
+    if (!hasAttachmentData) {
+      const deterministic = this.renderDeterministicFromEvidence(input, plan, envelope);
+      if (deterministic !== null) {
+        this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
+        return freeze({ ...base, response: freeze({ text: deterministic }) });
+      }
     }
     if (!this.dependencies.responseProvider) {
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });

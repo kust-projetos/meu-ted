@@ -304,6 +304,16 @@ const ATTACHMENT_DATA_NOTICE: Record<AttachmentKind, string> = {
 };
 
 /**
+ * A19-READ-BYPASS: true ONLY when the turn carries accepted NON-EMPTY
+ * extraction. `unsupported`/`skipped_budget`/refused/unavailable items
+ * produce states but no `datas` entry, and an empty transcript composes to
+ * nothing — all of those read `false`, exactly like a turn with no
+ * attachment at all.
+ */
+export const hasAcceptedAttachmentData = (datas: ReadonlyArray<{ kind?: string; text: string }>): boolean =>
+  datas.some((item) => typeof item.text === "string" && item.text.trim() !== "");
+
+/**
  * A13: headers carrying the upload intent. `kind` and `name` are DECLARED
  * claims only — the real media type always comes from magic bytes in
  * `ingestAttachment`, and a mismatch is rejected.
@@ -3148,7 +3158,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // as a server-side option and never read from the body, so attachment-
         // derived data (a PDF saying "sim confirmo", an STT transcript) can
         // never reach the confirmation/cancel/retry/undo routing.
-        { typedText: unredactedText },
+        // A19-READ-BYPASS: the attachment-data flag is computed from the
+        // ACCEPTED extractions only (same non-empty filter as the composer
+        // above) and passed server-side — never from the body.
+        { typedText: unredactedText, hasAttachmentData: hasAcceptedAttachmentData(attachmentData) },
       );
       if (typeof this.persistMessages !== 'function') {
         return Response.json({ code: 'agent.persistence_unavailable', message: 'SDK persistence is not available' }, { status: 503 });
