@@ -10,7 +10,8 @@
  *      por contrato do relatório A19 §4.1; default-off), senão 503
  *      `attachment_upload_disabled`;
  *   3. coorte explícita `TED_ATTACHMENTS_COHORT` (CSV de workspace/actor ids;
- *      vazia/ausente = NINGUÉM, fail-closed), senão 503
+ *      vazia/ausente = NINGUÉM, fail-closed; entrada curinga `'*'` = TODOS,
+ *      decisão do operador para rollout geral), senão 503
  *      `attachment_upload_disabled`.
  *
  * A negação no DO acontece ANTES de qualquer leitura de corpo/bytes: nenhum
@@ -52,7 +53,9 @@ export const parseAttachmentUploadCohort = (env: unknown): string[] => {
 /**
  * Coorte attachment-specific: casa por workspaceId OU actorId. Lista vazia
  * (env ausente/vazia) = ninguém — fail-closed por construção, sem caso
- * especial no chamador.
+ * especial no chamador. Entrada curinga `'*'` = TODOS (decisão do operador
+ * para rollout geral; registrada e testada) — qualquer outra entrada segue
+ * casamento exato, case-sensitive.
  */
 export const isAttachmentUploadCohortMember = (
   env: unknown,
@@ -61,6 +64,7 @@ export const isAttachmentUploadCohortMember = (
 ): boolean => {
   const allow = parseAttachmentUploadCohort(env);
   if (allow.length === 0) return false;
+  if (allow.includes('*')) return true;
   return allow.includes(workspaceId) || allow.includes(actorId);
 };
 
