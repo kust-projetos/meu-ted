@@ -40,10 +40,10 @@ const loadCases = (): GoldenCase[] => {
 describe("F4 golden — catalog is versioned, well-formed data", () => {
   it("every case file validates against the v1 schema with unique ids", () => {
     const cases = loadCases();
-    expect(cases.length).toBe(25);
+    expect(cases.length).toBe(27);
     const executable = cases.filter((entry) => entry.status === "executable");
     const pending = cases.filter((entry) => entry.status === "pending-capability");
-    expect(executable.length).toBe(19);
+    expect(executable.length).toBe(21);
     expect(pending.length).toBe(6);
     for (const entry of pending) {
       expect(entry.pendingReason?.capability, entry.id).toMatch(/\S/);

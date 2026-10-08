@@ -44,6 +44,7 @@ import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } fr
 import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
 import {
   NO_FAILED_OPERATION_TEXT,
+  NO_PENDING_CANCEL_TEXT,
   PendingOperationCoordinator,
   isRetryText,
   renderDisambiguation,
@@ -2270,6 +2271,22 @@ export class ConversationOrchestrator {
     if (resolution.kind === 'inconclusive') {
       return this.completeTurn(input, plan, startedAt, base, {
         response: freeze({ text: coordinator.renderInconclusive() }),
+      });
+    }
+    // Golden GW-027 (INV-03): 'empty' (nada pendente) responde o no-op
+    // determinístico — nunca "cancelada" sem evidência. Espelha o ramo
+    // 'none' do retry (emite approval.rejected + cópia sem claim).
+    if (resolution.kind === 'empty') {
+      this.emit('approval.rejected', {
+        intentionId: input.intentionId,
+        traceId: input.traceId,
+        channel: input.channel,
+        domain: plan.domain,
+        mode: plan.mode,
+        status: 'rejected',
+      });
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: NO_PENDING_CANCEL_TEXT }),
       });
     }
     if (resolution.kind === 'ambiguous') {
