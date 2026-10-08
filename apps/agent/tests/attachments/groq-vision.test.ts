@@ -4,7 +4,8 @@
  * Everything is injected (`fetchImpl`): no network, no credential, no Worker
  * runtime. The tests pin the CONTRACT of the adapter, not the provider:
  *
- * - the double lock (`GROQ_API_KEY` + `TED_VISION_ENABLED`) gates the whole
+ * - the triple lock (`GROQ_API_KEY` + `TED_VISION_ENABLED` + `TED_VISION_COHORT`,
+ *   A19-VISION-COHORT mirroring STT) gates the whole
  *   capability — absent either, the image processor stays `unsupported` and
  *   ZERO requests leave the isolate;
  * - the model is an ALLOWLIST: an unknown value falls back to the default
@@ -34,6 +35,8 @@ import {
   createGroqVisionProvider,
   createImageVisionProcessor,
   isGroqVisionAvailable,
+  isVisionCohortMember,
+  parseVisionCohort,
   resolveVisionModel,
   resolveVisionTimeoutMs,
   type VisionBudget,
@@ -50,6 +53,7 @@ const IDENTITY: AttachmentIdentity = { workspaceId: "ws-1", actorId: "actor-1" }
 const ENABLED_ENV = {
   GROQ_API_KEY: "gsk-test-key",
   TED_VISION_ENABLED: "1",
+  TED_VISION_COHORT: "*",
 } as const;
 
 const bytesOf = (bytes: Uint8Array): ArrayBuffer =>
@@ -95,7 +99,7 @@ describe("A15/AC23 — capability gate (default-off duplo)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("com a key mas SEM TED_VISION_ENABLED continua indisponível (trava dupla)", () => {
+  it("com a key mas SEM TED_VISION_ENABLED continua indisponível (trava tripla)", () => {
     expect(isGroqVisionAvailable({ GROQ_API_KEY: "gsk-test-key" })).toBe(false);
     expect(isGroqVisionAvailable({ GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "0" })).toBe(false);
     expect(isGroqVisionAvailable({ GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "true" })).toBe(false);
@@ -105,6 +109,36 @@ describe("A15/AC23 — capability gate (default-off duplo)", () => {
   it("provider indisponível devolve 'unavailable' sem tocar a rede", async () => {
     const { calls, fetchImpl } = recordingFetch(async () => completionWith("nunca chamado"));
     const provider = createGroqVisionProvider({ env: {}, fetchImpl });
+    const outcome = await provider.extract({ bytes: bytesOf(pngBytes(4, 4)), mime: "image/png" });
+    expect(outcome.state).toBe("unavailable");
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("A19-VISION-COHORT — rollout sequenciado (flag + key + coorte, parser único)", () => {
+  const KEY_ENV = {
+    GROQ_API_KEY: "gsk-test-key",
+    TED_VISION_ENABLED: "1",
+  } as const;
+
+  it("flag+key SEM coorte ⇒ indisponível (flag sozinha não autoriza egress)", () => {
+    expect(isGroqVisionAvailable(KEY_ENV, "ws-1", "actor-1")).toBe(false);
+    expect(isGroqVisionAvailable(KEY_ENV)).toBe(false);
+    expect(isGroqVisionAvailable(ENABLED_ENV, "ws-1", "actor-1")).toBe(true);
+  });
+
+  it("'*' casa qualquer identidade; explícita casa por workspace OU actor; resto nega", () => {
+    expect(isVisionCohortMember({ TED_VISION_COHORT: "*" }, "any-ws", "any-actor")).toBe(true);
+    expect(isVisionCohortMember({ TED_VISION_COHORT: "ws-1" }, "ws-1", "other")).toBe(true);
+    expect(isVisionCohortMember({ TED_VISION_COHORT: "ws-1" }, "ws-2", "actor-1")).toBe(false);
+    expect(isVisionCohortMember({}, "ws-1", "actor-1")).toBe(false);
+    expect(parseVisionCohort({ TED_VISION_COHORT: " , ," })).toEqual([]);
+  });
+
+  it("fora da coorte: extract devolve 'unavailable' com ZERO chamadas de rede", async () => {
+    const { calls, fetchImpl } = recordingFetch(async () => completionWith("nunca chamado"));
+    const provider = createGroqVisionProvider({ env: KEY_ENV, workspaceId: "ws-1", actorId: "actor-1", fetchImpl });
+    expect(provider.available).toBe(false);
     const outcome = await provider.extract({ bytes: bytesOf(pngBytes(4, 4)), mime: "image/png" });
     expect(outcome.state).toBe("unavailable");
     expect(calls).toHaveLength(0);

@@ -163,7 +163,7 @@ import {
 // `unsupported` fail-closed da A13, sem qualquer chamada de rede.
 import { AUDIO_TRANSCRIPT_NOTICE, audioSttProcessorOverride, composeTurnTextWithTranscript } from "./multimodal/groq-stt.js";
 // A15/R13: visão de imagem via Groq (G05, mesmo vendor do STT — nenhum vendor
-// novo) — default-off com trava dupla. Sem as duas envs, `imageVisionProcessorOverride`
+// novo) — default-off com trava tripla (A19-VISION-COHORT). Sem as três travas, `imageVisionProcessorOverride`
 // devolve `undefined` e a imagem segue no `unsupported` fail-closed da A13.
 import { VISION_EXTRACT_NOTICE, imageVisionProcessorOverride } from "./multimodal/groq-vision.js";
 import { imageGeminiVisionProcessorOverride, resolveVisionProviderKind } from "./multimodal/gemini-vision.js";
@@ -247,14 +247,15 @@ export type Env = {
   /**
    * A15/R13: visão de imagem — Groq legado por default, Gemini (Google AI
    * Studio, decisão do operador) via `TED_VISION_PROVIDER=gemini` — default-off
-   * com TRAVA DUPLA. Credencial do provider ativo (`GROQ_API_KEY` ou
+   * com TRAVA TRIPLA (A19-VISION-COHORT). Credencial do provider ativo (`GROQ_API_KEY` ou
    * `GOOGLE_AI_STUDIO_KEY`, lida no call time, nunca logada) +
-   * `TED_VISION_ENABLED=1`: sem as duas, a imagem permanece `unsupported` e
+   * `TED_VISION_ENABLED=1` + coorte `TED_VISION_COHORT`: sem as três travas, a imagem permanece `unsupported` e
    * nada muda. `TED_VISION_MODEL` (allowlist fechada do provider ativo) e
    * `TED_VISION_TIMEOUT_MS` (default 30 s) são opcionais; não há fallback
    * automático de modelo nem de provider.
    */
   TED_VISION_ENABLED?: string;
+  TED_VISION_COHORT?: string;
   TED_VISION_MODEL?: string;
   TED_VISION_TIMEOUT_MS?: string;
   TED_VISION_PROVIDER?: string;
@@ -2342,7 +2343,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     // never enables egress). The
     // registry — and the per-turn transcription budget carried by the processor
     // — is built HERE, once per turn: no state leaks across turns/workspaces.
-    // A15: same contract for the image (vision, double lock) and for the PDF
+    // A15: same contract for the image (vision, triple lock A19-VISION-COHORT) and for the PDF
     // (local text-layer parse — no egress, no credential, so no double lock).
     // With every lock off, the registry is byte-for-byte the A13 one.
     const audioProcessor = audioSttProcessorOverride(this.env, identity);
@@ -2350,8 +2351,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     // TED_VISION_PROVIDER=gemini (setado no rollout, nunca aqui).
     const imageProcessor =
       resolveVisionProviderKind(this.env) === "gemini"
-        ? imageGeminiVisionProcessorOverride(this.env)
-        : imageVisionProcessorOverride(this.env);
+        ? imageGeminiVisionProcessorOverride(this.env, identity)
+        : imageVisionProcessorOverride(this.env, identity);
     // F4: the PDF text-layer parse is behind `TED_PDF_TEXT_ENABLED=1`
     // (default-off). Without it NO extractor is built and the PDF stays the
     // A13 `unsupported` entry — zero parse, zero bytes read.

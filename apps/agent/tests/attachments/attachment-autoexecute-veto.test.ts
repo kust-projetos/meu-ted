@@ -338,7 +338,7 @@ describe("A19/F1 — o cliente elevado não é construído com anexo presente (o
     },
     {
       label: "extração aceita (imagem processada)",
-      env: { GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "1" },
+      env: { GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "1", TED_VISION_COHORT: "*" },
       kind: "image" as const,
       name: "recibo.png",
       bytes: () => imageBytes(),
@@ -347,7 +347,7 @@ describe("A19/F1 — o cliente elevado não é construído com anexo presente (o
     },
     {
       label: "visão falhou (provider error)",
-      env: { GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "1" },
+      env: { GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "1", TED_VISION_COHORT: "*" },
       kind: "image" as const,
       name: "recibo.png",
       bytes: () => imageBytes(),
@@ -408,7 +408,7 @@ describe("A19/F1 — o cliente elevado não é construído com anexo presente (o
     // genuinely processed for the second to become `skipped_budget`.
     installGroq(async () => groqJson({ merchant: "Mercado", amount: "35", currency: "BRL" }));
     const { agent } = createAttachmentTestAgent({
-      extraEnv: { GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "1" },
+      extraEnv: { GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "1", TED_VISION_COHORT: "*" },
     });
     const wiring = captureOrchestratorWiring(agent);
     const first = await uploadRef(agent, "image", "primeiro.png", imageBytes());

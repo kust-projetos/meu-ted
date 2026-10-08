@@ -5,8 +5,8 @@
  * default é `gemini`. Mesmos princípios do adapter Groq (AC23), reaproveitados
  * sem duplicar lógica de parse:
  *
- * 1. **Default-off com trava dupla.** Só há provider quando
- *    `TED_VISION_ENABLED=1` **e** `GOOGLE_AI_STUDIO_KEY` estão presentes.
+ * 1. **Default-off com trava tripla (A19-VISION-COHORT).** Só há provider quando
+ *    `TED_VISION_ENABLED=1` **e** `GOOGLE_AI_STUDIO_KEY` **e** a coorte incluem a identidade.
  * 2. **A imagem é DADO, nunca instrução.** O system prompt é uma CONSTANTE em
  *    paridade com `GROQ_VISION_SYSTEM_PROMPT` (teste de paridade impede drift
  *    silencioso); `userText`/`fileName` nunca entram no payload.
@@ -23,12 +23,13 @@
  *
  * Residual de privacidade (decisão do operador, registrar): diferentemente do
  * Groq com ZDR, o uso de dados pelo plano do AI Studio deve ser conferido no
- * billing/console do Google antes de qualquer tráfego real com dado de usuário.
+ * billing/console do Google; o operador aceitou o caminho Gemini para o canary em 2026-10-08 (equivalente-ZDR: política de dados do AI Studio para uso via API; revalidar antes de tráfego geral).
  */
 
 import {
   createImageVisionProcessor,
   createVisionBudget,
+  isVisionCohortMember,
   parseExtraction,
   readChoiceContent,
   toImageDataUrl,
@@ -41,14 +42,16 @@ export const GEMINI_VISION_URL =
   'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
 
 /**
- * Default = modelo recomendado pelo próprio provider (erro 404 do
- * `gemini-2.5-flash` para contas novas sugere este). Allowlist fechada;
- * qualquer outro valor cai no default em vez de ser enviado.
+ * Default = `gemini-3.8-flash` (conservador); o 2.5-flash entra via opt-in:
+ * (antes 404 para contas novas; provado live e admitido por decisão do operador (2026-10-08)).
  */
 export const GEMINI_VISION_DEFAULT_MODEL = 'gemini-3.8-flash';
 export const GEMINI_VISION_DEFAULT_TIMEOUT_MS = 30_000;
 
-const ALLOWED_MODELS = ['gemini-3.8-flash', 'gemini-3-flash-preview'] as const;
+// Allowlist fechada: `gemini-2.5-flash` admitido por decisão do operador
+// (2026-10-08, extração exata provada live; `gemini-3.8-flash` segue o default
+// e o caminho de 503-demand). Qualquer outro valor cai no default.
+const ALLOWED_MODELS = ['gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-3-flash-preview'] as const;
 
 /**
  * Prompt FIXO, em paridade textual com `GROQ_VISION_SYSTEM_PROMPT`.
@@ -70,6 +73,7 @@ export const GEMINI_VISION_SYSTEM_PROMPT = [
 export type GeminiVisionEnv = {
   GOOGLE_AI_STUDIO_KEY?: string;
   TED_VISION_ENABLED?: string;
+  TED_VISION_COHORT?: string;
   TED_VISION_MODEL?: string;
   TED_VISION_TIMEOUT_MS?: string;
   TED_VISION_PROVIDER?: string;
@@ -83,11 +87,16 @@ export type VisionProviderKind = 'gemini' | 'groq';
 export const resolveVisionProviderKind = (env: { TED_VISION_PROVIDER?: string } | undefined): VisionProviderKind =>
   env?.TED_VISION_PROVIDER?.trim() === 'gemini' ? 'gemini' : 'groq';
 
-/** Trava dupla: flag exata (trim, mesma convenção dos demais gates multimodais) + key. */
-export const isGeminiVisionAvailable = (env: GeminiVisionEnv | undefined): boolean => {
+/** Trava tripla (A19-VISION-COHORT): flag exata + key + coorte, com o parser compartilhado de `groq-vision.ts` (sem divergência entre providers). */
+export const isGeminiVisionAvailable = (
+  env: GeminiVisionEnv | undefined,
+  workspaceId?: string,
+  actorId?: string,
+): boolean => {
   const enabled = env?.TED_VISION_ENABLED?.trim();
   const key = env?.GOOGLE_AI_STUDIO_KEY?.trim();
-  return enabled === '1' && typeof key === 'string' && key.length > 0;
+  if (!(enabled === '1' && typeof key === 'string' && key.length > 0)) return false;
+  return isVisionCohortMember(env, workspaceId, actorId);
 };
 
 const DEFAULT_TIMEOUT_MIN_MS = 1;
@@ -112,6 +121,8 @@ export type GeminiVisionProvider = VisionProvider & {
 
 export const createGeminiVisionProvider = (input: {
   env?: GeminiVisionEnv;
+  workspaceId?: string;
+  actorId?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }): GeminiVisionProvider => {
@@ -120,10 +131,10 @@ export const createGeminiVisionProvider = (input: {
 
   return {
     provider: 'gemini',
-    available: isGeminiVisionAvailable(input.env),
+    available: isGeminiVisionAvailable(input.env, input.workspaceId, input.actorId),
     extract: async (request: VisionRequest): Promise<VisionOutcome> => {
       const env = input.env;
-      if (!isGeminiVisionAvailable(env)) return { state: 'unavailable' };
+      if (!isGeminiVisionAvailable(env, input.workspaceId, input.actorId)) return { state: 'unavailable' };
       const apiKey = env?.GOOGLE_AI_STUDIO_KEY?.trim() ?? '';
       const timeoutMs = resolveGeminiVisionTimeoutMs(env);
       const model = resolveGeminiVisionModel(env);
@@ -150,9 +161,19 @@ export const createGeminiVisionProvider = (input: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(payload),
+          // Nunca segue redirect com a imagem + Authorization em voo: um 3xx
+          // (ou o redirect opaco que o edge produz para 'manual' cross-origin)
+          // cai no erro tipado de provider abaixo, nunca num reenvio para um
+          // host que o operador não nomeou (espelha o fix P2 do STT).
+          redirect: 'manual',
           signal: controller.signal,
         });
 
+        // Redirect recusado de saída — nunca seguido, nunca reenviado para
+        // fora do endpoint aprovado. Mapeia para o caminho tipado existente.
+        if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+          return { state: 'provider_error' };
+        }
         if (response.status === 401 || response.status === 403) return { state: 'unauthorized' };
         if (response.status === 429) return { state: 'rate_limited' };
         if (!response.ok) return { state: 'provider_error' };
@@ -197,8 +218,13 @@ import type { AttachmentProcessor } from '../attachments/processors.js';
  */
 export const imageGeminiVisionProcessorOverride = (
   env: GeminiVisionEnv | undefined,
+  identity?: { workspaceId?: string; actorId?: string },
 ): AttachmentProcessor | undefined => {
-  const provider = createGeminiVisionProvider({ env });
+  const provider = createGeminiVisionProvider({
+    env,
+    workspaceId: identity?.workspaceId,
+    actorId: identity?.actorId,
+  });
   if (!provider.available) return undefined;
   return createImageVisionProcessor({ provider, budget: createVisionBudget() });
 };

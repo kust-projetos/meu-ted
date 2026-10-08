@@ -84,13 +84,13 @@
     {
       "version": "1",
       "id": "GW-019",
-      "title": "Imagem: visão exige chave + segunda trava + ZDR, modelo a confirmar",
+      "title": "Imagem: visão Gemini 2.5-flash em canary (trava tripla + coorte ws)",
       "workflow": "image-vision",
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.vision",
-        "reason": "Sem GROQ_API_KEY provisionada, sem TED_VISION_ENABLED=1 e sem ZDR elegível; imagem é unsupported fail-closed com zero egress.",
-        "requires": ["GROQ_API_KEY como secret", "TED_VISION_ENABLED=1", "ZDR elegível na organização", "modelo default confirmado no rollout", "F2.3 (Vision) com canary aprovado"]
+        "reason": "Canary A19-VISION-CANARY configurado no manifesto (TED_VISION_ENABLED=1, provider gemini, modelo gemini-2.5-flash admitido na allowlist por decisão do operador 2026-10-08 com extração exata provada live, coorte = test workspace junio d36cb649-4462-486d-940a-47128ad329f2; GOOGLE_AI_STUDIO_KEY provisionada como secret; redirect manual com 3xx para provider_error; política de dados do AI Studio aceita pelo operador para o canary). Prova live pendente: recuperação do relay do turno (flapping no upstream LLM) + canary sintético com imagem ainda não executado; o runner isolado nunca faz egress, então o caminho ON segue offline-unprovable.",
+        "requires": ["GOOGLE_AI_STUDIO_KEY como secret (provisionada)", "TED_VISION_ENABLED=1 + TED_VISION_PROVIDER=gemini + TED_VISION_MODEL=gemini-2.5-flash (manifesto)", "TED_VISION_COHORT com identidade canary (operador)", "política de dados do AI Studio aceita (revalidar antes de tráfego geral)", "F2.3 (Vision) com canary aprovado: relay recuperado + prova sintética com imagem"]
       },
       "initialState": {},
       "inputs": [{ "text": "leia o valor da nota na foto", "attachments": [{ "name": "nota.jpg", "type": "image/jpeg" }] }],
