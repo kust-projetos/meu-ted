@@ -43,6 +43,7 @@ export type DecisionTarget =
 
 export type CancelResolution =
   | Readonly<{ kind: 'cancelled'; operationId?: string }>
+  | Readonly<{ kind: 'empty' }>
   | Readonly<{ kind: 'inconclusive' }>
   | Readonly<{ kind: 'ambiguous'; operations: readonly ActiveOperationRecord[] }>;
 
@@ -68,6 +69,12 @@ export type DecisionResult = Readonly<{
 
 export const NO_PENDING_OPERATION_TEXT = 'Não há nenhuma operação pendente para confirmar.';
 export const NO_FAILED_OPERATION_TEXT = 'Não há nenhuma operação com falha para tentar novamente.';
+/**
+ * Golden GW-027 (INV-03): cancelar sem nada pendente NÃO é "cancelada" — é um
+ * no-op determinístico com cópia própria, sem palavra de claim. Sem isso o
+ * turno alegava "Operação cancelada com segurança." com zero evidência.
+ */
+export const NO_PENDING_CANCEL_TEXT = 'Não há nenhuma operação pendente para cancelar.';
 
 /** Conversational retry (§8.2): "tenta de novo" / "refaz" over a failed op. Kept tight — bare "tenta" never matches. */
 const RETRY_RE = /\b(tenta? (de novo|novamente)|tentar (de novo|novamente)|tente (de novo|novamente)|refa[zç](a|er)?|repet(e|ir|a|indo))\b/i;
@@ -202,9 +209,9 @@ export class PendingOperationCoordinator {
    * handoffs are settled by the SAME proposalIdempotencyKey first —
    * existing operation → authoritative cancel; definitive rejection →
    * discard; unknown → inconclusive (never "cancelado"). Then actives are
-   * discarded and the authoritative listing decides: none → cancelled
-   * without operation; one → cancelled; several → ambiguous (nothing
-   * cancelled).
+   * discarded and the authoritative listing decides: none → 'empty'
+   * (deterministic no-op copy, never a "cancelada" claim — INV-03/GW-027);
+   * one → cancelled; several → ambiguous (nothing cancelled).
    */
   async resolveCancel(
     identity: MutationIdentity,
@@ -212,7 +219,7 @@ export class PendingOperationCoordinator {
   ): Promise<CancelResolution> {
     if (!draftScope) {
       const target = await this.resolveDecisionTarget(identity, 'decidable');
-      if (target.kind === 'none') return { kind: 'cancelled' };
+      if (target.kind === 'none') return { kind: 'empty' };
       if (target.kind === 'multiple') return { kind: 'ambiguous', operations: target.operations };
       const result = await this.dependencies.client.cancel(target.operation.id, identity);
       return { kind: 'cancelled', operationId: result.operationId };
@@ -272,7 +279,7 @@ export class PendingOperationCoordinator {
     this.discardActiveDrafts({ store, ctx, intentionId, nowMs: now });
     if (outcomeUnknown) return { kind: 'inconclusive' };
     const target = await this.resolveDecisionTarget(identity, 'decidable');
-    if (target.kind === 'none') return { kind: 'cancelled' };
+    if (target.kind === 'none') return { kind: 'empty' };
     if (target.kind === 'multiple') return { kind: 'ambiguous', operations: target.operations };
     const result = await this.dependencies.client.cancel(target.operation.id, identity);
     return { kind: 'cancelled', operationId: result.operationId };

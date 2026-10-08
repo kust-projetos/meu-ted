@@ -24,7 +24,7 @@ machine-readable. Coração: `false-success = HARD FAILURE` (INV-03).
 - `v1/reporters/json.ts` — relatório machine-readable. `tokens`/`cost` são
   `"unknown"` de propósito: o stub é determinístico, nenhuma chamada de
   modelo acontece, então não há nada para contar — nunca inventar.
-- `v1/cases/*.golden.json` — o catálogo como DADOS (19 executáveis +
+- `v1/cases/*.golden.json` — o catálogo como DADOS (21 executáveis +
   6 `pending-capability`).
 - `golden.test.ts` — a suíte: schema + controles negativos do detector +
   subset executável + relatório.
@@ -42,7 +42,7 @@ Saída machine-readable: `apps/agent/test-results/golden-report.json`
 (diretório gitignored — evidência, não fonte). Resumo no console:
 
 ```text
-golden v1: total=25 pass=19 fail=0 skipped-pending=6 falseSuccess=0 tokens=unknown cost=unknown
+golden v1: total=27 pass=21 fail=0 skipped-pending=6 falseSuccess=0 tokens=unknown cost=unknown
 ```
 
 Casos `pending-capability` (anexo, PDF, áudio, imagem, web, autoexecute
@@ -66,7 +66,7 @@ nunca como `pass`. Executá-los exige a capability provisionada (ver
    `pendingReason: { capability, reason, requires }` — o runner pula e
    reporta; fingir cobertura com caso falso é proibido.
 4. Rode `pnpm test:golden` e ajuste as contagens pinadas na suíte
-   (25/19/6) se o catálogo cresceu de verdade.
+   (27/21/6) se o catálogo cresceu de verdade.
 
 ## Regras do harness
 
@@ -109,3 +109,9 @@ nunca como `pass`. Executá-los exige a capability provisionada (ver
   (propor→confirmar→executar, claim legítima), GW-024
   (propor→cancelar, zero execuções) e GW-025 (confirmar-sem-proposta,
   resposta determinística sem efeito).
+- Cancelar sem nada pendente NÃO é "cancelada": `resolveCancel` devolve
+  `empty` e o turno responde o no-op determinístico ("Não há nenhuma
+  operação pendente para cancelar."), sem palavra de claim. Casos
+  (`cancel-edge.golden.json`): GW-026 (duas propostas + "cancela" →
+  desambiguação, nada cancelado) e GW-027 (cancela sem pendência →
+  no-op determinístico, zero efeitos).

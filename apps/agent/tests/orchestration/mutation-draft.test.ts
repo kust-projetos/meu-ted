@@ -24,6 +24,7 @@ import {
   type MutationDraftStore,
 } from '../../src/mutations/mutation-draft.js';
 import type { EntityReader } from '../../src/mutations/entity-resolver.js';
+import { NO_PENDING_CANCEL_TEXT } from '../../src/orchestration/pending-operation-coordinator.js';
 
 const identity: AuthenticatedIdentity = {
   actorId: 'actor-authenticated',
@@ -289,14 +290,15 @@ describe('SPEC §25.3.1 — MutationDraft multi-turno', () => {
     expect(result.response?.text).toMatch(/mais de uma inten/);
   });
 
-  it('"cancela": active draft discarded, no pending operation', async () => {
+  it('"cancela": active draft discarded, no pending operation → deterministic no-op copy (INV-03)', async () => {
     const fake = makeFakeApi();
     const store = new InMemoryMutationDraftStore();
     const orchestrator = setup(fake, store);
     await turn(orchestrator, 'Gastei R$ 85 no mercado', 'msg-cancel-1');
     const cancelled = await turn(orchestrator, 'cancela', 'msg-cancel-2');
     expect(fake.proposePosts()).toBe(0);
-    expect(cancelled.response?.text).toMatch(/cancelada/);
+    expect(cancelled.response?.text).toBe(NO_PENDING_CANCEL_TEXT);
+    expect(cancelled.response?.text).not.toMatch(/cancelada|registrado|com sucesso/);
     const ctx = ctxOf();
     expect(store.listActive(ctx, Date.now())).toHaveLength(0);
     const discarded = store.findByIntention(ctx, 'msg-cancel-1');
@@ -422,8 +424,9 @@ describe('SPEC §25.3.1 — MutationDraft multi-turno', () => {
       expect(fake.opStatus(opId)).toBe('cancelled');
       expect(cancel.response?.text).toMatch(/cancelada|processamento/);
     } else {
-      // Cancel won before any proposal: nothing may have been created.
-      expect(cancel.response?.text).toMatch(/cancelada/);
+      // Cancel won before any proposal: nothing was created — deterministic
+      // no-op copy (INV-03), never "cancelada" without evidence.
+      expect(cancel.response?.text).toBe(NO_PENDING_CANCEL_TEXT);
     }
   });
 
@@ -682,7 +685,7 @@ describe('A07/R07 — goal metadata, fragments and corrections', () => {
     expect(reopened.proposalIdempotencyKey).not.toBe(opened.proposalIdempotencyKey);
   });
 
-  it('AC15: a corrected draft can still be cancelled without any effect', async () => {
+  it('AC15: a corrected draft can still be cancelled without any effect → no-op copy (INV-03)', async () => {
     const fake = makeFakeApi();
     const store = new InMemoryMutationDraftStore();
     const orchestrator = setup(fake, store, { now: () => NOW_MS });
@@ -690,7 +693,7 @@ describe('A07/R07 — goal metadata, fragments and corrections', () => {
     const draftId = store.listActive(ctxOf(), NOW_MS)[0]!.draftId;
     await turn(orchestrator, 'não, 500', 'ac15-cancel-2');
     const cancelled = await turn(orchestrator, 'cancela', 'ac15-cancel-3');
-    expect(cancelled.response?.text).toMatch(/cancelada/);
+    expect(cancelled.response?.text).toBe(NO_PENDING_CANCEL_TEXT);
     expect(fake.proposePosts()).toBe(0);
     expect(fake.ops.size).toBe(0);
     const closed = draftOf(store, draftId);
