@@ -244,3 +244,72 @@ jobs:
       - name: API health (public GET only)
         run: |
           curl -fsS "$API_PROD_URL/health"
+
+  attest:
+    name: Attestation — ATTESTED vs NOT-ATTESTED (fail-closed, §5.6)
+    # Always runs: a skipped deploy/smoke is a legitimate green state (the
+    # other CI's completion re-fires this workflow), but green MUST NOT be
+    # readable as a release. This job records the explicit terminal state:
+    # ATTESTED (deploy ran + smoke ran + PASS, with sha/buildId) vs
+    # NOT-ATTESTED with an explicit reason. It never deploys, never touches
+    # credentials or the API, and never changes the outcome of
+    # gate/deploy/smoke — it only records. Contract (fail-closed): a missing
+    # or negative attestation MUST be read as NOT DEPLOYED. Only
+    # `attestation=ATTESTED` with a matching sha constitutes a release;
+    # consumers must check the `attestation`/`reason` job outputs, never the
+    # workflow's green status alone. Gates stay intact: the workflow_run
+    # origin check, the CI+PWA-CI gate, the freshness/staleness gate and the
+    # manifest verification above are untouched.
+    needs: [gate, deploy, smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: none
+    outputs:
+      attestation: ${{ steps.verdict.outputs.attestation }}
+      reason: ${{ steps.verdict.outputs.reason }}
+    steps:
+      - name: Compute deployment attestation (records only, never deploys)
+        id: verdict
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          DEPLOY_READY: ${{ needs.gate.outputs.deploy_ready }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+        run: |
+          node -e "
+          const fs = require('fs');
+          const gate = process.env.GATE_RESULT || 'unknown';
+          const ready = process.env.DEPLOY_READY || '';
+          const deploy = process.env.DEPLOY_RESULT || 'unknown';
+          const smoke = process.env.SMOKE_RESULT || 'unknown';
+          const sha = process.env.HEAD_SHA || 'unknown';
+          const runId = process.env.WORKFLOW_RUN_ID || 'unknown';
+          let attestation = 'NOT-ATTESTED';
+          let reason = 'unknown';
+          if (gate !== 'success') { reason = 'gate-not-success:' + gate; }
+          else if (ready !== 'true') { reason = 'deploy-skipped:gate-not-ready'; }
+          else if (deploy === 'skipped') { reason = 'deploy-skipped'; }
+          else if (deploy !== 'success') { reason = 'deploy-' + deploy; }
+          else if (smoke === 'skipped') { reason = 'smoke-skipped'; }
+          else if (smoke !== 'success') { reason = 'smoke-' + smoke; }
+          else { attestation = 'ATTESTED'; reason = 'deploy-smoke-pass'; }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'attestation=' + attestation + '\nreason=' + reason + '\n');
+          const lines = [
+            '## Deployment attestation: ' + attestation,
+            '',
+            '- sha: ' + sha,
+            '- buildId (workflow_run.id): ' + runId,
+            '- reason: ' + reason,
+            '- gate: ' + gate + ' deploy_ready: ' + (ready || '(empty)') + ' deploy: ' + deploy + ' smoke: ' + smoke,
+            '',
+            attestation === 'ATTESTED'
+              ? 'Deploy ran and smoke PASSED for this sha. This is the ONLY state that constitutes a release.'
+              : 'NOT DEPLOYED (fail-closed): a green workflow with a skipped deploy/smoke is NOT a release. Only attestation=ATTESTED with a matching sha counts — check the attestation/reason job outputs, never the workflow status alone.',
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+          console.log('attestation=' + attestation + ' reason=' + reason + ' sha=' + sha + ' buildId=' + runId);
+          "

@@ -34,6 +34,8 @@
  * (piggyback no upload) — sem crescimento infinito do SQLite do DO.
  */
 
+import { isAttachmentUploadCohortMember } from './upload-gate.js';
+
 export type AttachmentObservabilitySql = {
   exec<T>(query: string, ...bindings: unknown[]): Iterable<T>;
 };
@@ -478,20 +480,25 @@ export const queryAttachmentObservabilityBaseline = (
  * Coorte attachment-specific (gate PR-A): casa por workspaceId OU actorId
  * contra `TED_ATTACHMENTS_COHORT` (CSV). Ausente/vazia ⇒ 'none'
  * (fail-closed por construção — ninguém é membro por default).
+ *
+ * P1-5.2: semântica ÚNICA com o gate — delega a
+ * `isAttachmentUploadCohortMember` (upload-gate.ts), a única dona do parse
+ * CSV (trim, vazios descartados) e do curinga `'*'` = todos. Nenhuma lógica
+ * de CSV duplicada aqui: qualquer evolução do gate reflete na
+ * observabilidade por construção, e uploads admitidos pelo gate nunca mais
+ * afundam como `cohort='none'` na baseline G07. Nunca joga (best-effort:
+ * env malformado ⇒ 'none').
  */
 export const resolveAttachmentCohort = (
   env: unknown,
   workspaceId: string,
   actorId: string,
 ): 'member' | 'none' => {
-  const raw = (env as { TED_ATTACHMENTS_COHORT?: unknown } | undefined)?.TED_ATTACHMENTS_COHORT;
-  if (typeof raw !== 'string') return 'none';
-  const allow = raw
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-  if (allow.length === 0) return 'none';
-  return allow.includes(workspaceId) || allow.includes(actorId) ? 'member' : 'none';
+  try {
+    return isAttachmentUploadCohortMember(env, workspaceId, actorId) ? 'member' : 'none';
+  } catch {
+    return 'none';
+  }
 };
 
 export type AttachmentObservabilitySink = {

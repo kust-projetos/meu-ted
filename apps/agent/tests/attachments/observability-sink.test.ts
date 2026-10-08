@@ -35,6 +35,7 @@ import {
   resolveAttachmentCohort,
   sanitizeAttachmentObservabilityInput,
 } from '../../src/attachments/observability.js';
+import { isAttachmentUploadCohortMember } from '../../src/attachments/upload-gate.js';
 import { cleanupExpiredAttachments } from '../../src/attachments/ingest.js';
 import { createMemoryAttachmentStorage } from '../../src/attachments/storage.js';
 import { createRelayUsageStorage } from '../helpers/relay-usage-storage.js';
@@ -418,6 +419,98 @@ describe('PR-B sink — coorte attachment-specific', () => {
     expect(resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: 'ws-9,actor-1' }, 'ws-1', 'actor-1')).toBe('member');
     expect(resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: 'ws-9' }, 'ws-1', 'actor-1')).toBe('none');
     expect(resolveAttachmentCohort({}, 'ws-1', 'actor-1')).toBe('none');
+  });
+});
+
+describe('P1-5.2 — coorte unificada gate ↔ observabilidade (semântica única)', () => {
+  it("(17) curinga '*' admite todos na observabilidade (paridade com o gate)", () => {
+    expect(resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: '*' }, 'ws-x', 'actor-x')).toBe('member');
+    expect(resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: '*, ws-a' }, 'ws-x', 'actor-x')).toBe('member');
+    expect(resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: '  *  ' }, 'ws-x', 'actor-x')).toBe('member');
+  });
+
+  it('(18) casamento exato por workspace OU actor (com trim); estranho nega', () => {
+    expect(resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: 'ws-1,actor-9' }, 'ws-1', 'actor-1')).toBe('member');
+    expect(resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: 'ws-9,actor-1' }, 'ws-1', 'actor-1')).toBe('member');
+    expect(resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: ' ws-a , actor-b ' }, 'ws-a', 'x')).toBe('member');
+    expect(resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: ' ws-a , actor-b ' }, 'x', 'actor-b')).toBe('member');
+    expect(resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: 'ws-9' }, 'ws-1', 'actor-1')).toBe('none');
+  });
+
+  it("(19) malformado nunca joga e nega: vazio/ausente/whitespace/',,,\"/env não-string", () => {
+    const badEnvs: unknown[] = [
+      {},
+      { TED_ATTACHMENTS_COHORT: undefined },
+      { TED_ATTACHMENTS_COHORT: '' },
+      { TED_ATTACHMENTS_COHORT: '   ' },
+      { TED_ATTACHMENTS_COHORT: ',,,' },
+      { TED_ATTACHMENTS_COHORT: ' , , ' },
+      { TED_ATTACHMENTS_COHORT: 123 },
+      { TED_ATTACHMENTS_COHORT: null },
+      { TED_ATTACHMENTS_COHORT: ['ws-1'] },
+      null,
+      undefined,
+      42,
+    ];
+    for (const env of badEnvs) {
+      expect(() => resolveAttachmentCohort(env, 'ws-1', 'actor-1')).not.toThrow();
+      expect(resolveAttachmentCohort(env, 'ws-1', 'actor-1')).toBe('none');
+    }
+  });
+
+  it('(20) paridade gate ↔ observabilidade em matriz de coortes (semântica única)', () => {
+    const envs: unknown[] = [
+      {},
+      { TED_ATTACHMENTS_COHORT: '' },
+      { TED_ATTACHMENTS_COHORT: '   ' },
+      { TED_ATTACHMENTS_COHORT: ',,,' },
+      { TED_ATTACHMENTS_COHORT: '*' },
+      { TED_ATTACHMENTS_COHORT: ' *, ws-a' },
+      { TED_ATTACHMENTS_COHORT: 'ws-1,actor-9' },
+      { TED_ATTACHMENTS_COHORT: 'ws-9,actor-1' },
+      { TED_ATTACHMENTS_COHORT: 'ws-9' },
+      { TED_ATTACHMENTS_COHORT: 123 },
+      null,
+    ];
+    const identities: Array<[string, string]> = [
+      ['ws-1', 'actor-1'],
+      ['ws-x', 'actor-x'],
+      ['ws-a', 'actor-x'],
+    ];
+    for (const env of envs) {
+      for (const [ws, actor] of identities) {
+        const expected = isAttachmentUploadCohortMember(env, ws, actor) ? 'member' : 'none';
+        expect(resolveAttachmentCohort(env, ws, actor), `env=${JSON.stringify(env)} ws=${ws}`).toBe(expected);
+      }
+    }
+  });
+
+  it('(21) byCohort agrega member + none em SQLite real (coortes resolvidas pela semântica única)', () => {
+    const { sql } = createRealSql();
+    initializeAttachmentObservabilitySchema(sql);
+    const memberCohort = resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: '*' }, 'ws-1', 'actor-1');
+    const noneCohort = resolveAttachmentCohort({ TED_ATTACHMENTS_COHORT: 'ws-other' }, 'ws-1', 'actor-1');
+    expect(memberCohort).toBe('member');
+    expect(noneCohort).toBe('none');
+    const base = { workspaceId: 'ws-1', actorId: 'actor-1' };
+    expect(
+      emitAttachmentObservabilityEvent(sql, { ...base, cohort: memberCohort, event: 'succeeded', capability: 'image', success: true, latencyMs: 100 }),
+    ).toBe(true);
+    expect(
+      emitAttachmentObservabilityEvent(sql, { ...base, cohort: memberCohort, event: 'succeeded', capability: 'image', success: true, latencyMs: 300 }),
+    ).toBe(true);
+    expect(
+      emitAttachmentObservabilityEvent(sql, { ...base, cohort: noneCohort, event: 'failed', capability: 'pdf', success: false, latencyMs: 500 }),
+    ).toBe(true);
+    expect(
+      emitAttachmentObservabilityEvent(sql, { ...base, cohort: noneCohort, event: 'blocked', capability: 'unknown', success: false }),
+    ).toBe(true);
+    const baseline = queryAttachmentObservabilityBaseline(sql, { workspaceId: 'ws-1', actorId: 'actor-1' });
+    expect(baseline.total).toBe(4);
+    // Uploads admitidos pelo curinga afundam como member — nunca como none.
+    expect(baseline.byCohort['member']).toMatchObject({ total: 2, succeeded: 2, failed: 0 });
+    // blocked conta no total da coorte, fora do success rate (P2-d).
+    expect(baseline.byCohort['none']).toMatchObject({ total: 2, succeeded: 0, failed: 1 });
   });
 });
 

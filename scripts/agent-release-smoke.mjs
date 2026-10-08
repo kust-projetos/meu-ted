@@ -43,6 +43,15 @@
  * `url` is the validated Agent origin (e.g. from $AGENT_PROD_URL, already
  * pinned by validate-deploy-origins.mjs); this helper appends `/health`
  * itself. No hosts are hardcoded here — everything arrives via args.
+ *
+ * ATTESTATION CONTRACT (fail-closed, §5.6): only exit 0 with an observed
+ * `buildSha === expectedSha` constitutes ATTESTED for a release. Every other
+ * outcome — non-zero exit, skipped deploy job, skipped smoke job, or a run
+ * that never reached this helper — is NOT-ATTESTED and MUST be read as NOT
+ * DEPLOYED. The exact machine check is the deploy workflow's `attest` job
+ * outputs: `attestation == 'ATTESTED'` AND the attested sha equals the
+ * candidate sha. Consumers must never infer a deployment from a green
+ * workflow alone: a green run whose deploy/smoke skipped is NOT-ATTESTED.
  */
 
 import { pathToFileURL } from "node:url";

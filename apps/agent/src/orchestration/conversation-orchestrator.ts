@@ -43,6 +43,7 @@ import { TurnBudget, type RecoveryPermit, type ResolutionRecoveryRequest } from 
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
 import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
 import {
+  DRAFTS_DISCARDED_NO_OP_TEXT,
   NO_FAILED_OPERATION_TEXT,
   NO_PENDING_CANCEL_TEXT,
   PendingOperationCoordinator,
@@ -179,6 +180,16 @@ const DENIED_DATE_TEXT = 'Não identifiquei a data com segurança. Informe a dat
  */
 const DRAFT_WRITE_CONTENTION_TEXT =
   'Não consegui atualizar o lançamento com segurança. Confirme os dados para eu tentar de novo.';
+
+/**
+ * P1-5.1 (DESFAZ) — deterministic copies for the desfaz/cancel-vs-undo
+ * arbitration in `runUndoTurn`/`runCancelTurn`. Exported so the precedence
+ * suite pins the exact wording; the routing itself owns when each fires.
+ */
+export const UNDO_CANCEL_TWO_TARGET_TEXT =
+  'Você tem uma operação pendente aguardando confirmação e uma ação anterior que pode ser desfeita. Quer cancelar a operação pendente ou desfazer a ação anterior? Responda "cancela a pendente" ou "desfaz a anterior".';
+export const NOTHING_TO_UNDO_OR_CANCEL_TEXT = 'Não há nada para desfazer ou cancelar.';
+export const CANCEL_NEGATION_TEXT = 'Entendido — nada foi cancelado.';
 
 export type TurnResult = Readonly<{
   input: TurnInput;
@@ -332,6 +343,43 @@ const LETTER = /\p{L}/u;
  * the heuristic's own signal is visible to it without the text ever leaving.
  */
 const NEGATION_MARKER = /\b(?:n[aã]o|nunca|jamais)\b/iu;
+
+/**
+ * P1-5.1 (DESFAZ) — a negated cancel/undo ("não cancela", "não desfaz",
+ * "desfaz não", "nunca cancela") is a refusal, never a decision. It must
+ * reach neither the cancel path nor the undo-proposal path. Checked against
+ * the DECISION text only — attachment-derived data never decides.
+ */
+const isCancelNegation = (text: string): boolean =>
+  NEGATION_MARKER.test(text ?? '') && (isCancelText(text ?? '') || hasUndoIntent(text ?? ''));
+
+/**
+ * P1-REVIEWFIX (P2) — the two explicit answers to the two-target
+ * clarification (`UNDO_CANCEL_TWO_TARGET_TEXT`). Honored ONLY when both
+ * targets are still present (pending + undo-eligible); anywhere else the
+ * turn keeps its normal routing. Folded (case/diacritic/whitespace/trailing
+ * punctuation) so "DESFAZ A ANTERIOR." answers exactly like
+ * "desfaz a anterior". Full-string anchored: a longer sentence is not a
+ * direct answer and re-clarifies instead of executing.
+ */
+const foldSelectorText = (text: string): string =>
+  (text ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.?!…]+$/u, '');
+
+const UNDO_PREVIOUS_SELECTOR_RE =
+  /^(?:(?:desfaz(?:er)?|desfaca|undo)\s+(?:a\s+)?(?:acao\s+)?anterior|a\s+(?:acao\s+)?anterior|anterior)$/;
+const UNDO_PENDING_SELECTOR_RE =
+  /^(?:(?:cancela(?:r)?|cancele|desfaz(?:er)?|desfaca|undo)\s+(?:a\s+)?pendente|a\s+pendente|pendente)$/;
+
+const isUndoPreviousSelector = (text: string): boolean =>
+  UNDO_PREVIOUS_SELECTOR_RE.test(foldSelectorText(text));
+const isUndoPendingSelector = (text: string): boolean =>
+  UNDO_PENDING_SELECTOR_RE.test(foldSelectorText(text));
 
 type CorrectionOutcome =
   | Readonly<{ kind: 'amount'; amountCents: number }>
@@ -1909,7 +1957,14 @@ export class ConversationOrchestrator {
     // F1: undo intent/negation/confirmation are read from the TYPED text only —
     // attachment-derived data never proposes, negates or confirms an undo.
     const text = decisionText ?? input.text ?? '';
-    if (!hasUndoIntent(text)) return null;
+    // P1-REVIEWFIX (P2): the two explicit answers to the two-target
+    // clarification. Bare "a anterior"/"a pendente" carry no undo stem, so
+    // they enter the arbitration through here instead of falling through to
+    // an unrelated path; selectors are only honored when both targets are
+    // still present (checked inside the pending branch below).
+    const previousSelector = isUndoPreviousSelector(text);
+    const pendingSelector = isUndoPendingSelector(text);
+    if (!hasUndoIntent(text) && !previousSelector && !pendingSelector) return null;
     // Natural-language negation fails closed: no proposal, no execution.
     if (isUndoNegation(text)) {
       const reply = 'Entendido — nada será desfeito.';
@@ -1922,6 +1977,68 @@ export class ConversationOrchestrator {
       const reply = 'Para desfazer, confirme no botão da proposta. A confirmação por texto não desfaz.';
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
       return freeze({ ...base, response: freeze({ text: reply }) });
+    }
+    // P1-5.1 (DESFAZ): a pending financial operation takes precedence over
+    // proposing an undo of an older action — "desfaz" matches both the undo
+    // matcher and the cancel matcher, and the pending target wins. Two
+    // targets (pending AND an undo-eligible prior action) clarify instead of
+    // executing anything; a pending target alone takes the cancel path with
+    // the exact contract "cancela" has today (same coordinator, same client).
+    if (await this.hasPendingFinancialTarget(input)) {
+      // P1-REVIEWFIX (P1): the undo probe is tri-state — a preview FAILURE
+      // (timeout/transport) is `unknown`, never "no target". Cancelling the
+      // pending op on `unknown` could destroy it when a prior undo-eligible
+      // action actually exists (the turn should have clarified instead).
+      // `unknown` + pending fails closed with an inconclusive reply and ZERO
+      // state change (no cancel call, no draft discard, no undo proposal);
+      // `unknown` + no pending never reaches here and falls through to the
+      // normal undo path below, which fails closed on its own.
+      const undoProbe = await this.probeUndoEligibility(input);
+      if (undoProbe === 'unknown') {
+        this.emit('mutation.blocked', {
+          intentionId: input.intentionId,
+          traceId: input.traceId,
+          channel: input.channel,
+          domain: plan.domain,
+          mode: plan.mode,
+          status: 'blocked',
+          reason: 'undo_probe_unknown',
+        });
+        return this.completeTurn(input, plan, startedAt, base, {
+          response: freeze({ text: renderInconclusive() }),
+        });
+      }
+      // P1-REVIEWFIX (P2): honor the direct answer when both targets are
+      // still present — previous goes to the undo-PROPOSAL path only (the
+      // button still owns execution, unchanged policy), pending goes to the
+      // cancel path. Anything else re-clarifies, never executes. A previous-
+      // selector with NO undo target falls through to the undo path below,
+      // which answers nothing-to-undo honestly with the pending untouched
+      // (the pending op was explicitly NOT selected, so it is never
+      // cancelled on this turn).
+      if (undoProbe === 'eligible' && !previousSelector && !pendingSelector) {
+        const ambiguousPlan = freeze({ ...plan, missingFields: freeze(['intent']) });
+        this.emit('mutation.blocked', {
+          intentionId: input.intentionId,
+          traceId: input.traceId,
+          channel: input.channel,
+          domain: plan.domain,
+          mode: plan.mode,
+          status: 'blocked',
+        });
+        return this.completeTurn(input, ambiguousPlan, startedAt, base, {
+          plan: ambiguousPlan,
+          clarification: freeze({ missingFields: ambiguousPlan.missingFields, text: UNDO_CANCEL_TWO_TARGET_TEXT }),
+          response: freeze({ text: UNDO_CANCEL_TWO_TARGET_TEXT }),
+        });
+      }
+      if (pendingSelector || (undoProbe === 'none' && !previousSelector)) {
+        return this.runCancelTurn(input, plan, this.dependencies.mutationApiClient ?? null, startedAt, base, decisionText);
+      }
+    } else if (pendingSelector && !hasUndoIntent(text)) {
+      // Bare "a pendente"/"cancela a pendente" with nothing pending: the
+      // deterministic cancel-contract no-op (same reply "cancela" gets today).
+      return this.runCancelTurn(input, plan, this.dependencies.mutationApiClient ?? null, startedAt, base, decisionText);
     }
     const undoDeps = this.dependencies.undoProposals;
     if (!input.deviceId) {
@@ -1949,7 +2066,7 @@ export class ConversationOrchestrator {
     }
     if (outcome.kind === 'unavailable') {
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
-      return freeze({ ...base, response: freeze({ text: 'Não há ação para desfazer.' }) });
+      return freeze({ ...base, response: freeze({ text: NOTHING_TO_UNDO_OR_CANCEL_TEXT }) });
     }
     const record = outcome.record;
     const reply = 'Encontrei a última ação para desfazer. Confirme no botão para desfazer.';
@@ -1961,12 +2078,68 @@ export class ConversationOrchestrator {
     });
   }
 
+  /**
+   * P1-5.1 (DESFAZ) — read-only pending probe for the undo/cancel
+   * arbitration. True when a financial target is still decidable: a
+   * recoverable local draft (active/proposing) OR an authoritative pending
+   * operation. Never writes, never proposes, never cancels; any probe
+   * failure reads as "no pending" and the turn falls through to the
+   * pre-existing undo flow, which fails closed on its own.
+   */
+  private async hasPendingFinancialTarget(input: TurnInput): Promise<boolean> {
+    try {
+      if (this.hasRecoverableDraft(input)) return true;
+    } catch {
+      // A store failure is not a pending target; the listing below decides.
+    }
+    const client = this.dependencies.mutationApiClient;
+    if (!client || !input.deviceId) return false;
+    try {
+      const target = await this.coordinatorFor(client).resolveDecisionTarget(
+        { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId },
+        'decidable',
+        this.dependencies.draftStore ? this.draftContext(input) : undefined,
+      );
+      return target.kind !== 'none';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * P1-REVIEWFIX (P1) — read-only undo-eligibility probe, TRI-STATE.
+   * `eligible` = the authoritative preview fixed a target; `none` = the
+   * preview returned null (genuinely nothing to undo — the
+   * finance-chat-agent.ts `previewUndoTarget` contract: "Null = genuinely
+   * nothing to undo; throw = transport failure"). `unknown` = the preview
+   * THREW. The old boolean folded `unknown` into "no target" and cancelled a
+   * pending op on what may be a transient preview failure. Never persists:
+   * the proposal itself (when the undo path owns the turn) still goes
+   * through `UndoProposalService.propose`, which re-reads the preview and
+   * owns the row.
+   */
+  private async probeUndoEligibility(input: TurnInput): Promise<'eligible' | 'none' | 'unknown'> {
+    const undoDeps = this.dependencies.undoProposals;
+    if (!undoDeps || !input.deviceId) return 'none';
+    try {
+      const target = await undoDeps.preview({
+        workspaceId: input.workspaceId,
+        actorId: input.actorId,
+        deviceId: input.deviceId,
+      });
+      return target !== null ? 'eligible' : 'none';
+    } catch {
+      return 'unknown';
+    }
+  }
+
   private async runMutationTurn(
     input: TurnInput,
     plan: TurnPlan,
     client: MutationApiClient,
     startedAt: number,
     base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    decisionText: string,
   ): Promise<TurnResult> {
     const store = this.dependencies.draftStore!;
     const ctx = this.draftContext(input);
@@ -2004,8 +2177,10 @@ export class ConversationOrchestrator {
     }
 
     // "cancela" routed here under a forced mutation plan still cancels.
-    if (isCancelText(input.text)) {
-      return this.runCancelTurn(input, plan, client, startedAt, base);
+    // P1-5.1/AC5: the DECISION text decides — attachment-derived data in the
+    // composed turn text never authorizes a cancel on this fallback path.
+    if (isCancelText(decisionText)) {
+      return this.runCancelTurn(input, plan, client, startedAt, base, decisionText);
     }
 
     const actives = store.listActive(ctx, now);
@@ -2207,7 +2382,17 @@ export class ConversationOrchestrator {
     client: MutationApiClient | null,
     startedAt: number,
     base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    decisionText?: string,
   ): Promise<TurnResult> {
+    // P1-5.1/AC6: a negated cancel ("não cancela", "não desfaz", "desfaz não")
+    // is a refusal, never a decision — nothing is read, discarded or
+    // cancelled. Read from the DECISION text only.
+    const decision = decisionText ?? input.decisionText ?? input.text;
+    if (isCancelNegation(decision)) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: CANCEL_NEGATION_TEXT }),
+      });
+    }
     const store = this.dependencies.draftStore;
     const cancelled = (): TurnResult => {
       this.emit('approval.rejected', {
@@ -2222,8 +2407,22 @@ export class ConversationOrchestrator {
         response: freeze({ text: renderMutationResult('cancelled') }),
       });
     };
-    // Legacy contract preserved when no draft store is configured.
-    if (!store) return cancelled();
+    // P1-INTEGRATE (H3): no draft store is fail-closed, never "cancelada".
+    // Evidence: no test relies on the legacy store-less claim (every cancel
+    // test constructs the orchestrator WITH a draftStore; the golden runner
+    // always injects one; the golden contract fails a cancel claim with no
+    // cancellation evidence anywhere as fail-closed). In prod the only
+    // store-less path is degraded (durableSql unavailable → draftStoreForRequest
+    // undefined; the SDK path additionally carries no client), where the old
+    // `cancelled()` claimed "Operação cancelada com segurança." without
+    // reading the authoritative listing or cancelling anything — an INV-03
+    // false-success. Unknown outcome ⇒ inconclusive (INV-10 consistent,
+    // same terminal as the transport-failure catch below).
+    if (!store) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: renderInconclusive() }),
+      });
+    }
     const ctx = this.draftContext(input);
     const now = this.draftNowMs();
     // Without a transport the proposing outcome cannot be resolved — reply
@@ -2232,6 +2431,7 @@ export class ConversationOrchestrator {
     // may survive to become a proposal afterwards.
     if (!client) {
       const stamp = new Date(now).toISOString();
+      let discarded = 0;
       for (const draft of store.listActive(ctx, now)) {
         store.update(draft.draftId, {
           status: 'discarded',
@@ -2242,13 +2442,42 @@ export class ConversationOrchestrator {
           // closed. Metadata only — the discard itself is unchanged.
           ...this.turnMetadata(input, draft, 'cancel_ref'),
         });
+        discarded += 1;
       }
       if (store.listProposing(ctx, now).length > 0) {
         return this.completeTurn(input, plan, startedAt, base, {
           response: freeze({ text: renderInconclusive() }),
         });
       }
-      return cancelled();
+      // P1-5.3 (H2): ONLY local active drafts were discarded and no
+      // authoritative operation could exist (no transport) — the distinct
+      // drafts-discarded no-op copy, never the 'cancelled' claim.
+      if (discarded > 0) {
+        this.emit('approval.rejected', {
+          intentionId: input.intentionId,
+          traceId: input.traceId,
+          channel: input.channel,
+          domain: plan.domain,
+          mode: plan.mode,
+          status: 'rejected',
+        });
+        return this.completeTurn(input, plan, startedAt, base, {
+          response: freeze({ text: DRAFTS_DISCARDED_NO_OP_TEXT }),
+        });
+      }
+      // Nothing discarded, nothing proposing: deterministic no-op, never a
+      // "cancelada" claim (mirrors the 'empty' resolution below).
+      this.emit('approval.rejected', {
+        intentionId: input.intentionId,
+        traceId: input.traceId,
+        channel: input.channel,
+        domain: plan.domain,
+        mode: plan.mode,
+        status: 'rejected',
+      });
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: NO_PENDING_CANCEL_TEXT }),
+      });
     }
     const coordinator = this.coordinatorFor(client);
     let resolution: Awaited<ReturnType<PendingOperationCoordinator['resolveCancel']>>;
@@ -2287,6 +2516,24 @@ export class ConversationOrchestrator {
       });
       return this.completeTurn(input, plan, startedAt, base, {
         response: freeze({ text: NO_PENDING_CANCEL_TEXT }),
+      });
+    }
+    // P1-5.3 (H1): 'drafts-discarded' (ONLY local active drafts were
+    // discarded, no authoritative operation ever existed) answers the
+    // distinct deterministic no-op copy — never the 'cancelled' claim.
+    // Mirrors 'empty' (approval.rejected + claim-free copy) and composes
+    // with the negation guard at function top (the guard stays first).
+    if (resolution.kind === 'drafts-discarded') {
+      this.emit('approval.rejected', {
+        intentionId: input.intentionId,
+        traceId: input.traceId,
+        channel: input.channel,
+        domain: plan.domain,
+        mode: plan.mode,
+        status: 'rejected',
+      });
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: coordinator.renderDraftsDiscarded() }),
       });
     }
     if (resolution.kind === 'ambiguous') {
@@ -2544,7 +2791,7 @@ export class ConversationOrchestrator {
     // (draft persistence, continuation, atomic consumption, recoverable
     // handoff). Without a store the legacy single-turn block above applies.
     if (plan.mode === 'mutation-proposal' && client && this.dependencies.draftStore) {
-      return this.runMutationTurn(input, plan, client, startedAt, result);
+      return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
     }
     // Draft continuation under a non-mutation plan: a bare answer ("Nubank")
     // routes `unsupported`, but with a recoverable draft and a client it is a
@@ -2555,7 +2802,7 @@ export class ConversationOrchestrator {
       (plan.mode === 'unsupported' || plan.mode === 'conversation') &&
       this.hasDraftForTurn(input)
     ) {
-      return this.runMutationTurn(input, plan, client, startedAt, result);
+      return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
     }
     // T1.5 (SPEC §8): confirmation resolves from the AUTHORITATIVE listing
     // (GET /v2/active, authenticated identity) — never from
@@ -2604,7 +2851,7 @@ export class ConversationOrchestrator {
       }
     }
     if (plan.mode === 'cancel') {
-      return this.runCancelTurn(input, plan, client ?? null, startedAt, result);
+      return this.runCancelTurn(input, plan, client ?? null, startedAt, result, decisionText);
     }
     // T1.5 conversational retry (§8.2/§13): only when no draft owns the
     // turn — recoverable drafts keep their own re-emission path above.

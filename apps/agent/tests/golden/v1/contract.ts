@@ -249,13 +249,19 @@ export const evaluateContract = (
     }
   }
 
-  // INV-03 — false-success = HARD FAILURE. A success claim is legitimate ONLY
-  // when the authoritative backend holds a matching execution AT OR BEFORE
-  // the claiming turn's response — never a later turn's — and, when the turn
-  // carries an operationId, that SAME operation (not any other operation Y).
-  // A proposal is NOT an execution: "Proposta ... Confirma?" carries no claim
-  // by construction, and any past-tense claim over a merely-proposed op fails.
-  // Turns carrying a per-turn snapshot (`executionsSucceededAfterTurn` /
+  // INV-03 — false-success = HARD FAILURE. Success claims and cancel claims
+  // are validated INDEPENDENTLY (P1-5.4): a response may carry both ("mixed
+  // claims") and each half needs its own authoritative evidence as of the
+  // claiming turn — an execution NEVER legitimizes a cancel half and a
+  // cancellation NEVER legitimizes an execution half.
+  //
+  // A success claim is legitimate ONLY when the authoritative backend holds
+  // a matching execution AT OR BEFORE the claiming turn's response — never
+  // a later turn's — and, when the turn carries an operationId, that SAME
+  // operation (not any other operation Y). A proposal is NOT an execution:
+  // "Proposta ... Confirma?" carries no claim by construction, and any
+  // past-tense claim over a merely-proposed op fails. Turns carrying a
+  // per-turn snapshot (`executionsSucceededAfterTurn` /
   // `executedOperationIdsAfterTurn`, recorded by the runner) use it; turns
   // without one fall back to the final `backend` aggregate (legacy unit-call
   // path). A null-operationId claim is a summary reference: legitimate only
@@ -269,25 +275,69 @@ export const evaluateContract = (
   // execution claim — the two effects are validated independently, so a
   // cancel reply over zero cancellations stays a HARD FAILURE even when the
   // ledger holds executions, and vice versa.
+  //
+  // Cancel↔operation binding (P1-5.4/AC3): the per-turn snapshots are
+  // cumulative, so a claiming turn must have ADDED a cancellation — the
+  // count after this turn must exceed the previous turn's count (0 for the
+  // first turn). A stale re-assertion of an earlier cancellation under a NEW
+  // intentionId is a HARD FAILURE, even when prior executions exist (AC4).
+  // The single exception is an idempotent redelivery: the SAME intentionId
+  // repeated in a later turn re-answers the same outcome without a new
+  // backend effect — but ONLY when the prior turn with that SAME intentionId
+  // itself recorded the cancellation (per-turn delta evidence as of that
+  // turn). A cancellation effected under a DIFFERENT intentionId never
+  // excuses a replayed claim (redelivery-mismatch). When no cancellation evidence exists anywhere (legacy
+  // unit calls with neither per-turn nor aggregate data), a cancel claim
+  // fails closed — executions never stand in for it.
   let falseSuccess = false;
-  for (const turn of turns) {
+  for (const [turnPosition, turn] of turns.entries()) {
     const claims = detectSuccessClaim(turn.responseText);
     if (claims.length === 0) continue;
-    if (claims.every((source) => source === CANCEL_CLAIM_SOURCE)) {
-      const hasPerTurn = turn.cancellationsAfterTurn !== undefined || turn.cancelledOperationIdsAfterTurn !== undefined;
-      const hasAggregate = backend.cancellationsSucceeded !== undefined || backend.cancelledOperationIds !== undefined;
-      if (!hasPerTurn && !hasAggregate) {
-        // Legacy unit calls carry no cancellation evidence: preserve the
-        // historical fail-closed behavior (a cancel claim over an empty
-        // ledger stays a HARD FAILURE).
+    const cancelClaims = claims.filter((source) => source === CANCEL_CLAIM_SOURCE);
+    const execClaims = claims.filter((source) => source !== CANCEL_CLAIM_SOURCE);
+    if (execClaims.length > 0) {
+      const hasPerTurn = turn.executionsSucceededAfterTurn !== undefined || turn.executedOperationIdsAfterTurn !== undefined;
+      if (!hasPerTurn) {
         if (backend.executionsSucceeded === 0) {
           falseSuccess = true;
           findings.push({
             rule: "false-success",
             severity: "failure",
-            detail: `HARD FAILURE (INV-03): turn ${turn.index} claims "${claims.join(",")}" with executionsSucceeded=0. Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
+            detail: `HARD FAILURE (INV-03): turn ${turn.index} claims "${execClaims.join(",")}" with executionsSucceeded=0. Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
           });
         }
+      } else {
+        const afterCount = turn.executionsSucceededAfterTurn ?? backend.executionsSucceeded;
+        const afterIds = turn.executedOperationIdsAfterTurn ?? backend.operationIds;
+        if (afterCount === 0 || afterIds.length === 0) {
+          falseSuccess = true;
+          findings.push({
+            rule: "false-success",
+            severity: "failure",
+            detail: `HARD FAILURE (INV-03/temporal): turn ${turn.index} claims "${execClaims.join(",")}" before any execution (executionsSucceededAfterTurn=${afterCount}). Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
+          });
+        } else if (turn.operationId !== null && !afterIds.includes(turn.operationId)) {
+          falseSuccess = true;
+          findings.push({
+            rule: "false-success",
+            severity: "failure",
+            detail: `HARD FAILURE (INV-03/operation): turn ${turn.index} claims "${execClaims.join(",")}" about operation "${turn.operationId}" with no matching execution as of the turn (executed=${JSON.stringify(afterIds.slice(0, 8))}). Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
+          });
+        }
+      }
+    }
+    if (cancelClaims.length > 0) {
+      const hasPerTurn = turn.cancellationsAfterTurn !== undefined || turn.cancelledOperationIdsAfterTurn !== undefined;
+      const hasAggregate = backend.cancellationsSucceeded !== undefined || backend.cancelledOperationIds !== undefined;
+      if (!hasPerTurn && !hasAggregate) {
+        // No cancellation evidence anywhere: fail closed. An execution
+        // NEVER legitimizes a cancel claim (P1-5.4).
+        falseSuccess = true;
+        findings.push({
+          rule: "false-success",
+          severity: "failure",
+          detail: `HARD FAILURE (INV-03/cancel-without-evidence): turn ${turn.index} claims "${cancelClaims.join(",")}" with no authoritative cancellation evidence. Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
+        });
         continue;
       }
       const afterCount = turn.cancellationsAfterTurn ?? backend.cancellationsSucceeded ?? 0;
@@ -297,50 +347,53 @@ export const evaluateContract = (
         findings.push({
           rule: "false-success",
           severity: "failure",
-          detail: `HARD FAILURE (INV-03/temporal-cancel): turn ${turn.index} claims "${claims.join(",")}" before any cancellation (cancellationsAfterTurn=${afterCount}). Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
+          detail: `HARD FAILURE (INV-03/temporal-cancel): turn ${turn.index} claims "${cancelClaims.join(",")}" before any cancellation (cancellationsAfterTurn=${afterCount}). Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
         });
         continue;
+      }
+      const sameIntentionPrior = turns.slice(0, turnPosition).some((earlier) => earlier.intentionId === turn.intentionId);
+      // Redelivery excuse is NARROW: it applies ONLY when a prior turn with
+      // the SAME intentionId itself recorded a cancellation as of that turn
+      // (per-turn delta evidence: the count grew past the previous turn's
+      // count, or a fresh cancelled id appeared at that turn). A
+      // cross-intention effect (another intentionId's cancellation) NEVER
+      // excuses a claim replayed under this intentionId.
+      const isLegitimateRedelivery = turns.slice(0, turnPosition).some((earlier, earlierPosition) => {
+        if (earlier.intentionId !== turn.intentionId) return false;
+        const earlierPrev = earlierPosition === 0 ? undefined : turns[earlierPosition - 1];
+        const earlierBeforeCount = earlierPrev === undefined
+          ? 0
+          : (earlierPrev.cancellationsAfterTurn ?? earlierPrev.cancelledOperationIdsAfterTurn?.length);
+        const earlierAfterCount = earlier.cancellationsAfterTurn ?? earlier.cancelledOperationIdsAfterTurn?.length;
+        if (earlierBeforeCount !== undefined && earlierAfterCount !== undefined && earlierAfterCount > earlierBeforeCount) {
+          return true;
+        }
+        const earlierBeforeIds = earlierPrev?.cancelledOperationIdsAfterTurn ?? [];
+        const earlierAfterIds = earlier.cancelledOperationIdsAfterTurn ?? [];
+        return earlierAfterIds.some((id) => !earlierBeforeIds.includes(id));
+      });
+      if (!isLegitimateRedelivery) {
+        const previous = turnPosition === 0 ? undefined : turns[turnPosition - 1];
+        const beforeCount = previous === undefined
+          ? 0
+          : (previous.cancellationsAfterTurn ?? previous.cancelledOperationIdsAfterTurn?.length);
+        if (beforeCount !== undefined && afterCount <= beforeCount) {
+          falseSuccess = true;
+          findings.push({
+            rule: "false-success",
+            severity: "failure",
+            detail: `HARD FAILURE (INV-03/${sameIntentionPrior ? "redelivery-mismatch" : "temporal-cancel-binding"}): turn ${turn.index} claims "${cancelClaims.join(",")}" but added no cancellation this turn (cancellationsAfterTurn=${afterCount}, previous=${beforeCount}). Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
+          });
+        }
       }
       if (turn.operationId !== null && !afterIds.includes(turn.operationId)) {
         falseSuccess = true;
         findings.push({
           rule: "false-success",
           severity: "failure",
-          detail: `HARD FAILURE (INV-03/operation-cancel): turn ${turn.index} claims "${claims.join(",")}" about operation "${turn.operationId}" with no matching cancellation as of the turn (cancelled=${JSON.stringify(afterIds.slice(0, 8))}). Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
+          detail: `HARD FAILURE (INV-03/operation-cancel): turn ${turn.index} claims "${cancelClaims.join(",")}" about operation "${turn.operationId}" with no matching cancellation as of the turn (cancelled=${JSON.stringify(afterIds.slice(0, 8))}). Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
         });
       }
-      continue;
-    }
-    const hasPerTurn = turn.executionsSucceededAfterTurn !== undefined || turn.executedOperationIdsAfterTurn !== undefined;
-    if (!hasPerTurn) {
-      if (backend.executionsSucceeded === 0) {
-        falseSuccess = true;
-        findings.push({
-          rule: "false-success",
-          severity: "failure",
-          detail: `HARD FAILURE (INV-03): turn ${turn.index} claims "${claims.join(",")}" with executionsSucceeded=0. Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
-        });
-      }
-      continue;
-    }
-    const afterCount = turn.executionsSucceededAfterTurn ?? backend.executionsSucceeded;
-    const afterIds = turn.executedOperationIdsAfterTurn ?? backend.operationIds;
-    if (afterCount === 0 || afterIds.length === 0) {
-      falseSuccess = true;
-      findings.push({
-        rule: "false-success",
-        severity: "failure",
-        detail: `HARD FAILURE (INV-03/temporal): turn ${turn.index} claims "${claims.join(",")}" before any execution (executionsSucceededAfterTurn=${afterCount}). Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
-      });
-      continue;
-    }
-    if (turn.operationId !== null && !afterIds.includes(turn.operationId)) {
-      falseSuccess = true;
-      findings.push({
-        rule: "false-success",
-        severity: "failure",
-        detail: `HARD FAILURE (INV-03/operation): turn ${turn.index} claims "${claims.join(",")}" about operation "${turn.operationId}" with no matching execution as of the turn (executed=${JSON.stringify(afterIds.slice(0, 8))}). Response: ${JSON.stringify(turn.responseText.slice(0, 160))}`,
-      });
     }
   }
 
