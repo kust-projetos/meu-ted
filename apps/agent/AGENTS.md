@@ -232,12 +232,13 @@ antes de qualquer tráfego real** (condição de G05; a retenção residual padr
 do provider é de 30 dias e não é ZDR). Nenhuma credencial foi provisionada
 nesta fatia.
 
-## Visão (imagem) — R13, default-off com trava dupla
+## Visão (imagem) — R13, default-off com trava dupla (provider selecionável)
 
-`multimodal/groq-vision.ts` é a fronteira de visão (G05: **mesmo vendor do
-STT, nenhum vendor novo**). Com a capacidade off, o processador de imagem
-continua sendo o `unsupported` fail-closed da A13: bytes ingeridos e
-referenciados, nada fingindo ter lido o conteúdo, zero rede.
+`multimodal/groq-vision.ts` (Groq, legado) e `multimodal/gemini-vision.ts`
+(Google AI Studio, decisão do operador) implementam o mesmo contrato AC23. A
+seleção é por `TED_VISION_PROVIDER`: `groq` (default, preserva o legado) ou
+`gemini` (opt-in explícito). Com a capacidade off, o processador de imagem
+continua sendo o `unsupported` fail-closed da A13.
 
 Envs (todas opcionais, **default-off**):
 

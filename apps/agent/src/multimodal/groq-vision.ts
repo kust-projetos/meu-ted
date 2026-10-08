@@ -77,7 +77,8 @@ export const VISION_EXTRACTIONS_PER_TURN = 1;
  */
 export type VisionProvenance = {
   attachmentId: string;
-  provider: 'groq';
+  /** Alargado para o provider Gemini (decisão do operador); Groq inalterado. */
+  provider: 'groq' | 'gemini';
   model: string;
   retrievedAt: number;
 };
@@ -128,10 +129,14 @@ export type VisionRequest = {
   fileName?: string;
 };
 
-export type GroqVisionProvider = {
-  readonly provider: 'groq';
+/** Interface estrutural mínima de um provider de visão (Groq ou Gemini). */
+export type VisionProvider = {
   readonly available: boolean;
   extract: (request: VisionRequest) => Promise<VisionOutcome>;
+};
+
+export type GroqVisionProvider = VisionProvider & {
+  readonly provider: 'groq';
 };
 
 /**
@@ -173,7 +178,7 @@ export const isVisionMime = (mime: string): boolean => ALLOWED_IMAGE_MIMES.has(m
  * Bytes → data URL. This is the ONLY place a base64 image exists, and it is the
  * request body of a single outbound call. It is never returned, logged or stored.
  */
-const toImageDataUrl = (bytes: ArrayBuffer, mime: string): string => {
+export const toImageDataUrl = (bytes: ArrayBuffer, mime: string): string => {
   let binary = '';
   const view = new Uint8Array(bytes);
   // Chunked to stay clear of `apply` argument limits on large buffers.
@@ -204,7 +209,7 @@ const readField = (payload: Record<string, unknown>, ...keys: string[]): string 
 };
 
 /** Tolerates a fenced ```json block; returns `null` when there is no extraction. */
-const parseExtraction = (content: string): VisionFields | null => {
+export const parseExtraction = (content: string): VisionFields | null => {
   const trimmed = content.trim();
   const unfenced = trimmed.startsWith('```')
     ? trimmed.replace(/^```[a-zA-Z]*\s*/, '').replace(/```$/, '').trim()
@@ -236,7 +241,7 @@ const parseExtraction = (content: string): VisionFields | null => {
 };
 
 /** Reads `choices[0].message.content` from the OpenAI-compatible envelope. */
-const readChoiceContent = (payload: unknown): string | null => {
+export const readChoiceContent = (payload: unknown): string | null => {
   if (!payload || typeof payload !== 'object') return null;
   const choices = (payload as { choices?: unknown }).choices;
   if (!Array.isArray(choices) || choices.length === 0) return null;
@@ -356,7 +361,7 @@ export const renderVisionFields = (fields: VisionFields): string =>
  * when the vision double lock is on; every other outcome keeps the A13 promise.
  */
 export const createImageVisionProcessor = (input: {
-  provider: GroqVisionProvider;
+  provider: VisionProvider;
   budget: VisionBudget;
 }): AttachmentProcessor => {
   return async (processorInput): Promise<AttachmentProcessorResult> => {
