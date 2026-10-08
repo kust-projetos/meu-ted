@@ -240,4 +240,124 @@ describe("F1 PR-A — unidade do gate (sem I/O)", () => {
       }),
     ).toBe(false);
   });
+
+  it("P1-5.2 — matriz permissão/denial inalterada (storage × flag × coorte; sem alargamento silencioso)", () => {
+    const bucket = createFakeBucket().bucket;
+    const withBucket = (extra: Record<string, unknown>) => ({ TED_ATTACHMENTS_BUCKET: bucket, ...extra });
+    type Case = {
+      name: string;
+      env: unknown;
+      ws: string;
+      actor: string;
+      allowed: boolean;
+      denial: { code: string; status: 503 } | null;
+    };
+    const cases: Case[] = [
+      {
+        name: "sem binding + flag ON + coorte member → storage_unavailable",
+        env: { TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: "ws-1" },
+        ws: "ws-1",
+        actor: "actor-1",
+        allowed: false,
+        denial: { code: "attachment_storage_unavailable", status: 503 },
+      },
+      {
+        name: "binding + flag OFF + coorte member → upload_disabled",
+        env: withBucket({ TED_ATTACHMENTS_ENABLED: "0", TED_ATTACHMENTS_COHORT: "ws-1" }),
+        ws: "ws-1",
+        actor: "actor-1",
+        allowed: false,
+        denial: { code: "attachment_upload_disabled", status: 503 },
+      },
+      {
+        name: "binding + flag ON + coorte vazia → deny-all (upload_disabled)",
+        env: withBucket({ TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: "" }),
+        ws: "ws-1",
+        actor: "actor-1",
+        allowed: false,
+        denial: { code: "attachment_upload_disabled", status: 503 },
+      },
+      {
+        name: "binding + flag ON + coorte ausente → deny-all (upload_disabled)",
+        env: withBucket({ TED_ATTACHMENTS_ENABLED: "1" }),
+        ws: "ws-1",
+        actor: "actor-1",
+        allowed: false,
+        denial: { code: "attachment_upload_disabled", status: 503 },
+      },
+      {
+        name: "binding + flag ON + whitespace-only → deny-all",
+        env: withBucket({ TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: "  ,  " }),
+        ws: "ws-1",
+        actor: "actor-1",
+        allowed: false,
+        denial: { code: "attachment_upload_disabled", status: 503 },
+      },
+      {
+        name: "binding + flag ON + ',,,' → deny-all",
+        env: withBucket({ TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: ",,," }),
+        ws: "ws-1",
+        actor: "actor-1",
+        allowed: false,
+        denial: { code: "attachment_upload_disabled", status: 503 },
+      },
+      {
+        name: "binding + flag ON + coorte não-string → deny-all",
+        env: withBucket({ TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: 123 }),
+        ws: "ws-1",
+        actor: "actor-1",
+        allowed: false,
+        denial: { code: "attachment_upload_disabled", status: 503 },
+      },
+      {
+        name: "binding + flag ON + '*' → allow-all (estranho elegível)",
+        env: withBucket({ TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: "*" }),
+        ws: "ws-x",
+        actor: "actor-x",
+        allowed: true,
+        denial: null,
+      },
+      {
+        name: "binding + flag ON + '*, ws-a' → allow-all (estranho elegível)",
+        env: withBucket({ TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: "*, ws-a" }),
+        ws: "ws-x",
+        actor: "actor-x",
+        allowed: true,
+        denial: null,
+      },
+      {
+        name: "binding + flag ON + workspace exato → elegível",
+        env: withBucket({ TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: "ws-1,actor-9" }),
+        ws: "ws-1",
+        actor: "actor-1",
+        allowed: true,
+        denial: null,
+      },
+      {
+        name: "binding + flag ON + actor exato → elegível",
+        env: withBucket({ TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: "ws-9,actor-1" }),
+        ws: "ws-1",
+        actor: "actor-1",
+        allowed: true,
+        denial: null,
+      },
+      {
+        name: "binding + flag ON + fora da coorte → upload_disabled",
+        env: withBucket({ TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: "ws-other,actor-other" }),
+        ws: "ws-1",
+        actor: "actor-1",
+        allowed: false,
+        denial: { code: "attachment_upload_disabled", status: 503 },
+      },
+    ];
+    for (const c of cases) {
+      expect(isAttachmentUploadAllowed(c.env, c.ws, c.actor), c.name).toBe(c.allowed);
+      const denial = attachmentUploadDenial(c.env, c.ws, c.actor);
+      if (c.allowed) {
+        expect(denial, c.name).toBeNull();
+      } else {
+        expect(denial, c.name).toMatchObject(c.denial!);
+      }
+    }
+  });
 });
