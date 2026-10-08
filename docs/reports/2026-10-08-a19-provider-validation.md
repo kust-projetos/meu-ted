@@ -89,11 +89,33 @@ gemini-vision,vision-pdf-turn,audio-stt-turn,audio-duration}` →
 - Próximo: PR follow-up preenche a coorte com identidade de teste (operador)
   → canary sintético → expansão.
 
+## 9. Incidente: relay LLM 100% down (2026-10-08, externo ao A19)
+
+- **Prova:** turnos modo conversation/texto puro (`ola, como voce esta?`,
+  `me conte uma dica de economia`) → 502 `http_502` ~2.6 s; turnos
+  determinísticos (`qual meu saldo?`) → 200. Split limpo: todo caminho que
+  chama o provider falha; todo render determinístico passa. "Flapping"
+  anterior era leitura errada (determinístico vs provider, não instabilidade
+  intermitente) — com a correção, o padrão é 100% consistente.
+- **Escopo:** afeta TODO turno generativo do TED em produção (chat
+  conversacional parado; leituras determinísticas OK). Independente das
+  mudanças A19 (turnos sem anexo também falham).
+- **Causa provável:** upstream do relay na API (opencode-go/deepseek —
+  sessões anteriores registram OpenRouter sem créditos e Zen sem fundos).
+  Verificação API/Contabo fora do alcance desta sessão.
+- **Gap de processo:** o smoke pós-deploy (`/health` + checks read-only)
+  NUNCA exercita um turno generativo — um relay morto passa no deploy como
+  verde. Recomendação: smoke com turno `conversation` sintético (conta de
+  teste) como gate pós-deploy.
+- **Impacto A19:** provas de RESPOSTA (transcrição útil, citação de PDF)
+  bloqueadas até a recuperação; pipeline até a chamada do modelo 100% provado
+  (upload→R2→extract→composed→relay-attempt).
+
 | Capacidade | IMPLEMENTED | CONFIGURED | TESTED | CANARY | PROD VERIFIED | ROLLBACK | Bloqueio |
 |---|---|---|---|---|---|---|---|
 | Attachments/R2 upload | sim | sim (repo) | sim | parcial (live ativado antes) | parcial | redeploy SHA | R2 live + secret no Worker (operador) |
 | PDF texto | sim | não (flag off) | sim (96) | não | não | n/a local | nenhum — liberado p/ canary |
-| STT | sim | sim (flag+coorte ws) | sim (unit + live sintético ±) | sim (processed + negativo) | parcial (membro; precisão fala real pendente) | revert PR | voz do operador p/ precisão; telemetria STT no sink |
+| STT | sim | sim (flag+coorte ws) | sim (unit + live sintético ±) | sim (processed + negativo; utilidade da transcrição pendente relay) | parcial (membro; precisão fala real pendente) | revert PR | relay LLM down (incidente §9); voz do operador p/ precisão; telemetria STT no sink |
 | Vision | sim | não | sim (unit; live 404) | não | não | n/a | modelo Groq indisponível + sem chave Gemini |
 | Web search | sim (sem provider) | n/a | sim (gracioso) | n/a | n/a | n/a | sem provider (decisão operador) — pendente permanente |
 | Web fetch | sim | sim (allowlist vazia) | sim | n/a | DISABLED aprovado | n/a | nenhum |
