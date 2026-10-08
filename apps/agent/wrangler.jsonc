@@ -18,7 +18,9 @@
     { "binding": "TED_ATTACHMENTS_BUCKET", "bucket_name": "pi-finance-ted-attachments" }
   ],
   "vars": {
-    "API_ORIGIN": "https://api.synkroo.com.br"
+    "API_ORIGIN": "https://api.synkroo.com.br",
+    "TED_ATTACHMENTS_ENABLED": "1",
+    "TED_ATTACHMENTS_COHORT": "*"
   },
   "observability": { "enabled": true }
 }

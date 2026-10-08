@@ -1,18 +1,22 @@
 /**
- * F1 PR-C (issue #107) — prova de config: binding R2 declarado + capability OFF.
+ * F1 activation (COD-ACTIVATE-ATTACHMENTS) — prova de config: binding R2
+ * declarado + capability de upload ATIVA (flag + coorte geral).
  *
- * O PR-C declara o binding `TED_ATTACHMENTS_BUCKET` (bucket
- * `pi-finance-ted-attachments`) em `apps/agent/wrangler.jsonc` SEM ativar a
- * capability: nenhuma env `TED_*` em `vars`, nenhuma coorte, nenhum binding
- * novo além do R2. A prova tem duas pernas:
- *   [config] o manifesto declara exatamente o binding esperado e nada que
- *   ative a capability (o próprio parse deste arquivo já é a checagem de
- *   validade JSON do manifesto);
- *   [elo config→behavior] o nome do binding é lido DO manifesto (sem literal
- *   duplicado) e a rota real de upload com esse binding + flag OFF responde
- *   503 `attachment_upload_disabled` com zero write — o caso (c) da matriz
- *   PR-A (`tests/attachments/upload-gate.test.ts`), agora ancorado no
- *   manifesto de deploy em vez de só no harness.
+ * O manifesto em `apps/agent/wrangler.jsonc` declara o binding
+ * `TED_ATTACHMENTS_BUCKET` (bucket `pi-finance-ted-attachments`) E ativa
+ * APENAS o upload: `TED_ATTACHMENTS_ENABLED === '1'` (trava estrita) +
+ * `TED_ATTACHMENTS_COHORT === '*'` (coorte geral, decisão do operador).
+ * Nenhum binding novo além do R2, nenhuma outra env `TED_*`. A prova tem
+ * duas pernas:
+ *   [config] o manifesto declara exatamente o binding esperado e as envs de
+ *   ativação no estado real (o próprio parse deste arquivo já é a checagem
+ *   de validade JSON do manifesto);
+ *   [elo config→behavior] o nome do binding E flag/coorte são lidos DO
+ *   manifesto (sem literal duplicado) e a rota real de upload com esse
+ *   binding + flag/coorte do manifesto é elegível: `isAttachmentUploadAllowed`
+ *   TRUE, `attachmentUploadDenial` null, `POST /rpc/attachments` 200 com
+ *   write. A negação por OFF continua provada em `upload-gate.test.ts`
+ *   (casos (c)/(d): 503 + zero write).
  */
 
 import { readFileSync } from "node:fs";
@@ -42,18 +46,21 @@ const manifest = JSON.parse(
 
 const declaredBinding = (manifest.r2_buckets ?? [])[0]?.binding;
 
-describe("F1 PR-C — binding R2 declarado, capability OFF por construção", () => {
+describe("F1 activation manifest — binding R2 declarado, upload ATIVO (flag + coorte geral)", () => {
   it("manifesto declara exatamente um r2_buckets (binding + bucket exatos)", () => {
     expect(manifest.r2_buckets).toEqual([
       { binding: "TED_ATTACHMENTS_BUCKET", bucket_name: "pi-finance-ted-attachments" },
     ]);
   });
 
-  it("vars intocadas: só API_ORIGIN, nenhuma env de ativação", () => {
-    expect(manifest.vars).toEqual({ API_ORIGIN: "https://api.synkroo.com.br" });
-    for (const key of Object.keys(manifest.vars ?? {})) {
-      expect(key.startsWith("TED_")).toBe(false);
-    }
+  it("vars ativam SÓ o upload: API_ORIGIN + flag '1' + coorte '*'", () => {
+    expect(manifest.vars).toEqual({
+      API_ORIGIN: "https://api.synkroo.com.br",
+      TED_ATTACHMENTS_ENABLED: "1",
+      TED_ATTACHMENTS_COHORT: "*",
+    });
+    expect(manifest.vars?.TED_ATTACHMENTS_ENABLED).toBe("1");
+    expect(manifest.vars?.TED_ATTACHMENTS_COHORT).toBe("*");
   });
 
   it("nenhuma capability nova: sem binding AI, DO único preservado", () => {
@@ -63,36 +70,38 @@ describe("F1 PR-C — binding R2 declarado, capability OFF por construção", ()
     ]);
   });
 
-  it("elo config→behavior: binding do manifesto + flag OFF ⇒ 503 attachment_upload_disabled + zero write (caso (c) PR-A)", async () => {
+  it("elo config→behavior: binding + flag/coorte do manifesto ⇒ elegível (200 com write)", async () => {
     expect(typeof declaredBinding).toBe("string");
     const name = declaredBinding as string;
+    const flag = manifest.vars?.TED_ATTACHMENTS_ENABLED;
+    const cohort = manifest.vars?.TED_ATTACHMENTS_COHORT;
+    expect(flag).toBe("1");
+    expect(cohort).toBe("*");
     const { agent, bucket } = createAttachmentTestAgent();
     // O harness instala o bucket sob o nome canônico; o elo é real: se o
-    // manifesto divergir do código, `current[name]` é undefined e o denial
-    // abaixo vira `attachment_storage_unavailable` (caso (a), não (c)).
+    // manifesto divergir do código, `current[name]` é undefined e o storage
+    // abaixo é null (indisponível, não elegível).
     const current = (agent as unknown as { env: Record<string, unknown> }).env;
     const bound = current[name];
     (agent as unknown as { env: Record<string, unknown> }).env = {
       API_ORIGIN: "https://api.synkroo.com.br",
       [name]: bound,
+      TED_ATTACHMENTS_ENABLED: flag,
+      TED_ATTACHMENTS_COHORT: cohort,
     };
     const env = (agent as unknown as { env: unknown }).env;
     expect(getAttachmentStorage(env)).not.toBeNull();
-    expect(isAttachmentUploadAllowed(env, "ws-1", "actor-1")).toBe(false);
-    expect(attachmentUploadDenial(env, "ws-1", "actor-1")).toMatchObject({
-      code: "attachment_upload_disabled",
-      status: 503,
-    });
-    const req = uploadRequest(bytesOf(pngBytes(4, 4)), {
-      "x-ted-attachment-kind": "image",
-      "x-ted-attachment-name": "a.png",
-    });
-    const res = await agent.fetch(req);
-    expect(res.status).toBe(503);
-    expect(((await res.json()) as { code: string }).code).toBe(
-      "attachment_upload_disabled",
+    expect(isAttachmentUploadAllowed(env, "ws-1", "actor-1")).toBe(true);
+    expect(attachmentUploadDenial(env, "ws-1", "actor-1")).toBeNull();
+    const res = await agent.fetch(
+      uploadRequest(bytesOf(pngBytes(4, 4)), {
+        "x-ted-attachment-kind": "image",
+        "x-ted-attachment-name": "a.png",
+      }),
     );
-    expect(bucket.objects.size).toBe(0);
-    expect(req.bodyUsed).toBe(false);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ref: string };
+    expect(body.ref).toMatch(/^att_/);
+    expect(bucket.objects.size).toBe(1);
   });
 });
