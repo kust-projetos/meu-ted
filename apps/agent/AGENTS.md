@@ -233,8 +233,13 @@ curto).
 **Rollout**: habilitar exige `GROQ_API_KEY` como secret **e**
 `TED_AUDIO_STT_ENABLED=1` **e** a identidade na `TED_AUDIO_STT_COHORT`, com
 **ZDR elegível ativado na organização da Groq antes de qualquer tráfego real** (condição de G05; a retenção residual padrão
-do provider é de 30 dias e não é ZDR). Nenhuma credencial foi provisionada
-nesta fatia.
+do provider é de 30 dias e não é ZDR). Validação live 2026-10-08
+(`docs/reports/2026-10-08-a19-provider-validation.md`, bytes sintéticos, zero
+PII): chave (1ª de 3 em `GROQ_API_KEYS` do projeto telegran, salva no `.env`
+gitignored da raiz) autentica — `whisper-large-v3-turbo` listado e transcreve
+(200 em 463 ms, campo `text` presente). Secret `GROQ_API_KEY` **presente no
+Worker** (verificado via `wrangler secret list`). Precisão em fala real
+pt-BR pendente de canary.
 
 **Estado live (2026-10-08):** `TED_AUDIO_STT_ENABLED=1` em produção, mas o
 rollout é SEQUENCIADO por coorte (`TED_AUDIO_STT_COHORT`, CSV de
@@ -323,6 +328,7 @@ nulls honestos); `gemini-3.8-flash` segue o default e o caminho de 503-demand.
 do STT). Equivalente-ZDR: política de dados do AI Studio para uso via API
 aceita pelo operador para o canary (revalidar antes de tráfego geral). Prova
 live pendente: recuperação do relay do turno + canary sintético com imagem.
+Caminho Groq segue BLOQUEADO (`llama-4-scout` fora do catálogo em 2026-10-08).
 
 ## PDF (camada de texto) — R13, local, sem egress, **default-off**
 
