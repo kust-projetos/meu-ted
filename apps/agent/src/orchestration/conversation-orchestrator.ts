@@ -119,6 +119,18 @@ export type TurnInput = Readonly<{
    */
   hasAttachmentData?: boolean;
   /**
+   * A19-GROUND-EVIDENCE: the turn's accepted attachment-extracted texts,
+   * admitted as support for grounded READ narration ONLY. Set EXCLUSIVELY
+   * by the server adapter via `NormalizeOptions` (the accepted extraction
+   * strings, never typed text); `normalize` never reads it from `body`, so
+   * a client-supplied same-named field is ignored exactly like
+   * `hasAttachmentData`. Absent/empty means "no admitted text" — unchanged
+   * behaviour. It is NEVER consulted by mutation, approval, autoexecute or
+   * memory paths: the sole consumer is the `createGroundedResponseWithRetry`
+   * call in `runGroundedRead`.
+   */
+  attachmentTexts?: readonly string[];
+  /**
    * FIX-AGENT-RELAY-FAILOVER-HARDENING (A): internal-only marker for the
    * structured grounding-correction retry. Set EXCLUSIVELY by the internal
    * `correctionProvider` (channel-evidence.ts); `normalize` always builds it
@@ -439,7 +451,7 @@ const correctionOutcome = (text: string): CorrectionOutcome => {
  * Internal-only construction options. They are passed by the SERVER adapter, not
  * read from `body`: a client-supplied `decisionText`/`typedText` is ignored.
  */
-export type NormalizeOptions = Readonly<{ typedText?: string; hasAttachmentData?: boolean }>;
+export type NormalizeOptions = Readonly<{ typedText?: string; hasAttachmentData?: boolean; attachmentTexts?: readonly string[] }>;
 
 const normalize = (
   body: Body,
@@ -478,6 +490,13 @@ const normalize = (
   // read, so untrusted input can never route its own turn past the
   // deterministic render.
   const hasAttachmentData = options?.hasAttachmentData === true ? true as const : undefined;
+  // A19-GROUND-EVIDENCE: admitted attachment texts are server-side only —
+  // a client-supplied `attachmentTexts` field in `body` is deliberately NOT
+  // read, so untrusted input can never ground its own figures. Only
+  // non-empty strings travel; empties are dropped here, not downstream.
+  const attachmentTexts = Array.isArray(options?.attachmentTexts)
+    ? options.attachmentTexts.filter((item): item is string => typeof item === 'string' && item.trim() !== '')
+    : [];
   return freeze({
     intentionId,
     traceId,
@@ -490,6 +509,7 @@ const normalize = (
     channel,
     ...(decisionText !== undefined ? { decisionText } : {}),
     ...(hasAttachmentData !== undefined ? { hasAttachmentData } : {}),
+    ...(attachmentTexts.length > 0 ? { attachmentTexts: freeze(attachmentTexts) } : {}),
     // FIX-AGENT-RELAY-FAILOVER-HARDENING (A): the internal correction flag
     // is constructed here as `false` — any client-supplied `internalCorrection`
     // / `isInternalCorrectionRetry` field in `body` is deliberately NOT read,
@@ -797,8 +817,15 @@ export class ConversationOrchestrator {
     }
     // Provider failures are operational, never a fabricated success.
     const text = await this.dependencies.responseProvider(input, plan);
+    // A19-GROUND-EVIDENCE: the admitted attachment texts (server-side
+    // accepted extractions, absent without them) join grounded validation
+    // as source-tagged support for READ narration — a block-cited figure
+    // publishes instead of collapsing into a tool-failure excuse, while a
+    // figure present in NEITHER still fails. Fail-closed paths above and
+    // the no-provider path are untouched.
     const grounded = await createGroundedResponseWithRetry(text, envelope, {
       fallbackSubject: plan.domain,
+      ...(input.attachmentTexts && input.attachmentTexts.length > 0 ? { attachmentTexts: input.attachmentTexts } : {}),
       ...(this.dependencies.correctionProvider ? { retry: (claims) => this.dependencies.correctionProvider!(input, plan, claims) } : {}),
       sink: (eventType, fields) => this.emit(eventType, fields),
       intentionId: input.intentionId,

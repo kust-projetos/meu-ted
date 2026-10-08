@@ -30,6 +30,13 @@ export type GroundedRetryOptions = Readonly<{
   intentionId?: string;
   traceId?: string;
   /**
+   * A19-GROUND-EVIDENCE: admitted attachment support for READ narration.
+   * Server-side attachment-extracted texts ONLY (never typed text, never
+   * client input). Passed through to BOTH validation attempts, so a
+   * correction retry citing the block is not rejected for citing it.
+   */
+  attachmentTexts?: readonly string[];
+  /**
    * R10 (AC20): additive hook fired the moment the correction retry is
    * actually invoked, so the caller can charge this attempt against the
    * turn's shared recovery budget. Purely observational — it cannot alter
@@ -68,7 +75,7 @@ export const createGroundedResponseWithRetry = async (
   if (sanitized.changed && sanitized.text === '') {
     return { text: renderClarificationFallback(fallbackSubject), grounded: false, rejected: true };
   }
-  const first = validateGroundedClaims(sanitized.text, evidence);
+  const first = validateGroundedClaims(sanitized.text, evidence, options.attachmentTexts ?? []);
   if (first.valid) return { text: sanitized.text, grounded: true, rejected: false };
   if (options.retry) {
     // R10: the retry is about to run — charge it to the turn's budget before
@@ -93,7 +100,7 @@ export const createGroundedResponseWithRetry = async (
           });
         }
         if (revisedSanitized.text.trim().length > 0) {
-          const second = validateGroundedClaims(revisedSanitized.text, evidence);
+          const second = validateGroundedClaims(revisedSanitized.text, evidence, options.attachmentTexts ?? []);
           if (second.valid) return { text: revisedSanitized.text, grounded: true, rejected: false };
           sink('agent.grounding.rejected', {
             ...(options.intentionId ? { intentionId: options.intentionId } : {}),
