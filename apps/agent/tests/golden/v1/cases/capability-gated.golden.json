@@ -63,13 +63,13 @@
     {
       "version": "1",
       "id": "GW-018",
-      "title": "Áudio: STT exige chave + segunda trava + ZDR",
+      "title": "Áudio: STT exige chave + flag + coorte + ZDR (rollout sequenciado)",
       "workflow": "audio-stt",
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.audio_stt",
-        "reason": "Sem GROQ_API_KEY provisionada, sem TED_AUDIO_STT_ENABLED=1 e sem ZDR elegível; áudio é unsupported fail-closed com zero egress.",
-        "requires": ["GROQ_API_KEY como secret", "TED_AUDIO_STT_ENABLED=1", "ZDR elegível na organização", "F2.2 (STT) com canary aprovado"]
+        "reason": "TED_AUDIO_STT_ENABLED=1 em produção (operador, 2026-10-08) com GROQ_API_KEY provisionada como secret e ZDR elegível ativo, MAS o rollout é sequenciado por coorte (A19-STT-COHORT): flag sozinha não autoriza egress — TED_AUDIO_STT_COHORT vazia = ninguém (fail-closed), canary pendente da identidade de teste do operador; o runner isolado nunca faz egress, então o caminho ON é offline-unprovable — a prova é live via canary com áudio sintético, e o tráfego de usuário segue pendente dessa prova.",
+        "requires": ["GROQ_API_KEY como secret", "TED_AUDIO_STT_ENABLED=1", "TED_AUDIO_STT_COHORT com identidade canary (operador)", "ZDR elegível na organização", "F2.2 (STT) com canary aprovado"]
       },
       "initialState": {},
       "inputs": [{ "text": "transcreva o áudio", "attachments": [{ "name": "nota.m4a", "type": "audio/mp4" }] }],

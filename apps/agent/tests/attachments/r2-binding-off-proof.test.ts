@@ -4,9 +4,12 @@
  *
  * O manifesto em `apps/agent/wrangler.jsonc` declara o binding
  * `TED_ATTACHMENTS_BUCKET` (bucket `pi-finance-ted-attachments`) E ativa
- * APENAS o upload: `TED_ATTACHMENTS_ENABLED === '1'` (trava estrita) +
- * `TED_ATTACHMENTS_COHORT === '*'` (coorte geral, decisão do operador).
- * Nenhum binding novo além do R2, nenhuma outra env `TED_*`. A prova tem
+ * o upload (`TED_ATTACHMENTS_ENABLED === '1'` + coorte geral `'*'`) MAIS o
+ * canary STT (`TED_AUDIO_STT_ENABLED === '1'`, operador 2026-10-08, ZDR ativo)
+ * com rollout SEQUENCIADO por coorte (`TED_AUDIO_STT_COHORT === ''` = ninguém,
+ * fail-closed — A19-STT-COHORT; a identidade de teste entra em follow-up).
+ * Nenhum binding novo além do R2, nenhuma outra env `TED_*` além das listadas
+ * no teste de vars. A prova tem
  * duas pernas:
  *   [config] o manifesto declara exatamente o binding esperado e as envs de
  *   ativação no estado real (o próprio parse deste arquivo já é a checagem
@@ -53,14 +56,22 @@ describe("F1 activation manifest — binding R2 declarado, upload ATIVO (flag + 
     ]);
   });
 
-  it("vars ativam SÓ o upload: API_ORIGIN + flag '1' + coorte '*'", () => {
+  it("vars: upload ativo (flag '1' + coorte '*') + STT canary fail-closed (flag '1' + coorte vazia)", () => {
     expect(manifest.vars).toEqual({
       API_ORIGIN: "https://api.synkroo.com.br",
       TED_ATTACHMENTS_ENABLED: "1",
       TED_ATTACHMENTS_COHORT: "*",
+      // A19 STT canary (operador 2026-10-08, ZDR ativo): segunda trava ligada,
+      // MAS o rollout é sequenciado por coorte (A19-STT-COHORT): coorte vazia
+      // = NINGUÉM (fail-closed) — a identidade de teste do canary entra em
+      // PR follow-up. Rastrear qualquer nova var TED_* aqui.
+      TED_AUDIO_STT_ENABLED: "1",
+      TED_AUDIO_STT_COHORT: "",
     });
     expect(manifest.vars?.TED_ATTACHMENTS_ENABLED).toBe("1");
     expect(manifest.vars?.TED_ATTACHMENTS_COHORT).toBe("*");
+    expect(manifest.vars?.TED_AUDIO_STT_ENABLED).toBe("1");
+    expect(manifest.vars?.TED_AUDIO_STT_COHORT).toBe("");
   });
 
   it("nenhuma capability nova: sem binding AI, DO único preservado", () => {
