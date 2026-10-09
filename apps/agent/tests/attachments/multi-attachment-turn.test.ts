@@ -6,6 +6,14 @@
  * uma nota de voz perderia silenciosamente um dos dois. Agora cada outcome
  * aceito entra com sua própria proveniência, e o teto por TIPO é aplicado antes
  * da leitura — um anexo excedente nunca é lido e depois descartado.
+ *
+ * P1 (bounded execution pendente): a extração de texto de PDF está DESLIGADA
+ * (`pdfTextProcessorOverride` devolve `undefined` incondicionalmente, inclusive
+ * com `TED_PDF_TEXT_ENABLED=1`), então o caso de dois PDFs passou a provar o
+ * fail-closed — os dois ficam `unsupported`, nada é lido e o orçamento por tipo
+ * não é gasto. A invariante do orçamento por tipo (excedente ⇒ `skipped_budget`
+ * antes de qualquer leitura) continua provada executavelmente no caminho de
+ * áudio, que realmente processa.
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -141,9 +149,9 @@ describe("F8 — imagem + áudio no mesmo turno: ambos os conteúdos entram", ()
   });
 });
 
-describe("F8 — dois PDFs no mesmo turno", () => {
-  it("o excedente é marcado skipped_budget ANTES do parse — nunca lido e depois descartado", async () => {
-    installProviderMock({});
+describe("F8 — dois PDFs no mesmo turno com a extração INDISPONÍVEL (P1 fail-closed)", () => {
+  it("os DOIS PDFs ficam 'unsupported': zero bytes lidos, zero dado no turno e o orçamento por tipo NÃO é gasto", async () => {
+    const { sttCalls, visionCalls } = installProviderMock({});
     const { agent, persisted } = createAttachmentTestAgent({ extraEnv: { ...PDF_ENV } });
     const first = await upload(agent, "pdf", "nota1.pdf", buildTextLayerPdf(["Mercado Livre ALFA 10,00"]));
     const second = await upload(agent, "pdf", "nota2.pdf", buildTextLayerPdf(["Farmácia BETA 20,00"]));
@@ -163,14 +171,23 @@ describe("F8 — dois PDFs no mesmo turno", () => {
     const body = (await res.json()) as {
       attachmentStates?: Array<{ state: string; detail: string }>;
     };
-    // The per-turn work budget is one unit PER TYPE, and it is applied BEFORE
-    // the processor runs — the second PDF is never parsed. Its exclusion is
-    // EXPLICIT (a named state with a reason), never a silent discard.
-    expect(body.attachmentStates?.map((s) => s.state)).toEqual(["processed", "skipped_budget"]);
-    expect(body.attachmentStates?.[1]?.detail).toBeTruthy();
-
+    // P1 fail-closed: `pdfTextProcessorOverride` devolve `undefined` sempre —
+    // inclusive com `TED_PDF_TEXT_ENABLED=1` — então o registry mantém o
+    // `unsupported` da A13 e NENHUM byte é parseado nos dois anexos.
+    expect(body.attachmentStates?.map((s) => s.state)).toEqual(["unsupported", "unsupported"]);
+    // Consequência da regra "o orçamento só é gasto por uma tentativa real": um
+    // anexo com a capability off NÃO queima a vaga do próximo, então o segundo
+    // PDF também é `unsupported` — nunca `skipped_budget`, que seria uma
+    // alegação falsa de exclusão por orçamento. A invariante do orçamento por
+    // TIPO continua provada executavelmente acima, no caminho de áudio (que
+    // realmente processa).
+    expect(body.attachmentStates?.[1]?.state).not.toBe("skipped_budget");
+    // Nenhum provider foi chamado por causa dos PDFs (nem STT, nem visão).
+    expect(sttCalls).toHaveLength(0);
+    expect(visionCalls).toHaveLength(0);
+    // Nenhum texto foi extraído: os dois conteúdos estão AUSENTES do turno.
     const persistedText = JSON.stringify(persisted);
-    expect(persistedText).toContain("Mercado Livre ALFA");
+    expect(persistedText).not.toContain("Mercado Livre ALFA");
     expect(persistedText).not.toContain("Farmácia BETA");
   });
 });
