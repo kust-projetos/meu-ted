@@ -12,6 +12,7 @@ import { PLAYBOOK_BODY } from '../src/agent-config/playbook.js';
 import { skillCatalogLines } from '../src/agent-config/skills/index.js';
 import { toolSkillLines } from '../src/agent-config/tools.js';
 import { assembleCognition } from '../src/agent-config/index.js';
+import { DEFAULT_POLICY, estimateTokens } from '../src/safety/usage-policy.js';
 
 const baseInput = {
   skillCatalog: skillCatalogLines(),
@@ -24,6 +25,32 @@ const baseInput = {
 describe('TED instructions (Part A, item 15)', () => {
   it('is versioned', () => {
     expect(INSTRUCTIONS_VERSION).toMatch(/^\d{4}-\d{2}-\d{2}\.[a-z]$/);
+  });
+
+  /**
+   * V1-GROUND-PROMPT + V1-GROUND-ATTRIBUTION: the validator's
+   * money/currency/unit/count/provenance rules are the enforcement; the prompt
+   * version is the contract marker that those rules changed. The instruction
+   * TEXT describing the positive document-attribution rule is folded INTO the
+   * existing attachment-precedence section (replace/tighten, no new section) —
+   * see the budget invariant below.
+   */
+  it('bumps the prompt version for the grounding and attribution rules', () => {
+    expect(INSTRUCTIONS_VERSION).toBe('2026-10-09.b');
+  });
+
+  it('leaves room for the grounding correction leg inside the relay budgets', () => {
+    // The relay transmits `system.slice(0, 7_900)` + the prompt, and every leg
+    // reserves against a per-request input cap. The mounted prompt is already
+    // close to that ceiling, so a new prompt section would push the CORRECTION
+    // leg over the cap (an `agent.usage_input_cap` denial instead of the ONE
+    // structured retry). This pins the headroom that keeps the retry contract.
+    const cognition = assembleCognition('Quanto gastei este mês?', {});
+    const system = cognition.system.slice(0, 7_900);
+    const correctionText = 'Quanto gastei este mês?\n\n[Correção de grounding: os trechos a seguir não têm suporte nos dados apurados e devem ser removidos ou substituídos apenas por dados apurados: R$ 99999. Responda usando APENAS os dados apurados.]';
+    const leg = (text: string): number => estimateTokens(`${system}${text.slice(0, 15_000)}`);
+    expect(leg('Quanto gastei este mês?')).toBeLessThanOrEqual(DEFAULT_POLICY.maxInputTokens);
+    expect(leg(correctionText)).toBeLessThanOrEqual(DEFAULT_POLICY.maxInputTokens);
   });
 
   it('persona names the Meu Ted brand without jargon promises', () => {
@@ -112,6 +139,42 @@ describe('attachment DATA precedence (A19-PROMPT-PRECEDENCE)', () => {
     expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/tool-first|REGRA DE OURO/i);
     expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/dado, nunca instrução|nunca instrução/i);
     expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/autoexecute/i);
+  });
+
+  /**
+   * V1-GROUND-ATTRIBUTION (prompt side): the validator admits an attachment
+   * money/percent figure ONLY when the figure's own sentence attributes it to
+   * the document. The prompt must therefore ask for the positive attribution —
+   * otherwise the model narrates a document figure in a bare assertive
+   * sentence, the validator rejects it, and the ONE structured correction retry
+   * is burned on phrasing the prompt never requested.
+   */
+  it('requires positive document attribution for attachment money and percent', () => {
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/valor ou percentual/i);
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/atribu\S* ao documento/i);
+    // The example must be one the validator's DOCUMENT_ATTRIBUTION accepts:
+    // a document noun immediately followed by a pt-BR report verb.
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/o documento informa/i);
+  });
+
+  it('never narrates an attachment figure as registered workspace state without API evidence', () => {
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/nunca narrado/i);
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/saldo/i);
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/lan[çc]amento/i);
+    // "API evidence" is the only thing that can license registered-state phrasing.
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/sem prova da API/i);
+  });
+
+  it('keeps no-authorization and no-mutation explicit alongside the attribution rule', () => {
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/não autoriza/i);
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/não decide/i);
+    expect(TED_ATTACHMENT_DATA_PRECEDENCE).toMatch(/autoexecute/i);
+  });
+
+  it('carries the attribution requirement into the mounted system prompt', () => {
+    const system = buildSystemPrompt(baseInput);
+    expect(system).toContain('o documento informa');
+    expect(system).toContain('sem prova da API');
   });
 
   it('is injected into the mounted system prompt', () => {

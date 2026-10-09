@@ -110,8 +110,12 @@ const imageBytes = (): Uint8Array => pngBytes(64, 64);
 
 /**
  * Byte-accurate minimal PDF writer (valid xref) whose single page carries an
- * EMPTY content stream: the document parses, and its text layer is genuinely
- * empty — which is the `pdf_no_text_layer` state, distinct from `pdf_invalid`.
+ * EMPTY content stream: a well-formed document whose text layer is genuinely
+ * empty. Were the parser wired, that is the `pdf_no_text_layer` state — distinct
+ * from `pdf_invalid` — pinned in the isolated parser test (`pdf-text.test.ts`).
+ * With the extraction DISABLED (P1) the gateway never builds a PDF processor, so
+ * this same document resolves `unsupported`: the builder now stands for "a real,
+ * parseable PDF that is deliberately NOT read".
  */
 const buildPdfWithoutTextLayer = (): Uint8Array => {
   const chunks: Buffer[] = [];
@@ -355,12 +359,22 @@ describe("A19/F1 — o cliente elevado não é construído com anexo presente (o
       groq: async () => new Response("boom", { status: 500 }),
     },
     {
-      label: "PDF sem camada de texto",
+      // P1 fail-closed: a extração de texto de PDF está DESLIGADA por decisão
+      // (sem limite de trabalho/memória por-página) e `pdfTextProcessorOverride`
+      // devolve `undefined` INCONDICIONALMENTE — inclusive com
+      // `TED_PDF_TEXT_ENABLED=1`. Um PDF escaneado, ou com texto, resolve o
+      // `unsupported` da A13 e nenhum byte é parseado. Os estados NOMEADOS do
+      // parser (`pdf_no_text_layer`, `pdf_encrypted`, …) seguem EXATOS no
+      // parser isolado (`pdf-text.test.ts`, que chama `createPdfTextProcessor`
+      // diretamente); no gateway são inalcançáveis porque nenhum processador
+      // de PDF é construído. O veto abaixo é sobre PRESENÇA de anexo, então
+      // continua exercido neste estado.
+      label: "PDF com a extração DESLIGADA (flag '1' não reativa o parser)",
       env: { TED_PDF_TEXT_ENABLED: "1" },
       kind: "pdf" as const,
       name: "escaneado.pdf",
       bytes: () => buildPdfWithoutTextLayer(),
-      expectedState: "pdf_no_text_layer",
+      expectedState: "unsupported",
       groq: async () => groqJson({}),
     },
     {

@@ -20,6 +20,14 @@
  *
  * No network, no credential: `unpdf` is a local parser, and a scanned/OCR PDF
  * has NO provider in this delivery (out of scope — see report).
+ *
+ * P1 (bounded execution pendente): these tests pin the CONTRACT of the
+ * processor and the extractor in ISOLATION (injected extractor / parser called
+ * directly). The production WIRING (`pdfTextProcessorOverride`) is CLOSED: it
+ * returns `undefined` always — `TED_PDF_TEXT_ENABLED=1` does not re-enable
+ * extraction and the real parser is never called through the attachment flow.
+ * See `pdf-gate-worklimit.test.ts` for the flow proof and the per-page P1
+ * residual.
  */
 
 import { describe, expect, it } from "vitest";
@@ -28,6 +36,7 @@ import {
   PDF_EXTRACT_MAX_PAGES,
   PDF_TEXT_NOTICE,
   createPdfTextProcessor,
+  pdfTextProcessorOverride,
   type PdfExtractOutcome,
   type PdfTextExtractor,
 } from "../../src/multimodal/pdf-text.js";
@@ -352,6 +361,21 @@ describe("A15/AC23 — o parser real (unpdf) funciona offline contra um PDF cons
     if (outcome.state !== "too_many_pages") throw new Error('expected "too_many_pages"');
     expect(outcome.pageCount).toBe(12);
     expect((outcome as { pages?: unknown }).pages).toBeUndefined();
+  });
+});
+
+describe("P1 fail-closed — o parser está DESLIGADO independente da env (bounded execution pendente)", () => {
+  it("TED_PDF_TEXT_ENABLED=1 (e além) NÃO ativa o parser: o override é sempre AUSENTE", () => {
+    // Defesa em profundidade: a desativação é INCONDICIONAL. Nenhum valor de env
+    // — e nem um extractor injetado — reconstrói o processor enquanto não
+    // existir limite por-página (bounded execution). Sem o override, o registry
+    // mantém o `unsupported` da A13 e o parser real nunca é chamado.
+    expect(pdfTextProcessorOverride({ TED_PDF_TEXT_ENABLED: "1" })).toBeUndefined();
+    expect(
+      pdfTextProcessorOverride({ TED_PDF_TEXT_ENABLED: "1" }, {
+        extractor: async () => ({ state: "ok" as const, pages: ["x"], pageCount: 1 }),
+      }),
+    ).toBeUndefined();
   });
 });
 

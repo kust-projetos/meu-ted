@@ -36,7 +36,10 @@ import {
   createImageVisionProcessor,
   isGroqVisionAvailable,
   isVisionCohortMember,
+  normalizeVisionCurrency,
+  parseExtraction,
   parseVisionCohort,
+  renderVisionFields,
   resolveVisionModel,
   resolveVisionTimeoutMs,
   type VisionBudget,
@@ -266,6 +269,40 @@ describe("A15/AC23 — resposta estruturada e proveniência", () => {
     expect(outcome.fields.amount).toBe("unknown");
     // Nada de fallback para o histórico, o workspace ou um palpite.
     expect(JSON.stringify(outcome.fields)).not.toContain("Mercado Livre");
+  });
+
+  it("keeps an unreadable currency honest and normalizes the symbol to the ISO code", () => {
+    // Live canary shape (2026-10-08): `amount=42.50`, `currency=R$`. The AMOUNT
+    // is preserved verbatim (never reconstructed); the currency is canonicalized
+    // so the renderer emits a figure the grounding matcher recognizes.
+    expect(normalizeVisionCurrency("R$")).toBe("BRL");
+    expect(normalizeVisionCurrency("US$")).toBe("USD");
+    expect(normalizeVisionCurrency("BRL")).toBe("BRL");
+    expect(normalizeVisionCurrency("USD")).toBe("USD");
+    // Unreadable/ambiguous/empty stay honest — never a default currency.
+    expect(normalizeVisionCurrency("unknown")).toBe("unknown");
+    expect(normalizeVisionCurrency("ambiguous")).toBe("ambiguous");
+    expect(normalizeVisionCurrency("")).toBe("unknown");
+  });
+
+  it("canonicalizes the extraction currency while preserving the amount", () => {
+    const fields = parseExtraction(JSON.stringify({ amount: "42.50", currency: "R$" }))!;
+    expect(fields.amount).toBe("42.50");
+    expect(fields.currency).toBe("BRL");
+    expect(parseExtraction(JSON.stringify({ amount: "42.50", currency: "US$" }))!.currency).toBe("USD");
+    expect(parseExtraction(JSON.stringify({ amount: "42.50", currency: "unknown" }))!.currency).toBe("unknown");
+  });
+
+  it("renders the normalized currency so the figure reaches grounding", () => {
+    const fields = parseExtraction(JSON.stringify({
+      merchant: "Mercado",
+      amount: "42.50",
+      currency: "R$",
+    }))!;
+    const rendered = renderVisionFields(fields);
+    expect(rendered).toContain("42.50");
+    expect(rendered).toContain("BRL");
+    expect(rendered).not.toContain("R$");
   });
 
   it("JSON embrulhado em cercas de código ainda é aceito (parse tolerante)", async () => {

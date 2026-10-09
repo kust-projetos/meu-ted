@@ -10,7 +10,7 @@ const envelope = (data: unknown): EvidenceEnvelope => ({
 
 describe('AGENT-005 hardened grounding validator', () => {
   it('validates percentages against the envelope', () => {
-    const env = envelope({ allocation: 12.5, accountName: 'Conta principal' });
+    const env = envelope({ savingsRatePct: 12.5, accountName: 'Conta principal' });
     expect(validateGroundedClaims('Sua alocação é 12,5% na Conta principal.', env).valid).toBe(true);
     expect(validateGroundedClaims('Sua alocação é 99% na Conta principal.', env).valid).toBe(false);
   });
@@ -54,7 +54,14 @@ describe('AGENT-005 hardened grounding validator', () => {
     expect(retry).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ grounded: true, rejected: false });
     expect(result.text).toContain('123,45');
-    expect(events).toHaveLength(0);
+    // V1-GROUND-OBSERVABILITY: success is now observable too — the retry
+    // attempt, its outcome and the publication validation travel the SAME
+    // sanitized sink; what must NEVER happen is a rejection event here.
+    expect(events.map((event) => event.type)).toEqual([
+      'agent.grounding.correction_attempted',
+      'agent.grounding.correction_completed',
+      'agent.grounding.validated',
+    ]);
   });
 
   // R10: `onRecoveryAttempted` is purely OBSERVATIONAL (it charges the turn's
@@ -115,6 +122,34 @@ describe('AGENT-005 hardened grounding validator', () => {
     ).rejects.toMatchObject({ code: 'agent.quota_exceeded', status: 429 });
   });
 
+  /**
+   * V1-GROUND-OBSERVABILITY: the rejection event already existed and already
+   * carried a count; it could not say WHICH axis failed, so an operator could
+   * not tell "the model invented a figure" from "it named an unknown account".
+   * The event now carries per-axis counts (numbers only) — never the raw claim
+   * text, never a figure, never a name.
+   */
+  it('emits agent.grounding.rejected with sanitized per-axis counts', async () => {
+    const env = envelope({ balanceCents: 12345, accountName: 'Conta principal' });
+    const events: Array<{ type: string; fields: Record<string, unknown> }> = [];
+    const result = await createGroundedResponseWithRetry(
+      'Seu saldo é R$ 999,99 e a taxa é 90% no Cartão Inter.',
+      env,
+      { sink: (type, fields) => events.push({ type, fields }), intentionId: 'intent-kinds', traceId: 'trace-kinds' },
+    );
+    expect(result).toMatchObject({ grounded: false, rejected: true });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.type).toBe('agent.grounding.rejected');
+    const fields = events[0]!.fields;
+    const kinds = fields.unsupportedKinds as { money: number; percent: number; date: number; name: number };
+    expect(kinds.money).toBe(1);
+    expect(kinds.percent).toBe(1);
+    expect(kinds.date).toBe(0);
+    expect(kinds.name).toBeGreaterThanOrEqual(1);
+    expect(fields.unsupportedCount).toBe(kinds.money + kinds.percent + kinds.date + kinds.name);
+    expect(JSON.stringify(fields)).not.toMatch(/999,99|90|Inter|Conta principal/);
+  });
+
   it('emits agent.grounding.rejected without raw payload when the retry still fails', async () => {
     const env = envelope({ balanceCents: 12345, accountName: 'Conta principal' });
     const events: Array<{ type: string; fields: Record<string, unknown> }> = [];
@@ -127,9 +162,12 @@ describe('AGENT-005 hardened grounding validator', () => {
     expect(result).toMatchObject({ grounded: false, rejected: true });
     expect(result.text).toMatch(/Não foi possível consultar/);
     expect(result.text).not.toMatch(/999,99|888,88/);
-    expect(events).toHaveLength(1);
-    expect(events[0]!.type).toBe('agent.grounding.rejected');
-    expect(JSON.stringify(events[0]!.fields)).not.toMatch(/999,99|888,88|Conta principal/);
+    // The retry lifecycle is observable; the REJECTION event is the one that
+    // must remain singular and sanitized.
+    const rejected = events.filter((event) => event.type === 'agent.grounding.rejected');
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.fields.status).toBe('rejected_after_retry');
+    expect(JSON.stringify(rejected[0]!.fields)).not.toMatch(/999,99|888,88|Conta principal/);
   });
 });
 
@@ -160,11 +198,18 @@ describe('A19-GROUND-FORMATS: alternate pt-BR money shapes are financial claims'
     ['R$ integer with space', 'Seu saldo é R$ 999 na Conta principal.'],
     ['R$ integer no space', 'Seu saldo é R$999 na Conta principal.'],
     ['reais with BR decimals', 'A fatura é 999,00 reais na Conta principal.'],
-    ['US$ prefixed', 'O total é US$ 999,00 na Conta principal.'],
     ['bare decimal in financial context', 'O saldo total é 999,00 na Conta principal.'],
     ['canonical (already covered)', 'Seu saldo é R$ 999,00 na Conta principal.'],
   ])('passes %s when the figure is in the tool envelope', (_label, text) => {
     expect(validateGroundedClaims(text, with999).valid).toBe(true);
+  });
+
+  // V1-GROUND-CURRENCY: the envelope above holds BRL (the workspace currency
+  // the `*cents` contract serves). A US$ figure is a DIFFERENT currency and is
+  // no longer grounded by it — the previous behavior let a USD shape
+  // substitute for reais.
+  it('rejects a US$ figure against the BRL cents contract', () => {
+    expect(validateGroundedClaims('O total é US$ 999,00 na Conta principal.', with999).valid).toBe(false);
   });
 
   it('rejects a correction retry that smuggles an unverified alternate-shape figure', async () => {
@@ -198,10 +243,17 @@ describe('A19-GROUND-FIX2: unit-preserving money grounding + singular "real"', (
     expect(result.unsupportedClaims.length).toBeGreaterThan(0);
   });
 
-  // P1 control: a genuinely reais-denominated field still grounds a reais claim.
-  it('still grounds a reais claim against a reais-denominated field', () => {
-    const env = envelope({ total: 999, accountName: 'Conta principal' });
+  // P1 control: a genuinely money-denominated field still grounds a reais claim.
+  // V1-GROUND-SCHEMA: `total` on a list payload is a ROW COUNT, not money — the
+  // schema-declared money field is `*cents`.
+  it('still grounds a reais claim against a contract-declared money field', () => {
+    const env = envelope({ totalCents: 99900, accountName: 'Conta principal' });
     expect(validateGroundedClaims('A fatura é 999 reais na Conta principal.', env).valid).toBe(true);
+  });
+
+  it('REJECTS a reais claim against a row count (total is not money)', () => {
+    const env = envelope({ total: 999, accountName: 'Conta principal' });
+    expect(validateGroundedClaims('A fatura é 999 reais na Conta principal.', env).valid).toBe(false);
   });
 
   // P2: the singular "1 real" is a financial claim, not claim-free prose.

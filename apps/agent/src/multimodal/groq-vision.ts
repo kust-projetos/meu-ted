@@ -252,6 +252,35 @@ const readField = (payload: Record<string, unknown>, ...keys: string[]): string 
   return 'unknown';
 };
 
+/**
+ * V1-GROUND-VISION — the provider contract answers `currency` as a SYMBOL or a
+ * code (`R$`, `BRL`, `US$`, `USD`, or `unknown`/`ambiguous` when unreadable).
+ * The figure itself is never touched: only the currency is canonicalized to
+ * the ISO code, so `renderVisionFields` emits `42.50 BRL` — the shape the
+ * grounding matcher recognizes (`42.50 R$` would be invisible to it, and a
+ * documented amount must reach the turn as grounded data). An unreadable or
+ * ambiguous currency stays exactly as read: no default is ever substituted.
+ */
+const CURRENCY_CODES: Readonly<Record<string, string>> = {
+  'r$': 'BRL',
+  'rs': 'BRL',
+  'real': 'BRL',
+  'reais': 'BRL',
+  'brl': 'BRL',
+  'us$': 'USD',
+  'usd': 'USD',
+  'dolar': 'USD',
+  'dólar': 'USD',
+  'dollars': 'USD',
+};
+
+export const normalizeVisionCurrency = (value: string): string => {
+  if (typeof value !== 'string') return 'unknown';
+  const trimmed = value.trim();
+  if (trimmed === '') return 'unknown';
+  return CURRENCY_CODES[trimmed.toLowerCase()] ?? trimmed;
+};
+
 /** Tolerates a fenced ```json block; returns `null` when there is no extraction. */
 export const parseExtraction = (content: string): VisionFields | null => {
   const trimmed = content.trim();
@@ -278,7 +307,10 @@ export const parseExtraction = (content: string): VisionFields | null => {
     merchant: readField(record, 'merchant', 'establishment', 'estabelecimento'),
     date: readField(record, 'date', 'data'),
     amount: readField(record, 'amount', 'valor'),
-    currency: readField(record, 'currency', 'moeda'),
+    // V1-GROUND-VISION: `R$`/`US$`/… are canonicalized to the ISO code so the
+    // rendered figure is reachable by grounding; `unknown`/`ambiguous` pass
+    // through untouched (clampField already mapped absence to `unknown`).
+    currency: normalizeVisionCurrency(readField(record, 'currency', 'moeda')),
     suggestedCategory: readField(record, 'suggested_category', 'suggestedCategory', 'category', 'categoria'),
     confidence: readField(record, 'confidence', 'confianca'),
   };
