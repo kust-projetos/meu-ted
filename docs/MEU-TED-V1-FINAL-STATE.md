@@ -5,12 +5,18 @@ encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 
 ## 1. Produção viva
 
+Este snapshot foi preparado antes do merge do PR documental #133. O merge
+dispara CI/PWA CI e os workflows oficiais de deploy sem path filters; o Agent
+e a PWA podem passar a reportar o SHA do merge documental embora o código de
+aplicação não mude. Para a ponta atual após esse merge, conferir as execuções e
+attestations dos workflows antes de substituir os SHAs históricos abaixo.
+
 | Camada | SHA vigente | Evidência |
 |---|---|---|
 | API (Contabo) | `bd1ed9b` | `/health` + `/ready` verdes; `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` |
-| Agent (Cloudflare) | `687a7e8d` | Deploy run `38081117169`: deploy + `/health`, `/health/agent`, SHA smoke e `ATTESTED`; GET pós-deploy confirmou `ready` e SHA |
-| PWA (Cloudflare) | `687a7e8d` | Deploy run `38081117377`: artifact testado + smoke read-only + `ATTESTED`; GET `/api/build-info` confirmou SHA |
-| `main` (remota) | `687a7e8d` (PR #132) | Merge squash em 10/10; CI e PWA CI pós-merge verdes |
+| Agent (último deploy atestado antes de #133) | `687a7e8d` | Deploy run `38081117169`: deploy + `/health`, `/health/agent`, SHA smoke e `ATTESTED`; GET pós-deploy confirmou `ready` e SHA |
+| PWA (último deploy atestado antes de #133) | `687a7e8d` | Deploy run `38081117377`: artifact testado + smoke read-only + `ATTESTED`; GET `/api/build-info` confirmou SHA |
+| Base main antes do merge documental #133 | `687a7e8d` (PR #132) | Merge squash em 10/10; CI e PWA CI pós-merge verdes |
 | Credencial demo (E2E/prova) | `demo@clinicademo.com` | criada em 08/10 via fluxo de convite; membership owner no household E2E `550e8400…` (dados sintéticos); senha só no env do operador |
 
 ## 2. Matriz de capabilities (config-de-deploy; live runtime = UNKNOWN sem credencial)
