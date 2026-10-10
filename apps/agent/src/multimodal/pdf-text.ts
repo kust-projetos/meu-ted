@@ -44,10 +44,19 @@
  * 6. **PDF.js não executa scripts** do documento e nada é renderizado (o
  *    opcional `@napi-rs/canvas` não entra do bundle deste caminho).
  *
- * GATE (F4): o parse é local, mas é a única dependência nova e o único parse de
- * CPU do Worker, então fica atrás de `TED_PDF_TEXT_ENABLED=1`, **default-off**
- * (plano §8). Sem a env o override não existe e o PDF continua o `unsupported`
- * fail-closed da A13 — zero parse, zero bytes lidos.
+ * GATE (F4) — agora **DESLIGADO** (P1, bounded execution pendente). O parse é
+ * local, mas `page.getTextContent()` materializa TODOS os itens de texto de
+ * UMA página ANTES de qualquer teto: o teto de caracteres só age ENTRE páginas
+ * (o `accumulated` é conferido antes de abrir a PRÓXIMA página) e na SAÍDA
+ * (`joinPages` trunca) — NÃO dentro de uma página. Não há limite de
+ * trabalho/memória POR-PÁGINA: uma única página gigante é trabalho sem bound
+ * mensurável, e o deadline é de EVENTO (não cancela CPU síncrona já em curso).
+ * Por isso a extração está INDISPONÍVEL: `pdfTextProcessorOverride` devolve
+ * `undefined` INCONDICIONALMENTE, inclusive com `TED_PDF_TEXT_ENABLED=1` — a
+ * env NÃO reativa o parser e o PDF segue o `unsupported` fail-closed da A13
+ * (zero parse, zero bytes lidos). O parser (`createUnpdfExtractor`), a
+ * dependência `unpdf` e `createPdfTextProcessor` ficam PRESERVADOS para uma
+ * reabilitação futura com execução limitada (bounded execution) real.
  */
 
 import type { AttachmentProcessor, AttachmentProcessorResult } from '../attachments/processors.js';
@@ -317,34 +326,26 @@ export const createPdfTextProcessor = (input: {
 };
 
 /**
- * The per-turn PDF override, or `undefined` when the gate is OFF or the
- * dependency is unavailable.
+ * The per-turn PDF override. **ALWAYS `undefined`** (P1 — bounded execution
+ * pendente).
  *
- * F4: parsing is local (no egress, no credential) but it is still the only CPU
- * parse in the Worker and the only new dependency of this slice, so it sits
- * behind `TED_PDF_TEXT_ENABLED=1` (default-off, plan §8). Without the env, NO
- * extractor is even constructed and the registry keeps the A13 `unsupported`
- * processor — zero parse, zero bytes read. A failure to LOAD the parser must not
- * take the turn down either: the entry simply stays `unsupported`.
+ * `page.getTextContent()` materializes every text item of a page before any
+ * cap: the character ceiling is applied only BETWEEN pages (the `accumulated`
+ * check runs before opening the NEXT page) and on the OUTPUT (`joinPages`
+ * truncates), never within a page. There is therefore no per-page
+ * work/memory bound, and the `Promise.race` deadline is an EVENT deadline (it
+ * cannot cancel synchronous CPU already in flight) — so a single adversarial
+ * page is unbounded work. Until effective isolation/limits exist, extraction is
+ * UNCONDITIONALLY unavailable: this returns `undefined` even when
+ * `TED_PDF_TEXT_ENABLED=1` and even when an extractor is injected, so the
+ * registry keeps the A13 `unsupported` processor — zero parse, zero bytes read.
+ * The parser (`createUnpdfExtractor`), the `unpdf` dependency and
+ * `createPdfTextProcessor` are all PRESERVED for a future bounded re-enable.
  */
 export const pdfTextProcessorOverride = (
-  env: PdfTextEnv | undefined,
-  options: { extractor?: PdfTextExtractor; timeoutMs?: number } = {},
-): AttachmentProcessor | undefined => {
-  if (!isPdfTextEnabled(env)) return undefined;
-  const extractor = options.extractor ?? safeUnpdfExtractor();
-  if (!extractor) return undefined;
-  return createPdfTextProcessor({ extractor, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) });
-};
-
-/** Probes that `unpdf` actually loads; on failure, PDF stays `unsupported`. */
-const safeUnpdfExtractor = (): PdfTextExtractor | undefined => {
-  try {
-    return createUnpdfExtractor();
-  } catch {
-    return undefined;
-  }
-};
+  _env: PdfTextEnv | undefined,
+  _options: { extractor?: PdfTextExtractor; timeoutMs?: number } = {},
+): AttachmentProcessor | undefined => undefined;
 
 /**
  * Composes the TURN TEXT from the user's own text plus extracted document data.

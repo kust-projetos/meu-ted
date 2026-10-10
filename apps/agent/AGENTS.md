@@ -330,22 +330,24 @@ aceita pelo operador para o canary (revalidar antes de tráfego geral). Prova
 live pendente: recuperação do relay do turno + canary sintético com imagem.
 Caminho Groq segue BLOQUEADO (`llama-4-scout` fora do catálogo em 2026-10-08).
 
-## PDF (camada de texto) — R13, local, sem egress, **default-off**
+## PDF (camada de texto) — R13, **desabilitado até haver limite efetivo**
 
-`multimodal/pdf-text.ts` extrai a **camada de texto** do PDF com `unpdf`
-(serverless build do pdf.js), que é **a única dependência nova desta fatia** —
-aprova num spike bounded: zero dependências transitivas, sem `wasm`/native, ~0,5 MB
-gzip, bundle do Worker de 3564 KiB → 5976 KiB (limite de 64 MiB; gzip é
-referência), 25 páginas em ~8 ms e erros **nomeáveis** (`PasswordException`,
-`InvalidPDFException`). A extração é **local**: sem egress e sem credencial.
+`multimodal/pdf-text.ts` preserva o parser `unpdf` (serverless build do pdf.js),
+mas o override de produção está **incondicionalmente desabilitado**. O spike
+validou compatibilidade e PDFs sintéticos comuns; ele **não** estabeleceu limite
+efetivo para uma única página densa. `page.getTextContent()` materializa todos
+os itens da página antes de expor a lista ao chamador.
 
-**Gate (F4)**: mesmo sendo local, o parse fica atrás de `TED_PDF_TEXT_ENABLED`,
-que precisa ser **exatamente `1`** (plano §8 — flag nova sempre default-off).
-Sem a env **nenhum extractor é construído**: zero parse, zero bytes lidos, e o
-PDF continua o `unsupported` fail-closed da A13. É a única env nova desta fatia.
+**Gate (F4 / hardening P1)**: `TED_PDF_TEXT_ENABLED` é `0` no manifesto, e
+`pdfTextProcessorOverride()` retorna `undefined` mesmo que uma configuração
+externa ainda defina `1`. Portanto o parser não é chamado e o PDF continua
+`unsupported` fail-closed da A13. Upload, armazenamento privado no R2 e cleanup
+TTL seguem independentes e ativos. Não reabilitar por flag; exige isolamento ou
+limites efetivos verificáveis de CPU/memória por documento/página.
 
-Tetos: **10 páginas** (recusado **antes** de extrair qualquer página — o
-`numPages` do proxy é lido antes do parse) e **20 000 caracteres**.
+Os antigos tetos de **10 páginas** e **20 000 caracteres** continuam no parser
+isolado, mas não limitam o trabalho dentro de `getTextContent()` de uma página.
+Eles não são critério suficiente para reabilitar o caminho de produção.
 
 **O deadline é de EVENTO, não de CPU.** O `Promise.race` de 10 s resolve o turno
 com `pdf_timeout`, mas um timer de evento **não cancela CPU síncrona** já em
@@ -357,7 +359,7 @@ lido inteiro e truncado depois (`pagesRead` reporta o que foi realmente lido).
 O prazo é defense in depth para o tempo de espera do turno, não um controle de
 CPU.
 
-Estados: `processed`, `pdf_encrypted` (senha — peça um PDF sem proteção),
+Os estados do parser isolado incluem `processed`, `pdf_encrypted` (senha — peça um PDF sem proteção),
 `pdf_invalid` (corrompido), `pdf_no_text_layer`, `pdf_too_many_pages`,
 `pdf_timeout` e `failed`. **PDF escaneado/OCR é subfatia própria**: sem provider
 validado nesta entrega, um PDF sem camada de texto resolve `pdf_no_text_layer` —
@@ -371,12 +373,14 @@ marcador é load-bearing e é testada contra o `routeIntent` real: uma versão
 anterior ("NÃO são um lote; registre um por vez") casava com a heurística de
 negação e roteava todo turno com dado para `cancel`.
 
-**Estado (A19-PDF-FLAG, configurado para próximo deploy — ainda NÃO em
-produção):** `TED_PDF_TEXT_ENABLED=1` no manifesto para canary pós-deploy.
-Extração **local-only** (unpdf, zero egress, zero credencial);
-flag-global por desenho (sem mecanismo de coorte para PDF; coorte geral de
-anexos já live) — blast radius é CPU-only, com tetos testados (10 páginas /
-20k chars / 10s por evento, early-exit).
+**Estado verificado em 2026-10-09:** produção ainda está no SHA `035d0a1d`, cujo
+manifesto tinha `TED_PDF_TEXT_ENABLED=1`; a leitura é local, mas **não é sem
+egress no fluxo completo**. Após extrair, o texto é composto no turno e enviado
+ao LLM relay/provider para gerar a resposta. Este branch prepara o fail-closed
+(`wrangler.jsonc=0` + override incondicional), mas não altera produção. Qualquer
+desativação live requer o fluxo operacional autorizado; até lá, não expandir o
+canary. Política de retenção/uso do provider para esse conteúdo requer novo gate
+do operador; não presumir ZDR nem ausência de retenção.
 
 ## Anexos: identidade, decisão e proveniência (A13 + correções F1–F3, F5, F8, F9, F11)
 
@@ -538,5 +542,4 @@ metadados continua sendo um **miss**, nunca um hit cross-identity.
   capability; candidate/revogada/inativa nunca carregam; promoção exige replay
   + safety + humano (intocado). Catálogo de categorias cacheado por DO
   (a regra manda reconfirmar com `list_categories`).
-
 

@@ -104,3 +104,46 @@ gemini-vision,vision-pdf-turn,audio-stt-turn,audio-duration}` →
 - **Cota de uso provada ao vivo:** turnos com imagem retornaram 429
   `agent.quota_exceeded` (ator 200k, consumido pelo dia de canary); governor
   nega com erro tipado. Canary de imagem com conteúdo pendente da janela.
+
+## 11. Retificação pós-review — egress, PDF e grounding (2026-10-09)
+
+Esta seção complementa o registro histórico acima. A prova da seção 10 continua
+válida como evidência de que um turno PDF percorreu o caminho completo; a
+classificação anterior de privacidade (“PDF local, sem egress”) estava
+incompleta e está **substituída** pelo fluxo abaixo:
+
+```text
+PDF recebido → objeto em R2 privado (TTL de 24 h)
+             → extração local da camada de texto pelo unpdf
+             → texto extraído composto no contexto do turno
+             → contexto enviado pelo LLM relay ao provider configurado
+             → validação de grounding → resposta ao usuário
+```
+
+- **Processamento local:** só a leitura do PDF é local. O timeout de 10 s é de
+  evento e não cancela CPU síncrona. `getTextContent()` materializa todos os
+  itens de uma página antes dos limites de caracteres; por isso o parser foi
+  desabilitado no branch de hardening até existir limite efetivo/isolation.
+- **Armazenamento e retenção local:** bytes e metadata ficam no bucket privado
+  `pi-finance-ted-attachments`; o contrato `ATTACHMENT_TTL_MS` é 24 h e o sweep
+  de cleanup é bounded/resumível. Não há prova de execução do cleanup live nesta
+  validação, portanto TTL configurado não é alegado como exclusão já observada.
+- **Tráfego externo:** texto extraído pode integrar o prompt/contexto do turno e
+  sair pelo relay. O provider/modelo é o configurado para a resposta do Agent;
+  nenhuma alegação de ZDR, não retenção ou exclusão após processamento é feita
+  aqui. Política e endpoint aplicáveis precisam ser confirmados pelo operador.
+- **Logs e observabilidade:** eventos de upload/cleanup e grounding guardam
+  estados, contagens/tipos, latência e classes de erro sanitizados; não devem
+  incluir bytes, texto extraído, conteúdo financeiro bruto, prompt ou segredo.
+  Métricas existentes não provam política de retenção do provider.
+- **Gate:** a decisão anterior de aceitar o canary PDF com base em “sem egress”
+  deve ser reapresentada ao operador como gate de privacidade. Este branch
+  configura a flag `0` e ignora qualquer override `1`, preservando upload/R2;
+  **nenhuma flag live foi alterada** nesta execução.
+
+O review também confirmou que o grounding anterior permitia colisões entre
+dinheiro, unidades, percentuais, contagens e moedas; o branch
+`fix/v1-attachment-grounding-hardening` adiciona testes regressivos e correções.
+Isso não encerra A19 nem Golden Workflows (#105/#107), não habilita capacidade e
+não é aceite final da v1. Ver `docs/reports/2026-10-09-v1-attachment-grounding-hardening.md`
+para evidências locais e estado da produção.

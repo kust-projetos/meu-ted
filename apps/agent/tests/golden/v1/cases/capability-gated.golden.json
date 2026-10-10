@@ -42,13 +42,13 @@
     {
       "version": "1",
       "id": "GW-017",
-      "title": "PDF textual: parse local atrás de flag default-off",
+      "title": "PDF textual: extração local INDISPONÍVEL por decisão (P1 fail-closed)",
       "workflow": "pdf-text",
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.pdf_text",
-        "reason": "TED_PDF_TEXT_ENABLED=1 configurado no manifesto para canary pós-deploy (A19-PDF-FLAG; extração local unpdf, zero egress, zero credencial; tetos 10 páginas/20k chars/10s por evento com early-exit; flag-global por desenho, sem coorte PDF — coorte geral de anexos já live). O runner isolado nunca constrói o extractor nem lê bytes de PDF, então o caminho ON segue offline-unprovable; prova live via canary sintético com PDF pós-deploy.",
-        "requires": ["TED_PDF_TEXT_ENABLED=1", "F2.1 (PDF) com canary aprovado"]
+        "reason": "Extração DESLIGADA por decisão (P1 — bounded execution pendente): `page.getTextContent()` materializa todos os itens de texto de UMA página antes de qualquer teto (o teto de caracteres só age ENTRE páginas e na saída, e o deadline de 10 s é de EVENTO, não de CPU), então uma única página adversária é trabalho sem bound mensurável. `pdfTextProcessorOverride` devolve `undefined` INCONDICIONALMENTE e `TED_PDF_TEXT_ENABLED=0` no manifesto — a env nem reativaria o parser. Consequência: um PDF resolve `unsupported` (fallback A13), zero parse, zero bytes lidos, zero dado extraído, sem efeito em upload/R2, STT ou visão. O parser (`createUnpdfExtractor`), a dependência `unpdf` e `createPdfTextProcessor` ficam PRESERVADOS; os estados nomeados (`pdf_encrypted`, `pdf_invalid`, `pdf_no_text_layer`, `pdf_too_many_pages`, `pdf_timeout`) seguem EXATOS e testados no parser isolado (`pdf-text.test.ts`), e o fail-closed do gateway é provado executavelmente em `pdf-gate-worklimit.test.ts` / `vision-pdf-turn.test.ts`.",
+        "requires": ["limite de trabalho/memória POR-PÁGINA real (bounded execution) antes de qualquer reabilitação", "reexposição do wiring (pdfTextProcessorOverride) + TED_PDF_TEXT_ENABLED=1 deployado", "F2.1 (PDF) com canary aprovado"]
       },
       "initialState": {},
       "inputs": [{ "text": "quanto deu a fatura no PDF?", "attachments": [{ "name": "fatura.pdf", "type": "application/pdf" }] }],

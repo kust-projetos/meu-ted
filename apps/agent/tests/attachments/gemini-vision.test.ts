@@ -19,7 +19,7 @@ import {
   resolveGeminiVisionTimeoutMs,
   resolveVisionProviderKind,
 } from "../../src/multimodal/gemini-vision.js";
-import { GROQ_VISION_SYSTEM_PROMPT, isVisionCohortMember, parseVisionCohort } from "../../src/multimodal/groq-vision.js";
+import { GROQ_VISION_SYSTEM_PROMPT, isVisionCohortMember, parseExtraction, parseVisionCohort, renderVisionFields } from "../../src/multimodal/groq-vision.js";
 
 const ENABLED_ENV = {
   GOOGLE_AI_STUDIO_KEY: "AIza-test-key",
@@ -196,6 +196,46 @@ describe("A19-VISION-COHORT — rollout sequenciado (flag + key + coorte)", () =
     expect(p.available).toBe(false);
     expect(await p.extract({ bytes: png4x4(), mime: "image/png" })).toMatchObject({ state: "unavailable" });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("Gemini vision — contrato de extração (paridade de normalização com o Groq)", () => {
+  it("R$ / US$ são canonicalizados para o código ISO; unknown/ambiguous ficam honestos", () => {
+    // Mesmo parser compartilhado (`parseExtraction` em groq-vision.ts), exercitado
+    // pelo contrato Gemini: o valor NUNCA é reconstruído, só a moeda é normalizada.
+    const brl = parseExtraction(JSON.stringify({ amount: "42.50", currency: "R$" }))!;
+    expect(brl.amount).toBe("42.50");
+    expect(brl.currency).toBe("BRL");
+    expect(parseExtraction(JSON.stringify({ amount: "42.50", currency: "US$" }))!.currency).toBe("USD");
+    expect(parseExtraction(JSON.stringify({ amount: "42.50", currency: "unknown" }))!.currency).toBe("unknown");
+    expect(renderVisionFields(brl)).toContain("BRL");
+    expect(renderVisionFields(brl)).not.toContain("R$");
+  });
+
+  it("extract devolve os campos normalizados COM proveniência (provider/model/attachmentId)", async () => {
+    const { fetchImpl } = recordingFetch(async () =>
+      completionWith(
+        JSON.stringify({
+          merchant: "Padaria",
+          date: "2026-10-07",
+          amount: "42.50",
+          currency: "R$",
+          suggested_category: "Alimentação",
+          confidence: "unknown",
+        }),
+      ),
+    );
+    const p = createGeminiVisionProvider({ env: ENABLED_ENV, fetchImpl });
+    const out = await p.extract({ bytes: png4x4(), mime: "image/png", attachmentId: "att_gemini_1" });
+    expect(out.state).toBe("extracted");
+    if (out.state !== "extracted") throw new Error('expected "extracted"');
+    expect(out.fields.amount).toBe("42.50");
+    expect(out.fields.currency).toBe("BRL");
+    expect(out.provenance).toMatchObject({
+      attachmentId: "att_gemini_1",
+      provider: "gemini",
+      model: GEMINI_VISION_DEFAULT_MODEL,
+    });
   });
 });
 

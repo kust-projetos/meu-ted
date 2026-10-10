@@ -1,16 +1,30 @@
 /**
- * F4 — o parser de PDF é DEFAULT-OFF e tem TETO DE TRABALHO, não só de saída.
+ * P1 fail-closed — a extração de PDF está INDISPONÍVEL até existir limite
+ * por-página (isolamento/medição) real. Estes testes fixam:
  *
- * - **Gate**: o parse é LOCAL (sem egress, sem credencial), mas ainda é a única
- *   dependência nova e o único parse de CPU do Worker. O plano (§8 "flags novas
- *   default-off") exige uma trava: sem `TED_PDF_TEXT_ENABLED=1` nenhum byte é
- *   parseado e o estado é o `unsupported` honesto da A13.
- * - **Teto de trabalho**: antes, `extractText(proxy)` extraía o documento TODO e
- *   só depois truncava em 20 000 caracteres — o teto era de SAÍDA, não de
- *   TRABALHO. Agora o laço por página EARLY-EXIT ao atingir os tetos, e o
- *   `pagesRead` reportado é o real.
- * - **Deadline honesto**: `Promise.race` resolve o TURN, mas não cancela CPU
- *   síncrona. A mitigação real são os tetos pré-parse + early-exit.
+ * - **Por que foi desligada (P1):** `page.getTextContent()` materializa TODOS
+ *   os itens de texto de UMA página ANTES de qualquer teto. O teto de
+ *   caracteres só age ENTRE páginas (o `accumulated` é conferido antes de abrir
+ *   a PRÓXIMA página) e na SAÍDA (`joinPages` trunca): não há limite de
+ *   trabalho/memória POR-PÁGINA. Uma única página é trabalho sem bound
+ *   mensurável — o teste "residual P1 documentado" prova isso rodando o parser
+ *   real: com `maxChars` pequeno, a página volta materializada BEM acima dele
+ *   (o teto não é aplicado dentro dela).
+ * - **Como foi desligada:** `pdfTextProcessorOverride` passa a devolver
+ *   `undefined` INCONDICIONALMENTE — `TED_PDF_TEXT_ENABLED=1` NÃO reativa o
+ *   parser (nem com extractor injetado), e o parser real NUNCA é chamado pelo
+ *   fluxo real de anexos: um PDF válido resolve `unsupported` (o fallback A13)
+ *   e nenhum texto é extraído/persistido.
+ * - **Upload/R2 intacto:** a rota de upload continua 200 e o objeto continua
+ *   persistido no R2; só a LEITURA do PDF fica indisponível.
+ * - **Deadline é de EVENTO, não de CPU:** com limite por-página inexistente, um
+ *   parse travado continuaria queimando CPU depois de o turno responder — o
+ *   `Promise.race` de 10 s NÃO cancela a CPU síncrona; a contenção real seriam
+ *   os tetos de trabalho (que hoje não cobrem o single-page).
+ *
+ * O parser (`createUnpdfExtractor`), a dependência `unpdf` e o
+ * `createPdfTextProcessor` permanecem no módulo — NADA é removido; só o WIRING
+ * (override) está fechado, pendente de execução limitada (bounded execution).
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +34,7 @@ import {
   createUnpdfExtractor,
   pdfTextProcessorOverride,
 } from "../../src/multimodal/pdf-text.js";
-import { bytesOf, createAttachmentTestAgent, installRelayMock } from "./helpers.js";
+import { bytesOf, createAttachmentTestAgent, installRelayMock, uploadRequest } from "./helpers.js";
 import { getAttachmentStorage } from "../../src/attachments/storage.js";
 import { ingestAttachment } from "../../src/attachments/ingest.js";
 
@@ -39,29 +53,61 @@ const chatRequest = (body: unknown): Request =>
     body: JSON.stringify(body),
   });
 
-describe("F4(a) — gate TED_PDF_TEXT_ENABLED, default-off", () => {
-  it("sem a env, o override do PDF é AUSENTE (o registry mantém o unsupported da A13)", () => {
+const UPLOAD_GATE = { TED_ATTACHMENTS_ENABLED: "1", TED_ATTACHMENTS_COHORT: "ws-1,actor-1" } as const;
+
+describe("P1 — gate fail-closed: TED_PDF_TEXT_ENABLED NÃO ativa o parser", () => {
+  it("sem a env (ou com valor != '1') o override é AUSENTE — PDF segue 'unsupported'", () => {
     expect(pdfTextProcessorOverride(undefined)).toBeUndefined();
     expect(pdfTextProcessorOverride({})).toBeUndefined();
     expect(pdfTextProcessorOverride({ TED_PDF_TEXT_ENABLED: "0" })).toBeUndefined();
     expect(pdfTextProcessorOverride({ TED_PDF_TEXT_ENABLED: "true" })).toBeUndefined();
   });
 
-  it("com a env exatamente '1', o processor existe", () => {
-    const processor = pdfTextProcessorOverride(
-      { TED_PDF_TEXT_ENABLED: "1" },
-      { extractor: async () => ({ state: "ok" as const, pages: [], pageCount: 0 }) },
+  it("com TED_PDF_TEXT_ENABLED=1 o override CONTINUA AUSENTE (a env não reativa o parser)", () => {
+    // P1 fail-closed: a flag não basta mais — a extração está indisponível
+    // enquanto não existir limite por-página. Nem com a env ligada...
+    expect(pdfTextProcessorOverride({ TED_PDF_TEXT_ENABLED: "1" })).toBeUndefined();
+    // ...nem com um extractor injetado (o caminho legítimo dos testes) o
+    // processor é construído: o override devolve undefined antes de qualquer
+    // parser.
+    expect(
+      pdfTextProcessorOverride({ TED_PDF_TEXT_ENABLED: "1" }, {
+        extractor: async () => ({ state: "ok" as const, pages: ["x"], pageCount: 1 }),
+      }),
+    ).toBeUndefined();
+  });
+
+  it("com TED_PDF_TEXT_ENABLED=1, um PDF no turno resolve 'unsupported' e o parser real NUNCA é chamado", async () => {
+    // A env ligada é o pior caso da regressão: se o parser estivesse acessível,
+    // um PDF com camada de texto viraria `processed` e o texto "Mercado Livre"
+    // seria persistido. Observar `unsupported` + ausência do texto extraído é a
+    // prova de que ZERO byte foi parseado pelo parser real.
+    installRelayMock();
+    const { agent, persisted } = createAttachmentTestAgent({ extraEnv: { TED_PDF_TEXT_ENABLED: "1" } });
+    const storage = getAttachmentStorage((agent as unknown as { env: unknown }).env)!;
+    const uploaded = await ingestAttachment({
+      storage,
+      identity: { workspaceId: "ws-1", actorId: "actor-1" },
+      kind: "pdf",
+      name: "nota.pdf",
+      bytes: bytesOf(buildTextLayerPdf(["Mercado Livre 42,50"])),
+    });
+
+    const res = await agent.fetch(
+      chatRequest({
+        text: "anota",
+        intentionId: "intent-pdf-disabled",
+        attachments: [{ type: "pdf", ref: uploaded.ref, name: "nota.pdf" }],
+      }),
     );
-    expect(processor).toBeTypeOf("function");
+
+    const body = (await res.json()) as { attachmentStates?: Array<{ state: string }> };
+    expect(body.attachmentStates?.[0]?.state).toBe("unsupported");
+    // O parser real extrairia este texto; sua ausência prova que não rodou.
+    expect(JSON.stringify(persisted)).not.toContain("Mercado Livre");
   });
 
   it("sem a env, um PDF no turno resolve 'unsupported' e o parser NUNCA é chamado", async () => {
-    let parsed = 0;
-    const extractor = vi.fn(async () => {
-      parsed += 1;
-      return { state: "ok" as const, pages: ["conteudo"], pageCount: 1 };
-    });
-    // A env ausente é o caso real; o spy prova que zero parse aconteceu.
     installRelayMock();
     const { agent } = createAttachmentTestAgent();
     const storage = getAttachmentStorage((agent as unknown as { env: unknown }).env)!;
@@ -83,37 +129,68 @@ describe("F4(a) — gate TED_PDF_TEXT_ENABLED, default-off", () => {
 
     const body = (await res.json()) as { attachmentStates?: Array<{ state: string }> };
     expect(body.attachmentStates?.[0]?.state).toBe("unsupported");
-    expect(parsed).toBe(0);
-    expect(extractor).not.toHaveBeenCalled();
-  });
-
-  it("com a env ligada, o MESMO PDF é lido (o gate não quebrou o caminho legítimo)", async () => {
-    installRelayMock();
-    const { agent } = createAttachmentTestAgent({ extraEnv: { TED_PDF_TEXT_ENABLED: "1" } });
-    const storage = getAttachmentStorage((agent as unknown as { env: unknown }).env)!;
-    const uploaded = await ingestAttachment({
-      storage,
-      identity: { workspaceId: "ws-1", actorId: "actor-1" },
-      kind: "pdf",
-      name: "nota.pdf",
-      bytes: bytesOf(buildTextLayerPdf(["Mercado Livre 42,50"])),
-    });
-
-    const res = await agent.fetch(
-      chatRequest({
-        text: "anota",
-        intentionId: "intent-pdf-gate-on",
-        attachments: [{ type: "pdf", ref: uploaded.ref, name: "nota.pdf" }],
-      }),
-    );
-
-    const body = (await res.json()) as { attachmentStates?: Array<{ state: string }> };
-    expect(body.attachmentStates?.[0]?.state).toBe("processed");
   });
 });
 
-describe("F4(b) — teto de TRABALHO: early-exit no laço de páginas", () => {
-  it("o teto de caracteres é early-exit: as páginas restantes NÃO são lidas", async () => {
+describe("P1 — upload/R2 NÃO é afetado pela desativação da leitura de PDF", () => {
+  it("um PDF sobe pela rota real (200 + objeto no R2) e no turno segue 'unsupported'", async () => {
+    installRelayMock();
+    const { agent, bucket } = createAttachmentTestAgent({ extraEnv: { ...UPLOAD_GATE, TED_PDF_TEXT_ENABLED: "1" } });
+
+    const uploadRes = await agent.fetch(
+      uploadRequest(bytesOf(buildTextLayerPdf(["Mercado Livre 42,50"])), {
+        "x-ted-attachment-kind": "pdf",
+        "x-ted-attachment-name": "nota.pdf",
+      }),
+    );
+    expect(uploadRes.status).toBe(200);
+    const uploaded = (await uploadRes.json()) as { ref: string };
+    expect(uploaded.ref).toMatch(/^att_/);
+    // Upload + write R2 intactos: um objeto persistido, nenhuma funcionalidade
+    // de armazenamento foi tocada pela desativação da LEITURA.
+    expect(bucket.objects.size).toBe(1);
+
+    const chatRes = await agent.fetch(
+      chatRequest({
+        text: "anota",
+        intentionId: "intent-pdf-r2",
+        attachments: [{ type: "pdf", ref: uploaded.ref, name: "nota.pdf" }],
+      }),
+    );
+    const body = (await chatRes.json()) as { attachmentStates?: Array<{ state: string }> };
+    expect(body.attachmentStates?.[0]?.state).toBe("unsupported");
+  });
+});
+
+describe("residual P1 documentado — o teto de caracteres NÃO limita dentro de um page", () => {
+  it("getTextContent() materializa a página inteira antes de qualquer teto (por que a extração está desligada)", async () => {
+    const extractor = createUnpdfExtractor();
+    // UMA página com texto muito acima do teto pedido. O laço só confere
+    // `maxChars` ANTES de abrir a PRÓXIMA página, e o truncamento de saída
+    // (`joinPages`) age DEPOIS: nenhum dos dois limita o que `getTextContent()`
+    // já materializou DENTRO desta página. A página volta MAIOR que o teto — o
+    // teto é cross-page/saída, NÃO um bound de trabalho/memória por-página.
+    // (Nota honesta: este builder sintético extrai ~2500 chars/página por
+    // artefato do fixture; a prova é relacional — qualquer extrato da página
+    // excede o teto porque o teto não é aplicado dentro dela.)
+    const smallCeiling = 1_000;
+    const bytes = buildTextLayerPdf(["a".repeat(20_000)]);
+
+    const outcome = await extractor({
+      bytes: bytesOf(bytes),
+      mime: "application/pdf",
+      maxPages: PDF_EXTRACT_MAX_PAGES,
+      maxChars: smallCeiling,
+    });
+
+    expect(outcome.state).toBe("ok");
+    if (outcome.state !== "ok") throw new Error('expected "ok"');
+    expect(outcome.pages[0]!.length).toBeGreaterThan(smallCeiling);
+  });
+});
+
+describe("F4(b) — tetos do EXTRACTOR (cross-page + saída), preservados no módulo", () => {
+  it("o teto de caracteres é early-exit ENTRE páginas: as páginas restantes NÃO são lidas", async () => {
     const extractor = createUnpdfExtractor();
     // Um documento de exatamente `PDF_EXTRACT_MAX_PAGES` páginas (portanto NÃO
     // recusado pelo teto de páginas) com texto muito maior que o teto de

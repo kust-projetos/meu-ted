@@ -1,7 +1,7 @@
 import type { EvidenceEnvelope } from '../evidence/evidence-envelope.js';
 import { validateGroundedClaims } from '../evidence/grounding-validator.js';
 import { isUsageQuotaPassthroughError } from '../llm/relay-failover.js';
-import { emitSanitizedEvent } from '../observability/events.js';
+import { classifyError, emitSanitizedEvent } from '../observability/events.js';
 import { renderClarificationFallback, renderUnavailable } from './deterministic-responses.js';
 import { stripToolCallMarkup } from './tool-call-sanitizer.js';
 
@@ -56,6 +56,22 @@ export type GroundedRetryOptions = Readonly<{
  * clarification fallback (`renderClarificationFallback`) — never an empty
  * message, never raw markup — and emits `agent.response.tool_call_sanitized`
  * with counts only.
+ *
+ * V1-GROUND-OBSERVABILITY: that same pre-existing rejection event now also
+ * carries `unsupportedKinds` — the validator's per-axis counts (money /
+ * percent / date / name). Numbers only: which axis failed is the operational
+ * signal, and a figure or a name must never travel in an event.
+ *
+ * The REST of the lifecycle is sanitized the same way, through the SAME sink:
+ * `agent.grounding.validated` on a published grounded reply (stage
+ * `initial` / `correction_retry`), `agent.grounding.correction_attempted`
+ * when the ONE retry actually runs (with the counts that drove it),
+ * `agent.grounding.correction_completed` with its outcome
+ * (`grounded` / `rejected` / `empty`) and latency, and
+ * `agent.grounding.correction_failed` with the provider's ERROR CLASS only
+ * when an ordinary failure falls the turn back safe. Purely additive
+ * telemetry: no extra provider call, exactly one retry, and never a claim
+ * text, figure, document text, token or new ID.
  */
 export const createGroundedResponseWithRetry = async (
   text: string,
@@ -64,11 +80,16 @@ export const createGroundedResponseWithRetry = async (
 ): Promise<GroundedResponse> => {
   const sink = options.sink ?? defaultSink;
   const fallbackSubject = options.fallbackSubject ?? 'esta consulta';
+  // V1-GROUND-OBSERVABILITY: the turn's existing ids (never a new one) ride
+  // every grounding event below; absent when the caller supplies none.
+  const ids = {
+    ...(options.intentionId ? { intentionId: options.intentionId } : {}),
+    ...(options.traceId ? { traceId: options.traceId } : {}),
+  };
   const sanitized = stripToolCallMarkup(text);
   if (sanitized.removedBlocks > 0) {
     sink('agent.response.tool_call_sanitized', {
-      ...(options.intentionId ? { intentionId: options.intentionId } : {}),
-      ...(options.traceId ? { traceId: options.traceId } : {}),
+      ...ids,
       removedBlocks: sanitized.removedBlocks,
     });
   }
@@ -76,7 +97,10 @@ export const createGroundedResponseWithRetry = async (
     return { text: renderClarificationFallback(fallbackSubject), grounded: false, rejected: true };
   }
   const first = validateGroundedClaims(sanitized.text, evidence, options.attachmentTexts ?? []);
-  if (first.valid) return { text: sanitized.text, grounded: true, rejected: false };
+  if (first.valid) {
+    sink('agent.grounding.validated', { ...ids, stage: 'initial' });
+    return { text: sanitized.text, grounded: true, rejected: false };
+  }
   if (options.retry) {
     // R10: the retry is about to run — charge it to the turn's budget before
     // awaiting, so a quota denial still counts as the attempt. The hook is
@@ -87,43 +111,72 @@ export const createGroundedResponseWithRetry = async (
     } catch {
       /* Observational only: never affects grounding. */
     }
+    // Sanitized lifecycle: the ONE retry is actually running, carrying the
+    // per-axis counts that drove it. Purely observational — it adds no call
+    // and cannot change grounding.
+    sink('agent.grounding.correction_attempted', { ...ids, unsupportedKinds: first.counts });
+    const correctionStartedAt = Date.now();
     try {
       const revised = await options.retry(first.unsupportedClaims);
       if (typeof revised === 'string' && revised.trim().length > 0) {
         const revisedSanitized = stripToolCallMarkup(revised);
         if (revisedSanitized.removedBlocks > 0) {
           sink('agent.response.tool_call_sanitized', {
-            ...(options.intentionId ? { intentionId: options.intentionId } : {}),
-            ...(options.traceId ? { traceId: options.traceId } : {}),
+            ...ids,
             removedBlocks: revisedSanitized.removedBlocks,
             stage: 'correction_retry',
           });
         }
         if (revisedSanitized.text.trim().length > 0) {
           const second = validateGroundedClaims(revisedSanitized.text, evidence, options.attachmentTexts ?? []);
-          if (second.valid) return { text: revisedSanitized.text, grounded: true, rejected: false };
+          sink('agent.grounding.correction_completed', {
+            ...ids,
+            outcome: second.valid ? 'grounded' : 'rejected',
+            latencyMs: Date.now() - correctionStartedAt,
+          });
+          if (second.valid) {
+            sink('agent.grounding.validated', { ...ids, stage: 'correction_retry' });
+            return { text: revisedSanitized.text, grounded: true, rejected: false };
+          }
           sink('agent.grounding.rejected', {
-            ...(options.intentionId ? { intentionId: options.intentionId } : {}),
-            ...(options.traceId ? { traceId: options.traceId } : {}),
+            ...ids,
             status: 'rejected_after_retry',
             unsupportedCount: second.unsupportedClaims.length,
+            unsupportedKinds: second.counts,
           });
           return { text: renderUnavailable(fallbackSubject), grounded: false, rejected: true };
         }
       }
+      // The retry ran but produced NO usable revision (nothing returned, or
+      // markup that sanitized away): an outcome the operator must observe
+      // before the turn falls back safe below.
+      sink('agent.grounding.correction_completed', {
+        ...ids,
+        outcome: 'empty',
+        latencyMs: Date.now() - correctionStartedAt,
+      });
     } catch (error) {
       // Usage-quota gate: a denied/unavailable correction reservation must
       // remain an HTTP quota error — rethrown verbatim, never collapsed
       // into the safe deterministic fallback. Ordinary retry failures are
       // operational: fall through to the safe fallback below.
       if (isUsageQuotaPassthroughError(error)) throw error;
+      // Sanitized operational signal for the otherwise-silent fallback path:
+      // ERROR CLASS only — the raw message can carry model text or a figure —
+      // plus the retry latency. A usage-quota denial is NOT duplicated here;
+      // it is rethrown above and surfaced verbatim by the HTTP layer.
+      sink('agent.grounding.correction_failed', {
+        ...ids,
+        errorClass: classifyError(error),
+        latencyMs: Date.now() - correctionStartedAt,
+      });
     }
   }
   sink('agent.grounding.rejected', {
-    ...(options.intentionId ? { intentionId: options.intentionId } : {}),
-    ...(options.traceId ? { traceId: options.traceId } : {}),
+    ...ids,
     status: 'rejected',
     unsupportedCount: first.unsupportedClaims.length,
+    unsupportedKinds: first.counts,
   });
   return { text: renderUnavailable(fallbackSubject), grounded: false, rejected: true };
 };

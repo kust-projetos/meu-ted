@@ -8,17 +8,23 @@ const envelope = (data: unknown): EvidenceEnvelope => ({
 });
 
 /**
- * A19-GROUND-EVIDENCE: attachment-extracted texts are admitted as a
- * source-tagged support set for READ narration. The tool envelope below
- * carries no usable finance data (the live attachment-turn shape); the
- * admitted block text is what grounds the figure.
+ * A19-GROUND-EVIDENCE + V1-GROUND-ATTRIBUTION: attachment-extracted texts
+ * are admitted as a source-tagged support set for READ narration. The tool
+ * envelope below carries no usable finance data (the live attachment-turn
+ * shape); the admitted block text is what grounds the figure.
+ *
+ * V1-GROUND-ATTRIBUTION: MONEY from the admitted set needs positive explicit
+ * attribution in the figure's own sentence ("Segundo o anexo, a fatura é
+ * R$ 999…"), never a bare workspace-shaped narration — a document can never
+ * prove registered state. Dates and names are figure-free and keep their
+ * support without attribution.
  */
 const EMPTY_TOOLS = envelope([]);
 const BLOCK = ['fatura do cartao Nubank total R$ 999,00 Conta principal vencimento 2026-03-12'];
 
 describe('A19-GROUND-EVIDENCE: attachment-admitted figures ground read narration', () => {
-  it('accepts a block figure absent from the tool envelope', () => {
-    const result = validateGroundedClaims('A fatura é R$ 999 na Conta principal.', EMPTY_TOOLS, BLOCK);
+  it('accepts a block figure absent from the tool envelope when the reply attributes it to the document', () => {
+    const result = validateGroundedClaims('Segundo o anexo, a fatura é R$ 999 na Conta principal.', EMPTY_TOOLS, BLOCK);
     expect(result.valid).toBe(true);
   });
 
@@ -32,9 +38,26 @@ describe('A19-GROUND-EVIDENCE: attachment-admitted figures ground read narration
     expect(result.valid).toBe(true);
   });
 
-  it('accepts an alternate-format block figure (BR-decimal support-side superset)', () => {
-    const block = ['extrato total 1.234,56 Conta principal'];
-    expect(validateGroundedClaims('O total é R$ 1.234,56 na Conta principal.', EMPTY_TOOLS, block).valid).toBe(true);
+  it('accepts an alternate-format block figure (BR-decimal with an explicit monetary marker)', () => {
+    const block = ['extrato total R$ 1.234,56 Conta principal'];
+    expect(validateGroundedClaims('Segundo o extrato, o total é R$ 1.234,56 na Conta principal.', EMPTY_TOOLS, block).valid).toBe(true);
+  });
+
+  it('REJECTS an unmarked block figure (V1-GROUND-ATTRIBUTION-MARKER: a bare decimal is not document money)', () => {
+    // The figure is IN the block and the reply attributes it, yet the block
+    // carries no monetary marker: an unmarked decimal is a quantity or an
+    // unknown-currency figure, never implicit BRL evidence.
+    const result = validateGroundedClaims('Segundo o extrato, o total é R$ 1.234,56 na Conta principal.', EMPTY_TOOLS, ['extrato total 1.234,56 Conta principal']);
+    expect(result.valid).toBe(false);
+    expect(result.counts.money).toBe(1);
+  });
+
+  it('REJECTS an unattributed block figure (V1-GROUND-ATTRIBUTION: no provenance)', () => {
+    // The figure is IN the block, yet the reply presents it as workspace
+    // state: a deny-list alone would let that through.
+    const result = validateGroundedClaims('A fatura é R$ 999 na Conta principal.', EMPTY_TOOLS, BLOCK);
+    expect(result.valid).toBe(false);
+    expect(result.unsupportedClaims.length).toBeGreaterThan(0);
   });
 
   it('REJECTS a figure present in NEITHER tools NOR the admitted block', () => {
