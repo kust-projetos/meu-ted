@@ -1,6 +1,6 @@
 # Meu Ted — Roadmap
 
-**Last verified:** 2026-10-07
+**Last verified:** 2026-10-10
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 | Marco | Status | Evidência/limite |
@@ -15,7 +15,7 @@
 | Dados canônicos (conversor + cutover) | Em andamento — gate humano | A API de produção serve o esquema canônico `pi_financeiro_canonical` (rota fresh concluída); repair commitado com residual zero (32 contas vivas) e reconciliação `--provenance=fresh` drifted=0; conversor pronto ([ADR-025](adr/ADR-025-canonical-converter.md)) com F2 smoke PASS e real-dump NO-GO documentado (irrelevante para produção). A aposentadoria do legacy/archive (F3–F5) é gate humano por design ([ADR-024](adr/ADR-024-legacy-canonical-conversion-policy.md)). |
 | Release B (descomissionamento do bearer legado) | Em andamento — gate humano | Sink durável `auth.request.legacy_bearer_used` em produção (PRs #51/#52); **janela de 14 dias reiniciada** em 2026-10-02T21:36:06Z (último evento; 115 eventos idênticos nas duas origens no corte Hostinger → Contabo) → **2026-10-16T21:36:06Z**; flip somente com contagem zero desde a migração (evidência: [`reports/2026-10-03-vps-migration-contabo.md`](reports/2026-10-03-vps-migration-contabo.md)). |
 | Itens future-dated | Planejado | Compat localStorage/bearer em 2026-12-01 (ADR-011/015) e allowlists (`pwa-audit` + `.trivyignore`) em 2026-12-31; workflows-lembrete ativos e idempotentes. |
-| TED Agent A19 (anexos/decision/STT/vision/PDF) | **NOT READY — gate de privacidade reaberto; PDF em fail-closed no branch, produção ainda no SHA anterior** | Agent/PWA `035d0a1d` live; upload/R2 ativos; PDF manifesto `TED_PDF_TEXT_ENABLED=1`, STT e Vision em coorte de teste. A extração PDF é local, mas o texto extraído entra no contexto enviado ao LLM relay/provider. Este branch prepara override PDF incondicionalmente disabled + manifesto `0`, preservando upload/R2; ainda não mergeado/deployado. Operador deve rever egress/retenção antes de qualquer nova promoção. Ver [`reports/2026-10-08-a19-provider-validation.md`](reports/2026-10-08-a19-provider-validation.md) (retificação §11) e [`reports/2026-10-09-v1-attachment-grounding-hardening.md`](reports/2026-10-09-v1-attachment-grounding-hardening.md). |
+| TED Agent A19 (anexos/decision/STT/vision/PDF) | **NOT READY — pacote corretivo #132 implantado; PDF fail-closed** | Agent/PWA `687a7e8d` com deploy/smoke/attestation verdes (`38081117169`, `38081117377`); API Contabo `bd1ed9b` inalterada. `TED_PDF_TEXT_ENABLED=0` e `pdfTextProcessorOverride()` retorna `undefined` incondicionalmente. Upload/R2 preservados; testes provam caminho `unsupported` e zero parser. Não houve solicitação PDF nem conversa generativa autenticada em produção por falta de sessão de workspace de teste; os smokes live foram read-only. Privacidade/egress/retention continua gate para eventual reativação. A19 e V1 permanecem **NOT READY**. Ver [`MEU-TED-V1-FINAL-STATE.md`](MEU-TED-V1-FINAL-STATE.md) e [`reports/2026-10-09-v1-attachment-grounding-hardening.md`](reports/2026-10-09-v1-attachment-grounding-hardening.md). |
 
 ## Próximos passos (gates humanos)
 

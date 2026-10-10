@@ -1,6 +1,6 @@
 # MEU-TED-V1-FINAL-STATE (estado vigente — snapshot somente-leitura)
 
-**Atualizado:** 09/10/2026. Este documento é snapshot, não plano. A definição de
+**Atualizado:** 10/10/2026. Este documento é snapshot, não plano. A definição de
 encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 
 ## 1. Produção viva
@@ -8,9 +8,9 @@ encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 | Camada | SHA vigente | Evidência |
 |---|---|---|
 | API (Contabo) | `bd1ed9b` | `/health` + `/ready` verdes; `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` |
-| Agent (Cloudflare) | `035d0a1d` (build `37860109691`) | GET `/health`: ready; SHA/builtAt conferidos em 09/10 |
-| PWA (Cloudflare) | `035d0a1d` (build `37860109691`) | GET `/api/build-info`: SHA/builtAt conferidos em 09/10 |
-| `main` (remota) | `035d0a1d` (PR #130) | fetch confirmou `main == origin/main`; working tree estava limpa no início |
+| Agent (Cloudflare) | `687a7e8d` | Deploy run `38081117169`: deploy + `/health`, `/health/agent`, SHA smoke e `ATTESTED`; GET pós-deploy confirmou `ready` e SHA |
+| PWA (Cloudflare) | `687a7e8d` | Deploy run `38081117377`: artifact testado + smoke read-only + `ATTESTED`; GET `/api/build-info` confirmou SHA |
+| `main` (remota) | `687a7e8d` (PR #132) | Merge squash em 10/10; CI e PWA CI pós-merge verdes |
 | Credencial demo (E2E/prova) | `demo@clinicademo.com` | criada em 08/10 via fluxo de convite; membership owner no household E2E `550e8400…` (dados sintéticos); senha só no env do operador |
 
 ## 2. Matriz de capabilities (config-de-deploy; live runtime = UNKNOWN sem credencial)
@@ -19,7 +19,7 @@ encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 |---|---|---|---|---|
 | Chat texto, memória/A17, skills/A18, forget two-step transacional | ACTIVE | ACTIVE | ACTIVE | — (baseline V1) |
 | Attachments (upload/R2) | ACTIVE | **ACTIVE** (`TED_ATTACHMENTS_ENABLED=1`, coorte `*`, R2 binding) | upload/R2 provados em 08/10; nova flag não alterada | manter gates/cleanup |
-| PDF textual | parser preservado, runtime fail-closed neste branch | produção no SHA `035d0a1d` veio de manifesto com `TED_PDF_TEXT_ENABLED=1`; branch altera para `0` e ignora override `1` | produção não redeployada; valor live inferido do SHA/manifesto, sem endpoint de flags | **WAITING_OPERATOR**: rever egress/retention; desativar via fluxo autorizado; reabilitar somente com limite CPU/memória verificável |
+| PDF textual | parser preservado, `pdfTextProcessorOverride()` retorna `undefined` incondicionalmente | deploy SHA `687a7e8d`, manifesto `TED_PDF_TEXT_ENABLED=0`; override não reativa mesmo com valor externo `1` | Agent e PWA SHA atestados; testes provam `unsupported`, zero parser e upload/R2 preservados. Não foi feito pedido autenticado de PDF em produção (sem sessão de workspace de teste neste runtime) | **DISABLED / FAIL-CLOSED**. Reativação bloqueada até isolamento/limites efetivos de CPU/memória e aprovação de privacidade/egress/retention |
 | STT (Groq whisper-large-v3-turbo) | disponível | manifesto com flag `1`, coorte workspace de teste; secret presente segundo relatório 08/10 | probe sintético aprovado; voz real pendente | **WAITING_OPERATOR** para aceite de precisão/privacidade |
 | Vision (Gemini `gemini-2.5-flash`, canary; Groq alternativo) | ACTIVE (código) | manifesto com flag `1`, provider/modelo allowlisted, coorte workspace de teste | extração sintética off-box; turno real ainda pendente (cota anterior esgotada) | **BLOCKED_EXTERNAL**: turno canary/cota e verificação de privacidade |
 | web_search | disponível | UNKNOWN (key fora do repo) | UNKNOWN (inventário pendente) | F2.4 |
@@ -31,7 +31,7 @@ Regra: `infra provisionada != capability habilitada`; `repo config != live runti
 
 ## 3. Flags (todas default-off, trava exata `=== '1'`)
 
-`TED_AUDIO_STT_ENABLED`, `TED_VISION_ENABLED`, `TED_PDF_TEXT_ENABLED` (branch = `0`; runtime de produção = SHA anterior),
+`TED_AUDIO_STT_ENABLED`, `TED_VISION_ENABLED`, `TED_PDF_TEXT_ENABLED` (produção no SHA `687a7e8d`, manifesto `0`; hard-disable no código),
 `TED_DECISION_PROVIDER` (ausente/vazio/`none` = off), `TED_WEB_FETCH_ALLOWED_HOSTS`
 (ausente/vazio = fetch OFF). `TED_ATTACHMENTS_ENABLED`: nome conceitual da #107,
 **não implementado** (F1 PR A). PWA: `NEXT_PUBLIC_TED_ATTACHMENT_*` (anúncio, não
@@ -72,11 +72,12 @@ performance tuning, novos providers/agents/features, refactors cosméticos.
 
 ## 8. Trilha recente
 
-#90→#92→#97→#100→#103/#104→#106→#108→#110–#130. Em 09/10, Agent/PWA live
-`035d0a1d`; attachments/R2 ACTIVE; PDF flag configurada `1` no SHA live, STT e
-Vision configurados em coorte de teste. Este branch prepara PDF fail-closed,
-mas não foi publicado; A19 continua **NOT READY** até resolver gates de
-privacidade, prova/canary e observabilidade.
+#90→#92→#97→#100→#103/#104→#106→#108→#110–#132. Baseline pré-merge de 09/10:
+Agent/PWA `035d0a1d`, PDF manifesto `1`, STT e Vision configurados em coorte de
+teste. Em 10/10, PR #132 foi implantado e atestado em `687a7e8d`; PDF agora
+fail-closed com flag `0`, sem alterar upload/R2. A19 continua **NOT READY** por
+gates de bounded processing, privacidade para eventual reativação, prova/canary
+e observabilidade.
 
 ## 9. Ativação de attachments (08/10/2026) — evidência e achados
 
@@ -103,15 +104,16 @@ privacidade, prova/canary e observabilidade.
   `users` canônico → membership owner no household E2E `550e8400…`, dados
   sintéticos). E-mail/validade registrados aqui; **senha nunca vai ao git**.
 
-## 10. Situação da closure V1 (09/10/2026)
+## 10. Situação da closure V1 (baseline pré-deploy de 09/10/2026; atualizada em 10/10)
 
 Os estados abaixo são deliberadamente separados de “código implementado” e
-“produção comprovada”. O hardening local está no branch
-`fix/v1-attachment-grounding-hardening`; não foi publicado nem implantado.
+“produção comprovada”. A tabela de gates humanos abaixo continua vigente;
+detalhes do pacote #132 já implantado e dos limites dos smokes live estão nas
+seções seguintes e na atualização de 10/10.
 
 | Frente | Estado | Bloqueador |
 |---|---|---|
-| A19 | **WAITING_OPERATOR** | Revisar egress/retention do PDF; confirmar deactivation/rollback live e gates restantes de canary. |
+| A19 | **NOT READY** | PDF fail-closed está implantado; faltam limites efetivos de CPU/memória antes de eventual reativação, aprovação de privacidade/egress/retention e gates restantes de canary/observabilidade. |
 | Golden #105 | **WAITING_OPERATOR** | Workflows completos e invariantes da issue ainda não executados/aceitos; não transformar `pending-capability` em PASS. |
 | Autoexecute low-risk | **WAITING_OPERATOR** | Continua SHADOW; `on` exige sink e telemetria de undo-after-autoexecute. |
 | Release B | **WAITING_DATE** | Gate temporal `2026-10-16T21:36:06Z` + zero eventos na janela e procedimento autorizado. |
@@ -120,19 +122,42 @@ Os estados abaixo são deliberadamente separados de “código implementado” e
 | Production E2E | **WAITING_OPERATOR** | Aceite final integrado (API/PWA/Agent, anexos, PDF/STT/Vision, mutation receipts/undo) ainda não executado. |
 | Release v1 | **BLOCKED_EXTERNAL** | Bloqueado por A19, #105, Release B, F3–F5, restore proof e E2E final; este pacote sozinho não conclui v1. |
 
-### Findings deste pacote
+### Findings e implantação do pacote (#132, 10/10/2026)
 
 | Finding | Estado no branch | Evidência |
 |---|---|---|
-| PDF page work limit | Mitigado por **desativação fail-closed**, não por limite efetivo. Reabilitar bloqueado até isolamento/CPU/memória bounded. | `pdf-text.ts`; `pdf-gate-worklimit.test.ts`; `wrangler.jsonc=0`. |
+| PDF page work limit | Mitigado em produção por **desativação fail-closed**, não por limite efetivo. Reabilitar bloqueado até isolamento/CPU/memória bounded. | PR #132; Agent/PWA atestados em `687a7e8d`; `pdf-text.ts` retorna `undefined` incondicionalmente, `wrangler.jsonc=0`, testes de gate provam `unsupported`/zero parser e upload/R2 preservados. Sem solicitação autenticada de PDF em produção. |
 | Grounding: unidade/moeda/count/sinal | Corrigido em validação local: contagem e campo sem unidade não suportam dinheiro; moeda e sinal comparados; moeda/unidade desconhecida fail-closed. | `grounding-quantity-provenance.test.ts`. |
 | Vision Gemini/Groq | Parser comum preserva amount e normaliza símbolos conhecidos; unknown/ambiguous permanecem honestos; sem provider, timeout, quota ou retry extra. | `groq-vision.test.ts`, `gemini-vision.test.ts`. |
 | Anexo vs. registro financeiro | Texto documental pode fundamentar leitura citada; não pode provar saldo/lançamento registrado, que requer suporte API. Anexo continua dado sem autoridade. | Testes de publicação no mesmo arquivo evidence. |
 | Egress/privacidade | Documentação retificada; gate do operador pendente, sem alegação ZDR/retention. | Relatório A19 §11 + relatório hardening. |
 | Instruction version/telemetria | Versão atualizada e eventos de grounding sanitizados implementados. | `cognitive-instructions.test.ts`, `grounding-events-observability.test.ts`. |
 
-**Produção atual:** Agent/PWA `035d0a1d` (read-only smoke 09/10); API
-`bd1ed9b`. O Agent live segue na versão anterior à mitigação e seu manifesto
-indica PDF `1`; nenhuma flag/secret foi alterada nesta execução. A flag `0` do
-branch só terá efeito após deploy autorizado. A retificação de egress exige
-reapresentar o gate de privacidade antes de retomar rollout A19.
+**Produção atual:** Agent/PWA `687a7e8d` (deploys atestados em 10/10; GETs
+pós-deploy confirmaram SHA e readiness); API Contabo `bd1ed9b` (`/health` e
+`/ready` OK, sem redeploy). PR #132 foi mergeado por squash em
+`687a7e8d09cc874aa3babdad133f737b7f848336`. CI `38080566857` e PWA CI
+`38080566817` verdes; Agent Deploy `38081117169` e PWA Deploy `38081117377`
+com deploy executado, smoke read-only e `ATTESTED`. Os primeiros workflows
+pós-merge terminaram verdes com `deploy=skipped`; não foram tratados como
+release. As execuções posteriores acima executaram o deploy e atestaram o SHA.
+
+`TED_PDF_TEXT_ENABLED=0` no manifesto implantado; adicionalmente,
+`pdfTextProcessorOverride()` desabilita o parser incondicionalmente, inclusive
+se o runtime externo declarar `1`. Não se consultou um endpoint de flags (não
+há tal endpoint) nem se enviou conteúdo PDF ao LLM. A API permaneceu em
+`bd1ed9b`; nenhuma flag de STT/Vision/Web/autoexecute, secret ou modelo foi
+alterada. Upload/R2 e outras capacidades mantêm o comportamento coberto pelos
+testes; não houve novo canary de STT/Vision.
+
+**Limite da prova live:** os smokes autorizados do workflow são GET/read-only
+(`/health`, `/health/agent`, `/api/build-info`, raiz PWA e health API). Este
+runtime não tinha sessão autenticada para workspace de teste, portanto não foi
+enviada solicitação PDF nem turno generativo em produção. A garantia de zero
+execução do parser é sustentada pelo código fail-closed implantado e pelos
+testes, não por uma resposta live. Sem alegação de teste live de egress, provider
+ou telemetria de grounding.
+
+**Pacote corretivo concluído; A19/V1 não concluídos.** A privacidade/egress do
+texto extraído permanece pendente para qualquer eventual reativação; não se
+afirma ZDR nem retenção zero. O hard-disable não aprova nem inicia reativação.
