@@ -74,7 +74,19 @@ PDF → R2 privado → unpdf local → texto no contexto da conversa
 | Production E2E | `WAITING_OPERATOR` | Aceite final integrado pendente. |
 | Release v1 | `BLOCKED_EXTERNAL` | Este hardening não fecha os gates operacionais da v1. |
 
-Veredito deste pacote: correções locais e CI/PWA CI do SHA `f1c5213` verdes,
-review estático APPROVED; ainda faltam decisão do operador sobre privacidade e
-desativação live autorizada. A v1 permanece NOT READY enquanto os gates
-operacionais listados acima não forem fechados.
+Veredito pré-deploy deste relatório: correções locais e CI/PWA CI verdes,
+review estático APPROVED; PR #132 ainda aberto naquele momento. A subseção
+seguinte registra a conclusão posterior do pacote corretivo, sem fechar A19/V1.
+
+## Atualização pós-merge/deploy (2026-10-10)
+
+- PR #132 foi mergeado por squash: head do PR `f7ab73c32fdd111e4b01005e8bead182cb12688d`; merge/main SHA `687a7e8d09cc874aa3babdad133f737b7f848336`.
+- Checks pré-merge no head exato: CI `37997721775` e PWA CI `37997721797` verdes; revisão/tester independentes locais APPROVED/PASS. Codex externo indisponível por quota (sem aprovação externa alegada).
+- CI pós-merge da main: `38080566857` e PWA CI `38080566817`, ambos verdes no merge SHA; Agent, API, PWA, E2E PWA, PostgreSQL integration, security, Docker, public-safety strict, governance, capability inventory, write policy, docs e consolidated gate passaram.
+- Agent Deploy `38081117169`: gate passou, job `deploy` executado, smoke GET `/health` + `/health/agent` + identidade exata PASS, API health PASS, `ATTESTED` (SHA `687a7e8…`, reason `deploy-smoke-pass`). PWA Deploy `38081117377`: gate passou, artifact CI testado implantado, PWA/API GET + production read-only smoke PASS, `ATTESTED` no mesmo SHA. Os workflows iniciais (`38080937196`, `38080937281`) terminaram verdes com deploy e smoke **skipped** e não foram contados como release; os reruns oficiais posteriores executaram e atestaram.
+- GET independente pós-deploy: Agent `/health` = ready + `buildSha=687a7e8…`; `/health/agent` = ready; PWA `/api/build-info` = `gitSha=687a7e8…`; API Contabo `/health` = `gitSha=bd1ed9b…` e `/ready` = ready. API não foi redeployada.
+- PDF: manifesto publicado contém `TED_PDF_TEXT_ENABLED=0`; a função de produção `pdfTextProcessorOverride()` retorna `undefined` incondicionalmente mesmo com env externo `1`. Testes focados locais (152/152) e Agent CI (2.232 passed / 1 skip) cobrem config OFF/ON, `unsupported`, ausência de parse e preservação de upload/R2. Grounding de unidade/moeda/contagem/sinal/proveniência, eventos sanitizados, normalização Vision e fluxos de retry/fallback cobertos em testes; nenhum valor financial foi enviado para mutação.
+- Limite operacional: os smokes de produção executados foram read-only. Este runtime não dispunha de sessão autenticada para workspace de teste; não foi feito turno generativo nem solicitação PDF em produção. Portanto não há claim de resposta live `unsupported`, de zero bytes lidos por requisição real, de caminho provider/relay, nem de telemetria live `agent.grounding.*`. A prova de não execução do parser é do código implantado + testes. Nenhum conteúdo PDF foi enviado ao LLM.
+- Estado: pacote corretivo #132 implantado; `TED_PDF_TEXT_ENABLED=0`; upload/R2 e demais capacidades não foram alterados; STT/Vision não tiveram canary repetido; Web permaneceu como antes; autoexecute continua SHADOW; rollback não acionado. Parser não tem limite efetivo de CPU/memória e continua proibido de reativar. Egress/privacidade/retention não aprovados para processamento futuro; A19 continua NOT READY e a V1 permanece NOT READY/BLOCKED pelos gates existentes.
+
+Veredito: **pacote corretivo implantado e atestado; gates de fechamento global da V1 permanecem abertos.**
