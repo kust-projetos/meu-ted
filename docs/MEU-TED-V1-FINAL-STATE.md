@@ -284,7 +284,7 @@ continua intacto.
 | Frente | Código | Testes / evidência | Produção | Próximo gate |
 |---|---|---|---|---|
 | PDF smoke desabilitado | Nenhuma alteração de flag; parser segue incondicionalmente disabled | Fluxo oficial mapeado: proxy PWA exige origem válida para POST/CSRF; encaminha cookie, authorization e `X-Workspace-Id`; helper usa token de conexão de uso único; Worker resolve membership e grava identidade server-side; upload retorna `ref` opaca; envio de turno é RPC separado. Controle de UI não é requisito para RPC | **Não executado**: esta sessão não dispõe de sessão/cookie autenticado legítimo de Test Family. Não se usou `junio`, não se mintou identidade/tokens, nenhum PDF foi enviado. Código fail-closed + testes locais existentes provam `unsupported`/zero parser, não smoke live | Executar `uploadAttachment` e turno pela sessão real Test Family, sem mudar flags; verificar ref/workspace, objeto R2, `unsupported`, zero mutação e independência de imagem/áudio |
-| Golden integrado #105 | Adapter test-only em `apps/api/tests/integration/golden-agent-real-api.test.ts`; Fastify real via `inject`, rotas V2, stores/escritas PostgreSQL reais; banco exige `DATABASE_URL_TEST` + `DB_TEST_MARKER` e guard; nomes produtivos bloqueados; seed/cleanup escopados e transacionais | 18 testes passam com PG 16 descartável; 3 verticais financeiras verificam estado e receipt por SQL, saldo exato e zero escrita em cancel/no-proposal. Suite rápida: 21/21; catálogo continua 29 total / 23 executáveis / 6 pending. Teste em memória preservado | Sem chamadas externas; DB descartável removido após validação | Implementar/validar undo, retry/redelivery/idempotência pelo orquestrador, isolamento cross-actor/workspace, falhas transport/inconclusivas, forget em SQLite DO e natural-language missing-data; CI required no PR |
+| Golden integrado #105 | Adapter test-only em `apps/api/tests/integration/golden-agent-real-api.test.ts`; Fastify real via `inject`, rotas V2, stores/escritas PostgreSQL reais; banco exige `DATABASE_URL_TEST` + `DB_TEST_MARKER` e guard; nomes produtivos bloqueados; seed/cleanup escopados e transacionais | 18 testes passam com PG 16 descartável; 3 verticais financeiras verificam estado e receipt por SQL, saldo exato e zero escrita em cancel/no-proposal. Suite rápida: 21/21; catálogo continua 29 total / 23 executáveis / 6 pending. API Postgres CI run `38120029936` PASS | Sem chamadas externas; DB descartável removido após validação | Implementar/validar undo, retry/redelivery/idempotência pelo orquestrador, isolamento cross-actor/workspace, falhas transport/inconclusivas, forget em SQLite DO e natural-language missing-data; issue permanece OPEN |
 | Inventário A19 #107 | Novo modelo puro `capability-state.ts`: cinco estados e sete dimensões boolean/unknown; whitelist em runtime, sem segredos/texto livre; bloqueio operacional `unknown` não pode derivar `ACTIVE`; não conectado a runtime/endpoints | 45 testes unitários PASS; typecheck Agent PASS. Estados são derivados de evidência fornecida, não amostrados do runtime | **Não é inventário live**; estado produtivo não foi derivado pelo novo módulo | Definir e implementar composição interna dos sinais existentes; testes de contrato/integration e revisão de privacidade antes de qualquer superfície operacional. Atualizar #107 somente pelo critério comprovado |
 | PDF seguro | Nenhuma implementação de parser novo; `pdfTextProcessorOverride()` segue sempre `undefined` | Pesquisa oficial: Worker/DO limita CPU por invocação, não por operação; memória é por isolate; `Promise.race`/fila não dão hard cancel/isolamento de PDF.js síncrono. Alternativas de kill/resource-bound: Cloudflare Container em microVM (mudança de arquitetura e plano pago) ou serviço isolado no Contabo (nova superfície operacional/egress); nenhuma escolhida ou criada | PDF permanece desabilitado; zero alteração de configuração ou deploy | Decisão de arquitetura/custo e política de privacidade/egress antes de iniciar serviço isolado; desenvolver/medir adversarialmente em ambiente isolado. Não considerar truncamento ou timeout de evento garantia |
 | R2 lifecycle | Nenhuma mudança | Wrangler 4.135 `r2 bucket lifecycle list` releu 11/10: regra `pi-finance-attachments-expire-after-one-day` Enabled, prefixo exato `ted/attachments/v1/`, expiração 1 dia; regra default separada só aborta multipart após 7 dias, sem filtro de prefixo. Readback 10/10 após gravação também consta acima. Cloudflare documenta remoção tipicamente até 24h após `x-amz-expiration`, podendo atrasar mais para objetos existentes | **Regra confirmada; nenhum objeto elegível/expirado foi enumerado, nem deleção física confirmada.** A listagem de lifecycle não prova existência/exclusão; não há ref sintética exata nesta sessão. Outros prefixos não recebem a regra de expiração; nenhum objeto manualmente removido | **AWAITING_EXPIRY_EVIDENCE**: listar/HEAD apenas objetos sintéticos autorizados, capturar `x-amz-expiration`/metadata e reler após janela eventual; provar prefixo não alvo sem baixar conteúdo |
@@ -316,13 +316,21 @@ V1.1.
 
 ### Evidências e limites desta execução
 
-- HEAD inicial/final do trabalho: `65304dca829f01f31c965810c7414dd50fcaddd0`;
-  branch `feat/v1-remaining-blockers`, ainda não commitada/publicada. Os seis
+- HEAD inicial: `65304dca829f01f31c965810c7414dd50fcaddd0`; HEAD final:
+  `b207b800e689c6cb1b1a8b356c638414898aea61`. Branch/PR draft:
+  `feat/v1-remaining-blockers` / [#135](https://github.com/kust-projetos/meu-ted/pull/135).
+  Os seis
   documentos locais preservados foram comparados e incorporados; arquivos:
   `apps/agent/AGENTS.md`, Golden README/case JSON, `docs/MEU-TED-V1-FINAL-STATE.md`,
   `docs/ROADMAP.md`, `docs/reports/2026-10-08-a19-provider-validation.md`.
-- Sem commit, PR, deploy, merge, segredo alterado, coorte ampliada, canary
-  ativado, cobrança ou mutação financeira. CI remota não iniciada nesta execução.
+- Issues #105 e #107 receberam comentários de progresso e permanecem OPEN.
+  Required CI passou: workflow run `38120029936` (incl. Postgres/API/Agent/PWA,
+  docs, security, governance, capabilities e write-policy) + required checks
+  `38120029935` (`e2e (22, 10)` e `quality (22, 10)`) verdes. Jobs de publish
+  image/release foram skipped por serem main-only. Nenhum merge/deploy ocorreu.
+- Houve commit `b207b80` e publicação do branch/PR draft; nenhum segredo foi
+  alterado, coorte ampliada, canary ativado, cobrança iniciada ou dado financeiro
+  mutado.
 - Código novo também altera `apps/api/src/db/db-guard.ts` e seus testes para
   bloquear sempre `pi_financeiro_canonical`; nenhum banco de produção foi
   consultado pelo harness. O Postgres de teste foi um container novo PG16 em
