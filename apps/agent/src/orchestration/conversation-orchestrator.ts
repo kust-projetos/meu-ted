@@ -2875,6 +2875,45 @@ export class ConversationOrchestrator {
       // empty when no single target was ever resolved.
       let confirmTargetId = '';
       try {
+        // PR137-SEC-FIX Fase 1 (A): idempotent confirmation replay. A
+        // redelivered confirmation (same intentionId, same identity ctx)
+        // replays the ORIGINAL success verbatim — it must never resolve the
+        // CURRENT listing, which may now hold a LATER operation. The marker
+        // lives in the draft store (durable in prod: DO SQLite) because this
+        // orchestrator is constructed per turn — instance memory would never
+        // survive a redelivery. Without a store (or without the method) there
+        // is no marker: behavior is unchanged (residual: a redelivery then
+        // resolves the live listing, as before).
+        const confirmationStore = this.dependencies.draftStore;
+        const confirmationCtx = this.draftContext(input);
+        try {
+          const prior = confirmationStore?.findConfirmation?.(confirmationCtx, input.intentionId, this.draftNowMs());
+          if (prior) {
+            let replayReceipt: MutationReceipt | undefined;
+            try {
+              const parsed: unknown = prior.receiptJson ? JSON.parse(prior.receiptJson) : undefined;
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                replayReceipt = parsed as MutationReceipt;
+              }
+            } catch {
+              // A corrupt receipt cell degrades to a receipt-less replay, never
+              // to a second execution: the operationId binding is the authority.
+              replayReceipt = undefined;
+            }
+            return this.completeTurn(input, plan, startedAt, result, {
+              mutation: freeze({
+                operationId: prior.operationId,
+                status: 'succeeded' as const,
+                ...(replayReceipt ? { receipt: replayReceipt } : {}),
+              }),
+              response: freeze({ text: renderMutationResult('succeeded') }),
+            });
+          }
+        } catch {
+          // Marker unreadable → fall through to the authoritative path. This
+          // fails open ONLY the replay optimization; the API stays the
+          // anti-double-effect authority for the SAME operation.
+        }
         const target = await coordinator.resolveDecisionTarget(identity, 'decidable', this.draftContext(input));
         if (target.kind === 'none') {
           this.emit('approval.rejected', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'rejected' });
@@ -2896,6 +2935,21 @@ export class ConversationOrchestrator {
         const confirmed = await coordinator.confirm(target.operation.id, identity);
         this.emit('approval.confirmed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'confirmed' });
         this.emit('mutation.executed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'succeeded', latencyMs: Date.now() - startedAt });
+        // PR137-SEC-FIX Fase 1 (A): bind this intentionId to the success for
+        // future redeliveries. Best-effort: a marker-write failure must NEVER
+        // break a success the API already persisted (the API stays the
+        // anti-double-effect authority for the SAME operation).
+        try {
+          confirmationStore?.rememberConfirmation?.({
+            ctx: confirmationCtx,
+            intentionId: input.intentionId,
+            operationId: confirmed.operationId,
+            receiptJson: confirmed.receipt ? JSON.stringify(confirmed.receipt) : null,
+            nowMs: this.draftNowMs(),
+          });
+        } catch {
+          // Best-effort marker only.
+        }
         return this.completeTurn(input, plan, startedAt, result, {
           mutation: freeze({
             operationId: confirmed.operationId,
@@ -2915,16 +2969,22 @@ export class ConversationOrchestrator {
         // lançamentos. A still-active target, an unreconciled target, or an
         // unreadable listing keeps the existing failure copy.
         let targetTerminal = false;
+        // PR137-SEC-FIX Fase 1 (B): a resolved target with an UNREADABLE
+        // listing is the same unknown as a terminal one — the effect may have
+        // landed before the error, so a definitive `failed` would be a false
+        // claim. Answer inconclusive.
+        let listingUnreadable = false;
         try {
           if (confirmTargetId !== '') {
             const current = await coordinator.listActive(identity);
             targetTerminal = !current.some((item) => item.id === confirmTargetId);
           }
         } catch {
+          listingUnreadable = confirmTargetId !== '';
           targetTerminal = false;
         }
         return this.completeTurn(input, plan, startedAt, result, {
-          response: freeze({ text: targetTerminal ? renderInconclusive() : renderMutationResult('failed') }),
+          response: freeze({ text: targetTerminal || listingUnreadable ? renderInconclusive() : renderMutationResult('failed') }),
         });
       }
     }

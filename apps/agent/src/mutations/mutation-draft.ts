@@ -218,6 +218,66 @@ export type DraftUpdateOptions = Readonly<{ expectedRevision?: number }>;
 export const DEFAULT_DRAFT_TTL_MS = 15 * 60_000;
 export const DEFAULT_MAX_PROPOSE_ATTEMPTS = 2;
 
+/**
+ * PR137-SEC-FIX Fase 1 (A) — idempotent confirmation binding (SPEC §7.7
+ * redelivery, issue #105). Records that THIS identity context already
+ * confirmed+executed an operation under THIS intentionId, with the success
+ * receipt to replay verbatim.
+ *
+ * Durability is load-bearing: the orchestrator is constructed PER TURN in
+ * production (`orchestratorForChannel`), so instance memory would never
+ * survive a redelivery. The marker lives in the same durable store as the
+ * drafts (DO SQLite in prod, InMemory in tests) — never in orchestrator
+ * instance state.
+ *
+ * Scope is the authenticated identity (workspace + actor + device), like
+ * `sameContext` minus `conversationId` (a conversation is not an auth leg:
+ * the listing the marker guards is device-bound). A marker NEVER crosses an
+ * identity leg. TTL 24h with opportunistic prune of expired rows; an expired
+ * marker reads as absent (the operation stays terminal server-side — the
+ * listing answers `none`, exactly as before this marker existed).
+ */
+export const CONFIRMATION_TTL_MS = 24 * 60 * 60_000;
+
+export type ConfirmationRecord = Readonly<{
+  workspaceId: string;
+  actorId: string;
+  deviceId: string | null;
+  intentionId: string;
+  operationId: string;
+  /** JSON-serialized success receipt (`null` when the success carried none). */
+  receiptJson: string | null;
+  createdAt: string;
+  expiresAt: string;
+}>;
+
+export type RememberConfirmationInput = Readonly<{
+  ctx: DraftContext;
+  intentionId: string;
+  operationId: string;
+  receiptJson: string | null;
+  nowMs: number;
+  ttlMs?: number;
+}>;
+
+export const buildConfirmationRecord = (input: RememberConfirmationInput): ConfirmationRecord => {
+  const now = input.nowMs;
+  const stamp = new Date(now).toISOString();
+  return Object.freeze({
+    workspaceId: input.ctx.workspaceId,
+    actorId: input.ctx.actorId,
+    deviceId: input.ctx.deviceId,
+    intentionId: input.intentionId,
+    operationId: input.operationId,
+    receiptJson: input.receiptJson,
+    createdAt: stamp,
+    expiresAt: new Date(now + (input.ttlMs ?? CONFIRMATION_TTL_MS)).toISOString(),
+  });
+};
+
+export const isConfirmationExpired = (record: ConfirmationRecord, nowMs: number): boolean =>
+  Number.isFinite(Date.parse(record.expiresAt)) && Date.parse(record.expiresAt) <= nowMs;
+
 const sameContext = (draft: MutationDraftRecord, ctx: DraftContext): boolean =>
   draft.workspaceId === ctx.workspaceId &&
   draft.actorId === ctx.actorId &&
@@ -383,11 +443,24 @@ export interface MutationDraftStore {
   ): MutationDraftRecord | undefined;
   /** Marks stale `active` drafts `expired`; returns how many were closed. */
   expireStale(ctx: DraftContext, nowMs: number): number;
+  /**
+   * PR137-SEC-FIX Fase 1 (A) — idempotent confirmation binding. Optional so
+   * pre-existing store doubles keep compiling; the orchestrator treats an
+   * absent method like an absent store (current behavior, residual
+   * documented at the confirmation branch).
+   */
+  rememberConfirmation?(input: RememberConfirmationInput): void;
+  findConfirmation?(ctx: DraftContext, intentionId: string, nowMs: number): ConfirmationRecord | undefined;
 }
 
 export class InMemoryMutationDraftStore implements MutationDraftStore {
   private readonly drafts = new Map<string, MutationDraftRecord>();
   private readonly byIntention = new Map<string, string>();
+  private readonly confirmations = new Map<string, ConfirmationRecord>();
+
+  private static confirmationKey(ctx: DraftContext, intentionId: string): string {
+    return `${ctx.workspaceId}\u0000${ctx.actorId}\u0000${ctx.deviceId ?? ''}\u0000${intentionId}`;
+  }
 
   getOrCreate(record: MutationDraftRecord): { record: MutationDraftRecord; created: boolean } {
     const existing = this.drafts.get(record.draftId);
@@ -474,6 +547,31 @@ export class InMemoryMutationDraftStore implements MutationDraftStore {
       }
     }
     return closed;
+  }
+
+  rememberConfirmation(input: RememberConfirmationInput): void {
+    // Opportunistic prune: expired markers are dead weight, and the map is
+    // bounded by live confirmations only.
+    for (const [key, record] of this.confirmations) {
+      if (isConfirmationExpired(record, input.nowMs)) this.confirmations.delete(key);
+    }
+    const record = buildConfirmationRecord(input);
+    this.confirmations.set(InMemoryMutationDraftStore.confirmationKey(input.ctx, input.intentionId), record);
+  }
+
+  findConfirmation(ctx: DraftContext, intentionId: string, nowMs: number): ConfirmationRecord | undefined {
+    const record = this.confirmations.get(InMemoryMutationDraftStore.confirmationKey(ctx, intentionId));
+    // Defense in depth: the key already encodes the legs, but a marker is
+    // only ever valid for its own identity — never trust the key alone.
+    if (!record) return undefined;
+    if (record.workspaceId !== ctx.workspaceId || record.actorId !== ctx.actorId || (record.deviceId ?? null) !== (ctx.deviceId ?? null)) {
+      return undefined;
+    }
+    if (isConfirmationExpired(record, nowMs)) {
+      this.confirmations.delete(InMemoryMutationDraftStore.confirmationKey(ctx, intentionId));
+      return undefined;
+    }
+    return record;
   }
 }
 
@@ -577,6 +675,23 @@ export const initializeMutationDraftSchema = (sql: SqlExec): void => {
   sql.exec(`
     CREATE INDEX IF NOT EXISTS idx_mutation_drafts_context
     ON mutation_drafts (workspace_id, actor_id, status);
+  `);
+  // PR137-SEC-FIX Fase 1 (A) — durable idempotent confirmation binding (see
+  // `ConfirmationRecord`). `device_id` is NOT NULL with `''` standing for
+  // "no device" so the PRIMARY KEY legs are never NULL (SQLite treats NULL
+  // PK legs as distinct, which would fork one identity into many markers).
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS mutation_confirmations (
+      workspace_id TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      device_id TEXT NOT NULL DEFAULT '',
+      intention_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      receipt_json TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, actor_id, device_id, intention_id)
+    );
   `);
   // Idempotent compat for DOs created before these columns existed
   // (CREATE TABLE IF NOT EXISTS never backfills columns): add them when
@@ -833,6 +948,75 @@ export class SqlMutationDraftStore implements MutationDraftStore {
       ),
     ];
     return rows.map(rowToRecord).filter((draft) => sameContext(draft, ctx));
+  }
+
+  rememberConfirmation(input: RememberConfirmationInput): void {
+    const record = buildConfirmationRecord(input);
+    const device = record.deviceId ?? '';
+    // Opportunistic prune of expired markers (bounded table, same write).
+    try {
+      this.sql.exec(`DELETE FROM mutation_confirmations WHERE expires_at <= ?`, new Date(input.nowMs).toISOString());
+    } catch {
+      // Prune is hygiene, never authority — a prune failure must not break
+      // the binding write below.
+    }
+    this.sql.exec(
+      `INSERT INTO mutation_confirmations (workspace_id, actor_id, device_id, intention_id, operation_id, receipt_json, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (workspace_id, actor_id, device_id, intention_id)
+       DO UPDATE SET operation_id = excluded.operation_id, receipt_json = excluded.receipt_json, created_at = excluded.created_at, expires_at = excluded.expires_at`,
+      record.workspaceId,
+      record.actorId,
+      device,
+      record.intentionId,
+      record.operationId,
+      record.receiptJson,
+      record.createdAt,
+      record.expiresAt,
+    );
+  }
+
+  findConfirmation(ctx: DraftContext, intentionId: string, nowMs: number): ConfirmationRecord | undefined {
+    const rows = [
+      ...this.sql.exec<Record<string, unknown>>(
+        `SELECT * FROM mutation_confirmations WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND intention_id = ?`,
+        ctx.workspaceId,
+        ctx.actorId,
+        ctx.deviceId ?? '',
+        intentionId,
+      ),
+    ];
+    const row = rows[0];
+    if (!row) return undefined;
+    const record = Object.freeze({
+      workspaceId: String(row.workspace_id ?? ''),
+      actorId: String(row.actor_id ?? ''),
+      deviceId: (typeof row.device_id === 'string' && row.device_id ? row.device_id : null) as string | null,
+      intentionId: String(row.intention_id ?? ''),
+      operationId: String(row.operation_id ?? ''),
+      receiptJson: (typeof row.receipt_json === 'string' ? row.receipt_json : null) as string | null,
+      createdAt: String(row.created_at ?? ''),
+      expiresAt: String(row.expires_at ?? ''),
+    }) as ConfirmationRecord;
+    // Identity legs re-checked (defense in depth) and expiry reads as absent.
+    if (record.workspaceId !== ctx.workspaceId || record.actorId !== ctx.actorId || (record.deviceId ?? null) !== (ctx.deviceId ?? null)) {
+      return undefined;
+    }
+    if (isConfirmationExpired(record, nowMs)) {
+      try {
+        this.sql.exec(
+          `DELETE FROM mutation_confirmations WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND intention_id = ?`,
+          ctx.workspaceId,
+          ctx.actorId,
+          ctx.deviceId ?? '',
+          intentionId,
+        );
+      } catch {
+        // Delete-on-read is hygiene; the caller already treats it as absent.
+      }
+      return undefined;
+    }
+    return record;
   }
 }
 

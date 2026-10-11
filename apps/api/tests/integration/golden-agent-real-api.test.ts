@@ -923,13 +923,16 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
       const snapshotAfterExecute = await readPendingRowJsonb(db, operationId, householdId);
 
       // ── Redelivery: the SAME confirmation text with the SAME intentionId.
-      // The operation is terminal, so the authoritative listing resolves to
-      // none — the agent must answer the no-pending copy, never a second
-      // success, and persist nothing.
+      // PR137-SEC-FIX Fase 1 (A) — DELIBERATE behavior change (standard
+      // idempotency: same key → same response): the operation is terminal,
+      // so the turn replays the ORIGINAL success (same operationId + same
+      // receipt) instead of the old 'nenhuma pendente' copy, and persists
+      // nothing. The receipt below is asserted identical to the first one.
       const redelivered = await harness.runTurn({ text: 'sim', intentionId: confirmIntentionId });
-      expect(redelivered.mutation).toBeUndefined();
-      expect(redelivered.response?.text).toContain('nenhuma operação pendente');
-      expect(redelivered.response?.text).not.toBe(renderMutationResult('succeeded'));
+      expect(redelivered.mutation?.status).toBe('succeeded');
+      expect(redelivered.mutation?.operationId).toBe(operationId);
+      expect(redelivered.mutation?.receipt).toEqual(receipt1);
+      expect(redelivered.response?.text).toBe(renderMutationResult('succeeded'));
 
       // ── Authoritative postconditions: nothing moved a second time. ───────
       const rowsAfter = await readTransactionRows(db, householdId);
@@ -942,8 +945,15 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
       // ── Mandatory invariants (explicitly named). ─────────────────────────
       const DUPLICATE_FINANCIAL_EFFECT = rowsAfter.length - 1;
       expect(DUPLICATE_FINANCIAL_EFFECT).toBe(0);
+      // PR137-SEC-FIX Fase 1 (A): the replay IS the original success — same
+      // receipt relayed, never a second effect. FALSE_SUCCESS here means a
+      // success that names anything OTHER than the original operation.
       const FALSE_SUCCESS =
-        redelivered.mutation !== undefined || redelivered.response?.text === renderMutationResult('succeeded') ? 1 : 0;
+        redelivered.mutation?.status !== 'succeeded' ||
+        redelivered.mutation?.operationId !== operationId ||
+        JSON.stringify(redelivered.mutation?.receipt) !== JSON.stringify(receipt1)
+          ? 1
+          : 0;
       expect(FALSE_SUCCESS).toBe(0);
       const settledRow = await readPendingRow(db, operationId, householdId);
       const UNAUTHORIZED_MUTATION =
@@ -1174,6 +1184,314 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
         settledRow.actor_id !== actor.actorId ||
         settledRow.device_id !== actor.deviceId ||
         rowsAfter[0]!.household_id !== householdId
+          ? 1
+          : 0;
+      expect(UNAUTHORIZED_MUTATION).toBe(0);
+      const CROSS_WORKSPACE_LEAK =
+        (await countTransactions(db, decoy.householdId)) !== 0 ||
+        (await readAccountBalanceCents(db, decoyAccount.id)) !== 50_000 ||
+        (await countOrphanLedgerRows(db, [householdId, decoy.householdId])) !== 0
+          ? 1
+          : 0;
+      expect(CROSS_WORKSPACE_LEAK).toBe(0);
+    },
+    60_000,
+  );
+
+  // ─── PR137-SEC-FIX Fase 1 — confirmation redelivery guards ───────────────
+  //
+  // (A) MATERIAL: a replay of A's confirmation (same intentionId) after A went
+  // terminal and B became pending must replay A's original success — never
+  // confirm+execute B. (B) SEMANTIC: a resolved target with an unreadable
+  // reconciling listing is inconclusive, never a definitive `failed`.
+  // Same harness, seam, guards and SQL oracle as the phase-2 cases above.
+
+  itIfDatabase(
+    'GW-023 redelivery-guard A (same actor): replay of A after B proposed never confirms B (SQL-verified)',
+    async () => {
+      const db = pool!;
+      const { householdId } = await seedTenant(db);
+      const decoy = await seedTenant(db);
+      const actor = { actorId: randomUUID(), deviceId: randomUUID() };
+      const account = await writes!.createAccount(householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const decoyAccount = await writes!.createAccount(decoy.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const harness = createCaseHarness(householdId, actor);
+
+      // ── A: propose → confirm → execute (terminal success). ───────────────
+      const proposedA = await harness.runTurn({
+        text: 'gastei 50 de carne categoria alimentação',
+        intentionId: `golden-gw023-guardA-propose-${randomUUID()}`,
+      });
+      expect(proposedA.mutation?.status).toBe('proposed');
+      const operationA = proposedA.mutation?.operationId ?? '';
+      expect(operationA).not.toBe('');
+
+      const confirmA = `golden-gw023-guardA-confirm-${randomUUID()}`;
+      const first = await harness.runTurn({ text: 'sim', intentionId: confirmA });
+      expect(first.mutation?.status).toBe('succeeded');
+      expect(first.mutation?.operationId).toBe(operationA);
+      const receiptA = first.mutation?.receipt;
+      expect(receiptA).toBeTruthy();
+      const rowsAfterA = await readTransactionRows(db, householdId);
+      expect(rowsAfterA).toHaveLength(1);
+      const transactionA = rowsAfterA[0]!.id;
+
+      // ── B: a LATER proposal, now the single decidable operation. ──────────
+      const proposedB = await harness.runTurn({
+        text: 'gastei 30 de pao categoria alimentação',
+        intentionId: `golden-gw023-guardA-proposeB-${randomUUID()}`,
+      });
+      expect(proposedB.mutation?.status).toBe('proposed');
+      const operationB = proposedB.mutation?.operationId ?? '';
+      expect(operationB).not.toBe('');
+      expect(operationB).not.toBe(operationA);
+      const rowB = await readPendingRow(db, operationB, householdId);
+      expect(rowB.execution_status).toBe('proposed');
+      expect(rowB.normalized_args).toMatchObject({ amountCents: 3000 });
+
+      // ── Redelivery of A's confirmation: MUST replay A, never touch B. ─────
+      const replayed = await harness.runTurn({ text: 'sim', intentionId: confirmA });
+      expect(replayed.mutation?.status).toBe('succeeded');
+      expect(replayed.mutation?.operationId).toBe(operationA);
+      expect(replayed.mutation?.receipt).toEqual(receiptA);
+      expect(replayed.response?.text).toBe(renderMutationResult('succeeded'));
+
+      // ── Authoritative postconditions: only A moved money; B untouched. ────
+      const rowsAfter = await readTransactionRows(db, householdId);
+      expect(rowsAfter).toHaveLength(1);
+      expect(rowsAfter[0]!.id).toBe(transactionA);
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+      expect(await readPendingAttemptCount(db, operationA)).toBe(1);
+      const rowBAfter = await readPendingRow(db, operationB, householdId);
+      expect(rowBAfter.execution_status).toBe('proposed');
+      expect(rowBAfter.execution_attempt_count).toBe(0);
+      expect(rowBAfter.mutation_id).toBeNull();
+
+      // ── Mandatory invariants (explicitly named). ─────────────────────────
+      const DUPLICATE_FINANCIAL_EFFECT = rowsAfter.length - 1;
+      expect(DUPLICATE_FINANCIAL_EFFECT).toBe(0);
+      const FALSE_SUCCESS =
+        replayed.mutation?.operationId !== operationA ||
+        JSON.stringify(replayed.mutation?.receipt) !== JSON.stringify(receiptA)
+          ? 1
+          : 0;
+      expect(FALSE_SUCCESS).toBe(0);
+      const settledA = await readPendingRow(db, operationA, householdId);
+      const UNAUTHORIZED_MUTATION =
+        settledA.actor_id !== actor.actorId ||
+        settledA.device_id !== actor.deviceId ||
+        rowsAfter[0]!.household_id !== householdId
+          ? 1
+          : 0;
+      expect(UNAUTHORIZED_MUTATION).toBe(0);
+      const CROSS_WORKSPACE_LEAK =
+        (await countTransactions(db, decoy.householdId)) !== 0 ||
+        (await readAccountBalanceCents(db, decoyAccount.id)) !== 50_000 ||
+        (await countOrphanLedgerRows(db, [householdId, decoy.householdId])) !== 0
+          ? 1
+          : 0;
+      expect(CROSS_WORKSPACE_LEAK).toBe(0);
+    },
+    60_000,
+  );
+
+  itIfDatabase(
+    'GW-023 redelivery-guard A (cross actor): replay of A never reaches another identity operation (SQL-verified)',
+    async () => {
+      const db = pool!;
+      const { householdId } = await seedTenant(db);
+      const decoy = await seedTenant(db);
+      const actor = { actorId: randomUUID(), deviceId: randomUUID() };
+      const other = { actorId: randomUUID(), deviceId: randomUUID() };
+      const account = await writes!.createAccount(householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const decoyAccount = await writes!.createAccount(decoy.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const harness = createCaseHarness(householdId, actor);
+      const otherHarness = createCaseHarness(householdId, other);
+
+      const proposedA = await harness.runTurn({
+        text: 'gastei 50 de carne categoria alimentação',
+        intentionId: `golden-gw023-guardAX-propose-${randomUUID()}`,
+      });
+      expect(proposedA.mutation?.status).toBe('proposed');
+      const operationA = proposedA.mutation?.operationId ?? '';
+      expect(operationA).not.toBe('');
+
+      const confirmA = `golden-gw023-guardAX-confirm-${randomUUID()}`;
+      const first = await harness.runTurn({ text: 'sim', intentionId: confirmA });
+      expect(first.mutation?.status).toBe('succeeded');
+      const receiptA = first.mutation?.receipt;
+      expect(receiptA).toBeTruthy();
+      const rowsAfterA = await readTransactionRows(db, householdId);
+      expect(rowsAfterA).toHaveLength(1);
+
+      // B belongs to a DIFFERENT actor+device of the same workspace.
+      const proposedB = await otherHarness.runTurn({
+        text: 'gastei 30 de pao categoria alimentação',
+        intentionId: `golden-gw023-guardAX-proposeB-${randomUUID()}`,
+      });
+      expect(proposedB.mutation?.status).toBe('proposed');
+      const operationB = proposedB.mutation?.operationId ?? '';
+      expect(operationB).not.toBe('');
+      const rowB = await readPendingRow(db, operationB, householdId);
+      expect(rowB.execution_status).toBe('proposed');
+      expect(rowB.actor_id).toBe(other.actorId);
+      expect(rowB.device_id).toBe(other.deviceId);
+
+      // Actor 1 redelivers A's confirmation: replays A, leaves B intact.
+      const replayed = await harness.runTurn({ text: 'sim', intentionId: confirmA });
+      expect(replayed.mutation?.status).toBe('succeeded');
+      expect(replayed.mutation?.operationId).toBe(operationA);
+      expect(replayed.mutation?.receipt).toEqual(receiptA);
+
+      const rowsAfter = await readTransactionRows(db, householdId);
+      expect(rowsAfter).toHaveLength(1);
+      expect(rowsAfter[0]!.id).toBe(rowsAfterA[0]!.id);
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+      expect(await readPendingAttemptCount(db, operationA)).toBe(1);
+      const rowBAfter = await readPendingRow(db, operationB, householdId);
+      expect(rowBAfter.execution_status).toBe('proposed');
+      expect(rowBAfter.actor_id).toBe(other.actorId);
+      expect(rowBAfter.device_id).toBe(other.deviceId);
+      expect(rowBAfter.execution_attempt_count).toBe(0);
+
+      // ── Mandatory invariants (explicitly named). ─────────────────────────
+      const DUPLICATE_FINANCIAL_EFFECT = rowsAfter.length - 1;
+      expect(DUPLICATE_FINANCIAL_EFFECT).toBe(0);
+      const FALSE_SUCCESS =
+        replayed.mutation?.operationId !== operationA ||
+        JSON.stringify(replayed.mutation?.receipt) !== JSON.stringify(receiptA)
+          ? 1
+          : 0;
+      expect(FALSE_SUCCESS).toBe(0);
+      const UNAUTHORIZED_MUTATION =
+        rowBAfter.actor_id !== other.actorId ||
+        rowBAfter.device_id !== other.deviceId ||
+        rowsAfter[0]!.household_id !== householdId
+          ? 1
+          : 0;
+      expect(UNAUTHORIZED_MUTATION).toBe(0);
+      const CROSS_WORKSPACE_LEAK =
+        (await countTransactions(db, decoy.householdId)) !== 0 ||
+        (await readAccountBalanceCents(db, decoyAccount.id)) !== 50_000 ||
+        (await countOrphanLedgerRows(db, [householdId, decoy.householdId])) !== 0
+          ? 1
+          : 0;
+      expect(CROSS_WORKSPACE_LEAK).toBe(0);
+    },
+    60_000,
+  );
+
+  itIfDatabase(
+    'GW-023 redelivery-guard B: resolved target + unreadable listing is inconclusive, never failed (SQL-verified)',
+    async () => {
+      const db = pool!;
+      const { householdId } = await seedTenant(db);
+      const decoy = await seedTenant(db);
+      const actor = { actorId: randomUUID(), deviceId: randomUUID() };
+      const account = await writes!.createAccount(householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const decoyAccount = await writes!.createAccount(decoy.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const baseSeam = createRequestSeam(app!, { householdId, actorId: actor.actorId, deviceId: actor.deviceId });
+      // Double fault, each firing EXACTLY once-after-pass-through: the execute
+      // REALLY persists server-side, then the reply is lost; the reconciling
+      // listing (2nd GET /v2/active — the 1st resolves the target) is
+      // unreadable. The money moved but nothing proves it at the turn.
+      const isV2ListActive = (method: string, path: string): boolean =>
+        method.toUpperCase() === 'GET' && path.includes('/pending-operations/v2/active');
+      let executeCalls = 0;
+      let faultsInjected = 0;
+      let listCalls = 0;
+      let listFaultsInjected = 0;
+      const faultingSeam: MutationRequest = async (method, path, opts) => {
+        if (isV2ExecuteCall(method, path)) {
+          executeCalls += 1;
+          if (faultsInjected === 0) {
+            faultsInjected += 1;
+            await baseSeam(method, path, opts);
+            throw Object.assign(new Error('golden.real_api.injected_execute_transport_failure'), {
+              statusCode: 502,
+              code: 'golden.real_api.injected_execute_transport_failure',
+            });
+          }
+        }
+        if (isV2ListActive(method, path)) {
+          listCalls += 1;
+          if (listCalls > 1) {
+            listFaultsInjected += 1;
+            throw Object.assign(new Error('golden.real_api.injected_listing_unavailable'), {
+              statusCode: 503,
+              code: 'golden.real_api.injected_listing_unavailable',
+            });
+          }
+        }
+        return baseSeam(method, path, opts);
+      };
+      const harness = createCaseHarness(householdId, actor, faultingSeam);
+
+      const proposed = await harness.runTurn({
+        text: 'gastei 50 de carne categoria alimentação',
+        intentionId: `golden-gw023-guardB-propose-${randomUUID()}`,
+      });
+      expect(proposed.mutation?.status).toBe('proposed');
+      const operationId = proposed.mutation?.operationId ?? '';
+      expect(operationId).not.toBe('');
+
+      const answered = await harness.runTurn({ text: 'sim', intentionId: `golden-gw023-guardB-confirm-${randomUUID()}` });
+      expect(faultsInjected).toBe(1);
+      expect(executeCalls).toBe(1);
+      expect(listFaultsInjected).toBe(1);
+
+      // The effect WAS persisted before the failure (authoritative SQL oracle).
+      const settledRow = await readPendingRow(db, operationId, householdId);
+      expect(settledRow.execution_status).toBe('succeeded');
+      expect(settledRow.execution_attempt_count).toBe(1);
+      const rows = await readTransactionRows(db, householdId);
+      expect(rows).toHaveLength(1);
+      const transactionId = rows[0]!.id;
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+
+      // …but the turn must communicate INCONCLUSIVE — never a definitive
+      // failure (the money moved) and never success (no receipt arrived).
+      expect(answered.mutation).toBeUndefined();
+      expect(answered.response?.text).toBe(renderInconclusive());
+      expect(answered.response?.text).not.toBe(renderMutationResult('succeeded'));
+      expect(answered.response?.text).not.toBe(renderMutationResult('failed'));
+
+      // ── Mandatory invariants (explicitly named). ─────────────────────────
+      const DUPLICATE_FINANCIAL_EFFECT = rows.length - 1;
+      expect(DUPLICATE_FINANCIAL_EFFECT).toBe(0);
+      const FALSE_SUCCESS =
+        answered.mutation?.status === 'succeeded' || answered.response?.text === renderMutationResult('succeeded')
+          ? 1
+          : 0;
+      expect(FALSE_SUCCESS).toBe(0);
+      const UNAUTHORIZED_MUTATION =
+        settledRow.actor_id !== actor.actorId ||
+        settledRow.device_id !== actor.deviceId ||
+        rows[0]!.household_id !== householdId
           ? 1
           : 0;
       expect(UNAUTHORIZED_MUTATION).toBe(0);

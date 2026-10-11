@@ -65,6 +65,13 @@ describe('T2.4 mutation integration', () => {
   });
 
   it('does not use success wording when API execution is incomplete', async () => {
+    const stillActiveListing = {
+      items: [{
+        id: 'pending-2', status: 'proposed', tool: 'transactions.expense.create',
+        createdAt: '2026-09-14T00:00:00.000Z', expiresAt: '2026-09-14T01:00:00.000Z',
+      }],
+      total: 1,
+    };
     const request = vi.fn()
       .mockResolvedValueOnce({
         items: [{
@@ -74,7 +81,11 @@ describe('T2.4 mutation integration', () => {
         total: 1,
       })
       .mockResolvedValueOnce({ id: 'pending-2', attestation: 'b'.repeat(32) })
-      .mockResolvedValueOnce({ id: 'pending-2', status: 'failed' });
+      .mockResolvedValueOnce({ id: 'pending-2', status: 'failed' })
+      // PR137-SEC-FIX Fase 1 (B): the catch reconciles against the listing,
+      // so the double provides it — the target is still active, keeping the
+      // definitive failure copy (an UNREADABLE listing would be inconclusive).
+      .mockResolvedValueOnce(stillActiveListing);
     const api = new MutationApiClient({ request });
     const orchestrator = new ConversationOrchestrator({ mutationApiClient: api, plan: () => plan('confirmation') });
 

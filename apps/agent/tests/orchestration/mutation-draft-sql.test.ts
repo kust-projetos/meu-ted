@@ -462,3 +462,112 @@ describe('SqlMutationDraftStore — A07/RR', () => {
     expect(Number(row!.revision)).toBe(1);
   });
 });
+
+describe('SqlMutationDraftStore confirmation binding on real SQLite (PR137-SEC-FIX Fase 1 A)', () => {
+  const NOW = Date.parse('2026-10-11T12:00:00.000Z');
+  const RECEIPT = '{"operationId":"pending-A","entity":{"type":"transaction","id":"tx-A"}}';
+  const confirmCtx = { workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-1' };
+
+  const remember = (
+    store: SqlMutationDraftStore,
+    overrides: Partial<{ ctx: typeof confirmCtx; intentionId: string; operationId: string; receiptJson: string | null; nowMs: number; ttlMs: number }> = {},
+  ) =>
+    store.rememberConfirmation!({
+      ctx: overrides.ctx ?? confirmCtx,
+      intentionId: overrides.intentionId ?? 'intent-confirm-A',
+      operationId: overrides.operationId ?? 'pending-A',
+      receiptJson: overrides.receiptJson !== undefined ? overrides.receiptJson : RECEIPT,
+      nowMs: overrides.nowMs ?? NOW,
+      ...(overrides.ttlMs !== undefined ? { ttlMs: overrides.ttlMs } : {}),
+    });
+
+  it('init creates mutation_confirmations; remember → find round-trips the binding', () => {
+    const { sql } = createSql();
+    initializeMutationDraftSchema(sql);
+    const tables = [...sql.exec<Record<string, unknown>>(`SELECT name FROM sqlite_master WHERE type = 'table'`)].map((row) => String(row.name));
+    expect(tables).toContain('mutation_confirmations');
+    const store = new SqlMutationDraftStore(sql);
+    expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW)).toBeUndefined();
+    remember(store);
+    expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW)).toMatchObject({
+      workspaceId: 'ws-1',
+      actorId: 'actor-1',
+      deviceId: 'device-1',
+      intentionId: 'intent-confirm-A',
+      operationId: 'pending-A',
+      receiptJson: RECEIPT,
+    });
+  });
+
+  it('a marker never crosses an identity leg (workspace, actor, device)', () => {
+    const { sql } = createSql();
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    remember(store);
+    expect(store.findConfirmation!({ workspaceId: 'ws-2', actorId: 'actor-1', deviceId: 'device-1' }, 'intent-confirm-A', NOW)).toBeUndefined();
+    expect(store.findConfirmation!({ workspaceId: 'ws-1', actorId: 'actor-2', deviceId: 'device-1' }, 'intent-confirm-A', NOW)).toBeUndefined();
+    expect(store.findConfirmation!({ workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-2' }, 'intent-confirm-A', NOW)).toBeUndefined();
+    expect(store.findConfirmation!({ workspaceId: 'ws-1', actorId: 'actor-1', deviceId: null }, 'intent-confirm-A', NOW)).toBeUndefined();
+    // Owner still reads its own marker.
+    expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW)?.operationId).toBe('pending-A');
+  });
+
+  it('expired marker reads as absent (TTL) and is pruned', () => {
+    const { sql } = createSql();
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    remember(store, { ttlMs: 60_000 });
+    expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW + 60_001)).toBeUndefined();
+    const rows = [...sql.exec<Record<string, unknown>>(`SELECT * FROM mutation_confirmations`)];
+    expect(rows).toHaveLength(0);
+  });
+
+  it('re-confirmation under the same key upserts (no duplicate row)', () => {
+    const { sql } = createSql();
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    remember(store);
+    remember(store, { operationId: 'pending-A2', nowMs: NOW + 1000 });
+    expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW + 1000)?.operationId).toBe('pending-A2');
+    const rows = [...sql.exec<Record<string, unknown>>(`SELECT * FROM mutation_confirmations`)];
+    expect(rows).toHaveLength(1);
+  });
+
+  it('pre-fix DO without the table: init creates it and the binding works', () => {
+    const { sql } = createSql();
+    // Simulate a pre-fix DO: the FULL legacy mutation_drafts table exists
+    // (all pre-fix columns, so the context index builds), but there is no
+    // mutation_confirmations table yet.
+    sql.exec(`
+      CREATE TABLE mutation_drafts (
+        draft_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        device_id TEXT,
+        conversation_id TEXT,
+        tool TEXT NOT NULL,
+        resolved_args_json TEXT NOT NULL,
+        missing_fields_json TEXT NOT NULL,
+        proposal_idempotency_key TEXT NOT NULL,
+        proposal_id TEXT,
+        propose_outcome TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        discard_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        last_intention_id TEXT NOT NULL,
+        last_question TEXT NOT NULL DEFAULT '',
+        goal_id TEXT,
+        revision INTEGER NOT NULL DEFAULT 0,
+        origin_messages_json TEXT NOT NULL DEFAULT '[]',
+        relations_json TEXT NOT NULL DEFAULT '[]',
+        field_provenance_json TEXT
+      );
+    `);
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    remember(store);
+    expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW)?.operationId).toBe('pending-A');
+  });
+});
