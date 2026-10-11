@@ -142,21 +142,44 @@ export const isAudioSttCohortMember = (
 };
 
 /**
+ * The FLAG, and only the flag: `TED_AUDIO_STT_ENABLED` trimmed must be exactly
+ * `'1'`. This is the canonical flag-only parser — the credential
+ * (`GROQ_API_KEY`) and the cohort (`TED_AUDIO_STT_COHORT`) are deliberately NOT
+ * read here, so a caller can ask "is the flag on?" without conflating the other
+ * two locks with it (issue #107: the runtime capability inventory composes its
+ * `serverFlagEnabled` dimension from THIS parser instead of re-implementing the
+ * parse or reading the triple lock as if it were the flag).
+ *
+ * Trimmed by contract (the same rule `isPdfTextEnabled` uses), so `' 1 '` is ON
+ * and `'1 '`, `'01'`, `'true'`, `''`, a non-string or an absent variable are all
+ * OFF. A missing variable is therefore a proven OFF (the gates are default-off),
+ * never an unanswered question. Total: a loosely typed value fails CLOSED
+ * (`false`) instead of throwing — the runtime capability inventory's contract is
+ * that a capability question is always answerable, never an exception.
+ */
+export const isAudioSttFlagEnabled = (env: unknown): boolean => {
+  const raw = (env as GroqSttEnv | undefined)?.TED_AUDIO_STT_ENABLED;
+  return typeof raw === 'string' && raw.trim() === '1';
+};
+
+/**
  * The triple lock. `TED_AUDIO_STT_ENABLED` alone is not enough (a leaked key
  * must not silently enable audio egress), the key alone is not enough (the
  * rollout stays opt-in), and NEITHER enables egress without cohort membership
  * (`TED_AUDIO_STT_COHORT`: CSV of workspace/actor ids, `'*'` = everyone;
  * empty/missing = NOBODY — A19-STT-COHORT, the sequenced rollout
  * operator-only → internal → small canary → active).
+ *
+ * The flag leg is the canonical parser above, never a second reading of the
+ * same variable: one parse, one behavior.
  */
 export const isGroqSttAvailable = (
   env: GroqSttEnv | undefined,
   workspaceId?: string,
   actorId?: string,
 ): boolean => {
-  const enabled = env?.TED_AUDIO_STT_ENABLED?.trim();
   const key = env?.GROQ_API_KEY?.trim();
-  if (!(enabled === '1' && typeof key === 'string' && key.length > 0)) return false;
+  if (!(isAudioSttFlagEnabled(env) && typeof key === 'string' && key.length > 0)) return false;
   return isAudioSttCohortMember(env, workspaceId, actorId);
 };
 

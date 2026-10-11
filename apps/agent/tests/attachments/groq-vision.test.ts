@@ -35,6 +35,7 @@ import {
   createGroqVisionProvider,
   createImageVisionProcessor,
   isGroqVisionAvailable,
+  isVisionFlagEnabled,
   isVisionCohortMember,
   normalizeVisionCurrency,
   parseExtraction,
@@ -76,6 +77,63 @@ const recordingFetch = (impl: (url: string, init: RequestInit) => Promise<Respon
 };
 
 const freshBudget = (): VisionBudget => ({ consumed: 0 });
+
+describe("A15 — canonical flag-only parser (the FLAG, never the lock)", () => {
+  // RED against the pre-parser gate: `TED_VISION_ENABLED` was parsed inline
+  // inside `isGroqVisionAvailable`, and gemini re-parsed the SAME variable on
+  // its own — two parses of one flag is exactly how the providers could drift.
+  // The exported parser is now the single parse, shared by groq and gemini, and
+  // the runtime capability inventory (#107) composes its `serverFlagEnabled`
+  // dimension from it (never from the credential or the cohort).
+
+  it("'1' (trimmed) is the only ON value", () => {
+    expect(isVisionFlagEnabled({ TED_VISION_ENABLED: "1" })).toBe(true);
+    expect(isVisionFlagEnabled({ TED_VISION_ENABLED: " 1 " })).toBe(true);
+    expect(isVisionFlagEnabled({ TED_VISION_ENABLED: "1\n" })).toBe(true);
+  });
+
+  it("'0', 'true', '' and anything else are OFF", () => {
+    for (const value of ["0", "true", "yes", "01", "1.0", ""]) {
+      expect(isVisionFlagEnabled({ TED_VISION_ENABLED: value })).toBe(false);
+    }
+  });
+
+  it("neither the credential nor the cohort is read as the flag", () => {
+    expect(isVisionFlagEnabled({ GROQ_API_KEY: "gsk-test-key", TED_VISION_COHORT: "*" })).toBe(false);
+    expect(isVisionFlagEnabled({ TED_VISION_ENABLED: "1" })).toBe(true);
+  });
+
+  it("total: absent variable, non-object, null and undefined never throw and read OFF", () => {
+    expect(isVisionFlagEnabled(undefined)).toBe(false);
+    expect(isVisionFlagEnabled(null)).toBe(false);
+    expect(isVisionFlagEnabled("not-an-object")).toBe(false);
+    expect(isVisionFlagEnabled(42)).toBe(false);
+    expect(isVisionFlagEnabled({ TED_VISION_ENABLED: 1 as unknown as string })).toBe(false);
+  });
+
+  it("the groq triple lock is UNCHANGED by the shared parser (behavior preserved)", () => {
+    expect(isGroqVisionAvailable(ENABLED_ENV, "ws-1", "actor-1")).toBe(true);
+    expect(isGroqVisionAvailable(ENABLED_ENV, "ws-outro", "actor-outro")).toBe(true); // '*'
+    expect(
+      isGroqVisionAvailable({ ...ENABLED_ENV, TED_VISION_COHORT: "ws-1" }, "ws-outro", "actor-outro"),
+    ).toBe(false);
+    // Flag off ⇒ lock off even with key and cohort.
+    expect(isGroqVisionAvailable({ ...ENABLED_ENV, TED_VISION_ENABLED: "0" }, "ws-1", "actor-1")).toBe(false);
+    // Key missing ⇒ lock off even with the flag on.
+    expect(isGroqVisionAvailable({ TED_VISION_ENABLED: "1", TED_VISION_COHORT: "*" }, "ws-1", "actor-1")).toBe(false);
+    // Cohort empty (nobody) ⇒ lock off.
+    expect(isGroqVisionAvailable({ GROQ_API_KEY: "gsk-test-key", TED_VISION_ENABLED: "1" }, "ws-1", "actor-1")).toBe(
+      false,
+    );
+  });
+
+  it("the provider boundary reads the SAME lock (no second parsing)", () => {
+    expect(createGroqVisionProvider({ env: { TED_VISION_ENABLED: "1" } }).available).toBe(false);
+    expect(createGroqVisionProvider({ env: ENABLED_ENV, workspaceId: "ws-1", actorId: "actor-1" }).available).toBe(
+      true,
+    );
+  });
+});
 
 /** The provider's documented answer shape (OpenAI-compatible chat completion). */
 const completionWith = (content: string) =>

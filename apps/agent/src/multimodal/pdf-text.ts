@@ -143,9 +143,19 @@ export type PdfTextEnv = {
   TED_PDF_TEXT_ENABLED?: string;
 };
 
-/** Must be exactly `1`: any other value (or absence) keeps PDF unsupported. */
-export const isPdfTextEnabled = (env: PdfTextEnv | undefined): boolean =>
-  env?.TED_PDF_TEXT_ENABLED?.trim() === '1';
+/**
+ * Must be exactly `'1'`: any other value (or absence) keeps PDF unsupported.
+ *
+ * TOTAL and fail-closed over the env VALUE, not just the env object: the flag
+ * is read through a `typeof` guard, so a NON-STRING value injected by a
+ * misconfigured deployment (a numeric `1`, a boolean, an object) can never
+ * reach `.trim()` — it reads OFF instead of throwing a TypeError out of the
+ * caller (the A19 capability report is total over any env shape).
+ */
+export const isPdfTextEnabled = (env: PdfTextEnv | undefined): boolean => {
+  const raw = env?.TED_PDF_TEXT_ENABLED;
+  return typeof raw === 'string' && raw.trim() === '1';
+};
 
 export type PdfTextExtractor = (input: PdfExtractInput) => Promise<PdfExtractOutcome>;
 

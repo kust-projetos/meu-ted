@@ -239,18 +239,24 @@ PII): chave (1ª de 3 em `GROQ_API_KEYS` do projeto telegran, salva no `.env`
 gitignored da raiz) autentica — `whisper-large-v3-turbo` listado e transcreve
 (200 em 463 ms, campo `text` presente). Secret `GROQ_API_KEY` **presente no
 Worker** (verificado via `wrangler secret list`). Precisão em fala real
-pt-BR pendente de canary.
+pt-BR ainda pendente; o canary sintético live de 08/10 provou upload + turno
+processado, não precisão em fala pt-BR real nem o conjunto completo de falhas,
+quotas e rollback.
 
 **Estado live (2026-10-08):** `TED_AUDIO_STT_ENABLED=1` em produção, mas o
 rollout é SEQUENCIADO por coorte (`TED_AUDIO_STT_COHORT`, CSV de
 workspace/actor ids, `'*'` = todos — A19-STT-COHORT): flag sozinha NÃO
 autoriza egress — coorte vazia/ausente = NINGUÉM (fail-closed). Coorte
-inicial `""`; coorte = test workspace junio `d36cb649-4462-486d-940a-47128ad329f2` desde A19-STT-COHORT-WS
-(canary restritivo single-workspace). O gate por actor nunca casaria: o token
+inicial `""`; coorte = workspace real junio `d36cb649-4462-486d-940a-47128ad329f2` desde A19-STT-COHORT-WS
+(canary restritivo single-workspace). **`junio` é o household real, com dados
+financeiros reais** — não é o workspace sintético de E2E (Test Family
+`550e8400-e29b-41d4-a716-446655440000`). O gate por actor nunca casaria: o token
 de conexão delegado não carrega actorId e o `sub` delegado vive em namespace
 distinto do session user.id, por isso a coorte usa o workspaceId do turno. ZDR ativo por decisão do operador (2026-10-08); `GROQ_API_KEY`
 provisionada como secret no Worker; tráfego de usuário pendente da prova
-sintética.
+de precisão em fala real pt-BR e dos demais critérios de aceite; o canary
+sintético de 08/10 provou upload + turno 200 com `audio:processed`. Não usar
+`junio` como workspace de teste: é o household real com dados financeiros reais.
 
 ## Visão (imagem) — R13, default-off com trava tripla (provider selecionável)
 
@@ -319,15 +325,20 @@ um lote para escrita; a escrita continua exigindo a confirmação vigente.
 
 **Estado live (2026-10-08, A19-VISION-CANARY):** `TED_VISION_ENABLED=1` +
 `TED_VISION_PROVIDER=gemini` + `TED_VISION_MODEL=gemini-2.5-flash` no manifesto,
-com coorte = test workspace junio `d36cb649-4462-486d-940a-47128ad329f2`
-(canary restritivo single-workspace, mesmo alvo do STT). Modelo `gemini-2.5-flash`
+com coorte = workspace real junio `d36cb649-4462-486d-940a-47128ad329f2`
+(canary restritivo single-workspace, mesmo alvo do STT) — **household real com
+dados financeiros reais, não o workspace sintético Test Family
+`550e8400-e29b-41d4-a716-446655440000`**. Modelo `gemini-2.5-flash`
 por decisão do operador (extração exata provada live: valor 42.50, moeda R$,
 nulls honestos); `gemini-3.8-flash` segue o default e o caminho de 503-demand.
 `GOOGLE_AI_STUDIO_KEY` provisionada como secret no Worker. Fetch com
 `redirect: 'manual'` (3xx vira `provider_error`, sem reenvio — espelha o fix P2
 do STT). Equivalente-ZDR: política de dados do AI Studio para uso via API
-aceita pelo operador para o canary (revalidar antes de tráfego geral). Prova
-live pendente: recuperação do relay do turno + canary sintético com imagem.
+aceita pelo operador para o canary (revalidar antes de tráfego geral). A extração
+sintética exata foi provada live em 08/10; permanece pendente o turno de aceite
+com imagem no fluxo completo, a cota regular e a validação de privacidade antes
+de qualquer ampliação. Não usar `junio` como workspace de teste: é o household
+real com dados financeiros reais.
 Caminho Groq segue BLOQUEADO (`llama-4-scout` fora do catálogo em 2026-10-08).
 
 ## PDF (camada de texto) — R13, **desabilitado até haver limite efetivo**
@@ -373,14 +384,16 @@ marcador é load-bearing e é testada contra o `routeIntent` real: uma versão
 anterior ("NÃO são um lote; registre um por vez") casava com a heurística de
 negação e roteava todo turno com dado para `cancel`.
 
-**Estado verificado em 2026-10-09:** produção ainda está no SHA `035d0a1d`, cujo
-manifesto tinha `TED_PDF_TEXT_ENABLED=1`; a leitura é local, mas **não é sem
-egress no fluxo completo**. Após extrair, o texto é composto no turno e enviado
-ao LLM relay/provider para gerar a resposta. Este branch prepara o fail-closed
-(`wrangler.jsonc=0` + override incondicional), mas não altera produção. Qualquer
-desativação live requer o fluxo operacional autorizado; até lá, não expandir o
-canary. Política de retenção/uso do provider para esse conteúdo requer novo gate
-do operador; não presumir ZDR nem ausência de retenção.
+**Estado verificado em 2026-10-09 (registro histórico supersedido):** naquele
+momento a produção ainda estava no SHA `035d0a1d`, cujo manifesto tinha
+`TED_PDF_TEXT_ENABLED=1`; a leitura era local, mas **não** sem egress no fluxo
+completo, pois o texto extraído era composto no turno e enviado ao relay/provider
+LLM. Em 10/10, PR #132 foi implantado; o estado vigente está em
+`docs/MEU-TED-V1-FINAL-STATE.md`: Agent/PWA `65304dca`, manifesto PDF `0` e
+`pdfTextProcessorOverride()` incondicionalmente `undefined`. O smoke autenticado
+posterior foi bloqueado antes do upload porque a PWA não renderizou o input; não
+há prova live de pedido PDF. Não reativar o parser sem limites efetivos e gate de
+privacidade/egress/retention; não presumir ZDR nem ausência de retenção.
 
 ## Anexos: identidade, decisão e proveniência (A13 + correções F1–F3, F5, F8, F9, F11)
 
@@ -542,4 +555,3 @@ metadados continua sendo um **miss**, nunca um hit cross-identity.
   capability; candidate/revogada/inativa nunca carregam; promoção exige replay
   + safety + humano (intocado). Catálogo de categorias cacheado por DO
   (a regra manda reconfirmar com `list_categories`).
-

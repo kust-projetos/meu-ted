@@ -141,12 +141,28 @@ export type GroqVisionProvider = VisionProvider & {
 };
 
 /**
- * The triple lock. `TED_VISION_ENABLED` alone is not enough (a leaked key must
- * not silently enable image egress), the key alone is not enough (the
- * rollout stays opt-in), and NEITHER enables egress without cohort membership
- * (`TED_VISION_COHORT`: CSV of workspace/actor ids, `'*'` = everyone;
- * empty/missing = NOBODY — A19-VISION-COHORT, mirroring the STT triple lock).
+ * The FLAG, and only the flag: `TED_VISION_ENABLED` trimmed must be exactly
+ * `'1'`. This is the canonical flag-only parser, SHARED by the two vision
+ * providers (groq and gemini) exactly like the cohort parser above — one
+ * parser, one parse behavior, so the rollout cannot diverge per provider.
+ * Neither the credential (`GROQ_API_KEY`/`GOOGLE_AI_STUDIO_KEY`) nor the cohort
+ * (`TED_VISION_COHORT`) is read here: a caller asking "is the flag on?" must
+ * never have the other two locks answered instead (issue #107 — the runtime
+ * capability inventory composes its `serverFlagEnabled` dimension from THIS
+ * parser, instead of re-implementing the parse or reading the triple lock as
+ * if it were the flag).
+ *
+ * Trimmed by contract (same rule as `isPdfTextEnabled` and `isAudioSttFlagEnabled`):
+ * `' 1 '` is ON; `'0'`, `'true'`, `''`, a non-string or an absent variable are
+ * OFF, so a missing variable is a proven OFF (default-off gates), never an
+ * unanswered question. Total: a loosely typed value fails CLOSED (`false`)
+ * instead of throwing — like the cohort parsers above, so the runtime
+ * capability inventory can always ANSWER the flag, never crash on it.
  */
+export const isVisionFlagEnabled = (env: unknown): boolean => {
+  const raw = (env as GroqVisionEnv | undefined)?.TED_VISION_ENABLED;
+  return typeof raw === 'string' && raw.trim() === '1';
+};
 
 /** Nome da env da allowlist de coorte da visão (CSV, documentado no DO). */
 export const VISION_COHORT_ENV = 'TED_VISION_COHORT';
@@ -183,14 +199,24 @@ export const isVisionCohortMember = (
   return allow.includes(workspaceId ?? '') || allow.includes(actorId ?? '');
 };
 
+/**
+ * The triple lock. `TED_VISION_ENABLED` alone is not enough (a leaked key must
+ * not silently enable image egress), the key alone is not enough (the
+ * rollout stays opt-in), and NEITHER enables egress without cohort membership
+ * (`TED_VISION_COHORT`: CSV of workspace/actor ids, `'*'` = everyone;
+ * empty/missing = NOBODY — A19-VISION-COHORT, mirroring the STT triple lock).
+ *
+ * The flag leg is the canonical flag-only parser above: one parse, one
+ * behavior — the credential and the cohort stay out of the flag question
+ * entirely, and a caller that needs only the flag never has to read them.
+ */
 export const isGroqVisionAvailable = (
   env: GroqVisionEnv | undefined,
   workspaceId?: string,
   actorId?: string,
 ): boolean => {
-  const enabled = env?.TED_VISION_ENABLED?.trim();
   const key = env?.GROQ_API_KEY?.trim();
-  if (!(enabled === '1' && typeof key === 'string' && key.length > 0)) return false;
+  if (!(isVisionFlagEnabled(env) && typeof key === 'string' && key.length > 0)) return false;
   return isVisionCohortMember(env, workspaceId, actorId);
 };
 

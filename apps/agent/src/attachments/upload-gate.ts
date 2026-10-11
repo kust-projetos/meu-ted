@@ -70,8 +70,12 @@ export const isAttachmentUploadCohortMember = (
 
 /** Trava estrita: `=== '1'`, sem trim (whitespace nega). Diverge
  * intencionalmente dos gates STT/vision/PDF (que dão trim): aqui o contrato é
- * o do relatório A19 §4.1, e negar por whitespace é o lado fail-closed. */
-const isUploadFlagEnabled = (env: unknown): boolean => {
+ * o do relatório A19 §4.1, e negar por whitespace é o lado fail-closed.
+ *
+ * Exportado para o composer do inventário runtime de capabilities (#107):
+ * a dimensão `serverFlagEnabled` do relatório precisa do parser EXATO — e não
+ * de uma reimplementação que pudesse divergir desta trava. */
+export const isUploadFlagEnabled = (env: unknown): boolean => {
   const raw = (env as UploadGateEnv | undefined)?.TED_ATTACHMENTS_ENABLED;
   return raw === '1';
 };

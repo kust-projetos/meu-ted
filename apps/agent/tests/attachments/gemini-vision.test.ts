@@ -19,7 +19,7 @@ import {
   resolveGeminiVisionTimeoutMs,
   resolveVisionProviderKind,
 } from "../../src/multimodal/gemini-vision.js";
-import { GROQ_VISION_SYSTEM_PROMPT, isVisionCohortMember, parseExtraction, parseVisionCohort, renderVisionFields } from "../../src/multimodal/groq-vision.js";
+import { GROQ_VISION_SYSTEM_PROMPT, isVisionCohortMember, isVisionFlagEnabled, parseExtraction, parseVisionCohort, renderVisionFields } from "../../src/multimodal/groq-vision.js";
 
 const ENABLED_ENV = {
   GOOGLE_AI_STUDIO_KEY: "AIza-test-key",
@@ -81,6 +81,47 @@ describe("Gemini vision — trava dupla default-off", () => {
     const p = createGeminiVisionProvider({ env: {}, fetchImpl });
     expect(await p.extract({ bytes: png4x4(), mime: "image/png" })).toMatchObject({ state: "unavailable" });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("Gemini vision — a perna da flag é o parser CANÔNICO compartilhado (sem re-parse)", () => {
+  // RED against the two-parses gate: each provider parsed `TED_VISION_ENABLED`
+  // on its own, so the flag question could be answered differently by groq and
+  // gemini. The parse now lives ONCE, in groq-vision.ts (`isVisionFlagEnabled`),
+  // and this suite pins that gemini's availability is UNCHANGED by sharing it.
+
+  it("gemini usa o MESMO parser da flag que o groq (um parse, um comportamento)", () => {
+    // Only `1` (trimmed) is ON, for the gemini path as well.
+    for (const value of ["1", " 1 ", "1\n"]) {
+      expect(isVisionFlagEnabled({ TED_VISION_ENABLED: value })).toBe(true);
+    }
+    for (const value of ["0", "true", "yes", "", " 0 "]) {
+      expect(isVisionFlagEnabled({ TED_VISION_ENABLED: value })).toBe(false);
+    }
+    // A missing variable is a proven OFF, never an unanswered question.
+    expect(isVisionFlagEnabled(undefined)).toBe(false);
+    expect(isVisionFlagEnabled({ GOOGLE_AI_STUDIO_KEY: "k" })).toBe(false);
+  });
+
+  it("a trava tripla do gemini continua EXATAMENTE a mesma (comportamento preservado)", () => {
+    // Flag + key + cohort ⇒ available; any leg missing ⇒ unavailable.
+    expect(isGeminiVisionAvailable(ENABLED_ENV, "ws-1", "actor-1")).toBe(true);
+    expect(isGeminiVisionAvailable(ENABLED_ENV, "ws-outro", "actor-outro")).toBe(true); // '*'
+    expect(
+      isGeminiVisionAvailable({ ...ENABLED_ENV, TED_VISION_COHORT: "ws-1" }, "ws-outro", "actor-outro"),
+    ).toBe(false);
+    expect(isGeminiVisionAvailable({ ...ENABLED_ENV, TED_VISION_ENABLED: "0" }, "ws-1", "actor-1")).toBe(false);
+    expect(isGeminiVisionAvailable({ ...ENABLED_ENV, TED_VISION_ENABLED: " 1 " }, "ws-1", "actor-1")).toBe(true);
+    expect(
+      isGeminiVisionAvailable({ TED_VISION_ENABLED: "1", TED_VISION_COHORT: "*" }, "ws-1", "actor-1"),
+    ).toBe(false);
+    expect(isGeminiVisionAvailable({ GOOGLE_AI_STUDIO_KEY: "k", TED_VISION_ENABLED: "1" }, "ws-1", "actor-1")).toBe(
+      false,
+    );
+    // The gemini credential is never read as the flag.
+    expect(isGeminiVisionAvailable({ GOOGLE_AI_STUDIO_KEY: "k", TED_VISION_COHORT: "*" }, "ws-1", "actor-1")).toBe(
+      false,
+    );
   });
 });
 

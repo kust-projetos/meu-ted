@@ -30,6 +30,7 @@ import {
   createImageVisionProcessor,
   createVisionBudget,
   isVisionCohortMember,
+  isVisionFlagEnabled,
   parseExtraction,
   readChoiceContent,
   toImageDataUrl,
@@ -87,15 +88,21 @@ export type VisionProviderKind = 'gemini' | 'groq';
 export const resolveVisionProviderKind = (env: { TED_VISION_PROVIDER?: string } | undefined): VisionProviderKind =>
   env?.TED_VISION_PROVIDER?.trim() === 'gemini' ? 'gemini' : 'groq';
 
-/** Trava tripla (A19-VISION-COHORT): flag exata + key + coorte, com o parser compartilhado de `groq-vision.ts` (sem divergência entre providers). */
+/**
+ * Trava tripla (A19-VISION-COHORT): flag + key + coorte. A perna da flag é o
+ * parser CANÔNICO e compartilhado de `groq-vision.ts`
+ * (`isVisionFlagEnabled`) — o mesmo parser que o provider Groq usa, para que a
+ * leitura da flag não possa divergir entre os dois providers; a credencial e a
+ * coorte continuam fora da pergunta da flag. O parser de coorte também é o
+ * compartilhado (`isVisionCohortMember`).
+ */
 export const isGeminiVisionAvailable = (
   env: GeminiVisionEnv | undefined,
   workspaceId?: string,
   actorId?: string,
 ): boolean => {
-  const enabled = env?.TED_VISION_ENABLED?.trim();
   const key = env?.GOOGLE_AI_STUDIO_KEY?.trim();
-  if (!(enabled === '1' && typeof key === 'string' && key.length > 0)) return false;
+  if (!(isVisionFlagEnabled(env) && typeof key === 'string' && key.length > 0)) return false;
   return isVisionCohortMember(env, workspaceId, actorId);
 };
 
