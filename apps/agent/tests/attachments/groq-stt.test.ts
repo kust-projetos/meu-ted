@@ -27,6 +27,7 @@ import {
   createAudioSttProcessor,
   createGroqSttProvider,
   isAudioSttCohortMember,
+  isAudioSttFlagEnabled,
   isGroqSttAvailable,
   parseAudioSttCohort,
   type AudioSttBudget,
@@ -65,6 +66,64 @@ const recordingFetch = (impl: (url: string, init: RequestInit) => Promise<Respon
 };
 
 const freshBudget = (): AudioSttBudget => ({ consumed: 0 });
+
+describe("A14 — canonical flag-only parser (the FLAG, never the lock)", () => {
+  // RED against the pre-parser gate: `TED_AUDIO_STT_ENABLED` was parsed inline
+  // inside `isGroqSttAvailable`, so no caller could ask "is the flag on?"
+  // without ALSO reading the credential and the cohort. The runtime capability
+  // inventory (#107) needs the flag ALONE — and the parse must not be able to
+  // drift from the one the triple lock uses, hence the exported parser reused
+  // by both.
+
+  it("'1' (trimmed) is the only ON value", () => {
+    expect(isAudioSttFlagEnabled({ TED_AUDIO_STT_ENABLED: "1" })).toBe(true);
+    expect(isAudioSttFlagEnabled({ TED_AUDIO_STT_ENABLED: " 1 " })).toBe(true);
+    expect(isAudioSttFlagEnabled({ TED_AUDIO_STT_ENABLED: "1\n" })).toBe(true);
+  });
+
+  it("'0', 'true', '' and anything else are OFF", () => {
+    for (const value of ["0", "true", "yes", "01", "1.0", ""]) {
+      expect(isAudioSttFlagEnabled({ TED_AUDIO_STT_ENABLED: value })).toBe(false);
+    }
+  });
+
+  it("the credential and the cohort are NOT read as the flag", () => {
+    // A present key and a wide cohort never turn the flag on ...
+    expect(isAudioSttFlagEnabled({ GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_COHORT: "*" })).toBe(false);
+    // ... and a missing credential never turns a `1` flag off.
+    expect(isAudioSttFlagEnabled({ TED_AUDIO_STT_ENABLED: "1" })).toBe(true);
+  });
+
+  it("total: absent variable, non-object, null and undefined never throw and read OFF", () => {
+    expect(isAudioSttFlagEnabled(undefined)).toBe(false);
+    expect(isAudioSttFlagEnabled(null)).toBe(false);
+    expect(isAudioSttFlagEnabled("not-an-object")).toBe(false);
+    expect(isAudioSttFlagEnabled(42)).toBe(false);
+    expect(isAudioSttFlagEnabled({ TED_AUDIO_STT_ENABLED: 1 as unknown as string })).toBe(false);
+  });
+
+  it("the triple lock is UNCHANGED by the shared parser (behavior preserved)", () => {
+    // Same lock, same answers: flag + key + cohort, nothing else.
+    expect(isGroqSttAvailable(ENABLED_ENV, "ws-1", "actor-1")).toBe(true);
+    expect(isGroqSttAvailable(ENABLED_ENV, "ws-outro", "actor-outro")).toBe(true); // '*'
+    expect(isGroqSttAvailable({ ...ENABLED_ENV, TED_AUDIO_STT_COHORT: "ws-1" }, "ws-outro", "actor-outro")).toBe(false);
+    // Flag off ⇒ lock off even with key and cohort.
+    expect(
+      isGroqSttAvailable({ ...ENABLED_ENV, TED_AUDIO_STT_ENABLED: "0" }, "ws-1", "actor-1"),
+    ).toBe(false);
+    // Key missing ⇒ lock off even with the flag on.
+    expect(isGroqSttAvailable({ TED_AUDIO_STT_ENABLED: "1", TED_AUDIO_STT_COHORT: "*" }, "ws-1", "actor-1")).toBe(false);
+    // Cohort empty (nobody) ⇒ lock off.
+    expect(
+      isGroqSttAvailable({ GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1" }, "ws-1", "actor-1"),
+    ).toBe(false);
+  });
+
+  it("the provider boundary reads the SAME lock (no second parsing)", () => {
+    expect(createGroqSttProvider({ env: { TED_AUDIO_STT_ENABLED: "1" } }).available).toBe(false);
+    expect(createGroqSttProvider({ env: ENABLED_ENV, workspaceId: "ws-1", actorId: "actor-1" }).available).toBe(true);
+  });
+});
 
 describe("A14/AC22 — capability gate (default-off duplo)", () => {
   it("sem GROQ_API_KEY o provider é INDISPONÍVEL e nunca faz rede", () => {

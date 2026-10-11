@@ -95,6 +95,10 @@ import {
   queryAttachmentObservabilityBaseline,
   resolveAttachmentCohort,
 } from "./attachments/observability.js";
+// A19 runtime wiring (#107): composer do inventário de capabilities para o
+// GET read-only existente — só leitura (env + SELECT de frescor no sink),
+// nunca escrita/ativação.
+import { buildRuntimeCapabilityInventory } from "./attachments/runtime-capability-inventory.js";
 
 /**
  * A19 — DO-storage-backed checkpoint for the piggybacked attachment TTL sweep.
@@ -2269,6 +2273,15 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    *
    * REV-F1-PRB-SINK [P2-c]: sink ilegível ⇒ 503 tipado (nunca 200 com baseline
    * vazia "saudável"). A escrita do sink continua best-effort.
+   *
+   * A19 runtime wiring (#107): a resposta GANHA o campo `capabilities` — o
+   * inventário de quatro entradas fechadas derivado dos gates REAIS deste
+   * build (`runtime-capability-inventory.ts`). Nenhum endpoint novo, nenhuma
+   * escrita: o GET continua autenticado, escopado por (workspace, actor) e
+   * read-only; o inventário só lê env + o sink atual (SELECT de frescor),
+   * e presença de secret/binding NUNCA promove provider/canary acima de
+   * `unknown` (que nunca deriva ACTIVE). O contrato anterior
+   * (`workspaceId`/`cohort`/`baseline`) fica intacto.
    */
   private async handleAttachmentObservability(request: Request): Promise<Response> {
     const actorId = request.headers.get("x-agent-actor")?.trim();
@@ -2298,10 +2311,20 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         { status: 503 },
       );
     }
+    // A19 runtime wiring: composed AFTER the degraded check so a broken sink
+    // still fails at the baseline read — the inventory read would simply see
+    // "no fresh scoped success" and keep provider/canary `unknown`.
+    const capabilities = buildRuntimeCapabilityInventory({
+      env: this.env,
+      workspaceId,
+      actorId,
+      canarySql: sql,
+    });
     return Response.json({
       workspaceId,
       cohort: resolveAttachmentCohort(this.env, workspaceId, actorId),
       baseline,
+      capabilities,
     });
   }
 

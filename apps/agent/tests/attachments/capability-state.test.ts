@@ -5,11 +5,11 @@
  *
  * - the derived status is exactly one of UNCONFIGURED / CONFIGURED_DISABLED /
  *   CANARY / ACTIVE / BLOCKED — never a sixth state, never `undefined`;
- * - the seven evidence dimensions stay SEPARATE: code implemented,
- *   configuration present, server flag, provider available (boolean only),
- *   cohort authorization (boolean/unknown), canary evidence (boolean/unknown)
- *   and operational block (boolean/unknown) are never collapsed into one
- *   another;
+ * - the seven evidence dimensions stay SEPARATE: code implemented (boolean),
+ *   configuration present (boolean), server flag (boolean/unknown), provider
+ *   available (boolean/unknown), cohort authorization (boolean/unknown),
+ *   canary evidence (boolean/unknown) and operational block (boolean/unknown)
+ *   are never collapsed into one another;
  * - ACTIVE is never inferred from a single dimension (a credential/binding
  *   presence alone never reaches it — the inventory receives booleans only,
  *   never env values, binding names or secrets);
@@ -102,8 +102,29 @@ describe("A19 capability inventory — one dimension at a time", () => {
     expect(deriveCapabilityStatus(withEvidence({ serverFlagEnabled: false }))).toBe("CONFIGURED_DISABLED");
   });
 
+  it("server flag UNKNOWN ⇒ CONFIGURED_DISABLED — an undecidable flag is never an on flag", () => {
+    // A19 runtime wiring: stt/vision export no flag-only parser, so the
+    // composer reports 'unknown' when the flag VALUE is not canonically
+    // decidable. That must fail closed like an undecidable cohort — never
+    // read as on, never guessed as off.
+    const status = deriveCapabilityStatus(withEvidence({ serverFlagEnabled: "unknown" }));
+    expect(status).toBe("CONFIGURED_DISABLED");
+    expect(status).not.toBe("ACTIVE");
+    expect(status).not.toBe("CANARY");
+  });
+
   it("provider unavailable ⇒ CONFIGURED_DISABLED (credential/binding presence never substitutes)", () => {
     expect(deriveCapabilityStatus(withEvidence({ providerAvailable: false }))).toBe("CONFIGURED_DISABLED");
+  });
+
+  it("provider UNKNOWN ⇒ CONFIGURED_DISABLED — an undecidable provider is never a functioning one", () => {
+    // A19 runtime wiring: stt/vision have no provider-health sink, so a
+    // present secret keeps the dimension 'unknown' — which must fail closed
+    // to a non-active state, never reach CANARY, never read as unavailable.
+    const status = deriveCapabilityStatus(withEvidence({ providerAvailable: "unknown" }));
+    expect(status).toBe("CONFIGURED_DISABLED");
+    expect(status).not.toBe("ACTIVE");
+    expect(status).not.toBe("CANARY");
   });
 
   it("cohort authorization false (nobody) ⇒ CONFIGURED_DISABLED", () => {
@@ -167,7 +188,9 @@ describe("A19 capability inventory — contradictions and precedence", () => {
       { codeImplemented: false },
       { configurationPresent: false },
       { serverFlagEnabled: false },
+      { serverFlagEnabled: "unknown" },
       { providerAvailable: false },
+      { providerAvailable: "unknown" },
       { cohortAuthorized: false },
       { cohortAuthorized: "unknown" },
       { canaryEvidence: false },
@@ -270,8 +293,8 @@ describe("A19 capability inventory — defensive derivation", () => {
     ];
     for (const codeImplemented of [true, false]) {
       for (const configurationPresent of [true, false]) {
-        for (const serverFlagEnabled of [true, false]) {
-          for (const providerAvailable of [true, false]) {
+        for (const serverFlagEnabled of [true, false, "unknown"] as const) {
+          for (const providerAvailable of [true, false, "unknown"] as const) {
             for (const cohortAuthorized of [true, false, "unknown"] as const) {
               for (const canaryEvidence of [true, false, "unknown"] as const) {
                 for (const operationalBlock of [true, false, "unknown"] as const) {
@@ -443,8 +466,16 @@ describe("A19 capability derivation — snapshot hardening (leak/mutation-proof)
 
     const entries = buildCapabilityInventory([{ capability: "stt", evidence: hostile }]);
 
-    expect(entries[0]?.evidence.serverFlagEnabled).toBe(false);
-    expect(entries[0]?.evidence.providerAvailable).toBe(false);
+    // The flag dimension is a tri-state now: the string "yes" is neither
+    // exactly `true` nor exactly `false`, so it is unusable evidence —
+    // normalized to the honest "unknown" (never read as an on flag, never a
+    // guessed boolean), which derives CONFIGURED_DISABLED below.
+    expect(entries[0]?.evidence.serverFlagEnabled).toBe("unknown");
+    // The provider dimension is a tri-state now: the number 1 is neither
+    // exactly `true` nor exactly `false`, so it is unusable evidence —
+    // normalized to the honest "unknown" (never a functioning claim, never a
+    // guessed boolean), which derives CONFIGURED_DISABLED below.
+    expect(entries[0]?.evidence.providerAvailable).toBe("unknown");
     // The block is a tri-state now: the STRING "true" is neither exactly `true`
     // nor exactly `false`, so it is unusable evidence — normalized to the honest
     // "unknown" (never read as a block, never read as proof of an unblock).

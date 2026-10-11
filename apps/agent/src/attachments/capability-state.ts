@@ -16,10 +16,14 @@
  *
  * 1. `codeImplemented` — the capability code exists in this build;
  * 2. `configurationPresent` — the deployment configuration names it;
- * 3. `serverFlagEnabled` — the server-side enable flag is on;
+ * 3. `serverFlagEnabled` — the server-side enable flag is on (boolean, or
+ *    `'unknown'` when no canonical predicate can decide the flag value —
+ *    never a guessed default);
  * 4. `providerAvailable` — the provider boundary reports availability
- *    (BOOLEAN only: this module never reads a credential, a binding name or
- *    any env value, so a leaked secret can never, by itself, be evidence);
+ *    (a tri-state: `true`/`false`/`'unknown'` — this module never reads a
+ *    credential, a binding name or any env value, so a leaked secret can never,
+ *    by itself, be evidence of `true`, and an undecidable provider question
+ *    stays the honest `'unknown'` instead of a guessed boolean);
  * 5. `cohortAuthorized` — the rollout cohort authorizes the identity
  *    (boolean, or `'unknown'` when undecidable — never a guessed default);
  * 6. `canaryEvidence` — live canary evidence exists (boolean or `'unknown'`);
@@ -114,9 +118,22 @@ export type EvidenceTriState = boolean | "unknown";
 export type CapabilityEvidence = {
   readonly codeImplemented: boolean;
   readonly configurationPresent: boolean;
-  readonly serverFlagEnabled: boolean;
-  /** Boolean only — never a credential, a binding name or an env value. */
-  readonly providerAvailable: boolean;
+  /**
+   * Tri-state like the provider/cohort/canary/block dimensions: `true`/
+   * `false` when a canonical flag predicate answered (the flag variable
+   * absent proves the default-off gates are OFF; a provider lock that has
+   * the flag as a necessary condition proves it ON), `'unknown'` when the
+   * flag VALUE is not canonically observable without duplicating a gate's
+   * parser. NEVER a guess, and never the credential/cohort read as the flag.
+   */
+  readonly serverFlagEnabled: EvidenceTriState;
+  /**
+   * Tri-state like the cohort/canary/block dimensions: `true`/`false` when the
+   * provider boundary answered, `'unknown'` when it did not (e.g. there is no
+   * provider-health signal at all). NEVER a credential, a binding name or an
+   * env value — only a boundary that was actually probed may say `true`.
+   */
+  readonly providerAvailable: EvidenceTriState;
   readonly cohortAuthorized: EvidenceTriState;
   readonly canaryEvidence: EvidenceTriState;
   /**
@@ -146,10 +163,14 @@ export type CapabilityInventoryEntry = {
  *    here: an undecidable block is not a block, it is an unanswered question;
  * 2. no implementation or no configuration ⇒ UNCONFIGURED — a flag without the
  *    capability is not a configured-off capability, it is nothing;
- * 3. flag off ⇒ CONFIGURED_DISABLED — present, wired, deliberately off;
- * 4. provider unavailable ⇒ CONFIGURED_DISABLED — credential/binding absence
- *    is a configuration fact here; the provider boolean is the ONLY provider
- *    signal and it is never inferred from any other dimension;
+ * 3. flag not proven true (false OR `'unknown'`) ⇒ CONFIGURED_DISABLED —
+ *    present, wired, and either deliberately off or undecidably flagged; an
+ *    unanswered flag question fails closed exactly like an undecidable cohort;
+ * 4. provider unavailable OR undecidable (`false` OR `'unknown'`) ⇒
+ *    CONFIGURED_DISABLED — credential/binding absence is a configuration fact
+ *    here; the provider tri-state is the ONLY provider signal and it is never
+ *    inferred from any other dimension (a secret presence never produces
+ *    `true`, and an unanswered provider question never reaches CANARY/ACTIVE);
  * 5. cohort not proven true (false OR `'unknown'`) ⇒ CONFIGURED_DISABLED —
  *    undecidable authorization fails closed to "nobody authorized", matching
  *    the fail-closed cohort gates (empty/absent cohort = NOBODY);
@@ -165,11 +186,16 @@ export type CapabilityInventoryEntry = {
  */
 export const deriveCapabilityStatus = (evidence: CapabilityEvidence): CapabilityStatus => {
   // `=== true` / `!== true` (not truthiness) so a hostile or loosely typed
-  // caller passing "yes"/1 cannot smuggle a dimension into the on state.
+  // caller passing "yes"/1 cannot smuggle a dimension into the on state. The
+  // same rule makes every TRI-state dimension fail closed: `'unknown'` is not
+  // `true`, so an unanswered question never reaches CANARY/ACTIVE.
   if (evidence.operationalBlock === true) return "BLOCKED";
   if (evidence.codeImplemented !== true || evidence.configurationPresent !== true) {
     return "UNCONFIGURED";
   }
+  // The flag is tri-state now: an exact `false` proves the default-off gates
+  // are off; `'unknown'` (declared but not canonically decidable) fails
+  // closed exactly like an undecidable cohort.
   if (evidence.serverFlagEnabled !== true) return "CONFIGURED_DISABLED";
   if (evidence.providerAvailable !== true) return "CONFIGURED_DISABLED";
   if (evidence.cohortAuthorized !== true) return "CONFIGURED_DISABLED";
@@ -191,17 +217,29 @@ export const deriveCapabilityStatus = (evidence: CapabilityEvidence): Capability
  *
  * Normalization is CONSERVATIVE (fail closed): a boolean dimension survives
  * only as exactly `true`/`false` (anything else becomes `false`, never on);
- * a tri-state (`cohortAuthorized`, `canaryEvidence`, `operationalBlock`)
- * survives only as exactly `true`/`false` (anything else — missing, malformed
- * or a hostile object — becomes the honest `"unknown"`, never a guessed
- * boolean). A hostile `"yes"`/`1` therefore can neither smuggle a dimension
- * into the ON state nor travel as itself into the projected snapshot.
+ * a tri-state (`serverFlagEnabled`, `providerAvailable`, `cohortAuthorized`,
+ * `canaryEvidence`, `operationalBlock`) survives only as exactly
+ * `true`/`false` (anything else — missing, malformed, a string like
+ * `"yes"`/`"true"` or a hostile object — becomes the honest `"unknown"`,
+ * never a guessed boolean). A hostile `"yes"`/`1` therefore can neither
+ * smuggle a dimension into the ON state nor travel as itself into the
+ * projected snapshot.
  */
 const snapshotEvidence = (source: CapabilityEvidence): CapabilityEvidence => ({
   codeImplemented: source.codeImplemented === true,
   configurationPresent: source.configurationPresent === true,
-  serverFlagEnabled: source.serverFlagEnabled === true,
-  providerAvailable: source.providerAvailable === true,
+  serverFlagEnabled:
+    source.serverFlagEnabled === true
+      ? true
+      : source.serverFlagEnabled === false
+        ? false
+        : "unknown",
+  providerAvailable:
+    source.providerAvailable === true
+      ? true
+      : source.providerAvailable === false
+        ? false
+        : "unknown",
   cohortAuthorized:
     source.cohortAuthorized === true
       ? true

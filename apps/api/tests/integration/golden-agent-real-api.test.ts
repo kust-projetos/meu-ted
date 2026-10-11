@@ -26,6 +26,25 @@
  *   `transactions`, account balance) — never on the Agent response text. The
  *   deterministic response copy is asserted only as secondary evidence.
  *
+ * The isolation slice at the end of this file re-proves cross-actor and
+ * cross-workspace containment of pending V2 operations through the SAME real
+ * surface: a foreign fully-capable delegated identity (same workspace, and a
+ * different workspace) can never list, read, confirm, cancel, execute,
+ * retry, reconcile, expire or otherwise affect another identity's pending
+ * operation, proven by before/after SQL snapshots of the original row, the
+ * transaction ledger and account balances.
+ *
+ * The identity dimensions are isolated INDEPENDENTLY: beyond the conflation
+ * probes (both/all legs changed), the matrix adds attackers that change
+ * EXACTLY ONE of workspace/actor/device and preserve the other two from the
+ * owner — so no denial can ever depend on all three legs differing. After
+ * the owner confirm, the COMPLETE persisted state of BOTH the original
+ * proposed row and the legitimate confirmed sibling is snapshotted
+ * (attestation hash/consumption/issued time, auth mode/reason/risk,
+ * authorized time, attempt count, lease/claim, failure, receipt/mutation id
+ * — plus a whole-row JSONB oracle covering every column) and proven
+ * byte-identical after every foreign attempt.
+ *
  * Reachability notes for this bounded slice (reported, not faked):
  * - undo: NOT reachable here. The conversational undo flow needs the Agent-side
  *   two-step undo-proposal service plus the `/rpc/undo/:requestId/verify-target`
@@ -43,7 +62,7 @@ import type { DelegatedTurnClaims } from '../../src/auth/delegated-token.js';
 import { createDelegatedTokenForTest, verifyDelegatedTurnToken } from '../../src/auth/delegated-token.js';
 import { requireTestDatabase } from '../../src/db/db-guard.js';
 import { createPool } from '../../src/db/pool.js';
-import { createPostgresPendingOperationV2Store } from '../../src/approvals/pending-v2.js';
+import { createPostgresPendingOperationV2Store, type PendingIdentity, type PendingOperationV2Store } from '../../src/approvals/pending-v2.js';
 import { runMigrations } from '../../src/read-models/sql/migrate.js';
 import { createPostgresReadModelStore } from '../../src/read-models/postgres-store.js';
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
@@ -377,6 +396,16 @@ export const cleanupTenant = async (db: Pool, householdId: string): Promise<void
 
 // ─── Authoritative SQL reads (the oracle — never the Agent response) ─────────
 
+/**
+ * The COMPLETE persisted V2 state of a pending operation, as read straight
+ * from PostgreSQL — the authoritative oracle. Every column the V2 surface
+ * writes is captured, so a byte-identical before/after comparison proves the
+ * foreign attempts below changed NOTHING: binding (workspace/actor/device),
+ * proposal (tool/args/hash/idempotency key), execution status, attestation
+ * hash + consumption + issued time, the authorization audit fields
+ * (mode/reason/risk/authorized time) and the execution-recovery surface
+ * (attempt count, claim, lease, failure, receipt/mutation id).
+ */
 type PendingRow = Readonly<{
   id: string;
   workspace_id: string;
@@ -385,15 +414,42 @@ type PendingRow = Readonly<{
   tool: string;
   normalized_args: Record<string, unknown>;
   execution_status: string;
+  proposal_hash: string;
+  idempotency_key: string;
   attestation_hash: string | null;
+  attestation_consumed_at: string | null;
+  attestation_issued_at: string | null;
+  authorization_mode: string | null;
+  authorization_reason: string | null;
+  risk_tier: string | null;
+  authorized_at: string | null;
+  execution_attempt_count: number;
+  execution_claimed_at: string | null;
+  execution_lease_expires_at: string | null;
+  failure_code: string | null;
+  failed_at: string | null;
   mutation_id: string | null;
   execution_result: Record<string, unknown> | null;
+  created_at: string;
+  expires_at: string;
 }>;
 
 const readPendingRow = async (db: Pool, id: string, workspaceId: string): Promise<PendingRow> => {
   const result = await db.query<PendingRow>(
     `SELECT id, workspace_id, actor_id, device_id, tool, normalized_args, execution_status,
-            attestation_hash, mutation_id, execution_result
+            proposal_hash, idempotency_key,
+            attestation_hash,
+            attestation_consumed_at::text AS attestation_consumed_at,
+            attestation_issued_at::text AS attestation_issued_at,
+            authorization_mode, authorization_reason, risk_tier,
+            authorized_at::text AS authorized_at,
+            execution_attempt_count::int AS execution_attempt_count,
+            execution_claimed_at::text AS execution_claimed_at,
+            execution_lease_expires_at::text AS execution_lease_expires_at,
+            failure_code,
+            failed_at::text AS failed_at,
+            mutation_id, execution_result,
+            created_at::text AS created_at, expires_at::text AS expires_at
        FROM pending_operations
       WHERE id = $1 AND workspace_id = $2 AND protocol_version = 2`,
     [id, workspaceId],
@@ -401,6 +457,24 @@ const readPendingRow = async (db: Pool, id: string, workspaceId: string): Promis
   const row = result.rows[0];
   if (row === undefined) throw new Error(`golden.real_api.pending_row_missing:${id}`);
   return row;
+};
+
+/**
+ * Whole-row JSONB oracle: the ENTIRE persisted row, every column, as the
+ * database itself sees it. A deep-equality before/after comparison therefore
+ * catches a change in ANY column — including ones not enumerated in
+ * `PendingRow` — so the "unchanged" proof can never miss a field.
+ */
+const readPendingRowJsonb = async (db: Pool, id: string, workspaceId: string): Promise<Record<string, unknown>> => {
+  const result = await db.query<{ snapshot: Record<string, unknown> }>(
+    `SELECT to_jsonb(p) AS snapshot
+       FROM pending_operations p
+      WHERE p.id = $1 AND p.workspace_id = $2 AND p.protocol_version = 2`,
+    [id, workspaceId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new Error(`golden.real_api.pending_row_missing:${id}`);
+  return row.snapshot;
 };
 
 const countPendingForTenant = async (db: Pool, workspaceId: string): Promise<number> => {
@@ -1035,4 +1109,443 @@ describe('golden real-api seed — transactional, tracked only after COMMIT (no 
     expect(householdId).toBeTruthy();
     expect(trackedTenants.has(householdId!)).toBe(false);
   });
+});
+
+// ─── Cross-actor / cross-workspace isolation of pending V2 operations ────────
+
+/**
+ * Every V2 approval capability a probe identity may carry — INCLUDING
+ * reconcile/retry/authorize, which the golden verticals above never use. A
+ * foreign probe must be rejected by TENANT ISOLATION, never by a narrower
+ * capability set, so the probe token deliberately carries the full surface.
+ */
+const ISOLATION_PROBE_CAPABILITIES: readonly string[] = [
+  ...APPROVAL_CAPABILITIES,
+  'financial.approval.reconcile',
+  'financial.approval.retry',
+  'financial.approval.autoexecute',
+];
+
+type IsolationIdentity = Readonly<{ householdId: string; actorId: string; deviceId: string }>;
+
+/**
+ * Injects a request under a REAL short-lived delegated turn minted for an
+ * ARBITRARY identity — the isolation-attacker seam. Unlike
+ * `createRequestSeam` (pinned to a case fixture), this intentionally signs the
+ * given identity so every probe crosses the REAL token-verification boundary
+ * and is decided purely by tenant isolation. The signing secret is the
+ * test-only `DELEGATION_SECRET`; no production credential is involved.
+ */
+const injectAsIdentity = async (
+  app: FastifyInstance,
+  identity: IsolationIdentity,
+  request: Readonly<{ method: 'GET' | 'POST'; url: string; payload?: unknown; idempotencyKey?: string }>,
+): Promise<Readonly<{ statusCode: number; body: Record<string, unknown> }>> => {
+  const token = await createDelegatedTokenForTest(
+    {
+      actorId: identity.actorId,
+      workspaceId: identity.householdId,
+      role: 'member',
+      capabilities: [...ISOLATION_PROBE_CAPABILITIES],
+      requestId: `golden-isolation-${randomUUID()}`,
+      deviceId: identity.deviceId,
+    },
+    DELEGATION_SECRET,
+  );
+  const headers: Record<string, string> = { accept: 'application/json', authorization: `Bearer ${token}` };
+  if (request.idempotencyKey !== undefined) headers['idempotency-key'] = request.idempotencyKey;
+  let payload: string | undefined;
+  if (request.payload !== undefined && request.method === 'POST') {
+    headers['content-type'] = 'application/json';
+    payload = JSON.stringify(request.payload);
+  }
+  const response = await app.inject({ method: request.method, url: request.url, headers, ...(payload !== undefined ? { payload } : {}) });
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = (response.body === '' ? {} : JSON.parse(response.body)) as Record<string, unknown>;
+  } catch {
+    parsed = {};
+  }
+  return { statusCode: response.statusCode, body: parsed };
+};
+
+const readPendingAttemptCount = async (db: Pool, id: string): Promise<number> => {
+  const result = await db.query<{ execution_attempt_count: number }>(
+    `SELECT execution_attempt_count::int AS execution_attempt_count FROM pending_operations WHERE id = $1`,
+    [id],
+  );
+  return Number(result.rows[0]?.execution_attempt_count ?? -1);
+};
+
+const listPendingIdsForTenant = async (db: Pool, workspaceId: string): Promise<readonly string[]> => {
+  const result = await db.query<{ id: string }>(
+    `SELECT id FROM pending_operations WHERE workspace_id = $1 AND protocol_version = 2 ORDER BY created_at`,
+    [workspaceId],
+  );
+  return result.rows.map((row) => String(row.id));
+};
+
+/** Counts pending rows bound to ANY of the given actor/device identities. */
+const countPendingRowsForIdentity = async (db: Pool, actors: readonly string[], devices: readonly string[]): Promise<number> => {
+  const result = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM pending_operations WHERE actor_id = ANY($1::text[]) OR device_id = ANY($2::text[])`,
+    [actors, devices],
+  );
+  return Number(result.rows[0]?.n ?? -1);
+};
+
+/**
+ * Counts pending rows bound to the probing identity's EXACT full triple
+ * (workspace + actor + device). The single-dimension attackers deliberately
+ * REUSE one or two of the owner's legs, so the OR-shaped probe above would
+ * count the owner's own rows for them; the exact triple is the honest "no
+ * row was ever created for THIS identity" oracle.
+ */
+const countPendingRowsForExactIdentity = async (
+  db: Pool,
+  identity: Readonly<{ householdId: string; actorId: string; deviceId: string }>,
+): Promise<number> => {
+  const result = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM pending_operations WHERE workspace_id = $1 AND actor_id = $2 AND device_id = $3`,
+    [identity.householdId, identity.actorId, identity.deviceId],
+  );
+  return Number(result.rows[0]?.n ?? -1);
+};
+
+describe('golden real-api isolation — cross-actor and cross-workspace containment of pending V2 operations (issue #105)', () => {
+  let pool: Pool | undefined;
+  let writes: ReturnType<typeof createPostgresWriteStore> | undefined;
+  let app: FastifyInstance | undefined;
+  let store: PendingOperationV2Store | undefined;
+
+  beforeAll(async () => {
+    // Same fail-closed gate as the golden verticals above.
+    if (envState.state === 'partial') {
+      throw new Error(
+        `golden.real_api.partial_env: refusing to run — ${envState.missing.join(' and ')} must be provided together with the other variable. ` +
+          'A half-configured environment fails closed; it never degrades to a skip.',
+      );
+    }
+    if (envState.state !== 'full') return;
+    pool = createPool({ connectionString: envState.databaseUrl, max: 8 });
+    await requireTestDatabase(pool, 'golden-agent-real-api-isolation');
+    await runMigrations(pool);
+    writes = createPostgresWriteStore({ pool });
+    app = composeAuthoritativeApp(pool);
+    // A second store instance on the SAME pool drives the direct
+    // store-boundary probes below (the app owns its own instance).
+    store = createPostgresPendingOperationV2Store(pool);
+    await app.ready();
+  }, 120_000);
+
+  afterEach(async () => {
+    if (!pool) return;
+    for (const householdId of [...tenants]) await cleanupTenant(pool, householdId);
+  });
+
+  afterAll(async () => {
+    if (pool && tenants.size > 0) {
+      for (const householdId of [...tenants]) await cleanupTenant(pool, householdId);
+    }
+    await app?.close();
+    await pool?.end();
+  });
+
+  itIfDatabase(
+    'a fully-capable foreign identity — same workspace and different workspace — cannot list, read, confirm, cancel, execute or otherwise affect a pending V2 operation (SQL-proven)',
+    async () => {
+      const db = pool!;
+      // Tenant A owns the operations; tenant C is a fully separate workspace.
+      const tenantA = await seedTenant(db);
+      const tenantC = await seedTenant(db);
+      const accountA = await writes!.createAccount(tenantA.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const accountC = await writes!.createAccount(tenantC.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const categoryA = { id: await readCategoryIdByName(db, tenantA.householdId, 'Alimentação') };
+
+      const owner: IsolationIdentity = { householdId: tenantA.householdId, actorId: randomUUID(), deviceId: randomUUID() };
+      // A DIFFERENT authenticated actor inside the SAME workspace.
+      const sameWorkspaceOtherActor: IsolationIdentity = {
+        householdId: tenantA.householdId,
+        actorId: randomUUID(),
+        deviceId: randomUUID(),
+      };
+      // An owner-scoped identity of a DIFFERENT workspace.
+      const otherWorkspace: IsolationIdentity = { householdId: tenantC.householdId, actorId: randomUUID(), deviceId: randomUUID() };
+      // ── Single-dimension attackers: each changes EXACTLY ONE binding leg of
+      // the owner identity and preserves the other two. The dimensions
+      // (workspace / actor / device) must be isolated INDEPENDENTLY: an
+      // attacker who keeps two legs of the legitimate identity is still
+      // refused, so the denial can never depend on all three differing.
+      // ONLY the actor changes (owner workspace AND owner device preserved).
+      const sameWorkspaceOnlyActor: IsolationIdentity = {
+        householdId: owner.householdId,
+        actorId: randomUUID(),
+        deviceId: owner.deviceId,
+      };
+      // ONLY the device changes (owner workspace AND owner actor preserved).
+      const sameWorkspaceOnlyDevice: IsolationIdentity = {
+        householdId: owner.householdId,
+        actorId: owner.actorId,
+        deviceId: randomUUID(),
+      };
+      // ONLY the workspace changes (owner actor AND owner device preserved).
+      const sameActorOnlyWorkspace: IsolationIdentity = {
+        householdId: tenantC.householdId,
+        actorId: owner.actorId,
+        deviceId: owner.deviceId,
+      };
+
+      const propose = async (identity: IsolationIdentity, description: string, key: string): Promise<string> => {
+        const response = await injectAsIdentity(app!, identity, {
+          method: 'POST',
+          url: '/pending-operations/v2/propose',
+          idempotencyKey: key,
+          payload: {
+            tool: 'transactions.expense.create',
+            normalizedArgs: {
+              description,
+              amountCents: 5000,
+              date: '2026-10-11',
+              accountId: accountA.id,
+              categoryId: categoryA.id,
+            },
+          },
+        });
+        expect(response.statusCode, `propose ${description}`).toBe(201);
+        const id = response.body['id'];
+        expect(typeof id, `propose ${description}`).toBe('string');
+        return id as string;
+      };
+
+      // ── Setup: the owner proposes TWO operations. ─────────────────────────
+      const op1 = await propose(owner, 'Golden isolation target', `golden-iso-op1-${randomUUID()}`);
+      const op2 = await propose(owner, 'Golden isolation attested sibling', `golden-iso-op2-${randomUUID()}`);
+
+      // Positive control: the OWNER listing sees exactly its two operations.
+      const ownerListing = await injectAsIdentity(app!, owner, { method: 'GET', url: '/pending-operations/v2/active' });
+      expect(ownerListing.statusCode).toBe(200);
+      expect(ownerListing.body['total']).toBe(2);
+
+      // ── BEFORE snapshot (authoritative SQL oracle). ───────────────────────
+      const beforeOp1 = await readPendingRow(db, op1, tenantA.householdId);
+      const beforeTransactionsA = await countTransactions(db, tenantA.householdId);
+      const beforeTransactionsC = await countTransactions(db, tenantC.householdId);
+      const beforeBalanceA = await readAccountBalanceCents(db, accountA.id);
+      const beforeBalanceC = await readAccountBalanceCents(db, accountC.id);
+      const beforeIdsA = await listPendingIdsForTenant(db, tenantA.householdId);
+
+      expect(beforeOp1.execution_status).toBe('proposed');
+      expect(beforeOp1.attestation_hash).toBeNull();
+      expect(beforeOp1.mutation_id).toBeNull();
+      expect(beforeOp1.execution_result).toBeNull();
+      expect(await readPendingAttemptCount(db, op1)).toBe(0);
+      expect(beforeTransactionsA).toBe(0);
+      expect(beforeTransactionsC).toBe(0);
+      expect(beforeBalanceA).toBe(50_000);
+      expect(beforeBalanceC).toBe(50_000);
+      expect([...beforeIdsA].sort()).toEqual([op1, op2].sort());
+
+      // Positive control: the OWNER confirms op2, minting a REAL attestation.
+      // Confirmation moves no money; op1 stays proposed for the whole test.
+      const ownerConfirm = await injectAsIdentity(app!, owner, { method: 'POST', url: `/pending-operations/v2/${op2}/confirm` });
+      expect(ownerConfirm.statusCode).toBe(200);
+      const attestation = ownerConfirm.body['attestation'];
+      expect(typeof attestation).toBe('string');
+      expect((attestation as string).length).toBeGreaterThanOrEqual(32);
+      const confirmedOp2 = await readPendingRow(db, op2, tenantA.householdId);
+      expect(confirmedOp2.execution_status).toBe('confirmed');
+      expect(confirmedOp2.attestation_hash).not.toBeNull();
+      expect(confirmedOp2.mutation_id).toBeNull();
+      expect(confirmedOp2.execution_result).toBeNull();
+
+      // ── FULL persisted-state snapshots of BOTH rows, AFTER the owner
+      // confirm: the original proposed row AND the legitimate confirmed
+      // sibling. Every later "unchanged" comparison is taken against these.
+      const confirmedSnapshotOp1 = await readPendingRow(db, op1, tenantA.householdId);
+      const confirmedSnapshotOp2 = await readPendingRow(db, op2, tenantA.householdId);
+      const confirmedSnapshotOp1Jsonb = await readPendingRowJsonb(db, op1, tenantA.householdId);
+      const confirmedSnapshotOp2Jsonb = await readPendingRowJsonb(db, op2, tenantA.householdId);
+      // The proposed original is untouched by the owner confirming its sibling.
+      expect(confirmedSnapshotOp1, 'the owner confirm of op2 left op1 identical').toEqual(beforeOp1);
+      // The confirmed sibling's authorization state is fully PERSISTED:
+      // attestation hash + issued time + auth mode/reason/risk + authorized
+      // time are all set, while consumption/claim/lease/failure/receipt
+      // fields remain empty until the owner executes.
+      expect(confirmedSnapshotOp2.execution_status).toBe('confirmed');
+      expect(confirmedSnapshotOp2.attestation_hash).not.toBeNull();
+      expect(confirmedSnapshotOp2.attestation_issued_at).not.toBeNull();
+      expect(confirmedSnapshotOp2.authorization_mode).toBe('manual');
+      expect(confirmedSnapshotOp2.authorization_reason).toBe('policy_required');
+      expect(confirmedSnapshotOp2.risk_tier).toBe('low');
+      expect(confirmedSnapshotOp2.authorized_at).not.toBeNull();
+      expect(confirmedSnapshotOp2.attestation_consumed_at).toBeNull();
+      expect(confirmedSnapshotOp2.execution_claimed_at).toBeNull();
+      expect(confirmedSnapshotOp2.execution_lease_expires_at).toBeNull();
+      expect(confirmedSnapshotOp2.execution_attempt_count).toBe(0);
+      expect(confirmedSnapshotOp2.failure_code).toBeNull();
+      expect(confirmedSnapshotOp2.failed_at).toBeNull();
+      expect(confirmedSnapshotOp2.mutation_id).toBeNull();
+      expect(confirmedSnapshotOp2.execution_result).toBeNull();
+
+      // ── Foreign probes through the REAL API (full capability set). ────────
+      // The matrix mixes the two conflation probes (both/all legs changed)
+      // with the three single-dimension attackers (exactly one leg changed,
+      // the other two preserved from the owner). Every identity carries the
+      // FULL capability set, so any denial below is tenant isolation, never
+      // a missing capability.
+      const foreignIdentities: ReadonlyArray<{ label: string; identity: IsolationIdentity }> = [
+        { label: 'same-workspace other actor', identity: sameWorkspaceOtherActor },
+        { label: 'other workspace', identity: otherWorkspace },
+        { label: 'same-workspace only-actor attacker', identity: sameWorkspaceOnlyActor },
+        { label: 'same-workspace only-device attacker', identity: sameWorkspaceOnlyDevice },
+        { label: 'only-workspace attacker', identity: sameActorOnlyWorkspace },
+      ];
+
+      for (const foreign of foreignIdentities) {
+        // Listing never exposes the owner's pending operations.
+        const active = await injectAsIdentity(app!, foreign.identity, { method: 'GET', url: '/pending-operations/v2/active' });
+        expect(active.statusCode, `${foreign.label} active`).toBe(200);
+        expect(active.body['total'], `${foreign.label} active total`).toBe(0);
+        expect(active.body['items'], `${foreign.label} active items`).toEqual([]);
+
+        // Read paths: 403 approval.forbidden — never a 404 existence oracle.
+        for (const path of [`/pending-operations/v2/${op1}`, `/pending-operations/v2/${op1}/status`]) {
+          const response = await injectAsIdentity(app!, foreign.identity, { method: 'GET', url: path });
+          expect(response.statusCode, `${foreign.label} GET ${path}`).toBe(403);
+          expect(response.body['code'], `${foreign.label} GET ${path}`).toBe('approval.forbidden');
+        }
+
+        // Mutation paths on the PROPOSED original — including execute with a
+        // guessed attestation. None may move, confirm or cancel anything.
+        // execute is special: a claim miss is indistinguishable from a bad
+        // token, so it answers attestation_replayed (403) rather than
+        // forbidden — never a 404 existence oracle. Every other mutation is
+        // refused as approval.forbidden (403).
+        const forbiddenMutations: ReadonlyArray<{ action: string; code: string; payload?: unknown }> = [
+          { action: 'confirm', code: 'approval.forbidden' },
+          { action: 'cancel', code: 'approval.forbidden' },
+          { action: 'retry', code: 'approval.forbidden' },
+          { action: 'reconcile', code: 'approval.forbidden' },
+          { action: 'expire', code: 'approval.forbidden' },
+          { action: 'execute', code: 'approval.attestation_replayed', payload: { attestation: 'f'.repeat(32) } },
+        ];
+        for (const mutation of forbiddenMutations) {
+          const response = await injectAsIdentity(app!, foreign.identity, {
+            method: 'POST',
+            url: `/pending-operations/v2/${op1}/${mutation.action}`,
+            ...(mutation.payload !== undefined ? { payload: mutation.payload } : {}),
+          });
+          expect(response.statusCode, `${foreign.label} ${mutation.action} op1`).toBe(403);
+          expect(response.body['code'], `${foreign.label} ${mutation.action} op1`).toBe(mutation.code);
+        }
+
+        // The CONFIRMED sibling, including a replay of its REAL attestation.
+        for (const action of ['confirm', 'cancel', 'retry', 'reconcile', 'expire']) {
+          const response = await injectAsIdentity(app!, foreign.identity, { method: 'POST', url: `/pending-operations/v2/${op2}/${action}` });
+          expect(response.statusCode, `${foreign.label} ${action} op2`).toBe(403);
+          expect(response.body['code'], `${foreign.label} ${action} op2`).toBe('approval.forbidden');
+        }
+        const replay = await injectAsIdentity(app!, foreign.identity, {
+          method: 'POST',
+          url: `/pending-operations/v2/${op2}/execute`,
+          payload: { attestation },
+        });
+        expect(replay.statusCode, `${foreign.label} execute op2 with the owner attestation`).toBe(403);
+        expect(replay.body['code'], `${foreign.label} execute op2 with the owner attestation`).toBe('approval.attestation_replayed');
+      }
+
+      // ── Foreign probes at the authoritative store boundary. ───────────────
+      const probeStore = store!;
+      const executorStub = async () => ({ status: 'succeeded', operationId: randomUUID() });
+      for (const foreign of foreignIdentities) {
+        const identity: PendingIdentity = {
+          workspaceId: foreign.identity.householdId,
+          actorId: foreign.identity.actorId,
+          deviceId: foreign.identity.deviceId,
+        };
+        // A different workspace cannot see the row at all (not_found); another
+        // actor in the SAME workspace is bound out (binding_mismatch).
+        const expectedCode = foreign.identity.householdId === tenantA.householdId ? 'approval.binding_mismatch' : 'approval.not_found';
+        await expect(probeStore.get(op1, identity), `${foreign.label} store.get`).rejects.toMatchObject({ code: expectedCode });
+        await expect(probeStore.confirm(op1, identity), `${foreign.label} store.confirm`).rejects.toMatchObject({ code: expectedCode });
+        await expect(
+          probeStore.authorize(op1, identity, { mode: 'auto', reason: 'explicit_low_risk', riskTier: 'low' }),
+          `${foreign.label} store.authorize`,
+        ).rejects.toMatchObject({ code: expectedCode });
+        await expect(probeStore.cancel(op1, identity), `${foreign.label} store.cancel`).rejects.toMatchObject({ code: expectedCode });
+        await expect(probeStore.expire(op1, identity), `${foreign.label} store.expire`).rejects.toMatchObject({ code: expectedCode });
+        await expect(
+          probeStore.reconcileExpiredExecuting(op1, identity, executorStub),
+          `${foreign.label} store.reconcile`,
+        ).rejects.toMatchObject({ code: expectedCode });
+        await expect(
+          probeStore.execute('z'.repeat(32), identity, executorStub),
+          `${foreign.label} store.execute guessed attestation`,
+        ).rejects.toMatchObject({ code: 'approval.attestation_replayed' });
+        expect(await probeStore.listActive(identity), `${foreign.label} store.listActive`).toEqual([]);
+        // The confirmed sibling and its real attestation stay out of reach too.
+        await expect(probeStore.get(op2, identity), `${foreign.label} store.get op2`).rejects.toMatchObject({ code: expectedCode });
+        await expect(
+          probeStore.execute(attestation as string, identity, executorStub, op2),
+          `${foreign.label} store.execute owner attestation`,
+        ).rejects.toMatchObject({ code: 'approval.attestation_replayed' });
+      }
+
+      // ── AFTER snapshot (authoritative SQL oracle). ────────────────────────
+      const afterOp1 = await readPendingRow(db, op1, tenantA.householdId);
+      expect(afterOp1, 'the original operation must be byte-identical').toEqual(beforeOp1);
+      expect(await readPendingAttemptCount(db, op1), 'the original was never claimed').toBe(0);
+      const afterOp2 = await readPendingRow(db, op2, tenantA.householdId);
+      expect(afterOp2.execution_status, 'the confirmed sibling is still confirmed').toBe('confirmed');
+      expect(afterOp2.mutation_id).toBeNull();
+      expect(afterOp2.execution_result).toBeNull();
+      // Both rows are byte-identical to their state right AFTER the owner
+      // confirm — attestation hash/consumption/issued time, auth
+      // mode/reason/risk/authorized time, attempt count, lease/claim,
+      // failure and receipt fields all unchanged.
+      expect(afterOp1, 'the original operation must equal its post-confirm snapshot field-for-field').toEqual(confirmedSnapshotOp1);
+      expect(afterOp2, 'the confirmed sibling must equal its post-confirm snapshot field-for-field').toEqual(confirmedSnapshotOp2);
+      // Whole-row oracle: ANY column change on either row fails here,
+      // including columns not enumerated in the typed snapshot above.
+      expect(await readPendingRowJsonb(db, op1, tenantA.householdId), 'the original row must be byte-identical in the whole-row oracle').toEqual(confirmedSnapshotOp1Jsonb);
+      expect(await readPendingRowJsonb(db, op2, tenantA.householdId), 'the confirmed sibling must be byte-identical in the whole-row oracle').toEqual(confirmedSnapshotOp2Jsonb);
+      expect(await countTransactions(db, tenantA.householdId)).toBe(beforeTransactionsA);
+      expect(await countTransactions(db, tenantC.householdId)).toBe(beforeTransactionsC);
+      expect(await readAccountBalanceCents(db, accountA.id)).toBe(beforeBalanceA);
+      expect(await readAccountBalanceCents(db, accountC.id)).toBe(beforeBalanceC);
+      const afterIdsA = await listPendingIdsForTenant(db, tenantA.householdId);
+      expect([...afterIdsA].sort()).toEqual([op1, op2].sort());
+      expect(await listPendingIdsForTenant(db, tenantC.householdId), 'no foreign workspace row was ever written').toEqual([]);
+      // The OR-shaped probe applies to the two identities whose actor AND
+      // device legs are BOTH fresh — the pre-existing conflation probes. The
+      // single-dimension attackers deliberately reuse the owner's workspace,
+      // actor or device, so their legs are covered by the exact-triple check
+      // right below (the OR shape would otherwise count the owner's own rows).
+      expect(
+        await countPendingRowsForIdentity(
+          db,
+          [sameWorkspaceOtherActor.actorId, otherWorkspace.actorId],
+          [sameWorkspaceOtherActor.deviceId, otherWorkspace.deviceId],
+        ),
+        'no row anywhere is bound to a probing actor/device',
+      ).toBe(0);
+      // No row ANYWHERE matches any probing identity's full triple —
+      // conflation probes and single-dimension attackers alike.
+      for (const foreign of foreignIdentities) {
+        expect(
+          await countPendingRowsForExactIdentity(db, foreign.identity),
+          `no row anywhere is bound to the ${foreign.label} identity triple`,
+        ).toBe(0);
+      }
+    },
+    60_000,
+  );
 });
