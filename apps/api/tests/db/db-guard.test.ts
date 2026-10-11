@@ -123,3 +123,53 @@ describe('G0.2.1 — validateTestDatabase rejects when marker is missing', () =>
     await expect(requireTestDatabase(pool, 'truncate')).rejects.toThrow(/truncate.*_test_marker/);
   });
 });
+
+describe('G0.2.2 — protected production DB names are ALWAYS blocked', () => {
+  beforeEach(() => {
+    // Marker passes so the test reaches the database-name rule (Rule 2).
+    process.env.DB_TEST_MARKER = 'deadbeef-dead-beef-dead-beefdeadbeef';
+    delete process.env.DATABASE_URL_TEST;
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('blocks pi_financeiro_canonical even when DB_BLOCKED_NAMES is customized without it', async () => {
+    process.env.DB_BLOCKED_NAMES = 'some_other_test_db';
+    const pool = fakePool({
+      markerTable: [{ exists: true }],
+      markerValue: [{ marker_value: 'deadbeef-dead-beef-dead-beefdeadbeef' }],
+      currentDb: [{ current_database: 'pi_financeiro_canonical' }],
+    });
+    const result = await validateTestDatabase(pool);
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) expect(result.reason).toContain('pi_financeiro_canonical');
+  });
+
+  it('blocks every protected production name even when DB_BLOCKED_NAMES is empty', async () => {
+    process.env.DB_BLOCKED_NAMES = '';
+    for (const name of ['pi_financeiro', 'pi_financeiro_prod', 'pi_financeiro_canonical']) {
+      const pool = fakePool({
+        markerTable: [{ exists: true }],
+        markerValue: [{ marker_value: 'deadbeef-dead-beef-dead-beefdeadbeef' }],
+        currentDb: [{ current_database: name }],
+      });
+      const result = await validateTestDatabase(pool);
+      expect(result.allowed).toBe(false);
+      if (!result.allowed) expect(result.reason).toContain(name);
+    }
+  });
+
+  it('customized DB_BLOCKED_NAMES stays additive (custom names still block)', async () => {
+    process.env.DB_BLOCKED_NAMES = 'shared_db,scratch';
+    const pool = fakePool({
+      markerTable: [{ exists: true }],
+      markerValue: [{ marker_value: 'deadbeef-dead-beef-dead-beefdeadbeef' }],
+      currentDb: [{ current_database: 'scratch' }],
+    });
+    const result = await validateTestDatabase(pool);
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) expect(result.reason).toContain('scratch');
+  });
+});

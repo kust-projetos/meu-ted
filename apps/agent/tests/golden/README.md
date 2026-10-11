@@ -24,7 +24,7 @@ machine-readable. Coração: `false-success = HARD FAILURE` (INV-03).
 - `v1/reporters/json.ts` — relatório machine-readable. `tokens`/`cost` são
   `"unknown"` de propósito: o stub é determinístico, nenhuma chamada de
   modelo acontece, então não há nada para contar — nunca inventar.
-- `v1/cases/*.golden.json` — o catálogo como DADOS (21 executáveis +
+- `v1/cases/*.golden.json` — o catálogo como DADOS (23 executáveis +
   6 `pending-capability`).
 - `golden.test.ts` — a suíte: schema + controles negativos do detector +
   subset executável + relatório.
@@ -42,14 +42,27 @@ Saída machine-readable: `apps/agent/test-results/golden-report.json`
 (diretório gitignored — evidência, não fonte). Resumo no console:
 
 ```text
-golden v1: total=27 pass=21 fail=0 skipped-pending=6 falseSuccess=0 tokens=unknown cost=unknown
+golden v1: total=29 pass=23 fail=0 skipped-pending=6 falseSuccess=0 tokens=unknown cost=unknown
 ```
 
-Casos `pending-capability` (anexo, PDF, áudio, imagem, web, autoexecute
-low-risk) são **pulados explicitamente** e reportados como
-`skipped-pending` com o motivo (flag OFF, sem chave, sem binding) —
-nunca como `pass`. Executá-los exige a capability provisionada (ver
-`pendingReason.requires` em cada caso).
+O `golden-report.json` da corrida de 10/10/2026 traz, além do resumo acima,
+`providerCalls=2` (stubs determinísticos — nenhuma chamada de modelo real);
+`tokens`/`cost` seguem `"unknown"` por construção (não há nada para contar, e
+número nunca é inventado). `latencyMs` é wall-clock da corrida isolada e varia
+por execução — não é métrica de qualidade.
+
+Casos `pending-capability` são **pulados explicitamente** e reportados como
+`skipped-pending` com o motivo — nunca como `pass`. **Cada caso tem o seu
+motivo específico**, descrito em `pendingReason.reason`/`requires`: o estado
+`pending-capability` de um caso **não** implica que flag, chave ou binding
+estejam universalmente OFF (ex.: GW-018/GW-019 têm flag `1` e secret
+provisionada em produção e seguem pending porque o **aceite completo** está
+pendente; provas sintéticas parciais de STT/Vision foram realizadas em 08/10,
+mas o runner isolado nunca faz egress nem valida o pipeline real. Na corrida de
+10/10/2026 são seis, e **não foram promovidos**: GW-016 (anexo), GW-017 (PDF),
+GW-018 (áudio/STT), GW-019 (imagem/Vision), GW-020 (web) e GW-021
+(autoexecute low-risk). Executá-los exige a capability provisionada e aceita
+(ver `pendingReason.requires` em cada caso).
 
 ## Como adicionar um caso
 
@@ -65,8 +78,12 @@ nunca como `pass`. Executá-los exige a capability provisionada (ver
 3. Sem capability disponível? `status: "pending-capability"` com
    `pendingReason: { capability, reason, requires }` — o runner pula e
    reporta; fingir cobertura com caso falso é proibido.
-4. Rode `pnpm test:golden` e ajuste as contagens pinadas na suíte
-   (27/21/6) se o catálogo cresceu de verdade.
+4. Rode `pnpm test:golden`. A suíte falha se qualquer caso executável falhar
+   ou se houver `false-success`. O **resumo** impresso e o `golden-report.json`
+   são derivados do catálogo pelo reporter, não hard-coded; já as asserções de
+   `golden.test.ts` (linhas 47-51) **pinam a cardinalidade do catálogo**
+   (`29` casos / `23` executáveis / `6` `pending-capability`): ao acrescentar
+   casos genuínos, atualize esses `expect` junto com os dados.
 
 ## Regras do harness
 
@@ -115,3 +132,19 @@ nunca como `pass`. Executá-los exige a capability provisionada (ver
   (`cancel-edge.golden.json`): GW-026 (duas propostas + "cancela" →
   desambiguação, nada cancelado) e GW-027 (cancela sem pendência →
   no-op determinístico, zero efeitos).
+
+## Limites — o que este harness NÃO prova
+
+- **Backend isolado em memória**: sem API, sem Postgres, sem rede, sem
+  credencial e sem dinheiro real. O `MutationApiClient`, o executor e o
+  orquestrador são código de produção, mas só o transporte é dobrado — não há
+  integração com o caminho real de produção.
+- **Provider é stub determinístico**: `providerCalls=2` na corrida de
+  10/10/2026; `tokens` e `cost` são `"unknown"` por construção — nenhuma
+  chamada de modelo aconteceu, então não há nada para contar, e número nunca é
+  inventado. `latencyMs` é wall-clock da corrida isolada e varia por execução.
+- **Corrida verde não é aceite de v1**: a issue #105 segue **OPEN**; workflows
+  e invariantes completos ainda dependem de execução e aceite do operador. Um
+  smoke autenticado em produção (chat/leitura PASS, zero mutação) **não**
+  promove nenhum caso `pending-capability`: PDF, STT, Vision, web e
+  autoexecute seguem sem prova live nesta disciplina.

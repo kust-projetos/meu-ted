@@ -69,8 +69,11 @@ gemini-vision,vision-pdf-turn,audio-stt-turn,audio-duration}` →
 - Flag `TED_AUDIO_STT_ENABLED=1` + coorte `""` (fail-closed) deployados;
   attestation `ATTESTED reason=deploy-smoke-pass`; `/health` `ready`.
 - Gate triplo + `redirect:'manual'` revisados (APPROVED P0=P1=P2=0).
-- Coorte preenchida com test workspace junio via PRs #123/#124 (JWT provou
-  que coorte por actor jamais casaria: token delegado sem `actorId`).
+- Coorte preenchida com o workspace junio `d36cb649-4462-486d-940a-47128ad329f2`
+  via PRs #123/#124 (JWT provou que coorte por actor jamais casaria: token
+  delegado sem `actorId`). **Nota de correção de rótulo:** `junio` é o household
+  **real**, com dados financeiros reais, e **não** o workspace sintético Test
+  Family `550e8400-e29b-41d4-a716-446655440000` usado no E2E.
 
 ## 8. Canary STT sintético ao vivo (coorte workspace)
 

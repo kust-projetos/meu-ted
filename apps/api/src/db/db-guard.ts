@@ -4,7 +4,7 @@
  * Before any destructive operation (migration, truncate, seed),
  * validates that the connected database is NOT production by checking:
  * 1. A server-side marker table exists with expected UUID.
- * 2. current_database() matches expected name.
+ * 2. current_database() is not a protected/blocked name.
  * 3. Known production hosts are blocked as defense-in-depth.
  *
  * RED: database without expected server-side marker must be rejected
@@ -12,6 +12,20 @@
  */
 
 import type { DbPool } from './pool.js';
+
+/**
+ * Production database names that are ALWAYS blocked for destructive test
+ * operations, no matter how `DB_BLOCKED_NAMES` is customized. Customizing the
+ * env list can ADD blocked names; it can never REMOVE these protections —
+ * `pi_financeiro_canonical` is the current production database (canonical
+ * schema server) and must stay unreachable even if an operator narrows the
+ * env list or leaves it empty.
+ */
+const PROTECTED_DB_NAMES: ReadonlySet<string> = new Set([
+  'pi_financeiro',
+  'pi_financeiro_prod',
+  'pi_financeiro_canonical',
+]);
 
 /** Resolve marker from env at call time (testable). */
 const getExpectedMarker = (): string | undefined => process.env.DB_TEST_MARKER?.trim();
@@ -44,7 +58,9 @@ export type GuardResult =
  * Rule 1 (primary): DB must contain a `_test_marker` table with
  * a matching `marker_value` UUID. Set via DB_TEST_MARKER env.
  *
- * Rule 2 (defense-in-depth): database name must not be in the blocked list.
+ * Rule 2 (defense-in-depth): database name must not be a protected
+ * production name nor appear in the blocked list. The protected set is
+ * unconditional; `DB_BLOCKED_NAMES` customization is strictly additive.
  *
  * Rule 3 (defense-in-depth): host must not be in the blocked list.
  */
@@ -97,8 +113,13 @@ export const validateTestDatabase = async (pool: DbPool): Promise<GuardResult> =
         `SELECT current_database()`,
       );
       const dbName = dbCheck.rows[0]?.current_database;
-      if (dbName && blockedDbNames.has(dbName)) {
-        return { allowed: false, reason: `Database name '${dbName}' is in the blocked list. Refusing destructive operation.` };
+      if (dbName) {
+        if (PROTECTED_DB_NAMES.has(dbName)) {
+          return { allowed: false, reason: `Database name '${dbName}' is a protected production database. Refusing destructive operation.` };
+        }
+        if (blockedDbNames.has(dbName)) {
+          return { allowed: false, reason: `Database name '${dbName}' is in the blocked list. Refusing destructive operation.` };
+        }
       }
     } finally {
       client.release();
