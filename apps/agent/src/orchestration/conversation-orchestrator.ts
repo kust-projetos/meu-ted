@@ -2870,6 +2870,10 @@ export class ConversationOrchestrator {
       const declared = input.pendingOperationIds ?? [];
       const identity: MutationIdentity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })() };
       this.emit('approval.requested', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'requested', declaredOperationCount: declared.length });
+      // Bloco A fase 2 (issue #105): the id of the operation this turn tried
+      // to confirm+execute. The catch below reconciles against it — it stays
+      // empty when no single target was ever resolved.
+      let confirmTargetId = '';
       try {
         const target = await coordinator.resolveDecisionTarget(identity, 'decidable', this.draftContext(input));
         if (target.kind === 'none') {
@@ -2888,6 +2892,7 @@ export class ConversationOrchestrator {
             response: freeze({ text }),
           });
         }
+        confirmTargetId = target.operation.id;
         const confirmed = await coordinator.confirm(target.operation.id, identity);
         this.emit('approval.confirmed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'confirmed' });
         this.emit('mutation.executed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'succeeded', latencyMs: Date.now() - startedAt });
@@ -2901,8 +2906,25 @@ export class ConversationOrchestrator {
         });
       } catch {
         this.emit('mutation.blocked', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'blocked' });
+        // Bloco A fase 2 (issue #105): the confirm+execute above may have
+        // persisted BEFORE the error (lost execute response, receipt-less
+        // reply). The authoritative listing decides: when the target left the
+        // active set it is terminal (succeeded — this branch only confirms,
+        // never cancels), so a definitive "failed" claim would be FALSE while
+        // the money moved. Answer inconclusive; the user checks the
+        // lançamentos. A still-active target, an unreconciled target, or an
+        // unreadable listing keeps the existing failure copy.
+        let targetTerminal = false;
+        try {
+          if (confirmTargetId !== '') {
+            const current = await coordinator.listActive(identity);
+            targetTerminal = !current.some((item) => item.id === confirmTargetId);
+          }
+        } catch {
+          targetTerminal = false;
+        }
         return this.completeTurn(input, plan, startedAt, result, {
-          response: freeze({ text: renderMutationResult('failed') }),
+          response: freeze({ text: targetTerminal ? renderInconclusive() : renderMutationResult('failed') }),
         });
       }
     }

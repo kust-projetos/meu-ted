@@ -79,7 +79,7 @@ import {
 import { MutationApiClient, type MutationRequest } from '../../../agent/src/mutations/mutation-api-client.js';
 import { InMemoryMutationDraftStore } from '../../../agent/src/mutations/mutation-draft.js';
 import { createEvidenceEnvelope } from '../../../agent/src/evidence/evidence-envelope.js';
-import { renderMutationResult } from '../../../agent/src/responses/deterministic-responses.js';
+import { renderInconclusive, renderMutationResult } from '../../../agent/src/responses/deterministic-responses.js';
 import type { ApiRequestOptions } from '../../../agent/src/tools/api-client.js';
 
 // ─── Fail-closed environment gate ───────────────────────────────────────────
@@ -614,6 +614,11 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
   const createCaseHarness = (
     householdId: string,
     actor: Readonly<{ actorId: string; deviceId: string }>,
+    // Bloco A fase 2 (redelivery/recovery): an optional per-case transport
+    // override. When omitted the pinned real seam is used unchanged; recovery
+    // cases pass a wrapper that faults EXACTLY ONE execute call (closure over
+    // the case — never a global mock, so nothing leaks between tests).
+    requestOverride?: MutationRequest,
   ): Readonly<{ runTurn: (input: Readonly<{ text: string; intentionId: string }>) => Promise<TurnResult> }> => {
     const db = pool!;
     const readModel = createPostgresReadModelStore({ pool: db });
@@ -636,7 +641,7 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
       // The seam is pinned to this case's fixture identity: the Agent may only
       // ever present the household/actor/device the harness seeded.
       mutationApiClient: new MutationApiClient({
-        request: createRequestSeam(app!, { householdId, actorId: actor.actorId, deviceId: actor.deviceId }),
+        request: requestOverride ?? createRequestSeam(app!, { householdId, actorId: actor.actorId, deviceId: actor.deviceId }),
         events: () => {},
       }),
       draftStore: new InMemoryMutationDraftStore(),
@@ -820,6 +825,368 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
       // ── Authoritative postconditions, read from SQL. ────────────────────
       expect(await countPendingForTenant(db, householdId)).toBe(0);
       expect(await countTransactions(db, householdId)).toBe(0);
+    },
+    60_000,
+  );
+
+  // ─── Bloco A fase 2 — redelivery & recovery (issue #105) ──────────────────
+  //
+  // The three cases below extend the SAME suite, harness, seam, guards and SQL
+  // oracle above: GW-023 confirm redelivery (same intentionId re-sent),
+  // GW-023 lost-execute-response recovery (effect persisted, reply lost), and
+  // GW-023 inconclusive-execute (backend reply without a valid receipt).
+  // Faults are per-case single-shot wrappers OVER the real seam
+  // (pass-through first, so the server really persists) — never a global
+  // mock. `faultsInjected`/`executeCalls` are asserted, so a wrapper that
+  // never fires (or fires twice) fails instead of silently proving nothing.
+  // Each case runs under a UNIQUE synthetic tenant plus an untouched decoy
+  // tenant, and cleans only its own fixtures via afterEach.
+
+  /** Counts ledger rows bound to NO known tenant of the case (leak oracle). */
+  const countOrphanLedgerRows = async (db: Pool, householdIds: readonly string[]): Promise<number> => {
+    const transactions = await db.query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM transactions WHERE NOT (household_id = ANY($1::uuid[]))`,
+      [householdIds],
+    );
+    const pending = await db.query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM pending_operations WHERE NOT (workspace_id = ANY($1::uuid[]))`,
+      [householdIds],
+    );
+    return Number(transactions.rows[0]?.n ?? -1) + Number(pending.rows[0]?.n ?? -1);
+  };
+
+  /** Matches ONLY the authoritative V2 execute call of the composed app. */
+  const isV2ExecuteCall = (method: string, path: string): boolean =>
+    method.toUpperCase() === 'POST' && path.includes('/pending-operations/v2/') && path.endsWith('/execute');
+
+  const countOperationRecords = async (db: Pool, workspaceId: string): Promise<number> => {
+    const result = await db.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM operation_records WHERE workspace_id = $1`, [
+      workspaceId,
+    ]);
+    return Number(result.rows[0]?.n ?? -1);
+  };
+
+  const countAuditLogs = async (db: Pool, workspaceId: string): Promise<number> => {
+    const result = await db.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM audit_logs WHERE workspace_id = $1`, [
+      workspaceId,
+    ]);
+    return Number(result.rows[0]?.n ?? -1);
+  };
+
+  itIfDatabase(
+    'GW-023 redelivery: re-sent confirmation (same intentionId) books nothing twice — one transaction, stable receipt (SQL-verified)',
+    async () => {
+      const db = pool!;
+      const { householdId } = await seedTenant(db);
+      const decoy = await seedTenant(db);
+      const actor = { actorId: randomUUID(), deviceId: randomUUID() };
+      const account = await writes!.createAccount(householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const decoyAccount = await writes!.createAccount(decoy.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const category = { id: await readCategoryIdByName(db, householdId, 'Alimentação') };
+      const harness = createCaseHarness(householdId, actor);
+
+      const proposed = await harness.runTurn({
+        text: 'gastei 50 de carne categoria alimentação',
+        intentionId: `golden-gw023-redelivery-propose-${randomUUID()}`,
+      });
+      expect(proposed.mutation?.status).toBe('proposed');
+      const operationId = proposed.mutation?.operationId ?? '';
+      expect(operationId).not.toBe('');
+
+      const confirmIntentionId = `golden-gw023-redelivery-confirm-${randomUUID()}`;
+      const first = await harness.runTurn({ text: 'sim', intentionId: confirmIntentionId });
+      expect(first.mutation?.status).toBe('succeeded');
+      const receipt1 = first.mutation?.receipt;
+      // Receipt linkage: the relayed receipt names the pending operation…
+      expect(receipt1?.operationId).toBe(operationId);
+
+      const rowsAfterExecute = await readTransactionRows(db, householdId);
+      expect(rowsAfterExecute).toHaveLength(1);
+      const transactionId = rowsAfterExecute[0]!.id;
+      // …and the persisted transaction row — never a synthesized id.
+      expect(receipt1?.entity).toEqual({ type: 'transaction', id: transactionId });
+      const executedRow = await readPendingRow(db, operationId, householdId);
+      expect(executedRow.execution_status).toBe('succeeded');
+      expect(executedRow.execution_attempt_count).toBe(1);
+      expect(executedRow.execution_claimed_at).not.toBeNull();
+      expect(executedRow.execution_lease_expires_at).not.toBeNull();
+      const persistedReceipt = (executedRow.execution_result as { receipt?: Record<string, unknown> } | null)?.receipt;
+      expect(persistedReceipt).toMatchObject({ operationId, entity: { type: 'transaction', id: transactionId } });
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+      const snapshotAfterExecute = await readPendingRowJsonb(db, operationId, householdId);
+
+      // ── Redelivery: the SAME confirmation text with the SAME intentionId.
+      // The operation is terminal, so the authoritative listing resolves to
+      // none — the agent must answer the no-pending copy, never a second
+      // success, and persist nothing.
+      const redelivered = await harness.runTurn({ text: 'sim', intentionId: confirmIntentionId });
+      expect(redelivered.mutation).toBeUndefined();
+      expect(redelivered.response?.text).toContain('nenhuma operação pendente');
+      expect(redelivered.response?.text).not.toBe(renderMutationResult('succeeded'));
+
+      // ── Authoritative postconditions: nothing moved a second time. ───────
+      const rowsAfter = await readTransactionRows(db, householdId);
+      expect(rowsAfter).toHaveLength(1);
+      expect(rowsAfter[0]!.id).toBe(transactionId);
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+      expect(await readPendingAttemptCount(db, operationId)).toBe(1);
+      expect(await readPendingRowJsonb(db, operationId, householdId)).toEqual(snapshotAfterExecute);
+
+      // ── Mandatory invariants (explicitly named). ─────────────────────────
+      const DUPLICATE_FINANCIAL_EFFECT = rowsAfter.length - 1;
+      expect(DUPLICATE_FINANCIAL_EFFECT).toBe(0);
+      const FALSE_SUCCESS =
+        redelivered.mutation !== undefined || redelivered.response?.text === renderMutationResult('succeeded') ? 1 : 0;
+      expect(FALSE_SUCCESS).toBe(0);
+      const settledRow = await readPendingRow(db, operationId, householdId);
+      const UNAUTHORIZED_MUTATION =
+        settledRow.actor_id !== actor.actorId ||
+        settledRow.device_id !== actor.deviceId ||
+        rowsAfter[0]!.household_id !== householdId
+          ? 1
+          : 0;
+      expect(UNAUTHORIZED_MUTATION).toBe(0);
+      const CROSS_WORKSPACE_LEAK =
+        (await countTransactions(db, decoy.householdId)) !== 0 ||
+        (await readAccountBalanceCents(db, decoyAccount.id)) !== 50_000 ||
+        (await countOrphanLedgerRows(db, [householdId, decoy.householdId])) !== 0
+          ? 1
+          : 0;
+      expect(CROSS_WORKSPACE_LEAK).toBe(0);
+    },
+    60_000,
+  );
+
+  itIfDatabase(
+    'GW-023 recovery: execute persisted but the response was lost — inconclusive, then retry converges with no duplicate (SQL-verified)',
+    async () => {
+      const db = pool!;
+      const { householdId } = await seedTenant(db);
+      const decoy = await seedTenant(db);
+      const actor = { actorId: randomUUID(), deviceId: randomUUID() };
+      const account = await writes!.createAccount(householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const decoyAccount = await writes!.createAccount(decoy.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const category = { id: await readCategoryIdByName(db, householdId, 'Alimentação') };
+      const baseSeam = createRequestSeam(app!, { householdId, actorId: actor.actorId, deviceId: actor.deviceId });
+      // Lost-response fault: the execute REALLY persists server-side, then a
+      // transport error is raised instead of the receipt. Fires EXACTLY once.
+      let executeCalls = 0;
+      let faultsInjected = 0;
+      const losingSeam: MutationRequest = async (method, path, opts) => {
+        if (isV2ExecuteCall(method, path)) {
+          executeCalls += 1;
+          if (faultsInjected === 0) {
+            faultsInjected += 1;
+            await baseSeam(method, path, opts);
+            throw Object.assign(new Error('golden.real_api.injected_execute_transport_failure'), {
+              statusCode: 502,
+              code: 'golden.real_api.injected_execute_transport_failure',
+            });
+          }
+        }
+        return baseSeam(method, path, opts);
+      };
+      const harness = createCaseHarness(householdId, actor, losingSeam);
+
+      const proposed = await harness.runTurn({
+        text: 'gastei 50 de carne categoria alimentação',
+        intentionId: `golden-gw023-recovery-propose-${randomUUID()}`,
+      });
+      expect(proposed.mutation?.status).toBe('proposed');
+      const operationId = proposed.mutation?.operationId ?? '';
+      expect(operationId).not.toBe('');
+
+      const confirmIntentionId = `golden-gw023-recovery-confirm-${randomUUID()}`;
+      const answered = await harness.runTurn({ text: 'sim', intentionId: confirmIntentionId });
+      expect(faultsInjected).toBe(1);
+
+      // The effect WAS persisted before the failure (authoritative SQL oracle).
+      const settledRow = await readPendingRow(db, operationId, householdId);
+      expect(settledRow.execution_status).toBe('succeeded');
+      expect(settledRow.execution_attempt_count).toBe(1);
+      const rows = await readTransactionRows(db, householdId);
+      expect(rows).toHaveLength(1);
+      const transactionId = rows[0]!.id;
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+
+      // …but the agent must communicate INCONCLUSIVE — never success (the
+      // receipt never arrived) and never a definitive failure (the money
+      // moved). `mutation` stays undefined: no receipt is relayed.
+      expect(answered.mutation).toBeUndefined();
+      expect(answered.response?.text).toBe(renderInconclusive());
+      expect(answered.response?.text).not.toBe(renderMutationResult('succeeded'));
+      expect(answered.response?.text).not.toBe(renderMutationResult('failed'));
+
+      // ── Recovery: re-sending the confirmation (same intentionId) converges
+      // with the API — the operation is terminal, so no second execution and
+      // no duplicate ledger effect.
+      const recovered = await harness.runTurn({ text: 'sim', intentionId: confirmIntentionId });
+      expect(recovered.mutation).toBeUndefined();
+      expect(recovered.response?.text).toContain('nenhuma operação pendente');
+      expect(faultsInjected).toBe(1);
+      expect(executeCalls).toBe(1);
+      const rowsAfter = await readTransactionRows(db, householdId);
+      expect(rowsAfter).toHaveLength(1);
+      expect(rowsAfter[0]!.id).toBe(transactionId);
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+      expect(await readPendingAttemptCount(db, operationId)).toBe(1);
+      // The persisted receipt still names the operation and the landed row.
+      const persistedReceipt = (settledRow.execution_result as { receipt?: Record<string, unknown> } | null)?.receipt;
+      expect(persistedReceipt).toMatchObject({ operationId, entity: { type: 'transaction', id: transactionId } });
+
+      // ── Mandatory invariants (explicitly named). ─────────────────────────
+      const DUPLICATE_FINANCIAL_EFFECT = rowsAfter.length - 1;
+      expect(DUPLICATE_FINANCIAL_EFFECT).toBe(0);
+      const FALSE_SUCCESS =
+        answered.mutation?.status === 'succeeded' || answered.response?.text === renderMutationResult('succeeded')
+          ? 1
+          : 0;
+      expect(FALSE_SUCCESS).toBe(0);
+      const UNAUTHORIZED_MUTATION =
+        settledRow.actor_id !== actor.actorId ||
+        settledRow.device_id !== actor.deviceId ||
+        rowsAfter[0]!.household_id !== householdId
+          ? 1
+          : 0;
+      expect(UNAUTHORIZED_MUTATION).toBe(0);
+      const CROSS_WORKSPACE_LEAK =
+        (await countTransactions(db, decoy.householdId)) !== 0 ||
+        (await readAccountBalanceCents(db, decoyAccount.id)) !== 50_000 ||
+        (await countOrphanLedgerRows(db, [householdId, decoy.householdId])) !== 0
+          ? 1
+          : 0;
+      expect(CROSS_WORKSPACE_LEAK).toBe(0);
+    },
+    60_000,
+  );
+
+  itIfDatabase(
+    'GW-023 inconclusive execute: backend reply without a valid receipt never becomes success — safe state, bounded recovery (SQL-verified)',
+    async () => {
+      const db = pool!;
+      const { householdId } = await seedTenant(db);
+      const decoy = await seedTenant(db);
+      const actor = { actorId: randomUUID(), deviceId: randomUUID() };
+      const account = await writes!.createAccount(householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const decoyAccount = await writes!.createAccount(decoy.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const category = { id: await readCategoryIdByName(db, householdId, 'Alimentação') };
+      const baseSeam = createRequestSeam(app!, { householdId, actorId: actor.actorId, deviceId: actor.deviceId });
+      // Inconclusive-backend fault: the execute REALLY persists server-side,
+      // but the reply carries NO valid receipt (id + status only). The
+      // executor must fail closed — never a partial success. Fires once.
+      let executeCalls = 0;
+      const strippingSeam: MutationRequest = async (method, path, opts) => {
+        const result = await baseSeam(method, path, opts);
+        if (isV2ExecuteCall(method, path)) {
+          executeCalls += 1;
+          if (executeCalls === 1) {
+            const partial = result as unknown as Record<string, unknown>;
+            return { id: partial['id'], status: partial['status'] } as unknown as typeof result;
+          }
+        }
+        return result;
+      };
+      const harness = createCaseHarness(householdId, actor, strippingSeam);
+
+      const proposed = await harness.runTurn({
+        text: 'gastei 50 de carne categoria alimentação',
+        intentionId: `golden-gw023-inconclusive-propose-${randomUUID()}`,
+      });
+      expect(proposed.mutation?.status).toBe('proposed');
+      const operationId = proposed.mutation?.operationId ?? '';
+      expect(operationId).not.toBe('');
+
+      const answered = await harness.runTurn({ text: 'sim', intentionId: `golden-gw023-inconclusive-confirm-${randomUUID()}` });
+      expect(executeCalls).toBe(1);
+
+      // Fail-closed: a receipt-less reply is NEVER declared success…
+      expect(answered.mutation).toBeUndefined();
+      expect(answered.response?.text).not.toBe(renderMutationResult('succeeded'));
+      // …and — the effect having landed — NEVER a definitive failure either.
+      expect(answered.response?.text).toBe(renderInconclusive());
+      expect(answered.response?.text).not.toBe(renderMutationResult('failed'));
+
+      // …the operation holds a safe terminal state: succeeded exactly once,
+      // no failure persist, claim/lease intact, receipt naming the landed row.
+      const settledRow = await readPendingRow(db, operationId, householdId);
+      expect(settledRow.execution_status).toBe('succeeded');
+      expect(settledRow.failure_code).toBeNull();
+      expect(settledRow.failed_at).toBeNull();
+      expect(settledRow.mutation_id).not.toBeNull();
+      expect(settledRow.execution_attempt_count).toBe(1);
+      expect(settledRow.execution_claimed_at).not.toBeNull();
+      expect(settledRow.execution_lease_expires_at).not.toBeNull();
+      const rows = await readTransactionRows(db, householdId);
+      expect(rows).toHaveLength(1);
+      const transactionId = rows[0]!.id;
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+      const persistedReceipt = (settledRow.execution_result as { receipt?: Record<string, unknown> } | null)?.receipt;
+      expect(persistedReceipt).toMatchObject({ operationId, entity: { type: 'transaction', id: transactionId } });
+      const recordsBefore = await countOperationRecords(db, householdId);
+      const auditsBefore = await countAuditLogs(db, householdId);
+
+      // ── Bounded recovery: a later confirmation converges without a second
+      // claim, a second row, or ledger growth — no retry loop is possible.
+      const MAX_LEDGER_TRANSACTIONS_PER_OPERATION = 1;
+      const recovered = await harness.runTurn({ text: 'sim', intentionId: `golden-gw023-inconclusive-retry-${randomUUID()}` });
+      expect(recovered.mutation).toBeUndefined();
+      expect(recovered.response?.text).toContain('nenhuma operação pendente');
+      expect(executeCalls).toBe(1);
+      const rowsAfter = await readTransactionRows(db, householdId);
+      expect(rowsAfter.length).toBeLessThanOrEqual(MAX_LEDGER_TRANSACTIONS_PER_OPERATION);
+      expect(rowsAfter).toHaveLength(1);
+      expect(rowsAfter[0]!.id).toBe(transactionId);
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+      expect(await readPendingAttemptCount(db, operationId)).toBe(1);
+      expect(await countOperationRecords(db, householdId)).toBe(recordsBefore);
+      expect(await countAuditLogs(db, householdId)).toBe(auditsBefore);
+
+      // ── Mandatory invariants (explicitly named). ─────────────────────────
+      const DUPLICATE_FINANCIAL_EFFECT = rowsAfter.length - MAX_LEDGER_TRANSACTIONS_PER_OPERATION;
+      expect(DUPLICATE_FINANCIAL_EFFECT).toBe(0);
+      const FALSE_SUCCESS =
+        answered.mutation?.status === 'succeeded' || answered.response?.text === renderMutationResult('succeeded')
+          ? 1
+          : 0;
+      expect(FALSE_SUCCESS).toBe(0);
+      const UNAUTHORIZED_MUTATION =
+        settledRow.actor_id !== actor.actorId ||
+        settledRow.device_id !== actor.deviceId ||
+        rowsAfter[0]!.household_id !== householdId
+          ? 1
+          : 0;
+      expect(UNAUTHORIZED_MUTATION).toBe(0);
+      const CROSS_WORKSPACE_LEAK =
+        (await countTransactions(db, decoy.householdId)) !== 0 ||
+        (await readAccountBalanceCents(db, decoyAccount.id)) !== 50_000 ||
+        (await countOrphanLedgerRows(db, [householdId, decoy.householdId])) !== 0
+          ? 1
+          : 0;
+      expect(CROSS_WORKSPACE_LEAK).toBe(0);
     },
     60_000,
   );
