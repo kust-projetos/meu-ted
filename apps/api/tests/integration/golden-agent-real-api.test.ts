@@ -1470,7 +1470,8 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
       expect(settledRow.execution_attempt_count).toBe(1);
       const rows = await readTransactionRows(db, householdId);
       expect(rows).toHaveLength(1);
-      const transactionId = rows[0]!.id;
+      // The landed row carries a real id (named handle would be write-only).
+      expect(rows[0]!.id).toBeTruthy();
       expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
 
       // …but the turn must communicate INCONCLUSIVE — never a definitive
