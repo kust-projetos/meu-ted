@@ -890,7 +890,6 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
         kind: 'bank',
         initialBalanceCents: 50_000,
       });
-      const category = { id: await readCategoryIdByName(db, householdId, 'Alimentação') };
       const harness = createCaseHarness(householdId, actor);
 
       const proposed = await harness.runTurn({
@@ -982,7 +981,6 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
         kind: 'bank',
         initialBalanceCents: 50_000,
       });
-      const category = { id: await readCategoryIdByName(db, householdId, 'Alimentação') };
       const baseSeam = createRequestSeam(app!, { householdId, actorId: actor.actorId, deviceId: actor.deviceId });
       // Lost-response fault: the execute REALLY persists server-side, then a
       // transport error is raised instead of the receipt. Fires EXACTLY once.
@@ -1093,7 +1091,6 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
         kind: 'bank',
         initialBalanceCents: 50_000,
       });
-      const category = { id: await readCategoryIdByName(db, householdId, 'Alimentação') };
       const baseSeam = createRequestSeam(app!, { householdId, actorId: actor.actorId, deviceId: actor.deviceId });
       // Inconclusive-backend fault: the execute REALLY persists server-side,
       // but the reply carries NO valid receipt (id + status only). The
