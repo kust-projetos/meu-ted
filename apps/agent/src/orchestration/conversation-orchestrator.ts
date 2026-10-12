@@ -3256,6 +3256,18 @@ export class ConversationOrchestrator {
     ) {
       return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
     }
+    // GW-036 (Bloco C): an account-name answer ("conta corrente") routes
+    // `read`, but with a recoverable draft awaiting the account it is a
+    // missing-field answer, not a new read. A balance query still never
+    // completes a draft (`seeksAccountBalance` keeps the read flow).
+    if (
+      this.dependencies.draftStore && client &&
+      plan.mode === 'read' &&
+      !seeksAccountBalance(input.text ?? '') &&
+      this.hasDraftForTurn(input)
+    ) {
+      return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
+    }
     // T1.5 (SPEC §8): confirmation resolves from the AUTHORITATIVE listing
     // (GET /v2/active, authenticated identity) — never from
     // client-declared pendingOperationIds, which are parsed for logging
