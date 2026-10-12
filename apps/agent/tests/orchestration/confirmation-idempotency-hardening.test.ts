@@ -537,6 +537,32 @@ describe('PR137-HARDEN: idempotência de confirmação sobre SQLite real', () =>
     expect(backend.active.map((op) => op.id)).toEqual(['op-B']);
   });
 
+  it('GW-023: redelivery com operação terminal e listagem vazia converge para "nenhuma operação pendente" (sem executar, sem alegar)', async () => {
+    const { sql } = createSql();
+    const store = new SqlMutationDraftStore(sql);
+    const nowRef = { now: NOW };
+    const backend = fakeBackend({
+      active: [{ id: 'op-A', status: 'proposed' }],
+      confirmBehavior: 'throw-after-persist',
+      store,
+    });
+    const orchestrator = orchestratorFor(backend.coordinator, store, nowRef);
+
+    const answered = await confirmTurn(orchestrator, 'intent-A');
+    expect(backend.executes).toEqual([{ operationId: 'op-A' }]);
+    expect(answered.mutation).toBeUndefined();
+    expect(answered.response?.text).toBe(renderInconclusive());
+    // A saiu do active set (terminal, como a succeeded da API real).
+    expect(backend.active).toHaveLength(0);
+
+    const redelivery = await confirmTurn(orchestrator, 'intent-A');
+    expect(backend.executes).toHaveLength(1);
+    expect(redelivery.mutation).toBeUndefined();
+    expect(redelivery.response?.text).toContain('nenhuma operação pendente');
+    expect(redelivery.response?.text).not.toBe(renderMutationResult('succeeded'));
+    expect(redelivery.response?.text).not.toBe(renderMutationResult('failed'));
+  });
+
   it('reconciliação indisponível após resposta perdida: inconclusivo, sem sucesso falso', async () => {
     const { sql } = createSql();
     const store = new SqlMutationDraftStore(sql);

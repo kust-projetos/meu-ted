@@ -1033,6 +1033,25 @@ export class ConversationOrchestrator {
     const { prior, coordinator, identity, input, plan, startedAt, base } = args;
     const store = this.dependencies.draftStore;
     const nowMs = this.draftNowMs();
+    // GW-023 convergence: a redelivery of an inconclusive-settled BOUND
+    // intention reconciles against the authoritative listing instead of
+    // blindly replaying inconclusive. Bound op terminal AND listing empty ⇒
+    // nothing is pending (truthful, zero mutation, no success/failure claim).
+    // Any active op or an unreadable listing stays inconclusive. The unbound
+    // sentinel below never consults the listing (P1-2/P1-4).
+    if (prior.status === 'inconclusive' && prior.operationId !== CONFIRMATION_UNBOUND_OPERATION_ID) {
+      try {
+        const current = await coordinator.listActive(identity);
+        if (current.length === 0) {
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: 'Não há nenhuma operação pendente para confirmar.' }),
+          });
+        }
+      } catch {
+        // Unreadable listing: fall through to inconclusive below.
+      }
+      return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_binding_inconclusive');
+    }
     if (prior.status === 'inconclusive') {
       return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_binding_inconclusive');
     }
