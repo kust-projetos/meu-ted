@@ -4,8 +4,10 @@ import { ConversationOrchestrator, type TurnInput, type TurnPlan } from '../../s
 import { createChannelGrounding, type ChannelReadTools } from '../../src/orchestration/channel-evidence.js';
 import { routeIntent } from '../../src/orchestration/intent-router.js';
 import {
+  asksForTotal,
   extractAccountsEvidence,
   renderAccountsAnswer,
+  splitPresentationClause,
 } from '../../src/orchestration/account-grounding.js';
 
 const inputFor = (text: string, intentionId: string): TurnInput =>
@@ -1116,5 +1118,339 @@ describe('FIX-TED-GROUNDING-BROAD-SCOPE-EDGECASES RED', () => {
     expect(text).toContain('100,00');
     expect(text).toContain('200,00');
     expect(text.toLowerCase()).toMatch(/tipo não confirmado|tipo.*não.*confirm|não.*confirm|não entrou|omit|refin/);
+  });
+});
+
+/**
+ * FIX-TED-GROUNDING-PRESENTATION-CLAUSE.
+ *
+ * P1-P5 pin the guarantees the earlier wordlist iteration established; they now
+ * run through the clause stage and stay valid UNCHANGED, which is the point:
+ * presentation is removed as an ATOMIC trailing clause, never as loose tokens,
+ * so a presentation-looking word INSIDE the scope ("conta Nubank Valor?") is
+ * still scope and keeps its veto.
+ *
+ * C1-C8 are the architect's contract for the clause stage itself.
+ * C9-C12 are the round-3 reviewer findings: a NOMINAL complement is scope
+ * (never presentation), and a SCOPE/aggregation demand is never consumed by
+ * the presentation layer — it stays visible to the scope predicates.
+ */
+describe('FIX-TED-GROUNDING-PRESENTATION-CLAUSE RED', () => {
+  const evidenceOf = (accounts: readonly { name: string; kind: string; balanceCents: number }[]) =>
+    extractAccountsEvidence({
+      version: '1',
+      items: accounts.map((account, index) => ({
+        ref: `account:presentation-${index}`,
+        source: 'api.accounts',
+        retrievedAt: new Date().toISOString(),
+        status: 'ok' as const,
+        data: { accountName: account.name, balanceCents: account.balanceCents, kind: account.kind },
+      })),
+    })!;
+
+  /** An account whose NAME is a presentation word — the trap of the old wordlist. */
+  const bankValor = { name: 'Valor', kind: 'bank', balanceCents: 42000 };
+  const absentAccounts = [
+    { name: 'Itaú', kind: 'bank', balanceCents: 10000 },
+    { name: 'Nubank', kind: 'bank', balanceCents: 20000 },
+  ];
+
+  it('P1: presentation instruction words are not nominal qualifiers — full spec prompt answers with figures', async () => {
+    const result = await runBalanceTurn(
+      'Qual o saldo total das minhas contas hoje? Responda citando o valor em reais.',
+      { items: [bankIta, bankNubank] },
+      'intent-presentation-1',
+    );
+    const text = result.response?.text ?? '';
+    expect(text).toMatch(/R\$\s*\d/);
+    expect(text).toContain('100,00');
+    expect(text).toContain('200,00');
+    expect(text).not.toMatch(/não encontrei essa conta/i);
+  });
+
+  it('P2: renderer-level — presentation suffix keeps the homogeneous total with figures', () => {
+    const rendered = renderAccountsAnswer(
+      'Qual o saldo total das minhas contas hoje? Responda citando o valor em reais.',
+      evidenceOf([
+        { name: 'Itaú', kind: 'bank', balanceCents: 10000 },
+        { name: 'Nubank', kind: 'bank', balanceCents: 20000 },
+      ]),
+    );
+    expect(rendered).not.toBeNull();
+    const text = rendered!;
+    expect(text).toMatch(/R\$\s*\d/);
+    expect(text).toContain('300,00');
+    expect(text).not.toMatch(/não encontrei essa conta/i);
+  });
+
+  it('P3: vetos preserved — a truly unknown name with a presentation suffix still clarifies without figures', () => {
+    const rendered = renderAccountsAnswer(
+      'Qual o saldo da conta XP? Responda citando o valor em reais.',
+      evidenceOf([
+        { name: 'Itaú', kind: 'bank', balanceCents: 10000 },
+        { name: 'Nubank', kind: 'bank', balanceCents: 20000 },
+      ]),
+    );
+    expect(rendered).not.toBeNull();
+    const text = rendered!;
+    expect(text).toMatch(/não encontrei essa conta/i);
+    expect(text).not.toMatch(/100,00/);
+    expect(text).not.toMatch(/200,00/);
+  });
+
+  it('P4a: a presentation word next to a nominal funds match keeps the unmatched-qualifier veto — no figures', () => {
+    const rendered = renderAccountsAnswer(
+      'Qual o saldo da conta Nubank Valor?',
+      evidenceOf([{ name: 'Nubank', kind: 'bank', balanceCents: 20000 }]),
+    );
+    expect(rendered).not.toBeNull();
+    const text = rendered!;
+    expect(text).toMatch(/não encontrei essa conta/i);
+    expect(text).not.toMatch(/200,00/);
+  });
+
+  it('P4b: a presentation word next to a nominal card match keeps the veto — no debt figures', () => {
+    const rendered = renderAccountsAnswer(
+      'Qual o saldo do cartão Nubank Valor?',
+      evidenceOf([{ name: 'Nubank', kind: 'credit_card', balanceCents: 56000 }]),
+    );
+    expect(rendered).not.toBeNull();
+    const text = rendered!;
+    expect(text).toMatch(/não encontrei esse cartão/i);
+    expect(text).not.toMatch(/560,00/);
+  });
+
+  it('P4c: a bare presentation word in a card question is specific — never a generic debt listing', () => {
+    const rendered = renderAccountsAnswer(
+      'Qual o saldo do cartão Valor?',
+      evidenceOf([{ name: 'Itaú', kind: 'credit_card', balanceCents: 31000 }]),
+    );
+    expect(rendered).not.toBeNull();
+    const text = rendered!;
+    expect(text).toMatch(/não encontrei esse cartão/i);
+    expect(text).not.toMatch(/310,00/);
+  });
+
+  it('P5: an account literally named "Valor" keeps its nominal semantics when explicitly selected', () => {
+    const rendered = renderAccountsAnswer(
+      'Qual o saldo da conta Valor?',
+      evidenceOf([
+        { name: 'Nubank', kind: 'bank', balanceCents: 20000 },
+        { name: 'Valor', kind: 'bank', balanceCents: 42000 },
+      ]),
+    );
+    expect(rendered).not.toBeNull();
+    const text = rendered!;
+    expect(text).toContain('Valor');
+    expect(text).toContain('420,00');
+    expect(text).not.toContain('Nubank');
+    expect(text).not.toMatch(/não encontrei essa conta/i);
+  });
+
+  // ---- Architect contract: presentation is a LAYER, removed before matching ----
+
+  it('C1: the spec prompt returns the exact total — INCLUDING when an account named "Valor" exists', async () => {
+    const result = await runBalanceTurn(
+      'Qual o saldo total das minhas contas hoje? Responda citando o valor em reais.',
+      { items: [bankIta, bankNubank, bankValor] },
+      'intent-clause-1',
+    );
+    const text = result.response?.text ?? '';
+    // The clause stage runs BEFORE nominal matching, so the "valor" of the
+    // suffix can never single-select the account literally named "Valor",
+    // and that account stays inside the exact total (100+200+420 = 720).
+    expect(text).not.toMatch(/não encontrei/i);
+    expect(text).toContain('100,00');
+    expect(text).toContain('200,00');
+    expect(text).toContain('420,00');
+    expect(text).toContain('720,00');
+  });
+
+  it('C2: an absent "Nubank Valor" clarifies with no figures, with and without a valid suffix', () => {
+    for (const text of [
+      'Qual o saldo da conta Nubank Valor?',
+      'Qual o saldo da conta Nubank Valor? Responda citando o valor em reais.',
+    ]) {
+      const rendered = renderAccountsAnswer(text, evidenceOf([{ name: 'Nubank', kind: 'bank', balanceCents: 20000 }]));
+      expect(rendered).not.toBeNull();
+      expect(rendered!).toMatch(/não encontrei essa conta/i);
+      expect(rendered!).not.toMatch(/R\$\s*\d/);
+      expect(rendered!).not.toContain('200,00');
+    }
+  });
+
+  it('C3: an account literally named "Valor" answers with only its own balance', () => {
+    for (const text of ['Qual o saldo da conta Valor?', 'Qual o saldo do banco Valor?']) {
+      const rendered = renderAccountsAnswer(
+        text,
+        evidenceOf([
+          { name: 'Nubank', kind: 'bank', balanceCents: 20000 },
+          bankValor,
+        ]),
+      );
+      expect(rendered).not.toBeNull();
+      expect(rendered!).toContain('Valor');
+      expect(rendered!).toContain('420,00');
+      expect(rendered!).not.toContain('Nubank');
+      expect(rendered!).not.toMatch(/não encontrei/i);
+    }
+  });
+
+  it('C4: an absent "XP" or "banco Valor" yields ZERO figures from the other accounts', () => {
+    for (const text of [
+      'Qual o saldo do banco XP? Responda citando o valor em reais.',
+      'Qual o saldo da conta XP? Responda citando o valor em reais.',
+      'Qual o saldo do banco Valor? Responda citando o valor em reais.',
+    ]) {
+      const rendered = renderAccountsAnswer(text, evidenceOf(absentAccounts));
+      expect(rendered).not.toBeNull();
+      // ANY financial figure is forbidden — not just the known balances.
+      expect(rendered!).not.toMatch(/R\$\s*\d/);
+      expect(rendered!).not.toMatch(/\d+,\d{2}/);
+    }
+  });
+
+  it('C5: a named account plus a valid suffix still selects only that account', async () => {
+    const result = await runBalanceTurn(
+      'Qual o saldo da conta Nubank? Responda citando o valor em reais.',
+      { items: [bankIta, bankNubank] },
+      'intent-clause-5',
+    );
+    const text = result.response?.text ?? '';
+    expect(text).not.toMatch(/não encontrei/i);
+    expect(text).toContain('200,00');
+    expect(text).not.toContain('100,00');
+  });
+
+  it('C6: a scope-changing clause is never presentation — no broad fallback listing', () => {
+    // "sobre o banco Valor" AND the bare "sobre o Valor" both change the
+    // scope (a nominal complement), so the clause is NOT stripped and the
+    // leftover scope words keep the missing-name veto fail-closed.
+    for (const text of [
+      'Qual o saldo? Responda sobre o banco Valor.',
+      'Qual o saldo? Responda sobre o Valor.',
+    ]) {
+      const rendered = renderAccountsAnswer(text, evidenceOf([...absentAccounts, bankValor]));
+      expect(rendered).not.toBeNull();
+      expect(rendered!).not.toMatch(/R\$\s*\d/);
+      expect(rendered!).not.toMatch(/\d+,\d{2}/);
+    }
+  });
+
+  it('C7: quotes, multiple questions and an incomplete clause are never presentation', () => {
+    for (const text of [
+      'Qual o saldo? Responda "citando o valor em reais".',
+      'Qual o saldo? Responda citando o valor em reais. E o saldo do XP?',
+      'Qual o saldo? Responda citando',
+    ]) {
+      const rendered = renderAccountsAnswer(text, evidenceOf(absentAccounts));
+      expect(rendered).not.toBeNull();
+      expect(rendered!).not.toMatch(/R\$\s*\d/);
+      expect(rendered!).not.toMatch(/\d+,\d{2}/);
+    }
+  });
+
+  it('C8: only a COMPLETE, ANCHORED clause is recognized; every other shape keeps the utterance', () => {
+    const accepted = splitPresentationClause('Qual o saldo? Responda citando o valor em reais.');
+    expect(accepted).toEqual({
+      scopeText: 'qual o saldo',
+      presentation: 'responda citando o valor em reais',
+    });
+
+    // [utterance, token the tail must still carry when nothing is recognized]
+    const rejected: readonly (readonly [string, string])[] = [
+      ['Qual o saldo? Responda sobre o banco Valor.', 'banco valor'],
+      ['Qual o saldo? Responda sobre o Valor.', 'sobre o valor'],
+      ['Qual o saldo? Responda sobre valores.', 'sobre valores'],
+      ['Qual o saldo? Responda citando o Valor.', 'citando o valor'],
+      ['Qual o saldo? Responda "citando o valor em reais".', '"citando'],
+      ['Qual o saldo? Responda citando o valor em reais. E o saldo do XP?', 'xp'],
+      ['Qual o saldo? Responda citando', 'citando'],
+      ['Qual o saldo?', 'saldo'],
+    ];
+    for (const [text, retained] of rejected) {
+      const split = splitPresentationClause(text);
+      expect(split.presentation).toBeNull();
+      expect(split.scopeText).toContain(retained);
+    }
+  });
+
+  // ---- Round-3 reviewer findings ----
+
+  it('C9: a nominal complement is not presentation — with "Valor" present it is never widened into a listing', () => {
+    const rendered = renderAccountsAnswer(
+      'Qual o saldo? Responda sobre o Valor.',
+      evidenceOf([...absentAccounts, bankValor]),
+    );
+    expect(rendered).not.toBeNull();
+    const text = rendered!;
+    // "sobre o Valor" names an account, so the clause stays and the turn
+    // resolves THAT name. FORBIDDEN: publishing the other accounts' balances
+    // as if the user had asked for a generic listing.
+    expect(text).toMatch(/não encontrei essa conta/i);
+    expect(text).not.toMatch(/R\$\s*\d/);
+    expect(text).not.toMatch(/\d+,\d{2}/);
+  });
+
+  it('C10: a nominal complement naming an absent account yields ZERO figures from the other accounts', () => {
+    for (const text of [
+      'Qual o saldo? Responda sobre o Valor.',
+      'Qual o saldo? Responda citando o Valor.',
+      'Qual o saldo do banco Valor? Responda sobre o Valor.',
+    ]) {
+      const rendered = renderAccountsAnswer(text, evidenceOf(absentAccounts));
+      expect(rendered).not.toBeNull();
+      expect(rendered!).toMatch(/não encontrei essa conta/i);
+      expect(rendered!).not.toMatch(/R\$\s*\d/);
+      expect(rendered!).not.toMatch(/\d+,\d{2}/);
+    }
+  });
+
+  it('C11: an aggregation demand is never consumed by the presentation clause — total predicates stay invariant', () => {
+    for (const text of [
+      'Qual o saldo? Informe o total.',
+      'Qual o saldo? Responda com o total em reais.',
+      'Qual o saldo? Mostre o total.',
+      'Qual o saldo das contas? Responda o total geral.',
+    ]) {
+      // The demand is a SCOPE predicate (`asksForTotal`), never presentation:
+      // it must survive the split or the clause must not be recognized at all.
+      expect(asksForTotal(text)).toBe(true);
+      expect(asksForTotal(splitPresentationClause(text).scopeText)).toBe(true);
+      const rendered = renderAccountsAnswer(text, evidenceOf(absentAccounts));
+      expect(rendered).not.toBeNull();
+      expect(rendered!).toMatch(/Total disponível em contas: R\$\s*300,00/);
+    }
+  });
+
+  it('C12: no scope/aggregation demand word is ever consumed by the presentation layer', () => {
+    const demands = [
+      'total',
+      'totais',
+      'soma',
+      'somando',
+      'somatorio',
+      'consolidado',
+      'geral',
+      'tudo',
+      'todas',
+      'conta',
+      'contas',
+      'banco',
+      'bancos',
+      'cartao',
+      'cartoes',
+      'fatura',
+      'faturas',
+      'corrente',
+      'poupanca',
+      'dinheiro',
+    ] as const;
+    for (const demand of demands) {
+      // Whatever the grammar decides, the word the user typed to ask for a
+      // scope must still be visible to the scope predicates afterwards.
+      const { scopeText } = splitPresentationClause(`Qual o saldo? Responda o ${demand} em reais.`);
+      expect(scopeText).toContain(demand);
+    }
   });
 });
