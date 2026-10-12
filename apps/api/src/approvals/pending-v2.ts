@@ -231,6 +231,20 @@ export type ReconcileEnqueuedSink = (event: ReconcileEnqueuedTelemetryEvent) => 
 /** Reason recorded when reconcile starts from an expired executing lease. */
 export const RECONCILE_REASON_LEASE_EXPIRED = 'executing-lease-expired';
 
+/**
+ * Review round 4 P1-B (direction iii) — authoritative intentionId binding.
+ * `firstSeenAt` is the API-stamped instant THIS intention was first seen;
+ * `fresh` is true only when THIS call created it; `operationId` is the
+ * operation a previous confirm already bound to this intention (null when
+ * only sighted). The table survives agent-storage loss and restarts, so it
+ * is the durable frontier independent of the agent's own markers.
+ */
+export type ConfirmationIntentionBinding = {
+  firstSeenAt: string;
+  fresh: boolean;
+  operationId: string | null;
+};
+
 /** Best-effort emission (T2.2 pattern): validates, sinks-or-logs, never throws. */
 const emitReconcileEnqueued = (
   sink: ReconcileEnqueuedSink | undefined,
@@ -301,7 +315,16 @@ export type PendingOperationV2Store = {
    * client-declared ids. Read-only: no state transitions, no attestation.
    */
   listActive(identity: PendingIdentity): Promise<readonly PendingOperationV2Record[]>;
-  confirm(id: string, identity: PendingIdentity, authorization?: PendingAuthorization): Promise<PendingOperationV2Record>;
+  confirm(id: string, identity: PendingIdentity, authorization?: PendingAuthorization, options?: { intentionId?: string }): Promise<PendingOperationV2Record>;
+  /**
+   * Review round 4 P1-B: binds the confirmation intention API-side BEFORE
+   * any listing is resolved. First durable writer wins; a repeat for the
+   * same identity+intentionId returns the stored instant with `fresh:
+   * false` (post-outage redelivery signal) and any operation a previous
+   * confirm already bound. Never overwrites — divergence is refused at
+   * confirm time with `approval.intention_conflict`, never applied.
+   */
+  bindConfirmationIntention(identity: PendingIdentity, intentionId: string): Promise<ConfirmationIntentionBinding>;
   authorize(id: string, identity: PendingIdentity, authorization: PendingAuthorization): Promise<PendingOperationV2Record>;
   /**
    * Security P2 (v2-attestation-route-and-ttl): `expectedId` binds the URL
@@ -312,7 +335,7 @@ export type PendingOperationV2Store = {
    * by the identity like every other path. Omitted (legacy direct-store
    * callers) keeps the previous token-only claim.
    */
-  execute(token: string, identity: PendingIdentity, executor: PendingExecutor, expectedId?: string): Promise<PendingOperationV2Record>;
+  execute(token: string, identity: PendingIdentity, executor: PendingExecutor, expectedId?: string, options?: { intentionId?: string }): Promise<PendingOperationV2Record>;
   retry(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
   cancel(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
   expire(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
@@ -358,6 +381,49 @@ const isoOrUndefined = (value: unknown): string | undefined => {
 };
 const textOrUndefined = (value: unknown): string | undefined =>
   value === null || value === undefined ? undefined : String(value);
+
+/**
+ * Review round 4 P1-B: binds intentionId→operationId inside the caller's
+ * transaction (confirm path). Immutable CAS: first durable writer wins.
+ * - fresh insert ⇒ proceed;
+ * - stored operationId === this operation ⇒ identical, idempotent proceed;
+ * - stored NULL (sighted but never confirmed) ⇒ adopt via CAS on NULL
+ *   (exactly one concurrent adopter wins; losers re-read);
+ * - anything else ⇒ `approval.intention_conflict` (409), never overwrite.
+ */
+const bindIntentionToOperation = async (
+  client: PoolClient,
+  identity: PendingIdentity,
+  intentionId: string,
+  operationId: string,
+  fail: (code: string, message: string, statusCode?: number) => never,
+): Promise<void> => {
+  const legs = [identity.workspaceId, identity.actorId, identity.deviceId, intentionId];
+  const inserted = await client.query<PendingV2Row>(
+    `INSERT INTO pending_operation_confirmation_intentions (workspace_id, actor_id, device_id, intention_id, operation_id, first_seen_at, bound_at) VALUES ($1,$2,$3,$4,$5,NOW(),NOW()) ON CONFLICT (workspace_id, actor_id, device_id, intention_id) DO NOTHING RETURNING operation_id`,
+    [...legs, operationId],
+  );
+  if (inserted.rows[0]) return;
+  const current = await client.query<PendingV2Row>(
+    `SELECT operation_id FROM pending_operation_confirmation_intentions WHERE workspace_id=$1 AND actor_id=$2 AND device_id=$3 AND intention_id=$4 FOR UPDATE`,
+    legs,
+  );
+  const bound = current.rows[0]?.operation_id ? String(current.rows[0]?.operation_id) : null;
+  if (bound === operationId) return;
+  if (bound === null) {
+    const adopted = await client.query<PendingV2Row>(
+      `UPDATE pending_operation_confirmation_intentions SET operation_id=$5, bound_at=NOW() WHERE workspace_id=$1 AND actor_id=$2 AND device_id=$3 AND intention_id=$4 AND operation_id IS NULL RETURNING operation_id`,
+      [...legs, operationId],
+    );
+    if (adopted.rows[0]) return;
+    const reread = await client.query<PendingV2Row>(
+      `SELECT operation_id FROM pending_operation_confirmation_intentions WHERE workspace_id=$1 AND actor_id=$2 AND device_id=$3 AND intention_id=$4`,
+      legs,
+    );
+    if (reread.rows[0]?.operation_id && String(reread.rows[0]?.operation_id) === operationId) return;
+  }
+  return fail('approval.intention_conflict', 'Esta confirmação já está vinculada a outra operação.', 409);
+};
 const mapV2 = (row: PendingV2Row, token?: string): PendingOperationV2Record => {
   const attestationIssuedAt = isoOrUndefined(row.attestation_issued_at);
   const executionClaimedAt = isoOrUndefined(row.execution_claimed_at);
@@ -443,7 +509,33 @@ export const createPostgresPendingOperationV2Store = (
       );
       return result.rows.map((row) => mapV2(row));
     },
-    async confirm(id, identity, authorization: PendingAuthorization = { mode: 'manual', reason: 'policy_required', riskTier: null }) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); const status = String(row.execution_status); if (Date.parse(String(row.expires_at)) <= Date.now()) { await client.query("UPDATE pending_operations SET execution_status='expired' WHERE id=$1", [id]); events.push({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return fail('approval.expired', 'A proposta expirou.'); } if (status === 'confirmed') {
+    async bindConfirmationIntention(identity, intentionId) {
+      const legs = [identity.workspaceId, identity.actorId, identity.deviceId, intentionId];
+      const inserted = await pool.query<PendingV2Row>(
+        `INSERT INTO pending_operation_confirmation_intentions (workspace_id, actor_id, device_id, intention_id, first_seen_at) VALUES ($1,$2,$3,$4,NOW()) ON CONFLICT (workspace_id, actor_id, device_id, intention_id) DO NOTHING RETURNING first_seen_at, operation_id`,
+        legs,
+      );
+      if (inserted.rows[0]) {
+        const firstSeen = inserted.rows[0].first_seen_at;
+        return {
+          firstSeenAt: firstSeen instanceof Date ? firstSeen.toISOString() : new Date(String(firstSeen)).toISOString(),
+          fresh: true,
+          operationId: inserted.rows[0].operation_id ? String(inserted.rows[0].operation_id) : null,
+        };
+      }
+      const existing = await pool.query<PendingV2Row>(
+        `SELECT first_seen_at, operation_id FROM pending_operation_confirmation_intentions WHERE workspace_id=$1 AND actor_id=$2 AND device_id=$3 AND intention_id=$4`,
+        legs,
+      );
+      if (!existing.rows[0]) return fail('approval.store_unavailable', 'Vínculo de intenção ilegível.', 503);
+      const firstSeen = existing.rows[0].first_seen_at;
+      return {
+        firstSeenAt: firstSeen instanceof Date ? firstSeen.toISOString() : new Date(String(firstSeen)).toISOString(),
+        fresh: false,
+        operationId: existing.rows[0].operation_id ? String(existing.rows[0].operation_id) : null,
+      };
+    },
+    async confirm(id, identity, authorization: PendingAuthorization = { mode: 'manual', reason: 'policy_required', riskTier: null }, options?: { intentionId?: string }) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); const status = String(row.execution_status); if (Date.parse(String(row.expires_at)) <= Date.now()) { await client.query("UPDATE pending_operations SET execution_status='expired' WHERE id=$1", [id]); events.push({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return fail('approval.expired', 'A proposta expirou.'); } if (options?.intentionId !== undefined) { await bindIntentionToOperation(client, identity, options.intentionId, id, fail); } if (status === 'confirmed') {
       // SPEC §9 (H-03) recoverable confirm: lost confirm responses re-emit.
       // Unconsumed attestation rotates atomically in this same transaction:
       // new hash replaces the old (old token invalid), only the new token
@@ -455,7 +547,7 @@ export const createPostgresPendingOperationV2Store = (
       return mapV2(reemitted.rows[0]!, reissued);
      } if (status !== 'proposed') return fail('approval.not_pending', 'A operação não está pendente.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_issued_at=NOW(), authorization_mode=$3, authorization_reason=$4, risk_tier=$5, authorized_at=NOW() WHERE id=$1 RETURNING *", [id, hashAttestation(token), authorization.mode, authorization.reason, authorization.riskTier]); events.push({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!, token); }); },
     async authorize(id, identity, authorization) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); const status = String(row.execution_status); if (Date.parse(String(row.expires_at)) <= Date.now()) { await client.query("UPDATE pending_operations SET execution_status='expired' WHERE id=$1", [id]); events.push({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return fail('approval.expired', 'A proposta expirou.'); } if (status !== 'proposed') return fail('approval.not_pending', 'A operação não está pendente.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_issued_at=NOW(), authorization_mode=$3, authorization_reason=$4, risk_tier=$5, authorized_at=NOW() WHERE id=$1 AND execution_status='proposed' RETURNING *", [id, hashAttestation(token), authorization.mode, authorization.reason, authorization.riskTier]); if (!updated.rows[0]) return fail('approval.not_pending', 'A operação não está pendente.'); events.push({ operationId: id, event: 'authorize', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0], token); }); },
-    async execute(token, identity, executor, expectedId?) {
+    async execute(token, identity, executor, expectedId?, opts?: { intentionId?: string }) {
       // TX1 — claim. Consumes the attestation, marks `executing`, writes the
       // lease columns, and COMMITS before the executor runs: a failure after
       // this point can never roll the claim back (H-04). P2: when expectedId
@@ -481,6 +573,21 @@ export const createPostgresPendingOperationV2Store = (
             return fail('approval.execution_in_progress', 'Execução já em andamento.', 409);
           }
           return fail('approval.attestation_replayed', 'Attestation inválida ou já consumida.', 403);
+        }
+        // Review round 4 P1-B: when the caller carries an intentionId, the
+        // claimed operation must be the one bound to it — a divergent
+        // binding (redelivery confirming B after X→A) is refused with zero
+        // effect. Absent/NULL binding proceeds (flows that never bound,
+        // e.g. authorize-path autoexecute, are unaffected).
+        if (opts?.intentionId !== undefined) {
+          const bound = await client.query<PendingV2Row>(
+            `SELECT operation_id FROM pending_operation_confirmation_intentions WHERE workspace_id=$1 AND actor_id=$2 AND device_id=$3 AND intention_id=$4`,
+            [identity.workspaceId, identity.actorId, identity.deviceId, opts.intentionId],
+          );
+          const boundId = bound.rows[0]?.operation_id ? String(bound.rows[0]?.operation_id) : null;
+          if (boundId !== null && boundId !== String(row.id)) {
+            return fail('approval.intention_conflict', 'Esta confirmação já está vinculada a outra operação.', 409);
+          }
         }
         events.push({ operationId: String(row.id), event: 'execute', actorId: identity.actorId, at: nowIso() });
         return row;
@@ -682,6 +789,12 @@ export const createInMemoryPendingOperationV2Store = (
 ): PendingOperationV2Store => {
   const records = new Map<string, PendingOperationV2Record>();
   const tokens = new Map<string, { id: string; consumed: boolean }>();
+  // Review round 4 P1-B: authoritative intentionId→operationId bindings
+  // (in-memory mirror of `pending_operation_confirmation_intentions`).
+  const intentions = new Map<string, { firstSeenAt: string; operationId: string | null }>();
+  // Explicit separators: identity legs must never fuse into an ambiguous key.
+  const intentionKey = (identity: PendingIdentity, intentionId: string): string =>
+    [identity.workspaceId, identity.actorId, identity.deviceId, intentionId].join('|');
   const events: PendingAuditEvent[] = [];
   const fail = (code: string, message: string, statusCode = 409): never => { throw new PendingOperationV2Error(code, message, statusCode); };
   const resolve = (id: string, identity: PendingIdentity): PendingOperationV2Record => {
@@ -764,8 +877,31 @@ export const createInMemoryPendingOperationV2Store = (
       // confirm/retry responses carry the newly issued token.
       return expose(resolve(id, identity));
     },
-    async confirm(id, identity, authorization: PendingAuthorization = { mode: 'manual', reason: 'policy_required', riskTier: null }) {
+    async bindConfirmationIntention(identity, intentionId) {
+      const key = intentionKey(identity, intentionId);
+      const existing = intentions.get(key);
+      if (existing) return { firstSeenAt: existing.firstSeenAt, fresh: false, operationId: existing.operationId };
+      const record = { firstSeenAt: nowIso(), operationId: null as string | null };
+      intentions.set(key, record);
+      return { firstSeenAt: record.firstSeenAt, fresh: true, operationId: null };
+    },
+    async confirm(id, identity, authorization: PendingAuthorization = { mode: 'manual', reason: 'policy_required', riskTier: null }, options?: { intentionId?: string }) {
       const record = resolve(id, identity);
+      if (options?.intentionId !== undefined) {
+        // Review round 4 P1-B (in-memory mirror of the Postgres CAS):
+        // first writer wins; identical re-binds proceed; a binding for
+        // another operation is refused with `approval.intention_conflict`,
+        // never overwritten. An unbound sighting (NULL) is adopted.
+        const key = intentionKey(identity, options.intentionId);
+        const existing = intentions.get(key);
+        if (!existing) {
+          intentions.set(key, { firstSeenAt: nowIso(), operationId: id });
+        } else if (existing.operationId === null) {
+          existing.operationId = id;
+        } else if (existing.operationId !== id) {
+          fail('approval.intention_conflict', 'Esta confirmação já está vinculada a outra operação.');
+        }
+      }
       if (record.status === 'expired') fail('approval.expired', 'A proposta expirou.');
       if (record.status === 'confirmed') {
         // SPEC §9 (H-03) recoverable confirm: mirror of the Postgres
@@ -807,7 +943,7 @@ export const createInMemoryPendingOperationV2Store = (
       events.push({ operationId: id, event: 'authorize', actorId: record.actorId, at: nowIso() });
       return issued(record);
     },
-    async execute(token, identity, executor, expectedId?) {
+    async execute(token, identity, executor, expectedId?, opts?: { intentionId?: string }) {
       const found = tokens.get(token);
       if (!found) throw new PendingOperationV2Error('approval.attestation_replayed', 'Attestation inválida ou já consumida.', 403);
       // P2 binding: the URL id must name the attestation's own operation.
@@ -817,6 +953,14 @@ export const createInMemoryPendingOperationV2Store = (
       // existence oracle for the named URL id.
       if (expectedId !== undefined && found.id !== expectedId) {
         throw new PendingOperationV2Error('approval.attestation_replayed', 'Attestation inválida ou já consumida.', 403);
+      }
+      // Review round 4 P1-B: a divergent intention binding refuses with zero
+      // effect (no consumption, executor never runs). Absent/NULL proceeds.
+      if (opts?.intentionId !== undefined) {
+        const bound = intentions.get(intentionKey(identity, opts.intentionId))?.operationId ?? null;
+        if (bound !== null && bound !== found.id) {
+          throw new PendingOperationV2Error('approval.intention_conflict', 'Esta confirmação já está vinculada a outra operação.', 409);
+        }
       }
       if (found.consumed) {
         // Consumed attestation on an in-flight execution (valid OR expired

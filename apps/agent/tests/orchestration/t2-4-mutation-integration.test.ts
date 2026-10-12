@@ -5,6 +5,7 @@ import {
   type AuthenticatedIdentity,
 } from '../../src/orchestration/conversation-orchestrator.js';
 import { MutationApiClient } from '../../src/mutations/mutation-api-client.js';
+import { InMemoryMutationDraftStore } from '../../src/mutations/mutation-draft.js';
 
 const identity: AuthenticatedIdentity = {
   actorId: 'actor-authenticated',
@@ -35,6 +36,12 @@ describe('T2.4 mutation integration', () => {
     };
     const request = vi.fn()
       .mockResolvedValueOnce({ id: 'pending-1' })
+      // Review round 4 P1-B: the authoritative intention bind precedes the
+      // listing on every fresh confirmation (durable API frontier). Lazy
+      // timestamp: the API stamps firstSeenAt at CALL time — an eager value
+      // would predate the proposal's presentation and falsely fail the
+      // presentation check (`presentedAt <= anchor`).
+      .mockImplementationOnce(async () => ({ firstSeenAt: new Date().toISOString(), fresh: true, operationId: null }))
       .mockResolvedValueOnce(activeListing)
       .mockResolvedValueOnce({ id: 'pending-1', attestation: 'a'.repeat(32) })
       .mockResolvedValueOnce({ id: 'pending-1', status: 'succeeded', execution: { status: 'succeeded', operationId: 'mut-pending-1', receipt: { mutationId: 'mut-pending-1', mutationKind: 'transactions.expense.create', status: 'succeeded', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'], operationId: 'pending-1', entity: { type: 'transaction', id: 'mut-pending-1' } } } });
@@ -47,7 +54,7 @@ describe('T2.4 mutation integration', () => {
       listAccounts: async () => [{ id: '00000000-0000-4000-8000-0000000000a1', name: 'Nubank' }],
       listCategories: async () => [{ id: '00000000-0000-4000-8000-000000000001', name: 'Mercado' }],
     };
-    const orchestrator = new ConversationOrchestrator({ mutationApiClient: api, plan: planner, entityReader });
+    const orchestrator = new ConversationOrchestrator({ mutationApiClient: api, plan: planner, entityReader, draftStore: new InMemoryMutationDraftStore() });
 
     const proposed = await orchestrator.runTurn(normalizeRestTurn({ text: 'gastei R$ 12,34 no mercado na categoria 00000000-0000-4000-8000-000000000001', intentionId: 'intent-1' }, identity));
     expect(proposed.mutation?.operationId).toBe('pending-1');
@@ -58,14 +65,28 @@ describe('T2.4 mutation integration', () => {
     expect(request).toHaveBeenNthCalledWith(1, 'POST', '/pending-operations/v2/propose', expect.objectContaining({
       body: expect.not.objectContaining({ actorId: expect.anything(), workspaceId: expect.anything(), deviceId: expect.anything() }),
     }));
-    expect(request).toHaveBeenNthCalledWith(2, 'GET', '/pending-operations/v2/active', expect.anything());
-    expect(request).toHaveBeenNthCalledWith(3, 'POST', '/pending-operations/v2/pending-1/confirm', expect.anything());
-    expect(request).toHaveBeenNthCalledWith(4, 'POST', '/pending-operations/v2/pending-1/execute', expect.objectContaining({ body: { attestation: 'a'.repeat(32) } }));
+    expect(request).toHaveBeenNthCalledWith(2, 'POST', '/pending-operations/v2/confirmation-intentions/bind', expect.anything());
+    expect(request).toHaveBeenNthCalledWith(3, 'GET', '/pending-operations/v2/active', expect.anything());
+    expect(request).toHaveBeenNthCalledWith(4, 'POST', '/pending-operations/v2/pending-1/confirm', expect.anything());
+    expect(request).toHaveBeenNthCalledWith(5, 'POST', '/pending-operations/v2/pending-1/execute', expect.objectContaining({ body: expect.objectContaining({ attestation: 'a'.repeat(32) }) }));
     expect(planner).toHaveBeenCalledTimes(2);
   });
 
   it('does not use success wording when API execution is incomplete', async () => {
+    const stillActiveListing = {
+      items: [{
+        id: 'pending-2', status: 'proposed', tool: 'transactions.expense.create',
+        createdAt: '2026-09-14T00:00:00.000Z', expiresAt: '2026-09-14T01:00:00.000Z',
+      }],
+      total: 1,
+    };
     const request = vi.fn()
+      // Review round 4 P1-B: the authoritative intention bind precedes the
+      // listing on every fresh confirmation (durable API frontier). Lazy
+      // timestamp: the API stamps firstSeenAt at CALL time — an eager value
+      // would predate the proposal's presentation and falsely fail the
+      // presentation check (`presentedAt <= anchor`).
+      .mockImplementationOnce(async () => ({ firstSeenAt: new Date().toISOString(), fresh: true, operationId: null }))
       .mockResolvedValueOnce({
         items: [{
           id: 'pending-2', status: 'proposed', tool: 'transactions.expense.create',
@@ -74,9 +95,23 @@ describe('T2.4 mutation integration', () => {
         total: 1,
       })
       .mockResolvedValueOnce({ id: 'pending-2', attestation: 'b'.repeat(32) })
-      .mockResolvedValueOnce({ id: 'pending-2', status: 'failed' });
+      .mockResolvedValueOnce({ id: 'pending-2', status: 'failed' })
+      // PR137-SEC-FIX Fase 1 (B): the catch reconciles against the listing,
+      // so the double provides it — the target is still active, keeping the
+      // definitive failure copy (an UNREADABLE listing would be inconclusive).
+      .mockResolvedValueOnce(stillActiveListing);
     const api = new MutationApiClient({ request });
-    const orchestrator = new ConversationOrchestrator({ mutationApiClient: api, plan: () => plan('confirmation') });
+    // PR137-HARDEN: financial confirmation is fail-closed without a binding
+    // store, so the flow under test injects one (behavior otherwise unchanged).
+    // Review round 4 P1-A3: pending-2 was shown (proposal card) long before
+    // this turn, so the presentation binding is seeded at its proposal time.
+    const draftStore = new InMemoryMutationDraftStore();
+    draftStore.noteConfirmationPresentation?.({
+      ctx: { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null },
+      operationIds: ['pending-2'],
+      nowMs: Date.parse('2026-09-14T00:00:00.000Z'),
+    });
+    const orchestrator = new ConversationOrchestrator({ mutationApiClient: api, plan: () => plan('confirmation'), draftStore });
 
     const result = await orchestrator.runTurn(normalizeRestTurn({ text: 'confirmo', intentionId: 'intent-2', pendingOperationIds: ['pending-2'] }, identity));
     expect(result.response?.text).not.toMatch(/registrad|sucesso|concluíd/i);

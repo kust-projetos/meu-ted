@@ -45,6 +45,7 @@ import { SKILL_INVENTORY } from '../src/orchestration/skill-inventory.js';
 import { parseFinancialMutation } from '../src/mutations/financial-parser.js';
 import { resolveConfirmation } from '../src/mutations/confirmation-resolver.js';
 import { MutationApiClient } from '../src/mutations/mutation-api-client.js';
+import { InMemoryMutationDraftStore } from '../src/mutations/mutation-draft.js';
 import { MutationExecutor } from '../src/mutations/mutation-executor.js';
 import { MUTATION_EFFECTS_REGISTRY } from '@pi-finance/llm-contracts';
 import { resolveEntity, EntityResolutionError } from '../src/tools/entity-resolution.js';
@@ -164,11 +165,15 @@ const attestationFor = (id: string): string => `att-${id}-${'x'.repeat(56)}`.sli
 
 const createFakePendingApi = (options: FakeApiOptions = {}): FakeApi => {
   const mode = options.mode ?? 'ok';
-  const store = new Map<string, { bindings: { workspaceId: string; actorId: string; deviceId: string }; expiresAt: string; status: string; tool: string; normalizedArgs: unknown; idempotencyKey: string }>();
+  const store = new Map<string, { bindings: { workspaceId: string; actorId: string; deviceId: string }; createdAt: string; expiresAt: string; status: string; tool: string; normalizedArgs: unknown; idempotencyKey: string }>();
   const byIdempotency = new Map<string, string>();
   for (const seed of options.seed ?? []) {
     store.set(seed.id, {
       bindings: { workspaceId: seed.workspaceId, actorId: seed.actorId, deviceId: seed.deviceId },
+      // Round 3 P1-A: proposal-time stamp (like the real pending-v2 API),
+      // never listing-time — the confirmation temporal fence compares this
+      // against the intention's first-sighting instant.
+      createdAt: freshTs(),
       expiresAt: seed.expiresAt ?? new Date(Date.now() + 30 * 60_000).toISOString(),
       status: seed.status ?? 'pending',
       tool: seed.tool ?? 'transactions.income.create',
@@ -179,6 +184,10 @@ const createFakePendingApi = (options: FakeApiOptions = {}): FakeApi => {
   let counter = 0;
   const calls = { propose: 0, confirm: 0, execute: 0 };
   let lastProposeBody: Record<string, unknown> | null = null;
+  // Review round 4 P1-B: authoritative intention frontier (first bind wins;
+  // confirm enforces identical/divergent like the real API).
+  const intentions = new Map<string, { firstSeenAt: string }>();
+  const intentionBindings = new Map<string, string>();
 
   const headersOf = (opts?: Record<string, unknown>): { workspaceId: string; actorId: string; deviceId: string } => {
     const headers = (opts?.headers ?? {}) as Record<string, unknown>;
@@ -190,6 +199,19 @@ const createFakePendingApi = (options: FakeApiOptions = {}): FakeApi => {
   };
 
   const request = async (method: string, path: string, opts: Record<string, unknown> = {}): Promise<unknown> => {
+    // Review round 4 P1-B: the pre-listing authoritative intention bind.
+    if (method === 'POST' && path === '/pending-operations/v2/confirmation-intentions/bind') {
+      const body = (opts.body ?? {}) as { intentionId?: unknown };
+      const intentionId = typeof body.intentionId === 'string' ? body.intentionId : '';
+      if (!intentionId) throw new Error('validation.error');
+      const headers = headersOf(opts);
+      const key = `${headers.workspaceId}|${headers.actorId}|${headers.deviceId}|${intentionId}`;
+      const existing = intentions.get(key);
+      if (existing) return { firstSeenAt: existing.firstSeenAt, fresh: false, operationId: intentionBindings.get(key) ?? null };
+      const at = new Date().toISOString();
+      intentions.set(key, { firstSeenAt: at });
+      return { firstSeenAt: at, fresh: true, operationId: intentionBindings.get(key) ?? null };
+    }
     // T1.5 (SPEC §8.3): authoritative listing. The fake mirrors the real
     // API vocabulary loosely ('pending' → proposed, 'approved' → confirmed)
     // and enforces the same identity scope + terminal-state exclusion.
@@ -207,7 +229,7 @@ const createFakePendingApi = (options: FakeApiOptions = {}): FakeApi => {
             id,
             status: operation.status === 'approved' ? 'confirmed' : operation.status === 'failed' ? 'failed' : 'proposed',
             tool: operation.tool,
-            createdAt: freshTs(),
+            createdAt: operation.createdAt,
             expiresAt: operation.expiresAt,
             ...(typeof args.amountCents === 'number' ? { amountCents: args.amountCents } : {}),
             ...(typeof args.description === 'string' ? { description: args.description } : {}),
@@ -227,6 +249,7 @@ const createFakePendingApi = (options: FakeApiOptions = {}): FakeApi => {
       const headers = headersOf(opts);
       store.set(id, {
         bindings: headers,
+        createdAt: freshTs(),
         expiresAt: String(body.expiresAt ?? new Date(Date.now() + 30 * 60_000).toISOString()),
         status: 'pending',
         tool: String(body.tool ?? 'transactions.income.create'),
@@ -248,6 +271,14 @@ const createFakePendingApi = (options: FakeApiOptions = {}): FakeApi => {
       if (headers.workspaceId !== operation.bindings.workspaceId) throw new Error('approval.binding_mismatch');
       if (headers.actorId !== operation.bindings.actorId) throw new Error('approval.binding_mismatch');
       if (headers.deviceId !== operation.bindings.deviceId) throw new Error('approval.binding_mismatch');
+      // Review round 4 P1-B: identical re-binds proceed, divergent refuse.
+      const confirmBody = (opts.body ?? {}) as { intentionId?: unknown };
+      if (typeof confirmBody.intentionId === 'string' && confirmBody.intentionId !== '') {
+        const key = `${headers.workspaceId}|${headers.actorId}|${headers.deviceId}|${confirmBody.intentionId}`;
+        const bound = intentionBindings.get(key);
+        if (bound !== undefined && bound !== id) throw Object.assign(new Error('approval.intention_conflict'), { statusCode: 409, code: 'approval.intention_conflict' });
+        if (bound === undefined) intentionBindings.set(key, id);
+      }
       if (mode === 'hash-mismatch') throw new Error('approval.hash_mismatch');
       if (mode === 'confirm-missing-attestation') return { id };
       return { id, attestation: attestationFor(id) };
@@ -477,7 +508,23 @@ const runOrchConfirm = async (scenario: BehavioralScenario): Promise<string> => 
   const identity = (exec.identity ?? DEFAULT_IDENTITY) as AuthenticatedIdentity;
   const api = createFakePendingApi({ seed: (exec.seed ?? []) as SeedOperation[], mode: (exec.apiMode ?? 'ok') as FakeApiOptions['mode'] });
   const client = new MutationApiClient({ request: api.request as never, events: silent });
-  const orchestrator = new ConversationOrchestrator({ plan: () => mutationPlan('confirmation'), mutationApiClient: client, events: silent });
+  const draftStore = new InMemoryMutationDraftStore();
+  // Review round 4 P1-A3: seeded ops were proposed (card shown) before the
+  // turn — seed their presentations so legitimate confirms pass; scenarios
+  // that must stay fail-closed fail for their own reasons (expiry, hash,
+  // attestation, ambiguity), never for a missing card.
+  for (const seed of (exec.seed ?? []) as SeedOperation[]) {
+    try {
+      draftStore.noteConfirmationPresentation?.({
+        ctx: { workspaceId: seed.workspaceId, actorId: seed.actorId, deviceId: seed.deviceId ?? null },
+        operationIds: [seed.id],
+        nowMs: Date.now(),
+      });
+    } catch {
+      // Best-effort seeding only.
+    }
+  }
+  const orchestrator = new ConversationOrchestrator({ plan: () => mutationPlan('confirmation'), mutationApiClient: client, events: silent, draftStore });
   const result = await orchestrator.runTurn(
     normalizeRestTurn({ text: String(exec.text ?? 'sim'), intentionId: `${id}-confirm`, pendingOperationIds: (exec.pendingIds ?? []) as string[] }, identity),
   );
@@ -505,11 +552,14 @@ const runOrchIdempotency = async (scenario: BehavioralScenario): Promise<string>
     listCategories: async () => entities.categories ?? [],
   };
   const proposePlan = () => mutationPlan('mutation-proposal');
-  const proposeTurn = new ConversationOrchestrator({ plan: proposePlan, mutationApiClient: client, entityReader, events: silent });
+  // Review round 4 P1-A3: ONE store for propose+confirm (like the production
+  // DO) so the proposal card's presentation is visible to the confirm turn.
+  const sharedStore = new InMemoryMutationDraftStore();
+  const proposeTurn = new ConversationOrchestrator({ plan: proposePlan, mutationApiClient: client, entityReader, events: silent, draftStore: sharedStore });
   const first = await proposeTurn.runTurn(normalizeRestTurn({ text: String(exec.utterance ?? ''), intentionId: `${id}-idem` }, identity));
   const second = await proposeTurn.runTurn(normalizeRestTurn({ text: String(exec.utterance ?? ''), intentionId: `${id}-idem` }, identity));
   if (expect.sameOperation === true) eq(first.mutation?.operationId, second.mutation?.operationId, 'stable idempotency key', id);
-  const confirmTurn = new ConversationOrchestrator({ plan: () => mutationPlan('confirmation'), mutationApiClient: client, events: silent });
+  const confirmTurn = new ConversationOrchestrator({ plan: () => mutationPlan('confirmation'), mutationApiClient: client, events: silent, draftStore: sharedStore });
   const confirmed = await confirmTurn.runTurn(
     normalizeRestTurn({ text: 'sim', intentionId: `${id}-idem-confirm`, pendingOperationIds: first.mutation?.operationId ? [first.mutation.operationId] : [] }, identity),
   );

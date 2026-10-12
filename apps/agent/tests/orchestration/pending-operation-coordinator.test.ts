@@ -45,9 +45,26 @@ const makeFakeApprovalApi = (initial: FakeOp[] = [], fakeOpts?: { executeReceipt
   const ops = new Map<string, FakeOp>(initial.map((op) => [op.id, { ...op }]));
   const proposeKeys: Array<string | undefined> = [];
   const events: string[] = [];
+  // Review round 4 P1-B: authoritative intention frontier (first bind wins;
+  // confirm enforces identical/divergent). No `events` entries: existing
+  // event-sequence assertions stay byte-identical.
+  const intentions = new Map<string, { firstSeenAt: string }>();
+  const intentionBindings = new Map<string, string>();
   let seq = initial.length;
   const request = vi.fn();
-  request.mockImplementation(async (method: string, path: string, opts?: { body?: unknown; idempotencyKey?: string }) => {
+  request.mockImplementation(async (method: string, path: string, opts?: { body?: unknown; idempotencyKey?: string; headers?: Record<string, string | number | undefined> }) => {
+    if (method === 'POST' && path === '/pending-operations/v2/confirmation-intentions/bind') {
+      const body = (opts?.body ?? {}) as { intentionId?: unknown };
+      const intentionId = typeof body.intentionId === 'string' ? body.intentionId : '';
+      if (!intentionId) throw Object.assign(new Error('validation.error'), { statusCode: 400 });
+      const headers = opts?.headers ?? {};
+      const key = `${String(headers['x-workspace-id'] ?? '')}|${String(headers['x-actor-id'] ?? '')}|${String(headers['x-device-id'] ?? '')}|${intentionId}`;
+      const existing = intentions.get(key);
+      if (existing) return { firstSeenAt: existing.firstSeenAt, fresh: false, operationId: intentionBindings.get(key) ?? null };
+      const at = new Date().toISOString();
+      intentions.set(key, { firstSeenAt: at });
+      return { firstSeenAt: at, fresh: true, operationId: intentionBindings.get(key) ?? null };
+    }
     if (method === 'GET' && path === '/pending-operations/v2/active') {
       events.push('listActive');
       const items = [...ops.values()]
@@ -94,6 +111,17 @@ const makeFakeApprovalApi = (initial: FakeOp[] = [], fakeOpts?: { executeReceipt
       }
       if (action === 'confirm') {
         if (op.status !== 'proposed') throw Object.assign(new Error('approval.not_pending'), { statusCode: 409 });
+        // Review round 4 P1-B: identical re-binds proceed, divergent refuse.
+        const confirmBody = (opts?.body ?? {}) as { intentionId?: unknown };
+        if (typeof confirmBody.intentionId === 'string' && confirmBody.intentionId !== '') {
+          const headers = opts?.headers ?? {};
+          const key = `${String(headers['x-workspace-id'] ?? '')}|${String(headers['x-actor-id'] ?? '')}|${String(headers['x-device-id'] ?? '')}|${confirmBody.intentionId}`;
+          const bound = intentionBindings.get(key);
+          if (bound !== undefined && bound !== id) {
+            throw Object.assign(new Error('approval.intention_conflict'), { statusCode: 409, code: 'approval.intention_conflict' });
+          }
+          if (bound === undefined) intentionBindings.set(key, id);
+        }
         op.status = 'confirmed';
         events.push(`confirm:${id}`);
         return { id, attestation: 'a'.repeat(40) };
@@ -154,8 +182,24 @@ const expenseOp = (id: string, status: FakeOp['status'] = 'proposed'): FakeOp =>
   args: { amountCents: 5000, description: 'Mercado', date: '2026-09-14', accountId: ACCOUNT_ID, categoryId: CATEGORY_ID },
 });
 
-const setup = (fake: ReturnType<typeof makeFakeApprovalApi>, store = new InMemoryMutationDraftStore()) =>
-  new ConversationOrchestrator({ mutationApiClient: fake.api, draftStore: store });
+const setup = (fake: ReturnType<typeof makeFakeApprovalApi>, store = new InMemoryMutationDraftStore()) => {
+  // Review round 4 P1-A3: pre-seeded ops were proposed (card shown) before
+  // the turn — seed their presentations at proposal time so legitimate first
+  // confirms pass; ops created mid-test are presented only when the test says
+  // so (the confirmation branch self-records listings for future turns).
+  for (const id of fake.ops.keys()) {
+    try {
+      store.noteConfirmationPresentation?.({
+        ctx: { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null },
+        operationIds: [id],
+        nowMs: Date.parse('2026-09-14T00:00:00.000Z'),
+      });
+    } catch {
+      // Best-effort seeding only.
+    }
+  }
+  return new ConversationOrchestrator({ mutationApiClient: fake.api, draftStore: store });
+};
 
 const turn = (orchestrator: ConversationOrchestrator, text: string, intentionId: string, extra: Record<string, unknown> = {}) =>
   orchestrator.runTurn(normalizeRestTurn({ text, intentionId, ...extra }, identity));

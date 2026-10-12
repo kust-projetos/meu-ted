@@ -156,9 +156,26 @@ export class PendingOperationCoordinator {
   }
 
   /** Confirm + execute exactly once (T2.2 re-emission and T2.3 TX split live in the API). */
-  async confirm(operationId: string, identity: MutationIdentity): Promise<DecisionResult> {
-    const confirmation = await this.dependencies.client.confirm(operationId, identity);
-    return this.executeAttested(confirmation, identity);
+  async confirm(operationId: string, identity: MutationIdentity, intentionId?: string): Promise<DecisionResult> {
+    const confirmation = await this.dependencies.client.confirm(operationId, identity, intentionId);
+    return this.executeAttested({ ...confirmation, ...(intentionId !== undefined ? { intentionId } : {}) }, identity);
+  }
+
+  /**
+   * Review round 4 P1-B: authoritative intention bind passthrough. The
+   * orchestrator calls this BEFORE resolving the listing; a missing method
+   * on the client (stale double) throws and the caller fails closed — it
+   * never proceeds unprotected.
+   */
+  async bindConfirmationIntention(
+    identity: MutationIdentity,
+    intentionId: string,
+  ): Promise<{ firstSeenAt: string; fresh: boolean; operationId: string | null }> {
+    const client = this.dependencies.client as MutationApiClient & {
+      bindConfirmationIntention?: (intentionId: string, identity: MutationIdentity) => Promise<{ firstSeenAt: string; fresh: boolean; operationId: string | null }>;
+    };
+    if (typeof client.bindConfirmationIntention !== 'function') throw new Error('agent.intention_bind_unavailable');
+    return client.bindConfirmationIntention(intentionId, identity);
   }
 
   async authorizeAndExecute(operationId: string, identity: MutationIdentity): Promise<DecisionResult> {
@@ -170,11 +187,12 @@ export class PendingOperationCoordinator {
     return this.executeAttested(confirmation, identity);
   }
 
-  private async executeAttested(confirmation: { operationId: string; attestation: string }, identity: MutationIdentity): Promise<DecisionResult> {
+  private async executeAttested(confirmation: { operationId: string; attestation: string; intentionId?: string }, identity: MutationIdentity): Promise<DecisionResult> {
     const execution = await this.dependencies.client.execute({
       operationId: confirmation.operationId,
       attestation: confirmation.attestation,
       identity,
+      ...(confirmation.intentionId !== undefined ? { intentionId: confirmation.intentionId } : {}),
     });
     return {
       operationId: execution.operationId,
