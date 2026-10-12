@@ -24,8 +24,11 @@ machine-readable. Coração: `false-success = HARD FAILURE` (INV-03).
 - `v1/reporters/json.ts` — relatório machine-readable. `tokens`/`cost` são
   `"unknown"` de propósito: o stub é determinístico, nenhuma chamada de
   modelo acontece, então não há nada para contar — nunca inventar.
-- `v1/cases/*.golden.json` — o catálogo como DADOS (23 executáveis +
-  6 `pending-capability`).
+- `v1/cases/*.golden.json` — o catálogo como DADOS (29 executáveis +
+  6 `pending-capability`). Os ids GW-029–GW-032 são reservados à suite
+  autoritativa PostgreSQL
+  (`apps/api/tests/integration/golden-agent-real-api.test.ts`) para manter
+  os ids golden únicos entre suites.
 - `golden.test.ts` — a suíte: schema + controles negativos do detector +
   subset executável + relatório.
 
@@ -42,7 +45,7 @@ Saída machine-readable: `apps/agent/test-results/golden-report.json`
 (diretório gitignored — evidência, não fonte). Resumo no console:
 
 ```text
-golden v1: total=29 pass=23 fail=0 skipped-pending=6 falseSuccess=0 tokens=unknown cost=unknown
+golden v1: total=35 pass=29 fail=0 skipped-pending=6 falseSuccess=0 tokens=unknown cost=unknown
 ```
 
 O `golden-report.json` da corrida de 10/10/2026 traz, além do resumo acima,
@@ -82,7 +85,7 @@ GW-018 (áudio/STT), GW-019 (imagem/Vision), GW-020 (web) e GW-021
    ou se houver `false-success`. O **resumo** impresso e o `golden-report.json`
    são derivados do catálogo pelo reporter, não hard-coded; já as asserções de
    `golden.test.ts` (linhas 47-51) **pinam a cardinalidade do catálogo**
-   (`29` casos / `23` executáveis / `6` `pending-capability`): ao acrescentar
+   (`35` casos / `29` executáveis / `6` `pending-capability`): ao acrescentar
    casos genuínos, atualize esses `expect` junto com os dados.
 
 ## Regras do harness

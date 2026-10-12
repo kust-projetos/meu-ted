@@ -44,10 +44,13 @@ const loadCases = (): GoldenCase[] => {
 describe("F4 golden — catalog is versioned, well-formed data", () => {
   it("every case file validates against the v1 schema with unique ids", () => {
     const cases = loadCases();
-    expect(cases.length).toBe(29);
+    // GW-029–GW-032 are reserved for the authoritative PostgreSQL suite
+    // (apps/api/tests/integration/golden-agent-real-api.test.ts) to keep
+    // golden ids unique across suites.
+    expect(cases.length).toBe(35);
     const executable = cases.filter((entry) => entry.status === "executable");
     const pending = cases.filter((entry) => entry.status === "pending-capability");
-    expect(executable.length).toBe(23);
+    expect(executable.length).toBe(29);
     expect(pending.length).toBe(6);
     for (const entry of pending) {
       expect(entry.pendingReason?.capability, entry.id).toMatch(/\S/);
