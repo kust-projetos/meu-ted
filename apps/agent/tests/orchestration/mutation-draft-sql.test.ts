@@ -12,9 +12,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import {
   buildDraftRecord,
+  CONFIRMATION_PRESENTATION_RETENTION_MS,
+  CONFIRMATION_TTL_MS,
   initializeMutationDraftSchema,
+  InMemoryMutationDraftStore,
   SqlMutationDraftStore,
+  validateConfirmationReceipt,
 } from '../../src/mutations/mutation-draft.js';
+import { createRelayUsageStorage } from '../helpers/relay-usage-storage.js';
 
 type SqlShim = {
   exec<T>(query: string, ...bindings: unknown[]): Iterable<T>;
@@ -512,25 +517,213 @@ describe('SqlMutationDraftStore confirmation binding on real SQLite (PR137-SEC-F
     expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW)?.operationId).toBe('pending-A');
   });
 
-  it('expired marker reads as absent (TTL) and is pruned', () => {
+  it('expired marker persists as a TOMBSTONE (binding never pruned; only the receipt is stripped)', () => {
     const { sql } = createSql();
     initializeMutationDraftSchema(sql);
     const store = new SqlMutationDraftStore(sql);
     remember(store, { ttlMs: 60_000 });
-    expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW + 60_001)).toBeUndefined();
+    // Past the 24h-style receipt TTL the binding is still found — it no
+    // longer proves success, but it must keep blocking a divergent claim.
+    const tombstone = store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW + 60_001);
+    expect(tombstone?.operationId).toBe('pending-A');
+    expect(tombstone?.status).toBe('succeeded');
     const rows = [...sql.exec<Record<string, unknown>>(`SELECT * FROM mutation_confirmations`)];
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    // Review fix P1-3 (policy a): even tombstones past the 30-day retention
+    // are NEVER deleted — retention hygiene strips only the bulky receipt
+    // cell. The binding keeps blocking a divergent confirmation forever
+    // (one minimal row per intention, bounded by business volume).
+    const ancient = NOW + 60_001 + 31 * 24 * 60 * 60_000;
+    store.claimConfirmation!({
+      ctx: confirmCtx,
+      intentionId: 'intent-other',
+      operationId: 'pending-other',
+      receiptJson: null,
+      status: 'reserved',
+      nowMs: ancient,
+    });
+    // The ancient binding still blocks: divergent re-claim is rejected and
+    // the row survives with its receipt stripped.
+    expect(
+      store.claimConfirmation!({
+        ctx: confirmCtx,
+        intentionId: 'intent-confirm-A',
+        operationId: 'pending-evil',
+        receiptJson: null,
+        status: 'reserved',
+        nowMs: ancient,
+      }),
+    ).toBe('divergent');
+    expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', ancient)).toMatchObject({
+      operationId: 'pending-A',
+      receiptJson: null,
+    });
+    expect(store.findConfirmation!(confirmCtx, 'intent-other', ancient)?.operationId).toBe('pending-other');
   });
 
-  it('re-confirmation under the same key upserts (no duplicate row)', () => {
+  it('re-claim with a DIVERGENT operationId is rejected, never overwritten (immutability)', () => {
     const { sql } = createSql();
     initializeMutationDraftSchema(sql);
     const store = new SqlMutationDraftStore(sql);
-    remember(store);
-    remember(store, { operationId: 'pending-A2', nowMs: NOW + 1000 });
-    expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW + 1000)?.operationId).toBe('pending-A2');
+    expect(
+      store.claimConfirmation!({
+        ctx: confirmCtx,
+        intentionId: 'intent-confirm-A',
+        operationId: 'pending-A',
+        receiptJson: null,
+        status: 'reserved',
+        nowMs: NOW,
+      }),
+    ).toBe('claimed');
+    // Identical re-claim is idempotent.
+    expect(
+      store.claimConfirmation!({
+        ctx: confirmCtx,
+        intentionId: 'intent-confirm-A',
+        operationId: 'pending-A',
+        receiptJson: null,
+        status: 'reserved',
+        nowMs: NOW + 1,
+      }),
+    ).toBe('identical');
+    // Divergent re-claim (the pre-hardening A→B overwrite) is rejected.
+    expect(
+      store.claimConfirmation!({
+        ctx: confirmCtx,
+        intentionId: 'intent-confirm-A',
+        operationId: 'pending-B',
+        receiptJson: null,
+        status: 'reserved',
+        nowMs: NOW + 2,
+      }),
+    ).toBe('divergent');
+    expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW + 2)?.operationId).toBe('pending-A');
     const rows = [...sql.exec<Record<string, unknown>>(`SELECT * FROM mutation_confirmations`)];
     expect(rows).toHaveLength(1);
+    // Legacy post-success write honors the same immutable contract.
+    remember(store, { operationId: 'pending-A2', nowMs: NOW + 3 });
+    expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW + 3)?.operationId).toBe('pending-A');
+  });
+
+  it('reserve → settle lifecycle: only reserved rows transition, terminal rows are immutable', () => {
+    const { sql } = createSql();
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    store.claimConfirmation!({
+      ctx: confirmCtx,
+      intentionId: 'intent-settle',
+      operationId: 'pending-A',
+      receiptJson: null,
+      status: 'reserved',
+      nowMs: NOW,
+    });
+    expect(store.findConfirmation!(confirmCtx, 'intent-settle', NOW)?.status).toBe('reserved');
+    // Foreign operationId settles nothing.
+    expect(
+      store.settleConfirmation!({
+        ctx: confirmCtx,
+        intentionId: 'intent-settle',
+        operationId: 'pending-B',
+        status: 'succeeded',
+        receiptJson: RECEIPT,
+        nowMs: NOW + 1,
+      }),
+    ).toBe(false);
+    expect(
+      store.settleConfirmation!({
+        ctx: confirmCtx,
+        intentionId: 'intent-settle',
+        operationId: 'pending-A',
+        status: 'succeeded',
+        receiptJson: RECEIPT,
+        nowMs: NOW + 1,
+      }),
+    ).toBe(true);
+    expect(store.findConfirmation!(confirmCtx, 'intent-settle', NOW + 1)).toMatchObject({
+      operationId: 'pending-A',
+      status: 'succeeded',
+      receiptJson: RECEIPT,
+    });
+    // Terminal rows never transition again.
+    expect(
+      store.settleConfirmation!({
+        ctx: confirmCtx,
+        intentionId: 'intent-settle',
+        operationId: 'pending-A',
+        status: 'inconclusive',
+        receiptJson: null,
+        nowMs: NOW + 2,
+      }),
+    ).toBe(false);
+    expect(store.findConfirmation!(confirmCtx, 'intent-settle', NOW + 2)?.status).toBe('succeeded');
+  });
+
+  it('pre-hardening rows without the status column read as succeeded (rollback compat)', () => {
+    const { sql } = createSql();
+    // Simulate a pre-hardening DO: confirmations table WITHOUT `status`
+    // (full legacy drafts table so the context index builds).
+    sql.exec(`
+      CREATE TABLE mutation_drafts (
+        draft_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        device_id TEXT,
+        conversation_id TEXT,
+        tool TEXT NOT NULL,
+        resolved_args_json TEXT NOT NULL,
+        missing_fields_json TEXT NOT NULL,
+        proposal_idempotency_key TEXT NOT NULL,
+        proposal_id TEXT,
+        propose_outcome TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        discard_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        last_intention_id TEXT NOT NULL,
+        last_question TEXT NOT NULL DEFAULT '',
+        goal_id TEXT,
+        revision INTEGER NOT NULL DEFAULT 0,
+        origin_messages_json TEXT NOT NULL DEFAULT '[]',
+        relations_json TEXT NOT NULL DEFAULT '[]',
+        field_provenance_json TEXT
+      );
+    `);
+    sql.exec(`
+      CREATE TABLE mutation_confirmations (
+        workspace_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        device_id TEXT NOT NULL DEFAULT '',
+        intention_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        receipt_json TEXT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, actor_id, device_id, intention_id)
+      );
+    `);
+    sql.exec(
+      `INSERT INTO mutation_confirmations (workspace_id, actor_id, device_id, intention_id, operation_id, receipt_json, created_at, expires_at)
+       VALUES ('ws-1', 'actor-1', 'device-1', 'intent-legacy', 'pending-legacy', ?, '2026-10-11T12:00:00.000Z', '2026-10-12T12:00:00.000Z')`,
+      RECEIPT,
+    );
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    // The migration backfills the column; the legacy row reads as the only
+    // state it could ever have been in (written strictly post-success).
+    expect(store.findConfirmation!(confirmCtx, 'intent-legacy', NOW)?.status).toBe('succeeded');
+    expect(store.findConfirmation!(confirmCtx, 'intent-legacy', NOW)?.operationId).toBe('pending-legacy');
+    // And the immutable contract already guards it against rebinding.
+    expect(
+      store.claimConfirmation!({
+        ctx: confirmCtx,
+        intentionId: 'intent-legacy',
+        operationId: 'pending-evil',
+        receiptJson: null,
+        status: 'reserved',
+        nowMs: NOW,
+      }),
+    ).toBe('divergent');
   });
 
   it('pre-fix DO without the table: init creates it and the binding works', () => {
@@ -569,5 +762,289 @@ describe('SqlMutationDraftStore confirmation binding on real SQLite (PR137-SEC-F
     const store = new SqlMutationDraftStore(sql);
     remember(store);
     expect(store.findConfirmation!(confirmCtx, 'intent-confirm-A', NOW)?.operationId).toBe('pending-A');
+  });
+
+  it('round 3 P2-C: double do relay produz a mesma linha que o SQLite real (sighting 7-bindings + claim + temporal)', () => {
+    // A INSERT da sighting leva 7 bindings com `receipt_json = NULL` e
+    // `status = 'reserved'` como LITERAIS SQL; o double lia 8 posições
+    // (timestamp virava receipt, expiry virava createdAt, expires_at
+    // undefined). A mesma sequência de statements roda nos dois shims e as
+    // linhas resultantes são comparadas campo a campo, incluindo o caso
+    // temporal (createdAt da sighting é a âncora do fence).
+    const { sql: realSql } = createSql();
+    initializeMutationDraftSchema(realSql);
+    const relay = createRelayUsageStorage();
+    const real = new SqlMutationDraftStore(realSql);
+    const doubled = new SqlMutationDraftStore({ exec: relay.exec });
+
+    const realSighting = real.noteConfirmationSighted!(confirmCtx, 'intent-double', NOW);
+    const relaySighting = doubled.noteConfirmationSighted!(confirmCtx, 'intent-double', NOW);
+    expect(realSighting.fresh).toBe(true);
+    expect(relaySighting.fresh).toBe(true);
+    // Paridade total da linha, não só das colunas "interessantes".
+    expect(relaySighting.record).toEqual(realSighting.record);
+    expect(relaySighting.record).toMatchObject({
+      operationId: '',
+      receiptJson: null,
+      status: 'reserved',
+      createdAt: new Date(NOW).toISOString(),
+      expiresAt: new Date(NOW + CONFIRMATION_TTL_MS).toISOString(),
+    });
+    // Leitura crua do double: created_at/expires_at/receipt nas colunas
+    // certas (é exatamente aqui que o double antigo trocava tudo).
+    const rawRelay = [
+      ...relay.exec<Record<string, unknown>>(
+        `SELECT * FROM mutation_confirmations WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND intention_id = ?`,
+        'ws-1',
+        'actor-1',
+        'device-1',
+        'intent-double',
+      ),
+    ];
+    expect(rawRelay).toHaveLength(1);
+    expect(rawRelay[0]).toMatchObject({
+      operation_id: '',
+      receipt_json: null,
+      created_at: new Date(NOW).toISOString(),
+      expires_at: new Date(NOW + CONFIRMATION_TTL_MS).toISOString(),
+      status: 'reserved',
+    });
+
+    // Claim (adoção da sentinela) também é idêntico nos dois shims.
+    expect(real.claimConfirmation!({ ctx: confirmCtx, intentionId: 'intent-double', operationId: 'pending-A', receiptJson: null, status: 'reserved', nowMs: NOW + 1 })).toBe('claimed');
+    expect(doubled.claimConfirmation!({ ctx: confirmCtx, intentionId: 'intent-double', operationId: 'pending-A', receiptJson: null, status: 'reserved', nowMs: NOW + 1 })).toBe('claimed');
+    expect(doubled.findConfirmation!(confirmCtx, 'intent-double', NOW + 1)).toEqual(
+      real.findConfirmation!(confirmCtx, 'intent-double', NOW + 1),
+    );
+    // A âncora temporal sobrevive igual nos dois: createdAt preservado da
+    // sighting após a adoção.
+    expect(doubled.findConfirmation!(confirmCtx, 'intent-double', NOW + 1)).toMatchObject({
+      operationId: 'pending-A',
+      createdAt: new Date(NOW).toISOString(),
+    });
+  });
+
+  it('round 3 rollback-reverso: binário antigo sobre schema novo não quebra; proteção degradada ao pré-hardening, nunca pior', () => {
+    // Binário antigo = pré-hardening (pós-SEC-FIX): escreve
+    // mutation_confirmations SEM a coluna `status`, nunca referencia a
+    // coluna nova, e ignora a tabela quando ela não lhe diz respeito. Sobre
+    // o schema novo isso tem de funcionar (colunas aditivas com DEFAULT,
+    // sem NOT NULL sem default, sem rename/drop; nenhum SELECT * quebrável
+    // do lado antigo), com a proteção degradada exatamente ao residual
+    // pré-hardening (fail-open legado) — nunca a um estado pior (linha
+    // corrompida, exceção no caminho de leitura, ou rebinding silencioso).
+    // Recomendação operacional: bloquear rollback incompatível ou reaplicar
+    // o hardening antes de confirmar qualquer operação.
+    const { sql } = createSql();
+    initializeMutationDraftSchema(sql);
+    // Statement legado: INSERT explícito sem `status`.
+    sql.exec(
+      `INSERT INTO mutation_confirmations (workspace_id, actor_id, device_id, intention_id, operation_id, receipt_json, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      'ws-1',
+      'actor-1',
+      'device-1',
+      'intent-legacy',
+      'pending-A',
+      RECEIPT,
+      new Date(NOW).toISOString(),
+      new Date(NOW + CONFIRMATION_TTL_MS).toISOString(),
+    );
+    const store = new SqlMutationDraftStore(sql);
+    // O DEFAULT preenche a coluna nova; a linha legada lê como o único
+    // estado que ela poderia ter sido (succeeded pós-sucesso).
+    expect(store.findConfirmation!(confirmCtx, 'intent-legacy', NOW)).toMatchObject({
+      operationId: 'pending-A',
+      status: 'succeeded',
+      receiptJson: RECEIPT,
+    });
+    // UPDATE legado (sem predicados de status) e SELECT * legado funcionam.
+    sql.exec(`UPDATE mutation_confirmations SET receipt_json = NULL WHERE intention_id = ?`, 'intent-legacy');
+    expect([...sql.exec(`SELECT * FROM mutation_confirmations`)]).toHaveLength(1);
+    expect(store.findConfirmation!(confirmCtx, 'intent-legacy', NOW)?.receiptJson).toBeNull();
+    // Código novo sobre linha legada: contrato imutável já vale —
+    // divergent rejeitado, nunca rebinding.
+    expect(
+      store.claimConfirmation!({ ctx: confirmCtx, intentionId: 'intent-legacy', operationId: 'pending-evil', receiptJson: null, status: 'reserved', nowMs: NOW }),
+    ).toBe('divergent');
+    // Evidência estrutural da aditividade: `status` é NOT NULL *com*
+    // DEFAULT (INSERT legado seguro) e nada foi renomeado/removido — as
+    // colunas que o binário antigo conhece seguem todas presentes.
+    const columns = [...sql.exec<Record<string, unknown>>(`PRAGMA table_info(mutation_confirmations)`)].map((row) => String(row.name));
+    for (const legacy of ['workspace_id', 'actor_id', 'device_id', 'intention_id', 'operation_id', 'receipt_json', 'created_at', 'expires_at']) {
+      expect(columns).toContain(legacy);
+    }
+    const statusInfo = [...sql.exec<Record<string, unknown>>(`PRAGMA table_info(mutation_confirmations)`)].find((row) => String(row.name) === 'status');
+    expect(statusInfo).toBeTruthy();
+    expect(String(statusInfo?.dflt_value ?? '')).toContain('succeeded');
+  });
+});
+
+describe('ROUND5-3: prune de apresentações na retenção de 30d (SQL + InMemory)', () => {
+  // O horizonte é 30d (`CONFIRMATION_PRESENTATION_RETENTION_MS`): a linha
+  // expira em presentedAt+30d e o prune apaga quando `expires_at <= agora`.
+  // O código pré-round-5 comparava `expires_at <= agora-30d` (horizonte
+  // efetivo de 60d): estes testes FALHAM nele (a linha vencida sobrevive).
+  const DAY = 24 * 60 * 60_000;
+  const T0 = Date.parse('2026-10-11T12:00:00.000Z');
+  const pruneCtx = { workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-1' } as const;
+
+  it('SQL: linha vencida há exatamente 30d é podada; linha com 1ms de vida restante sobrevive', () => {
+    const { sql } = createSql();
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    expect(CONFIRMATION_PRESENTATION_RETENTION_MS).toBe(30 * DAY);
+    store.noteConfirmationPresentation!({ ctx: pruneCtx, operationIds: ['op-old'], nowMs: T0 });
+    // Em T0+30d-1ms a linha velha ainda é válida: só dispara a higiene.
+    store.noteConfirmationPresentation!({ ctx: pruneCtx, operationIds: ['op-fresh'], nowMs: T0 + 30 * DAY - 1 });
+    expect(store.findConfirmationPresentation!(pruneCtx, 'op-old')?.operationId).toBe('op-old');
+    expect(store.listConfirmationPresentations!(pruneCtx)).toEqual(expect.arrayContaining(['op-old', 'op-fresh']));
+    // Em T0+30d a linha velha venceu (expiresAt == agora, `<=` poda).
+    store.noteConfirmationPresentation!({ ctx: pruneCtx, operationIds: ['op-trigger'], nowMs: T0 + 30 * DAY });
+    expect(store.findConfirmationPresentation!(pruneCtx, 'op-old')).toBeUndefined();
+    expect(store.listConfirmationPresentations!(pruneCtx)).toEqual(expect.arrayContaining(['op-fresh', 'op-trigger']));
+    expect(store.listConfirmationPresentations!(pruneCtx)).not.toContain('op-old');
+  });
+
+  it('InMemory: mesma fronteira de 30d', () => {
+    const store = new InMemoryMutationDraftStore();
+    const mctx = { workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-1' } as const;
+    expect(CONFIRMATION_PRESENTATION_RETENTION_MS).toBe(30 * DAY);
+    store.noteConfirmationPresentation({ ctx: mctx, operationIds: ['op-old'], nowMs: T0 });
+    store.noteConfirmationPresentation({ ctx: mctx, operationIds: ['op-fresh'], nowMs: T0 + 30 * DAY - 1 });
+    expect(store.findConfirmationPresentation(mctx, 'op-old')?.operationId).toBe('op-old');
+    store.noteConfirmationPresentation({ ctx: mctx, operationIds: ['op-trigger'], nowMs: T0 + 30 * DAY });
+    expect(store.findConfirmationPresentation(mctx, 'op-old')).toBeUndefined();
+    expect(store.listConfirmationPresentations(mctx)).toEqual(expect.arrayContaining(['op-fresh', 'op-trigger']));
+    expect(store.listConfirmationPresentations(mctx)).not.toContain('op-old');
+  });
+});
+
+
+describe('validateConfirmationReceipt (PR137-HARDEN criterion 6, P2-6 canonical schema)', () => {
+  const OP = 'pending-A';
+  const valid = JSON.stringify({
+    operationId: OP,
+    mutationId: 'mut-A',
+    mutationKind: 'transactions.expense.create',
+    status: 'succeeded',
+    affectedTargets: ['transactions'],
+    entity: { type: 'transaction', id: 'tx-A' },
+  });
+
+  it('null receipt is absent (binding stays the authority, replay unexpired only)', () => {
+    expect(validateConfirmationReceipt(null, OP)).toEqual({ kind: 'absent' });
+  });
+
+  it('canonical receipt for the bound operation is valid', () => {
+    expect(validateConfirmationReceipt(valid, OP).kind).toBe('valid');
+  });
+
+  it('legacy shape without status is INCOMPLETE (reconciles, never replays success)', () => {
+    // Review fix P2-6: pre-hardening doubles/rows carry no status (nor the
+    // canonical mutationKind/affectedTargets). The weak shape is not proof —
+    // the caller must reconcile via the API listing.
+    expect(
+      validateConfirmationReceipt(JSON.stringify({ operationId: OP, mutationId: 'mut-A' }), OP),
+    ).toEqual({ kind: 'invalid', reason: 'incomplete' });
+    expect(
+      validateConfirmationReceipt(JSON.stringify({ operationId: OP, entity: { type: 'transaction', id: 'tx-A' } }), OP),
+    ).toEqual({ kind: 'invalid', reason: 'incomplete' });
+  });
+
+  it('schema violations are incomplete (wrong status value, bad kind, extra keys)', () => {
+    const base = { operationId: OP, mutationId: 'mut-A', mutationKind: 'transactions.expense.create', affectedTargets: ['transactions'] };
+    expect(validateConfirmationReceipt(JSON.stringify({ ...base, status: 'failed' }), OP)).toEqual({
+      kind: 'invalid',
+      reason: 'incomplete',
+    });
+    expect(validateConfirmationReceipt(JSON.stringify({ ...base, status: 'succeeded', mutationKind: 'nope' }), OP)).toEqual({
+      kind: 'invalid',
+      reason: 'incomplete',
+    });
+    expect(validateConfirmationReceipt(JSON.stringify({ ...base, status: 'succeeded', forged: true }), OP)).toEqual({
+      kind: 'invalid',
+      reason: 'incomplete',
+    });
+  });
+
+  it('unparseable or non-object receipts are corrupt', () => {
+    expect(validateConfirmationReceipt('{oops', OP)).toEqual({ kind: 'invalid', reason: 'corrupt' });
+    expect(validateConfirmationReceipt('123', OP)).toEqual({ kind: 'invalid', reason: 'corrupt' });
+    expect(validateConfirmationReceipt('[1,2]', OP)).toEqual({ kind: 'invalid', reason: 'corrupt' });
+    expect(validateConfirmationReceipt('null', OP)).toEqual({ kind: 'invalid', reason: 'corrupt' });
+  });
+
+  it('missing or different operationId is divergent', () => {
+    expect(validateConfirmationReceipt(JSON.stringify({ mutationId: 'mut-X' }), OP)).toEqual({
+      kind: 'invalid',
+      reason: 'divergent',
+    });
+    expect(validateConfirmationReceipt(JSON.stringify({ operationId: 'pending-B' }), OP)).toEqual({
+      kind: 'invalid',
+      reason: 'divergent',
+    });
+  });
+
+  it('explicit non-succeeded status is incomplete (never a false success)', () => {
+    expect(
+      validateConfirmationReceipt(JSON.stringify({ operationId: OP, status: 'failed' }), OP),
+    ).toEqual({ kind: 'invalid', reason: 'incomplete' });
+  });
+});
+
+describe('noteConfirmationSighted + sentinel adoption on real SQLite (review P1-2/P1-4)', () => {
+  const NOW = Date.parse('2026-10-11T12:00:00.000Z');
+  const confirmCtx = { workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-1' };
+
+  it('first sighting creates an unbound sentinel (fresh); second sighting replays it (stale, first-seen kept)', () => {
+    const { sql } = createSql();
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    const first = store.noteConfirmationSighted!(confirmCtx, 'intent-X', NOW);
+    expect(first.fresh).toBe(true);
+    expect(first.record.operationId).toBe('');
+    expect(first.record.status).toBe('reserved');
+    expect(Date.parse(first.record.createdAt)).toBe(NOW);
+    const second = store.noteConfirmationSighted!(confirmCtx, 'intent-X', NOW + 5_000);
+    expect(second.fresh).toBe(false);
+    expect(second.record.operationId).toBe('');
+    // First-seen instant is preserved, not overwritten by the redelivery.
+    expect(Date.parse(second.record.createdAt)).toBe(NOW);
+  });
+
+  it('claim adopts the sentinel (CAS): first adopter wins, loser sees identical/divergent', () => {
+    const { sql } = createSql();
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    expect(store.noteConfirmationSighted!(confirmCtx, 'intent-X', NOW).fresh).toBe(true);
+    expect(
+      store.claimConfirmation!({ ctx: confirmCtx, intentionId: 'intent-X', operationId: 'op-A', receiptJson: null, status: 'reserved', nowMs: NOW + 1 }),
+    ).toBe('claimed');
+    const bound = store.findConfirmation!(confirmCtx, 'intent-X', NOW + 1);
+    expect(bound?.operationId).toBe('op-A');
+    // First-seen survives the adoption (temporal check keeps the original instant).
+    expect(Date.parse(bound?.createdAt ?? '')).toBe(NOW);
+    expect(
+      store.claimConfirmation!({ ctx: confirmCtx, intentionId: 'intent-X', operationId: 'op-A', receiptJson: null, status: 'reserved', nowMs: NOW + 2 }),
+    ).toBe('identical');
+    expect(
+      store.claimConfirmation!({ ctx: confirmCtx, intentionId: 'intent-X', operationId: 'op-B', receiptJson: null, status: 'reserved', nowMs: NOW + 3 }),
+    ).toBe('divergent');
+  });
+
+  it('sentinel settles to inconclusive and keeps blocking (P1-2: no-target outcome is durable)', () => {
+    const { sql } = createSql();
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    store.noteConfirmationSighted!(confirmCtx, 'intent-X', NOW);
+    expect(
+      store.settleConfirmation!({ ctx: confirmCtx, intentionId: 'intent-X', operationId: '', status: 'inconclusive', receiptJson: null, nowMs: NOW }),
+    ).toBe(true);
+    expect(store.findConfirmation!(confirmCtx, 'intent-X', NOW)).toMatchObject({ operationId: '', status: 'inconclusive' });
+    // A later claim for B is divergent against the sentinel — never adopted.
+    expect(
+      store.claimConfirmation!({ ctx: confirmCtx, intentionId: 'intent-X', operationId: 'op-B', receiptJson: null, status: 'reserved', nowMs: NOW + 1 }),
+    ).toBe('divergent');
   });
 });

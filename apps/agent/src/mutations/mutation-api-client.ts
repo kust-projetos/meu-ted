@@ -89,8 +89,42 @@ export class MutationApiClient {
     return this.timed('transactions.propose', () => createMutationProposal({ ...input, request: this.request }));
   }
 
-  confirm(operationId: string, identity: MutationIdentity): Promise<{ operationId: string; attestation: string }> {
-    return this.timed('transactions.confirm', () => this.executor.confirm(operationId, identity));
+  confirm(operationId: string, identity: MutationIdentity, intentionId?: string): Promise<{ operationId: string; attestation: string }> {
+    return this.timed('transactions.confirm', () => this.executor.confirm(operationId, identity, undefined, intentionId));
+  }
+
+  /**
+   * Review round 4 P1-B (direction iii): binds the confirmation intention
+   * API-side BEFORE the listing is ever resolved. Returns the authoritative
+   * first-seen instant and whether THIS call created it, plus any operation
+   * already bound to this intention by a previous confirm. The orchestrator
+   * fails closed when the call throws, when the instant is unreadable, and
+   * when a pre-existing API sighting meets a fresh local one (post-outage
+   * redelivery). Never throws for a divergent binding — that surfaces as
+   * `operationId` for the caller to refuse before the transport.
+   */
+  bindConfirmationIntention(
+    intentionId: string,
+    identity: MutationIdentity,
+  ): Promise<{ firstSeenAt: string; fresh: boolean; operationId: string | null }> {
+    return this.timed('transactions.bindIntention', () =>
+      this.request<{ firstSeenAt?: unknown; fresh?: unknown; operationId?: unknown }>(
+        'POST', '/pending-operations/v2/confirmation-intentions/bind',
+        {
+          body: { intentionId },
+          headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId },
+        },
+      ).then((result) => {
+        if (typeof result.firstSeenAt !== 'string' || !Number.isFinite(Date.parse(result.firstSeenAt))) {
+          throw new Error('approval.intention_bind_invalid');
+        }
+        return {
+          firstSeenAt: result.firstSeenAt,
+          fresh: result.fresh === true,
+          operationId: typeof result.operationId === 'string' && result.operationId !== '' ? result.operationId : null,
+        };
+      }),
+    );
   }
 
   authorize(operationId: string, identity: MutationIdentity): Promise<{ operationId: string; attestation: string }> {

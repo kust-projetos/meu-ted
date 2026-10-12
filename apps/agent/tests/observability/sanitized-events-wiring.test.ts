@@ -5,6 +5,7 @@ import {
   type AuthenticatedIdentity,
 } from '../../src/orchestration/conversation-orchestrator.js';
 import { MutationApiClient } from '../../src/mutations/mutation-api-client.js';
+import { InMemoryMutationDraftStore } from '../../src/mutations/mutation-draft.js';
 import { createSanitizedEvent } from '../../src/observability/events.js';
 import { logFailoverEvent } from '../../src/llm/failover.js';
 
@@ -44,6 +45,10 @@ describe('AGENT-010 sanitized lifecycle events', () => {
     const seen: Array<{ type: string; fields: Record<string, unknown> }> = [];
     const request = vi.fn()
       .mockResolvedValueOnce({ id: 'pending-1' })
+      // Review round 4 P1-B: the authoritative intention bind precedes the
+      // listing on every fresh confirmation. Lazy timestamp: the API stamps
+      // firstSeenAt at CALL time.
+      .mockImplementationOnce(async () => ({ firstSeenAt: new Date().toISOString(), fresh: true, operationId: null }))
       .mockResolvedValueOnce({
         items: [{
           id: 'pending-1', status: 'proposed', tool: 'transactions.expense.create',
@@ -65,6 +70,9 @@ describe('AGENT-010 sanitized lifecycle events', () => {
       });
     const orchestrator = new ConversationOrchestrator({
       mutationApiClient: api, plan: planner, events: (type, fields) => seen.push({ type, fields }),
+      // PR137-HARDEN: financial confirmation is fail-closed without a
+      // binding store, so the flow under test injects one.
+      draftStore: new InMemoryMutationDraftStore(),
       // SPEC §7.2/§7.3: single account auto-resolves, UUID category verified.
       entityReader: {
         listAccounts: async () => [{ id: '00000000-0000-4000-8000-0000000000a1', name: 'Nubank' }],

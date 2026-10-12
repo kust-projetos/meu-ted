@@ -25,6 +25,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAttachmentStorage } from "../../src/attachments/storage.js";
 import { ingestAttachment } from "../../src/attachments/ingest.js";
 import { normalizeRestTurn, type AuthenticatedIdentity } from "../../src/orchestration/conversation-orchestrator.js";
+import { SqlMutationDraftStore } from "../../src/mutations/mutation-draft.js";
 import { routeIntent } from "../../src/orchestration/intent-router.js";
 import { isRetryText } from "../../src/orchestration/pending-operation-coordinator.js";
 import { createAttachmentTestAgent, installRelayMock } from "./helpers.js";
@@ -79,6 +80,25 @@ const installPendingOperationApi = (): { calls: string[] } => {
           ],
           total: 1,
         });
+      }
+      // Review round 4 P1-B: o bind pré-listagem da intenção (fronteira
+      // durável independente). Primeiro escritor vence; repetições devolvem
+      // o instante original com `fresh: false`.
+      if (url.includes("/confirmation-intentions/bind")) {
+        const seen = (installPendingOperationApi as unknown as { intentions?: Map<string, string> }).intentions
+          ?? ((installPendingOperationApi as unknown as { intentions?: Map<string, string> }).intentions = new Map());
+        let intentionId = '';
+        try {
+          intentionId = String((JSON.parse(String(init.body ?? '{}')) as { intentionId?: unknown }).intentionId ?? '');
+        } catch {
+          intentionId = '';
+        }
+        if (!intentionId) return Response.json({ code: 'validation.error' }, { status: 400 });
+        const existing = seen.get(intentionId);
+        if (existing) return Response.json({ firstSeenAt: existing, fresh: false, operationId: null }, { status: 200 });
+        const at = new Date().toISOString();
+        seen.set(intentionId, at);
+        return Response.json({ firstSeenAt: at, fresh: true, operationId: null }, { status: 200 });
       }
       if (url.includes("/confirm") || url.includes("/cancel") || url.includes("/execute") || url.includes("/retry")) {
         return Response.json({ id: "op-pending-1", status: "cancelled" }, { status: 200 });
@@ -172,6 +192,19 @@ describe("F1 — PDF com 'sim confirmo' NO CONTEÚDO não confirma a operação 
     const { calls } = installPendingOperationApi();
     const { agent } = createAttachmentTestAgent({ extraEnv: { ...PDF_ENV, AGENT_DELEGATION_SECRET: "delegation-secret-32-chars-min!!" } });
 
+    // ROUND5-1: a confirmação exige EXIBIÇÃO prévia real — o card de
+    // op-pending-1 foi exibido quando a operação foi proposta (apresentação
+    // registrada pelo caminho de proposta, aqui semeada pelo store de
+    // produção sobre o mesmo storage do agente). A rejeição nunca apresenta:
+    // sem este card, o "sim" abaixo falharia fechado.
+    const store = new SqlMutationDraftStore(
+      (agent as unknown as { ctx: { storage: { sql: { exec: <T>(query: string, ...params: unknown[]) => Iterable<T> } } } }).ctx.storage.sql,
+    );
+    store.noteConfirmationPresentation?.({
+      ctx: { workspaceId: "ws-1", actorId: "actor-1", deviceId: "device-1" },
+      operationIds: ["op-pending-1"],
+      nowMs: Date.now(),
+    });
     const res = await agent.fetch(
       chatRequest({ text: "sim confirmo", intentionId: "intent-f1-typed-confirm" }),
     );

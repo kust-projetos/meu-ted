@@ -30,6 +30,15 @@ export type IsolatedOp = Readonly<{
   idempotencyKey: string;
   status: "proposed" | "executed" | "cancelled";
   transactionId: string | null;
+  /**
+   * Round 3 P1-A: authoritative proposal-time stamps, like the real
+   * `pending-v2` API (`createdAt` is when the proposal was created, NOT the
+   * listing time). The confirmation temporal check compares these against
+   * the intention's first-sighting instant — a listing-time stamp would be
+   * born after the sighting by construction and would invert the fence.
+   */
+  createdAt: string;
+  expiresAt: string;
 }>;
 
 const stableStringify = (value: unknown): string => JSON.stringify(value) ?? "";
@@ -38,6 +47,17 @@ export class IsolatedBackend {
   readonly ops: IsolatedOp[] = [];
   readonly providerCalls: string[] = [];
   private readonly byIdempotency = new Map<string, { id: string; bodyHash: string }>();
+  // Review round 4 P1-B: authoritative intentionId frontier (mirror of
+  // `pending_operation_confirmation_intentions`): first bind wins, repeats
+  // return the stored instant, confirm enforces the operation binding.
+  private readonly intentions = new Map<string, { firstSeenAt: string }>();
+  private readonly intentionBindings = new Map<string, string>();
+  private intentionKey(headers: Record<string, string | number | undefined>, intentionId: string): string {
+    const ws = String(headers['x-workspace-id'] ?? '');
+    const actor = String(headers['x-actor-id'] ?? '');
+    const device = String(headers['x-device-id'] ?? '');
+    return `${ws}|${actor}|${device}|${intentionId}`;
+  }
   private opSeq = 0;
   private txSeq = 0;
   private proposeFailuresLeft: number;
@@ -107,6 +127,8 @@ export class IsolatedBackend {
         idempotencyKey: key,
         status: "proposed",
         transactionId: null,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
       });
       this.byIdempotency.set(key, { id, bodyHash });
       return ok({ id, existing: false });
@@ -119,8 +141,8 @@ export class IsolatedBackend {
           id: op.id,
           status: "proposed",
           tool: op.tool,
-          createdAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+          createdAt: op.createdAt,
+          expiresAt: op.expiresAt,
         }));
       return ok({ items, total: items.length });
     }
@@ -129,7 +151,35 @@ export class IsolatedBackend {
       const id = decodeURIComponent(path.split("/")[3] ?? "");
       const op = this.ops.find((entry) => entry.id === id);
       if (!op || op.status !== "proposed") throw Object.assign(new Error("approval.not_found"), { statusCode: 404 });
+      // Review round 4 P1-B: intentionId→operationId enforcement (mirror of
+      // the API): identical re-binds proceed, divergent bindings are refused
+      // with zero effect.
+      const confirmBody = (opts.body ?? {}) as { intentionId?: unknown };
+      if (typeof confirmBody.intentionId === "string" && confirmBody.intentionId !== "") {
+        const key = this.intentionKey(opts.headers ?? {}, confirmBody.intentionId);
+        const bound = this.intentionBindings.get(key);
+        if (bound !== undefined && bound !== id) {
+          throw Object.assign(new Error("approval.intention_conflict"), { statusCode: 409, code: "approval.intention_conflict" });
+        }
+        if (bound === undefined) this.intentionBindings.set(key, id);
+      }
       return ok({ id, attestation: `golden-attestation-${id}-0123456789abcdef` });
+    }
+    // Review round 4 P1-B: authoritative intention bind (first durable writer
+    // wins; repeats return the stored instant with any bound operation).
+    const bindMatch = method === "POST" && path === "/pending-operations/v2/confirmation-intentions/bind";
+    if (bindMatch) {
+      const bindBody = (opts.body ?? {}) as { intentionId?: unknown };
+      const intentionId = typeof bindBody.intentionId === "string" ? bindBody.intentionId : "";
+      if (!intentionId) throw Object.assign(new Error("validation.error"), { statusCode: 400 });
+      const key = this.intentionKey(opts.headers ?? {}, intentionId);
+      const existing = this.intentions.get(key);
+      if (existing) {
+        return ok({ firstSeenAt: existing.firstSeenAt, fresh: false, operationId: this.intentionBindings.get(key) ?? null });
+      }
+      const at = new Date().toISOString();
+      this.intentions.set(key, { firstSeenAt: at });
+      return ok({ firstSeenAt: at, fresh: true, operationId: this.intentionBindings.get(key) ?? null });
     }
     const executeMatch = method === "POST" && /^\/pending-operations\/v2\/[^/]+\/execute$/.test(path);
     if (executeMatch) {
@@ -137,6 +187,16 @@ export class IsolatedBackend {
       const index = this.ops.findIndex((entry) => entry.id === id);
       const op = this.ops[index];
       if (!op || op.status !== "proposed") throw Object.assign(new Error("approval.not_found"), { statusCode: 404 });
+      // Review round 4 P1-B: divergent intention bindings are refused with
+      // zero effect (mirror of the API execute verify).
+      const executeBody = (opts.body ?? {}) as { intentionId?: unknown };
+      if (typeof executeBody.intentionId === "string" && executeBody.intentionId !== "") {
+        const key = this.intentionKey(opts.headers ?? {}, executeBody.intentionId);
+        const bound = this.intentionBindings.get(key);
+        if (bound !== undefined && bound !== id) {
+          throw Object.assign(new Error("approval.intention_conflict"), { statusCode: 409, code: "approval.intention_conflict" });
+        }
+      }
       this.txSeq += 1;
       const transactionId = `golden-tx-${this.txSeq}`;
       const mutationId = `golden-mutation-${this.txSeq}`;

@@ -290,7 +290,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
       let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
       const params = idSchema.safeParse(req.params);
       if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
-      const body = z.object({}).strict().safeParse(req.body ?? {});
+      const body = z.object({ intentionId: z.string().trim().min(1).max(240).optional() }).strict().safeParse(req.body ?? {});
       if (!body.success) return reply.code(400).send({ code: 'validation.error', issues: body.error.issues });
       try {
         if (!(await requireActionablePresentation(params.data.id, ctx, 'proposed', reply))) return;
@@ -302,10 +302,26 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
           : decision.reason === 'destructive'
             ? { mode: 'manual' as const, reason: 'destructive', riskTier: 'destructive' as const }
             : { mode: 'manual' as const, reason: 'policy_required', riskTier: decision.risk };
-        return reply.send(await v2Store.confirm(params.data.id, identity(ctx), authorization));
+        // Review round 4 P1-B: the caller's intentionId binds atomically
+        // inside confirm (identical ⇒ idempotent proceed; divergent ⇒ 409
+        // `approval.intention_conflict`, zero effect). Absent ⇒ legacy path.
+        return reply.send(await v2Store.confirm(
+          params.data.id,
+          identity(ctx),
+          authorization,
+          ...(body.data.intentionId !== undefined ? [{ intentionId: body.data.intentionId } as const] : []),
+        ));
       } catch (error) { return handleError(error, reply, true); }
     };
     app.post('/pending-operations/v2/:id/confirm', confirm);
+    // Review round 4 P1-B (direction iii): authoritative intention bind,
+    // called by the Agent BEFORE resolving the listing. First durable writer
+    // wins; repeats return the stored instant (`fresh: false`) with any
+    // operation already bound — the agent fails closed on a pre-existing
+    // sighting with a fresh local history (post-outage redelivery) and
+    // refuses a divergent target before the transport. Same confirm
+    // capability: marking an intent is part of confirming, never a read.
+    app.post('/pending-operations/v2/confirmation-intentions/bind', async (req, reply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.confirm)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const body = z.object({ intentionId: z.string().trim().min(1).max(240) }).strict().safeParse(req.body ?? {}); if (!body.success) return reply.code(400).send({ code: 'validation.error', issues: body.error.issues }); try { return reply.send(await v2Store.bindConfirmationIntention(identity(ctx), body.data.intentionId)); } catch (error) { return handleError(error, reply, true); } });
     app.post('/pending-operations/v2/:id/authorize', async (req, reply) => {
       if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.authorize)) return;
       let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
@@ -347,7 +363,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
     const reject = async (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.cancel)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); try { return reply.send(await v2Store.cancel(params.data.id, identity(ctx))); } catch (error) { return handleError(error, reply, true); } };
     app.post('/pending-operations/v2/:id/reject', reject);
     app.post('/pending-operations/v2/:id/cancel', reject);
-    app.post('/pending-operations/v2/:id/execute', async (req, reply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.execute)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); const body = z.object({ attestation: z.string().min(32) }).strict().safeParse(req.body ?? {}); if (!body.success) return reply.code(400).send({ code: 'validation.error', issues: body.error.issues }); if (!v2Executor) return reply.code(501).send({ code: 'unsupported', message: 'Executor V2 não configurado.' }); try { return reply.send(await v2Store.execute(body.data.attestation, identity(ctx), v2Executor, params.data.id)); } catch (error) { return handleError(error, reply, true); } });
+    app.post('/pending-operations/v2/:id/execute', async (req, reply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.execute)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); const body = z.object({ attestation: z.string().min(32), intentionId: z.string().trim().min(1).max(240).optional() }).strict().safeParse(req.body ?? {}); if (!body.success) return reply.code(400).send({ code: 'validation.error', issues: body.error.issues }); if (!v2Executor) return reply.code(501).send({ code: 'unsupported', message: 'Executor V2 não configurado.' }); try { return reply.send(await v2Store.execute(body.data.attestation, identity(ctx), v2Executor, params.data.id, ...(body.data.intentionId !== undefined ? [{ intentionId: body.data.intentionId } as const] : []))); } catch (error) { return handleError(error, reply, true); } });
     app.post('/pending-operations/v2/:id/retry', async (req, reply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.retry)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); try { if (!(await requireActionablePresentation(params.data.id, ctx, 'failed', reply))) return; return reply.send(await v2Store.retry(params.data.id, identity(ctx))); } catch (error) { return handleError(error, reply, true); } });
     // T6.1 (audit remediation, SPEC §11): controlled crash-recovery entry
     // point — same Agent-only auth/capability model as the sibling V2 routes.

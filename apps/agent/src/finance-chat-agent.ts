@@ -3194,6 +3194,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       if (typeof this.persistMessages !== 'function') {
         return Response.json({ code: 'agent.persistence_unavailable', message: 'SDK persistence is not available' }, { status: 503 });
       }
+      // R6 (PR137-FIX): the orchestrator instance is held so a failure
+      // AFTER `runTurn` returns but BEFORE the response is sent can
+      // compensate the witnesses this turn wrote but never exhibited (see
+      // the catch below). Pre-`runTurn` failures leave an empty ledger, so
+      // the compensation there is a precise no-op.
+      let turnOrchestrator: ConversationOrchestrator | undefined;
       try {
         const mutationPlan = this.mutationProposalPlan(restInput);
         // SPEC §7.8: a bare continuation answer ("Nubank") carries no
@@ -3219,7 +3225,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           || isRetryText(decisionText);
         const mutationApiClient = await this.mutationApiClientForTurn(restInput, needsMutation);
         const entityReader = needsMutation ? await this.entityReaderForTurn(restInput) : undefined;
-        const turnResult = await this.orchestratorForChannel({
+        turnOrchestrator = this.orchestratorForChannel({
           ...(mutationPlan ? { plan: () => mutationPlan } : {}),
           ...(mutationApiClient ? { mutationApiClient } : {}),
           // AC22 (A14) / A19 (F1): a turn carrying an attachment NEVER gets an
@@ -3242,7 +3248,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             : {}),
           ...(entityReader ? { entityReader } : {}),
           ...(draftStore ? { draftStore } : {}),
-        }).runTurn(restInput);
+        });
+        const turnResult = await turnOrchestrator.runTurn(restInput);
         if (turnResult.response) {
           // A17 (post-merge closure, issue #91) — learning is conditioned on
           // the turn's DEFINITIVE evidence, and it must run only AFTER that
@@ -3387,6 +3394,16 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           });
         }
       } catch (error) {
+        // R6 (PR137-FIX): the turn failed AFTER `runTurn` may have written
+        // presentation witnesses but BEFORE any response was sent — those
+        // cards were never exhibited, so they must not authorize a later
+        // confirmation. Ledger-precise best-effort (a no-op when the failure
+        // predates `runTurn` or wrote nothing); never masks the error below.
+        try {
+          turnOrchestrator?.revertUnpublishedTurnPresentations?.();
+        } catch {
+          // Compensation never breaks the error mapping below.
+        }
         const status = (error as { status?: unknown }).status;
         const code = (error as { code?: unknown }).code;
         if (typeof status === 'number' && status >= 400 && status < 600) {
