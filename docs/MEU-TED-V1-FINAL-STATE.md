@@ -13,10 +13,10 @@ com evidência própria de CI/deploy/smoke.
 
 | Camada | SHA vigente | Evidência |
 |---|---|---|
-| API (Contabo) | `bd1ed9b` (`bd1ed9bdbcaf99c407ac40f1d4a668099a405585`, build `37238430467`) | `/health` + `/ready` 200 em 10/10/2026, sem redeploy desde 04/10; `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados |
-| Agent (Cloudflare) | `65304dca` (merge #133) | Deploy run `38086070929` success/`ATTESTED`; `agent-release-smoke` PASS ao vivo para o SHA; GET pós-deploy confirmou `ready` e SHA |
-| PWA (Cloudflare) | `65304dca` (merge #133) | Deploy run `38086070927` success/`ATTESTED`; GET `/api/build-info` 200 reportando o mesmo SHA |
-| origin/main | `65304dca` (PR #133) | CI `38085540279` e PWA CI `38085540233` success |
+| API (Contabo) | `bd1ed9b` (`bd1ed9bdbcaf99c407ac40f1d4a668099a405585`, build `37238430467`) | `/health` + `/ready` 200 em 12/10/2026, sem redeploy desde 04/10; `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados |
+| Agent (Cloudflare) | `36ccaac` (merge #138) | Deploy run `38266117716` success/`ATTESTED` (deploy-smoke-pass, 12/10); smoke read-only pós-deploy para o SHA |
+| PWA (Cloudflare) | `36ccaac` (merge #138) | Deploy run `38266117889` success/`ATTESTED` (deploy-smoke-pass, 12/10) |
+| origin/main | `e7e15a3` (PR #139) | CI verde no HEAD do PR; deploys Agent/PWA pós-merge pendentes (último deploy atestado: `36ccaac`) |
 | Agent/PWA — último deploy atestado **antes** de #133 (histórico) | `687a7e8d` (PR #132) | Deploy runs `38081117169`/`38081117377`; CI `38080566857` / PWA CI `38080566817` |
 | Credencial demo (E2E/prova) | `demo@clinicademo.com` | criada em 08/10 via fluxo de convite; membership owner no workspace E2E sintético `550e8400…` (Test Family); senha só no env do operador |
 
@@ -58,8 +58,8 @@ PWA: `NEXT_PUBLIC_TED_ATTACHMENT_*` (anúncio, não gate),
 
 | Gate | Data/condição | Owner |
 |---|---|---|
-| #107 Phase A (gate+cohort+sink) | Gate de upload, coorte attachment-specific, sink G07 de upload e binding+OFF: **DONE + TESTED**; upload/R2 e baseline do sink: **PROD VERIFIED** em 08/10. Novo modelo puro e tipado para os cinco estados foi implementado/testado localmente; ainda **não coleta evidências live nem está wiringado no runtime**. Cleanup bounded/cursor: **TESTED**, deleção física live não validada; lifecycle R2 de 1 dia configurada e relida em 11/10, mas eventual. Attachment config live usa coorte `*` (geral), não canary restrito | **BLOCKED** para declarar A19 completa: modelo de estados ainda não é inventário operacional; falta prova de expiração física, bounded PDF + gate de privacidade/egress/retention e aceite dos canaries/modalidades exigidas. Não reimplementar gate/binding/sink existentes |
-| #105 Golden Workflows | Suite rápida permanece 23/23 executáveis PASS, 6 `pending-capability`; nova integração API/PostgreSQL validou via SQL GW-023 propose→confirm→execute, GW-024 cancel e GW-025 confirmação sem proposta (Postgres 16 descartável) | **PARTIAL — ENGINEERING IN PROGRESS**: undo, retry/redelivery, idempotência conversacional, isolamento ator/workspace, forget persistido, falha de transporte/inconclusiva e linguagem natural com dados faltantes ainda não foram provados pela nova camada; issue permanece OPEN |
+| #107 Phase A (gate+cohort+sink) | **CLOSED em 12/10/2026** (issue fechada com comentário de evidência): gate server-side, coorte attachment-specific, testes binding+OFF, sink durável G07 e inventário de 5 estados — todos implementados + testados (`tests/attachments` 26 arquivos/405 testes verdes); CI do `main` verde | Phase A encerrada; **A19 geral segue NOT READY** (rollout, expiração física R2, bounded PDF, privacidade/egress, canaries STT/Vision têm gates próprios) |
+| #105 Golden Workflows | Suite rápida 35/29 executáveis PASS (GW-033–038: categoria inexistente, conta não identificada, extrato com dados, fragmento de conta, forget redelivery, forget após esquecido), 6 `pending-capability` sem promoção; PG autoritativa: Bloco A (GW-023/024/025 + redelivery/recuperação) + Bloco B (GW-030 undo, GW-031 receita, GW-032 concorrência), tudo SQL-verified | **PARTIAL**: Blocos A+B fechados e mergeados (#137/#138); Bloco C/D determinístico mergeado (#139); restam matriz obrigatória completa, E2E final e capacidades adiadas; issue OPEN |
 | Release B (flip bearer legado) | ≥ `2026-10-16T21:36:06Z`, sink = 0 | operador (gate temporal) |
 | Cutover F3–F5 | gate humano (ADR-024/ADR-025) | operador |
 | Privacidade A19 (PDF → relay/provider) | classificação “sem egress” retificada; conteúdo pode sair pelo relay; sem prova de ZDR/retention neste endpoint | **WAITING_OPERATOR** |
@@ -105,6 +105,14 @@ smoke de PDF ficou bloqueado antes do upload (§11) e a regra de lifecycle R2 de
 secret, coorte, modelo ou canary foi alterado, e nenhum dado financeiro foi
 mutado. A19 continua **NOT READY** por gates de bounded processing, privacidade
 para eventual reativação, prova/canary e observabilidade.
+
+Em 12/10, três PRs Golden foram mergeados com CI 100% verde e deploys
+atestados: #137 (Bloco A fase 2, squash `b3861cf`), #138 (Bloco B, squash
+`36ccaac` — merge executado pelo operador) e #139 (Bloco C/D determinístico,
+squash `e7e15a3`). Agent/PWA em produção avançaram para `36ccaac` (deploys
+`38266117716`/`38266117889` ATTESTED deploy-smoke-pass); API Contabo segue
+`bd1ed9b` sem redeploy (`/health`+`/ready` 200 re-verificados em 12/10). #107
+(Phase A) foi **fechada** com comentário de evidência; #105 segue OPEN.
 
 ## 9. Ativação de attachments (08/10/2026) — evidência e achados
 
@@ -385,3 +393,18 @@ Branch `feat/golden-bloco-a-fase2-redelivery-recovery`, HEAD `c8ec2b3` (`fe7367f
 | Gates operacionais | Sem merge/deploy; sem mudança de flag/binding/coorte/secret/modelo/banco; PDF OFF; API Contabo segue `bd1ed9b` (divergência intencional); backups e worktree preservados. | **Pendentes de operador** (iguais à execução anterior). |
 
 **Veredito desta execução:** `PARTIAL — ADDITIONAL EVIDENCE REQUIRED`. O fix Fase 1 está implementado e provado (RED→GREEN + PG 25/25 + tester PASS + Planner-review APPROVED), mas o exit gate exige `CI=PASS` no HEAD final e `REVIEW=APPROVED` independente — ambos pendentes (CI em curso; reviewers indisponíveis por limite de uso). PR #137 permanece DRAFT até esses gates. V1 segue NOT READY. #105 e #107 seguem OPEN.
+
+### Atualização incremental — 12/10/2026 (fechamento PR #137, Bloco B, Bloco C/D, #107 CLOSED)
+
+Execução autônoma do operador (decisões técnicas delegadas; merges #137/#139 por autorização explícita pontual, #138 mergeado diretamente pelo operador com CI verde).
+
+| Frente | Evidência incremental | Estado honesto / saída |
+|---|---|---|
+| PR #137 (Bloco A fase 2) | Falha CI `expected 60 to be 54`: causa raiz provada (V060 no manifesto legado quebraria o boot fail-closed da VPS, ledger V054) — V060 voltou a canonical-only (`cdaae39`); GW-023 recovery convergia para inconclusivo para sempre — replay reconcilia com a listagem (`717fbfc`). CI 100% verde → merge squash `b3861cf`. | **MERGED.** Boot VPS preservado; promoção V060 a legacy-safe só junto ao job de migration aprovado. |
+| PR #138 (Bloco B) | GW-030 undo conversacional completo, GW-031 receita, GW-032 concorrência (1 efeito exato), todos SQL-verified vs PG real. 2 falhas de teste na 1ª rodada, ambas no teste (invariante com snapshot tardio; ordem de lock assumida) — produto correto; corrigidas (`96dfb03`, `523753e`). CI 100% verde. | **MERGED** (`36ccaac`, pelo operador). |
+| PR #139 (Bloco C/D) | GW-033–038 determinísticos (categoria inexistente, conta não identificada, extrato com dados, fragmento de conta, forget redelivery, forget após esquecido) + fix real: resposta de conta roteada como read agora continua o rascunho (exceto consulta de saldo). Catálogo 35/29/6. CI 100% verde. | **MERGED** (`e7e15a3`). |
+| #107 Phase A | Verificação dos 5 critérios contra o código no `main` + suite `tests/attachments` 405/405 local + CI verde; comentário de evidência + close. | **CLOSED.** A19 geral segue NOT READY (rollout/fases posteriores). |
+| #105 | Comentário de progresso (Blocos A+B+C parcial). | **OPEN** (matriz completa, E2E final, capacidades adiadas). |
+| Produção 12/10 | API Contabo `bd1ed9b` (`/health`+`/ready` 200 re-verificados, sem redeploy); Agent/PWA deployados e ATESTADOS em `36ccaac` (runs `38266117716`/`38266117889`, deploy-smoke-pass). Nenhuma flag/secret/coorte/modelo/banco alterado; zero mutação financeira. | Sem redeploy de API (compatível por design); deploys Cloudflare acompanham o `main`. |
+
+**Veredito desta execução:** `PARTIAL_TECHNICAL_CLOSURE`. Núcleo Golden A+B+C/D fechado e em produção Cloudflare; pendem gates de operador/data: Release B (≥2026-10-16T21:36:06Z), cutover F3–F5, backup/restore proof, homologação E2E com sessão Test Family, e a matriz obrigatória final da #105.
