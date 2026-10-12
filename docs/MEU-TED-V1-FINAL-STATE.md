@@ -14,9 +14,10 @@ com evidência própria de CI/deploy/smoke.
 | Camada | SHA vigente | Evidência |
 |---|---|---|
 | API (Contabo) | `bd1ed9b` (`bd1ed9bdbcaf99c407ac40f1d4a668099a405585`, build `37238430467`) | `/health` + `/ready` 200 em 12/10/2026, sem redeploy desde 04/10; `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados |
-| Agent (Cloudflare) | `36ccaac` (merge #138) | Deploy run `38266117716` success/`ATTESTED` (deploy-smoke-pass, 12/10); smoke read-only pós-deploy para o SHA |
-| PWA (Cloudflare) | `36ccaac` (merge #138) | Deploy run `38266117889` success/`ATTESTED` (deploy-smoke-pass, 12/10) |
-| origin/main | `e7e15a3` (PR #139) | CI verde no HEAD do PR; deploys Agent/PWA pós-merge pendentes (último deploy atestado: `36ccaac`) |
+| Agent (Cloudflare) | `bc2ba9e` (`bc2ba9e11c3272d29d89b8e8c64aa7d01c85cb1d`, build `38313912315`, builtAt `2026-10-12T21:58:24Z`) | Deploy run `38314671723` success/`ATTESTED` (deploy-smoke-pass, 12/10; attest job `115028677706`); smoke read-only pós-deploy para o SHA |
+| PWA (Cloudflare) | `bc2ba9e` (mesmo SHA/buildId) | Deploy run `38314671758` success/`ATTESTED` (deploy-smoke-pass, 12/10; attest job `115028936543`) |
+| origin/main | `bc2ba9e` | CI `38313912283` + PWA CI `38313912315` success; deploys Agent/PWA pós-merge executados e atestados |
+| Agent/PWA — deploy atestado anterior (histórico) | `36ccaac` (merge #138) | Deploy runs `38266117716`/`38266117889` success/`ATTESTED` (deploy-smoke-pass, 12/10) |
 | Agent/PWA — último deploy atestado **antes** de #133 (histórico) | `687a7e8d` (PR #132) | Deploy runs `38081117169`/`38081117377`; CI `38080566857` / PWA CI `38080566817` |
 | Credencial demo (E2E/prova) | `demo@clinicademo.com` | criada em 08/10 via fluxo de convite; membership owner no workspace E2E sintético `550e8400…` (Test Family); senha só no env do operador |
 
@@ -114,8 +115,10 @@ para eventual reativação, prova/canary e observabilidade.
 Em 12/10, três PRs Golden foram mergeados com CI 100% verde e deploys
 atestados: #137 (Bloco A fase 2, squash `b3861cf`), #138 (Bloco B, squash
 `36ccaac` — merge executado pelo operador) e #139 (Bloco C/D determinístico,
-squash `e7e15a3`). Agent/PWA em produção avançaram para `36ccaac` (deploys
-`38266117716`/`38266117889` ATTESTED deploy-smoke-pass); API Contabo segue
+squash `e7e15a3`). Agent/PWA em produção avançaram para `bc2ba9e` (doc
+`7fc9fe8`; deploys `38314671723`/`38314671758` ATTESTED deploy-smoke-pass —
+antes `36ccaac` via `38266117716`/`38266117889`; detalhe incremental ao fim
+deste documento); API Contabo segue
 `bd1ed9b` sem redeploy (`/health`+`/ready` 200 re-verificados em 12/10). #107
 (Phase A) foi **fechada** com comentário de evidência; #105 segue OPEN.
 
@@ -413,3 +416,15 @@ Execução autônoma do operador (decisões técnicas delegadas; merges #137/#13
 | Produção 12/10 | API Contabo `bd1ed9b` (`/health`+`/ready` 200 re-verificados, sem redeploy); Agent/PWA deployados e ATESTADOS em `36ccaac` (runs `38266117716`/`38266117889`, deploy-smoke-pass). Nenhuma flag/secret/coorte/modelo/banco alterado; zero mutação financeira. | Sem redeploy de API (compatível por design); deploys Cloudflare acompanham o `main`. |
 
 **Veredito desta execução:** `PARTIAL_TECHNICAL_CLOSURE`. Núcleo Golden A+B+C/D fechado e em produção Cloudflare; pendem gates de operador/data: Release B (≥2026-10-16T21:36:06Z), cutover F3–F5, backup/restore proof, homologação E2E com sessão Test Family, e a matriz obrigatória final da #105.
+
+### Atualização incremental — 12/10/2026 (avanço `36ccaac`→`bc2ba9e`, deploys atestados)
+
+Em 12/10, Agent/PWA em produção avançaram de `36ccaac` para `bc2ba9e`
+(`bc2ba9e11c3272d29d89b8e8c64aa7d01c85cb1d`, build `38313912315`, builtAt
+`2026-10-12T21:58:24Z`): Agent Deploy run `38314671723` e PWA Deploy run
+`38314671758`, com jobs gate+deploy+smoke+attest todos success e attestation
+`ATTESTED` reason `deploy-smoke-pass` (attest jobs `115028677706`/`115028936543`).
+CI `38313912283` + PWA CI `38313912315` success para o SHA. API Contabo segue
+`bd1ed9b` sem redeploy (`/health`+`/ready` 200). `origin/main` = `bc2ba9e`
+(verificado por `git rev-parse`, sem divergência). Nenhuma flag, secret, coorte,
+modelo ou banco alterado; zero mutação financeira. A19 segue **NOT READY**.
