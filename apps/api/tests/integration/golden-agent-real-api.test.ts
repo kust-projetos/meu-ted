@@ -1730,7 +1730,9 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
 
       // Race two confirms: the row lock serializes them — the first confirms,
       // the second re-emits (rotating the attestation, invalidating the
-      // first). Either order converges to exactly one live attestation.
+      // first). Which response holds the live attestation depends on lock
+      // order, so the test determines it empirically: exactly one of the two
+      // executes, the other is refused with zero effect — in either order.
       const confirmCall = () =>
         seam<{ attestation?: string }>('POST', `/pending-operations/v2/${operationId}/confirm`, { headers, body: {} });
       const [c1, c2] = await Promise.all([confirmCall(), confirmCall()]);
@@ -1738,26 +1740,42 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
       expect(c2.attestation).toBeTruthy();
       expect(c2.attestation).not.toBe(c1.attestation);
 
-      // The stale attestation is refused with zero effect; the live one
-      // executes exactly once — in either order.
-      let staleCode = 'unexpected-success';
-      let staleStatus = 0;
-      try {
-        await seam('POST', `/pending-operations/v2/${operationId}/execute`, {
-          headers,
-          body: { attestation: c1.attestation },
-        });
-      } catch (error) {
-        staleCode = String((error as { code?: unknown }).code ?? '');
-        staleStatus = Number((error as { statusCode?: unknown }).statusCode ?? 0);
+      const tryExecute = async (attestation: string | undefined): Promise<{ code: string; status: number; succeeded: boolean }> => {
+        try {
+          await seam('POST', `/pending-operations/v2/${operationId}/execute`, {
+            headers,
+            body: { attestation },
+          });
+          return { code: 'ok', status: 200, succeeded: true };
+        } catch (error) {
+          return {
+            code: String((error as { code?: unknown }).code ?? ''),
+            status: Number((error as { statusCode?: unknown }).statusCode ?? 0),
+            succeeded: false,
+          };
+        }
+      };
+      const first = await tryExecute(c1.attestation);
+      // The loser is refused with zero effect: a stale attestation replays as
+      // 403; an in-flight execution (had the winner already claimed) as 409.
+      // Exactly one pipeline succeeds — the SQL oracle below proves the
+      // single effect.
+      const second = first.succeeded
+        ? await tryExecute(c2.attestation)
+        : await (async () => {
+            expect(first.code).toBe('approval.attestation_replayed');
+            expect(first.status).toBe(403);
+            const winner = await tryExecute(c2.attestation);
+            expect(winner.succeeded).toBe(true);
+            return winner;
+          })();
+      if (first.succeeded) {
+        expect(second.succeeded).toBe(false);
+        expect(second.code).toBe('approval.attestation_replayed');
+        expect(second.status).toBe(403);
       }
-      expect(staleCode).toBe('approval.attestation_replayed');
-      expect(staleStatus).toBe(403);
-      const done = await seam<{ status?: string }>('POST', `/pending-operations/v2/${operationId}/execute`, {
-        headers,
-        body: { attestation: c2.attestation },
-      });
-      expect(done.status).toBe('succeeded');
+      const successes = [first, second].filter((r) => r.succeeded).length;
+      expect(successes).toBe(1);
 
       // ── Authoritative postconditions, read from SQL. ────────────────────
       const settledRow = await readPendingRow(db, operationId, householdId);
@@ -1959,7 +1977,8 @@ describe('F4 golden Bloco B — conversational undo against the authoritative Po
       // ── Turn 3: conversational undo PROPOSES — free text never executes.
       const undoRequestId = `golden-gw030-undo-${randomUUID()}`;
       const asked = await harness.runTurn({ text: 'desfaz o último lançamento', intentionId: undoRequestId });
-      expect(undoApiCalls).toBe(0);
+      const apiCallsAfterTextTurn = undoApiCalls;
+      expect(apiCallsAfterTextTurn).toBe(0);
       expect(asked.undoProposal?.status).toBe('proposed');
       expect(asked.response?.text).toContain('botão');
       expect(await countTransactions(db, householdId)).toBe(1);
@@ -1989,7 +2008,7 @@ describe('F4 golden Bloco B — conversational undo against the authoritative Po
       const DUPLICATE_FINANCIAL_EFFECT = (await readTransactionRows(db, householdId)).length;
       expect(DUPLICATE_FINANCIAL_EFFECT).toBe(0);
       const FALSE_SUCCESS =
-        asked.undoProposal?.status === 'proposed' && undoApiCalls === 0 ? 0 : 1;
+        asked.undoProposal?.status === 'proposed' && apiCallsAfterTextTurn === 0 ? 0 : 1;
       expect(FALSE_SUCCESS).toBe(0);
       const CROSS_WORKSPACE_LEAK =
         (await countTransactions(db, decoy.householdId)) !== 0 ||
