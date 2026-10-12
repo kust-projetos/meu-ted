@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "lint": "biome check src tests",
+    "lint": "biome check src tests --max-diagnostics=500",
     "dev": "tsx watch src/server/index.ts",
     "start": "node --import tsx src/server/index.ts",
     "test": "vitest run --exclude=\"tests/integration/**\"",
