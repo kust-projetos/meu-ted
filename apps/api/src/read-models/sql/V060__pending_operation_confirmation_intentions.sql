@@ -10,8 +10,10 @@
 -- `approval.intention_conflict` (409) with zero effect.
 --
 -- Dual-schema safe (pure new table, no FK, no canonical-only columns), so it
--- stays applicable in legacy mode like V051/V052 (pending-operation V2
--- execution bindings/recovery).
+-- becomes applicable in legacy mode like V051/V052 only after the approved
+-- VPS migration job (docs/runbooks/api-migration-v2.md); until then it stays
+-- canonical-only to preserve VPS boot (legacy ledger tops at V054, web
+-- verify-only fail-closed).
 CREATE TABLE IF NOT EXISTS pending_operation_confirmation_intentions (
   workspace_id TEXT NOT NULL,
   actor_id TEXT NOT NULL,
