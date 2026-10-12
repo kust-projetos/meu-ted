@@ -55,6 +55,7 @@
  *   `pending-v2-e2e.test.ts`; not re-proved through the orchestrator here.
  */
 import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
@@ -63,6 +64,9 @@ import { createDelegatedTokenForTest, verifyDelegatedTurnToken } from '../../src
 import { requireTestDatabase } from '../../src/db/db-guard.js';
 import { createPool } from '../../src/db/pool.js';
 import { createPostgresPendingOperationV2Store, type PendingIdentity, type PendingOperationV2Store } from '../../src/approvals/pending-v2.js';
+import { createInMemoryPendingOperationStore } from '../../src/approvals/pending.js';
+import { createUndoService } from '../../src/approvals/undo.js';
+import { createPostgresAuditLogStore } from '../../src/audit/store.js';
 import { runMigrations } from '../../src/read-models/sql/migrate.js';
 import { createPostgresReadModelStore } from '../../src/read-models/postgres-store.js';
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
@@ -81,6 +85,16 @@ import { InMemoryMutationDraftStore } from '../../../agent/src/mutations/mutatio
 import { createEvidenceEnvelope } from '../../../agent/src/evidence/evidence-envelope.js';
 import { renderInconclusive, renderMutationResult } from '../../../agent/src/responses/deterministic-responses.js';
 import type { ApiRequestOptions } from '../../../agent/src/tools/api-client.js';
+// Bloco B (GW-030) — conversational undo through the real surface: the
+// Agent-side two-step undo-proposal service plus the undo API. Test-only
+// cross-imports by relative path (same contract as the orchestrator imports
+// above — no package dependency, no workspace coupling).
+import {
+  initializeUndoProposalSchema,
+  SqlUndoProposalStore,
+  UndoProposalService,
+  type UndoIdentity,
+} from '../../../agent/src/mutations/undo-proposal.js';
 
 // ─── Fail-closed environment gate ───────────────────────────────────────────
 
@@ -141,13 +155,14 @@ const APPROVAL_CAPABILITIES: readonly string[] = [
   'financial.approval.cancel',
 ];
 
-const composeAuthoritativeApp = (pool: Pool): FastifyInstance => {
-  const app = Fastify({ logger: false });
-  // Same shape as the production delegation preHandler (routes/index.ts):
-  // verify the signed turn token, then derive identity from the CLAIMS —
-  // never from a free header. This is the delegated-token boundary: it proves
-  // token/capability verification and downstream persistence, NOT full
-  // production user-membership authentication (no session/membership layer).
+/**
+ * Test-only delegation preHandler, extracted so the V2-only composition below
+ * and the Bloco B undo-capable composition share the exact same delegated
+ * identity boundary (verified turn token → identity from CLAIMS, never from
+ * free headers). Same shape as the production delegation preHandler
+ * (routes/index.ts).
+ */
+const attachDelegatedTestPreHandler = (app: FastifyInstance): void => {
   app.addHook('preHandler', async (request, reply) => {
     const header = request.headers.authorization;
     const token = typeof header === 'string' && header.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : '';
@@ -170,6 +185,11 @@ const composeAuthoritativeApp = (pool: Pool): FastifyInstance => {
     };
     request.delegatedTurn = claims;
   });
+};
+
+const composeAuthoritativeApp = (pool: Pool): FastifyInstance => {
+  const app = Fastify({ logger: false });
+  attachDelegatedTestPreHandler(app);
   registerPendingOperationRoutes(app, {
     resolveToken: async () => {
       // Unreachable: every request carries a verified delegated turn token, so
@@ -186,6 +206,84 @@ const composeAuthoritativeApp = (pool: Pool): FastifyInstance => {
     readModel: createPostgresReadModelStore({ pool }),
   });
   return app;
+};
+
+/**
+ * Bloco B (GW-030) — undo-capable composition. Mirrors the production route
+ * shape (routes/index.ts): the V2 approval surface PLUS the V1 undo route
+ * (`POST /pending-operations/undo`) served by a real `UndoService` over the
+ * same PostgreSQL. The V2-only composition above is untouched; only the undo
+ * vertical uses this app.
+ */
+const UNDO_CAPABILITIES: readonly string[] = ['financial.undo.execute'];
+
+const composeUndoCapableApp = (pool: Pool): FastifyInstance => {
+  const app = Fastify({ logger: false });
+  attachDelegatedTestPreHandler(app);
+  const writes = createPostgresWriteStore({ pool });
+  registerPendingOperationRoutes(app, {
+    store: createInMemoryPendingOperationStore(),
+    resolveToken: async () => {
+      throw Object.assign(new Error('golden.real_api.device_token_path_unreachable'), {
+        statusCode: 401,
+        code: 'auth.session_required',
+      });
+    },
+    undoService: createUndoService({ auditLogs: createPostgresAuditLogStore(pool), writes }),
+    v2Store: createPostgresPendingOperationV2Store(pool),
+    v2Executor: createPendingOperationV2Executor(createPostgresWriteStore({ pool })),
+    readModel: createPostgresReadModelStore({ pool }),
+  });
+  return app;
+};
+
+/**
+ * Bloco B (GW-030) — Agent-side undo-proposal durability over disposable
+ * SQLite (node:sqlite `:memory:`, same engine family as the DO store in
+ * production). Table layout owned by `initializeUndoProposalSchema`; the shim
+ * only adapts node:sqlite to the `UndoSql` shape.
+ */
+const createUndoProposalStore = (): SqlUndoProposalStore => {
+  const db = new DatabaseSync(':memory:');
+  const sql = {
+    exec<T>(query: string, ...bindings: unknown[]): Iterable<T> {
+      const statement = db.prepare(query);
+      if (/^\s*(SELECT|PRAGMA|WITH)/i.test(query) || /\bRETURNING\b/i.test(query)) {
+        return statement.all(...(bindings as never[])) as T[];
+      }
+      statement.run(...(bindings as never[]));
+      return [] as T[];
+    },
+  };
+  initializeUndoProposalSchema(sql);
+  return new SqlUndoProposalStore(sql);
+};
+
+/**
+ * Bloco B (GW-030) — test double of the DO `previewUndoTarget`: resolves the
+ * most recent reversible audit entry through the REAL Postgres audit store
+ * (the same reader the API undo service uses), preferring the actor's own
+ * entries. Returns the audit-log id the undo proposal binds as its fixed
+ * target — never client input.
+ */
+const REVERSIBLE_OPERATIONS = new Set([
+  'transactions.expense.create',
+  'transactions.income.create',
+  'transactions.transfer.create',
+  'accounts.create',
+  'categories.create',
+]);
+
+const previewLastReversibleAudit = (pool: Pool) => async (identity: UndoIdentity): Promise<{ id: string } | null> => {
+  const reader = createPostgresAuditLogStore(pool);
+  const { items } = await reader.listAuditLogs(identity.workspaceId, { limit: 50 });
+  const candidates = (items ?? [])
+    .filter((item) => typeof item.id === 'string' && REVERSIBLE_OPERATIONS.has(String(item.operation)))
+    .sort((a, b) => Date.parse(String(b.createdAt ?? 0)) - Date.parse(String(a.createdAt ?? 0)));
+  if (candidates.length === 0) return null;
+  const own = candidates.filter((item) => item.actorId === identity.actorId);
+  const target = (own.length > 0 ? own[0] : candidates[0])!;
+  return { id: String(target.id) };
 };
 
 /**
@@ -208,6 +306,9 @@ const composeAuthoritativeApp = (pool: Pool): FastifyInstance => {
 export const createRequestSeam = (
   app: FastifyInstance,
   expected: Readonly<{ householdId: string; actorId: string; deviceId: string }>,
+  // Bloco B (GW-030): the undo call carries the NARROW undo capability, not
+  // the approval set. Defaults preserve every existing caller.
+  capabilities: readonly string[] = APPROVAL_CAPABILITIES,
 ): MutationRequest =>
   async <T = Record<string, unknown>>(method: string, path: string, opts: ApiRequestOptions = {}): Promise<T> => {
     const headerValue = (value: string | number | undefined): string | undefined => {
@@ -227,7 +328,7 @@ export const createRequestSeam = (
       throw Object.assign(new Error('golden.real_api.identity_mismatch'), { statusCode: 500, code: 'golden.real_api.identity_mismatch' });
     }
     const token = await createDelegatedTokenForTest(
-      { actorId, workspaceId, role: 'member', capabilities: [...APPROVAL_CAPABILITIES], requestId: `golden-real-api-${randomUUID()}`, deviceId },
+      { actorId, workspaceId, role: 'member', capabilities: [...capabilities], requestId: `golden-real-api-${randomUUID()}`, deviceId },
       DELEGATION_SECRET,
     );
     const headers: Record<string, string> = { accept: 'application/json', authorization: `Bearer ${token}` };
@@ -510,19 +611,32 @@ const readTransactionRows = async (db: Pool, householdId: string): Promise<reado
 const countTransactions = async (db: Pool, householdId: string): Promise<number> =>
   (await readTransactionRows(db, householdId)).length;
 
+/** Counts ledger rows bound to NO known tenant of the case (leak oracle). */
+const countOrphanLedgerRows = async (db: Pool, householdIds: readonly string[]): Promise<number> => {
+  const transactions = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM transactions WHERE NOT (household_id = ANY($1::uuid[]))`,
+    [householdIds],
+  );
+  const pending = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM pending_operations WHERE NOT (workspace_id = ANY($1::uuid[]))`,
+    [householdIds],
+  );
+  return Number(transactions.rows[0]?.n ?? -1) + Number(pending.rows[0]?.n ?? -1);
+};
+
 /**
  * Resolves a seeded default category (the createAccount bootstrap applies the
  * default catalog to a fresh household — production behavior). The golden
  * verticals name `Alimentação`, which is a default macro category, so a fresh
  * synthetic workspace already carries it.
  */
-const readCategoryIdByName = async (db: Pool, householdId: string, name: string): Promise<string> => {
+const readCategoryIdByName = async (db: Pool, householdId: string, name: string, kind = 'expense'): Promise<string> => {
   const result = await db.query<{ id: string }>(
     `SELECT id FROM categories
       WHERE household_id = $1 AND parent_id IS NULL AND lower(name) = lower($2)
-        AND kind = 'expense' AND status = 'active' AND deleted_at IS NULL
+        AND kind = $3 AND status = 'active' AND deleted_at IS NULL
       LIMIT 1`,
-    [householdId, name],
+    [householdId, name, kind],
   );
   const row = result.rows[0];
   if (row === undefined) throw new Error(`golden.real_api.category_missing:${name}`);
@@ -841,19 +955,6 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
   // never fires (or fires twice) fails instead of silently proving nothing.
   // Each case runs under a UNIQUE synthetic tenant plus an untouched decoy
   // tenant, and cleans only its own fixtures via afterEach.
-
-  /** Counts ledger rows bound to NO known tenant of the case (leak oracle). */
-  const countOrphanLedgerRows = async (db: Pool, householdIds: readonly string[]): Promise<number> => {
-    const transactions = await db.query<{ n: number }>(
-      `SELECT COUNT(*)::int AS n FROM transactions WHERE NOT (household_id = ANY($1::uuid[]))`,
-      [householdIds],
-    );
-    const pending = await db.query<{ n: number }>(
-      `SELECT COUNT(*)::int AS n FROM pending_operations WHERE NOT (workspace_id = ANY($1::uuid[]))`,
-      [householdIds],
-    );
-    return Number(transactions.rows[0]?.n ?? -1) + Number(pending.rows[0]?.n ?? -1);
-  };
 
   /** Matches ONLY the authoritative V2 execute call of the composed app. */
   const isV2ExecuteCall = (method: string, path: string): boolean =>
@@ -1496,6 +1597,419 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
           ? 1
           : 0;
       expect(UNAUTHORIZED_MUTATION).toBe(0);
+      const CROSS_WORKSPACE_LEAK =
+        (await countTransactions(db, decoy.householdId)) !== 0 ||
+        (await readAccountBalanceCents(db, decoyAccount.id)) !== 50_000 ||
+        (await countOrphanLedgerRows(db, [householdId, decoy.householdId])) !== 0
+          ? 1
+          : 0;
+      expect(CROSS_WORKSPACE_LEAK).toBe(0);
+    },
+    60_000,
+  );
+
+  itIfDatabase(
+    'GW-031 golden vertical (Bloco B): income propose → confirm → execute books exactly one canonical income transaction (SQL-verified)',
+    async () => {
+      const db = pool!;
+      const { householdId } = await seedTenant(db);
+      const decoy = await seedTenant(db);
+      const actor = { actorId: randomUUID(), deviceId: randomUUID() };
+      const account = await writes!.createAccount(householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const decoyAccount = await writes!.createAccount(decoy.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      // The default catalog bootstrapped by `createAccount` carries the
+      // `Renda` income macro (production behavior).
+      const category = { id: await readCategoryIdByName(db, householdId, 'Renda', 'income') };
+      const harness = createCaseHarness(householdId, actor);
+
+      // ── Turn 1: the income proposal. A proposal NEVER moves money. ──────
+      const proposed = await harness.runTurn({
+        text: 'recebi 200 de salário categoria renda',
+        intentionId: `golden-gw031-propose-${randomUUID()}`,
+      });
+      expect(proposed.mutation?.status).toBe('proposed');
+      const operationId = proposed.mutation?.operationId ?? '';
+      expect(operationId).not.toBe('');
+      expect(proposed.response?.text).toMatch(/Confirma\?/);
+      expect(proposed.response?.text).not.toMatch(/registrado/i);
+
+      const afterPropose = await readPendingRow(db, operationId, householdId);
+      expect(afterPropose.execution_status).toBe('proposed');
+      expect(afterPropose.tool).toBe('transactions.income.create');
+      expect(afterPropose.actor_id).toBe(actor.actorId);
+      expect(afterPropose.device_id).toBe(actor.deviceId);
+      expect(afterPropose.normalized_args).toMatchObject({
+        amountCents: 20000,
+        accountId: account.id,
+        categoryId: category.id,
+      });
+      expect(await countTransactions(db, householdId)).toBe(0);
+
+      // ── Turn 2: explicit human confirmation executes once. ──────────────
+      const executed = await harness.runTurn({ text: 'sim', intentionId: `golden-gw031-confirm-${randomUUID()}` });
+      expect(executed.mutation?.status).toBe('succeeded');
+      const receipt = executed.mutation?.receipt;
+      expect(receipt).toBeTruthy();
+      expect(executed.response?.text).toBe(renderMutationResult('succeeded'));
+
+      // ── Authoritative postconditions, read from SQL. ────────────────────
+      const afterExecute = await readPendingRow(db, operationId, householdId);
+      expect(afterExecute.execution_status).toBe('succeeded');
+      expect(afterExecute.mutation_id).toBe(receipt?.mutationId);
+      const rows = await readTransactionRows(db, householdId);
+      expect(rows).toHaveLength(1);
+      const transaction = rows[0]!;
+      expect(transaction).toMatchObject({
+        kind: 'income',
+        amount_cents: 20000,
+        account_id: account.id,
+        category_id: category.id,
+        household_id: householdId,
+      });
+      expect(receipt?.entity).toEqual({ type: 'transaction', id: transaction.id });
+      // ADR-018: exact balance delta, no clamp, no rounding.
+      expect(await readAccountBalanceCents(db, account.id)).toBe(70_000);
+
+      // ── Mandatory invariants (explicitly named). ─────────────────────────
+      const DUPLICATE_FINANCIAL_EFFECT = rows.length - 1;
+      expect(DUPLICATE_FINANCIAL_EFFECT).toBe(0);
+      const FALSE_SUCCESS =
+        executed.mutation?.status === 'succeeded' && rows.length === 0 ? 1 : 0;
+      expect(FALSE_SUCCESS).toBe(0);
+      const CROSS_WORKSPACE_LEAK =
+        (await countTransactions(db, decoy.householdId)) !== 0 ||
+        (await readAccountBalanceCents(db, decoyAccount.id)) !== 50_000 ||
+        (await countOrphanLedgerRows(db, [householdId, decoy.householdId])) !== 0
+          ? 1
+          : 0;
+      expect(CROSS_WORKSPACE_LEAK).toBe(0);
+    },
+    60_000,
+  );
+
+  itIfDatabase(
+    'GW-032 concurrency (Bloco B): two confirm+execute pipelines racing one operation book exactly one effect (SQL-verified)',
+    async () => {
+      const db = pool!;
+      const { householdId } = await seedTenant(db);
+      const decoy = await seedTenant(db);
+      const actor = { actorId: randomUUID(), deviceId: randomUUID() };
+      const account = await writes!.createAccount(householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const decoyAccount = await writes!.createAccount(decoy.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const seam = createRequestSeam(app!, { householdId, actorId: actor.actorId, deviceId: actor.deviceId });
+      const headers = {
+        'x-workspace-id': householdId,
+        'x-actor-id': actor.actorId,
+        'x-device-id': actor.deviceId,
+      };
+      // Propose through the conversational vertical (keeps the golden shape).
+      const harness = createCaseHarness(householdId, actor);
+      const proposed = await harness.runTurn({
+        text: 'gastei 50 de carne categoria alimentação',
+        intentionId: `golden-gw032-propose-${randomUUID()}`,
+      });
+      expect(proposed.mutation?.status).toBe('proposed');
+      const operationId = proposed.mutation?.operationId ?? '';
+      expect(operationId).not.toBe('');
+
+      // Race two confirms: the row lock serializes them — the first confirms,
+      // the second re-emits (rotating the attestation, invalidating the
+      // first). Which response holds the live attestation depends on lock
+      // order, so the test determines it empirically: exactly one of the two
+      // executes, the other is refused with zero effect — in either order.
+      const confirmCall = () =>
+        seam<{ attestation?: string }>('POST', `/pending-operations/v2/${operationId}/confirm`, { headers, body: {} });
+      const [c1, c2] = await Promise.all([confirmCall(), confirmCall()]);
+      expect(c1.attestation).toBeTruthy();
+      expect(c2.attestation).toBeTruthy();
+      expect(c2.attestation).not.toBe(c1.attestation);
+
+      const tryExecute = async (attestation: string | undefined): Promise<{ code: string; status: number; succeeded: boolean }> => {
+        try {
+          await seam('POST', `/pending-operations/v2/${operationId}/execute`, {
+            headers,
+            body: { attestation },
+          });
+          return { code: 'ok', status: 200, succeeded: true };
+        } catch (error) {
+          return {
+            code: String((error as { code?: unknown }).code ?? ''),
+            status: Number((error as { statusCode?: unknown }).statusCode ?? 0),
+            succeeded: false,
+          };
+        }
+      };
+      const first = await tryExecute(c1.attestation);
+      // The loser is refused with zero effect: a stale attestation replays as
+      // 403; an in-flight execution (had the winner already claimed) as 409.
+      // Exactly one pipeline succeeds — the SQL oracle below proves the
+      // single effect.
+      const second = first.succeeded
+        ? await tryExecute(c2.attestation)
+        : await (async () => {
+            expect(first.code).toBe('approval.attestation_replayed');
+            expect(first.status).toBe(403);
+            const winner = await tryExecute(c2.attestation);
+            expect(winner.succeeded).toBe(true);
+            return winner;
+          })();
+      if (first.succeeded) {
+        expect(second.succeeded).toBe(false);
+        expect(second.code).toBe('approval.attestation_replayed');
+        expect(second.status).toBe(403);
+      }
+      const successes = [first, second].filter((r) => r.succeeded).length;
+      expect(successes).toBe(1);
+
+      // ── Authoritative postconditions, read from SQL. ────────────────────
+      const settledRow = await readPendingRow(db, operationId, householdId);
+      expect(settledRow.execution_status).toBe('succeeded');
+      expect(settledRow.execution_attempt_count).toBe(1);
+      const rows = await readTransactionRows(db, householdId);
+      expect(rows).toHaveLength(1);
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+
+      // ── Mandatory invariants (explicitly named). ─────────────────────────
+      const DUPLICATE_FINANCIAL_EFFECT = rows.length - 1;
+      expect(DUPLICATE_FINANCIAL_EFFECT).toBe(0);
+      const UNAUTHORIZED_MUTATION =
+        settledRow.actor_id !== actor.actorId ||
+        settledRow.device_id !== actor.deviceId ||
+        rows[0]!.household_id !== householdId
+          ? 1
+          : 0;
+      expect(UNAUTHORIZED_MUTATION).toBe(0);
+      const CROSS_WORKSPACE_LEAK =
+        (await countTransactions(db, decoy.householdId)) !== 0 ||
+        (await readAccountBalanceCents(db, decoyAccount.id)) !== 50_000 ||
+        (await countOrphanLedgerRows(db, [householdId, decoy.householdId])) !== 0
+          ? 1
+          : 0;
+      expect(CROSS_WORKSPACE_LEAK).toBe(0);
+    },
+    60_000,
+  );
+});
+
+// ─── F4 Bloco B — conversational undo against the authoritative API ──────────
+//
+// GW-030 proves the complete conversational undo vertical through the REAL
+// surface: expense booked via the orchestrator, `desfaz` proposing through
+// `UndoProposalService` (Agent-side two-step, SQLite-backed like the DO
+// store), the authenticated decision (the PWA button path, driven here
+// directly on the service) executing the reversal through the REAL undo API,
+// and the replay converging without a second effect. SQL postconditions are
+// authoritative; response copy is secondary evidence.
+//
+// Composition note: this describe mounts its own app with the V2 approval
+// surface PLUS `POST /pending-operations/undo` (same route shape as
+// production in routes/index.ts). The V2-only composition above is untouched.
+
+type UndoApiDeps = Readonly<{
+  store: SqlUndoProposalStore;
+  preview: (identity: UndoIdentity) => Promise<{ id: string } | null>;
+  api: {
+    undo: (input: { lastOperationId: string; idempotencyKey: string; identity: UndoIdentity }) => Promise<unknown>;
+  };
+}>;
+
+describe('F4 golden Bloco B — conversational undo against the authoritative PostgreSQL API (issue #105)', () => {
+  let pool: Pool | undefined;
+  let writes: ReturnType<typeof createPostgresWriteStore> | undefined;
+  let app: FastifyInstance | undefined;
+
+  beforeAll(async () => {
+    if (envState.state === 'partial') {
+      throw new Error(
+        `golden.real_api.partial_env: refusing to run — ${envState.missing.join(' and ')} must be provided together with the other variable. ` +
+          'A half-configured environment fails closed; it never degrades to a skip.',
+      );
+    }
+    if (envState.state !== 'full') return;
+    pool = createPool({ connectionString: envState.databaseUrl, max: 8 });
+    await requireTestDatabase(pool, 'golden-agent-real-api-bloco-b');
+    await runMigrations(pool);
+    writes = createPostgresWriteStore({ pool });
+    app = composeUndoCapableApp(pool);
+    await app.ready();
+  }, 120_000);
+
+  afterEach(async () => {
+    if (!pool) return;
+    for (const householdId of [...tenants]) await cleanupTenant(pool, householdId);
+  });
+
+  afterAll(async () => {
+    if (pool && tenants.size > 0) {
+      for (const householdId of [...tenants]) await cleanupTenant(pool, householdId);
+    }
+    await app?.close();
+    await pool?.end();
+  });
+
+  const createUndoCaseHarness = (
+    householdId: string,
+    actor: Readonly<{ actorId: string; deviceId: string }>,
+    undoDeps: UndoApiDeps,
+  ): Readonly<{
+    runTurn: (input: Readonly<{ text: string; intentionId: string }>) => Promise<TurnResult>;
+    undoService: UndoProposalService;
+  }> => {
+    const db = pool!;
+    const readModel = createPostgresReadModelStore({ pool: db });
+    const entityReader = {
+      scope: { workspaceId: householdId },
+      listAccounts: async () =>
+        (await readModel.listAccounts(householdId)).map((account) => ({
+          id: account.id,
+          name: account.name,
+          status: account.status,
+        })),
+      listCategories: async () =>
+        (await readModel.listCategories(householdId)).map((category) => ({
+          id: category.id,
+          name: category.name,
+          status: category.status,
+        })),
+    };
+    const undoService = new UndoProposalService({ store: undoDeps.store, preview: undoDeps.preview, api: undoDeps.api });
+    const orchestrator = new ConversationOrchestrator({
+      mutationApiClient: new MutationApiClient({
+        request: createRequestSeam(app!, { householdId, actorId: actor.actorId, deviceId: actor.deviceId }),
+        events: () => {},
+      }),
+      draftStore: new InMemoryMutationDraftStore(),
+      undoProposals: { store: undoDeps.store, preview: undoDeps.preview, api: undoDeps.api },
+      entityReader,
+      evidenceProvider: async () =>
+        createEvidenceEnvelope([
+          { ref: 'accounts', source: 'golden-real-api', retrievedAt: new Date().toISOString(), status: 'empty', reason: 'period_empty', data: [] },
+          { ref: 'transactions', source: 'golden-real-api', retrievedAt: new Date().toISOString(), status: 'empty', reason: 'period_empty', data: [] },
+        ]),
+      responseProvider: async () => 'Resposta do harness PostgreSQL, sem alegações financeiras.',
+      events: () => {},
+    });
+    const identity: AuthenticatedIdentity = {
+      actorId: actor.actorId,
+      workspaceId: householdId,
+      role: 'member',
+      deviceId: actor.deviceId,
+    };
+    return {
+      runTurn: (input) =>
+        orchestrator.runTurn(normalizeRestTurn({ text: input.text, intentionId: input.intentionId }, identity)),
+      undoService,
+    };
+  };
+
+  itIfDatabase(
+    'GW-030 conversational undo (Bloco B): expense → desfazer proposal → button decision reverses exactly once, replay converges (SQL-verified)',
+    async () => {
+      const db = pool!;
+      const { householdId } = await seedTenant(db);
+      const decoy = await seedTenant(db);
+      const actor = { actorId: randomUUID(), deviceId: randomUUID() };
+      const undoIdentity: UndoIdentity = { workspaceId: householdId, actorId: actor.actorId, deviceId: actor.deviceId };
+      const account = await writes!.createAccount(householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const decoyAccount = await writes!.createAccount(decoy.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const undoSeam = createRequestSeam(
+        app!,
+        { householdId, actorId: actor.actorId, deviceId: actor.deviceId },
+        UNDO_CAPABILITIES,
+      );
+      let undoApiCalls = 0;
+      const harness = createUndoCaseHarness(householdId, actor, {
+        store: createUndoProposalStore(),
+        preview: previewLastReversibleAudit(db),
+        api: {
+          undo: async ({ lastOperationId, idempotencyKey, identity }) => {
+            undoApiCalls += 1;
+            return undoSeam('POST', '/pending-operations/undo', {
+              headers: {
+                'x-workspace-id': identity.workspaceId,
+                'x-actor-id': identity.actorId,
+                'x-device-id': identity.deviceId,
+              },
+              body: { lastOperationId },
+              idempotencyKey,
+            });
+          },
+        },
+      });
+
+      // ── Turns 1–2: book the expense through the conversational vertical.
+      const proposed = await harness.runTurn({
+        text: 'gastei 50 de carne categoria alimentação',
+        intentionId: `golden-gw030-propose-${randomUUID()}`,
+      });
+      expect(proposed.mutation?.status).toBe('proposed');
+      const confirmed = await harness.runTurn({ text: 'sim', intentionId: `golden-gw030-confirm-${randomUUID()}` });
+      expect(confirmed.mutation?.status).toBe('succeeded');
+      const rows = await readTransactionRows(db, householdId);
+      expect(rows).toHaveLength(1);
+      const transactionId = rows[0]!.id;
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+
+      // ── Turn 3: conversational undo PROPOSES — free text never executes.
+      const undoRequestId = `golden-gw030-undo-${randomUUID()}`;
+      const asked = await harness.runTurn({ text: 'desfaz o último lançamento', intentionId: undoRequestId });
+      const apiCallsAfterTextTurn = undoApiCalls;
+      expect(apiCallsAfterTextTurn).toBe(0);
+      expect(asked.undoProposal?.status).toBe('proposed');
+      expect(asked.response?.text).toContain('botão');
+      expect(await countTransactions(db, householdId)).toBe(1);
+      expect(await readAccountBalanceCents(db, account.id)).toBe(45_000);
+
+      // ── The authenticated decision (PWA button path): confirm once. ─────
+      const decided = await harness.undoService.decide({ requestId: undoRequestId, decision: 'confirm', identity: undoIdentity });
+      expect(decided.kind).toBe('confirmed');
+      if (decided.kind !== 'confirmed') throw new Error('golden-gw030: expected the undo decision to confirm');
+      expect(undoApiCalls).toBe(1);
+      expect(decided.result).toMatchObject({
+        undone: { operation: 'transactions.expense.create', entityId: transactionId, reversal: 'soft_delete' },
+      });
+
+      // ── Authoritative postconditions: reversed exactly once. ─────────────
+      expect(await readTransactionRows(db, householdId)).toHaveLength(0);
+      expect(await readAccountBalanceCents(db, account.id)).toBe(50_000);
+
+      // ── Replay of the same decision converges without a second effect. ──
+      const replayed = await harness.undoService.decide({ requestId: undoRequestId, decision: 'confirm', identity: undoIdentity });
+      expect(replayed.kind).toBe('confirmed');
+      expect(undoApiCalls).toBe(1);
+      expect(await readTransactionRows(db, householdId)).toHaveLength(0);
+      expect(await readAccountBalanceCents(db, account.id)).toBe(50_000);
+
+      // ── Mandatory invariants (explicitly named). ─────────────────────────
+      const DUPLICATE_FINANCIAL_EFFECT = (await readTransactionRows(db, householdId)).length;
+      expect(DUPLICATE_FINANCIAL_EFFECT).toBe(0);
+      const FALSE_SUCCESS =
+        asked.undoProposal?.status === 'proposed' && apiCallsAfterTextTurn === 0 ? 0 : 1;
+      expect(FALSE_SUCCESS).toBe(0);
       const CROSS_WORKSPACE_LEAK =
         (await countTransactions(db, decoy.householdId)) !== 0 ||
         (await readAccountBalanceCents(db, decoyAccount.id)) !== 50_000 ||
