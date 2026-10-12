@@ -1848,11 +1848,15 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
       const seen = await seam<{
         id?: string;
         status?: string;
-        receipt?: { entity?: { type?: string; id?: string } };
+        mutation_id?: string;
+        execution?: { receipt?: { entity?: { type?: string; id?: string } } };
       }>('GET', `/pending-operations/v2/${operationId}`, { headers });
       expect(seen.id).toBe(operationId);
       expect(seen.status).toBe('succeeded');
-      expect(seen.receipt?.entity).toEqual({ type: 'transaction', id: transactionId });
+      // The receipt lives inside the persisted execution result (mapV2
+      // exposes `execution`, never a top-level receipt): it names the
+      // landed transaction row.
+      expect(seen.execution?.receipt?.entity).toEqual({ type: 'transaction', id: transactionId });
 
       // An unknown id answers 403 (never 404): no existence oracle.
       let unknownCode = '';
