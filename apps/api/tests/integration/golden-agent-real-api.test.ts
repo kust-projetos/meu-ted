@@ -1805,9 +1805,78 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
     },
     60_000,
   );
-});
 
-// ─── F4 Bloco B — conversational undo against the authoritative API ──────────
+  itIfDatabase(
+    'GW-040 read-after-execute (Bloco B): authoritative GET names the landed transaction; unknown id is 403 with no existence leak (SQL-verified)',
+    async () => {
+      const db = pool!;
+      const { householdId } = await seedTenant(db);
+      const decoy = await seedTenant(db);
+      const actor = { actorId: randomUUID(), deviceId: randomUUID() };
+      const account = await writes!.createAccount(householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const decoyAccount = await writes!.createAccount(decoy.householdId, {
+        name: 'Conta Corrente',
+        kind: 'bank',
+        initialBalanceCents: 50_000,
+      });
+      const seam = createRequestSeam(app!, { householdId, actorId: actor.actorId, deviceId: actor.deviceId });
+      const harness = createCaseHarness(householdId, actor);
+      const proposed = await harness.runTurn({
+        text: 'gastei 50 de carne categoria alimentação',
+        intentionId: `golden-gw040-propose-${randomUUID()}`,
+      });
+      expect(proposed.mutation?.status).toBe('proposed');
+      const operationId = proposed.mutation?.operationId ?? '';
+      expect(operationId).not.toBe('');
+      const executed = await harness.runTurn({ text: 'sim', intentionId: `golden-gw040-confirm-${randomUUID()}` });
+      expect(executed.mutation?.status).toBe('succeeded');
+      const rows = await readTransactionRows(db, householdId);
+      expect(rows).toHaveLength(1);
+      const transactionId = rows[0]!.id;
+
+      // The authoritative read names the landed transaction row.
+      const headers = {
+        'x-workspace-id': householdId,
+        'x-actor-id': actor.actorId,
+        'x-device-id': actor.deviceId,
+      };
+      const seen = await seam<{
+        id?: string;
+        status?: string;
+        receipt?: { entity?: { type?: string; id?: string } };
+      }>('GET', `/pending-operations/v2/${operationId}`, { headers });
+      expect(seen.id).toBe(operationId);
+      expect(seen.status).toBe('succeeded');
+      expect(seen.receipt?.entity).toEqual({ type: 'transaction', id: transactionId });
+
+      // An unknown id answers 403 (never 404): no existence oracle.
+      let unknownCode = '';
+      let unknownStatus = 0;
+      try {
+        await seam('GET', `/pending-operations/v2/${randomUUID()}`, { headers });
+      } catch (error) {
+        unknownCode = String((error as { code?: unknown }).code ?? '');
+        unknownStatus = Number((error as { statusCode?: unknown }).statusCode ?? 0);
+      }
+      expect(unknownCode).toBe('approval.forbidden');
+      expect(unknownStatus).toBe(403);
+
+      // ── Mandatory invariants (explicitly named). ─────────────────────────
+      const CROSS_WORKSPACE_LEAK =
+        (await countTransactions(db, decoy.householdId)) !== 0 ||
+        (await readAccountBalanceCents(db, decoyAccount.id)) !== 50_000 ||
+        (await countOrphanLedgerRows(db, [householdId, decoy.householdId])) !== 0
+          ? 1
+          : 0;
+      expect(CROSS_WORKSPACE_LEAK).toBe(0);
+    },
+    60_000,
+  );
+});
 //
 // GW-030 proves the complete conversational undo vertical through the REAL
 // surface: expense booked via the orchestrator, `desfaz` proposing through
