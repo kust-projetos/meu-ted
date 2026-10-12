@@ -59,7 +59,7 @@ PWA: `NEXT_PUBLIC_TED_ATTACHMENT_*` (anúncio, não gate),
 | Gate | Data/condição | Owner |
 |---|---|---|
 | #107 Phase A (gate+cohort+sink) | **CLOSED em 12/10/2026** (issue fechada com comentário de evidência): gate server-side, coorte attachment-specific, testes binding+OFF, sink durável G07 e inventário de 5 estados — todos implementados + testados (`tests/attachments` 26 arquivos/405 testes verdes); CI do `main` verde | Phase A encerrada; **A19 geral segue NOT READY** (rollout, expiração física R2, bounded PDF, privacidade/egress, canaries STT/Vision têm gates próprios) |
-| #105 Golden Workflows | Suite rápida 35/29 executáveis PASS (GW-033–038: categoria inexistente, conta não identificada, extrato com dados, fragmento de conta, forget redelivery, forget após esquecido), 6 `pending-capability` sem promoção; PG autoritativa: Bloco A (GW-023/024/025 + redelivery/recuperação) + Bloco B (GW-030 undo, GW-031 receita, GW-032 concorrência), tudo SQL-verified | **PARTIAL**: Blocos A+B fechados e mergeados (#137/#138); Bloco C/D determinístico mergeado (#139); restam matriz obrigatória completa, E2E final e capacidades adiadas; issue OPEN |
+| #105 Golden Workflows | Suite rápida 35/29 executáveis PASS (GW-033–038: categoria inexistente, conta não identificada, extrato com dados, fragmento de conta, forget redelivery, forget após esquecido), 6 `pending-capability` sem promoção; PG autoritativa: Bloco A (GW-023/024/025 + redelivery/recuperação) + Bloco B (GW-030 undo, GW-031 receita, GW-032 concorrência, GW-040 leitura), tudo SQL-verified | **CLOSED em 12/10/2026** (checklist de aceite + §5.4 mapeados em comentário). Residuais fora da issue: homologação E2E, Release B, cutover, rollout de capacidades |
 | Release B (flip bearer legado) | ≥ `2026-10-16T21:36:06Z`, sink = 0 | operador (gate temporal) |
 | Cutover F3–F5 | gate humano (ADR-024/ADR-025) | operador |
 | Privacidade A19 (PDF → relay/provider) | classificação “sem egress” retificada; conteúdo pode sair pelo relay; sem prova de ZDR/retention neste endpoint | **WAITING_OPERATOR** |
@@ -72,7 +72,12 @@ PWA: `NEXT_PUBLIC_TED_ATTACHMENT_*` (anúncio, não gate),
 
 Bootstrap Contabo + dumps em `backups-local/` (nunca deletar; ignorado no git);
 backup diário na Contabo (`~/infra/backup`, cron 03:30 UTC); rollback tags
-`pi-finance-api:rollback-pre-*` preservadas. Restore proof fresco: pendente (F6/F7).
+`pi-finance-api:rollback-pre-*` preservadas. Restore proof 12/10/2026:
+âncora `pi-financeiro-contabo-anchor-pre-hostinger-removal-20261003.dump`
+com sha256 conferido (`285d2065…`) e restore em PG 15 descartável local
+(43 tabelas, ledger canônico V059, 38 contas/39 transações — só contagens;
+container destruído após a prova). Restore de backup diário da VPS e
+smoke funcional no restaurado seguem pendentes de acesso à VPS (F6/F7).
 
 ## 6. Limitações conhecidas (residuais aceitos, fail-closed)
 
