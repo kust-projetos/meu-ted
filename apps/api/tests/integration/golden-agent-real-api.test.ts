@@ -611,6 +611,19 @@ const readTransactionRows = async (db: Pool, householdId: string): Promise<reado
 const countTransactions = async (db: Pool, householdId: string): Promise<number> =>
   (await readTransactionRows(db, householdId)).length;
 
+/** Counts ledger rows bound to NO known tenant of the case (leak oracle). */
+const countOrphanLedgerRows = async (db: Pool, householdIds: readonly string[]): Promise<number> => {
+  const transactions = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM transactions WHERE NOT (household_id = ANY($1::uuid[]))`,
+    [householdIds],
+  );
+  const pending = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM pending_operations WHERE NOT (workspace_id = ANY($1::uuid[]))`,
+    [householdIds],
+  );
+  return Number(transactions.rows[0]?.n ?? -1) + Number(pending.rows[0]?.n ?? -1);
+};
+
 /**
  * Resolves a seeded default category (the createAccount bootstrap applies the
  * default catalog to a fresh household — production behavior). The golden
@@ -942,19 +955,6 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
   // never fires (or fires twice) fails instead of silently proving nothing.
   // Each case runs under a UNIQUE synthetic tenant plus an untouched decoy
   // tenant, and cleans only its own fixtures via afterEach.
-
-  /** Counts ledger rows bound to NO known tenant of the case (leak oracle). */
-  const countOrphanLedgerRows = async (db: Pool, householdIds: readonly string[]): Promise<number> => {
-    const transactions = await db.query<{ n: number }>(
-      `SELECT COUNT(*)::int AS n FROM transactions WHERE NOT (household_id = ANY($1::uuid[]))`,
-      [householdIds],
-    );
-    const pending = await db.query<{ n: number }>(
-      `SELECT COUNT(*)::int AS n FROM pending_operations WHERE NOT (workspace_id = ANY($1::uuid[]))`,
-      [householdIds],
-    );
-    return Number(transactions.rows[0]?.n ?? -1) + Number(pending.rows[0]?.n ?? -1);
-  };
 
   /** Matches ONLY the authoritative V2 execute call of the composed app. */
   const isV2ExecuteCall = (method: string, path: string): boolean =>
