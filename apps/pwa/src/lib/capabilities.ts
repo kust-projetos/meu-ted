@@ -16,8 +16,8 @@
  * same contract server-side; these flags only decide what the UI advertises.
  *
  * The microphone gate (V4 T1.1) follows the same call-time pattern: default
- * false, enabled by `NEXT_PUBLIC_TED_MICROPHONE=1` or `=true`. The deploy
- * sets it to `true` (Phase 1); code default stays false. Both the
+ * false, enabled by `NEXT_PUBLIC_TED_MICROPHONE=1` or `=true`. V1-textual
+ * leaves it off (no deploy override); code default stays false. Both the
  * Permissions-Policy header (proxy-utils) and the record button (TedChat)
  * read this same flag, so header and UI can never diverge.
  */
