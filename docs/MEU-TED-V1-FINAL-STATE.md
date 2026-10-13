@@ -1,23 +1,26 @@
 # MEU-TED-V1-FINAL-STATE (estado vigente — snapshot somente-leitura)
 
-**Atualizado:** 10/10/2026. Este documento é snapshot, não plano. A definição de
+**Atualizado:** 13/10/2026. Este documento é snapshot, não plano. A definição de
 encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 
 ## 1. Produção viva
 
-O merge do PR documental #133 (`65304dca`, squash em 10/10/2026) disparou
-CI/PWA CI e os workflows oficiais de deploy sem path filters; o deploy foi
-**executado e atestado**, e Agent/PWA passaram a reportar esse SHA. O código de
-aplicação não mudou em relação a #132 — o SHA vigente é o do merge documental,
-com evidência própria de CI/deploy/smoke.
+O merge do PR #145 — `fix(agent): closed-grammar presentation split before
+nominal grounding` (`e57bcec`, squash em 13/10/2026) — disparou CI/PWA CI e os
+workflows oficiais de deploy sem path filters; o deploy foi **executado e
+atestado na 2ª wave** (1ª wave `deploy-skipped:gate-not-ready`), e Agent/PWA
+passaram a reportar esse SHA. O código de aplicação mudou em relação a
+`bc2ba9e` (split de presentation antes do nominal grounding em
+`account-grounding.ts` + testes); a API Contabo segue `bd1ed9b` sem redeploy.
 
 | Camada | SHA vigente | Evidência |
 |---|---|---|
 | API (Contabo) | `bd1ed9b` (`bd1ed9bdbcaf99c407ac40f1d4a668099a405585`, build `37238430467`) | `/health` + `/ready` 200 em 12/10/2026, sem redeploy desde 04/10; `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados |
-| Agent (Cloudflare) | `bc2ba9e` (`bc2ba9e11c3272d29d89b8e8c64aa7d01c85cb1d`, build `38313912315`, builtAt `2026-10-12T21:58:24Z`) | Deploy run `38314671723` success/`ATTESTED` (deploy-smoke-pass, 12/10; attest job `115028677706`); smoke read-only pós-deploy para o SHA |
-| PWA (Cloudflare) | `bc2ba9e` (mesmo SHA/buildId) | Deploy run `38314671758` success/`ATTESTED` (deploy-smoke-pass, 12/10; attest job `115028936543`) |
-| origin/main | `bc2ba9e` | CI `38313912283` + PWA CI `38313912315` success; deploys Agent/PWA pós-merge executados e atestados |
-| Agent/PWA — deploy atestado anterior (histórico) | `36ccaac` (merge #138) | Deploy runs `38266117716`/`38266117889` success/`ATTESTED` (deploy-smoke-pass, 12/10) |
+| Agent (Cloudflare) | `e57bcec` (`e57bcecb46fca664c412e8b47d71f9d0b5ef5291`, build `38325143776`) | Deploy run `38326659522` success/`ATTESTED` (deploy-smoke-pass, 13/10, 2ª wave; 1ª wave deploy-skipped:gate-not-ready); smoke read-only pós-deploy para o SHA |
+| PWA (Cloudflare) | `e57bcec` (mesmo SHA/buildId) | Deploy run `38326659650` success/`ATTESTED` (deploy-smoke-pass, 13/10, 2ª wave) |
+| origin/main | `e57bcec` | CI `38325143697` + PWA CI `38325143776` success (PWA CI após `rerun --failed` de 1 flake PUSH-02 — botão Entrar desabilitado, mesma família PWA-03/04; resto 152+39+matrix verde); deploys Agent/PWA pós-merge executados e atestados |
+| Agent/PWA — deploy atestado anterior (histórico) | `bc2ba9e` (`bc2ba9e11c3272d29d89b8e8c64aa7d01c85cb1d`, build `38313912315`, builtAt `2026-10-12T21:58:24Z`) | Deploy runs `38314671723`/`38314671758` success/`ATTESTED` (deploy-smoke-pass, 12/10; attest jobs `115028677706`/`115028936543`) |
+| Agent/PWA — deploy atestado **antes** de `bc2ba9e` (histórico) | `36ccaac` (merge #138) | Deploy runs `38266117716`/`38266117889` success/`ATTESTED` (deploy-smoke-pass, 12/10) |
 | Agent/PWA — último deploy atestado **antes** de #133 (histórico) | `687a7e8d` (PR #132) | Deploy runs `38081117169`/`38081117377`; CI `38080566857` / PWA CI `38080566817` |
 | Credencial demo (E2E/prova) | `demo@clinicademo.com` | criada em 08/10 via fluxo de convite; membership owner no workspace E2E sintético `550e8400…` (Test Family); senha só no env do operador |
 
@@ -121,6 +124,20 @@ antes `36ccaac` via `38266117716`/`38266117889`; detalhe incremental ao fim
 deste documento); API Contabo segue
 `bd1ed9b` sem redeploy (`/health`+`/ready` 200 re-verificados em 12/10). #107
 (Phase A) foi **fechada** com comentário de evidência; #105 segue OPEN.
+
+Em 13/10, o PR #145 (fix grounding: closed-grammar presentation split before
+nominal grounding) foi mergeado como `e57bcec`; CI `38325143697` + PWA CI
+`38325143776` success (PWA CI após `rerun --failed` de 1 flake PUSH-02 — botão
+Entrar desabilitado, mesma família PWA-03/04; resto 152+39+matrix verde);
+Agent/PWA avançaram para `e57bcec` (build `38325143776`) com deploys
+`38326659522`/`38326659650` ATTESTED deploy-smoke-pass na 2ª wave (1ª wave
+deploy-skipped:gate-not-ready); API Contabo segue `bd1ed9b` sem redeploy. E2E
+live-mobile-full PASS em 13/10 (~2.6 min: login→conta→transação→extrato→TED
+leitura com valores→TED mutação com aprovação, `workspaceWriteViolations`
+vazio, só Test Family) — detalhe no apêndice incremental ao fim deste
+documento. A19 segue **NOT READY**; Release B ≥2026-10-16T21:36:06Z, cutover
+F3–F5 pendente, PDF fail-closed, coortes STT/Vision restritas ao workspace
+real `junio`.
 
 ## 9. Ativação de attachments (08/10/2026) — evidência e achados
 
@@ -237,6 +254,12 @@ produção (health/ready/build-info) das três camadas.
 **Bloqueado / sem prova live:** PDF, STT, Vision, web_search/web_fetch e
 autoexecute. Não há alegação de teste live de PDF, de egress, de provider ou de
 telemetria de grounding, e nenhum dado financeiro foi mutado.
+
+**Atualização 13/10:** E2E live-mobile-full PASS executado em produção
+(login→conta→transação→extrato→TED leitura com valores→TED mutação com
+aprovação, `workspaceWriteViolations` vazio, só Test Family) — detalhe no
+apêndice incremental de 13/10 ao fim deste documento. Este §11 preserva o
+smoke de 10/10 como histórico.
 
 ## 12. Retenção dos anexos no R2 — lifecycle configurado, deleção não validada
 
@@ -428,3 +451,23 @@ CI `38313912283` + PWA CI `38313912315` success para o SHA. API Contabo segue
 `bd1ed9b` sem redeploy (`/health`+`/ready` 200). `origin/main` = `bc2ba9e`
 (verificado por `git rev-parse`, sem divergência). Nenhuma flag, secret, coorte,
 modelo ou banco alterado; zero mutação financeira. A19 segue **NOT READY**.
+
+### Atualização incremental — 13/10/2026 (PR #145 `e57bcec`, deploys atestados + E2E live PASS)
+
+Em 13/10, o PR #145 (`fix(agent): closed-grammar presentation split before
+nominal grounding` — split de presentation antes do nominal grounding em
+`apps/agent/src/orchestration/account-grounding.ts` + testes em
+`apps/agent/tests/orchestration/account-grounding.test.ts`) foi mergeado por
+squash como `e57bcec` (`e57bcecb46fca664c412e8b47d71f9d0b5ef5291`).
+
+| Frente | Evidência incremental | Estado honesto / saída |
+|---|---|---|
+| PR #145 (fix grounding) | Squash `e57bcec` em 13/10; escopo estrito a `account-grounding.ts` (+330/−26) + testes (+336); sem mudança de flags, secrets, coortes, modelos ou banco. | **MERGED.** |
+| CI / PWA CI | CI `38325143697` success; PWA CI `38325143776` success após `rerun --failed` de 1 flake PUSH-02 (botão Entrar desabilitado, mesma família PWA-03/04; resto 152+39+matrix verde). | **GREEN.** |
+| Produção 13/10 | Agent/PWA vivos em `e57bcec` (build `38325143776`); Agent Deploy run `38326659522` + PWA Deploy run `38326659650` success/`ATTESTED` deploy-smoke-pass na 2ª wave (1ª wave deploy-skipped:gate-not-ready); smoke read-only pós-deploy para o SHA. API Contabo segue `bd1ed9b` sem redeploy. Nenhuma flag, secret, coorte, modelo ou banco alterado. | Deployado e atestado; API inalterada por design. |
+| E2E live-mobile-full | PASS em 13/10 (~2.6 min): login→conta→transação→extrato→TED leitura com valores→TED mutação com aprovação; `workspaceWriteViolations` vazio; executado só contra Test Family (workspace sintético). | **PASS** (homologação executada; não promove A19 sozinha). |
+| Gates | A19 segue **NOT READY** (rollout, expiração física R2, bounded PDF, privacidade/egress, canaries STT/Vision); Release B ≥2026-10-16T21:36:06Z; cutover F3–F5 pendente; PDF fail-closed (`TED_PDF_TEXT_ENABLED=0` + override `undefined`); coortes STT/Vision restritas ao workspace real `junio`. | Pendentes de operador/data. |
+
+**Veredito desta execução:** `ROLLING_SNAPSHOT`. Produção Cloudflare em
+`e57bcec` atestada + E2E live-mobile-full PASS registrados; nenhum gate humano
+ou de data foi fechado por este snapshot.
