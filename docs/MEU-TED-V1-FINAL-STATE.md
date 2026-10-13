@@ -64,7 +64,7 @@ PWA: `NEXT_PUBLIC_TED_ATTACHMENT_*` (anúncio, não gate),
 |---|---|---|
 | #107 Phase A (gate+cohort+sink) | **CLOSED em 12/10/2026** (issue fechada com comentário de evidência): gate server-side, coorte attachment-specific, testes binding+OFF, sink durável G07 e inventário de 5 estados — todos implementados + testados (`tests/attachments` 26 arquivos/405 testes verdes); CI do `main` verde | Phase A encerrada; **A19 geral segue NOT READY** (rollout, expiração física R2, bounded PDF, privacidade/egress, canaries STT/Vision têm gates próprios) |
 | #105 Golden Workflows | Suite rápida 35/29 executáveis PASS (GW-033–038: categoria inexistente, conta não identificada, extrato com dados, fragmento de conta, forget redelivery, forget após esquecido), 6 `pending-capability` sem promoção; PG autoritativa: Bloco A (GW-023/024/025 + redelivery/recuperação) + Bloco B (GW-030 undo, GW-031 receita, GW-032 concorrência, GW-040 leitura), tudo SQL-verified | **CLOSED em 12/10/2026** (checklist de aceite + §5.4 mapeados em comentário). Residuais fora da issue: homologação E2E, Release B, cutover, rollout de capacidades |
-| Release B (flip bearer legado) | ≥ `2026-10-16T21:36:06Z`, sink = 0 | operador (gate temporal) |
+| Release B (flip bearer legado) | **Flip ABORTADO em 13/10** — 136 eventos pós-2026-10-02T21:36:06Z (último 2026-10-10T22:09:01Z); nova janela zero-14-dias fecha ~2026-10-24T22:09Z | operador (gate temporal) |
 | Cutover F3–F5 | gate humano (ADR-024/ADR-025) | operador |
 | Privacidade A19 (PDF → relay/provider) | classificação “sem egress” retificada; conteúdo pode sair pelo relay; sem prova de ZDR/retention neste endpoint | **WAITING_OPERATOR** |
 | Web live inventory (Tavily/Brave) | pré-F2.4 | operador (credencial CF) |
@@ -135,7 +135,7 @@ deploy-skipped:gate-not-ready); API Contabo segue `bd1ed9b` sem redeploy. E2E
 live-mobile-full PASS em 13/10 (~2.6 min: login→conta→transação→extrato→TED
 leitura com valores→TED mutação com aprovação, `workspaceWriteViolations`
 vazio, só Test Family) — detalhe no apêndice incremental ao fim deste
-documento. A19 segue **NOT READY**; Release B ≥2026-10-16T21:36:06Z, cutover
+documento. A19 segue **NOT READY**; Release B com flip ABORTADO em 13/10 (136 eventos; nova janela ~2026-10-24T22:09Z), cutover
 F3–F5 pendente, PDF fail-closed, coortes STT/Vision restritas ao workspace
 real `junio`.
 
@@ -176,7 +176,7 @@ seções seguintes e na atualização de 10/10.
 | A19 | **NOT READY** | PDF fail-closed está implantado; faltam limites efetivos de CPU/memória antes de eventual reativação, aprovação de privacidade/egress/retention e gates restantes de canary/observabilidade. |
 | Golden #105 | **WAITING_OPERATOR** | Run local 10/10: 23/23 executáveis PASS e 6 `pending-capability` mantidos como skipped (§13); workflows completos e invariantes da issue ainda não executados/aceitos pelo operador; não transformar `pending-capability` em PASS. |
 | Autoexecute low-risk | **WAITING_OPERATOR** | Continua SHADOW; `on` exige sink e telemetria de undo-after-autoexecute. |
-| Release B | **WAITING_DATE** | Gate temporal `2026-10-16T21:36:06Z` + zero eventos na janela e procedimento autorizado. |
+| Release B | **WAITING_DATE (flip ABORTADO em 13/10)** | 136 eventos pós-2026-10-02T21:36:06Z (último 2026-10-10T22:09:01Z); nova janela zero-14-dias fecha ~2026-10-24T22:09Z + procedimento autorizado. |
 | F3–F5 | **WAITING_OPERATOR** | Canonical cutover/aposentadoria do legado requer gate humano. |
 | Backup/restore | **WAITING_OPERATOR** | Backup diário/configurado; restore proof fresco ainda pendente. |
 | Production E2E | **WAITING_OPERATOR** | Smoke autenticado parcial em 10/10 (chat/leitura PASS, zero mutação — §11); aceite final integrado (API/PWA/Agent, anexos, PDF/STT/Vision, mutation receipts/undo) ainda não executado. |
@@ -466,8 +466,22 @@ squash como `e57bcec` (`e57bcecb46fca664c412e8b47d71f9d0b5ef5291`).
 | CI / PWA CI | CI `38325143697` success; PWA CI `38325143776` success após `rerun --failed` de 1 flake PUSH-02 (botão Entrar desabilitado, mesma família PWA-03/04; resto 152+39+matrix verde). | **GREEN.** |
 | Produção 13/10 | Agent/PWA vivos em `e57bcec` (build `38325143776`); Agent Deploy run `38326659522` + PWA Deploy run `38326659650` success/`ATTESTED` deploy-smoke-pass na 2ª wave (1ª wave deploy-skipped:gate-not-ready); smoke read-only pós-deploy para o SHA. API Contabo segue `bd1ed9b` sem redeploy. Nenhuma flag, secret, coorte, modelo ou banco alterado. | Deployado e atestado; API inalterada por design. |
 | E2E live-mobile-full | PASS em 13/10 (~2.6 min): login→conta→transação→extrato→TED leitura com valores→TED mutação com aprovação; `workspaceWriteViolations` vazio; executado só contra Test Family (workspace sintético). | **PASS** (homologação executada; não promove A19 sozinha). |
-| Gates | A19 segue **NOT READY** (rollout, expiração física R2, bounded PDF, privacidade/egress, canaries STT/Vision); Release B ≥2026-10-16T21:36:06Z; cutover F3–F5 pendente; PDF fail-closed (`TED_PDF_TEXT_ENABLED=0` + override `undefined`); coortes STT/Vision restritas ao workspace real `junio`. | Pendentes de operador/data. |
+| Gates | A19 segue **NOT READY** (rollout, expiração física R2, bounded PDF, privacidade/egress, canaries STT/Vision); Release B com flip ABORTADO em 13/10 (nova janela ~2026-10-24T22:09Z); cutover F3–F5 pendente; PDF fail-closed (`TED_PDF_TEXT_ENABLED=0` + override `undefined`); coortes STT/Vision restritas ao workspace real `junio`. | Pendentes de operador/data. |
 
 **Veredito desta execução:** `ROLLING_SNAPSHOT`. Produção Cloudflare em
 `e57bcec` atestada + E2E live-mobile-full PASS registrados; nenhum gate humano
 ou de data foi fechado por este snapshot.
+
+### Atualização incremental — 13/10/2026 (Release B: flip ABORTADO, janela reancorada)
+
+Leitura cuidadosa do sink `audit_logs`
+(`event_type=auth.request.legacy_bearer_used`, filtro exclusivo `>`
+`2026-10-02T21:36:06Z`) em 13/10 **superou a sonda anterior (COUNT=0)**:
+**COUNT=136**, MIN `2026-10-02T21:36:06.027881Z`, MAX
+`2026-10-10T22:09:01.594968Z`. Por dia: 10-02=2 (pós-âncora), 10-03=28,
+10-04=57, 10-08=26, 10-10=23; 10-05/06/07/09/11/12/13=0. Dois workspaces
+distintos, actor sempre device; burst final de 12 eventos em ~1s (retry-storm
+provável). O flip previsto para 13/10 foi **ABORTADO** por evidência. Nova
+janela zero-14-dias fecha **~2026-10-24T22:09Z** se nada mais ocorrer;
+re-verificação agendada com a mesma query. A19 segue **NOT READY**; demais
+gates intocados.

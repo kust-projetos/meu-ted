@@ -13,7 +13,7 @@
 | Hardening V4 / V4.1 closure | Concluído | PR #11 (merge 2026-09-22, `4e4e83c`); rollout completo de API, PWA e Agent na mesma release `2d7bdf8` com rollback tagado. |
 | CI, containers e deploys gateados | Concluído | Billing do GitHub Actions resolvido (repo público, 2026-09-25); branch protection em `main` (sem push direto); deploys verificam `head_repository` e `workflow_run.event == push`; falso-verde do comprehensive E2E provado corrigido (2026-10-01). |
 | Dados canônicos (conversor + cutover) | Em andamento — gate humano | A API de produção serve o esquema canônico `pi_financeiro_canonical` (rota fresh concluída); repair commitado com residual zero (32 contas vivas) e reconciliação `--provenance=fresh` drifted=0; conversor pronto ([ADR-025](adr/ADR-025-canonical-converter.md)) com F2 smoke PASS e real-dump NO-GO documentado (irrelevante para produção). A aposentadoria do legacy/archive (F3–F5) é gate humano por design ([ADR-024](adr/ADR-024-legacy-canonical-conversion-policy.md)). |
-| Release B (descomissionamento do bearer legado) | Em andamento — gate humano | Sink durável `auth.request.legacy_bearer_used` em produção (PRs #51/#52); **janela de 14 dias reiniciada** em 2026-10-02T21:36:06Z (último evento; 115 eventos idênticos nas duas origens no corte Hostinger → Contabo) → **2026-10-16T21:36:06Z**; flip somente com contagem zero desde a migração (evidência: [`reports/2026-10-03-vps-migration-contabo.md`](reports/2026-10-03-vps-migration-contabo.md)). |
+| Release B (descomissionamento do bearer legado) | Em andamento — gate humano (**flip ABORTADO em 13/10**) | Sink durável `auth.request.legacy_bearer_used` em produção (PRs #51/#52); leitura cuidadosa de 13/10 com filtro exclusivo `> 2026-10-02T21:36:06Z`: **COUNT=136** (MIN `2026-10-02T21:36:06.027881Z`, MAX `2026-10-10T22:09:01.594968Z`; por dia: 10-02=2 pós-âncora, 10-03=28, 10-04=57, 10-08=26, 10-10=23, demais dias 0; 2 workspaces distintos, actor sempre device, burst final de 12 eventos em ~1s — retry-storm provável). A sonda anterior (COUNT=0) foi **superada** por esta leitura. Nova janela zero-14-dias fecha **~2026-10-24T22:09Z** se nada mais ocorrer; re-verificação com a mesma query (evidência: [`reports/2026-10-03-vps-migration-contabo.md`](reports/2026-10-03-vps-migration-contabo.md)). |
 | Itens future-dated | Planejado | Compat localStorage/bearer em 2026-12-01 (ADR-011/015) e allowlists (`pwa-audit` + `.trivyignore`) em 2026-12-31; workflows-lembrete ativos e idempotentes. |
 | TED Agent A19 (anexos/decision/STT/vision/PDF) | **NOT READY — PR #145 (fix grounding) implantado como `e57bcec`; deploys atestados em 13/10; E2E live-mobile-full PASS em 13/10; PDF segue fail-closed** | Agent/PWA `e57bcec` (build `38325143776`) com deploy/smoke/attestation verdes na 2ª wave (`38326659522`, `38326659650`, `ATTESTED` deploy-smoke-pass; 1ª wave deploy-skipped:gate-not-ready); CI `38325143697` / PWA CI `38325143776` (PWA CI após rerun de 1 flake PUSH-02, mesma família PWA-03/04); deploy anterior atestado em `bc2ba9e` (`38314671723`, `38314671758`); API Contabo `bd1ed9b` inalterada (`/health` + `/ready` 200, build `37238430467`). `TED_PDF_TEXT_ENABLED=0` e `pdfTextProcessorOverride()` retorna `undefined` incondicionalmente. Upload/R2 preservados; testes provam caminho `unsupported` e zero parser, e `pdf-gate-worklimit.test.ts` passa 10/10 local. E2E live-mobile-full **PASS** em 13/10 (~2.6 min: login, conta, transação, extrato, TED leitura com valores, TED mutação com aprovação; `workspaceWriteViolations` vazio; só Test Family). Regra de lifecycle R2 de 1 dia configurada por autorização expressa do operador; deleção física **não validada** (assíncrona, sem bucket de teste isolado). STT/Vision sem novo canary/coorte; autoexecute segue `SHADOW` (último conhecido, não re-verificado live). Privacidade/egress/retention continua gate para eventual reativação. A19 e V1 permanecem **NOT READY**. Ver [`MEU-TED-V1-FINAL-STATE.md`](MEU-TED-V1-FINAL-STATE.md) e [`reports/2026-10-09-v1-attachment-grounding-hardening.md`](reports/2026-10-09-v1-attachment-grounding-hardening.md). |
 
@@ -22,12 +22,15 @@
 Nenhum trabalho de engenharia está bloqueando os gates com data abaixo; dependências de sink/telemetria (canary) e rollout A19 seguem como pré-condições explicitadas nos marcos. Os passos
 restantes são gates humanos com data:
 
-1. **2026-10-16 - gate Release B:** com zero eventos
-   `auth.request.legacy_bearer_used` desde 2026-10-02T21:36:06Z (janela
-   reiniciada no corte para a Contabo; ver
-   [`reports/2026-10-03-vps-migration-contabo.md`](reports/2026-10-03-vps-migration-contabo.md)),
-   flipar `SESSION_BEARER_FALLBACK_ENABLED=off` na VPS Contabo e rebuild do PWA
-   com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`.
+1. **~2026-10-24T22:09Z - gate Release B (flip ABORTADO em 13/10):** leitura
+   cuidadosa de 13/10 encontrou **136 eventos**
+   `auth.request.legacy_bearer_used` após 2026-10-02T21:36:06Z (último em
+   2026-10-10T22:09:01Z; burst final de 12 eventos em ~1s — retry-storm
+   provável); a sonda anterior (COUNT=0) foi superada por esta leitura. Nova
+   janela zero-14-dias fecha ~2026-10-24T22:09Z se nada mais ocorrer;
+   re-verificar NO MOMENTO DO FLIP, somente depois de 2026-10-24T22:09:01Z, com a mesma query (filtro exclusivo `>`), confirmando zero eventos desde 2026-10-10T22:09:01Z (qualquer evento posterior reancora a janela); e só
+   então flipar `SESSION_BEARER_FALLBACK_ENABLED=off` na VPS Contabo e rebuild
+   do PWA com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`.
 2. **Quando o operador decidir — cutover residual:** aposentar o legacy/archive
    (a API já serve o canônico). A transação ambígua `49c01613…` do legacy só
    exige decisão humana se o caminho legacy→canonical for reanimado
