@@ -342,3 +342,52 @@ inevitável.
   operador com A19 blocker faseado); golden `gate_separado` (0.96);
   F1 `gate_sink_first` (0.99).
 - `jev_check` (seguro prosseguir sem ativação): **likely true** (0.82).
+
+---
+
+## ADENDO V1-TEXTUAL — 13/10/2026 (congela escopo textual, preserva história)
+
+Este adendo congela o escopo da V1-textual sem apagar nem reescrever a
+história acima. Nada do corpo original foi alterado; as seções citadas abaixo
+seguem suspensas para a V1-textual e vigentes como backlog pós-V1.
+
+### 1. Critério de CLOSED da V1-textual
+
+V1-textual = CLOSED quando o checklist textual passar: chat em linguagem
+natural, consultas reais, cadastro, confirmação/cancelamento/undo, contexto
+isolado, memória com forget transacional, correção, erros honestos, PWA
+funcional e segurança textual — com CI e PWA CI verdes, Golden textual PASS
+com `falseSuccess=0` e 6 `pending-capability` skipped, E2E só-Test Family PASS
+com `workspaceWriteViolations` vazio, deploys ATTESTED com SHA casado e
+P0=0/P1=0 no escopo textual.
+
+### 2. Movidos para PÓS-V1 sem apagar (§§6-B2/B3/B4/B5, §10, F2, F3)
+
+Movidos para PÓS-V1, sem apagar: áudio/STT, imagens/Vision, reativação do PDF,
+`web_search`/`web_fetch`, autoexecução `on`, novos modelos/providers,
+aprendizado avançado de skills e interfaces adaptativas. As seções
+correspondentes (§§6-B2/B3/B4/B5, §10, F2, F3) estão suspensas para a
+V1-textual e vigentes como backlog. Estado preservado: PDF fail-closed
+(`TED_PDF_TEXT_ENABLED=0` + `override` `undefined`); STT PARCIAL com finding
+aberto; Vision FULL PASS sem promover; autoexecute em `shadow`.
+
+### 3. #105 e #107 permanecem CLOSED
+
+#105 e #107 permanecem CLOSED em 12/10/2026. Não reabrir.
+
+### 4. Pós-V1 condicionados a avaliação de segurança — diferidos, não eliminados
+
+Release B (flip ABORTADO em 13/10, 136 eventos, MAX em
+2026-10-10T22:09:01Z, nova janela ~24/10), retirada do legado (F3/F4 vácuos;
+resta F6 + remoção de código, KEEP do bearer até a Release B) e autoexecute
+`on` são pós-V1 condicionados a avaliação de segurança — diferidos, não
+eliminados.
+
+### 5. Baseline viva e invariantes
+
+Baseline viva: API `414aefa`, Agent/PWA `e91a3cd`, `origin/main` `e91a3cd`.
+INV-01 a INV-10 inalterados.
+
+### 6. Precedência
+
+6. Precedência: em caso de conflito, este adendo prevalece sobre §16 (acceptance) e §25/DoD (PLAN F0–F9) para a V1-textual. Os requisitos multimodais (PDF/STT/Vision/web), autoexecute fora de shadow, Release B flip, cutover F3–F5 e tag v1 plena seguem vigentes como backlog pós-V1, não como bloqueadores da V1-textual. Os requisitos de §15/§24 (backup/restore/smoke funcional) permanecem obrigatórios na trilha de estabilização (tarefa 10 do plano V1) antes do release final, com evidência de restore em PostgreSQL descartável + smoke funcional — a âncora 12/10 sozinha não basta.

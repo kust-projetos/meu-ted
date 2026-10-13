@@ -1,0 +1,178 @@
+{
+  "version": "1",
+  "cases": [
+    {
+      "version": "1",
+      "id": "GW-039",
+      "title": "Saudação casual pura: roteamento conversacional sem efeitos no backend isolado (ledger vazio, sem proposta/execução, skill conversation)",
+      "workflow": "casual-pure",
+      "status": "executable",
+      "description": "Cobertura real: roteamento conversacional observado (nenhum turno responde em modo read, ledger vazio, zero propostas/execuções, skill conversation roteada). Limite: o runner não instrumenta chamadas ao evidenceProvider/entityReader/transporte — 'read_answered' proibido significa que nenhum turno roteou para modo read com resposta, não prova zero chamadas de leitura subjacentes nem zero tools financeiras invocadas.",
+      "initialState": {},
+      "inputs": [
+        {
+          "text": "Oi, tudo bem?",
+          "intentionId": "intent-casual-1"
+        },
+        {
+          "text": "obrigado!",
+          "intentionId": "intent-casual-2"
+        }
+      ],
+      "expectations": {
+        "expectedActions": ["provider_called"],
+        "forbiddenActions": [
+          "proposal_created",
+          "confirmation_executed",
+          "cancel_executed",
+          "read_answered",
+          "fail_closed",
+          "forget_proposed",
+          "forget_executed",
+          "error_propagated"
+        ],
+        "backend": {
+          "proposalsCreated": 0,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 0
+        },
+        "response": {
+          "mustMatch": ["sem alegações financeiras"],
+          "mustNotMatch": [
+            "registrado",
+            "com sucesso",
+            "R\\$",
+            "cancelad",
+            "Confirma\\?"
+          ]
+        },
+        "budget": {
+          "maxTurns": 2
+        },
+        "plan": {
+          "skillsContain": ["conversation"]
+        }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-040",
+      "title": "Troca de workspace no meio do turno: nada do A vaza nem executa no B",
+      "workflow": "workspace-switch-isolation",
+      "status": "pending-capability",
+      "pendingReason": {
+        "capability": "isolation.multi_workspace",
+        "reason": "O runner isolado não modela troca de workspace: a identidade é fixa (actor-golden/ws-golden em runner.ts), o schema GoldenInput não tem campo workspaceId e o IsolatedBackend semeia memória e ledger num único namespace (ws-golden). Sem partição por workspace no harness, qualquer asserção de isolamento (sem cross-read, intenção/draft do A nunca executa no B) seria falso-positivo por construção. O caso modela a intenção com dois turnos e workspaces sintéticos distintos (ws-golden-a / ws-golden-b — nunca o household real junio nem ids reais) e fica pending até o harness suportar identidade por turno.",
+        "requires": [
+          "campo workspaceId por turno no schema GoldenInput",
+          "identidade por turno no runner (sem IDENTITY fixa)",
+          "partição de ledger/memória/draft por workspace no IsolatedBackend"
+        ]
+      },
+      "initialState": {
+        "accounts": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "name": "Conta Corrente"
+          }
+        ],
+        "categories": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "name": "Alimentação"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "text": "gastei 50 de carne categoria alimentação",
+          "intentionId": "intent-ws-a-1"
+        },
+        {
+          "text": "sim",
+          "intentionId": "intent-ws-b-1"
+        }
+      ],
+      "expectations": {
+        "expectedActions": [],
+        "forbiddenActions": ["confirmation_executed"],
+        "backend": {
+          "proposalsCreated": 0,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 0
+        },
+        "response": {},
+        "budget": {
+          "maxTurns": 2
+        }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-041",
+      "title": "Leitura com envelope de erro persistente: fail-closed determinístico, nunca zero",
+      "workflow": "backend-failure-envelope",
+      "status": "executable",
+      "initialState": {
+        "reads": "error"
+      },
+      "inputs": [
+        {
+          "text": "qual é o meu saldo?"
+        }
+      ],
+      "expectations": {
+        "expectedActions": ["fail_closed"],
+        "forbiddenActions": ["provider_called", "proposal_created", "confirmation_executed"],
+        "backend": {
+          "proposalsCreated": 0,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 0
+        },
+        "response": {
+          "mustMatch": ["Não consegui acessar seus dados financeiros agora"],
+          "mustNotMatch": ["R\\$", "registrado", "com sucesso"]
+        },
+        "budget": {
+          "maxTurns": 2
+        }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-042",
+      "title": "Matriz de status de leitura (500/timeout/429/401/403): reasons tipadas sem falso-sucesso",
+      "workflow": "read-failure-matrix",
+      "status": "pending-capability",
+      "pendingReason": {
+        "capability": "evidence.read_failure_matrix",
+        "reason": "O oráculo de classificação existe e é unit-testado (classifyReadFailure em evidence-envelope.ts: 500/429/timeout→retryable_error, 401/403→forbidden; suite read-absence-and-failure-reasons.test.ts prova error+forbidden nunca virando zero), mas o IsolatedBackend só oferece `reads: throw` (transporte genérico sem statusCode) e `reads: error` (envelope permanent_error fixo) — sem injeção de falha por statusCode/marcador de timeout por turno. No runner, throw e error convergem para a MESMA cópia fail-closed (FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT) e o vocabulário fechado de ações não distingue retryable de forbidden; 4 casos executáveis por status seriam quádruplos idênticos — cobertura fingida, proibida pelo README. As faces throw (GW-010) e error-envelope (GW-041) seguem executáveis; a granularidade por status fica pending até o harness suportar fault-injection por status.",
+        "requires": [
+          "injeção de falha por statusCode/timeout por turno no IsolatedBackend",
+          "distinção observável de retryable vs forbidden no contrato do runner (ação ou cópia)"
+        ]
+      },
+      "initialState": {
+        "reads": "throw"
+      },
+      "inputs": [
+        {
+          "text": "qual é o meu saldo?"
+        }
+      ],
+      "expectations": {
+        "expectedActions": [],
+        "forbiddenActions": ["confirmation_executed"],
+        "backend": {
+          "proposalsCreated": 0,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 0
+        },
+        "response": {},
+        "budget": {
+          "maxTurns": 2
+        }
+      }
+    }
+  ]
+}

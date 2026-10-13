@@ -290,6 +290,21 @@ export type PendingChatSend = Readonly<{
   content: string;
   createdAt: string;
   attachments?: ReadonlyArray<OutgoingAttachment>;
+  /**
+   * R2 FIX 1 (HIGH): `true` quando a âncora veio do formato legado (JSON sem
+   * `anchorVersion`/`attachments`). O envio original podia ter anexos que se
+   * perderam no formato antigo, então o retry é PROIBIDO — reenviar sem os
+   * anexos mudaria o payload sob a mesma identidade (mesmo `intentionId`) e
+   * derrubaria o veto de anexo no Agent. A UI reidrata como failed SEM retry.
+   */
+  legacyAnchor?: boolean;
+  /**
+   * R3 FIX 3 (MEDIUM): `true` quando o envio original carregava mais anexos
+   * que o limite do servidor. Reenviar (truncado ou não) produziria um
+   * payload diferente sob a mesma identidade — então o retry é PROIBIDO e a
+   * UI reidrata como failed SEM retry, como na âncora legada.
+   */
+  overLimit?: boolean;
 }>;
 
 export function createChatMessageId(): string {
@@ -319,14 +334,68 @@ export function composeChatSend(
 const pendingSendKey = (workspaceId: string): string => `ted.pending-send.${workspaceId}`;
 
 /**
- * Persists the in-flight send record (messageId + content only — never
- * secrets) so a page reload restores the same id for retry.
+ * R2 FIX 1 (HIGH): a âncora persiste as REFS dos anexos (`{type,ref,name}` —
+ * JSON pequeno, referências opacas já emitidas pelo servidor), nunca blob
+ * URLs locais (inúteis após o reload) e nunca segredos. No load, os refs
+ * voltam no draft para que o retry reenvie o MESMO payload sob a MESMA
+ * identidade (`intentionId`).
+ */
+const CHAT_SEND_ANCHOR_VERSION = 1;
+const ANCHOR_ATTACHMENT_TYPES: ReadonlySet<string> = new Set(["image", "pdf", "audio"]);
+/**
+ * R3 FIX 3: limite de anexos por envio — o MESMO número do servidor
+ * (`MAX_CHAT_ATTACHMENTS = 10` em `apps/agent/src/finance-chat-agent.ts`,
+ * que responde 413 `agent.payload_too_large` acima disso). A âncora e a UI
+ * usam este número; nenhum teto próprio/inventado no cliente.
+ */
+export const CHAT_SEND_ATTACHMENT_LIMIT = 10;
+
+function sanitizeAnchorAttachment(value: unknown): OutgoingAttachment | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Record<string, unknown>;
+  if (typeof item.type !== "string" || !ANCHOR_ATTACHMENT_TYPES.has(item.type)) return null;
+  if (typeof item.name !== "string" || item.name.length === 0 || item.name.length > 256) return null;
+  if (
+    item.ref !== undefined &&
+    (typeof item.ref !== "string" || item.ref.length === 0 || item.ref.length > 512)
+  ) {
+    return null;
+  }
+  return {
+    type: item.type,
+    url: "",
+    name: item.name,
+    ...(typeof item.ref === "string" ? { ref: item.ref } : {}),
+  };
+}
+
+/**
+ * Persists the in-flight send record (messageId + content + attachment refs —
+ * never secrets, never local blob URLs) so a page reload restores the same
+ * id for retry.
  */
 export function savePendingChatSend(workspaceId: string, send: PendingChatSend): void {
   try {
+    const raw = Array.isArray(send.attachments) ? send.attachments : [];
+    // R3 FIX 3: NUNCA truncar. Um envio acima do limite persiste marcado
+    // `overLimit` (sem retry) — os 10 primeiros sob a mesma identidade seriam
+    // um payload DIFERENTE do original (o 11º levaria 413 no servidor).
+    const overLimit = send.overLimit === true || raw.length > CHAT_SEND_ATTACHMENT_LIMIT;
+    const attachments = raw.map((a) => ({
+      type: a.type,
+      name: a.name,
+      ...(typeof a.ref === "string" && a.ref ? { ref: a.ref } : {}),
+    }));
     sessionStorage.setItem(
       pendingSendKey(workspaceId),
-      JSON.stringify({ messageId: send.messageId, content: send.content, createdAt: send.createdAt }),
+      JSON.stringify({
+        anchorVersion: CHAT_SEND_ANCHOR_VERSION,
+        messageId: send.messageId,
+        content: send.content,
+        createdAt: send.createdAt,
+        attachments,
+        ...(overLimit ? { overLimit: true } : {}),
+      }),
     );
   } catch {
     // Storage unavailable (private mode): the in-memory retry path still reuses the id.
@@ -337,16 +406,153 @@ export function loadPendingChatSend(workspaceId: string): PendingChatSend | null
   try {
     const raw = sessionStorage.getItem(pendingSendKey(workspaceId));
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { messageId?: unknown; content?: unknown; createdAt?: unknown };
+    const parsed = JSON.parse(raw) as {
+      messageId?: unknown;
+      content?: unknown;
+      createdAt?: unknown;
+      anchorVersion?: unknown;
+      attachments?: unknown;
+      overLimit?: unknown;
+    };
     if (typeof parsed.messageId !== "string" || !parsed.messageId || typeof parsed.content !== "string") return null;
-    return {
+    const base = {
       messageId: parsed.messageId,
       content: parsed.content,
       createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date(0).toISOString(),
     };
+    // Formato legado (gravado antes do FIX 1): sem versão nem anexos — o
+    // envio original podia ter anexos, então volta marcado como legado (sem
+    // retry; ver `legacyAnchor`). Âncoras sem timestamp caem no epoch, o que
+    // preserva a regra conservadora anterior (igualdade textual suprime).
+    if (parsed.anchorVersion !== CHAT_SEND_ANCHOR_VERSION || !Array.isArray(parsed.attachments)) {
+      return { ...base, legacyAnchor: true };
+    }
+    // R3 FIX 3: âncora acima do limite — nunca retryable. Defesa em
+    // profundidade dupla: a flag gravada pelo save novo OU a contagem real
+    // (âncora artesanal/antiga com 11 itens vira non-retryable aqui).
+    if (parsed.overLimit === true || parsed.attachments.length > CHAT_SEND_ATTACHMENT_LIMIT) {
+      return { ...base, overLimit: true };
+    }
+    const attachments: OutgoingAttachment[] = [];
+    for (const item of parsed.attachments) {
+      const clean = sanitizeAnchorAttachment(item);
+      // Anexo corrompido = payload não mais fiel → trata como legado (sem retry).
+      if (!clean) return { ...base, legacyAnchor: true };
+      attachments.push(clean);
+    }
+    return { ...base, attachments };
   } catch {
     return null;
   }
+}
+
+/**
+ * R3 FIX 2: evidência de anexo no histórico do servidor. Um turno com anexo
+ * persiste como placeholder `[anexo …]` (sem extração aceita) ou ABRINDO com
+ * o portador de proveniência da extração aceita (STT/visão/PDF) — ver
+ * `finance-chat-agent.ts` (`attachmentPlaceholder`,
+ * `composeTurnTextWithAttachmentData`). Texto arbitrário nunca conta: sem
+ * heurística textual permissiva.
+ *
+ * R4 FIX (MEDIUM): o marcador vale somente como PREFIXO estrutural
+ * (`startsWith`) — é assim que o servidor compõe o turno (placeholder ou
+ * portador de extração no INÍCIO). Texto puro posterior que apenas CITA o
+ * marcador no meio (ex: "O que significa [anexo nota.jpg]?") NÃO é evidência
+ * de anexo: fail-closed, mantém o failed+retry.
+ */
+const ATTACHMENT_HISTORY_MARKERS: readonly string[] = [
+  "[anexo ",
+  "[transcrição do anexo de áudio",
+  "[dados extraídos do anexo de imagem",
+  "[texto extraído do anexo em PDF",
+];
+
+type HistoryItemForSupersede = Pick<AgentMessage, "isOwn" | "content" | "createdAt" | "attachments">;
+
+function historyItemCarriesAttachment(item: HistoryItemForSupersede): boolean {
+  if (Array.isArray(item.attachments) && item.attachments.length > 0) return true;
+  return (
+    typeof item.content === "string" &&
+    ATTACHMENT_HISTORY_MARKERS.some((marker) => item.content.startsWith(marker))
+  );
+}
+
+/**
+ * R2 FIX 2 + FIX 3 (MEDIUM): critério temporal único para reconciliar a
+ * âncora contra o histórico autoritativo. A âncora é considerada superada
+ * somente quando o histórico traz mensagem própria de conteúdo idêntico com
+ * timestamp >= timestamp da âncora (o servidor persistiu DEPOIS do envio).
+ * Igualdade textual sozinha NÃO confirma nada: um "Bom dia" antigo nunca
+ * suprime um novo envio "Bom dia".
+ *
+ * Casos sem timestamp confiável (âncora legada no epoch, histórico sem
+ * `createdAt`) seguem a regra conservadora anterior — igualdade textual
+ * suprime — porque não há como provar a ordem; ver FIX 2.
+ *
+ * R3 FIX 2 (MEDIUM): âncora COM anexos segue regra própria. O conteúdo da
+ * âncora é SÓ o digitado (`""` no envio só-anexo) enquanto o servidor
+ * persiste placeholder/extração — igualdade textual nunca casaria (ou
+ * casaria errado: um texto idêntico posterior sem anexo é OUTRO envio, não
+ * a persistência deste). A âncora com anexos só é superada por mensagem
+ * própria POSTERIOR com evidência de anexo (placeholder, portador de
+ * extração real ou `attachments` no item). Sem ordem confiável: fail-closed
+ * (mantém o failed, nunca suprime).
+ *
+ * Limite documentado: o histórico não carrega refs nem identidade do envio,
+ * então a correlação é marcador+timestamp — duas âncoras só-anexo próximas
+ * podem colidir num mesmo marcador. Fail-closed nos cantos (sem
+ * marcador/sem ordem) em vez de heurística permissiva.
+ */
+export function isAnchorSupersededByHistory(
+  anchor: Pick<PendingChatSend, "content" | "createdAt" | "attachments">,
+  history: ReadonlyArray<HistoryItemForSupersede>,
+): boolean {
+  const anchorAttachments = Array.isArray(anchor.attachments) ? anchor.attachments : [];
+  if (anchorAttachments.length > 0) {
+    const anchorTime = Date.parse(anchor.createdAt);
+    if (Number.isNaN(anchorTime)) return false;
+    for (const item of history) {
+      if (!item.isOwn) continue;
+      const itemTime = typeof item.createdAt === "string" ? Date.parse(item.createdAt) : NaN;
+      if (Number.isNaN(itemTime) || itemTime < anchorTime) continue;
+      if (historyItemCarriesAttachment(item)) return true;
+    }
+    return false;
+  }
+  const anchorTime = Date.parse(anchor.createdAt);
+  for (const item of history) {
+    if (!item.isOwn || item.content !== anchor.content) continue;
+    if (Number.isNaN(anchorTime)) return true;
+    const itemTime = typeof item.createdAt === "string" ? Date.parse(item.createdAt) : NaN;
+    if (Number.isNaN(itemTime)) return true;
+    if (itemTime >= anchorTime) return true;
+  }
+  return false;
+}
+
+/**
+ * R3 FIX 1 (HIGH): decisão de retry FORA do updater de reconciliação — pura
+ * e testável. Com draft armazenado, reusa (mesma identidade, mesmo payload).
+ * Sem draft e com qualquer resíduo de anexo (no snapshot da âncora ou no
+ * próprio balão), RECUSA (`null`): o payload fiel se perdeu e reenviar sem
+ * os anexos mudaria o envio sob a mesma identidade (`intentionId`). Sem
+ * draft e texto puro, recompõe o mesmo messageId e conteúdo.
+ */
+export function resolveRetrySend(input: {
+  messageId: string;
+  failed: {
+    content: string;
+    attachments?: ReadonlyArray<{ type: string; url?: string; name?: string }>;
+  };
+  stored?: PendingChatSend;
+  snapshotAttachments?: ReadonlyArray<OutgoingAttachment>;
+}): PendingChatSend | null {
+  if (input.stored) return input.stored;
+  const snapshotHas =
+    Array.isArray(input.snapshotAttachments) && input.snapshotAttachments.length > 0;
+  const balloonHas = Array.isArray(input.failed.attachments) && input.failed.attachments.length > 0;
+  if (snapshotHas || balloonHas) return null;
+  return composeChatSend(input.failed.content, { messageId: input.messageId });
 }
 
 export function clearPendingChatSend(workspaceId: string): void {

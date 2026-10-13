@@ -41,7 +41,16 @@ describe('pending V2 bootstrap wiring', () => {
   it('uses the Postgres V2 store in both Postgres bootstrap branches', () => {
     expect(source).toContain('createPostgresPendingOperationV2Store(pool)');
     expect(source.match(/createPostgresPendingOperationV2Store\(pool\)/g)).toHaveLength(2);
-    expect(source).toContain('v2Only: true');
+    // CODER-API-ROUTE-DUPE (incidente 13/10, dedupe na origem): o V2 chega a
+    // registerRoutes via threading (pendingV2*) — UMA única chamada a
+    // registerPendingOperationRoutes dentro de registerRoutes. Não há mais
+    // 2º registro v2Only no mesmo app em server/index.ts (era ele que
+    // registrava /undo 2x e derrubava o boot com FST_ERR_DUPLICATED_ROUTE).
+    expect(source.match(/pendingV2Store: createPostgresPendingOperationV2Store\(pool\)/g)).toHaveLength(2);
+    expect(source.match(/pendingV2Executor: createPendingOperationV2Executor\(writes\)/g)).toHaveLength(2);
+    expect(source.match(/pendingV2ReadModel: store/g)).toHaveLength(2);
+    expect(source).not.toContain('v2Only: true');
+    expect(source).not.toContain('registerPendingOperationRoutes(app,');
   });
 
   it('does not wire an in-memory V2 authority or a default executor', () => {
