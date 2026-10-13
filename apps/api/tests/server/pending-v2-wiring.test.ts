@@ -6,11 +6,6 @@ import { registerPendingOperationRoutes } from '../../src/routes/pending-operati
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
 
 const source = readFileSync(new URL('../../src/server/index.ts', import.meta.url), 'utf8');
-const legacyStore = {
-  async get() { return null; }, async list() { return []; }, async findByChatId() { return null; },
-  async create() { throw new Error('unused'); }, async approve() { throw new Error('unused'); },
-  async reject() { throw new Error('unused'); },
-};
 
 describe('pending V2 bootstrap wiring', () => {
   it('executor maps only canonical transaction tools to the authoritative WriteStore', async () => {
@@ -66,11 +61,11 @@ describe('pending V2 bootstrap wiring', () => {
       };
     });
     const store = createInMemoryPendingOperationV2Store();
+    // Post-V1 (PR-1 retire-pending-v1): the registration is V2-only by
+    // construction — no V1 store and no `v2Only` opt needed.
     registerPendingOperationRoutes(app, {
-      store: legacyStore,
       resolveToken: async () => ({ householdId: 'workspace-token', deviceId: 'device-token' }),
       v2Store: store,
-      v2Only: true,
     });
     const response = await app.inject({
       method: 'POST', url: '/pending-operations/v2/propose',
