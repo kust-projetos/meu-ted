@@ -1,23 +1,24 @@
 # MEU-TED-V1-FINAL-STATE (estado vigente — snapshot somente-leitura)
 
-**Atualizado:** 13/10/2026. Este documento é snapshot, não plano. A definição de
+**Atualizado:** 13/10/2026 (noite). Este documento é snapshot, não plano. A definição de
 encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 
 ## 1. Produção viva
 
-Em 13/10/2026, após o estado `e57bcec` abaixo, a API Contabo passou por um
-outage (~15:44Z–recuperação no mesmo dia) durante o release de `3c3a3f9`
-(V1 routes retirement) e foi recuperada por forward-fix no PR #154
-(`414aefa`) — detalhe no apêndice de incidente ao fim deste documento. O
-vigente: API `414aefa` (release manual pos-recovery) e Agent/PWA `e91a3cd` (ATTESTED pos-#155).
+Em 13/10/2026 à noite, o PR #157 (V1-textual) foi mergeado por squash como
+`fd3481f` e implantado nas três camadas — detalhe na atualização incremental
+de 13/10 (noite) ao fim deste documento. O vigente: API `fd3481f` (release
+via wrapper na Contabo) e Agent/PWA `fd3481f` (ATTESTED na Cloudflare).
 
 | Camada | SHA vigente | Evidência |
 |---|---|---|
-| API (Contabo) | `414aefa` (`414aefad8e04cba1927338b8d6af0aa53b7fc9d7`, build CI `38437241159`) | swap manual + smokes verdes pós-recovery em 13/10 (`/health`+`/ready` 200, gitSha/buildId casados, 0 restarts); `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados; manifesto manual `release-manifest-414aefa-manual.json` na VPS; rollback tag preservada |
-| Agent (Cloudflare) | `e91a3cd` (`e91a3cdd051fabc7fb2fe6469aae70c80ac4e148`, build `38452770765`) | Deploys 38453779343/38453779281 ATTESTED deploy-smoke-pass 13/10; transcript fix validado live (T1/T2 sem read-fail, com evidencia (T1/T2 no live 3e90c30; codigo agent identico em e91a3cd, diff vazio) |
-| PWA (Cloudflare) | `e91a3cd` (mesmo SHA/build `38452770765`) | Deploys 38453779343/38453779281 ATTESTED deploy-smoke-pass 13/10 |
-| origin/main | `e91a3cd` | PR #155 (docs outage+recovery); CI + PWA CI verdes |
+| API (Contabo) | `fd3481f` (`fd3481f2f92c39ff8b68727ff73939121123280d`, build CI `38483695616`) | release via wrapper `api-release-20260930.sh --execute`, lane source-build (checkout pristine `src-fd3481f`, sem GHCR login na VPS), backup pré-release `pi-db-20261013T195335Z` (sha256 `0b4b04ad…cdb7e`), RELEASE OK, manifesto `release-manifest-fd3481f….json` na VPS, rollback tag `pi-finance-api:rollback-pre-fd3481f` preservada; smokes `/health` (gitSha `fd3481f`, buildId `38483695616`) + `/ready` 200 + PWA `/api/backend/health` `fd3481f`; container 0 restarts healthy, sem `FST_ERR`/`DUPLICATED_ROUTE` nos logs |
+| Agent (Cloudflare) | `fd3481f` (build `38483695618`) | Deploys runs `38484529550`/`38484529484` ATTESTED deploy-smoke-pass 13/10 (par anterior 23:26 deploy-skipped pela corrida `workflow_run` conhecida); live `/health` ready com `buildSha=fd3481f` |
+| PWA (Cloudflare) | `fd3481f` (mesmo build `38483695618`) | Mesmos deploys/runs ATTESTED acima; live `/api/build-info` com `gitSha=fd3481f` |
+| origin/main | `fd3481f` | PR #157 (V1-textual); CI + PWA CI verdes (`38483695616`/`…618`); Gate + quality (22, 10) 100% verde |
+| API — release anterior (histórico) | `414aefa` (`414aefad8e04cba1927338b8d6af0aa53b7fc9d7`, build CI `38437241159`) | swap manual + smokes verdes pós-recovery em 13/10 (`/health`+`/ready` 200, gitSha/buildId casados, 0 restarts); `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados; manifesto manual `release-manifest-414aefa-manual.json` na VPS; rollback tag preservada |
 | Agent/PWA - tentativa `414aefa` (nunca servida) | `414aefad8e04cba1927338b8d6af0aa53b7fc9d7` | wave1 deploy-skipped + wave2 smoke-fail no outage da API 13/10; live foi direto `e91a3cd` |
+| Agent/PWA — deploy atestado anterior (histórico) | `e91a3cd` (`e91a3cdd051fabc7fb2fe6469aae70c80ac4e148`, build `38452770765`) | Deploys 38453779343/38453779281 ATTESTED deploy-smoke-pass 13/10; transcript fix validado live (T1/T2 sem read-fail, com evidência T1/T2 no live 3e90c30; código agent idêntico em e91a3cd, diff vazio) |
 | API — imagem anterior (histórico) | `bd1ed9b` (`bd1ed9bdbcaf99c407ac40f1d4a668099a405585`, build `37238430467`) | `/health` + `/ready` 200 em 12/10/2026, sem redeploy desde 04/10 até o incidente de 13/10; **não reutilizável após V060** (manifesto V059 × ledger V060 — ver apêndice) |
 | Agent/PWA — deploy atestado anterior (histórico) | `bc2ba9e` (`bc2ba9e11c3272d29d89b8e8c64aa7d01c85cb1d`, build `38313912315`, builtAt `2026-10-12T21:58:24Z`) | Deploy runs `38314671723`/`38314671758` success/`ATTESTED` (deploy-smoke-pass, 12/10; attest jobs `115028677706`/`115028936543`) |
 | Agent/PWA — deploy atestado **antes** de `bc2ba9e` (histórico) | `36ccaac` (merge #138) | Deploy runs `38266117716`/`38266117889` success/`ATTESTED` (deploy-smoke-pass, 12/10) |
@@ -178,7 +179,7 @@ seções seguintes e na atualização de 10/10.
 | Autoexecute low-risk | **WAITING_OPERATOR** | Continua SHADOW; `on` exige sink e telemetria de undo-after-autoexecute. |
 | Release B | **WAITING_DATE (flip ABORTADO em 13/10)** | 136 eventos pós-2026-10-02T21:36:06Z (último 2026-10-10T22:09:01.594968Z); nova janela zero-14-dias fecha ~2026-10-24T22:09Z + procedimento autorizado. |
 | F3–F5 | **WAITING_OPERATOR** | Canonical cutover/aposentadoria do legado requer gate humano. |
-| Backup/restore | **WAITING_OPERATOR** | Backup diário/configurado; restore proof fresco ainda pendente. |
+| Backup/restore | **RESTORE PROOF 13/10 (backup 19:53Z)** | Backup diário/configurado; restore proof executado em PG 15 descartável (removido após a prova) — detalhe na atualização incremental de 13/10 (noite) ao fim deste documento. |
 | Production E2E | **WAITING_OPERATOR** | Smoke autenticado parcial em 10/10 (chat/leitura PASS, zero mutação — §11); aceite final integrado (API/PWA/Agent, anexos, PDF/STT/Vision, mutation receipts/undo) ainda não executado. |
 | Release v1 | **BLOCKED_EXTERNAL** | Bloqueado por A19, #105, Release B, F3–F5, restore proof e E2E final; este pacote sozinho não conclui v1. |
 
@@ -665,9 +666,41 @@ janela de retenção (decisão do operador).
 `pi-db-20261013T180741Z` + `pi-db-20261013T195335Z` (pré-rotação, verificado; sha256sum -c OK nos três; restore completo provado só para a âncora 12/10). Diretório `backups-local/` nunca
 é deletado nem vai ao git.
 
+Restore proof 13/10 (noite): backup `pi-db-20261013T195335Z` restaurado em
+PG 15 descartável local (exit 0; container removido após a prova): ledger
+V060; 44 tabelas; 41 contas (20 active/21 inactive); 44 expenses; 3 users;
+sink legacy com 250 eventos e MAX `2026-10-10T22:09:01.594968Z` (coerente
+com a re-ancoragem da Release B); 22 `pending_operations` pending; 16
+`idempotency_keys`; agregação funcional de outubro OK. Nota metodológica:
+a verificação foi feita via arquivos `.sql` (o quoting entre camadas
+corrompeu filtros inline — o `252` observado era `44+139+69`).
+
 **Veredito desta execução:** `RECOVERY_ATTESTED`. API 404 fechada por
 forward-fix atestado em `414aefa`; rotação do segredo ENCERRADA
 (mecanismo apurado + backup pré-rotação verificado); seguem como
 follow-ups a autoria dos probes 15:48Z, o endurecimento do `pg_hba` e a
 remoção futura dos `.bak-pre-rotate-*` — sem novo gate de produto. A19
 segue **NOT READY**; Release B ~24/10; PDF fail-closed.
+
+### Atualização incremental — 13/10/2026 (noite — deploy V1-textual `fd3481f` + restore proof + higiene `.bak`/`pg_hba`)
+
+Em 13/10 à noite, o PR #157 (V1-textual) foi mergeado por squash como
+`fd3481f` (`fd3481f2f92c39ff8b68727ff73939121123280d`) e implantado nas
+três camadas. Nenhuma flag, secret, coorte, modelo ou banco foi alterado
+além do release; zero mutação financeira pelo deploy.
+
+| Frente | Evidência incremental | Estado honesto / saída |
+|---|---|---|
+| PR #157 (V1-textual) | Squash `fd3481f` em 13/10; SPEC com ADENDO V1-TEXTUAL (texto obrigatório; STT/Vision/PDF/web/autoexec-on/Release B/legado pós-V1; #105/#107 CLOSED), config Agent OFF + coortes vazias, PWA sem flags multimodais, golden GW-039/GW-041, dedup de rotas API, reidratação PWA failed+retry. | **MERGED.** |
+| CI | PR #157 100% verde (Gate + quality 22,10); CI/PWA CI da main verdes (`38483695616`/`…618`). | **GREEN.** |
+| API (Contabo) | Release via wrapper `api-release-20260930.sh --execute`, lane source-build (checkout pristine `src-fd3481f`, sem GHCR login na VPS), backup pré-release `pi-db-20261013T195335Z` (sha256 `0b4b04ad…cdb7e`), RELEASE OK, manifesto `release-manifest-fd3481f….json` na VPS, rollback tag `pi-finance-api:rollback-pre-fd3481f` preservada. Smokes: `/health` (gitSha `fd3481f`, buildId `38483695616`) + `/ready` 200 + PWA `/api/backend/health` `fd3481f`; container 0 restarts healthy, sem `FST_ERR`/`DUPLICATED_ROUTE` nos logs. | Deployado e atestado. |
+| Agent/PWA (Cloudflare) | Deploys runs `38484529550`/`38484529484` ATTESTED deploy-smoke-pass, sha `fd3481f`, buildId `38483695618` (par anterior 23:26 deploy-skipped pela corrida `workflow_run` conhecida); live Agent `/health` ready com `buildSha=fd3481f`, PWA `/api/build-info` com `gitSha=fd3481f`. | Deployados e atestados. |
+| Restore proof | Backup `pi-db-20261013T195335Z` restaurado em PG 15 descartável local (exit 0; container removido após a prova): ledger V060; 44 tabelas; 41 contas (20 active/21 inactive); 44 expenses; 3 users; sink legacy com 250 eventos e MAX `2026-10-10T22:09:01.594968Z` (coerente com a re-ancoragem da Release B); 22 `pending_operations` pending; 16 `idempotency_keys`; agregação funcional de outubro OK. Nota metodológica: verificação via arquivos `.sql` (quoting entre camadas corrompeu filtros inline — o `252` observado era `44+139+69`). | **PROOF PASS** (restaurabilidade + integridade do backup 19:53Z). |
+| Higiene VPS (`.bak`) | Removidos `.env.bak-pre-rotate-20261013T195457Z` (API+PG — continham a senha antiga exposta); restam `.env.bak-pre-gokey-rotate-20261008` (follow-up) + `docker-compose.yml.bak-pre-contabo-migration` (referência). | Higiene parcial; follow-up do `.bak` de 08/10 pendente de operador. |
+| `pg_hba` / exposição PG | `pg_hba`: trust em local/loopback + scram no resto; PG sem portas publicadas (`PortBindings {}`) — exposição confinada a containers da mesma rede + `docker exec`. Endurecimento (remover trust) adiado com risco documentado: quebrar backups cron se algo depender de trust. | Endurecimento adiado por decisão de risco; sem novo gate de produto. |
+| NÃO feito | Sem credenciais live do operador: turno autenticado com modelo real em `fd3481f` **não** executado; E2E live-mobile-full em `fd3481f` **não** executado (último PASS foi em `e91a3cd`); tag `v1.0.0` **não** criada (aguarda esses dois). | Pendentes de operador; sem alegação de homologação live/tag. |
+
+**Veredito desta execução:** `DEPLOY_ATTESTED`. Três camadas em `fd3481f`
+atestadas + restore proof do backup 19:53Z registrados; nenhum gate humano
+ou de data foi fechado por este snapshot. A19 segue **NOT READY**;
+Release B ~24/10; PDF fail-closed.
