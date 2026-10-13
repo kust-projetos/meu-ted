@@ -47,11 +47,11 @@ describe("F4 golden — catalog is versioned, well-formed data", () => {
     // GW-029–GW-032 are reserved for the authoritative PostgreSQL suite
     // (apps/api/tests/integration/golden-agent-real-api.test.ts) to keep
     // golden ids unique across suites.
-    expect(cases.length).toBe(35);
+    expect(cases.length).toBe(39);
     const executable = cases.filter((entry) => entry.status === "executable");
     const pending = cases.filter((entry) => entry.status === "pending-capability");
-    expect(executable.length).toBe(29);
-    expect(pending.length).toBe(6);
+    expect(executable.length).toBe(31);
+    expect(pending.length).toBe(8);
     for (const entry of pending) {
       expect(entry.pendingReason?.capability, entry.id).toMatch(/\S/);
       expect(entry.pendingReason?.requires.length, entry.id).toBeGreaterThan(0);
