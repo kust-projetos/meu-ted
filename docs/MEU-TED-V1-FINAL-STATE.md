@@ -5,20 +5,19 @@ encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 
 ## 1. Produção viva
 
-O merge do PR #145 — `fix(agent): closed-grammar presentation split before
-nominal grounding` (`e57bcec`, squash em 13/10/2026) — disparou CI/PWA CI e os
-workflows oficiais de deploy sem path filters; o deploy foi **executado e
-atestado na 2ª wave** (1ª wave `deploy-skipped:gate-not-ready`), e Agent/PWA
-passaram a reportar esse SHA. O código de aplicação mudou em relação a
-`bc2ba9e` (split de presentation antes do nominal grounding em
-`account-grounding.ts` + testes); a API Contabo segue `bd1ed9b` sem redeploy.
+Em 13/10/2026, após o estado `e57bcec` abaixo, a API Contabo passou por um
+outage (~15:44Z–recuperação no mesmo dia) durante o release de `3c3a3f9`
+(V1 routes retirement) e foi recuperada por forward-fix no PR #154
+(`414aefa`) — detalhe no apêndice de incidente ao fim deste documento. O
+estado vigente em todas as camadas é `414aefa`.
 
 | Camada | SHA vigente | Evidência |
 |---|---|---|
-| API (Contabo) | `bd1ed9b` (`bd1ed9bdbcaf99c407ac40f1d4a668099a405585`, build `37238430467`) | `/health` + `/ready` 200 em 12/10/2026, sem redeploy desde 04/10; `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados |
-| Agent (Cloudflare) | `e57bcec` (`e57bcecb46fca664c412e8b47d71f9d0b5ef5291`, build `38325143776`) | Deploy run `38326659522` success/`ATTESTED` (deploy-smoke-pass, 13/10, 2ª wave; 1ª wave deploy-skipped:gate-not-ready); smoke read-only pós-deploy para o SHA |
-| PWA (Cloudflare) | `e57bcec` (mesmo SHA/buildId) | Deploy run `38326659650` success/`ATTESTED` (deploy-smoke-pass, 13/10, 2ª wave) |
-| origin/main | `e57bcec` | CI `38325143697` + PWA CI `38325143776` success (PWA CI após `rerun --failed` de 1 flake PUSH-02 — botão Entrar desabilitado, mesma família PWA-03/04; resto 152+39+matrix verde); deploys Agent/PWA pós-merge executados e atestados |
+| API (Contabo) | `414aefa` (`414aefad8e04cba1927338b8e8d6af0aa53b7fc9d7`, build CI `38437241159`) | swap manual + smokes verdes pós-recovery em 13/10 (`/health`+`/ready` 200, gitSha/buildId casados, 0 restarts); `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados; manifesto manual `release-manifest-414aefa-manual.json` na VPS; rollback tag preservada |
+| Agent (Cloudflare) | `414aefa` (mesmo SHA) | Deploy + smoke/attestation verdes pós-merge #154; transcript fix validado live (T1/T2 sem read-fail, com evidência) |
+| PWA (Cloudflare) | `414aefa` (mesmo SHA) | Deploy + smoke verdes pós-merge #154 |
+| origin/main | `414aefa` | PR #154 (`fix(api): single-registration guard for POST /pending-operations/undo`); CI + PWA CI verdes |
+| API — imagem anterior (histórico) | `bd1ed9b` (`bd1ed9bdbcaf99c407ac40f1d4a668099a405585`, build `37238430467`) | `/health` + `/ready` 200 em 12/10/2026, sem redeploy desde 04/10 até o incidente de 13/10; **não reutilizável após V060** (manifesto V059 × ledger V060 — ver apêndice) |
 | Agent/PWA — deploy atestado anterior (histórico) | `bc2ba9e` (`bc2ba9e11c3272d29d89b8e8c64aa7d01c85cb1d`, build `38313912315`, builtAt `2026-10-12T21:58:24Z`) | Deploy runs `38314671723`/`38314671758` success/`ATTESTED` (deploy-smoke-pass, 12/10; attest jobs `115028677706`/`115028936543`) |
 | Agent/PWA — deploy atestado **antes** de `bc2ba9e` (histórico) | `36ccaac` (merge #138) | Deploy runs `38266117716`/`38266117889` success/`ATTESTED` (deploy-smoke-pass, 12/10) |
 | Agent/PWA — último deploy atestado **antes** de #133 (histórico) | `687a7e8d` (PR #132) | Deploy runs `38081117169`/`38081117377`; CI `38080566857` / PWA CI `38080566817` |
@@ -590,3 +589,65 @@ locais do canary apagadas.
 PASS x3 + STT verbatim OK/turnos falhando + M8 falso-positivo registrado)
 anexado ao canary 13/10; A19 segue **NOT READY**; Release B ~24/10; PDF
 fail-closed.
+
+### Atualização incremental — 13/10/2026 (outage API + recovery `414aefa`)
+
+Outage da API Contabo em 13/10 (~15:44Z até a recuperação no mesmo dia),
+durante o release de `3c3a3f9` (V1 routes retirement, PR #152). API
+retornou 404 (crash-loop) no período; Agent/PWA (Cloudflare) não foram
+afetados. Recuperação por forward-fix, PR #154 (squash `414aefa`).
+
+#### (a) Timeline (UTC 13/10)
+
+1. `3c3a3f9` — release 15:13Z fez rollback por V060 ausente no ledger
+   (fail-closed correto, sem outage).
+2. Migração V060 aplicada 15:35:36Z (0 drift, counts idênticos).
+3. Retry do release 15:40:59Z — crash `FST_ERR_DUPLICATED_ROUTE`: o PR-1
+   removeu o early-return `v2Only` e `/undo` passou a registrar 2x na
+   composição. O CI não pega esta classe — os testes montam o router 1x.
+4. Rollback recriou `bd1ed9b`, que n\u00e3o boota sob o startup guard com o ledger atual: V060 fora
+   do manifesto V059 da imagem → crash-loop; API 404 desde ~15:44Z.
+5. Forward-fix TDD (guard idempotente first-wins + teste de montagem
+   dupla), suite 2493 pass, review APPROVED → merge #154 (`414aefa`).
+6. Build `414aefa` + prova de boot isolada + swap manual + smokes verdes
+   (gitSha/buildId casados), 0 restarts; rollback tag preservada;
+   manifesto manual `release-manifest-414aefa-manual.json` na VPS.
+
+#### (b) Produção vigente pós-recovery
+
+API + Agent + PWA em `414aefa` (ver §1). Transcript fix validado live
+(T1/T2 sem read-fail, com evidência) no Agent `414aefa`. A19 segue
+**NOT READY**; Release B ~24/10; PDF fail-closed; cutover F3–F5 pendente.
+
+#### (c) Incidente de segurança — rotação PENDENTE
+
+`POSTGRES_PASSWORD` foi exibido em transcript de sessão de worker (acesso
+restrito). Rotação **PENDENTE** — bloqueada até localizar a fonte da
+`DATABASE_URL` do shell do operador (pergunta aberta ao operador). O `.env`
+com CRLF é armadilha latente: normalizar para LF na janela da rotação.
+Nenhum valor de segredo vai ao git.
+
+#### (d) Probes manuais malformados — toques congelados
+
+Probes manuais malformados no PG às 15:48Z, autoria desconhecida —
+perguntado ao operador. **Congelar toques manuais no banco até o closure
+do incidente.**
+
+#### (e) Lições para o runbook
+
+1. Pré-checar ledger × manifesto da imagem-alvo antes do swap.
+2. Rollback para imagem com manifesto < ledger \u00e9 **inv\u00e1lido sob o startup guard atual** (alternativas: forward-fix compat\u00edvel, ou
+   restore a partir de backup).
+3. Teste de boot em composição dupla no CI para a classe
+   duplicate-route.
+4. V060 fora do manifesto legacy por design (canonical-only).
+
+#### (f) Backups verificados
+
+`pi-db-20261013T151220Z` (pré-V060) + `pi-db-20261013T154038Z` +
+`pi-db-20261013T180741Z` (sha256sum -c OK nos tr\u00eas; restore completo provado s\u00f3 para a \u00e2ncora 12/10). Diret\u00f3rio `backups-local/` nunca
+é deletado nem vai ao git.
+
+**Veredito desta execução:** `RECOVERY_ATTESTED`. API 404 fechada por
+forward-fix atestado em `414aefa`; pendem closure formal (rotação do
+segredo, autoria dos probes, runbook) — sem novo gate de produto.
