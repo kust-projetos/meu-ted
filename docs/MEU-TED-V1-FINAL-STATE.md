@@ -9,14 +9,15 @@ Em 13/10/2026, após o estado `e57bcec` abaixo, a API Contabo passou por um
 outage (~15:44Z–recuperação no mesmo dia) durante o release de `3c3a3f9`
 (V1 routes retirement) e foi recuperada por forward-fix no PR #154
 (`414aefa`) — detalhe no apêndice de incidente ao fim deste documento. O
-estado vigente em todas as camadas é `414aefa`.
+vigente: API `414aefa` (release manual pos-recovery) e Agent/PWA `e91a3cd` (ATTESTED pos-#155).
 
 | Camada | SHA vigente | Evidência |
 |---|---|---|
-| API (Contabo) | `414aefa` (`414aefad8e04cba1927338b8e8d6af0aa53b7fc9d7`, build CI `38437241159`) | swap manual + smokes verdes pós-recovery em 13/10 (`/health`+`/ready` 200, gitSha/buildId casados, 0 restarts); `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados; manifesto manual `release-manifest-414aefa-manual.json` na VPS; rollback tag preservada |
-| Agent (Cloudflare) | `414aefa` (mesmo SHA) | Deploy + smoke/attestation verdes pós-merge #154; transcript fix validado live (T1/T2 sem read-fail, com evidência) |
-| PWA (Cloudflare) | `414aefa` (mesmo SHA) | Deploy + smoke verdes pós-merge #154 |
-| origin/main | `414aefa` | PR #154 (`fix(api): single-registration guard for POST /pending-operations/undo`); CI + PWA CI verdes |
+| API (Contabo) | `414aefa` (`414aefad8e04cba1927338b8d6af0aa53b7fc9d7`, build CI `38437241159`) | swap manual + smokes verdes pós-recovery em 13/10 (`/health`+`/ready` 200, gitSha/buildId casados, 0 restarts); `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados; manifesto manual `release-manifest-414aefa-manual.json` na VPS; rollback tag preservada |
+| Agent (Cloudflare) | `e91a3cd` (`e91a3cdd051fabc7fb2fe6469aae70c80ac4e148`, build `38452770765`) | Deploys 38453779343/38453779281 ATTESTED deploy-smoke-pass 13/10; transcript fix validado live (T1/T2 sem read-fail, com evidencia (T1/T2 no live 3e90c30; codigo agent identico em e91a3cd, diff vazio) |
+| PWA (Cloudflare) | `e91a3cd` (mesmo SHA/build `38452770765`) | Deploys 38453779343/38453779281 ATTESTED deploy-smoke-pass 13/10 |
+| origin/main | `e91a3cd` | PR #155 (docs outage+recovery); CI + PWA CI verdes |
+| Agent/PWA - tentativa `414aefa` (nunca servida) | `414aefad8e04cba1927338b8d6af0aa53b7fc9d7` | wave1 deploy-skipped + wave2 smoke-fail no outage da API 13/10; live foi direto `e91a3cd` |
 | API — imagem anterior (histórico) | `bd1ed9b` (`bd1ed9bdbcaf99c407ac40f1d4a668099a405585`, build `37238430467`) | `/health` + `/ready` 200 em 12/10/2026, sem redeploy desde 04/10 até o incidente de 13/10; **não reutilizável após V060** (manifesto V059 × ledger V060 — ver apêndice) |
 | Agent/PWA — deploy atestado anterior (histórico) | `bc2ba9e` (`bc2ba9e11c3272d29d89b8e8c64aa7d01c85cb1d`, build `38313912315`, builtAt `2026-10-12T21:58:24Z`) | Deploy runs `38314671723`/`38314671758` success/`ATTESTED` (deploy-smoke-pass, 12/10; attest jobs `115028677706`/`115028936543`) |
 | Agent/PWA — deploy atestado **antes** de `bc2ba9e` (histórico) | `36ccaac` (merge #138) | Deploy runs `38266117716`/`38266117889` success/`ATTESTED` (deploy-smoke-pass, 12/10) |
@@ -63,7 +64,7 @@ PWA: `NEXT_PUBLIC_TED_ATTACHMENT_*` (anúncio, não gate),
 |---|---|---|
 | #107 Phase A (gate+cohort+sink) | **CLOSED em 12/10/2026** (issue fechada com comentário de evidência): gate server-side, coorte attachment-specific, testes binding+OFF, sink durável G07 e inventário de 5 estados — todos implementados + testados (`tests/attachments` 26 arquivos/405 testes verdes); CI do `main` verde | Phase A encerrada; **A19 geral segue NOT READY** (rollout, expiração física R2, bounded PDF, privacidade/egress, canaries STT/Vision têm gates próprios) |
 | #105 Golden Workflows | Suite rápida 35/29 executáveis PASS (GW-033–038: categoria inexistente, conta não identificada, extrato com dados, fragmento de conta, forget redelivery, forget após esquecido), 6 `pending-capability` sem promoção; PG autoritativa: Bloco A (GW-023/024/025 + redelivery/recuperação) + Bloco B (GW-030 undo, GW-031 receita, GW-032 concorrência, GW-040 leitura), tudo SQL-verified | **CLOSED em 12/10/2026** (checklist de aceite + §5.4 mapeados em comentário). Residuais fora da issue: homologação E2E, Release B, cutover, rollout de capacidades |
-| Release B (flip bearer legado) | **Flip ABORTADO em 13/10** — 136 eventos pós-2026-10-02T21:36:06Z (último 2026-10-10T22:09:01Z); nova janela zero-14-dias fecha ~2026-10-24T22:09Z | operador (gate temporal) |
+| Release B (flip bearer legado) | **Flip ABORTADO em 13/10** — 136 eventos pós-2026-10-02T21:36:06Z (último 2026-10-10T22:09:01.594968Z); nova janela zero-14-dias fecha ~2026-10-24T22:09Z | operador (gate temporal) |
 | Cutover F3–F5 | gate humano (ADR-024/ADR-025) | operador |
 | Privacidade A19 (PDF → relay/provider) | classificação “sem egress” retificada; conteúdo pode sair pelo relay; sem prova de ZDR/retention neste endpoint | **WAITING_OPERATOR** |
 | Web live inventory (Tavily/Brave) | pré-F2.4 | operador (credencial CF) |
@@ -175,7 +176,7 @@ seções seguintes e na atualização de 10/10.
 | A19 | **NOT READY** | PDF fail-closed está implantado; faltam limites efetivos de CPU/memória antes de eventual reativação, aprovação de privacidade/egress/retention e gates restantes de canary/observabilidade. |
 | Golden #105 | **WAITING_OPERATOR** | Run local 10/10: 23/23 executáveis PASS e 6 `pending-capability` mantidos como skipped (§13); workflows completos e invariantes da issue ainda não executados/aceitos pelo operador; não transformar `pending-capability` em PASS. |
 | Autoexecute low-risk | **WAITING_OPERATOR** | Continua SHADOW; `on` exige sink e telemetria de undo-after-autoexecute. |
-| Release B | **WAITING_DATE (flip ABORTADO em 13/10)** | 136 eventos pós-2026-10-02T21:36:06Z (último 2026-10-10T22:09:01Z); nova janela zero-14-dias fecha ~2026-10-24T22:09Z + procedimento autorizado. |
+| Release B | **WAITING_DATE (flip ABORTADO em 13/10)** | 136 eventos pós-2026-10-02T21:36:06Z (último 2026-10-10T22:09:01.594968Z); nova janela zero-14-dias fecha ~2026-10-24T22:09Z + procedimento autorizado. |
 | F3–F5 | **WAITING_OPERATOR** | Canonical cutover/aposentadoria do legado requer gate humano. |
 | Backup/restore | **WAITING_OPERATOR** | Backup diário/configurado; restore proof fresco ainda pendente. |
 | Production E2E | **WAITING_OPERATOR** | Smoke autenticado parcial em 10/10 (chat/leitura PASS, zero mutação — §11); aceite final integrado (API/PWA/Agent, anexos, PDF/STT/Vision, mutation receipts/undo) ainda não executado. |
@@ -200,7 +201,7 @@ squash em `687a7e8d09cc874aa3babdad133f737b7f848336`. CI `38080566857` e PWA CI
 com deploy executado, smoke read-only e `ATTESTED`. Os primeiros workflows
 pós-merge terminaram verdes com `deploy=skipped`; não foram tratados como
 release. As execuções posteriores acima executaram o deploy e atestaram o SHA.
-O SHA **vigente** em Agent/PWA agora é `65304dca` (merge documental #133, sem
+O SHA em Agent/PWA em 10/10 era `65304dca` (merge documental #133, sem
 alteração de código de aplicação — ver §1).
 
 `TED_PDF_TEXT_ENABLED=0` no manifesto implantado; adicionalmente,
@@ -605,7 +606,7 @@ afetados. Recuperação por forward-fix, PR #154 (squash `414aefa`).
 3. Retry do release 15:40:59Z — crash `FST_ERR_DUPLICATED_ROUTE`: o PR-1
    removeu o early-return `v2Only` e `/undo` passou a registrar 2x na
    composição. O CI não pega esta classe — os testes montam o router 1x.
-4. Rollback recriou `bd1ed9b`, que n\u00e3o boota sob o startup guard com o ledger atual: V060 fora
+4. Rollback recriou `bd1ed9b`, que não boota sob o startup guard com o ledger atual: V060 fora
    do manifesto V059 da imagem → crash-loop; API 404 desde ~15:44Z.
 5. Forward-fix TDD (guard idempotente first-wins + teste de montagem
    dupla), suite 2493 pass, review APPROVED → merge #154 (`414aefa`).
@@ -615,39 +616,58 @@ afetados. Recuperação por forward-fix, PR #154 (squash `414aefa`).
 
 #### (b) Produção vigente pós-recovery
 
-API + Agent + PWA em `414aefa` (ver §1). Transcript fix validado live
-(T1/T2 sem read-fail, com evidência) no Agent `414aefa`. A19 segue
+API `414aefa` (ver §1) + Agent/PWA `e91a3cd`. Transcript T1/T2 validados no live `3e90c30` (codigo agent identico em `e91a3cd`, diff vazio).
+A19 segue
 **NOT READY**; Release B ~24/10; PDF fail-closed; cutover F3–F5 pendente.
 
-#### (c) Incidente de segurança — rotação PENDENTE
+#### (c) Incidente de segurança — rotação ENCERRADA em 13/10
 
 `POSTGRES_PASSWORD` foi exibido em transcript de sessão de worker (acesso
-restrito). Rotação **PENDENTE** — bloqueada até localizar a fonte da
-`DATABASE_URL` do shell do operador (pergunta aberta ao operador). O `.env`
-com CRLF é armadilha latente: normalizar para LF na janela da rotação.
-Nenhum valor de segredo vai ao git.
+restrito). Rotação **ENCERRADA em 13/10** na Contabo: senha nova ativa
+(dual-test pelo caminho scram — nova autentica com `SELECT 1`, antiga
+recebe FATAL, controle garbage discrimina), app healthy, smokes
+`/health`+`/ready` 200 na API `414aefa`. Backup pré-rotação
+`pi-db-20261013T195335Z` verificado. Backups `.env` `.bak-pre-rotate`
+retidos com permissão restrita (contêm a senha antiga — remoção futura é
+decisão do operador). Nenhum valor de segredo vai ao git.
+
+Mecanismo apurado (descoberta durável): o compose declara a
+`DATABASE_URL` por interpolação a partir de `POSTGRES_PASSWORD`; o `.env`
+(normalizado de CRLF para LF, permissão restrita) contém
+`POSTGRES_PASSWORD` e **não** contém `DATABASE_URL`. Um segundo `.env`
+também foi rotacionado em disco (uso init-only, sem recreate). A hipótese
+da fonte "shell do operador" foi descartada.
 
 #### (d) Probes manuais malformados — toques congelados
 
-Probes manuais malformados no PG às 15:48Z, autoria desconhecida —
-perguntado ao operador. **Congelar toques manuais no banco até o closure
-do incidente.**
+Probes manuais malformados no PG às 15:48Z, autoria **segue desconhecida**.
+**Manter toques manuais no banco congelados.** Follow-ups abertos:
+endurecer `pg_hba` (trust em loopback/local → scram; só redes docker, sem
+porta publicada — risco contido) e remover os `.bak-pre-rotate-*` após a
+janela de retenção (decisão do operador).
 
 #### (e) Lições para o runbook
 
 1. Pré-checar ledger × manifesto da imagem-alvo antes do swap.
-2. Rollback para imagem com manifesto < ledger \u00e9 **inv\u00e1lido sob o startup guard atual** (alternativas: forward-fix compat\u00edvel, ou
+2. Rollback para imagem com manifesto < ledger é **inválido sob o startup guard atual** (alternativas: forward-fix compatível, ou
    restore a partir de backup).
 3. Teste de boot em composição dupla no CI para a classe
    duplicate-route.
 4. V060 fora do manifesto legacy por design (canonical-only).
+5. Na rotação de segredo do Postgres: o `.env` é dono da senha
+   (`POSTGRES_PASSWORD`, sem `DATABASE_URL` no arquivo), o compose
+   interpola a `DATABASE_URL`, normalizar CRLF→LF e checar o segundo
+   `.env` init-only; backup pré-rotação verificado antes de tocar no banco.
 
 #### (f) Backups verificados
 
 `pi-db-20261013T151220Z` (pré-V060) + `pi-db-20261013T154038Z` +
-`pi-db-20261013T180741Z` (sha256sum -c OK nos tr\u00eas; restore completo provado s\u00f3 para a \u00e2ncora 12/10). Diret\u00f3rio `backups-local/` nunca
+`pi-db-20261013T180741Z` + `pi-db-20261013T195335Z` (pré-rotação, verificado; sha256sum -c OK nos três; restore completo provado só para a âncora 12/10). Diretório `backups-local/` nunca
 é deletado nem vai ao git.
 
 **Veredito desta execução:** `RECOVERY_ATTESTED`. API 404 fechada por
-forward-fix atestado em `414aefa`; pendem closure formal (rotação do
-segredo, autoria dos probes, runbook) — sem novo gate de produto.
+forward-fix atestado em `414aefa`; rotação do segredo ENCERRADA
+(mecanismo apurado + backup pré-rotação verificado); seguem como
+follow-ups a autoria dos probes 15:48Z, o endurecimento do `pg_hba` e a
+remoção futura dos `.bak-pre-rotate-*` — sem novo gate de produto. A19
+segue **NOT READY**; Release B ~24/10; PDF fail-closed.
