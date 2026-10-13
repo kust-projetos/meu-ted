@@ -383,6 +383,15 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
   // and POST /approve, /reject, /:id/approve, /:id/reject are unmounted.
   // The Agent model surface never used them (RETIRED_MODEL_TOOLS) and
   // production already served V2-only; only /undo below is kept.
+  //
+  // Single-registration guard: the production boot composes registerRoutes
+  // (which already mounts /undo with the real undoService) and a second
+  // registerPendingOperationRoutes call with v2Only on the SAME app. PR-1
+  // dropped the `if (opts.v2Only) return;` early-return, so /undo registered
+  // twice and boot crashed (FST_ERR_DUPLICATED_ROUTE). The first
+  // registration wins — the second call (server/index.ts) wires no
+  // undoService, so skipping it also preserves the real handler.
+  if (app.hasRoute({ method: 'POST', url: '/pending-operations/undo' })) return;
   app.post('/pending-operations/undo', async (req, reply) => {
     let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
     try {
