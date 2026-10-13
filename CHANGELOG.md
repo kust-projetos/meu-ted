@@ -3,6 +3,15 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-13 noite - deploy V1-textual `fd3481f` (PR #157) nas três camadas + restore proof + higiene VPS; sem tag/release)
+
+- Produção: API/Agent/PWA em `fd3481f2f92c39ff8b68727ff73939121123280d` (merge squash do PR #157; CI 100% verde — Gate + quality 22,10; CI/PWA CI da main `38483695616`/`…618` verdes).
+- API (Contabo): release via wrapper `api-release-20260930.sh --execute` (lane source-build, checkout pristine `src-fd3481f`, sem GHCR login na VPS), backup pré-release `pi-db-20261013T195335Z` (sha256 `0b4b04ad…cdb7e`), RELEASE OK, manifesto `release-manifest-fd3481f….json` na VPS, rollback tag `pi-finance-api:rollback-pre-fd3481f` preservada; smokes `/health` (gitSha `fd3481f`, buildId `38483695616`) + `/ready` 200 + PWA `/api/backend/health` `fd3481f`; container 0 restarts healthy, sem `FST_ERR`/`DUPLICATED_ROUTE` nos logs.
+- Agent/PWA (Cloudflare): deploys runs `38484529550`/`38484529484` ATTESTED deploy-smoke-pass, sha `fd3481f`, buildId `38483695618` (par anterior 23:26 deploy-skipped pela corrida `workflow_run` conhecida); live Agent `/health` ready (`buildSha=fd3481f`) + PWA `/api/build-info` (`gitSha=fd3481f`).
+- Restore proof: backup `pi-db-20261013T195335Z` restaurado em PG 15 descartável (exit 0; removido após) — ledger V060, 44 tabelas, 41 contas (20 active/21 inactive), 44 expenses, 3 users, sink legacy 250 eventos MAX `2026-10-10T22:09:01.594968Z`, 22 pending_operations pending, 16 idempotency_keys, agregação funcional de outubro OK (verificação via arquivos `.sql` — quoting entre camadas corrompeu filtros inline: `252` era `44+139+69`).
+- VPS: removidos `.env.bak-pre-rotate-20261013T195457Z` (API+PG, senha antiga exposta); restam `.env.bak-pre-gokey-rotate-20261008` (follow-up) + `docker-compose.yml.bak-pre-contabo-migration` (referência); pg_hba trust local/loopback + scram resto, PG sem portas publicadas (`PortBindings {}`), endurecimento adiado com risco documentado.
+- NÃO feito (sem credenciais live do operador): turno autenticado com modelo real em `fd3481f`; E2E live-mobile-full em `fd3481f` (último PASS em `e91a3cd`); tag `v1.0.0`. Sem alegação de homologação live/tag.
+
 ## Unreleased (2026-10-13 - sessão V1-textual: SPEC congelado, config OFF publicado, golden GW-039/GW-041, dedup de rotas API, reidratação PWA; sem merge/deploy/release)
 
 - SPEC: ADENDO V1-TEXTUAL congela o escopo (texto obrigatório; STT/Vision/PDF/web/autoexec-on/Release B/legado = pós-V1 diferidos; #105/#107 seguem CLOSED; precedência sobre §16/§25; §15/§24 backup/restore seguem obrigatórios na tarefa 10).
