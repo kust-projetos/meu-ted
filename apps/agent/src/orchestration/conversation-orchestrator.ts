@@ -49,6 +49,10 @@ import { TurnBudget, type RecoveryPermit, type ResolutionRecoveryRequest } from 
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
 import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
 import {
+  resolveAttachmentContentQuery,
+  type AttachmentContentQuery,
+} from './attachment-content-query.js';
+import {
   DRAFTS_DISCARDED_NO_OP_TEXT,
   NO_FAILED_OPERATION_TEXT,
   NO_PENDING_CANCEL_TEXT,
@@ -571,6 +575,16 @@ export class ConversationOrchestrator {
      */
     decisionProvider?: () => DecisionProvider | undefined;
     responseProvider?: TurnResponseProvider;
+    /**
+     * REVIEW-P1 (attachment-content-query): tool-free single-inference
+     * provider for generative content queries, wired by the channel adapter
+     * (`provideContentQueryResponse`: relay/broker single transports, SDK
+     * `generateText` with NO tools). The terminal prefers it over
+     * `responseProvider`, so a content query can never run the tool-carrying
+     * SDK path (`streamText` + `stepCountIs`). Absent = the common provider
+     * (tests/back-compat; production always wires it).
+     */
+    contentQueryProvider?: TurnResponseProvider;
     /** Read-path evidence source (EvidenceCollector). Absent = legacy pass-through. */
     evidenceProvider?: (input: TurnInput, plan: TurnPlan) => Promise<EvidenceEnvelope | null>;
     /** ONE structured correction retry for unsupported grounded claims. */
@@ -871,6 +885,55 @@ export class ConversationOrchestrator {
       onRecoveryAttempted: () => { this.budgetFor(base).noteGroundingRetry(); },
     });
     this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: grounded.grounded, latencyMs: Date.now() - startedAt });
+    return freeze({ ...base, response: freeze({ text: grounded.text }) });
+  }
+
+  /**
+   * ATTACHMENT-CONTENT-QUERY terminal: answers the typed question from the
+   * admitted attachment block only. Never calls the evidence provider (zero
+   * financial reads), never proposes/executes, never touches the draft store
+   * (a recoverable draft stays active and untouched — no INV-10 capture).
+   *
+   * - verbatim: deterministic repeat of the admitted texts, no provider call;
+   * - generative: ONE tool-free inference (`contentQueryProvider`, wired by
+   *   the channel adapter — never the tool-carrying common provider) whose
+   *   reply is validated against the admitted texts as document provenance
+   *   (audio / transcript attribution admitted — see `DOCUMENT_NOUN`), with
+   *   an empty financial envelope: figures or names present in NEITHER still
+   *   fail.
+   */
+  private async runAttachmentContentQuery(
+    input: TurnInput,
+    plan: TurnPlan,
+    query: AttachmentContentQuery,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+  ): Promise<TurnResult> {
+    if (query.verbatim) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: query.admitted.join('\n\n') }),
+      });
+    }
+    const provider = this.dependencies.contentQueryProvider ?? this.dependencies.responseProvider;
+    if (!provider) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: renderUnavailable('o conteúdo do anexo') }),
+      });
+    }
+    const text = await provider(input, plan);
+    const envelope: EvidenceEnvelope = freeze({ version: '1' as const, items: freeze([]) });
+    const grounded = await createGroundedResponseWithRetry(text, envelope, {
+      fallbackSubject: 'o conteúdo do anexo',
+      attachmentTexts: query.admitted,
+      sink: (eventType, fields) => this.emit(eventType, fields),
+      intentionId: input.intentionId,
+      traceId: input.traceId,
+      // R10: the ONE correction retry spends a slot of the shared per-turn
+      // recovery budget, mirroring the read path.
+      onRecoveryAttempted: () => { this.budgetFor(base).noteGroundingRetry(); },
+    });
+    this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: grounded.grounded, latencyMs: Date.now() - startedAt });
+    this.emitTurnBudget(base);
     return freeze({ ...base, response: freeze({ text: grounded.text }) });
   }
 
@@ -3023,6 +3086,19 @@ export class ConversationOrchestrator {
     this.emit('plan.validated', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode });
     const policy = freeze({ capability: 'financial.read' as const, writeAuthorized: false as const, approvalRequired: true as const, authorizationMode: 'none' as const });
     const result: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy; mutation?: { operationId: string; status: 'proposed' | 'succeeded'; receipt?: MutationReceipt }; response?: { text: string } } = { input, plan: freeze(plan), policy };
+    // ATTACHMENT-CONTENT-QUERY: a TYPED question about server-side admitted
+    // attachment data precedes financial routing and draft continuation — the
+    // composed text may carry finance words ("conta", "gastei", "R$ 42,50")
+    // that would otherwise route a read, trip INV-06, or be captured by a
+    // recoverable draft (INV-10). Verbatim repeats the admitted block
+    // deterministically (zero reads, zero provider calls); generative answers
+    // validate against it as document provenance (zero financial reads).
+    // `confirmation` / `cancel` plans are never intercepted (F1: a typed
+    // decision owns the turn); without admitted data the legacy flow owns it.
+    const contentQuery = resolveAttachmentContentQuery(input, plan.mode);
+    if (contentQuery) {
+      return this.runAttachmentContentQuery(input, plan, contentQuery, startedAt, result);
+    }
     // Review round 4 P1-A1: the confirmation anchor is captured SYNCHRONOUSLY
     // at turn entry, before ANY await/I/O below (undo probe, forget sondagem,
     // listing). `draftNowMs()` is the turn clock (injected in tests); calling

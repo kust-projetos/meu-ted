@@ -644,9 +644,17 @@ const REGISTERED_STATE =
  * not provenance. Matching stays on the FOLDED text, so the marker and its
  * figure keep the same context even across a line break ("O documento
  * informa:\nR$ 42,50").
+ *
+ * ATTACHMENT-CONTENT-QUERY: the STT transcript is admitted attachment data,
+ * so its spoken kinds are provenance nouns too — "O áudio informa R$ 42,50"
+ * and "Segundo a transcrição, …" attribute a figure to the admitted block
+ * exactly like "O documento informa …". The nouns are matched FOLDED
+ * (`áudio`→`audio`, `transcrição`→`transcricao`), and the document axis still
+ * requires the figure to match the ADMITTED block text: the noun alone never
+ * grounds anything.
  */
 const DOCUMENT_NOUN =
-  '(?:documento|anexo|arquivo|pdf|imagem|foto|recibo|comprovante|nota\\s+fiscal|cupom|fatura|boleto|extrato|print|captura\\s+de\\s+tela|scan)';
+  '(?:documento|anexo|arquivo|pdf|imagem|foto|recibo|comprovante|nota\\s+fiscal|cupom|fatura|boleto|extrato|print|captura\\s+de\\s+tela|scan|audio|transcricao|transcricoes|transcrito|transcritos)';
 const DOCUMENT_REPORT =
   '(?:informa\\w*|consta\\w*|mostra\\w*|indica\\w*|aponta\\w*|descreve\\w*|menciona\\w*|diz\\w*|traz\\w*|apresenta\\w*|cont[ée]m|lista\\w*)';
 const DOCUMENT_ATTRIBUTION_SOURCE = [
