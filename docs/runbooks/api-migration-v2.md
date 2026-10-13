@@ -27,4 +27,18 @@ nunca cria tabela, altera coluna ou executa migration.
 - Em rollback de aplicação, mantenha o ledger e as migrations V2; não reative
   `[EXEC_ACTION]`, write sem confirmação ou qualquer bypass de capability.
 
+## Pré-swap obrigatório — ledger × manifesto (lição do incidente 13/10)
+
+Antes de qualquer swap/rollback de imagem da API na VPS, passo obrigatório:
+
+1. Ler o ledger de migrations aplicado no banco
+   (`SELECT version ... FROM _migrations` ou o verificador de schema).
+2. Ler o manifesto da imagem-alvo (versões V0xx que ela contém).
+3. Só fazer o swap se `manifesto(imagem-alvo) ⊇ ledger(banco)`.
+   Rollback para imagem com manifesto < ledger é **inválido sob o startup
+   guard atual**: o processo recusa readiness e a API entra em crash-loop
+   (foi o que estendeu o outage de 13/10 após o `FST_ERR_DUPLICATED_ROUTE`
+   do release `3c3a3f9`). Alternativas válidas: forward-fix compatível com
+   o ledger atual, ou restore a partir de backup verificado.
+
 Não execute este procedimento contra produção durante desenvolvimento da SPEC.

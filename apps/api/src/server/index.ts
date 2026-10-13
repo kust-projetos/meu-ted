@@ -63,7 +63,6 @@ import { createPostgresPendingOperationV2Store } from "../approvals/pending-v2.j
 import { createUndoService } from "../approvals/undo.js";
 import { createInMemoryAuditLogStore, createLegacyPostgresAuditLogStore, createPostgresAuditLogStore } from "../audit/store.js";
 import { createLegacyBearerAuditSink } from "../audit/legacy-bearer-sink.js";
-import { registerPendingOperationRoutes } from "../routes/pending-operations.js";
 import { createPendingOperationV2Executor } from "../routes/index.js";
 
 const start = async (): Promise<void> => {
@@ -240,17 +239,16 @@ const start = async (): Promise<void> => {
         disableDeviceRegistration: cfg.disableDeviceRegistration,
         legacyBearerAuditLog: createLegacyBearerAuditSink(pool),
         pool,
-        ...(vapid?.publicKey ? { vapidPublicKey: vapid.publicKey } : {}),
-       ...(pushDelivery ? { pushDelivery } : {}),
-      });
-      registerPendingOperationRoutes(app, {
-        resolveToken: async (token) => tokenStore.resolve(token),
-        v2Store: createPostgresPendingOperationV2Store(pool),
-        v2Executor: createPendingOperationV2Executor(writes),
-        v2Only: true,
+        // CODER-API-ROUTE-DUPE (incidente 13/10): V2 via threading em
+        // registerRoutes (origem única) — o 2º registerPendingOperationRoutes
+        // v2Only no mesmo app registrava /undo 2x (FST_ERR_DUPLICATED_ROUTE).
         // FIX-P1 labels: authoritative account/category display labels for
         // the active presentation resolve from this workspace-scoped store.
-        readModel: store,
+        pendingV2Store: createPostgresPendingOperationV2Store(pool),
+        pendingV2Executor: createPendingOperationV2Executor(writes),
+        pendingV2ReadModel: store,
+        ...(vapid?.publicKey ? { vapidPublicKey: vapid.publicKey } : {}),
+       ...(pushDelivery ? { pushDelivery } : {}),
       });
     } else {
       const store = createPostgresReadModelStore({ pool });
@@ -351,17 +349,15 @@ const start = async (): Promise<void> => {
         analyticsSource: createSqlAnalyticsSource(pool, {
           stores: { store, cardStore, budgetStore, subscriptionStore },
         }),
-        ...(vapid?.publicKey ? { vapidPublicKey: vapid.publicKey } : {}),
-        ...(pushDelivery ? { pushDelivery } : {}),
-      });
-      registerPendingOperationRoutes(app, {
-        resolveToken: async (token) => tokenStore.resolve(token),
-        v2Store: createPostgresPendingOperationV2Store(pool),
-        v2Executor: createPendingOperationV2Executor(writes),
-        v2Only: true,
+        // CODER-API-ROUTE-DUPE (incidente 13/10): V2 via threading em
+        // registerRoutes (origem única) — ver branch legacy acima.
         // FIX-P1 labels: authoritative account/category display labels for
         // the active presentation resolve from this workspace-scoped store.
-        readModel: store,
+        pendingV2Store: createPostgresPendingOperationV2Store(pool),
+        pendingV2Executor: createPendingOperationV2Executor(writes),
+        pendingV2ReadModel: store,
+        ...(vapid?.publicKey ? { vapidPublicKey: vapid.publicKey } : {}),
+        ...(pushDelivery ? { pushDelivery } : {}),
       });
     }
     app.addHook("onClose", async () => {
