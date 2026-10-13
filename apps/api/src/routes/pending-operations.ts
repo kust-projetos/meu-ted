@@ -9,12 +9,15 @@ import { validateApprovalToolArgs } from '../approvals/tool-registry.js';
 import { buildPendingOperationPresentation } from '../approvals/presentation.js';
 import type { ReadModelStore } from '../read-models/store.js';
 import { PendingOperationV2Error, PENDING_V2_MAX_TTL_MS, type PendingExecutor, type PendingOperationExecutor, type PendingOperationStore, type PendingOperationV2Store } from '../approvals/pending.js';
-import { createInMemoryPendingOperationStore } from '../approvals/pending.js';
 import type { UndoService } from '../approvals/undo.js';
 import { createApprovalPolicy, type ApprovalPolicy } from '../approvals/policy.js';
 import { getTedRiskBasedAutoexecute } from '../approvals/authorization-config.js';
 import { buildObservabilityEvent } from '../audit/events.js';
 
+// PR-1 (retire-pending-v1): the V1 routes that consumed this identity are
+// retired, but the schema stays exported — the OpenAPI agent-tools contract
+// still lists the retired V1 tools until the agent regen follow-up, and
+// `tests/contract/agent-tools-authoritative-all.test.ts` validates it.
 export const pendingIdentitySchema = z.object({
   pendingOperationId: z.string().uuid().optional(),
   chatId: z.string().trim().min(1).max(240).optional(),
@@ -35,13 +38,13 @@ export const V2_APPROVAL_CAPABILITIES = {
 } as const;
 
 export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { store?: PendingOperationStore; resolveToken: AuthResolver; executor?: PendingOperationExecutor; undoService?: UndoService; v2Store?: PendingOperationV2Store; v2Executor?: PendingExecutor; v2Only?: boolean; readModel?: Pick<ReadModelStore, 'listAccounts' | 'listCategories'>; approvalPolicy?: ApprovalPolicy }): void => {
-  // Phase 7 (V4.1 Task 7.3): the V1 store is optional. Production
-  // composition (server/index.ts, v2Only) wires no V1 store at all — the
-  // default below only serves dev/test compositions that still mount V1
-  // for the Agent's generated V1 tools.
-  const { resolveToken, executor, undoService, v2Store, v2Executor } = opts;
+  // PR-1 (retire-pending-v1): the registration is unconditionally V2-only.
+  // `store`, `executor` and `v2Only` are deprecated no-ops retained so
+  // existing call sites keep compiling; the V1 routes are gone, so these
+  // opts have no effect. Full removal is a follow-up with the agent
+  // OpenAPI regen (the contract still lists the retired V1 tools).
+  const { resolveToken, undoService, v2Store, v2Executor } = opts;
   const approvalPolicy = opts.approvalPolicy ?? createApprovalPolicy();
-  const store = opts.store ?? createInMemoryPendingOperationStore();
   const resolve = async (req: import('fastify').FastifyRequest): Promise<{ householdId: string; actorId: string; deviceId: string }> => {
     if (req.authenticatedContext) return req.authenticatedContext;
     const token = req.headers[DEVICE_TOKEN_HEADER];
@@ -376,87 +379,10 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
     app.post('/pending-operations/v2/:id/expire', async (req, reply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.cancel)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const params = idSchema.safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues }); try { return reply.send(await v2Store.expire(params.data.id, identity(ctx))); } catch (error) { return handleError(error, reply, true); } });
   }
 
-  if (opts.v2Only) return;
-
-  app.get('/pending-operations/details', async (req, reply) => {
-    let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
-    const query = pendingIdentitySchema.safeParse(req.query);
-    if (!query.success) return reply.code(400).send({ code: 'validation.error', issues: query.error.issues });
-
-    try {
-      if (query.data.chatId !== undefined) {
-        // Phase 7 (V4.1 Task 7.7): bridge context decommissioned — no
-        // request can carry a validated bridge binding anymore, so the
-        // chatId-scoped dual path fails closed. Use pendingOperationId.
-        return reply.code(403).send({ code: 'auth.context_chat_mismatch', message: 'chatId does not match the authenticated bridge context' });
-      }
-      return reply.send({ operation: await store.get(query.data.pendingOperationId!, ctx.householdId) });
-    } catch (error) { return handleError(error, reply); }
-  });
-
-  app.get('/pending-operations', async (req, reply) => {
-    let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
-    const query = z.object({ status: z.enum(['pending', 'approved', 'rejected', 'expired']).optional() }).safeParse(req.query);
-    if (!query.success) return reply.code(400).send({ code: 'validation.error', issues: query.error.issues });
-    try {
-      const items = await store.list(ctx.householdId, query.data.status);
-      return reply.send({ items, total: items.length });
-    } catch (error) { return handleError(error, reply); }
-  });
-
-  app.get('/pending-operations/:id', async (req, reply) => {
-    let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
-    const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
-    if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
-    try { return reply.send(await store.get(params.data.id, ctx.householdId)); }
-    catch (error) { return handleError(error, reply); }
-  });
-
-  app.post('/pending-operations/approve', async (req, reply) => {
-    let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
-    const query = pendingIdentitySchema.safeParse(req.query);
-    if (!query.success) return reply.code(400).send({ code: 'validation.error', issues: query.error.issues });
-    try {
-      const pendingId = query.data.pendingOperationId;
-      if (query.data.chatId !== undefined) {
-        // Phase 7 (V4.1 Task 7.7): bridge context decommissioned — the
-        // chatId-scoped dual path fails closed. Use pendingOperationId.
-        return reply.code(403).send({ code: 'auth.context_chat_mismatch', message: 'chatId does not match the authenticated bridge context' });
-      }
-      return reply.send(await store.approve(pendingId!, ctx.householdId, ctx.actorId, executor));
-    } catch (error) { return handleError(error, reply, true); }
-  });
-
-  app.post('/pending-operations/reject', async (req, reply) => {
-    let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
-    const query = pendingIdentitySchema.safeParse(req.query);
-    if (!query.success) return reply.code(400).send({ code: 'validation.error', issues: query.error.issues });
-    try {
-      const pendingId = query.data.pendingOperationId;
-      if (query.data.chatId !== undefined) {
-        // Phase 7 (V4.1 Task 7.7): bridge context decommissioned — the
-        // chatId-scoped dual path fails closed. Use pendingOperationId.
-        return reply.code(403).send({ code: 'auth.context_chat_mismatch', message: 'chatId does not match the authenticated bridge context' });
-      }
-      return reply.send(await store.reject(pendingId!, ctx.householdId, ctx.actorId));
-    } catch (error) { return handleError(error, reply, true); }
-  });
-
-  app.post('/pending-operations/:id/approve', async (req, reply) => {
-    let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
-    const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
-    if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
-    try { return reply.send(await store.approve(params.data.id, ctx.householdId, ctx.actorId, executor)); }
-catch (error) { return handleError(error, reply, true); }
-  });
-
-  app.post('/pending-operations/:id/reject', async (req, reply) => {
-    let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
-    const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
-    if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
-    try { return reply.send(await store.reject(params.data.id, ctx.householdId, ctx.actorId)); }
-catch (error) { return handleError(error, reply, true); }
-  });
+  // PR-1 (retire-pending-v1): V1 routes removed — GET /details, /, /:id
+  // and POST /approve, /reject, /:id/approve, /:id/reject are unmounted.
+  // The Agent model surface never used them (RETIRED_MODEL_TOOLS) and
+  // production already served V2-only; only /undo below is kept.
   app.post('/pending-operations/undo', async (req, reply) => {
     let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
     try {
