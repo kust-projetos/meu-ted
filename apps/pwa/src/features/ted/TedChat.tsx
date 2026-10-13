@@ -9,6 +9,11 @@ import {
   sendAgentMessage,
   renewAgentSession,
   composeChatSend,
+  loadPendingChatSend,
+  clearPendingChatSend,
+  isAnchorSupersededByHistory,
+  resolveRetrySend,
+  CHAT_SEND_ATTACHMENT_LIMIT,
   uploadAttachment,
   PENDING_OPERATION_STATUS,
   type ActivePendingOperation,
@@ -22,6 +27,7 @@ import { TedUndoCard, type TedUndoProposal } from "./TedUndoCard";
 import { useRecordingState } from "./use-recording-state";
 import { getChatAttachmentCapabilities } from "@/lib/capabilities";
 import { useOptionalAppState } from "@/lib/state/app-state-context";
+import { routePatrimonio } from "@/lib/routes";
 import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 import type { PendingOperationDecision, UndoDecision } from "@/lib/api/agent-client";
 import { notifyPendingOperationsChanged } from "@/lib/state/use-pending-operations";
@@ -54,6 +60,13 @@ const MESSAGE_SEND_RATE_LIMIT_ERROR = "Muitas mensagens seguidas. Aguarde alguns
  */
 const MESSAGE_SEND_INPUT_CAP_ERROR =
   "Sua mensagem está longa demais para o assistente. Tente encurtar e enviar de novo.";
+/**
+ * R3 FIX 3: o servidor recusa com 413 acima de `CHAT_SEND_ATTACHMENT_LIMIT`
+ * anexos — o excedente é bloqueado na seleção/envio com esta mensagem, nunca
+ * truncado em silêncio.
+ */
+const MESSAGE_ATTACHMENT_LIMIT_ERROR =
+  `Você pode anexar no máximo ${CHAT_SEND_ATTACHMENT_LIMIT} arquivos por mensagem.`;
 
 /** Ledger denials get their own copy; every other failure is generic. */
 const sendErrorMessage = (err: unknown): string => {
@@ -100,7 +113,15 @@ const CONNECTION_STATUS_LABELS: Readonly<Record<TedChatStatus, string>> = {
 };
 
 /** Local message with the §19.1 optimistic delivery lifecycle. */
-type ChatMessage = AgentMessage & { delivery?: TedDeliveryState };
+type ChatMessage = AgentMessage & {
+  delivery?: TedDeliveryState;
+  /**
+   * R2 FIX 1: `false` para âncoras legadas reidratadas — o envio original
+   * podia ter anexos perdidos no formato antigo, então não há retry (o balão
+   * failed é explícito, sem reenvio). Ausente/`true` = retry permitido.
+   */
+  retryable?: boolean;
+};
 
 interface TedChatProps {
   /**
@@ -203,6 +224,12 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
         setError("O envio de áudio não está disponível.");
         return;
       }
+      // R3 FIX 3: teto de anexos também vale para o áudio gravado
+      // (leitura do state, não do ref espelho — o ref só serve ao teardown).
+      if (attachments.length >= CHAT_SEND_ATTACHMENT_LIMIT) {
+        setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
+        return;
+      }
       const url = URL.createObjectURL(blob);
       const attachment: TedAttachment = {
         type: "audio",
@@ -248,7 +275,8 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
 
   const clearAttachments = useCallback(() => {
     revokeAttachmentUrls(attachmentsRef.current);
-    attachmentsRef.current = [];
+    // Sem escrita no ref: o efeito espelho (linha do useEffect acima) sincroniza
+    // após setAttachments([]); mutar ref aqui viola react-hooks/immutability.
     setAttachments([]);
   }, [revokeAttachmentUrls]);
 
@@ -257,11 +285,27 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // the draft; teardown paths that drop failed messages revoke their URLs
   // first (INV-08) — failed messages are never silently discarded.
   const draftsRef = useRef<Map<string, PendingChatSend>>(new Map());
+  /**
+   * R2 FIX 3 + R3 FIX 1/2: snapshots das âncoras restauradas (`messageId` →
+   * conteúdo + timestamp + anexos do envio) para reconciliar em TODA carga de
+   * histórico — não só na montagem. Quando o lote autoritativo passa a trazer
+   * a mensagem correspondente (critério temporal do FIX 2; para âncoras com
+   * anexos, só com evidência de anexo — R3 FIX 2), o failed restaurado sai da
+   * tela e o servidor vira dono do log. Sobrevive à troca do storage (um novo
+   * envio sobrescreve/limpa a âncora) porque vive em memória. Os anexos do
+   * snapshot servem à regra de reconciliação e à recusa de retry infiel
+   * (R3 FIX 1: sem draft e com anexos, não há reenvio).
+   */
+  const anchorSnapshotsRef = useRef<
+    Map<string, Pick<PendingChatSend, "content" | "createdAt" | "attachments">>
+  >(new Map());
   const discardDrafts = useCallback(() => {
     for (const draft of draftsRef.current.values()) {
       revokeAttachmentUrls(draft.attachments ?? []);
     }
     draftsRef.current.clear();
+    // R2 FIX 3: snapshots pertencem ao escopo derrubado junto com os drafts.
+    anchorSnapshotsRef.current.clear();
     // A13: previews locais registrados por messageId também são revogados.
     for (const urls of draftPreviewUrlsRef.current.values()) {
       revokeAttachmentUrls(urls.map((url) => ({ url })));
@@ -347,13 +391,116 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     // The scope may have changed while the batch was in flight: this batch
     // belongs to the previous conversation and must never reach the new one.
     if (isStaleScope(scopeId)) return [];
-    setMessages((prev) => [
-      ...history,
-      // SPEC §19.1/§19.3: local optimistic sends not yet confirmed by the
-      // server survive authoritative reloads — failed messages are never
-      // silently discarded and in-flight ones keep their sending state.
-      ...prev.filter((m) => m.delivery === "sending" || m.delivery === "failed"),
-    ]);
+    // TASK-08 FIX 1 + R2 FIXES 1–3 + R3 FIXES 1–3: consume the in-flight send
+    // anchor (SPEC §7.7, `savePendingChatSend` in `sendAgentMessage`) and
+    // rehydrate it as a `failed` bubble with retry — the SAME stable
+    // messageId, never an automatic resend. Guards: (a) a bubble with that id
+    // already on screen is never duplicated; (b) R2 FIX 2 / R3 FIX 2: when
+    // the authoritative history already carries an own message that
+    // supersedes the anchor (text anchors: identical content with timestamp
+    // >= anchor timestamp; attachment anchors: ONLY a later own message with
+    // attachment evidence — placeholder, extraction carrier or attachments),
+    // the server owns the log and no local failed copy is invented; text
+    // equality alone never suppresses an attachment anchor. (c) R2 FIX 1 /
+    // R3 FIX 3: a legacy OR over-limit anchor rehydrates as failed WITHOUT
+    // retry — the original send may have carried attachments lost in the old
+    // format (legacy) or more attachments than the server accepts (overLimit),
+    // so resending would change the payload under the same identity. The
+    // draft (with the anchor's attachment refs) is registered so `handleRetry`
+    // resends the SAME payload.
+    // R3 FIX 1: o updater abaixo é PURO — só calcula mensagens a partir de
+    // decisões tomadas ANTES (ancora superada? quais snapshots reconciliam?
+    // a âncora é retryable?). Nenhum `Map.set/delete` e nenhum
+    // `clearPendingChatSend` dentro do updater: StrictMode double-invoke
+    // passa a ser no-op na 2ª passada. O cleanup de refs/storage acontece
+    // DEPOIS do setState, de forma idempotente.
+    const anchored = loadPendingChatSend(scopeId);
+    // Decisão pura de storage, fora do updater: âncora superada é obsoleta.
+    const anchoredSuperseded = anchored ? isAnchorSupersededByHistory(anchored, history) : false;
+    if (anchored && anchoredSuperseded) {
+      clearPendingChatSend(scopeId);
+    }
+    // R2 FIX 3: reconciliação em TODA carga de histórico — snapshots
+    // superados pelo lote atual, calculados só do histórico (sem `prev`).
+    const reconciledIds: string[] = [];
+    for (const [anchorId, snap] of anchorSnapshotsRef.current) {
+      if (isAnchorSupersededByHistory(snap, history)) reconciledIds.push(anchorId);
+    }
+    const anchorRetryable =
+      anchored !== null &&
+      !anchoredSuperseded &&
+      anchored.legacyAnchor !== true &&
+      anchored.overLimit !== true;
+    setMessages((prev) => {
+      let next: ChatMessage[] = [
+        ...history,
+        // SPEC §19.1/§19.3: local optimistic sends not yet confirmed by the
+        // server survive authoritative reloads — failed messages are never
+        // silently discarded and in-flight ones keep their sending state.
+        ...prev.filter((m) => m.delivery === "sending" || m.delivery === "failed"),
+      ];
+      if (reconciledIds.length > 0) {
+        const reconciled = new Set(reconciledIds);
+        next = next.filter((m) => !(reconciled.has(m.id) && m.delivery === "failed"));
+      }
+      if (anchored && !anchoredSuperseded && !next.some((m) => m.id === anchored.messageId)) {
+        return [
+          ...next,
+          {
+            id: anchored.messageId,
+            actorId: "local",
+            role: "user",
+            content: anchored.content,
+            createdAt: anchored.createdAt,
+            isOwn: true,
+            delivery: "failed" as const,
+            // F1: o texto do balão continua EXATAMENTE o digitado (refs de
+            // anexo viajam só no draft, nunca compostos no texto que o
+            // servidor usa para rotear decisões). Sem URL local pós-reload,
+            // não há preview — a fidelidade está no payload do retry.
+            ...(anchorRetryable ? {} : { retryable: false }),
+          },
+        ];
+      }
+      return next;
+    });
+    // Cleanup de refs/storage FORA do updater (idempotente — repetir é no-op).
+    for (const anchorId of reconciledIds) {
+      anchorSnapshotsRef.current.delete(anchorId);
+      draftsRef.current.delete(anchorId);
+    }
+    if (anchored && anchoredSuperseded) {
+      anchorSnapshotsRef.current.delete(anchored.messageId);
+      draftsRef.current.delete(anchored.messageId);
+    } else if (anchored && !anchorSnapshotsRef.current.has(anchored.messageId)) {
+      // Registra o snapshot UMA vez — SEMPRE (inclusive legada/overLimit,
+      // para a reconciliação tardia remover o failed quando o servidor passar
+      // a trazer a mensagem). O draft fiel, só quando retryable — e sem
+      // sobrescrever o draft vivo de um retry em andamento (`composeChatSend`
+      // geraria um novo `createdAt` e mudaria a ordem de reconciliação).
+      // Idempotent: repetir o registro com a mesma chave é no-op.
+      if (anchorRetryable) {
+        draftsRef.current.set(
+          anchored.messageId,
+          composeChatSend(anchored.content, {
+            messageId: anchored.messageId,
+            // R2 FIX 1: o draft carrega os MESMOS refs de anexo da âncora —
+            // o retry recompõe o payload fiel. Omitido quando vazio para
+            // preservar a forma do envio original (sem chave `attachments`).
+            ...(anchored.attachments && anchored.attachments.length > 0
+              ? { attachments: [...anchored.attachments] }
+              : {}),
+          }),
+        );
+      }
+      anchorSnapshotsRef.current.set(anchored.messageId, {
+        content: anchored.content,
+        createdAt: anchored.createdAt,
+        ...(anchored.attachments && anchored.attachments.length > 0
+          ? { attachments: [...anchored.attachments] }
+          : {}),
+      });
+    }
     setHistoryLoaded(true);
     if (!preserveError) setError(null);
     // FIX-P1: live cards come EXCLUSIVELY from the authoritative active
@@ -438,6 +585,37 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       await loadHistory();
     }
   };
+  // TASK-08 FIX 2 + R2 FIX 4 (LOW): workspace sem contas/categorias recebe
+  // orientação no empty state, reaproveitando copy e rotas existentes
+  // (patrimônio para cadastrar conta, `/hub/categorias` para categorias,
+  // capture para criar transação) — nenhuma tela nova.
+  // Fora do provider (launcher tests) ou com dados indisponíveis, o empty
+  // state original é preservado.
+  // R2 FIX 4: arrays iniciais vazios ≠ carregado. O gate exige carga
+  // concluída — quando o app-state expõe `sync`/`loading`, os domínios
+  // contas/categorias precisam estar sincronizados (`syncedAt`) e `loading`
+  // precisa ser `false`; sem esses sinais (doubles de teste, launcher sem
+  // provider) cai para histórico carregado + arrays definidos. E a cópia
+  // distingue contas vazias de categorias vazias (contas têm precedência —
+  // sem conta não há onde lançar).
+  const setupAccounts = optionalAppState?.accounts;
+  const setupCategories = optionalAppState?.categories;
+  const setupArraysDefined = Array.isArray(setupAccounts) && Array.isArray(setupCategories);
+  const setupSync = optionalAppState?.sync;
+  const setupSyncLoaded =
+    setupSync === undefined || setupSync === null
+      ? true
+      : (setupSync.accounts?.syncedAt ?? null) !== null && (setupSync.categories?.syncedAt ?? null) !== null;
+  const setupSettled =
+    setupArraysDefined && setupSyncLoaded && optionalAppState?.loading !== true;
+  const setupAccountsEmpty = Array.isArray(setupAccounts) && setupAccounts.length === 0;
+  const setupCategoriesEmpty = Array.isArray(setupCategories) && setupCategories.length === 0;
+  const showSetupGuidance =
+    messages.length === 0 &&
+    historyLoaded &&
+    setupSettled &&
+    (setupAccountsEmpty || setupCategoriesEmpty);
+
   // Isolamento por workspace: limpar histórico imediatamente ao trocar de workspace
   // (SPEC §17: troca de workspace também encerra o microfone via cleanup único)
   useEffect(() => {
@@ -543,14 +721,24 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     if (!caps.image) return;
     const files = e.target.files;
     if (!files) return;
+    // R3 FIX 3: o servidor recusa com 413 acima do limite — o excedente é
+    // bloqueado AQUI, com mensagem, nunca truncado em silêncio.
+    const picked = Array.from(files);
+    const room = CHAT_SEND_ATTACHMENT_LIMIT - attachments.length;
+    if (room <= 0) {
+      setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
+      e.target.value = "";
+      return;
+    }
     const newAttachments: TedAttachment[] = [];
-    for (const file of Array.from(files)) {
+    for (const file of picked.slice(0, room)) {
       if (!file.type.startsWith("image/")) continue;
       const url = URL.createObjectURL(file);
       // F6: the chip starts as `uploading`, which BLOCKS the send until the
       // reference resolves (or the failure is made visible).
       newAttachments.push({ type: "image", url, name: file.name, file, uploadState: "uploading" });
     }
+    if (picked.length > room) setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
     if (newAttachments.length > 0) {
       setAttachments((prev) => [...prev, ...newAttachments]);
       if (activeWorkspace) void uploadSelected(activeWorkspace.id, newAttachments);
@@ -563,12 +751,21 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     if (!caps.pdf) return;
     const files = e.target.files;
     if (!files) return;
+    // R3 FIX 3: mesmo bloqueio do excedente (ver `handleImageSelect`).
+    const picked = Array.from(files);
+    const room = CHAT_SEND_ATTACHMENT_LIMIT - attachments.length;
+    if (room <= 0) {
+      setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
+      e.target.value = "";
+      return;
+    }
     const newAttachments: TedAttachment[] = [];
-    for (const file of Array.from(files)) {
+    for (const file of picked.slice(0, room)) {
       if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) continue;
       const url = URL.createObjectURL(file);
       newAttachments.push({ type: "pdf", url, name: file.name, file, uploadState: "uploading" });
     }
+    if (picked.length > room) setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
     if (newAttachments.length > 0) {
       setAttachments((prev) => [...prev, ...newAttachments]);
       if (activeWorkspace) void uploadSelected(activeWorkspace.id, newAttachments);
@@ -717,6 +914,9 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // A13: os previews são locais (o wire leva só a referência), então o
       // revoke vem do registro local do rascunho, não do payload enviado.
       draftsRef.current.delete(send.messageId);
+      // R3 FIX 1: o snapshot da âncora morre com o draft no sucesso — o
+      // histórico autoritativo passa a ser dono do log.
+      anchorSnapshotsRef.current.delete(send.messageId);
       revokeAttachmentUrls(
         (draftPreviewUrlsRef.current.get(send.messageId) ?? []).map((url) => ({ url })),
       );
@@ -763,6 +963,12 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     const wireAttachments = attachments
       .filter((a) => Boolean(a.ref))
       .map((a) => ({ type: a.type, url: "", name: a.name, ref: a.ref as string }));
+    // R3 FIX 3: defesa em profundidade — a seleção já bloqueia o excedente,
+    // mas um estado inconsistente nunca sai como 413 evitável: falha explícita.
+    if (wireAttachments.length > CHAT_SEND_ATTACHMENT_LIMIT) {
+      setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
+      return;
+    }
     // SPEC §7.7: the send identity is minted ONCE at composition; retries
     // reuse it via the draft record below. Because `content` IS the typed text,
     // the §19.3 retry path re-sends exactly what was typed — the old divergence
@@ -796,25 +1002,24 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // SPEC §19.3: retry resends the preserved draft — same text, same live
   // attachments, SAME stable messageId. A retry that fails again returns
   // the message to `failed` keeping the draft; success consumes it.
+  // R3 FIX 1: sem o draft fiel (com anexos), o retry é RECUSADO — reenviar
+  // sem os anexos mudaria o payload sob a mesma identidade (`intentionId`).
   const handleRetry = (messageId: string) => {
     if (!activeWorkspace || loading) return;
     const failed = messages.find((m) => m.id === messageId && m.delivery === "failed");
-    if (!failed) return;
+    // R2 FIX 1 + R3 FIX 3: âncora legada/overLimit reidratada
+    // (`retryable: false`) não tem retry — defesa em profundidade (o botão
+    // nem é oferecido).
+    if (!failed || failed.retryable === false) return;
     const stored = draftsRef.current.get(messageId);
-    const send: PendingChatSend =
-      stored ??
-      composeChatSend(failed.content, {
-        messageId,
-        // Fallback (rascunho perdido): só reanexo o que ainda tem URL real —
-        // um anexo sem URL não pode virar um envio vazio.
-        ...(Array.isArray(failed.attachments) && failed.attachments.length > 0
-          ? {
-              attachments: failed.attachments
-                .filter((a) => typeof a.url === "string" && a.url !== "")
-                .map((a) => ({ type: a.type, url: a.url, name: a.name ?? "" })),
-            }
-          : {}),
-      });
+    const snapshot = anchorSnapshotsRef.current.get(messageId);
+    const send = resolveRetrySend({
+      messageId,
+      failed,
+      ...(stored ? { stored } : {}),
+      ...(snapshot?.attachments?.length ? { snapshotAttachments: snapshot.attachments } : {}),
+    });
+    if (!send) return;
     draftsRef.current.set(messageId, send);
     setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "sending" as const } : m)));
     void executeSend(send);
@@ -893,6 +1098,51 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
               <p className="mt-1.5 max-w-[280px] text-[13px] leading-relaxed text-text-muted">
                 Seu co-piloto financeiro. Posso analisar despesas, consultar metas, simular pagamentos e te ajudar a manter o orçamento no azul.
               </p>
+              {showSetupGuidance && (
+                <div
+                  data-testid="ted-setup-guidance"
+                  className="mt-4 w-full max-w-[300px] rounded-[14px] border border-dashed border-border-subtle bg-surface-2 px-3.5 py-3 text-left"
+                >
+                  {setupAccountsEmpty ? (
+                    <p
+                      data-testid="ted-setup-guidance-accounts"
+                      className="text-[13px] leading-relaxed text-text-secondary"
+                    >
+                      Nenhuma conta cadastrada. Cadastre sua primeira conta para o TED registrar e analisar seus gastos.
+                    </p>
+                  ) : (
+                    <p
+                      data-testid="ted-setup-guidance-categories"
+                      className="text-[13px] leading-relaxed text-text-secondary"
+                    >
+                      Nenhuma categoria cadastrada. Crie categorias para organizar seus gastos por tema.
+                    </p>
+                  )}
+                  <div className="mt-2.5 flex flex-col gap-2">
+                    {setupAccountsEmpty ? (
+                      <a
+                        href={routePatrimonio("contas")}
+                        className="rounded-[12px] bg-primary px-3.5 py-2.5 text-center text-[13px] font-bold text-white shadow-xs transition-all hover:bg-primary-hover"
+                      >
+                        Cadastrar conta
+                      </a>
+                    ) : (
+                      <a
+                        href="/hub/categorias"
+                        className="rounded-[12px] bg-primary px-3.5 py-2.5 text-center text-[13px] font-bold text-white shadow-xs transition-all hover:bg-primary-hover"
+                      >
+                        Ver categorias
+                      </a>
+                    )}
+                    <a
+                      href="/capture"
+                      className="rounded-[12px] border border-border-subtle bg-surface-1 px-3.5 py-2.5 text-center text-[13px] font-bold text-text-primary shadow-xs transition-all hover:border-primary"
+                    >
+                      Criar transação
+                    </a>
+                  </div>
+                </div>
+              )}
               <div className="mt-5 grid w-full max-w-[300px] gap-2">
                 {[
                   "Quanto gastei em alimentação este mês?",
@@ -926,7 +1176,8 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
                 isCurrentUser={isCurrentUser}
                 senderName={m.role === "assistant" ? "TED" : senderName}
                 delivery={m.delivery}
-                onRetry={m.delivery === "failed" ? () => handleRetry(m.id) : undefined}
+                // R2 FIX 1: failed de âncora legada não oferece retry.
+                onRetry={m.delivery === "failed" && m.retryable !== false ? () => handleRetry(m.id) : undefined}
               />
             );
           })}

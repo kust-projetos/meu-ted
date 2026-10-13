@@ -285,13 +285,13 @@ describe("TedChat — AC05: um balão por messageId, sem desaparecimento silenci
     await waitFor(() => expect(screen.getByText("Gastei R$ 50 no mercado")).toBeInTheDocument());
   });
 
-  it("COMPORTAMENTO REAL (documentado): reload não restaura o balão não confirmado, mas o id âncora persiste em sessionStorage", async () => {
-    // Verificação do comportamento atual de recuperação pós-reload: o
-    // registro de envio em voo é gravado por `savePendingChatSend`
-    // (messageId + texto), porém NADA o consome na montagem — o chat volta
-    // apenas do histórico autoritativo do servidor. Uma resposta HTTP perdida
-    // (o DO pode ter gravado a mensagem; o cliente não teve confirmação)
-    // deixa a mensagem fora da tela até um refresh trazê-la de volta.
+  it("REIDRATAÇÃO (TASK-08 FIX 1): reload restaura o balão não confirmado como failed com retry, sem reenvio", async () => {
+    // Comportamento APÓS o fix: o registro de envio em voo gravado por
+    // `savePendingChatSend` (messageId + texto) É consumido na montagem — o
+    // chat reidrata o balão como `failed` com affordance de retry, reusando a
+    // âncora estável (sem reenvio automático, sem inventar card). Uma resposta
+    // HTTP perdida (o DO pode ter gravado a mensagem; o cliente não teve
+    // confirmação) volta à tela como falha explícita, nunca some em silêncio.
     agentClient.savePendingChatSend("ws-1", {
       messageId: "msg-anchor-1",
       content: "Gastei R$ 50 no mercado",
@@ -301,12 +301,13 @@ describe("TedChat — AC05: um balão por messageId, sem desaparecimento silenci
 
     await renderReady();
 
-    // Sem bolão local e sem affordance de retry: nada é inventado.
-    expect(screen.queryByText("Gastei R$ 50 no mercado")).toBeNull();
-    expect(screen.queryByRole("button", { name: RETRY })).toBeNull();
+    // Balão local reidratado COM affordance de retry…
+    expect(screen.getByText("Gastei R$ 50 no mercado")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: RETRY })).toBeInTheDocument();
+    // …mas NADA foi reenviado sozinho…
     expect(agentClient.sendAgentMessage).not.toHaveBeenCalled();
-    // …mas a identidade do envio continua disponível para uma futura
-    // recuperação (a âncora de idempotência não é perdida).
+    // …e a identidade do envio continua disponível (a âncora de
+    // idempotência não é perdida — o retry reusa o MESMO messageId).
     expect(agentClient.loadPendingChatSend("ws-1")?.messageId).toBe("msg-anchor-1");
   });
 });
