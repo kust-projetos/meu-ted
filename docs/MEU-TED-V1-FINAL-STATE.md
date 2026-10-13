@@ -31,8 +31,8 @@ passaram a reportar esse SHA. O código de aplicação mudou em relação a
 | Chat texto, memória/A17, skills/A18, forget two-step transacional | ACTIVE | ACTIVE | ACTIVE — chat/leitura comprovados no smoke autenticado de 10/10 (§11) | — (baseline V1) |
 | Attachments (upload/R2) | ACTIVE | **ACTIVE** (`TED_ATTACHMENTS_ENABLED=1`, coorte `*`, binding R2 `pi-finance-ted-attachments`) | upload/R2 provados em 08/10 e coerentes com o smoke autenticado de 10/10; regra de lifecycle R2 de 1 dia **configurada** (§12), deleção física **não validada** | manter gates/cleanup; validar expiração antes de confiar na retenção |
 | PDF textual | parser preservado, `pdfTextProcessorOverride()` retorna `undefined` incondicionalmente | Agent: manifesto `TED_PDF_TEXT_ENABLED=0`; PWA: `NEXT_PUBLIC_TED_ATTACHMENT_PDF` e flag master não estão no config versionado, default-off | Smoke autenticado de 10/10 **não** chegou a pedir PDF: a PWA deployada (`65304dca`) não renderizou input de arquivo PDF, e o smoke foi bloqueado antes do upload — zero request/upload/parser em produção. Teste local `pdf-gate-worklimit.test.ts` 10/10 PASS | **DISABLED / FAIL-CLOSED**. Reativação do parser bloqueada até isolamento/limites efetivos de CPU/memória e aprovação de privacidade/egress/retention; expor o botão de upload também requer build/deploy autorizado da PWA |
-| STT (Groq whisper-large-v3-turbo) | disponível | manifesto com flag `1`, coorte restrita ao workspace `junio` `d36cb649-4462-486d-940a-47128ad329f2` (ver nota 13/10 sobre natureza dos dados no apêndice canary ao fim deste documento); secret presente segundo relatório 08/10 | **canary API-direto 13/10 PARCIAL** — upload 200 + transcrição Groq OK, mas turnos com transcrição caem em fluxos de leitura/mutação que falham (finding aberto, apêndice canary ao fim deste documento); **sem** mudança de coorte em 10/10 | **WAITING_OPERATOR** para aceite de precisão/privacidade |
-| Vision (Gemini `gemini-2.5-flash`, canary; Groq alternativo) | ACTIVE (código) | manifesto com flag `1`, provider/modelo allowlisted, coorte restrita ao workspace `junio` `d36cb649-4462-486d-940a-47128ad329f2` (ver nota 13/10 sobre natureza dos dados no apêndice canary ao fim deste documento) | extração sintética exata provada live em 08/10; **canary API-direto 13/10 FULL PASS** (upload 200 + turno completed, extração exata, zero mutação — apêndice canary ao fim deste documento); quota regular e verificação de privacidade pendentes; **sem** mudança de coorte em 10/10 | **BLOCKED_EXTERNAL**: quota regular e verificação de privacidade |
+| STT (Groq whisper-large-v3-turbo) | disponível | manifesto com flag `1`, coorte restrita ao workspace `junio` `d36cb649-4462-486d-940a-47128ad329f2` (ver nota 13/10 sobre natureza dos dados no apêndice canary ao fim deste documento); secret presente segundo relatório 08/10 | **canary API-direto 13/10 PARCIAL** — upload 200 + transcrição Groq OK, mas turnos com transcrição caem em fluxos de leitura/mutação que falham (finding aberto, apêndice canary ao fim deste documento); **canary UI 13/10**: verbatim comprovado no histórico, turnos com transcrição falham ao responder (finding aberto, extensão UI do apêndice); **sem** mudança de coorte em 10/10 | **WAITING_OPERATOR** para aceite de precisão/privacidade |
+| Vision (Gemini `gemini-2.5-flash`, canary; Groq alternativo) | ACTIVE (código) | manifesto com flag `1`, provider/modelo allowlisted, coorte restrita ao workspace `junio` `d36cb649-4462-486d-940a-47128ad329f2` (ver nota 13/10 sobre natureza dos dados no apêndice canary ao fim deste documento) | extração sintética exata provada live em 08/10; **canary API-direto 13/10 FULL PASS** (upload 200 + turno completed, extração exata, zero mutação — apêndice canary ao fim deste documento); **canary UI 13/10 FULL PASS x3** via PWA `df23c3d` (extensão UI do apêndice); quota regular e verificação de privacidade pendentes; **sem** mudança de coorte em 10/10 | **BLOCKED_EXTERNAL**: quota regular e verificação de privacidade |
 | web_search | disponível | UNKNOWN (key fora do repo; Tavily/Brave pago recusados) | UNKNOWN (inventário pendente) | F2.4 |
 | web_fetch | disponível | DISABLED (allowlist ausente) | pendente | F2.4 |
 | Decision provider (Jev/Clef/Strands) | disponível | DISABLED (default-off) | DISABLED | POST-V1 / OPTIONAL |
@@ -543,3 +543,50 @@ inventário: **PR-0/1/2/3**.
 **Veredito desta execução:** `ROLLING_SNAPSHOT`. Canary Vision FULL PASS +
 STT PARCIAL (finding aberto) registrados; A19 segue **NOT READY**; Release B
 ~24/10; PDF fail-closed.
+
+### Atualização incremental — 13/10/2026 (canary UI via PWA `df23c3d` — estende b/c)
+
+Canary UI executado em 13/10 via PWA `df23c3d` (ATTESTED), que renderiza
+"Anexar imagem" + "Gravar áudio" (input de imagem com `accept image/*`) e
+**não** renderiza "Anexar PDF" — flags IMAGE/AUDIO/MICROPHONE do PR #149.
+Nenhuma flag, secret, coorte, modelo ou banco foi alterado; auditoria:
+**zero mutações criadas** pelo canary UI.
+
+#### (g) Vision UI: FULL PASS x3 (estende b)
+
+Três turnos via UI com chip + extração exata + caveats + pergunta de
+confirmação e **zero mutação**. Confirma o FULL PASS API-direto do bloco
+(b) pelo caminho de UI.
+
+#### (h) STT UI: verbatim OK, turnos falham (estende c)
+
+Transcrição Groq comprovada **verbatim no histórico** ("Teste de
+transcrição Recibo de teste, valor R$..." — Groq correta), **MAS** turnos
+com transcrição falham ao responder (`FINANCIAL_EVIDENCE_UNAVAILABLE` /
+accounts-read-fail / handoff inconclusivo INV-10). Causa provável:
+conteúdo transcrito com valores é roteado para fluxos
+financeiros/leitura/mutação (classe F1: o transcrito deve permanecer
+**DADO** no texto composto, nunca em `decisionText` — o provável defeito
+está nos consumidores do texto composto que tratam valores transcritos
+como acionáveis). Finding segue
+**aberto para debugger**.
+
+#### (i) Correções honestas + resíduos
+
+1. **M8 falso-positivo (1ª correção honesta):** o M8 do canary UI casou a
+palavra "Transcreva" da **própria mensagem enviada** — falso-positivo,
+**não** conta como evidência de transcrição. Métrica M8 descartada.
+2. **Verbatim STT (2ª correção honesta):** o bloco (c) dizia "verbatim
+transcrito **não verificado**"; o canary UI verificou o verbatim no
+histórico e deslocou a falha para os **turnos**. Leitura corrigida,
+finding mantido aberto.
+3. Mic headless: a gravação headless exige `--use-fake-ui-for-media-stream`;
+sem ela, o `getUserMedia` trava e a gravação nunca inicia.
+4. Resíduo: anexos TESTE sem rota de delete expiram via **TTL 24h / sweep +
+lifecycle R2 de 1 dia** (deleção física segue não validada, §12); mídias
+locais do canary apagadas.
+
+**Veredito desta execução:** `ROLLING_SNAPSHOT`. Canary UI (Vision FULL
+PASS x3 + STT verbatim OK/turnos falhando + M8 falso-positivo registrado)
+anexado ao canary 13/10; A19 segue **NOT READY**; Release B ~24/10; PDF
+fail-closed.
