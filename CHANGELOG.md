@@ -3,6 +3,17 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-13 - sessão V1-textual: SPEC congelado, config OFF publicado, golden GW-039/GW-041, dedup de rotas API, reidratação PWA; sem merge/deploy/release)
+
+- SPEC: ADENDO V1-TEXTUAL congela o escopo (texto obrigatório; STT/Vision/PDF/web/autoexec-on/Release B/legado = pós-V1 diferidos; #105/#107 seguem CLOSED; precedência sobre §16/§25; §15/§24 backup/restore seguem obrigatórios na tarefa 10).
+- Config publicado: Agent com upload/STT/Vision OFF + coortes vazias (R2/binding/secrets preservados); PWA sem flags multimodais no build (wrangler + next.config + ci.yml + pwa-ci.yml; PDF segue OFF).
+- Golden: GW-039 (casual, claim delimitado) e GW-041 (matriz-erro) executáveis PASS; GW-040 (multi-workspace) e GW-042 (matriz-por-status) pending-capability com requires (exigem harness); catálogo 39/31/8.
+- API: registro de rotas deduplicado na origem (fim do duplo `registerPendingOperationRoutes`; guard first-wins preservado; trava de unicidade); runbook com pré-swap ledger×manifesto obrigatório.
+- PWA: reidratação de envio não-confirmado como failed+retry fiel (âncora v1 com refs de anexo, legada/overLimit sem retry, reconciliação temporal em toda loadHistory, marcador de anexo só como prefixo); guidance de setup no empty (contas/categorias + CTAs); limite 10 anexos pré-envio alinhado ao 413.
+- Validação local: typecheck 5/5, docs:lint PASS, suítes focadas verdes (sem números agregados — detalhe nos logs da sessão), reviews independentes (2 APPROVED P1, golden APPROVED após delimitação, API APPROVED, PWA 4 rodadas até APPROVED). CI pendente no PR (CI ainda não rodou nesta branch).
+- NÃO deployado, NÃO tagueado; produção inalterada. Pendências de operador inalteradas (deploys, E2E live, modelo real, PG-real, restore proof, pg_hba/.bak, Release B ~24/10, tag v1.0.0).
+- Commits (branch `docs/rotation-20261013`, sem PR ainda): `4e46301` (SPEC+flags), `89d4b8c` (golden), `594f0a3` (API routes), `a3d247b` (PWA).
+
 ## Unreleased (2026-10-12 - PR137 hardening round 4 (P1-A/P1-B): âncora síncrona, fronteira >=, vínculo de apresentação, amarração intentionId→operationId na API; sem merge/deploy/release)
 
 - Agent (P1-A1): **âncora síncrona + sighting antes de qualquer I/O de decisão** - `runForgetDecisionTurn` (sondagem de precedência) executava antes da sighting: B nascida na janela precedia a âncora e passava. `tEntry = draftNowMs()` capturado na entrada do ramo `confirmation`, `noteConfirmationSighted` movida para antes de qualquer I/O (inclusive a sondagem do forget) com `createdAt = tEntry`; check temporal usa a âncora. Regressão com relógio avançado prova B-durante-sondagem rejeitada e ordenação âncora < createdAt(B) <= presentedAt(B).
