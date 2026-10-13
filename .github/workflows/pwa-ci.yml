@@ -72,6 +72,10 @@ jobs:
           NEXT_PUBLIC_BUILD_SHA: ${{ github.sha }}
           NEXT_PUBLIC_BUILD_ID: ${{ github.run_id }}
           NEXT_PUBLIC_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
+          # Canary 13/10: announce image/audio/mic attach buttons (PDF stays OFF — no PDF/INGESTION flag).
+          NEXT_PUBLIC_TED_ATTACHMENT_IMAGE: 1
+          NEXT_PUBLIC_TED_ATTACHMENT_AUDIO: 1
+          NEXT_PUBLIC_TED_MICROPHONE: true
 
       - name: Pack tested Cloudflare build (SHA-pinned artifact)
         run: tar -czf /tmp/pwa-build-pwaci.tgz -C apps/pwa .open-next wrangler.jsonc

@@ -31,8 +31,8 @@ passaram a reportar esse SHA. O código de aplicação mudou em relação a
 | Chat texto, memória/A17, skills/A18, forget two-step transacional | ACTIVE | ACTIVE | ACTIVE — chat/leitura comprovados no smoke autenticado de 10/10 (§11) | — (baseline V1) |
 | Attachments (upload/R2) | ACTIVE | **ACTIVE** (`TED_ATTACHMENTS_ENABLED=1`, coorte `*`, binding R2 `pi-finance-ted-attachments`) | upload/R2 provados em 08/10 e coerentes com o smoke autenticado de 10/10; regra de lifecycle R2 de 1 dia **configurada** (§12), deleção física **não validada** | manter gates/cleanup; validar expiração antes de confiar na retenção |
 | PDF textual | parser preservado, `pdfTextProcessorOverride()` retorna `undefined` incondicionalmente | Agent: manifesto `TED_PDF_TEXT_ENABLED=0`; PWA: `NEXT_PUBLIC_TED_ATTACHMENT_PDF` e flag master não estão no config versionado, default-off | Smoke autenticado de 10/10 **não** chegou a pedir PDF: a PWA deployada (`65304dca`) não renderizou input de arquivo PDF, e o smoke foi bloqueado antes do upload — zero request/upload/parser em produção. Teste local `pdf-gate-worklimit.test.ts` 10/10 PASS | **DISABLED / FAIL-CLOSED**. Reativação do parser bloqueada até isolamento/limites efetivos de CPU/memória e aprovação de privacidade/egress/retention; expor o botão de upload também requer build/deploy autorizado da PWA |
-| STT (Groq whisper-large-v3-turbo) | disponível | manifesto com flag `1`, coorte restrita ao workspace real `junio` `d36cb649-4462-486d-940a-47128ad329f2` (household com dados financeiros reais, **não** o sintético Test Family `550e8400…`); secret presente segundo relatório 08/10 | probe sintético aprovado; voz real pendente; **sem** novo canary ou mudança de coorte em 10/10 | **WAITING_OPERATOR** para aceite de precisão/privacidade |
-| Vision (Gemini `gemini-2.5-flash`, canary; Groq alternativo) | ACTIVE (código) | manifesto com flag `1`, provider/modelo allowlisted, coorte restrita ao workspace real `junio` `d36cb649-4462-486d-940a-47128ad329f2` (household com dados financeiros reais, **não** o sintético Test Family `550e8400…`) | extração sintética exata provada live em 08/10; turno completo Agent→relay/grounding e quota regular pendentes; **sem** novo canary ou mudança de coorte em 10/10 | **BLOCKED_EXTERNAL**: turno canary/cota e verificação de privacidade |
+| STT (Groq whisper-large-v3-turbo) | disponível | manifesto com flag `1`, coorte restrita ao workspace `junio` `d36cb649-4462-486d-940a-47128ad329f2` (ver nota 13/10 sobre natureza dos dados no apêndice canary ao fim deste documento); secret presente segundo relatório 08/10 | **canary API-direto 13/10 PARCIAL** — upload 200 + transcrição Groq OK, mas turnos com transcrição caem em fluxos de leitura/mutação que falham (finding aberto, apêndice canary ao fim deste documento); **sem** mudança de coorte em 10/10 | **WAITING_OPERATOR** para aceite de precisão/privacidade |
+| Vision (Gemini `gemini-2.5-flash`, canary; Groq alternativo) | ACTIVE (código) | manifesto com flag `1`, provider/modelo allowlisted, coorte restrita ao workspace `junio` `d36cb649-4462-486d-940a-47128ad329f2` (ver nota 13/10 sobre natureza dos dados no apêndice canary ao fim deste documento) | extração sintética exata provada live em 08/10; **canary API-direto 13/10 FULL PASS** (upload 200 + turno completed, extração exata, zero mutação — apêndice canary ao fim deste documento); quota regular e verificação de privacidade pendentes; **sem** mudança de coorte em 10/10 | **BLOCKED_EXTERNAL**: quota regular e verificação de privacidade |
 | web_search | disponível | UNKNOWN (key fora do repo; Tavily/Brave pago recusados) | UNKNOWN (inventário pendente) | F2.4 |
 | web_fetch | disponível | DISABLED (allowlist ausente) | pendente | F2.4 |
 | Decision provider (Jev/Clef/Strands) | disponível | DISABLED (default-off) | DISABLED | POST-V1 / OPTIONAL |
@@ -45,8 +45,8 @@ Regra: `infra provisionada != capability habilitada`; `repo config != live runti
 | Flag | Estado atual | Restrição |
 |---|---|---|
 | `TED_ATTACHMENTS_ENABLED` (anexos) | `1` | coorte `*`; binding R2 `pi-finance-ted-attachments` |
-| `TED_AUDIO_STT_ENABLED` (áudio/STT) | `1` | coorte restrita ao workspace **real** `junio` `d36cb649-4462-486d-940a-47128ad329f2` (household com dados financeiros reais, **não** o sintético Test Family); flag sozinha não autoriza egress |
-| `TED_VISION_ENABLED` (Vision) | `1` | provider `gemini`, modelo `gemini-2.5-flash`, coorte restrita ao workspace **real** `junio` `d36cb649-4462-486d-940a-47128ad329f2` (household com dados financeiros reais, **não** o sintético Test Family) |
+| `TED_AUDIO_STT_ENABLED` (áudio/STT) | `1` | coorte restrita ao workspace **real** `junio` `d36cb649-4462-486d-940a-47128ad329f2` (household com dados financeiros reais segundo notas antigas — ver nota de retificação 13/10 no apêndice canary; **não** o sintético Test Family); flag sozinha não autoriza egress |
+| `TED_VISION_ENABLED` (Vision) | `1` | provider `gemini`, modelo `gemini-2.5-flash`, coorte restrita ao workspace **real** `junio` `d36cb649-4462-486d-940a-47128ad329f2` (household com dados financeiros reais segundo notas antigas — ver nota de retificação 13/10 no apêndice canary; **não** o sintético Test Family) |
 | `TED_PDF_TEXT_ENABLED` (PDF) | `0` | hard-disabled no código (`pdfTextProcessorOverride()` → `undefined` incondicional) |
 | `TED_WEB_FETCH_ALLOWED_HOSTS` (web_fetch) | off | allowlist ausente/vazia = fetch OFF |
 | `TED_DECISION_PROVIDER` (decision) | default-off | ausente/vazio/`none` = off |
@@ -485,3 +485,61 @@ provável). O flip previsto para 13/10 foi **ABORTADO** por evidência. Nova
 janela zero-14-dias fecha **~2026-10-24T22:09Z** se nada mais ocorrer;
 re-verificação agendada com a mesma query. A19 segue **NOT READY**; demais
 gates intocados.
+
+### Atualização incremental — 13/10/2026 (canary STT/Vision API-direto + aposentadoria formal)
+
+Canary executado em 13/10 **via API direta** (não via PWA — a PWA deployada
+não renderiza inputs de anexo/áudio; `caps.default-off` no build). Nenhuma
+flag, secret, coorte, modelo ou banco foi alterado; nenhuma mutação
+financeira foi criada pelo canary (auditoria pós-canary: só resíduo de 28/09).
+
+#### (a) Declaração do operador: `junio` contém só dados de teste
+
+O operador declarou **3x em 13/10** que o workspace `junio`
+(`d36cb649-4462-486d-940a-47128ad329f2`) contém **só dados de teste** — nada
+financeiro real; só pedidos de registro e perguntas. Isso **RETIFICA** a classificação anterior:
+contradição com notas antigas que o descreviam literalmente como "household com dados financeiros reais": por declaração do operador em 13/10, o workspace contém só dados de teste. Evidência corroborante (não prova sozinha): o
+workspace contém contas "E2E cleanup"/"Conta Teste E2E" e 8 transações de
+28/09 ("Teste E2E mobile", "Diag click test", R$1,00). As menções antigas a "workspace real `junio`" ficam retificadas por esta nota. A19 segue **NOT READY** — o canary parcial não promove.
+
+#### (b) Vision: FULL PASS
+
+Upload `200` + turno `completed` via API direta, com extração exata
+(LOJA TESTE LTDA / 13/10/2026 / R$12,34 / Retail / alta), caveats honestos,
+pergunta de confirmação e **zero mutação**. PWA UI sem inputs — o canary foi
+API-direto.
+
+#### (c) STT: PARCIAL (finding aberto)
+
+Upload `200` + Groq transcreveu (`attachmentStates` com `state=processed`:
+"Áudio transcrito; o texto entrou na mensagem"), **MAS** turnos com
+transcrição caem em fluxos de leitura/mutação que falham
+(`FINANCIAL_EVIDENCE_UNAVAILABLE` / "consultar accounts" / handoff
+inconclusivo INV-10) — verbatim transcrito **não verificado**. Auditoria
+pós-canary: **zero mutações criadas** (só resíduo de 28/09). Causa provável:
+roteamento do conteúdo transcrito ("valor doze reais...") para fluxos
+financeiros — **finding aberto para debugger**.
+
+#### (d) Lição de mídia: normalizar antes do canary
+
+WAV via SAPI saiu com header inválido (sem tag `data`) → ffmpeg rejeita.
+Lição: **normalizar a mídia antes do canary** (validar header/container).
+
+#### (e) Resíduo de anexos TESTE
+
+Anexos TESTE permanecem em `junio` sem rota de delete; expiram via **TTL 24h
+/ sweep + lifecycle R2 de 1 dia**. Deleção física segue não validada (§12).
+
+#### (f) Plano de aposentadoria formal do legado
+
+O DB **nasceu canônico** (sem `legacy_archive`/marker); F3/F4 são **vácuos**.
+Resta **F6** (backup + restore + recon — restore proof 12/10 PASS, rehearsal
+F2 SYNTHETIC verde em 13/10) + **remoção de código**: 7 twins
+`legacy-postgres`, ramo `DB_SCHEMA` legacy, bloco V1 pending-ops (linhas
+381–459), flag legacy analytics. **KEEP** bearer até Release B. Divergência
+conhecida S0 em `production-routes.ts:159` (budgets). Plano por PRs do
+inventário: **PR-0/1/2/3**.
+
+**Veredito desta execução:** `ROLLING_SNAPSHOT`. Canary Vision FULL PASS +
+STT PARCIAL (finding aberto) registrados; A19 segue **NOT READY**; Release B
+~24/10; PDF fail-closed.
