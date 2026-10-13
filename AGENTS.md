@@ -132,7 +132,7 @@
 - **Histórico V4.1 (2026-09-21/22):** reconciliação read-only inicial com 1 finding (`814332c4`), depois reclassificado em produção com backup pré-repair e allowlist v2 `adr-018-conscious-negative-credit-v2` (PR #14); lembrete Release B automatizado (`release-b-reminder.yml`); conversor desbloqueia o cutover (ADR-025).
 
 ### Gates humanos abertos
-- **Release B:** flip após 2026-10-16T21:36:06Z (`SESSION_BEARER_FALLBACK_ENABLED=off` na VPS Contabo + rebuild PWA com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`); janela de 14 dias REINICIADA no corte Contabo — contagem reinicia de 2026-10-02T21:36:06Z (último evento `auth.request.legacy_bearer_used`); `release-b-reminder.yml` atualizado com filtro EXCLUSIVO no evento âncora e comparação por timestamp ISO (gate antigo 2026-10-15 substituído).
+- **Release B:** flip após 2026-10-24T22:09:01.594968Z (flip de 13/10 ABORTADO: 136 eventos, último 2026-10-10T22:09:01.594968Z); janela zero-14-dias reancorada em 10-10. Flip = `SESSION_BEARER_FALLBACK_ENABLED=off` na VPS Contabo + rebuild PWA com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`; `release-b-reminder.yml` atualizado (âncora/timestamps novos, filtro EXCLUSIVO com precisâo total).
 - **Canonical Cutover:** conversor pronto (ADR-025); F3–F5 aguardam o operador; F2 real-dump = NO-GO técnico documentado, irrelevante para produção (a API já serve o canônico).
 - **Canary TED (`TED_RISK_BASED_AUTOEXECUTE=on`):** gate humano — exige sink persistente + telemetria (undo-after-autoexecute) suficientes.
 - **Future-dated:** compat localStorage 2026-12-01 (ADR-011/015), `sharp@0.34.5`, allowlists security 2026-12-31 (`.trivyignore`/pwa-audit).
