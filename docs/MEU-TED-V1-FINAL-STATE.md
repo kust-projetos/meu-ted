@@ -1,6 +1,6 @@
 # MEU-TED-V1-FINAL-STATE (estado vigente — snapshot somente-leitura)
 
-**Atualizado:** 14/10/2026 (homologação live + veredito V1-textual CLOSED, docs-only; baseline viva `715b2cf`, código V1-textual `fd3481f`). Este documento é snapshot, não plano. A definição de
+**Atualizado:** 14/10/2026 (release `3de0d3a` + E2E live + higiene, docs-only; homologação live + veredito V1-textual CLOSED; baseline viva `715b2cf`, código V1-textual `fd3481f`). Este documento é snapshot, não plano. A definição de
 encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 
 ## 1. Produção viva
@@ -768,3 +768,28 @@ V1-TEXTUAL atendidos no escopo textual; A19 multimodal geral e os itens
 pós-V1 (STT, R2 expiração física, `pg_hba`, gokey, probes, Release B,
 legado, autoexec-on) seguem pós-V1 por decisão, sem novo gate de produto
 neste registro.
+
+### Atualização incremental — 14/10/2026 (release `3de0d3a` + E2E live + higiene, docs-only)
+
+Em 14/10, o PR #161 (`feat: explicit web_search gate, golden GW-040/042,
+canonical docs sync, release-promote workflow`) foi mergeado por squash como
+`3de0d3a` (`3de0d3a6a2ad1a297a1b2ce11714a25dd5099485`) em
+2026-10-14T09:37:07Z e implantado em Agent/PWA. API segue `fd3481f` sem
+redeploy (pacote sem código de API). Nenhuma flag, secret, coorte, modelo
+ou banco foi alterado além do release; zero mutação financeira pelo deploy.
+
+| Frente | Evidência incremental | Estado honesto / saída |
+|---|---|---|
+| PR #161 | Squash `3de0d3a` em 14/10; conteúdo: gate `TED_WEB_SEARCH_ENABLED==='1'` (prod sem flag => search disabled); docs sync (ROADMAP 14/10, runtime-facts V060/58, SPEC banner adendo); golden 39/33/6 (GW-040/GW-042 executáveis); `release-promote.yml` novo. | **MERGED.** |
+| CI | CI main run `38543671348` success (~6m11s); PWA CI run `38543671350` success (~7m44s). | **GREEN.** |
+| Agent/PWA (Cloudflare) | Wave1 (corrida `workflow_run` conhecida): Agent `38544430462` + PWA `38544430292`, deploy=skipped (~13s). Wave2: Agent `38544625400` + PWA `38544625419`, gate+deploy+smoke+attest success; attestation `ATTESTED` reason `deploy-smoke-pass` sha `3de0d3a` buildId `38543671350`; smoke Agent attempt 1/8 PASS buildSha matches expected. Live PWA `/api/build-info` gitSha `3de0d3a`. | Deployados e atestados. |
+| API (Contabo) | Sem redeploy; live `/health` gitSha `fd3481f` (pacote sem código de API). | Intencional; sem nova evidência de release. |
+| E2E live-mobile-full | PASS 1/1 (~1.2min) em `3de0d3a`: `workspaceWriteViolations` vazio, 1 decision POST, `receipt.entity.id==ledger`, 0 page/console/server errors, 23 screenshots em `apps/pwa/test-results/live-mobile/`. | **PASS** (homologação live executada no SHA vigente). |
+| Limpeza E2E | Run `mv7xoski`: 2 DELETE 200 + deactivate 200, re-verificado 0 restantes no Test Family. | **Limpeza verificada** (zero resíduo desta execução). |
+| Higiene | 22 contas E2E inactive, 0 txs vivas — NO-OP verificado, zero mutações. | **Sem resíduo; nada a limpar.** |
+
+**Veredito desta execução:** `ROLLING_SNAPSHOT`. Agent/PWA em `3de0d3a`
+atestados + E2E live-mobile-full PASS + higiene NO-OP registrados; nenhum
+gate humano ou de data foi fechado por este snapshot. A19 segue **NOT
+READY**; Release B ~24/10; PDF fail-closed; web_search disabled em prod
+(sem flag).

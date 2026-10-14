@@ -3,6 +3,15 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-14 - release `3de0d3a` + E2E live + higiene; docs-only, sem tag/release)
+
+- PR #161 (`feat: explicit web_search gate, golden GW-040/042, canonical docs sync, release-promote workflow`) mergeado por squash como `3de0d3a6a2ad1a297a1b2ce11714a25dd5099485` em 2026-10-14T09:37:07Z; CI main run `38543671348` success (~6m11s), PWA CI run `38543671350` success (~7m44s).
+- Agent/PWA (Cloudflare): wave1 Agent `38544430462` + PWA `38544430292` deploy=skipped (~13s, corrida `workflow_run` conhecida); wave2 Agent `38544625400` + PWA `38544625419` success com attestation `ATTESTED` reason `deploy-smoke-pass` sha `3de0d3a` buildId `38543671350` (smoke Agent attempt 1/8 PASS); live PWA `/api/build-info` gitSha `3de0d3a`; API `/health` gitSha `fd3481f` sem redeploy (pacote sem código de API).
+- Conteúdo: gate `TED_WEB_SEARCH_ENABLED==='1'` (prod sem flag => search disabled); docs sync (ROADMAP 14/10, runtime-facts V060/58, SPEC banner adendo); golden 39/33/6 (GW-040/GW-042 executáveis); `release-promote.yml` novo.
+- E2E live-mobile-full PASS 1/1 (~1.2min) em `3de0d3a`: violations vazio, 1 decision POST, `receipt.entity.id==ledger`, 0 page/console/server errors, 23 screenshots em `apps/pwa/test-results/live-mobile/`; limpeza run `mv7xoski` (2 DELETE 200 + deactivate 200, re-verificado 0 restantes).
+- Higiene: 22 contas E2E inactive, 0 txs vivas — NO-OP verificado, zero mutações.
+- NÃO feito nesta entrega (docs-only): sem código/workflows, sem deploy/tag além do registrado. Detalhes: `docs/MEU-TED-V1-FINAL-STATE.md`.
+
 ## Unreleased (2026-10-14 - homologação live + veredito V1-textual CLOSED; docs-only, sem tag/release)
 
 - E2E live-mobile-full PASS em 14/10 (~01:0xZ, 1.7min) contra produção (PWA `c5adf53` / API `fd3481f`): login real → conta → transação → extrato → TED leitura de dado real (modelo real) → TED mutação com aprovação + recibo; viewport mobile 390x844; `workspaceWriteViolations` vazio (só Test Family `550e8400…`); screenshots em `apps/pwa/test-results/live-mobile/` (01-login, 02-home, 03-nova-conta, 04-conta-criada, 06-extrato, 07-ted-leitura, 08-ted-aprovacao, 09-ted-recibo, 10-extrato-pos-ted, 11-nav--a-pagar).
