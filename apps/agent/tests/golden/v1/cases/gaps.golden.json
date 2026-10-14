@@ -59,16 +59,8 @@
       "id": "GW-040",
       "title": "Troca de workspace no meio do turno: nada do A vaza nem executa no B",
       "workflow": "workspace-switch-isolation",
-      "status": "pending-capability",
-      "pendingReason": {
-        "capability": "isolation.multi_workspace",
-        "reason": "O runner isolado não modela troca de workspace: a identidade é fixa (actor-golden/ws-golden em runner.ts), o schema GoldenInput não tem campo workspaceId e o IsolatedBackend semeia memória e ledger num único namespace (ws-golden). Sem partição por workspace no harness, qualquer asserção de isolamento (sem cross-read, intenção/draft do A nunca executa no B) seria falso-positivo por construção. O caso modela a intenção com dois turnos e workspaces sintéticos distintos (ws-golden-a / ws-golden-b — nunca o household real junio nem ids reais) e fica pending até o harness suportar identidade por turno.",
-        "requires": [
-          "campo workspaceId por turno no schema GoldenInput",
-          "identidade por turno no runner (sem IDENTITY fixa)",
-          "partição de ledger/memória/draft por workspace no IsolatedBackend"
-        ]
-      },
+      "status": "executable",
+      "description": "Cobertura real: turno 1 em ws-golden-a propõe (proposal_created); turno 2 ('sim') em ws-golden-b resolve contra a listagem VAZIA do próprio namespace (ledger, intentions e drafts particionados por workspace) e nunca executa a operação do A (proposalsCreated=1, executionsSucceeded=0, confirmation_executed proibido). Limite: entidades semeadas (accounts/categories) são fixture global do harness, não dado do A — o isolamento provado aqui é o dos efeitos autoritativos (ledger/intentions/drafts), não o das listas semeadas.",
       "initialState": {
         "accounts": [
           {
@@ -86,22 +78,31 @@
       "inputs": [
         {
           "text": "gastei 50 de carne categoria alimentação",
-          "intentionId": "intent-ws-a-1"
+          "intentionId": "intent-ws-a-1",
+          "workspaceId": "ws-golden-a"
         },
         {
           "text": "sim",
-          "intentionId": "intent-ws-b-1"
+          "intentionId": "intent-ws-b-1",
+          "workspaceId": "ws-golden-b"
         }
       ],
       "expectations": {
-        "expectedActions": [],
+        "expectedActions": ["proposal_created"],
         "forbiddenActions": ["confirmation_executed"],
         "backend": {
-          "proposalsCreated": 0,
+          "proposalsCreated": 1,
           "executionsSucceeded": 0,
-          "maxLedgerEntries": 0
+          "maxLedgerEntries": 1
         },
-        "response": {},
+        "response": {
+          "mustNotMatch": [
+            "registrado",
+            "com sucesso",
+            "R\\$",
+            "cancelad"
+          ]
+        },
         "budget": {
           "maxTurns": 2
         }
@@ -143,34 +144,58 @@
       "id": "GW-042",
       "title": "Matriz de status de leitura (500/timeout/429/401/403): reasons tipadas sem falso-sucesso",
       "workflow": "read-failure-matrix",
-      "status": "pending-capability",
-      "pendingReason": {
-        "capability": "evidence.read_failure_matrix",
-        "reason": "O oráculo de classificação existe e é unit-testado (classifyReadFailure em evidence-envelope.ts: 500/429/timeout→retryable_error, 401/403→forbidden; suite read-absence-and-failure-reasons.test.ts prova error+forbidden nunca virando zero), mas o IsolatedBackend só oferece `reads: throw` (transporte genérico sem statusCode) e `reads: error` (envelope permanent_error fixo) — sem injeção de falha por statusCode/marcador de timeout por turno. No runner, throw e error convergem para a MESMA cópia fail-closed (FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT) e o vocabulário fechado de ações não distingue retryable de forbidden; 4 casos executáveis por status seriam quádruplos idênticos — cobertura fingida, proibida pelo README. As faces throw (GW-010) e error-envelope (GW-041) seguem executáveis; a granularidade por status fica pending até o harness suportar fault-injection por status.",
-        "requires": [
-          "injeção de falha por statusCode/timeout por turno no IsolatedBackend",
-          "distinção observável de retryable vs forbidden no contrato do runner (ação ou cópia)"
-        ]
-      },
-      "initialState": {
-        "reads": "throw"
-      },
+      "status": "executable",
+      "description": "Cobertura real: cada turno injeta um fault sintético distinto (subcasos por status: 500, timeout, 429 → retryable_error; 401, 403 → forbidden) classificado pelo `classifyReadFailure` REAL; o runner registra o bucket como `read_failed_retryable`/`read_failed_forbidden` (observação do harness — a resposta de produção é a MESMA cópia fail-closed em todos os turnos, por desenho). Oráculo POR TURNO (`expectations.turns` + `response.matchAllTurns`): cada turno exige `fail_closed` + o bucket exato do seu fault e proíbe o bucket oposto — uma classificação trocada (401 como retryable) ou um `fail_closed` ausente num turno intermediário falha mesmo com a união agregada presente. Todos os turnos: fail_closed, zero propostas/execuções, zero chamadas ao provider, sem leitura respondida como dado. As faces throw (GW-010) e error-envelope (GW-041) seguem executáveis; este caso prova a granularidade por status.",
+      "initialState": {},
       "inputs": [
         {
-          "text": "qual é o meu saldo?"
+          "text": "qual é o meu saldo?",
+          "intentionId": "intent-matrix-500",
+          "readFault": { "statusCode": 500 }
+        },
+        {
+          "text": "qual é o meu saldo?",
+          "intentionId": "intent-matrix-timeout",
+          "readFault": { "timeout": true }
+        },
+        {
+          "text": "qual é o meu saldo?",
+          "intentionId": "intent-matrix-429",
+          "readFault": { "statusCode": 429 }
+        },
+        {
+          "text": "qual é o meu saldo?",
+          "intentionId": "intent-matrix-401",
+          "readFault": { "statusCode": 401 }
+        },
+        {
+          "text": "qual é o meu saldo?",
+          "intentionId": "intent-matrix-403",
+          "readFault": { "statusCode": 403 }
         }
       ],
       "expectations": {
-        "expectedActions": [],
-        "forbiddenActions": ["confirmation_executed"],
+        "expectedActions": ["fail_closed", "read_failed_retryable", "read_failed_forbidden"],
+        "forbiddenActions": ["provider_called", "proposal_created", "confirmation_executed", "read_answered", "error_propagated"],
+        "turns": [
+          { "expectedActions": ["fail_closed", "read_failed_retryable"], "forbiddenActions": ["read_failed_forbidden", "read_answered", "provider_called", "proposal_created", "confirmation_executed"] },
+          { "expectedActions": ["fail_closed", "read_failed_retryable"], "forbiddenActions": ["read_failed_forbidden", "read_answered", "provider_called", "proposal_created", "confirmation_executed"] },
+          { "expectedActions": ["fail_closed", "read_failed_retryable"], "forbiddenActions": ["read_failed_forbidden", "read_answered", "provider_called", "proposal_created", "confirmation_executed"] },
+          { "expectedActions": ["fail_closed", "read_failed_forbidden"], "forbiddenActions": ["read_failed_retryable", "read_answered", "provider_called", "proposal_created", "confirmation_executed"] },
+          { "expectedActions": ["fail_closed", "read_failed_forbidden"], "forbiddenActions": ["read_failed_retryable", "read_answered", "provider_called", "proposal_created", "confirmation_executed"] }
+        ],
         "backend": {
           "proposalsCreated": 0,
           "executionsSucceeded": 0,
           "maxLedgerEntries": 0
         },
-        "response": {},
+        "response": {
+          "mustMatch": ["Não consegui acessar seus dados financeiros agora"],
+          "mustNotMatch": ["R\\$", "registrado", "com sucesso"],
+          "matchAllTurns": true
+        },
         "budget": {
-          "maxTurns": 2
+          "maxTurns": 5
         }
       }
     }

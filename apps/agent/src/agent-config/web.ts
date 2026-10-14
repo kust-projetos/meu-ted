@@ -1,8 +1,10 @@
 /**
  * Web access (Part A, item 15): provider-abstracted search + SSRF-safe fetch.
  *
- * - Search providers resolve from env: TAVILY_API_KEY, then BRAVE_API_KEY.
- *   With neither, the provider reports `available: false` and the tool
+ * - Search providers resolve from env: TAVILY_API_KEY, then BRAVE_API_KEY —
+ *   but ONLY when the explicit opt-in TED_WEB_SEARCH_ENABLED === '1'
+ *   (pós-V1 fail-closed: a key alone never enables search).
+ *   Otherwise the provider reports `available: false` and the tool
  *   answers gracefully ("busca web indisponível") — no key is ever required
  *   in code or tests (fetchImpl is injectable, tests use mocks).
  * - webFetch only allows http/https, blocks private/loopback/link-local
@@ -41,6 +43,13 @@ export { EGRESS_DISABLED_MESSAGE, EGRESS_NOT_ALLOWED_MESSAGE };
  */
 export const WEB_FETCH_ALLOWED_HOSTS_ENV = 'TED_WEB_FETCH_ALLOWED_HOSTS';
 
+/**
+ * Operator opt-in for `web_search` (pós-V1 fail-closed): must be exactly
+ * `'1'` (strict `===`, no trim — whitespace denies). A provider key alone
+ * NEVER enables search; unset/blank/any-other ⇒ `disabled`.
+ */
+export const WEB_SEARCH_ENABLED_ENV = 'TED_WEB_SEARCH_ENABLED';
+
 export type WebSearchResultItem = {
   title: string;
   url: string;
@@ -71,6 +80,8 @@ export type WebEnv = {
   TAVILY_API_KEY?: string;
   BRAVE_API_KEY?: string;
   TED_WEB_FETCH_ALLOWED_HOSTS?: string;
+  /** Pós-V1 gate: `web_search` requires exactly `'1'` (fail-closed). */
+  TED_WEB_SEARCH_ENABLED?: string;
 };
 
 /**
@@ -169,6 +180,9 @@ export const createWebSearchProvider = (
   env: WebEnv,
   fetchImpl: typeof fetch = fetch,
 ): WebSearchProvider => {
+  // Pós-V1 fail-closed gate: the flag must be exactly `'1'` — a provider key
+  // alone never enables search (a leaked key cannot activate egress).
+  if (env.TED_WEB_SEARCH_ENABLED !== '1') return disabledProvider;
   if (env.TAVILY_API_KEY && env.TAVILY_API_KEY.trim() !== '') return tavilyProvider(env.TAVILY_API_KEY.trim(), fetchImpl);
   if (env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim() !== '') return braveProvider(env.BRAVE_API_KEY.trim(), fetchImpl);
   return disabledProvider;

@@ -212,6 +212,12 @@ export type Env = {
   /** A11: CSV of exact hostnames `web_fetch` may read (default-off). */
   TED_WEB_FETCH_ALLOWED_HOSTS?: string;
   /**
+   * WEB-GATE-02 (pós-V1 fail-closed): explicit opt-in for `web_search`.
+   * Must be exactly `'1'` (strict, no trim); a provider key alone never
+   * enables search. Unset/blank/any-other ⇒ `disabled`.
+   */
+  TED_WEB_SEARCH_ENABLED?: string;
+  /**
    * A13/G05: OPTIONAL private R2 binding for attachment bytes. Absent ⇒ the
    * ingestion pipeline is UNAVAILABLE (fail-closed) and the upload RPC answers
    * `attachment_storage_unavailable`. Declared as the adapter's minimal bucket

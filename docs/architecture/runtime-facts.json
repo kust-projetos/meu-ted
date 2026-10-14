@@ -1,6 +1,6 @@
 {
   "version": "1.2.1",
-  "lastVerified": "2026-10-07",
+  "lastVerified": "2026-10-14",
   "activeWorkspaces": [
     "apps/api",
     "apps/pwa",
@@ -29,8 +29,8 @@
   },
   "counts": {
     "apiRoutes": 127,
-    "databaseMigrations": 57,
-    "latestMigration": "V059__pending_operation_authorization.sql",
+    "databaseMigrations": 58,
+    "latestMigration": "V060__pending_operation_confirmation_intentions.sql",
     "capabilitiesTotal": 72,
     "capabilitiesInApiMode": 51
   },

@@ -58,6 +58,11 @@ tool→skill derivado das definições — ver `toolSkillLines()`.
 Env `TAVILY_API_KEY` (preferido) ou `BRAVE_API_KEY` (nenhuma key no código).
 Sem key: tools respondem "busca web indisponível" com elegância.
 
+`TED_WEB_SEARCH_ENABLED` — trava explícita da busca web: precisa ser
+exatamente `1`. Key sozinha **nunca** ativa nada (uma key vazada ou
+provisionada não habilita egress de busca); sem `1`, o provider resolve
+para desabilitado com mensagem graciosa — mesmo com key presente.
+
 `TED_WEB_FETCH_ALLOWED_HOSTS`: CSV de hosts **exatos** (sem expansão de subdomínio)
 que libera o egress do `web_fetch`, validados também em cada redirect. Default-off:
 ausente ou vazia deixa a tool indisponível com mensagem graciosa. Não afeta os

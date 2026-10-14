@@ -1,0 +1,340 @@
+name: Release Promote
+
+# RELEASE-02: tag SOMENTE após atestação final (fail-closed).
+#
+# Corrige o processo que criou a tag v1.0.0 antes de CI/deployments do
+# commit documental final terminarem: este workflow é o ÚNICO caminho
+# autorizado para criar tag/release. Tag manual fora deste fluxo é
+# PROIBIDA (ver docs/RELEASE-PROCESS.md).
+#
+# Ordem canônica: push main -> CI + PWA CI (Gate) -> agent-deploy /
+# pwa-deploy (gate -> deploy -> smoke -> attest ATTESTED) -> API Contabo
+# via wrapper manual -> homologação live manual (E2E live-mobile-full
+# PASS) -> ESTE workflow (workflow_dispatch) -> tag anotada + Release.
+#
+# Sem trigger em push/tag: disparo exclusivamente manual via
+# workflow_dispatch. Não toca branch protection.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'SHA web/main candidato (Agent/PWA, 40-hex) a ser tagueado'
+        required: true
+        type: string
+      api_sha:
+        description: 'SHA da API em produção na Contabo (40-hex; igual a sha quando unificado)'
+        required: true
+        type: string
+      version:
+        description: 'Nome da tag/release (ex: v1.0.1)'
+        required: true
+        type: string
+      api_manifest:
+        description: 'Manifesto do release da API na VPS (ex: release-manifest-<sha>-<ts>.json)'
+        required: true
+        type: string
+      e2e_evidence_url:
+        description: 'URL da evidência do E2E live-mobile-full PASS (run, relatório ou screenshots)'
+        required: true
+        type: string
+      confirm_api_release:
+        description: 'Confirmo: API implantada via wrapper com backup + manifesto + smokes verdes'
+        required: true
+        default: false
+        type: boolean
+      confirm_e2e_pass:
+        description: 'Confirmo: homologação live (E2E live-mobile-full) PASS sem violations + limpeza verificada'
+        required: true
+        default: false
+        type: boolean
+
+# Least privilege: leitura por default; o job promote eleva só o
+# necessário (actions:read para auditar runs + contents:write para tag/release).
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: Promote — validar tudo, taguear por último
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Validate input formats (fail closed)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          INPUT_API_SHA: ${{ inputs.api_sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_API_MANIFEST: ${{ inputs.api_manifest }}
+          INPUT_E2E_URL: ${{ inputs.e2e_evidence_url }}
+        with:
+          script: |
+            const sha = process.env.INPUT_SHA || '';
+            const apiSha = process.env.INPUT_API_SHA || '';
+            const version = process.env.INPUT_VERSION || '';
+            const manifest = process.env.INPUT_API_MANIFEST || '';
+            const e2eUrl = process.env.INPUT_E2E_URL || '';
+            const hex40 = /^[0-9a-f]{40}$/i;
+            if (!hex40.test(sha)) {
+              core.setFailed(`Promote blocked: 'sha' must be a full 40-hex commit (got '${sha}').`);
+              return;
+            }
+            if (!hex40.test(apiSha)) {
+              core.setFailed(`Promote blocked: 'api_sha' must be a full 40-hex commit (got '${apiSha}').`);
+              return;
+            }
+            if (!/^v\d+\.\d+\.\d+$/.test(version)) {
+              core.setFailed(`Promote blocked: 'version' must match vMAJOR.MINOR.PATCH (got '${version}').`);
+              return;
+            }
+            if (manifest.trim() === '') {
+              core.setFailed('Promote blocked: api_manifest is empty — declare the VPS release manifest file.');
+              return;
+            }
+            if (!/^https:\/\/.+/.test(e2eUrl)) {
+              core.setFailed('Promote blocked: e2e_evidence_url must be an https URL to the live E2E PASS evidence.');
+              return;
+            }
+            core.info(`Inputs OK: sha=${sha} api_sha=${apiSha} version=${version}`);
+
+      - name: Require operator confirmations (fail closed)
+        env:
+          CONFIRM_API: ${{ inputs.confirm_api_release }}
+          CONFIRM_E2E: ${{ inputs.confirm_e2e_pass }}
+        run: |
+          if [ "$CONFIRM_API" != "true" ]; then
+            echo "Promote blocked: confirm_api_release is not true — API wrapper release (backup + manifest + smokes) must be confirmed."
+            exit 1
+          fi
+          if [ "$CONFIRM_E2E" != "true" ]; then
+            echo "Promote blocked: confirm_e2e_pass is not true — live E2E homologation PASS must be confirmed."
+            exit 1
+          fi
+          echo "Operator confirmations OK."
+
+      - name: Freshness — candidate must equal current main (fail closed)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        with:
+          script: |
+            const sha = (process.env.INPUT_SHA || '').toLowerCase();
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const { data: branch } = await github.rest.repos.getBranch({ owner, repo, branch: 'main' });
+            core.info(`candidate=${sha} main=${branch.commit.sha}`);
+            if ((branch.commit.sha || '').toLowerCase() !== sha) {
+              core.setFailed(`Promote blocked: stale SHA ${sha} — main is now ${branch.commit.sha}. Promote only the current tip after its CI/deployments finish.`);
+              return;
+            }
+            core.info(`Freshness gate passed for ${sha}.`);
+
+      - name: Require CI + PWA CI success for sha and api_sha (fail closed)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          INPUT_API_SHA: ${{ inputs.api_sha }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const shas = [...new Set(
+              [process.env.INPUT_SHA, process.env.INPUT_API_SHA]
+                .map((s) => (s || '').toLowerCase()),
+            )];
+            for (const sha of shas) {
+              const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner, repo, head_sha: sha, per_page: 50,
+              });
+              for (const name of ['CI', 'PWA CI']) {
+                // Push-originated runs only: PR runs for the same SHA must
+                // never satisfy the promote gate.
+                const runs = data.workflow_runs
+                  .filter((r) => r.name === name && r.event === 'push')
+                  .sort((a, b) => b.created_at.localeCompare(a.created_at));
+                if (runs.length === 0) {
+                  core.setFailed(`Promote blocked: no push-originated ${name} run found for ${sha}.`);
+                  return;
+                }
+                const latest = runs[0];
+                core.info(`${name} @ ${sha}: run #${latest.run_number} status=${latest.status} conclusion=${latest.conclusion}`);
+                if (latest.status !== 'completed' || latest.conclusion == null) {
+                  core.setFailed(`Promote blocked: ${name} for ${sha} is not completed (status=${latest.status}). Wait for CI to finish — never tag mid-flight.`);
+                  return;
+                }
+                if (latest.conclusion !== 'success') {
+                  core.setFailed(`Promote blocked: ${name} latest conclusion for ${sha} is '${latest.conclusion}'.`);
+                  return;
+                }
+              }
+            }
+            core.info(`CI + PWA CI green for ${shas.join(' and ')}.`);
+
+      - name: Require ATTESTED deploy-smoke-pass for Agent + PWA (fail closed)
+        id: attestation
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        with:
+          script: |
+            const sha = (process.env.INPUT_SHA || '').toLowerCase();
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const evidence = {};
+            for (const name of ['Agent Deploy', 'PWA Deploy']) {
+              const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner, repo, head_sha: sha, per_page: 50,
+              });
+              // Agent/PWA Deploy run on `workflow_run` (agent-deploy.yml:3-7,
+              // pwa-deploy.yml:3-7), never on `push`. The push-origin check
+              // lives one layer down: the per-run `gate` job (matched by
+              // suffix below) only succeeds when the push-originated CI +
+              // PWA CI runs for the same SHA are green. Require that gate
+              // job success here, so a workflow_run detached from a green
+              // push CI can never satisfy the promote gate.
+              const candidates = data.workflow_runs
+                .filter((r) => r.name === name && r.event === 'workflow_run' && r.status === 'completed' && r.head_branch === 'main')
+                .sort((a, b) => b.created_at.localeCompare(a.created_at))
+                .slice(0, 10);
+              if (candidates.length === 0) {
+                core.setFailed(`Promote blocked: no completed workflow_run-originated '${name}' run found for ${sha}.`);
+                return;
+              }
+              let accepted = null;
+              for (const run of candidates) {
+                const { data: jobsData } = await github.rest.actions.listJobsForWorkflowRun({
+                  owner, repo, run_id: run.id, per_page: 50,
+                });
+                const find = (pred) => jobsData.jobs.find(pred);
+                // Gate job names carry an em-dash that is mojibake in one
+                // workflow file — match on the stable suffix instead.
+                const gate = find((j) => j.name.includes('PWA CI green for SHA'));
+                const deploy = find((j) => j.name === 'deploy');
+                const smoke = find((j) => j.name.includes('Post-deploy smoke'));
+                const attest = find((j) => j.name.includes('Attestation'));
+                core.info(`${name} run #${run.run_number} (id=${run.id}): gate=${gate?.conclusion} deploy=${deploy?.conclusion} smoke=${smoke?.conclusion} attest=${attest?.conclusion}`);
+                if (
+                  gate?.conclusion === 'success' &&
+                  deploy?.conclusion === 'success' &&
+                  smoke?.conclusion === 'success' &&
+                  attest?.conclusion === 'success'
+                ) {
+                  accepted = run;
+                  break;
+                }
+              }
+              if (!accepted) {
+                core.setFailed(`Promote blocked: no '${name}' run for ${sha} has gate+deploy+smoke+attest ALL success (ATTESTED/deploy-smoke-pass not proven). A green workflow with skipped deploy/smoke is NOT a release.`);
+                return;
+              }
+              evidence[name] = { run_number: accepted.run_number, id: accepted.id };
+              core.info(`${name}: ATTESTED evidence accepted (run #${accepted.run_number}, id=${accepted.id}).`);
+            }
+            core.setOutput('agent_run_id', String(evidence['Agent Deploy'].id));
+            core.setOutput('pwa_run_id', String(evidence['PWA Deploy'].id));
+            core.info(`Attestation gate passed for ${sha}.`);
+
+      - name: Require API live identity to match api_sha (fail closed)
+        env:
+          INPUT_API_SHA: ${{ inputs.api_sha }}
+          API_PROD_URL: https://api.synkroo.com.br
+        run: |
+          SHA="$(echo "$INPUT_API_SHA" | tr 'A-F' 'a-f')"
+          # /health carries release identity (gitSha/buildId, routes/index.ts);
+          # /ready carries only {status:'ready'} (server/index.ts) — fetch
+          # into SEPARATE files so the /ready payload never overwrites the
+          # /health identity payload.
+          CODE="$(curl -fsS -o /tmp/api-health.json -w '%{http_code}' "$API_PROD_URL/health")"
+          if [ "$CODE" != "200" ]; then
+            echo "Promote blocked: GET /health returned $CODE."
+            exit 1
+          fi
+          CODE="$(curl -fsS -o /tmp/api-ready.json -w '%{http_code}' "$API_PROD_URL/ready")"
+          if [ "$CODE" != "200" ]; then
+            echo "Promote blocked: GET /ready returned $CODE."
+            exit 1
+          fi
+          node -e "
+          const fs = require('fs');
+          const expected = process.env.INPUT_API_SHA.toLowerCase();
+          const h = JSON.parse(fs.readFileSync('/tmp/api-health.json', 'utf8'));
+          const live = String(h.gitSha || '').toLowerCase();
+          if (!live || live === 'dev') { console.error('Promote blocked: /health gitSha missing/dev — release identity not injected.'); process.exit(1); }
+          if (live !== expected) { console.error('Promote blocked: API live gitSha=' + live + ' != api_sha=' + expected + ' (manifesto/smoke API nao casado).'); process.exit(1); }
+          const r = JSON.parse(fs.readFileSync('/tmp/api-ready.json', 'utf8'));
+          if (r.status !== 'ready') { console.error('Promote blocked: /ready status is ' + JSON.stringify(r.status) + ' — API not ready.'); process.exit(1); }
+          console.log('API live identity OK: gitSha=' + live + ' buildId=' + h.buildId + ' ready=' + r.status);
+          "
+
+      - name: Create annotated tag + GitHub Release (last step only)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          INPUT_API_SHA: ${{ inputs.api_sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_API_MANIFEST: ${{ inputs.api_manifest }}
+          INPUT_E2E_URL: ${{ inputs.e2e_evidence_url }}
+          AGENT_RUN_ID: ${{ steps.attestation.outputs.agent_run_id }}
+          PWA_RUN_ID: ${{ steps.attestation.outputs.pwa_run_id }}
+        with:
+          script: |
+            const sha = (process.env.INPUT_SHA || '').toLowerCase();
+            const apiSha = (process.env.INPUT_API_SHA || '').toLowerCase();
+            const version = process.env.INPUT_VERSION;
+            const tag = version.startsWith('refs/tags/') ? version : `refs/tags/${version}`;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Fail closed: never move an existing tag.
+            try {
+              await github.rest.git.getRef({ owner, repo, ref: `tags/${version}` });
+              core.setFailed(`Promote blocked: tag ${version} already exists — never move tags. Bump 'version' instead.`);
+              return;
+            } catch (err) {
+              if (err.status !== 404) throw err;
+            }
+
+            const message =
+              `${version}\n\n` +
+              `ATTESTED release (release-promote gate, fail-closed).\n` +
+              `- web/main sha: ${sha}\n` +
+              `- api sha (Contabo): ${apiSha}\n` +
+              `- api manifest (VPS): ${process.env.INPUT_API_MANIFEST}\n` +
+              `- agent deploy run id: ${process.env.AGENT_RUN_ID} (ATTESTED/deploy-smoke-pass)\n` +
+              `- pwa deploy run id: ${process.env.PWA_RUN_ID} (ATTESTED/deploy-smoke-pass)\n` +
+              `- live E2E evidence: ${process.env.INPUT_E2E_URL}\n`;
+
+            const { data: tagObj } = await github.rest.git.createTag({
+              owner, repo,
+              tag: version,
+              message,
+              object: sha,
+              type: 'commit',
+            });
+            await github.rest.git.createRef({ owner, repo, ref: tag, sha: tagObj.sha });
+            core.info(`Annotated tag ${version} created -> ${sha} (tag object ${tagObj.sha}).`);
+
+            const { data: release } = await github.rest.repos.createRelease({
+              owner, repo,
+              tag_name: version,
+              target_commitish: sha,
+              name: version,
+              body: message,
+              draft: false,
+              prerelease: false,
+              generate_release_notes: false,
+            });
+            core.info(`GitHub Release ${version} created (id=${release.id}).`);
+            core.summary.addRaw(
+              `# Release ${version} promovida\n\n` +
+              `- tag anotada em \`${sha}\`\n` +
+              `- API (Contabo): \`${apiSha}\` (manifesto \`${process.env.INPUT_API_MANIFEST}\`, identidade live casada)\n` +
+              `- Agent deploy run \`${process.env.AGENT_RUN_ID}\` + PWA deploy run \`${process.env.PWA_RUN_ID}\` (ATTESTED/deploy-smoke-pass)\n` +
+              `- E2E live: ${process.env.INPUT_E2E_URL}\n`,
+              true,
+            );
+            await core.summary.write();
