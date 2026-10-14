@@ -123,6 +123,7 @@ Esta seção é ÍNDICE dos itens pós-V1 (snapshot somente-leitura): o estado c
 - Release B — flip ABORTADO 13/10, nova janela zero-14-dias ~24/10 → §4/§10.
 - Legado — F6 (backup + restore + recon) + remoção de código (twins/`DB_SCHEMA`/V1 pending-ops/analytics); KEEP bearer até Release B → canary 13/10 (f) + §4.
 - #87 SDK épico (+Dependabot #93/#94), #95 keepalive — POST-V1 backlog → §4.
+- Agents SDK major (linha 0.7.x + ai 6 + ai-sdk/react 3 + @cloudflare/ai-chat alinhado) — PRs #119/#120 CLOSED 14/10 como unmergeable (P1: shim agents/ai-chat-agent 0.3.10 x ai-chat 0.1.9 incompatível, export __DO_NOT_USE_WILL_BREAK__agentContext ausente; evidência nos comentários dos PRs) → §4 (fileira #87).
 - G01/G02 — gaps Golden fora do escopo textual, POST-V1 → §4/§13.
 - Future-dated 2026-12-01/2026-12-31 — MAINTENANCE POST-V1 (workflows/lembretes) → §4.
 - Decision provider — DISABLED default-off, POST-V1/OPTIONAL → §2.
