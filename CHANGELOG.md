@@ -3,6 +3,13 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-14 - homologação live + veredito V1-textual CLOSED; docs-only, sem tag/release)
+
+- E2E live-mobile-full PASS em 14/10 (~01:0xZ, 1.7min) contra produção (PWA `c5adf53` / API `fd3481f`): login real → conta → transação → extrato → TED leitura de dado real (modelo real) → TED mutação com aprovação + recibo; viewport mobile 390x844; `workspaceWriteViolations` vazio (só Test Family `550e8400…`); screenshots em `apps/pwa/test-results/live-mobile/` (01-login, 02-home, 03-nova-conta, 04-conta-criada, 06-extrato, 07-ted-leitura, 08-ted-aprovacao, 09-ted-recibo, 10-extrato-pos-ted, 11-nav--a-pagar).
+- Limpeza E2E verificada: 2 txs soft-delete (DELETE com `Idempotency-Key`) + 1 conta deactivate (POST …/deactivate; exigiu `Content-Type` json — 415 sem ele); re-verificação: 0 contas + 0 txs "Teste E2E*" restantes no Test Family. Dry-run antes (1 conta / 2 txs, só desta execução).
+- Veredito: critérios do ADENDO V1-TEXTUAL atendidos — CI/PWA CI verdes, Golden textual PASS `falseSuccess=0` (8 pending-capability skipped), E2E Test Family PASS sem violations, deploys ATTESTED SHAs casados, P0=0/P1=0 no escopo textual (residuais STT/R2/`pg_hba`/gokey/probes classificados pós-V1 ou diferidos com evidência; Release B/legado/autoexec-on pós-V1 por decisão). Tag `v1.0.0` liberada pelo Planner na sequência (fora deste escopo de docs).
+- NÃO feito nesta entrega (docs-only): sem commit/push, sem deploy/tag. Detalhes: `docs/MEU-TED-V1-FINAL-STATE.md`.
+
 ## Unreleased (2026-10-14 - baseline viva `715b2cf` (docs-only, sem código); baseline de código V1-textual `fd3481f`; sem tag/release)
 
 - Agent/PWA: `715b2cf3d11c8ac03e55fea1e35b15fa2049c4c1` (build `38487522792`), ATTESTED deploy-smoke-pass runs `38488407037`/`38488407171` (14/10 ~00:09Z); delta `fd3481f..715b2cf` SÓ-docs (código idêntico).
