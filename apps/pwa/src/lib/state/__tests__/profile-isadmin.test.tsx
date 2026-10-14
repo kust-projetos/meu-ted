@@ -6,6 +6,7 @@ import {
   resetSessionStatus,
   setSessionStatus,
 } from "@/lib/auth/session-authority";
+import { setActiveWorkspaceId } from "@/lib/api/client";
 import type { Profile } from "../types";
 
 beforeEach(async () => {
@@ -23,6 +24,8 @@ function apiReady() {
   localStorage.setItem("pi-finance:token", "test-token-abc");
   // V41C FIX 1: live bootstrap requires a probe-confirmed session.
   setSessionStatus({ status: "authenticated", user: { userId: "test-user" } });
+  // FIX-168: bootstrap and writes additionally require an active workspace.
+  setActiveWorkspaceId("test-workspace-1");
 }
 
 function mockBootstrapReads(profile: Profile | null) {

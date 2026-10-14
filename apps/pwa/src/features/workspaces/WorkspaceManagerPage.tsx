@@ -86,6 +86,19 @@ export default function WorkspaceManagerPage() {
   const active = workspaces.filter((workspace) => workspace.status !== "archived");
   const archived = workspaces.filter((workspace) => workspace.status === "archived");
   const activeMembers = activeWorkspace?.kind === "shared" ? members.length : 0;
+  // FIX-167 (P0 #167): the one-personal-workspace rule counts archived
+  // workspaces too (kept by design — D1/D2 pending), so a blind "Pessoal"
+  // create answers 409 workspace.invalid. The form disables the kind and
+  // points at the restore path instead of letting the POST fail raw.
+  const personalWorkspace = workspaces.find((workspace) => workspace.kind === "personal");
+  const hasPersonal = personalWorkspace !== undefined;
+  const archivedPersonal =
+    personalWorkspace?.status === "archived" ? personalWorkspace : undefined;
+  const personalGuidance = personalWorkspace
+    ? `Você já possui um workspace pessoal (${personalWorkspace.name})${
+        archivedPersonal ? ", arquivado" : ""
+      }. Só é permitido um workspace pessoal por conta.`
+    : null;
 
   const handleCloseLogs = () => {
     setLogsWorkspace(null);
@@ -239,13 +252,29 @@ export default function WorkspaceManagerPage() {
     event.preventDefault();
     const name = newName.trim();
     if (!name) return;
+    // FIX-167: never POST a deterministic 409 — the server rejects a second
+    // personal workspace (active OR archived) with workspace.invalid.
+    if (newKind === "personal" && personalWorkspace) {
+      setActionError(
+        `Você já possui um workspace pessoal (${personalWorkspace.name}). Restaure-o em vez de criar outro.`,
+      );
+      return;
+    }
     setFormBusy(true);
     setActionError(null);
     try {
       await createWorkspace({ name, kind: newKind });
       setNewName("");
     } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : "Não foi possível criar o workspace.");
+      // FIX-167: a raced 409 (personal created elsewhere) maps to the same
+      // restore guidance instead of the raw server message.
+      if (cause instanceof ApiError && cause.status === 409 && cause.code === "workspace.invalid") {
+        setActionError(
+          `Você já possui um workspace pessoal${personalWorkspace ? ` (${personalWorkspace.name})` : ""}. Restaure-o em vez de criar outro.`,
+        );
+      } else {
+        setActionError(cause instanceof Error ? cause.message : "Não foi possível criar o workspace.");
+      }
     } finally {
       setFormBusy(false);
     }
@@ -579,9 +608,23 @@ export default function WorkspaceManagerPage() {
                   <label htmlFor="workspace-kind" className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">Tipo</label>
                   <select id="workspace-kind" value={newKind} onChange={(event) => setNewKind(event.target.value as WorkspaceKind)} className="h-11 w-full rounded-[12px] border border-border-subtle bg-surface-2 px-3 text-[13px] font-medium text-text-primary outline-none focus:border-primary">
                     <option value="shared">Compartilhado</option>
-                    <option value="personal">Pessoal</option>
+                    <option value="personal" disabled={hasPersonal}>Pessoal{hasPersonal ? " (já existe)" : ""}</option>
                   </select>
+                  {personalGuidance && (
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-text-muted">{personalGuidance}</p>
+                  )}
                 </div>
+                {archivedPersonal && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    loading={busyWorkspaceId === archivedPersonal.id}
+                    onClick={() => void handleRestore(archivedPersonal)}
+                  >
+                    <RotateCcw size={14} /> Restaurar {archivedPersonal.name}
+                  </Button>
+                )}
                 <Button type="submit" className="w-full" loading={formBusy} disabled={!newName.trim()}>Criar workspace</Button>
               </form>
             </Card>
