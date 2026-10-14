@@ -193,7 +193,19 @@ export const selectToolsFor = (skillNames: string[]): string[] => {
 
 const CONFIRMATION_RE = /(confirmo|confirmado|pode (fazer|executar|pagar|criar|confirmar|desfazer)|pode sim|sim, pode|autorizo|autorizado|vai em frente|pode ir|fechado|ok, pode|confirmar)/i;
 
-export const isExplicitConfirmation = (message: string): boolean => CONFIRMATION_RE.test(message ?? '');
+// P0 #174: an affirmative token matching inside a negation ("não confirmo",
+// "não autorizo", "sim, mas não confirme") is NOT a confirmation. The
+// negation check runs FIRST and fails closed — no affirmative-inside-negative
+// regex is used here.
+const CONFIRMATION_NEGATION_RE = /\b(nao|nunca|jamais)\b/;
+
+const foldConfirmationText = (value: string): string =>
+  (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+export const isExplicitConfirmation = (message: string): boolean => {
+  const folded = foldConfirmationText(message ?? '');
+  return !CONFIRMATION_NEGATION_RE.test(folded) && CONFIRMATION_RE.test(folded);
+};
 
 /**
  * Historical conversational-undo intent matcher, kept for the chat-turn
