@@ -201,6 +201,89 @@ export const createMemorySql = (): MemorySqlMock => {
       }
       if (q.startsWith('CREATE INDEX') || q.startsWith('CREATE UNIQUE INDEX')) return [] as T[];
 
+      // Review P1-double-fix: `mutation_confirmations` is load-bearing for
+      // the financial confirmation path (immutable CAS + `RETURNING *`
+      // verdicts + sighting sentinels + adoption + receipt-strip hygiene),
+      // so THIS table is modeled faithfully: PK-conflict skip on
+      // `ON CONFLICT DO NOTHING`, `RETURNING *` verdict rows, literal
+      // predicates (`status = 'reserved'`). Every other table keeps the
+      // legacy permissive behavior below (unconditional push, no RETURNING
+      // rows), so no existing suite changes meaning.
+      if (q.startsWith('INSERT INTO mutation_confirmations')) {
+        const parsed =
+          q.match(/^INSERT INTO (\w+) \(([^)]+)\) VALUES \((.+?)\) ON CONFLICT \(([^)]+)\) DO NOTHING(.*)$/i);
+        if (parsed) {
+          const cols = parsed[2]!.split(',').map((column) => column.trim());
+          const tokens = splitTopLevelCommas(parsed[3]!);
+          const conflictCols = parsed[4]!.split(',').map((column) => column.trim());
+          const returning = /RETURNING/i.test(parsed[5] ?? '');
+          const row: Row = {};
+          let binding = 0;
+          cols.forEach((column, index) => {
+            assertNotKeyword(column);
+            const token = (tokens[index] ?? '?').trim();
+            if (token === '?') {
+              row[column] = bindings[binding];
+              binding += 1;
+            } else if (/^NULL$/i.test(token)) {
+              row[column] = null;
+            } else {
+              row[column] = token.replace(/^'(.*)'$/, '$1');
+            }
+          });
+          const conflicted = table('mutation_confirmations').some((existing) =>
+            conflictCols.every((column) => existing[column] === row[column]),
+          );
+          if (conflicted) return [] as T[];
+          table('mutation_confirmations').push(row);
+          return (returning ? [{ ...row }] : []) as T[];
+        }
+      }
+      if (q.startsWith('UPDATE mutation_confirmations SET receipt_json = NULL')) {
+        // P1-3 (policy a) receipt-strip hygiene: never deletes the binding.
+        const pruneBefore = bindings[0];
+        for (const row of table('mutation_confirmations')) {
+          if (row['receipt_json'] != null && (row['expires_at'] as string) <= (pruneBefore as string)) {
+            row['receipt_json'] = null;
+          }
+        }
+        return [] as T[];
+      }
+      if (q.startsWith('UPDATE mutation_confirmations SET')) {
+        const returning = q.includes('RETURNING');
+        const byKey = (workspace_id: unknown, actor_id: unknown, device_id: unknown, intention_id: unknown): Row | undefined =>
+          table('mutation_confirmations').find(
+            (row) =>
+              row['workspace_id'] === workspace_id &&
+              row['actor_id'] === actor_id &&
+              row['device_id'] === device_id &&
+              row['intention_id'] === intention_id,
+          );
+        if (bindings.length === 7) {
+          // Settle: SET receipt_json = ?, status = ? WHERE identity + op + reserved.
+          const [receipt_json, status, workspace_id, actor_id, device_id, intention_id, operation_id] =
+            bindings as [unknown, unknown, unknown, unknown, unknown, unknown, unknown];
+          const row = byKey(workspace_id, actor_id, device_id, intention_id);
+          if (!row || row['operation_id'] !== operation_id || row['status'] !== 'reserved') return [] as T[];
+          row['receipt_json'] = receipt_json;
+          row['status'] = status;
+          return (returning ? [{ ...row }] : []) as T[];
+        }
+        if (bindings.length === 9) {
+          // Adoption: SET operation_id = ?, receipt_json = ?, expires_at = ?,
+          // status = ? WHERE identity + expected op + reserved.
+          const [operation_id, receipt_json, expires_at, status, workspace_id, actor_id, device_id, intention_id, expected_op] =
+            bindings as [unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown];
+          const row = byKey(workspace_id, actor_id, device_id, intention_id);
+          if (!row || row['operation_id'] !== expected_op || row['status'] !== 'reserved') return [] as T[];
+          row['operation_id'] = operation_id;
+          row['receipt_json'] = receipt_json;
+          row['expires_at'] = expires_at;
+          row['status'] = status;
+          return (returning ? [{ ...row }] : []) as T[];
+        }
+      }
+
       const alter = q.match(/^ALTER TABLE (\w+) ADD COLUMN (\w+)/i);
       if (alter) {
         // A keyword column is a syntax error in real SQLite: the mock refuses it
@@ -208,6 +291,33 @@ export const createMemorySql = (): MemorySqlMock => {
         assertNotKeyword(alter[2]!);
         table(alter[1]!);
         columns.get(alter[1]!)!.add(alter[2]!);
+        return [] as T[];
+      }
+
+      // Review round 4 P1-A3: `mutation_confirmation_presentations` is
+      // load-bearing for the confirmation path (first-presentation-wins +
+      // anchor comparison), so it is modeled faithfully like
+      // `mutation_confirmations` above: PK-conflict skip on
+      // `ON CONFLICT DO NOTHING`, plus the retention prune. Every other
+      // table keeps the legacy permissive behavior below.
+      if (q.startsWith('INSERT INTO mutation_confirmation_presentations')) {
+        const cols = ['workspace_id', 'actor_id', 'device_id', 'operation_id', 'presented_at', 'expires_at'];
+        const row: Row = {};
+        cols.forEach((column, index) => {
+          row[column] = bindings[index];
+        });
+        const conflicted = table('mutation_confirmation_presentations').some((existing) =>
+          cols.slice(0, 4).every((column) => existing[column] === row[column]),
+        );
+        if (!conflicted) table('mutation_confirmation_presentations').push(row);
+        return [] as T[];
+      }
+      if (q.startsWith('DELETE FROM mutation_confirmation_presentations')) {
+        const pruneBefore = bindings[0];
+        const rows = table('mutation_confirmation_presentations');
+        for (let index = rows.length - 1; index >= 0; index -= 1) {
+          if ((rows[index]!['expires_at'] as string) <= (pruneBefore as string)) rows.splice(index, 1);
+        }
         return [] as T[];
       }
 

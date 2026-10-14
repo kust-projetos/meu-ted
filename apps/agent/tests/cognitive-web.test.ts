@@ -30,6 +30,39 @@ describe('web search provider resolution', () => {
     expect(WEB_UNAVAILABLE_MESSAGE).toMatch(/indisponível/i);
   });
 
+  it('stays disabled with a key but without the explicit opt-in flag (fail-closed)', async () => {
+    const fetchMock = vi.fn(() => {
+      throw new Error('provider must never be reached');
+    });
+    for (const webEnv of [
+      { TAVILY_API_KEY: 'tv-test' },
+      { BRAVE_API_KEY: 'br-test' },
+      { TAVILY_API_KEY: 'tv-test', BRAVE_API_KEY: 'br-test' },
+    ]) {
+      const provider = createWebSearchProvider(webEnv, fetchMock as unknown as typeof fetch);
+      expect(provider.available).toBe(false);
+      expect(provider.name).toBe('disabled');
+      const result = await provider.search('selic hoje');
+      expect(result).toEqual({ provider: 'disabled', available: false, results: [] });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('stays disabled when the flag is anything but exactly \'1\', even with a key', async () => {
+    const fetchMock = vi.fn(() => {
+      throw new Error('provider must never be reached');
+    });
+    for (const flag of ['0', 'true', '', ' 1', '1 ', 'TRUE', 'yes', 'on']) {
+      const provider = createWebSearchProvider(
+        { TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: flag },
+        fetchMock as unknown as typeof fetch,
+      );
+      expect(provider.available, JSON.stringify(flag)).toBe(false);
+      expect(provider.name, JSON.stringify(flag)).toBe('disabled');
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('prefers Tavily and maps results', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -38,7 +71,7 @@ describe('web search provider resolution', () => {
       ),
     );
     const provider = createWebSearchProvider(
-      { TAVILY_API_KEY: 'tv-test', BRAVE_API_KEY: 'br-test' },
+      { TAVILY_API_KEY: 'tv-test', BRAVE_API_KEY: 'br-test', TED_WEB_SEARCH_ENABLED: '1' },
       fetchMock as unknown as typeof fetch,
     );
     expect(provider.name).toBe('tavily');
@@ -58,7 +91,7 @@ describe('web search provider resolution', () => {
         { status: 200 },
       ),
     );
-    const provider = createWebSearchProvider({ BRAVE_API_KEY: 'br-test' }, fetchMock as unknown as typeof fetch);
+    const provider = createWebSearchProvider({ BRAVE_API_KEY: 'br-test', TED_WEB_SEARCH_ENABLED: '1' }, fetchMock as unknown as typeof fetch);
     expect(provider.name).toBe('brave');
     const result = await provider.search('dólar hoje');
     expect(result.results[0]).toMatchObject({ url: 'https://exemplo.test/dolar' });
@@ -66,7 +99,7 @@ describe('web search provider resolution', () => {
 
   it('surfaces provider HTTP errors without leaking the key', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('forbidden', { status: 403 }));
-    const provider = createWebSearchProvider({ TAVILY_API_KEY: 'super-secret' }, fetchMock as unknown as typeof fetch);
+    const provider = createWebSearchProvider({ TAVILY_API_KEY: 'super-secret', TED_WEB_SEARCH_ENABLED: '1' }, fetchMock as unknown as typeof fetch);
     await expect(provider.search('x')).rejects.toMatchObject({ code: 'http_403' });
   });
 });
@@ -355,7 +388,7 @@ describe('web_fetch on the production tool route (no injected resolver/fetch)', 
     );
     const tools = buildExposedTools(['web_search'], {
       ...baseCtx,
-      webEnv: { TAVILY_API_KEY: 'tv-test' },
+      webEnv: { TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1' },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     const result = (await (
@@ -410,7 +443,7 @@ describe('web evidence on the exposed tools (R14 minimisation + provenance)', ()
       .fn()
       .mockResolvedValue(new Response(JSON.stringify({ results: tavilyResults }), { status: 200 }));
     const result = await callWebSearch(
-      { TAVILY_API_KEY: 'tv-test' },
+      { TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1' },
       'meu saldo é R$ 12.345,67 e o cpf é 529.982.247-25, me manda para ana.souza@exemplo.com.br?',
       fetchMock as unknown as typeof fetch,
     );
@@ -446,7 +479,7 @@ describe('web evidence on the exposed tools (R14 minimisation + provenance)', ()
           { status: 200 },
         ),
       );
-    const result = await callWebSearch({ TAVILY_API_KEY: 'tv-test' }, 'notícias de mercado', fetchMock as unknown as typeof fetch);
+    const result = await callWebSearch({ TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1' }, 'notícias de mercado', fetchMock as unknown as typeof fetch);
     expect(result.evidence?.length).toBeLessThanOrEqual(WEB_EVIDENCE_PROMPT_CHARS);
   });
 
@@ -454,7 +487,7 @@ describe('web evidence on the exposed tools (R14 minimisation + provenance)', ()
     const fetchMock = vi.fn(() => {
       throw new Error('provider must never be reached');
     });
-    const result = await callWebSearch({ TAVILY_API_KEY: 'tv-test' }, '529.982.247-25', fetchMock as unknown as typeof fetch);
+    const result = await callWebSearch({ TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1' }, '529.982.247-25', fetchMock as unknown as typeof fetch);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.available).toBe(false);
     expect(result.results).toEqual([]);
@@ -468,6 +501,23 @@ describe('web evidence on the exposed tools (R14 minimisation + provenance)', ()
     expect(result.message).toBe(WEB_UNAVAILABLE_MESSAGE);
     expect(result.evidence).toContain(WEB_UNAVAILABLE_MESSAGE);
     expect(result.evidence).not.toContain('[F1]');
+  });
+
+  it('answers gracefully with a key but without the flag, never reaching the network', async () => {
+    const fetchMock = vi.fn(() => {
+      throw new Error('provider must never be reached');
+    });
+    for (const webEnv of [
+      { TAVILY_API_KEY: 'tv-test' },
+      { BRAVE_API_KEY: 'br-test' },
+      { TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '0' },
+    ]) {
+      const result = await callWebSearch(webEnv, 'taxa selic hoje', fetchMock as unknown as typeof fetch);
+      expect(result.available).toBe(false);
+      expect(result.message).toBe(WEB_UNAVAILABLE_MESSAGE);
+      expect(result.evidence).toContain(WEB_UNAVAILABLE_MESSAGE);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('attaches single-source provenance to web_fetch without duplicating the body', async () => {
@@ -510,7 +560,7 @@ describe('web evidence on the exposed tools (R14 minimisation + provenance)', ()
         { status: 200 },
       ),
     );
-    const result = await callWebSearch({ TAVILY_API_KEY: 'tv-test' }, 'taxa selic hoje', fetchMock as unknown as typeof fetch);
+    const result = await callWebSearch({ TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1' }, 'taxa selic hoje', fetchMock as unknown as typeof fetch);
     const whole = JSON.stringify(result);
     // Rejected items are gone, forged markers neutralised, provenance intact.
     expect(result.results).toHaveLength(1);
@@ -549,7 +599,7 @@ describe('web evidence on the exposed tools (R14 minimisation + provenance)', ()
       .fn()
       .mockResolvedValue(new Response(JSON.stringify({ results: tavilyResults }), { status: 200 }));
     const result = await callWebSearch(
-      { TAVILY_API_KEY: 'tv-test', [WEB_FETCH_ALLOWED_HOSTS_ENV]: '' },
+      { TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1', [WEB_FETCH_ALLOWED_HOSTS_ENV]: '' },
       'taxa selic hoje',
       fetchMock as unknown as typeof fetch,
     );
@@ -562,19 +612,25 @@ describe('web status line honesty about the fetch allowlist', () => {
   const assemble = async (webEnv: Record<string, string | undefined>): Promise<string> =>
     (await import('../src/agent-config/index.js')).assembleCognition('qual o meu saldo?', { webEnv }).system;
 
-  it('keeps the graceful line when no search key is configured', async () => {
+  it('keeps the graceful line when search is not enabled', async () => {
     const system = await assemble({});
-    expect(system).toContain('WEB: indisponível (sem chave configurada)');
+    expect(system).toContain('WEB: indisponível (desativada neste ambiente)');
+  });
+
+  it('keeps the graceful line when a key exists but the flag is off', async () => {
+    const system = await assemble({ TAVILY_API_KEY: 'tv-test' });
+    expect(system).toContain('WEB: indisponível (desativada neste ambiente)');
   });
 
   it('does not promise page reading while the allowlist is empty', async () => {
-    const system = await assemble({ TAVILY_API_KEY: 'tv-test' });
+    const system = await assemble({ TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1' });
     expect(system).toContain('nenhum domínio autorizado');
   });
 
   it('announces page reading only for the configured domains', async () => {
     const system = await assemble({
       TAVILY_API_KEY: 'tv-test',
+      TED_WEB_SEARCH_ENABLED: '1',
       [WEB_FETCH_ALLOWED_HOSTS_ENV]: 'exemplo.test,news.test',
     });
     expect(system).toContain('apenas nos domínios autorizados');

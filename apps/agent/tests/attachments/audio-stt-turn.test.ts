@@ -94,7 +94,7 @@ describe("A14/AC22 — turn text com proveniência (dado, nunca instrução)", (
   it("o aviso de proveniência abre o texto e a transcrição entra junto do texto do usuário", async () => {
     const { groqCalls } = installFetchMock(async () => transcriptResponse("qual o meu saldo hoje?"));
     const { agent, persisted } = createAttachmentTestAgent({
-      extraEnv: { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1" },
+      extraEnv: { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1", TED_AUDIO_STT_COHORT: "*" },
     });
     const ref = await uploadAudioRef(agent);
 
@@ -131,7 +131,7 @@ describe("A14/AC22 — turn text com proveniência (dado, nunca instrução)", (
         }),
     );
     const { agent, persisted } = createAttachmentTestAgent({
-      extraEnv: { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1", TED_AUDIO_STT_TIMEOUT_MS: "1" },
+      extraEnv: { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1", TED_AUDIO_STT_COHORT: "*", TED_AUDIO_STT_TIMEOUT_MS: "1" },
     });
     const ref = await uploadAudioRef(agent);
 
@@ -179,7 +179,7 @@ describe("A14/AC22 — turn text com proveniência (dado, nunca instrução)", (
       });
     }
     const { agent, persisted } = createAttachmentTestAgent({
-      extraEnv: { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1" },
+      extraEnv: { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1", TED_AUDIO_STT_COHORT: "*" },
     });
     const ref = await uploadAudioRef(agent);
 
@@ -217,7 +217,7 @@ describe("A14/AC22 — nunca autoexecução (AC22 §5)", () => {
     }) as unknown as typeof fetch;
 
     const { agent } = createAttachmentTestAgent({
-      extraEnv: { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1" },
+      extraEnv: { GROQ_API_KEY: "gsk-test-key", TED_AUDIO_STT_ENABLED: "1", TED_AUDIO_STT_COHORT: "*" },
     });
     // A factory do cliente ELEVADO é a porta de entrada do autoexecute: se ela
     // não é nem construída, o fast path é estruturalmente inalcançável.

@@ -7,8 +7,8 @@
  *
  * Princípios (AC23):
  *
- * 1. **Default-off com trava dupla.** Só há provider quando `TED_VISION_ENABLED=1`
- *    **e** `GROQ_API_KEY` estão presentes. Sem as duas, `available` é `false`,
+ * 1. **Default-off com trava tripla.** Só há provider quando `TED_VISION_ENABLED=1`
+ *    **e** `GROQ_API_KEY` **e** a coorte `TED_VISION_COHORT` (CSV) estão presentes. Sem as 3 travas, `available` é `false`,
  *    zero requisições saem e o processador de imagem permanece o `unsupported`
  *    fail-closed da A13 — nada muda no comportamento.
  * 2. **A imagem é DADO, nunca instrução.** O system prompt é uma CONSTANTE no
@@ -108,6 +108,7 @@ export type VisionState =
 export type GroqVisionEnv = {
   GROQ_API_KEY?: string;
   TED_VISION_ENABLED?: string;
+  TED_VISION_COHORT?: string;
   TED_VISION_MODEL?: string;
   TED_VISION_TIMEOUT_MS?: string;
 };
@@ -140,14 +141,83 @@ export type GroqVisionProvider = VisionProvider & {
 };
 
 /**
- * The double lock. `TED_VISION_ENABLED` alone is not enough (a leaked key must
- * not silently enable image egress) and the key alone is not enough (the
- * rollout stays opt-in). Exactly `1` enables — same rule as the A14 STT.
+ * The FLAG, and only the flag: `TED_VISION_ENABLED` trimmed must be exactly
+ * `'1'`. This is the canonical flag-only parser, SHARED by the two vision
+ * providers (groq and gemini) exactly like the cohort parser above — one
+ * parser, one parse behavior, so the rollout cannot diverge per provider.
+ * Neither the credential (`GROQ_API_KEY`/`GOOGLE_AI_STUDIO_KEY`) nor the cohort
+ * (`TED_VISION_COHORT`) is read here: a caller asking "is the flag on?" must
+ * never have the other two locks answered instead (issue #107 — the runtime
+ * capability inventory composes its `serverFlagEnabled` dimension from THIS
+ * parser, instead of re-implementing the parse or reading the triple lock as
+ * if it were the flag).
+ *
+ * Trimmed by contract (same rule as `isPdfTextEnabled` and `isAudioSttFlagEnabled`):
+ * `' 1 '` is ON; `'0'`, `'true'`, `''`, a non-string or an absent variable are
+ * OFF, so a missing variable is a proven OFF (default-off gates), never an
+ * unanswered question. Total: a loosely typed value fails CLOSED (`false`)
+ * instead of throwing — like the cohort parsers above, so the runtime
+ * capability inventory can always ANSWER the flag, never crash on it.
  */
-export const isGroqVisionAvailable = (env: GroqVisionEnv | undefined): boolean => {
-  const enabled = env?.TED_VISION_ENABLED?.trim();
+export const isVisionFlagEnabled = (env: unknown): boolean => {
+  const raw = (env as GroqVisionEnv | undefined)?.TED_VISION_ENABLED;
+  return typeof raw === 'string' && raw.trim() === '1';
+};
+
+/** Nome da env da allowlist de coorte da visão (CSV, documentado no DO). */
+export const VISION_COHORT_ENV = 'TED_VISION_COHORT';
+
+/**
+ * Parse ÚNICO da coorte de visão, compartilhado pelos dois providers (Groq e
+ * Gemini): CSV com trim, vazios descartados. Ausente/vazia/não-string ⇒ [].
+ * Parser duplicado por provider divergiria o rollout — por isso vive aqui, no
+ * módulo compartilhado, e `gemini-vision.ts` importa em vez de reimplementar.
+ */
+export const parseVisionCohort = (env: unknown): string[] => {
+  const raw = (env as GroqVisionEnv | undefined)?.TED_VISION_COHORT;
+  if (typeof raw !== 'string') return [];
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+};
+
+/**
+ * Coorte de visão: casa por workspaceId OU actorId. Lista vazia (env
+ * ausente/vazia) = ninguém — fail-closed por construção. Entrada curinga `'*'`
+ * = TODOS (decisão do operador para rollout geral). Casamento exato,
+ * case-sensitive. Nunca lança.
+ */
+export const isVisionCohortMember = (
+  env: unknown,
+  workspaceId?: string,
+  actorId?: string,
+): boolean => {
+  const allow = parseVisionCohort(env);
+  if (allow.length === 0) return false;
+  if (allow.includes('*')) return true;
+  return allow.includes(workspaceId ?? '') || allow.includes(actorId ?? '');
+};
+
+/**
+ * The triple lock. `TED_VISION_ENABLED` alone is not enough (a leaked key must
+ * not silently enable image egress), the key alone is not enough (the
+ * rollout stays opt-in), and NEITHER enables egress without cohort membership
+ * (`TED_VISION_COHORT`: CSV of workspace/actor ids, `'*'` = everyone;
+ * empty/missing = NOBODY — A19-VISION-COHORT, mirroring the STT triple lock).
+ *
+ * The flag leg is the canonical flag-only parser above: one parse, one
+ * behavior — the credential and the cohort stay out of the flag question
+ * entirely, and a caller that needs only the flag never has to read them.
+ */
+export const isGroqVisionAvailable = (
+  env: GroqVisionEnv | undefined,
+  workspaceId?: string,
+  actorId?: string,
+): boolean => {
   const key = env?.GROQ_API_KEY?.trim();
-  return enabled === '1' && typeof key === 'string' && key.length > 0;
+  if (!(isVisionFlagEnabled(env) && typeof key === 'string' && key.length > 0)) return false;
+  return isVisionCohortMember(env, workspaceId, actorId);
 };
 
 const DEFAULT_TIMEOUT_MIN_MS = 1;
@@ -208,6 +278,35 @@ const readField = (payload: Record<string, unknown>, ...keys: string[]): string 
   return 'unknown';
 };
 
+/**
+ * V1-GROUND-VISION — the provider contract answers `currency` as a SYMBOL or a
+ * code (`R$`, `BRL`, `US$`, `USD`, or `unknown`/`ambiguous` when unreadable).
+ * The figure itself is never touched: only the currency is canonicalized to
+ * the ISO code, so `renderVisionFields` emits `42.50 BRL` — the shape the
+ * grounding matcher recognizes (`42.50 R$` would be invisible to it, and a
+ * documented amount must reach the turn as grounded data). An unreadable or
+ * ambiguous currency stays exactly as read: no default is ever substituted.
+ */
+const CURRENCY_CODES: Readonly<Record<string, string>> = {
+  'r$': 'BRL',
+  'rs': 'BRL',
+  'real': 'BRL',
+  'reais': 'BRL',
+  'brl': 'BRL',
+  'us$': 'USD',
+  'usd': 'USD',
+  'dolar': 'USD',
+  'dólar': 'USD',
+  'dollars': 'USD',
+};
+
+export const normalizeVisionCurrency = (value: string): string => {
+  if (typeof value !== 'string') return 'unknown';
+  const trimmed = value.trim();
+  if (trimmed === '') return 'unknown';
+  return CURRENCY_CODES[trimmed.toLowerCase()] ?? trimmed;
+};
+
 /** Tolerates a fenced ```json block; returns `null` when there is no extraction. */
 export const parseExtraction = (content: string): VisionFields | null => {
   const trimmed = content.trim();
@@ -234,7 +333,10 @@ export const parseExtraction = (content: string): VisionFields | null => {
     merchant: readField(record, 'merchant', 'establishment', 'estabelecimento'),
     date: readField(record, 'date', 'data'),
     amount: readField(record, 'amount', 'valor'),
-    currency: readField(record, 'currency', 'moeda'),
+    // V1-GROUND-VISION: `R$`/`US$`/… are canonicalized to the ISO code so the
+    // rendered figure is reachable by grounding; `unknown`/`ambiguous` pass
+    // through untouched (clampField already mapped absence to `unknown`).
+    currency: normalizeVisionCurrency(readField(record, 'currency', 'moeda')),
     suggestedCategory: readField(record, 'suggested_category', 'suggestedCategory', 'category', 'categoria'),
     confidence: readField(record, 'confidence', 'confianca'),
   };
@@ -257,6 +359,8 @@ export const readChoiceContent = (payload: unknown): string | null => {
  */
 export const createGroqVisionProvider = (input: {
   env?: GroqVisionEnv;
+  workspaceId?: string;
+  actorId?: string;
   fetchImpl?: typeof fetch;
   /** Injected clock: keeps provenance testable without faking timers. */
   now?: () => number;
@@ -266,10 +370,10 @@ export const createGroqVisionProvider = (input: {
 
   return {
     provider: 'groq',
-    available: isGroqVisionAvailable(input.env),
+    available: isGroqVisionAvailable(input.env, input.workspaceId, input.actorId),
     extract: async (request: VisionRequest): Promise<VisionOutcome> => {
       const env = input.env;
-      if (!isGroqVisionAvailable(env)) return { state: 'unavailable' };
+      if (!isGroqVisionAvailable(env, input.workspaceId, input.actorId)) return { state: 'unavailable' };
       const apiKey = env?.GROQ_API_KEY?.trim() ?? '';
       const timeoutMs = resolveVisionTimeoutMs(env);
       const model = resolveVisionModel(env);
@@ -358,7 +462,7 @@ export const renderVisionFields = (fields: VisionFields): string =>
 
 /**
  * The image processor for the A13 registry. Replaces the `unsupported` entry ONLY
- * when the vision double lock is on; every other outcome keeps the A13 promise.
+ * when the vision triple lock is on; every other outcome keeps the A13 promise.
  */
 export const createImageVisionProcessor = (input: {
   provider: VisionProvider;
@@ -482,8 +586,13 @@ export const composeTurnTextWithVisionData = (input: {
  */
 export const imageVisionProcessorOverride = (
   env: GroqVisionEnv | undefined,
+  identity?: { workspaceId?: string; actorId?: string },
 ): AttachmentProcessor | undefined => {
-  const provider = createGroqVisionProvider({ env });
+  const provider = createGroqVisionProvider({
+    env,
+    workspaceId: identity?.workspaceId,
+    actorId: identity?.actorId,
+  });
   if (!provider.available) return undefined;
   return createImageVisionProcessor({ provider, budget: createVisionBudget() });
 };

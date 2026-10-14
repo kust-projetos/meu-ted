@@ -1,5 +1,9 @@
 # MEU-TED-SPEC-V1-FINAL-CLOSURE (revisada)
 
+> **V1-textual: vale o ADENDO 13/10 ao fim deste documento; corpo §§6/10/13/14/16/25/F2/F3/F5/F6 = histórico/pós-V1.**
+> **Nada do corpo foi apagado — seções suspensas estão marcadas [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO].**
+> **Baseline viva: API `fd3481f` / Agent-PWA `715b2cf` (código `fd3481f`) — ver `MEU-TED-V1-FINAL-STATE.md`.**
+
 **Status:** Scope Freeze / Final Closure — revisada em 07/10/2026.
 **Objetivo:** concluir definitivamente a v1 em produção, congelando o escopo e
 separando bloqueadores reais de backlog pós-v1.
@@ -91,26 +95,26 @@ Entregar, **nesta ordem** (gate→sink→binding→prova→canary):
 Fora da #107: `GROQ_API_KEY`/ZDR (operador), Tavily/Brave (inventário live
 pendente), percentuais de canary.
 
-### B2 — Attachments + PDF
+### B2 — Attachments + PDF [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 Upload seguro, R2 privado, TTL, cleanup, limites, prompt-injection protection,
 PDF textual local. PDF escaneado/OCR é subfatia própria. Sem PDF real, v1 não fecha.
 
-### B3 — Áudio/STT
+### B3 — Áudio/STT [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 Provider aprovado + `GROQ_API_KEY` + retenção/ZDR validada (G05) + timeout +
 tamanho/duração bounded + falha tipada + transcrição como input não confiável +
 observabilidade. **Sem ZDR evidenciado = BLOCKED** (operador provisiona; agente
 não inventa).
 
-### B4 — Vision/imagem
+### B4 — Vision/imagem [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 Provider/modelo definido (default atual `llama-4-scout-17b-16e-instruct` **a
 confirmar no rollout** — troca de modelo é decisão humana) + privacidade aprovada
 + timeout + limite de payload + prompt injection multimodal + sem authority
 bypass + observabilidade.
 
-### B5 — Web
+### B5 — Web [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 Separar `web_search` / `web_fetch`. Obrigatório: live inventory, server-side
 gates, allowlist (`TED_WEB_FETCH_ALLOWED_HOSTS`), timeout, source provenance,
@@ -137,7 +141,7 @@ Sem segredo/token/bytes/conteúdo completo/documento bruto. Investigar reuso
 Toda capability ativada precisa: versão conhecida, migration compatível,
 rollout controlado, cohort, rollback, evidência pós-deploy.
 
-## 10. Autoexecute low-risk (V5)
+## 10. Autoexecute low-risk (V5) [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 Estado atual `SHADOW` (produção desde 2026-10-02, preservado no corte e no
 `bd1ed9b`); kill switch = `off`/remover env. Exigido antes da closure:
@@ -165,7 +169,7 @@ corpo da #105.
 `cross-actor leak = 0`, `duplicate mutation on replay = 0`, golden críticos
 PASS, CI obrigatório verde, production E2E verde, rollback comprovado.
 
-## 13. Release B (gate temporal, ABERTO)
+## 13. Release B (gate temporal, ABERTO) [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 Janela termina em `2026-10-16T21:36:06Z`. Se zero eventos
 `auth.request.legacy_bearer_used` com filtro **exclusivo** no evento âncora
@@ -174,7 +178,7 @@ Janela termina em `2026-10-16T21:36:06Z`. Se zero eventos
 CI/deploy/smoke/E2E autenticado/validação do sink. Release B concluída é
 requisito operacional da closure.
 
-## 14. Cutover F3–F5 (gate humano, ABERTO)
+## 14. Cutover F3–F5 (gate humano, ABERTO) [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 Canônico já é fonte ativa. Não reanimar legacy→canonical por histórico.
 Sequência: backup → restore proof → canonical-only verification → F3 → F4 → F5
@@ -188,7 +192,7 @@ Antes do fechamento: backup PostgreSQL fresco + checksum + restore em ambiente
 descartável + smoke do restore + rollback Cloudflare documentado + API rollback
 tag + runbook atualizado. "Tem backup" sem prova de restore não conta.
 
-## 16. Production acceptance (única, final)
+## 16. Production acceptance (única, final) [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 API (`/health`, `/ready`, versão, DB, auth, reads autoritativas, write+receipt);
 PWA (login, workspace, dashboard, módulos, TED, approval, attachment, mobile
@@ -243,7 +247,7 @@ sessões.
 merge final → CI main verde → deploy → smoke → Golden → production E2E →
 backup/restore → documentação → tag/release v1 → `V1 PRODUCTION READY`.
 
-## 25. Definition of Done final
+## 25. Definition of Done final [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 - [ ] A19 rollout (#107) concluído;
 - [ ] attachments ACTIVE; PDF ACTIVE; STT ACTIVE; vision ACTIVE;
@@ -278,7 +282,7 @@ Jev optional, future-dated. **Exit:** baseline known, scope frozen, backlog clas
 - **PR C (binding):** só depois de A+B, com flag OFF + prova disabled.
   **Exit:** gate server-side, cohort, sink, R2, zero-write OFF proof, CI verde, P0/P1 zero.
 
-## F2 — Functional rollout A19 (uma capability por vez)
+## F2 — Functional rollout A19 (uma capability por vez) [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 F2.1 PDF (textual; inválido/oversized/corrupto/injection/timeout/cleanup/
 rollback) → F2.2 STT (pré-req key+ZDR; casos §B3) → F2.3 Vision (pré-req
@@ -287,7 +291,7 @@ search/fetch separados). Canary sempre: operator-only → internal → small can
 → active, com coorte explícita e critérios pausa/promoção. **Exit:** matriz
 Attachments/PDF/STT/Vision/Web/R2/Observability ACTIVE (ou estado aprovado).
 
-## F3 — Autoexecute low-risk
+## F3 — Autoexecute low-risk [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 `shadow baseline → operator-only → small low-risk canary → low-risk active`,
 monitorando autoexecute rate, failure, false positive, undo-after-autoexecute,
@@ -300,12 +304,12 @@ Dataset versionado + runner contra backend isolado + resultado machine-readable;
 hard failures: false success, unauthorized write, wrong workspace, duplicate
 write, backend mismatch. **Exit:** workflows críticos PASS.
 
-## F5 — Release B (≥ 2026-10-16T21:36:06Z)
+## F5 — Release B (≥ 2026-10-16T21:36:06Z) [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 Verificar sink; se zero no período, flip + CI/deploy/smoke/auth-E2E/mobile/
 Agent-test. **Exit:** legacy bearer OFF, compat OFF, sem regressão.
 
-## F6 — Cutover residual F3–F5
+## F6 — Cutover residual F3–F5 [HISTÓRICO — suspenso p/ V1-textual pelo ADENDO]
 
 Backup fresco + checksum + restore proof + reconciliação canônica → F3–F5
 (ADR-024/ADR-025). **Exit:** canonical = only active source, legacy = retired.
@@ -342,3 +346,52 @@ inevitável.
   operador com A19 blocker faseado); golden `gate_separado` (0.96);
   F1 `gate_sink_first` (0.99).
 - `jev_check` (seguro prosseguir sem ativação): **likely true** (0.82).
+
+---
+
+## ADENDO V1-TEXTUAL — 13/10/2026 (congela escopo textual, preserva história)
+
+Este adendo congela o escopo da V1-textual sem apagar nem reescrever a
+história acima. Nada do corpo original foi alterado; as seções citadas abaixo
+seguem suspensas para a V1-textual e vigentes como backlog pós-V1.
+
+### 1. Critério de CLOSED da V1-textual
+
+V1-textual = CLOSED quando o checklist textual passar: chat em linguagem
+natural, consultas reais, cadastro, confirmação/cancelamento/undo, contexto
+isolado, memória com forget transacional, correção, erros honestos, PWA
+funcional e segurança textual — com CI e PWA CI verdes, Golden textual PASS
+com `falseSuccess=0` e 6 `pending-capability` skipped, E2E só-Test Family PASS
+com `workspaceWriteViolations` vazio, deploys ATTESTED com SHA casado e
+P0=0/P1=0 no escopo textual.
+
+### 2. Movidos para PÓS-V1 sem apagar (§§6-B2/B3/B4/B5, §10, F2, F3)
+
+Movidos para PÓS-V1, sem apagar: áudio/STT, imagens/Vision, reativação do PDF,
+`web_search`/`web_fetch`, autoexecução `on`, novos modelos/providers,
+aprendizado avançado de skills e interfaces adaptativas. As seções
+correspondentes (§§6-B2/B3/B4/B5, §10, F2, F3) estão suspensas para a
+V1-textual e vigentes como backlog. Estado preservado: PDF fail-closed
+(`TED_PDF_TEXT_ENABLED=0` + `override` `undefined`); STT PARCIAL com finding
+aberto; Vision FULL PASS sem promover; autoexecute em `shadow`.
+
+### 3. #105 e #107 permanecem CLOSED
+
+#105 e #107 permanecem CLOSED em 12/10/2026. Não reabrir.
+
+### 4. Pós-V1 condicionados a avaliação de segurança — diferidos, não eliminados
+
+Release B (flip ABORTADO em 13/10, 136 eventos, MAX em
+2026-10-10T22:09:01Z, nova janela ~24/10), retirada do legado (F3/F4 vácuos;
+resta F6 + remoção de código, KEEP do bearer até a Release B) e autoexecute
+`on` são pós-V1 condicionados a avaliação de segurança — diferidos, não
+eliminados.
+
+### 5. Baseline viva e invariantes
+
+Baseline viva (atualizada 14/10): API `fd3481f`, Agent/PWA `715b2cf` (delta só-docs, código `fd3481f`), `origin/main` `715b2cf`.
+INV-01 a INV-10 inalterados.
+
+### 6. Precedência
+
+6. Precedência: em caso de conflito, este adendo prevalece sobre §16 (acceptance) e §25/DoD (PLAN F0–F9) para a V1-textual. Os requisitos multimodais (PDF/STT/Vision/web), autoexecute fora de shadow, Release B flip, cutover F3–F5 e tag v1 plena seguem vigentes como backlog pós-V1, não como bloqueadores da V1-textual. Os requisitos de §15/§24 (backup/restore/smoke funcional) permanecem obrigatórios na trilha de estabilização (tarefa 10 do plano V1) antes do release final, com evidência de restore em PostgreSQL descartável + smoke funcional — a âncora 12/10 sozinha não basta.

@@ -42,13 +42,13 @@
     {
       "version": "1",
       "id": "GW-017",
-      "title": "PDF textual: parse local atrás de flag default-off",
+      "title": "PDF textual: extração local INDISPONÍVEL por decisão (P1 fail-closed)",
       "workflow": "pdf-text",
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.pdf_text",
-        "reason": "TED_PDF_TEXT_ENABLED ainda não é 1 neste ambiente; sem a flag nenhum extractor é construído e o PDF é unsupported fail-closed.",
-        "requires": ["TED_PDF_TEXT_ENABLED=1", "F2.1 (PDF) com canary aprovado"]
+        "reason": "Extração DESLIGADA por decisão (P1 — bounded execution pendente): `page.getTextContent()` materializa todos os itens de texto de UMA página antes de qualquer teto (o teto de caracteres só age ENTRE páginas e na saída, e o deadline de 10 s é de EVENTO, não de CPU), então uma única página adversária é trabalho sem bound mensurável. `pdfTextProcessorOverride` devolve `undefined` INCONDICIONALMENTE e `TED_PDF_TEXT_ENABLED=0` no manifesto — a env nem reativaria o parser. Consequência: um PDF resolve `unsupported` (fallback A13), zero parse, zero bytes lidos, zero dado extraído, sem efeito em upload/R2, STT ou visão. O parser (`createUnpdfExtractor`), a dependência `unpdf` e `createPdfTextProcessor` ficam PRESERVADOS; os estados nomeados (`pdf_encrypted`, `pdf_invalid`, `pdf_no_text_layer`, `pdf_too_many_pages`, `pdf_timeout`) seguem EXATOS e testados no parser isolado (`pdf-text.test.ts`), e o fail-closed do gateway é provado executavelmente em `pdf-gate-worklimit.test.ts` / `vision-pdf-turn.test.ts`.",
+        "requires": ["limite de trabalho/memória POR-PÁGINA real (bounded execution) antes de qualquer reabilitação", "reexposição do wiring (pdfTextProcessorOverride) + TED_PDF_TEXT_ENABLED=1 deployado", "F2.1 (PDF) com canary aprovado"]
       },
       "initialState": {},
       "inputs": [{ "text": "quanto deu a fatura no PDF?", "attachments": [{ "name": "fatura.pdf", "type": "application/pdf" }] }],
@@ -63,13 +63,13 @@
     {
       "version": "1",
       "id": "GW-018",
-      "title": "Áudio: STT exige chave + segunda trava + ZDR",
+      "title": "Áudio: STT exige chave + flag + coorte + ZDR (rollout sequenciado)",
       "workflow": "audio-stt",
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.audio_stt",
-        "reason": "Sem GROQ_API_KEY provisionada, sem TED_AUDIO_STT_ENABLED=1 e sem ZDR elegível; áudio é unsupported fail-closed com zero egress.",
-        "requires": ["GROQ_API_KEY como secret", "TED_AUDIO_STT_ENABLED=1", "ZDR elegível na organização", "F2.2 (STT) com canary aprovado"]
+        "reason": "TED_AUDIO_STT_ENABLED=1 em produção (operador, 2026-10-08) com GROQ_API_KEY provisionada como secret e ZDR elegível ativo; coorte preenchida com o workspace junio d36cb649-4462-486d-940a-47128ad329f2 (canary restritivo single-workspace, A19-STT-COHORT) — flag+coorte autorizam egress só para turnos desse workspace. junio é o household REAL com dados financeiros reais, não o workspace sintético Test Family 550e8400-e29b-41d4-a716-446655440000 usado no E2E. O gate por actor nunca casaria: o token de conexão delegado não carrega actorId e o `sub` delegado vive em namespace distinto do session user.id, por isso a coorte usa o workspaceId do turno. O canary sintético live de 08/10 já provou upload + turno 200 com `audio:processed`; seguem pendentes precisão em fala real pt-BR, cenários de silêncio/áudio inválido/timeout/erro/quota, observabilidade e o aceite de rollout/rollback. O runner Golden permanece isolado e não faz egress; este caso continua pending porque não valida o pipeline real do provider.",
+        "requires": ["GROQ_API_KEY como secret", "TED_AUDIO_STT_ENABLED=1", "TED_AUDIO_STT_COHORT com identidade canary (operador)", "ZDR elegível na organização", "F2.2 (STT) com canary aprovado"]
       },
       "initialState": {},
       "inputs": [{ "text": "transcreva o áudio", "attachments": [{ "name": "nota.m4a", "type": "audio/mp4" }] }],
@@ -84,13 +84,13 @@
     {
       "version": "1",
       "id": "GW-019",
-      "title": "Imagem: visão exige chave + segunda trava + ZDR, modelo a confirmar",
+      "title": "Imagem: visão Gemini 2.5-flash em canary (trava tripla + coorte ws)",
       "workflow": "image-vision",
       "status": "pending-capability",
       "pendingReason": {
         "capability": "attachments.vision",
-        "reason": "Sem GROQ_API_KEY provisionada, sem TED_VISION_ENABLED=1 e sem ZDR elegível; imagem é unsupported fail-closed com zero egress.",
-        "requires": ["GROQ_API_KEY como secret", "TED_VISION_ENABLED=1", "ZDR elegível na organização", "modelo default confirmado no rollout", "F2.3 (Vision) com canary aprovado"]
+        "reason": "Canary A19-VISION-CANARY configurado no manifesto (TED_VISION_ENABLED=1, provider gemini, modelo gemini-2.5-flash admitido na allowlist por decisão do operador 2026-10-08 com extração sintética exata já provada live, coorte = workspace junio d36cb649-4462-486d-940a-47128ad329f2 (household REAL com dados financeiros reais, não o workspace sintético Test Family 550e8400-e29b-41d4-a716-446655440000); GOOGLE_AI_STUDIO_KEY provisionada como secret; redirect manual com 3xx para provider_error; política de dados do AI Studio aceita pelo operador para o canary). Seguem pendentes um turno de aceite completo com imagem no fluxo Agent → relay, quota regular e validação de grounding/proveniência, injection, telemetria e privacidade antes de qualquer ampliação; o runner isolado nunca faz egress, então o caso continua offline-unprovable.",
+        "requires": ["GOOGLE_AI_STUDIO_KEY como secret (provisionada)", "TED_VISION_ENABLED=1 + TED_VISION_PROVIDER=gemini + TED_VISION_MODEL=gemini-2.5-flash (manifesto)", "TED_VISION_COHORT com identidade canary (operador)", "política de dados do AI Studio aceita (revalidar antes de tráfego geral)", "F2.3 (Vision) com canary aprovado: relay recuperado + prova sintética com imagem"]
       },
       "initialState": {},
       "inputs": [{ "text": "leia o valor da nota na foto", "attachments": [{ "name": "nota.jpg", "type": "image/jpeg" }] }],

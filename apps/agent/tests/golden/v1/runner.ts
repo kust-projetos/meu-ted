@@ -48,19 +48,30 @@ const FAIL_CLOSED_COPIES = new Set([
   renderMutationResult("failed"),
 ]);
 
-const IDENTITY = {
+const BASE_IDENTITY = {
   actorId: "actor-golden",
   workspaceId: "ws-golden",
   role: "member" as const,
   deviceId: "golden-device-1",
 };
 
-const memoryCount = (backend: IsolatedBackend, query: string): number => {
+const memoryCount = (backend: IsolatedBackend, query: string, workspaceId: string): number => {
   try {
-    return recallMemories(backend.memorySql, { workspaceId: "ws-golden", actor: "actor-golden", query }).length;
+    return recallMemories(backend.memorySql, { workspaceId, actor: "actor-golden", query }).length;
   } catch {
     return -1;
   }
+};
+
+/**
+ * GW-042: harness-observed read-failure bucket → closed action vocabulary.
+ * Only the two matrix buckets are recorded; any other typed reason
+ * (`permanent_error`, `unavailable`) stays covered by `fail_closed` alone.
+ */
+const readFailureAction = (reason: string): GoldenAction | null => {
+  if (reason === "retryable_error") return "read_failed_retryable";
+  if (reason === "forbidden") return "read_failed_forbidden";
+  return null;
 };
 
 /** Executes one executable case; pending-capability cases never reach here. */
@@ -93,7 +104,10 @@ export const runGoldenCase = async (goldenCase: GoldenCase): Promise<GoldenCaseR
   });
 
   const seedQuery = (goldenCase.initialState.memory ?? [])[0]?.content.slice(0, 16) ?? "";
-  const memoryBefore = seedQuery ? memoryCount(backend, seedQuery) : -1;
+  // GW-040: seeded memories live in the first turn's workspace (default
+  // preserves the single-namespace v1 behavior for every existing case).
+  const seedWorkspace = goldenCase.inputs[0]?.workspaceId ?? "ws-golden";
+  const memoryBefore = seedQuery ? memoryCount(backend, seedQuery, seedWorkspace) : -1;
 
   const turns: GoldenTurnRecord[] = [];
   let lastOperationId: string | null = null;
@@ -103,6 +117,15 @@ export const runGoldenCase = async (goldenCase: GoldenCase): Promise<GoldenCaseR
   for (const [index, input] of inputs.entries()) {
     const turnStartedAt = Date.now();
     const intentionId = input.intentionId ?? `${goldenCase.id}-t${index + 1}`;
+    // GW-040: identity is per-turn (default `ws-golden` preserves v1). The
+    // draft store, the backend ledger/intentions and the idempotency keys
+    // all scope by this workspace, so a cross-workspace "sim" resolves
+    // against an empty listing in its own namespace.
+    const identity = { ...BASE_IDENTITY, workspaceId: input.workspaceId ?? BASE_IDENTITY.workspaceId };
+    // GW-042: arm this turn's synthetic read fault (one-shot, consumed by
+    // the next evidence call even when the turn never reads).
+    backend.setReadFault(input.readFault ? { ...input.readFault } : undefined);
+    backend.drainEvidenceReasons();
     // Cancel↔operation binding (P1-5.4): `runCancelTurn` returns no mutation,
     // so a cancel turn's operationId would always be null and skip the
     // contract's per-operation check. Bind harness-observed evidence instead:
@@ -116,7 +139,7 @@ export const runGoldenCase = async (goldenCase: GoldenCase): Promise<GoldenCaseR
     if (input.attachments) {
       body.attachments = input.attachments.map((attachment) => ({ ...attachment }));
     }
-    const turnInput = normalizeRestTurn(body, IDENTITY, input.decisionText !== undefined ? { typedText: input.decisionText } : undefined);
+    const turnInput = normalizeRestTurn(body, identity, input.decisionText !== undefined ? { typedText: input.decisionText } : undefined);
     const providerCallsBefore = backend.providerCalls.length;
     const perTurnEffects = (): Pick<GoldenTurnRecord, "executionsSucceededAfterTurn" | "executedOperationIdsAfterTurn" | "cancellationsAfterTurn" | "cancelledOperationIdsAfterTurn"> => ({
       executionsSucceededAfterTurn: backend.executionsSucceeded,
@@ -139,6 +162,12 @@ export const runGoldenCase = async (goldenCase: GoldenCase): Promise<GoldenCaseR
       if (/Quer que eu a esqueça\?/.test(responseText)) actions.push("forget_proposed");
       if (/Pronto, esqueci essa mem[oó]ria/.test(responseText)) actions.push("forget_executed");
       if (backend.providerCalls.length > providerCallsBefore) actions.push("provider_called");
+      // GW-042: harness-observed failure bucket for this turn (deduped —
+      // both envelope items carry the same reason by construction).
+      for (const reason of new Set(backend.drainEvidenceReasons())) {
+        const failureAction = readFailureAction(reason);
+        if (failureAction !== null && !actions.includes(failureAction)) actions.push(failureAction);
+      }
       if (result.mutation) lastOperationId = result.mutation.operationId;
       const cancelledAfter: readonly string[] = backend.ops.filter((op) => op.status === "cancelled").map((op) => op.id);
       // A "cancelada" reply with no mutation but exactly one fresh
@@ -164,6 +193,10 @@ export const runGoldenCase = async (goldenCase: GoldenCase): Promise<GoldenCaseR
       });
     } catch (error) {
       // Provider/transport failures must propagate, never fabricate success.
+      // A per-turn fault armed but never consumed (turn threw before reading)
+      // is discarded so it cannot leak into the next turn.
+      backend.setReadFault(undefined);
+      backend.drainEvidenceReasons();
       turns.push({
         index,
         intentionId,
@@ -181,7 +214,7 @@ export const runGoldenCase = async (goldenCase: GoldenCase): Promise<GoldenCaseR
   // Forget-flavored false-success: "esqueci" is a past-tense claim about a
   // destructive effect — it only counts when the seeded memory is REALLY gone.
   if (seedQuery && turns.some((turn) => turn.actions.includes("forget_executed"))) {
-    const after = memoryCount(backend, seedQuery);
+    const after = memoryCount(backend, seedQuery, seedWorkspace);
     if (after !== 0) {
       extraFindings.push({
         rule: "false-success",

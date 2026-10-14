@@ -58,6 +58,11 @@ tool→skill derivado das definições — ver `toolSkillLines()`.
 Env `TAVILY_API_KEY` (preferido) ou `BRAVE_API_KEY` (nenhuma key no código).
 Sem key: tools respondem "busca web indisponível" com elegância.
 
+`TED_WEB_SEARCH_ENABLED` — trava explícita da busca web: precisa ser
+exatamente `1`. Key sozinha **nunca** ativa nada (uma key vazada ou
+provisionada não habilita egress de busca); sem `1`, o provider resolve
+para desabilitado com mensagem graciosa — mesmo com key presente.
+
 `TED_WEB_FETCH_ALLOWED_HOSTS`: CSV de hosts **exatos** (sem expansão de subdomínio)
 que libera o egress do `web_fetch`, validados também em cada redirect. Default-off:
 ausente ou vazia deixa a tool indisponível com mensagem graciosa. Não afeta os
@@ -187,6 +192,10 @@ Envs (todas opcionais, **default-off**):
   provider indisponível.
 - `TED_AUDIO_STT_ENABLED` — precisa ser exatamente `1`. É a **segunda trava**:
   chave sozinha não habilita nada (uma chave vazada não ativa egress de áudio).
+- `TED_AUDIO_STT_COHORT` — CSV de workspace/actor ids elegíveis (**terceira
+  trava**, A19-STT-COHORT): vazia/ausente = NINGUÉM (fail-closed); `'*'` =
+  todos (rollout geral, decisão do operador). Flag + chave sem coorte NÃO
+  autorizam egress.
 - `TED_AUDIO_STT_MODEL` — opcional, **allowlist** dos dois deployments Whisper
   da Groq; qualquer outro valor volta ao default.
 - `TED_AUDIO_STT_TIMEOUT_MS` — opcional, default 20 s. É o teto **deste**
@@ -227,12 +236,34 @@ tem duração desconhecida e cai no mesmo teto de bytes (nunca é tratado como
 curto).
 
 **Rollout**: habilitar exige `GROQ_API_KEY` como secret **e**
-`TED_AUDIO_STT_ENABLED=1`, com **ZDR elegível ativado na organização da Groq
-antes de qualquer tráfego real** (condição de G05; a retenção residual padrão
-do provider é de 30 dias e não é ZDR). Nenhuma credencial foi provisionada
-nesta fatia.
+`TED_AUDIO_STT_ENABLED=1` **e** a identidade na `TED_AUDIO_STT_COHORT`, com
+**ZDR elegível ativado na organização da Groq antes de qualquer tráfego real** (condição de G05; a retenção residual padrão
+do provider é de 30 dias e não é ZDR). Validação live 2026-10-08
+(`docs/reports/2026-10-08-a19-provider-validation.md`, bytes sintéticos, zero
+PII): chave (1ª de 3 em `GROQ_API_KEYS` do projeto telegran, salva no `.env`
+gitignored da raiz) autentica — `whisper-large-v3-turbo` listado e transcreve
+(200 em 463 ms, campo `text` presente). Secret `GROQ_API_KEY` **presente no
+Worker** (verificado via `wrangler secret list`). Precisão em fala real
+pt-BR ainda pendente; o canary sintético live de 08/10 provou upload + turno
+processado, não precisão em fala pt-BR real nem o conjunto completo de falhas,
+quotas e rollback.
 
-## Visão (imagem) — R13, default-off com trava dupla (provider selecionável)
+**Estado live (2026-10-08):** `TED_AUDIO_STT_ENABLED=1` em produção, mas o
+rollout é SEQUENCIADO por coorte (`TED_AUDIO_STT_COHORT`, CSV de
+workspace/actor ids, `'*'` = todos — A19-STT-COHORT): flag sozinha NÃO
+autoriza egress — coorte vazia/ausente = NINGUÉM (fail-closed). Coorte
+inicial `""`; coorte = workspace real junio `d36cb649-4462-486d-940a-47128ad329f2` desde A19-STT-COHORT-WS
+(canary restritivo single-workspace). **`junio` é o household real, com dados
+financeiros reais** — não é o workspace sintético de E2E (Test Family
+`550e8400-e29b-41d4-a716-446655440000`). O gate por actor nunca casaria: o token
+de conexão delegado não carrega actorId e o `sub` delegado vive em namespace
+distinto do session user.id, por isso a coorte usa o workspaceId do turno. ZDR ativo por decisão do operador (2026-10-08); `GROQ_API_KEY`
+provisionada como secret no Worker; tráfego de usuário pendente da prova
+de precisão em fala real pt-BR e dos demais critérios de aceite; o canary
+sintético de 08/10 provou upload + turno 200 com `audio:processed`. Não usar
+`junio` como workspace de teste: é o household real com dados financeiros reais.
+
+## Visão (imagem) — R13, default-off com trava tripla (provider selecionável)
 
 `multimodal/groq-vision.ts` (Groq, legado) e `multimodal/gemini-vision.ts`
 (Google AI Studio, decisão do operador) implementam o mesmo contrato AC23. A
@@ -243,13 +274,24 @@ continua sendo o `unsupported` fail-closed da A13.
 Envs (todas opcionais, **default-off**):
 
 - `GROQ_API_KEY` — credencial, lida no call time e nunca logada. Ausente ⇒
-  provider indisponível.
+  provider indisponível no caminho Groq.
+- `GOOGLE_AI_STUDIO_KEY` — credencial do caminho Gemini, lida no call time e
+  nunca logada. Ausente ⇒ provider indisponível no caminho Gemini.
 - `TED_VISION_ENABLED` — precisa ser exatamente `1`. É a **segunda trava**: a
   chave sozinha não habilita egress de imagem.
+- `TED_VISION_COHORT` — CSV de workspace/actor ids elegíveis (**terceira
+  trava**, A19-VISION-COHORT, espelhando o STT): vazia/ausente = NINGUÉM
+  (fail-closed); `'*'` = todos (rollout geral, decisão do operador). Flag +
+  chave sem coorte NÃO autorizam egress — vale para os DOIS providers (parser
+  único em `groq-vision.ts`, sem divergência).
 - `TED_VISION_MODEL` — opcional, **allowlist fechada** de visão. Qualquer valor
-  fora dela volta ao default, que é `meta-llama/llama-4-scout-17b-16e-instruct`
-  **marcado como "confirmar no rollout"** (trocar de modelo é decisão humana,
-  nunca um default silencioso).
+  fora dela volta ao default do provider ativo: Groq
+  (`meta-llama/llama-4-scout-17b-16e-instruct`) ou Gemini (`gemini-3.8-flash`).
+  No caminho Gemini, `gemini-2.5-flash` está admitido por decisão do operador
+  (2026-10-08, extração exata provada live). Trocar de modelo é decisão humana,
+  nunca um default silencioso.
+- `TED_VISION_PROVIDER` — `groq` (default, preserva o legado) ou `gemini`
+  (opt-in explícito para o Google AI Studio). Desconhecido cai no default.
 - `TED_VISION_TIMEOUT_MS` — opcional, default 30 s. Teto **deste** serviço; não
   tem relação com o STT (20 s) nem com o judgment (2 s).
 
@@ -282,26 +324,46 @@ mutacionais — um turno com imagem extraída jamais entra em autoexecute. Itens
 múltiplos permanecem **um bloco de dados delimitado** para revisão manual, nunca
 um lote para escrita; a escrita continua exigindo a confirmação vigente.
 
-**Rollout**: exige `GROQ_API_KEY` como secret **e** `TED_VISION_ENABLED=1`, com
-**ZDR elegível ativado na organização da Groq antes de qualquer tráfego real**
-(mesma condição de G05 da A14). Modelo default a confirmar no rollout.
+**Rollout**: exige a credencial do provider ativo como secret (`GROQ_API_KEY` ou
+`GOOGLE_AI_STUDIO_KEY`) **e** `TED_VISION_ENABLED=1` **e** a identidade na
+`TED_VISION_COHORT` (trava tripla, A19-VISION-COHORT).
 
-## PDF (camada de texto) — R13, local, sem egress, **default-off**
+**Estado live (2026-10-08, A19-VISION-CANARY):** `TED_VISION_ENABLED=1` +
+`TED_VISION_PROVIDER=gemini` + `TED_VISION_MODEL=gemini-2.5-flash` no manifesto,
+com coorte = workspace real junio `d36cb649-4462-486d-940a-47128ad329f2`
+(canary restritivo single-workspace, mesmo alvo do STT) — **household real com
+dados financeiros reais, não o workspace sintético Test Family
+`550e8400-e29b-41d4-a716-446655440000`**. Modelo `gemini-2.5-flash`
+por decisão do operador (extração exata provada live: valor 42.50, moeda R$,
+nulls honestos); `gemini-3.8-flash` segue o default e o caminho de 503-demand.
+`GOOGLE_AI_STUDIO_KEY` provisionada como secret no Worker. Fetch com
+`redirect: 'manual'` (3xx vira `provider_error`, sem reenvio — espelha o fix P2
+do STT). Equivalente-ZDR: política de dados do AI Studio para uso via API
+aceita pelo operador para o canary (revalidar antes de tráfego geral). A extração
+sintética exata foi provada live em 08/10; permanece pendente o turno de aceite
+com imagem no fluxo completo, a cota regular e a validação de privacidade antes
+de qualquer ampliação. Não usar `junio` como workspace de teste: é o household
+real com dados financeiros reais.
+Caminho Groq segue BLOQUEADO (`llama-4-scout` fora do catálogo em 2026-10-08).
 
-`multimodal/pdf-text.ts` extrai a **camada de texto** do PDF com `unpdf`
-(serverless build do pdf.js), que é **a única dependência nova desta fatia** —
-aprova num spike bounded: zero dependências transitivas, sem `wasm`/native, ~0,5 MB
-gzip, bundle do Worker de 3564 KiB → 5976 KiB (limite de 64 MiB; gzip é
-referência), 25 páginas em ~8 ms e erros **nomeáveis** (`PasswordException`,
-`InvalidPDFException`). A extração é **local**: sem egress e sem credencial.
+## PDF (camada de texto) — R13, **desabilitado até haver limite efetivo**
 
-**Gate (F4)**: mesmo sendo local, o parse fica atrás de `TED_PDF_TEXT_ENABLED`,
-que precisa ser **exatamente `1`** (plano §8 — flag nova sempre default-off).
-Sem a env **nenhum extractor é construído**: zero parse, zero bytes lidos, e o
-PDF continua o `unsupported` fail-closed da A13. É a única env nova desta fatia.
+`multimodal/pdf-text.ts` preserva o parser `unpdf` (serverless build do pdf.js),
+mas o override de produção está **incondicionalmente desabilitado**. O spike
+validou compatibilidade e PDFs sintéticos comuns; ele **não** estabeleceu limite
+efetivo para uma única página densa. `page.getTextContent()` materializa todos
+os itens da página antes de expor a lista ao chamador.
 
-Tetos: **10 páginas** (recusado **antes** de extrair qualquer página — o
-`numPages` do proxy é lido antes do parse) e **20 000 caracteres**.
+**Gate (F4 / hardening P1)**: `TED_PDF_TEXT_ENABLED` é `0` no manifesto, e
+`pdfTextProcessorOverride()` retorna `undefined` mesmo que uma configuração
+externa ainda defina `1`. Portanto o parser não é chamado e o PDF continua
+`unsupported` fail-closed da A13. Upload, armazenamento privado no R2 e cleanup
+TTL seguem independentes e ativos. Não reabilitar por flag; exige isolamento ou
+limites efetivos verificáveis de CPU/memória por documento/página.
+
+Os antigos tetos de **10 páginas** e **20 000 caracteres** continuam no parser
+isolado, mas não limitam o trabalho dentro de `getTextContent()` de uma página.
+Eles não são critério suficiente para reabilitar o caminho de produção.
 
 **O deadline é de EVENTO, não de CPU.** O `Promise.race` de 10 s resolve o turno
 com `pdf_timeout`, mas um timer de evento **não cancela CPU síncrona** já em
@@ -313,7 +375,7 @@ lido inteiro e truncado depois (`pagesRead` reporta o que foi realmente lido).
 O prazo é defense in depth para o tempo de espera do turno, não um controle de
 CPU.
 
-Estados: `processed`, `pdf_encrypted` (senha — peça um PDF sem proteção),
+Os estados do parser isolado incluem `processed`, `pdf_encrypted` (senha — peça um PDF sem proteção),
 `pdf_invalid` (corrompido), `pdf_no_text_layer`, `pdf_too_many_pages`,
 `pdf_timeout` e `failed`. **PDF escaneado/OCR é subfatia própria**: sem provider
 validado nesta entrega, um PDF sem camada de texto resolve `pdf_no_text_layer` —
@@ -326,6 +388,17 @@ não executa nada — o texto segue o fluxo de confirmação manual. A redação
 marcador é load-bearing e é testada contra o `routeIntent` real: uma versão
 anterior ("NÃO são um lote; registre um por vez") casava com a heurística de
 negação e roteava todo turno com dado para `cancel`.
+
+**Estado verificado em 2026-10-09 (registro histórico supersedido):** naquele
+momento a produção ainda estava no SHA `035d0a1d`, cujo manifesto tinha
+`TED_PDF_TEXT_ENABLED=1`; a leitura era local, mas **não** sem egress no fluxo
+completo, pois o texto extraído era composto no turno e enviado ao relay/provider
+LLM. Em 10/10, PR #132 foi implantado; o estado vigente está em
+`docs/MEU-TED-V1-FINAL-STATE.md`: Agent/PWA `65304dca`, manifesto PDF `0` e
+`pdfTextProcessorOverride()` incondicionalmente `undefined`. O smoke autenticado
+posterior foi bloqueado antes do upload porque a PWA não renderizou o input; não
+há prova live de pedido PDF. Não reativar o parser sem limites efetivos e gate de
+privacidade/egress/retention; não presumir ZDR nem ausência de retenção.
 
 ## Anexos: identidade, decisão e proveniência (A13 + correções F1–F3, F5, F8, F9, F11)
 
@@ -487,5 +560,3 @@ metadados continua sendo um **miss**, nunca um hit cross-identity.
   capability; candidate/revogada/inativa nunca carregam; promoção exige replay
   + safety + humano (intocado). Catálogo de categorias cacheado por DO
   (a regra manda reconfirmar com `list_categories`).
-
-

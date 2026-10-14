@@ -6,7 +6,7 @@
  * `memoryContext` into the prompt — nothing here reads or writes memory.
  */
 
-export { INSTRUCTIONS_VERSION, TED_IDENTITY, TED_GOLDEN_RULE, TED_MUTATION_POLICY, TED_BOUNDARIES, TED_RESPONSE_DISCIPLINE, buildSystemPrompt, TED_SYSTEM_PROMPT_LEGACY } from './instructions.js';
+export { INSTRUCTIONS_VERSION, TED_IDENTITY, TED_GOLDEN_RULE, TED_ATTACHMENT_DATA_PRECEDENCE, TED_MUTATION_POLICY, TED_BOUNDARIES, TED_RESPONSE_DISCIPLINE, buildSystemPrompt, TED_SYSTEM_PROMPT_LEGACY } from './instructions.js';
 export type { SystemPromptInput } from './instructions.js';
 export { ALL_SKILLS, skillByName, skillCatalogLines } from './skills/index.js';
 export type { Skill } from './skills/index.js';
@@ -132,6 +132,7 @@ export type { ToolExecutionContext, ExposedTool } from './tools.js';
 export {
   WEB_UNAVAILABLE_MESSAGE,
   WEB_FETCH_ALLOWED_HOSTS_ENV,
+  WEB_SEARCH_ENABLED_ENV,
   WEB_FETCH_TIMEOUT_MS,
   WEB_FETCH_MAX_CHARS,
   WEB_FETCH_MAX_BYTES,
@@ -249,7 +250,7 @@ export const assembleCognition = (
     playbookBody: PLAYBOOK_BODY,
     toolCatalog: toolSkillLines(toolNames),
     webStatusLine: !webAvailable
-      ? 'indisponível (sem chave configurada) — responda com os dados do workspace.'
+      ? 'indisponível (desativada neste ambiente) — responda com os dados do workspace.'
       : fetchHosts > 0
         ? 'busca disponível; leitura de páginas apenas nos domínios autorizados.'
         : 'busca disponível; leitura de páginas indisponível (nenhum domínio autorizado) — só use web_search.',

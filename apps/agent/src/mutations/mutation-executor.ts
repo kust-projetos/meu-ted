@@ -1,7 +1,7 @@
 import { requestPiApiJson } from '../tools/api-client.js';
 import { emitSanitizedEvent } from '../observability/events.js';
 import { mutationReceiptSchema, type MutationReceipt } from '@pi-finance/llm-contracts';
-export type MutationExecution = { operationId: string; attestation: string; identity: { workspaceId: string; actorId: string; deviceId: string } };
+export type MutationExecution = { operationId: string; attestation: string; identity: { workspaceId: string; actorId: string; deviceId: string }; /** Review round 4 P1-B: propagated to confirm/execute for the API-side intentionId→operationId binding. */ intentionId?: string };
 export type ApprovalDecision = 'confirm' | 'cancel' | 'retry';
 export type ApprovalDecisionInput = {
   operationId: string;
@@ -82,9 +82,9 @@ export class MutationExecutor {
     this.emit('mutation.blocked', { status: 'blocked', error: 'approval.operation_id_mismatch' });
     throw new Error('approval.operation_id_mismatch');
   }
-  async confirm(operationId: string, identity: MutationExecution['identity'], delegatedToken?: string): Promise<{ operationId: string; attestation: string }> {
+  async confirm(operationId: string, identity: MutationExecution['identity'], delegatedToken?: string, intentionId?: string): Promise<{ operationId: string; attestation: string }> {
     const request = this.deps.request ?? requestPiApiJson;
-    const result = await request<{ id?: unknown; attestation?: unknown }>('POST', `/pending-operations/v2/${encodeURIComponent(operationId)}/confirm`, { delegatedToken, headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId } });
+    const result = await request<{ id?: unknown; attestation?: unknown }>('POST', `/pending-operations/v2/${encodeURIComponent(operationId)}/confirm`, { delegatedToken, ...(intentionId !== undefined ? { body: { intentionId } } : {}), headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId } });
     this.assertOperationId(result.id, operationId);
     if (typeof result.attestation !== 'string' || result.attestation.length < 32) throw new Error('approval.missing_attestation');
     return { operationId, attestation: result.attestation };
@@ -108,7 +108,7 @@ export class MutationExecutor {
     // validated below — a partial `{id,status}` without a linked
     // execution/receipt fails closed with `approval.incomplete_result`
     // and never returns success. No IDs are synthesized.
-    const result = await request<{ id?: unknown; status?: unknown; execution?: unknown }>('POST', `/pending-operations/v2/${encodeURIComponent(input.operationId)}/execute`, { delegatedToken, body: { attestation: input.attestation }, headers: { 'x-workspace-id': input.identity.workspaceId, 'x-actor-id': input.identity.actorId, 'x-device-id': input.identity.deviceId } });
+    const result = await request<{ id?: unknown; status?: unknown; execution?: unknown }>('POST', `/pending-operations/v2/${encodeURIComponent(input.operationId)}/execute`, { delegatedToken, body: { attestation: input.attestation, ...(input.intentionId !== undefined ? { intentionId: input.intentionId } : {}) }, headers: { 'x-workspace-id': input.identity.workspaceId, 'x-actor-id': input.identity.actorId, 'x-device-id': input.identity.deviceId } });
     const failClosed = (): never => {
       this.emit('mutation.blocked', { status: 'blocked', error: 'approval.incomplete_result' });
       throw new Error('approval.incomplete_result');

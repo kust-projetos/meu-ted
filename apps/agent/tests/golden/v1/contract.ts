@@ -199,6 +199,31 @@ export const evaluateContract = (
     }
   }
 
+  // GW-042 (read-failure matrix): per-turn oracle. Entry `i` governs
+  // `turns[i]`: every expected action must be recorded by THAT turn (a
+  // missing `fail_closed` on an intermediate turn fails here, even when the
+  // aggregate union still holds) and no forbidden action may appear (a
+  // swapped 401<->429 bucket fails its own turn, even when the union of both
+  // buckets is present across turns).
+  const turnExpects = goldenCase.expectations.turns ?? [];
+  turnExpects.forEach((turnExpect, turnIndex) => {
+    const turn = turns[turnIndex];
+    if (!turn) {
+      findings.push({ rule: "turn-action", severity: "failure", detail: `turn ${turnIndex}: expected turn missing (budget or runner produced fewer turns)` });
+      return;
+    }
+    for (const expected of turnExpect.expectedActions ?? []) {
+      if (!turn.actions.includes(expected)) {
+        findings.push({ rule: "turn-action", severity: "failure", detail: `turn ${turn.index}: expected action "${expected}" never recorded (actions=${JSON.stringify(turn.actions)})` });
+      }
+    }
+    for (const forbidden of turnExpect.forbiddenActions ?? []) {
+      if (turn.actions.includes(forbidden)) {
+        findings.push({ rule: "turn-action", severity: "failure", detail: `turn ${turn.index}: forbidden action "${forbidden}" was recorded (actions=${JSON.stringify(turn.actions)})` });
+      }
+    }
+  });
+
   const expectedBackend = goldenCase.expectations.backend;
   if (expectedBackend.proposalsCreated !== undefined && backend.proposalsCreated !== expectedBackend.proposalsCreated) {
     findings.push({
@@ -230,6 +255,15 @@ export const evaluateContract = (
 
   const responseExpect = goldenCase.expectations.response;
   const lastText = turns.length > 0 ? (turns[turns.length - 1]?.responseText ?? "") : "";  for (const source of responseExpect.mustMatch ?? []) {
+    if (responseExpect.matchAllTurns === true) {
+      // GW-042: every turn must carry the fail-closed copy — an intermediate
+      // positive reply fails here even when the last turn is clean.
+      const missing = turns.find((turn) => !new RegExp(source, "iu").test(turn.responseText));
+      if (missing) {
+        findings.push({ rule: "acceptable-response", severity: "failure", detail: `turn ${missing.index} response matches none of /${source}/ (matchAllTurns)` });
+      }
+      continue;
+    }
     if (!new RegExp(source, "iu").test(lastText)) {
       findings.push({ rule: "acceptable-response", severity: "failure", detail: `last response matches none of /${source}/` });
     }

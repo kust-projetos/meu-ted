@@ -25,7 +25,8 @@
     "enabled": true
   },
   "vars": {
-    "NEXT_PRIVATE_MINIMAL_MODE": "1",
-    "NEXT_PUBLIC_TED_MICROPHONE": "true"
+    "NEXT_PRIVATE_MINIMAL_MODE": "1"
+    // V1-textual: nenhum NEXT_PUBLIC_TED_* aqui — capabilities default-off
+    // (ausente = desligado). Re-adicionar só com pipeline de ingestão + gate.
   }
 }

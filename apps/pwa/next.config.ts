@@ -22,6 +22,11 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL: process.env.NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL ?? "",
     NEXT_PUBLIC_TED_MICROPHONE: process.env.NEXT_PUBLIC_TED_MICROPHONE ?? "",
     NEXT_PUBLIC_TED_ATTACHMENT_INGESTION: process.env.NEXT_PUBLIC_TED_ATTACHMENT_INGESTION ?? "",
+    // V1-textual: per-type attachment flags explicitamente inlinadas como ""
+    // (desligado) por default — mesma garantia do hotfix acima.
+    NEXT_PUBLIC_TED_ATTACHMENT_IMAGE: process.env.NEXT_PUBLIC_TED_ATTACHMENT_IMAGE ?? "",
+    NEXT_PUBLIC_TED_ATTACHMENT_PDF: process.env.NEXT_PUBLIC_TED_ATTACHMENT_PDF ?? "",
+    NEXT_PUBLIC_TED_ATTACHMENT_AUDIO: process.env.NEXT_PUBLIC_TED_ATTACHMENT_AUDIO ?? "",
     NEXT_PUBLIC_MAX_OFFLINE_AUTH_AGE_HOURS: process.env.NEXT_PUBLIC_MAX_OFFLINE_AUTH_AGE_HOURS ?? "",
     NEXT_PUBLIC_DISABLE_OFFLINE_SNAPSHOT: process.env.NEXT_PUBLIC_DISABLE_OFFLINE_SNAPSHOT ?? "",
     // Semantics-preserving: undefined AND "" both resolve to compat ON

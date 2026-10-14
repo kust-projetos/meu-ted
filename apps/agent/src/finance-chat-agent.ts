@@ -95,6 +95,10 @@ import {
   queryAttachmentObservabilityBaseline,
   resolveAttachmentCohort,
 } from "./attachments/observability.js";
+// A19 runtime wiring (#107): composer do inventário de capabilities para o
+// GET read-only existente — só leitura (env + SELECT de frescor no sink),
+// nunca escrita/ativação.
+import { buildRuntimeCapabilityInventory } from "./attachments/runtime-capability-inventory.js";
 
 /**
  * A19 — DO-storage-backed checkpoint for the piggybacked attachment TTL sweep.
@@ -157,12 +161,13 @@ import {
   type AttachmentIdentity,
   type AttachmentKind,
 } from "./attachments/types.js";
-// A14/R12: STT de áudio via Groq (G05) — default-off com trava dupla. Sem as
-// duas envs, `audioSttProcessorOverride` devolve `undefined` e o áudio segue no
+// A14/R12: STT de áudio via Groq (G05) — default-off com trava tripla. Sem as
+// três envs (flag + key + coorte com a identidade do turno),
+// `audioSttProcessorOverride` devolve `undefined` e o áudio segue no
 // `unsupported` fail-closed da A13, sem qualquer chamada de rede.
 import { AUDIO_TRANSCRIPT_NOTICE, audioSttProcessorOverride, composeTurnTextWithTranscript } from "./multimodal/groq-stt.js";
 // A15/R13: visão de imagem via Groq (G05, mesmo vendor do STT — nenhum vendor
-// novo) — default-off com trava dupla. Sem as duas envs, `imageVisionProcessorOverride`
+// novo) — default-off com trava tripla (A19-VISION-COHORT). Sem as três travas, `imageVisionProcessorOverride`
 // devolve `undefined` e a imagem segue no `unsupported` fail-closed da A13.
 import { VISION_EXTRACT_NOTICE, imageVisionProcessorOverride } from "./multimodal/groq-vision.js";
 import { imageGeminiVisionProcessorOverride, resolveVisionProviderKind } from "./multimodal/gemini-vision.js";
@@ -207,6 +212,12 @@ export type Env = {
   /** A11: CSV of exact hostnames `web_fetch` may read (default-off). */
   TED_WEB_FETCH_ALLOWED_HOSTS?: string;
   /**
+   * WEB-GATE-02 (pós-V1 fail-closed): explicit opt-in for `web_search`.
+   * Must be exactly `'1'` (strict, no trim); a provider key alone never
+   * enables search. Unset/blank/any-other ⇒ `disabled`.
+   */
+  TED_WEB_SEARCH_ENABLED?: string;
+  /**
    * A13/G05: OPTIONAL private R2 binding for attachment bytes. Absent ⇒ the
    * ingestion pipeline is UNAVAILABLE (fail-closed) and the upload RPC answers
    * `attachment_storage_unavailable`. Declared as the adapter's minimal bucket
@@ -229,28 +240,32 @@ export type Env = {
   TED_ATTACHMENTS_ENABLED?: string;
   TED_ATTACHMENTS_COHORT?: string;
   /**
-   * A14/R12: STT de áudio via Groq (G05) — default-off com TRAVA DUPLA.
-   * `GROQ_API_KEY` é a credencial (lida no call time, nunca logada) e
-   * `TED_AUDIO_STT_ENABLED=1` é o opt-in do rollout: sem as duas, a
+   * A14/R12: STT de áudio via Groq (G05) — default-off com TRAVA TRIPLA.
+   * `GROQ_API_KEY` é a credencial (lida no call time, nunca logada),
+   * `TED_AUDIO_STT_ENABLED=1` é o opt-in do rollout e `TED_AUDIO_STT_COHORT`
+   * (CSV de workspace/actor ids, `'*'` = todos; vazia/ausente = ninguém —
+   * A19-STT-COHORT) é o sequenciamento: sem os três, a
    * capacidade permanece `unsupported` e nada muda. `TED_AUDIO_STT_MODEL`
    * (allowlist Groq Whisper) e `TED_AUDIO_STT_TIMEOUT_MS` (default 20 s) são
    * opcionais; não há fallback automático de modelo.
    */
   GROQ_API_KEY?: string;
   TED_AUDIO_STT_ENABLED?: string;
+  TED_AUDIO_STT_COHORT?: string;
   TED_AUDIO_STT_MODEL?: string;
   TED_AUDIO_STT_TIMEOUT_MS?: string;
   /**
    * A15/R13: visão de imagem — Groq legado por default, Gemini (Google AI
    * Studio, decisão do operador) via `TED_VISION_PROVIDER=gemini` — default-off
-   * com TRAVA DUPLA. Credencial do provider ativo (`GROQ_API_KEY` ou
+   * com TRAVA TRIPLA (A19-VISION-COHORT). Credencial do provider ativo (`GROQ_API_KEY` ou
    * `GOOGLE_AI_STUDIO_KEY`, lida no call time, nunca logada) +
-   * `TED_VISION_ENABLED=1`: sem as duas, a imagem permanece `unsupported` e
+   * `TED_VISION_ENABLED=1` + coorte `TED_VISION_COHORT`: sem as três travas, a imagem permanece `unsupported` e
    * nada muda. `TED_VISION_MODEL` (allowlist fechada do provider ativo) e
    * `TED_VISION_TIMEOUT_MS` (default 30 s) são opcionais; não há fallback
    * automático de modelo nem de provider.
    */
   TED_VISION_ENABLED?: string;
+  TED_VISION_COHORT?: string;
   TED_VISION_MODEL?: string;
   TED_VISION_TIMEOUT_MS?: string;
   TED_VISION_PROVIDER?: string;
@@ -298,6 +313,16 @@ const ATTACHMENT_DATA_NOTICE: Record<AttachmentKind, string> = {
   image: VISION_EXTRACT_NOTICE,
   pdf: PDF_TEXT_NOTICE,
 };
+
+/**
+ * A19-READ-BYPASS: true ONLY when the turn carries accepted NON-EMPTY
+ * extraction. `unsupported`/`skipped_budget`/refused/unavailable items
+ * produce states but no `datas` entry, and an empty transcript composes to
+ * nothing — all of those read `false`, exactly like a turn with no
+ * attachment at all.
+ */
+export const hasAcceptedAttachmentData = (datas: ReadonlyArray<{ kind?: string; text: string }>): boolean =>
+  datas.some((item) => typeof item.text === "string" && item.text.trim() !== "");
 
 /**
  * A13: headers carrying the upload intent. `kind` and `name` are DECLARED
@@ -1646,6 +1671,77 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     return redactTranscript(text);
   }
 
+  /**
+   * ATTACHMENT-CONTENT-QUERY tool-free inference (REVIEW-P1): answers the
+   * typed question about server-side admitted attachment data with a SINGLE
+   * model call and ZERO tools. The common provider (`provideUnifiedResponse`)
+   * cannot serve this turn on the SDK path: it builds the exposed tools
+   * (core reads + recall) and runs `streamText` with `stopWhen:
+   * stepCountIs(5)`, so the query could execute tools before the grounding
+   * step ever validated the reply.
+   *
+   * - `pwa-rest` and Codex-broker transports are single-inference with no
+   *   tools by construction — they reuse the unified path;
+   * - every other channel runs `generateText` with NO `tools` key and no
+   *   multi-step loop: with no tools wired, no proposal/recall/read can run
+   *   before grounding, so there is nothing to revert on failure (the
+   *   `revertUnpublishedTurnProposals` calls of the tool-carrying path are
+   *   deliberately absent here). Authority (snapshot + `authorizeTurn`),
+   *   cognition (same system prompt) and output contract (non-empty,
+   *   `redactTranscript`, typed 502/503 failures) mirror the unified path.
+   */
+  private async provideContentQueryResponse(input: TurnInput, _plan: TurnPlan): Promise<string> {
+    const snapshot = await this.resolveIntentionSnapshot(input.intentionId);
+    if (!snapshot) throw Object.assign(new Error('agent.provider_not_configured'), { code: 'agent.provider_not_configured', status: 503 });
+    const activeSnapshot = await this.authorizeTurn(snapshot, {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      intentionId: input.intentionId,
+    });
+    const userSkills = await this.loadUserSkills({
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      intentionId: input.intentionId,
+    });
+    const cognition = assembleCognition(input.text, {
+      webEnv: (this.env ?? {}) as Record<string, string | undefined>,
+      ...(userSkills.length > 0 ? { userSkills } : {}),
+    });
+    const target = {
+      providerId: activeSnapshot.provider_id,
+      modelName: resolveBareModelName(activeSnapshot.provider_id, activeSnapshot.model_id, activeSnapshot.model_name),
+    };
+    if (!target.modelName) throw Object.assign(new Error('agent.provider_not_configured'), { code: 'agent.provider_not_configured', status: 503 });
+    if (input.channel === 'pwa-rest' || isCodexProviderId(target.providerId)) {
+      return this.provideUnifiedResponse(input, _plan);
+    }
+    const modelInstance = createLanguageModel(
+      target.providerId,
+      target.modelName,
+      activeSnapshot.protocol as Protocol,
+      (this.env ?? {}) as Record<string, string | undefined>,
+    );
+    let text: string;
+    try {
+      const generated = await generateText({
+        model: modelInstance.model,
+        system: cognition.system,
+        prompt: input.text,
+        maxOutputTokens: DEFAULT_POLICY.maxOutputTokens,
+      });
+      text = generated.text;
+    } catch {
+      throw Object.assign(new Error('No output generated by provider.'), {
+        code: 'agent.inference_error',
+        status: 502,
+      });
+    }
+    if (!text) {
+      throw Object.assign(new Error('agent.invalid_provider_output'), { code: 'agent.invalid_provider_output', status: 502 });
+    }
+    return redactTranscript(text);
+  }
+
   private orchestratorForChannel(dependencies: {
     mutationApiClient?: MutationApiClient;
     autoExecutionClient?: () => MutationApiClient | undefined;
@@ -1682,6 +1778,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     return new ConversationOrchestrator({
       ...dependencies,
       responseProvider: (input, plan) => this.provideUnifiedResponse(input, plan),
+      // REVIEW-P1: generative content queries infer through the tool-free
+      // path (single inference, zero tools) — never the tool-carrying SDK
+      // `streamText` loop behind the common provider.
+      contentQueryProvider: (input, plan) => this.provideContentQueryResponse(input, plan),
       evidenceProvider: dependencies.evidenceProvider ?? grounding.evidenceProvider,
       correctionProvider: dependencies.correctionProvider ?? grounding.correctionProvider,
       // Issue #86: every channel reaches the optional decision layer through THIS
@@ -2254,6 +2354,15 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    *
    * REV-F1-PRB-SINK [P2-c]: sink ilegível ⇒ 503 tipado (nunca 200 com baseline
    * vazia "saudável"). A escrita do sink continua best-effort.
+   *
+   * A19 runtime wiring (#107): a resposta GANHA o campo `capabilities` — o
+   * inventário de quatro entradas fechadas derivado dos gates REAIS deste
+   * build (`runtime-capability-inventory.ts`). Nenhum endpoint novo, nenhuma
+   * escrita: o GET continua autenticado, escopado por (workspace, actor) e
+   * read-only; o inventário só lê env + o sink atual (SELECT de frescor),
+   * e presença de secret/binding NUNCA promove provider/canary acima de
+   * `unknown` (que nunca deriva ACTIVE). O contrato anterior
+   * (`workspaceId`/`cohort`/`baseline`) fica intacto.
    */
   private async handleAttachmentObservability(request: Request): Promise<Response> {
     const actorId = request.headers.get("x-agent-actor")?.trim();
@@ -2283,10 +2392,20 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         { status: 503 },
       );
     }
+    // A19 runtime wiring: composed AFTER the degraded check so a broken sink
+    // still fails at the baseline read — the inventory read would simply see
+    // "no fresh scoped success" and keep provider/canary `unknown`.
+    const capabilities = buildRuntimeCapabilityInventory({
+      env: this.env,
+      workspaceId,
+      actorId,
+      canarySql: sql,
+    });
     return Response.json({
       workspaceId,
       cohort: resolveAttachmentCohort(this.env, workspaceId, actorId),
       baseline,
+      capabilities,
     });
   }
 
@@ -2323,19 +2442,21 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     // comportamento atual é preservado byte a byte.
     const attachmentDeleteAllowed = isAttachmentUploadAllowed(this.env, identity.workspaceId, identity.actorId);
     // A14: the audio processor replaces the `unsupported` entry ONLY when the
-    // STT double lock is on (`GROQ_API_KEY` + `TED_AUDIO_STT_ENABLED`). The
+    // STT triple lock is on (`GROQ_API_KEY` + `TED_AUDIO_STT_ENABLED` + the
+    // turn identity in `TED_AUDIO_STT_COHORT` — A19-STT-COHORT: flag alone
+    // never enables egress). The
     // registry — and the per-turn transcription budget carried by the processor
     // — is built HERE, once per turn: no state leaks across turns/workspaces.
-    // A15: same contract for the image (vision, double lock) and for the PDF
+    // A15: same contract for the image (vision, triple lock A19-VISION-COHORT) and for the PDF
     // (local text-layer parse — no egress, no credential, so no double lock).
     // With every lock off, the registry is byte-for-byte the A13 one.
-    const audioProcessor = audioSttProcessorOverride(this.env);
+    const audioProcessor = audioSttProcessorOverride(this.env, identity);
     // Visão: Groq legado por default; Gemini (decisão do operador) via
     // TED_VISION_PROVIDER=gemini (setado no rollout, nunca aqui).
     const imageProcessor =
       resolveVisionProviderKind(this.env) === "gemini"
-        ? imageGeminiVisionProcessorOverride(this.env)
-        : imageVisionProcessorOverride(this.env);
+        ? imageGeminiVisionProcessorOverride(this.env, identity)
+        : imageVisionProcessorOverride(this.env, identity);
     // F4: the PDF text-layer parse is behind `TED_PDF_TEXT_ENABLED=1`
     // (default-off). Without it NO extractor is built and the PDF stays the
     // A13 `unsupported` entry — zero parse, zero bytes read.
@@ -3142,11 +3263,24 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // as a server-side option and never read from the body, so attachment-
         // derived data (a PDF saying "sim confirmo", an STT transcript) can
         // never reach the confirmation/cancel/retry/undo routing.
-        { typedText: unredactedText },
+        // A19-READ-BYPASS: the attachment-data flag is computed from the
+        // ACCEPTED extractions only (same non-empty filter as the composer
+        // above) and passed server-side — never from the body.
+        // A19-GROUND-EVIDENCE: the accepted extraction texts travel
+        // server-side as admitted grounding support for READ narration
+        // (attachment-extracted ONLY — never typed text, never client
+        // input; empties are dropped by `normalize`, not trusted here).
+        { typedText: unredactedText, hasAttachmentData: hasAcceptedAttachmentData(attachmentData), attachmentTexts: attachmentData.map((item) => item.text) },
       );
       if (typeof this.persistMessages !== 'function') {
         return Response.json({ code: 'agent.persistence_unavailable', message: 'SDK persistence is not available' }, { status: 503 });
       }
+      // R6 (PR137-FIX): the orchestrator instance is held so a failure
+      // AFTER `runTurn` returns but BEFORE the response is sent can
+      // compensate the witnesses this turn wrote but never exhibited (see
+      // the catch below). Pre-`runTurn` failures leave an empty ledger, so
+      // the compensation there is a precise no-op.
+      let turnOrchestrator: ConversationOrchestrator | undefined;
       try {
         const mutationPlan = this.mutationProposalPlan(restInput);
         // SPEC §7.8: a bare continuation answer ("Nubank") carries no
@@ -3172,7 +3306,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           || isRetryText(decisionText);
         const mutationApiClient = await this.mutationApiClientForTurn(restInput, needsMutation);
         const entityReader = needsMutation ? await this.entityReaderForTurn(restInput) : undefined;
-        const turnResult = await this.orchestratorForChannel({
+        turnOrchestrator = this.orchestratorForChannel({
           ...(mutationPlan ? { plan: () => mutationPlan } : {}),
           ...(mutationApiClient ? { mutationApiClient } : {}),
           // AC22 (A14) / A19 (F1): a turn carrying an attachment NEVER gets an
@@ -3195,7 +3329,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             : {}),
           ...(entityReader ? { entityReader } : {}),
           ...(draftStore ? { draftStore } : {}),
-        }).runTurn(restInput);
+        });
+        const turnResult = await turnOrchestrator.runTurn(restInput);
         if (turnResult.response) {
           // A17 (post-merge closure, issue #91) — learning is conditioned on
           // the turn's DEFINITIVE evidence, and it must run only AFTER that
@@ -3340,6 +3475,16 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           });
         }
       } catch (error) {
+        // R6 (PR137-FIX): the turn failed AFTER `runTurn` may have written
+        // presentation witnesses but BEFORE any response was sent — those
+        // cards were never exhibited, so they must not authorize a later
+        // confirmation. Ledger-precise best-effort (a no-op when the failure
+        // predates `runTurn` or wrote nothing); never masks the error below.
+        try {
+          turnOrchestrator?.revertUnpublishedTurnPresentations?.();
+        } catch {
+          // Compensation never breaks the error mapping below.
+        }
         const status = (error as { status?: unknown }).status;
         const code = (error as { code?: unknown }).code;
         if (typeof status === 'number' && status >= 400 && status < 600) {

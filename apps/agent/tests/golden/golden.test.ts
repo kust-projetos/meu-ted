@@ -44,10 +44,13 @@ const loadCases = (): GoldenCase[] => {
 describe("F4 golden — catalog is versioned, well-formed data", () => {
   it("every case file validates against the v1 schema with unique ids", () => {
     const cases = loadCases();
-    expect(cases.length).toBe(29);
+    // GW-029–GW-032 are reserved for the authoritative PostgreSQL suite
+    // (apps/api/tests/integration/golden-agent-real-api.test.ts) to keep
+    // golden ids unique across suites.
+    expect(cases.length).toBe(39);
     const executable = cases.filter((entry) => entry.status === "executable");
     const pending = cases.filter((entry) => entry.status === "pending-capability");
-    expect(executable.length).toBe(23);
+    expect(executable.length).toBe(33);
     expect(pending.length).toBe(6);
     for (const entry of pending) {
       expect(entry.pendingReason?.capability, entry.id).toMatch(/\S/);
@@ -594,6 +597,107 @@ describe("F4 golden — cancel/execution claims validated independently (P1-5.3/
     expect(detectSuccessClaim(DRAFTS_DISCARDED_NO_OP_TEXT)).toEqual([]);
     expect(DRAFTS_DISCARDED_NO_OP_TEXT).not.toMatch(/cancelad/i);
     expect(DRAFTS_DISCARDED_NO_OP_TEXT).not.toBe(NO_PENDING_CANCEL_TEXT);
+  });
+});
+
+describe("F4 golden — GW-042 read-failure matrix is per-turn exact (no aggregate false-green)", () => {
+  const FAIL_CLOSED = "Não consegui acessar seus dados financeiros agora. Tente novamente em instantes.";
+  const matrixCase = {
+    version: "1",
+    id: "GW-042-NEG",
+    title: "GW-042 negative control",
+    workflow: "read-failure-matrix",
+    status: "executable",
+    initialState: {},
+    inputs: [{ text: "x" }, { text: "y" }, { text: "z" }, { text: "w" }, { text: "v" }],
+    expectations: {
+      expectedActions: ["fail_closed", "read_failed_retryable", "read_failed_forbidden"] as const,
+      forbiddenActions: [] as const,
+      turns: [
+        { expectedActions: ["fail_closed", "read_failed_retryable"] as const, forbiddenActions: ["read_failed_forbidden"] as const },
+        { expectedActions: ["fail_closed", "read_failed_retryable"] as const, forbiddenActions: ["read_failed_forbidden"] as const },
+        { expectedActions: ["fail_closed", "read_failed_retryable"] as const, forbiddenActions: ["read_failed_forbidden"] as const },
+        { expectedActions: ["fail_closed", "read_failed_forbidden"] as const, forbiddenActions: ["read_failed_retryable"] as const },
+        { expectedActions: ["fail_closed", "read_failed_forbidden"] as const, forbiddenActions: ["read_failed_retryable"] as const },
+      ],
+      backend: {},
+      response: { mustMatch: ["Não consegui acessar seus dados financeiros agora"], matchAllTurns: true },
+      budget: { maxTurns: 5 },
+    },
+  } as const;
+  const turn = (index: number, actions: readonly ("fail_closed" | "read_failed_retryable" | "read_failed_forbidden")[], responseText: string = FAIL_CLOSED) => ({
+    index,
+    intentionId: `matrix-neg-${index}`,
+    mode: "read",
+    actions,
+    responseText,
+    operationId: null,
+    latencyMs: 1,
+    planSkills: [] as readonly string[],
+  });
+
+  it("a swapped classification (401 recorded as retryable) fails its own turn", () => {
+    const verdict = evaluateContract(
+      { ...matrixCase },
+      [
+        turn(0, ["fail_closed", "read_failed_retryable"]),
+        turn(1, ["fail_closed", "read_failed_retryable"]),
+        turn(2, ["fail_closed", "read_failed_retryable"]),
+        turn(3, ["fail_closed", "read_failed_retryable"]),
+        turn(4, ["fail_closed", "read_failed_forbidden"]),
+      ],
+      { proposalsCreated: 0, executionsSucceeded: 0, ledgerEntries: 0, operationIds: [] },
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.findings.filter((finding) => finding.rule === "turn-action").length).toBeGreaterThan(0);
+  });
+
+  it("a missing fail_closed on an intermediate turn fails even when the aggregate union holds", () => {
+    const verdict = evaluateContract(
+      { ...matrixCase },
+      [
+        turn(0, ["fail_closed", "read_failed_retryable"]),
+        turn(1, ["read_failed_retryable"]),
+        turn(2, ["fail_closed", "read_failed_retryable"]),
+        turn(3, ["fail_closed", "read_failed_forbidden"]),
+        turn(4, ["fail_closed", "read_failed_forbidden"]),
+      ],
+      { proposalsCreated: 0, executionsSucceeded: 0, ledgerEntries: 0, operationIds: [] },
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.findings.some((finding) => finding.rule === "turn-action" && finding.detail.includes('"fail_closed"'))).toBe(true);
+  });
+
+  it("an intermediate positive reply fails matchAllTurns even when the last turn is clean", () => {
+    const verdict = evaluateContract(
+      { ...matrixCase },
+      [
+        turn(0, ["fail_closed", "read_failed_retryable"]),
+        turn(1, ["fail_closed", "read_failed_retryable"], "Seu saldo é R$ 100."),
+        turn(2, ["fail_closed", "read_failed_retryable"]),
+        turn(3, ["fail_closed", "read_failed_forbidden"]),
+        turn(4, ["fail_closed", "read_failed_forbidden"]),
+      ],
+      { proposalsCreated: 0, executionsSucceeded: 0, ledgerEntries: 0, operationIds: [] },
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.findings.some((finding) => finding.rule === "acceptable-response" && finding.detail.includes("matchAllTurns"))).toBe(true);
+  });
+
+  it("the exact per-turn matrix passes", () => {
+    const verdict = evaluateContract(
+      { ...matrixCase },
+      [
+        turn(0, ["fail_closed", "read_failed_retryable"]),
+        turn(1, ["fail_closed", "read_failed_retryable"]),
+        turn(2, ["fail_closed", "read_failed_retryable"]),
+        turn(3, ["fail_closed", "read_failed_forbidden"]),
+        turn(4, ["fail_closed", "read_failed_forbidden"]),
+      ],
+      { proposalsCreated: 0, executionsSucceeded: 0, ledgerEntries: 0, operationIds: [] },
+    );
+    expect(verdict.findings).toEqual([]);
+    expect(verdict.passed).toBe(true);
   });
 });
 

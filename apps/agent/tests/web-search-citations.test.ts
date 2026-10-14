@@ -42,7 +42,7 @@ describe('published_date do Tavily chega ao item de resultado (A12 follow-up)', 
     const fetchImpl = tavilyFetch([
       { title: 'Selic 15%', url: 'https://exemplo.test/selic', content: 'anúncio', published_date: '2026-10-01T09:00:00Z' },
     ]);
-    const provider = createWebSearchProvider({ TAVILY_API_KEY: 'tv-test' }, fetchImpl as unknown as typeof fetch);
+    const provider = createWebSearchProvider({ TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1' }, fetchImpl as unknown as typeof fetch);
     const result = await provider.search('selic hoje');
     expect(result.results[0]).toMatchObject({
       title: 'Selic 15%',
@@ -56,7 +56,7 @@ describe('published_date do Tavily chega ao item de resultado (A12 follow-up)', 
       { title: 'Sem data', url: 'https://exemplo.test/a', content: 'x' },
       { title: 'Data numérica', url: 'https://exemplo.test/b', content: 'y', published_date: 20261001 },
     ]);
-    const provider = createWebSearchProvider({ TAVILY_API_KEY: 'tv-test' }, fetchImpl as unknown as typeof fetch);
+    const provider = createWebSearchProvider({ TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1' }, fetchImpl as unknown as typeof fetch);
     const result = await provider.search('selic hoje');
     expect(result.results[0]?.publishedAt).toBeUndefined();
     expect(result.results[1]?.publishedAt).toBeUndefined();
@@ -67,7 +67,7 @@ describe('published_date do Tavily chega ao item de resultado (A12 follow-up)', 
     const fetchImpl = tavilyFetch([
       { title: 'Selic 15%', url: 'https://exemplo.test/selic', content: 'anúncio', published_date: '2026-10-01' },
     ]);
-    const provider = createWebSearchProvider({ TAVILY_API_KEY: 'tv-test' }, fetchImpl as unknown as typeof fetch);
+    const provider = createWebSearchProvider({ TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1' }, fetchImpl as unknown as typeof fetch);
     const result = await provider.search('selic hoje');
     const rendered = renderEvidenceForPrompt(buildWebEvidenceEnvelope({ query: 'selic', items: result.results }));
     expect(rendered).toContain('publicado: 2026-10-01');
@@ -80,7 +80,7 @@ describe('published_date do Tavily chega ao item de resultado (A12 follow-up)', 
         headers: { 'content-type': 'application/json' },
       }),
     );
-    const provider = createWebSearchProvider({ BRAVE_API_KEY: 'br-test' }, fetchImpl as unknown as typeof fetch);
+    const provider = createWebSearchProvider({ BRAVE_API_KEY: 'br-test', TED_WEB_SEARCH_ENABLED: '1' }, fetchImpl as unknown as typeof fetch);
     const result = await provider.search('dólar hoje');
     expect('publishedAt' in (result.results[0] ?? {})).toBe(false);
   });
@@ -134,7 +134,7 @@ describe('marcadores de citação [F1]/[F2] nos resultados (A12 follow-up)', () 
     ]);
     const tools = buildExposedTools(['web_search'], {
       ...baseCtx,
-      webEnv: { TAVILY_API_KEY: 'tv-test' },
+      webEnv: { TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1' },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     const result = (await (
@@ -226,7 +226,7 @@ describe('os marcadores nunca ultrapassam a proveniência (teto único de fontes
     );
     const tools = buildExposedTools(['web_search'], {
       ...baseCtx,
-      webEnv: { TAVILY_API_KEY: 'tv-test' },
+      webEnv: { TAVILY_API_KEY: 'tv-test', TED_WEB_SEARCH_ENABLED: '1' },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     const result = (await (

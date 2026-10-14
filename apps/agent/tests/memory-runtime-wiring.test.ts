@@ -191,6 +191,7 @@ describe("A19/A17 — memória de ponta a ponta (SQL real)", () => {
         ...previousEnv,
         GROQ_API_KEY: "gsk-test-key",
         TED_VISION_ENABLED: "1",
+        TED_VISION_COHORT: "*",
       },
       writable: true,
       configurable: true,
@@ -476,9 +477,10 @@ describe("A19 round 2 — ramo mutation aprende só com evidência durável", ()
     expect(response.status).toBe(200);
     const body = (await response.clone().json()) as { output?: string; pendingOperation?: unknown };
     expect(body.pendingOperation).toBeUndefined();
-    // O ramo de confirmação rodou de verdade: a listagem AUTORITATIVA de
-    // pendentes foi consultada (T1.5/SPEC §8) e é ela que falhou.
-    expect(requested.some((url) => url.includes("/pending-operations/v2/active"))).toBe(true);
+    // O ramo de confirmação rodou de verdade: o bind AUTORITATIVO da intenção
+    // (fronteira P1-B, anterior à listagem) foi consultado (T1.5/SPEC §8) e é
+    // ele que falhou — a listagem sequer é alcançada com a API fora do ar.
+    expect(requested.some((url) => url.includes("/pending-operations/v2/confirmation-intentions/bind"))).toBe(true);
     // O coordinator falhou: nada foi confirmado. A recusa determinística de
     // falha NÃO é conhecimento — nem memória, nem contador, nem extractor.
     expect(spy).not.toHaveBeenCalled();

@@ -1,0 +1,132 @@
+{
+  "version": "1",
+  "cases": [
+    {
+      "version": "1",
+      "id": "GW-035",
+      "title": "Extrato com dados responde com os valores reais, nunca ausência",
+      "workflow": "statement-with-data",
+      "status": "executable",
+      "initialState": {
+        "reads": "ok-data",
+        "readData": {
+          "transactions": [
+            {
+              "description": "Carne",
+              "date": "2026-01-15",
+              "amountCents": 5000
+            }
+          ]
+        }
+      },
+      "inputs": [
+        {
+          "text": "qual meu extrato de janeiro?",
+          "intentionId": "intent-stmt-data-1"
+        }
+      ],
+      "expectations": {
+        "expectedActions": ["read_answered"],
+        "forbiddenActions": ["proposal_created", "confirmation_executed"],
+        "backend": {
+          "proposalsCreated": 0,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 0
+        },
+        "response": {
+          "mustMatch": ["extrato", "Carne"],
+          "mustNotMatch": ["registrado", "com sucesso", "Não há"]
+        },
+        "budget": { "maxTurns": 2 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-037",
+      "title": "Repetir a confirmação do forget converge sem reapagar nem alegar de novo",
+      "workflow": "forget-confirm-redelivery",
+      "status": "executable",
+      "initialState": {
+        "reads": "ok-empty",
+        "memory": [
+          {
+            "kind": "preference",
+            "content": "Prefiro o banco Nubank"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "text": "Esqueça minha preferência do banco Nubank",
+          "intentionId": "intent-forget-repeat-1"
+        },
+        {
+          "text": "pode esquecer",
+          "intentionId": "intent-forget-repeat-2"
+        },
+        {
+          "text": "pode esquecer",
+          "intentionId": "intent-forget-repeat-2"
+        }
+      ],
+      "expectations": {
+        "expectedActions": ["forget_proposed", "forget_executed"],
+        "forbiddenActions": ["proposal_created", "confirmation_executed"],
+        "backend": {
+          "proposalsCreated": 0,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 0
+        },
+        "response": {
+          "mustMatch": ["já foi esquecido"],
+          "mustNotMatch": ["registrado", "com sucesso"]
+        },
+        "budget": { "maxTurns": 4 }
+      }
+    },
+    {
+      "version": "1",
+      "id": "GW-038",
+      "title": "Novo pedido de forget após esquecido responde honestamente, sem proposta fantasma",
+      "workflow": "forget-after-forgotten",
+      "status": "executable",
+      "initialState": {
+        "reads": "ok-empty",
+        "memory": [
+          {
+            "kind": "preference",
+            "content": "Prefiro o banco Nubank"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "text": "Esqueça minha preferência do banco Nubank",
+          "intentionId": "intent-forget-gone-1"
+        },
+        {
+          "text": "pode esquecer",
+          "intentionId": "intent-forget-gone-2"
+        },
+        {
+          "text": "Esqueça minha preferência do banco Nubank",
+          "intentionId": "intent-forget-gone-3"
+        }
+      ],
+      "expectations": {
+        "expectedActions": ["forget_proposed", "forget_executed"],
+        "forbiddenActions": ["proposal_created", "confirmation_executed"],
+        "backend": {
+          "proposalsCreated": 0,
+          "executionsSucceeded": 0,
+          "maxLedgerEntries": 0
+        },
+        "response": {
+          "mustMatch": ["Não encontrei uma memória"],
+          "mustNotMatch": ["registrado", "com sucesso"]
+        },
+        "budget": { "maxTurns": 5 }
+      }
+    }
+  ]
+}

@@ -12,17 +12,23 @@ import { resolveMutationEntities, revalidateResolvedEntities, entityResolutionSi
 import type { MutationApiClient, MutationIdentity } from '../mutations/mutation-api-client.js';
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
 import {
+  CONFIRMATION_OPERATION_SKEW_MS,
+  CONFIRMATION_UNBOUND_OPERATION_ID,
   DEFAULT_MAX_PROPOSE_ATTEMPTS,
   DEFAULT_DRAFT_TTL_MS,
   appendDraftRelation,
   appendOriginMessage,
   buildDraftRecord,
   isCancelText,
+  isConfirmationExpired,
   isExpired,
   isDefinitiveProposeError,
   isResetText,
   toChannelMessage,
   validateCompleteArgs,
+  validateConfirmationReceipt,
+  type ConfirmationRecord,
+  type ConfirmationSighting,
   type DraftContext,
   type DraftFieldProvenance,
   type DraftRecordPatch,
@@ -42,6 +48,10 @@ import { routeIntent } from './intent-router.js';
 import { TurnBudget, type RecoveryPermit, type ResolutionRecoveryRequest } from './turn-budget.js';
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
 import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
+import {
+  resolveAttachmentContentQuery,
+  type AttachmentContentQuery,
+} from './attachment-content-query.js';
 import {
   DRAFTS_DISCARDED_NO_OP_TEXT,
   NO_FAILED_OPERATION_TEXT,
@@ -105,6 +115,31 @@ export type TurnInput = Readonly<{
    * data — unchanged behaviour.
    */
   decisionText?: string;
+  /**
+   * A19-READ-BYPASS: true ONLY when the turn carries accepted NON-EMPTY
+   * attachment extraction (F8 `attachmentData` with real text). Set
+   * EXCLUSIVELY by the server adapter via `NormalizeOptions`; `normalize`
+   * never reads it from `body`, so a client-supplied same-named field is
+   * ignored exactly like `decisionText`. Absent means "no attachment data"
+   * — every channel without accepted extraction, unchanged behaviour. A
+   * read turn with the flag skips the deterministic evidence render and
+   * goes straight to the provider path with the composed text (which
+   * already carries the carrier-marked block); all fail-closed paths are
+   * untouched.
+   */
+  hasAttachmentData?: boolean;
+  /**
+   * A19-GROUND-EVIDENCE: the turn's accepted attachment-extracted texts,
+   * admitted as support for grounded READ narration ONLY. Set EXCLUSIVELY
+   * by the server adapter via `NormalizeOptions` (the accepted extraction
+   * strings, never typed text); `normalize` never reads it from `body`, so
+   * a client-supplied same-named field is ignored exactly like
+   * `hasAttachmentData`. Absent/empty means "no admitted text" — unchanged
+   * behaviour. It is NEVER consulted by mutation, approval, autoexecute or
+   * memory paths: the sole consumer is the `createGroundedResponseWithRetry`
+   * call in `runGroundedRead`.
+   */
+  attachmentTexts?: readonly string[];
   /**
    * FIX-AGENT-RELAY-FAILOVER-HARDENING (A): internal-only marker for the
    * structured grounding-correction retry. Set EXCLUSIVELY by the internal
@@ -253,6 +288,25 @@ const freeze = <T>(value: T): T => {
     Object.freeze(value);
   }
   return value;
+};
+
+/**
+ * Review round 4 P1-B: detects the API's authoritative intention-conflict
+ * refusal (`approval.intention_conflict`): THIS intentionId is already bound
+ * API-side to a DIFFERENT operation. Matches the error code field, the
+ * statusCode-tagged message, or the code inside the message — the transport
+ * shapes it differently across the real client (thrown `Error` carrying
+ * `code`/`statusCode`) and test doubles (plain `Error(message)`).
+ */
+const isIntentionConflictError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as { code?: unknown; statusCode?: unknown; message?: unknown };
+  if (record.code === 'approval.intention_conflict') return true;
+  return (
+    record.statusCode === 409 &&
+    typeof record.message === 'string' &&
+    record.message.includes('approval.intention_conflict')
+  );
 };
 
 // SPEC R03: a bare answer to the category clarification ("categoria Carne
@@ -426,7 +480,7 @@ const correctionOutcome = (text: string): CorrectionOutcome => {
  * Internal-only construction options. They are passed by the SERVER adapter, not
  * read from `body`: a client-supplied `decisionText`/`typedText` is ignored.
  */
-export type NormalizeOptions = Readonly<{ typedText?: string }>;
+export type NormalizeOptions = Readonly<{ typedText?: string; hasAttachmentData?: boolean; attachmentTexts?: readonly string[] }>;
 
 const normalize = (
   body: Body,
@@ -460,6 +514,18 @@ const normalize = (
   // that sends its own `decisionText`/`typedText` changes nothing.
   const typedText = typeof options?.typedText === 'string' ? scrubForPersistence(options.typedText.trim()) : text;
   const decisionText = typedText === text ? undefined : typedText;
+  // A19-READ-BYPASS: the attachment-data flag is server-side only — a
+  // client-supplied `hasAttachmentData` field in `body` is deliberately NOT
+  // read, so untrusted input can never route its own turn past the
+  // deterministic render.
+  const hasAttachmentData = options?.hasAttachmentData === true ? true as const : undefined;
+  // A19-GROUND-EVIDENCE: admitted attachment texts are server-side only —
+  // a client-supplied `attachmentTexts` field in `body` is deliberately NOT
+  // read, so untrusted input can never ground its own figures. Only
+  // non-empty strings travel; empties are dropped here, not downstream.
+  const attachmentTexts = Array.isArray(options?.attachmentTexts)
+    ? options.attachmentTexts.filter((item): item is string => typeof item === 'string' && item.trim() !== '')
+    : [];
   return freeze({
     intentionId,
     traceId,
@@ -471,6 +537,8 @@ const normalize = (
     attachments: freeze(attachments),
     channel,
     ...(decisionText !== undefined ? { decisionText } : {}),
+    ...(hasAttachmentData !== undefined ? { hasAttachmentData } : {}),
+    ...(attachmentTexts.length > 0 ? { attachmentTexts: freeze(attachmentTexts) } : {}),
     // FIX-AGENT-RELAY-FAILOVER-HARDENING (A): the internal correction flag
     // is constructed here as `false` — any client-supplied `internalCorrection`
     // / `isInternalCorrectionRetry` field in `body` is deliberately NOT read,
@@ -507,6 +575,16 @@ export class ConversationOrchestrator {
      */
     decisionProvider?: () => DecisionProvider | undefined;
     responseProvider?: TurnResponseProvider;
+    /**
+     * REVIEW-P1 (attachment-content-query): tool-free single-inference
+     * provider for generative content queries, wired by the channel adapter
+     * (`provideContentQueryResponse`: relay/broker single transports, SDK
+     * `generateText` with NO tools). The terminal prefers it over
+     * `responseProvider`, so a content query can never run the tool-carrying
+     * SDK path (`streamText` + `stepCountIs`). Absent = the common provider
+     * (tests/back-compat; production always wires it).
+     */
+    contentQueryProvider?: TurnResponseProvider;
     /** Read-path evidence source (EvidenceCollector). Absent = legacy pass-through. */
     evidenceProvider?: (input: TurnInput, plan: TurnPlan) => Promise<EvidenceEnvelope | null>;
     /** ONE structured correction retry for unsupported grounded claims. */
@@ -555,6 +633,17 @@ export class ConversationOrchestrator {
       now?: () => number;
     };
   } = {}) {}
+
+  /**
+   * R6 (PR137-FIX): ids this turn NEWLY presented (proposal card,
+   * disambiguation set, pre-claim refresh) whose response may still fail to
+   * reach the channel. Pre-existing rows are never ledgered (first-wins —
+   * they predate this turn, typically an earlier PUBLISHED card). Reset at
+   * every `runTurn` entry; consumed by
+   * `revertUnpublishedTurnPresentations`. Production builds one orchestrator
+   * per turn, so the ledger never outlives its turn there.
+   */
+  private unpublishedPresentationLedger: Array<{ ctx: DraftContext; operationIds: string[] }> = [];
 
   private emit(eventType: string, fields: Record<string, unknown>): void {
     try {
@@ -757,10 +846,20 @@ export class ConversationOrchestrator {
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
       return freeze({ ...base, failClosed: true as const, response: freeze({ text: FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT }) });
     }
-    const deterministic = this.renderDeterministicFromEvidence(input, plan, envelope);
-    if (deterministic !== null) {
-      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
-      return freeze({ ...base, response: freeze({ text: deterministic }) });
+    // A19-READ-BYPASS: a read turn carrying accepted attachment extraction
+    // MUST consult the model — the composed text already carries the
+    // carrier-marked block plus the DATA-precedence instruction, and the
+    // deterministic render below would answer from (empty) tool evidence
+    // without ever consulting it. Skipped ONLY on the explicit server-side
+    // flag; every fail-closed path above (null/error envelopes) and below
+    // (no provider, grounding rejection) is preserved.
+    const hasAttachmentData = input.hasAttachmentData === true;
+    if (!hasAttachmentData) {
+      const deterministic = this.renderDeterministicFromEvidence(input, plan, envelope);
+      if (deterministic !== null) {
+        this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
+        return freeze({ ...base, response: freeze({ text: deterministic }) });
+      }
     }
     if (!this.dependencies.responseProvider) {
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
@@ -768,8 +867,15 @@ export class ConversationOrchestrator {
     }
     // Provider failures are operational, never a fabricated success.
     const text = await this.dependencies.responseProvider(input, plan);
+    // A19-GROUND-EVIDENCE: the admitted attachment texts (server-side
+    // accepted extractions, absent without them) join grounded validation
+    // as source-tagged support for READ narration — a block-cited figure
+    // publishes instead of collapsing into a tool-failure excuse, while a
+    // figure present in NEITHER still fails. Fail-closed paths above and
+    // the no-provider path are untouched.
     const grounded = await createGroundedResponseWithRetry(text, envelope, {
       fallbackSubject: plan.domain,
+      ...(input.attachmentTexts && input.attachmentTexts.length > 0 ? { attachmentTexts: input.attachmentTexts } : {}),
       ...(this.dependencies.correctionProvider ? { retry: (claims) => this.dependencies.correctionProvider!(input, plan, claims) } : {}),
       sink: (eventType, fields) => this.emit(eventType, fields),
       intentionId: input.intentionId,
@@ -779,6 +885,55 @@ export class ConversationOrchestrator {
       onRecoveryAttempted: () => { this.budgetFor(base).noteGroundingRetry(); },
     });
     this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: grounded.grounded, latencyMs: Date.now() - startedAt });
+    return freeze({ ...base, response: freeze({ text: grounded.text }) });
+  }
+
+  /**
+   * ATTACHMENT-CONTENT-QUERY terminal: answers the typed question from the
+   * admitted attachment block only. Never calls the evidence provider (zero
+   * financial reads), never proposes/executes, never touches the draft store
+   * (a recoverable draft stays active and untouched — no INV-10 capture).
+   *
+   * - verbatim: deterministic repeat of the admitted texts, no provider call;
+   * - generative: ONE tool-free inference (`contentQueryProvider`, wired by
+   *   the channel adapter — never the tool-carrying common provider) whose
+   *   reply is validated against the admitted texts as document provenance
+   *   (audio / transcript attribution admitted — see `DOCUMENT_NOUN`), with
+   *   an empty financial envelope: figures or names present in NEITHER still
+   *   fail.
+   */
+  private async runAttachmentContentQuery(
+    input: TurnInput,
+    plan: TurnPlan,
+    query: AttachmentContentQuery,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+  ): Promise<TurnResult> {
+    if (query.verbatim) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: query.admitted.join('\n\n') }),
+      });
+    }
+    const provider = this.dependencies.contentQueryProvider ?? this.dependencies.responseProvider;
+    if (!provider) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: renderUnavailable('o conteúdo do anexo') }),
+      });
+    }
+    const text = await provider(input, plan);
+    const envelope: EvidenceEnvelope = freeze({ version: '1' as const, items: freeze([]) });
+    const grounded = await createGroundedResponseWithRetry(text, envelope, {
+      fallbackSubject: 'o conteúdo do anexo',
+      attachmentTexts: query.admitted,
+      sink: (eventType, fields) => this.emit(eventType, fields),
+      intentionId: input.intentionId,
+      traceId: input.traceId,
+      // R10: the ONE correction retry spends a slot of the shared per-turn
+      // recovery budget, mirroring the read path.
+      onRecoveryAttempted: () => { this.budgetFor(base).noteGroundingRetry(); },
+    });
+    this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: grounded.grounded, latencyMs: Date.now() - startedAt });
+    this.emitTurnBudget(base);
     return freeze({ ...base, response: freeze({ text: grounded.text }) });
   }
 
@@ -801,6 +956,242 @@ export class ConversationOrchestrator {
       client,
       ...(store ? { draftStore: store } : {}),
       ...(this.dependencies.draftNow ? { now: this.dependencies.draftNow } : {}),
+    });
+  }
+
+  /**
+   * PR137-HARDEN (Bloco A): fail-closed terminal for the FINANCIAL
+   * confirmation path only. Non-financial confirmations (forget-memory
+   * two-step, undo RPC, reads) never reach this helper — they own their
+   * stores and their own fail-closed copies.
+   */
+  private inconclusiveConfirmationTurn(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    reason: string,
+  ): TurnResult {
+    this.emit('mutation.blocked', {
+      intentionId: input.intentionId,
+      traceId: input.traceId,
+      channel: input.channel,
+      domain: plan.domain,
+      mode: plan.mode,
+      status: 'blocked',
+      reason,
+    });
+    return this.completeTurn(input, plan, startedAt, base, {
+      response: freeze({ text: renderInconclusive() }),
+    });
+  }
+
+  /**
+   * Review round 4 P1-A3: records WHAT was shown (single target or
+   * disambiguation set) with WHEN, best-effort, for FUTURE turns. It runs
+   * only where THIS turn EFFECTIVELY presents the target to the user —
+   * proposal cards, the disambiguation listing (which renders the set), or
+   * AFTER the admission checks passed (pre-claim refresh) — never on a
+   * rejection path: a rejection answers only `renderInconclusive()` (no card
+   * of B), so recording there would forge a testimony without exhibition
+   * (ROUND5-1). It runs after the admission checks, never before them, where
+   * a just-recorded row could self-authorize the current turn when the clock
+   * does not advance between anchor and listing. This also self-heals
+   * operations proposed before this hardening: the first "sim" presents
+   * fail-closed, the next confirms.
+   *
+   * R6 (PR137-FIX): ledgers ONLY the ids this turn newly presents. A row
+   * that already exists predates this turn (first-presentation-wins — the
+   * earliest instant is kept, typically an earlier PUBLISHED card) and must
+   * survive a compensation of this turn, so it is NOT ledgered. The
+   * find+write below are synchronous with no await between, so no
+   * interleaved turn can slip in. The ledger feeds
+   * `revertUnpublishedTurnPresentations` when the response never reaches
+   * the channel.
+   */
+  private recordPresentedOperations(
+    store: MutationDraftStore,
+    ctx: DraftContext,
+    operationIds: readonly string[],
+  ): void {
+    let fresh: string[] = [];
+    try {
+      if (typeof store.findConfirmationPresentation === 'function') {
+        fresh = operationIds.filter(
+          (operationId) => !!operationId && !store.findConfirmationPresentation?.(ctx, operationId),
+        );
+      } else {
+        fresh = operationIds.filter((operationId) => !!operationId);
+      }
+      store.noteConfirmationPresentation?.({ ctx, operationIds, nowMs: this.draftNowMs() });
+    } catch {
+      // Best-effort presentation bookkeeping only.
+      fresh = [];
+    }
+    if (fresh.length > 0) {
+      this.unpublishedPresentationLedger.push({ ctx, operationIds: fresh });
+    }
+  }
+
+  /**
+   * R6 (PR137-FIX): best-effort compensation for witnesses this turn wrote
+   * but never published. The caller (channel adapter) invokes it when the
+   * turn's response demonstrably never reached the channel — a send/persist
+   * failure or a post-`runTurn` error before the send — so a later intention
+   * cannot confirm an operation whose card was never exhibited. Deletes ONLY
+   * the ledgered (this-turn, newly-presented) ids; pre-existing rows from
+   * earlier published cards are kept. Never throws; clears the ledger either
+   * way. Rejections write no witness (ROUND5-1), so there is nothing to
+   * compensate on those paths.
+   */
+  revertUnpublishedTurnPresentations(): void {
+    const ledger = this.unpublishedPresentationLedger;
+    this.unpublishedPresentationLedger = [];
+    if (ledger.length === 0) return;
+    const store = this.dependencies.draftStore;
+    if (!store || typeof store.forgetConfirmationPresentations !== 'function') return;
+    try {
+      for (const entry of ledger) {
+        store.forgetConfirmationPresentations(entry.ctx, entry.operationIds);
+      }
+    } catch {
+      // Compensation never breaks the caller.
+    }
+  }
+
+  /**
+   * PR137-HARDEN (Bloco A): resolves a durable identity→operationId binding
+   * WITHOUT ever re-resolving the live listing for a new target — a
+   * redelivery replays or preserves A, never confirms a later B.
+   *
+   * - `inconclusive` → inconclusive (terminal, claims nothing);
+   * - unbound sentinel (`operationId === ''`) → inconclusive WITHOUT
+   *   consulting the listing (P1-2/P1-4: never resolves a later B);
+   * - `reserved` → the pre-execute crash window: reconcile by operationId.
+   *   Still decidable — INCLUDING `executing` (P1-1: the API applies the
+   *   effect under `executing`, so a mid-execution redelivery must NOT
+   *   settle) ⇒ inconclusive WITHOUT executing and WITHOUT settling: only
+   *   the claim winner drives, and the `reserved` row stays settleable to
+   *   `succeeded` when the winner completes. Terminal ⇒ settle inconclusive
+   *   + inconclusive (the effect may be ours or another device's cancel —
+   *   indistinguishable, so no success claim). A fresh intentionId
+   *   re-resolves and confirms the still-pending op normally. Never executes
+   *   here, so concurrent losers can never double-effect even against a
+   *   transport without dedup;
+   * - `succeeded` + unexpired + valid/absent receipt → verbatim replay;
+   * - `succeeded` + expired (tombstone) or invalid receipt → reconcile by
+   *   operationId: terminal ⇒ replay (receipt when valid, else receipt-less
+   *   — the binding, written strictly post-success, is the proof); still
+   *   active or unreadable listing ⇒ inconclusive, original op preserved.
+   */
+  private async replayConfirmationBinding(args: {
+    prior: ConfirmationRecord;
+    coordinator: PendingOperationCoordinator;
+    identity: MutationIdentity;
+    input: TurnInput;
+    plan: TurnPlan;
+    startedAt: number;
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy };
+  }): Promise<TurnResult> {
+    const { prior, coordinator, identity, input, plan, startedAt, base } = args;
+    const store = this.dependencies.draftStore;
+    const nowMs = this.draftNowMs();
+    // GW-023 convergence: a redelivery of an inconclusive-settled BOUND
+    // intention reconciles against the authoritative listing instead of
+    // blindly replaying inconclusive. Bound op terminal AND listing empty ⇒
+    // nothing is pending (truthful, zero mutation, no success/failure claim).
+    // Any active op or an unreadable listing stays inconclusive. The unbound
+    // sentinel below never consults the listing (P1-2/P1-4).
+    if (prior.status === 'inconclusive' && prior.operationId !== CONFIRMATION_UNBOUND_OPERATION_ID) {
+      try {
+        const current = await coordinator.listActive(identity);
+        if (current.length === 0) {
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: 'Não há nenhuma operação pendente para confirmar.' }),
+          });
+        }
+      } catch {
+        // Unreadable listing: fall through to inconclusive below.
+      }
+      return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_binding_inconclusive');
+    }
+    if (prior.status === 'inconclusive') {
+      return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_binding_inconclusive');
+    }
+    // Review fix P1-2/P1-4: unbound sighting sentinel — this intention was
+    // seen before but never bound a target (no decidable op, ambiguous
+    // listing, or failed claim). A redelivery reproduces inconclusive
+    // WITHOUT consulting the listing, so a LATER operation B can never be
+    // resolved-and-confirmed under this intention; only a fresh turn with a
+    // new intentionId may confirm B.
+    if (prior.operationId === CONFIRMATION_UNBOUND_OPERATION_ID) {
+      return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_sentinel_replay');
+    }
+    const expired = isConfirmationExpired(prior, nowMs);
+    const validated = validateConfirmationReceipt(prior.receiptJson, prior.operationId);
+    if (prior.status === 'succeeded' && !expired && (validated.kind === 'valid' || validated.kind === 'absent')) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        mutation: freeze({
+          operationId: prior.operationId,
+          status: 'succeeded' as const,
+          ...(validated.kind === 'valid' ? { receipt: validated.receipt as unknown as MutationReceipt } : {}),
+        }),
+        response: freeze({ text: renderMutationResult('succeeded') }),
+      });
+    }
+    // Tombstone, reservation, or untrusted receipt: reconcile by operationId.
+    // Review fix P1-1: `executing` counts as ACTIVE. The API keeps an
+    // operation `executing` while its effect is being applied
+    // (`pending-v2.ts` active listing includes it); the agent-side
+    // `decidable` scope (proposed/confirmed) does not. Treating `executing`
+    // as terminal here settled the reservation `inconclusive` mid-execution,
+    // so the winner's later `reserved → succeeded` settle CAS (which only
+    // transitions `reserved` rows) returned false — ignored best-effort —
+    // and the success replay was lost forever.
+    let boundStillDecidable = false;
+    let listingUnreadable = false;
+    try {
+      const current = await coordinator.listActive(identity);
+      const bound = current.find((item) => item.id === prior.operationId);
+      boundStillDecidable =
+        !!bound && (bound.status === 'proposed' || bound.status === 'confirmed' || bound.status === 'executing');
+    } catch {
+      listingUnreadable = true;
+    }
+    if (listingUnreadable || boundStillDecidable) {
+      // Still active: the claim owner may be live — leave the reservation
+      // untouched (no settle under a possibly-running execution). Terminal
+      // or unreadable: inconclusive, original op preserved, B never touched.
+      return this.inconclusiveConfirmationTurn(
+        input, plan, startedAt, base,
+        listingUnreadable ? 'confirmation_reconcile_unreadable' : 'confirmation_binding_preserved',
+      );
+    }
+    // Bound operation terminal: success is proven ONLY for a `succeeded`
+    // marker (written strictly post-success). A `reserved` marker proves
+    // nothing — inconclusive, never a success claim (criterion 6).
+    if (prior.status !== 'succeeded') {
+      try {
+        store?.settleConfirmation?.({
+          ctx: this.draftContext(input),
+          intentionId: input.intentionId,
+          operationId: prior.operationId,
+          status: 'inconclusive',
+          receiptJson: prior.receiptJson,
+          nowMs,
+        });
+      } catch {
+        // Best-effort only.
+      }
+      return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_reserved_terminal');
+    }
+    return this.completeTurn(input, plan, startedAt, base, {
+      mutation: freeze({
+        operationId: prior.operationId,
+        status: 'succeeded' as const,
+        ...(validated.kind === 'valid' ? { receipt: validated.receipt as unknown as MutationReceipt } : {}),
+      }),
+      response: freeze({ text: renderMutationResult('succeeded') }),
     });
   }
 
@@ -1062,6 +1453,11 @@ export class ConversationOrchestrator {
           updatedAt: new Date(this.draftNowMs()).toISOString(),
           lastIntentionId: input.intentionId,
         });
+        // Review round 4 P1-A3: the proposal card shows this operation to the
+        // user — record the presentation so a later "sim" turn may confirm
+        // it (presentationTime <= that turn's anchor). Best-effort only.
+        // R6: ledgered — compensated if this turn's response never publishes.
+        this.recordPresentedOperations(store, this.draftContext(input), [proposal.id]);
         return this.completeTurn(input, plan, startedAt, base, {
           mutation: this.proposedMutation({
             operationId: proposal.id,
@@ -1926,6 +2322,11 @@ export class ConversationOrchestrator {
         }
       }
     }
+    // Review round 4 P1-A3: the proposal card shows this operation to the
+    // user — record the presentation (best-effort) so a later "sim" turn
+    // may confirm it. `store`/`ctx` are the draft scope in this method.
+    // R6: ledgered — compensated if this turn's response never publishes.
+    this.recordPresentedOperations(store, ctx, [proposal.id]);
     return this.completeTurn(input, plan, startedAt, base, {
       policy: freeze({ ...base.policy, authorizationMode: 'manual' }),
       mutation: this.proposedMutation({
@@ -2647,7 +3048,29 @@ export class ConversationOrchestrator {
     }
   }
 
+  /**
+   * R6 (PR137-FIX): the turn entry. Resets the unpublished-presentation
+   * ledger, then runs the turn; if the turn itself throws AFTER writing
+   * witnesses (an exception before any response exists — nothing was
+   * published by construction), those witnesses are compensated before the
+   * error propagates, so a later intention cannot confirm an operation whose
+   * card never reached the channel. Errors the turn converts into a
+   * responded (inconclusive/failed) turn need no compensation here — the
+   * response IS the publication; only a caller-observed send failure after
+   * the return compensates those, via
+   * `revertUnpublishedTurnPresentations`.
+   */
   async runTurn(input: TurnInput): Promise<TurnResult> {
+    this.unpublishedPresentationLedger = [];
+    try {
+      return await this.runTurnInner(input);
+    } catch (error) {
+      this.revertUnpublishedTurnPresentations();
+      throw error;
+    }
+  }
+
+  private async runTurnInner(input: TurnInput): Promise<TurnResult> {
     const startedAt = Date.now();
     this.emit('turn.started', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel });
     // F1 (BLOCKER): the DECISION surface of the turn is the text the human
@@ -2663,6 +3086,57 @@ export class ConversationOrchestrator {
     this.emit('plan.validated', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode });
     const policy = freeze({ capability: 'financial.read' as const, writeAuthorized: false as const, approvalRequired: true as const, authorizationMode: 'none' as const });
     const result: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy; mutation?: { operationId: string; status: 'proposed' | 'succeeded'; receipt?: MutationReceipt }; response?: { text: string } } = { input, plan: freeze(plan), policy };
+    // ATTACHMENT-CONTENT-QUERY: a TYPED question about server-side admitted
+    // attachment data precedes financial routing and draft continuation — the
+    // composed text may carry finance words ("conta", "gastei", "R$ 42,50")
+    // that would otherwise route a read, trip INV-06, or be captured by a
+    // recoverable draft (INV-10). Verbatim repeats the admitted block
+    // deterministically (zero reads, zero provider calls); generative answers
+    // validate against it as document provenance (zero financial reads).
+    // `confirmation` / `cancel` plans are never intercepted (F1: a typed
+    // decision owns the turn); without admitted data the legacy flow owns it.
+    const contentQuery = resolveAttachmentContentQuery(input, plan.mode);
+    if (contentQuery) {
+      return this.runAttachmentContentQuery(input, plan, contentQuery, startedAt, result);
+    }
+    // Review round 4 P1-A1: the confirmation anchor is captured SYNCHRONOUSLY
+    // at turn entry, before ANY await/I/O below (undo probe, forget sondagem,
+    // listing). `draftNowMs()` is the turn clock (injected in tests); calling
+    // it here pins tEntry even when later I/O stalls for seconds. The durable
+    // sighting below is stamped with tEntry — never with a post-I/O instant —
+    // so an operation born during the pre-sighting I/O window is newer than
+    // the anchor and fenced by the temporal check, whatever its timestamp.
+    const confirmationTEntry = this.draftNowMs();
+    // ROUND5-2: the presentation present-set snapshot, frozen SYNCHRONOUSLY
+    // here — same instant as tEntry, before the first await below. Admission
+    // requires target ∈ snapshot (membership): an operation presented DURING
+    // this turn's awaits — even in the same millisecond — is absent from the
+    // snapshot and rejected, whatever its timestamp. The temporal check stays
+    // as defense-in-depth. Narrow residual (documented): a concurrent
+    // proposal that COMPLETED before this synchronous read legitimately
+    // enters the snapshot (its card predates the turn); the window is ~zero
+    // because this read is the first store I/O of the turn, and anything
+    // newer than the anchor is still fenced by the temporal check.
+    let confirmationPresentationSnapshot: ReadonlySet<string> | undefined;
+    if (plan.mode === 'confirmation') {
+      try {
+        const listed = this.dependencies.draftStore?.listConfirmationPresentations?.(this.draftContext(input));
+        if (listed) confirmationPresentationSnapshot = new Set(listed);
+      } catch {
+        confirmationPresentationSnapshot = undefined;
+      }
+    }
+    // Review round 4 P1-A1/P1-B: the entry anchor + independent frontiers
+    // are established below (after `client`, before `runForgetDecisionTurn`'s
+    // precedence sondagem): API intention bind FIRST, then the durable local
+    // sighting stamped with tEntry. Both precede ANY decision I/O, so an
+    // operation born during the pre-sighting window is newer than the anchor
+    // and fenced, whatever its timestamp.
+    let earlyConfirmationSighting: ConfirmationSighting | undefined;
+    let earlyConfirmationSightingError: unknown;
+    let earlyConfirmationSightingAttempted = false;
+    let earlyApiSighting: { firstSeenAt: string; fresh: boolean; operationId: string | null } | undefined;
+    let earlyApiSightingError: unknown;
     // debt-undo-confirmation-protocol: free text only ever requests an undo
     // proposal (or fails closed). Textual confirmation NEVER executes undo —
     // only the authenticated PWA RPC decides. This check runs before every
@@ -2678,6 +3152,60 @@ export class ConversationOrchestrator {
     const ambiguous = this.ambiguousMutationClarification(input.text);
     if (ambiguous) return this.stopAmbiguousMutation(input, plan, startedAt, result, ambiguous);
     const client = this.dependencies.mutationApiClient;
+    // Review round 4 P1-A1/P1-B — frontiers BEFORE any decision I/O
+    // (`runForgetDecisionTurn`'s precedence sondagem awaits the listing, so
+    // anything born in that window must postdate the anchor). Order matters:
+    // (1) API intention bind FIRST — the frontier independent of agent
+    // storage: even a TOTAL outage of both local writes below still leaves
+    // X@T_api durably, and the post-recovery redelivery fails closed via
+    // the pre-existing-API-sighting rule instead of confirming B fresh;
+    // (2) durable local sighting stamped with tEntry (never a post-I/O
+    // instant). Both are sync except the bind round-trip, which is itself
+    // the first await — nothing else interposes. Reused by the confirmation
+    // branch (re-writing either would misroute the first attempt into a
+    // replay path). A stray marker on a turn the financial path does not own
+    // (forget/undo owns it) is harmless: those paths return before the
+    // confirmation branch and own their own redelivery dedupe.
+    if (plan.mode === 'confirmation' && client) {
+      const entryStore = this.dependencies.draftStore;
+      // Without a device the branch below throws `mutation.device_required`
+      // (pre-existing posture) — never bind an empty-device row here.
+      const entryDeviceId = input.deviceId ?? null;
+      const entryIdentity: MutationIdentity = {
+        workspaceId: input.workspaceId,
+        actorId: input.actorId,
+        deviceId: entryDeviceId ?? '',
+      };
+      if (
+        entryStore &&
+        entryDeviceId !== null &&
+        typeof entryStore.findConfirmation === 'function' &&
+        typeof entryStore.claimConfirmation === 'function' &&
+        typeof entryStore.settleConfirmation === 'function' &&
+        typeof entryStore.noteConfirmationSighted === 'function' &&
+        typeof entryStore.noteConfirmationPresentation === 'function' &&
+        typeof entryStore.findConfirmationPresentation === 'function' &&
+        typeof entryStore.listConfirmationPresentations === 'function'
+      ) {
+        try {
+          earlyApiSighting = await this.coordinatorFor(client).bindConfirmationIntention(entryIdentity, input.intentionId);
+        } catch (error) {
+          earlyApiSightingError = error;
+        }
+        if (earlyApiSightingError === undefined) {
+          earlyConfirmationSightingAttempted = true;
+          try {
+            earlyConfirmationSighting = entryStore.noteConfirmationSighted(
+              this.draftContext(input),
+              input.intentionId,
+              confirmationTEntry,
+            );
+          } catch (error) {
+            earlyConfirmationSightingError = error;
+          }
+        }
+      }
+    }
     // Issue #99 — forget em duas etapas: pedido/confirmação/cancelamento de
     // esquecimento decididos deterministicamente (texto digitado + veto de
     // anexo), com precedência do financeiro quando houver alvo decidível.
@@ -2804,6 +3332,18 @@ export class ConversationOrchestrator {
     ) {
       return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
     }
+    // GW-036 (Bloco C): an account-name answer ("conta corrente") routes
+    // `read`, but with a recoverable draft awaiting the account it is a
+    // missing-field answer, not a new read. A balance query still never
+    // completes a draft (`seeksAccountBalance` keeps the read flow).
+    if (
+      this.dependencies.draftStore && client &&
+      plan.mode === 'read' &&
+      !seeksAccountBalance(input.text ?? '') &&
+      this.hasDraftForTurn(input)
+    ) {
+      return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
+    }
     // T1.5 (SPEC §8): confirmation resolves from the AUTHORITATIVE listing
     // (GET /v2/active, authenticated identity) — never from
     // client-declared pendingOperationIds, which are parsed for logging
@@ -2814,15 +3354,202 @@ export class ConversationOrchestrator {
       const declared = input.pendingOperationIds ?? [];
       const identity: MutationIdentity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })() };
       this.emit('approval.requested', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'requested', declaredOperationCount: declared.length });
+      // Bloco A fase 2 (issue #105): the id of the operation this turn tried
+      // to confirm+execute. The catch below reconciles against it — it stays
+      // empty when no single target was ever resolved.
+      let confirmTargetId = '';
+      // Review round 4 P1-B: operation already bound to THIS intention
+      // API-side by a previous confirm (see the bind above). A resolution
+      // for a different operation is refused before the transport.
+      let apiBoundOperationId = '';
       try {
+        // PR137-HARDEN (Bloco A): durable idempotent confirmation. The
+        // identity→operationId binding lives in the draft store (durable in
+        // prod: DO SQLite) because this orchestrator is constructed per turn.
+        //
+        // FAIL-CLOSED (criterion 1): this branch is EXCLUSIVELY the financial
+        // mutation confirmation. Without a store, without the binding
+        // methods, or when the marker read throws, the turn answers
+        // inconclusive — it NEVER falls back to resolving the live listing
+        // (which could confirm a different operation than the redelivered
+        // turn intended). Non-financial confirmations (forget two-step, undo
+        // RPC, reads) never reach this branch and are unaffected.
+        const confirmationStore = this.dependencies.draftStore;
+        const confirmationCtx = this.draftContext(input);
+        const canBind =
+          !!confirmationStore &&
+          typeof confirmationStore.findConfirmation === 'function' &&
+          typeof confirmationStore.claimConfirmation === 'function' &&
+          typeof confirmationStore.settleConfirmation === 'function' &&
+          typeof confirmationStore.noteConfirmationSighted === 'function' &&
+          typeof confirmationStore.noteConfirmationPresentation === 'function' &&
+          typeof confirmationStore.findConfirmationPresentation === 'function' &&
+          typeof confirmationStore.listConfirmationPresentations === 'function';
+        if (!canBind) {
+          return this.inconclusiveConfirmationTurn(input, plan, startedAt, result, 'confirmation_store_unavailable');
+        }
+        // Review round 4 P1-A1: the sighting was written at turn entry
+        // (`earlyConfirmationSighting`, stamped with tEntry BEFORE any
+        // decision I/O). It is reused here — never re-written (a second
+        // call would observe `fresh: false` and misroute the first attempt
+        // into the replay path). The `record.createdAt` below IS tEntry, so
+        // the temporal check fences anything born during the pre-sighting
+        // I/O window (forget sondagem, undo probe).
+        let sighting: ConfirmationSighting;
+        if (earlyConfirmationSightingAttempted && earlyConfirmationSighting) {
+          sighting = earlyConfirmationSighting;
+        } else if (earlyConfirmationSightingAttempted && earlyConfirmationSightingError !== undefined) {
+          // Review fix P1-B (round 3): the sighting write failed, so no
+          // T0-anchored marker exists yet and a post-recovery redelivery
+          // would resolve-and-confirm a later B with a FRESH (T2) sighting.
+          // Best-effort an INDEPENDENT claim-path sentinel for the same
+          // intention (unbound `operationId === ''`, same instant): it goes
+          // through a different statement than the sighting, so a selective
+          // sighting-write outage still leaves a durable T0 marker and the
+          // redelivery replays inconclusive via the unbound-sentinel path
+          // below — never touching the listing. A TOTAL outage of both local
+          // writes (this throws too) is closed by the API frontier instead:
+          // the entry bind already persisted X@T_api, so the post-recovery
+          // redelivery fails closed via `confirmation_post_outage_redelivery`
+          // (round 4 P1-B). Either way the turn fails closed here with zero
+          // executes.
+          try {
+            confirmationStore.claimConfirmation!({
+              ctx: confirmationCtx,
+              intentionId: input.intentionId,
+              operationId: CONFIRMATION_UNBOUND_OPERATION_ID,
+              receiptJson: null,
+              status: 'reserved',
+              nowMs: confirmationTEntry,
+            });
+          } catch {
+            // Best-effort marker only.
+          }
+          return this.inconclusiveConfirmationTurn(input, plan, startedAt, result, 'confirmation_marker_unreadable');
+        } else {
+          // Defensive (unreachable when the entry write ran): stamp with
+          // tEntry, never with a post-I/O instant.
+          try {
+            sighting = confirmationStore.noteConfirmationSighted!(confirmationCtx, input.intentionId, confirmationTEntry);
+          } catch {
+            try {
+              confirmationStore.claimConfirmation!({
+                ctx: confirmationCtx,
+                intentionId: input.intentionId,
+                operationId: CONFIRMATION_UNBOUND_OPERATION_ID,
+                receiptJson: null,
+                status: 'reserved',
+                nowMs: confirmationTEntry,
+              });
+            } catch {
+              // Best-effort marker only.
+            }
+            return this.inconclusiveConfirmationTurn(input, plan, startedAt, result, 'confirmation_marker_unreadable');
+          }
+        }
+        // Review round 4 P1-B (direction iii): the INDEPENDENT durable
+        // frontier, bound at turn entry BEFORE any decision I/O (see
+        // runTurn). Reused here — never re-bound (a second call would
+        // observe `fresh: false` for THIS attempt's own bind and misroute
+        // into the post-outage path). Rules:
+        // - bind threw at entry ⇒ fail closed (zero executes);
+        // - API knew X before (`fresh: false`) while the local sighting is
+        //   fresh ⇒ post-outage redelivery whose local history is gone
+        //   (total outage of both local writes on the first attempt, storage
+        //   loss, ...): fail closed, NEVER confirm on a rebuilt anchor;
+        // - otherwise the effective anchor is min(local, API): whichever
+        //   frontier saw the intention first fences the target.
+        // The same intentionId is propagated to confirm/execute below, where
+        // the API enforces the operationId binding atomically (identical ⇒
+        // idempotent proceed; divergent ⇒ 409 `approval.intention_conflict`
+        // ⇒ fail closed here, B never touched).
+        if (earlyApiSightingError !== undefined || !earlyApiSighting) {
+          return this.inconclusiveConfirmationTurn(input, plan, startedAt, result, 'confirmation_intention_bind_failed');
+        }
+        const apiSighting = earlyApiSighting;
+        let anchorMs = Date.parse(sighting.record.createdAt);
+        {
+          const apiFirstSeenMs = Date.parse(apiSighting.firstSeenAt);
+          if (!Number.isFinite(apiFirstSeenMs)) {
+            return this.inconclusiveConfirmationTurn(input, plan, startedAt, result, 'confirmation_intention_bind_failed');
+          }
+          if (!apiSighting.fresh && sighting.fresh) {
+            try {
+              confirmationStore.settleConfirmation!({
+                ctx: confirmationCtx,
+                intentionId: input.intentionId,
+                operationId: CONFIRMATION_UNBOUND_OPERATION_ID,
+                status: 'inconclusive',
+                receiptJson: null,
+                nowMs: this.draftNowMs(),
+              });
+            } catch {
+              // Best-effort terminal bookkeeping only.
+            }
+            return this.inconclusiveConfirmationTurn(input, plan, startedAt, result, 'confirmation_post_outage_redelivery');
+          }
+          if (Number.isFinite(anchorMs)) anchorMs = Math.min(anchorMs, apiFirstSeenMs);
+          else anchorMs = apiFirstSeenMs;
+          // A previous confirm under THIS intention already bound an
+          // operation API-side: remember it so the resolution below can
+          // refuse a different target before touching the transport.
+          // (Kept apart from `confirmTargetId`, which names the operation
+          // THIS turn attempted — the catch below settles exactly that.)
+          apiBoundOperationId = apiSighting.operationId ?? '';
+        }
+        if (!sighting.fresh) {
+          return await this.replayConfirmationBinding({
+            prior: sighting.record,
+            coordinator,
+            identity,
+            input,
+            plan,
+            startedAt,
+            base: result,
+          });
+        }
         const target = await coordinator.resolveDecisionTarget(identity, 'decidable', this.draftContext(input));
         if (target.kind === 'none') {
+          // P1-2: persist the no-target outcome as an unbound sentinel (the
+          // sighting row settles `reserved → inconclusive`) so a redelivery
+          // of THIS intention reproduces inconclusive even after a LATER
+          // operation appears — it never confirms B. Best-effort: the
+          // freshly written sighting already blocks by construction when the
+          // settle itself fails.
+          try {
+            confirmationStore.settleConfirmation!({
+              ctx: confirmationCtx,
+              intentionId: input.intentionId,
+              operationId: CONFIRMATION_UNBOUND_OPERATION_ID,
+              status: 'inconclusive',
+              receiptJson: null,
+              nowMs: this.draftNowMs(),
+            });
+          } catch {
+            // Best-effort terminal bookkeeping only.
+          }
           this.emit('approval.rejected', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'rejected' });
           return this.completeTurn(input, plan, startedAt, result, {
             response: freeze({ text: 'Não há nenhuma operação pendente para confirmar.' }),
           });
         }
         if (target.kind === 'multiple') {
+          // P1-2: same sentinel as above — the ambiguity is terminal for
+          // THIS intention; only a new turn/intention may confirm B.
+          // The disambiguation SHOWS the set: record it for future turns.
+          this.recordPresentedOperations(confirmationStore, confirmationCtx, target.operations.map((operation) => operation.id));
+          try {
+            confirmationStore.settleConfirmation!({
+              ctx: confirmationCtx,
+              intentionId: input.intentionId,
+              operationId: CONFIRMATION_UNBOUND_OPERATION_ID,
+              status: 'inconclusive',
+              receiptJson: null,
+              nowMs: this.draftNowMs(),
+            });
+          } catch {
+            // Best-effort terminal bookkeeping only.
+          }
           const text = renderDisambiguation(target.operations, 'confirmar');
           const ambiguousPlan = freeze({ ...plan, missingFields: freeze(['intent']) });
           this.emit('mutation.blocked', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'blocked' });
@@ -2832,9 +3559,171 @@ export class ConversationOrchestrator {
             response: freeze({ text }),
           });
         }
-        const confirmed = await coordinator.confirm(target.operation.id, identity);
+        confirmTargetId = target.operation.id;
+        // Review round 4 P1-B: the API already bound THIS intention to a
+        // different operation (a previous confirm reached the API while the
+        // agent lost its local history). Refuse before the transport — a
+        // redelivery replays A via the binding, it never confirms B.
+        if (apiBoundOperationId !== '' && apiBoundOperationId !== target.operation.id) {
+          try {
+            confirmationStore.settleConfirmation!({
+              ctx: confirmationCtx,
+              intentionId: input.intentionId,
+              operationId: CONFIRMATION_UNBOUND_OPERATION_ID,
+              status: 'inconclusive',
+              receiptJson: null,
+              nowMs: this.draftNowMs(),
+            });
+          } catch {
+            // Best-effort terminal bookkeeping only.
+          }
+          return this.inconclusiveConfirmationTurn(
+            input, plan, startedAt, result, 'confirmation_intention_conflict',
+          );
+        }
+        // Review fix P1-4: TEMPORAL ADMISSIBILITY. The resolved operation
+        // must already have existed when THIS intention was first seen
+        // (effective anchor = min(local sighting tEntry, API first-seen) vs
+        // the operation's authoritative `createdAt`, with skew tolerance).
+        // An operation created AFTER the anchor (beyond clock-skew
+        // tolerance) is rejected fail-closed (settle the sighting sentinel
+        // best-effort) so only a fresh turn/intention may confirm the newer
+        // operation. An unparseable timestamp proves nothing ⇒ fail closed
+        // as well. Review round 4 P1-A2: the frontier REJECTS (`>=`): an
+        // operation born exactly at anchor+skew is indistinguishable from a
+        // race and must not execute — a fresh intention confirms it.
+        {
+          const opCreatedMs = Date.parse(target.operation.createdAt);
+          if (
+            !Number.isFinite(anchorMs) ||
+            !Number.isFinite(opCreatedMs) ||
+            opCreatedMs >= anchorMs + CONFIRMATION_OPERATION_SKEW_MS
+          ) {
+            // ROUND5-1: NO presentation witness here. This rejection answers
+            // only `renderInconclusive()` — no card, no summary of B — so
+            // recording a presentation would forge a testimony without
+            // exhibition and let a later intention confirm an operation it
+            // never saw. The sentinel settle above is the only durable mark.
+            try {
+              confirmationStore.settleConfirmation!({
+                ctx: confirmationCtx,
+                intentionId: input.intentionId,
+                operationId: CONFIRMATION_UNBOUND_OPERATION_ID,
+                status: 'inconclusive',
+                receiptJson: null,
+                nowMs: this.draftNowMs(),
+              });
+            } catch {
+              // Best-effort terminal bookkeeping only.
+            }
+            return this.inconclusiveConfirmationTurn(
+              input, plan, startedAt, result, 'confirmation_operation_newer_than_intention',
+            );
+          }
+        }
+        // Review round 4 P1-A3 + round 5 ROUND5-2: PRESENTATION BINDING by
+        // entry-snapshot membership. Time alone cannot prove identity
+        // (skew-window birth, backdated `createdAt` from a negatively-skewed
+        // API clock), so the target must belong to the present-set frozen at
+        // turn entry (`confirmationPresentationSnapshot`): never presented —
+        // or presented only DURING this turn's awaits (even in the same ms,
+        // e.g. first seen in this very listing) — ⇒ fail closed; only a
+        // fresh turn/intention whose entry snapshot already contains it may
+        // confirm it. The `presentedAt <= anchor` read stays as
+        // defense-in-depth below. Temporal stays as defense-in-depth above.
+        // ROUND5-1: no witness on rejection (inconclusive publishes no card).
+        {
+          const inEntrySnapshot = confirmationPresentationSnapshot?.has(target.operation.id) ?? false;
+          const presented = confirmationStore.findConfirmationPresentation?.(confirmationCtx, target.operation.id);
+          const presentedMs = presented ? Date.parse(presented.presentedAt) : NaN;
+          if (!inEntrySnapshot || !presented || !Number.isFinite(presentedMs) || presentedMs > anchorMs) {
+            try {
+              confirmationStore.settleConfirmation!({
+                ctx: confirmationCtx,
+                intentionId: input.intentionId,
+                operationId: CONFIRMATION_UNBOUND_OPERATION_ID,
+                status: 'inconclusive',
+                receiptJson: null,
+                nowMs: this.draftNowMs(),
+              });
+            } catch {
+              // Best-effort terminal bookkeeping only.
+            }
+            return this.inconclusiveConfirmationTurn(
+              input, plan, startedAt, result, 'confirmation_operation_not_presented',
+            );
+          }
+        }
+        // PR137-HARDEN (Bloco A): RESERVE BEFORE EXECUTE (criterion 2). The
+        // intention→operationId binding is written durably with CAS BEFORE
+        // any remote confirm/execute — no distributed DO↔PG transaction is
+        // presumed; the API stays the anti-double-effect authority for the
+        // SAME operation. Only the `claimed` caller drives the execution:        // `identical` (concurrent loser / retry) and `divergent` (a binding
+        // for another op already won) answer inconclusive without touching
+        // the transport — the first durable writer wins (criterion 3). A
+        // claim-write failure (SQLite error, uninitialized schema) leaves
+        // the path unprotected ⇒ fail closed (criteria 1/7).
+        // All admissibility checks passed: refresh the presentation witness
+        // (post-check, so it can never self-authorize) and reserve.
+        this.recordPresentedOperations(confirmationStore, confirmationCtx, [target.operation.id]);
+        let claim: string | void;
+        try {
+          claim = confirmationStore.claimConfirmation!({
+            ctx: confirmationCtx,
+            intentionId: input.intentionId,
+            operationId: target.operation.id,
+            receiptJson: null,
+            status: 'reserved',
+            nowMs: this.draftNowMs(),
+          });
+        } catch {
+          // Review fix P1-4: the claim write failed BEFORE persisting, so no
+          // binding protects this intention yet. Attempt to leave an unbound
+          // sentinel (best-effort — a fully-down store throws here too, the
+          // documented residual) so a post-recovery redelivery reproduces
+          // inconclusive instead of resolving-and-confirming a later B; the
+          // sighting's first-seen instant additionally fences it via the
+          // temporal check above.
+          try {
+            confirmationStore.settleConfirmation!({
+              ctx: confirmationCtx,
+              intentionId: input.intentionId,
+              operationId: CONFIRMATION_UNBOUND_OPERATION_ID,
+              status: 'inconclusive',
+              receiptJson: null,
+              nowMs: this.draftNowMs(),
+            });
+          } catch {
+            // Best-effort terminal bookkeeping only.
+          }
+          return this.inconclusiveConfirmationTurn(input, plan, startedAt, result, 'confirmation_reserve_failed');
+        }
+        if (claim !== 'claimed') {
+          return this.inconclusiveConfirmationTurn(
+            input, plan, startedAt, result,
+            claim === 'divergent' ? 'confirmation_binding_conflict' : 'confirmation_already_claimed',
+          );
+        }
+        const confirmed = await coordinator.confirm(target.operation.id, identity, input.intentionId);
         this.emit('approval.confirmed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'confirmed' });
         this.emit('mutation.executed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'succeeded', latencyMs: Date.now() - startedAt });
+        // PR137-HARDEN (Bloco A): settle the reservation to its terminal
+        // state. Best-effort: a settle-write failure must NEVER break a
+        // success the API already persisted (the API stays the
+        // anti-double-effect authority for the SAME operation). An unsettled
+        // `reserved` row still blocks B on redelivery (reconcile path).
+        try {
+          confirmationStore.settleConfirmation!({
+            ctx: confirmationCtx,
+            intentionId: input.intentionId,
+            operationId: confirmed.operationId,
+            status: 'succeeded',
+            receiptJson: confirmed.receipt ? JSON.stringify(confirmed.receipt) : null,
+            nowMs: this.draftNowMs(),
+          });
+        } catch {
+          // Best-effort marker only.
+        }
         return this.completeTurn(input, plan, startedAt, result, {
           mutation: freeze({
             operationId: confirmed.operationId,
@@ -2843,10 +3732,86 @@ export class ConversationOrchestrator {
           }),
           response: freeze({ text: renderMutationResult('succeeded') }),
         });
-      } catch {
+      } catch (error) {
         this.emit('mutation.blocked', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'blocked' });
+        // Review round 4 P1-B: the API refused the confirm because THIS
+        // intention is already bound to a DIFFERENT operation
+        // (`approval.intention_conflict`): the redelivery must never confirm
+        // B. Settle terminal (best-effort) and answer inconclusive — never
+        // the `failed` copy (which would read as "nothing happened, retry",
+        // inviting a re-confirm of B under a fresh intention without the
+        // binding context).
+        if (isIntentionConflictError(error)) {
+          if (confirmTargetId !== '') {
+            try {
+              this.dependencies.draftStore?.settleConfirmation?.({
+                ctx: this.draftContext(input),
+                intentionId: input.intentionId,
+                operationId: confirmTargetId,
+                status: 'inconclusive',
+                receiptJson: null,
+                nowMs: this.draftNowMs(),
+              });
+            } catch {
+              // Best-effort terminal bookkeeping only.
+            }
+          }
+          return this.completeTurn(input, plan, startedAt, result, {
+            response: freeze({ text: renderInconclusive() }),
+          });
+        }
+        // Bloco A fase 2 (issue #105): the confirm+execute above may have
+        // persisted BEFORE the error (lost execute response, receipt-less
+        // reply). The authoritative listing decides: when the target left the
+        // active set it is terminal (succeeded — this branch only confirms,
+        // never cancels), so a definitive "failed" claim would be FALSE while
+        // the money moved. Answer inconclusive; the user checks the
+        // lançamentos. A still-active target, an unreconciled target, or an
+        // unreadable listing keeps the existing failure copy.
+        // PR137-HARDEN: the reservation won above stays terminal-bookkept:
+        // settle it `inconclusive` best-effort so a redelivery of THIS
+        // intention reconciles against A (never confirms B) instead of
+        // re-driving a `reserved` row whose outcome is already unknown.
+        // The immediate copy below is unchanged (terminal/unreadable →
+        // inconclusive; still-active → failed).
+        if (confirmTargetId !== '') {
+          try {
+            this.dependencies.draftStore?.settleConfirmation?.({
+              ctx: this.draftContext(input),
+              intentionId: input.intentionId,
+              operationId: confirmTargetId,
+              status: 'inconclusive',
+              receiptJson: null,
+              nowMs: this.draftNowMs(),
+            });
+          } catch {
+            // Best-effort terminal bookkeeping only.
+          }
+        }
+        let targetTerminal = false;
+        // PR137-SEC-FIX Fase 1 (B): a resolved target with an UNREADABLE
+        // listing is the same unknown as a terminal one — the effect may have
+        // landed before the error, so a definitive `failed` would be a false
+        // claim. Answer inconclusive.
+        // Review fix P1-1: a target still present as `executing` is the same
+        // unknown — the API is applying the effect right now, so `failed`
+        // would be equally false. Only a target still `proposed`/`confirmed`
+        // (nothing started) keeps the `failed` copy.
+        let listingUnreadable = false;
+        let targetExecuting = false;
+        try {
+          if (confirmTargetId !== '') {
+            const current = await coordinator.listActive(identity);
+            const found = current.find((item) => item.id === confirmTargetId);
+            targetTerminal = !found;
+            targetExecuting = !!found && found.status === 'executing';
+          }
+        } catch {
+          listingUnreadable = confirmTargetId !== '';
+          targetTerminal = false;
+        }
         return this.completeTurn(input, plan, startedAt, result, {
-          response: freeze({ text: renderMutationResult('failed') }),
+          response: freeze({ text: targetTerminal || listingUnreadable || targetExecuting ? renderInconclusive() : renderMutationResult('failed') }),
         });
       }
     }

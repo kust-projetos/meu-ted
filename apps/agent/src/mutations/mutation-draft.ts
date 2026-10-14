@@ -21,6 +21,7 @@
  */
 
 import type { MutationDraftChannelMessage, TedApprovalTool } from '@pi-finance/llm-contracts';
+import { mutationReceiptSchema } from '@pi-finance/llm-contracts';
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
 import type { FieldProvenance } from './semantic-interpretation.js';
 
@@ -218,6 +219,262 @@ export type DraftUpdateOptions = Readonly<{ expectedRevision?: number }>;
 export const DEFAULT_DRAFT_TTL_MS = 15 * 60_000;
 export const DEFAULT_MAX_PROPOSE_ATTEMPTS = 2;
 
+/**
+ * PR137-SEC-FIX Fase 1 (A) — idempotent confirmation binding (SPEC §7.7
+ * redelivery, issue #105). Records that THIS identity context already
+ * confirmed+executed an operation under THIS intentionId, with the success
+ * receipt to replay verbatim.
+ *
+ * Durability is load-bearing: the orchestrator is constructed PER TURN in
+ * production (`orchestratorForChannel`), so instance memory would never
+ * survive a redelivery. The marker lives in the same durable store as the
+ * drafts (DO SQLite in prod, InMemory in tests) — never in orchestrator
+ * instance state.
+ *
+ * Scope is the authenticated identity (workspace + actor + device), like
+ * `sameContext` minus `conversationId` (a conversation is not an auth leg:
+ * the listing the marker guards is device-bound). A marker NEVER crosses an
+ * identity leg. Receipt validity is TTL 24h; an expired marker is a TOMBSTONE
+ * (see `CONFIRMATION_TOMBSTONE_RETENTION_MS`): it no longer replays success
+ * blindly, but the binding still blocks any divergent confirmation until
+ * pruned well beyond the redelivery window.
+ */
+export const CONFIRMATION_TTL_MS = 24 * 60 * 60_000;
+
+/**
+ * PR137-HARDEN (Bloco A): tombstone retention. An expired receipt stops
+ * proving success, but the identity→operationId BINDING must keep blocking a
+ * divergent confirmation (criterion 5): a redelivery that arrives after the
+ * 24h receipt TTL must never confirm a LATER operation B. Rows are pruned
+ * opportunistically ONLY when expired well beyond any plausible redelivery
+ * window (30 days) — never at TTL expiry — so the table stays bounded
+ * without ever reopening the A→B substitution it exists to close.
+ */
+export const CONFIRMATION_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+
+/**
+ * Review fix P1-3 (policy a) + P1-4 (temporal admissibility): the
+ * identity→operationId BINDING is never deleted — retention hygiene only
+ * strips the bulky `receipt_json` cell (the binding row itself is the proof
+ * that blocks a divergent confirmation, and it is minimal: one row per
+ * confirmation intention, bounded by business volume, never by redelivery
+ * traffic). A pruned-then-redelivered intention still finds its binding and
+ * reconciles against the ORIGINAL operation; it can never resolve-and-confirm
+ * a LATER operation B.
+ *
+ * Review fix P1-4 (round 3, narrowed): an intention may only confirm an
+ * operation that already existed when the intention was FIRST seen. The
+ * durable first-sighting row (`noteConfirmationSighted` `createdAt`) IS the
+ * message-instant anchor: `TurnInput` carries no trusted edge timestamp
+ * (investigated — `normalize` builds the turn from body + server-side
+ * options only, `finance-chat-agent` stamps nothing, and a client-supplied
+ * timestamp would be untrusted input), and `Date.now()` at turn start is
+ * NOT redelivery-stable (a redelivery would re-stamp T2 and admit anything
+ * born before T2). The sighting row, written once and reused via the
+ * `fresh: false` replay path, preserves the original T0 across redeliveries
+ * and restarts. An operation created AFTER the anchor (beyond clock-skew
+ * tolerance) is rejected fail-closed: a fresh turn/intention is required to
+ * confirm it. The 5 s tolerance covers agent↔API clock skew ONLY — a
+ * legitimately confirmable operation is proposed turns earlier, never newer
+ * than the utterance that confirms it. Documented residual: an operation
+ * born within ≤5 s after the message instant is indistinguishable from
+ * skew and admitted (deliberate trade-off: false rejection of a legitimate
+ * confirm is the worse failure here, and proposals always pre-exist).
+ */
+export const CONFIRMATION_OPERATION_SKEW_MS = 5_000;
+
+/** Empty `operation_id` standing for "seen, no target bound yet" (P1-2/P1-4 sentinel). */
+export const CONFIRMATION_UNBOUND_OPERATION_ID = '';
+
+/**
+ * Review round 4 P1-A3 — presentation binding. Time alone cannot prove
+ * identity (an operation born inside the clock-skew window, or with a
+ * backdated/forged `createdAt` from a negatively-skewed API clock, passes
+ * the temporal check). The target must additionally belong to the SET that
+ * was PRESENTED to this identity at or before the intention's anchor
+ * (`presentationTime <= tEntry`): an operation never shown (no proposal
+ * card, no disambiguation listing) is rejected even inside the skew.
+ *
+ * Recorded at every point the agent shows operations to the user (proposal
+ * turns, confirmation/cancel disambiguations, confirmation listings — the
+ * latter self-heals in-flight operations proposed before this hardening:
+ * the first post-deploy "sim" presents fail-closed, the next confirms).
+ * First presentation wins (earliest instant preserved); rows are minimal
+ * (one per identity+operation) and pruned past the tombstone horizon.
+ */
+export const CONFIRMATION_PRESENTATION_RETENTION_MS = 30 * 24 * 60 * 60_000;
+
+export type ConfirmationPresentation = Readonly<{
+  workspaceId: string;
+  actorId: string;
+  deviceId: string | null;
+  operationId: string;
+  presentedAt: string;
+  expiresAt: string;
+}>;
+
+export type NoteConfirmationPresentationInput = Readonly<{
+  ctx: DraftContext;
+  operationIds: readonly string[];
+  nowMs: number;
+}>;
+
+/**
+ * PR137-HARDEN (Bloco A): durability states of the identity→operationId
+ * binding. Minimal set, deliberately not over-engineered:
+ * - `reserved` — claimed BEFORE any remote confirm/execute (crash window);
+ *   proves nothing about money, only who may drive this intention;
+ * - `succeeded` — the bound operation confirmed+executed (receipt or not);
+ * - `inconclusive` — terminal without proof of success (transport failure,
+ *   conflict, unreadable reconcile). Blocks B forever for this intention,
+ *   claims nothing.
+ */
+export type ConfirmationStatus = 'reserved' | 'succeeded' | 'inconclusive';
+
+export type ConfirmationRecord = Readonly<{
+  workspaceId: string;
+  actorId: string;
+  deviceId: string | null;
+  intentionId: string;
+  operationId: string;
+  /** JSON-serialized success receipt (`null` for reservations and receipt-less successes). */
+  receiptJson: string | null;
+  createdAt: string;
+  expiresAt: string;
+  status: ConfirmationStatus;
+}>;
+
+export type RememberConfirmationInput = Readonly<{
+  ctx: DraftContext;
+  intentionId: string;
+  operationId: string;
+  receiptJson: string | null;
+  nowMs: number;
+  ttlMs?: number;
+}>;
+
+/**
+ * PR137-HARDEN (Bloco A): reserve-before-execute claim. The orchestrator
+ * claims the binding BEFORE any remote confirm/execute with `status:
+ * 'reserved'`; `rememberConfirmation` keeps the post-success path with
+ * `status: 'succeeded'`. Both are the same immutable CAS: first durable
+ * writer wins, divergent rewrites are rejected, never applied.
+ */
+export type ClaimConfirmationInput = RememberConfirmationInput &
+  Readonly<{ status: ConfirmationStatus }>;
+
+export type ClaimOutcome = 'claimed' | 'identical' | 'divergent';
+
+/**
+ * Review fix P1-2/P1-4: durable first-sighting of a confirmation intention.
+ * `record` is the sighting row (or the pre-existing binding when this
+ * intention was seen before); `fresh` is true only when THIS call created
+ * it. An unbound sighting (`operationId === ''`) is a SENTINEL: a redelivery
+ * that finds one must reproduce inconclusive, never resolve-and-confirm a
+ * later operation. `record.createdAt` is the first-seen instant used by the
+ * temporal-admissibility check (P1-4).
+ */
+export type ConfirmationSighting = Readonly<{
+  record: ConfirmationRecord;
+  fresh: boolean;
+}>;
+
+export type SettleConfirmationInput = Readonly<{
+  ctx: DraftContext;
+  intentionId: string;
+  operationId: string;
+  status: Extract<ConfirmationStatus, 'succeeded' | 'inconclusive'>;
+  receiptJson: string | null;
+  nowMs: number;
+}>;
+
+/**
+ * PR137-HARDEN (Bloco A): receipt validation for a replay (criterion 6),
+ * hardened by review (P2-6): the receipt MUST satisfy the canonical
+ * `mutationReceiptSchema` (SPEC §15.1 — the same schema the executor enforces
+ * at write time in `receiptFromExecution`, including the approval-tool
+ * identity rule that pins the origin `operationId`).
+ * - `absent` — no receipt cell. The BINDING stays the authority for
+ *   blocking B; replay without receipt is allowed only for an unexpired
+ *   `succeeded` marker (written strictly post-success). Expired markers
+ *   always reconcile first.
+ * - `valid` — schema-valid AND `operationId` equals the bound one. An absent
+ *   `status` is NO LONGER accepted: pre-hardening doubles/rows without a
+ *   status field are legacy shapes, not proof — they reconcile, never replay
+ *   success verbatim.
+ * - `invalid` — `corrupt` (unparseable/non-object), `divergent`
+ *   (`operationId` missing or different from the bound one), or `incomplete`
+ *   (parseable object that fails the canonical schema: missing/invalid
+ *   mutationId, mutationKind, status, affectedTargets, or entity linkage).
+ *   Never a false success: the caller must reconcile via the API listing,
+ *   and answer inconclusive when reconciliation is impossible.
+ *
+ * Entity linkage (`entity.type/id`) is enforced at WRITE time by the
+ * executor; the replay re-validates shape + bound operationId + succeeded
+ * status, which is all the binding row can prove on its own.
+ */
+export type ValidatedReceipt =
+  | Readonly<{ kind: 'valid'; receipt: Record<string, unknown> }>
+  | Readonly<{ kind: 'absent' }>
+  | Readonly<{ kind: 'invalid'; reason: 'corrupt' | 'divergent' | 'incomplete' }>;
+
+export const validateConfirmationReceipt = (
+  receiptJson: string | null,
+  operationId: string,
+): ValidatedReceipt => {
+  if (receiptJson === null) return { kind: 'absent' };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(receiptJson);
+  } catch {
+    return { kind: 'invalid', reason: 'corrupt' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { kind: 'invalid', reason: 'corrupt' };
+  }
+  const receipt = parsed as Record<string, unknown>;
+  if (receipt.operationId !== operationId) return { kind: 'invalid', reason: 'divergent' };
+  if (!mutationReceiptSchema.safeParse(parsed).success) {
+    return { kind: 'invalid', reason: 'incomplete' };
+  }
+  return { kind: 'valid', receipt };
+};
+
+export const buildConfirmationRecord = (input: RememberConfirmationInput): ConfirmationRecord => {
+  const now = input.nowMs;
+  const stamp = new Date(now).toISOString();
+  return Object.freeze({
+    workspaceId: input.ctx.workspaceId,
+    actorId: input.ctx.actorId,
+    deviceId: input.ctx.deviceId,
+    intentionId: input.intentionId,
+    operationId: input.operationId,
+    receiptJson: input.receiptJson,
+    createdAt: stamp,
+    expiresAt: new Date(now + (input.ttlMs ?? CONFIRMATION_TTL_MS)).toISOString(),
+    status: 'succeeded' as ConfirmationStatus,
+  });
+};
+
+export const buildClaimRecord = (input: ClaimConfirmationInput): ConfirmationRecord => {
+  const now = input.nowMs;
+  const stamp = new Date(now).toISOString();
+  return Object.freeze({
+    workspaceId: input.ctx.workspaceId,
+    actorId: input.ctx.actorId,
+    deviceId: input.ctx.deviceId,
+    intentionId: input.intentionId,
+    operationId: input.operationId,
+    receiptJson: input.receiptJson,
+    createdAt: stamp,
+    expiresAt: new Date(now + (input.ttlMs ?? CONFIRMATION_TTL_MS)).toISOString(),
+    status: input.status,
+  });
+};
+
+export const isConfirmationExpired = (record: ConfirmationRecord, nowMs: number): boolean =>
+  Number.isFinite(Date.parse(record.expiresAt)) && Date.parse(record.expiresAt) <= nowMs;
+
 const sameContext = (draft: MutationDraftRecord, ctx: DraftContext): boolean =>
   draft.workspaceId === ctx.workspaceId &&
   draft.actorId === ctx.actorId &&
@@ -383,11 +640,105 @@ export interface MutationDraftStore {
   ): MutationDraftRecord | undefined;
   /** Marks stale `active` drafts `expired`; returns how many were closed. */
   expireStale(ctx: DraftContext, nowMs: number): number;
+  /**
+   * PR137-HARDEN (Bloco A) — idempotent confirmation binding. Optional so
+   * pre-existing store doubles keep compiling; the orchestrator treats an
+   * absent method like an absent store: the financial confirmation path is
+   * FAIL-CLOSED (inconclusive), never falls back to the live listing.
+   *
+   * IMMUTABLE contract: first durable writer wins. Re-claiming the SAME
+   * operationId is idempotent (`identical`); claiming a DIFFERENT
+   * operationId for the same identity+intentionId is rejected
+   * (`divergent`) — never overwritten (the pre-hardening
+   * `ON CONFLICT DO UPDATE` that silently rebound A→B is removed).
+   */
+  rememberConfirmation?(input: RememberConfirmationInput): ClaimOutcome | void;
+  /**
+   * PR137-HARDEN (Bloco A) — reserve-before-execute CAS. Called BEFORE any
+   * remote confirm/execute with `status: 'reserved'`. Same immutable
+   * contract as `rememberConfirmation`. Only the `claimed` caller may
+   * drive the execution; `identical`/`divergent` callers must answer
+   * inconclusive without touching the transport.
+   */
+  claimConfirmation?(input: ClaimConfirmationInput): ClaimOutcome | void;
+  /**
+   * PR137-HARDEN (Bloco A) — settles a `reserved` binding to its terminal
+   * state (`succeeded` with the receipt, or `inconclusive`). CAS on
+   * `status = 'reserved'`: `succeeded`/`inconclusive` rows are immutable
+   * and never transition again. Returns true when this call settled.
+   */
+  settleConfirmation?(input: SettleConfirmationInput): boolean | void;
+  findConfirmation?(ctx: DraftContext, intentionId: string, nowMs: number): ConfirmationRecord | undefined;
+  /**
+   * Review fix P1-2/P1-4 — durable first-sighting, written BEFORE the live
+   * listing is ever resolved for a new intention. INSERT-with-adoption: the
+   * first call creates an unbound sentinel row (`operationId === ''`); a
+   * later `claimConfirmation` for the resolved target ADOPTS the sentinel
+   * (CAS on `operationId === ''`) instead of conflicting with it, so the
+   * sighting never blocks the legitimate first-attempt claim. Optional like
+   * the other binding methods; the orchestrator treats an absent method like
+   * an absent store (fail-closed).
+   *
+   * RESIDUAL (documented, P1-4 round 3; CLOSED round 4 P1-B): when THIS write
+   * itself throws, the orchestrator best-efforts an independent claim-path
+   * sentinel for the same intention (same instant, unbound `operationId ===
+   * ''`), so a selective sighting-write outage still leaves a T0-anchored
+   * marker and the post-recovery redelivery replays inconclusive. A TOTAL
+   * outage (every binding-write path down for the whole turn) is closed by
+   * the API frontier instead (direction iii): the entry bind persists
+   * X@T_api BEFORE any local write, and the redelivery fails closed via the
+   * pre-existing-API-sighting rule — see the confirmation branch.
+   */
+  noteConfirmationSighted?(ctx: DraftContext, intentionId: string, nowMs: number): ConfirmationSighting;
+  /**
+   * Review round 4 P1-A3 — presentation binding (see
+   * `CONFIRMATION_PRESENTATION_RETENTION_MS`). Records that THESE operation
+   * ids were presented to this identity at `nowMs` (proposal card,
+   * disambiguation, authoritative listing). First presentation wins: a
+   * repeat call for an already-presented operation keeps the earliest
+   * instant. Optional like the other binding methods; the orchestrator
+   * treats an absent method like an absent store (fail-closed on the
+   * financial confirmation path). Best-effort hygiene prunes rows past the
+   * retention horizon; a prune failure never breaks the write.
+   */
+  noteConfirmationPresentation?(input: NoteConfirmationPresentationInput): void;
+  /** Reads back one presentation record for this identity, if any. */
+  findConfirmationPresentation?(ctx: DraftContext, operationId: string): ConfirmationPresentation | undefined;
+  /**
+   * PR137-HARDEN round 5 — entry snapshot of the present-set. Lists the
+   * operation ids ever presented to this identity, read SYNCHRONOUSLY at
+   * turn entry (before the first await) and frozen for the turn. Admission
+   * requires target ∈ snapshot (membership): an operation presented DURING
+   * this turn's awaits — even in the same millisecond — is absent from the
+   * snapshot and rejected, whatever its timestamp. Optional like the other
+   * binding methods; absent ⇒ the confirmation path fails closed.
+   */
+  listConfirmationPresentations?(ctx: DraftContext): readonly string[];
+  /**
+   * R6 (PR137-FIX): best-effort compensation for presentations THIS turn
+   * wrote but never published (the card never reached the user, so the
+   * testimony must not authorize a later confirmation). Deletes ONLY the
+   * listed operation ids for this identity — pre-existing rows (an earlier
+   * turn whose card WAS published) are never touched by the orchestrator's
+   * ledgered revert. Optional like the other binding methods; absent ⇒ the
+   * orchestrator's revert is a no-op. Never throws past the caller.
+   */
+  forgetConfirmationPresentations?(ctx: DraftContext, operationIds: readonly string[]): void;
 }
 
 export class InMemoryMutationDraftStore implements MutationDraftStore {
   private readonly drafts = new Map<string, MutationDraftRecord>();
   private readonly byIntention = new Map<string, string>();
+  private readonly confirmations = new Map<string, ConfirmationRecord>();
+  private readonly presentations = new Map<string, ConfirmationPresentation>();
+
+  private static confirmationKey(ctx: DraftContext, intentionId: string): string {
+    return `${ctx.workspaceId}\u0000${ctx.actorId}\u0000${ctx.deviceId ?? ''}\u0000${intentionId}`;
+  }
+
+  private static presentationKey(ctx: DraftContext, operationId: string): string {
+    return `${ctx.workspaceId}\u0000${ctx.actorId}\u0000${ctx.deviceId ?? ''}\u0000${operationId}`;
+  }
 
   getOrCreate(record: MutationDraftRecord): { record: MutationDraftRecord; created: boolean } {
     const existing = this.drafts.get(record.draftId);
@@ -474,6 +825,176 @@ export class InMemoryMutationDraftStore implements MutationDraftStore {
       }
     }
     return closed;
+  }
+
+  rememberConfirmation(input: RememberConfirmationInput): ClaimOutcome {
+    return this.claimConfirmation({ ...input, status: 'succeeded' as ConfirmationStatus });
+  }
+
+  claimConfirmation(input: ClaimConfirmationInput): ClaimOutcome {
+    // Synchronous check-and-set: inside one DO turn handler this cannot
+    // interleave (single-event serialization), and the method performs NO
+    // await between the check and the write, so exactly one concurrent
+    // continuation wins. Immutability: a divergent re-claim is rejected,
+    // never applied (criterion 4).
+    const key = InMemoryMutationDraftStore.confirmationKey(input.ctx, input.intentionId);
+    const existing = this.confirmations.get(key);
+    if (existing) {
+      // Review fix P1-2/P1-4: an unbound RESERVED sighting sentinel
+      // (`operationId === ''`) is ADOPTED by the first real claim — the
+      // sighting records first-seen, it never blocks the legitimate
+      // first-attempt binding. A terminal (`inconclusive`) sentinel is never
+      // adopted (falls through to divergent below).
+      // The adoption preserves the sighting's `createdAt` (first-seen) so
+      // the temporal-admissibility check keeps the original instant.
+      if (existing.operationId === CONFIRMATION_UNBOUND_OPERATION_ID && existing.status === 'reserved') {
+        this.confirmations.set(
+          key,
+          Object.freeze({
+            ...buildClaimRecord(input),
+            createdAt: existing.createdAt,
+          }),
+        );
+        return 'claimed';
+      }
+      return existing.operationId === input.operationId ? 'identical' : 'divergent';
+    }
+    // Opportunistic hygiene: review fix P1-3 (policy a) — the binding is
+    // NEVER deleted. Only the bulky `receipt_json` cell of tombstones far
+    // beyond the redelivery window is stripped; the minimal binding row
+    // keeps blocking divergent confirmations forever (bounded: one minimal
+    // row per confirmation intention).
+    this.stripAncientConfirmationReceipts(input.nowMs);
+    this.confirmations.set(key, buildClaimRecord(input));
+    return 'claimed';
+  }
+
+  noteConfirmationSighted(ctx: DraftContext, intentionId: string, nowMs: number): ConfirmationSighting {
+    const key = InMemoryMutationDraftStore.confirmationKey(ctx, intentionId);
+    const existing = this.confirmations.get(key);
+    // The key encodes the identity legs, so a hit is always this
+    // identity's own marker (per-identity sightings, like the binding).
+    if (existing) return { record: existing, fresh: false };
+    this.stripAncientConfirmationReceipts(nowMs);
+    const stamp = new Date(nowMs).toISOString();
+    const record = Object.freeze({
+      workspaceId: ctx.workspaceId,
+      actorId: ctx.actorId,
+      deviceId: ctx.deviceId,
+      intentionId,
+      operationId: CONFIRMATION_UNBOUND_OPERATION_ID,
+      receiptJson: null,
+      createdAt: stamp,
+      expiresAt: new Date(nowMs + CONFIRMATION_TTL_MS).toISOString(),
+      status: 'reserved' as ConfirmationStatus,
+    });
+    this.confirmations.set(key, record);
+    return { record, fresh: true };
+  }
+
+  noteConfirmationPresentation(input: NoteConfirmationPresentationInput): void {
+    // First presentation wins (earliest instant is the proof); repeats keep
+    // it. Opportunistic prune of rows past the retention horizon keeps the
+    // table bounded by business volume, never by redelivery traffic.
+    // ROUND5-3: the horizon compares `expiresAt <= now` (a row presented at
+    // P expires at P+30d, pruned once now >= P+30d). Comparing against
+    // `now - 30d` doubled the horizon to an effective 60d.
+    for (const [storedKey, record] of this.presentations) {
+      if (Date.parse(record.expiresAt) <= input.nowMs) this.presentations.delete(storedKey);
+    }
+    const stamp = new Date(input.nowMs).toISOString();
+    for (const operationId of input.operationIds) {
+      if (!operationId) continue;
+      const key = InMemoryMutationDraftStore.presentationKey(input.ctx, operationId);
+      if (this.presentations.has(key)) continue;
+      this.presentations.set(
+        key,
+        Object.freeze({
+          workspaceId: input.ctx.workspaceId,
+          actorId: input.ctx.actorId,
+          deviceId: input.ctx.deviceId,
+          operationId,
+          presentedAt: stamp,
+          expiresAt: new Date(input.nowMs + CONFIRMATION_PRESENTATION_RETENTION_MS).toISOString(),
+        }),
+      );
+    }
+  }
+
+  findConfirmationPresentation(ctx: DraftContext, operationId: string): ConfirmationPresentation | undefined {
+    const record = this.presentations.get(InMemoryMutationDraftStore.presentationKey(ctx, operationId));
+    // Defense in depth: the key already encodes the legs, but a record is
+    // only ever valid for its own identity — never trust the key alone.
+    if (!record) return undefined;
+    if (record.workspaceId !== ctx.workspaceId || record.actorId !== ctx.actorId || (record.deviceId ?? null) !== (ctx.deviceId ?? null)) {
+      return undefined;
+    }
+    return record;
+  }
+
+  listConfirmationPresentations(ctx: DraftContext): readonly string[] {
+    const ids: string[] = [];
+    for (const record of this.presentations.values()) {
+      if (
+        record.workspaceId === ctx.workspaceId &&
+        record.actorId === ctx.actorId &&
+        (record.deviceId ?? null) === (ctx.deviceId ?? null) &&
+        record.operationId
+      ) {
+        ids.push(record.operationId);
+      }
+    }
+    return ids;
+  }
+
+  forgetConfirmationPresentations(ctx: DraftContext, operationIds: readonly string[]): void {
+    for (const operationId of operationIds) {
+      if (!operationId) continue;
+      this.presentations.delete(InMemoryMutationDraftStore.presentationKey(ctx, operationId));
+    }
+  }
+
+  private stripAncientConfirmationReceipts(nowMs: number): void {
+    const pruneBefore = nowMs - CONFIRMATION_TOMBSTONE_RETENTION_MS;
+    for (const [storedKey, record] of this.confirmations) {
+      if (record.receiptJson !== null && Date.parse(record.expiresAt) <= pruneBefore) {
+        this.confirmations.set(storedKey, Object.freeze({ ...record, receiptJson: null }));
+      }
+    }
+  }
+
+  settleConfirmation(input: SettleConfirmationInput): boolean {
+    // Synchronous CAS on `status = 'reserved'`: terminal rows are immutable.
+    const key = InMemoryMutationDraftStore.confirmationKey(input.ctx, input.intentionId);
+    const existing = this.confirmations.get(key);
+    if (
+      !existing ||
+      existing.operationId !== input.operationId ||
+      existing.status !== 'reserved' ||
+      existing.workspaceId !== input.ctx.workspaceId ||
+      existing.actorId !== input.ctx.actorId ||
+      (existing.deviceId ?? null) !== (input.ctx.deviceId ?? null)
+    ) {
+      return false;
+    }
+    this.confirmations.set(
+      key,
+      Object.freeze({ ...existing, status: input.status, receiptJson: input.receiptJson }),
+    );
+    return true;
+  }
+
+  findConfirmation(ctx: DraftContext, intentionId: string, _nowMs: number): ConfirmationRecord | undefined {
+    const record = this.confirmations.get(InMemoryMutationDraftStore.confirmationKey(ctx, intentionId));
+    // Defense in depth: the key already encodes the legs, but a marker is
+    // only ever valid for its own identity — never trust the key alone.
+    // Tombstones included: an expired binding still blocks a divergent
+    // confirmation (the caller discriminates via `isConfirmationExpired`).
+    if (!record) return undefined;
+    if (record.workspaceId !== ctx.workspaceId || record.actorId !== ctx.actorId || (record.deviceId ?? null) !== (ctx.deviceId ?? null)) {
+      return undefined;
+    }
+    return record;
   }
 }
 
@@ -578,10 +1099,48 @@ export const initializeMutationDraftSchema = (sql: SqlExec): void => {
     CREATE INDEX IF NOT EXISTS idx_mutation_drafts_context
     ON mutation_drafts (workspace_id, actor_id, status);
   `);
+  // PR137-SEC-FIX Fase 1 (A) — durable idempotent confirmation binding (see
+  // `ConfirmationRecord`). `device_id` is NOT NULL with `''` standing for
+  // "no device" so the PRIMARY KEY legs are never NULL (SQLite treats NULL
+  // PK legs as distinct, which would fork one identity into many markers).
+  // PR137-HARDEN: `status` carries the reserve→terminal lifecycle
+  // (`reserved`/`succeeded`/`inconclusive`); pre-hardening rows default to
+  // `succeeded` (they were written strictly post-success).
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS mutation_confirmations (
+      workspace_id TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      device_id TEXT NOT NULL DEFAULT '',
+      intention_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      receipt_json TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'succeeded',
+      PRIMARY KEY (workspace_id, actor_id, device_id, intention_id)
+    );
+  `);
+  // Review round 4 P1-A3 — presentation binding (see
+  // `CONFIRMATION_PRESENTATION_RETENTION_MS`). One minimal row per
+  // identity+operation: WHEN this operation was shown to this identity.
+  // First presentation wins (`ON CONFLICT DO NOTHING` below); `device_id`
+  // is NOT NULL with `''` for "no device" so PK legs are never NULL.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS mutation_confirmation_presentations (
+      workspace_id TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      device_id TEXT NOT NULL DEFAULT '',
+      operation_id TEXT NOT NULL,
+      presented_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, actor_id, device_id, operation_id)
+    );
+  `);
   // Idempotent compat for DOs created before these columns existed
   // (CREATE TABLE IF NOT EXISTS never backfills columns): add them when
   // missing. Duplicate-column races are swallowed, other errors propagate.
   for (const column of MUTATION_DRAFT_COMPAT_COLUMNS) ensureColumn(sql, column);
+  for (const column of MUTATION_CONFIRMATION_COMPAT_COLUMNS) ensureConfirmationColumn(sql, column);
 };
 
 /**
@@ -613,6 +1172,51 @@ const ensureColumn = (sql: SqlExec, column: Readonly<{ name: string; ddl: string
   } catch (error) {
     if (!/duplicate/i.test(String((error as Error)?.message ?? error))) throw error;
   }
+};
+
+/**
+ * PR137-HARDEN: additive `status` lifecycle on the confirmation binding.
+ * Same `ensureColumn` mold as the drafts table: idempotent, preservative
+ * (existing rows take `'succeeded'` — their only possible pre-hardening
+ * state), rollback-compatible (old code ignores the column; new code
+ * defaults it when absent).
+ */
+const MUTATION_CONFIRMATION_COMPAT_COLUMNS: readonly Readonly<{ name: string; ddl: string }>[] = [
+  { name: 'status', ddl: `status TEXT NOT NULL DEFAULT 'succeeded'` },
+];
+
+const ensureConfirmationColumn = (sql: SqlExec, column: Readonly<{ name: string; ddl: string }>): void => {
+  try {
+    const rows = [
+      ...sql.exec<Record<string, unknown>>(`PRAGMA table_info(mutation_confirmations)`),
+    ];
+    if (rows.some((row) => String(row.name ?? '') === column.name)) return;
+  } catch {
+    // PRAGMA unavailable — fall through to the guarded ALTER below. When
+    // the table itself is missing (schema never initialized), the ALTER
+    // throws a non-duplicate error that propagates: financial paths stay
+    // fail-closed instead of confirming unprotected.
+  }
+  try {
+    sql.exec(`ALTER TABLE mutation_confirmations ADD COLUMN ${column.ddl}`);
+  } catch (error) {
+    if (!/duplicate/i.test(String((error as Error)?.message ?? error))) throw error;
+  }
+};
+
+const rowToConfirmation = (row: Record<string, unknown>): ConfirmationRecord => {
+  const status = String(row.status ?? 'succeeded');
+  return Object.freeze({
+    workspaceId: String(row.workspace_id ?? ''),
+    actorId: String(row.actor_id ?? ''),
+    deviceId: (typeof row.device_id === 'string' && row.device_id ? row.device_id : null) as string | null,
+    intentionId: String(row.intention_id ?? ''),
+    operationId: String(row.operation_id ?? ''),
+    receiptJson: (typeof row.receipt_json === 'string' ? row.receipt_json : null) as string | null,
+    createdAt: String(row.created_at ?? ''),
+    expiresAt: String(row.expires_at ?? ''),
+    status: (status === 'reserved' || status === 'inconclusive' ? status : 'succeeded') as ConfirmationStatus,
+  });
 };
 
 /** DO-storage-backed draft store (SQLite in the conversation DO). */
@@ -833,6 +1437,255 @@ export class SqlMutationDraftStore implements MutationDraftStore {
       ),
     ];
     return rows.map(rowToRecord).filter((draft) => sameContext(draft, ctx));
+  }
+
+  rememberConfirmation(input: RememberConfirmationInput): ClaimOutcome {
+    return this.claimConfirmation({ ...input, status: 'succeeded' as ConfirmationStatus });
+  }
+
+  claimConfirmation(input: ClaimConfirmationInput): ClaimOutcome {
+    const record = buildClaimRecord(input);
+    const device = record.deviceId ?? '';
+    // Opportunistic hygiene, review fix P1-3 (policy a): the binding is
+    // NEVER deleted — only the bulky `receipt_json` of tombstones past
+    // `CONFIRMATION_TOMBSTONE_RETENTION_MS` is stripped (the minimal row
+    // keeps blocking divergent confirmations; bounded by business volume).
+    // Strip-hygiene is never authority: a failure must not break the
+    // binding write below.
+    try {
+      const pruneBefore = new Date(input.nowMs - CONFIRMATION_TOMBSTONE_RETENTION_MS).toISOString();
+      this.sql.exec(`UPDATE mutation_confirmations SET receipt_json = NULL WHERE receipt_json IS NOT NULL AND expires_at <= ?`, pruneBefore);
+    } catch {
+      // Best-effort hygiene only.
+    }
+    // IMMUTABLE CAS: `DO NOTHING` on conflict — the first durable writer
+    // wins at the storage engine, so concurrent claims for the same
+    // identity+intentionId elect exactly one winner with no TOCTOU window.
+    // `RETURNING *` is the STATEMENT's own verdict (a row comes back only
+    // for the writer that actually inserted — the same mold as
+    // `writeUpdate`): the winner reports `claimed`, losers fall through to
+    // the read below and report `identical`/`divergent`. The pre-hardening
+    // `DO UPDATE` (silent A→B rebinding) is removed.
+    const inserted = [
+      ...this.sql.exec<Record<string, unknown>>(
+        `INSERT INTO mutation_confirmations (workspace_id, actor_id, device_id, intention_id, operation_id, receipt_json, created_at, expires_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (workspace_id, actor_id, device_id, intention_id) DO NOTHING
+         RETURNING *`,
+        record.workspaceId,
+        record.actorId,
+        device,
+        record.intentionId,
+        record.operationId,
+        record.receiptJson,
+        record.createdAt,
+        record.expiresAt,
+        record.status,
+      ),
+    ];
+    if (inserted.length > 0) return 'claimed';
+    const stored = this.findConfirmation(input.ctx, input.intentionId, input.nowMs);
+    if (!stored) throw new Error('agent.confirmation_store_unavailable');
+    // Review fix P1-2/P1-4: adopt an unbound RESERVED sighting sentinel
+    // (`operationId === ''`, written by `noteConfirmationSighted` before
+    // any listing resolution). A terminal (`inconclusive`) sentinel is NEVER
+    // adopted — the no-target outcome is final for this intention. The
+    // sentinel records first-seen; it never blocks the legitimate
+    // first-attempt claim. CAS on `operation_id = '' AND status =
+    // 'reserved'` so exactly one concurrent adopter wins; losers re-read
+    // below. The sighting's `createdAt` (first-seen) is preserved for the
+    // temporal-admissibility check.
+    if (stored.operationId === CONFIRMATION_UNBOUND_OPERATION_ID && stored.status === 'reserved') {
+      const adopted = [
+        ...this.sql.exec<Record<string, unknown>>(
+          `UPDATE mutation_confirmations SET operation_id = ?, receipt_json = ?, expires_at = ?, status = ? WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND intention_id = ? AND operation_id = ? AND status = 'reserved' RETURNING *`,
+          record.operationId,
+          record.receiptJson,
+          record.expiresAt,
+          record.status,
+          record.workspaceId,
+          record.actorId,
+          device,
+          record.intentionId,
+          CONFIRMATION_UNBOUND_OPERATION_ID,
+        ),
+      ];
+      if (adopted.length > 0) return 'claimed';
+      const reread = this.findConfirmation(input.ctx, input.intentionId, input.nowMs);
+      if (!reread) throw new Error('agent.confirmation_store_unavailable');
+      return reread.operationId === input.operationId ? 'identical' : 'divergent';
+    }
+    return stored.operationId === input.operationId ? 'identical' : 'divergent';
+  }
+
+  noteConfirmationSighted(ctx: DraftContext, intentionId: string, nowMs: number): ConfirmationSighting {
+    const stamp = new Date(nowMs).toISOString();
+    const device = ctx.deviceId ?? '';
+    const inserted = [
+      ...this.sql.exec<Record<string, unknown>>(
+        `INSERT INTO mutation_confirmations (workspace_id, actor_id, device_id, intention_id, operation_id, receipt_json, created_at, expires_at, status)
+         VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'reserved')
+         ON CONFLICT (workspace_id, actor_id, device_id, intention_id) DO NOTHING
+         RETURNING *`,
+        ctx.workspaceId,
+        ctx.actorId,
+        device,
+        intentionId,
+        CONFIRMATION_UNBOUND_OPERATION_ID,
+        stamp,
+        new Date(nowMs + CONFIRMATION_TTL_MS).toISOString(),
+      ),
+    ];
+    if (inserted.length > 0) {
+      const row = inserted[0];
+      if (row) return { record: rowToConfirmation(row), fresh: true };
+    }
+    const stored = this.findConfirmation(ctx, intentionId, nowMs);
+    if (!stored) throw new Error('agent.confirmation_store_unavailable');
+    return { record: stored, fresh: false };
+  }
+
+  settleConfirmation(input: SettleConfirmationInput): boolean {
+    // Terminal CAS: only a `reserved` row for THIS operation transitions.
+    // `succeeded`/`inconclusive` rows are immutable — this statement can
+    // never move them, and a missing/foreign row settles nothing.
+    const rows = [
+      ...this.sql.exec<Record<string, unknown>>(
+        `UPDATE mutation_confirmations SET receipt_json = ?, status = ? WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND intention_id = ? AND operation_id = ? AND status = 'reserved' RETURNING *`,
+        input.receiptJson,
+        input.status,
+        input.ctx.workspaceId,
+        input.ctx.actorId,
+        input.ctx.deviceId ?? '',
+        input.intentionId,
+        input.operationId,
+      ),
+    ];
+    return rows.length > 0;
+  }
+
+  findConfirmation(ctx: DraftContext, intentionId: string, _nowMs: number): ConfirmationRecord | undefined {
+    const rows = [
+      ...this.sql.exec<Record<string, unknown>>(
+        `SELECT * FROM mutation_confirmations WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND intention_id = ?`,
+        ctx.workspaceId,
+        ctx.actorId,
+        ctx.deviceId ?? '',
+        intentionId,
+      ),
+    ];
+    const row = rows[0];
+    if (!row) return undefined;
+    const record = rowToConfirmation(row);
+    // Identity legs re-checked (defense in depth). Tombstones included: an
+    // expired binding still blocks a divergent confirmation — the caller
+    // discriminates via `isConfirmationExpired` (blind replay is allowed
+    // only for unexpired `succeeded` markers with a valid/absent receipt).
+    if (record.workspaceId !== ctx.workspaceId || record.actorId !== ctx.actorId || (record.deviceId ?? null) !== (ctx.deviceId ?? null)) {
+      return undefined;
+    }
+    return record;
+  }
+
+  noteConfirmationPresentation(input: NoteConfirmationPresentationInput): void {
+    // Opportunistic hygiene (best-effort, never authority): prune rows past
+    // the retention horizon; a prune failure never breaks the writes below.
+    // ROUND5-3: compare `expires_at <= now` (a row presented at P expires at
+    // P+30d). The previous `now - 30d` bound doubled the horizon to 60d.
+    try {
+      const pruneBefore = new Date(input.nowMs).toISOString();
+      this.sql.exec(`DELETE FROM mutation_confirmation_presentations WHERE expires_at <= ?`, pruneBefore);
+    } catch {
+      // Best-effort hygiene only.
+    }
+    const stamp = new Date(input.nowMs).toISOString();
+    const expiresAt = new Date(input.nowMs + CONFIRMATION_PRESENTATION_RETENTION_MS).toISOString();
+    for (const operationId of input.operationIds) {
+      if (!operationId) continue;
+      // First presentation wins at the storage engine: a repeat for an
+      // already-presented operation keeps the earliest instant (the proof
+      // that it was shown at or before the intention's anchor).
+      this.sql.exec(
+        `INSERT INTO mutation_confirmation_presentations (workspace_id, actor_id, device_id, operation_id, presented_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (workspace_id, actor_id, device_id, operation_id) DO NOTHING`,
+        input.ctx.workspaceId,
+        input.ctx.actorId,
+        input.ctx.deviceId ?? '',
+        operationId,
+        stamp,
+        expiresAt,
+      );
+    }
+  }
+
+  findConfirmationPresentation(ctx: DraftContext, operationId: string): ConfirmationPresentation | undefined {
+    const rows = [
+      ...this.sql.exec<Record<string, unknown>>(
+        `SELECT * FROM mutation_confirmation_presentations WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND operation_id = ?`,
+        ctx.workspaceId,
+        ctx.actorId,
+        ctx.deviceId ?? '',
+        operationId,
+      ),
+    ];
+    const row = rows[0];
+    if (!row) return undefined;
+    const record = Object.freeze({
+      workspaceId: String(row.workspace_id ?? ''),
+      actorId: String(row.actor_id ?? ''),
+      deviceId: (typeof row.device_id === 'string' && row.device_id ? row.device_id : null) as string | null,
+      operationId: String(row.operation_id ?? ''),
+      presentedAt: String(row.presented_at ?? ''),
+      expiresAt: String(row.expires_at ?? ''),
+    });
+    if (record.workspaceId !== ctx.workspaceId || record.actorId !== ctx.actorId || (record.deviceId ?? null) !== (ctx.deviceId ?? null)) {
+      return undefined;
+    }
+    return record;
+  }
+
+  listConfirmationPresentations(ctx: DraftContext): readonly string[] {
+    // `SELECT *` shape (not a projection): the test shims model exactly this
+    // statement family, and the legs are re-checked per row below.
+    const rows = [
+      ...this.sql.exec<Record<string, unknown>>(
+        `SELECT * FROM mutation_confirmation_presentations WHERE workspace_id = ? AND actor_id = ? AND device_id = ?`,
+        ctx.workspaceId,
+        ctx.actorId,
+        ctx.deviceId ?? '',
+      ),
+    ];
+    const ids: string[] = [];
+    for (const row of rows) {
+      if (
+        String(row.workspace_id ?? '') !== ctx.workspaceId ||
+        String(row.actor_id ?? '') !== ctx.actorId ||
+        (typeof row.device_id === 'string' && row.device_id ? row.device_id : null) !== (ctx.deviceId ?? null)
+      ) {
+        continue;
+      }
+      const operationId = String(row.operation_id ?? '');
+      if (operationId) ids.push(operationId);
+    }
+    return ids;
+  }
+
+  forgetConfirmationPresentations(ctx: DraftContext, operationIds: readonly string[]): void {
+    const ids = operationIds.filter((operationId) => !!operationId);
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(',');
+    try {
+      this.sql.exec(
+        `DELETE FROM mutation_confirmation_presentations WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND operation_id IN (${placeholders})`,
+        ctx.workspaceId,
+        ctx.actorId,
+        ctx.deviceId ?? '',
+        ...ids,
+      );
+    } catch {
+      // Best-effort compensation only — never breaks the turn.
+    }
   }
 }
 

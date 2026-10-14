@@ -18,7 +18,7 @@ import type { BudgetStore } from "../budgets/store.js";
 import type { GoalStore } from "../goals/store.js";
 import type { SubscriptionStore } from "../subscriptions/store.js";
 import type { ProfileStore } from "../profile/store.js";
-import type { PendingExecutor, PendingOperationExecutor, PendingOperationStore } from "../approvals/pending.js";
+import type { PendingExecutor, PendingOperationExecutor, PendingOperationStore, PendingOperationV2Store } from "../approvals/pending.js";
 import { createInMemoryPendingOperationStore } from "../approvals/pending.js";
 import type { PushSubscriptionStore } from "../push/store.js";
 import type { PushDelivery } from "../push/delivery.js";
@@ -90,6 +90,17 @@ export type RouteDeps = {
   idempotency?: IdempotencyStore;
   pendingStore?: PendingOperationStore;
   pendingExecutor?: PendingOperationExecutor;
+  /**
+   * CODER-API-ROUTE-DUPE (incidente 13/10, FST_ERR_DUPLICATED_ROUTE):
+   * threading do V2 para dentro de registerRoutes para que a composição
+   * produtiva PG faça UMA única chamada a registerPendingOperationRoutes
+   * (aqui dentro) em vez de registerRoutes + 2º registro v2Only no mesmo
+   * app em server/index.ts. Ausentes = V2 não montado (mesmo comportamento
+   * dos boots in-memory/teste, que nunca tiveram V2).
+   */
+  pendingV2Store?: PendingOperationV2Store;
+  pendingV2Executor?: PendingExecutor;
+  pendingV2ReadModel?: Pick<ReadModelStore, 'listAccounts' | 'listCategories'>;
   undoService?: import('../approvals/undo.js').UndoService;
   defaultHouseholdId?: string;
   cardStore?: CardStore;
@@ -581,6 +592,11 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
     resolveToken,
     ...(deps.pendingExecutor ? { executor: deps.pendingExecutor } : {}),
     undoService,
+    // CODER-API-ROUTE-DUPE: V2 via threading (origem única) — server/index.ts
+    // não faz mais o 2º registro v2Only no mesmo app.
+    ...(deps.pendingV2Store ? { v2Store: deps.pendingV2Store } : {}),
+    ...(deps.pendingV2Executor ? { v2Executor: deps.pendingV2Executor } : {}),
+    ...(deps.pendingV2ReadModel ? { readModel: deps.pendingV2ReadModel } : {}),
   });
   registerAdoptionRoutes(app, {
     store: deps.adoptionStore ?? createInMemoryAdoptionStore(),

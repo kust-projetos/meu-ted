@@ -6,11 +6,6 @@ import { registerPendingOperationRoutes } from '../../src/routes/pending-operati
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
 
 const source = readFileSync(new URL('../../src/server/index.ts', import.meta.url), 'utf8');
-const legacyStore = {
-  async get() { return null; }, async list() { return []; }, async findByChatId() { return null; },
-  async create() { throw new Error('unused'); }, async approve() { throw new Error('unused'); },
-  async reject() { throw new Error('unused'); },
-};
 
 describe('pending V2 bootstrap wiring', () => {
   it('executor maps only canonical transaction tools to the authoritative WriteStore', async () => {
@@ -46,7 +41,16 @@ describe('pending V2 bootstrap wiring', () => {
   it('uses the Postgres V2 store in both Postgres bootstrap branches', () => {
     expect(source).toContain('createPostgresPendingOperationV2Store(pool)');
     expect(source.match(/createPostgresPendingOperationV2Store\(pool\)/g)).toHaveLength(2);
-    expect(source).toContain('v2Only: true');
+    // CODER-API-ROUTE-DUPE (incidente 13/10, dedupe na origem): o V2 chega a
+    // registerRoutes via threading (pendingV2*) — UMA única chamada a
+    // registerPendingOperationRoutes dentro de registerRoutes. Não há mais
+    // 2º registro v2Only no mesmo app em server/index.ts (era ele que
+    // registrava /undo 2x e derrubava o boot com FST_ERR_DUPLICATED_ROUTE).
+    expect(source.match(/pendingV2Store: createPostgresPendingOperationV2Store\(pool\)/g)).toHaveLength(2);
+    expect(source.match(/pendingV2Executor: createPendingOperationV2Executor\(writes\)/g)).toHaveLength(2);
+    expect(source.match(/pendingV2ReadModel: store/g)).toHaveLength(2);
+    expect(source).not.toContain('v2Only: true');
+    expect(source).not.toContain('registerPendingOperationRoutes(app,');
   });
 
   it('does not wire an in-memory V2 authority or a default executor', () => {
@@ -66,11 +70,11 @@ describe('pending V2 bootstrap wiring', () => {
       };
     });
     const store = createInMemoryPendingOperationV2Store();
+    // Post-V1 (PR-1 retire-pending-v1): the registration is V2-only by
+    // construction — no V1 store and no `v2Only` opt needed.
     registerPendingOperationRoutes(app, {
-      store: legacyStore,
       resolveToken: async () => ({ householdId: 'workspace-token', deviceId: 'device-token' }),
       v2Store: store,
-      v2Only: true,
     });
     const response = await app.inject({
       method: 'POST', url: '/pending-operations/v2/propose',

@@ -30,6 +30,15 @@ export const GOLDEN_ACTIONS = [
   "forget_executed",
   "provider_called",
   "error_propagated",
+  /**
+   * GW-042 (read-failure matrix): harness-observed read-failure bucket for
+   * the turn, derived from the REAL `classifyReadFailure` over the injected
+   * per-turn fault. The production read path answers every failure with the
+   * SAME fail-closed copy, so the bucket is recorded by the runner from the
+   * evidence envelope (test-only observation), never from user-visible text.
+   */
+  "read_failed_retryable",
+  "read_failed_forbidden",
 ] as const;
 export type GoldenAction = (typeof GOLDEN_ACTIONS)[number];
 
@@ -39,11 +48,33 @@ export type GoldenAttachmentRef = Readonly<{
   size?: number;
 }>;
 
+export type GoldenReadFault = Readonly<{
+  /** Synthetic transport status for this turn (e.g. 500, 429, 401, 403). */
+  statusCode?: number;
+  /** When true, the turn faults as a read timeout. */
+  timeout?: boolean;
+}>;
+
 export type GoldenInput = Readonly<{
   /** Human-typed pt-BR text for this turn. */
   text: string;
   /** Distinct intention per turn; repeat an earlier id to model redelivery. */
   intentionId?: string;
+  /**
+   * GW-040 (workspace-switch isolation): workspace this turn runs as.
+   * Absent = `"ws-golden"` (every v1 case recorded before this field keeps
+   * its single-namespace behavior byte for byte). Synthetic ids only
+   * (`ws-golden`, `ws-golden-a`, `ws-golden-b`) — never a real household.
+   */
+  workspaceId?: string;
+  /**
+   * GW-042 (read-failure matrix): synthetic read fault for THIS turn only.
+   * The backend classifies it with the REAL `classifyReadFailure` and
+   * returns a typed error envelope; the runner records the bucket as
+   * `read_failed_retryable` / `read_failed_forbidden`. Absent = the case
+   * `reads` scenario applies to every turn (v1 behavior preserved).
+   */
+  readFault?: GoldenReadFault;
   /**
    * Pending-operation ids the (simulated) client declares. The orchestrator
    * resolves confirmations from the AUTHORITATIVE listing, never from this
@@ -81,9 +112,27 @@ export type GoldenInitialState = Readonly<{
   }>;
 }>;
 
+export type GoldenTurnExpectation = Readonly<{
+  /**
+   * GW-042 (read-failure matrix): actions THIS turn (by index) must record.
+   * Absent/empty = no per-turn assertion (aggregate checks still apply).
+   */
+  expectedActions?: readonly GoldenAction[];
+  /** Actions THIS turn must NOT record (exactness guard, e.g. swapped bucket). */
+  forbiddenActions?: readonly GoldenAction[];
+}>;
+
 export type GoldenExpectations = Readonly<{
   expectedActions: readonly GoldenAction[];
   forbiddenActions: readonly GoldenAction[];
+  /**
+   * GW-042 (read-failure matrix): per-turn oracle, indexed by turn. When
+   * present, entry `i` governs `turns[i]`: every `expectedActions` entry must
+   * be recorded by that turn and no `forbiddenActions` entry may appear.
+   * This closes the aggregate-union false-green (a swapped 401<->429 bucket
+   * still satisfied the old union; now it fails its own turn).
+   */
+  turns?: readonly GoldenTurnExpectation[];
   backend: Readonly<{
     proposalsCreated?: number;
     executionsSucceeded?: number;
@@ -97,6 +146,12 @@ export type GoldenExpectations = Readonly<{
     mustMatch?: readonly string[];
     /** Regex sources that must match NO turn response. */
     mustNotMatch?: readonly string[];
+    /**
+     * GW-042: when true, every `mustMatch` source must match EVERY turn
+     * response, not just the last one (closes the last-turn-only
+     * false-green: an intermediate positive reply would stay green).
+     */
+    matchAllTurns?: boolean;
   }>;
   budget: Readonly<{ maxTurns: number }>;
   /**
@@ -167,6 +222,23 @@ export const assertValidGoldenCase = (value: unknown): GoldenCase => {
     if (!isRecord(input) || typeof input.text !== "string" || input.text.trim().length === 0) {
       fail(id, `inputs[${index}].text must be a non-empty string`);
     }
+    const turn = input as Record<string, unknown>;
+    if (turn.workspaceId !== undefined && (typeof turn.workspaceId !== "string" || (turn.workspaceId as string).trim().length === 0)) {
+      fail(id, `inputs[${index}].workspaceId must be a non-empty string when present`);
+    }
+    if (turn.readFault !== undefined) {
+      if (!isRecord(turn.readFault)) fail(id, `inputs[${index}].readFault must be an object`);
+      const fault = turn.readFault as Record<string, unknown>;
+      if (fault.statusCode !== undefined && (typeof fault.statusCode !== "number" || !Number.isInteger(fault.statusCode) || (fault.statusCode as number) < 100 || (fault.statusCode as number) > 599)) {
+        fail(id, `inputs[${index}].readFault.statusCode must be an integer HTTP status when present`);
+      }
+      if (fault.timeout !== undefined && typeof fault.timeout !== "boolean") {
+        fail(id, `inputs[${index}].readFault.timeout must be a boolean when present`);
+      }
+      if (fault.statusCode === undefined && fault.timeout === undefined) {
+        fail(id, `inputs[${index}].readFault must carry statusCode and/or timeout`);
+      }
+    }
   }
   if (!isRecord(value.expectations)) fail(id, "expectations must be an object");
   const expectations = value.expectations as Record<string, unknown>;
@@ -189,6 +261,27 @@ export const assertValidGoldenCase = (value: unknown): GoldenCase => {
     if (!isRecord(plan)) fail(id, "expectations.plan must be an object");
     const skillsContain = (plan as Record<string, unknown>).skillsContain;
     if (skillsContain !== undefined) assertStringArray(id, "expectations.plan.skillsContain", skillsContain);
+  }
+  const turns = expectations.turns;
+  if (turns !== undefined) {
+    if (!Array.isArray(turns)) fail(id, "expectations.turns must be an array when present");
+    for (const [index, entry] of (turns as unknown[]).entries()) {
+      if (!isRecord(entry)) fail(id, `expectations.turns[${index}] must be an object`);
+      for (const field of ["expectedActions", "forbiddenActions"] as const) {
+        const actions = (entry as Record<string, unknown>)[field];
+        if (actions === undefined) continue;
+        if (!Array.isArray(actions)) fail(id, `expectations.turns[${index}].${field} must be an array`);
+        for (const action of actions as unknown[]) {
+          if (!(GOLDEN_ACTIONS as readonly unknown[]).includes(action)) {
+            fail(id, `expectations.turns[${index}].${field} holds unknown action "${String(action)}"`);
+          }
+        }
+      }
+    }
+  }
+  const response = expectations.response as Record<string, unknown>;
+  if (response.matchAllTurns !== undefined && typeof response.matchAllTurns !== "boolean") {
+    fail(id, "expectations.response.matchAllTurns must be a boolean when present");
   }
   return value as GoldenCase;
 };
