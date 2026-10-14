@@ -1,21 +1,24 @@
 # MEU-TED-V1-FINAL-STATE (estado vigente — snapshot somente-leitura)
 
-**Atualizado:** 13/10/2026 (noite). Este documento é snapshot, não plano. A definição de
+**Atualizado:** 14/10/2026 (baseline viva `715b2cf`, delta só-docs). Este documento é snapshot, não plano. A definição de
 encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 
 ## 1. Produção viva
 
 Em 13/10/2026 à noite, o PR #157 (V1-textual) foi mergeado por squash como
 `fd3481f` e implantado nas três camadas — detalhe na atualização incremental
-de 13/10 (noite) ao fim deste documento. O vigente: API `fd3481f` (release
-via wrapper na Contabo) e Agent/PWA `fd3481f` (ATTESTED na Cloudflare).
+de 13/10 (noite) ao fim deste documento. Em 14/10 (~00:09Z), Agent/PWA
+avançaram para `715b2cf` (PR #158, SÓ-docs, código idêntico a `fd3481f`,
+ATTESTED). O vigente: API `fd3481f` (release via wrapper na Contabo, sem
+redeploy em 14/10) e Agent/PWA `715b2cf` (ATTESTED na Cloudflare).
 
 | Camada | SHA vigente | Evidência |
 |---|---|---|
-| API (Contabo) | `fd3481f` (`fd3481f2f92c39ff8b68727ff73939121123280d`, build CI `38483695616`) | release via wrapper `api-release-20260930.sh --execute`, lane source-build (checkout pristine `src-fd3481f`, sem GHCR login na VPS), backup pré-release `pi-db-20261013T195335Z` (sha256 `0b4b04ad…cdb7e`), RELEASE OK, manifesto `release-manifest-fd3481f….json` na VPS, rollback tag `pi-finance-api:rollback-pre-fd3481f` preservada; smokes `/health` (gitSha `fd3481f`, buildId `38483695616`) + `/ready` 200 + PWA `/api/backend/health` `fd3481f`; container 0 restarts healthy, sem `FST_ERR`/`DUPLICATED_ROUTE` nos logs |
-| Agent (Cloudflare) | `fd3481f` (build `38483695618`) | Deploys runs `38484529550`/`38484529484` ATTESTED deploy-smoke-pass 13/10 (par anterior 23:26 deploy-skipped pela corrida `workflow_run` conhecida); live `/health` ready com `buildSha=fd3481f` |
-| PWA (Cloudflare) | `fd3481f` (mesmo build `38483695618`) | Mesmos deploys/runs ATTESTED acima; live `/api/build-info` com `gitSha=fd3481f` |
-| origin/main | `fd3481f` | PR #157 (V1-textual); CI + PWA CI verdes (`38483695616`/`…618`); Gate + quality (22, 10) 100% verde |
+| API (Contabo) | `fd3481f` (`fd3481f2f92c39ff8b68727ff73939121123280d`, build CI `38483695616`) | release via wrapper `api-release-20260930.sh --execute`, lane source-build (checkout pristine `src-fd3481f`, sem GHCR login na VPS), backup pré-release `pi-db-20261013T195335Z` (sha256 `0b4b04ad…cdb7e`), RELEASE OK, manifesto `release-manifest-fd3481f….json` na VPS, rollback tag `pi-finance-api:rollback-pre-fd3481f` preservada; smokes `/health` (gitSha `fd3481f`, buildId `38483695616`) + `/ready` 200 + PWA `/api/backend/health` `fd3481f`; container 0 restarts healthy, sem `FST_ERR`/`DUPLICATED_ROUTE` nos logs; **sem redeploy em 14/10** (delta `fd3481f..715b2cf` é SÓ-docs — decisão registrada) |
+| Agent (Cloudflare) | `715b2cf` (`715b2cf3d11c8ac03e55fea1e35b15fa2049c4c1`, build `38487522792`) | Deploys runs `38488407037`/`38488407171` ATTESTED deploy-smoke-pass 14/10 (~00:09Z); live `/health` ready com `buildSha=715b2cf`; delta `fd3481f..715b2cf` SÓ-docs (AGENTS/CHANGELOG/FINAL-STATE), código idêntico a `fd3481f` |
+| PWA (Cloudflare) | `715b2cf` (mesmo build `38487522792`) | Mesmos deploys/runs ATTESTED acima; live `/api/build-info` com `gitSha=715b2cf`; código idêntico a `fd3481f` |
+| origin/main | `715b2cf` | PR #158 (SÓ-docs, sem código); CI + PWA CI verdes; baseline de CÓDIGO V1-textual permanece `fd3481f` |
+| Baseline de CÓDIGO V1-textual (histórico) | `fd3481f` (`fd3481f2f92c39ff8b68727ff73939121123280d`) | PR #157 (V1-textual); CI + PWA CI verdes (`38483695616`/`…618`); Gate + quality (22, 10) 100% verde; API/Agent/PWA atestados em 13/10 (noite) |
 | API — release anterior (histórico) | `414aefa` (`414aefad8e04cba1927338b8d6af0aa53b7fc9d7`, build CI `38437241159`) | swap manual + smokes verdes pós-recovery em 13/10 (`/health`+`/ready` 200, gitSha/buildId casados, 0 restarts); `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados; manifesto manual `release-manifest-414aefa-manual.json` na VPS; rollback tag preservada |
 | Agent/PWA - tentativa `414aefa` (nunca servida) | `414aefad8e04cba1927338b8d6af0aa53b7fc9d7` | wave1 deploy-skipped + wave2 smoke-fail no outage da API 13/10; live foi direto `e91a3cd` |
 | Agent/PWA — deploy atestado anterior (histórico) | `e91a3cd` (`e91a3cdd051fabc7fb2fe6469aae70c80ac4e148`, build `38452770765`) | Deploys 38453779343/38453779281 ATTESTED deploy-smoke-pass 13/10; transcript fix validado live (T1/T2 sem read-fail, com evidência T1/T2 no live 3e90c30; código agent idêntico em e91a3cd, diff vazio) |
@@ -24,6 +27,13 @@ via wrapper na Contabo) e Agent/PWA `fd3481f` (ATTESTED na Cloudflare).
 | Agent/PWA — deploy atestado **antes** de `bc2ba9e` (histórico) | `36ccaac` (merge #138) | Deploy runs `38266117716`/`38266117889` success/`ATTESTED` (deploy-smoke-pass, 12/10) |
 | Agent/PWA — último deploy atestado **antes** de #133 (histórico) | `687a7e8d` (PR #132) | Deploy runs `38081117169`/`38081117377`; CI `38080566857` / PWA CI `38080566817` |
 | Credencial demo (E2E/prova) | `demo@clinicademo.com` | criada em 08/10 via fluxo de convite; membership owner no workspace E2E sintético `550e8400…` (Test Family); senha só no env do operador |
+
+**Convenção de baseline (14/10, para quebrar o loop deploy-docs-deploy):**
+commits SÓ-docs não avançam a baseline de código e dispensam re-registro;
+re-registro só com mudança de código/comportamento. PRs de docs seguem CI
+normal. Baseline de CÓDIGO V1-textual: `fd3481f`; baseline viva servida:
+Agent/PWA `715b2cf` (código idêntico a `fd3481f`); API permanece `fd3481f`
+sem redeploy por delta só-docs (camadas com SHAs independentes têm precedente).
 
 ## 2. Matriz de capabilities (config-de-deploy; coluna Live = estado verificado)
 
@@ -72,6 +82,11 @@ PWA: `NEXT_PUBLIC_TED_ATTACHMENT_*` (anúncio, não gate),
 | Autoexecute `on` | sink + telemetria undo-after-autoexecute | operador (gate humano) |
 | #87 SDK épico (+#93/#94), #95 keepalive | POST-V1 | backlog |
 | Future-dated 2026-12-01 / 2026-12-31 | MAINTENANCE POST-V1 | workflows/lembretes |
+
+Em 14/10 (baseline viva `715b2cf`, delta só-docs): nenhum gate humano ou de
+data foi fechado por este registro; pendências de operador inalteradas (turno
+autenticado com modelo real em produção, E2E live-mobile-full no SHA vigente,
+tag `v1.0.0`).
 
 ## 5. Backups / DR
 
@@ -704,3 +719,24 @@ além do release; zero mutação financeira pelo deploy.
 atestadas + restore proof do backup 19:53Z registrados; nenhum gate humano
 ou de data foi fechado por este snapshot. A19 segue **NOT READY**;
 Release B ~24/10; PDF fail-closed.
+
+### Atualização incremental — 14/10/2026 (baseline viva `715b2cf`, delta SÓ-docs)
+
+Em 14/10 (~00:09Z), Agent/PWA avançaram para `715b2cf`
+(`715b2cf3d11c8ac03e55fea1e35b15fa2049c4c1`, PR #158) com deploys runs
+`38488407037`/`38488407171` ATTESTED deploy-smoke-pass (build `38487522792`).
+Delta `fd3481f..715b2cf` = SÓ-docs (AGENTS/CHANGELOG/FINAL-STATE), código
+idêntico — ver `git diff --stat fd3481f..715b2cf` (3 arquivos de docs).
+API permanece `fd3481f` sem redeploy por delta só-docs (decisão registrada;
+camadas com SHAs independentes têm precedente).
+
+| Frente | Evidência incremental | Estado honesto / saída |
+|---|---|---|
+| Agent/PWA (Cloudflare) | Deploys runs `38488407037`/`38488407171` ATTESTED deploy-smoke-pass 14/10 (~00:09Z), build `38487522792`, live em `715b2cf`. | Deployados e atestados; código idêntico a `fd3481f`. |
+| API (Contabo) | Sem redeploy; permanece `fd3481f` (`fd3481f2f92c39ff8b68727ff73939121123280d`). | Intencional (delta só-docs); sem nova evidência de release. |
+| NÃO feito | Sem credenciais live do operador: turno autenticado com modelo real em produção **não** executado; E2E live-mobile-full no SHA vigente **não** executado; tag `v1.0.0` **não** criada. | Pendentes de operador; sem alegação de homologação live/tag. |
+
+**Veredito desta execução:** `BASELINE_REGISTERED`. Baseline de CÓDIGO
+V1-textual: `fd3481f`; baseline viva servida: Agent/PWA `715b2cf` (código
+idêntico). Nenhum gate humano ou de data foi fechado por este registro. A19
+segue **NOT READY**; Release B ~24/10; PDF fail-closed.
