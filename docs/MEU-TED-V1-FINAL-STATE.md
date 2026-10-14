@@ -113,8 +113,20 @@ conteúdo não cobre camada shared.
 
 ## 7. Backlog POST-V1
 
-#87 (+Dependabot #93/#94), #95, Decision provider, G01/G02, future-dated,
-performance tuning, novos providers/agents/features, refactors cosméticos.
+Esta seção é ÍNDICE dos itens pós-V1 (snapshot somente-leitura): o estado canônico de cada item vive nas seções/gates apontados, sem duplicar aqui estados que envelhecem; V1-textual segue CLOSED sem reabertura.
+
+- STT — finding aberto (verbatim OK, turnos com transcrição falham), WAITING_OPERATOR → §2 + canary 13/10 (c)/(h).
+- Vision — FULL PASS API-direto + UI x3 sem promoção, BLOCKED_EXTERNAL (quota regular + privacidade) → §2 + canary 13/10 (b)/(g).
+- PDF — fail-closed (parser `undefined` incondicional + flag `0`), reativação exige gate egress/retention + isolamento → §2/§3/§10.
+- web_search/web_fetch — gate `TED_WEB_SEARCH_ENABLED` (prod sem flag = disabled), sem provider/key → §2 + §14 decisão técnica.
+- Autoexecute low-risk — `shadow` (não re-verificado live); `on` exige sink + telemetria undo-after-autoexecute → §2/§4.
+- Release B — flip ABORTADO 13/10, nova janela zero-14-dias ~24/10 → §4/§10.
+- Legado — F6 (backup + restore + recon) + remoção de código (twins/`DB_SCHEMA`/V1 pending-ops/analytics); KEEP bearer até Release B → canary 13/10 (f) + §4.
+- #87 SDK épico (+Dependabot #93/#94), #95 keepalive — POST-V1 backlog → §4.
+- G01/G02 — gaps Golden fora do escopo textual, POST-V1 → §4/§13.
+- Future-dated 2026-12-01/2026-12-31 — MAINTENANCE POST-V1 (workflows/lembretes) → §4.
+- Decision provider — DISABLED default-off, POST-V1/OPTIONAL → §2.
+- Performance tuning, novos providers/agents/features, refactors cosméticos — POST-V1, sem gate aberto.
 
 ## 8. Trilha recente
 
