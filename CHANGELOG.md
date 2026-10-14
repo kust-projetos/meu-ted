@@ -3,6 +3,13 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-14 - baseline viva `715b2cf` (docs-only, sem código); baseline de código V1-textual `fd3481f`; sem tag/release)
+
+- Agent/PWA: `715b2cf3d11c8ac03e55fea1e35b15fa2049c4c1` (build `38487522792`), ATTESTED deploy-smoke-pass runs `38488407037`/`38488407171` (14/10 ~00:09Z); delta `fd3481f..715b2cf` SÓ-docs (código idêntico).
+- API: permanece `fd3481f2f92c39ff8b68727ff73939121123280d` sem redeploy por delta só-docs (decisão registrada; camadas com SHAs independentes têm precedente).
+- Convenção nova: commits SÓ-docs não avançam a baseline de código e dispensam re-registro; re-registro só com mudança de código/comportamento. PRs de docs seguem CI normal.
+- NÃO feito (operador): turno autenticado com modelo real em produção; E2E live-mobile-full no SHA vigente; tag `v1.0.0`. Sem alegação de homologação live.
+
 ## Unreleased (2026-10-13 noite - deploy V1-textual `fd3481f` (PR #157) nas três camadas + restore proof + higiene VPS; sem tag/release)
 
 - Produção: API/Agent/PWA em `fd3481f2f92c39ff8b68727ff73939121123280d` (merge squash do PR #157; CI 100% verde — Gate + quality 22,10; CI/PWA CI da main `38483695616`/`…618` verdes).
