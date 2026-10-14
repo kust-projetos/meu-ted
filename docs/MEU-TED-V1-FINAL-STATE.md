@@ -1,6 +1,6 @@
 # MEU-TED-V1-FINAL-STATE (estado vigente — snapshot somente-leitura)
 
-**Atualizado:** 14/10/2026 (baseline viva `715b2cf`, delta só-docs). Este documento é snapshot, não plano. A definição de
+**Atualizado:** 14/10/2026 (homologação live + veredito V1-textual CLOSED, docs-only; baseline viva `715b2cf`, código V1-textual `fd3481f`). Este documento é snapshot, não plano. A definição de
 encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 
 ## 1. Produção viva
@@ -740,3 +740,31 @@ camadas com SHAs independentes têm precedente).
 V1-textual: `fd3481f`; baseline viva servida: Agent/PWA `715b2cf` (código
 idêntico). Nenhum gate humano ou de data foi fechado por este registro. A19
 segue **NOT READY**; Release B ~24/10; PDF fail-closed.
+
+### Atualização incremental — 14/10/2026 (homologação live + veredito V1-textual CLOSED, docs-only)
+
+Em 14/10 (~01:0xZ, 1.7min), o E2E live-mobile-full passou contra produção
+(PWA `c5adf53` / API `fd3481f`): login real → conta → transação → extrato →
+TED leitura de dado real (modelo real) → TED mutação com aprovação + recibo;
+viewport mobile 390x844; `workspaceWriteViolations` vazio (só Test Family
+`550e8400…`); screenshots em `apps/pwa/test-results/live-mobile/` (01-login,
+02-home, 03-nova-conta, 04-conta-criada, 06-extrato, 07-ted-leitura,
+08-ted-aprovacao, 09-ted-recibo, 10-extrato-pos-ted, 11-nav--a-pagar).
+
+Limpeza E2E verificada: 2 txs soft-delete (DELETE com `Idempotency-Key`) +
+1 conta deactivate (POST …/deactivate; exigiu `Content-Type` json — 415 sem
+ele); re-verificação: 0 contas + 0 txs "Teste E2E\*" restantes no Test
+Family. Dry-run antes (1 conta / 2 txs, só desta execução).
+
+| Frente | Evidência incremental | Estado honesto / saída |
+|---|---|---|
+| E2E live-mobile-full | PASS em 14/10 (~01:0xZ, 1.7min) contra produção (PWA `c5adf53` / API `fd3481f`); fluxo login real → conta → transação → extrato → TED leitura de dado real (modelo real) → TED mutação com aprovação + recibo; viewport mobile 390x844; `workspaceWriteViolations` vazio (só Test Family `550e8400…`); screenshots em `apps/pwa/test-results/live-mobile/`. | **PASS** (homologação live executada no SHA vigente). |
+| Limpeza E2E | 2 txs soft-delete (DELETE com `Idempotency-Key`) + 1 conta deactivate (POST …/deactivate, exigiu `Content-Type` json — 415 sem ele); re-verificação com 0 contas + 0 txs "Teste E2E\*" restantes no Test Family; dry-run antes (1 conta / 2 txs, só desta execução). | **Limpeza verificada** (zero resíduo desta execução no Test Family). |
+| Critérios do ADENDO V1-TEXTUAL | CI/PWA CI verdes; Golden textual PASS com `falseSuccess=0` (8 pending-capability skipped); E2E Test Family PASS sem violations; deploys ATTESTED com SHAs casados; P0=0/P1=0 no escopo textual (residuais STT/R2/`pg_hba`/gokey/probes classificados pós-V1 ou diferidos com evidência; Release B/legado/autoexec-on pós-V1 por decisão). | **Atendidos.** |
+| Tag `v1.0.0` | Liberada pelo Planner na sequência (fora deste escopo de docs). | **Não** criada neste registro (docs-only, sem commit/push, sem deploy/tag). |
+
+**Veredito desta execução:** `V1-TEXTUAL CLOSED`. Critérios do ADENDO
+V1-TEXTUAL atendidos no escopo textual; A19 multimodal geral e os itens
+pós-V1 (STT, R2 expiração física, `pg_hba`, gokey, probes, Release B,
+legado, autoexec-on) seguem pós-V1 por decisão, sem novo gate de produto
+neste registro.
