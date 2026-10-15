@@ -69,43 +69,21 @@ export const transformLegacyMessages = (
   workspaceId = '',
   turns: LegacyTurn[] = [],
 ): SdkUIMessage[] => {
-  // FIX-melhorias item 1 / REVIEW-MEDIUM-2: o formato legado não carrega
-  // chave mensagem↔turn — a convenção do runtime legado é turno = par Q&A
-  // consecutivo em ordem cronológica. Agrupa as mensagens nessa ordem (user
-  // abre grupo, as demais anexam ao grupo aberto) e propaga
-  // turns[i].intention_id ao i-ésimo grupo SOMENTE com correspondência
-  // demonstrável — contagem (nº de grupos === nº de turnos), status
-  // completed e ator (o grupo contém msg user do actor do turno). Na
-  // ambiguidade, omite: nunca inventa identidade.
-  const ordered = [...messages].sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0));
-  const groupIndex = new Map<string, number>();
-  const groupUserActors = new Map<number, Set<string>>();
-  let group = -1;
-  for (const msg of ordered) {
-    const role: 'user' | 'assistant' | 'system' =
-      msg.role === 'assistant' ? 'assistant' : msg.role === 'system' ? 'system' : 'user';
-    if (role === 'user' || group < 0) group += 1;
-    groupIndex.set(msg.id, group);
-    if (role === 'user') {
-      let actors = groupUserActors.get(group);
-      if (!actors) {
-        actors = new Set<string>();
-        groupUserActors.set(group, actors);
-      }
-      actors.add(msg.actor_id);
-    }
-  }
-  const intentionByGroup = new Map<number, string>();
-  const positionalSound = group + 1 === turns.length && turns.length > 0;
-  if (positionalSound) {
-    turns.forEach((turn, i) => {
-      if (typeof turn.intention_id !== 'string' || !turn.intention_id) return;
-      if (turn.status !== 'completed') return;
-      const actors = groupUserActors.get(i);
-      if (!actors || !actors.has(turn.actor_id)) return;
-      intentionByGroup.set(i, turn.intention_id);
-    });
-  }
+  // FIX-R3 (REVIEW-MELHORIAS-R2 residual): o formato legado não carrega
+  // NENHUM campo que vincule turno↔mensagem de forma verificável —
+  // LegacyTurn não tem created_at/seq/message_ids e LegacyMessage não tem
+  // turn_id/intention_id (input_json/output_json são payloads opacos, não
+  // vínculo). Toda correspondência seria apenas posicional
+  // (turns[i] → i-ésimo grupo cronológico), e dois turnos completed do mesmo
+  // ator com o array em ordem inversa aos grupos passam nos gates de
+  // contagem/status/ator e TROCAM os intentionIds. Fail-closed: o
+  // intentionId legado NUNCA é propagado — mensagens migradas chegam sem
+  // intentionId e ficam fora do dedupe de redelivery, em vez de carregar
+  // identidade trocada. O parâmetro `turns` é mantido por compatibilidade
+  // de assinatura e ignorado. Se o formato um dia ganhar vínculo
+  // verificável (ex. turn.created_at ou message.turn_id), reabrir com
+  // exigência desse vínculo em teste.
+  void turns;
 
   return messages.map((msg) => {
     let parsedContent = '';
@@ -130,10 +108,6 @@ export const transformLegacyMessages = (
         actorId,
         workspaceId,
         createdAt: msg.created_at,
-        ...(groupIndex.get(msg.id) !== undefined &&
-        intentionByGroup.get(groupIndex.get(msg.id)!) !== undefined
-          ? { intentionId: intentionByGroup.get(groupIndex.get(msg.id)!)! }
-          : {}),
       },
     };
   });
