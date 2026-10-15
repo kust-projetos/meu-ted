@@ -69,26 +69,43 @@ export const transformLegacyMessages = (
   workspaceId = '',
   turns: LegacyTurn[] = [],
 ): SdkUIMessage[] => {
-  // FIX-melhorias item 1: o formato legado não carrega chave mensagem↔turn —
-  // a convenção do runtime legado é turno = par Q&A consecutivo em ordem
-  // cronológica. Agrupa as mensagens nessa ordem (user abre grupo, as demais
-  // anexam ao grupo aberto) e propaga turns[i].intention_id ao i-ésimo
-  // grupo, SOMENTE quando o turno o carrega — nunca inventa identidade.
+  // FIX-melhorias item 1 / REVIEW-MEDIUM-2: o formato legado não carrega
+  // chave mensagem↔turn — a convenção do runtime legado é turno = par Q&A
+  // consecutivo em ordem cronológica. Agrupa as mensagens nessa ordem (user
+  // abre grupo, as demais anexam ao grupo aberto) e propaga
+  // turns[i].intention_id ao i-ésimo grupo SOMENTE com correspondência
+  // demonstrável — contagem (nº de grupos === nº de turnos), status
+  // completed e ator (o grupo contém msg user do actor do turno). Na
+  // ambiguidade, omite: nunca inventa identidade.
   const ordered = [...messages].sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0));
   const groupIndex = new Map<string, number>();
+  const groupUserActors = new Map<number, Set<string>>();
   let group = -1;
   for (const msg of ordered) {
     const role: 'user' | 'assistant' | 'system' =
       msg.role === 'assistant' ? 'assistant' : msg.role === 'system' ? 'system' : 'user';
     if (role === 'user' || group < 0) group += 1;
     groupIndex.set(msg.id, group);
+    if (role === 'user') {
+      let actors = groupUserActors.get(group);
+      if (!actors) {
+        actors = new Set<string>();
+        groupUserActors.set(group, actors);
+      }
+      actors.add(msg.actor_id);
+    }
   }
   const intentionByGroup = new Map<number, string>();
-  turns.forEach((turn, i) => {
-    if (typeof turn.intention_id === 'string' && turn.intention_id) {
+  const positionalSound = group + 1 === turns.length && turns.length > 0;
+  if (positionalSound) {
+    turns.forEach((turn, i) => {
+      if (typeof turn.intention_id !== 'string' || !turn.intention_id) return;
+      if (turn.status !== 'completed') return;
+      const actors = groupUserActors.get(i);
+      if (!actors || !actors.has(turn.actor_id)) return;
       intentionByGroup.set(i, turn.intention_id);
-    }
-  });
+    });
+  }
 
   return messages.map((msg) => {
     let parsedContent = '';
