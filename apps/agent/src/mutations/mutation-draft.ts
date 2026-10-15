@@ -1414,17 +1414,23 @@ export class SqlMutationDraftStore implements MutationDraftStore {
       return draft && sameContext(draft, ctx) ? draft : undefined;
     }
     // No durable link: fall back to the last-toucher fast path.
-    const rows = [
-      ...this.sql.exec<Record<string, unknown>>(
-        `SELECT * FROM mutation_drafts WHERE workspace_id = ? AND actor_id = ? AND last_intention_id = ? ORDER BY updated_at DESC LIMIT 1`,
-        ctx.workspaceId,
-        ctx.actorId,
-        intentionId,
-      ),
-    ];
-    const found = rows.length > 0 && rows[0] ? rowToRecord(rows[0]) : undefined;
-    if (found && sameContext(found, ctx)) return found;
-    return undefined;
+    // FIX-DUP-PROPOSAL-R3: the WHOLE fallback branch (query, iteration,
+    // rowToRecord) is miss-on-failure — never a throw inside the lookup.
+    try {
+      const rows = [
+        ...this.sql.exec<Record<string, unknown>>(
+          `SELECT * FROM mutation_drafts WHERE workspace_id = ? AND actor_id = ? AND last_intention_id = ? ORDER BY updated_at DESC LIMIT 1`,
+          ctx.workspaceId,
+          ctx.actorId,
+          intentionId,
+        ),
+      ];
+      const found = rows.length > 0 && rows[0] ? rowToRecord(rows[0]) : undefined;
+      if (found && sameContext(found, ctx)) return found;
+      return undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

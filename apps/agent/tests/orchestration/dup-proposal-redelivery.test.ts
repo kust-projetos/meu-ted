@@ -289,3 +289,39 @@ describe('FIX-DUP-PROPOSAL-R2: selective draft-table outage degrades to miss', (
     expect(result).toBeUndefined();
   });
 });
+
+describe('FIX-DUP-PROPOSAL-R3: unlinked-intention fallback outage degrades to miss', () => {
+  it('[sqlite] unlinked intention + draft-table read failure → miss, never throws', () => {
+    const db = new DatabaseSync(':memory:');
+    let failDraftReads = false;
+    const sql: SqlShim = {
+      exec<T>(query: string, ...bindings: unknown[]): Iterable<T> {
+        // Fault injection: every read of the drafts table fails. The
+        // intention under test was NEVER linked, so the lookup reaches
+        // the last-toucher fallback branch — which must degrade to a
+        // miss (undefined), never throw.
+        if (failDraftReads && /FROM\s+mutation_drafts\b/i.test(query)) {
+          throw new Error('injected draft-table outage');
+        }
+        const statement = db.prepare(query);
+        if (/^\s*(SELECT|PRAGMA|WITH)/i.test(query) || /\bRETURNING\b/i.test(query)) {
+          return statement.all(...(bindings as never[])) as T[];
+        }
+        statement.run(...(bindings as never[]));
+        return [] as T[];
+      },
+    };
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    const ctx = ctxOf();
+    const seed = store.getOrCreate(buildDraftRecord(draftSeed('intent-R3-other')));
+    expect(seed.created).toBe(true);
+
+    failDraftReads = true;
+    let result: ReturnType<MutationDraftStore['findByIntention']> = undefined;
+    expect(() => {
+      result = store.findByIntention(ctx, 'intent-R3-unlinked');
+    }).not.toThrow();
+    expect(result).toBeUndefined();
+  });
+});
