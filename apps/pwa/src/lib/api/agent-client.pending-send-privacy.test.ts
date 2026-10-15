@@ -5,14 +5,16 @@
  * preserva o retry legítimo; logout/troca/revogação limpa tudo; âncora legada
  * ambígua nunca reidrata para outra conta.
  */
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import {
   savePendingChatSend,
   loadPendingChatSend,
   clearPendingChatSend,
   clearAllPendingChatSends,
+  renewAgentSession,
   type PendingChatSend,
 } from "./agent-client";
+import * as agentAuth from "./agent-auth";
 import { OFFLINE_PRINCIPAL_STORAGE_KEY } from "@/lib/auth/offline-identity";
 
 const WS = "ws-privacy-1";
@@ -113,5 +115,44 @@ describe("P1 #176 — rascunho isolado por ator", () => {
     clearPendingChatSend(WS);
     expect(loadPendingChatSend(WS)).toBeNull();
     expect(pendingSendKeys()).toHaveLength(0);
+  });
+
+  it("FIX-melhorias item 4: renewAgentSession purga a âncora do escopo no sucesso", async () => {
+    // Nova sessão = contexto arquivado: o retry de um envio do escopo antigo
+    // não sobrevive à renovação (mesma purga do sucesso de envio).
+    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("tok");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, sessionId: "s2", previousSessionId: "s1", messageCount: 3, summarized: false }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    try {
+      setPrincipal(ACTOR_A);
+      savePendingChatSend(WS, draft("pendente"));
+      sessionStorage.setItem(`ted.pending-send.${WS}`, JSON.stringify({ messageId: "x", content: "y" }));
+      const res = await renewAgentSession(WS);
+      expect(res.sessionId).toBe("s2");
+      expect(loadPendingChatSend(WS)).toBeNull();
+      expect(pendingSendKeys()).toHaveLength(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("FIX-melhorias item 4: renewAgentSession com falha preserva a âncora (fail-closed)", async () => {
+    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("tok");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ message: "falha transitória" }), { status: 500 }),
+    );
+    try {
+      setPrincipal(ACTOR_A);
+      const send = draft("pendente");
+      savePendingChatSend(WS, send);
+      await expect(renewAgentSession(WS)).rejects.toThrow();
+      expect(loadPendingChatSend(WS)?.messageId).toBe(send.messageId);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

@@ -1141,6 +1141,10 @@ export async function renewAgentSession(workspaceId: string): Promise<AgentSessi
     },
   );
   if (!response.ok) throw new Error("Não foi possível iniciar uma nova sessão.");
+  // FIX-melhorias item 4: nova sessão = contexto arquivado — a âncora de
+  // retry do escopo antigo morre aqui (mesma purga do sucesso de envio).
+  // Falha acima preserva a âncora (fail-closed: a sessão antiga segue válida).
+  clearPendingChatSend(workspaceId);
   return (await response.json()) as AgentSessionRenewal;
 }
 
