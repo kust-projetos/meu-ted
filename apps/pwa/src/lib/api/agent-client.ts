@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 import { fetchAgentConnectionToken, clearAgentConnectionTokenCache, trackAgentConnection } from "./agent-auth";
+import { getOfflinePrincipalId } from "@/lib/auth/offline-identity";
 
 export const attachmentSchema = z.object({
   type: z.enum(["image", "pdf", "audio"]),
@@ -331,7 +332,37 @@ export function composeChatSend(
   };
 }
 
-const pendingSendKey = (workspaceId: string): string => `ted.pending-send.${workspaceId}`;
+/**
+ * FIX-P1-SESS #176: a âncora de retry é isolada por (ator, workspace).
+ *
+ * A chave legada `ted.pending-send.${workspaceId}` não identifica o dono: o
+ * ator B, no mesmo workspace/browser, reidratava o retry do ator A. A chave
+ * com ator conhecido é `ted.pending-send.${actorId}.${workspaceId}`; sem
+ * ator conhecido (fluxo deslogado/antigo) mantém-se a chave legada por
+ * compatibilidade — e a legada NUNCA reidrata quando há principal ativo
+ * (dono ambíguo => fail-closed, sem vazar para outra conta).
+ */
+const PENDING_SEND_KEY_PREFIX = "ted.pending-send.";
+const pendingSendLegacyKey = (workspaceId: string): string => `${PENDING_SEND_KEY_PREFIX}${workspaceId}`;
+
+function currentPendingSendActor(): string | null {
+  try {
+    return getOfflinePrincipalId();
+  } catch {
+    return null;
+  }
+}
+
+function resolvePendingSendActor(explicit?: string | null): string | null {
+  if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
+  if (explicit === undefined) return currentPendingSendActor();
+  return null;
+}
+
+const pendingSendKey = (workspaceId: string, actorId?: string | null): string => {
+  const actor = resolvePendingSendActor(actorId);
+  return actor ? `${PENDING_SEND_KEY_PREFIX}${actor}.${workspaceId}` : pendingSendLegacyKey(workspaceId);
+};
 
 /**
  * R2 FIX 1 (HIGH): a âncora persiste as REFS dos anexos (`{type,ref,name}` —
@@ -372,9 +403,9 @@ function sanitizeAnchorAttachment(value: unknown): OutgoingAttachment | null {
 /**
  * Persists the in-flight send record (messageId + content + attachment refs —
  * never secrets, never local blob URLs) so a page reload restores the same
- * id for retry.
+ * id for retry. Scoped by (actor, workspace) — see #176 above.
  */
-export function savePendingChatSend(workspaceId: string, send: PendingChatSend): void {
+export function savePendingChatSend(workspaceId: string, send: PendingChatSend, actorId?: string | null): void {
   try {
     const raw = Array.isArray(send.attachments) ? send.attachments : [];
     // R3 FIX 3: NUNCA truncar. Um envio acima do limite persiste marcado
@@ -387,7 +418,7 @@ export function savePendingChatSend(workspaceId: string, send: PendingChatSend):
       ...(typeof a.ref === "string" && a.ref ? { ref: a.ref } : {}),
     }));
     sessionStorage.setItem(
-      pendingSendKey(workspaceId),
+      pendingSendKey(workspaceId, actorId),
       JSON.stringify({
         anchorVersion: CHAT_SEND_ANCHOR_VERSION,
         messageId: send.messageId,
@@ -402,9 +433,15 @@ export function savePendingChatSend(workspaceId: string, send: PendingChatSend):
   }
 }
 
-export function loadPendingChatSend(workspaceId: string): PendingChatSend | null {
+export function loadPendingChatSend(workspaceId: string, actorId?: string | null): PendingChatSend | null {
   try {
-    const raw = sessionStorage.getItem(pendingSendKey(workspaceId));
+    const actor = resolvePendingSendActor(actorId);
+    // #176: com principal ativo, a chave legada (sem ator, dono ambíguo)
+    // nunca reidrata — só a chave do próprio ator. Sem principal, a legada
+    // segue valendo (fluxo antigo/deslogado).
+    const raw = actor !== null
+      ? sessionStorage.getItem(pendingSendKey(workspaceId, actor))
+      : sessionStorage.getItem(pendingSendLegacyKey(workspaceId));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as {
       messageId?: unknown;
@@ -555,9 +592,34 @@ export function resolveRetrySend(input: {
   return composeChatSend(input.failed.content, { messageId: input.messageId });
 }
 
-export function clearPendingChatSend(workspaceId: string): void {
+export function clearPendingChatSend(workspaceId: string, actorId?: string | null): void {
   try {
-    sessionStorage.removeItem(pendingSendKey(workspaceId));
+    // #176: limpa a âncora do próprio escopo E a legada ambígua do workspace
+    // (o sucesso do envio encerra qualquer retry pendente dali).
+    const actor = resolvePendingSendActor(actorId);
+    if (actor !== null) sessionStorage.removeItem(pendingSendKey(workspaceId, actor));
+    sessionStorage.removeItem(pendingSendLegacyKey(workspaceId));
+  } catch {
+    // Best effort.
+  }
+}
+
+/**
+ * FIX-P1-SESS #176: purga TODAS as âncoras de retry (`ted.pending-send.*`,
+ * com e sem ator) — teardown de sessão (logout, troca de principal,
+ * revogação). Chamada por `clearSensitiveSession`; best-effort, nunca lança.
+ */
+export function clearAllPendingChatSends(): void {
+  try {
+    const storage =
+      typeof sessionStorage !== "undefined" ? sessionStorage : null;
+    if (!storage) return;
+    const doomed: string[] = [];
+    for (let i = 0; i < storage.length; i += 1) {
+      const key = storage.key(i);
+      if (key && key.startsWith(PENDING_SEND_KEY_PREFIX)) doomed.push(key);
+    }
+    for (const key of doomed) storage.removeItem(key);
   } catch {
     // Best effort.
   }
