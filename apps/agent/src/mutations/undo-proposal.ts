@@ -49,15 +49,96 @@ export const deriveUndoIdempotencyKey = (workspaceId: string, requestId: string)
 export type UndoProposalStatus = 'proposed' | 'executing' | 'confirmed' | 'cancelled' | 'expired';
 
 /**
+ * FIX-172: display-safe projection of the FIXED undo target. Display-only —
+ * the same 5 fields as the PWA `undoTargetSchema` (kind/description/
+ * amountCents/accountLabel/occurredOn), derived from the authoritative
+ * preview and persisted with the proposal. The execution binding never reads
+ * this: `decide` uses only `targetLastOperationId` + the stable idempotency
+ * key, so a tampered display cannot move execution.
+ */
+export type UndoTargetDisplay = Readonly<{
+  kind?: string;
+  description?: string;
+  amountCents?: number;
+  accountLabel?: string;
+  occurredOn?: string;
+}>;
+
+const UNDO_TARGET_DISPLAY_KEYS: ReadonlySet<string> = new Set([
+  'kind',
+  'description',
+  'amountCents',
+  'accountLabel',
+  'occurredOn',
+]);
+
+const nonBlank = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+/**
+ * FIX-172: strict allowlist sanitizer for the display projection. Mirrors
+ * the PWA `undoTargetSchema` contract: anything outside the 5 presentation
+ * fields (in particular target ids, idempotency keys, request ids or raw
+ * operation data) fails the WHOLE projection to `undefined` — never
+ * partially forwarded. A projection without a human-reviewable description
+ * is equally `undefined` (the PWA blocks confirm next to a description-less
+ * target, so emitting one would only remove the legacy confirm path).
+ */
+export const sanitizeUndoTargetDisplay = (value: unknown): UndoTargetDisplay | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (Object.keys(raw).some((key) => !UNDO_TARGET_DISPLAY_KEYS.has(key))) return undefined;
+  const description = nonBlank(raw.description);
+  if (!description) return undefined;
+  let amountCents: number | undefined;
+  if (raw.amountCents !== undefined) {
+    if (typeof raw.amountCents !== 'number' || !Number.isFinite(raw.amountCents)) return undefined;
+    amountCents = raw.amountCents;
+  }
+  const kind = nonBlank(raw.kind);
+  const accountLabel = nonBlank(raw.accountLabel);
+  const occurredOn = nonBlank(raw.occurredOn);
+  return Object.freeze({
+    ...(kind !== undefined ? { kind } : {}),
+    description,
+    ...(amountCents !== undefined ? { amountCents } : {}),
+    ...(accountLabel !== undefined ? { accountLabel } : {}),
+    ...(occurredOn !== undefined ? { occurredOn } : {}),
+  });
+};
+
+/**
+ * FIX-172: reads the persisted display projection off a stored record.
+ * Corrupt or smuggled content sanitizes to `undefined` — never throws,
+ * never leaks.
+ */
+export const recordDisplayTarget = (
+  record: Pick<UndoProposalRecord, 'targetJson'> | undefined,
+): UndoTargetDisplay | undefined => {
+  const raw = record?.targetJson;
+  if (typeof raw !== 'string' || !raw) return undefined;
+  try {
+    return sanitizeUndoTargetDisplay(JSON.parse(raw) as unknown);
+  } catch {
+    return undefined;
+  }
+};
+
+/**
  * debt-undo-proposal-rehydration: browser-safe rehydration summary. Identity
  * (workspace/actor/device) is the query binding and never part of the
  * payload; the fixed target, the idempotency key and raw operation data
  * never leave the DO.
+ *
+ * FIX-172: plus the optional display-safe `target` projection of the fixed
+ * target (absent on legacy/preview-less proposals — the card degrades to
+ * the summary shape).
  */
 export type UndoProposalSummary = Readonly<{
   requestId: string;
   status: 'proposed' | 'executing';
   expiresAt: string;
+  target?: UndoTargetDisplay;
 }>;
 
 export type UndoProposalRecord = Readonly<{
@@ -72,6 +153,13 @@ export type UndoProposalRecord = Readonly<{
   expiresAt: string;
   decidedAt?: string;
   resultJson?: string;
+  /**
+   * FIX-172: canonical JSON of the display-safe target projection, fixed at
+   * proposal time alongside `targetLastOperationId`. Absent (NULL) on legacy
+   * rows and previews without descriptives. Display-only — `decide`/`verify`
+   * never read this column.
+   */
+  targetJson?: string;
 }>;
 
 export type UndoSql = {
@@ -91,13 +179,54 @@ export const initializeUndoProposalSchema = (sql: UndoSql): void => {
       created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL,
       decided_at TEXT,
-      result_json TEXT
+      result_json TEXT,
+      target_json TEXT
     );
   `);
   sql.exec(`
     CREATE INDEX IF NOT EXISTS idx_undo_proposals_context
     ON undo_proposals (workspace_id, actor_id, status);
   `);
+  ensureUndoProposalTargetColumn(sql);
+};
+
+/**
+ * FIX-172: additive `target_json` lifecycle on the undo proposal binding.
+ * CREATE TABLE IF NOT EXISTS never upgrades legacy tables, so the display
+ * column is added explicitly (PRAGMA first, duplicate-guarded ALTER — the
+ * same mold as the mutation-draft `ensureColumn`).
+ *
+ * Unlike the financial columns, a failure here is FULLY swallowed: the
+ * column is display-only, so a legacy/mock storage without ALTER support
+ * degrades to the legacy shape (no target projection) instead of breaking
+ * proposals — and `insert` falls back to the 11-column statement when the
+ * column is missing. Proposal, binding and execution never depend on it.
+ */
+const ensureUndoProposalTargetColumn = (sql: UndoSql): void => {
+  try {
+    const rows = [...sql.exec<Record<string, unknown>>(`PRAGMA table_info(undo_proposals)`)];
+    if (rows.some((row) => String(row.name ?? '') === 'target_json')) return;
+  } catch {
+    // PRAGMA unavailable on this storage shim — fall through to the
+    // guarded ALTER below, itself fully failure-tolerant.
+  }
+  try {
+    sql.exec(`ALTER TABLE undo_proposals ADD COLUMN target_json TEXT`);
+  } catch {
+    // Display-only degradation (see above): never break initialization.
+  }
+};
+
+/**
+ * FIX-P1-UX-R3: the legacy insert fallback must recognize the REAL SQLite
+ * missing-column wording (`table undo_proposals has no column named
+ * target_json`) — not just the `no such column` phrasing raised by the
+ * in-memory test shim. Scoped to `target_json`: any other failure (including
+ * `no column named <other>`) still propagates instead of silently degrading.
+ */
+const isMissingTargetColumn = (error: unknown): boolean => {
+  const message = String((error as Error)?.message ?? error);
+  return /no such column/i.test(message) || /no column named\s+["'`\[]?target_json/i.test(message);
 };
 
 const rowToRecord = (row: Record<string, unknown>): UndoProposalRecord =>
@@ -113,6 +242,15 @@ const rowToRecord = (row: Record<string, unknown>): UndoProposalRecord =>
     expiresAt: String(row.expires_at ?? ''),
     ...(row.decided_at != null ? { decidedAt: String(row.decided_at) } : {}),
     ...(row.result_json != null ? { resultJson: String(row.result_json) } : {}),
+    // FIX-172: legacy rows (and mock storages without the column) carry no
+    // `target_json` — the projection is absent, never invented. Stored
+    // content is re-sanitized on read, so tampered rows degrade to absent.
+    ...(typeof row.target_json === 'string' && row.target_json
+      ? (() => {
+          const target = recordDisplayTarget({ targetJson: row.target_json });
+          return target ? { targetJson: JSON.stringify(target) } : {};
+        })()
+      : {}),
   });
 
 export class SqlUndoProposalStore {
@@ -127,22 +265,47 @@ export class SqlUndoProposalStore {
   }
 
   insert(record: UndoProposalRecord): void {
-    this.sql.exec(
-      `INSERT INTO undo_proposals (request_id, workspace_id, actor_id, device_id, target_last_operation_id, idempotency_key, status, created_at, expires_at, decided_at, result_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (request_id) DO NOTHING`,
-      record.requestId,
-      record.workspaceId,
-      record.actorId,
-      record.deviceId,
-      record.targetLastOperationId,
-      record.idempotencyKey,
-      record.status,
-      record.createdAt,
-      record.expiresAt,
-      record.decidedAt ?? null,
-      record.resultJson ?? null,
-    );
+    try {
+      this.sql.exec(
+        `INSERT INTO undo_proposals (request_id, workspace_id, actor_id, device_id, target_last_operation_id, idempotency_key, status, created_at, expires_at, decided_at, result_json, target_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (request_id) DO NOTHING`,
+        record.requestId,
+        record.workspaceId,
+        record.actorId,
+        record.deviceId,
+        record.targetLastOperationId,
+        record.idempotencyKey,
+        record.status,
+        record.createdAt,
+        record.expiresAt,
+        record.decidedAt ?? null,
+        record.resultJson ?? null,
+        record.targetJson ?? null,
+      );
+    } catch (error) {
+      // FIX-172 preservative fallback (+ FIX-P1-UX-R3 real-SQLite wording):
+      // legacy tables without the display column take the original 11-column
+      // statement. Only the missing column degrades (to no projection); any
+      // other failure propagates.
+      if (!isMissingTargetColumn(error)) throw error;
+      this.sql.exec(
+        `INSERT INTO undo_proposals (request_id, workspace_id, actor_id, device_id, target_last_operation_id, idempotency_key, status, created_at, expires_at, decided_at, result_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (request_id) DO NOTHING`,
+        record.requestId,
+        record.workspaceId,
+        record.actorId,
+        record.deviceId,
+        record.targetLastOperationId,
+        record.idempotencyKey,
+        record.status,
+        record.createdAt,
+        record.expiresAt,
+        record.decidedAt ?? null,
+        record.resultJson ?? null,
+      );
+    }
   }
 
   /**
@@ -231,7 +394,18 @@ export type UndoIdentity = Readonly<{
   deviceId: string;
 }>;
 
-export type UndoPreview = (identity: UndoIdentity) => Promise<{ id: string } | null>;
+export type UndoPreviewTarget = Readonly<{
+  id: string;
+  /**
+   * FIX-172: optional display-safe descriptives of the fixed target,
+   * resolved server-side by the preview. Re-sanitized on `propose` — a
+   * preview without descriptives simply fixes no projection (the proposal
+   * keeps the legacy summary shape).
+   */
+  target?: UndoTargetDisplay;
+}>;
+
+export type UndoPreview = (identity: UndoIdentity) => Promise<UndoPreviewTarget | null>;
 
 /**
  * closure-undo-verify: read-only audit surface for target verification.
@@ -314,6 +488,12 @@ export class UndoProposalService {
     }
     const target = await this.deps.preview(identity);
     if (!target) return { kind: 'unavailable' };
+    // FIX-172: the display projection is fixed here, alongside the target —
+    // re-sanitized (a hostile/buggy preview cannot smuggle ids or keys into
+    // the persisted row), and absent when the preview carries nothing
+    // displayable. Redeliveries and insert-race winners below keep the FIRST
+    // fixed projection, exactly like the fixed target id.
+    const display = sanitizeUndoTargetDisplay(target.target);
     const now = this.nowMs();
     const record: UndoProposalRecord = Object.freeze({
       requestId,
@@ -325,6 +505,7 @@ export class UndoProposalService {
       status: 'proposed' as const,
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + this.ttlMs()).toISOString(),
+      ...(display ? { targetJson: JSON.stringify(display) } : {}),
     });
     this.deps.store.insert(record);
     // A concurrent proposer may have won the insert race: reuse the winner
@@ -362,10 +543,16 @@ export class UndoProposalService {
         if (record.status === 'proposed') this.deps.store.markExpired(record.requestId, nowIso);
         continue;
       }
+      // FIX-172: the fixed display projection rides along when the proposal
+      // carries one. The key stays ABSENT (not `undefined`) otherwise, so
+      // legacy shapes serialize exactly as before. Sanitized on read — a
+      // tampered row degrades to the summary shape, never leaks.
+      const target = recordDisplayTarget(record);
       items.push(Object.freeze({
         requestId: record.requestId,
         status: record.status,
         expiresAt: record.expiresAt,
+        ...(target ? { target } : {}),
       }));
     }
     return items;
@@ -474,6 +661,9 @@ export class UndoProposalService {
       return fail('undo.binding_mismatch', 'Undo proposal belongs to another actor/device/workspace.');
     }
     const result = await this.deps.api.undo({
+      // FIX-172: the effect binds EXCLUSIVELY to the fixed proposal columns.
+      // The display projection (`target_json`) is never consulted here — a
+      // client tampering with the display cannot move execution.
       lastOperationId: holder.targetLastOperationId,
       idempotencyKey: holder.idempotencyKey,
       identity,

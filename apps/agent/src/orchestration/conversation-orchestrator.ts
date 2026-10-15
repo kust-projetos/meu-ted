@@ -200,6 +200,16 @@ const RESOLUTION_BUDGET_CLARIFICATION =
 const CORRECTION_REFUSAL_TEXT = 'Não consegui aplicar o valor novo com segurança. Informe o valor correto.';
 
 /**
+ * FIX-170 (d) — the stable impasse copy for a category answer that adds no
+ * new information (identical repeat of the stored query) and still does not
+ * resolve. It names the impasse, lists no invented row and promises no
+ * creation; repeats converge HERE instead of re-asking the same question
+ * forever. Any NEW answer ('mercado' after 'xyz') leaves this state at once.
+ */
+const CATEGORY_IMPASSE_TEXT =
+  'Ainda não consegui definir a categoria. Escolha uma das categorias existentes do seu catálogo — não crio categorias novas.';
+
+/**
  * A07/RR (review fix 4) — a date fragment that names more than one relative
  * date reuses the A06 copy verbatim (one wording per ambiguity). A NEGATED
  * date fragment gets its own sentence: "não foi ontem" is not a conflicting
@@ -329,16 +339,80 @@ const CATEGORY_FRAGMENT = /^\s*(?:e\s+)?de\s+([^,.;?]+?)\s*$/iu;
 // else is not a category name and must fall back to the ordinary question.
 const CATEGORY_FRAGMENT_MAX = 40;
 
+// FIX-170 — the BARE NAME. A short answer to the pending category question
+// ("mercado", "supermercado", "alimentação > mercado") carries no amount, so
+// it is never a candidate interpretation of its own (R03/A03 intact: the flag
+// stays structurally unavailable on the fresh path). A leading negation
+// ("não, transporte") names the REPLACEMENT, not a retraction — a bare "não"
+// keeps its fail-closed clarification. Guards mirror the fragment's (no
+// digits, bounded length/words, no sentence punctuation); separators (`>`,
+// `/`, `:`) take the last segment. `fromFragment: false` on purpose: a bare
+// answer keeps the pre-existing account-hint behavior (fix-5's exclusion
+// stays exclusive to `de X` fragments), so an account answer to a
+// both-pending draft still resolves the account.
+const CATEGORY_NEGATION_PREFIX = /^\s*(?:n[aã]o|nunca|jamais)\s*,?\s+(.+?)\s*$/iu;
+// FIX-169-170-R2 (P2-3): a vírgula separa a ALTERNATIVA ('não, transporte' =>
+// a resposta é 'transporte') da INSTRUÇÃO negativa ('não use mercado' => o
+// usuário recusa, não responde — nunca vira query). Sem a vírgula, despir o
+// prefixo produzia 'use mercado' e o substring casava Mercado: a rejeição
+// virava seleção.
+const CATEGORY_NEGATION_REPLACEMENT = /^\s*(?:n[aã]o|nunca|jamais)\s*,\s*(.+?)\s*$/iu;
+const CATEGORY_SEGMENT_SPLIT = /[>/:|\\]+/u;
+const CATEGORY_BARE_MAX_WORDS = 4;
+const CATEGORY_BARE_INNER_PUNCT = /[.?!,;:"“”'‘’]/u;
+
 const categoryQueryFrom = (
   text: string,
   options: Readonly<{ allowBareFragment?: boolean }> = {},
-): { query: string; fromFragment: boolean } | undefined => {
+): { query: string; fromFragment: boolean; bare?: boolean } | undefined => {
+  // FIX-169-170-R2 (P2-3): 'não, X' responde X (alternativa); 'não <verbo> X'
+  // sem vírgula é instrução negativa e NUNCA vira query — nem via o `de X`,
+  // nem via o bare, nem via o explícito 'categoria X'. Retornar undefined
+  // mantém o esclarecimento fail-closed com o draft ativo (sem proposta).
+  const replacement = CATEGORY_NEGATION_REPLACEMENT.exec(text)?.[1]?.trim();
+  if (replacement !== undefined) {
+    if (!replacement) return undefined;
+    // FIX-169-170-R3 (MEDIUM): 'não, NÃO QUERO mercado' despia só o primeiro
+    // prefixo e o resto ('não quero mercado') casava Mercado por substring —
+    // a rejeição virava seleção. Desempilha prefixos aninhados e RE-VALIDA o
+    // resto: se ainda for negação/instrução negativa, nunca vira query.
+    let rest = replacement;
+    for (let depth = 0; depth < 3; depth++) {
+      const inner = CATEGORY_NEGATION_REPLACEMENT.exec(rest)?.[1]?.trim();
+      if (inner === undefined) break;
+      if (!inner) return undefined;
+      rest = inner;
+    }
+    if (!rest || CATEGORY_NEGATION_PREFIX.test(rest)) return undefined;
+    // FIX-169-170-R4 (REVIEW-169-170-R3): negações repetidas sem espaço
+    // pós-vírgula ('não,não,…não quero categoria mercado') esgotam o bound-3
+    // do loop acima e o resto ('não,não quero categoria mercado') não casa
+    // CATEGORY_NEGATION_PREFIX (exige espaço após a negação) — o CATEGORY_PHRASE
+    // extraía 'mercado' e a rejeição virava seleção. Se o resto AINDA começa
+    // com marcador de negação (com ou sem vírgula/espaço), fail-closed: sem
+    // proposta, draft preservado. 'não, transporte' (resto limpo) segue
+    // funcionando; 'não,não transporte' também retorna undefined (conservador).
+    if (/^\s*(?:n[aã]o|nunca|jamais)\s*,?\s*/iu.test(rest)) return undefined;
+    text = rest;
+  } else if (CATEGORY_NEGATION_PREFIX.test(text)) {
+    return undefined;
+  }
   const explicit = CATEGORY_PHRASE.exec(text)?.[1]?.trim();
   if (explicit) return explicit ? { query: explicit, fromFragment: false } : undefined;
   if (!options.allowBareFragment) return undefined;
   const fragment = CATEGORY_FRAGMENT.exec(text)?.[1]?.trim();
-  if (!fragment || fragment.length > CATEGORY_FRAGMENT_MAX || /\d/.test(fragment)) return undefined;
-  return { query: fragment, fromFragment: true };
+  if (fragment && fragment.length <= CATEGORY_FRAGMENT_MAX && !/\d/.test(fragment)) {
+    return { query: fragment, fromFragment: true };
+  }
+  const segment = text.split(CATEGORY_SEGMENT_SPLIT).map((part) => part.trim()).filter((part) => part.length > 0).pop() ?? '';
+  const bare = segment.replace(/[.?!,;)\]}]+$/u, '').trim();
+  if (!bare || bare.length > CATEGORY_FRAGMENT_MAX || /\d/.test(bare)) return undefined;
+  // A lone negation ("não") answers nothing: it keeps the pre-existing
+  // fail-closed path instead of becoming a category query.
+  if (/^(?:n[aã]o|nunca|jamais)$/iu.test(bare)) return undefined;
+  if (bare.split(/\s+/u).length > CATEGORY_BARE_MAX_WORDS) return undefined;
+  if (CATEGORY_BARE_INNER_PUNCT.test(bare)) return undefined;
+  return { query: bare, fromFragment: false, bare: true };
 };
 
 /**
@@ -1940,7 +2014,15 @@ export class ConversationOrchestrator {
     const turnCategory = draft.missingFields.includes('categoryId')
       ? categoryQueryFrom(input.text, { allowBareFragment })
       : undefined;
-    const turnCategoryQuery = turnCategory?.query;
+    // FIX-170: a BARE name is adopted as the category answer ONLY when the
+    // category is the SOLE pending field. With the account still pending the
+    // same word could name either field, so it stays out of `categoryQuery`
+    // and the turn keeps the pre-existing hint behavior (account-first,
+    // description-exact category) — never a silent misattribution. Explicit
+    // (`categoria X`) and `de X` fragments keep their existing adoption.
+    const adoptedCategory =
+      turnCategory?.bare === true && draft.missingFields.includes('accountId') ? undefined : turnCategory;
+    const turnCategoryQuery = adoptedCategory?.query;
     const categoryQuery = turnCategoryQuery ?? draft.resolvedArgs.categoryQuery;
     // A07/AC14: "ontem"/"hoje" CORRECTS the stored date. Resolved through the
     // parser's own `dateFor` against the injected clock — the same timezone
@@ -2010,7 +2092,7 @@ export class ConversationOrchestrator {
     // visible) while the fragment only feeds `categoryQuery`.
     const resolutionHint = turnInterpretation.status === 'candidate'
       ? turnInterpretation.resolutionText
-      : turnCategory?.fromFragment
+      : adoptedCategory?.fromFragment
         ? draft.resolvedArgs.description
         : `${draft.resolvedArgs.description} ${input.text}`;
     const permit = this.permitResolutionRecovery(base, {
@@ -2052,6 +2134,33 @@ export class ConversationOrchestrator {
     const stamp = new Date(this.draftNowMs()).toISOString();
     this.emitEntityResolution(input, plan, resolution.trace);
     if (!resolution.complete) {
+      // FIX-170 (d): an identical category answer that adds nothing new and
+      // still does not resolve converges to a STABLE impasse instead of
+      // re-asking the same question indefinitely. Finite by construction:
+      // the first unproductive repeat gets the impasse copy, every further
+      // identical repeat re-asks exactly that copy, and any NEW answer
+      // resolves normally. Zero new schema: `lastQuestion` is the only
+      // memory, and the draft stays active for a valid answer at any time.
+      const repeatsStoredCategoryQuery =
+        turnCategoryQuery !== undefined &&
+        turnCategoryQuery === observedBefore.categoryQuery &&
+        resolution.missingFields.includes('categoryId');
+      if (
+        repeatsStoredCategoryQuery &&
+        (draft.lastQuestion === CATEGORY_IMPASSE_TEXT || resolution.clarification === draft.lastQuestion)
+      ) {
+        const settled = this.writeDraftContinuation(draft.draftId, (current) => ({
+          missingFields: [...resolution.missingFields],
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+          lastQuestion: CATEGORY_IMPASSE_TEXT,
+          ...this.turnMetadata(input, current, relation),
+        }));
+        if (!settled.ok) {
+          return this.refuseDraftWrite(input, plan, startedAt, base, settled.current, CATEGORY_IMPASSE_TEXT);
+        }
+        return this.clarifyDraft(input, plan, startedAt, base, settled.record, CATEGORY_IMPASSE_TEXT);
+      }
       // SPEC R03: an explicit category accepted in this turn must survive the
       // draft while another field stays pending. Dropping it would make the
       // next bare answer ("Nubank") re-ask the category the user just named,

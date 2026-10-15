@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { isActionablePendingOperationPresentation } from "@pi-finance/llm-contracts/types";
 import {
   decidePendingOperation,
@@ -38,16 +38,116 @@ const deriveFallbackTitle = (operation: TedPendingOperation): string => {
   return operation.summary || "Confirmar operação";
 };
 
+/**
+ * FIX-P1-UX-R3: terminal-sticky lifecycle predicates. `succeeded` /
+ * `cancelled` / `expired` are DEFINITIVE terminals — the first one applied
+ * wins and no later remote snapshot or late RPC verdict ever moves the card
+ * again. `failed` is a RETRYABLE terminal: the card never steps INTO it from
+ * another terminal verdict (a stale failure GET would resurrect Retry), but a
+ * retryable `failed` follows a legitimate retry — back into `executing` /
+ * `confirmed`, or onward to its definitive outcome — instead of freezing on
+ * the failure shape. Retry is only offered while `failed` is the confirmed
+ * current state.
+ */
+const isDefinitiveTerminal = (status: TedPendingOperation["status"]): boolean =>
+  status === "succeeded" || status === "cancelled" || status === "expired";
+
+const isTerminalStatus = (status: TedPendingOperation["status"]): boolean =>
+  status === "failed" || isDefinitiveTerminal(status);
+
+const isRetryInflight = (status: TedPendingOperation["status"]): boolean =>
+  status === "executing" || status === "confirmed";
+
+/**
+ * FIX-P1-UX #171: lifecycle rank of the approval states. Forward motion only
+ * — see the terminal-sticky guards on the sync effect and on `resolve`.
+ */
+const APPROVAL_STATUS_RANK: Readonly<Record<TedPendingOperation["status"], number>> = {
+  proposed: 0,
+  executing: 1,
+  confirmed: 1,
+  failed: 2,
+  succeeded: 2,
+  cancelled: 2,
+  expired: 2,
+};
+
 export function TedApprovalCard({ operation, workspaceId, onResolved }: TedApprovalCardProps) {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<TedPendingOperation["status"]>(operation.status);
   const [error, setError] = useState<string | null>(null);
+
+  // FIX-P1-UX #171 + FIX-P1-UX-R3: the remote `operation.status` is
+  // authoritative and must flow into the card — the initial `useState`
+  // snapshot alone goes stale on every parent refresh. Terminal-sticky guards
+  // keep the card from stepping back:
+  // (1) a definitive terminal (`succeeded`/`cancelled`/`expired`) never moves
+  // again — first terminal wins, so a stale GET carrying another terminal
+  // (e.g. `failed` after `succeeded`) never regresses the card nor resurrects
+  // Retry; moves between definitive terminals are likewise ignored;
+  // (2) the card never steps INTO `failed` from a terminal verdict — a stale
+  // failure GET after a verdict would resurrect Retry (`executing`/
+  // `confirmed`→`failed` stays allowed: that is the execution legitimately
+  // failing);
+  // (3) a retryable `failed` follows a legitimate retry — back into
+  // `executing`/`confirmed`, or onward to its definitive outcome when the
+  // refresh skips flight — instead of freezing on the failure shape;
+  // converging to a definitive outcome resurrects no action (it renders no
+  // buttons);
+  // (4) any other refresh must be strictly forward by lifecycle rank
+  // (proposed(0) < executing/confirmed(1) < terminals(2)) — stale snapshots
+  // never downgrade the card, no resurrected Confirm/Cancel/Retry;
+  // (5) a decision RPC that resolves after a NEWER remote truth arrived
+  // mid-flight never overwrites it — the newer truth wins, while the decision
+  // itself still propagates to the parent (reconcile + reload).
+  const lastRemoteStatusRef = useRef(operation.status);
+  useEffect(() => {
+    const prev = lastRemoteStatusRef.current;
+    const next = operation.status;
+    if (next === prev) return;
+    // FIX-P1-UX-R3 HIGH: definitive terminal never regresses — first wins.
+    if (isDefinitiveTerminal(prev)) return;
+    // FIX-P1-UX-R3 HIGH: never step INTO `failed` from a terminal verdict
+    // (stale failure GET); flight→failed stays allowed (legitimate failure).
+    if (next === "failed" && isTerminalStatus(prev)) return;
+    // FIX-P1-UX-R3 MEDIUM: retryable `failed` follows the retry — back into
+    // flight or onward to its definitive outcome — instead of freezing.
+    if (prev === "failed" && (isRetryInflight(next) || isDefinitiveTerminal(next))) {
+      lastRemoteStatusRef.current = next;
+      setStatus(next);
+      return;
+    }
+    if ((APPROVAL_STATUS_RANK[next] ?? 0) > (APPROVAL_STATUS_RANK[prev] ?? 0)) {
+      lastRemoteStatusRef.current = next;
+      setStatus(next);
+    }
+  }, [operation.status]);
   const presentation = operation.presentation;
   const title = presentation?.title ?? deriveFallbackTitle(operation);
   const operationLabel = presentation?.description ?? operation.summary ?? operation.operation ?? "operação financeira";
 
   const resolve = async (decision: "confirm" | "cancel" | "retry") => {
+    const remoteAtStart = lastRemoteStatusRef.current;
     const resolved: PendingOperationDecision = await decidePendingOperation(workspaceId, operation.id, decision);
+    const latestRemote = lastRemoteStatusRef.current;
+    // FIX-P1-UX #171 + FIX-P1-UX-R3: a newer remote truth that arrived while
+    // this RPC was in flight wins over this verdict — never step the card
+    // back to it. That is either a strictly more advanced remote state, or a
+    // definitive terminal (`succeeded`/`cancelled`/`expired`) differing from
+    // this verdict (a tardy `failed` after a `succeeded` refresh never
+    // regresses the card nor resurrects Retry). The decision itself still
+    // propagates to the parent so reconciliation and history reload happen.
+    // A legitimate retry verdict (from the confirmed `failed` state, with no
+    // newer remote truth) always propagates — retry never freezes.
+    if (
+      ((APPROVAL_STATUS_RANK[latestRemote] ?? 0) > (APPROVAL_STATUS_RANK[remoteAtStart] ?? 0) &&
+        (APPROVAL_STATUS_RANK[latestRemote] ?? 0) > (APPROVAL_STATUS_RANK[resolved.status] ?? 0)) ||
+      (isDefinitiveTerminal(latestRemote) && latestRemote !== resolved.status)
+    ) {
+      onResolved?.(resolved);
+      return;
+    }
+    lastRemoteStatusRef.current = resolved.status;
     setStatus(resolved.status);
     onResolved?.(resolved);
   };
@@ -61,7 +161,10 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
   // Shared approve/retry lock: the decision may have reached the API and
   // committed the write even when the response/receipt is missing. Keep this
   // card non-actionable until the authoritative operation state is refreshed.
+  // FIX-P1-UX-R4: a late RPC rejection after a definitive terminal refresh
+  // must not regress the card — the definitive terminal wins, no lock.
   const lockUnverified = () => {
+    if (isDefinitiveTerminal(lastRemoteStatusRef.current)) return;
     setStatus("executing");
     setError("O resultado desta operação ainda não foi verificado. Atualize o estado antes de tomar outra decisão.");
   };
@@ -75,6 +178,9 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
       // Uncertain post-retry outcome: SAME lock as approve — executing, no
       // Confirm/Cancel/Retry, no duplicate resend. Any other error keeps the
       // failed state with Retry available.
+      // FIX-P1-UX-R4: both branches respect terminal-sticky — a definitive
+      // terminal already in force is never regressed by a late rejection.
+      if (isDefinitiveTerminal(lastRemoteStatusRef.current)) return;
       if (isUncertainOutcome(e)) {
         lockUnverified();
       } else {
@@ -103,6 +209,8 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
     try {
       await resolve("cancel");
     } catch (e) {
+      // FIX-P1-UX-R4: late rejection never regresses a definitive terminal.
+      if (isDefinitiveTerminal(lastRemoteStatusRef.current)) return;
       setError((e as Error).message);
     } finally {
       setLoading(false);

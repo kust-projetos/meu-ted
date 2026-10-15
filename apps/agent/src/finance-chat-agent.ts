@@ -59,6 +59,7 @@ import {
 } from "./migration/legacy-history.js";
 import { requestPiApiJson } from "./tools/api-client.js";
 import { createDelegatedTurnToken } from "./delegated-token.js";
+import { runMemoryTransaction } from "./agent-config/memory/store.js";
 import { detectDuplicateSuspectedStrict } from './tools/duplicate-detector.js';
 import { verifyAgentConnectionToken } from "./auth/connection-token.js";
 import {
@@ -189,8 +190,12 @@ import {
   UndoProposalService,
   UNDO_DELEGATED_CAPABILITY,
   UNDO_UUID_RE,
+  UNDO_VERIFY_ALLOWED_OPERATIONS,
   UNDO_VERIFY_READ_CAPABILITY,
+  recordDisplayTarget,
+  sanitizeUndoTargetDisplay,
   type UndoIdentity,
+  type UndoTargetDisplay,
 } from "./mutations/undo-proposal.js";
 
 export type Env = {
@@ -727,6 +732,17 @@ export const USAGE_INPUT_CAP_CODE = 'agent.usage_input_cap';
  */
 const USAGE_RATE_LIMIT_REASON_PREFIX = 'Rate limit exceeded';
 const USAGE_INPUT_CAP_REASON_PREFIX = 'Message exceeds maximum';
+
+/**
+ * FIX-172: pt-BR kind labels for the undo display projection. Transaction
+ * ops only (the verify-allowed set) — account/category creations keep the
+ * legacy summary shape.
+ */
+const UNDO_TARGET_KIND_LABEL: Readonly<Record<string, string>> = {
+  'transactions.expense.create': 'Despesa',
+  'transactions.income.create': 'Receita',
+  'transactions.transfer.create': 'Transferência',
+};
 
 /**
  * Maps an atomic reservation denial reason to its wire code. The rate window
@@ -2851,8 +2867,15 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * server-side from GET /audit-logs (most recent reversible operation,
    * preferring the actor's own). Null = genuinely nothing to undo; throw =
    * transport failure (the turn degrades to try-again, never "no action").
+   *
+   * FIX-172: plus a best-effort display-safe projection of that fixed
+   * target (turn-relay source; persisted with the proposal and re-emitted
+   * by the active list). Display resolution NEVER throws past this method:
+   * any failure degrades to the id-only shape — the proposal itself (and
+   * its fixed target) is unaffected. The projection is DISPLAY-ONLY: the
+   * decision RPC keeps binding exclusively to the fixed target id below.
    */
-  private async previewUndoTarget(identity: UndoIdentity): Promise<{ id: string } | null> {
+  private async previewUndoTarget(identity: UndoIdentity): Promise<{ id: string; target?: UndoTargetDisplay } | null> {
     const secret = this.env?.AGENT_DELEGATION_SECRET?.trim();
     if (!secret) throw new Error('agent.persistence_unavailable');
     const readToken = await createDelegatedTurnToken({
@@ -2863,10 +2886,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       requestId: crypto.randomUUID(),
       deviceId: identity.deviceId,
     }, secret);
-    const result = await requestPiApiJson<{ items?: Array<{ id?: unknown; operation?: unknown; actorId?: unknown; createdAt?: unknown }> }>(
-      'GET',
+    const read = <T>(path: string): Promise<T> =>
+      requestPiApiJson<T>('GET', path, { delegatedToken: readToken, apiOrigin: this.env?.API_ORIGIN });
+    const result = await read<{ items?: Array<{ id?: unknown; operation?: unknown; actorId?: unknown; createdAt?: unknown; effectRef?: unknown; metadata?: unknown }> }>(
       '/audit-logs?limit=50',
-      { delegatedToken: readToken, apiOrigin: this.env?.API_ORIGIN },
     );
     const reversible = new Set([
       'transactions.expense.create',
@@ -2882,7 +2905,69 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     if (candidates.length === 0) return null;
     const own = candidates.filter((item) => item.actorId === identity.actorId);
     const target = (own.length > 0 ? own[0] : candidates[0])!;
-    return { id: String(target.id) };
+    const fixed = { id: String(target.id) };
+    try {
+      const display = await this.resolveUndoTargetDisplay(target, read);
+      const clean = sanitizeUndoTargetDisplay(display);
+      return clean ? { ...fixed, target: clean } : fixed;
+    } catch {
+      return fixed;
+    }
+  }
+
+  /**
+   * FIX-172: best-effort display resolution for the FIXED audit target.
+   * Transaction ops only (`transactions.*.create` — the verify-allowed set):
+   * resolves the created entity with the SAME id chain as `verify`
+   * (`metadata.entityId > effectRef > metadata.after.id`), reads it from the
+   * authoritative list endpoint, and projects display fields. Account /
+   * category creations and anything unresolvable yield `undefined` (legacy
+   * summary shape — confirm stays available there, while a description-less
+   * target would make the PWA block confirm). Read-only under the narrow
+   * `financial.read` delegation; entity-read failures propagate to the
+   * caller, which degrades to the id-only shape.
+   */
+  private async resolveUndoTargetDisplay(
+    auditItem: { operation?: unknown; effectRef?: unknown; metadata?: unknown },
+    read: <T>(path: string) => Promise<T>,
+  ): Promise<UndoTargetDisplay | undefined> {
+    const operation = String(auditItem.operation ?? '');
+    if (!UNDO_VERIFY_ALLOWED_OPERATIONS.has(operation)) return undefined;
+    const metadata = auditItem.metadata && typeof auditItem.metadata === 'object'
+      ? (auditItem.metadata as Record<string, unknown>)
+      : {};
+    const fromMeta = typeof metadata.entityId === 'string' && metadata.entityId.trim() ? metadata.entityId.trim() : undefined;
+    const fromRef = typeof auditItem.effectRef === 'string' && auditItem.effectRef.trim() ? auditItem.effectRef.trim() : undefined;
+    const after = metadata.after && typeof metadata.after === 'object' ? (metadata.after as Record<string, unknown>) : undefined;
+    const fromAfter = after && typeof after.id === 'string' && after.id.trim() ? after.id.trim() : undefined;
+    const entityId = fromMeta ?? fromRef ?? fromAfter;
+    if (!entityId) return undefined;
+    const txResult = await read<{ items?: Array<{ id?: unknown; description?: unknown; amountCents?: unknown; date?: unknown; accountId?: unknown }> }>(
+      '/transactions?limit=200',
+    );
+    const tx = (Array.isArray(txResult.items) ? txResult.items : []).find((item) => item?.id === entityId);
+    if (!tx) return undefined;
+    if (typeof tx.description !== 'string' || !tx.description.trim()) return undefined;
+    const amountCents = typeof tx.amountCents === 'number' && Number.isFinite(tx.amountCents) ? tx.amountCents : undefined;
+    const occurredOn = typeof tx.date === 'string' && tx.date.trim() ? tx.date.trim() : undefined;
+    // Account label is garnish: its failure omits the field, never the card.
+    let accountLabel: string | undefined;
+    if (typeof tx.accountId === 'string' && tx.accountId) {
+      try {
+        const account = await read<{ name?: unknown }>(`/accounts/${encodeURIComponent(tx.accountId)}`);
+        if (typeof account?.name === 'string' && account.name.trim()) accountLabel = account.name.trim();
+      } catch {
+        // Omit the label only.
+      }
+    }
+    const kind = UNDO_TARGET_KIND_LABEL[operation];
+    return {
+      ...(kind !== undefined ? { kind } : {}),
+      description: tx.description.trim(),
+      ...(amountCents !== undefined ? { amountCents } : {}),
+      ...(accountLabel !== undefined ? { accountLabel } : {}),
+      ...(occurredOn !== undefined ? { occurredOn } : {}),
+    };
   }
 
   /**
@@ -3066,8 +3151,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * debt-undo-proposal-rehydration: read-only active-listing for chat
    * startup/workspace change (`GET /rpc/undo/active`). Identity SOLELY from
    * the gateway-verified headers; returns ONLY bound live summaries
-   * (`proposed` + truthful `executing`, safe projection — never targets,
-   * keys or raw operation data). Never previews, never calls the undo API,
+   * (`proposed` + truthful `executing`, safe projection — FIX-172 adds the
+   * display-safe target projection when the proposal carries one; never
+   * fixed-target ids, keys or raw operation data). Never previews, never calls the undo API,
    * never decides: the `api` dependency throws if ever touched.
    */
   private async handleUndoActive(request: Request): Promise<Response> {
@@ -3287,12 +3373,20 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // mutation plan, but with a recoverable draft it still needs the
         // mutation client + reader so the turn can complete the handoff.
         const draftStore = this.draftStoreForRequest();
+        const draftCtx = { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: deviceId ?? null };
         const hasPendingDraft = draftStore
           ? hasRecoverableDraft(
             draftStore,
-            { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: deviceId ?? null },
+            draftCtx,
             Date.now(),
-          )
+          ) ||
+          // FIX-169-170-R2 (P2-1): a redelivery after consumption is still a
+          // draft turn (mirror of the orchestrator's `hasDraftForTurn`). The
+          // consumed record converges to the SAME proposal under the SAME
+          // intentionId; without a client here that path is unreachable and
+          // the turn degrades to a provider 503 for an already-successful
+          // operation.
+          draftStore.findByIntention(draftCtx, intentionId) !== undefined
           : false;
         // T1.5 (SPEC §8): decision turns (confirmation/cancel/retry) build
         // the same MutationApiClient as proposals — the orchestrator's
@@ -3353,15 +3447,35 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           // Persist the FINAL grounded/deterministic response (never the raw
           // relay text: grounding may have rejected or replaced the provider
           // output, and /rpc/history serves exactly what is persisted here).
-          // Mutation modes never reach the response provider (no user message
-          // was persisted for them either), so their historical
-          // non-persistence is preserved unchanged.
-          if (turnResult.plan.mode !== 'mutation-proposal' && turnResult.plan.mode !== 'confirmation' && turnResult.plan.mode !== 'cancel') {
+          // FIX-169 (SPEC §7.7) + FIX-169-170-R2 (P2-1): mutation modes persist
+          // their honest Q&A pair with stable ids in the `else` branch below —
+          // and so do draft-continuation and retry turns, which answer under a
+          // NON-mutation plan (`unsupported`/`conversation`/`read`) while their
+          // Q&A is still the turn's durable evidence. Learning on these paths
+          // still requires `turnResult.mutation` (A19).
+          //
+          // The branch is NOT plan.mode alone: `clarification.draft` IS the
+          // continuation signal (every `clarifyDraft` reply carries it, on any
+          // plan mode); a retry is the same typed-text predicate the
+          // orchestrator routes on (`runRetryTurn`); a materialized `mutation`
+          // always pairs (redelivery convergence included — the redelivered
+          // turn carries the SAME intentionId and dedupes to zero extra rows).
+          // A genuine read has none of the three and keeps this branch.
+          const isDraftContinuation = turnResult.clarification?.draft !== undefined;
+          const isRetryTurn = isRetryText(decisionText);
+          const persistStablePair =
+            turnResult.plan.mode === 'mutation-proposal' ||
+            turnResult.plan.mode === 'confirmation' ||
+            turnResult.plan.mode === 'cancel' ||
+            isDraftContinuation ||
+            isRetryTurn ||
+            turnResult.mutation !== undefined;
+          if (!persistStablePair) {
             // T3.1 (SPEC §14): a fail-closed read never reaches the response
             // provider, which is where the user message is otherwise
             // persisted — persist it here so history keeps the Q&A pair
-            // (fail-closed only ever happens on the read path, so mutation
-            // non-persistence above is unaffected).
+            // (fail-closed only ever happens on the read path, so the
+            // mutation Q&A persistence in the `else` branch is unaffected).
             if (turnResult.failClosed) {
               const failClosedUserMessage: UIMessage = {
                 id: `msg-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -3408,29 +3522,71 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             if (!turnResult.failClosed && (!needsMutation || turnResult.mutation)) {
               await this.recordPostTurnLearning(learningPayload);
             }
-          } else if (!turnResult.failClosed && turnResult.mutation) {
-            // Mutation modes do not persist chat messages (historical
-            // behavior, unchanged). Their durable turn evidence is the pending
-            // operation / receipt materialized by the coordinator inside
-            // `runTurn`, which already happened before this point — so learning
-            // is owed the same evidence, with the same guards.
-            //
-            // `turnResult.mutation` IS that evidence (review round 2, P1-2):
-            // the pending operation the coordinator actually materialized — a
-            // proposal with `operationId`, a confirmation/retry with `receipt`.
-            // The orchestrator answers a mutation-mode turn with NO mutation on
-            // real paths — no pending target, disambiguation between several
-            // pendings, and a captured coordinator error
-            // (`renderMutationResult('failed')`) — and a refusal, a block or a
-            // failed confirmation is not knowledge. Those turns teach nothing
-            // and advance no turn counter; learning happens again on the turn
-            // that carries the operation.
-            //
-            // Conservative by design (review round 3, P1): `runCancelTurn` does
-            // not materialize `mutation` in the current contract, so cancel
-            // turns — and any other mode whose coordinator does not — do not
-            // teach. Losing a little learning is the safe direction here.
-            await this.recordPostTurnLearning(learningPayload);
+          } else {
+            // FIX-169 (P0) + FIX-169-170-R2 (P2-1): mutation modes
+            // (mutation-proposal / confirmation / cancel) never reach the
+            // response provider — and neither do draft-continuation / retry
+            // turns answering under a non-mutation plan — so neither the user
+            // bubble nor the assistant reply was persisted: the PWA dropped
+            // its `sent` bubble on the next history reload and the turn
+            // vanished. Persist the Q&A pair here with STABLE
+            // ids derived from the turn's intentionId (SPEC §7.7): a
+            // redelivery after a lost response carries the same id and
+            // dedupes to zero extra rows, while two distinct sends carry
+            // distinct ids and persist two pairs. Texts are the
+            // already-DLP-scrubbed turn input and the orchestrator's
+            // deterministic reply (never raw provider output). Eventual
+            // consistency: the PWA keeps its `sent` bubble until this
+            // history converges.
+            const mutationUserId = `msg-user-${intentionId}`;
+            const mutationAsstId = `msg-asst-${intentionId}`;
+            const existingIds = new Set(
+              (Array.isArray(this.messages) ? this.messages : []).map((m) => String((m as { id?: unknown }).id ?? "")),
+            );
+            const mutationNowIso = new Date().toISOString();
+            const mutationToPersist: UIMessage[] = [];
+            if (!existingIds.has(mutationUserId)) {
+              mutationToPersist.push({
+                id: mutationUserId,
+                role: 'user',
+                parts: [{ type: 'text', text: scrubForPersistence(restInput.text) }],
+                metadata: { actorId: identity.actorId, workspaceId: identity.workspaceId, createdAt: mutationNowIso, intentionId },
+              } as unknown as UIMessage);
+            }
+            if (!existingIds.has(mutationAsstId)) {
+              mutationToPersist.push({
+                id: mutationAsstId,
+                role: 'assistant',
+                parts: [{ type: 'text', text: scrubForPersistence(turnResult.response.text) }],
+                metadata: { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: mutationNowIso, intentionId },
+              } as unknown as UIMessage);
+            }
+            if (mutationToPersist.length > 0) {
+              try {
+                await this.persistMessages(mutationToPersist);
+              } catch (persistError) {
+                // Same §40 (issue #99) compensation as the read path: the
+                // unpublished turn must not leave confirmable pendings behind.
+                this.revertUnpublishedTurnProposals({
+                  workspaceId: identity.workspaceId,
+                  actorId: identity.actorId,
+                  intentionId,
+                });
+                throw persistError;
+              }
+            }
+            if (!turnResult.failClosed && turnResult.mutation) {
+              // `turnResult.mutation` IS the durable turn evidence (review
+              // round 2, P1-2): the pending operation the coordinator actually
+              // materialized — a proposal with `operationId`, a
+              // confirmation/retry with `receipt`. Turns without it (no
+              // pending target, disambiguation, captured coordinator error,
+              // refusal, block) still persist their Q&A pair above but teach
+              // nothing. Conservative by design (review round 3, P1):
+              // `runCancelTurn` materializes no `mutation`, so cancel turns do
+              // not teach. Losing a little learning is the safe direction.
+              await this.recordPostTurnLearning(learningPayload);
+            }
           }
           const pendingOperation = turnResult.mutation
             ? {
@@ -3467,10 +3623,20 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             // debt-undo-confirmation-protocol: separate undo proposal relay
             // (requestId for the decision RPC; the fixed target never leaves
             // the DO). Re-validated shape — unknown keys are dropped.
+            // FIX-172: the fixed display projection persisted with the
+            // proposal rides along (turn-relay path). Re-sanitized on read;
+            // absent on legacy rows. A store failure degrades to the legacy
+            // shape — never the turn.
             ...(() => {
               const proposal = (turnResult as { undoProposal?: unknown }).undoProposal as { requestId?: unknown; status?: unknown; expiresAt?: unknown } | undefined;
               if (!proposal || typeof proposal.requestId !== 'string' || proposal.status !== 'proposed' || typeof proposal.expiresAt !== 'string') return {};
-              return { undoProposal: { requestId: proposal.requestId, status: 'proposed' as const, expiresAt: proposal.expiresAt } };
+              const base = { requestId: proposal.requestId, status: 'proposed' as const, expiresAt: proposal.expiresAt };
+              try {
+                const target = recordDisplayTarget(this.undoStoreForRequest()?.get(proposal.requestId));
+                return { undoProposal: target ? { ...base, target } : base };
+              } catch {
+                return { undoProposal: base };
+              }
             })(),
           });
         }
@@ -3550,25 +3716,68 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           summary = null;
         }
       }
-      // Ensure a registry row exists even for the very first session, so the
-      // archived history is never lost when no session was opened before.
-      // Empty renewals only reset the context without archiving noise.
+      // FIX-P1-SESS #177: renovação com escopo por ator, fail-closed.
+      //
+      // O DO é por workspace (compartilhado pelos membros), mas o registry
+      // (`agent_sessions`) já é por (workspace, actor). O apagão GLOBAL da
+      // tabela SDK (`DELETE FROM cf_ai_chat_agent_messages` sem WHERE) foi
+      // removido: B iniciando nova sessão destruía o contexto de A.
+      //
+      // Escolha documentada (sem migração destrutiva, sem deletar dados
+      // reais): remove SOMENTE linhas atribuíveis ao solicitante
+      // (`message` é JSON; `metadata.actorId` é gravado pelo persist do
+      // chat). Linhas sem atribuição (legadas, sem metadata) e de outros
+      // atores (incl. respostas `ted`, compartilhadas) são MANTIDAS — o
+      // isolamento pleno do contexto por ator (coletivo-vs-privado) fica
+      // como ADR pendente (D3). O espelho em memória usa o mesmo predicado,
+      // então nada "ressuscita" no restart do DO.
+      //
+      // SECREVIEW-P1-SESS: renovação ATÔMICA (tudo-ou-nada).
+      //
+      // O DELETE com escopo + currentSession/endSession rodam numa ÚNICA
+      // `runMemoryTransaction` (primitiva `transactionSync` do DO; fallback
+      // `BEGIN IMMEDIATE` em `node:sqlite`). Falha em qualquer ponto =>
+      // ROLLBACK integral: a tabela SDK, o registry e o espelho `this.messages`
+      // (atualizado SOMENTE após sucesso) ficam 100% preservados — resposta
+      // 500 com `ok:false`, NUNCA `ok:true`, e restart sem desaparecimento.
       let previous: { id: string } | null = null;
-      if (messageCount > 0) {
-        currentSession(sql, identity.workspaceId, identity.actorId);
-        previous = endSession(sql, identity.workspaceId, identity.actorId, {
-          ...(summary ? { summary } : {}),
-          messageCount,
-        });
-      }
+      let next: { id: string };
       try {
-        // SDK coupling (documented): the messages table is SDK-internal.
-        sql.exec(`DELETE FROM cf_ai_chat_agent_messages`);
+        const result = runMemoryTransaction(sql, () => {
+          sql.exec(
+            `DELETE FROM cf_ai_chat_agent_messages WHERE json_extract(message, '$.metadata.actorId') = ?`,
+            identity.actorId,
+          );
+          // Ensure a registry row exists even for the very first session, so the
+          // archived history is never lost when no session was opened before.
+          // Empty renewals only reset the context without archiving noise.
+          let prev: { id: string } | null = null;
+          if (messageCount > 0) {
+            currentSession(sql, identity.workspaceId, identity.actorId);
+            prev = endSession(sql, identity.workspaceId, identity.actorId, {
+              ...(summary ? { summary } : {}),
+              messageCount,
+            });
+          }
+          const nxt = currentSession(sql, identity.workspaceId, identity.actorId);
+          return { prev, nxt };
+        });
+        previous = result.prev;
+        next = result.nxt;
       } catch {
-        // Best effort: a fresh session id is still returned.
+        return Response.json(
+          { ok: false, code: 'agent.session_renew_failed', message: 'Não foi possível iniciar uma nova sessão.' },
+          { status: 500 },
+        );
       }
-      if (Array.isArray(this.messages)) this.messages.length = 0;
-      const next = currentSession(sql, identity.workspaceId, identity.actorId);
+      if (Array.isArray(this.messages)) {
+        const kept = this.messages.filter((message) => {
+          const actor = (message.metadata as { actorId?: string } | undefined)?.actorId;
+          return actor !== identity.actorId;
+        });
+        this.messages.length = 0;
+        this.messages.push(...kept);
+      }
       return Response.json({
         ok: true,
         sessionId: next.id,
@@ -3603,6 +3812,12 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         const isOwn = msg.role === "user" && msgActorId === identity.actorId;
         const createdAt = (msg.metadata as { createdAt?: string } | undefined)?.createdAt ?? undefined;
         const attachments = (msg.metadata as { attachments?: Array<{ type: string; url: string; name: string }> } | undefined)?.attachments;
+        // FIX-169-170-R2 (P2-2): publica a identidade estável do envio quando
+        // o turno a gravou (par Q&A de mutação/continuação/retry) — o PWA
+        // reconcilia por ela como chave primária; conteúdo+timestamp seguem
+        // como fallback legado. Eco estrito: só string não vazia vinda do
+        // metadata, nunca id inventado aqui.
+        const intentionId = (msg.metadata as { intentionId?: string } | undefined)?.intentionId;
         return {
           id: String(msg.id ?? `msg-${Date.now()}`),
           actorId: msgActorId,
@@ -3612,6 +3827,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           createdAt: typeof createdAt === "string" ? createdAt : undefined,
           isOwn,
           ...(attachments ? { attachments } : {}),
+          ...(typeof intentionId === "string" && intentionId ? { intentionId } : {}),
         };
       });
 

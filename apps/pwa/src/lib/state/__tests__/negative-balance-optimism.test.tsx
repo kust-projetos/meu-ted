@@ -7,6 +7,7 @@ import {
   resetSessionStatus,
   setSessionStatus,
 } from "@/lib/auth/session-authority";
+import { setActiveWorkspaceId } from "@/lib/api/client";
 import type { Account, CardStatement, Transaction } from "@/lib/state/types";
 
 const apiConfigState = vi.hoisted(() => ({ forceUnconfigured: false }));
@@ -38,6 +39,8 @@ function apiReady() {
   // V41C FIX 1: live bootstrap requires a probe-confirmed session.
   setSessionStatus({ status: "authenticated", user: { userId: "test-user" } });
   setOfflineSubjectId("66666666-7777-4888-8999-aaaaaaaaaaaa");
+  // FIX-168: writes additionally require an active workspace header.
+  setActiveWorkspaceId("test-workspace-1");
 }
 
 function mockAccount(id: string, name: string, balanceCents: number): Account {

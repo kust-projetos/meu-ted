@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import HomePage from "../HomePage";
 import * as appStateModule from "@/lib/state/app-state-context";
+import * as workspaceModule from "@/lib/auth/workspace-context";
 import type { AppState } from "@/lib/state/app-state-context";
 
 // V4.1 Phase 5 (SPEC §12.6): the browser defaults to the same-origin proxy,
@@ -1162,6 +1163,11 @@ describe("HomePage", () => {
 
     it("triggers refreshDashboardSummary when dashboardSummary is not yet loaded", () => {
       const refreshSpy = vi.fn();
+      // FIX-168-R2: page reads require an active workspace — established here
+      // so the test isolates the summary variable, not the workspace gate.
+      vi.spyOn(workspaceModule, "useWorkspaceSafe").mockReturnValue({
+        activeWorkspace: { id: "ws-1", name: "Casa" },
+      } as never);
       vi.spyOn(appStateModule, "useAppState").mockReturnValue({
         ...defaultState(),
         dashboardSummary: null,
@@ -1312,6 +1318,10 @@ describe("HomePage", () => {
       const user = userEvent.setup();
       const refreshDomains = vi.fn().mockResolvedValue(true);
       const refreshStrict = vi.fn().mockResolvedValue(undefined);
+      // FIX-168-R2: snapshot retry requires an active workspace (page guard).
+      vi.spyOn(workspaceModule, "useWorkspaceSafe").mockReturnValue({
+        activeWorkspace: { id: "ws-1", name: "Casa" },
+      } as never);
       vi.spyOn(appStateModule, "useAppState").mockReturnValue(
         snapshotState({
           refreshDomains,
@@ -1365,6 +1375,10 @@ describe("HomePage", () => {
         .fn()
         .mockRejectedValueOnce(new Error("summary offline"))
         .mockResolvedValueOnce(undefined);
+      // FIX-168-R2: snapshot retry requires an active workspace (page guard).
+      vi.spyOn(workspaceModule, "useWorkspaceSafe").mockReturnValue({
+        activeWorkspace: { id: "ws-1", name: "Casa" },
+      } as never);
       const reloadSpy = vi.fn();
       Object.defineProperty(window, "location", {
         value: { ...window.location, reload: reloadSpy },
