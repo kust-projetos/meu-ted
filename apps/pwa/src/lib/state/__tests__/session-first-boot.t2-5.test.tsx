@@ -7,6 +7,7 @@ import {
   resetSessionStatus,
   setSessionStatus,
 } from "@/lib/auth/session-authority";
+import { setActiveWorkspaceId } from "@/lib/api/client";
 import type { Account } from "@/lib/state/types";
 
 /**
@@ -66,6 +67,10 @@ beforeEach(async () => {
   }
   vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_API_BASE_URL", "http://localhost:3001");
   setOfflineSubjectId("66666666-7777-4888-8999-aaaaaaaaaaaa");
+  // FIX-168: the online gate additionally requires an active workspace —
+  // established for the whole file so the session assertions keep isolating
+  // exactly the session variable (absent session still blocks with header).
+  setActiveWorkspaceId("test-workspace-1");
 });
 
 describe("AppStateProvider — session-first boot (FIX-AUTH-BOOT FINDING 2)", () => {

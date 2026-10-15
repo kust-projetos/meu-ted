@@ -17,6 +17,7 @@ import {
   resetSessionStatus,
   setSessionStatus,
 } from "@/lib/auth/session-authority";
+import { setActiveWorkspaceId } from "@/lib/api/client";
 
 const TOKEN = "test-token-v2";
 // T2.6: v2 reads require the subject partition (an authenticated session
@@ -49,6 +50,8 @@ function stubEnvAndToken(): void {
   // V41C FIX 1: live bootstrap requires a probe-confirmed session.
   setSessionStatus({ status: "authenticated", user: { userId: "test-user" } });
   setOfflineSubjectId(TEST_SUBJECT);
+  // FIX-168: live bootstrap additionally requires an active workspace.
+  setActiveWorkspaceId("test-workspace-1");
 }
 
 function seedV1(domain: string, data: unknown[]): void {

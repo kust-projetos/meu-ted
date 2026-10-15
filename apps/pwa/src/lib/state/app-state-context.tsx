@@ -35,7 +35,7 @@ import {
   mockSubscriptions,
   mockDashboardSummary,
 } from "./mock-data";
-import { isApiConfigured, getAuthToken, getSessionToken } from "@/lib/api/client";
+import { isApiConfigured, getAuthToken, getSessionToken, getActiveWorkspaceId } from "@/lib/api/client";
 import { getSessionStatus } from "@/lib/auth/session-authority";
 import { type DomainKey } from "./snapshot-store";
 import { useSession } from "@/lib/auth/session-context";
@@ -402,6 +402,24 @@ function apiUsable(): boolean {
 }
 
 /**
+ * FIX-168-R2 (P2 SECREVIEW-168-167): gate comum de leitura financeira.
+ * Todo read/reconciliação exige sessão confirmada (apiUsable) E workspace
+ * ativo (header X-Workspace-Id presente). Sem workspace, cada endpoint
+ * financeiro falha fechado server-side (403 workspace_required) — bloquear
+ * localmente com zero I/O em vez de coletar rejeições.
+ */
+function hasActiveWorkspace(): boolean {
+  return getActiveWorkspaceId() !== undefined;
+}
+
+function canReadFinancial(): boolean {
+  return apiUsable() && hasActiveWorkspace();
+}
+
+const NO_ACTIVE_WORKSPACE_MESSAGE =
+  "Nenhum workspace ativo — selecione ou restaure um workspace para continuar.";
+
+/**
  * Effective online credential for bootstrap/snapshot reads: device token
  * wins when present (existing snapshot partitions keep working); otherwise
  * the compat session bearer. Never persisted — snapshot stores only its
@@ -485,7 +503,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     window.addEventListener("pi-finance:forbidden", handler);
     return () => window.removeEventListener("pi-finance:forbidden", handler);
   }, []);
-  const [loading, setLoading] = useState(apiUsable());
+  const [loading, setLoading] = useState(
+    // FIX-168: with no active workspace the bootstrap effect below parks
+    // immediately (no financial I/O) — start unblocked instead of flashing
+    // a loader that no fetch will ever resolve.
+    () => apiUsable() && getActiveWorkspaceId() !== undefined,
+  );
   const [error, setError] = useState<string | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [failedWrite, setFailedWrite] = useState<FailedWriteIntent | null>(null);
@@ -552,6 +575,17 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     if (configured) {
       if (getSessionStatus().status !== "authenticated") {
         setWriteError("Sessão não confirmada — faça login para salvar alterações.");
+        failedWriteRef.current = null;
+        setFailedWrite(null);
+        return true;
+      }
+      // FIX-168 (P0 #168): without an active workspace every financial write
+      // would leave without (or with a stale) X-Workspace-Id and fail closed
+      // server-side — block locally with an actionable message instead of
+      // producing ghost optimistic state. Workspace management (list/create/
+      // restore via useWorkspace) bypasses this provider entirely.
+      if (!getActiveWorkspaceId()) {
+        setWriteError("Nenhum workspace ativo — selecione ou restaure um workspace para salvar alterações.");
         failedWriteRef.current = null;
         setFailedWrite(null);
         return true;
@@ -791,6 +825,17 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // ── Fetch from API when configured + session exists (session-first) ──
   useEffect(() => {
     if (!apiUsable() || loadedRef.current) return;
+    // FIX-168 (P0 #168): no active workspace → no financial I/O. Every
+    // financial endpoint requires X-Workspace-Id, so bootstrapping now would
+    // only collect 403 workspace_required rejections. Workspace management
+    // stays reachable through useWorkspace (independent provider). The mount
+    // is parked (loaded, not loading): any active-workspace change remounts
+    // this provider (WorkspaceProvider keys children by activeWorkspaceId),
+    // so a fresh instance bootstraps when a workspace becomes available.
+    if (!getActiveWorkspaceId()) {
+      loadedRef.current = true;
+      return;
+    }
     loadedRef.current = true;
 
     let cancelled = false;
@@ -823,6 +868,20 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // never the data; attributable expiries queue offline.locked).
         await reportOfflineLock().catch(() => {});
 
+        // FIX-168-R3 (P2): revalidação pré-bootstrap — o gate inicial do
+        // efeito precede os awaits acima (migrate/preload/lock); arquivar
+        // durante o preload dispararia runBootstrap sem workspace ativo.
+        // Estaciona como o descarte tardio (domínios indisponíveis + boot
+        // completo) em vez de emitir requests órfãos.
+        if (cancelled) return;
+        if (!hasActiveWorkspace()) {
+          for (const domain of ALL_DOMAINS) {
+            bootstrapDispatch({ type: "DOMAIN_UNAVAILABLE", domain });
+          }
+          bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+          return;
+        }
+
         // 3. Run bootstrap with preloaded snapshot data. Profile and quick
         // insights are fetched by the bootstrap and returned in `boot` —
         // the provider must NOT re-fetch them (boot dedupe).
@@ -838,6 +897,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         );
 
         if (cancelled) return;
+
+        // FIX-168 (P0 #168): tardy-bootstrap verification — the active
+        // workspace vanished while the bootstrap was in flight (archived or
+        // cleared without a remount racing us). The live payload belongs to
+        // no selected workspace: discard it and park every domain as
+        // unavailable (read-only derives from that) instead of rendering
+        // data the session can no longer address. A later remount with an
+        // active workspace re-bootstraps from a fresh instance.
+        if (!getActiveWorkspaceId()) {
+          for (const domain of ALL_DOMAINS) {
+            bootstrapDispatch({ type: "DOMAIN_UNAVAILABLE", domain });
+          }
+          bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+          return;
+        }
 
         // T2.6: a fulfilled profile fetch proves online + authenticated —
         // stamp the session record and unlock (live domain writes already
@@ -865,13 +939,23 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // bootstrap profile must not wipe a profile saved earlier in this
         // session — apply the server profile only when one was returned.
         const bootProfile = boot.profile;
-        if (!cancelled && bootProfile) setProfile((prev) => mergeProfileFlags(prev, bootProfile));
-        if (!cancelled) setQuickInsights(boot.quickInsights);
-        try {
-          const summary = await endpoints.fetchDashboardSummary();
-          if (!cancelled) setDashboardSummary(summary);
-        } catch {
-          if (!cancelled) setDashboardSummary(null);
+        // FIX-168-R3 (descarte tardio): despachos internos do boot nunca
+        // publicam sem workspace (archive entre o tardy check e aqui).
+        if (!cancelled && hasActiveWorkspace() && bootProfile)
+          setProfile((prev) => mergeProfileFlags(prev, bootProfile));
+        if (!cancelled && hasActiveWorkspace()) setQuickInsights(boot.quickInsights);
+        // FIX-168-R4 (P2 SECREVIEW-168-R3): gate pré-fetch — o workspace
+        // pode ter sumido nos awaits acima (migrate/lock); sem workspace o
+        // resumo seria um request órfão (403 workspace_required). Zero I/O.
+        if (!cancelled && hasActiveWorkspace()) {
+          try {
+            const summary = await endpoints.fetchDashboardSummary();
+            // FIX-168-R2 (descarte tardio): workspace sumiu entre o tardy check
+            // e o fetch do resumo — nunca publica resumo órfão.
+            if (!cancelled && hasActiveWorkspace()) setDashboardSummary(summary);
+          } catch {
+            if (!cancelled && hasActiveWorkspace()) setDashboardSummary(null);
+          }
         }
       } catch (cause) {
         if (!cancelled) {
@@ -1573,7 +1657,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // allows online use — no storage token required (cookie-only boots too).
     // Snapshot persistence inside the adapter is best-effort and skipped
     // without a token-derived key until offline V3 (Phase 3).
-    if (!apiUsable()) return;
+    // FIX-168-R2: sem workspace ativo, zero I/O (todo endpoint financeiro
+    // exige X-Workspace-Id).
+    if (!canReadFinancial()) return;
     const token = effectiveOnlineToken();
 
     const adapter = createSubscriptionsAdapter({ token, online: apiUsable() });
@@ -1583,6 +1669,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // Offline — keep existing data (mock or empty)
       return;
     }
+
+    // FIX-168-R2 (descarte tardio): o workspace sumiu com o fetch em voo
+    // (archive/remount race) — descarta antes de despachar, nunca publica
+    // dado de workspace que a sessão não mais endereça.
+    if (!hasActiveWorkspace()) return;
 
     setSubscriptions(result.data);
     setSyncFor("subscriptions", {
@@ -2264,8 +2355,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const refreshProfile = useCallback(async () => {
+    // FIX-168-R3 (P2): sem sessão confirmada + workspace ativo, zero I/O
+    // (silent no-op) — o GET /profile resolve por household da sessão e
+    // nunca deve disparar sem workspace selecionado.
+    if (!canReadFinancial()) return;
     try {
       const fresh = await profileAdapter.refresh();
+      // FIX-168-R3 (descarte tardio): resposta diferida durante archive/
+      // remount não publica.
+      if (!hasActiveWorkspace()) return;
       if (fresh) setProfile((prev) => mergeProfileFlags(prev, fresh));
     } catch {
       // ignore — keep previous profile state
@@ -2274,23 +2372,37 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const refreshDashboardSummaryStrict = useCallback(async () => {
     if (!apiUsable()) throw new Error("API não configurada.");
+    // FIX-168-R2: sem workspace ativo, throw antes de qualquer I/O.
+    if (!hasActiveWorkspace()) throw new Error(NO_ACTIVE_WORKSPACE_MESSAGE);
     const summary = await endpoints.fetchDashboardSummary();
+    // FIX-168-R2 (descarte tardio): workspace sumiu em voo — nunca publica.
+    if (!hasActiveWorkspace()) throw new Error(NO_ACTIVE_WORKSPACE_MESSAGE);
     setDashboardSummary(summary);
   }, []);
 
   const refreshDashboardSummary = useCallback(async () => {
-    if (!apiUsable()) return;
+    // FIX-168-R2: sem workspace ativo, zero I/O (leniente: silent no-op).
+    if (!canReadFinancial()) return;
     try {
       const summary = await endpoints.fetchDashboardSummary();
+      // FIX-168-R2 (descarte tardio): resposta diferida durante archive/
+      // remount não publica.
+      if (!hasActiveWorkspace()) return;
       setDashboardSummary(summary);
     } catch {
+      if (!hasActiveWorkspace()) return;
       setDashboardSummary(null);
     }
   }, []);
 
   const refreshQuickInsightsStrict = useCallback(async () => {
     if (!apiUsable()) throw new Error("API não configurada.");
-    setQuickInsights(await endpoints.fetchQuickInsights());
+    // FIX-168-R2: sem workspace ativo, throw antes de qualquer I/O.
+    if (!hasActiveWorkspace()) throw new Error(NO_ACTIVE_WORKSPACE_MESSAGE);
+    const insights = await endpoints.fetchQuickInsights();
+    // FIX-168-R2 (descarte tardio): workspace sumiu em voo — nunca publica.
+    if (!hasActiveWorkspace()) throw new Error(NO_ACTIVE_WORKSPACE_MESSAGE);
+    setQuickInsights(insights);
   }, []);
 
   /**
@@ -2301,8 +2413,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const refreshDomainStrict = useCallback(
     async (domain: DomainKey) => {
       if (!apiUsable()) throw new Error("API não configurada.");
+      // FIX-168-R2: sem workspace ativo, throw antes de qualquer I/O.
+      if (!hasActiveWorkspace()) throw new Error(NO_ACTIVE_WORKSPACE_MESSAGE);
       if (domain === "subscriptions") {
         const subs = await endpoints.fetchSubscriptions();
+        // FIX-168-R2 (descarte tardio): nunca despacha sem workspace.
+        if (!hasActiveWorkspace()) throw new Error(NO_ACTIVE_WORKSPACE_MESSAGE);
         setSubscriptions(subs);
         setSyncFor("subscriptions", {
           source: "live",
@@ -2347,6 +2463,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         default:
           return;
       }
+      // FIX-168-R2 (descarte tardio): o workspace sumiu com os fetches em
+      // voo — descarta antes de despachar, nunca publica dado órfão.
+      if (!hasActiveWorkspace()) throw new Error(NO_ACTIVE_WORKSPACE_MESSAGE);
       bootstrapDispatch({
         type: "DOMAIN_LIVE",
         domain,
@@ -2374,7 +2493,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
    */
   const refreshDomains = useCallback(
     async (domains: DomainKey[]) => {
-      if (!apiUsable()) return false;
+      // FIX-168-R2: sem workspace ativo, zero I/O (false = nada atualizado).
+      if (!canReadFinancial()) return false;
       const results = await Promise.all(
         domains.map(async (domain) => {
           try {
@@ -2452,7 +2572,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const reconcileMutation = useCallback(
     async (input: ReconcileInput): Promise<ReconcileResult> => {
+      // FIX-168-R2: sem workspace ativo, zero I/O e sem publicação de stale
+      // (deduped no-op — o reconciler nunca é acionado).
+      if (!canReadFinancial()) {
+        return { targets: [], refreshed: [], failed: [], deduped: true };
+      }
       const outcome = await reconciler.reconcile(input);
+      // FIX-168-R2 (descarte tardio): workspace sumiu em voo — descarta a
+      // publicação de stale antes de despachar.
+      if (!hasActiveWorkspace()) return outcome;
       if (!outcome.deduped) {
         setStaleTargets((prev) => {
           const stillStale = prev.filter(
@@ -2477,7 +2605,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const retryReconciliation = useCallback(async () => {
     const targets = staleTargetsRef.current;
     if (targets.length === 0) return;
+    // FIX-168-R2: retry manual sem workspace ativo emite zero I/O e mantém
+    // o stale intacto para quando um workspace voltar.
+    if (!canReadFinancial()) return;
     const outcome = await reconciler.reconcileTargets(targets);
+    // FIX-168-R2 (descarte tardio): workspace sumiu em voo — sem publicação.
+    if (!hasActiveWorkspace()) return;
     setStaleTargets(outcome.failed);
   }, [reconciler]);
 

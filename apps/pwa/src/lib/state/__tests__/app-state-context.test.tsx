@@ -2,7 +2,7 @@ import "fake-indexeddb/auto";
 import { renderHook, act, waitFor } from "@/lib/test-utils";
 import { AppStateProvider, useAppState } from "../app-state-context";
 import * as endpoints from "@/lib/api/endpoints";
-import { ApiError, apiFetch } from "@/lib/api/client";
+import { ApiError, apiFetch, setActiveWorkspaceId } from "@/lib/api/client";
 import { setOfflineSubjectId } from "@/lib/auth/offline-subject";
 import {
   resetSessionStatus,
@@ -131,6 +131,10 @@ function apiReady() {
   // V41C FIX 1: bearer alone never unlocks live I/O — tests exercising the
   // online path simulate the probe-confirmed session AuthGate publishes.
   setSessionStatus({ status: "authenticated", user: { userId: "test-user" } });
+  // FIX-168: live I/O additionally requires an active workspace — tests
+  // exercising the online path simulate the header WorkspaceProvider sets
+  // after resolving the selection (module state is file-scoped).
+  setActiveWorkspaceId("test-workspace-1");
   // T2.6 contract: v2 reads verify the subject partition — an
   // authenticated session always carries one (set at login).
   setOfflineSubjectId("66666666-7777-4888-8999-aaaaaaaaaaaa");
