@@ -30,6 +30,9 @@ Este diretório contém o registro imutável de decisões de arquitetura do proj
 | [ADR-022](ADR-022-pi-rewind-store-preservation.md) | Preservação de `refs/pi-rewind/store` | accepted | 2026-09-19 | — |
 | [ADR-023](ADR-023-agent-sdk-security-migration-plan.md) | Migração controlada do Agents SDK e AI SDK | accepted | 2026-09-19 | — |
 | [ADR-024](ADR-024-legacy-canonical-conversion-policy.md) | Política de conversão Legacy para Canonical | accepted | 2026-09-19 | — |
+| [ADR-025](ADR-025-canonical-converter.md) | Arquitetura do conversor Legacy→Canonical e âncora de saldo inicial | accepted | 2026-09-25 | — |
+| [ADR-026](ADR-026-risk-based-mutation-authorization.md) | Autorização de mutações baseada em risco | accepted | 2026-10-02 | — |
+| [ADR-027](ADR-027-workspace-plurality-lifecycle-views.md) | Pluralidade de workspaces, lifecycle e visibilidade de conversas (D1/D2/D3) | accepted | 2026-10-15 | D1/D2/D3 |
 
 ## Template para Novos ADRs
 
