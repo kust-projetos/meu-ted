@@ -43,13 +43,14 @@ describe('item5: relay classifier explicito (sem isRetryableLlmError)', () => {
     expect(isRelayFallbackEligible(Object.assign(new Error('nope'), { status: 404 }))).toBe(false);
   });
 
-  it('nao reutiliza isRetryableLlmError: 401/403/503 nao disparam fallback de relay', async () => {
-    // isRetryableLlmError legado trataria 401/403/503 como retryable; o
-    // classificador de relay deve negar explicitamente.
+  it('FIX-189 unificado com isRetryableLlmError: 401/403 nao disparam fallback em nenhum caminho', async () => {
+    // Pré-FIX-189 o legado trataria 401/403 como retryable; unificado, o
+    // legado nega como o relay. O relay segue mais estrito no 5xx genérico
+    // (só `agent.provider_error` + 5xx é elegível lá).
     const { isRetryableLlmError } = await import('../src/llm/failover.js');
-    expect(isRetryableLlmError(relayErr(401, 'auth.invalid_token'))).toBe(true);
+    expect(isRetryableLlmError(relayErr(401, 'auth.invalid_token'))).toBe(false);
     expect(isRelayFallbackEligible(relayErr(401, 'auth.invalid_token'))).toBe(false);
-    expect(isRetryableLlmError(relayErr(403, 'agent.model_not_allowlisted'))).toBe(true);
+    expect(isRetryableLlmError(relayErr(403, 'agent.model_not_allowlisted'))).toBe(false);
     expect(isRelayFallbackEligible(relayErr(403, 'agent.model_not_allowlisted'))).toBe(false);
     expect(isRetryableLlmError(relayErr(503, 'agent.provider_not_configured'))).toBe(true);
     expect(isRelayFallbackEligible(relayErr(503, 'agent.provider_not_configured'))).toBe(false);

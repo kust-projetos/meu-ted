@@ -503,6 +503,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
       operationId: 'op-1',
       decision: 'confirm',
       identity: { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! },
+      intentionId: 'intent-button-parity-1',
     });
 
     expect(nl.mutation).toEqual({

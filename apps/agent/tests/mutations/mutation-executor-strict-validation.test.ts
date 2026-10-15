@@ -36,6 +36,7 @@ describe('MutationExecutor strict execute validation (RED)', () => {
     requestId: 'request-1',
     delegatedToken: 'delegated-token',
     identity: input.identity,
+    intentionId: 'intent-strict-1',
   };
 
   it('succeeds on the faithful shape with linked receipt', async () => {

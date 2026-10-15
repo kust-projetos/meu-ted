@@ -3116,7 +3116,11 @@ export class ConversationOrchestrator {
           response: freeze({ text }),
         });
       }
-      const result = await coordinator.retry(target.operation.id, identity);
+      // FIX-187: the retry execute leg carries the turn intention so the
+      // durable API frontier (V060) verifies the binding; the retry POST
+      // itself also carries it (uniform with executor.decide — the API
+      // retry route ignores the body today and the execute leg enforces).
+      const result = await coordinator.retry(target.operation.id, identity, input.intentionId);
       this.emit('approval.confirmed', {
         intentionId: input.intentionId,
         traceId: input.traceId,

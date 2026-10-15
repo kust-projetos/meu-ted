@@ -43,6 +43,7 @@ describe('MutationExecutor faithful execute shape (RED)', () => {
       requestId: 'req-faithful-1',
       delegatedToken: 'approval-token-1',
       identity: { workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-1' },
+      intentionId: 'intent-faithful-1',
     });
 
     expect(result).toEqual({ operationId: pendingId, status: 'succeeded', receipt: faithfulReceipt });
