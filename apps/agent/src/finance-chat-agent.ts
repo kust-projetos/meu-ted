@@ -189,8 +189,12 @@ import {
   UndoProposalService,
   UNDO_DELEGATED_CAPABILITY,
   UNDO_UUID_RE,
+  UNDO_VERIFY_ALLOWED_OPERATIONS,
   UNDO_VERIFY_READ_CAPABILITY,
+  recordDisplayTarget,
+  sanitizeUndoTargetDisplay,
   type UndoIdentity,
+  type UndoTargetDisplay,
 } from "./mutations/undo-proposal.js";
 
 export type Env = {
@@ -727,6 +731,17 @@ export const USAGE_INPUT_CAP_CODE = 'agent.usage_input_cap';
  */
 const USAGE_RATE_LIMIT_REASON_PREFIX = 'Rate limit exceeded';
 const USAGE_INPUT_CAP_REASON_PREFIX = 'Message exceeds maximum';
+
+/**
+ * FIX-172: pt-BR kind labels for the undo display projection. Transaction
+ * ops only (the verify-allowed set) — account/category creations keep the
+ * legacy summary shape.
+ */
+const UNDO_TARGET_KIND_LABEL: Readonly<Record<string, string>> = {
+  'transactions.expense.create': 'Despesa',
+  'transactions.income.create': 'Receita',
+  'transactions.transfer.create': 'Transferência',
+};
 
 /**
  * Maps an atomic reservation denial reason to its wire code. The rate window
@@ -2851,8 +2866,15 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * server-side from GET /audit-logs (most recent reversible operation,
    * preferring the actor's own). Null = genuinely nothing to undo; throw =
    * transport failure (the turn degrades to try-again, never "no action").
+   *
+   * FIX-172: plus a best-effort display-safe projection of that fixed
+   * target (turn-relay source; persisted with the proposal and re-emitted
+   * by the active list). Display resolution NEVER throws past this method:
+   * any failure degrades to the id-only shape — the proposal itself (and
+   * its fixed target) is unaffected. The projection is DISPLAY-ONLY: the
+   * decision RPC keeps binding exclusively to the fixed target id below.
    */
-  private async previewUndoTarget(identity: UndoIdentity): Promise<{ id: string } | null> {
+  private async previewUndoTarget(identity: UndoIdentity): Promise<{ id: string; target?: UndoTargetDisplay } | null> {
     const secret = this.env?.AGENT_DELEGATION_SECRET?.trim();
     if (!secret) throw new Error('agent.persistence_unavailable');
     const readToken = await createDelegatedTurnToken({
@@ -2863,10 +2885,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       requestId: crypto.randomUUID(),
       deviceId: identity.deviceId,
     }, secret);
-    const result = await requestPiApiJson<{ items?: Array<{ id?: unknown; operation?: unknown; actorId?: unknown; createdAt?: unknown }> }>(
-      'GET',
+    const read = <T>(path: string): Promise<T> =>
+      requestPiApiJson<T>('GET', path, { delegatedToken: readToken, apiOrigin: this.env?.API_ORIGIN });
+    const result = await read<{ items?: Array<{ id?: unknown; operation?: unknown; actorId?: unknown; createdAt?: unknown; effectRef?: unknown; metadata?: unknown }> }>(
       '/audit-logs?limit=50',
-      { delegatedToken: readToken, apiOrigin: this.env?.API_ORIGIN },
     );
     const reversible = new Set([
       'transactions.expense.create',
@@ -2882,7 +2904,69 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     if (candidates.length === 0) return null;
     const own = candidates.filter((item) => item.actorId === identity.actorId);
     const target = (own.length > 0 ? own[0] : candidates[0])!;
-    return { id: String(target.id) };
+    const fixed = { id: String(target.id) };
+    try {
+      const display = await this.resolveUndoTargetDisplay(target, read);
+      const clean = sanitizeUndoTargetDisplay(display);
+      return clean ? { ...fixed, target: clean } : fixed;
+    } catch {
+      return fixed;
+    }
+  }
+
+  /**
+   * FIX-172: best-effort display resolution for the FIXED audit target.
+   * Transaction ops only (`transactions.*.create` — the verify-allowed set):
+   * resolves the created entity with the SAME id chain as `verify`
+   * (`metadata.entityId > effectRef > metadata.after.id`), reads it from the
+   * authoritative list endpoint, and projects display fields. Account /
+   * category creations and anything unresolvable yield `undefined` (legacy
+   * summary shape — confirm stays available there, while a description-less
+   * target would make the PWA block confirm). Read-only under the narrow
+   * `financial.read` delegation; entity-read failures propagate to the
+   * caller, which degrades to the id-only shape.
+   */
+  private async resolveUndoTargetDisplay(
+    auditItem: { operation?: unknown; effectRef?: unknown; metadata?: unknown },
+    read: <T>(path: string) => Promise<T>,
+  ): Promise<UndoTargetDisplay | undefined> {
+    const operation = String(auditItem.operation ?? '');
+    if (!UNDO_VERIFY_ALLOWED_OPERATIONS.has(operation)) return undefined;
+    const metadata = auditItem.metadata && typeof auditItem.metadata === 'object'
+      ? (auditItem.metadata as Record<string, unknown>)
+      : {};
+    const fromMeta = typeof metadata.entityId === 'string' && metadata.entityId.trim() ? metadata.entityId.trim() : undefined;
+    const fromRef = typeof auditItem.effectRef === 'string' && auditItem.effectRef.trim() ? auditItem.effectRef.trim() : undefined;
+    const after = metadata.after && typeof metadata.after === 'object' ? (metadata.after as Record<string, unknown>) : undefined;
+    const fromAfter = after && typeof after.id === 'string' && after.id.trim() ? after.id.trim() : undefined;
+    const entityId = fromMeta ?? fromRef ?? fromAfter;
+    if (!entityId) return undefined;
+    const txResult = await read<{ items?: Array<{ id?: unknown; description?: unknown; amountCents?: unknown; date?: unknown; accountId?: unknown }> }>(
+      '/transactions?limit=200',
+    );
+    const tx = (Array.isArray(txResult.items) ? txResult.items : []).find((item) => item?.id === entityId);
+    if (!tx) return undefined;
+    if (typeof tx.description !== 'string' || !tx.description.trim()) return undefined;
+    const amountCents = typeof tx.amountCents === 'number' && Number.isFinite(tx.amountCents) ? tx.amountCents : undefined;
+    const occurredOn = typeof tx.date === 'string' && tx.date.trim() ? tx.date.trim() : undefined;
+    // Account label is garnish: its failure omits the field, never the card.
+    let accountLabel: string | undefined;
+    if (typeof tx.accountId === 'string' && tx.accountId) {
+      try {
+        const account = await read<{ name?: unknown }>(`/accounts/${encodeURIComponent(tx.accountId)}`);
+        if (typeof account?.name === 'string' && account.name.trim()) accountLabel = account.name.trim();
+      } catch {
+        // Omit the label only.
+      }
+    }
+    const kind = UNDO_TARGET_KIND_LABEL[operation];
+    return {
+      ...(kind !== undefined ? { kind } : {}),
+      description: tx.description.trim(),
+      ...(amountCents !== undefined ? { amountCents } : {}),
+      ...(accountLabel !== undefined ? { accountLabel } : {}),
+      ...(occurredOn !== undefined ? { occurredOn } : {}),
+    };
   }
 
   /**
@@ -3066,8 +3150,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * debt-undo-proposal-rehydration: read-only active-listing for chat
    * startup/workspace change (`GET /rpc/undo/active`). Identity SOLELY from
    * the gateway-verified headers; returns ONLY bound live summaries
-   * (`proposed` + truthful `executing`, safe projection — never targets,
-   * keys or raw operation data). Never previews, never calls the undo API,
+   * (`proposed` + truthful `executing`, safe projection — FIX-172 adds the
+   * display-safe target projection when the proposal carries one; never
+   * fixed-target ids, keys or raw operation data). Never previews, never calls the undo API,
    * never decides: the `api` dependency throws if ever touched.
    */
   private async handleUndoActive(request: Request): Promise<Response> {
@@ -3467,10 +3552,20 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             // debt-undo-confirmation-protocol: separate undo proposal relay
             // (requestId for the decision RPC; the fixed target never leaves
             // the DO). Re-validated shape — unknown keys are dropped.
+            // FIX-172: the fixed display projection persisted with the
+            // proposal rides along (turn-relay path). Re-sanitized on read;
+            // absent on legacy rows. A store failure degrades to the legacy
+            // shape — never the turn.
             ...(() => {
               const proposal = (turnResult as { undoProposal?: unknown }).undoProposal as { requestId?: unknown; status?: unknown; expiresAt?: unknown } | undefined;
               if (!proposal || typeof proposal.requestId !== 'string' || proposal.status !== 'proposed' || typeof proposal.expiresAt !== 'string') return {};
-              return { undoProposal: { requestId: proposal.requestId, status: 'proposed' as const, expiresAt: proposal.expiresAt } };
+              const base = { requestId: proposal.requestId, status: 'proposed' as const, expiresAt: proposal.expiresAt };
+              try {
+                const target = recordDisplayTarget(this.undoStoreForRequest()?.get(proposal.requestId));
+                return { undoProposal: target ? { ...base, target } : base };
+              } catch {
+                return { undoProposal: base };
+              }
             })(),
           });
         }
