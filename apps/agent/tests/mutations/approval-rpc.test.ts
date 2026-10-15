@@ -58,16 +58,18 @@ describe('MutationExecutor approval decision RPC', () => {
       requestId: 'req-1',
       delegatedToken: 'approval-token-1',
       identity: { workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-1' },
+      intentionId: 'intent-rpc-1',
     });
 
     expect(result).toEqual({ operationId: 'op-1', status: 'succeeded', receipt: receiptForOp1 });
     expect(result).not.toHaveProperty('attestation');
     expect(request).toHaveBeenNthCalledWith(1, 'POST', '/pending-operations/v2/op-1/confirm', expect.objectContaining({
       delegatedToken: 'approval-token-1',
+      body: { intentionId: 'intent-rpc-1' },
     }));
     expect(request).toHaveBeenNthCalledWith(2, 'POST', '/pending-operations/v2/op-1/execute', expect.objectContaining({
       delegatedToken: 'approval-token-1',
-      body: { attestation: 'a'.repeat(32) },
+      body: { attestation: 'a'.repeat(32), intentionId: 'intent-rpc-1' },
     }));
   });
 
@@ -83,6 +85,7 @@ describe('MutationExecutor approval decision RPC', () => {
       requestId: 'req-receipt-1',
       delegatedToken: 'approval-token-1',
       identity: { workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-1' },
+      intentionId: 'intent-rpc-receipt-1',
     });
 
     expect(result).toEqual({ operationId: 'op-1', status: 'succeeded', receipt: expectedReceipt });

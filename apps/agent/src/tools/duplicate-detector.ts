@@ -51,40 +51,124 @@ export function formatDuplicateWarning(match: DuplicateMatch, newDesc: string): 
   return `Achei um lançamento parecido: "${match.description}" — R$ ${amount} em ${dateStr} (${simPct}% similar) Seu novo: "${newDesc}" É o mesmo gasto?`;
 }
 
-export async function detectDuplicateViaApi(
+export type DuplicateCheckOpts = {
+  apiOrigin: string;
+  workspaceId: string;
+  delegatedToken: string;
+  strict?: boolean;
+  /**
+   * FIX-186: budget explícito por verificação (default 10 s — detector é
+   * leitura auxiliar do hot path financeiro, nunca pendência ilimitada).
+   * Só encurta; valores at/acima do default saturam nele.
+   */
+  timeoutMs?: number;
+  /** FIX-186: cancelamento do chamador (composto com o timeout interno). */
+  signal?: AbortSignal;
+};
+
+/** Budget default do detector — leitura auxiliar, nunca ilimitada. */
+export const DEFAULT_DUPLICATE_CHECK_TIMEOUT_MS = 10_000;
+
+const resolveDuplicateTimeoutMs = (timeoutMs: unknown): number => {
+  if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    return Math.min(Math.trunc(timeoutMs), DEFAULT_DUPLICATE_CHECK_TIMEOUT_MS);
+  }
+  return DEFAULT_DUPLICATE_CHECK_TIMEOUT_MS;
+};
+
+const fetchWithDuplicateBudget = async (
+  url: string,
+  init: Omit<RequestInit, 'signal'>,
+  timeoutMs: number,
+  callerSignal?: AbortSignal,
+): Promise<Response> => {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(Object.assign(new Error(`duplicate check timed out after ${timeoutMs}ms`), { name: 'TimeoutError' }));
+  }, timeoutMs);
+  if (timer.unref) timer.unref();
+  const onCallerAbort = (): void => {
+    controller.abort((callerSignal as AbortSignal).reason ?? new Error('aborted'));
+  };
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      clearTimeout(timer);
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    }
+    callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+  }
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (timedOut && (err as { name?: unknown } | null)?.name !== 'TimeoutError') {
+      throw Object.assign(new Error(`duplicate check timed out after ${timeoutMs}ms`), { name: 'TimeoutError' });
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', onCallerAbort);
+  }
+};
+
+/**
+ * FIX-186: caminho não-strict é FAIL-CLOSED como o strict — falha de
+ * detecção (HTTP não-ok, transporte, timeout, corpo malformado) NUNCA é
+ * prova de inexistência de duplicata em fluxo financeiro. Retorna
+ * `duplicate_detected: true` (suspeito, sem match) nesses casos, com budget
+ * explícito e cancelamento. Tentativa única, sem loops.
+ */
+export const detectDuplicateViaApi = async (
   input: DuplicateCheckInput,
-  opts: { apiOrigin: string; workspaceId: string; delegatedToken: string; strict?: boolean },
-): Promise<DuplicateCheckResult> {
+  opts: DuplicateCheckOpts,
+): Promise<DuplicateCheckResult> => {
   if (opts.strict) return detectDuplicateStrictResult(input, opts);
-  const res = await fetch(`${opts.apiOrigin.replace(/\/$/, "")}/transactions/detect-duplicate`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      Authorization: `Bearer ${opts.delegatedToken}`,
-      "X-Workspace-Id": opts.workspaceId,
-    },
-    body: JSON.stringify(input),
-  });
-  if (!res.ok) return { duplicate_detected: false };
-  const body = (await res.json()) as { duplicate_detected: boolean; match?: DuplicateMatch };
-  if (!body.duplicate_detected || !body.match) return { duplicate_detected: false };
-  return { duplicate_detected: true, match: body.match, warning: formatDuplicateWarning(body.match, input.description) };
-}
+  try {
+    const res = await fetchWithDuplicateBudget(
+      `${opts.apiOrigin.replace(/\/$/, "")}/transactions/detect-duplicate`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: `Bearer ${opts.delegatedToken}`,
+          "X-Workspace-Id": opts.workspaceId,
+        },
+        body: JSON.stringify(input),
+      },
+      resolveDuplicateTimeoutMs(opts.timeoutMs),
+      opts.signal,
+    );
+    if (!res.ok) return { duplicate_detected: true };
+    const body = (await res.json().catch(() => null)) as { duplicate_detected?: unknown; match?: DuplicateMatch } | null;
+    if (!body || typeof body.duplicate_detected !== 'boolean') return { duplicate_detected: true };
+    if (!body.duplicate_detected) return { duplicate_detected: false };
+    if (!body.match) return { duplicate_detected: true };
+    return { duplicate_detected: true, match: body.match, warning: formatDuplicateWarning(body.match, input.description) };
+  } catch {
+    return { duplicate_detected: true };
+  }
+};
 
 const detectDuplicateStrictResult = async (
   input: DuplicateCheckInput,
-  opts: { apiOrigin: string; workspaceId: string; delegatedToken: string },
+  opts: DuplicateCheckOpts,
 ): Promise<DuplicateCheckResult> => {
   try {
-  const res = await fetch(`${opts.apiOrigin.replace(/\/$/, "")}/transactions/detect-duplicate`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      Authorization: `Bearer ${opts.delegatedToken}`,
-      "X-Workspace-Id": opts.workspaceId,
+  const res = await fetchWithDuplicateBudget(
+    `${opts.apiOrigin.replace(/\/$/, "")}/transactions/detect-duplicate`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${opts.delegatedToken}`,
+        "X-Workspace-Id": opts.workspaceId,
+      },
+      body: JSON.stringify(input),
     },
-    body: JSON.stringify(input),
-  });
+    resolveDuplicateTimeoutMs(opts.timeoutMs),
+    opts.signal,
+  );
   if (!res.ok) {
     return { duplicate_detected: true };
   }

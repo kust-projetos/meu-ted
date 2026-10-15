@@ -9,6 +9,17 @@ export type ApprovalDecisionInput = {
   requestId: string;
   delegatedToken: string;
   identity: { workspaceId: string; actorId: string; deviceId: string };
+  /**
+   * FIX-187: the durable confirmation intention (V060
+   * `pending_operation_confirmation_intentions`). Required on the
+   * confirm/retry legs so confirm/execute bind atomically API-side
+   * (identical ⇒ idempotent proceed; divergent ⇒ 409
+   * `approval.intention_conflict`, zero effect). The per-instance
+   * `consumed` set below cannot survive a restart — the API is the
+   * durable anti-replay frontier, and it can only enforce the binding
+   * when the caller carries the intention.
+   */
+  intentionId?: string;
 };
 export type ApprovalDecisionResult = {
   operationId: string;
@@ -142,13 +153,22 @@ export class MutationExecutor {
       return { operationId: input.operationId, status: 'cancelled' };
     }
     const path = input.decision === 'retry' ? 'retry' : 'confirm';
-    const confirmation = await request<{ id?: unknown; attestation?: unknown }>('POST', `/pending-operations/v2/${encodeURIComponent(input.operationId)}/${path}`, { delegatedToken: input.delegatedToken, headers });
+    // FIX-187: the decide path never runs unbound. Without an intentionId
+    // the API could neither bind (confirm) nor verify (execute) the V060
+    // intention frontier, leaving only the per-instance `consumed` set —
+    // lost on restart. Fail closed with zero transport instead.
+    const intentionId = typeof input.intentionId === 'string' ? input.intentionId.trim() : '';
+    if (!intentionId) {
+      this.emit('mutation.blocked', { status: 'blocked', error: 'approval.intention_required' });
+      throw new Error('approval.intention_required');
+    }
+    const confirmation = await request<{ id?: unknown; attestation?: unknown }>('POST', `/pending-operations/v2/${encodeURIComponent(input.operationId)}/${path}`, { delegatedToken: input.delegatedToken, body: { intentionId }, headers });
     this.assertOperationId(confirmation.id, input.operationId);
     if (typeof confirmation.attestation !== 'string' || confirmation.attestation.length < 32) {
       this.emit('approval.expired', { status: 'expired', error: 'approval.missing_attestation' });
       throw new Error('approval.missing_attestation');
     }
     this.emit('approval.confirmed', { status: 'confirmed' });
-    return this.execute({ operationId: input.operationId, attestation: confirmation.attestation, identity: input.identity }, input.delegatedToken);
+    return this.execute({ operationId: input.operationId, attestation: confirmation.attestation, identity: input.identity, intentionId }, input.delegatedToken);
   }
 }
