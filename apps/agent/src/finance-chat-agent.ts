@@ -59,6 +59,7 @@ import {
 } from "./migration/legacy-history.js";
 import { requestPiApiJson } from "./tools/api-client.js";
 import { createDelegatedTurnToken } from "./delegated-token.js";
+import { runMemoryTransaction } from "./agent-config/memory/store.js";
 import { detectDuplicateSuspectedStrict } from './tools/duplicate-detector.js';
 import { verifyAgentConnectionToken } from "./auth/connection-token.js";
 import {
@@ -3620,25 +3621,68 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           summary = null;
         }
       }
-      // Ensure a registry row exists even for the very first session, so the
-      // archived history is never lost when no session was opened before.
-      // Empty renewals only reset the context without archiving noise.
+      // FIX-P1-SESS #177: renovação com escopo por ator, fail-closed.
+      //
+      // O DO é por workspace (compartilhado pelos membros), mas o registry
+      // (`agent_sessions`) já é por (workspace, actor). O apagão GLOBAL da
+      // tabela SDK (`DELETE FROM cf_ai_chat_agent_messages` sem WHERE) foi
+      // removido: B iniciando nova sessão destruía o contexto de A.
+      //
+      // Escolha documentada (sem migração destrutiva, sem deletar dados
+      // reais): remove SOMENTE linhas atribuíveis ao solicitante
+      // (`message` é JSON; `metadata.actorId` é gravado pelo persist do
+      // chat). Linhas sem atribuição (legadas, sem metadata) e de outros
+      // atores (incl. respostas `ted`, compartilhadas) são MANTIDAS — o
+      // isolamento pleno do contexto por ator (coletivo-vs-privado) fica
+      // como ADR pendente (D3). O espelho em memória usa o mesmo predicado,
+      // então nada "ressuscita" no restart do DO.
+      //
+      // SECREVIEW-P1-SESS: renovação ATÔMICA (tudo-ou-nada).
+      //
+      // O DELETE com escopo + currentSession/endSession rodam numa ÚNICA
+      // `runMemoryTransaction` (primitiva `transactionSync` do DO; fallback
+      // `BEGIN IMMEDIATE` em `node:sqlite`). Falha em qualquer ponto =>
+      // ROLLBACK integral: a tabela SDK, o registry e o espelho `this.messages`
+      // (atualizado SOMENTE após sucesso) ficam 100% preservados — resposta
+      // 500 com `ok:false`, NUNCA `ok:true`, e restart sem desaparecimento.
       let previous: { id: string } | null = null;
-      if (messageCount > 0) {
-        currentSession(sql, identity.workspaceId, identity.actorId);
-        previous = endSession(sql, identity.workspaceId, identity.actorId, {
-          ...(summary ? { summary } : {}),
-          messageCount,
-        });
-      }
+      let next: { id: string };
       try {
-        // SDK coupling (documented): the messages table is SDK-internal.
-        sql.exec(`DELETE FROM cf_ai_chat_agent_messages`);
+        const result = runMemoryTransaction(sql, () => {
+          sql.exec(
+            `DELETE FROM cf_ai_chat_agent_messages WHERE json_extract(message, '$.metadata.actorId') = ?`,
+            identity.actorId,
+          );
+          // Ensure a registry row exists even for the very first session, so the
+          // archived history is never lost when no session was opened before.
+          // Empty renewals only reset the context without archiving noise.
+          let prev: { id: string } | null = null;
+          if (messageCount > 0) {
+            currentSession(sql, identity.workspaceId, identity.actorId);
+            prev = endSession(sql, identity.workspaceId, identity.actorId, {
+              ...(summary ? { summary } : {}),
+              messageCount,
+            });
+          }
+          const nxt = currentSession(sql, identity.workspaceId, identity.actorId);
+          return { prev, nxt };
+        });
+        previous = result.prev;
+        next = result.nxt;
       } catch {
-        // Best effort: a fresh session id is still returned.
+        return Response.json(
+          { ok: false, code: 'agent.session_renew_failed', message: 'Não foi possível iniciar uma nova sessão.' },
+          { status: 500 },
+        );
       }
-      if (Array.isArray(this.messages)) this.messages.length = 0;
-      const next = currentSession(sql, identity.workspaceId, identity.actorId);
+      if (Array.isArray(this.messages)) {
+        const kept = this.messages.filter((message) => {
+          const actor = (message.metadata as { actorId?: string } | undefined)?.actorId;
+          return actor !== identity.actorId;
+        });
+        this.messages.length = 0;
+        this.messages.push(...kept);
+      }
       return Response.json({
         ok: true,
         sessionId: next.id,
