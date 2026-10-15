@@ -223,3 +223,50 @@ Branch protection em `main` exige `Gate — all checks` + `quality (22, 10)`.
    e os gates rápidos; E2E somente em banco descartável/Test Family.
 4. Abrir o PR A (sem merge — gate humano A6) e registrar D1/D2/D3 como
    ADR proposta.
+
+## 9. FASE 7 — reconciliação pós-lotes (15/10/2026, somente-docs)
+
+**Base:** `main` em `056da43`. **Documentos reconciliados:**
+`../audits/V1-TED-TEST-MATRIX.md` (INT-01–INT-24 com SHAs/comandos reais) e
+`../audits/V1-TED-AUDIT-2026-10-15-SUPLEMENTO.md` (vereditos por issue, gates,
+integridade/segurança, limitações). Sem fechar issues, sem merge, sem código
+de produção, sem tags/releases.
+
+### 9.1 Status das fases/lotes
+
+| Lote | PR (OPEN, sem merge) | Issues | Evidência real | Status |
+|---|---|---|---|---|
+| A | #192 (`0099ae9` #184 + `895440f`/`94ddeee` #185) | #184, #185 | CI + PWA CI verdes; tester 143/143 combinado + typecheck; reviews APPROVED | CORRIGIDA (PR OPEN); merge = gate humano |
+| BC | #193 (`0267c4c` + `80a0832` + `a3654c7`) | #187, #186, #189 | CI verde (1 rerun flake e2e UI-05/PUSH-02, mesma família histórica); agent suite 2589 + focados + typecheck; reviews APPROVED | CORRIGIDA (PR OPEN); merge = gate humano |
+| #188 | #194 (`1536164` + `c42a63f`) | #188 | 46/46 PG descartável + typecheck; CI verde; review com limitação declarada (guardless sem re-execução independente) | PARCIAL; merge = gate humano |
+| #178 | #195 (`ce245b8` + `d4aeaa0` + `b3d8f51` + `67fbe5f`, test-only) | #178 | validação estática (typecheck + eslint + collect); live NÃO executado (sem credenciais) | INCONCLUSIVE |
+| Melhorias | #196 (9 + 1 commits) | a rastrear issue-a-issue | tester PASS + typechecks; review APPROVED | cobertura por issue a confirmar |
+| #174 | (fix que a fechou; SHA de merge a confirmar) | #174 | issue CLOSED — única fechada | CLOSED |
+
+Fases do §1: F0–F4 com fixes em PRs OPEN (não mergeados); F5/G5 não atingido
+(modelo-real INCONCLUSIVE); F6/G6 e F7 com releases fora do fluxo
+autorizado (ver §9.3); F9 sem veredito CLOSED (nenhum item FULLY_CLOSED).
+
+### 9.2 Decisões pendentes D1/D2/D3-sessões (gate humano, sem resposta inventada)
+
+D1 (política de negação), D2 (escopo do guard de `routeIntent`) e D3 (formato
+canônico do recibo de cancelamento por negação) seguem **gates de produto**
+(A7): este plano não inventa a resposta. D3-sessões (decisões de sessão
+pendentes — isolamento de drafts, expiração de sessão, anúncio de 401
+definitivo e temas correlatos de #176/#177) juntam-se à lista como decisão
+humana explícita antes de qualquer fix de comportamento.
+
+### 9.3 Gates humanos (não executar sem aprovação explícita do operador)
+
+- **Merges** dos PRs #192–#196 (gate humano A6; sem merge = sem CLOSED).
+- **Live / modelo-real:** sem credenciais/provider autorizado — E2E live no
+  SHA final pendente; INT-20/INT-21/INT-22-live INCONCLUSIVOS.
+- **Release B:** flip bearer legado segue gate temporal do operador.
+- **Cutover** F3–F5: gate humano (ADR-024/ADR-025).
+- **Release `v1.0.2`:** manual pelo operador em 11:09:07Z (`gh release view`),
+  fora do `release-promote` (único run `38581993569` de 14/10); gates
+  CI/PWA/attest vieram depois — registrar como exceção de processo, não como
+  precedente.
+- **Tag `v1.0.3`:** NÃO criar nesta fase.
+- **E2E live no SHA final** (pós-merge dos lotes): devido antes de qualquer
+  veredito CLOSED; matriz INT sem FULLY_CLOSED até lá.
