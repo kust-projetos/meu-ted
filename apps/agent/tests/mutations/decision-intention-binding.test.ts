@@ -224,4 +224,31 @@ describe('FIX-187 decide() propagates the durable intention binding (RED)', () =
       body: { attestation: 'b'.repeat(40), intentionId: 'intent-coord-9' },
     }));
   });
+
+  it('coordinator retry carries intentionId on the retry POST too (uniform with executor.decide)', async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce({ id: 'op-9', attestation: 'b'.repeat(40) })
+      .mockResolvedValueOnce(faithfulExecute('op-9', 'mut-op-9'));
+    const coordinator = new PendingOperationCoordinator({ client: new MutationApiClient({ request }) });
+    const result = await coordinator.retry('op-9', identity, 'intent-coord-retry-9');
+    expect(result.status).toBe('succeeded');
+    expect(request).toHaveBeenNthCalledWith(1, 'POST', '/pending-operations/v2/op-9/retry', expect.objectContaining({
+      body: { intentionId: 'intent-coord-retry-9' },
+    }));
+    expect(request).toHaveBeenNthCalledWith(2, 'POST', '/pending-operations/v2/op-9/execute', expect.objectContaining({
+      body: { attestation: 'b'.repeat(40), intentionId: 'intent-coord-retry-9' },
+    }));
+  });
+
+  it('client.retry without intentionId sends no body (authorize-era callers unaffected)', async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce({ id: 'op-9', attestation: 'b'.repeat(40) })
+      .mockResolvedValueOnce(faithfulExecute('op-9', 'mut-op-9'));
+    const coordinator = new PendingOperationCoordinator({ client: new MutationApiClient({ request }) });
+    const result = await coordinator.retry('op-9', identity);
+    expect(result.status).toBe('succeeded');
+    expect(request).toHaveBeenNthCalledWith(1, 'POST', '/pending-operations/v2/op-9/retry', expect.not.objectContaining({
+      body: expect.anything(),
+    }));
+  });
 });

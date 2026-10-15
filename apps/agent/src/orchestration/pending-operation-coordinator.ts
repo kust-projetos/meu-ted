@@ -222,7 +222,7 @@ export class PendingOperationCoordinator {
 
   /** Conversational retry (§8.2/§13): failed → confirmed (fresh attestation) → execute once. */
   async retry(operationId: string, identity: MutationIdentity, intentionId?: string): Promise<DecisionResult> {
-    const confirmation = await this.dependencies.client.retry(operationId, identity);
+    const confirmation = await this.dependencies.client.retry(operationId, identity, intentionId);
     return this.executeAttested({ ...confirmation, ...(intentionId !== undefined ? { intentionId } : {}) }, identity);
   }
 
