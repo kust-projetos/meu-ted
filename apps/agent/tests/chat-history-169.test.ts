@@ -235,3 +235,88 @@ describe("FIX-169 RED: mutation turns persist into durable history", () => {
     expect(pair.map((i) => i.role).sort()).toEqual(["assistant", "user"]);
   });
 });
+
+describe("FIX-melhorias item 2: ?limit= no /rpc/history (default 200, shape intacto)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const storedMsg = (
+    id: string,
+    role: "user" | "assistant",
+    text: string,
+    createdAt: string,
+  ): UIMessage =>
+    ({
+      id,
+      role,
+      parts: [{ type: "text", text }],
+      metadata: {
+        actorId: role === "assistant" ? "ted" : "actor-169",
+        workspaceId: "workspace-169",
+        createdAt,
+      },
+    }) as unknown as UIMessage;
+
+  const seedPairs = async (
+    agent: { persistMessages: (msgs: UIMessage[]) => Promise<void> },
+    count: number,
+  ): Promise<void> => {
+    const base = Date.parse("2026-10-01T10:00:00.000Z");
+    const msgs: UIMessage[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const stamp = new Date(base + i * 60_000).toISOString();
+      msgs.push(storedMsg(`seed-user-${i}`, "user", `pergunta ${i}`, stamp));
+      msgs.push(storedMsg(`seed-asst-${i}`, "assistant", `resposta ${i}`, stamp));
+    }
+    await agent.persistMessages(msgs);
+  };
+
+  const historyReqWith = (query: string) =>
+    new Request(`https://agent.test.local/rpc/history${query}`, {
+      method: "GET",
+      headers: {
+        "x-agent-actor": "actor-169",
+        "x-agent-workspace": "workspace-169",
+      },
+    });
+
+  it("?limit=2 pagina os mais antigos primeiro, sem mudar o shape {items, total}", async () => {
+    const { agent } = createTestAgent();
+    await seedPairs(agent, 3);
+    const hist = await agent.fetch(historyReqWith("?limit=2"));
+    expect(hist.status).toBe(200);
+    const data = (await hist.json()) as {
+      items: Array<{ id: string; role: string; text?: string; content?: string }>;
+      total: number;
+    };
+    expect(Array.isArray(data.items)).toBe(true);
+    expect(typeof data.total).toBe("number");
+    expect(data.items).toHaveLength(2);
+    expect(data.total).toBe(2);
+    expect(data.items[0]!.id).toBe("seed-user-0");
+    expect(data.items[1]!.id).toBe("seed-asst-0");
+  });
+
+  it("sem limit retorna tudo (default alto cobre conversa longa)", async () => {
+    const { agent } = createTestAgent();
+    await seedPairs(agent, 3);
+    const hist = await agent.fetch(historyReqWith(""));
+    expect(hist.status).toBe(200);
+    const data = (await hist.json()) as { items: Array<{ id: string }>; total: number };
+    expect(data.items).toHaveLength(6);
+    expect(data.total).toBe(6);
+  });
+
+  it("?limit inválido ou <= 0 cai no default (retorna tudo)", async () => {
+    const { agent } = createTestAgent();
+    await seedPairs(agent, 3);
+    for (const query of ["?limit=abc", "?limit=0", "?limit=-5"]) {
+      const hist = await agent.fetch(historyReqWith(query));
+      expect(hist.status).toBe(200);
+      const data = (await hist.json()) as { items: Array<{ id: string }>; total: number };
+      expect(data.items).toHaveLength(6);
+      expect(data.total).toBe(6);
+    }
+  });
+});

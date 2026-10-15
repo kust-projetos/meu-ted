@@ -3837,7 +3837,22 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         return timeA - timeB;
       });
 
-      return Response.json({ items, total: items.length });
+      // FIX-melhorias item 2: ?limit= explícito pagina os mais antigos
+      // primeiro; ausente/inválido/<=0 cai no default alto (200) — conversa
+      // longa sem truncar, sem mudar o shape {items, total}.
+      const HISTORY_DEFAULT_LIMIT = 200;
+      const HISTORY_MAX_LIMIT = 1000;
+      let historyLimit = HISTORY_DEFAULT_LIMIT;
+      const limitRaw = url.searchParams.get("limit");
+      if (limitRaw !== null) {
+        const parsed = Number.parseInt(limitRaw, 10);
+        if (Number.isSafeInteger(parsed) && parsed > 0) {
+          historyLimit = Math.min(parsed, HISTORY_MAX_LIMIT);
+        }
+      }
+      const paged = items.slice(0, historyLimit);
+
+      return Response.json({ items: paged, total: paged.length });
     }
 
     return new Response("Not found", { status: 404 });
