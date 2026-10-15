@@ -498,7 +498,11 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     }
     const expectedCategoryId = expectedCategory.id as string;
     const T2_TEXT = `Na conta ${ACCOUNT_NAME} gastei 90 com ${pick.item} ${MARK}`;
-    const T4_TEXT = `Na conta ${ACCOUNT_NAME} gastei 45 com pão ${MARK}`;
+    // T4 precisa EMITIR proposta para a negação ter o que cancelar: "pão"
+    // sem categoria é genuinamente ambíguo e o TED pergunta (correto, #170).
+    // Categoria explícita aqui não enfraquece o teste — o caminho
+    // pergunta→bare-name já foi provado em T2/T3 neste mesmo run.
+    const T4_TEXT = `Na conta ${ACCOUNT_NAME} gastei 45 com pão, categoria ${pick.short} ${MARK}`;
     // Descrição do produto compõe item+marker em ordem própria; os asserts
     // exigem conter AMBOS (MARK e pick.item), sem fixar ordem.
 
