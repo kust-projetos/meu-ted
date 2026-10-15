@@ -21,6 +21,20 @@
  *
  * Opt-in: PWA_LIVE_E2E=1 + PWA_LIVE_ADMIN_EMAIL + PWA_LIVE_ADMIN_PASSWORD.
  * Todos os writes levam o marker do RUN_ID para identificação/limpeza.
+ *
+ * R5 (fix #178 — anti-falso-vermelho de hidratação): o run real falhou em T2
+ * (22.9s) porque o snapshot preT2 foi capturado durante a hidratação
+ * ("conectando…" no header, dentro de [data-testid=ted-chat]) com histórico
+ * de runs anteriores no workspace — o texto mutou entre snapshot e leitura e
+ * o fail-closed de reidratação disparou sem que a resposta real de T2 fosse
+ * avaliada. Endurecimento (só-teste): (a) waitForChatReady bloqueia qualquer
+ * snapshot pré-turno e envio até a sessão sair de "conectando…"/"escrevendo…"
+ * (timeout explícito com diagnóstico, nunca segue em estado transiente);
+ * (b) isolamento de turno por IDENTIDADE (bolhas da message-list + ids
+ * ted-op-*, multiset tolerante a reordem/reidratação), texto como fallback
+ * secundário — reidratação que preserva o conjunto de ids não invalida o
+ * turno; (c) pre-flight fail-fast (read-only) que lista contas "E2E conversa
+ * *", markers e propostas pendentes de OUTROS runs sem deletar nada alheio.
  */
 import { test, expect, type Page } from "@playwright/test";
 import { validateNoHistoricReuse, validateReceiptBinding } from "../support/live-closure-guards";
@@ -175,6 +189,78 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
   const suffixText = (full: string, before: string): string | null =>
     full.length >= before.length && full.startsWith(before) ? full.slice(before.length) : null;
 
+  // R5 (fix #178): a sessão TED sai de "conectando…" SÓ DEPOIS que o snapshot
+  // pré-turno seria capturado — o header vive dentro de [data-testid=ted-chat]
+  // e sua hidratação muta dialogText sem mensagem nova. Bloqueia qualquer
+  // snapshot pré-turno e envio até a sessão sair do estado transiente
+  // ("conectando…" E "escrevendo…" ausentes com message-list montada).
+  // Timeout explícito com diagnóstico — nunca segue em estado transiente.
+  // Status de erro persistente ("indisponível"/sinal de provider) vira SKIP
+  // INCONCLUSIVE estruturado (mesma disciplina de failOrSkip); transiente
+  // preso vira FAIL fechado.
+  const waitForChatReady = async (page: Page, context: string): Promise<void> => {
+    const ready = await page.waitForFunction(() => {
+      const list = document.querySelector('[data-testid="ted-message-list"]');
+      if (!list) return false;
+      const header = document.querySelector('[data-testid="ted-chat"]')?.textContent ?? "";
+      return !/conectando/i.test(header) && !/escrevendo/i.test(header);
+    }, undefined, { timeout: 60_000 }).then(() => true).catch(() => false);
+    if (ready) return;
+    const cur = await dialogText(page).catch(() => "");
+    if (PROVIDER_DOWN_RE.test(cur) || /indispon[ií]vel/i.test(cur)) {
+      test.info().annotations.push({ type: context, description: `INCONCLUSIVE (sessão TED nunca pronta): ${cur.slice(0, 300)}` });
+      test.skip(true, `INCONCLUSIVE (sessão TED nunca pronta) em ${context}`);
+      return;
+    }
+    throw new Error(
+      `${context}: sessão TED não ficou pronta em 60s (conectando/escrevendo persistente) — ` +
+      `snapshot/envio recusado em estado transiente (chat: ${JSON.stringify(cur.slice(0, 500))})`,
+    );
+  };
+
+  // R5 (fix #178): fotografia de IDENTIDADE do turno. O DOM das mensagens
+  // (TedMessage) não expõe id/intentionId — a identidade é o multiset das
+  // bolhas filhas diretas da message-list + os ids dos cards ted-op-*
+  // (pendingOperations autoritativas por id de turno). Reidratação que
+  // reordene/rehidrate sem mudar o conjunto NÃO invalida o turno; perda de
+  // bolha ou sumiço de card mantém o fail-closed.
+  type TurnSnapshot = { text: string; bubbles: string[]; approvalIds: string[] };
+
+  const snapshotTurn = async (page: Page): Promise<TurnSnapshot> =>
+    page.evaluate(() => {
+      const dlg = document.querySelector("[data-testid=ted-chat]");
+      const list = document.querySelector("[data-testid=ted-message-list]");
+      return {
+        text: dlg?.textContent ?? "",
+        bubbles: list ? [...list.children].map((c) => c.textContent ?? "") : [],
+        approvalIds: dlg ? [...dlg.querySelectorAll('[id^="ted-op-"]')].map((el) => el.id).sort() : [],
+      };
+    });
+
+  // Sufixo do turno por IDENTIDADE com texto como fallback secundário:
+  // prefixo textual exato (caminho rápido, mesma semântica anterior) OU
+  // reconciliação por identidade (todo o snapshot preservado como multiset
+  // + mesmos cards → só o conteúdo novo; nada novo fora da message-list
+  // conta como turno — header/notice não são resposta). null = divergência
+  // real (bolha perdida/card sumido) — fail-closed como antes.
+  const turnSuffix = (full: TurnSnapshot, before: TurnSnapshot): string | null => {
+    const fast = suffixText(full.text, before.text);
+    if (fast !== null) return fast;
+    const remaining = [...full.bubbles];
+    for (const b of before.bubbles) {
+      const i = remaining.indexOf(b);
+      if (i === -1) return null;
+      remaining.splice(i, 1);
+    }
+    for (const id of before.approvalIds) {
+      if (!full.approvalIds.includes(id)) return null;
+    }
+    return remaining.join("\n");
+  };
+
+  const readTurnSuffix = async (page: Page, before: TurnSnapshot): Promise<string | null> =>
+    snapshotTurn(page).then((snap) => turnSuffix(snap, before)).catch(() => null);
+
   // Erro estruturado da resposta de um turno de chat (HTTP >= 400, status
   // failed, ou campo error/code) — null quando o turno respondeu sem erro.
   const readChatTurnError = async (resp: Awaited<ReturnType<Page["waitForResponse"]>>): Promise<string | null> => {
@@ -262,6 +348,47 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     await page.getByRole("option", { name: /Test Family/ }).click();
     await expect(page.getByRole("button", { name: "Selecionar espaço" })).toContainText("Test Family", { timeout: 15000 });
 
+    // ── R5 pre-flight: isolamento do RUN_ID (fail-fast, read-only) ────
+    // Workspace Test Family é compartilhado entre runs: conta "E2E conversa *"
+    // ativa ou marker "Teste E2E conversa *" de OUTRO run invalida o
+    // isolamento de turno — FALHA listando (nunca deleta nada alheio; a
+    // limpeza do finally só toca o marker DESTE run).
+    const accPre = await apiJson(page, "GET", "/api/backend/accounts");
+    expect(accPre.status, "pre-flight: catálogo de contas ilegível").toBe(200);
+    const accPreItems = ((accPre.body as { items?: { id?: unknown; name?: unknown; isActive?: unknown }[] }).items ?? []);
+    const foreignAccounts = accPreItems
+      .filter((a) => typeof a.name === "string" && /^Conta E2E conversa /.test(a.name) && a.name !== ACCOUNT_NAME && a.isActive !== false)
+      .map((a) => `${String(a.name)} (id=${String(a.id)})`);
+    const foreignMarks = await page.evaluate(async ({ workspaceId, runId }: { workspaceId: string; runId: string }) => {
+      const seen = new Set<string>();
+      for (let p = 0; p < 3; p++) {
+        const res = await fetch(`/api/backend/transactions?limit=100&offset=${p * 100}`, {
+          credentials: "include",
+          headers: { "X-Workspace-Id": workspaceId },
+        });
+        if (!res.ok) return { unreadable: true, foreign: [] as string[] };
+        const body = await res.json().catch(() => ({})) as { items?: { description?: unknown }[]; total?: number };
+        if (!Array.isArray(body.items)) return { unreadable: true, foreign: [] as string[] };
+        for (const t of body.items) {
+          if (typeof t.description !== "string") continue;
+          const m = /Teste E2E conversa (\S+)/.exec(t.description);
+          if (m && m[1] !== runId) seen.add(m[1]!);
+        }
+        if (typeof body.total === "number" && (p + 1) * 100 >= body.total) break;
+      }
+      return { unreadable: false, foreign: [...seen] };
+    }, { workspaceId: ACTIVE_WS, runId: RUN_ID });
+    if (foreignMarks.unreadable) {
+      throw new Error(`pre-flight: ledger ilegível — isolamento de "${MARK}" improvável (nada foi deletado)`);
+    }
+    const preflightViolations = [
+      ...foreignAccounts.map((a) => `conta alheia ativa: ${a}`),
+      ...foreignMarks.foreign.map((r) => `marker de outro run no ledger (primeiras 300 txs): runId=${r}`),
+    ];
+    if (preflightViolations.length > 0) {
+      throw new Error(`pre-flight: resíduo de outro run no workspace TestFamily — ${preflightViolations.join("; ")} (nada foi deletado)`);
+    }
+
     // ── Preparação: conta de teste + categorias default + catálogo ──
     const acc = await apiJson(page, "POST", "/api/backend/accounts",
       { name: ACCOUNT_NAME, kind: "bank", initialBalanceCents: 10000 }, `conv-acc-${RUN_ID}`);
@@ -299,8 +426,26 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
 
     const dialog = await openTed(page);
 
+    // ── R5 pre-flight (DOM): propostas pendentes pré-existentes ─────────
+    // Só depois de waitForChatReady (com histórico ainda carregando, a lista
+    // de pendentes pode estar incompleta — falso-negativo). Qualquer card
+    // ted-op-* ou undo-item aqui é de OUTRO run: FALHA listando, sem deletar.
+    await waitForChatReady(page, "conv-preflight");
+    const preflightPending = await page.evaluate(() => ({
+      ops: [...document.querySelectorAll('[id^="ted-op-"]')].map((el) => el.id),
+      undos: document.querySelectorAll('[data-testid="ted-undo-item"], [data-testid="ted-undo-focused"], [data-testid="ted-undo-card"]').length,
+    }));
+    if (preflightPending.ops.length > 0 || preflightPending.undos > 0) {
+      throw new Error(
+        `pre-flight: propostas pendentes pré-existentes no chat (cards: ${preflightPending.ops.join(", ") || "nenhum"}; ` +
+        `undo-items: ${preflightPending.undos}) — resíduo de outro run (nada foi deletado)`,
+      );
+    }
+
     // ── T1: leitura com grounding ──────────────────────────────────
-    const preT1 = await dialogText(page).catch(() => "");
+    // R5: sessão pronta antes do snapshot (nunca em "conectando…").
+    await waitForChatReady(page, "conv-t1");
+    const preT1 = await snapshotTurn(page);
     const chat1 = page.waitForResponse(
       (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 200_000 });
     await sendTedMessage(page, dialog, "Qual o saldo total das minhas contas hoje? Responda citando o valor em reais.");
@@ -309,7 +454,7 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     } catch {
       const t1Resp = await chat1.then((r) => r).catch(() => null);
       const t1Error = t1Resp ? await readChatTurnError(t1Resp) : null;
-      const t1Text = suffixText(await dialogText(page).catch(() => ""), preT1);
+      const t1Text = await readTurnSuffix(page, preT1);
       await failOrSkip(page, "conv-t1", "T1 sem grounding (saldo em R$ ausente após 180s)",
         { turnText: t1Text, turnError: t1Error });
     }
@@ -319,7 +464,10 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // Mesmo-draft: sem categoria informada o TED deve perguntar (INT-12);
     // card direto aqui significaria categorização presumida — FALHA, pois o
     // restante do fluxo prova o caminho pergunta→bare-name→card (INT-13).
-    const preT2 = await dialogText(page).catch(() => "");
+    // R5: sessão pronta antes do snapshot (nunca em "conectando…"); o
+    // isolamento do turno é por identidade (snapshotTurn/turnSuffix).
+    await waitForChatReady(page, "conv-t2");
+    const preT2 = await snapshotTurn(page);
     const chat2 = page.waitForResponse(
       (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 200_000 });
     await sendTedMessage(page, dialog, T2_TEXT);
@@ -334,7 +482,7 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     test.info().annotations.push({ type: "conv-t2", description: `progresso T2: ${progress2}` });
     const t2Resp = await chat2.then((r) => r).catch(() => null);
     const t2Evidence = {
-      turnText: suffixText(await dialogText(page).catch(() => ""), preT2),
+      turnText: await readTurnSuffix(page, preT2),
       turnError: t2Resp ? await readChatTurnError(t2Resp) : null,
     };
     if (progress2 === "timeout") {
@@ -345,14 +493,15 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
         `T2 produziu card direto em vez da pergunta de categoria (progresso: ${progress2}) — mesmo-draft exige o caminho pergunta→bare-name (INT-12/INT-13)`,
         t2Evidence);
     }
-    // Pergunta vinculada ao turno T2: só o texto novo desde o envio de T2
-    // (mensagens anteriores a T2 excluídas). A pergunta deve estar DENTRO
+    // Pergunta vinculada ao turno T2 por IDENTIDADE (só conteúdo novo desde
+    // o snapshot de T2 — mensagens anteriores excluídas, reidratação que
+    // preserva o conjunto de ids tolerada). A pergunta deve estar DENTRO
     // deste sufixo — casar no diálogo inteiro permitiria reusar pergunta de
     // turno anterior (falso-positivo).
-    const t2Question = suffixText(await dialogText(page).catch(() => ""), preT2);
+    const t2Question = t2Evidence.turnText;
     if (t2Question === null) {
       await failOrSkip(page, "conv-t2",
-        "reidratação T2: snapshot preT2 não é prefixo do texto atual — pergunta histórica não vale",
+        "reidratação T2: divergência de identidade (bolha perdida ou card sumido desde o snapshot preT2) — pergunta histórica não vale",
         t2Evidence);
     }
     if (!/qual\s+(a\s+)?categoria/i.test(t2Question)) {
@@ -366,15 +515,18 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // Binding autoritativo: o id da pendingOperation do TURNO T3 (nunca o
     // primeiro card com MARK, nunca stale de outro run). Loop de pergunta
     // idêntica FALHA em vez de passar adiante.
-    const preT3 = await dialogText(page).catch(() => "");
+    // R5: sessão pronta antes do snapshot (nunca em "conectando…").
+    await waitForChatReady(page, "conv-t3");
+    const preT3 = await snapshotTurn(page);
     const chat3 = page.waitForResponse(
       (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 120_000 });
     await sendTedMessage(page, dialog, pick.short);
     const t3Resp = await chat3;
     const t3opId = await readPendingOpId(t3Resp);
+    const t3TurnText = await readTurnSuffix(page, preT3);
     if (!t3opId) {
       await failOrSkip(page, "conv-t3", "turno T3 não emitiu pendingOperation — draft original não progrediu",
-        { turnText: suffixText(await dialogText(page).catch(() => ""), preT3), turnError: await readChatTurnError(t3Resp) });
+        { turnText: t3TurnText, turnError: await readChatTurnError(t3Resp) });
     }
     validateNoHistoricReuse([t3opId]);
     const card = dialog.locator(`[id="ted-op-${t3opId}"]`);
@@ -382,7 +534,7 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
       await expect(card).toBeVisible({ timeout: 180_000 });
       await expect(card.getByText(MARK, { exact: false })).toBeVisible({ timeout: 30000 });
     } catch {
-      const afterText = suffixText(await dialogText(page).catch(() => ""), preT3);
+      const afterText = await readTurnSuffix(page, preT3);
       const afterTextForMatch = afterText ?? "";
       const sameQuestion = /qual\s+(a\s+)?categoria/i.test(afterTextForMatch) &&
         t2Question.split(/qual\s+(a\s+)?categoria/i)[1]?.slice(0, 80) ===
@@ -435,7 +587,9 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // A negação roda DEPOIS da confirmação do draft original (negar o
     // próprio card do T3 o cancelaria e inviabilizaria o mesmo-draft).
     // Jornada negar→cancelar (INT-22) num draft próprio: zero escrita nova.
-    const preT4 = await dialogText(page).catch(() => "");
+    // R5: sessão pronta antes do snapshot (nunca em "conectando…").
+    await waitForChatReady(page, "conv-t4");
+    const preT4 = await snapshotTurn(page);
     const chat4 = page.waitForResponse(
       (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 120_000 });
     await sendTedMessage(page, dialog, T4_TEXT);
@@ -443,7 +597,7 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     const t4opId = await readPendingOpId(t4Resp);
     if (!t4opId) {
       await failOrSkip(page, "conv-t4", "turno T4 não emitiu pendingOperation — draft da negação não progrediu",
-        { turnText: suffixText(await dialogText(page).catch(() => ""), preT4), turnError: await readChatTurnError(t4Resp) });
+        { turnText: await readTurnSuffix(page, preT4), turnError: await readChatTurnError(t4Resp) });
     }
     validateNoHistoricReuse([t4opId]);
     expect(t4opId, "draft da negação reutilizou o operationId do draft original").not.toBe(operationId);
@@ -452,12 +606,14 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
       await expect(card4).toBeVisible({ timeout: 180_000 });
     } catch {
       await failOrSkip(page, "conv-t4", `card do draft da negação ausente (ted-op-${t4opId})`,
-        { turnText: suffixText(await dialogText(page).catch(() => ""), preT4), turnError: await readChatTurnError(t4Resp) });
+        { turnText: await readTurnSuffix(page, preT4), turnError: await readChatTurnError(t4Resp) });
     }
     const before = await countTxByMark(page);
     expect(before, "contagem pré-negação divergiu do TX do draft original").toBe(1);
     const denyChat = page.waitForResponse(
       (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 120_000 });
+    // R5: sessão pronta antes do envio (nunca em "conectando…").
+    await waitForChatReady(page, "conv-t4-deny");
     await sendTedMessage(page, dialog, "não confirmo");
     const denyResp = await denyChat;
     const denyBody = await denyResp.json().catch(() => ({})) as {
@@ -473,7 +629,7 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     if (denyOp?.id !== t4opId) {
       await failOrSkip(page, "conv-t4",
         `negação sem vínculo estruturado ao draft ${t4opId} (pendingOperation ausente ou id divergente) — texto sozinho não prova cancelamento`,
-        { turnText: suffixText(await dialogText(page).catch(() => ""), preT4), turnError: await readChatTurnError(denyResp) });
+        { turnText: await readTurnSuffix(page, preT4), turnError: await readChatTurnError(denyResp) });
     }
     expect(denyOp.status, `draft da negação ${t4opId} sem estado terminal cancelled`).toBe("cancelled");
     validateNoHistoricReuse([JSON.stringify(denyBody).slice(0, 4000)]);
@@ -494,6 +650,8 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     await page.goto("/ted", { waitUntil: "domcontentloaded" });
     const dialog2 = page.getByRole("region", { name: /chat com ted/i });
     await expect(dialog2).toBeVisible({ timeout: 15000 });
+    // R5: aguarda hidratação completa antes de asseverar as bolhas.
+    await waitForChatReady(page, "conv-t5b");
     for (const bubble of [T2_TEXT, pick.short, T4_TEXT, "não confirmo"]) {
       await expect(dialog2.getByText(bubble, { exact: true }).first()).toBeVisible({ timeout: 30000 });
     }
@@ -503,6 +661,8 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // O único TX com o marker é o do draft original (o draft da negação
     // foi cancelado sem escrever): zerar a contagem prova que o undo
     // atingiu o TX certo (tedTxId).
+    // R5: sessão pronta antes do envio (nunca em "conectando…").
+    await waitForChatReady(page, "conv-t6");
     await sendTedMessage(page, dialog2, "desfazer a última ação");
     const undoCard = dialog2.locator('[data-testid="ted-undo-item"], [data-testid="ted-undo-focused"], [data-testid="ted-undo-card"]').first();
     await expect(undoCard).toBeVisible({ timeout: 120_000 });
