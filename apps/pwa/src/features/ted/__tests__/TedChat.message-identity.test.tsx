@@ -358,53 +358,54 @@ describe("TedChat — AC06: dois textos iguais com IDs distintos = DUAS mensagen
     expect(ids[0]).not.toBe(ids[1]);
   });
 
-  it("CONFOUND DOCUMENTADO (comportamento real, NÃO endossado): resposta local não convergida + turno atual idêntico persiste duplicata", async () => {
-    // Cenário exato do reviewer (MEDIUM). O fio NÃO carrega identidade
-    // autoritativa hoje — evidência:
-    //   • `/rpc/chat` responde `{ status, output, pendingOperation?, undoProposal? }`
-    //     (finance-chat-agent.ts:2254): NÃO ecoa `turnId`/`intentionId`, então o
-    //     cliente cai no fallback `turn-${Date.now()}` (agent-client.ts:499) —
-    //     id local, tempo-based, sem relação com o intentionId enviado;
-    //   • o DO persiste `id: msg-user-*/msg-asst-*` gerados no servidor e
-    //     `metadata: { actorId, workspaceId, createdAt }`
-    //     (finance-chat-agent.ts:857-867) — o intentionId do cliente NÃO é
-    //     persistido;
-    //   • `/rpc/history` devolve só `{ id, actorId, role, content, createdAt,
-    //     isOwn, attachments }` (finance-chat-agent.ts:2375-2394) — nenhum
-    //     turnId/intentionId.
-    // Logo não existe identidade reutilizável para reconciliar a resposta do
-    // turno contra o lote, e a heurística de contagem (texto) não dá conta.
-    // COMO O COMPORTAMENTO É HOJE (fixado aqui, não endossado):
-    //   turno 1 = mutation/confirmation/cancel cuja resposta ainda não
-    //   convergiu no histórico mockado → fica só local;
-    //   turno 2 = read → resposta "X" IGUAL, persistida pelo DO;
-    //   o refresh substitui a lista (a cópia local do turno 1 some) e a
-    //   heurística conta 1 <= 1 → anexa a cópia local do turno 2 → o MESMO
-    //   texto aparece DUAS vezes, ambas do turno 2.
-    // (FIX-169: no protocolo real o DO agora persiste o Q&A de mutação, então
-    // a janela ficou restrita a histórico defasado/parcial — a heurística de
-    // contagem por texto continua sem identidade autoritativa.)
-    // Correção exige mudança de protocolo (persistir/ecoar o intentionId) —
-    // decisão do Planner, fora do escopo desta fatia.
+  it("FIX-melhorias item 3: resposta do turno com identidade convergida não duplica (histórico parcial)", async () => {
+    // Protocolo real pós FIX-169-170-R2: o DO persiste o par Q&A de
+    // mutação/continuação/retry com o intentionId do envio e o /rpc/history
+    // o ecoa. Quando o refresh traz a resposta DESTE turno (mesmo texto +
+    // intentionId do envio), a cópia local é suprimida POR IDENTIDADE — a
+    // contagem legada por texto contaria a resposta ainda-local do turno
+    // anterior como cópia deste e anexaria duplicata (o CONFOUND antigo).
+    // Limites documentados: turno read persistido sem intentionId segue a
+    // regra legada; resposta de turno anterior some de lote parcial (lag) —
+    // o servidor real a persistiu, é o refresh que está defasado.
     const user = userEvent.setup();
     const answer = "Registrei isso aqui.";
     await renderReady();
 
-    // Turno 1: mutation — a resposta não é persistida pelo DO.
+    // Turno 1 (mutation): resposta local; o refresh ainda não a trouxe.
     vi.mocked(agentClient.sendAgentMessage).mockResolvedValueOnce(okTurn("t1", answer));
     await send(user, "Gastei R$ 50 no mercado");
     await waitFor(() => expect(screen.getAllByText(answer)).toHaveLength(1));
+    const firstId = sentMessageIds()[0]!;
+    expect(firstId).toBeTruthy();
 
-    // Turno 2: read — resposta idêntica, AGORA persistida pelo DO (o
-    // histórico autoritativo traz a cópia do servidor).
-    histories["ws-1"] = [userMsg("srv-2", "e as metas?"), assistantMsg("srv-x", answer)];
-    vi.mocked(agentClient.sendAgentMessage).mockResolvedValueOnce(okTurn("t2", answer));
+    // Turno 2: mesmo texto de entrada e resposta byte-idêntica — desta vez
+    // o lote parcial traz SÓ o par deste turno, com a identidade do envio
+    // (como o servidor real persiste o par Q&A).
+    const flight = deferred<agentClient.AgentTurn>();
+    vi.mocked(agentClient.sendAgentMessage).mockReturnValueOnce(flight.promise);
     await send(user, "e as metas?");
+    await waitFor(() => expect(vi.mocked(agentClient.sendAgentMessage)).toHaveBeenCalledTimes(2));
+    const secondId = sentMessageIds()[1]!;
+    expect(secondId).toBeTruthy();
+    expect(secondId).not.toBe(firstId);
+    histories["ws-1"] = [
+      { ...userMsg("srv-u2", "e as metas?"), intentionId: secondId },
+      { ...assistantMsg("srv-a2", answer), intentionId: secondId },
+    ];
+    const historyCallsBefore = vi.mocked(agentClient.fetchAgentHistory).mock.calls.length;
+    flight.resolve(okTurn("t2", answer));
+
+    // Sincronia com o refresh do turno 2 (sem waitFor na asserção final: ele
+    // sairia no primeiro match, antes do refresh, e mascararia a duplicata).
+    await waitFor(() =>
+      expect(vi.mocked(agentClient.fetchAgentHistory).mock.calls.length).toBeGreaterThan(historyCallsBefore),
+    );
     await settle();
 
-    // COMPORTAMENTO REAL: duas cópias do mesmo texto (a do servidor + a local
-    // do turno 2); a cópia local do turno 1 saiu no refresh.
-    expect(screen.getAllByText(answer)).toHaveLength(2);
+    // Cópia única: a do servidor (turno 2). Sem o fix por identidade seriam
+    // 2 (servidor + local do turno 2), ambas atribuíveis ao turno 2.
+    expect(screen.getAllByText(answer)).toHaveLength(1);
   });
 
   it("a retenção local da resposta do turno continua existindo (histórico já persistiu a resposta)", async () => {

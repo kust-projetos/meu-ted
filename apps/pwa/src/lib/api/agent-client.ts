@@ -552,6 +552,28 @@ function hasDivergingIdentity(item: HistoryItemForSupersede, anchorIdentity: str
 }
 
 /**
+ * FIX-melhorias item 3: a resposta do turno convergiu quando o lote
+ * autoritativo já traz a resposta DESTE turno — item do assistente com o
+ * mesmo texto E o intentionId do envio (SPEC §7.7: o messageId do PWA viaja
+ * como intentionId; o Agent persiste o par Q&A de mutação/continuação/retry
+ * com ele e o /rpc/history o ecoa). Regra pura, sem schema: não toca no
+ * protocolo nem em zod. Sem identidade em jogo (turno read persistido sem
+ * intentionId, item legado), retorna false e a contagem legada por texto
+ * decide como antes. Restrita a itens do assistente: o eco existe também no
+ * item próprio do mesmo turno, que nunca confirma a resposta.
+ */
+export function isTurnAnswerConvergedByIdentity(
+  output: string | undefined,
+  turnIntentionId: string | undefined,
+  history: ReadonlyArray<Pick<AgentMessage, "isOwn" | "content" | "intentionId">>,
+): boolean {
+  if (!output || !turnIntentionId) return false;
+  return history.some(
+    (item) => !item.isOwn && item.content === output && item.intentionId === turnIntentionId,
+  );
+}
+
+/**
  * R2 FIX 2 + FIX 3 (MEDIUM): critério temporal único para reconciliar a
  * âncora contra o histórico autoritativo. A âncora é considerada superada
  * somente quando o histórico traz mensagem própria de conteúdo idêntico com
