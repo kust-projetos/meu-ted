@@ -1141,6 +1141,14 @@ export type AgentSessionRenewal = {
   summarized: boolean;
 };
 
+const agentSessionRenewalSchema = z.object({
+  ok: z.literal(true),
+  sessionId: z.string().min(1),
+  previousSessionId: z.string().nullable(),
+  messageCount: z.number(),
+  summarized: z.boolean(),
+});
+
 /**
  * Starts a fresh chat session (Part B): archives the current context into
  * the session registry and clears the model context. Durable memories are
@@ -1163,11 +1171,19 @@ export async function renewAgentSession(workspaceId: string): Promise<AgentSessi
     },
   );
   if (!response.ok) throw new Error("Não foi possível iniciar uma nova sessão.");
-  // FIX-melhorias item 4: nova sessão = contexto arquivado — a âncora de
-  // retry do escopo antigo morre aqui (mesma purga do sucesso de envio).
-  // Falha acima preserva a âncora (fail-closed: a sessão antiga segue válida).
+  // FIX-melhorias item 4 / REVIEW-MEDIUM-3: nova sessão = contexto
+  // arquivado — a âncora de retry do escopo antigo morre aqui (mesma purga
+  // do sucesso de envio), SOMENTE após o sucesso validado: JSON íntegro +
+  // shape do contrato (ok:true). JSON inválido ou ok:false preservam a
+  // âncora (fail-closed: a sessão antiga segue válida).
+  let renewal: z.infer<typeof agentSessionRenewalSchema>;
+  try {
+    renewal = agentSessionRenewalSchema.parse(await response.json());
+  } catch {
+    throw new Error("Não foi possível iniciar uma nova sessão.");
+  }
   clearPendingChatSend(workspaceId);
-  return (await response.json()) as AgentSessionRenewal;
+  return renewal;
 }
 
 /**

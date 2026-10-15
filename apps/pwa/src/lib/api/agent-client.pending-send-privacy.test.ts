@@ -155,4 +155,43 @@ describe("P1 #176 — rascunho isolado por ator", () => {
       vi.restoreAllMocks();
     }
   });
+
+  it("REVIEW-MEDIUM-3: renewAgentSession com JSON inválido preserva a âncora (sem purga antes de validar)", async () => {
+    // 200 com corpo não-JSON: response.json() rejeita — a âncora do escopo
+    // antigo segue válida porque nada foi validado.
+    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("tok");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("não é json {", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    try {
+      setPrincipal(ACTOR_A);
+      const send = draft("pendente");
+      savePendingChatSend(WS, send);
+      await expect(renewAgentSession(WS)).rejects.toThrow();
+      expect(loadPendingChatSend(WS)?.messageId).toBe(send.messageId);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("REVIEW-MEDIUM-3: renewAgentSession com ok:false preserva a âncora (shape inválido não purga)", async () => {
+    // 200 com shape fora do contrato (ok:false, sem sessionId): sucesso NÃO
+    // demonstrado — a âncora é preservada.
+    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("tok");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, sessionId: "", messageCount: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    try {
+      setPrincipal(ACTOR_A);
+      const send = draft("pendente");
+      savePendingChatSend(WS, send);
+      await expect(renewAgentSession(WS)).rejects.toThrow();
+      expect(loadPendingChatSend(WS)?.messageId).toBe(send.messageId);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 });
