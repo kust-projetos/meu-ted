@@ -887,23 +887,41 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // estruturado.
     await requireOwnBubble(page, preT4, "não confirmo", "conv-t4");
     const denyResp = await denyChat;
-    // Contrato real da decisão (agent-client pendingDecisionSchema):
-    // { operationId, status, retryable?, receipt? } — SEM objeto
-    // pendingOperation. cancelled/failed/proposed/expired não têm recibo.
-    const denyBody = await denyResp.json().catch(() => ({})) as {
-      status?: unknown; output?: unknown; operationId?: unknown;
-    };
-    // Estado terminal cancelled do draft da negação, VINCULADO ao t4opId
-    // pela resposta estruturada (operationId + status). Cópia textual
-    // ("Operação cancelada") sozinha NÃO basta — sem vínculo estruturado ao
-    // t4opId, FALHA (ou SKIP INCONCLUSIVE com sinal de provider).
-    if (denyBody.operationId !== t4opId) {
+    const denyTurnError = await readChatTurnError(denyResp);
+    // Contrato real do turno de chat no cancelamento: a resposta é
+    // {status:'completed', output:'Operação cancelada com segurança.'} —
+    // SEM mutation/pendingOperation (runCancelTurn não materializa mutation
+    // por desenho) e SEM operationId. O vínculo ao t4opId vem de três
+    // evidências independentes: (1) texto de cancelamento NOVO no turno
+    // (cardinalidade — histórico não conta); (2) o card ted-op-<t4opId>,
+    // presente e visível acima, some da lista autoritativa (só terminal
+    // sai da lista); (3) ledger inalterado abaixo.
+    const cancelGrowth = await waitForBubbleGrowth(page, preT4,
+      (b) => /opera[çc][aã]o cancelada/i.test(b), 120_000);
+    if (cancelGrowth.current <= cancelGrowth.base) {
       await failOrSkip(page, "conv-t4",
-        `negação sem vínculo estruturado ao draft ${t4opId} (operationId ausente ou divergente) — texto sozinho não prova cancelamento`,
-        { turnText: await readNewText(page, preT4), turnError: await readChatTurnError(denyResp) });
+        "turno de negação sem confirmação textual de cancelamento (contagem inalterada)",
+        { turnText: await readNewText(page, preT4), turnError: denyTurnError });
     }
-    expect(denyBody.status, `draft da negação ${t4opId} sem estado terminal cancelled`).toBe("cancelled");
-    validateNoHistoricReuse([JSON.stringify(denyBody).slice(0, 4000)]);
+    const cardGoneDeadline = Date.now() + 60_000;
+    let cardGone = false;
+    let lastIds: string[] = [];
+    for (;;) {
+      const snap = await snapshotTurn(page).catch(() => null);
+      if (snap) {
+        lastIds = snap.approvalIds;
+        if (!lastIds.includes(`ted-op-${t4opId}`)) { cardGone = true; break; }
+      }
+      if (Date.now() >= cardGoneDeadline) break;
+      await page.waitForTimeout(1000);
+    }
+    if (!cardGone) {
+      await failOrSkip(page, "conv-t4",
+        `card do draft negado segue acionável após cancelamento (ted-op-${t4opId} ainda listado — ` +
+        `ids visíveis: ${lastIds.join(",") || "nenhum"})`,
+        { turnText: await readNewText(page, preT4), turnError: denyTurnError });
+    }
+    validateNoHistoricReuse([JSON.stringify(await denyResp.json().catch(() => ({}))).slice(0, 4000)]);
     await page.waitForTimeout(25000); // dá tempo a qualquer execução indevida
     const afterDeny = await countTxByMark(page);
     expect(afterDeny, "negação executou mutação contra vontade expressa").toBe(before);
