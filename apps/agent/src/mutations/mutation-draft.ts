@@ -1136,6 +1136,30 @@ export const initializeMutationDraftSchema = (sql: SqlExec): void => {
       PRIMARY KEY (workspace_id, actor_id, device_id, operation_id)
     );
   `);
+  // FIX-DUP-PROPOSAL — durable intention→draft index. `findByIntention`
+  // below used to match ONLY `last_intention_id`, which every continuation
+  // overwrites: after intention J completed/consumed a draft created by
+  // intention I, a redelivery of I missed the lookup and the fresh flow
+  // proposed anew under a different idempotency key (1 turno → 2
+  // pending_operations). Every intention that touches a draft is linked
+  // immutably (first writer wins, `ON CONFLICT DO NOTHING`); the lookup
+  // consults the index when the fast path misses, so a redelivery recovers
+  // its draft/proposal — including consumed ones — before any flow choice.
+  // `device_id` is NOT NULL with `''` for "no device" so PK legs are never
+  // NULL (same mold as `mutation_confirmations`); the fetched draft still
+  // passes the `sameContext` check, so the index can never cross an
+  // identity leg (workspace/actor/device/conversation).
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS mutation_draft_intentions (
+      workspace_id TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      device_id TEXT NOT NULL DEFAULT '',
+      intention_id TEXT NOT NULL,
+      draft_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, actor_id, device_id, intention_id)
+    );
+  `);
   // Idempotent compat for DOs created before these columns existed
   // (CREATE TABLE IF NOT EXISTS never backfills columns): add them when
   // missing. Duplicate-column races are swallowed, other errors propagate.
@@ -1298,14 +1322,24 @@ export class SqlMutationDraftStore implements MutationDraftStore {
 
   getOrCreate(record: MutationDraftRecord): { record: MutationDraftRecord; created: boolean } {
     const existing = this.get(record.draftId);
-    if (existing) return { record: existing, created: false };
+    if (existing) {
+      // Self-heal for rows written before the intention index existed: a
+      // getOrCreate hit means the caller derives this draftId, so the
+      // caller's intention is a contributor by construction.
+      this.linkIntention(existing, record.lastIntentionId);
+      return { record: existing, created: false };
+    }
     try {
       this.persist(record);
     } catch {
       const raced = this.get(record.draftId);
-      if (raced) return { record: raced, created: false };
+      if (raced) {
+        this.linkIntention(raced, record.lastIntentionId);
+        return { record: raced, created: false };
+      }
       throw new Error('agent.draft_store_unavailable');
     }
+    this.linkIntention(record, record.lastIntentionId);
     return { record, created: true };
   }
 
@@ -1346,7 +1380,58 @@ export class SqlMutationDraftStore implements MutationDraftStore {
       ),
     ];
     const found = rows.length > 0 && rows[0] ? rowToRecord(rows[0]) : undefined;
-    return found && sameContext(found, ctx) ? found : undefined;
+    if (found && sameContext(found, ctx)) return found;
+    // FIX-DUP-PROPOSAL: fall back to the durable contributor index. The fast
+    // path above only sees the LAST toucher; an earlier contributor (e.g. the
+    // intention that created the draft) is linked immutably at write time.
+    // A missing index/table degrades to the pre-fix miss (undefined) — never
+    // to a throw inside the lookup.
+    let draftId: string | undefined;
+    try {
+      const linked = [
+        ...this.sql.exec<Record<string, unknown>>(
+          `SELECT draft_id FROM mutation_draft_intentions WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND intention_id = ?`,
+          ctx.workspaceId,
+          ctx.actorId,
+          ctx.deviceId ?? '',
+          intentionId,
+        ),
+      ];
+      const first = linked[0];
+      draftId = first ? String(first.draft_id ?? '') || undefined : undefined;
+    } catch {
+      return undefined;
+    }
+    if (!draftId) return undefined;
+    const draft = this.get(draftId);
+    return draft && sameContext(draft, ctx) ? draft : undefined;
+  }
+
+  /**
+   * FIX-DUP-PROPOSAL — immutable intention→draft link (first writer wins).
+   * Best-effort: a link failure degrades the lookup to the pre-fix
+   * last-intention behavior instead of breaking the turn that just wrote.
+   */
+  private linkIntention(
+    record: MutationDraftRecord,
+    intentionId: string | undefined,
+  ): void {
+    if (!intentionId) return;
+    try {
+      this.sql.exec(
+        `INSERT INTO mutation_draft_intentions (workspace_id, actor_id, device_id, intention_id, draft_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (workspace_id, actor_id, device_id, intention_id) DO NOTHING`,
+        record.workspaceId,
+        record.actorId,
+        record.deviceId ?? '',
+        intentionId,
+        record.draftId,
+        new Date().toISOString(),
+      );
+    } catch {
+      // Best-effort index only.
+    }
   }
 
   cas(
@@ -1365,6 +1450,7 @@ export class SqlMutationDraftStore implements MutationDraftStore {
     this.writeUpdateWithStatusGuard(draftId, next, from);
     const verified = this.get(draftId);
     if (verified && verified.status === to && verified.lastIntentionId === next.lastIntentionId) {
+      this.linkIntention(verified, patch.lastIntentionId);
       return { ok: true, record: verified };
     }
     return { ok: false, current: verified };
@@ -1410,10 +1496,12 @@ export class SqlMutationDraftStore implements MutationDraftStore {
     // only for the writer whose predicates matched) — never a re-read, which a
     // concurrent write landing on the next revision could impersonate. The
     // returned record is what the engine persisted.
-    return this.writeUpdate(draftId, next, options.expectedRevision, {
+    const written = this.writeUpdate(draftId, next, options.expectedRevision, {
       ...(touchesResolution ? { activeOnly: true } : {}),
       returning: true,
     });
+    if (written && patch.lastIntentionId) this.linkIntention(written, patch.lastIntentionId);
+    return written;
   }
 
   expireStale(ctx: DraftContext, nowMs: number): number {
