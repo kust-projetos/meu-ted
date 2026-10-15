@@ -320,3 +320,84 @@ describe("FIX-melhorias item 2: ?limit= no /rpc/history (default 200, shape inta
     }
   });
 });
+
+describe("FIX-melhorias item 6 (#169 conversa-longa): persist em volume 40+ turnos", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("45 turnos (90 msgs) persistem e o history serve tudo sob o default; ?limit= degrada graciosamente", async () => {
+    // Somente teste: sem paginação além do item 2 — o default 200 cobre a
+    // conversa longa inteira; o slice é ordenado e o shape não muda.
+    const persisted: UIMessage[] = [];
+    const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent & {
+      messages: UIMessage[];
+      persistMessages: (msgs: UIMessage[]) => Promise<void>;
+    };
+    agent.messages = persisted;
+    agent.persistMessages = vi.fn(async (msgs: UIMessage[]) => {
+      persisted.push(...msgs);
+    });
+    Object.defineProperty(agent, "state", {
+      value: { storage: {} },
+      writable: true,
+      configurable: true,
+    });
+
+    const TURNS = 45;
+    const base = Date.parse("2026-10-01T10:00:00.000Z");
+    const batch: UIMessage[] = [];
+    for (let i = 0; i < TURNS; i += 1) {
+      const stamp = new Date(base + i * 60_000).toISOString();
+      const intentionId = `vol-turn-${i}`;
+      batch.push({
+        id: `vol-user-${i}`,
+        role: "user",
+        parts: [{ type: "text", text: `pergunta volume ${i}` }],
+        metadata: { actorId: "actor-169", workspaceId: "workspace-169", createdAt: stamp, intentionId },
+      } as unknown as UIMessage);
+      batch.push({
+        id: `vol-asst-${i}`,
+        role: "assistant",
+        parts: [{ type: "text", text: `resposta volume ${i}` }],
+        metadata: { actorId: "ted", workspaceId: "workspace-169", createdAt: stamp, intentionId },
+      } as unknown as UIMessage);
+    }
+    await agent.persistMessages(batch);
+    expect(persisted).toHaveLength(TURNS * 2);
+
+    // History completo sob o default: 90 itens ordenados, identidade preservada.
+    const full = await agent.fetch(historyReq());
+    expect(full.status).toBe(200);
+    const fullData = (await full.json()) as {
+      items: Array<{ id: string; intentionId?: string }>;
+      total: number;
+    };
+    expect(fullData.items).toHaveLength(TURNS * 2);
+    expect(fullData.total).toBe(TURNS * 2);
+    expect(fullData.items[0]!.id).toBe("vol-user-0");
+    expect(fullData.items[fullData.items.length - 1]!.id).toBe(`vol-asst-${TURNS - 1}`);
+    expect(
+      fullData.items.filter((i) => i.intentionId === `vol-turn-${TURNS - 1}`).map((i) => i.id).sort(),
+    ).toEqual([`vol-asst-${TURNS - 1}`, `vol-user-${TURNS - 1}`]);
+
+    // Degradação graciosa: ?limit=50 pagina os mais antigos primeiro, sem erro.
+    const pagedReq = new Request("https://agent.test.local/rpc/history?limit=50", {
+      method: "GET",
+      headers: {
+        "x-agent-actor": "actor-169",
+        "x-agent-workspace": "workspace-169",
+      },
+    });
+    const paged = await agent.fetch(pagedReq);
+    expect(paged.status).toBe(200);
+    const pagedData = (await paged.json()) as {
+      items: Array<{ id: string }>;
+      total: number;
+    };
+    expect(pagedData.items).toHaveLength(50);
+    expect(pagedData.total).toBe(50);
+    expect(pagedData.items[0]!.id).toBe("vol-user-0");
+    expect(pagedData.items[49]!.id).toBe("vol-asst-24");
+  });
+});
