@@ -146,13 +146,20 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
   // (preferido) ou texto novo desde o início do turno — nunca o chat
   // inteiro, cujos valores financeiros (ex. "R$ 500") gerariam falso
   // INCONCLUSIVE.
-  type TurnEvidence = { turnText?: string; turnError?: string | null };
-  const failOrSkip = async (page: Page, context: string, failMessage: string, evidence?: TurnEvidence): Promise<never> => {
+  type TurnEvidence = { turnText?: string | null; turnError?: string | null };
+  const failOrSkip = async (_page: Page, context: string, failMessage: string, evidence?: TurnEvidence): Promise<never> => {
     if (evidence?.turnError) {
       test.info().annotations.push({ type: context, description: `INCONCLUSIVE (turno com erro estruturado: ${evidence.turnError}): ${failMessage}` });
       test.skip(true, `INCONCLUSIVE (sem provider/relay/modelo autorizado) em ${context}: ${failMessage}`);
     }
-    const text = evidence?.turnText ?? await dialogText(page).catch(() => "");
+    // Disciplina do turno: SOMENTE o sufixo do turno corrente classifica
+    // SKIP. Sufixo ausente (snapshot não-prefixo) FALHA fechado com
+    // diagnóstico de reidratação — nunca lê o chat inteiro, cujo conteúdo
+    // histórico produziria SKIP INCONCLUSIVE ou PASS indevido.
+    const text = evidence?.turnText;
+    if (text == null) {
+      throw new Error(`${failMessage} (reidratação: snapshot do turno não é prefixo do texto atual — sufixo indisponível)`);
+    }
     if (PROVIDER_DOWN_RE.test(text)) {
       test.info().annotations.push({ type: context, description: `INCONCLUSIVE (sem provider/relay/modelo autorizado): ${failMessage}` });
       test.skip(true, `INCONCLUSIVE (sem provider/relay/modelo autorizado) em ${context}: ${failMessage}`);
@@ -161,9 +168,12 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
   };
 
   // Texto novo do chat desde um snapshot anterior (vincula pergunta/resposta
-  // ao turno corrente, excluindo mensagens anteriores).
-  const suffixText = (full: string, before: string): string =>
-    full.length >= before.length && full.startsWith(before) ? full.slice(before.length) : full;
+  // ao turno corrente, excluindo mensagens anteriores). Fail-closed: se o
+  // snapshot NÃO for prefixo do texto atual (reidratação/reload/race),
+  // devolve null — nunca o chat inteiro, que admitiria pergunta histórica
+  // (falso-positivo) ou texto de provider histórico (falso INCONCLUSIVE).
+  const suffixText = (full: string, before: string): string | null =>
+    full.length >= before.length && full.startsWith(before) ? full.slice(before.length) : null;
 
   // Erro estruturado da resposta de um turno de chat (HTTP >= 400, status
   // failed, ou campo error/code) — null quando o turno respondeu sem erro.
@@ -339,7 +349,12 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // (mensagens anteriores a T2 excluídas). A pergunta deve estar DENTRO
     // deste sufixo — casar no diálogo inteiro permitiria reusar pergunta de
     // turno anterior (falso-positivo).
-    const t2Question = suffixText(await dialogText(page), preT2);
+    const t2Question = suffixText(await dialogText(page).catch(() => ""), preT2);
+    if (t2Question === null) {
+      await failOrSkip(page, "conv-t2",
+        "reidratação T2: snapshot preT2 não é prefixo do texto atual — pergunta histórica não vale",
+        t2Evidence);
+    }
     if (!/qual\s+(a\s+)?categoria/i.test(t2Question)) {
       await failOrSkip(page, "conv-t2",
         "pergunta de categoria ausente no sufixo do turno T2 (diálogo inteiro não vale)",
@@ -368,9 +383,10 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
       await expect(card.getByText(MARK, { exact: false })).toBeVisible({ timeout: 30000 });
     } catch {
       const afterText = suffixText(await dialogText(page).catch(() => ""), preT3);
-      const sameQuestion = /qual\s+(a\s+)?categoria/i.test(afterText) &&
+      const afterTextForMatch = afterText ?? "";
+      const sameQuestion = /qual\s+(a\s+)?categoria/i.test(afterTextForMatch) &&
         t2Question.split(/qual\s+(a\s+)?categoria/i)[1]?.slice(0, 80) ===
-        afterText.split(/qual\s+(a\s+)?categoria/i)[1]?.slice(0, 80);
+        afterTextForMatch.split(/qual\s+(a\s+)?categoria/i)[1]?.slice(0, 80);
       await failOrSkip(page, "conv-t3",
         sameQuestion
           ? `TED repetiu a MESMA pergunta de categoria após a resposta curta "${pick.short}" (loop) — card ted-op-${t3opId} ausente`
