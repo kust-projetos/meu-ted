@@ -14,7 +14,9 @@
  * rolled back, previously-committed transactions stay committed. What the
  * fault CANNOT simulate (documented per scenario) is client-side amnesia,
  * which is instead simulated by rebuilding the undo service with a fresh
- * `undone` set before replay (= a new process after the crash).
+ * instance before replay (= a new process after the crash; FIX-188: the
+ * service keeps no in-memory consumed set — the tombstoned row is the
+ * durable record, so a fresh instance converges via the row guard).
  *
  * THE 5 CRASH POINTS (SPEC §12.F2):
  *   P1 — before the financial reversal (no statement ran);
