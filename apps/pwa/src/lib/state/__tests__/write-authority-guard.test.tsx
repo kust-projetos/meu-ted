@@ -11,6 +11,7 @@ import {
   setOfflineWorkspaceId,
 } from "@/lib/auth/offline-identity";
 import { writeV3Snapshot } from "../snapshot-db";
+import { setActiveWorkspaceId } from "@/lib/api/client";
 import type { Account, Payable, Transaction } from "@/lib/state/types";
 
 /**
@@ -116,6 +117,10 @@ beforeEach(async () => {
     if (db.name) indexedDB.deleteDatabase(db.name);
   }
   vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_API_BASE_URL", "http://localhost:3001");
+  // FIX-168: live I/O requires an active workspace header alongside the
+  // session authority — established here so each test isolates exactly the
+  // authority variable it transitions.
+  setActiveWorkspaceId(WS_UUID);
 });
 
 afterEach(() => {

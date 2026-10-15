@@ -3,7 +3,7 @@ import { useLayoutEffect, useRef } from "react";
 import { renderHook, act, waitFor, render, screen, fireEvent } from "@/lib/test-utils";
 import { AppStateProvider, useAppState } from "../app-state-context";
 import { WriteErrorBanner } from "@/components/WriteErrorBanner";
-import { ApiError } from "@/lib/api/client";
+import { ApiError, setActiveWorkspaceId } from "@/lib/api/client";
 import * as endpoints from "@/lib/api/endpoints";
 import { setOfflineSubjectId } from "@/lib/auth/offline-subject";
 import {
@@ -68,6 +68,8 @@ function apiReady() {
   // V41C FIX 1: live bootstrap requires a probe-confirmed session.
   setSessionStatus({ status: "authenticated", user: { userId: "test-user" } });
   setOfflineSubjectId("66666666-7777-4888-8999-aaaaaaaaaaaa");
+  // FIX-168: writes additionally require an active workspace header.
+  setActiveWorkspaceId("test-workspace-1");
 }
 
 const TX = {
