@@ -11,8 +11,9 @@
  *  categoryId == categoria de T3) + T4 negação num SEGUNDO draft
  *  ("não confirmo" => zero escrita nova, contagem segue 1) + T5b reload
  *  (bolhas do draft original persistem) + T6 desfazer via TED (extrato
- *  atualizado, undo vinculado ao TX correto). Limpeza verificada no fim
- *  (zero resíduo "Teste E2E conversa", DELETE/deactivate com Idempotency-Key).
+ *  atualizado, undo vinculado ao TX correto). Limpeza idempotente em
+ *  finally (zero resíduo RUN_ID desta execução mesmo em falha/skip,
+ *  DELETE/deactivate com Idempotency-Key, verificada).
  *
  * Sem provider/relay/modelo autorizado o teste faz SKIP com motivo
  * INCONCLUSIVE — nunca PASS. Se o fluxo mesmo-draft não progredir
@@ -22,7 +23,7 @@
  * Todos os writes levam o marker do RUN_ID para identificação/limpeza.
  */
 import { test, expect, type Page } from "@playwright/test";
-import { validateNoHistoricReuse } from "../support/live-closure-guards";
+import { validateNoHistoricReuse, validateReceiptBinding } from "../support/live-closure-guards";
 
 const LIVE = process.env.PWA_LIVE_E2E === "1";
 const EMAIL = process.env.PWA_LIVE_ADMIN_EMAIL || "";
@@ -34,11 +35,12 @@ const MARK = `Teste E2E conversa ${RUN_ID}`;
 const ACCOUNT_NAME = `Conta E2E conversa ${RUN_ID}`;
 const ACTIVE_WS = "550e8400-e29b-41d4-a716-446655440000"; // Test Family
 
-// Sinais de provider/relay/modelo indisponível no texto do chat — qualquer
-// um deles transforma uma falha de progresso em SKIP INCONCLUSIVE (nunca
-// PASS, nunca FAIL mascarado de problema de fluxo).
+// Sinais de provider/relay/modelo indisponível — avaliados SOMENTE no texto
+// do turno corrente (ou no erro estruturado da resposta do turno), nunca no
+// chat inteiro: padrões numéricos genéricos (ex. \b5\d\d\b, que casa com
+// "R$ 500" de um grounding válido) são proibidos aqui.
 const PROVIDER_DOWN_RE =
-  /indispon[íi]vel|n[ãa]o autorizado|unauthorized|forbidden|\b401\b|\b429\b|rate.?limit|limite de (uso|cota|requisi|token)|tente (mais tarde|novamente)|provedor|relay|modelo .* (falhou|erro|indispon[íi]vel)|(servidor|serviço) .* (falhou|erro)|erro (interno|do servidor)|\b5\d\d\b/i;
+  /indispon[íi]vel|n[ãa]o autorizado|unauthorized|forbidden|\b401\b|\b429\b|rate.?limit|limite de (uso|cota|requisi|token)|tente (mais tarde|novamente)|provedor|relay|modelo .* (falhou|erro|indispon[íi]vel)|(servidor|serviço) .* (falhou|erro)|erro (interno|do servidor)/i;
 
 test.describe.configure({ mode: "serial" });
 
@@ -137,14 +139,44 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
 
   // Falha de progresso: SKIP INCONCLUSIVE quando há sinal de provider/
   // relay/modelo indisponível; FAIL explícito caso contrário (o fluxo
-  // mesmo-draft não progrediu — nunca PASS vacilante).
-  const failOrSkip = async (page: Page, context: string, failMessage: string): Promise<never> => {
-    const text = await dialogText(page).catch(() => "");
+  // mesmo-draft não progrediu — nunca PASS vacilante). A evidência é
+  // SEMPRE do turno corrente: erro estruturado da resposta do turno
+  // (preferido) ou texto novo desde o início do turno — nunca o chat
+  // inteiro, cujos valores financeiros (ex. "R$ 500") gerariam falso
+  // INCONCLUSIVE.
+  type TurnEvidence = { turnText?: string; turnError?: string | null };
+  const failOrSkip = async (page: Page, context: string, failMessage: string, evidence?: TurnEvidence): Promise<never> => {
+    if (evidence?.turnError) {
+      test.info().annotations.push({ type: context, description: `INCONCLUSIVE (turno com erro estruturado: ${evidence.turnError}): ${failMessage}` });
+      test.skip(true, `INCONCLUSIVE (sem provider/relay/modelo autorizado) em ${context}: ${failMessage}`);
+    }
+    const text = evidence?.turnText ?? await dialogText(page).catch(() => "");
     if (PROVIDER_DOWN_RE.test(text)) {
       test.info().annotations.push({ type: context, description: `INCONCLUSIVE (sem provider/relay/modelo autorizado): ${failMessage}` });
       test.skip(true, `INCONCLUSIVE (sem provider/relay/modelo autorizado) em ${context}: ${failMessage}`);
     }
     throw new Error(failMessage);
+  };
+
+  // Texto novo do chat desde um snapshot anterior (vincula pergunta/resposta
+  // ao turno corrente, excluindo mensagens anteriores).
+  const suffixText = (full: string, before: string): string =>
+    full.length >= before.length && full.startsWith(before) ? full.slice(before.length) : full;
+
+  // Erro estruturado da resposta de um turno de chat (HTTP >= 400, status
+  // failed, ou campo error/code) — null quando o turno respondeu sem erro.
+  const readChatTurnError = async (resp: Awaited<ReturnType<Page["waitForResponse"]>>): Promise<string | null> => {
+    const status = resp.status();
+    const body = await resp.json().catch(() => ({})) as {
+      status?: unknown; error?: unknown; code?: unknown; message?: unknown;
+    };
+    if (status >= 400) return `chat turn HTTP ${status} ${String(body.code ?? body.error ?? body.message ?? "")}`.trim();
+    if (body.status === "failed") return `chat turn status=failed ${String(body.code ?? body.message ?? "")}`.trim();
+    if (typeof body.error === "string" && body.error) return `chat turn error: ${body.error}`;
+    if (typeof body.code === "string" && /unauthor|forbidden|rate|limit|unavailable|5\d\d/i.test(body.code)) {
+      return `chat turn code: ${body.code}`;
+    }
+    return null;
   };
 
   const chatPath = (url: string) => {
@@ -174,7 +206,34 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
 
   test("conversa longa mesmo-draft: leitura, proposta, categoria, confirmação, negação, reload, undo", async ({ page }) => {
     test.setTimeout(600_000);
+    let testAccountId = "";
+    let flowOk = false;
 
+    // Limpeza idempotente dos resíduos DESTA execução (marker RUN_ID):
+    // apaga TXs marcados (best-effort por item, 404 tolerado), desativa a
+    // conta criada e verifica resíduo zero. Roda no finally mesmo em
+    // falha/skip; no caminho de falha só reporta (não mascara o erro raiz).
+    const cleanupRun = async (phase: string) => {
+      const marked = await readTxByMark(page).catch(() => null);
+      for (const t of marked ?? []) {
+        await apiJson(page, "DELETE", `/api/backend/transactions/${t.id}`, undefined, `conv-clean-${RUN_ID}-${t.id}`).catch(() => ({}));
+      }
+      if (testAccountId) {
+        await apiJson(page, "POST", `/api/backend/accounts/${testAccountId}/deactivate`, {}, `conv-deact-${RUN_ID}`).catch(() => ({}));
+      }
+      const check = await readTxByMark(page).catch(() => null);
+      expect(check, `limpeza ${phase}: ledger ilegível`).not.toBeNull();
+      expect(check!, `limpeza ${phase}: resíduo desta execução: ${JSON.stringify(check)}`).toHaveLength(0);
+      if (testAccountId) {
+        const accCheck = await apiJson(page, "GET", "/api/backend/accounts").catch(() => null) as {
+          status: number; body: { items?: { id?: unknown; name?: unknown; isActive?: unknown }[] };
+        } | null;
+        const ghost = accCheck?.body.items?.find((a) => a.name === ACCOUNT_NAME && a.isActive !== false);
+        expect(ghost, `limpeza ${phase}: conta desta execução segue ativa`).toBeUndefined();
+      }
+    };
+
+    try {
     // ── LOGIN + workspace ──────────────────────────────────────────
     await page.goto("/", { waitUntil: "domcontentloaded" });
     const emailInput = page.locator("#email").or(page.getByLabel("E-mail")).or(page.getByPlaceholder(/email/i));
@@ -192,7 +251,7 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     const acc = await apiJson(page, "POST", "/api/backend/accounts",
       { name: ACCOUNT_NAME, kind: "bank", initialBalanceCents: 10000 }, `conv-acc-${RUN_ID}`);
     expect(acc.status, `POST /accounts ${JSON.stringify(acc.body)}`).toBeLessThan(300);
-    const testAccountId = (acc.body as { id?: unknown }).id as string;
+    testAccountId = (acc.body as { id?: unknown }).id as string;
     expect(typeof testAccountId).toBe("string");
     const defs = await apiJson(page, "POST", "/api/backend/categories/apply-defaults", {}, `conv-cat-${RUN_ID}`);
     expect(defs.status).toBe(200);
@@ -226,11 +285,18 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     const dialog = await openTed(page);
 
     // ── T1: leitura com grounding ──────────────────────────────────
+    const preT1 = await dialogText(page).catch(() => "");
+    const chat1 = page.waitForResponse(
+      (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 200_000 });
     await sendTedMessage(page, dialog, "Qual o saldo total das minhas contas hoje? Responda citando o valor em reais.");
     try {
       await expect(dialog.getByText(/R\$\s*\d/).first()).toBeVisible({ timeout: 180_000 });
     } catch {
-      await failOrSkip(page, "conv-t1", "T1 sem grounding (saldo em R$ ausente após 180s)");
+      const t1Resp = await chat1.then((r) => r).catch(() => null);
+      const t1Error = t1Resp ? await readChatTurnError(t1Resp) : null;
+      const t1Text = suffixText(await dialogText(page).catch(() => ""), preT1);
+      await failOrSkip(page, "conv-t1", "T1 sem grounding (saldo em R$ ausente após 180s)",
+        { turnText: t1Text, turnError: t1Error });
     }
     await shot(page, "conv-01-leitura");
 
@@ -238,6 +304,9 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // Mesmo-draft: sem categoria informada o TED deve perguntar (INT-12);
     // card direto aqui significaria categorização presumida — FALHA, pois o
     // restante do fluxo prova o caminho pergunta→bare-name→card (INT-13).
+    const preT2 = await dialogText(page).catch(() => "");
+    const chat2 = page.waitForResponse(
+      (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 200_000 });
     await sendTedMessage(page, dialog, T2_TEXT);
     const progress2 = await page.waitForFunction(() => {
       const dlg = document.querySelector("[data-testid=ted-chat]");
@@ -246,28 +315,39 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
       if (/qual\s+(a\s+)?categoria/i.test(dlg.textContent || "")) return "question";
       if (html.includes("ted-approval-item") || html.includes("ted-approval-focused")) return "card";
       return null;
-    }, { timeout: 180_000 }).then((h) => h.jsonValue()).catch(() => "timeout") as string;
+    }, undefined, { timeout: 180_000 }).then((h) => h.jsonValue()).catch(() => "timeout") as string;
     test.info().annotations.push({ type: "conv-t2", description: `progresso T2: ${progress2}` });
+    const t2Resp = await chat2.then((r) => r).catch(() => null);
+    const t2Evidence = {
+      turnText: suffixText(await dialogText(page).catch(() => ""), preT2),
+      turnError: t2Resp ? await readChatTurnError(t2Resp) : null,
+    };
     if (progress2 === "timeout") {
-      await failOrSkip(page, "conv-t2", "TED não progrediu após proposta (nem pergunta de categoria, nem card)");
+      await failOrSkip(page, "conv-t2", "TED não progrediu após proposta (nem pergunta de categoria, nem card)", t2Evidence);
     }
     if (progress2 !== "question") {
       await failOrSkip(page, "conv-t2",
-        `T2 produziu card direto em vez da pergunta de categoria (progresso: ${progress2}) — mesmo-draft exige o caminho pergunta→bare-name (INT-12/INT-13)`);
+        `T2 produziu card direto em vez da pergunta de categoria (progresso: ${progress2}) — mesmo-draft exige o caminho pergunta→bare-name (INT-12/INT-13)`,
+        t2Evidence);
     }
-    const t2Question = await dialogText(page);
+    // Pergunta vinculada ao turno T2: só o texto novo desde o envio de T2
+    // (mensagens anteriores a T2 excluídas).
+    const t2Question = suffixText(await dialogText(page), preT2);
     await shot(page, "conv-02-proposta");
 
     // ── T3: resposta curta de categoria — EXPECT DURO no card ───────
     // Binding autoritativo: o id da pendingOperation do TURNO T3 (nunca o
     // primeiro card com MARK, nunca stale de outro run). Loop de pergunta
     // idêntica FALHA em vez de passar adiante.
+    const preT3 = await dialogText(page).catch(() => "");
     const chat3 = page.waitForResponse(
       (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 120_000 });
     await sendTedMessage(page, dialog, pick.short);
-    const t3opId = await readPendingOpId(await chat3);
+    const t3Resp = await chat3;
+    const t3opId = await readPendingOpId(t3Resp);
     if (!t3opId) {
-      await failOrSkip(page, "conv-t3", "turno T3 não emitiu pendingOperation — draft original não progrediu");
+      await failOrSkip(page, "conv-t3", "turno T3 não emitiu pendingOperation — draft original não progrediu",
+        { turnText: suffixText(await dialogText(page).catch(() => ""), preT3), turnError: await readChatTurnError(t3Resp) });
     }
     validateNoHistoricReuse([t3opId]);
     const card = dialog.locator(`[id="ted-op-${t3opId}"]`);
@@ -275,14 +355,15 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
       await expect(card).toBeVisible({ timeout: 180_000 });
       await expect(card.getByText(MARK, { exact: false })).toBeVisible({ timeout: 30000 });
     } catch {
-      const afterText = await dialogText(page).catch(() => "");
+      const afterText = suffixText(await dialogText(page).catch(() => ""), preT3);
       const sameQuestion = /qual\s+(a\s+)?categoria/i.test(afterText) &&
         t2Question.split(/qual\s+(a\s+)?categoria/i)[1]?.slice(0, 80) ===
         afterText.split(/qual\s+(a\s+)?categoria/i)[1]?.slice(0, 80);
       await failOrSkip(page, "conv-t3",
         sameQuestion
           ? `TED repetiu a MESMA pergunta de categoria após a resposta curta "${pick.short}" (loop) — card ted-op-${t3opId} ausente`
-          : `card do draft original ausente após resposta curta "${pick.short}" (ted-op-${t3opId} sem MARK visível em 180s)`);
+          : `card do draft original ausente após resposta curta "${pick.short}" (ted-op-${t3opId} sem MARK visível em 180s)`,
+        { turnText: afterText, turnError: await readChatTurnError(t3Resp) });
     }
     test.info().annotations.push({ type: "conv-t3", description: `card mesmo-draft visível: ted-op-${t3opId}` });
     await shot(page, "conv-03-categoria");
@@ -307,11 +388,10 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
       receipt?: { status?: unknown; operationId?: unknown; mutationId?: unknown; entity?: { type?: unknown; id?: unknown } };
     };
     expect(decisionBody.status).toBe("succeeded");
-    if (decisionBody.operationId !== undefined) expect(decisionBody.operationId).toBe(operationId);
-    if (decisionBody.receipt?.operationId !== undefined) expect(decisionBody.receipt.operationId).toBe(operationId);
-    if (decisionBody.receipt?.entity?.type !== undefined) expect(decisionBody.receipt.entity.type).toBe("transaction");
-    const tedTxId = decisionBody.receipt?.entity?.id as string;
-    expect(typeof tedTxId, "recibo sem receipt.entity.id").toBe("string");
+    // Recibo estrito e incondicional: operationId + status succeeded +
+    // receipt.operationId + receipt.status + receipt.mutationId +
+    // entity {type:'transaction', id} — via validateReceiptBinding.
+    const tedTxId = validateReceiptBinding(decisionBody, operationId);
     validateNoHistoricReuse([tedTxId, operationId]);
     // Exatamente UM lançamento com o marker — e é o do draft original.
     const marked = await readTxByMark(page);
@@ -327,12 +407,15 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // A negação roda DEPOIS da confirmação do draft original (negar o
     // próprio card do T3 o cancelaria e inviabilizaria o mesmo-draft).
     // Jornada negar→cancelar (INT-22) num draft próprio: zero escrita nova.
+    const preT4 = await dialogText(page).catch(() => "");
     const chat4 = page.waitForResponse(
       (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 120_000 });
     await sendTedMessage(page, dialog, T4_TEXT);
-    const t4opId = await readPendingOpId(await chat4);
+    const t4Resp = await chat4;
+    const t4opId = await readPendingOpId(t4Resp);
     if (!t4opId) {
-      await failOrSkip(page, "conv-t4", "turno T4 não emitiu pendingOperation — draft da negação não progrediu");
+      await failOrSkip(page, "conv-t4", "turno T4 não emitiu pendingOperation — draft da negação não progrediu",
+        { turnText: suffixText(await dialogText(page).catch(() => ""), preT4), turnError: await readChatTurnError(t4Resp) });
     }
     validateNoHistoricReuse([t4opId]);
     expect(t4opId, "draft da negação reutilizou o operationId do draft original").not.toBe(operationId);
@@ -340,14 +423,42 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     try {
       await expect(card4).toBeVisible({ timeout: 180_000 });
     } catch {
-      await failOrSkip(page, "conv-t4", `card do draft da negação ausente (ted-op-${t4opId})`);
+      await failOrSkip(page, "conv-t4", `card do draft da negação ausente (ted-op-${t4opId})`,
+        { turnText: suffixText(await dialogText(page).catch(() => ""), preT4), turnError: await readChatTurnError(t4Resp) });
     }
     const before = await countTxByMark(page);
     expect(before, "contagem pré-negação divergiu do TX do draft original").toBe(1);
+    const denyChat = page.waitForResponse(
+      (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 120_000 });
     await sendTedMessage(page, dialog, "não confirmo");
+    const denyResp = await denyChat;
+    const denyBody = await denyResp.json().catch(() => ({})) as {
+      status?: unknown; output?: unknown;
+      pendingOperation?: { id?: unknown; status?: unknown };
+    };
+    // Estado terminal cancelled do draft da negação: a resposta do turno de
+    // negação nomeia o t4opId com status cancelled (quando o turno
+    // materializa pendingOperation) ou traz a cópia determinística de
+    // cancelamento ("Operação cancelada…" — renderMutationResult('cancelled'),
+    // único caminho que a emite). Sem uma dessas evidências, FALHA.
+    const denyOp = denyBody.pendingOperation;
+    if (denyOp?.id === t4opId) {
+      expect(denyOp.status, `draft da negação ${t4opId} sem estado terminal cancelled`).toBe("cancelled");
+    } else {
+      expect(String(denyBody.output ?? ""), `negação sem evidência terminal cancelled para ${t4opId}`).toMatch(/opera[çc][aã]o cancelada/i);
+    }
+    validateNoHistoricReuse([JSON.stringify(denyBody).slice(0, 4000)]);
     await page.waitForTimeout(25000); // dá tempo a qualquer execução indevida
     const afterDeny = await countTxByMark(page);
     expect(afterDeny, "negação executou mutação contra vontade expressa").toBe(before);
+    // Identidade do TX original revalidada após a negação: o único marcado
+    // segue sendo o do recibo do draft original (id + descrição + categoria).
+    const afterDenyMarked = await readTxByMark(page);
+    expect(afterDenyMarked, "ledger ilegível após negação").not.toBeNull();
+    expect(afterDenyMarked!.length, "negação alterou o conjunto de TXs marcados").toBe(1);
+    expect(afterDenyMarked![0]!.id, "negação trocou o TX do draft original").toBe(tedTxId);
+    expect(afterDenyMarked![0]!.description).toContain(DESC);
+    expect(afterDenyMarked![0]!.categoryId, "negação alterou a categoria do TX original").toBe(expectedCategoryId);
     await shot(page, "conv-04-negacao");
 
     // ── T5b: RELOAD — histórico persiste (user + TED, sem sumiço) ────
@@ -381,21 +492,19 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     await shot(page, "conv-06b-undo-ok");
 
     // ── LIMPEZA verificada (Idempotency-Key em cada escrita) ──────────
-    const remaining = await countTxByMark(page);
-    if (remaining > 0) {
-      const list = await apiJson(page, "GET", "/api/backend/transactions?limit=100");
-      const items = ((list.body as { items?: { id?: unknown; description?: unknown }[] }).items ?? [])
-        .filter((t) => typeof t.description === "string" && t.description.includes(MARK));
-      for (const item of items) {
-        await apiJson(page, "DELETE", `/api/backend/transactions/${String(item.id)}`, undefined, `conv-clean-${RUN_ID}-${String(item.id)}`);
+    // Idempotente e verificada (resíduo zero desta execução + conta
+    // desativada); o finally abaixo repete a garantia em falha/skip.
+    await cleanupRun("final");
+    await shot(page, "conv-07-limpeza");
+    flowOk = true;
+    } finally {
+      if (!flowOk) {
+        await cleanupRun("finally").catch((e) => {
+          test.info().annotations.push({ type: "conv-cleanup", description: `limpeza pós-falha/skip incompleta: ${(e as Error).message}` });
+        });
+      } else {
+        await cleanupRun("finally");
       }
     }
-    const deact = await apiJson(page, "POST", `/api/backend/accounts/${testAccountId}/deactivate`, {}, `conv-deact-${RUN_ID}`);
-    expect(deact.status).toBeLessThan(300);
-    const final = await apiJson(page, "GET", "/api/backend/transactions?limit=100");
-    const leftovers = ((final.body as { items?: { description?: unknown }[] }).items ?? [])
-      .filter((t) => typeof t.description === "string" && t.description.includes("Teste E2E conversa"));
-    expect(leftovers, `resíduo de conversa: ${JSON.stringify(leftovers)}`).toHaveLength(0);
-    await shot(page, "conv-07-limpeza");
   });
 });
