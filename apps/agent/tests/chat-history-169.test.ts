@@ -329,7 +329,7 @@ describe("FIX-melhorias item 2: ?limit= no /rpc/history (default 200, shape inta
       },
     });
 
-  it("?limit=2 pagina os mais antigos primeiro, sem mudar o shape {items, total}", async () => {
+  it("?limit=2 pagina os MAIS RECENTES primeiro, em ordem cronológica, sem mudar o shape {items, total}", async () => {
     const { agent } = createTestAgent();
     await seedPairs(agent, 3);
     const hist = await agent.fetch(historyReqWith("?limit=2"));
@@ -342,18 +342,43 @@ describe("FIX-melhorias item 2: ?limit= no /rpc/history (default 200, shape inta
     expect(typeof data.total).toBe("number");
     expect(data.items).toHaveLength(2);
     expect(data.total).toBe(2);
-    expect(data.items[0]!.id).toBe("seed-user-0");
-    expect(data.items[1]!.id).toBe("seed-asst-0");
+    // Janela mais recente (par 2), preservando a ordem cronológica user→asst.
+    expect(data.items[0]!.id).toBe("seed-user-2");
+    expect(data.items[1]!.id).toBe("seed-asst-2");
   });
 
-  it("sem limit retorna tudo (default alto cobre conversa longa)", async () => {
+  it("250 msgs sem limit: default 200 serve a janela MAIS RECENTE em ordem cronológica", async () => {
     const { agent } = createTestAgent();
-    await seedPairs(agent, 3);
+    await seedPairs(agent, 125);
     const hist = await agent.fetch(historyReqWith(""));
     expect(hist.status).toBe(200);
     const data = (await hist.json()) as { items: Array<{ id: string }>; total: number };
-    expect(data.items).toHaveLength(6);
-    expect(data.total).toBe(6);
+    expect(data.items).toHaveLength(200);
+    expect(data.total).toBe(200);
+    // Últimas 200 de 250 msgs = pares 25..124, ordem cronológica preservada.
+    expect(data.items[0]!.id).toBe("seed-user-25");
+    expect(data.items[199]!.id).toBe("seed-asst-124");
+  });
+
+  it("1050 msgs: teto 1000 serve a janela MAIS RECENTE (?limit= gigante respeita o teto; sem limit vale o default 200)", async () => {
+    const { agent } = createTestAgent();
+    await seedPairs(agent, 525);
+    // ?limit= além do teto: capa em 1000, janela mais recente.
+    const hist = await agent.fetch(historyReqWith("?limit=2000"));
+    expect(hist.status).toBe(200);
+    const data = (await hist.json()) as { items: Array<{ id: string }>; total: number };
+    expect(data.items).toHaveLength(1000);
+    expect(data.total).toBe(1000);
+    // Últimas 1000 de 1050 msgs = msgs 50..1049 = pares 25..524.
+    expect(data.items[0]!.id).toBe("seed-user-25");
+    expect(data.items[999]!.id).toBe("seed-asst-524");
+    // Sem limit: default 200, janela mais recente.
+    const histDefault = await agent.fetch(historyReqWith(""));
+    expect(histDefault.status).toBe(200);
+    const dataDefault = (await histDefault.json()) as { items: Array<{ id: string }>; total: number };
+    expect(dataDefault.items).toHaveLength(200);
+    expect(dataDefault.items[0]!.id).toBe("seed-user-425");
+    expect(dataDefault.items[199]!.id).toBe("seed-asst-524");
   });
 
   it("?limit inválido ou <= 0 cai no default (retorna tudo)", async () => {
@@ -429,7 +454,7 @@ describe("FIX-melhorias item 6 (#169 conversa-longa): persist em volume 40+ turn
       fullData.items.filter((i) => i.intentionId === `vol-turn-${TURNS - 1}`).map((i) => i.id).sort(),
     ).toEqual([`vol-asst-${TURNS - 1}`, `vol-user-${TURNS - 1}`]);
 
-    // Degradação graciosa: ?limit=50 pagina os mais antigos primeiro, sem erro.
+    // Degradação graciosa: ?limit=50 pagina a janela MAIS RECENTE, sem erro.
     const pagedReq = new Request("https://agent.test.local/rpc/history?limit=50", {
       method: "GET",
       headers: {
@@ -445,7 +470,8 @@ describe("FIX-melhorias item 6 (#169 conversa-longa): persist em volume 40+ turn
     };
     expect(pagedData.items).toHaveLength(50);
     expect(pagedData.total).toBe(50);
-    expect(pagedData.items[0]!.id).toBe("vol-user-0");
-    expect(pagedData.items[49]!.id).toBe("vol-asst-24");
+    // Últimas 50 de 90 msgs (pares 20..44), ordem cronológica preservada.
+    expect(pagedData.items[0]!.id).toBe("vol-user-20");
+    expect(pagedData.items[49]!.id).toBe("vol-asst-44");
   });
 });
