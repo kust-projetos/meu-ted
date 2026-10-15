@@ -13,8 +13,10 @@
  * Each command invocation stamps exactly one id onto the logical command
  * (caller-provided ids win verbatim) BEFORE the first attempt, and the
  * guarded executor reuses that SAME id on automatic retries after network
- * drops, timeouts and 5xx. Definitive 4xx rejections — including the 409
- * replay signal — are never blind-retried: they propagate to the existing
+ * drops, timeouts, 5xx and `idempotency.in_progress` (unknown outcome, same
+ * key replay). Definitive 4xx rejections — including every other 409
+ * (domain refusals, divergent-payload idempotency conflicts, FIX-184) — are
+ * never blind-retried: they propagate to the existing
  * error handling. A manual retry after an unknown outcome reuses the id by
  * passing it back via the input's `idempotencyKey` (or the trailing
  * `CommandIdOptions` on id-only commands); a retry after a definitive
@@ -37,7 +39,6 @@ import {
   attachCommandId,
   newCommandId,
   isRetryableMutationError,
-  isIdempotencyConflict,
   MAX_COMMAND_ATTEMPTS,
 } from "@/lib/api/command-id";
 
@@ -334,8 +335,9 @@ export interface Commands {
  * V4.1 Task 3.9: the same logical command (already carrying its intent
  * command id — see the `ensureCommandId` / `commandId` bindings in
  * `buildCommands`) is re-attempted on retryable failures (network drop,
- * timeout, 5xx), bounded by MAX_COMMAND_ATTEMPTS. Definitive 4xx
- * rejections and 409 conflicts propagate untouched to the existing error
+ * timeout, 5xx, `idempotency.in_progress` — FIX-184), bounded by
+ * MAX_COMMAND_ATTEMPTS. Definitive 4xx rejections and definitive
+ * idempotency/domain 409 conflicts propagate untouched to the existing error
  * handling — a manual retry after a definitive result is a new intent.
  *
  * Finding 2: the intent's command id is attached to the surfaced error once
@@ -365,7 +367,12 @@ function guarded<T>(
         // there's a pending/incomplete write. The user must retry or cancel.
         // Retryable unknown-outcome failures re-run the SAME command closure,
         // which already carries the intent's command id (no new id minted).
-        if (retriesLeft > 0 && !isIdempotencyConflict(e) && isRetryableMutationError(e)) {
+        // FIX-184: the retry policy is authoritative in
+        // `isRetryableMutationError` — definitive 409s (domain refusals,
+        // divergent-payload idempotency conflicts) are never retryable there,
+        // while `idempotency.in_progress` (unknown outcome) replays the same
+        // key. No separate 409 gate: status alone must never decide.
+        if (retriesLeft > 0 && isRetryableMutationError(e)) {
           return attempt(retriesLeft - 1);
         }
         throw attachCommandId(e, commandId);
