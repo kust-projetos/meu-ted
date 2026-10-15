@@ -13,6 +13,7 @@ import {
   resetSessionStatus,
   setSessionStatus,
 } from "@/lib/auth/session-authority";
+import { setActiveWorkspaceId } from "@/lib/api/client";
 import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 
 function mockTx(id: string) {
@@ -55,6 +56,8 @@ beforeEach(async () => {
   localStorage.setItem("pi-finance:token", "test-token-abc");
   // V41C FIX 1: live bootstrap requires a probe-confirmed session.
   setSessionStatus({ status: "authenticated", user: { userId: "test-user" } });
+  // FIX-168: bootstrap and writes additionally require an active workspace.
+  setActiveWorkspaceId("test-workspace-1");
 });
 
 function mockReads() {

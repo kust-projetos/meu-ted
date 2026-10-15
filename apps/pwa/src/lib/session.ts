@@ -26,6 +26,7 @@ import { clearActiveWorkspacePreference } from "@/lib/auth/active-workspace-pref
 import { deleteV2Snapshot, deleteV3Snapshot } from "@/lib/state/snapshot-db";
 import { clearActiveWorkspaceId } from "@/lib/api/client";
 import { clearAgentSession } from "@/lib/api/agent-auth";
+import { clearAllPendingChatSends } from "@/lib/api/agent-client";
 
 const SNAPSHOT_KEY = "pi-finance:snapshot:v1";
 const PROFILE_KEY = "pi-finance:profile";
@@ -207,6 +208,20 @@ export async function clearSensitiveSession(
     // Phase 3: the snapshot purge always includes the V3 slot, so a
     // workspace switch or logout can never leave identity-keyed data behind.
     tasks.push(deleteV3Snapshot().catch(() => { /* noop */ }));
+  }
+
+  // FIX-P1-SESS #176: âncoras de retry do TED (`ted.pending-send.*`, com e
+  // sem ator) pertencem ao principal/workspace ativos — qualquer teardown
+  // (logout, troca de principal, revogação de acesso/vínculo) as purga para
+  // que a próxima conta nunca reidrate o retry de outra. Chamada sem
+  // teardown (bare `{}`) preserva: purga é teardown, não varredura.
+  // Tradeoff documentado: a troca de workspace (mesmo ator) também purga —
+  // o retry após voltar ao workspace anterior se perde, mas nenhum rascunho
+  // cruza contextos; o reload do mesmo ator (sem teardown) preserva.
+  if (doToken || doOfflineIdentity || doWorkspaceBinding) {
+    tasks.push(
+      Promise.resolve().then(() => { try { clearAllPendingChatSends(); } catch { /* noop */ } }),
+    );
   }
 
   // H-13: THE central agent cleanup — cache + every in-flight agent

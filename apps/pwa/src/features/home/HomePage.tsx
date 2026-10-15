@@ -52,6 +52,16 @@ export default function HomePage({ onNewTransaction }: HomePageProps = {}) {
   const router = useRouter();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
+  // T5.3 (H-14, SPEC §22): real pending-approvals count from the
+  // authoritative Agent listing, scoped to the active workspace. `null`
+  // (unknown/error) keeps the hero indicator hidden — never an invented
+  // number.
+  // FIX-168-R2: o workspace ativo também guarda os reads desta página —
+  // sem workspace, nenhum refresh financeiro dispara (zero I/O).
+  const workspace = useWorkspaceSafe();
+  const hasActiveWorkspace = workspace?.activeWorkspace != null;
+  const pendingOperations = usePendingOperations(workspace?.activeWorkspace?.id ?? null);
+
   // FIX-PWA-HOME-SNAPSHOT-SUMMARY: Home-owned summary recovery. The snapshot
   // StaleBanner owns domain retry via refreshDomains and invokes
   // handleSnapshotSummaryRefresh ONLY after all snapshotted domains go live,
@@ -62,6 +72,7 @@ export default function HomePage({ onNewTransaction }: HomePageProps = {}) {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [summaryRetrying, setSummaryRetrying] = useState(false);
   const handleSnapshotSummaryRefresh = useCallback(async () => {
+    if (!hasActiveWorkspace) return;
     const fn = refreshDashboardSummaryStrict ?? refreshDashboardSummary;
     if (typeof fn !== "function") return;
     setSummaryRetrying(true);
@@ -77,20 +88,14 @@ export default function HomePage({ onNewTransaction }: HomePageProps = {}) {
     } finally {
       setSummaryRetrying(false);
     }
-  }, [refreshDashboardSummary, refreshDashboardSummaryStrict]);
-
-  // T5.3 (H-14, SPEC §22): real pending-approvals count from the
-  // authoritative Agent listing, scoped to the active workspace. `null`
-  // (unknown/error) keeps the hero indicator hidden — never an invented
-  // number.
-  const workspace = useWorkspaceSafe();
-  const pendingOperations = usePendingOperations(workspace?.activeWorkspace?.id ?? null);
+  }, [hasActiveWorkspace, refreshDashboardSummary, refreshDashboardSummaryStrict]);
 
   useEffect(() => {
-    if (!dashboardSummary && refreshDashboardSummary) {
+    // FIX-168-R2: sem workspace ativo, nenhum fetch de resumo (zero I/O).
+    if (!dashboardSummary && hasActiveWorkspace && refreshDashboardSummary) {
       refreshDashboardSummary();
     }
-  }, [dashboardSummary, refreshDashboardSummary]);
+  }, [dashboardSummary, hasActiveWorkspace, refreshDashboardSummary]);
 
   const handleNew = (kind: NewTxKind) => {
     if (onNewTransaction) onNewTransaction(kind);
@@ -138,9 +143,11 @@ export default function HomePage({ onNewTransaction }: HomePageProps = {}) {
 
   // PTR (hook do Coder 2): invalida domínios + resumo do servidor.
   const handleRefresh = useCallback(async () => {
+    // FIX-168-R2: sem workspace ativo, pull-to-refresh não emite I/O.
+    if (!hasActiveWorkspace) return;
     await refreshDomains?.(["accounts", "transactions", "payables", "budgets"]);
     await refreshDashboardSummary?.();
-  }, [refreshDomains, refreshDashboardSummary]);
+  }, [hasActiveWorkspace, refreshDomains, refreshDashboardSummary]);
   const pull = usePullToRefresh({ onRefresh: handleRefresh });
 
   if (loading) {

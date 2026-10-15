@@ -25,7 +25,22 @@ const createSql = () => {
         return [] as T[];
       }
       if (q.startsWith('DELETE FROM cf_ai_chat_agent_messages')) {
-        tables.set('cf_ai_chat_agent_messages', []);
+        // FIX-P1-SESS #177: apagão global proibido — só com predicado por ator.
+        if (!q.includes('WHERE')) throw new Error('unscoped messages delete is forbidden');
+        const actor = bindings[0];
+        tables.set(
+          'cf_ai_chat_agent_messages',
+          tables.get('cf_ai_chat_agent_messages')!.filter((r) => {
+            try {
+              const parsed = JSON.parse(String(r['message'] ?? '{}')) as {
+                metadata?: { actorId?: string };
+              };
+              return parsed.metadata?.actorId !== actor;
+            } catch {
+              return true;
+            }
+          }),
+        );
         return [] as T[];
       }
       if (q.startsWith('INSERT INTO agent_memory')) {
@@ -169,11 +184,24 @@ describe('POST /rpc/session/new — Nova sessão (Part B)', () => {
     expect(res.status).toBe(401);
   });
 
-  it('archives history into the registry and clears the model context', async () => {
+  it('archives history into the registry and clears only the requester context (scoped, #177)', async () => {
     const agent = createAgent(sql);
+    const row = (id: string, actorId: string | undefined, text: string) => ({
+      id,
+      message: JSON.stringify({
+        id,
+        role: 'user',
+        parts: [{ type: 'text', text }],
+        ...(actorId === undefined ? {} : { metadata: { actorId, workspaceId: 'ws-1' } }),
+      }),
+    });
+    sql.tables.set('cf_ai_chat_agent_messages', [
+      row('m-a1', 'actor-1', 'Minha conta principal é o Nubank'),
+      row('m-a2', 'actor-2', 'Extrato do outro membro'),
+    ]);
     agent.messages = [
-      { id: 'm-1', role: 'user', parts: [{ type: 'text', text: 'Minha conta principal é o Nubank' }], metadata: {} },
-      { id: 'm-2', role: 'assistant', parts: [{ type: 'text', text: 'Anotado!' }], metadata: {} },
+      { id: 'm-a1', role: 'user', parts: [{ type: 'text', text: 'Minha conta principal é o Nubank' }], metadata: { actorId: 'actor-1', workspaceId: 'ws-1' } },
+      { id: 'm-2', role: 'assistant', parts: [{ type: 'text', text: 'Anotado!' }], metadata: { actorId: 'ted', workspaceId: 'ws-1' } },
     ];
     const res = await agent.fetch(new Request('https://agent.test/rpc/session/new', { method: 'POST', headers }));
     expect(res.status).toBe(200);
@@ -187,10 +215,12 @@ describe('POST /rpc/session/new — Nova sessão (Part B)', () => {
     expect(body.ok).toBe(true);
     expect(body.messageCount).toBe(2);
     expect(body.summarized).toBe(true);
-    // SDK context cleared, storage rows deleted.
-    expect(agent.messages).toHaveLength(0);
-    expect(sql.tables.get('cf_ai_chat_agent_messages')).toHaveLength(0);
-    expect(sql.queries.some((q) => q.startsWith('DELETE FROM cf_ai_chat_agent_messages'))).toBe(true);
+    // Scoped clearing: only actor-1 rows leave; actor-2 rows survive.
+    expect(agent.messages.map((m) => m['id'])).toEqual(['m-2']);
+    expect(sql.tables.get('cf_ai_chat_agent_messages')!.map((r) => r['id'])).toEqual(['m-a2']);
+    const deletes = sql.queries.filter((q) => q.startsWith('DELETE FROM cf_ai_chat_agent_messages'));
+    expect(deletes.length).toBeGreaterThan(0);
+    for (const q of deletes) expect(q).toContain('WHERE');
     // Registry holds the archived session with its summary (plus the fresh one).
     const sessions = sql.tables.get('agent_sessions')!;
     expect(sessions).toHaveLength(2);

@@ -386,6 +386,48 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
           return;
         }
 
+        // FIX-168 (P0 #168): archiving the last active workspace leaves the
+        // session with no X-Workspace-Id header. Session-scoped workspace
+        // management must stay reachable: creation needs only the session
+        // (the route handler authenticates it again), and restore is
+        // authorized here by session + target + owner — the same membership
+        // check the header path performs. Every other headerless route
+        // (financial I/O, rename/archive/members/invites/leave) keeps the
+        // workspace_required refusal below: no implicit workspace default,
+        // no absent-workspace substitution, no financial-guard relaxation.
+        const path = request.url.split('?')[0] ?? request.url;
+        if (request.method === 'POST' && path === '/workspaces') {
+          return;
+        }
+        const restoreTarget = request.method === 'POST' ? /^\/workspaces\/([^/]+)\/restore$/.exec(path) : null;
+        if (restoreTarget?.[1]) {
+          let targetId: string;
+          try {
+            targetId = decodeURIComponent(restoreTarget[1]);
+          } catch {
+            // Malformed escaping: let the route handler answer 400 through
+            // its own param validation instead of 500ing here.
+            return;
+          }
+          if (workspaceAccess) {
+            const access = await workspaceAccess.resolve(session.userId, targetId).catch(() => undefined);
+            if (!access || access.role !== 'owner') {
+              return reply.code(403).send({ code: 'auth.workspace_forbidden', message: 'Acesso ao workspace proibido.' });
+            }
+            request.betterAuthContext = session;
+            request.workspaceAccess = access;
+            request.authenticatedContext = {
+              householdId: access.householdId,
+              actorId: access.userId,
+              authUserId: session.userId,
+              actorType: 'user',
+              deviceId: '',
+              role: access.role,
+            };
+          }
+          return;
+        }
+
         return reply.code(403).send({ code: 'auth.workspace_required', message: 'Header x-workspace-id é obrigatório.' });
       }
     });

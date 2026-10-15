@@ -22,7 +22,18 @@ export type FastPathResult = Readonly<{
 /** Classifies high-volume requests without invoking a generative planner. */
 export const classifyFastPath = (text: string, options: FastPathOptions = {}): FastPathResult => {
   const normalized = typoNormalize(fold(text));
-  const kind: FastPathKind = /\b(confirmar|confirma|confirmo|confirmado|autorizo|sim)\b/.test(normalized) ? 'confirm'
+  // P0 #174: a negated confirmation ("não confirmo", "não autorizo",
+  // "sim, mas não confirme") is NEVER a confirmation. The affirmative token
+  // (`confirmo`, `autorizo`, `sim`) matches inside the negation, so the
+  // negation check runs FIRST and fails closed to `cancel` (abort the pending
+  // proposal — the same terminal `resolveConfirmation` assigns to an explicit
+  // negation. The negated turn routes to `cancel` fail-closed (aborts the
+  // pending proposal instead of confirming it); nothing is executed from a
+  // negated turn).
+  const negated = /\b(nao|nunca|jamais)\b/.test(normalized);
+  const confirmSignal = /\b(confirmar|confirma|confirmo|confirmado|autorizo|sim)\b/.test(normalized);
+  const kind: FastPathKind = negated && confirmSignal ? 'cancel'
+    : confirmSignal ? 'confirm'
     : /\b(cancelar|cancela|desistir|deixa pra la)\b/.test(normalized) ? 'cancel'
     : /\b(saldo|quanto tenho|quanto eu tenho)\b/.test(normalized) ? 'balance'
     : /\b(ultimos? lancamentos?|extrato recente|ultimas? transac)\b/.test(normalized) ? 'recent_transactions' : 'none';
