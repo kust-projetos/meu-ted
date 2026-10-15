@@ -743,22 +743,22 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // todo o draft da negação) antes de avaliar o vínculo estruturado.
     await requireOwnBubble(page, preT4, "não confirmo", "conv-t4");
     const denyResp = await denyChat;
+    // Contrato real da decisão (agent-client pendingDecisionSchema):
+    // { operationId, status, retryable?, receipt? } — SEM objeto
+    // pendingOperation. cancelled/failed/proposed/expired não têm recibo.
     const denyBody = await denyResp.json().catch(() => ({})) as {
-      status?: unknown; output?: unknown;
-      pendingOperation?: { id?: unknown; status?: unknown };
+      status?: unknown; output?: unknown; operationId?: unknown;
     };
     // Estado terminal cancelled do draft da negação, VINCULADO ao t4opId
-    // por resposta estruturada: o turno de negação deve materializar
-    // pendingOperation { id: t4opId, status: 'cancelled' }. Cópia textual
+    // pela resposta estruturada (operationId + status). Cópia textual
     // ("Operação cancelada") sozinha NÃO basta — sem vínculo estruturado ao
     // t4opId, FALHA (ou SKIP INCONCLUSIVE com sinal de provider).
-    const denyOp = denyBody.pendingOperation;
-    if (denyOp?.id !== t4opId) {
+    if (denyBody.operationId !== t4opId) {
       await failOrSkip(page, "conv-t4",
-        `negação sem vínculo estruturado ao draft ${t4opId} (pendingOperation ausente ou id divergente) — texto sozinho não prova cancelamento`,
+        `negação sem vínculo estruturado ao draft ${t4opId} (operationId ausente ou divergente) — texto sozinho não prova cancelamento`,
         { turnText: await readTurnSuffix(page, preT4), turnError: await readChatTurnError(denyResp) });
     }
-    expect(denyOp.status, `draft da negação ${t4opId} sem estado terminal cancelled`).toBe("cancelled");
+    expect(denyBody.status, `draft da negação ${t4opId} sem estado terminal cancelled`).toBe("cancelled");
     validateNoHistoricReuse([JSON.stringify(denyBody).slice(0, 4000)]);
     await page.waitForTimeout(25000); // dá tempo a qualquer execução indevida
     const afterDeny = await countTxByMark(page);
