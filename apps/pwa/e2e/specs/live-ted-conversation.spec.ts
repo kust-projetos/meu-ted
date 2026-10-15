@@ -499,7 +499,8 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     const expectedCategoryId = expectedCategory.id as string;
     const T2_TEXT = `Na conta ${ACCOUNT_NAME} gastei 90 com ${pick.item} ${MARK}`;
     const T4_TEXT = `Na conta ${ACCOUNT_NAME} gastei 45 com pão ${MARK}`;
-    const DESC = `${MARK} ${pick.item}`;
+    // Descrição do produto compõe item+marker em ordem própria; os asserts
+    // exigem conter AMBOS (MARK e pick.item), sem fixar ordem.
 
     const dialog = await openTed(page);
 
@@ -682,7 +683,10 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     expect(marked, "ledger ilegível após confirmação").not.toBeNull();
     expect(marked!.length, `esperado 1 TX do draft original, achado ${marked!.length}`).toBe(1);
     expect(marked![0]!.id, "TX confirmado não é o do recibo do draft original").toBe(tedTxId);
-    expect(marked![0]!.description).toContain(DESC);
+    // Ordem item/marker é composição do produto (ex.: "com carne <MARK>") —
+    // o contrato é conter AMBOS, em qualquer ordem.
+    expect(marked![0]!.description).toContain(MARK);
+    expect(marked![0]!.description).toContain(pick.item);
     expect(marked![0]!.categoryId, `categoryId do TX (${marked![0]!.categoryId}) != categoria de T3 (${expectedCategoryId})`).toBe(expectedCategoryId);
     test.info().annotations.push({ type: "conv-t5", description: `mesmo-draft confirmado: op ${operationId} tx ${tedTxId} cat ${expectedCategoryId}` });
     await shot(page, "conv-05-confirmacao");
@@ -761,7 +765,8 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     expect(afterDenyMarked, "ledger ilegível após negação").not.toBeNull();
     expect(afterDenyMarked!.length, "negação alterou o conjunto de TXs marcados").toBe(1);
     expect(afterDenyMarked![0]!.id, "negação trocou o TX do draft original").toBe(tedTxId);
-    expect(afterDenyMarked![0]!.description).toContain(DESC);
+    expect(afterDenyMarked![0]!.description).toContain(MARK);
+    expect(afterDenyMarked![0]!.description).toContain(pick.item);
     expect(afterDenyMarked![0]!.categoryId, "negação alterou a categoria do TX original").toBe(expectedCategoryId);
     await shot(page, "conv-04-negacao");
 
