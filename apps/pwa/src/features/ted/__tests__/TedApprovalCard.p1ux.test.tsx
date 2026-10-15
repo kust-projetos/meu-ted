@@ -3,7 +3,7 @@ import { render, screen } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import { TedApprovalCard } from "../TedApprovalCard";
 import * as agentClient from "@/lib/api/agent-client";
-import type { PendingOperationPresentation } from "@/lib/api/agent-client";
+import type { PendingOperationDecision, PendingOperationPresentation } from "@/lib/api/agent-client";
 
 vi.mock("@/lib/api/agent-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api/agent-client")>();
@@ -139,10 +139,12 @@ describe("TedApprovalCard remote status sync (FIX-P1-UX #171)", () => {
 
   it("a more advanced remote state that lands during the RPC wins over the staler RPC verdict", async () => {
     const user = userEvent.setup();
-    let resolveRpc!: (decision: { operationId: string; status: "executing" }) => void;
+    let resolveRpc!: (
+      value: PendingOperationDecision | PromiseLike<PendingOperationDecision>,
+    ) => void;
     vi.mocked(agentClient.decidePendingOperation).mockReturnValue(
       new Promise((resolve) => {
-        resolveRpc = resolve as (decision: { operationId: string; status: "executing" }) => void;
+        resolveRpc = resolve;
       }),
     );
 
@@ -162,8 +164,8 @@ describe("TedApprovalCard remote status sync (FIX-P1-UX #171)", () => {
     expect(screen.getByText(/registrada/)).toBeInTheDocument();
 
     // The late RPC verdict is older truth — it must not step the card back
-    // to the in-flight state.
-    resolveRpc({ operationId: "op-1", status: "executing" });
+    // to the failure state.
+    resolveRpc({ operationId: "op-1", status: "failed" });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(screen.getByText(/registrada/)).toBeInTheDocument();
