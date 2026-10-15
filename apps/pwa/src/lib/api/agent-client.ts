@@ -17,6 +17,10 @@ const historyItemSchema = z.object({
   createdAt: z.string().optional(),
   isOwn: z.boolean(),
   attachments: z.array(attachmentSchema).optional(),
+  // FIX-169-170-R2 (P2-2): identidade estável do envio ecoada pelo Agent
+  // (SPEC §7.7) — a reconciliação a usa como chave primária; ausente em
+  // itens legados, que seguem a regra conteúdo+timestamp.
+  intentionId: z.string().optional(),
   // §25.4 (browser reload during proposed/executing): the server may attach
   // the authoritative pending operation so the PWA rehydrates the approval
   // card from SERVER state. Raw input — sanitized in the transform below.
@@ -33,6 +37,7 @@ const historyItemSchema = z.object({
     createdAt: item.createdAt,
     isOwn: item.isOwn,
     attachments: item.attachments,
+    ...(typeof item.intentionId === "string" && item.intentionId ? { intentionId: item.intentionId } : {}),
     // Invalid/absent collapses to no card — never invented data.
     ...(pendingOperation === undefined ? {} : { pendingOperation }),
   };
@@ -51,6 +56,12 @@ export type AgentMessage = {
   createdAt: string | undefined;
   isOwn: boolean;
   attachments?: Array<z.infer<typeof attachmentSchema>>;
+  /**
+   * FIX-169-170-R2 (P2-2): identidade estável do envio (SPEC §7.7) ecoada
+   * pelo Agent quando o turno a gravou. Chave primária da reconciliação —
+   * ausente em itens legados (fallback conteúdo+timestamp).
+   */
+  intentionId?: string;
   /**
    * §25.4: authoritative pending operation attached to a history item, when
    * the server emitted one. Same allowlist as the turn path — absent or
@@ -467,13 +478,28 @@ const ATTACHMENT_HISTORY_MARKERS: readonly string[] = [
   "[texto extraído do anexo em PDF",
 ];
 
-type HistoryItemForSupersede = Pick<AgentMessage, "isOwn" | "content" | "createdAt" | "attachments">;
+type HistoryItemForSupersede = Pick<AgentMessage, "isOwn" | "content" | "createdAt" | "attachments" | "intentionId">;
 
 function historyItemCarriesAttachment(item: HistoryItemForSupersede): boolean {
   if (Array.isArray(item.attachments) && item.attachments.length > 0) return true;
   return (
     typeof item.content === "string" &&
     ATTACHMENT_HISTORY_MARKERS.some((marker) => item.content.startsWith(marker))
+  );
+}
+
+/**
+ * FIX-169-170-R3 (MEDIUM): o item carrega identidade conhecida (intentionId
+ * ecoado pelo Agent) que diverge da identidade da âncora. Só diverge quando
+ * OS DOIS lados são conhecidos: item legado sem intentionId e âncora sem
+ * identidade seguem o fallback legado (conteúdo+timestamp) inalterado.
+ */
+function hasDivergingIdentity(item: HistoryItemForSupersede, anchorIdentity: string | undefined): boolean {
+  return (
+    anchorIdentity !== undefined &&
+    typeof item.intentionId === "string" &&
+    item.intentionId.length > 0 &&
+    item.intentionId !== anchorIdentity
   );
 }
 
@@ -502,17 +528,40 @@ function historyItemCarriesAttachment(item: HistoryItemForSupersede): boolean {
  * então a correlação é marcador+timestamp — duas âncoras só-anexo próximas
  * podem colidir num mesmo marcador. Fail-closed nos cantos (sem
  * marcador/sem ordem) em vez de heurística permissiva.
+ *
+ * FIX-169-170-R2 (P2-2): quando AMBOS os lados carregam a identidade estável
+ * (âncora `messageId`/`intentionId` = intentionId enviado; item
+ * `intentionId` ecoado pelo Agent), ela é a CHAVE PRIMÁRIA — supera DLP
+ * (conteúdo divergente do digitado) e clock skew (timestamp anterior) sem
+ * fantasma permanente. Restrita a itens próprios: o eco existe também em
+ * itens do assistente do mesmo turno, que nunca absorvem a âncora do
+ * usuário. Sem identidade em jogo, a regra legada abaixo vale inalterada.
  */
 export function isAnchorSupersededByHistory(
-  anchor: Pick<PendingChatSend, "content" | "createdAt" | "attachments">,
+  anchor: Pick<PendingChatSend, "content" | "createdAt" | "attachments"> & Partial<Pick<PendingChatSend, "messageId">> & { intentionId?: string },
   history: ReadonlyArray<HistoryItemForSupersede>,
 ): boolean {
+  const anchorIdentity =
+    typeof anchor.intentionId === "string" && anchor.intentionId
+      ? anchor.intentionId
+      : typeof anchor.messageId === "string" && anchor.messageId
+        ? anchor.messageId
+        : undefined;
+  if (anchorIdentity !== undefined) {
+    for (const item of history) {
+      if (!item.isOwn) continue;
+      if (typeof item.intentionId === "string" && item.intentionId && item.intentionId === anchorIdentity) return true;
+    }
+  }
   const anchorAttachments = Array.isArray(anchor.attachments) ? anchor.attachments : [];
   if (anchorAttachments.length > 0) {
     const anchorTime = Date.parse(anchor.createdAt);
     if (Number.isNaN(anchorTime)) return false;
     for (const item of history) {
       if (!item.isOwn) continue;
+      // FIX-169-170-R3 (MEDIUM): identidade conhecida e DIFERENTE da âncora
+      // prova outro envio — nunca reconcilia pelo fallback marcador+timestamp.
+      if (hasDivergingIdentity(item, anchorIdentity)) continue;
       const itemTime = typeof item.createdAt === "string" ? Date.parse(item.createdAt) : NaN;
       if (Number.isNaN(itemTime) || itemTime < anchorTime) continue;
       if (historyItemCarriesAttachment(item)) return true;
@@ -522,6 +571,9 @@ export function isAnchorSupersededByHistory(
   const anchorTime = Date.parse(anchor.createdAt);
   for (const item of history) {
     if (!item.isOwn || item.content !== anchor.content) continue;
+    // FIX-169-170-R3 (MEDIUM): mesmo texto + ts posterior com intentionId
+    // DIFERENTE é outro envio (send-B), não a persistência da âncora (send-A).
+    if (hasDivergingIdentity(item, anchorIdentity)) continue;
     if (Number.isNaN(anchorTime)) return true;
     const itemTime = typeof item.createdAt === "string" ? Date.parse(item.createdAt) : NaN;
     if (Number.isNaN(itemTime)) return true;

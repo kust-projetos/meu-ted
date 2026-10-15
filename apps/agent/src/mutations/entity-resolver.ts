@@ -29,9 +29,11 @@
  * Boundaries it does NOT cross:
  * - it never creates a category (R08): ranking only names rows that already
  *   exist in the current list;
- * - the description is still NOT a category query (R03/A03): only a literal
- *   fold-exact name match is legitimate there, so no semantic inference can be
- *   smuggled in through the description;
+ * - the description is NOT a category query (R03/A03): only a literal
+ *   fold-exact name match auto-resolves there. Beyond that the description
+ *   feeds a SUGGESTION ONLY (FIX-170): the same bounded ranking over CURRENT
+ *   candidates, presented as a candidate the user confirms — it never
+ *   selects, never creates, and no semantic inference becomes a resolution;
  * - permission to use an account/category stays server-side (capabilities at
  *   propose); agent-side this module verifies existence, activity and scope.
  */
@@ -703,11 +705,29 @@ export const resolveMutationEntities = async (
         categoryId = exact[0]!.id;
         categoryName = exact[0]!.name;
         categorySource = 'deterministic';
-      } else {
+      } else if (exact.length > 1) {
+        // FIX-170 (d): homonyms stay visible instead of becoming a silent
+        // pick — even when the match came from the description.
+        categoryHomonyms = exact.map((category) => category.name);
         missingFields.push('categoryId');
-        // Generic on purpose: no category was asked for, so reporting the
-        // description as a category that could not be found would be false.
-        categorySections.push(`Qual categoria devo usar?${bulletList(usableCategories.map((category) => category.name))}`);
+        categorySections.push(`Encontrei mais de uma categoria com esse nome. Qual delas devo usar?${bulletList(categoryHomonyms)}`);
+      } else {
+        // FIX-170 (a): the description feeds the SAME bounded ranking as an
+        // explicit query, but strictly as a SUGGESTION the user confirms
+        // (source `semantic_candidate`, still a missing field). No candidate
+        // keeps the generic catalog question; nothing is ever selected or
+        // created from the description (R03/A03 intact).
+        const ranked = semanticCandidates(descriptionFold, usableCategories);
+        missingFields.push('categoryId');
+        if (ranked.length > 0) {
+          categorySource = 'semantic_candidate';
+          categoryHomonyms = ranked.map((category) => category.name);
+          categorySections.push(`Não encontrei uma categoria correspondente. Talvez você quis dizer?${bulletList(categoryHomonyms)}\n\nSe não for nenhuma delas, qual categoria devo usar?`);
+        } else {
+          // Generic on purpose: no category was asked for, so reporting the
+          // description as a category that could not be found would be false.
+          categorySections.push(`Qual categoria devo usar?${bulletList(usableCategories.map((category) => category.name))}`);
+        }
       }
     }
   }

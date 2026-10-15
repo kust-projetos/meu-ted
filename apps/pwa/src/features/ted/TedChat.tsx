@@ -289,15 +289,16 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
    * R2 FIX 3 + R3 FIX 1/2: snapshots das âncoras restauradas (`messageId` →
    * conteúdo + timestamp + anexos do envio) para reconciliar em TODA carga de
    * histórico — não só na montagem. Quando o lote autoritativo passa a trazer
-   * a mensagem correspondente (critério temporal do FIX 2; para âncoras com
-   * anexos, só com evidência de anexo — R3 FIX 2), o failed restaurado sai da
-   * tela e o servidor vira dono do log. Sobrevive à troca do storage (um novo
-   * envio sobrescreve/limpa a âncora) porque vive em memória. Os anexos do
-   * snapshot servem à regra de reconciliação e à recusa de retry infiel
-   * (R3 FIX 1: sem draft e com anexos, não há reenvio).
+   * a mensagem correspondente (FIX-169-170-R2 P2-2: identidade `messageId` /
+   * `intentionId` como chave primária; legado: critério temporal do FIX 2 —
+   * para âncoras com anexos, só com evidência de anexo — R3 FIX 2), o failed
+   * restaurado sai da tela e o servidor vira dono do log. Sobrevive à troca
+   * do storage (um novo envio sobrescreve/limpa a âncora) porque vive em
+   * memória. Os anexos do snapshot servem à regra de reconciliação e à recusa
+   * de retry infiel (R3 FIX 1: sem draft e com anexos, não há reenvio).
    */
   const anchorSnapshotsRef = useRef<
-    Map<string, Pick<PendingChatSend, "content" | "createdAt" | "attachments">>
+    Map<string, Pick<PendingChatSend, "content" | "createdAt" | "attachments" | "messageId">>
   >(new Map());
   const discardDrafts = useCallback(() => {
     for (const draft of draftsRef.current.values()) {
@@ -437,12 +438,40 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
         // SPEC §19.1/§19.3: local optimistic sends not yet confirmed by the
         // server survive authoritative reloads — failed messages are never
         // silently discarded and in-flight ones keep their sending state.
-        ...prev.filter((m) => m.delivery === "sending" || m.delivery === "failed"),
+        // FIX-169 (P0): `sent` bubbles ALSO survive as sent-awaiting-history
+        // (consistência eventual explícita) — marking sent then reloading a
+        // still-lagging history used to drop the bubble and the turn seemed
+        // to vanish. A `sent` bubble superseded below converges to the
+        // server copy; a 502/timeout never lands here (failed path).
+        ...prev.filter((m) => m.delivery === "sending" || m.delivery === "failed" || m.delivery === "sent"),
       ];
       if (reconciledIds.length > 0) {
         const reconciled = new Set(reconciledIds);
         next = next.filter((m) => !(reconciled.has(m.id) && m.delivery === "failed"));
       }
+      // FIX-169: converge `sent` bubbles once the authoritative history
+      // carries them (FIX-169-170-R2 P2-2: stable send identity as the primary
+      // key, content + timestamp as the legacy fallback — attachment sends
+      // additionally require attachment evidence server-side, so an unrelated
+      // same-text server message never absorbs them). Until then the local
+      // `sent` copy is the visible bubble.
+      next = next.filter(
+        (m) =>
+          m.delivery !== "sent" ||
+          !isAnchorSupersededByHistory(
+            {
+              content: m.content,
+              createdAt: m.createdAt ?? new Date().toISOString(),
+              // The local bubble id IS the stable send identity (SPEC §7.7:
+              // PWA messageId sent as the turn intentionId).
+              messageId: m.id,
+              ...(m.attachments && m.attachments.length > 0
+                ? { attachments: m.attachments.map((a) => ({ type: a.type, url: "", name: a.name ?? "" })) }
+                : {}),
+            },
+            history,
+          ),
+      );
       if (anchored && !anchoredSuperseded && !next.some((m) => m.id === anchored.messageId)) {
         return [
           ...next,
@@ -496,6 +525,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       anchorSnapshotsRef.current.set(anchored.messageId, {
         content: anchored.content,
         createdAt: anchored.createdAt,
+        messageId: anchored.messageId,
         ...(anchored.attachments && anchored.attachments.length > 0
           ? { attachments: [...anchored.attachments] }
           : {}),
