@@ -165,11 +165,11 @@ export class MutationApiClient {
   }
 
   /** T1.5 (SPEC §8.2/§13): failed → confirmed with a fresh attestation. */
-  retry(operationId: string, identity: MutationIdentity): Promise<{ operationId: string; attestation: string }> {
+  retry(operationId: string, identity: MutationIdentity, intentionId?: string): Promise<{ operationId: string; attestation: string }> {
     return this.timed('transactions.retry', async () => {
       const result = await this.request<{ id?: unknown; attestation?: unknown }>(
         'POST', `/pending-operations/v2/${encodeURIComponent(operationId)}/retry`,
-        { headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId } },
+        { ...(intentionId !== undefined ? { body: { intentionId } } : {}), headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId } },
       );
       this.assertPendingOperationId(result.id, operationId);
       if (typeof result.attestation !== 'string' || result.attestation.length < 32) throw new Error('approval.missing_attestation');

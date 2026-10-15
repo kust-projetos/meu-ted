@@ -55,6 +55,13 @@ export type DecisionInput = Readonly<{
   /** Button-path approval context (passed through to the transport). */
   requestId?: string;
   delegatedToken?: string;
+  /**
+   * FIX-187: the durable confirmation intention, bound API-side (V060) on
+   * confirm and verified on execute. Required for confirm/retry: without it
+   * decide() would run the unbound bypass (instance-memory anti-replay
+   * only). Cancel carries no binding and ignores it.
+   */
+  intentionId?: string;
 }>;
 
 export type DecisionResult = Readonly<{
@@ -214,24 +221,30 @@ export class PendingOperationCoordinator {
   }
 
   /** Conversational retry (§8.2/§13): failed → confirmed (fresh attestation) → execute once. */
-  async retry(operationId: string, identity: MutationIdentity): Promise<DecisionResult> {
-    const confirmation = await this.dependencies.client.retry(operationId, identity);
-    return this.executeAttested(confirmation, identity);
+  async retry(operationId: string, identity: MutationIdentity, intentionId?: string): Promise<DecisionResult> {
+    const confirmation = await this.dependencies.client.retry(operationId, identity, intentionId);
+    return this.executeAttested({ ...confirmation, ...(intentionId !== undefined ? { intentionId } : {}) }, identity);
   }
 
   /**
    * Button path (and any explicit-id caller): the same machine, addressed
    * by the operation id the authoritative surface issued. No listing, no
    * disambiguation — the card already names its operation.
+   *
+   * FIX-187: confirm/retry never run unbound — the intentionId binds (confirm)
+   * and verifies (execute) against the durable API frontier (V060). Absent ⇒
+   * fail closed with zero transport, never the legacy unbound bypass.
    */
   async decide(input: DecisionInput): Promise<DecisionResult> {
     if (input.decision === 'cancel') {
       return this.cancel(input.operationId, input.identity);
     }
+    const intentionId = typeof input.intentionId === 'string' ? input.intentionId.trim() : '';
+    if (!intentionId) throw new Error('approval.intention_required');
     if (input.decision === 'retry') {
-      return this.retry(input.operationId, input.identity);
+      return this.retry(input.operationId, input.identity, intentionId);
     }
-    return this.confirm(input.operationId, input.identity);
+    return this.confirm(input.operationId, input.identity, intentionId);
   }
 
   /**
