@@ -56,6 +56,30 @@ describe('FIX-186: duplicate-detector fail-closed + timeout', () => {
     const res = await detectDuplicateViaApi(dupInput, { ...dupOpts, timeoutMs: 30 });
     expect(res.duplicate_detected).toBe(true);
   }, 5000);
+
+  it('modo não-strict estoura budget com corpo paralisado pós-headers (falha fechado)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((_url: string, init?: RequestInit) => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => new Promise((_res, rej) => {
+        init?.signal?.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+      }),
+    })));
+    const res = await detectDuplicateViaApi(dupInput, { ...dupOpts, timeoutMs: 30 });
+    expect(res.duplicate_detected).toBe(true);
+  }, 5000);
+
+  it('modo strict estoura budget com corpo paralisado pós-headers (falha fechado)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((_url: string, init?: RequestInit) => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => new Promise((_res, rej) => {
+        init?.signal?.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+      }),
+    })));
+    const res = await detectDuplicateViaApi(dupInput, { ...dupOpts, strict: true, timeoutMs: 30 });
+    expect(res.duplicate_detected).toBe(true);
+  }, 5000);
 });
 
 describe('FIX-189: 401/403 nunca elegíveis a fallback', () => {

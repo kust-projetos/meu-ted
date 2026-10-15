@@ -76,12 +76,11 @@ const resolveDuplicateTimeoutMs = (timeoutMs: unknown): number => {
   return DEFAULT_DUPLICATE_CHECK_TIMEOUT_MS;
 };
 
-const fetchWithDuplicateBudget = async (
-  url: string,
-  init: Omit<RequestInit, 'signal'>,
+const withDuplicateBudget = async <T>(
   timeoutMs: number,
-  callerSignal?: AbortSignal,
-): Promise<Response> => {
+  callerSignal: AbortSignal | undefined,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> => {
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -100,7 +99,7 @@ const fetchWithDuplicateBudget = async (
     callerSignal.addEventListener('abort', onCallerAbort, { once: true });
   }
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await run(controller.signal);
   } catch (err) {
     if (timedOut && (err as { name?: unknown } | null)?.name !== 'TimeoutError') {
       throw Object.assign(new Error(`duplicate check timed out after ${timeoutMs}ms`), { name: 'TimeoutError' });
@@ -125,22 +124,28 @@ export const detectDuplicateViaApi = async (
 ): Promise<DuplicateCheckResult> => {
   if (opts.strict) return detectDuplicateStrictResult(input, opts);
   try {
-    const res = await fetchWithDuplicateBudget(
-      `${opts.apiOrigin.replace(/\/$/, "")}/transactions/detect-duplicate`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          Authorization: `Bearer ${opts.delegatedToken}`,
-          "X-Workspace-Id": opts.workspaceId,
-        },
-        body: JSON.stringify(input),
+    const budgetMs = resolveDuplicateTimeoutMs(opts.timeoutMs);
+    const url = `${opts.apiOrigin.replace(/\/$/, "")}/transactions/detect-duplicate`;
+    const init = {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${opts.delegatedToken}`,
+        "X-Workspace-Id": opts.workspaceId,
       },
-      resolveDuplicateTimeoutMs(opts.timeoutMs),
-      opts.signal,
-    );
-    if (!res.ok) return { duplicate_detected: true };
-    const body = (await res.json().catch(() => null)) as { duplicate_detected?: unknown; match?: DuplicateMatch } | null;
+      body: JSON.stringify(input),
+    };
+    // Budget cobre headers E corpo: fetch + leitura do JSON rodam sob o
+    // mesmo AbortSignal/timer (corpo paralisado pós-headers estoura e cai
+    // em fail-closed, nunca pendência ilimitada).
+    const outcome = await withDuplicateBudget(budgetMs, opts.signal, async (signal) => {
+      const res = await fetch(url, { ...init, signal });
+      if (!res.ok) return { resOk: false as const, body: null as unknown };
+      const body = (await res.json().catch(() => null)) as { duplicate_detected?: unknown; match?: DuplicateMatch } | null;
+      return { resOk: true as const, body };
+    });
+    if (!outcome.resOk) return { duplicate_detected: true };
+    const body = outcome.body;
     if (!body || typeof body.duplicate_detected !== 'boolean') return { duplicate_detected: true };
     if (!body.duplicate_detected) return { duplicate_detected: false };
     if (!body.match) return { duplicate_detected: true };
@@ -155,24 +160,28 @@ const detectDuplicateStrictResult = async (
   opts: DuplicateCheckOpts,
 ): Promise<DuplicateCheckResult> => {
   try {
-  const res = await fetchWithDuplicateBudget(
-    `${opts.apiOrigin.replace(/\/$/, "")}/transactions/detect-duplicate`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        Authorization: `Bearer ${opts.delegatedToken}`,
-        "X-Workspace-Id": opts.workspaceId,
-      },
-      body: JSON.stringify(input),
+  const budgetMs = resolveDuplicateTimeoutMs(opts.timeoutMs);
+  const url = `${opts.apiOrigin.replace(/\/$/, "")}/transactions/detect-duplicate`;
+  const init = {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${opts.delegatedToken}`,
+      "X-Workspace-Id": opts.workspaceId,
     },
-    resolveDuplicateTimeoutMs(opts.timeoutMs),
-    opts.signal,
-  );
-  if (!res.ok) {
+    body: JSON.stringify(input),
+  };
+  // Budget cobre headers E corpo (mesmo contrato do caminho não-strict).
+  const outcome = await withDuplicateBudget(budgetMs, opts.signal, async (signal) => {
+    const res = await fetch(url, { ...init, signal });
+    if (!res.ok) return { resOk: false as const, body: null as unknown };
+    const body = (await res.json()) as { duplicate_detected?: unknown; match?: DuplicateMatch };
+    return { resOk: true as const, body };
+  });
+  if (!outcome.resOk) {
     return { duplicate_detected: true };
   }
-  const body = (await res.json()) as { duplicate_detected?: unknown; match?: DuplicateMatch };
+  const body = outcome.body;
   if (typeof body.duplicate_detected !== 'boolean') return { duplicate_detected: true };
   if (!body.duplicate_detected) return { duplicate_detected: false };
   if (!body.match) return { duplicate_detected: true };
