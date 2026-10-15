@@ -12,6 +12,7 @@ import {
   loadPendingChatSend,
   clearPendingChatSend,
   isAnchorSupersededByHistory,
+  isTurnAnswerConvergedByIdentity,
   resolveRetrySend,
   CHAT_SEND_ATTACHMENT_LIMIT,
   uploadAttachment,
@@ -1033,7 +1034,17 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // the conversation did not have yet (A02/R02 AC06: this turn produces
       // exactly ONE answer; an identical one from an earlier turn never
       // suppresses it).
-      if (turn.output?.trim() && freshHistory.filter((m) => !m.isOwn && m.content === turn.output).length <= copiesBefore) {
+      // FIX-melhorias item 3: quando o lote já traz a resposta DESTE turno
+      // (mesmo texto + intentionId do envio — `send.messageId` viajou como
+      // intentionId, SPEC §7.7), a cópia local é suprimida por identidade,
+      // mesmo que a contagem por texto conte a resposta ainda-local de um
+      // turno anterior. Sem identidade em jogo, a regra legada vale.
+      const convergedByIdentity = isTurnAnswerConvergedByIdentity(turn.output, send.messageId, freshHistory);
+      if (
+        turn.output?.trim() &&
+        !convergedByIdentity &&
+        freshHistory.filter((m) => !m.isOwn && m.content === turn.output).length <= copiesBefore
+      ) {
         setMessages((previous) => [
           ...previous,
           {

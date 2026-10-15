@@ -8,8 +8,9 @@ import { failoverReasonOf, isRetryableLlmError } from './failover.js';
  * - resolves the CONCRETE upstream pair (provider id + bare model name,
  *   never a configuration row id) for primary and fallback;
  * - runs at most ONE primary + ONE distinct fallback attempt per turn;
- * - retries the fallback ONLY on retryable failures (timeout, 429/5xx,
- *   401/403 via `isRetryableLlmError`);
+ * - retries the fallback ONLY on retryable failures (timeout, 429/5xx via
+ *   `isRetryableLlmError` — 401/403 NUNCA fazem fallback, unificado com o
+ *   relay em FIX-189);
  * - throws a sanitized composite error (reason codes only, never prompts,
  *   transcripts or secrets) when both legs fail.
  *

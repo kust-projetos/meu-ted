@@ -616,10 +616,16 @@ const deactivateAccountInTx = async (
   const res = await client.query<Row>(
     `UPDATE accounts
         SET status = 'inactive'
-      WHERE id = $1 AND household_id = $2
+      WHERE id = $1 AND household_id = $2 AND status = 'active'
       RETURNING id, household_id, name, kind, balance_cents, status`,
     [id, householdId],
   );
+  // FIX-188: the conditional tombstone is the durable cross-key guard —
+  // a concurrent undo of the same account commits first and this claim
+  // rolls back with `not_found` (mapped to `undo.nothing_to_undo` by the
+  // undo service). A zero-row hit outside any race is unreachable here
+  // (the active-status check above passed), so it keeps the same code.
+  if (res.rowCount === 0) throw domainErrors.notFound('Conta');
   return mapAccount(res.rows[0]!);
 };
 
@@ -648,10 +654,12 @@ const deactivateCategoryInTx = async (
   const res = await client.query<Row>(
     `UPDATE categories
         SET status = 'inactive'
-      WHERE id = $1 AND household_id = $2
+      WHERE id = $1 AND household_id = $2 AND status = 'active'
       RETURNING ${CATEGORY_COLUMNS}`,
     [id, householdId],
   );
+  // FIX-188: same durable cross-key guard as deactivateAccountInTx above.
+  if (res.rowCount === 0) throw domainErrors.notFound('Categoria');
   return mapCategory(res.rows[0]!);
 };
 

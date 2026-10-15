@@ -10,12 +10,16 @@ export type FailoverOutcome<T> = {
 };
 
 /**
- * Retryable LLM failure classification (refactor item 5): timeout/abort,
- * HTTP 429/5xx and auth failures (401/403) trigger the fallback attempt
- * within the SAME request. 4xx other than auth/429 (ex. 400 validation,
- * 404 unknown model) fail closed without fallback — retrying would not help.
- * The check is status-code based so both direct SDK errors and relay HTTP
- * errors funnel through one rule. Never inspects or logs secrets.
+ * Retryable LLM failure classification (FIX-189: unificada com o relay —
+ * `isRelayFallbackEligible`): timeout/abort, HTTP 429 e 5xx disparam a
+ * tentativa de fallback DENTRO da mesma requisição. 401/403 NUNCA são
+ * elegíveis a fallback automático — credencial inválida ou modelo não
+ * permitido repetiria a chamada (double-spend em provider pago) e
+ * mascararia a falha de autoridade como failover; o erro apropriado
+ * propaga. 4xx demais (ex. 400 validation, 404 unknown model) falham
+ * fechados sem fallback — retentar não ajudaria.
+ * A checagem é por status-code para que erros diretos do SDK e erros HTTP
+ * do relay caiam numa regra só. Nunca inspeciona nem loga segredos.
  */
 export const isRetryableLlmError = (err: unknown): boolean => {
   const e = err as {
@@ -26,16 +30,21 @@ export const isRetryableLlmError = (err: unknown): boolean => {
     message?: string;
   } | null;
   if (!e) return false;
-  if (e.name === 'AbortError' || e.name === 'TimeoutError') return true;
   const status = typeof e.status === 'number' ? e.status : typeof e.statusCode === 'number' ? e.statusCode : null;
+  const code = typeof e.code === 'string' ? e.code : '';
+  const isAbortName = e.name === 'AbortError' || e.name === 'TimeoutError';
+  if (isAbortName && status === null && code.length === 0) return true;
   if (status !== null) {
     if (status === 429) return true;
     if (status >= 500 && status <= 599) return true;
-    if (status === 401 || status === 403) return true;
+    // FIX-189: 401/403 (e qualquer outro 4xx) nunca fazem fallback.
+    // Status/code explícito contradiz o nome local e prevalece — um
+    // AbortError+403 (negação de autoridade transportada como abort)
+    // permanece inelegível, como no classificador do relay.
     return false;
   }
-  const code = typeof e.code === 'string' ? e.code : '';
-  if (/^(agent\.rate_limited|agent\.provider_timeout|agent\.provider_error|agent\.provider_auth|agent\.invalid_provider_output|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch_failed|network_error|timeout)$/i.test(code)) {
+  // FIX-189: `agent.provider_auth` fora — falha de autoridade nunca retenta.
+  if (/^(agent\.rate_limited|agent\.provider_timeout|agent\.provider_error|agent\.invalid_provider_output|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch_failed|network_error|timeout)$/i.test(code)) {
     return true;
   }
   const message = typeof e.message === 'string' ? e.message : '';

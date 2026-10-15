@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg';
 import type { AuditLog, AuditLogStore } from '../audit/store.js';
 import type { WriteStore } from '../writes/store.js';
 import type { PostgresReversalTxExtensions } from '../writes/postgres.js';
-import { domainErrors } from '../writes/errors.js';
+import { domainErrors, DomainError } from '../writes/errors.js';
 import { createInMemoryIdempotencyStore, type IdempotencyStore } from '../writes/idempotency.js';
 import type { MutationReceipt } from '@pi-finance/llm-contracts';
 import { resolveUndoReceipt } from '../reconciliation/effects-registry.js';
@@ -74,7 +74,19 @@ export const createUndoService = (deps: {
   observabilitySink?: UndoObservabilitySink;
 }): UndoService => {
   const idempotency = deps.idempotency ?? createInMemoryIdempotencyStore();
-  const undone = new Set<string>();
+  /**
+   * FIX-188: same-process cross-key guard. The idempotency store serializes
+   * same-key callers, but DISTINCT keys electing the SAME target run
+   * independent producers. This set is claimed synchronously (no await
+   * between election and claim inside the producer continuation) so exactly
+   * one same-process producer owns a target; the loser fails closed with
+   * `undo.nothing_to_undo`. Cross-process races are owned by the durable
+   * row guard (conditional tombstone/deactivate inside the claim tx rolls
+   * the loser back); a restart loses this set and the loser then maps the
+   * consumed row to `undo.nothing_to_undo` below. Completed targets are NOT
+   * remembered here — the tombstoned/inactive row is the durable record.
+   */
+  const inFlightTargets = new Set<string>();
 
   const resolveEntityId = (log: AuditLog): string | undefined => {
     const metaId = log.metadata.entityId;
@@ -160,8 +172,7 @@ export const createUndoService = (deps: {
           .filter(
             (log) =>
               REVERSIBLE_OPERATIONS.has(log.operation) &&
-              resolveEntityId(log) !== undefined &&
-              !undone.has(`${householdId}:${resolveEntityId(log)}`),
+              resolveEntityId(log) !== undefined,
           )
           .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 
@@ -170,23 +181,53 @@ export const createUndoService = (deps: {
           target = candidates.find((log) => log.id === lastOperationId);
           if (!target) throw domainErrors.undoNothingToUndo();
         } else {
-          // Prefer actor's own operations when possible, fallback to household-wide most recent
+          // FIX-188: fail-closed head election. Without an explicit
+          // lastOperationId the ONLY eligible target is the head (the
+          // actor's own newest when present, else the household newest).
+          // When the head is already consumed the call fails with
+          // `undo.nothing_to_undo` — it NEVER walks back to a predecessor
+          // silently (that elected-and-reversed an operation nobody named).
           const own = candidates.filter((log) => log.actorId === actorId);
           const pool = own.length > 0 ? own : candidates;
           if (pool.length === 0) throw domainErrors.undoNothingToUndo();
           target = pool[0]!;
         }
         const entityId = resolveEntityId(target)!;
-        const reversal = await applyReversal(householdId, target, claimTx);
-        undone.add(`${householdId}:${entityId}`);
-        // Receipt is built inside the claim (before the idempotency record
-        // write) so replays return the identical receipt.
-        const receipt = resolveUndoReceipt(target.operation, entityId);
-        const result: UndoResult = {
-          undone: { operation: target.operation, entityId, reversal },
-          receipt,
-        };
-        return result;
+        // FIX-188: claim the target synchronously (no await between this
+        // check-add and the election above within this continuation), so
+        // concurrent same-process producers with distinct keys converge to
+        // exactly one owner. Released in `finally` — a failure before the
+        // reversal leaves the row untouched and a retry may proceed.
+        const targetClaim = `${householdId}:${entityId}`;
+        if (inFlightTargets.has(targetClaim)) throw domainErrors.undoNothingToUndo();
+        inFlightTargets.add(targetClaim);
+        try {
+          let reversal: string;
+          try {
+            reversal = await applyReversal(householdId, target, claimTx);
+          } catch (err) {
+            // FIX-188: a consumed target surfaces as `not_found` from the
+            // row guard (already tombstoned/inactive — restart, replay with
+            // a new key, or a lost cross-key race). That is
+            // `undo.nothing_to_undo`, never a bare `not_found`. Genuine
+            // conflicts (in_use, paid-payable link, atomicity invariant)
+            // pass through untouched.
+            if (err instanceof DomainError && err.code === 'not_found') {
+              throw domainErrors.undoNothingToUndo();
+            }
+            throw err;
+          }
+          // Receipt is built inside the claim (before the idempotency record
+          // write) so replays return the identical receipt.
+          const receipt = resolveUndoReceipt(target.operation, entityId);
+          const result: UndoResult = {
+            undone: { operation: target.operation, entityId, reversal },
+            receipt,
+          };
+          return result;
+        } finally {
+          inFlightTargets.delete(targetClaim);
+        }
       });
       if (replayed) {
         try {

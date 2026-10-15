@@ -36,6 +36,7 @@ export type SdkUIMessage = {
     actorId: string;
     workspaceId: string;
     createdAt: string;
+    intentionId?: string;
   };
 };
 
@@ -63,7 +64,27 @@ export const computeHistoryHash = (messages: LegacyMessage[], workspaceId = ''):
   return createHash('sha256').update(JSON.stringify(structured)).digest('hex');
 };
 
-export const transformLegacyMessages = (messages: LegacyMessage[], workspaceId = ''): SdkUIMessage[] => {
+export const transformLegacyMessages = (
+  messages: LegacyMessage[],
+  workspaceId = '',
+  turns: LegacyTurn[] = [],
+): SdkUIMessage[] => {
+  // FIX-R3 (REVIEW-MELHORIAS-R2 residual): o formato legado não carrega
+  // NENHUM campo que vincule turno↔mensagem de forma verificável —
+  // LegacyTurn não tem created_at/seq/message_ids e LegacyMessage não tem
+  // turn_id/intention_id (input_json/output_json são payloads opacos, não
+  // vínculo). Toda correspondência seria apenas posicional
+  // (turns[i] → i-ésimo grupo cronológico), e dois turnos completed do mesmo
+  // ator com o array em ordem inversa aos grupos passam nos gates de
+  // contagem/status/ator e TROCAM os intentionIds. Fail-closed: o
+  // intentionId legado NUNCA é propagado — mensagens migradas chegam sem
+  // intentionId e ficam fora do dedupe de redelivery, em vez de carregar
+  // identidade trocada. O parâmetro `turns` é mantido por compatibilidade
+  // de assinatura e ignorado. Se o formato um dia ganhar vínculo
+  // verificável (ex. turn.created_at ou message.turn_id), reabrir com
+  // exigência desse vínculo em teste.
+  void turns;
+
   return messages.map((msg) => {
     let parsedContent = '';
     try {
@@ -150,7 +171,7 @@ export const migrateLegacyHistory = async (
     };
   }
 
-  const transformed = transformLegacyMessages(exportData.messages, exportData.workspaceId);
+  const transformed = transformLegacyMessages(exportData.messages, exportData.workspaceId, exportData.turns);
 
   if (transformed.length > 0) {
     if (typeof persistCallback !== 'function') {

@@ -68,6 +68,30 @@ describe('Legacy History Migration into FinanceChatAgent (T4.3: import surface o
     };
   };
 
+  const migrateForIntentCase = async (exportData: LegacyFullExport) => {
+    const mockSql = createMockSql();
+    const persistedMessages: UIMessage[] = [];
+
+    const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent & {
+      messages: UIMessage[];
+      persistMessages: (msgs: UIMessage[]) => Promise<void>;
+    };
+    agent.messages = persistedMessages;
+    agent.persistMessages = vi.fn(async (msgs: UIMessage[]) => {
+      persistedMessages.push(...msgs);
+    });
+
+    Object.defineProperty(agent, 'ctx', {
+      value: { storage: { sql: mockSql } },
+      writable: true,
+      configurable: true,
+    });
+
+    const res = await agent.importLegacyHistory(exportData);
+    expect(res.success).toBe(true);
+    return { persistedMessages };
+  };
+
   it('(1) FinanceChatAgent.importLegacyHistory real persists UIMessage v5 strictly with parts & server-side metadata, and GET /rpc/history sorts chronologically by metadata.createdAt even when this.messages is reversed', async () => {
     const mockSql = createMockSql();
     const persistedMessages: UIMessage[] = [];
@@ -183,5 +207,252 @@ describe('Legacy History Migration into FinanceChatAgent (T4.3: import surface o
     expect(res.reason).toContain('missing_persist_callback');
     // Ensure memory messages array was not mutated as fallback
     expect(agent.messages).toHaveLength(0);
+  });
+
+  it('(6) FIX-R3: intention_id legado NUNCA propaga (sem vínculo verificável turno↔mensagem)', async () => {
+    const mockSql = createMockSql();
+    const persistedMessages: UIMessage[] = [];
+
+    const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent & {
+      messages: UIMessage[];
+      persistMessages: (msgs: UIMessage[]) => Promise<void>;
+    };
+    agent.messages = persistedMessages;
+    agent.persistMessages = vi.fn(async (msgs: UIMessage[]) => {
+      persistedMessages.push(...msgs);
+    });
+
+    Object.defineProperty(agent, 'ctx', {
+      value: { storage: { sql: mockSql } },
+      writable: true,
+      configurable: true,
+    });
+
+    const exportWithIntentions: LegacyFullExport = {
+      version: 1,
+      workspaceId: 'ws-intent-1',
+      turns: [
+        { id: 'turn-1', intention_id: 'intent-legacy-1', actor_id: 'user-a', status: 'completed', attempts: 1, tokens_used: 10 },
+        { id: 'turn-2', actor_id: 'user-a', status: 'completed', attempts: 1, tokens_used: 5 },
+      ],
+      messages: [
+        {
+          id: 'msg-1',
+          actor_id: 'user-a',
+          role: 'user',
+          content_json: JSON.stringify('qual meu saldo?'),
+          created_at: '2026-08-20T10:00:00.000Z',
+        },
+        {
+          id: 'msg-1:assistant',
+          actor_id: 'agent',
+          role: 'assistant',
+          content_json: JSON.stringify('Seu saldo é R$ 10,00.'),
+          created_at: '2026-08-20T10:00:01.000Z',
+        },
+        {
+          id: 'msg-2',
+          actor_id: 'user-a',
+          role: 'user',
+          content_json: JSON.stringify('e as contas?'),
+          created_at: '2026-08-20T10:05:00.000Z',
+        },
+      ],
+      hasInFlightTurns: false,
+    };
+
+    const res = await agent.importLegacyHistory(exportWithIntentions);
+    expect(res.success).toBe(true);
+    expect(res.importedCount).toBe(3);
+
+    // FIX-R3: sem campo verificável que vincule turno↔mensagem
+    // (LegacyTurn sem created_at/seq/message_ids; LegacyMessage sem
+    // turn_id/intention_id), NENHUMA correspondência posicional — nem a
+    // 1:1 aparentemente inequívoca — autoriza propagar identidade.
+    // Fail-closed: omissão sempre; mensagens migradas ficam sem
+    // intentionId em vez de arriscar identidade trocada.
+    const byId = new Map(persistedMessages.map((m) => [m.id, m]));
+    expect((byId.get('msg-1')!.metadata as { intentionId?: string }).intentionId).toBeUndefined();
+    expect((byId.get('msg-1:assistant')!.metadata as { intentionId?: string }).intentionId).toBeUndefined();
+    expect((byId.get('msg-2')!.metadata as { intentionId?: string }).intentionId).toBeUndefined();
+  });
+
+  it('(7) REVIEW-MEDIUM-2: turnos sem mensagens correspondentes (contagem diverge) → intentionId omitido em tudo', async () => {
+    // 3 turnos com intention_id mas só 1 grupo de mensagens: o mapeamento
+    // posicional seria ambíguo, então nada é propagado.
+    const { persistedMessages } = await migrateForIntentCase({
+      version: 1,
+      workspaceId: 'ws-intent-count',
+      turns: [
+        { id: 'turn-1', intention_id: 'intent-A', actor_id: 'user-a', status: 'completed', attempts: 1, tokens_used: 10 },
+        { id: 'turn-2', intention_id: 'intent-B', actor_id: 'user-a', status: 'completed', attempts: 1, tokens_used: 10 },
+        { id: 'turn-3', intention_id: 'intent-C', actor_id: 'user-a', status: 'completed', attempts: 1, tokens_used: 10 },
+      ],
+      messages: [
+        {
+          id: 'msg-1',
+          actor_id: 'user-a',
+          role: 'user',
+          content_json: JSON.stringify('qual meu saldo?'),
+          created_at: '2026-08-20T10:00:00.000Z',
+        },
+      ],
+      hasInFlightTurns: false,
+    });
+    for (const msg of persistedMessages) {
+      expect((msg.metadata as { intentionId?: string }).intentionId).toBeUndefined();
+    }
+  });
+
+  it('(8) REVIEW-MEDIUM-2: turno com intention_id de outro ator (ator diverge) → intentionId omitido', async () => {
+    // O único grupo é de user-a, mas o intention_id pertence a um turno de
+    // user-b: sem correspondência de ator demonstrável, omite.
+    const { persistedMessages } = await migrateForIntentCase({
+      version: 1,
+      workspaceId: 'ws-intent-actor',
+      turns: [
+        { id: 'turn-1', intention_id: 'intent-other-actor', actor_id: 'user-b', status: 'completed', attempts: 1, tokens_used: 10 },
+      ],
+      messages: [
+        {
+          id: 'msg-1',
+          actor_id: 'user-a',
+          role: 'user',
+          content_json: JSON.stringify('qual meu saldo?'),
+          created_at: '2026-08-20T10:00:00.000Z',
+        },
+        {
+          id: 'msg-1:assistant',
+          actor_id: 'agent',
+          role: 'assistant',
+          content_json: JSON.stringify('Seu saldo é R$ 10,00.'),
+          created_at: '2026-08-20T10:00:01.000Z',
+        },
+      ],
+      hasInFlightTurns: false,
+    });
+    for (const msg of persistedMessages) {
+      expect((msg.metadata as { intentionId?: string }).intentionId).toBeUndefined();
+    }
+  });
+
+  it('(9) REVIEW-MEDIUM-2: turno não-completed com intention_id → intentionId omitido', async () => {
+    // Turno failed/aborted não produziu par Q&A confiável: a identidade não
+    // é propagada mesmo com ator e contagem casando.
+    const { persistedMessages } = await migrateForIntentCase({
+      version: 1,
+      workspaceId: 'ws-intent-status',
+      turns: [
+        { id: 'turn-1', intention_id: 'intent-failed', actor_id: 'user-a', status: 'failed', attempts: 3, tokens_used: 10 },
+      ],
+      messages: [
+        {
+          id: 'msg-1',
+          actor_id: 'user-a',
+          role: 'user',
+          content_json: JSON.stringify('qual meu saldo?'),
+          created_at: '2026-08-20T10:00:00.000Z',
+        },
+      ],
+      hasInFlightTurns: false,
+    });
+    for (const msg of persistedMessages) {
+      expect((msg.metadata as { intentionId?: string }).intentionId).toBeUndefined();
+    }
+  });
+
+  it('(10) FIX-R3: ordenação do array divergente da cronológica → intentionId omitido em tudo (sem vínculo verificável)', async () => {
+    // FIX-R3: antes, o mapeamento turno↔grupo usava a ordem cronológica
+    // (turnos[i] casa com o i-ésimo grupo cronológico). Como o formato
+    // legado não tem vínculo verificável, nem a ordem cronológica autoriza
+    // propagar identidade: omite sempre.
+    const exportShuffled: LegacyFullExport = {
+      version: 1,
+      workspaceId: 'ws-intent-order',
+      turns: [
+        { id: 'turn-1', intention_id: 'intent-first', actor_id: 'user-a', status: 'completed', attempts: 1, tokens_used: 10 },
+        { id: 'turn-2', actor_id: 'user-a', status: 'completed', attempts: 1, tokens_used: 5 },
+      ],
+      messages: [
+        {
+          id: 'msg-2',
+          actor_id: 'user-a',
+          role: 'user',
+          content_json: JSON.stringify('e as contas?'),
+          created_at: '2026-08-20T10:05:00.000Z',
+        },
+        {
+          id: 'msg-1:assistant',
+          actor_id: 'agent',
+          role: 'assistant',
+          content_json: JSON.stringify('Seu saldo é R$ 10,00.'),
+          created_at: '2026-08-20T10:00:01.000Z',
+        },
+        {
+          id: 'msg-1',
+          actor_id: 'user-a',
+          role: 'user',
+          content_json: JSON.stringify('qual meu saldo?'),
+          created_at: '2026-08-20T10:00:00.000Z',
+        },
+      ],
+      hasInFlightTurns: false,
+    };
+    const { persistedMessages } = await migrateForIntentCase(exportShuffled);
+    const byId = new Map(persistedMessages.map((m) => [m.id, m]));
+    expect((byId.get('msg-1')!.metadata as { intentionId?: string }).intentionId).toBeUndefined();
+    expect((byId.get('msg-1:assistant')!.metadata as { intentionId?: string }).intentionId).toBeUndefined();
+    expect((byId.get('msg-2')!.metadata as { intentionId?: string }).intentionId).toBeUndefined();
+  });
+
+  it('(11) FIX-R3: dois turnos completed do mesmo ator em ordem inversa aos grupos → intentionId omitido (nunca trocado)', async () => {
+    // O formato legado não carrega vínculo verificável turno↔mensagem
+    // (LegacyTurn sem created_at/seq/message_ids; LegacyMessage sem
+    // turn_id/intention_id). Com dois portadores de intention_id, o
+    // mapeamento posicional atribui a identidade errada quando o array de
+    // turnos vem em ordem inversa à cronologia dos grupos — fail-closed:
+    // omite, nunca troca.
+    const { persistedMessages } = await migrateForIntentCase({
+      version: 1,
+      workspaceId: 'ws-intent-swap',
+      turns: [
+        { id: 'turn-2', intention_id: 'intent-second', actor_id: 'user-a', status: 'completed', attempts: 1, tokens_used: 10 },
+        { id: 'turn-1', intention_id: 'intent-first', actor_id: 'user-a', status: 'completed', attempts: 1, tokens_used: 10 },
+      ],
+      messages: [
+        {
+          id: 'msg-1',
+          actor_id: 'user-a',
+          role: 'user',
+          content_json: JSON.stringify('qual meu saldo?'),
+          created_at: '2026-08-20T10:00:00.000Z',
+        },
+        {
+          id: 'msg-1:assistant',
+          actor_id: 'agent',
+          role: 'assistant',
+          content_json: JSON.stringify('Seu saldo é R$ 10,00.'),
+          created_at: '2026-08-20T10:00:01.000Z',
+        },
+        {
+          id: 'msg-2',
+          actor_id: 'user-a',
+          role: 'user',
+          content_json: JSON.stringify('e as contas?'),
+          created_at: '2026-08-20T10:05:00.000Z',
+        },
+        {
+          id: 'msg-2:assistant',
+          actor_id: 'agent',
+          role: 'assistant',
+          content_json: JSON.stringify('Nada para amanhã.'),
+          created_at: '2026-08-20T10:05:01.000Z',
+        },
+      ],
+      hasInFlightTurns: false,
+    });
+    for (const msg of persistedMessages) {
+      expect((msg.metadata as { intentionId?: string }).intentionId).toBeUndefined();
+    }
   });
 });

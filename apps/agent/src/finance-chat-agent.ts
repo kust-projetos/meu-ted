@@ -2639,12 +2639,19 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       // PendingOperationCoordinator as natural language — one decision
       // machine, no parallel path. The card names its operation, so decide()
       // addresses it by id (no listing, no disambiguation).
+      // FIX-187: the per-tap approval context (requestId) doubles as the
+      // durable confirmation intention: decide(confirm|retry) binds it
+      // API-side (V060) and verifies it on execute, so a retap/redelivery
+      // can never confirm a different operation under a stale context, and
+      // a restart loses no protection (the API is the durable frontier —
+      // the body contract stays {decision, requestId}, PWA untouched).
       const result = await new PendingOperationCoordinator({
         client: new MutationApiClient({ request: requestWithApprovalToken }),
       }).decide({
         operationId,
         decision: body.decision as 'confirm' | 'cancel' | 'retry',
         identity: { workspaceId, actorId, deviceId },
+        intentionId: body.requestId.trim(),
       });
       // AGENT-010: sanitized approval lifecycle events (status only — never
       // operation payloads, tokens, or financial values).
@@ -3837,7 +3844,23 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         return timeA - timeB;
       });
 
-      return Response.json({ items, total: items.length });
+      // FIX-melhorias REVIEW-MEDIUM-1: ?limit= explícito pagina a janela
+      // MAIS RECENTE preservando a ordem cronológica; ausente/inválido/<=0
+      // cai no default alto (200) — conversa longa sem truncar, sem mudar
+      // o shape {items, total}.
+      const HISTORY_DEFAULT_LIMIT = 200;
+      const HISTORY_MAX_LIMIT = 1000;
+      let historyLimit = HISTORY_DEFAULT_LIMIT;
+      const limitRaw = url.searchParams.get("limit");
+      if (limitRaw !== null) {
+        const parsed = Number.parseInt(limitRaw, 10);
+        if (Number.isSafeInteger(parsed) && parsed > 0) {
+          historyLimit = Math.min(parsed, HISTORY_MAX_LIMIT);
+        }
+      }
+      const paged = items.slice(-historyLimit);
+
+      return Response.json({ items: paged, total: paged.length });
     }
 
     return new Response("Not found", { status: 404 });
