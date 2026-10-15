@@ -255,34 +255,30 @@ describe("TedChat — AC05: um balão por messageId, sem desaparecimento silenci
     expect(screen.getAllByText("Quanto gastei no mês?")).toHaveLength(1);
   });
 
-  it("COMPORTAMENTO REAL (documentado): o balão confirmado sai da tela se o histórico bem-sucedido não o trouxer", async () => {
-    // Comportamento atual do merge de `loadHistory`: só balões locais
-    // "sending"/"failed" sobrevivem a um refresh autoritativo — um balão já
-    // confirmado sai da tela se o lote retornado não o contiver.
-    //
-    // ALCANCE REAL (ver relatório A02): no caminho `/rpc/chat` o DO persiste a
-    // mensagem do usuário ANTES de responder (finance-chat-agent.ts:867), então
-    // o caso comum não some. A janela existe quando o histórico bem-sucedido
-    // não traz a mensagem — p.ex. retry interno de grounding
-    // (`isCorrectionRetry`, que suprime a persistência), histórico parcial ou
-    // outro cliente na mesma conversa. O `/rpc/history` NÃO devolve o
-    // intentionId/messageId, então o cliente não tem como reconciliar por
-    // identidade: fixar isto exige eco do id no contrato + decisão de produto.
+  it("FIX-169: o balão confirmado é retido como sent-awaiting-history até o histórico convergir (nunca some)", async () => {
+    // FIX-169 (P0): o merge de `loadHistory` agora retém balões locais `sent`
+    // (consistência eventual explícita) + o DO persiste turnos
+    // mutation-proposal/confirmation/cancel — o balão confirmado NÃO sai mais
+    // da tela quando o lote retornado ainda não o contém. Quando o histórico
+    // passa a trazer a mensagem, ela converge para a cópia do servidor (uma
+    // só, sem fantasma permanente).
     const user = userEvent.setup();
     await renderReady();
 
     await send(user, "Gastei R$ 50 no mercado");
     await waitFor(() => expect(screen.queryByText("enviando…")).toBeNull());
 
-    // O histórico autoritativo respondeu bem, mas sem a mensagem: o balão
-    // local confirmado não é retido.
-    expect(screen.queryByText("Gastei R$ 50 no mercado")).toBeNull();
+    // O histórico autoritativo respondeu bem, mas ainda sem a mensagem: o
+    // balão local confirmado PERMANECE (antes sumia aqui).
+    expect(screen.getByText("Gastei R$ 50 no mercado")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: RETRY })).toBeNull();
 
-    // Quando o histórico passa a trazer a mensagem, ela reaparece — sempre
-    // vinda do servidor, nunca do estado local.
+    // Quando o histórico passa a trazer a mensagem, há cópia única — sempre
+    // vinda do servidor, nunca duplicada com o estado local.
     histories["ws-1"] = [userMsg("srv-1", "Gastei R$ 50 no mercado")];
     await send(user, "e o almoço?");
     await waitFor(() => expect(screen.getByText("Gastei R$ 50 no mercado")).toBeInTheDocument());
+    expect(screen.getAllByText("Gastei R$ 50 no mercado")).toHaveLength(1);
   });
 
   it("REIDRATAÇÃO (TASK-08 FIX 1): reload restaura o balão não confirmado como failed com retry, sem reenvio", async () => {
@@ -362,7 +358,7 @@ describe("TedChat — AC06: dois textos iguais com IDs distintos = DUAS mensagen
     expect(ids[0]).not.toBe(ids[1]);
   });
 
-  it("CONFOUND DOCUMENTADO (comportamento real, NÃO endossado): resposta local não persistida + turno atual idêntico persiste duplicata", async () => {
+  it("CONFOUND DOCUMENTADO (comportamento real, NÃO endossado): resposta local não convergida + turno atual idêntico persiste duplicata", async () => {
     // Cenário exato do reviewer (MEDIUM). O fio NÃO carrega identidade
     // autoritativa hoje — evidência:
     //   • `/rpc/chat` responde `{ status, output, pendingOperation?, undoProposal? }`
@@ -379,12 +375,15 @@ describe("TedChat — AC06: dois textos iguais com IDs distintos = DUAS mensagen
     // Logo não existe identidade reutilizável para reconciliar a resposta do
     // turno contra o lote, e a heurística de contagem (texto) não dá conta.
     // COMO O COMPORTAMENTO É HOJE (fixado aqui, não endossado):
-    //   turno 1 = mutation/confirmation/cancel → resposta assistant NÃO
-    //   persistida pelo DO (finance-chat-agent.ts:2200-2203) → fica só local;
+    //   turno 1 = mutation/confirmation/cancel cuja resposta ainda não
+    //   convergiu no histórico mockado → fica só local;
     //   turno 2 = read → resposta "X" IGUAL, persistida pelo DO;
     //   o refresh substitui a lista (a cópia local do turno 1 some) e a
     //   heurística conta 1 <= 1 → anexa a cópia local do turno 2 → o MESMO
     //   texto aparece DUAS vezes, ambas do turno 2.
+    // (FIX-169: no protocolo real o DO agora persiste o Q&A de mutação, então
+    // a janela ficou restrita a histórico defasado/parcial — a heurística de
+    // contagem por texto continua sem identidade autoritativa.)
     // Correção exige mudança de protocolo (persistir/ecoar o intentionId) —
     // decisão do Planner, fora do escopo desta fatia.
     const user = userEvent.setup();

@@ -98,6 +98,36 @@ describe("R3 FIX 2 — âncora só-anexo só reconcilia com evidência de anexo"
     ).toBe(false);
   });
 
+  it("FIX-169-170-R3: evidência de anexo com intentionId DIFERENTE não supera (outro envio)", () => {
+    const anchorSendA = {
+      messageId: "send-A",
+      intentionId: "send-A",
+      content: "",
+      createdAt: "2026-10-13T10:00:00.000Z",
+      attachments: [att("nota.jpg")],
+    };
+    expect(
+      isAnchorSupersededByHistory(anchorSendA, [
+        { isOwn: true, content: "[anexo nota.jpg]", createdAt: "2026-10-13T10:05:00.000Z", intentionId: "send-B" },
+      ]),
+    ).toBe(false);
+  });
+
+  it("FIX-169-170-R3: evidência de anexo com a MESMA identidade supera (controle positivo)", () => {
+    const anchorSendA = {
+      messageId: "send-A",
+      intentionId: "send-A",
+      content: "",
+      createdAt: "2026-10-13T10:00:00.000Z",
+      attachments: [att("nota.jpg")],
+    };
+    expect(
+      isAnchorSupersededByHistory(anchorSendA, [
+        { isOwn: true, content: "[anexo nota.jpg]", createdAt: "2026-10-13T10:05:00.000Z", intentionId: "send-A" },
+      ]),
+    ).toBe(true);
+  });
+
   it("sem timestamps confiáveis: fail-closed (mantém o failed, nunca suprime)", () => {
     expect(
       isAnchorSupersededByHistory(
