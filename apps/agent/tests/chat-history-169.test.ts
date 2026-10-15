@@ -234,4 +234,244 @@ describe("FIX-169 RED: mutation turns persist into durable history", () => {
     const pair = data.items.filter((i) => i.intentionId === "intent-169-id-echo");
     expect(pair.map((i) => i.role).sort()).toEqual(["assistant", "user"]);
   });
+
+  it("(timeout) FIX-melhorias item 5 (#169 retry-timeout): resposta perdida + redelivery tardio converge sem duplicata", async () => {
+    // Somente teste: o redelivery intencional (mesmo intentionId, teste (d))
+    // existe; faltava o caso timeout — o servidor processou TUDO (par
+    // persistido, proposta materializada) mas a resposta HTTP se perdeu no
+    // transporte. O redelivery tardio deve convergir: 200, zero linhas
+    // extras, MESMA proposta e MESMA resposta — nunca um segundo efeito.
+    const { agent, persisted } = createTestAgent();
+    mockProposalUpstream();
+    const text = "gastei 90 com carne no mercado na categoria 00000000-0000-4000-8000-000000000001";
+    const post = (intentionId: string) =>
+      agent.fetch(
+        new Request("https://agent.test.local/rpc/chat", {
+          method: "POST",
+          headers: chatHeaders,
+          body: JSON.stringify({ text, intentionId }),
+        }),
+      );
+
+    // 1º POST: processado integralmente; a resposta "se perde" (o teste a
+    // descarta como um timeout no transporte a descartaria).
+    const r1 = await post("intent-169-timeout");
+    expect(r1.status).toBe(200);
+    const b1 = (await r1.json()) as { output?: string; pendingOperation?: { id?: string } };
+    expect(b1.output).toBeTruthy();
+    expect(b1.pendingOperation?.id).toBe("pending-169-1");
+    const countAfterLoss = persisted.length;
+    expect(countAfterLoss).toBeGreaterThanOrEqual(2);
+
+    // Redelivery tardio com o MESMO intentionId.
+    const r2 = await post("intent-169-timeout");
+    expect(r2.status).toBe(200);
+    const b2 = (await r2.json()) as { output?: string; pendingOperation?: { id?: string } };
+    expect(persisted.length).toBe(countAfterLoss);
+    expect(b2.pendingOperation?.id).toBe(b1.pendingOperation?.id);
+    expect(b2.output).toBe(b1.output);
+
+    // E o histórico segue com UM par (sem duplicata visível).
+    const hist = await agent.fetch(historyReq());
+    expect(hist.status).toBe(200);
+    const data = (await hist.json()) as {
+      items: Array<{ role: string; text?: string; content?: string; intentionId?: string }>;
+    };
+    expect(data.items.filter((i) => i.intentionId === "intent-169-timeout").map((i) => i.role).sort()).toEqual([
+      "assistant",
+      "user",
+    ]);
+  });
+});
+
+describe("FIX-melhorias item 2: ?limit= no /rpc/history (default 200, shape intacto)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const storedMsg = (
+    id: string,
+    role: "user" | "assistant",
+    text: string,
+    createdAt: string,
+  ): UIMessage =>
+    ({
+      id,
+      role,
+      parts: [{ type: "text", text }],
+      metadata: {
+        actorId: role === "assistant" ? "ted" : "actor-169",
+        workspaceId: "workspace-169",
+        createdAt,
+      },
+    }) as unknown as UIMessage;
+
+  const seedPairs = async (
+    agent: { persistMessages: (msgs: UIMessage[]) => Promise<void> },
+    count: number,
+  ): Promise<void> => {
+    const base = Date.parse("2026-10-01T10:00:00.000Z");
+    const msgs: UIMessage[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const stamp = new Date(base + i * 60_000).toISOString();
+      msgs.push(storedMsg(`seed-user-${i}`, "user", `pergunta ${i}`, stamp));
+      msgs.push(storedMsg(`seed-asst-${i}`, "assistant", `resposta ${i}`, stamp));
+    }
+    await agent.persistMessages(msgs);
+  };
+
+  const historyReqWith = (query: string) =>
+    new Request(`https://agent.test.local/rpc/history${query}`, {
+      method: "GET",
+      headers: {
+        "x-agent-actor": "actor-169",
+        "x-agent-workspace": "workspace-169",
+      },
+    });
+
+  it("?limit=2 pagina os MAIS RECENTES primeiro, em ordem cronológica, sem mudar o shape {items, total}", async () => {
+    const { agent } = createTestAgent();
+    await seedPairs(agent, 3);
+    const hist = await agent.fetch(historyReqWith("?limit=2"));
+    expect(hist.status).toBe(200);
+    const data = (await hist.json()) as {
+      items: Array<{ id: string; role: string; text?: string; content?: string }>;
+      total: number;
+    };
+    expect(Array.isArray(data.items)).toBe(true);
+    expect(typeof data.total).toBe("number");
+    expect(data.items).toHaveLength(2);
+    expect(data.total).toBe(2);
+    // Janela mais recente (par 2), preservando a ordem cronológica user→asst.
+    expect(data.items[0]!.id).toBe("seed-user-2");
+    expect(data.items[1]!.id).toBe("seed-asst-2");
+  });
+
+  it("250 msgs sem limit: default 200 serve a janela MAIS RECENTE em ordem cronológica", async () => {
+    const { agent } = createTestAgent();
+    await seedPairs(agent, 125);
+    const hist = await agent.fetch(historyReqWith(""));
+    expect(hist.status).toBe(200);
+    const data = (await hist.json()) as { items: Array<{ id: string }>; total: number };
+    expect(data.items).toHaveLength(200);
+    expect(data.total).toBe(200);
+    // Últimas 200 de 250 msgs = pares 25..124, ordem cronológica preservada.
+    expect(data.items[0]!.id).toBe("seed-user-25");
+    expect(data.items[199]!.id).toBe("seed-asst-124");
+  });
+
+  it("1050 msgs: teto 1000 serve a janela MAIS RECENTE (?limit= gigante respeita o teto; sem limit vale o default 200)", async () => {
+    const { agent } = createTestAgent();
+    await seedPairs(agent, 525);
+    // ?limit= além do teto: capa em 1000, janela mais recente.
+    const hist = await agent.fetch(historyReqWith("?limit=2000"));
+    expect(hist.status).toBe(200);
+    const data = (await hist.json()) as { items: Array<{ id: string }>; total: number };
+    expect(data.items).toHaveLength(1000);
+    expect(data.total).toBe(1000);
+    // Últimas 1000 de 1050 msgs = msgs 50..1049 = pares 25..524.
+    expect(data.items[0]!.id).toBe("seed-user-25");
+    expect(data.items[999]!.id).toBe("seed-asst-524");
+    // Sem limit: default 200, janela mais recente.
+    const histDefault = await agent.fetch(historyReqWith(""));
+    expect(histDefault.status).toBe(200);
+    const dataDefault = (await histDefault.json()) as { items: Array<{ id: string }>; total: number };
+    expect(dataDefault.items).toHaveLength(200);
+    expect(dataDefault.items[0]!.id).toBe("seed-user-425");
+    expect(dataDefault.items[199]!.id).toBe("seed-asst-524");
+  });
+
+  it("?limit inválido ou <= 0 cai no default (retorna tudo)", async () => {
+    const { agent } = createTestAgent();
+    await seedPairs(agent, 3);
+    for (const query of ["?limit=abc", "?limit=0", "?limit=-5"]) {
+      const hist = await agent.fetch(historyReqWith(query));
+      expect(hist.status).toBe(200);
+      const data = (await hist.json()) as { items: Array<{ id: string }>; total: number };
+      expect(data.items).toHaveLength(6);
+      expect(data.total).toBe(6);
+    }
+  });
+});
+
+describe("FIX-melhorias item 6 (#169 conversa-longa): persist em volume 40+ turnos", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("45 turnos (90 msgs) persistem e o history serve tudo sob o default; ?limit= degrada graciosamente", async () => {
+    // Somente teste: sem paginação além do item 2 — o default 200 cobre a
+    // conversa longa inteira; o slice é ordenado e o shape não muda.
+    const persisted: UIMessage[] = [];
+    const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent & {
+      messages: UIMessage[];
+      persistMessages: (msgs: UIMessage[]) => Promise<void>;
+    };
+    agent.messages = persisted;
+    agent.persistMessages = vi.fn(async (msgs: UIMessage[]) => {
+      persisted.push(...msgs);
+    });
+    Object.defineProperty(agent, "state", {
+      value: { storage: {} },
+      writable: true,
+      configurable: true,
+    });
+
+    const TURNS = 45;
+    const base = Date.parse("2026-10-01T10:00:00.000Z");
+    const batch: UIMessage[] = [];
+    for (let i = 0; i < TURNS; i += 1) {
+      const stamp = new Date(base + i * 60_000).toISOString();
+      const intentionId = `vol-turn-${i}`;
+      batch.push({
+        id: `vol-user-${i}`,
+        role: "user",
+        parts: [{ type: "text", text: `pergunta volume ${i}` }],
+        metadata: { actorId: "actor-169", workspaceId: "workspace-169", createdAt: stamp, intentionId },
+      } as unknown as UIMessage);
+      batch.push({
+        id: `vol-asst-${i}`,
+        role: "assistant",
+        parts: [{ type: "text", text: `resposta volume ${i}` }],
+        metadata: { actorId: "ted", workspaceId: "workspace-169", createdAt: stamp, intentionId },
+      } as unknown as UIMessage);
+    }
+    await agent.persistMessages(batch);
+    expect(persisted).toHaveLength(TURNS * 2);
+
+    // History completo sob o default: 90 itens ordenados, identidade preservada.
+    const full = await agent.fetch(historyReq());
+    expect(full.status).toBe(200);
+    const fullData = (await full.json()) as {
+      items: Array<{ id: string; intentionId?: string }>;
+      total: number;
+    };
+    expect(fullData.items).toHaveLength(TURNS * 2);
+    expect(fullData.total).toBe(TURNS * 2);
+    expect(fullData.items[0]!.id).toBe("vol-user-0");
+    expect(fullData.items[fullData.items.length - 1]!.id).toBe(`vol-asst-${TURNS - 1}`);
+    expect(
+      fullData.items.filter((i) => i.intentionId === `vol-turn-${TURNS - 1}`).map((i) => i.id).sort(),
+    ).toEqual([`vol-asst-${TURNS - 1}`, `vol-user-${TURNS - 1}`]);
+
+    // Degradação graciosa: ?limit=50 pagina a janela MAIS RECENTE, sem erro.
+    const pagedReq = new Request("https://agent.test.local/rpc/history?limit=50", {
+      method: "GET",
+      headers: {
+        "x-agent-actor": "actor-169",
+        "x-agent-workspace": "workspace-169",
+      },
+    });
+    const paged = await agent.fetch(pagedReq);
+    expect(paged.status).toBe(200);
+    const pagedData = (await paged.json()) as {
+      items: Array<{ id: string }>;
+      total: number;
+    };
+    expect(pagedData.items).toHaveLength(50);
+    expect(pagedData.total).toBe(50);
+    // Últimas 50 de 90 msgs (pares 20..44), ordem cronológica preservada.
+    expect(pagedData.items[0]!.id).toBe("vol-user-20");
+    expect(pagedData.items[49]!.id).toBe("vol-asst-44");
+  });
 });
