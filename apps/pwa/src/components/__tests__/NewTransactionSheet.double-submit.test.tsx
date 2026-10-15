@@ -208,4 +208,42 @@ describe("NewTransactionSheet double-submit guard (#185)", () => {
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(savedKeys(onSave)[0]).toBeDefined();
   });
+
+  it("troca de aba com save em voo: erro tardio de A não contamina a chave de B", async () => {
+    const user = userEvent.setup();
+    mockNoDuplicate();
+    let rejectSaveA!: (err: unknown) => void;
+    const onSave = vi.fn((data: SaveData) => {
+      if (onSave.mock.calls.length === 1) {
+        return new Promise<void>((_, reject) => {
+          rejectSaveA = reject;
+        });
+      }
+      return Promise.resolve();
+    });
+    render(<NewTransactionSheet accounts={accounts} categories={categories} onSave={onSave} />);
+    await fillValidExpense(user);
+
+    // Salvar A: fica em voo (promise pendente).
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [keyA] = savedKeys(onSave);
+    expect(keyA).toBeDefined();
+
+    // Trocar de aba com A pendente → draft novo (chave B), preencher B.
+    await user.click(screen.getByRole("button", { name: "Receita" }));
+    await fillValidExpense(user);
+
+    // A falha tardiamente com commandId=A.
+    rejectSaveA(attachCommandId(new Error("timeout"), keyA));
+    await waitFor(() => expect(saveButton()).not.toBeDisabled());
+
+    // Salvar B deve usar a chave de B, nunca a de A.
+    await user.click(saveButton());
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+
+    const [, keyB] = savedKeys(onSave);
+    expect(keyB).toBeDefined();
+    expect(keyB).not.toBe(keyA);
+  });
 });

@@ -433,7 +433,11 @@ export default function NewTransactionSheet({
    * chave. Sucesso definitivo → rotaciona (próxima intent, nova chave).
    * Falha → mantém a chave, adotando o id que a camada de escrita reportar
    * no erro (getFailedCommandId), para retry manual como replay, não novo
-   * efeito. O lock (savingRef/isSaving) é gerenciado pelos chamadores.
+   * efeito — mas SÓ se a ref ainda apontar para a intent que acabou de
+   * assentar. Se o usuário trocou de aba com o save em voo, resetDraft já
+   * rotacionou a ref para a nova intent B e o erro tardio de A nunca pode
+   * sobrescrevê-la (senão o próximo save de B reusaria a chave de A).
+   * O lock (savingRef/isSaving) é gerenciado pelos chamadores.
    */
   async function runSave(data: SaveData): Promise<boolean> {
     try {
@@ -443,7 +447,9 @@ export default function NewTransactionSheet({
       return true;
     } catch (e) {
       const failedId = getFailedCommandId(e);
-      if (failedId) commandIdRef.current = failedId;
+      if (failedId && commandIdRef.current === data.idempotencyKey) {
+        commandIdRef.current = failedId;
+      }
       // Save failed: keep dirty + keep the intent key for retry.
       return false;
     }
