@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Calendar,
@@ -17,6 +17,7 @@ import { useFormDirtySafe } from "@/lib/unsaved-changes";
 import type { Account, Category } from "@/lib/state/types";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { checkDuplicate, formatDuplicateWarning } from "@/lib/api/endpoints";
+import { getFailedCommandId, newCommandId } from "@/lib/api/command-id";
 import { isApiConfigured } from "@/lib/api/client";
 import { splitInstallmentAmounts } from "@/lib/finance/installments";
 
@@ -36,6 +37,13 @@ export interface SaveData {
   toAccountId?: string;
   installmentsTotal?: number;
   notes?: string;
+  /**
+   * #185: chave de idempotência da intent, mintada pelo sheet (uma por
+   * intent, estável em retries/re-renders). Transporte puro: o executor a
+   * repassa à camada commands (que a preserva verbatim); nunca entra no
+   * estado React nem distingue intents por igualdade de payload.
+   */
+  idempotencyKey?: string;
 }
 
 type OriginKind = "account" | "card";
@@ -167,6 +175,25 @@ export default function NewTransactionSheet({
     }
     return "";
   });
+
+  // #185: chave de idempotência por INTENT — mintada uma vez por montagem,
+  // estável em re-renders e retries; rotacionada só em sucesso definitivo ou
+  // draft genuinamente novo (troca de aba). Nunca por igualdade de payload.
+  const commandIdRef = useRef<string | null>(null);
+  if (commandIdRef.current === null) commandIdRef.current = newCommandId();
+  function currentCommandId(): string {
+    if (commandIdRef.current === null) commandIdRef.current = newCommandId();
+    return commandIdRef.current;
+  }
+  // #185: lock síncrono (ref, não estado) + espelho em estado para disable
+  // imediato do botão. O ref bloqueia o segundo toque antes de qualquer
+  // await; o estado desabilita o botão no próximo render.
+  const savingRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  function rotateCommandId() {
+    commandIdRef.current = newCommandId();
+  }
 
   // B2: mutually exclusive origin — exactly one of account/card.
   const [originKind, setOriginKind] = useState<OriginKind>("account");
@@ -373,6 +400,10 @@ export default function NewTransactionSheet({
   }
 
   function resetDraft() {
+    // Draft genuinamente novo (troca de aba limpa todos os campos) = nova
+    // intent: rotaciona a chave para nunca reusar o id de um commit anterior
+    // num payload distinto (#185 anti-falso-positivo).
+    rotateCommandId();
     setCategoryId("");
     setSubcategoryId("");
     setOriginKind("account");
@@ -397,12 +428,24 @@ export default function NewTransactionSheet({
   const [pendingData, setPendingData] = useState<SaveData | null>(null);
   const [checkingDuplicate, setCheckingDuplicate] = useState(false);
 
-  async function doSave(data: SaveData) {
+  /**
+   * #185: executa o save com a chave da intent e faz a contabilidade da
+   * chave. Sucesso definitivo → rotaciona (próxima intent, nova chave).
+   * Falha → mantém a chave, adotando o id que a camada de escrita reportar
+   * no erro (getFailedCommandId), para retry manual como replay, não novo
+   * efeito. O lock (savingRef/isSaving) é gerenciado pelos chamadores.
+   */
+  async function runSave(data: SaveData): Promise<boolean> {
     try {
       await onSave(data);
       markClean();
-    } catch {
-      // Save failed: keep dirty.
+      rotateCommandId();
+      return true;
+    } catch (e) {
+      const failedId = getFailedCommandId(e);
+      if (failedId) commandIdRef.current = failedId;
+      // Save failed: keep dirty + keep the intent key for retry.
+      return false;
     }
   }
 
@@ -443,49 +486,78 @@ export default function NewTransactionSheet({
       const trimmedNotes = notes.trim();
       if (trimmedNotes) data.notes = trimmedNotes.slice(0, 2000);
     }
+    // #185: a intent carrega a chave estável deste draft (retries e
+    // confirmação forçada reusam a MESMA chave; ver runSave/rotateCommandId).
+    data.idempotencyKey = currentCommandId();
 
-    // Duplicate check before save (unless force:true bypass)
-    if (!force && isApiConfigured() && description.trim()) {
-      try {
-        setCheckingDuplicate(true);
-        const dupInput = isTransfer
-          ? {
-              kind: "transfer" as const,
-              description: data.description,
-              amountCents: data.amountCents,
-              date: data.date,
-              fromAccountId: data.fromAccountId,
-              toAccountId: data.toAccountId,
-            }
-          : {
-              kind: (data.kind === "income" ? "income" : "expense") as "expense" | "income",
-              description: data.description,
-              amountCents: data.amountCents,
-              date: data.date,
-              accountId: data.accountId,
-            };
-        const result = await checkDuplicate(dupInput);
-        if (result.duplicate_detected && result.match) {
-          const warning = formatDuplicateWarning(result.match, data.description);
-          setDuplicateWarning(warning);
-          setPendingData(data);
-          return;
+    // #185: lock síncrono antes de qualquer await — o segundo toque na
+    // janela de voo (pós-check, save pendente) retorna de imediato.
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
+    try {
+      // Duplicate check before save (unless force:true bypass)
+      if (!force && isApiConfigured() && description.trim()) {
+        try {
+          setCheckingDuplicate(true);
+          const dupInput = isTransfer
+            ? {
+                kind: "transfer" as const,
+                description: data.description,
+                amountCents: data.amountCents,
+                date: data.date,
+                fromAccountId: data.fromAccountId,
+                toAccountId: data.toAccountId,
+              }
+            : {
+                kind: (data.kind === "income" ? "income" : "expense") as "expense" | "income",
+                description: data.description,
+                amountCents: data.amountCents,
+                date: data.date,
+                accountId: data.accountId,
+              };
+          const result = await checkDuplicate(dupInput);
+          if (result.duplicate_detected && result.match) {
+            const warning = formatDuplicateWarning(result.match, data.description);
+            setDuplicateWarning(warning);
+            setPendingData(data);
+            return;
+          }
+        } catch {
+          // Fail-open: on detection error, proceed to save.
+        } finally {
+          setCheckingDuplicate(false);
         }
-      } catch {
-        // Fail-open: on detection error, proceed to save.
-      } finally {
-        setCheckingDuplicate(false);
       }
-    }
 
-    await doSave(data);
+      await runSave(data);
+    } finally {
+      // O lock libera no settle; a CHAVE segue a regra de runSave (rotaciona
+      // só em sucesso, mantém em falha/resposta desconhecida para retry).
+      savingRef.current = false;
+      setIsSaving(false);
+    }
   }
 
   async function handleForceConfirm() {
+    // #185: confirmação duplicada ("Salvar mesmo assim" em duplo toque)
+    // executa uma única vez; o dialog permanece aberto até o settle para o
+    // segundo toque encontrar o lock, não um save novo.
+    if (savingRef.current) return;
     const data = pendingData;
-    setDuplicateWarning(null);
-    setPendingData(null);
-    if (data) await doSave(data);
+    if (!data) return;
+    savingRef.current = true;
+    setIsSaving(true);
+    try {
+      const ok = await runSave(data);
+      if (ok) {
+        setDuplicateWarning(null);
+        setPendingData(null);
+      }
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
+    }
   }
 
   function handleDuplicateCancel() {
@@ -500,7 +572,7 @@ export default function NewTransactionSheet({
   ];
 
   const saveDisabled =
-    amountCents <= 0 || checkingDuplicate || missingOrigin ||
+    amountCents <= 0 || checkingDuplicate || isSaving || missingOrigin ||
     (isTransfer && (!fromAccountId || !toAccountId || fromAccountId === toAccountId));
 
   return (
@@ -960,11 +1032,13 @@ export default function NewTransactionSheet({
         >
           {checkingDuplicate
             ? "Verificando..."
-            : isTransfer
-              ? "Transferir"
-              : parcelado
-                ? `Salvar em ${installmentsCount}x`
-                : "Salvar"}
+            : isSaving
+              ? "Salvando..."
+              : isTransfer
+                ? "Transferir"
+                : parcelado
+                  ? `Salvar em ${installmentsCount}x`
+                  : "Salvar"}
         </button>
       </div>
 
