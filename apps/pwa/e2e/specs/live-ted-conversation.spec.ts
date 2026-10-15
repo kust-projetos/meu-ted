@@ -35,7 +35,25 @@
  * secundário — reidratação que preserva o conjunto de ids não invalida o
  * turno; (c) pre-flight fail-fast (read-only) que lista contas "E2E conversa
  * *", markers e propostas pendentes de OUTROS runs sem deletar nada alheio.
- */
+ *
+ * R6 (fix #178 — waits TURN-SCOPED): o run live R5 (19.9s, FAIL linha 508)
+ * revelou falha sistêmica — progress2="question" veio do HISTÓRICO ("Qual
+ * categoria devo usar?" de run anterior), não do nosso turno; nossa mensagem
+ * T2 não constava no snapshot final; sufixo por identidade vazio; header
+ * ainda "conectando.". Conclusão: waits de progresso que varrem o diálogo
+ * inteiro são instantaneamente satisfeitos pelo histórico rico — o teste
+ * nunca espera DE FATO o nosso turno. Endurecimento (só-teste): (a) TODOS
+ * os waits de progresso (T1 R$, T2 pergunta/card, T3/T4 card, T6 undo)
+ * passam a ser TURN-SCOPED via poll de snapshots comparando
+ * turnSuffix(preTurn) até conter o sinal esperado (timeout com diagnóstico
+ * que inclui o sufixo atual) — NENHUM wait pode ser satisfeito por conteúdo
+ * pré-snapshot (card = approvalId novo vs preTurn, nunca innerHTML do
+ * diálogo inteiro); (b) após cada envio, exigir a bolha PRÓPRIA no sufixo
+ * antes de aguardar a resposta (bolha própria sumida = FAIL explícito
+ * "bolha própria perdida", bug #169 ressurgido — nunca mascarado);
+ * (c) T5 decision segue vinculado por URL com operationId do turno
+ * (inerentemente turn-scoped); T5b é checagem de persistência pós-reload
+ * (histórico esperado — âncoras de identidade do run preservadas). */
 import { test, expect, type Page } from "@playwright/test";
 import { validateNoHistoricReuse, validateReceiptBinding } from "../support/live-closure-guards";
 
@@ -224,7 +242,9 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
   // (pendingOperations autoritativas por id de turno). Reidratação que
   // reordene/rehidrate sem mudar o conjunto NÃO invalida o turno; perda de
   // bolha ou sumiço de card mantém o fail-closed.
-  type TurnSnapshot = { text: string; bubbles: string[]; approvalIds: string[] };
+  // R6: conta também os undo-items (data-testid ted-undo-*) para o wait
+  // TURN-SCOPED de T6 — item pré-snapshot nunca satisfaz o progresso.
+  type TurnSnapshot = { text: string; bubbles: string[]; approvalIds: string[]; undos: number };
 
   const snapshotTurn = async (page: Page): Promise<TurnSnapshot> =>
     page.evaluate(() => {
@@ -234,6 +254,9 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
         text: dlg?.textContent ?? "",
         bubbles: list ? [...list.children].map((c) => c.textContent ?? "") : [],
         approvalIds: dlg ? [...dlg.querySelectorAll('[id^="ted-op-"]')].map((el) => el.id).sort() : [],
+        undos: dlg
+          ? dlg.querySelectorAll('[data-testid="ted-undo-item"], [data-testid="ted-undo-focused"], [data-testid="ted-undo-card"]').length
+          : 0,
       };
     });
 
@@ -260,6 +283,60 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
 
   const readTurnSuffix = async (page: Page, before: TurnSnapshot): Promise<string | null> =>
     snapshotTurn(page).then((snap) => turnSuffix(snap, before)).catch(() => null);
+
+  // R6 (fix #178): waits de progresso TURN-SCOPED. Todo sinal de progresso
+  // (R$, pergunta de categoria, card, undo) é aguardado por poll de
+  // snapshots comparando turnSuffix(preTurn) até conter o sinal esperado —
+  // NENHUM wait varre o diálogo inteiro, que o histórico rico satisfaria
+  // instantaneamente (falso-vermelho/máscara do run R5). Timeout devolve o
+  // último sufixo (ou null em divergência de identidade) para diagnóstico
+  // via failOrSkip — nunca lê o chat inteiro como evidência.
+  const TURN_SIGNAL_TIMEOUT_MS = 180_000;
+  const OWN_BUBBLE_TIMEOUT_MS = 30_000;
+
+  const describeTurnSuffix = (suffix: string | null, max = 800): string =>
+    suffix === null
+      ? "<sufixo indisponível: divergência de identidade (bolha perdida ou card sumido)>"
+      : JSON.stringify(suffix.slice(-max));
+
+  const waitForTurnMatch = async (
+    page: Page,
+    before: TurnSnapshot,
+    match: (suffix: string, full: TurnSnapshot) => boolean,
+    timeoutMs = TURN_SIGNAL_TIMEOUT_MS,
+  ): Promise<{ suffix: string | null; full: TurnSnapshot | null }> => {
+    const deadline = Date.now() + timeoutMs;
+    let lastSuffix: string | null = null;
+    let lastFull: TurnSnapshot | null = null;
+    for (;;) {
+      const full = await snapshotTurn(page).catch(() => null);
+      const suffix = full ? turnSuffix(full, before) : null;
+      if (full && suffix !== null && match(suffix, full)) return { suffix, full };
+      lastSuffix = suffix;
+      lastFull = full;
+      if (Date.now() >= deadline) return { suffix: lastSuffix, full: lastFull };
+      await page.waitForTimeout(1000);
+    }
+  };
+
+  // R6: após cada envio, exigir a bolha PRÓPRIA no sufixo do turno antes de
+  // aguardar a resposta. Bolha própria sumida = FAIL explícito "bolha
+  // própria perdida" (bug #169 ressurgido) — nunca mascarado como timeout
+  // de progresso nem convertido em SKIP.
+  const requireOwnBubble = async (
+    page: Page,
+    before: TurnSnapshot,
+    ownText: string,
+    context: string,
+    timeoutMs = OWN_BUBBLE_TIMEOUT_MS,
+  ): Promise<string> => {
+    const { suffix } = await waitForTurnMatch(page, before, (s) => s.includes(ownText), timeoutMs);
+    if (suffix !== null && suffix.includes(ownText)) return suffix;
+    throw new Error(
+      `${context}: bolha própria perdida após envio ("${ownText.slice(0, 120)}") — ` +
+      `bug #169 ressurgido, sem mascaramento (sufixo atual: ${describeTurnSuffix(suffix)})`,
+    );
+  };
 
   // Erro estruturado da resposta de um turno de chat (HTTP >= 400, status
   // failed, ou campo error/code) — null quando o turno respondeu sem erro.
@@ -448,15 +525,18 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     const preT1 = await snapshotTurn(page);
     const chat1 = page.waitForResponse(
       (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 200_000 });
-    await sendTedMessage(page, dialog, "Qual o saldo total das minhas contas hoje? Responda citando o valor em reais.");
-    try {
-      await expect(dialog.getByText(/R\$\s*\d/).first()).toBeVisible({ timeout: 180_000 });
-    } catch {
+    const T1_TEXT = "Qual o saldo total das minhas contas hoje? Responda citando o valor em reais.";
+    await sendTedMessage(page, dialog, T1_TEXT);
+    // R6: bolha própria no sufixo antes de aguardar a resposta; progresso
+    // TURN-SCOPED (R$ só vale no sufixo do turno — histórico nunca satisfaz).
+    await requireOwnBubble(page, preT1, T1_TEXT, "conv-t1");
+    const t1Wait = await waitForTurnMatch(page, preT1, (s) => /R\$\s*\d/.test(s), 180_000);
+    if (t1Wait.suffix === null || !/R\$\s*\d/.test(t1Wait.suffix)) {
       const t1Resp = await chat1.then((r) => r).catch(() => null);
       const t1Error = t1Resp ? await readChatTurnError(t1Resp) : null;
-      const t1Text = await readTurnSuffix(page, preT1);
-      await failOrSkip(page, "conv-t1", "T1 sem grounding (saldo em R$ ausente após 180s)",
-        { turnText: t1Text, turnError: t1Error });
+      await failOrSkip(page, "conv-t1",
+        `T1 sem grounding (saldo em R$ ausente no sufixo do turno após 180s — sufixo atual: ${describeTurnSuffix(t1Wait.suffix)})`,
+        { turnText: t1Wait.suffix, turnError: t1Error });
     }
     await shot(page, "conv-01-leitura");
 
@@ -471,22 +551,32 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     const chat2 = page.waitForResponse(
       (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 200_000 });
     await sendTedMessage(page, dialog, T2_TEXT);
-    const progress2 = await page.waitForFunction(() => {
-      const dlg = document.querySelector("[data-testid=ted-chat]");
-      if (!dlg) return null;
-      const html = dlg.innerHTML;
-      if (/qual\s+(a\s+)?categoria/i.test(dlg.textContent || "")) return "question";
-      if (html.includes("ted-approval-item") || html.includes("ted-approval-focused")) return "card";
-      return null;
-    }, undefined, { timeout: 180_000 }).then((h) => h.jsonValue()).catch(() => "timeout") as string;
-    test.info().annotations.push({ type: "conv-t2", description: `progresso T2: ${progress2}` });
+    // R6: bolha própria no sufixo antes de aguardar a resposta; progresso
+    // TURN-SCOPED — pergunta só vale no sufixo do turno, card só vale como
+    // approvalId NOVO vs preT2 (nunca innerHTML/texto do diálogo inteiro,
+    // que o histórico satisfaz instantaneamente — falso-vermelho do R5).
+    await requireOwnBubble(page, preT2, T2_TEXT, "conv-t2");
+    const t2Wait = await waitForTurnMatch(page, preT2, (s, full) =>
+      /qual\s+(a\s+)?categoria/i.test(s) ||
+      full.approvalIds.some((id) => !preT2.approvalIds.includes(id)),
+    180_000);
+    const t2SuffixForProgress = t2Wait.suffix;
+    const t2HasQuestion = t2SuffixForProgress !== null && /qual\s+(a\s+)?categoria/i.test(t2SuffixForProgress);
+    const t2HasNewCard = (t2Wait.full?.approvalIds ?? []).some((id) => !preT2.approvalIds.includes(id));
+    const progress2 = t2HasQuestion ? "question" : t2HasNewCard ? "card" : "timeout";
+    test.info().annotations.push({
+      type: "conv-t2",
+      description: `progresso T2 (turn-scoped): ${progress2} (sufixo atual: ${describeTurnSuffix(t2SuffixForProgress)})`,
+    });
     const t2Resp = await chat2.then((r) => r).catch(() => null);
     const t2Evidence = {
-      turnText: await readTurnSuffix(page, preT2),
+      turnText: t2SuffixForProgress,
       turnError: t2Resp ? await readChatTurnError(t2Resp) : null,
     };
     if (progress2 === "timeout") {
-      await failOrSkip(page, "conv-t2", "TED não progrediu após proposta (nem pergunta de categoria, nem card)", t2Evidence);
+      await failOrSkip(page, "conv-t2",
+        `TED não progrediu após proposta (nem pergunta de categoria, nem card novo no sufixo do turno — sufixo atual: ${describeTurnSuffix(t2SuffixForProgress)})`,
+        t2Evidence);
     }
     if (progress2 !== "question") {
       await failOrSkip(page, "conv-t2",
@@ -521,12 +611,24 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     const chat3 = page.waitForResponse(
       (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 120_000 });
     await sendTedMessage(page, dialog, pick.short);
+    // R6: bolha própria no sufixo antes de aguardar o card.
+    await requireOwnBubble(page, preT3, pick.short, "conv-t3");
     const t3Resp = await chat3;
     const t3opId = await readPendingOpId(t3Resp);
     const t3TurnText = await readTurnSuffix(page, preT3);
     if (!t3opId) {
       await failOrSkip(page, "conv-t3", "turno T3 não emitiu pendingOperation — draft original não progrediu",
         { turnText: t3TurnText, turnError: await readChatTurnError(t3Resp) });
+    }
+    // R6: card TURN-SCOPED — o approvalId do turno deve surgir no snapshot
+    // (nunca basta existir no diálogo inteiro: seria máscara de histórico).
+    const t3CardWait = await waitForTurnMatch(page, preT3,
+      (_s, full) => full.approvalIds.includes(`ted-op-${t3opId}`), 180_000);
+    if (t3CardWait.suffix === null || !t3CardWait.full?.approvalIds.includes(`ted-op-${t3opId}`)) {
+      await failOrSkip(page, "conv-t3",
+        `card do draft original ausente no sufixo do turno após resposta curta "${pick.short}" ` +
+        `(ted-op-${t3opId} nunca surgiu vs preT3 — sufixo atual: ${describeTurnSuffix(t3CardWait.suffix)})`,
+        { turnText: t3CardWait.suffix, turnError: await readChatTurnError(t3Resp) });
     }
     validateNoHistoricReuse([t3opId]);
     const card = dialog.locator(`[id="ted-op-${t3opId}"]`);
@@ -552,6 +654,8 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // Sem re-proposta: o clique confirma o MESMO draft. Prova: decision
     // succeeded + recibo vinculado (entity.id) + exatamente 1 TX com o
     // marker, cujo id == recibo e cujo categoryId == categoria de T3.
+    // R6: o wait de decision é inerentemente TURN-SCOPED (URL contém o
+    // operationId do turno T3 — resposta de outro turno/run nunca satisfaz).
     const operationId = t3opId;
     const decisionWait = page.waitForResponse((r) => {
       const p = new URL(r.url()).pathname;
@@ -593,11 +697,23 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     const chat4 = page.waitForResponse(
       (r) => r.request().method() === "POST" && chatPath(r.url()), { timeout: 120_000 });
     await sendTedMessage(page, dialog, T4_TEXT);
+    // R6: bolha própria no sufixo antes de aguardar o card.
+    await requireOwnBubble(page, preT4, T4_TEXT, "conv-t4");
     const t4Resp = await chat4;
     const t4opId = await readPendingOpId(t4Resp);
     if (!t4opId) {
       await failOrSkip(page, "conv-t4", "turno T4 não emitiu pendingOperation — draft da negação não progrediu",
         { turnText: await readTurnSuffix(page, preT4), turnError: await readChatTurnError(t4Resp) });
+    }
+    // R6: card TURN-SCOPED — approvalId novo vs preT4 (id do turno; o
+    // expect estrutural abaixo confirma a visibilidade do mesmo id).
+    const t4CardWait = await waitForTurnMatch(page, preT4,
+      (_s, full) => full.approvalIds.includes(`ted-op-${t4opId}`), 180_000);
+    if (t4CardWait.suffix === null || !t4CardWait.full?.approvalIds.includes(`ted-op-${t4opId}`)) {
+      await failOrSkip(page, "conv-t4",
+        `card do draft da negação ausente no sufixo do turno (ted-op-${t4opId} nunca surgiu vs preT4 — ` +
+        `sufixo atual: ${describeTurnSuffix(t4CardWait.suffix)})`,
+        { turnText: t4CardWait.suffix, turnError: await readChatTurnError(t4Resp) });
     }
     validateNoHistoricReuse([t4opId]);
     expect(t4opId, "draft da negação reutilizou o operationId do draft original").not.toBe(operationId);
@@ -615,6 +731,9 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // R5: sessão pronta antes do envio (nunca em "conectando…").
     await waitForChatReady(page, "conv-t4-deny");
     await sendTedMessage(page, dialog, "não confirmo");
+    // R6: bolha própria da negação no sufixo (ancorada em preT4, que cobre
+    // todo o draft da negação) antes de avaliar o vínculo estruturado.
+    await requireOwnBubble(page, preT4, "não confirmo", "conv-t4");
     const denyResp = await denyChat;
     const denyBody = await denyResp.json().catch(() => ({})) as {
       status?: unknown; output?: unknown;
@@ -651,6 +770,10 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     const dialog2 = page.getByRole("region", { name: /chat com ted/i });
     await expect(dialog2).toBeVisible({ timeout: 15000 });
     // R5: aguarda hidratação completa antes de asseverar as bolhas.
+    // R6: T5b é intencionalmente checagem de PERSISTÊNCIA pós-reload
+    // (histórico esperado — não há "turno corrente" após reload). Âncoras
+    // de identidade do run: T2_TEXT e T4_TEXT carregam o MARK com RUN_ID
+    // (outro run nunca os satisfaz; pre-flight já barrou resíduo alheio).
     await waitForChatReady(page, "conv-t5b");
     for (const bubble of [T2_TEXT, pick.short, T4_TEXT, "não confirmo"]) {
       await expect(dialog2.getByText(bubble, { exact: true }).first()).toBeVisible({ timeout: 30000 });
@@ -662,8 +785,23 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     // foi cancelado sem escrever): zerar a contagem prova que o undo
     // atingiu o TX certo (tedTxId).
     // R5: sessão pronta antes do envio (nunca em "conectando…").
+    // R6: snapshot pré-turno + bolha própria no sufixo + wait TURN-SCOPED
+    // por undo-item NOVO vs preT6 (contagem no snapshot — item
+    // pré-snapshot/histórico nunca satisfaz; pre-flight já garante zero
+    // undos alheios na entrada).
     await waitForChatReady(page, "conv-t6");
-    await sendTedMessage(page, dialog2, "desfazer a última ação");
+    const preT6 = await snapshotTurn(page);
+    const T6_TEXT = "desfazer a última ação";
+    await sendTedMessage(page, dialog2, T6_TEXT);
+    await requireOwnBubble(page, preT6, T6_TEXT, "conv-t6");
+    const t6Wait = await waitForTurnMatch(page, preT6, (_s, full) => full.undos > preT6.undos, 120_000);
+    if (t6Wait.suffix === null || !(t6Wait.full && t6Wait.full.undos > preT6.undos)) {
+      const t6Text = t6Wait.suffix;
+      await failOrSkip(page, "conv-t6",
+        `card de undo ausente no sufixo do turno após 120s (undos: preT6=${preT6.undos} atual=${t6Wait.full?.undos ?? "?"} — ` +
+        `sufixo atual: ${describeTurnSuffix(t6Text)})`,
+        { turnText: t6Text, turnError: null });
+    }
     const undoCard = dialog2.locator('[data-testid="ted-undo-item"], [data-testid="ted-undo-focused"], [data-testid="ted-undo-card"]').first();
     await expect(undoCard).toBeVisible({ timeout: 120_000 });
     await shot(page, "conv-06-undo-card");
