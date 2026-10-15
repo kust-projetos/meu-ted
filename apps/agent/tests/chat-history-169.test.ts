@@ -234,6 +234,54 @@ describe("FIX-169 RED: mutation turns persist into durable history", () => {
     const pair = data.items.filter((i) => i.intentionId === "intent-169-id-echo");
     expect(pair.map((i) => i.role).sort()).toEqual(["assistant", "user"]);
   });
+
+  it("(timeout) FIX-melhorias item 5 (#169 retry-timeout): resposta perdida + redelivery tardio converge sem duplicata", async () => {
+    // Somente teste: o redelivery intencional (mesmo intentionId, teste (d))
+    // existe; faltava o caso timeout — o servidor processou TUDO (par
+    // persistido, proposta materializada) mas a resposta HTTP se perdeu no
+    // transporte. O redelivery tardio deve convergir: 200, zero linhas
+    // extras, MESMA proposta e MESMA resposta — nunca um segundo efeito.
+    const { agent, persisted } = createTestAgent();
+    mockProposalUpstream();
+    const text = "gastei 90 com carne no mercado na categoria 00000000-0000-4000-8000-000000000001";
+    const post = (intentionId: string) =>
+      agent.fetch(
+        new Request("https://agent.test.local/rpc/chat", {
+          method: "POST",
+          headers: chatHeaders,
+          body: JSON.stringify({ text, intentionId }),
+        }),
+      );
+
+    // 1º POST: processado integralmente; a resposta "se perde" (o teste a
+    // descarta como um timeout no transporte a descartaria).
+    const r1 = await post("intent-169-timeout");
+    expect(r1.status).toBe(200);
+    const b1 = (await r1.json()) as { output?: string; pendingOperation?: { id?: string } };
+    expect(b1.output).toBeTruthy();
+    expect(b1.pendingOperation?.id).toBe("pending-169-1");
+    const countAfterLoss = persisted.length;
+    expect(countAfterLoss).toBeGreaterThanOrEqual(2);
+
+    // Redelivery tardio com o MESMO intentionId.
+    const r2 = await post("intent-169-timeout");
+    expect(r2.status).toBe(200);
+    const b2 = (await r2.json()) as { output?: string; pendingOperation?: { id?: string } };
+    expect(persisted.length).toBe(countAfterLoss);
+    expect(b2.pendingOperation?.id).toBe(b1.pendingOperation?.id);
+    expect(b2.output).toBe(b1.output);
+
+    // E o histórico segue com UM par (sem duplicata visível).
+    const hist = await agent.fetch(historyReq());
+    expect(hist.status).toBe(200);
+    const data = (await hist.json()) as {
+      items: Array<{ role: string; text?: string; content?: string; intentionId?: string }>;
+    };
+    expect(data.items.filter((i) => i.intentionId === "intent-169-timeout").map((i) => i.role).sort()).toEqual([
+      "assistant",
+      "user",
+    ]);
+  });
 });
 
 describe("FIX-melhorias item 2: ?limit= no /rpc/history (default 200, shape intacto)", () => {
