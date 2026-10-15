@@ -37,10 +37,12 @@ const ACTIVE_WS = "550e8400-e29b-41d4-a716-446655440000"; // Test Family
 
 // Sinais de provider/relay/modelo indisponível — avaliados SOMENTE no texto
 // do turno corrente (ou no erro estruturado da resposta do turno), nunca no
-// chat inteiro: padrões numéricos genéricos (ex. \b5\d\d\b, que casa com
-// "R$ 500" de um grounding válido) são proibidos aqui.
+// chat inteiro. Números soltos (ex. \b401\b, \b429\b, \b5\d\d\b) são
+// proibidos aqui: casariam com valores financeiros de um grounding válido
+// (ex. "Saldo R$ 401,00"). Códigos 401/429 classificam-se SOMENTE via erro
+// estruturado do turno (readChatTurnError: HTTP status / code do corpo).
 const PROVIDER_DOWN_RE =
-  /indispon[íi]vel|n[ãa]o autorizado|unauthorized|forbidden|\b401\b|\b429\b|rate.?limit|limite de (uso|cota|requisi|token)|tente (mais tarde|novamente)|provedor|relay|modelo .* (falhou|erro|indispon[íi]vel)|(servidor|serviço) .* (falhou|erro)|erro (interno|do servidor)/i;
+  /indispon[íi]vel|n[ãa]o autorizado|unauthorized|forbidden|rate.?limit|limite de (uso|cota|requisi|token)|tente (mais tarde|novamente)|provedor|relay|modelo .* (falhou|erro|indispon[íi]vel)|(servidor|serviço) .* (falhou|erro)|erro (interno|do servidor)/i;
 
 test.describe.configure({ mode: "serial" });
 
@@ -228,7 +230,10 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
         const accCheck = await apiJson(page, "GET", "/api/backend/accounts").catch(() => null) as {
           status: number; body: { items?: { id?: unknown; name?: unknown; isActive?: unknown }[] };
         } | null;
-        const ghost = accCheck?.body.items?.find((a) => a.name === ACCOUNT_NAME && a.isActive !== false);
+        expect(accCheck, `limpeza ${phase}: catálogo de contas ilegível`).not.toBeNull();
+        expect(accCheck!.status, `limpeza ${phase}: GET /accounts sem HTTP 200`).toBe(200);
+        expect(Array.isArray(accCheck!.body.items), `limpeza ${phase}: catálogo de contas sem items array`).toBe(true);
+        const ghost = accCheck!.body.items!.find((a) => a.name === ACCOUNT_NAME && a.isActive !== false);
         expect(ghost, `limpeza ${phase}: conta desta execução segue ativa`).toBeUndefined();
       }
     };
@@ -331,8 +336,15 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
         t2Evidence);
     }
     // Pergunta vinculada ao turno T2: só o texto novo desde o envio de T2
-    // (mensagens anteriores a T2 excluídas).
+    // (mensagens anteriores a T2 excluídas). A pergunta deve estar DENTRO
+    // deste sufixo — casar no diálogo inteiro permitiria reusar pergunta de
+    // turno anterior (falso-positivo).
     const t2Question = suffixText(await dialogText(page), preT2);
+    if (!/qual\s+(a\s+)?categoria/i.test(t2Question)) {
+      await failOrSkip(page, "conv-t2",
+        "pergunta de categoria ausente no sufixo do turno T2 (diálogo inteiro não vale)",
+        t2Evidence);
+    }
     await shot(page, "conv-02-proposta");
 
     // ── T3: resposta curta de categoria — EXPECT DURO no card ───────
@@ -436,17 +448,18 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
       status?: unknown; output?: unknown;
       pendingOperation?: { id?: unknown; status?: unknown };
     };
-    // Estado terminal cancelled do draft da negação: a resposta do turno de
-    // negação nomeia o t4opId com status cancelled (quando o turno
-    // materializa pendingOperation) ou traz a cópia determinística de
-    // cancelamento ("Operação cancelada…" — renderMutationResult('cancelled'),
-    // único caminho que a emite). Sem uma dessas evidências, FALHA.
+    // Estado terminal cancelled do draft da negação, VINCULADO ao t4opId
+    // por resposta estruturada: o turno de negação deve materializar
+    // pendingOperation { id: t4opId, status: 'cancelled' }. Cópia textual
+    // ("Operação cancelada") sozinha NÃO basta — sem vínculo estruturado ao
+    // t4opId, FALHA (ou SKIP INCONCLUSIVE com sinal de provider).
     const denyOp = denyBody.pendingOperation;
-    if (denyOp?.id === t4opId) {
-      expect(denyOp.status, `draft da negação ${t4opId} sem estado terminal cancelled`).toBe("cancelled");
-    } else {
-      expect(String(denyBody.output ?? ""), `negação sem evidência terminal cancelled para ${t4opId}`).toMatch(/opera[çc][aã]o cancelada/i);
+    if (denyOp?.id !== t4opId) {
+      await failOrSkip(page, "conv-t4",
+        `negação sem vínculo estruturado ao draft ${t4opId} (pendingOperation ausente ou id divergente) — texto sozinho não prova cancelamento`,
+        { turnText: suffixText(await dialogText(page).catch(() => ""), preT4), turnError: await readChatTurnError(denyResp) });
     }
+    expect(denyOp.status, `draft da negação ${t4opId} sem estado terminal cancelled`).toBe("cancelled");
     validateNoHistoricReuse([JSON.stringify(denyBody).slice(0, 4000)]);
     await page.waitForTimeout(25000); // dá tempo a qualquer execução indevida
     const afterDeny = await countTxByMark(page);
@@ -499,9 +512,14 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     flowOk = true;
     } finally {
       if (!flowOk) {
-        await cleanupRun("finally").catch((e) => {
+        // Falhar alto: limpeza incompleta em falha/skip impede conclusão
+        // limpa — anota E propaga (nunca engole).
+        try {
+          await cleanupRun("finally");
+        } catch (e) {
           test.info().annotations.push({ type: "conv-cleanup", description: `limpeza pós-falha/skip incompleta: ${(e as Error).message}` });
-        });
+          throw e;
+        }
       } else {
         await cleanupRun("finally");
       }
