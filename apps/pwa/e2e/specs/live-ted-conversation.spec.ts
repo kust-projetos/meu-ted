@@ -319,6 +319,31 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     }
   };
 
+  // Espera por approvalId ÚNICO (UUID v4 por operação): NÃO exige sufixo
+  // não-nulo — histórico jamais contém esse id, então churn de bolhas/cards
+  // antigos (divergência de identidade) apenas adia a detecção, nunca a
+  // invalida. Sinais de TEXTO continuam exigindo sufixo (regex casaria
+  // histórico). Retorna os ids visíveis para diagnóstico.
+  const waitForNewCardId = async (
+    page: Page,
+    before: TurnSnapshot,
+    cardId: string,
+    timeoutMs = TURN_SIGNAL_TIMEOUT_MS,
+  ): Promise<{ found: boolean; approvalIds: string[]; diverged: boolean }> => {
+    const deadline = Date.now() + timeoutMs;
+    let ids: string[] = [];
+    let diverged = false;
+    for (;;) {
+      const full = await snapshotTurn(page).catch(() => null);
+      if (full) {
+        ids = full.approvalIds;
+        if (ids.includes(cardId)) return { found: true, approvalIds: ids, diverged };
+        if (turnSuffix(full, before) === null) diverged = true;
+      }
+      if (Date.now() >= deadline) return { found: false, approvalIds: ids, diverged };
+      await page.waitForTimeout(1000);
+    }
+  };
   // R6: após cada envio, exigir a bolha PRÓPRIA no sufixo do turno antes de
   // aguardar a resposta. Bolha própria sumida = FAIL explícito "bolha
   // própria perdida" (bug #169 ressurgido) — nunca mascarado como timeout
@@ -625,15 +650,13 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
       await failOrSkip(page, "conv-t3", "turno T3 não emitiu pendingOperation — draft original não progrediu",
         { turnText: t3TurnText, turnError: await readChatTurnError(t3Resp) });
     }
-    // R6: card TURN-SCOPED — o approvalId do turno deve surgir no snapshot
-    // (nunca basta existir no diálogo inteiro: seria máscara de histórico).
-    const t3CardWait = await waitForTurnMatch(page, preT3,
-      (_s, full) => full.approvalIds.includes(`ted-op-${t3opId}`), 180_000);
-    if (t3CardWait.suffix === null || !t3CardWait.full?.approvalIds.includes(`ted-op-${t3opId}`)) {
+    // Card por ID ÚNICO (nunca máscara de histórico; churn apenas adia).
+    const t3CardWait = await waitForNewCardId(page, preT3, `ted-op-${t3opId}`, 180_000);
+    if (!t3CardWait.found) {
       await failOrSkip(page, "conv-t3",
-        `card do draft original ausente no sufixo do turno após resposta curta "${pick.short}" ` +
-        `(ted-op-${t3opId} nunca surgiu vs preT3 — sufixo atual: ${describeTurnSuffix(t3CardWait.suffix)})`,
-        { turnText: t3CardWait.suffix, turnError: await readChatTurnError(t3Resp) });
+        `card do draft original ausente após resposta curta "${pick.short}" ` +
+        `(ted-op-${t3opId} nunca surgiu em 180s — ids visíveis: ${t3CardWait.approvalIds.join(",") || "nenhum"}; churn histórico: ${t3CardWait.diverged})`,
+        { turnText: await readTurnSuffix(page, preT3), turnError: await readChatTurnError(t3Resp) });
     }
     validateNoHistoricReuse([t3opId]);
     const card = dialog.locator(`[id="ted-op-${t3opId}"]`);
@@ -713,15 +736,13 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
       await failOrSkip(page, "conv-t4", "turno T4 não emitiu pendingOperation — draft da negação não progrediu",
         { turnText: await readTurnSuffix(page, preT4), turnError: await readChatTurnError(t4Resp) });
     }
-    // R6: card TURN-SCOPED — approvalId novo vs preT4 (id do turno; o
-    // expect estrutural abaixo confirma a visibilidade do mesmo id).
-    const t4CardWait = await waitForTurnMatch(page, preT4,
-      (_s, full) => full.approvalIds.includes(`ted-op-${t4opId}`), 180_000);
-    if (t4CardWait.suffix === null || !t4CardWait.full?.approvalIds.includes(`ted-op-${t4opId}`)) {
+    // Card por ID ÚNICO (nunca máscara de histórico; churn apenas adia).
+    const t4CardWait = await waitForNewCardId(page, preT4, `ted-op-${t4opId}`, 180_000);
+    if (!t4CardWait.found) {
       await failOrSkip(page, "conv-t4",
-        `card do draft da negação ausente no sufixo do turno (ted-op-${t4opId} nunca surgiu vs preT4 — ` +
-        `sufixo atual: ${describeTurnSuffix(t4CardWait.suffix)})`,
-        { turnText: t4CardWait.suffix, turnError: await readChatTurnError(t4Resp) });
+        `card do draft da negação ausente (ted-op-${t4opId} nunca surgiu em 180s — ` +
+        `ids visíveis: ${t4CardWait.approvalIds.join(",") || "nenhum"}; churn histórico: ${t4CardWait.diverged})`,
+        { turnText: await readTurnSuffix(page, preT4), turnError: await readChatTurnError(t4Resp) });
     }
     validateNoHistoricReuse([t4opId]);
     expect(t4opId, "draft da negação reutilizou o operationId do draft original").not.toBe(operationId);
