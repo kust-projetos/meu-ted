@@ -744,7 +744,10 @@ export class InMemoryMutationDraftStore implements MutationDraftStore {
     const existing = this.drafts.get(record.draftId);
     if (existing) return { record: existing, created: false };
     this.drafts.set(record.draftId, record);
-    this.byIntention.set(`${record.workspaceId}:${record.lastIntentionId}`, record.draftId);
+    // FIX-DUP-PROPOSAL-R2: first writer wins (parity with the durable SQL
+    // index): a later draft must never steal an earlier intention's link.
+    const createdKey = `${record.workspaceId}:${record.lastIntentionId}`;
+    if (!this.byIntention.has(createdKey)) this.byIntention.set(createdKey, record.draftId);
     return { record, created: true };
   }
 
@@ -785,7 +788,9 @@ export class InMemoryMutationDraftStore implements MutationDraftStore {
     const next = Object.freeze({ ...current, ...patch, status: to, revision: current.revision + 1 });
     this.drafts.set(draftId, next);
     if (patch.lastIntentionId && patch.lastIntentionId !== current.lastIntentionId) {
-      this.byIntention.set(`${next.workspaceId}:${patch.lastIntentionId}`, draftId);
+      // FIX-DUP-PROPOSAL-R2: first writer wins (see getOrCreate).
+      const casKey = `${next.workspaceId}:${patch.lastIntentionId}`;
+      if (!this.byIntention.has(casKey)) this.byIntention.set(casKey, draftId);
     }
     return { ok: true, record: next };
   }
@@ -808,7 +813,9 @@ export class InMemoryMutationDraftStore implements MutationDraftStore {
     const next = Object.freeze({ ...current, ...patch, revision: current.revision + 1 });
     this.drafts.set(draftId, next);
     if (patch.lastIntentionId && patch.lastIntentionId !== current.lastIntentionId) {
-      this.byIntention.set(`${next.workspaceId}:${patch.lastIntentionId}`, draftId);
+      // FIX-DUP-PROPOSAL-R2: first writer wins (see getOrCreate).
+      const updateKey = `${next.workspaceId}:${patch.lastIntentionId}`;
+      if (!this.byIntention.has(updateKey)) this.byIntention.set(updateKey, draftId);
     }
     return next;
   }
@@ -1143,7 +1150,9 @@ export const initializeMutationDraftSchema = (sql: SqlExec): void => {
   // proposed anew under a different idempotency key (1 turno → 2
   // pending_operations). Every intention that touches a draft is linked
   // immutably (first writer wins, `ON CONFLICT DO NOTHING`); the lookup
-  // consults the index when the fast path misses, so a redelivery recovers
+  // consults the index FIRST (a hijacked `last_intention_id` never shadows
+  // the original link) and falls back to the fast path only when no durable
+  // link exists, so a redelivery recovers
   // its draft/proposal — including consumed ones — before any flow choice.
   // `device_id` is NOT NULL with `''` for "no device" so PK legs are never
   // NULL (same mold as `mutation_confirmations`); the fetched draft still
@@ -1371,21 +1380,10 @@ export class SqlMutationDraftStore implements MutationDraftStore {
   }
 
   findByIntention(ctx: DraftContext, intentionId: string): MutationDraftRecord | undefined {
-    const rows = [
-      ...this.sql.exec<Record<string, unknown>>(
-        `SELECT * FROM mutation_drafts WHERE workspace_id = ? AND actor_id = ? AND last_intention_id = ? ORDER BY updated_at DESC LIMIT 1`,
-        ctx.workspaceId,
-        ctx.actorId,
-        intentionId,
-      ),
-    ];
-    const found = rows.length > 0 && rows[0] ? rowToRecord(rows[0]) : undefined;
-    if (found && sameContext(found, ctx)) return found;
-    // FIX-DUP-PROPOSAL: fall back to the durable contributor index. The fast
-    // path above only sees the LAST toucher; an earlier contributor (e.g. the
-    // intention that created the draft) is linked immutably at write time.
-    // A missing index/table degrades to the pre-fix miss (undefined) — never
-    // to a throw inside the lookup.
+    // FIX-DUP-PROPOSAL-R2: the durable contributor index (immutable,
+    // first-writer-wins) is consulted BEFORE the mutable `last_intention_id`
+    // fast path. A hijacked fast-path column (a later touch overwriting it
+    // with an earlier intention id) must never shadow the original link.
     let draftId: string | undefined;
     try {
       const linked = [
@@ -1400,11 +1398,33 @@ export class SqlMutationDraftStore implements MutationDraftStore {
       const first = linked[0];
       draftId = first ? String(first.draft_id ?? '') || undefined : undefined;
     } catch {
+      // A missing index/table degrades to the pre-fix miss (undefined) —
+      // never to a throw inside the lookup.
       return undefined;
     }
-    if (!draftId) return undefined;
-    const draft = this.get(draftId);
-    return draft && sameContext(draft, ctx) ? draft : undefined;
+    if (draftId) {
+      let draft: MutationDraftRecord | undefined;
+      try {
+        draft = this.get(draftId);
+      } catch {
+        // FIX-DUP-PROPOSAL-R2: a selective read failure on the linked draft
+        // is a miss, never a turn error.
+        return undefined;
+      }
+      return draft && sameContext(draft, ctx) ? draft : undefined;
+    }
+    // No durable link: fall back to the last-toucher fast path.
+    const rows = [
+      ...this.sql.exec<Record<string, unknown>>(
+        `SELECT * FROM mutation_drafts WHERE workspace_id = ? AND actor_id = ? AND last_intention_id = ? ORDER BY updated_at DESC LIMIT 1`,
+        ctx.workspaceId,
+        ctx.actorId,
+        intentionId,
+      ),
+    ];
+    const found = rows.length > 0 && rows[0] ? rowToRecord(rows[0]) : undefined;
+    if (found && sameContext(found, ctx)) return found;
+    return undefined;
   }
 
   /**

@@ -221,3 +221,71 @@ describe('FIX-DUP-PROPOSAL: end-to-end — one turn, one pending operation', () 
     });
   }
 });
+
+describe('FIX-DUP-PROPOSAL-R2: durable link wins over hijacked last_intention_id (store parity)', () => {
+  const cases: ReadonlyArray<readonly [string, () => MutationDraftStore]> = [
+    ['memory', () => new InMemoryMutationDraftStore()],
+    ['sqlite', () => createSqlStore()],
+  ];
+  for (const [name, createStore] of cases) {
+    it(`[${name}] findByIntention(I) returns A after B hijacks lastIntentionId=I`, () => {
+      const store = createStore();
+      const ctx = ctxOf();
+      const a = store.getOrCreate(buildDraftRecord(draftSeed('intent-R2-I')));
+      expect(a.created).toBe(true);
+      const b = store.getOrCreate(buildDraftRecord(draftSeed('intent-R2-J')));
+      expect(b.created).toBe(true);
+      expect(b.record.draftId).not.toBe(a.record.draftId);
+
+      // B is later touched with A's intention id (stale replay / crossed
+      // update overwriting the mutable fast-path column).
+      const hijacked = store.update(b.record.draftId, {
+        updatedAt: new Date().toISOString(),
+        lastIntentionId: 'intent-R2-I',
+      });
+      expect(hijacked?.lastIntentionId).toBe('intent-R2-I');
+
+      // The immutable first-writer link (A ↔ I) wins over the hijacked
+      // mutable fast-path column (B.last_intention_id = I).
+      expect(store.findByIntention(ctx, 'intent-R2-I')?.draftId).toBe(a.record.draftId);
+      expect(store.findByIntention(ctx, 'intent-R2-J')?.draftId).toBe(b.record.draftId);
+    });
+  }
+});
+
+describe('FIX-DUP-PROPOSAL-R2: selective draft-table outage degrades to miss', () => {
+  it('[sqlite] index ok + draft-table read failure → miss, never throws', () => {
+    const db = new DatabaseSync(':memory:');
+    let failDraftReads = false;
+    const sql: SqlShim = {
+      exec<T>(query: string, ...bindings: unknown[]): Iterable<T> {
+        // Fault injection: every read of the drafts table fails, while the
+        // durable intention index keeps answering. (`mutation_drafts\b`
+        // never matches `mutation_draft_intentions`: `_` is a word char, so
+        // there is no boundary after `drafts` there.)
+        if (failDraftReads && /FROM\s+mutation_drafts\b/i.test(query)) {
+          throw new Error('injected draft-table outage');
+        }
+        const statement = db.prepare(query);
+        if (/^\s*(SELECT|PRAGMA|WITH)/i.test(query) || /\bRETURNING\b/i.test(query)) {
+          return statement.all(...(bindings as never[])) as T[];
+        }
+        statement.run(...(bindings as never[]));
+        return [] as T[];
+      },
+    };
+    initializeMutationDraftSchema(sql);
+    const store = new SqlMutationDraftStore(sql);
+    const ctx = ctxOf();
+    const seed = store.getOrCreate(buildDraftRecord(draftSeed('intent-R2-K')));
+    expect(seed.created).toBe(true);
+    expect(store.findByIntention(ctx, 'intent-R2-K')?.draftId).toBe(seed.record.draftId);
+
+    failDraftReads = true;
+    let result: ReturnType<MutationDraftStore['findByIntention']> = undefined;
+    expect(() => {
+      result = store.findByIntention(ctx, 'intent-R2-K');
+    }).not.toThrow();
+    expect(result).toBeUndefined();
+  });
+});
