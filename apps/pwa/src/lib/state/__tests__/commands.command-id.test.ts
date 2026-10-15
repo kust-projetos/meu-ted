@@ -134,4 +134,29 @@ describe("commands — same id across retry/timeout/unknown (Task 3.9)", () => {
     await expect(commands.createExpenseTransaction(txInput())).rejects.toMatchObject({ status: 409 });
     expect(apiSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("does NOT retry domain 409 refusals as idempotency replay (FIX-184)", async () => {
+    const apiSpy = vi.spyOn(endpoints, "createExpenseTransaction")
+      .mockRejectedValueOnce(new ApiError(409, "in_use", "possui lançamentos ativos"));
+    const commands = createCommands(makeContext());
+
+    await expect(commands.createExpenseTransaction(txInput())).rejects.toMatchObject({
+      status: 409,
+      code: "in_use",
+    });
+    expect(apiSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries 409 idempotency.in_progress once with the SAME command id (FIX-184)", async () => {
+    const apiSpy = vi.spyOn(endpoints, "createExpenseTransaction")
+      .mockRejectedValueOnce(new ApiError(409, "idempotency.in_progress", "em processamento"))
+      .mockResolvedValueOnce({ id: "tx-1" } as never);
+    const commands = createCommands(makeContext());
+
+    const res = await commands.createExpenseTransaction(txInput());
+
+    expect(res).toEqual({ id: "tx-1" });
+    expect(apiSpy).toHaveBeenCalledTimes(2);
+    expect(keyOf(apiSpy, 0)).toBe(keyOf(apiSpy, 1));
+  });
 });

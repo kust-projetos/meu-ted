@@ -2639,12 +2639,19 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       // PendingOperationCoordinator as natural language — one decision
       // machine, no parallel path. The card names its operation, so decide()
       // addresses it by id (no listing, no disambiguation).
+      // FIX-187: the per-tap approval context (requestId) doubles as the
+      // durable confirmation intention: decide(confirm|retry) binds it
+      // API-side (V060) and verifies it on execute, so a retap/redelivery
+      // can never confirm a different operation under a stale context, and
+      // a restart loses no protection (the API is the durable frontier —
+      // the body contract stays {decision, requestId}, PWA untouched).
       const result = await new PendingOperationCoordinator({
         client: new MutationApiClient({ request: requestWithApprovalToken }),
       }).decide({
         operationId,
         decision: body.decision as 'confirm' | 'cancel' | 'retry',
         identity: { workspaceId, actorId, deviceId },
+        intentionId: body.requestId.trim(),
       });
       // AGENT-010: sanitized approval lifecycle events (status only — never
       // operation payloads, tokens, or financial values).

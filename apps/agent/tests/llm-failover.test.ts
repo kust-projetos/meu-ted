@@ -57,11 +57,14 @@ describe('LLM failover (refactor item 5)', () => {
     expect(fallback).not.toHaveBeenCalled();
   });
 
-  it('classifies timeout, 429/5xx and auth as retryable', () => {
+  it('classifies timeout, 429/5xx as retryable and 401/403 as never-fallback (FIX-189)', () => {
     expect(isRetryableLlmError(Object.assign(new Error('x'), { name: 'AbortError' }))).toBe(true);
     expect(isRetryableLlmError(Object.assign(new Error('x'), { status: 429 }))).toBe(true);
     expect(isRetryableLlmError(Object.assign(new Error('x'), { status: 500 }))).toBe(true);
-    expect(isRetryableLlmError(Object.assign(new Error('x'), { status: 401 }))).toBe(true);
+    expect(isRetryableLlmError(Object.assign(new Error('x'), { status: 401 }))).toBe(false);
+    expect(isRetryableLlmError(Object.assign(new Error('x'), { status: 403 }))).toBe(false);
+    expect(isRetryableLlmError(Object.assign(new Error('x'), { name: 'AbortError', status: 403 }))).toBe(false);
+    expect(isRetryableLlmError(Object.assign(new Error('x'), { code: 'agent.provider_auth' }))).toBe(false);
     expect(isRetryableLlmError(Object.assign(new Error('x'), { status: 400 }))).toBe(false);
     expect(isRetryableLlmError(Object.assign(new Error('x'), { status: 404 }))).toBe(false);
     expect(failoverReasonOf(Object.assign(new Error('x'), { status: 429 }))).toBe('http_429');

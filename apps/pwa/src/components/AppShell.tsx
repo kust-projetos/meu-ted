@@ -206,6 +206,11 @@ export default function AppShell({ children }: AppShellProps) {
 
   async function handleSave(data: SaveData) {
     try {
+      // #185: a chave de idempotência da intent (mintada pelo sheet, uma por
+      // intent) é repassada verbatim a cada mutator — a camada commands a
+      // preserva, então retries/replays dedupam em vez de duplicar.
+      const idOption =
+        data.idempotencyKey !== undefined ? { idempotencyKey: data.idempotencyKey } : {};
       if (data.kind === "transfer") {
         await createTransfer({
           description: data.description || "Transferência",
@@ -213,6 +218,7 @@ export default function AppShell({ children }: AppShellProps) {
           date: data.date,
           fromAccountId: data.fromAccountId ?? "",
           toAccountId: data.toAccountId ?? "",
+          ...idOption,
         });
       } else if (data.originKind === "card" && data.accountId) {
         // H-01: the card nature is preserved to the executor — invoice path
@@ -230,6 +236,7 @@ export default function AppShell({ children }: AppShellProps) {
             categoryId: data.categoryId,
             ...(data.subcategoryId ? { subcategoryId: data.subcategoryId } : {}),
             ...(data.notes ? { notes: data.notes } : {}),
+            ...idOption,
           });
         } else {
           await createCardPurchase({
@@ -240,6 +247,7 @@ export default function AppShell({ children }: AppShellProps) {
             categoryId: data.categoryId,
             ...(data.subcategoryId ? { subcategoryId: data.subcategoryId } : {}),
             ...(data.notes ? { notes: data.notes } : {}),
+            ...idOption,
           });
         }
       } else {
@@ -252,6 +260,7 @@ export default function AppShell({ children }: AppShellProps) {
           categoryId: data.categoryId ?? "",
           accountId: data.accountId ?? "",
           ...(data.notes ? { notes: data.notes } : {}),
+          ...idOption,
         });
       }
       if (captureFlowId)

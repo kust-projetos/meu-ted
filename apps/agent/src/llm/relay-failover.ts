@@ -10,8 +10,9 @@ import { resolveBareModelName } from './attempts.js';
  * explícita de relay e executa no máximo UMA primária + UM fallback distinto.
  *
  * Deliberadamente NÃO reutiliza `isRetryableLlmError`: aquele classificador
- * legado trata 401/403/5xx genéricos como retryable, o que ampliaria o
- * fallback para negações de política/autoridade. Aqui só há fallback em:
+ * legado tratava 401/403/5xx genéricos como retryable (FIX-189 unificou o
+ * legado com esta política: 401/403 nunca fazem fallback em nenhum caminho),
+ * o que ampliaria o fallback para negações de política/autoridade. Aqui só há fallback em:
  * - HTTP 429 com `agent.rate_limited` (rate limit operacional);
  * - timeout de provider (`AbortError`/`TimeoutError` ou
  *   `agent.provider_timeout`, em geral HTTP 504);
@@ -131,8 +132,8 @@ type RelayErrorShape = {
  * Classificador explícito de fallback do relay. Retorna true SOMENTE para
  * rate limit (429 + `agent.rate_limited`), timeout de provider e erro
  * operacional (`agent.provider_error` + 5xx). Qualquer outro status/code —
- * incluindo 401/403/409/503 que o `isRetryableLlmError` legado trataria como
- * retryable — retorna false.
+ * incluindo 401/403/409/503 (o `isRetryableLlmError` pré-FIX-189 trataria
+ * 401/403 como retryable) — retorna false.
  *
  * FIX-AGENT-RELAY-FAILOVER-HARDENING (D): `agent.provider_timeout` só é
  * elegível com o status coerente de timeout do contrato da API (504) ou com
