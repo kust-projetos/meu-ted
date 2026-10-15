@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { AuthGate } from "../AuthGate";
 import { AppStateProvider, useAppState } from "@/lib/state/app-state-context";
+import { setActiveWorkspaceId } from "@/lib/api/client";
 import * as endpoints from "@/lib/api/endpoints";
 
 /**
@@ -82,6 +83,10 @@ beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_API_BASE_URL", "http://localhost:3333");
   sessionOkFetch();
   mockApiReads();
+  // FIX-168: AuthGate publishes the session, but the financial bootstrap
+  // additionally requires the active-workspace header WorkspaceProvider sets
+  // in production (absent here — this composition mounts AppState directly).
+  setActiveWorkspaceId("test-workspace-1");
 });
 
 afterEach(() => {

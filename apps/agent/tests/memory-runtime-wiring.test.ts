@@ -444,11 +444,17 @@ describe("A19 round 2 — ramo mutation aprende só com evidência durável", ()
     // Houve RESPOSTA (o ramo é alcançado) e nenhuma operação pendente.
     expect(body.output).toBeTruthy();
     expect(body.pendingOperation).toBeUndefined();
-    // Prova de que o turno caiu no ramo de MUTAÇÃO e não no read path: só o
-    // read path persiste a resposta final do assistente; modos de mutação
-    // devolvem `pendingOperation` em vez de mensagem persistida. Sem a resposta
-    // persistida, `plan.mode` é `confirmation`.
-    expect(persisted.map((message) => message.role)).not.toContain("assistant");
+    // FIX-169 (SPEC §7.7): modos de mutação (incl. `confirmation` sem alvo)
+    // persistem o par Q&A honesto com ids estáveis derivados do intentionId —
+    // a prova de que o turno caiu no ramo de MUTAÇÃO é `pendingOperation`
+    // indefinida + o par estável abaixo (o read path usaria ids aleatórios).
+    // Texto canônico: o assistente persistido é byte-igual ao retornado.
+    const stableUser = persisted.find((message) => message.id === "msg-user-a19-r2-confirm-none");
+    const stableAsst = persisted.find((message) => message.id === "msg-asst-a19-r2-confirm-none");
+    expect(stableUser?.role).toBe("user");
+    expect(textOf(stableUser)).toContain("sim confirmo");
+    expect(stableAsst?.role).toBe("assistant");
+    expect(textOf(stableAsst)).toBe(body.output);
     // Uma confirmação que não confirma nada não vira memória nem contador.
     expect(spy).not.toHaveBeenCalled();
     expect(sqlMock.rows("agent_memory")).toHaveLength(0);
@@ -592,11 +598,16 @@ describe("A19 round 3 — retry (intenção mutacional no ramo de leitura) só e
     expect(spy).not.toHaveBeenCalled();
     expect(sqlMock.rows("agent_memory")).toHaveLength(0);
     expect(sqlMock.rows("agent_turn_counters")).toHaveLength(0);
-    // A HISTÓRIA do retry permanece intocada: a recusa também é histórico e a
-    // resposta continua persistida. O fix é no gate de aprendizado, nunca na
-    // persistência.
-    expect(persisted.map((message) => message.role)).toEqual(["assistant"]);
-    expect(textOf(persisted[0])).toBe(body.output);
+    // FIX-169-170-R2 (P2-1): o retry persiste o par Q&A com ids estáveis
+    // derivados do intentionId (ramo de continuação/retry) — a recusa também
+    // é histórico, sem duplicata em redelivery. O fix é no gate de
+    // aprendizado, nunca na persistência.
+    expect(persisted.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(persisted.map((message) => String(message.id))).toEqual([
+      "msg-user-a19-r3-retry-none",
+      "msg-asst-a19-r3-retry-none",
+    ]);
+    expect(textOf(persisted[1])).toBe(body.output);
   });
 
   it("NEGATIVO: retry ambíguo (várias operações com falha) não ensina", async () => {
@@ -631,8 +642,13 @@ describe("A19 round 3 — retry (intenção mutacional no ramo de leitura) só e
     expect(spy).not.toHaveBeenCalled();
     expect(sqlMock.rows("agent_memory")).toHaveLength(0);
     expect(sqlMock.rows("agent_turn_counters")).toHaveLength(0);
-    expect(persisted.map((message) => message.role)).toEqual(["assistant"]);
-    expect(textOf(persisted[0])).toBe(body.output);
+    // FIX-169-170-R2 (P2-1): par Q&A com ids estáveis (ver teste acima).
+    expect(persisted.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(persisted.map((message) => String(message.id))).toEqual([
+      "msg-user-a19-r3-retry-ambiguous",
+      "msg-asst-a19-r3-retry-ambiguous",
+    ]);
+    expect(textOf(persisted[1])).toBe(body.output);
   });
 
   it("NEGATIVO: erro do coordinator no retry não ensina (resposta 'failed', sem mutation)", async () => {
@@ -660,8 +676,13 @@ describe("A19 round 3 — retry (intenção mutacional no ramo de leitura) só e
     expect(spy).not.toHaveBeenCalled();
     expect(sqlMock.rows("agent_memory")).toHaveLength(0);
     expect(sqlMock.rows("agent_turn_counters")).toHaveLength(0);
-    expect(persisted.map((message) => message.role)).toEqual(["assistant"]);
-    expect(textOf(persisted[0])).toBe(body.output);
+    // FIX-169-170-R2 (P2-1): par Q&A com ids estáveis (ver teste acima).
+    expect(persisted.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(persisted.map((message) => String(message.id))).toEqual([
+      "msg-user-a19-r3-retry-error",
+      "msg-asst-a19-r3-retry-error",
+    ]);
+    expect(textOf(persisted[1])).toBe(body.output);
   });
 
   it("POSITIVO: retry de sucesso materializa mutation (operationId + receipt) e então ensina", async () => {

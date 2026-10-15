@@ -9,6 +9,7 @@ import { WriteErrorBanner } from "@/components/WriteErrorBanner";
 import { StaleBanner } from "@/components/StaleBanner";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { useAppState } from "@/lib/state/app-state-context";
+import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
 import { useFormDirtySafe } from "@/lib/unsaved-changes";
 import { Plus, ChevronRight } from "lucide-react";
 
@@ -437,9 +438,14 @@ export default function SubscriptionsPage() {
     refreshSubscriptions,
   } = useAppState();
 
+  // FIX-168-R2: sem workspace ativo, nenhum lazy-load dispara (zero I/O).
+  const workspace = useWorkspaceSafe();
+  const hasActiveWorkspace = workspace?.activeWorkspace != null;
+
   useEffect(() => {
+    if (!hasActiveWorkspace) return;
     refreshSubscriptions();
-  }, [refreshSubscriptions]);
+  }, [hasActiveWorkspace, refreshSubscriptions]);
 
   const [tab, setTab] = useState<"active" | "cancelled">("active");
   const [createOpen, setCreateOpen] = useState(false);

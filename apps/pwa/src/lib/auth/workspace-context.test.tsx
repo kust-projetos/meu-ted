@@ -47,6 +47,7 @@ vi.mock("@/lib/api/client", () => ({
   setActiveWorkspaceId: vi.fn((id: string) => {
     clientState.active = id;
   }),
+  getActiveWorkspaceId: vi.fn(() => clientState.active),
   clearActiveWorkspaceId: vi.fn(() => {
     clientState.active = undefined;
   }),

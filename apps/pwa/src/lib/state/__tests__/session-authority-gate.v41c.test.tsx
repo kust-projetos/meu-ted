@@ -6,6 +6,7 @@ import {
   resetSessionStatus,
   setSessionStatus,
 } from "@/lib/auth/session-authority";
+import { setActiveWorkspaceId } from "@/lib/api/client";
 import type { Account } from "@/lib/state/types";
 
 /**
@@ -62,6 +63,10 @@ beforeEach(async () => {
     if (db.name) indexedDB.deleteDatabase(db.name);
   }
   vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_API_BASE_URL", "http://localhost:3001");
+  // FIX-168: the online gate additionally requires an active workspace —
+  // established for every test so each case isolates exactly the session
+  // authority it asserts (absent authority still blocks with header set).
+  setActiveWorkspaceId("test-workspace-1");
 });
 
 afterEach(() => {
