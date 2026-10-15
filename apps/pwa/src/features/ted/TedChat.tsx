@@ -102,6 +102,34 @@ function toLiveCard(item: ActivePendingOperation): TedPendingOperation | null {
   };
 }
 
+/**
+ * FIX-P1-UX #175: browser-side allowlist for the undo decision `result`.
+ * The REAL result is the UndoResult envelope `{ undone, receipt }`
+ * (API `apps/api/src/approvals/undo.ts:185-188`, relayed verbatim by the
+ * Agent `finance-chat-agent.ts:2953` as the decision `result`). Only the
+ * RECEIPT nested at `result.receipt` — well-formed (non-empty id/kind,
+ * succeeded status, string-array targets) — may reach the financial
+ * reconciler. Anything else (absent, null, a flattened receipt at `result`
+ * itself, malformed) yields `null` and no reconciliation is invented.
+ * Mirrors the agent-client receipt contract without touching it.
+ */
+const sanitizeUndoResultReceipt = (value: unknown): MutationReceipt | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const envelope = value as Record<string, unknown>;
+  const receipt = envelope.receipt;
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return null;
+  const candidate = receipt as Record<string, unknown>;
+  if (typeof candidate.mutationId !== "string" || candidate.mutationId.trim() === "") return null;
+  if (typeof candidate.mutationKind !== "string" || candidate.mutationKind.trim() === "") return null;
+  if (candidate.status !== "succeeded") return null;
+  if (!Array.isArray(candidate.affectedTargets)) return null;
+  if (!candidate.affectedTargets.every((t) => typeof t === "string")) return null;
+  return receipt as MutationReceipt;
+};
+
+/** FIX-P1-UX #173: within this distance of the live tail the reader counts as "at the bottom". */
+const SCROLL_NEAR_BOTTOM_PX = 120;
+
 /** SPEC §19.4: every connection status is user-facing pt-BR, never raw enum names. */
 type TedChatStatus = "connecting" | "ready" | "streaming" | "error";
 
@@ -175,6 +203,27 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const [status, setStatus] = useState<TedChatStatus>("ready");
   const [attachments, setAttachments] = useState<TedAttachment[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageListRef = useRef<HTMLDivElement>(null);
+  /**
+   * FIX-P1-UX #173: the reader's viewport position. `true` while the user is
+   * parked near the live tail (auto-scroll allowed); `false` while they read
+   * history (auto-scroll forbidden, jump button offered). Written ONLY by the
+   * list's own scroll events — programmatic jumps never fake it, so a mocked
+   * `scrollIntoView` (no real movement) keeps the parked state in tests.
+   */
+  const nearBottomRef = useRef(true);
+  const tailScrolledOnceRef = useRef(false);
+  /**
+   * FIX-P1-UX #173: identity of the last tail the scroll effect already
+   * considered. Card-only updates (pendingOps/undoProposals refreshes,
+   * decision follow-ups) reuse the same message tail — with no NEW tail
+   * there is nothing to scroll to, so the effect returns early instead of
+   * scrolling again on `last.isOwn`. Only a genuinely new tail (a new own
+   * send or a new assistant answer) may scroll or toggle the jump button.
+   */
+  const lastScrolledTailIdRef = useRef<string | undefined>(undefined);
+  const tailWatchedRef = useRef(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const focusedCardRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -358,10 +407,14 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       if (!Number.isNaN(time) && time <= now) continue;
       if (seen.has(item.requestId)) continue;
       seen.add(item.requestId);
+      // FIX-P1-UX #172: carry the display-safe target projection through
+      // when the server sent one; legacy payloads stay target-less and the
+      // card degrades to the summary shape.
       next.push({
         requestId: item.requestId,
         status: item.status,
         expiresAt: item.expiresAt,
+        ...(item.target ? { target: item.target } : {}),
       });
     }
     setUndoProposals(next);
@@ -609,9 +662,24 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // debt-undo-confirmation-protocol: a confirmed undo reversed a mutation,
   // so external reflections refetch and the authoritative history reloads.
   // A cancel changes nothing — only the external badge state is refreshed.
+  //
+  // FIX-P1-UX #175: a confirmed undo also reconciles the financial UI
+  // (extrato/saldo/dashboard) from the TYPED receipt carried by the
+  // decision — the same single reconciler as the approval path. No receipt
+  // (or a malformed one) means no reconciliation is invented; a failed
+  // refresh is signaled stale inside app-state while history still reloads.
   const handleUndoResolved = async (decision: UndoDecision): Promise<void> => {
     notifyPendingOperationsChanged();
     if (decision.status === "confirmed") {
+      const receipt = sanitizeUndoResultReceipt(decision.result);
+      if (receipt && reconcileFinancialUi) {
+        try {
+          await reconcileFinancialUi({ receipt });
+        } catch {
+          // Reconciliation failure surfaces as stale in app-state;
+          // the chat history must still reload below.
+        }
+      }
       await loadHistory();
     }
   };
@@ -677,11 +745,71 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     }
   }, [activeWorkspace, loadHistory]);
 
-  useEffect(() => {
-    if (typeof messagesEndRef.current?.scrollIntoView === "function") {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+  /**
+   * FIX-P1-UX #173: reduced-motion users always get instant jumps — every
+   * programmatic tail scroll in this chat goes through this helper.
+   */
+  const scrollToLiveTail = useCallback(() => {
+    const tail = messagesEndRef.current;
+    if (!tail || typeof tail.scrollIntoView !== "function") return;
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    try {
+      tail.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "end" });
+    } catch {
+      /* scroll is best-effort — the jump button stays as the fallback */
     }
-  }, [messages, pendingOps, undoProposals]);
+  }, []);
+
+  const jumpToLiveTail = useCallback(() => {
+    scrollToLiveTail();
+    setShowJumpToLatest(false);
+  }, [scrollToLiveTail]);
+
+  /** FIX-P1-UX #173: parking far from the tail offers the jump button. */
+  const handleMessageListScroll = useCallback(() => {
+    const list = messageListRef.current;
+    if (!list) return;
+    const distanceFromTail = list.scrollHeight - list.scrollTop - list.clientHeight;
+    const near = distanceFromTail <= SCROLL_NEAR_BOTTOM_PX;
+    nearBottomRef.current = near;
+    setShowJumpToLatest(!near);
+  }, []);
+
+  // FIX-P1-UX #173: auto-scroll fires only for a NEW tail — the user's own
+  // new send, a new assistant/turn answer while near the tail, or mount. A
+  // mere card update (same message tail, only pendingOps/undoProposals
+  // changed) never yanks the viewport — the reader stays parked and the
+  // jump button recovers the live tail on demand.
+  useEffect(() => {
+    const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
+    const tailId = last?.id;
+    if (tailWatchedRef.current && tailId === lastScrolledTailIdRef.current) {
+      // No new tail since the last pass — a mere card update. Never scroll,
+      // never toggle the jump button.
+      return;
+    }
+    tailWatchedRef.current = true;
+    lastScrolledTailIdRef.current = tailId;
+    if (!tailScrolledOnceRef.current) {
+      tailScrolledOnceRef.current = true;
+      scrollToLiveTail();
+      return;
+    }
+    if (last?.isOwn === true) {
+      scrollToLiveTail();
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setShowJumpToLatest(false);
+      return;
+    }
+    if (nearBottomRef.current) {
+      scrollToLiveTail();
+      return;
+    }
+    setShowJumpToLatest(true);
+  }, [messages, scrollToLiveTail]);
 
   // T5.3 deep-link: the launcher routes one authoritative operation id here.
   // Only AUTHORITATIVE cards (history rehydration + turn responses) can match
@@ -929,12 +1057,15 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       }
       // debt-undo-confirmation-protocol: the structured turn field is the
       // ONLY source of the undo card — output text never mints one.
+      // FIX-P1-UX #172: the display-safe target projection rides along when
+      // present; absent stays absent (summary shape, never invented).
       if (returnedUndoProposal) {
         setUndoProposals((previous) => [
           {
             requestId: returnedUndoProposal.requestId,
             status: "proposed",
             expiresAt: returnedUndoProposal.expiresAt,
+            ...(returnedUndoProposal.target ? { target: returnedUndoProposal.target } : {}),
           },
           ...previous.filter((proposal) => proposal.requestId !== returnedUndoProposal.requestId),
         ]);
@@ -1082,7 +1213,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       role="region"
       aria-label="Chat com TED"
       data-testid="ted-chat"
-      className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[22px] border border-border-subtle bg-surface-1"
+      className="relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[22px] border border-border-subtle bg-surface-1"
     >
         {/* Header */}
         <div className="relative flex items-center justify-between border-b border-border-subtle bg-surface-2/80 px-4 py-3.5 backdrop-blur-md">
@@ -1118,7 +1249,12 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
         </div>
 
         {/* Message container */}
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-bg p-4 [scrollbar-width:thin]">
+        <div
+          ref={messageListRef}
+          data-testid="ted-message-list"
+          onScroll={handleMessageListScroll}
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-bg p-4 [scrollbar-width:thin]"
+        >
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center px-6 py-10 text-center">
               <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-[#0A3A28] text-white shadow-fab">
@@ -1269,6 +1405,20 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
 
           <div ref={messagesEndRef} />
         </div>
+
+        {/* FIX-P1-UX #173: parked readers recover the live tail on demand.
+            Absolute above the composer so it never covers input/buttons —
+            safe at 390px widths. */}
+        {showJumpToLatest && (
+          <button
+            type="button"
+            onClick={jumpToLiveTail}
+            aria-label="Ir à última mensagem"
+            className="absolute bottom-28 right-4 z-10 rounded-full bg-primary px-3.5 py-2 text-[12px] font-bold text-white shadow-fab transition-all hover:bg-primary-hover active:scale-95"
+          >
+            ↓ Ir à última
+          </button>
+        )}
 
         {notice && (
           <div role="status" className="mx-4 mb-2 flex items-center gap-2 rounded-[12px] border border-primary/30 bg-primary-tint px-3.5 py-2 text-[12px] font-semibold text-primary shadow-xs">

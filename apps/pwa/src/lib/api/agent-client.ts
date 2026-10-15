@@ -179,11 +179,22 @@ export type AgentTurn = {
    * debt-undo-confirmation-protocol: separate undo proposal (requestId for
    * the authenticated decision RPC). Display-only; the fixed target stays
    * server-side in the Agent DO.
+   *
+   * FIX-P1-UX #172: optional display-safe projection of that fixed target
+   * (wire contract: `undoTargetSchema`). Absent on legacy payloads — the
+   * card degrades to the summary shape.
    */
   undoProposal?: Readonly<{
     requestId: string;
     status: 'proposed';
     expiresAt: string;
+    target?: Readonly<{
+      kind?: string;
+      description?: string;
+      amountCents?: number;
+      accountLabel?: string;
+      occurredOn?: string;
+    }>;
   }>;
 };
 
@@ -986,9 +997,26 @@ export async function decidePendingOperation(
 /**
  * debt-undo-confirmation-protocol: browser-safe undo proposal DTO. Strict
  * allowlist — anything else collapses to `undefined` (no card).
+ *
+ * FIX-P1-UX #172: display-safe projection of the fixed undo target. Strict
+ * allowlist of presentation-only fields — anything else (in particular
+ * target ids, idempotency keys, or raw operation data smuggled inside
+ * `target`) fails the parse and the payload is discarded wholesale, like
+ * every other unknown key in these DTOs. Optional and additive: legacy
+ * payloads without `target` parse exactly as before.
  */
+const undoTargetSchema = z
+  .object({
+    kind: z.string().optional(),
+    description: z.string().optional(),
+    amountCents: z.number().optional(),
+    accountLabel: z.string().optional(),
+    occurredOn: z.string().optional(),
+  })
+  .strict();
+
 const undoProposalSchema = z
-  .object({ requestId: z.string().min(1).max(128), status: z.literal('proposed'), expiresAt: z.string().min(1) });
+  .object({ requestId: z.string().min(1).max(128), status: z.literal('proposed'), expiresAt: z.string().min(1), target: undoTargetSchema.optional() });
 
 function sanitizeUndoProposal(value: AgentTurn['undoProposal']): AgentTurn['undoProposal'] {
   if (!value || typeof value !== 'object') return undefined;
@@ -1028,8 +1056,9 @@ export async function decideUndoProposal(
 
 /**
  * debt-undo-proposal-rehydration: browser-safe active undo summary. Strict
- * allowlist — the server projection is {requestId,status,expiresAt} only;
- * ANY unknown key (in particular target ids / idempotency keys / raw
+ * allowlist — the server projection is {requestId,status,expiresAt} only,
+ * plus the optional display-safe `target` projection (FIX-P1-UX #172);
+ * ANY other unknown key (in particular target ids / idempotency keys / raw
  * operation data) fails the parse and the WHOLE payload is discarded.
  */
 const undoProposalSummarySchema = z
@@ -1037,6 +1066,7 @@ const undoProposalSummarySchema = z
     requestId: z.string().min(1).max(128),
     status: z.enum(["proposed", "executing"]),
     expiresAt: z.string().min(1),
+    target: undoTargetSchema.optional(),
   })
   .strict();
 
