@@ -184,4 +184,68 @@ describe('Legacy History Migration into FinanceChatAgent (T4.3: import surface o
     // Ensure memory messages array was not mutated as fallback
     expect(agent.messages).toHaveLength(0);
   });
+
+  it('(6) FIX-melhorias item 1: LegacyTurn.intention_id propaga para metadata.intentionId do par migrado (quando houver)', async () => {
+    const mockSql = createMockSql();
+    const persistedMessages: UIMessage[] = [];
+
+    const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent & {
+      messages: UIMessage[];
+      persistMessages: (msgs: UIMessage[]) => Promise<void>;
+    };
+    agent.messages = persistedMessages;
+    agent.persistMessages = vi.fn(async (msgs: UIMessage[]) => {
+      persistedMessages.push(...msgs);
+    });
+
+    Object.defineProperty(agent, 'ctx', {
+      value: { storage: { sql: mockSql } },
+      writable: true,
+      configurable: true,
+    });
+
+    const exportWithIntentions: LegacyFullExport = {
+      version: 1,
+      workspaceId: 'ws-intent-1',
+      turns: [
+        { id: 'turn-1', intention_id: 'intent-legacy-1', actor_id: 'user-a', status: 'completed', attempts: 1, tokens_used: 10 },
+        { id: 'turn-2', actor_id: 'user-a', status: 'completed', attempts: 1, tokens_used: 5 },
+      ],
+      messages: [
+        {
+          id: 'msg-1',
+          actor_id: 'user-a',
+          role: 'user',
+          content_json: JSON.stringify('qual meu saldo?'),
+          created_at: '2026-08-20T10:00:00.000Z',
+        },
+        {
+          id: 'msg-1:assistant',
+          actor_id: 'agent',
+          role: 'assistant',
+          content_json: JSON.stringify('Seu saldo é R$ 10,00.'),
+          created_at: '2026-08-20T10:00:01.000Z',
+        },
+        {
+          id: 'msg-2',
+          actor_id: 'user-a',
+          role: 'user',
+          content_json: JSON.stringify('e as contas?'),
+          created_at: '2026-08-20T10:05:00.000Z',
+        },
+      ],
+      hasInFlightTurns: false,
+    };
+
+    const res = await agent.importLegacyHistory(exportWithIntentions);
+    expect(res.success).toBe(true);
+    expect(res.importedCount).toBe(3);
+
+    // O par do turno com intention_id carrega a identidade; o turno sem
+    // intention_id não inventa nenhuma.
+    const byId = new Map(persistedMessages.map((m) => [m.id, m]));
+    expect((byId.get('msg-1')!.metadata as { intentionId?: string }).intentionId).toBe('intent-legacy-1');
+    expect((byId.get('msg-1:assistant')!.metadata as { intentionId?: string }).intentionId).toBe('intent-legacy-1');
+    expect((byId.get('msg-2')!.metadata as { intentionId?: string }).intentionId).toBeUndefined();
+  });
 });

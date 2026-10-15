@@ -36,6 +36,7 @@ export type SdkUIMessage = {
     actorId: string;
     workspaceId: string;
     createdAt: string;
+    intentionId?: string;
   };
 };
 
@@ -63,7 +64,32 @@ export const computeHistoryHash = (messages: LegacyMessage[], workspaceId = ''):
   return createHash('sha256').update(JSON.stringify(structured)).digest('hex');
 };
 
-export const transformLegacyMessages = (messages: LegacyMessage[], workspaceId = ''): SdkUIMessage[] => {
+export const transformLegacyMessages = (
+  messages: LegacyMessage[],
+  workspaceId = '',
+  turns: LegacyTurn[] = [],
+): SdkUIMessage[] => {
+  // FIX-melhorias item 1: o formato legado não carrega chave mensagem↔turn —
+  // a convenção do runtime legado é turno = par Q&A consecutivo em ordem
+  // cronológica. Agrupa as mensagens nessa ordem (user abre grupo, as demais
+  // anexam ao grupo aberto) e propaga turns[i].intention_id ao i-ésimo
+  // grupo, SOMENTE quando o turno o carrega — nunca inventa identidade.
+  const ordered = [...messages].sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0));
+  const groupIndex = new Map<string, number>();
+  let group = -1;
+  for (const msg of ordered) {
+    const role: 'user' | 'assistant' | 'system' =
+      msg.role === 'assistant' ? 'assistant' : msg.role === 'system' ? 'system' : 'user';
+    if (role === 'user' || group < 0) group += 1;
+    groupIndex.set(msg.id, group);
+  }
+  const intentionByGroup = new Map<number, string>();
+  turns.forEach((turn, i) => {
+    if (typeof turn.intention_id === 'string' && turn.intention_id) {
+      intentionByGroup.set(i, turn.intention_id);
+    }
+  });
+
   return messages.map((msg) => {
     let parsedContent = '';
     try {
@@ -87,6 +113,10 @@ export const transformLegacyMessages = (messages: LegacyMessage[], workspaceId =
         actorId,
         workspaceId,
         createdAt: msg.created_at,
+        ...(groupIndex.get(msg.id) !== undefined &&
+        intentionByGroup.get(groupIndex.get(msg.id)!) !== undefined
+          ? { intentionId: intentionByGroup.get(groupIndex.get(msg.id)!)! }
+          : {}),
       },
     };
   });
@@ -150,7 +180,7 @@ export const migrateLegacyHistory = async (
     };
   }
 
-  const transformed = transformLegacyMessages(exportData.messages, exportData.workspaceId);
+  const transformed = transformLegacyMessages(exportData.messages, exportData.workspaceId, exportData.turns);
 
   if (transformed.length > 0) {
     if (typeof persistCallback !== 'function') {
