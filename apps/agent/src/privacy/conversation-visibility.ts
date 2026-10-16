@@ -119,8 +119,11 @@ export const canAccessMessage = (input: {
       },
     });
   }
-  // Legado sem audiência explícita: proveniência = atribuição presente.
-  const attributed = typeof meta.actorId === 'string' && meta.actorId.trim().length > 0;
+  // Legado sem audiência explícita: proveniência = atribuição HUMANA
+  // verificável. Ids de sistema ('ted', 'assistant', 'unknown', 'system',
+  // vazio) nunca são proveniência — resposta do assistente sem dono humano
+  // é preservada-não-publicada, nunca coletiva (FIX-WS-D3-R2 finding 4).
+  const attributed = typeof meta.actorId === 'string' && !isSystemActorId(meta.actorId);
   if (!attributed) return false;
   return true;
 };
@@ -134,9 +137,10 @@ export const classifyLegacyAudience = (input: {
   if (typeof input.visibility === 'string' && (input.visibility === 'workspace' || input.visibility === 'private')) {
     return 'collective-with-provenance';
   }
-  const attributed =
-    (typeof input.actorId === 'string' && input.actorId.trim().length > 0) ||
-    (typeof input.ownerActorId === 'string' && input.ownerActorId.trim().length > 0);
+  // FIX-WS-D3-R2 finding 4: só atribuição HUMANA verificável conta como
+  // proveniência — 'ted'/sistema/ausente = preservado-não-publicado.
+  const humanActor = (value: unknown): boolean => typeof value === 'string' && !isSystemActorId(value);
+  const attributed = humanActor(input.actorId) || humanActor(input.ownerActorId);
   return attributed ? 'collective-with-provenance' : 'preserved-unpublished';
 };
 

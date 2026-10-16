@@ -8,6 +8,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { scrubForPersistence } from '../../privacy/dlp.js';
+import { isSystemActorId } from '../../privacy/conversation-visibility.js';
 import type { MemorySql } from './store.js';
 
 export type ChatSession = {
@@ -179,8 +180,9 @@ export const canAccessSessionRow = (actorId: string, session: ChatSession): bool
     return owner === actorId;
   }
   // Coletivo (incl. legado com atribuição): visível ao membro do workspace.
-  // Legado sem proveniência (actor vazio) = preservado-não-publicado.
-  if (!session.actorId || session.actorId.trim().length === 0) return false;
+  // Legado sem proveniência HUMANA (ator vazio ou id de sistema como 'ted')
+  // = preservado-não-publicado (FIX-WS-D3-R2 finding 4).
+  if (!session.actorId || isSystemActorId(session.actorId)) return false;
   return true;
 };
 
