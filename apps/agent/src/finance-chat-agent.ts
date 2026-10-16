@@ -111,6 +111,14 @@ import {
   countR2WorkspaceAttachments,
 } from "./workspace-deletion-attestation.js";
 import { depositEmptyAttestationProof } from "./workspace-deletion-deposit.js";
+// FIX-WS-D2-FENCE: fence durável de exclusão — instalado pelo attest-empty
+// ANTES do snapshot; todo caminho de escrita verifica e recusa fail-closed.
+import {
+  assertNoActiveWorkspaceDeletionFence,
+  clearWorkspaceDeletionFence,
+  installWorkspaceDeletionFence,
+  WorkspaceDeletionFencedError,
+} from "./workspace-deletion-fence.js";
 
 /**
  * A19 — DO-storage-backed checkpoint for the piggybacked attachment TTL sweep.
@@ -1911,6 +1919,18 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     if (!this.durableSql()) {
       return { text: "TED unavailable: durable storage is not available" };
     }
+    // FIX-WS-D2-FENCE — fence ativo → recusa fail-closed (nunca escreve).
+    try {
+      assertNoActiveWorkspaceDeletionFence(this.durableSql() as never, sdkWorkspace, Date.now());
+    } catch (error) {
+      if (error instanceof WorkspaceDeletionFencedError) {
+        throw Object.assign(new Error("agent.workspace_deletion_fenced"), {
+          code: "agent.workspace_deletion_fenced",
+          status: 409,
+        });
+      }
+      throw error;
+    }
 
     // T2.1: the SDK adapter normalizes into the canonical pipeline. Body
     // identity is only a compatibility hint here; authenticated gateway
@@ -2179,6 +2199,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         { code: "agent.unauthorized", message: "Missing authenticated actor or workspace" },
         { status: 401 },
       );
+    }
+    // FIX-WS-D2-FENCE — fence ativo → 409 tipado (fail-closed, zero write).
+    const uploadFence = this.deletionFenceRefusal(workspaceId);
+    if (uploadFence) {
+      return Response.json(uploadFence, { status: 409 });
     }
     // F1 PR-B — sink de observabilidade (best-effort; nunca quebra o upload)
     // e coorte attachment-specific para a baseline G07.
@@ -3219,6 +3244,45 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /**
+   * FIX-WS-D2-FENCE — drenagem de turnos em voo (assentamento, limitado).
+   *
+   * Aguarda a fila atual (`chatQueue`) assentar antes do snapshot do
+   * attest-empty, com teto de 5 s: turno em voo que persistir após o
+   * fechamento seria conteúdo remanescente no delete. Erro da fila é
+   * assentamento (não sucesso) — nunca propaga; timeout prossegue
+   * fail-closed a montante (o snapshot observa o estado real).
+   */
+  private async drainDeletionFenceTurns(limitMs = 5_000): Promise<void> {
+    const current = this.chatQueue;
+    if (!current) return;
+    try {
+      await Promise.race([
+        current.then(() => undefined, () => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, limitMs)),
+      ]);
+    } catch {
+      // Drenagem best-effort: o snapshot observa o estado real.
+    }
+  }
+
+  /**
+   * FIX-WS-D2-FENCE — guarda de escrita: fence ativo → 409 tipado
+   * `agent.workspace_deletion_fenced` (fail-closed, nunca escreve);
+   * ausente/expirado → libera (fail-open seguro).
+   */
+  private deletionFenceRefusal(workspaceId: string): { code: string; message: string } | null {
+    try {
+      assertNoActiveWorkspaceDeletionFence(this.durableSql() as never, workspaceId, Date.now());
+      return null;
+    } catch (error) {
+      if (error instanceof WorkspaceDeletionFencedError) {
+        return { code: error.code, message: error.message };
+      }
+      throw error;
+    }
+  }
+
+  /**
    * FIX-WS-D2-R5 — `POST /rpc/workspace/:id/attest-empty`: atesta o vazio
    * do lado Agent (SQLite + R2 próprios) e DEPOSITA a prova DIRETAMENTE
    * na API (server-to-server). O browser recebe SÓ `{ attestationId }`
@@ -3236,6 +3300,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * sem segredo/binding/SQLite/service-token/depósito → 409
    * `agent.attestation_unavailable`. Fail-closed em todos os cantos;
    * nunca conclui delete aqui (só atesta + deposita).
+   *
+   * FIX-WS-D2-FENCE — janela attest→consume fechada por construção: o
+   * fence durável (`workspace_deletion_fence`) é instalado ANTES do
+   * snapshot; turnos em voo são drenados (assentamento limitado) antes de
+   * observar; todo caminho de escrita recusa com fence ativo. Não-vazio
+   * ou depósito falho LIMPA o fence (sem handle não há delete, então
+   * liberar é seguro); vazio+depósito OK MANTÉM o fence até expirar.
    */
   private async handleWorkspaceAttestEmpty(request: Request, pathWorkspaceId: string): Promise<Response> {
     const actorId = request.headers.get("x-agent-actor")?.trim();
@@ -3268,6 +3339,40 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     const memory = this.memorySql();
     const durable = this.durableSql();
     const bucket = (this.env as { TED_ATTACHMENTS_BUCKET?: unknown } | undefined)?.TED_ATTACHMENTS_BUCKET;
+    // FIX-WS-D2-FENCE — sem SQLite durável não há fence durável: recusar
+    // fail-closed em vez de atestar sem fechar a janela.
+    const fenceSql = this.durableSql() as never;
+    if (!fenceSql) {
+      return Response.json(
+        {
+          code: "agent.attestation_unavailable",
+          message: "Atestação indisponível: armazenamento do Agent inacessível.",
+        },
+        { status: 409 },
+      );
+    }
+    // FIX-WS-D2-FENCE — fence PRIMEIRO (antes do snapshot): writers
+    // concorrentes passam a recusar a partir daqui. Drena turnos em voo
+    // antes de observar, para o snapshot ver o estado assentado.
+    try {
+      installWorkspaceDeletionFence(fenceSql as never, workspaceId, Date.now());
+    } catch {
+      return Response.json(
+        {
+          code: "agent.attestation_unavailable",
+          message: "Atestação indisponível no momento.",
+        },
+        { status: 409 },
+      );
+    }
+    await this.drainDeletionFenceTurns();
+    const releaseFence = (): void => {
+      try {
+        clearWorkspaceDeletionFence(fenceSql as never, workspaceId);
+      } catch {
+        // Limpeza best-effort (expira sozinho em 5min).
+      }
+    };
     try {
       const proof = await attestWorkspaceEmpty(
         {
@@ -3320,7 +3425,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       // API (server-to-server) e retorna SÓ o handle opaco. Sem service
       // token ou com depósito recusado/falho, indisponível fail-closed
       // (409, sem vazar conteúdo/HMAC ao browser).
+      // FIX-WS-D2-FENCE: sem depósito não há handle (sem delete) → LIMPA
+      // o fence; com depósito OK o fence é MANTIDO (janela fechada).
       if (!serviceToken) {
+        releaseFence();
         return Response.json(
           {
             code: "agent.attestation_unavailable",
@@ -3338,6 +3446,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         });
         return Response.json({ attestationId }, { status: 200 });
       } catch (error) {
+        releaseFence();
         if (error instanceof AgentAttestationError) {
           return Response.json(
             { code: error.code, message: error.message },
@@ -3347,6 +3456,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         return Response.json({ code: "agent.inference_error", message: "Falha ao atestar o workspace." }, { status: 502 });
       }
     } catch (error) {
+      // FIX-WS-D2-FENCE: attest recusou (não-vazio/indisponível) ou
+      // falhou antes do depósito → sem handle, LIMPA o fence.
+      releaseFence();
       if (error instanceof AgentAttestationError) {
         return Response.json(
           {
@@ -3420,6 +3532,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       const workspaceId = request.headers.get("x-agent-workspace");
       if (!actorId || !workspaceId || !actorId.trim() || !workspaceId.trim()) {
         return Response.json({ code: "agent.unauthorized", message: "Missing authenticated actor or workspace" }, { status: 401 });
+      }
+      // FIX-WS-D2-FENCE — fence ativo → 409 tipado (fail-closed, zero write).
+      const chatFence = this.deletionFenceRefusal(workspaceId.trim());
+      if (chatFence) {
+        return Response.json(chatFence, { status: 409 });
       }
       // C-06: effective identity — built ONCE from the gateway-verified
       // headers (assertConnectionBinding already ran above) and frozen.
@@ -3851,6 +3968,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       if (!sql) {
         return Response.json({ code: "agent.persistence_unavailable", message: "Memory storage is not available" }, { status: 503 });
       }
+      // FIX-WS-D2-FENCE — fence ativo → 409 tipado (fail-closed, zero write).
+      const prefsFence = this.deletionFenceRefusal(identity.workspaceId);
+      if (prefsFence) {
+        return Response.json(prefsFence, { status: 409 });
+      }
       let enabled = true;
       try {
         const body = (await request.json()) as { enabled?: unknown };
@@ -3880,6 +4002,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       const sql = this.memorySql();
       if (!sql) {
         return Response.json({ code: "agent.persistence_unavailable", message: "Session storage is not available" }, { status: 503 });
+      }
+      // FIX-WS-D2-FENCE — fence ativo → 409 tipado (fail-closed, zero write).
+      const sessionFence = this.deletionFenceRefusal(identity.workspaceId);
+      if (sessionFence) {
+        return Response.json(sessionFence, { status: 409 });
       }
       const turns = this.sdkTurns();
       const messageCount = turns.length;
