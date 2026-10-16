@@ -44,28 +44,42 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     if (!pool) throw new Error("database pool not initialized");
     const tomb = await pool.query(`SELECT to_regclass('public.workspace_tombstones') AS r`);
     const log = await pool.query(`SELECT to_regclass('public.workspace_closure_log') AS r`);
-    if (!tomb.rows[0]?.['r'] || !log.rows[0]?.['r']) {
-      // Schema descartável ainda sem V062: pula sem falhar (a suite
-      // unitária cobre o contrato; o deploy de migrations é job próprio).
-      return;
-    }
-    expect(tomb.rows[0]['r']).toBe('workspace_tombstones');
-    expect(log.rows[0]['r']).toBe('workspace_closure_log');
+    // FIX-WS-D2-R2 item 6: sem skip — o PG descartável aplica V061+V062
+    // via job/migrate antes da suite; ausência aqui é falha fechada.
+    expect(tomb.rows[0]?.['r']).toBe('workspace_tombstones');
+    expect(log.rows[0]?.['r']).toBe('workspace_closure_log');
   });
 
   itIfDatabase("vazio deleta de verdade; com-dados recusa; purge bloqueado", async () => {
     if (!pool) throw new Error("database pool not initialized");
+    // FIX-WS-D2-R2 item 6: sem skip — V062 é pré-requisito aplicado.
     const tomb = await pool.query(`SELECT to_regclass('public.workspace_tombstones') AS r`);
-    if (!tomb.rows[0]?.['r']) return;
+    expect(tomb.rows[0]?.['r']).toBe('workspace_tombstones');
     const store = createPostgresWorkspaceStore(pool);
 
     const authUser = `auth-${randomUUID()}`;
     await seedUser(pool, authUser, `wsd2-${randomUUID()}@example.com`);
 
-    // Workspace vazio: inventário vazio → delete OK.
+    // Workspace vazio: inventário vazio → delete OK (com atestação
+    // cross-store verificada na confirmação; `unverified` bloqueia).
     const empty = await store.create({ authUserId: authUser, name: "Vazio", kind: "shared" });
     const inventory = await store.deletionInventory({ authUserId: authUser, householdId: empty.id });
     expect(inventory.empty).toBe(true);
+    expect(inventory.agentAttestation).toBe('unverified');
+    // Barreira cross-store sob PG real: sem atestação, nunca conclui.
+    await expect(
+      store.deleteEmpty({
+        authUserId: authUser,
+        householdId: empty.id,
+        confirmation: buildDeleteConfirmation({
+          workspaceId: empty.id,
+          actor: authUser,
+          inventoryVersion: inventory.inventoryVersion,
+          expiresAt: inventory.expiresAt,
+          agentAttestation: 'unverified',
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'workspace.agent_unverified' });
     const receipt = await store.deleteEmpty({
       authUserId: authUser,
       householdId: empty.id,
@@ -74,6 +88,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
         actor: authUser,
         inventoryVersion: inventory.inventoryVersion,
         expiresAt: inventory.expiresAt,
+        agentAttestation: 'verified-empty',
       }),
     });
     expect(receipt.id).toBe(empty.id);
@@ -93,6 +108,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
           actor: authUser,
           inventoryVersion: receipt.inventoryVersion,
           expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          agentAttestation: 'verified-empty',
         }),
       }),
     ).rejects.toMatchObject({ code: 'workspace.deleted' });
@@ -117,6 +133,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
             actor: authUser,
             inventoryVersion: fullInventory.inventoryVersion,
             expiresAt: fullInventory.expiresAt,
+            agentAttestation: 'verified-empty',
           }),
         }),
       ).rejects.toMatchObject({ code: 'workspace.not_empty' });
@@ -130,6 +147,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
             actor: authUser,
             inventoryVersion: fullInventory.inventoryVersion,
             expiresAt: fullInventory.expiresAt,
+            agentAttestation: 'verified-empty',
           }),
           purge: true,
         }),
@@ -144,8 +162,9 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
 
   itIfDatabase("concorrência real: dois deletes simultâneos, um vence", async () => {
     if (!pool) throw new Error("database pool not initialized");
+    // FIX-WS-D2-R2 item 6: sem skip — V062 é pré-requisito aplicado.
     const tomb = await pool.query(`SELECT to_regclass('public.workspace_tombstones') AS r`);
-    if (!tomb.rows[0]?.['r']) return;
+    expect(tomb.rows[0]?.['r']).toBe('workspace_tombstones');
     const store = createPostgresWorkspaceStore(pool);
 
     const authUser = `auth-${randomUUID()}`;
@@ -158,6 +177,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
         actor: authUser,
         inventoryVersion: inventory.inventoryVersion,
         expiresAt: inventory.expiresAt,
+        agentAttestation: 'verified-empty',
       });
     const results = await Promise.allSettled([
       store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation: confirmation() }),
@@ -171,5 +191,158 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     expect(rejected).toHaveLength(1);
     const reason = (rejected[0] as PromiseRejectedResult).reason as { code?: string };
     expect(['workspace.deleted', 'workspace.confirmation_invalid', 'workspace.not_empty']).toContain(reason.code);
+  });
+
+  itIfDatabase("FIX-WS-D2-R2 item 5: replay com expiresAt adulterado recusa em PG real", async () => {
+    if (!pool) throw new Error("database pool not initialized");
+    const store = createPostgresWorkspaceStore(pool);
+
+    const authUser = `auth-${randomUUID()}`;
+    await seedUser(pool, authUser, `wsd2r-${randomUUID()}@example.com`);
+    const ws = await store.create({ authUserId: authUser, name: "Replay", kind: "shared" });
+    const inventory = await store.deletionInventory({ authUserId: authUser, householdId: ws.id });
+    expect(inventory.empty).toBe(true);
+    // Replay com `expiresAt` re-carimbado ainda válido na janela.
+    const tamperedExpiresAt = new Date(Date.parse(inventory.expiresAt) - 5 * 60 * 1000).toISOString();
+    expect(Date.parse(tamperedExpiresAt)).toBeGreaterThan(Date.now());
+    await expect(
+      store.deleteEmpty({
+        authUserId: authUser,
+        householdId: ws.id,
+        confirmation: buildDeleteConfirmation({
+          workspaceId: ws.id,
+          actor: authUser,
+          inventoryVersion: inventory.inventoryVersion,
+          expiresAt: tamperedExpiresAt,
+          agentAttestation: 'verified-empty',
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'workspace.confirmation_invalid' });
+    // Nada foi tocado: workspace segue ativo e sem tombstone.
+    const status = await pool.query(`SELECT status FROM households WHERE id = $1`, [ws.id]);
+    expect(status.rows[0]?.['status']).toBe('active');
+    const tombRow = await pool.query(`SELECT * FROM workspace_tombstones WHERE household_id = $1`, [ws.id]);
+    expect(tombRow.rowCount).toBe(0);
+  });
+
+  itIfDatabase("FIX-WS-D2-R2 item 2: delete-vs-create e archive-vs-create reais", async () => {
+    if (!pool) throw new Error("database pool not initialized");
+    const { createPostgresWriteStore } = await import("../../src/writes/postgres.js");
+    const store = createPostgresWorkspaceStore(pool);
+    const writes = createPostgresWriteStore({ pool });
+
+    const authUser = `auth-${randomUUID()}`;
+    await seedUser(pool, authUser, `wsd2w-${randomUUID()}@example.com`);
+
+    // Delete venceu: create posterior recusa 410, sem efeito.
+    const doomed = await store.create({ authUserId: authUser, name: "Morto", kind: "shared" });
+    const doomedInventory = await store.deletionInventory({ authUserId: authUser, householdId: doomed.id });
+    await store.deleteEmpty({
+      authUserId: authUser,
+      householdId: doomed.id,
+      confirmation: buildDeleteConfirmation({
+        workspaceId: doomed.id,
+        actor: authUser,
+        inventoryVersion: doomedInventory.inventoryVersion,
+        expiresAt: doomedInventory.expiresAt,
+        agentAttestation: 'verified-empty',
+      }),
+    });
+    await expect(
+      writes.createAccount(doomed.id, { name: 'Tardia', kind: 'bank', initialBalanceCents: 0 }),
+    ).rejects.toMatchObject({ code: 'workspace.deleted' });
+
+    // Archive: create recusa 403, sem efeito; restore libera de novo.
+    const frozen = await store.create({ authUserId: authUser, name: "Congelado", kind: "shared" });
+    await store.setStatus({ authUserId: authUser, householdId: frozen.id, status: 'archived' });
+    await expect(
+      writes.createAccount(frozen.id, { name: 'Congelada', kind: 'bank', initialBalanceCents: 0 }),
+    ).rejects.toMatchObject({ code: 'workspace.archived' });
+    await store.setStatus({ authUserId: authUser, householdId: frozen.id, status: 'active' });
+    const revived = await writes.createAccount(frozen.id, { name: 'Viva', kind: 'bank', initialBalanceCents: 0 });
+    expect(revived.householdId).toBe(frozen.id);
+  });
+
+  itIfDatabase("FIX-WS-D2-R2 item 2: delete-vs-create concorrente — sem escrita em workspace morto", async () => {
+    if (!pool) throw new Error("database pool not initialized");
+    const { createPostgresWriteStore } = await import("../../src/writes/postgres.js");
+    const store = createPostgresWorkspaceStore(pool);
+    const writes = createPostgresWriteStore({ pool });
+
+    const authUser = `auth-${randomUUID()}`;
+    await seedUser(pool, authUser, `wsd2cc-${randomUUID()}@example.com`);
+    const ws = await store.create({ authUserId: authUser, name: "Disputa", kind: "shared" });
+    const inventory = await store.deletionInventory({ authUserId: authUser, householdId: ws.id });
+    const confirmation = buildDeleteConfirmation({
+      workspaceId: ws.id,
+      actor: authUser,
+      inventoryVersion: inventory.inventoryVersion,
+      expiresAt: inventory.expiresAt,
+      agentAttestation: 'verified-empty',
+    });
+    const results = await Promise.allSettled([
+      store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation }),
+      writes.createAccount(ws.id, { name: 'Corrida', kind: 'bank', initialBalanceCents: 0 }),
+    ]);
+    const deleteResult = results[0]!;
+    const createResult = results[1]!;
+    if (deleteResult.status === 'fulfilled') {
+      // Delete venceu (lock primeiro): o create precisa ver o tombstone.
+      expect(createResult.status).toBe('rejected');
+      const reason = (createResult as PromiseRejectedResult).reason as { code?: string };
+      expect(reason.code).toBe('workspace.deleted');
+    } else {
+      // Create venceu: a confirmação do delete ficou obsoleta (as
+      // contagens vivas sob o lock divergem da versão vinculada) e o
+      // delete recusa SEMPRE — nunca apaga a conta recém-criada.
+      expect(createResult.status).toBe('fulfilled');
+      const reason = (deleteResult as PromiseRejectedResult).reason as { code?: string };
+      expect(['workspace.confirmation_invalid', 'workspace.not_empty']).toContain(reason.code);
+      const accounts = await pool.query(`SELECT COUNT(*)::int AS c FROM accounts WHERE household_id = $1`, [ws.id]);
+      expect(accounts.rows[0]?.['c']).toBeGreaterThan(0);
+      const tombRow = await pool.query(`SELECT * FROM workspace_tombstones WHERE household_id = $1`, [ws.id]);
+      expect(tombRow.rowCount).toBe(0);
+    }
+  });
+
+  itIfDatabase("FIX-WS-D2-R2 item 3: restore-vs-delete concorrente em PG real", async () => {
+    if (!pool) throw new Error("database pool not initialized");
+    const store = createPostgresWorkspaceStore(pool);
+
+    const authUser = `auth-${randomUUID()}`;
+    await seedUser(pool, authUser, `wsd2rd-${randomUUID()}@example.com`);
+    const ws = await store.create({ authUserId: authUser, name: "Ressuscitável", kind: "shared" });
+    await store.setStatus({ authUserId: authUser, householdId: ws.id, status: 'archived' });
+    const inventory = await store.deletionInventory({ authUserId: authUser, householdId: ws.id });
+    const confirmation = buildDeleteConfirmation({
+      workspaceId: ws.id,
+      actor: authUser,
+      inventoryVersion: inventory.inventoryVersion,
+      expiresAt: inventory.expiresAt,
+      agentAttestation: 'verified-empty',
+    });
+    const results = await Promise.allSettled([
+      store.setStatus({ authUserId: authUser, householdId: ws.id, status: 'active' }),
+      store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation }),
+    ]);
+    const restoreResult = results[0]!;
+    const deleteResult = results[1]!;
+    // O workspace estava vazio e a confirmação é válida: o delete sempre
+    // conclui (serializado sob FOR UPDATE). O restore perde a corrida
+    // (410 tombstone) ou vence antes e o delete sobrescreve depois —
+    // o estado final é SEMPRE deleted com tombstone (nunca ressuscita).
+    expect(deleteResult.status).toBe('fulfilled');
+    if (restoreResult.status === 'rejected') {
+      const reason = (restoreResult as PromiseRejectedResult).reason as { code?: string };
+      expect(reason.code).toBe('workspace.deleted');
+    }
+    const final = await pool.query(`SELECT status FROM households WHERE id = $1`, [ws.id]);
+    expect(final.rows[0]?.['status']).toBe('deleted');
+    const tombRow = await pool.query(`SELECT * FROM workspace_tombstones WHERE household_id = $1`, [ws.id]);
+    expect(tombRow.rowCount).toBe(1);
+    // Tombstone é proibição autoritativa: restore posterior recusa.
+    await expect(
+      store.setStatus({ authUserId: authUser, householdId: ws.id, status: 'active' }),
+    ).rejects.toMatchObject({ code: 'workspace.deleted' });
   });
 });

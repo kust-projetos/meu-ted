@@ -131,6 +131,12 @@ export type DeleteConfirmationInput = {
   workspaceId: string;
   inventoryVersion: string;
   expiresAt: string;
+  /**
+   * Barreira cross-store (FIX-WS-D2-R2): só `verified-empty` conclui no
+   * servidor. O PWA repassa a atestação do inventário; `unverified`
+   * bloqueia a exclusão (409 workspace.agent_unverified).
+   */
+  agentAttestation: "unverified" | "verified-empty";
 };
 
 /**

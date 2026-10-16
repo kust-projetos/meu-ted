@@ -330,6 +330,9 @@ export default function WorkspaceManagerPage() {
 
   async function handleDelete() {
     if (!deleteTarget || !deleteInventory?.empty) return;
+    // Barreira cross-store fail-closed: sem atestação do lado Agent, o
+    // servidor recusa (409) — nem tenta.
+    if (deleteInventory.agentAttestation !== "verified-empty") return;
     setDeleteBusy(true);
     setActionError(null);
     try {
@@ -337,6 +340,7 @@ export default function WorkspaceManagerPage() {
         workspaceId: deleteTarget.id,
         inventoryVersion: deleteInventory.inventoryVersion,
         expiresAt: deleteInventory.expiresAt,
+        agentAttestation: deleteInventory.agentAttestation,
       });
       setDeleteTarget(null);
     } catch (cause) {
@@ -833,6 +837,16 @@ export default function WorkspaceManagerPage() {
             </div>
           </div>
         ) : deleteInventory?.empty ? (
+          deleteInventory.agentAttestation !== "verified-empty" ? (
+            <div className="space-y-3">
+              <div className="rounded-[12px] border border-warning/30 bg-warning-tint p-3 text-[13px] font-medium text-warning">
+                Exclusão bloqueada: o lado Agent (conversas e arquivos) ainda não atestou que este workspace está vazio. Nenhuma exclusão foi executada.
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={() => setDeleteTarget(null)}>Fechar</Button>
+              </div>
+            </div>
+          ) : (
           <div className="space-y-4">
             <div className="rounded-[12px] border border-danger/20 bg-danger-tint p-3 text-[13px] font-medium text-danger">
               O workspace &ldquo;{deleteTarget?.name}&rdquo; está vazio e será excluído permanentemente. Auditoria e registros de idempotência são preservados; o identificador nunca será reutilizado.
@@ -862,6 +876,7 @@ export default function WorkspaceManagerPage() {
               </Button>
             </div>
           </div>
+          )
         ) : (
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setDeleteTarget(null)}>Fechar</Button>

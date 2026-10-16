@@ -15,6 +15,11 @@ const emptyInventory: DeletionInventory = {
   agentAttestation: "unverified",
 };
 
+const verifiedEmptyInventory: DeletionInventory = {
+  ...emptyInventory,
+  agentAttestation: "verified-empty",
+};
+
 const fullInventory: DeletionInventory = {
   ...emptyInventory,
   empty: false,
@@ -78,6 +83,7 @@ describe("WorkspaceManagerPage — delete só-vazio (D2)", () => {
 
   it("abre o diálogo de exclusão com inventário e exige o nome digitado", async () => {
     const user = userEvent.setup();
+    vi.mocked(context.fetchDeletionInventory).mockResolvedValueOnce(verifiedEmptyInventory);
     render(<WorkspaceManagerPage />);
 
     await user.click(screen.getByRole("button", { name: "Excluir Antigo" }));
@@ -96,10 +102,24 @@ describe("WorkspaceManagerPage — delete só-vazio (D2)", () => {
     await waitFor(() =>
       expect(context.deleteWorkspace).toHaveBeenCalledWith("ws-arquivado", {
         workspaceId: "ws-arquivado",
-        inventoryVersion: emptyInventory.inventoryVersion,
-        expiresAt: emptyInventory.expiresAt,
+        inventoryVersion: verifiedEmptyInventory.inventoryVersion,
+        expiresAt: verifiedEmptyInventory.expiresAt,
+        agentAttestation: "verified-empty",
       }),
     );
+  });
+
+  it("bloqueia a exclusão sem atestação cross-store (unverified nunca conclui)", async () => {
+    const user = userEvent.setup();
+    render(<WorkspaceManagerPage />);
+
+    await user.click(screen.getByRole("button", { name: "Excluir Antigo" }));
+    await waitFor(() =>
+      expect(context.fetchDeletionInventory).toHaveBeenCalledWith("ws-arquivado"),
+    );
+    expect(await screen.findByText(/ainda não atestou que este workspace está vazio/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Excluir permanentemente" })).not.toBeInTheDocument();
+    expect(context.deleteWorkspace).not.toHaveBeenCalled();
   });
 
   it("bloqueia a exclusão quando o inventário não está vazio (sem purge)", async () => {

@@ -5,6 +5,7 @@ import type {
   DeletionInventory,
 } from './workspace-deletion.js';
 import {
+  boundInventoryVersion,
   deletionInventoryExpiry,
   hashInventoryCounts,
   verifyDeleteConfirmation,
@@ -79,12 +80,14 @@ export class WorkspaceError extends Error {
     readonly code:
       | 'workspace.not_found'
       | 'workspace.forbidden'
+      | 'workspace.archived'
       | 'workspace.personal'
       | 'workspace.last_owner'
       | 'workspace.invalid'
       | 'workspace.not_empty'
       | 'workspace.purge_blocked'
       | 'workspace.confirmation_invalid'
+      | 'workspace.agent_unverified'
       | 'workspace.deleted',
     readonly statusCode: number,
     message: string,
@@ -124,13 +127,15 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks): 
   };
 
   // O fallback in-memory não tem tabelas de domínio: o inventário é
-  // trivialmente vazio (paridade de contrato com o Postgres).
+  // trivialmente vazio (paridade de contrato com o Postgres). A versão
+  // vincula a expiração (mesmo contrato do Postgres).
   const emptyInventory = (householdId: string): DeletionInventory => {
     const counts = {};
+    const expiresAt = deletionInventoryExpiry();
     return {
       workspaceId: householdId,
-      inventoryVersion: hashInventoryCounts(householdId, counts),
-      expiresAt: deletionInventoryExpiry(),
+      inventoryVersion: hashInventoryCounts(householdId, counts, expiresAt),
+      expiresAt,
       empty: true,
       counts,
       purgeBlocked: true,
@@ -171,11 +176,21 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks): 
     },
     async rename(input) {
       const workspace = ownedWorkspace(input.authUserId, input.householdId);
+      // D2 §1 (FIX-WS-D2-R2 item 4): o congelamento de archived vale pelo
+      // workspace efetivamente mutado (path), nunca pelo header opcional —
+      // o store recusa aqui, independente do que o header alegar.
+      if (workspace.status === 'archived') {
+        throw new WorkspaceError('workspace.archived', 403, 'Workspace arquivado: mutações congeladas até restaurar.');
+      }
       workspace.name = input.name;
       return toSummary(workspace);
     },
     async setStatus(input) {
       const workspace = ownedWorkspace(input.authUserId, input.householdId);
+      // D2: delete é permanente — restore de tombstone recusa (proibição
+      // autoritativa; ownedWorkspace já recusa tombstone/deleted).
+      // Re-archive idempotente e restore sobre archived passam; rename e
+      // demais mutações sobre archived congelam em rename/gates.
       workspace.status = input.status;
       return toSummary(workspace);
     },
@@ -222,12 +237,18 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks): 
         );
       }
       const inventory = emptyInventory(input.householdId);
+      // Versão vinculada: recomputada sobre as contagens vivas E o
+      // `expiresAt` apresentado — expiração adulterada diverge aqui.
       verifyDeleteConfirmation(
         input.confirmation,
         {
           workspaceId: input.householdId,
           actor: input.authUserId,
-          inventoryVersion: inventory.inventoryVersion,
+          inventoryVersion: boundInventoryVersion(
+            input.householdId,
+            inventory.counts,
+            input.confirmation.expiresAt,
+          ),
         },
       );
       workspace.status = 'deleted';

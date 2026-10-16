@@ -54,13 +54,16 @@ const workspaceBody = z.object({
 
 // D2 (ADR-027): confirmação forte vinculada (UUID/ator/ação/versão/expiração).
 // O `actor` NÃO vem do cliente: é injetado da sessão server-side no
-// handler (nunca confiar em claim do cliente).
+// handler (nunca confiar em claim do cliente). `agentAttestation` é
+// declarada pelo cliente mas só `verified-empty` conclui (barreira
+// cross-store fail-closed; `unverified` → 409 workspace.agent_unverified).
 const deleteBody = z.object({
   confirmation: z.object({
     workspaceId: workspaceId,
     action: z.literal('workspace.delete'),
     inventoryVersion: z.string().regex(/^[0-9a-f]{64}$/),
     expiresAt: z.string().datetime(),
+    agentAttestation: z.enum(['unverified', 'verified-empty']),
   }),
   purge: z.boolean().optional(),
 });

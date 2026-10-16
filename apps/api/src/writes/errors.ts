@@ -12,6 +12,8 @@ export type DomainErrorCode =
   | "household_mismatch"
   | "in_use"
   | "conflict"
+  | "workspace.archived"
+  | "workspace.deleted"
   | "idempotency.conflict"
   | "idempotency.in_progress"
   | "idempotency.atomic_mutation_not_supported"

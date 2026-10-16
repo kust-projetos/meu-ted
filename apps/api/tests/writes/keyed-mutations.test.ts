@@ -47,6 +47,10 @@ const makeClaimClient = (recorder: string[]) => ({
   query: vi.fn(async (text: string) => {
     recorder.push(text);
     if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') return { rows: [], rowCount: 0 };
+    // FIX-WS-D2-R2 item 2: guarda de lifecycle dos writers (workspace active).
+    if (text.includes('FROM households')) {
+      return { rows: [{ status: 'active' }], rowCount: 1 };
+    }
     if (text.includes('FROM accounts')) {
       return { rows: [{ id: ACC, household_id: H, name: 'A', kind: 'bank', balance_cents: 5000, status: 'active' }], rowCount: 1 };
     }

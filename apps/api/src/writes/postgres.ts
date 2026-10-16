@@ -21,6 +21,7 @@ import { runKeyedMutation } from './pending-idempotency.js';
 import type { WriteStore } from './store.js';
 import { resolveApplicationUserId } from '../auth/resolve-user-id.js';
 import { resolveHouseholdId } from '../auth/resolve-household-id.js';
+import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
 import type {
   CreateAccountInput,
   CreateExpenseInput,
@@ -413,6 +414,8 @@ const createExpenseInTx = async (
   householdId: string,
   input: CreateExpenseInput,
 ): Promise<Transaction> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   // V4.1 Phase 4 Task 4.6: the paying account is locked before the
   // balance decision so concurrent expenses serialize on the row.
   const acc = await lockAccountRow(client, input.accountId, householdId);
@@ -470,6 +473,8 @@ const createIncomeInTx = async (
   householdId: string,
   input: CreateIncomeInput,
 ): Promise<Transaction> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const acc = await findAccountInHousehold(client, input.accountId, householdId);
   if (acc.status !== 'active') throw domainErrors.notFound('Conta');
   // H-01: income on a credit card is rejected (422), not silently booked.
@@ -517,6 +522,8 @@ const createTransferInTx = async (
   householdId: string,
   input: CreateTransferInput,
 ): Promise<Transaction> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   // V4.1 Phase 4 Tasks 4.6–4.7: both legs locked in deterministic (sorted)
   // order — opposite-direction concurrent transfers cannot deadlock.
   const locked = await lockAccountsOrdered(client, householdId, [input.fromAccountId, input.toAccountId]);
@@ -567,6 +574,9 @@ export const createAccountInTx = async (
   householdId: string,
   input: CreateAccountInput,
 ): Promise<Account> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito
+  // (cobre delete-vs-create e archive-vs-create, inclusive concorrentes).
+  await assertWorkspaceWritableInTx(client, householdId);
   // Negative-balance rule: only bank/cash may start negative. The route
   // schema already limits kind to bank|cash; this guards direct store
   // callers presenting any account kind — a negative initial balance for
@@ -600,6 +610,8 @@ const deactivateAccountInTx = async (
   householdId: string,
   id: string,
 ): Promise<Account> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const existing = await findAccountInHousehold(client, id, householdId);
   if (existing.status !== 'active') throw domainErrors.notFound('Conta');
   const used = await client.query<{ count: string }>(
@@ -638,6 +650,8 @@ const deactivateCategoryInTx = async (
   householdId: string,
   id: string,
 ): Promise<Category> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const existing = await findCategoryInHousehold(client, id, householdId);
   if (existing.status !== 'active') throw domainErrors.notFound('Categoria');
   const used = await client.query<{ count: string }>(
@@ -673,6 +687,8 @@ const softDeleteTransactionInTx = async (
   householdId: string,
   id: string,
 ): Promise<Transaction> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const tx = await findActiveTransaction(client, id, householdId);
   // V4.1 REVIEWFIX F3: never tombstone a paid payable's payment effect
   // directly — the undo path owns that reversal.
@@ -731,6 +747,8 @@ const updateTransactionInTx = async (
   id: string,
   patch: UpdateTransactionInput,
 ): Promise<Transaction> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const tx = await findActiveTransaction(client, id, householdId);
   // V4.1 REVIEWFIX F3: a paid payable's payment effect is immutable
   // via PATCH — use unpay (which clears the link first).
@@ -896,6 +914,8 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
 
     async updateAccount(householdId, id, patch) {
       return withTransaction(pool, async (client) => {
+        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+        await assertWorkspaceWritableInTx(client, householdId);
         const existing = await findAccountInHousehold(client, id, householdId);
         if (existing.status !== 'active') throw domainErrors.notFound('Conta');
         const res = await client.query<Row>(
@@ -915,6 +935,8 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
 
     async createCategory(householdId, input) {
       return withTransaction(pool, async (client) => {
+        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+        await assertWorkspaceWritableInTx(client, householdId);
         if (input.parentId) {
           const parent = await findCategoryInHousehold(client, input.parentId, householdId);
           if (parent.status !== 'active') throw domainErrors.notFound('Categoria pai');
@@ -949,6 +971,8 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
 
     async updateCategory(householdId, id, patch) {
       return withTransaction(pool, async (client) => {
+        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+        await assertWorkspaceWritableInTx(client, householdId);
         const existing = await findCategoryInHousehold(client, id, householdId);
         if (existing.status !== 'active') throw domainErrors.notFound('Categoria');
         if (patch.name !== undefined) {
@@ -988,6 +1012,8 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
 
     async deleteCategory(householdId, id, input) {
       return withTransaction(pool, async (client) => {
+        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+        await assertWorkspaceWritableInTx(client, householdId);
         const cat = await findCategoryInHousehold(client, id, householdId);
         if (cat.status !== 'active') throw domainErrors.notFound('Categoria');
         const subs = await client.query<Row>(
@@ -1067,7 +1093,11 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
     },
 
     async applyCategoryDefaults(householdId) {
-      return withTransaction(pool, async (client) => applyDefaultsInTx(client, householdId));
+      return withTransaction(pool, async (client) => {
+        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+        await assertWorkspaceWritableInTx(client, householdId);
+        return applyDefaultsInTx(client, householdId);
+      });
     },
 
     async createExpense(householdId, input, options) {

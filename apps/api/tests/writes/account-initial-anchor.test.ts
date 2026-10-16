@@ -29,6 +29,10 @@ const makeFakePool = () => {
       if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') {
         return { rows: [], rowCount: 0 };
       }
+      // FIX-WS-D2-R2 item 2: guarda de lifecycle dos writers (workspace active).
+      if (text.includes('FROM households')) {
+        return { rows: [{ status: 'active' }], rowCount: 1 };
+      }
       if (text.startsWith('INSERT INTO accounts')) {
         // Simulate PG DEFAULT 0 for the anchor when the writer omits it.
         const balance = values[3] as number;

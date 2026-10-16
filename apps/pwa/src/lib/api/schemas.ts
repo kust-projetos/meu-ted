@@ -302,7 +302,7 @@ export const deletionInventorySchema = z.object({
   empty: z.boolean(),
   counts: z.record(z.string(), z.number()),
   purgeBlocked: z.literal(true),
-  agentAttestation: z.string(),
+  agentAttestation: z.enum(["unverified", "verified-empty"]),
 });
 export const deleteReceiptSchema = z.object({
   id,

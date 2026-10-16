@@ -18,6 +18,14 @@ const CONFIRMATION_CLOCK_SKEW_MS = 60 * 1000;
 
 export type DeletionInventoryCounts = Record<string, number>;
 
+/**
+ * Atestação cross-store do lado Agent (Durable Objects / R2 / memória).
+ * O Postgres da API não observa esse lado: o inventário API-side sempre
+ * retorna `unverified`, e o delete SÓ conclui com `verified-empty`
+ * apresentado na confirmação (barreira fail-closed, ADR-027 Riscos).
+ */
+export type AgentAttestation = 'unverified' | 'verified-empty';
+
 export type DeletionInventory = {
   workspaceId: string;
   inventoryVersion: string;
@@ -28,11 +36,11 @@ export type DeletionInventory = {
   purgeBlocked: true;
   /**
    * Lado Agent (Durable Objects / R2 / memória) não é observável pelo
-   * Postgres da API: a barreira cross-store é pendente (ver Riscos do
-   * ADR-027). O delete API-side prossegue para inventário vazio e o
-   * fechamento registra a ausência de atestação.
+   * Postgres da API: o inventário API-side sempre retorna `unverified`.
+   * O delete SÓ conclui com `verified-empty` na confirmação — `unverified`
+   * BLOQUEIA o delete (fail-closed, nunca conclui sem a barreira).
    */
-  agentAttestation: 'unverified';
+  agentAttestation: AgentAttestation;
 };
 
 export type DeleteConfirmation = {
@@ -41,6 +49,12 @@ export type DeleteConfirmation = {
   action: typeof DELETION_CONFIRM_ACTION;
   inventoryVersion: string;
   expiresAt: string;
+  /**
+   * Barreira cross-store (FIX-WS-D2-R2): só `verified-empty` conclui o
+   * delete. `unverified` é recusado com `workspace.agent_unverified`
+   * antes de qualquer efeito — nunca conclui sem atestação.
+   */
+  agentAttestation: AgentAttestation;
 };
 
 export type DeleteReceipt = {
@@ -52,13 +66,27 @@ export type DeleteReceipt = {
 const invalid = (message: string): WorkspaceError =>
   new WorkspaceError('workspace.confirmation_invalid', 409, message);
 
-/** Versão canônica do inventário: sha256 do JSON ordenado das contagens. */
+const agentUnverified = (): WorkspaceError =>
+  new WorkspaceError(
+    'workspace.agent_unverified',
+    409,
+    'Exclusão bloqueada: ausência do lado Agent (Durable Objects / R2 / memória) não atestada. Apresente agentAttestation verified-empty.',
+  );
+
+/**
+ * Versão canônica do inventário: sha256 do JSON ordenado das contagens
+ * VINCULADO à expiração (FIX-WS-D2-R2 item 5). Sem o vínculo, o cliente
+ * poderia reemitir a confirmação com `expiresAt` adulterado (dentro da
+ * janela) e renovar a validade indefinidamente: qualquer `expiresAt`
+ * divergente do inventariado gera versão divergente e recusa.
+ */
 export const hashInventoryCounts = (
   workspaceId: string,
   counts: DeletionInventoryCounts,
+  expiresAt: string,
 ): string => {
   const keys = Object.keys(counts).sort();
-  const canonical = JSON.stringify({ workspaceId, counts: keys.map((k) => [k, counts[k]]) });
+  const canonical = JSON.stringify({ workspaceId, counts: keys.map((k) => [k, counts[k]]), expiresAt });
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
 };
 
@@ -67,12 +95,14 @@ export const buildDeleteConfirmation = (input: {
   actor: string;
   inventoryVersion: string;
   expiresAt: string;
+  agentAttestation: AgentAttestation;
 }): DeleteConfirmation => ({
   workspaceId: input.workspaceId,
   actor: input.actor,
   action: DELETION_CONFIRM_ACTION,
   inventoryVersion: input.inventoryVersion,
   expiresAt: input.expiresAt,
+  agentAttestation: input.agentAttestation,
 });
 
 export const deletionInventoryExpiry = (now = Date.now()): string =>
@@ -80,7 +110,11 @@ export const deletionInventoryExpiry = (now = Date.now()): string =>
 
 /**
  * Validação pura da confirmação forte: vínculo (UUID/ator/ação/versão)
- * + expiração com TTL limitado server-side. Não toca no banco.
+ * + barreira cross-store + expiração com TTL limitado server-side.
+ * Não toca no banco. A expiração é IMUTÁVEL por vínculo: o chamador
+ * (deleteEmpty) recomputa a versão sobre as contagens vivas E o
+ * `expiresAt` apresentado — `expiresAt` adulterado gera versão
+ * divergente (ver `verifyInventoryBinding`).
  */
 export const verifyDeleteConfirmation = (
   confirmation: DeleteConfirmation,
@@ -96,6 +130,11 @@ export const verifyDeleteConfirmation = (
   ) {
     throw invalid('Confirmação de exclusão inválida ou divergente do inventário.');
   }
+  // Barreira cross-store ANTES de qualquer outra validação temporal:
+  // `unverified` nunca conclui, mesmo com o restante válido.
+  if (confirmation.agentAttestation !== 'verified-empty') {
+    throw agentUnverified();
+  }
   const expiresAt = Date.parse(confirmation.expiresAt);
   if (!Number.isFinite(expiresAt)) throw invalid('Confirmação de exclusão sem expiração válida.');
   // A janela nunca estende além do TTL + skew: relógio do cliente não amplia.
@@ -104,6 +143,21 @@ export const verifyDeleteConfirmation = (
     throw invalid('Confirmação de exclusão com expiração além da janela permitida.');
   }
 };
+
+/**
+ * Vínculo inventário↔confirmação sob a barreira (FIX-WS-D2-R2 item 5):
+ * a versão esperada é recomputada sobre as contagens vivas (sob o lock
+ * do delete) E o `expiresAt` apresentado na confirmação. Expiração
+ * adulterada → versão divergente → recusa, sem tocar nos dados.
+ * Na prática o deleteEmpty passa essa versão vinculada como
+ * `expected.inventoryVersion` de `verifyDeleteConfirmation`, de modo que
+ * vínculo, barreira e expiração são checados numa única validação pura.
+ */
+export const boundInventoryVersion = (
+  workspaceId: string,
+  liveCounts: DeletionInventoryCounts,
+  presentedExpiresAt: string,
+): string => hashInventoryCounts(workspaceId, liveCounts, presentedExpiresAt);
 
 /**
  * Gate do congelamento de archived (D2 §1): consultado SOMENTE quando o

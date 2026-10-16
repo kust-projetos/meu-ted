@@ -124,6 +124,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
       actor: 'auth-user-1',
       inventoryVersion: inventory.inventoryVersion,
       expiresAt: inventory.expiresAt,
+      agentAttestation: 'verified-empty',
     });
     const receipt = await store.deleteEmpty({
       authUserId: 'auth-user-1',
@@ -151,6 +152,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
       actor: 'auth-user-1',
       inventoryVersion: inventory.inventoryVersion,
       expiresAt: inventory.expiresAt,
+      agentAttestation: 'verified-empty',
     });
     await expect(
       store.deleteEmpty({ authUserId: 'auth-user-1', householdId: WS_ID, confirmation }),
@@ -169,6 +171,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
       actor: 'auth-user-1',
       inventoryVersion: inventory.inventoryVersion,
       expiresAt: inventory.expiresAt,
+      agentAttestation: 'verified-empty',
     });
     await expect(
       store.deleteEmpty({ authUserId: 'auth-user-1', householdId: WS_ID, confirmation, purge: true }),
@@ -191,6 +194,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
           actor: 'auth-user-1',
           action: DELETION_CONFIRM_ACTION,
           inventoryVersion: inventory.inventoryVersion,
+          agentAttestation: 'verified-empty',
           expiresAt: new Date(Date.now() - 1000).toISOString(),
         },
       }),
@@ -205,6 +209,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
           actor: 'auth-user-1',
           inventoryVersion: '0'.repeat(64),
           expiresAt: inventory.expiresAt,
+          agentAttestation: 'verified-empty',
         }),
       }),
     ).rejects.toMatchObject({ code: 'workspace.confirmation_invalid' });
@@ -217,6 +222,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
           workspaceId: WS_ID,
           actor: 'auth-user-outro',
           inventoryVersion: inventory.inventoryVersion,
+          agentAttestation: 'verified-empty',
           expiresAt: inventory.expiresAt,
         }),
       }),
@@ -246,6 +252,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
           actor: 'auth-user-1',
           inventoryVersion: 'f'.repeat(64),
           expiresAt: new Date(Date.now() + DELETION_INVENTORY_TTL_MS).toISOString(),
+          agentAttestation: 'verified-empty',
         }),
       }),
     ).rejects.toMatchObject({ code: 'workspace.deleted' });
@@ -269,6 +276,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
           workspaceId: created.id,
           actor: 'u1',
           inventoryVersion: inventory.inventoryVersion,
+          agentAttestation: 'verified-empty',
           expiresAt: inventory.expiresAt,
         }),
         purge: true,
@@ -281,6 +289,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
         workspaceId: created.id,
         actor: 'u1',
         inventoryVersion: inventory.inventoryVersion,
+        agentAttestation: 'verified-empty',
         expiresAt: inventory.expiresAt,
       }),
     });
@@ -294,6 +303,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
           workspaceId: created.id,
           actor: 'u1',
           inventoryVersion: inventory.inventoryVersion,
+          agentAttestation: 'verified-empty',
           expiresAt: inventory.expiresAt,
         }),
       }),
@@ -307,6 +317,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
       actor: 'auth-user-1',
       inventoryVersion: version,
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      agentAttestation: 'verified-empty',
     });
     expect(() =>
       verifyDeleteConfirmation(valid, { workspaceId: WS_ID, actor: 'auth-user-1', inventoryVersion: version }),
@@ -375,6 +386,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
           actor: 'auth-user-1',
           inventoryVersion: randomUUID().replace(/-/g, ''),
           expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          agentAttestation: 'verified-empty',
         }),
       })
       .catch((cause) => cause as WorkspaceError);
@@ -434,5 +446,108 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
     const access = await createPostgresWorkspaceAccessStore(pool).resolve('auth-user-1', WS_ID);
     expect(seenSql).toMatch(/h\.status/);
     expect(access?.status).toBe('archived');
+  });
+
+  it('FIX-WS-D2-R2 item 1 (HIGH cross-store): unverified BLOQUEIA o delete, sem tocar nos dados', async () => {
+    const seen: string[] = [];
+    const pool = withInventoryProbe({}, seen);
+    const store = createPostgresWorkspaceStore(pool);
+    const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
+    expect(inventory.agentAttestation).toBe('unverified');
+    // Confirmação de resto válida (versão + expiração), mas sem atestação.
+    const confirmation = buildDeleteConfirmation({
+      workspaceId: WS_ID,
+      actor: 'auth-user-1',
+      inventoryVersion: inventory.inventoryVersion,
+      expiresAt: inventory.expiresAt,
+      agentAttestation: 'unverified',
+    });
+    await expect(
+      store.deleteEmpty({ authUserId: 'auth-user-1', householdId: WS_ID, confirmation }),
+    ).rejects.toMatchObject({ code: 'workspace.agent_unverified', statusCode: 409 });
+    // Nenhum efeito: sem tombstone, sem closure, sem flip de status.
+    expect(seen.some((sql) => /INTO workspace_tombstones|INTO workspace_closure_log|SET status = 'deleted'/.test(sql))).toBe(false);
+  });
+
+  it('FIX-WS-D2-R2 item 5 (MEDIUM confirmação): replay com expiresAt adulterado diverge e recusa', async () => {
+    const seen: string[] = [];
+    const pool = withInventoryProbe({}, seen);
+    const store = createPostgresWorkspaceStore(pool);
+    const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
+    // Replay: mesma versão, expiração re-carimbada AINDA VÁLIDA na janela
+    // (o ataque renova a validade reemitindo `expiresAt`; sem vínculo, a
+    // versão casaria e o delete prosseguiria). A expiração é imutável por
+    // vínculo: versão cobre contagens + expiração inventariada.
+    const tamperedExpiresAt = new Date(Date.parse(inventory.expiresAt) - 5 * 60 * 1000).toISOString();
+    expect(Date.parse(tamperedExpiresAt)).toBeGreaterThan(Date.now());
+    const confirmation = buildDeleteConfirmation({
+      workspaceId: WS_ID,
+      actor: 'auth-user-1',
+      inventoryVersion: inventory.inventoryVersion,
+      expiresAt: tamperedExpiresAt,
+      agentAttestation: 'verified-empty',
+    });
+    await expect(
+      store.deleteEmpty({ authUserId: 'auth-user-1', householdId: WS_ID, confirmation }),
+    ).rejects.toMatchObject({ code: 'workspace.confirmation_invalid' });
+    expect(seen.some((sql) => /INTO workspace_tombstones|INTO workspace_closure_log|SET status = 'deleted'/.test(sql))).toBe(false);
+  });
+
+  it('FIX-WS-D2-R2 item 4 (HIGH header): rename sobre archived recusa pelo path, sem header', async () => {
+    // Store-level, sem header algum: o lifecycle vale pelo workspace
+    // efetivamente mutado (path), nunca pelo header opcional.
+    const pool = mockPool({
+      'FROM users': () => membershipOwner(),
+      'FROM households': () => ({
+        rows: [{ id: WS_ID, name: 'Arquivado', kind: 'shared', status: 'archived' }],
+        rowCount: 1,
+      }),
+    });
+    const store = createPostgresWorkspaceStore(pool);
+    await expect(
+      store.rename({ authUserId: 'auth-user-1', householdId: WS_ID, name: 'Novo nome' }),
+    ).rejects.toMatchObject({ code: 'workspace.archived', statusCode: 403 });
+  });
+
+  it('FIX-WS-D2-R2 item 3 (HIGH restore): restore é serializado sob lock com UPDATE condicional', async () => {
+    const seen: string[] = [];
+    const pool = mockPool(
+      {
+        'FROM users': () => membershipOwner(),
+        'FROM households': () => ({
+          rows: [{ id: WS_ID, name: 'Arquivado', kind: 'shared', status: 'archived' }],
+          rowCount: 1,
+        }),
+        'FROM workspace_tombstones': () => ({ rows: [], rowCount: 0 }),
+        "SET status = $1": () => ({
+          rows: [{ id: WS_ID, name: 'Arquivado', kind: 'shared', status: 'active' }],
+          rowCount: 1,
+        }),
+      },
+      seen,
+    );
+    const store = createPostgresWorkspaceStore(pool);
+    const restored = await store.setStatus({ authUserId: 'auth-user-1', householdId: WS_ID, status: 'active' });
+    expect(restored.status).toBe('active');
+    // Restore travou a linha (FOR UPDATE), consultou o tombstone
+    // (proibição autoritativa) e flipou com UPDATE condicional.
+    expect(seen.some((sql) => sql.includes('FOR UPDATE'))).toBe(true);
+    expect(seen.some((sql) => sql.includes('workspace_tombstones'))).toBe(true);
+    expect(seen.some((sql) => sql.includes("status <> 'deleted'"))).toBe(true);
+  });
+
+  it('FIX-WS-D2-R2 item 3 (HIGH restore): restore-vs-delete concorrente — delete venceu, restore recusa', async () => {
+    const pool = mockPool({
+      'FROM users': () => membershipOwner(),
+      // O delete concorrente já flipou para deleted antes do restore.
+      'FROM households': () => ({
+        rows: [{ id: WS_ID, name: 'Vazio', kind: 'shared', status: 'deleted' }],
+        rowCount: 1,
+      }),
+    });
+    const store = createPostgresWorkspaceStore(pool);
+    await expect(
+      store.setStatus({ authUserId: 'auth-user-1', householdId: WS_ID, status: 'active' }),
+    ).rejects.toMatchObject({ code: 'workspace.deleted', statusCode: 410 });
   });
 });

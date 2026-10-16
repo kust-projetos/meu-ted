@@ -40,6 +40,10 @@ const makeFakePool = (txRows: Record<string, unknown>[]) => {
     query: vi.fn(async (text: string, values: unknown[] = []) => {
       recorded.push({ text, values });
       if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') return { rows: [], rowCount: 0 };
+      // FIX-WS-D2-R2 item 2: guarda de lifecycle dos writers (workspace active).
+      if (text.includes('FROM households')) {
+        return { rows: [{ status: 'active' }], rowCount: 1 };
+      }
       if (text.includes('FROM categories') && text.includes('WHERE id = $1')) {
         return {
           rows: [{ id: CAT, household_id: H, name: 'Food', kind: 'expense', status: 'active' }],
