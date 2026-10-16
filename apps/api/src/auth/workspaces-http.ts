@@ -18,13 +18,17 @@ export type {
   WorkspaceStore,
   WorkspaceSummary,
 } from './workspaces-store.js';
+export type {
+  DeleteConfirmation,
+  DeleteReceipt,
+  DeletionInventory,
+} from './workspace-deletion.js';
 export {
   WorkspaceError,
   createInMemoryWorkspaceStore,
 } from './workspaces-store.js';
 import {
   type WorkspaceStore,
-  type WorkspaceStatus,
   WorkspaceError,
 } from './workspaces-store.js';
 
@@ -46,6 +50,19 @@ const memberParams = z.object({ householdId: workspaceId, userId: z.string().tri
 const workspaceBody = z.object({
   name: z.string().trim().min(1).max(120),
   kind: z.enum(['personal', 'shared']).default('shared'),
+});
+
+// D2 (ADR-027): confirmação forte vinculada (UUID/ator/ação/versão/expiração).
+// O `actor` NÃO vem do cliente: é injetado da sessão server-side no
+// handler (nunca confiar em claim do cliente).
+const deleteBody = z.object({
+  confirmation: z.object({
+    workspaceId: workspaceId,
+    action: z.literal('workspace.delete'),
+    inventoryVersion: z.string().regex(/^[0-9a-f]{64}$/),
+    expiresAt: z.string().datetime(),
+  }),
+  purge: z.boolean().optional(),
 });
 
 export const registerWorkspaceRoutes = (app: FastifyInstance, opts: {
@@ -165,7 +182,7 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, opts: {
     });
   });
 
-  const registerStatusRoute = (status: WorkspaceStatus, operation: string) => {
+  const registerStatusRoute = (status: 'active' | 'archived', operation: string) => {
     app.post(`/workspaces/:householdId/${status === 'archived' ? 'archive' : 'restore'}`, async (request, reply) => {
       const authSession = await session(request, reply);
       if (!authSession) return;
@@ -187,6 +204,52 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, opts: {
 
   registerStatusRoute('archived', 'workspace.archive');
   registerStatusRoute('active', 'workspace.restore');
+
+  // D2 (ADR-027) — inventário autoritativo de exclusão (owner-only).
+  app.get('/workspaces/:householdId/deletion-inventory', async (request, reply) => {
+    const authSession = await session(request, reply);
+    if (!authSession) return;
+    const parsed = workspaceParams.safeParse(request.params);
+    if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
+    if (!await requireOwnerAccess(authSession.userId, parsed.data.householdId, reply)) return;
+    try {
+      const inventory = await opts.store.deletionInventory({
+        authUserId: authSession.userId,
+        householdId: parsed.data.householdId,
+      });
+      return reply.send(inventory);
+    } catch (error) {
+      return sendWorkspaceError(reply, error);
+    }
+  });
+
+  // D2 (ADR-027) — delete SÓ-vazio, permanente, com confirmação forte.
+  // `purge: true` (com-dados) recusa com 409 dedicado sem tocar nos dados.
+  app.delete('/workspaces/:householdId', async (request, reply) => {
+    const authSession = await session(request, reply);
+    if (!authSession) return;
+    const parsedParams = workspaceParams.safeParse(request.params);
+    const parsedBody = deleteBody.safeParse(request.body ?? {});
+    if (!parsedParams.success || !parsedBody.success) {
+      return reply.code(400).send({ code: 'validation.error', issues: [...(parsedParams.success ? [] : parsedParams.error.issues), ...(parsedBody.success ? [] : parsedBody.error.issues)] });
+    }
+    if (!await requireOwnerAccess(authSession.userId, parsedParams.data.householdId, reply)) return;
+    return runIdempotent({
+      request,
+      reply,
+      userId: authSession.userId,
+      householdId: parsedParams.data.householdId,
+      operation: 'workspace.delete',
+      payload: { householdId: parsedParams.data.householdId, ...parsedBody.data },
+      status: 200,
+      producer: () => opts.store.deleteEmpty({
+        authUserId: authSession.userId,
+        householdId: parsedParams.data.householdId,
+        confirmation: { ...parsedBody.data.confirmation, actor: authSession.userId },
+        purge: parsedBody.data.purge,
+      }),
+    });
+  });
 
   app.get('/workspaces/:householdId/members', async (request, reply) => {
     const authSession = await session(request, reply);

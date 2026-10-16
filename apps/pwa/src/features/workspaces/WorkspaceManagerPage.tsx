@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, type FormEvent } from "react";
-import { Archive, Check, FolderKanban, Pencil, Plus, RotateCcw, Users, X, History, Send } from "lucide-react";
+import { Archive, Check, FolderKanban, Pencil, Plus, RotateCcw, Trash2, Users, X, History, Send } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
 import StatusBar from "@/components/StatusBar";
 import { Button } from "@/components/ui/Button";
@@ -9,7 +9,7 @@ import Card from "@/components/ui/Card";
 import Dialog from "@/components/ui/Dialog";
 import EmptyState from "@/components/ui/EmptyState";
 import { useWorkspace } from "@/lib/auth/workspace-context";
-import type { Workspace } from "@/lib/api/workspaces";
+import type { Workspace, DeletionInventory } from "@/lib/api/workspaces";
 import { createWorkspaceInvite } from "@/lib/api/workspaces";
 import { ApiError } from "@/lib/api/client";
 import { fetchAuditLogs, type AuditLog } from "@/lib/api/endpoints";
@@ -48,6 +48,8 @@ export default function WorkspaceManagerPage() {
     renameWorkspace,
     archiveWorkspace,
     restoreWorkspace,
+    fetchDeletionInventory,
+    deleteWorkspace,
     inviteMember,
     resendInvite,
     revokeInvite,
@@ -59,6 +61,13 @@ export default function WorkspaceManagerPage() {
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
   const [editingName, setEditingName] = useState("");
   const [archiveTarget, setArchiveTarget] = useState<Workspace | null>(null);
+  // D2 (ADR-027): exclusão permanente só de workspace vazio, com
+  // confirmação forte (inventário versionado + expiração + nome digitado).
+  const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
+  const [deleteInventory, setDeleteInventory] = useState<DeletionInventory | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteConfirmName, setDeleteConfirmName] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [busyWorkspaceId, setBusyWorkspaceId] = useState<string | null>(null);
   const [formBusy, setFormBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -296,6 +305,47 @@ export default function WorkspaceManagerPage() {
     }
   }
 
+  useEffect(() => {
+    if (!deleteTarget) {
+      setDeleteInventory(null);
+      setDeleteConfirmName("");
+      return;
+    }
+    let cancelled = false;
+    async function loadInventory() {
+      setDeleteLoading(true);
+      setActionError(null);
+      try {
+        const inventory = await fetchDeletionInventory(deleteTarget!.id);
+        if (!cancelled) setDeleteInventory(inventory);
+      } catch (cause) {
+        if (!cancelled) setActionError(cause instanceof Error ? cause.message : "Não foi possível verificar o workspace.");
+      } finally {
+        if (!cancelled) setDeleteLoading(false);
+      }
+    }
+    void loadInventory();
+    return () => { cancelled = true; };
+  }, [deleteTarget, fetchDeletionInventory]);
+
+  async function handleDelete() {
+    if (!deleteTarget || !deleteInventory?.empty) return;
+    setDeleteBusy(true);
+    setActionError(null);
+    try {
+      await deleteWorkspace(deleteTarget.id, {
+        workspaceId: deleteTarget.id,
+        inventoryVersion: deleteInventory.inventoryVersion,
+        expiresAt: deleteInventory.expiresAt,
+      });
+      setDeleteTarget(null);
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "Não foi possível excluir o workspace.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   function renderWorkspaceCard(workspace: Workspace) {
     const isActive = workspace.id === activeWorkspace?.id;
     const isArchived = workspace.status === "archived";
@@ -370,16 +420,31 @@ export default function WorkspaceManagerPage() {
                   <Pencil size={15} />
                 </Button>
                 {isArchived ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Restaurar ${workspace.name}`}
-                    onClick={() => void handleRestore(workspace)}
-                    loading={busy}
-                  >
-                    <RotateCcw size={15} />
-                  </Button>
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Restaurar ${workspace.name}`}
+                      onClick={() => void handleRestore(workspace)}
+                      loading={busy}
+                    >
+                      <RotateCcw size={15} />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Excluir ${workspace.name}`}
+                      onClick={() => {
+                        setDeleteTarget(workspace);
+                        setActionError(null);
+                      }}
+                      disabled={busy}
+                    >
+                      <Trash2 size={15} />
+                    </Button>
+                  </>
                 ) : (
                   <Button
                     type="button"
@@ -753,6 +818,55 @@ export default function WorkspaceManagerPage() {
           <Button type="button" variant="ghost" onClick={() => setArchiveTarget(null)}>Cancelar</Button>
           <Button type="button" variant="danger" loading={busyWorkspaceId === archiveTarget?.id} onClick={() => void handleArchive()}>Arquivar workspace</Button>
         </div>
+      </Dialog>
+
+      <Dialog open={deleteTarget !== null} onClose={() => setDeleteTarget(null)} title="Excluir workspace permanentemente?" description="Exclusão permanente só é permitida para workspace vazio. Com dados, a exclusão é recusada — purge com-dados está bloqueado.">
+        {deleteLoading ? (
+          <p className="py-4 text-center text-[13px] text-text-muted">Verificando conteúdo do workspace…</p>
+        ) : deleteInventory && !deleteInventory.empty ? (
+          <div className="space-y-3">
+            <div className="rounded-[12px] border border-warning/30 bg-warning-tint p-3 text-[13px] font-medium text-warning">
+              Este workspace possui dados e não pode ser excluído. Remova o conteúdo ou arquive-o novamente após limpar.
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setDeleteTarget(null)}>Fechar</Button>
+            </div>
+          </div>
+        ) : deleteInventory?.empty ? (
+          <div className="space-y-4">
+            <div className="rounded-[12px] border border-danger/20 bg-danger-tint p-3 text-[13px] font-medium text-danger">
+              O workspace &ldquo;{deleteTarget?.name}&rdquo; está vazio e será excluído permanentemente. Auditoria e registros de idempotência são preservados; o identificador nunca será reutilizado.
+            </div>
+            <div>
+              <label htmlFor="delete-confirm-name" className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">
+                Digite &ldquo;{deleteTarget?.name}&rdquo; para confirmar
+              </label>
+              <input
+                id="delete-confirm-name"
+                value={deleteConfirmName}
+                onChange={(event) => setDeleteConfirmName(event.target.value)}
+                autoFocus
+                className="h-11 w-full rounded-[12px] border border-border-subtle bg-surface-2 px-3 text-[13px] font-medium text-text-primary outline-none focus:border-danger"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setDeleteTarget(null)}>Cancelar</Button>
+              <Button
+                type="button"
+                variant="danger"
+                loading={deleteBusy}
+                disabled={deleteConfirmName.trim() !== deleteTarget?.name}
+                onClick={() => void handleDelete()}
+              >
+                Excluir permanentemente
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setDeleteTarget(null)}>Fechar</Button>
+          </div>
+        )}
       </Dialog>
 
       <Dialog open={revokeTarget !== null} onClose={() => setRevokeTarget(null)} title="Revogar convite?" description="O destinatário não conseguirá mais entrar neste workspace com este convite.">

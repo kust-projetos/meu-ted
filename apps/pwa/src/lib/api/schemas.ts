@@ -293,7 +293,21 @@ export const workspaceSchema = z.object({
   name: z.string(),
   kind: z.enum(["personal", "shared"]),
   role: z.enum(["owner", "member"]),
-  status: z.enum(["active", "archived"]).default("active"),
+  status: z.enum(["active", "archived", "deleted"]).default("active"),
+});
+export const deletionInventorySchema = z.object({
+  workspaceId: id,
+  inventoryVersion: z.string(),
+  expiresAt: date,
+  empty: z.boolean(),
+  counts: z.record(z.string(), z.number()),
+  purgeBlocked: z.literal(true),
+  agentAttestation: z.string(),
+});
+export const deleteReceiptSchema = z.object({
+  id,
+  deletedAt: date,
+  inventoryVersion: z.string(),
 });
 export const workspaceListSchema = listResponse(workspaceSchema);
 export const workspaceMemberSchema = z.object({

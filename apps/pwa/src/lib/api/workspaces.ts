@@ -12,6 +12,8 @@ import {
   workspaceListSchema,
   workspaceMemberListSchema,
   workspaceSchema,
+  deletionInventorySchema,
+  deleteReceiptSchema,
 } from "./schemas";
 
 /**
@@ -32,7 +34,7 @@ export type Workspace = {
   name: string;
   kind: "personal" | "shared";
   role: "owner" | "member";
-  status: "active" | "archived";
+  status: "active" | "archived" | "deleted";
 };
 
 export type WorkspaceMember = {
@@ -96,6 +98,60 @@ export async function archiveWorkspace(workspaceId: string): Promise<Workspace> 
 
 export async function restoreWorkspace(workspaceId: string): Promise<Workspace> {
   return updateWorkspaceStatus(workspaceId, "restore");
+}
+
+/**
+ * D2 (ADR-027): inventário autoritativo de exclusão (owner-only).
+ * Retorna versão vinculada + expiração para a confirmação forte.
+ */
+export type DeletionInventory = {
+  workspaceId: string;
+  inventoryVersion: string;
+  expiresAt: string;
+  empty: boolean;
+  counts: Record<string, number>;
+  purgeBlocked: true;
+  agentAttestation: string;
+};
+
+export type DeleteReceipt = {
+  id: string;
+  deletedAt: string;
+  inventoryVersion: string;
+};
+
+export async function fetchDeletionInventory(workspaceId: string): Promise<DeletionInventory> {
+  return apiFetch<DeletionInventory>(`/workspaces/${encodeURIComponent(workspaceId)}/deletion-inventory`, {
+    headers: sessionAuthHeader(),
+    responseSchema: deletionInventorySchema,
+  });
+}
+
+export type DeleteConfirmationInput = {
+  workspaceId: string;
+  inventoryVersion: string;
+  expiresAt: string;
+};
+
+/**
+ * D2 (ADR-027): delete SÓ-vazio, permanente. `purge: true` é recusado
+ * pelo servidor (409 workspace.purge_blocked) — nunca executa.
+ */
+export async function deleteWorkspace(
+  workspaceId: string,
+  confirmation: DeleteConfirmationInput,
+  options?: { purge?: boolean },
+): Promise<DeleteReceipt> {
+  return apiFetch<DeleteReceipt>(`/workspaces/${encodeURIComponent(workspaceId)}`, {
+    method: "DELETE",
+    headers: sessionAuthHeader(),
+    body: JSON.stringify({
+      confirmation: { ...confirmation, action: "workspace.delete" },
+      ...(options?.purge === true ? { purge: true } : {}),
+    }),
+    idempotencyKey: createIdempotencyKey(),
+    responseSchema: deleteReceiptSchema,
+  });
 }
 
 async function updateWorkspaceStatus(workspaceId: string, action: "archive" | "restore"): Promise<Workspace> {

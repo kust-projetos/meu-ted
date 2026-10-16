@@ -1,8 +1,23 @@
 import { randomUUID } from 'node:crypto';
+import type {
+  DeleteConfirmation,
+  DeleteReceipt,
+  DeletionInventory,
+} from './workspace-deletion.js';
+import {
+  deletionInventoryExpiry,
+  hashInventoryCounts,
+  verifyDeleteConfirmation,
+} from './workspace-deletion.js';
 
 export type WorkspaceKind = 'personal' | 'shared';
 export type WorkspaceRole = 'owner' | 'member';
-export type WorkspaceStatus = 'active' | 'archived';
+/**
+ * D2 (ADR-027): `deleted` é estado terminal via delete-vazio com
+ * tombstone — nunca via setStatus (use deleteEmpty). list() exclui
+ * deletados; restore de deletado recusa.
+ */
+export type WorkspaceStatus = 'active' | 'archived' | 'deleted';
 
 export type WorkspaceSummary = {
   id: string;
@@ -25,10 +40,27 @@ export type WorkspaceStore = {
   list(authUserId: string): Promise<WorkspaceSummary[]>;
   create(input: { authUserId: string; name: string; kind: WorkspaceKind }): Promise<WorkspaceSummary>;
   rename(input: { authUserId: string; householdId: string; name: string }): Promise<WorkspaceSummary>;
-  setStatus(input: { authUserId: string; householdId: string; status: WorkspaceStatus }): Promise<WorkspaceSummary>;
+  setStatus(input: { authUserId: string; householdId: string; status: 'active' | 'archived' }): Promise<WorkspaceSummary>;
   listMembers(input: { authUserId: string; householdId: string }): Promise<WorkspaceMember[]>;
   removeMember(input: { authUserId: string; householdId: string; memberUserId: string }): Promise<void>;
   leave(input: { authUserId: string; householdId: string }): Promise<void>;
+  /**
+   * D2 (ADR-027): inventário autoritativo de exclusão (owner-only).
+   * Recusa com `workspace.deleted` (410) sobre tombstone.
+   */
+  deletionInventory(input: { authUserId: string; householdId: string }): Promise<DeletionInventory>;
+  /**
+   * D2 (ADR-027): delete SÓ-vazio, permanente, com confirmação forte.
+   * `purge: true` (com-dados) é recusado com `workspace.purge_blocked`
+   * (409) sem tocar nos dados — purge permanece bloqueado até
+   * retenção/exportação/política existirem.
+   */
+  deleteEmpty(input: {
+    authUserId: string;
+    householdId: string;
+    confirmation: DeleteConfirmation;
+    purge?: boolean | undefined;
+  }): Promise<DeleteReceipt>;
 };
 
 export type WorkspaceRevocationHooks = {
@@ -44,7 +76,16 @@ export type WorkspaceRevocationHooks = {
 
 export class WorkspaceError extends Error {
   constructor(
-    readonly code: 'workspace.not_found' | 'workspace.forbidden' | 'workspace.personal' | 'workspace.last_owner' | 'workspace.invalid',
+    readonly code:
+      | 'workspace.not_found'
+      | 'workspace.forbidden'
+      | 'workspace.personal'
+      | 'workspace.last_owner'
+      | 'workspace.invalid'
+      | 'workspace.not_empty'
+      | 'workspace.purge_blocked'
+      | 'workspace.confirmation_invalid'
+      | 'workspace.deleted',
     readonly statusCode: number,
     message: string,
   ) {
@@ -57,6 +98,7 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks): 
   type StoredWorkspace = WorkspaceSummary & { ownerAuthUserId: string };
   const workspaces: StoredWorkspace[] = [];
   const members: Array<{ householdId: string; member: WorkspaceMember }> = [];
+  const tombstones = new Set<string>();
 
   const toSummary = (workspace: StoredWorkspace): WorkspaceSummary => ({
     id: workspace.id,
@@ -67,20 +109,43 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks): 
   });
 
   const ownedWorkspace = (authUserId: string, householdId: string): StoredWorkspace => {
+    if (tombstones.has(householdId)) {
+      throw new WorkspaceError('workspace.deleted', 410, 'Workspace excluído permanentemente.');
+    }
     const workspace = workspaces.find((candidate) => candidate.id === householdId);
     if (!workspace) throw new WorkspaceError('workspace.not_found', 404, 'Workspace não encontrado.');
+    if (workspace.status === 'deleted' || tombstones.has(householdId)) {
+      throw new WorkspaceError('workspace.deleted', 410, 'Workspace excluído permanentemente.');
+    }
     if (workspace.ownerAuthUserId !== authUserId) {
       throw new WorkspaceError('workspace.forbidden', 403, 'Usuário não é membro deste workspace.');
     }
     return workspace;
   };
 
+  // O fallback in-memory não tem tabelas de domínio: o inventário é
+  // trivialmente vazio (paridade de contrato com o Postgres).
+  const emptyInventory = (householdId: string): DeletionInventory => {
+    const counts = {};
+    return {
+      workspaceId: householdId,
+      inventoryVersion: hashInventoryCounts(householdId, counts),
+      expiresAt: deletionInventoryExpiry(),
+      empty: true,
+      counts,
+      purgeBlocked: true,
+      agentAttestation: 'unverified',
+    };
+  };
+
   return {
     async list(authUserId) {
       // D1 (ADR-027) ordering: active first, personal before shared,
       // insertion order within a group (stable sort ≈ created_at, id).
+      // D2: deletados nunca listam (tombstone anti-reuso).
       return workspaces
         .filter((workspace) => workspace.ownerAuthUserId === authUserId)
+        .filter((workspace) => workspace.status !== 'deleted' && !tombstones.has(workspace.id))
         .sort(
           (a, b) =>
             Number(b.status === 'active') - Number(a.status === 'active') ||
@@ -138,6 +203,40 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks): 
       const idx = members.findIndex((m) => m.householdId === input.householdId && m.member.userId === input.authUserId);
       if (idx !== -1) members.splice(idx, 1);
       await hooks?.onMemberRevoked?.({ userId: input.authUserId, householdId: input.householdId });
+    },
+    async deletionInventory(input) {
+      ownedWorkspace(input.authUserId, input.householdId);
+      return emptyInventory(input.householdId);
+    },
+    async deleteEmpty(input) {
+      // Purge com-dados bloqueado: recusa dedicada antes de qualquer efeito.
+      // O owner já foi revalidado por ownedWorkspace abaixo? Não — a ordem
+      // importa: purge recusado mesmo sem dado, mas a auth precede para não
+      // vazar existência a não-membros.
+      const workspace = ownedWorkspace(input.authUserId, input.householdId);
+      if (input.purge === true) {
+        throw new WorkspaceError(
+          'workspace.purge_blocked',
+          409,
+          'Purge com-dados bloqueado: retenção/exportação/política pendentes (D2).',
+        );
+      }
+      const inventory = emptyInventory(input.householdId);
+      verifyDeleteConfirmation(
+        input.confirmation,
+        {
+          workspaceId: input.householdId,
+          actor: input.authUserId,
+          inventoryVersion: inventory.inventoryVersion,
+        },
+      );
+      workspace.status = 'deleted';
+      tombstones.add(input.householdId);
+      return {
+        id: input.householdId,
+        deletedAt: new Date().toISOString(),
+        inventoryVersion: inventory.inventoryVersion,
+      };
     },
   };
 };

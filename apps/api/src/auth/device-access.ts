@@ -29,6 +29,14 @@ export const resolveAuthorizedDevice = async (
   if (!userId) throw forbidden();
   const access = await deps.workspaceAccess.resolve(userId, workspaceId);
   if (!access) throw forbidden();
+  // D2 (ADR-027): o status vem da mesma query da decisão de acesso.
+  // Status presente (produção) é autoritativo: tombstone e archived
+  // bloqueiam. Ausente (fakes legados) preserva o comportamento pré-D2
+  // via sonda de lista.
+  if (access.status) {
+    if (access.status !== 'active') throw forbidden();
+    return { deviceId: device.deviceId, userId, workspaceId: access.householdId, access };
+  }
   if (deps.workspaceStore) {
     const items = await deps.workspaceStore.list(userId);
     const workspace = items.find((item) => item.id === workspaceId);
