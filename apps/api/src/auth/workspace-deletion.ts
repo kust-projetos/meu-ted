@@ -28,10 +28,10 @@ export type DeletionInventoryCounts = Record<string, number>;
 /**
  * Atestação cross-store do lado Agent (Durable Objects / R2 / memória).
  * O Postgres da API não observa esse lado: o inventário API-side sempre
- * retorna `unverified`, e o delete SÓ conclui com prova HMAC válida
- * (`agentProof`) emitida pelo Agent e verificada aqui com o segredo
- * compartilhado (FIX-WS-D2-R4). A string `agentAttestation` do fio nunca
- * é prova — só transporte legado.
+ * retorna `unverified`, e o delete SÓ conclui com o handle opaco
+ * (`attestationId`) de um depósito server-side válido (FIX-WS-D2-R5).
+ * A string `agentAttestation` do fio nunca é prova — só transporte
+ * legado.
  */
 export type AgentAttestation = 'unverified' | 'verified-empty';
 
@@ -51,11 +51,13 @@ export type AgentEmptyCounts = {
 export const AGENT_EMPTY_COUNT_KEYS = ['sessions', 'messages', 'memories', 'attachments'] as const;
 
 /**
- * Prova de vazio do lado Agent (FIX-WS-D2-R4): emitida server-side pelo
- * Agent (que observa seu próprio SQLite/R2), transportada opacamente pelo
- * cliente e verificada aqui com o segredo compartilhado
- * `WORKSPACE_DELETION_HMAC_SECRET`. Sem segredo configurado, emissão e
- * verificação são indisponíveis (fail-closed, 409).
+ * Prova de vazio do lado Agent (FIX-WS-D2-R4, depósito R5): emitida
+ * server-side pelo Agent (que observa seu próprio SQLite/R2) e
+ * DEPOSITADA DIRETAMENTE na API (server-to-server) — nunca cruza o
+ * browser. Verificada aqui com o segredo compartilhado
+ * `WORKSPACE_DELETION_HMAC_SECRET` no momento do depósito. Sem segredo
+ * configurado, emissão e verificação são indisponíveis (fail-closed,
+ * 409).
  */
 export type AgentEmptyProof = {
   workspaceId: string;
@@ -64,6 +66,16 @@ export type AgentEmptyProof = {
   expiresAt: string;
   hmac: string;
 };
+
+/**
+ * Handle opaco do depósito server-side da prova de vazio (FIX-WS-D2-R5):
+ * o Agent deposita a prova DIRETAMENTE na API (server-to-server) e o
+ * browser recebe SÓ este UUID — nunca conteúdo, contagens ou HMAC. O
+ * delete aceita SÓ este id e resolve tudo server-side (workspace +
+ * versão vinculada + expiração + não-consumido).
+ */
+export const EMPTY_ATTESTATION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type DeletionInventory = {
   workspaceId: string;
@@ -89,17 +101,24 @@ export type DeleteConfirmation = {
   inventoryVersion: string;
   expiresAt: string;
   /**
-   * Barreira cross-store (FIX-WS-D2-R2, endurecida na R3 e resolvida na
-   * R4): a string segue no contrato de fio mas NUNCA é prova — é
-   * ignorada na verificação. O que conclui o delete é `agentProof`
-   * (atestação HMAC emitida server-side pelo Agent e verificada com o
-   * segredo compartilhado). Sem prova válida, `verifyDeleteConfirmation`
-   * recusa com `workspace.agent_unverified` antes de qualquer efeito
-   * (fail-closed).
+   * Barreira cross-store (FIX-WS-D2-R5; R2–R4 por string legada): a
+   * string segue no contrato de fio mas NUNCA é prova — é ignorada na
+   * verificação. O que conclui o delete é `attestationId` (handle opaco
+   * do depósito server-side Agent→API). Sem handle válido,
+   * `verifyDeleteConfirmation` recusa com `workspace.agent_unverified`
+   * antes de qualquer efeito (fail-closed).
    */
   agentAttestation: AgentAttestation;
-  /** Prova HMAC do lado Agent (FIX-WS-D2-R4); ausente = bloqueio. */
-  agentProof?: AgentEmptyProof | undefined;
+  /**
+   * Barreira cross-store (FIX-WS-D2-R5; antes R4 via `agentProof` HMAC no
+   * fio): handle opaco (UUID) do depósito server-side Agent→API. A string
+   * `agentAttestation` segue no contrato de fio mas NUNCA é prova. Sem
+   * handle válido, `verifyDeleteConfirmation` recusa com
+   * `workspace.agent_unverified` antes de qualquer efeito (fail-closed);
+   * o consumo (join workspace+versão+expiração+não-consumido) acontece no
+   * store, dentro da transação do delete.
+   */
+  attestationId?: string | undefined;
 };
 
 export type DeleteReceipt = {
@@ -111,7 +130,7 @@ export type DeleteReceipt = {
 const invalid = (message: string): WorkspaceError =>
   new WorkspaceError('workspace.confirmation_invalid', 409, message);
 
-const agentUnverified = (): WorkspaceError =>
+export const agentUnverified = (): WorkspaceError =>
   new WorkspaceError(
     'workspace.agent_unverified',
     409,
@@ -173,7 +192,7 @@ export const buildDeleteConfirmation = (input: {
   inventoryVersion: string;
   expiresAt: string;
   agentAttestation: AgentAttestation;
-  agentProof?: AgentEmptyProof | undefined;
+  attestationId?: string | undefined;
 }): DeleteConfirmation => ({
   workspaceId: input.workspaceId,
   actor: input.actor,
@@ -181,7 +200,7 @@ export const buildDeleteConfirmation = (input: {
   inventoryVersion: input.inventoryVersion,
   expiresAt: input.expiresAt,
   agentAttestation: input.agentAttestation,
-  ...(input.agentProof !== undefined ? { agentProof: input.agentProof } : {}),
+  ...(input.attestationId !== undefined ? { attestationId: input.attestationId } : {}),
 });
 
 export const deletionInventoryExpiry = (now = Date.now()): string =>
@@ -298,11 +317,15 @@ export const verifyAgentEmptyProof = (
 
 /**
  * Validação pura da confirmação forte: vínculo (UUID/ator/ação/versão)
- * + prova HMAC do lado Agent + expiração com TTL limitado server-side.
- * Não toca no banco. A string `agentAttestation` do fio é IGNORADA como
- * prova (qualquer valor declarado pelo cliente é indistinguível de
- * falsificação): só `agentProof` válida conclui — ausente/inválida =
- * `workspace.agent_unverified` antes de qualquer efeito (fail-closed).
+ * + handle opaco do depósito server-side + expiração com TTL limitado
+ * server-side. Não toca no banco. A string `agentAttestation` do fio é
+ * IGNORADA como prova (qualquer valor declarado pelo cliente é
+ * indistinguível de falsificação): só `attestationId` válido conclui o
+ * vínculo aqui — ausente/malformado = `workspace.agent_unverified`
+ * antes de qualquer efeito (fail-closed). O conteúdo da prova (HMAC,
+ * contagens, expiração do depósito) é verificado e consumido no store,
+ * dentro da transação do delete (FIX-WS-D2-R5: a prova nunca cruza o
+ * browser, então não há o que verificar neste fio).
  * A expiração é IMUTÁVEL por vínculo: o chamador (deleteEmpty)
  * recomputa a versão sobre as contagens vivas E o `expiresAt`
  * apresentado — `expiresAt` adulterado gera versão divergente (ver
@@ -310,7 +333,7 @@ export const verifyAgentEmptyProof = (
  */
 export const verifyDeleteConfirmation = (
   confirmation: DeleteConfirmation,
-  expected: { workspaceId: string; actor: string; inventoryVersion: string; agentProofSecret?: string | undefined },
+  expected: { workspaceId: string; actor: string; inventoryVersion: string },
   now = Date.now(),
 ): void => {
   if (
@@ -322,19 +345,16 @@ export const verifyDeleteConfirmation = (
   ) {
     throw invalid('Confirmação de exclusão inválida ou divergente do inventário.');
   }
-  // Barreira cross-store (FIX-WS-D2-R4): só prova HMAC emitida
-  // server-side pelo Agent e verificada com o segredo compartilhado
-  // conclui. Sem prova válida, bloqueia aqui (fail-closed).
-  if (!confirmation.agentProof) throw agentUnverified();
-  verifyAgentEmptyProof(
-    confirmation.agentProof,
-    {
-      workspaceId: expected.workspaceId,
-      inventoryVersion: expected.inventoryVersion,
-      secret: expected.agentProofSecret,
-    },
-    now,
-  );
+  // Barreira cross-store (FIX-WS-D2-R5): só o handle opaco do depósito
+  // server-side Agent→API conclui. Sem handle válido, bloqueia aqui
+  // (fail-closed); o join (workspace+versão+expiração+não-consumido) é
+  // resolvido no store, sob o lock do delete.
+  if (
+    typeof confirmation.attestationId !== 'string' ||
+    !EMPTY_ATTESTATION_ID_RE.test(confirmation.attestationId)
+  ) {
+    throw agentUnverified();
+  }
   const expiresAt = Date.parse(confirmation.expiresAt);
   if (!Number.isFinite(expiresAt)) throw invalid('Confirmação de exclusão sem expiração válida.');
   // A janela nunca estende além do TTL + skew: relógio do cliente não amplia.

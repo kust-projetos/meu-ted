@@ -147,10 +147,15 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
     expect(seen.some((sql) => /INTO workspace_tombstones|INTO workspace_closure_log|SET status = 'deleted'/.test(sql))).toBe(false);
   });
 
-  it('vazio COM prova HMAC válida conclui (FIX-WS-D2-R4: emissor server-side)', async () => {
+  it('vazio COM depósito server-side válido conclui (FIX-WS-D2-R5: handle opaco)', async () => {
     const seen: string[] = [];
+    const depositId = '22222222-2222-4222-8222-222222222222';
     const pool = withInventoryProbe(
       {
+        // Depósito server-side (a prova HMAC nunca cruza o browser).
+        'INTO workspace_empty_attestations': () => ({ rows: [{ id: depositId }], rowCount: 1 }),
+        // Consumo single-use sob o lock do delete.
+        'UPDATE workspace_empty_attestations': () => ({ rows: [{ id: depositId }], rowCount: 1 }),
         'INTO workspace_tombstones': () => ({ rows: [], rowCount: 1 }),
         'INTO workspace_closure_log': () => ({ rows: [], rowCount: 1 }),
         "SET status = 'deleted'": () => ({ rows: [], rowCount: 1 }),
@@ -160,10 +165,11 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
     const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
     expect(inventory.empty).toBe(true);
-    // Prova white-box do lado Agent (o Agent real emite com o mesmo
-    // segredo compartilhado): contagens zeradas, vinculada à versão.
+    // Depósito white-box do lado Agent (o Agent real deposita com o
+    // mesmo segredo compartilhado): contagens zeradas, vinculada à
+    // versão. O browser recebe SÓ o handle opaco.
     const { signAgentEmptyProof } = await import('../../src/auth/workspace-deletion.js');
-    const agentProof = signAgentEmptyProof(
+    const proof = signAgentEmptyProof(
       {
         workspaceId: WS_ID,
         inventoryVersion: inventory.inventoryVersion,
@@ -171,6 +177,8 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
       },
       TEST_HMAC_SECRET,
     );
+    const { attestationId } = await store.depositEmptyAttestation({ proof });
+    expect(attestationId).toBe(depositId);
     const receipt = await store.deleteEmpty({
       authUserId: 'auth-user-1',
       householdId: WS_ID,
@@ -180,7 +188,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
         inventoryVersion: inventory.inventoryVersion,
         expiresAt: inventory.expiresAt,
         agentAttestation: 'unverified',
-        agentProof,
+        attestationId,
       }),
     });
     expect(receipt.id).toBe(WS_ID);
@@ -188,13 +196,13 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
     expect(seen.some((sql) => sql.includes("SET status = 'deleted'"))).toBe(true);
   });
 
-  it('prova adulterada recusa sem efeito (fail-closed, sem tombstone)', async () => {
+  it('prova adulterada recusa NO DEPÓSITO; handle desconhecido recusa sem efeito', async () => {
     const seen: string[] = [];
     const pool = withInventoryProbe({}, seen);
     const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
     const { signAgentEmptyProof } = await import('../../src/auth/workspace-deletion.js');
-    const agentProof = signAgentEmptyProof(
+    const proof = signAgentEmptyProof(
       {
         workspaceId: WS_ID,
         inventoryVersion: inventory.inventoryVersion,
@@ -202,6 +210,12 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
       },
       TEST_HMAC_SECRET,
     );
+    // HMAC forjado nunca vira depósito (fail-closed, sem registrar).
+    await expect(
+      store.depositEmptyAttestation({ proof: { ...proof, hmac: 'f'.repeat(64) } }),
+    ).rejects.toMatchObject({ code: 'workspace.agent_unverified', statusCode: 409 });
+    expect(seen.some((sql) => sql.includes('INTO workspace_empty_attestations'))).toBe(false);
+    // Handle desconhecido no delete: recusa sem efeito.
     await expect(
       store.deleteEmpty({
         authUserId: 'auth-user-1',
@@ -212,7 +226,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
           inventoryVersion: inventory.inventoryVersion,
           expiresAt: inventory.expiresAt,
           agentAttestation: 'unverified',
-          agentProof: { ...agentProof, hmac: 'f'.repeat(64) },
+          attestationId: '33333333-3333-4333-8333-333333333333',
         }),
       }),
     ).rejects.toMatchObject({ code: 'workspace.agent_unverified', statusCode: 409 });
@@ -377,9 +391,9 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
     ).rejects.toMatchObject({ code: 'workspace.agent_unverified', statusCode: 409 });
     // Sem efeito: segue listado e ativo.
     expect((await store.list('u1')).map((w) => w.id)).toContain(created.id);
-    // Com prova HMAC válida (FIX-WS-D2-R4), conclui com tombstone.
+    // Com depósito server-side válido (FIX-WS-D2-R5), conclui com tombstone.
     const { signAgentEmptyProof } = await import('../../src/auth/workspace-deletion.js');
-    const agentProof = signAgentEmptyProof(
+    const proof = signAgentEmptyProof(
       {
         workspaceId: created.id,
         inventoryVersion: inventory.inventoryVersion,
@@ -387,6 +401,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
       },
       TEST_HMAC_SECRET,
     );
+    const { attestationId } = await store.depositEmptyAttestation({ proof });
     const receipt = await store.deleteEmpty({
       authUserId: 'u1',
       householdId: created.id,
@@ -396,7 +411,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
         inventoryVersion: inventory.inventoryVersion,
         agentAttestation: 'unverified',
         expiresAt: inventory.expiresAt,
-        agentProof,
+        attestationId,
       }),
     });
     expect(receipt.id).toBe(created.id);
@@ -412,7 +427,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
           inventoryVersion: inventory.inventoryVersion,
           agentAttestation: 'unverified',
           expiresAt: inventory.expiresAt,
-          agentProof,
+          attestationId,
         }),
       }),
     ).rejects.toMatchObject({ code: 'workspace.deleted' });

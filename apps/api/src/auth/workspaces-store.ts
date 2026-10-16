@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import type {
+  AgentEmptyProof,
   DeleteConfirmation,
   DeleteReceipt,
   DeletionInventory,
 } from './workspace-deletion.js';
 import {
   agentAttestationUnavailable,
+  agentUnverified,
   boundInventoryVersion,
   deletionInventoryExpiry,
   hashInventoryCounts,
   resolveDeletionHmacSecret,
+  verifyAgentEmptyProof,
   verifyDeleteConfirmation,
 } from './workspace-deletion.js';
 
@@ -52,6 +55,16 @@ export type WorkspaceStore = {
    * Recusa com `workspace.deleted` (410) sobre tombstone.
    */
   deletionInventory(input: { authUserId: string; householdId: string }): Promise<DeletionInventory>;
+  /**
+   * D2 (ADR-027) + FIX-WS-D2-R5: depósito server-side da prova de vazio
+   * do lado Agent. Chamado SÓ pela rota interna (autenticada por service
+   * token + owner revalidado); o browser nunca vê este caminho. Verifica
+   * o HMAC com o segredo compartilhado e registra (workspace, versão do
+   * inventário, contagens, expiração curta). Retorna SÓ o handle opaco
+   * (UUID) — conteúdo, contagens e HMAC nunca saem daqui. Sem segredo,
+   * indisponível fail-closed (`workspace.agent_unverified`, 409).
+   */
+  depositEmptyAttestation(input: { proof: AgentEmptyProof }): Promise<{ attestationId: string }>;
   /**
    * D2 (ADR-027): delete SÓ-vazio, permanente, com confirmação forte.
    * `purge: true` (com-dados) é recusado com `workspace.purge_blocked`
@@ -106,9 +119,21 @@ export type InMemoryWorkspaceStoreOptions = {
 
 export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks, opts?: InMemoryWorkspaceStoreOptions): WorkspaceStore => {
   type StoredWorkspace = WorkspaceSummary & { ownerAuthUserId: string };
+  type StoredDeposit = {
+    id: string;
+    householdId: string;
+    inventoryVersion: string;
+    expiresAtMs: number;
+    consumedAtMs: number | null;
+  };
   const workspaces: StoredWorkspace[] = [];
   const members: Array<{ householdId: string; member: WorkspaceMember }> = [];
   const tombstones = new Set<string>();
+  // FIX-WS-D2-R5: depósitos server-side (prova nunca cruza o browser).
+  // Single-use: o consumo marca `consumedAtMs`; divergência
+  // (workspace/versão/expiração/já-consumido) recusa fail-closed sem
+  // consumir — o depósito segue intacto para o dono legítimo.
+  const deposits: StoredDeposit[] = [];
 
   const toSummary = (workspace: StoredWorkspace): WorkspaceSummary => ({
     id: workspace.id,
@@ -238,6 +263,33 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks, o
       ownedWorkspace(input.authUserId, input.householdId);
       return emptyInventory(input.householdId);
     },
+    async depositEmptyAttestation(input) {
+      // HMAC verificado AQUI (server-side, prova nunca cruzou o
+      // browser): segredo ausente ou prova inválida = indisponível/
+      // bloqueio fail-closed, sem registrar nada.
+      verifyAgentEmptyProof(
+        input.proof,
+        {
+          workspaceId: input.proof.workspaceId,
+          inventoryVersion: input.proof.inventoryVersion,
+          secret: opts?.deletionHmacSecret,
+        },
+      );
+      const workspace = workspaces.find((candidate) => candidate.id === input.proof.workspaceId);
+      if (!workspace || tombstones.has(workspace.id) || workspace.status === 'deleted') {
+        throw new WorkspaceError('workspace.not_found', 404, 'Workspace não encontrado.');
+      }
+      const expiresAtMs = Date.parse(input.proof.expiresAt);
+      const deposit: StoredDeposit = {
+        id: randomUUID(),
+        householdId: input.proof.workspaceId,
+        inventoryVersion: input.proof.inventoryVersion,
+        expiresAtMs,
+        consumedAtMs: null,
+      };
+      deposits.push(deposit);
+      return { attestationId: deposit.id };
+    },
     async deleteEmpty(input) {
       // Purge com-dados bloqueado: recusa dedicada antes de qualquer efeito.
       // O owner já foi revalidado por ownedWorkspace abaixo? Não — a ordem
@@ -255,28 +307,44 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks, o
       // Versão vinculada sob HMAC server-side: recomputada sobre as
       // contagens vivas E o `expiresAt` apresentado — expiração
       // adulterada (mesmo com hash re-carimbado sem o segredo) diverge
-      // aqui. A prova HMAC do lado Agent é verificada em seguida
-      // (FIX-WS-D2-R4; sem prova válida, fail-closed).
+      // aqui. O handle opaco do depósito é consumido em seguida
+      // (FIX-WS-D2-R5; sem depósito válido vinculado, fail-closed).
       let secret: string;
       try {
         secret = resolveDeletionHmacSecret(opts?.deletionHmacSecret);
       } catch {
         throw agentAttestationUnavailable();
       }
+      const boundVersion = boundInventoryVersion(
+        input.householdId,
+        inventory.counts,
+        input.confirmation.expiresAt,
+        secret,
+      );
       verifyDeleteConfirmation(
         input.confirmation,
         {
           workspaceId: input.householdId,
           actor: input.authUserId,
-          inventoryVersion: boundInventoryVersion(
-            input.householdId,
-            inventory.counts,
-            input.confirmation.expiresAt,
-            secret,
-          ),
-          agentProofSecret: secret,
+          inventoryVersion: boundVersion,
         },
       );
+      // FIX-WS-D2-R5: consumo atômico single-use do depósito (join
+      // workspace+versão vinculada+expiração+não-consumido). Divergência
+      // recusa SEM consumir — o depósito segue válido para o dono
+      // legítimo; reuso do mesmo handle recusa (já-consumido).
+      const deposit = deposits.find((candidate) => candidate.id === input.confirmation.attestationId);
+      const nowMs = Date.now();
+      if (
+        !deposit ||
+        deposit.householdId !== input.householdId ||
+        deposit.inventoryVersion !== boundVersion ||
+        deposit.expiresAtMs <= nowMs ||
+        deposit.consumedAtMs !== null
+      ) {
+        throw agentUnverified();
+      }
+      deposit.consumedAtMs = nowMs;
       workspace.status = 'deleted';
       tombstones.add(input.householdId);
       return {

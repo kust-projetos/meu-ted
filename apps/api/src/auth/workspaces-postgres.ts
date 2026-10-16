@@ -2,13 +2,15 @@ import type { Pool } from 'pg';
 import { withTransaction, queryInTransaction } from '../db/pool.js';
 import type { WorkspaceKind, WorkspaceMember, WorkspaceRevocationHooks, WorkspaceRole, WorkspaceStatus, WorkspaceStore, WorkspaceSummary } from './workspaces-store.js';
 import { WorkspaceError } from './workspaces-store.js';
-import type { DeleteConfirmation, DeletionInventory, DeletionInventoryCounts } from './workspace-deletion.js';
+import type { AgentEmptyProof, DeletionInventory, DeletionInventoryCounts } from './workspace-deletion.js';
 import {
   agentAttestationUnavailable,
+  agentUnverified,
   boundInventoryVersion,
   deletionInventoryExpiry,
   hashInventoryCounts,
   resolveDeletionHmacSecret,
+  verifyAgentEmptyProof,
   verifyDeleteConfirmation,
 } from './workspace-deletion.js';
 
@@ -268,6 +270,38 @@ export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevoca
       return inventoryFromRow(householdId, result.rows[0] ?? {}, secret);
     },
 
+    async depositEmptyAttestation({ proof }: { proof: AgentEmptyProof }) {
+      // FIX-WS-D2-R5: o HMAC é verificado AQUI (server-side, a prova
+      // nunca cruzou o browser): segredo ausente ou prova inválida =
+      // indisponível/bloqueio fail-closed, sem registrar nada.
+      verifyAgentEmptyProof(
+        proof,
+        {
+          workspaceId: proof.workspaceId,
+          inventoryVersion: proof.inventoryVersion,
+          secret: opts?.deletionHmacSecret,
+        },
+      );
+      const household = await queryInTransaction<Row>(
+        pool,
+        `SELECT id FROM households WHERE id = $1`,
+        [proof.workspaceId],
+      );
+      if (!household.rows[0]) throw new WorkspaceError('workspace.not_found', 404, 'Workspace não encontrado.');
+      const inserted = await queryInTransaction<Row>(
+        pool,
+        `INSERT INTO workspace_empty_attestations (household_id, inventory_version, counts, expires_at)
+          VALUES ($1, $2, $3::jsonb, $4)
+         RETURNING id`,
+        [proof.workspaceId, proof.inventoryVersion, JSON.stringify(proof.counts), proof.expiresAt],
+      );
+      const attestationId = inserted.rows[0]?.['id'];
+      if (typeof attestationId !== 'string') {
+        throw new WorkspaceError('workspace.invalid', 500, 'Depósito de atestação indisponível.');
+      }
+      return { attestationId };
+    },
+
     async deleteEmpty({ authUserId, householdId, confirmation, purge }) {
       await assertActiveMembershipRole(authUserId, householdId, ['owner']);
       return withTransaction(pool, async (client) => {
@@ -289,12 +323,13 @@ export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevoca
         }
         // Inventário final recomputado SOB o lock: vínculo (contagens +
         // expiração apresentada, sob HMAC server-side), vazio real e
-        // prova HMAC do lado Agent antes de qualquer efeito. A ordem é
-        // intencional: `not_empty` precede a prova para preservar o
-        // diagnóstico, e a prova fail-closed (ausente/inválida, ou
-        // string declarada pelo cliente) BLOQUEIA tudo antes de
-        // qualquer efeito — o delete nunca conclui sem atestação
-        // emitida server-side pelo Agent (FIX-WS-D2-R4).
+        // handle opaco do depósito server-side antes de qualquer efeito.
+        // A ordem é intencional: `not_empty` precede o handle para
+        // preservar o diagnóstico, e o depósito fail-closed
+        // (ausente/inválido/expirado/consumido, ou string declarada pelo
+        // cliente) BLOQUEIA tudo antes de qualquer efeito — o delete
+        // nunca conclui sem depósito emitido server-side pelo Agent
+        // (FIX-WS-D2-R5: a prova nunca cruza o browser).
         const probed = await client.query<Row>(INVENTORY_SELECT, [householdId, householdId]);
         const liveCounts = toCounts(probed.rows[0] ?? {});
         const liveEmpty = Object.entries(liveCounts).every(([key, value]) =>
@@ -311,21 +346,35 @@ export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevoca
         try {
           secret = resolveDeletionHmacSecret(opts?.deletionHmacSecret);
         } catch {
-          // FIX-WS-D2-R4: sem segredo, a verificação é indisponível —
-          // 409 fail-closed (nunca conclui sem prova verificável).
+          // FIX-WS-D2-R5: sem segredo, a verificação é indisponível —
+          // 409 fail-closed (nunca conclui sem depósito verificável).
           throw agentAttestationUnavailable();
         }
+        const boundVersion = boundInventoryVersion(
+          householdId,
+          liveCounts,
+          confirmation.expiresAt,
+          secret,
+        );
         verifyDeleteConfirmation(confirmation, {
           workspaceId: householdId,
           actor: authUserId,
-          inventoryVersion: boundInventoryVersion(
-            householdId,
-            liveCounts,
-            confirmation.expiresAt,
-            secret,
-          ),
-          agentProofSecret: secret,
+          inventoryVersion: boundVersion,
         });
+        // FIX-WS-D2-R5: consumo atômico single-use do depósito
+        // server-side (join workspace + versão vinculada + expiração +
+        // não-consumido, sob o lock do delete). Divergência recusa SEM
+        // consumir — o depósito segue válido para o dono legítimo; o
+        // mesmo handle nunca conclui dois deletes (o segundo encontra
+        // `consumed_at` preenchido).
+        const consumed = await client.query<Row>(
+          `UPDATE workspace_empty_attestations SET consumed_at = NOW()
+            WHERE id = $1 AND household_id = $2 AND inventory_version = $3
+              AND expires_at > NOW() AND consumed_at IS NULL
+           RETURNING id`,
+          [confirmation.attestationId, householdId, boundVersion],
+        );
+        if ((consumed.rowCount ?? 0) === 0) throw agentUnverified();
         await client.query(
           `INSERT INTO workspace_tombstones (household_id, deleted_by, inventory_version)
            VALUES ($1, $2, $3)
