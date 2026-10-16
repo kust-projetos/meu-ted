@@ -139,4 +139,27 @@ describe('listActive expira preguiçosamente em PG real (issue #201)', () => {
     const row = await pool.query(`SELECT execution_status FROM pending_operations WHERE workspace_id = $1 AND idempotency_key = $2`, [ws, key]);
     expect(row.rows[0]?.['execution_status']).toBe('expired');
   });
+
+  itIfDatabase('executing vencido NÃO é tocado pelo list (finalização/reconciliação preservadas)', async () => {
+    const { Pool: PgPool } = await import('pg');
+    const { createPostgresPendingOperationV2Store } = await import('../../src/approvals/pending-v2.js');
+    pool = pool ?? new PgPool({ connectionString: DB_URL }) as import('pg').Pool;
+    const store = createPostgresPendingOperationV2Store(pool);
+    const ws = crypto.randomUUID();
+    createdWorkspaces.add(ws);
+    const identity = { workspaceId: ws, actorId: 'actor-a', deviceId: 'device-a' };
+    const key = `lazy-exp-exec-${ws}`;
+
+    await pool.query(
+      `INSERT INTO pending_operations (workspace_id, requester_id, operation, payload, reason, idempotency_key, status, expires_at, protocol_version, actor_id, device_id, tool, normalized_args, proposal_hash, execution_status)
+       VALUES ($1, $2, 'transactions.expense.create', '{}'::jsonb, 'high_value', $3, 'pending', NOW() - INTERVAL '1 hour', 2, 'actor-a', 'device-a', 'transactions.expense.create', '{}'::jsonb, $4, 'executing')`,
+      [ws, 'actor-a', key, '1'.repeat(64)],
+    );
+
+    const listed = await store.listActive(identity);
+    expect(listed.filter((r) => r.idempotencyKey === key)).toHaveLength(1);
+
+    const row = await pool.query(`SELECT execution_status FROM pending_operations WHERE workspace_id = $1 AND idempotency_key = $2`, [ws, key]);
+    expect(row.rows[0]?.['execution_status']).toBe('executing');
+  });
 });

@@ -507,8 +507,11 @@ export const createPostgresPendingOperationV2Store = (
       // acionáveis. A transição é a mesma do confirm (SET expired,
       // idempotente, sem efeito financeiro); só depois o SELECT lista.
       // Sem isso, vencidas há semanas seguiam no active-list do Agent.
+      // Escopo ESTRITO a proposed/confirmed (aguardando ação humana):
+      // `executing` pertence à finalização/reconciliação e `failed` ao
+      // retry — expirar por aqui quebraria recuperação (review R1).
       const expired = await pool.query<PendingV2Row>(
-        `UPDATE pending_operations SET execution_status='expired' WHERE workspace_id=$1 AND actor_id=$2 AND device_id=$3 AND protocol_version=2 AND execution_status IN ('proposed','confirmed','executing','failed') AND expires_at <= NOW() RETURNING id, actor_id`,
+        `UPDATE pending_operations SET execution_status='expired' WHERE workspace_id=$1 AND actor_id=$2 AND device_id=$3 AND protocol_version=2 AND execution_status IN ('proposed','confirmed') AND expires_at <= NOW() RETURNING id, actor_id`,
         [identity.workspaceId, identity.actorId, identity.deviceId],
       );
       for (const row of expired.rows) {
@@ -1170,9 +1173,11 @@ export const createInMemoryPendingOperationV2Store = (
     async listActive(identity) {
       // Issue #201 — lazy expiry (espelho do Postgres acima e do resolve):
       // vencer some da lista E marca expired com evento de auditoria.
+      // Escopo ESTRITO a proposed/confirmed: executing/failed pertencem à
+      // finalização/reconciliação/retry (review R1).
       for (const record of records.values()) {
         if (!identityMatches(record, identity)) continue;
-        if (!['proposed', 'confirmed', 'executing', 'failed'].includes(record.status)) continue;
+        if (!['proposed', 'confirmed'].includes(record.status)) continue;
         if (Date.parse(record.expiresAt) <= Date.now()) {
           record.status = 'expired';
           events.push({ operationId: record.id, event: 'expire', actorId: record.actorId, at: nowIso() });
