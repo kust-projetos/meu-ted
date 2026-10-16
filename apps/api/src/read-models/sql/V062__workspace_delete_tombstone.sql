@@ -18,21 +18,29 @@
 -- para ('active','archived') — SEGURO somente se nenhuma linha households
 -- estiver com status 'deleted' (fail-closed: verifique antes).
 
+-- NOTA (FIX CI card-store-idor): os guards abaixo são qualificados por
+-- conrelid resolvido via search_path ('households'::regclass). Checar
+-- SÓ conname (cluster-wide) quebra migrations com search_path alternativo:
+-- o IF EXISTS enxerga o constraint de OUTRO schema e o DROP falha no
+-- schema alvo ("constraint does not exist"). Conrelid + search_path mantêm
+-- DROP e ADD consistentes no mesmo namespace, por schema.
 DO $$
+DECLARE
+  households_oid OID := 'households'::regclass;
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_status_chk') THEN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = households_oid AND conname = 'households_status_chk') THEN
     ALTER TABLE households DROP CONSTRAINT households_status_chk;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_status_chk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = households_oid AND conname = 'households_status_chk') THEN
     ALTER TABLE households
       ADD CONSTRAINT households_status_chk
       CHECK (status IN ('active', 'archived', 'deleted'));
   END IF;
 
-  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_archive_timestamp_chk') THEN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = households_oid AND conname = 'households_archive_timestamp_chk') THEN
     ALTER TABLE households DROP CONSTRAINT households_archive_timestamp_chk;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_archive_timestamp_chk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = households_oid AND conname = 'households_archive_timestamp_chk') THEN
     ALTER TABLE households
       ADD CONSTRAINT households_archive_timestamp_chk
       CHECK ((status = 'active' AND archived_at IS NULL)
