@@ -16,8 +16,8 @@
  * pela API de todo modo).
  *
  * R2 (REVIEW-WS-D2-FENCE):
- * - install PRESERVA fence válido (serializa tentativas concorrentes — nunca
- *   sobrescreve cegamente a geração alheia);
+ * - install RECUSA nova tentativa com fence válido ativo (R3: 409
+ *   `agent.deletion_fence_active` — nunca compartilha o epoch alheio);
  * - clear aceita `expectedEpoch` e SÓ remove com epoch igual (depósito falho
  *   nunca limpa fence alheio/válido);
  * - leitura distingue ausente/expirado (allow) de erro de storage
@@ -29,6 +29,7 @@ export const WORKSPACE_DELETION_FENCE_TTL_MS = 5 * 60 * 1000;
 
 export const WORKSPACE_DELETION_FENCED_CODE = 'agent.workspace_deletion_fenced' as const;
 export const WORKSPACE_DELETION_FENCE_UNAVAILABLE_CODE = 'agent.persistence_unavailable' as const;
+export const WORKSPACE_DELETION_FENCE_ACTIVE_CODE = 'agent.deletion_fence_active' as const;
 
 export type WorkspaceDeletionFenceSqlLike = {
   exec<T = Record<string, unknown>>(query: string, ...bindings: unknown[]): Iterable<T>;
@@ -60,6 +61,23 @@ export class WorkspaceDeletionFenceUnavailableError extends Error {
   constructor(message = 'Fence de exclusão ilegível: escrita recusada como indisponível.') {
     super(message);
     this.name = 'WorkspaceDeletionFenceUnavailableError';
+  }
+}
+
+/**
+ * R3 — geração ATIVA: nova tentativa de attest enquanto houver fence válido
+ * é RECUSADA fail-closed (409 `agent.deletion_fence_active`) em vez de
+ * compartilhar o epoch. Cada attest bem-sucedido é dono exclusivo da sua
+ * geração; se B falhasse limpando o epoch compartilhado de A, a janela de
+ * A reabriria. O chamador (attest) NÃO limpa nada neste caminho — o fence
+ * de A segue intacto.
+ */
+export class WorkspaceDeletionFenceActiveError extends Error {
+  readonly code = WORKSPACE_DELETION_FENCE_ACTIVE_CODE;
+  readonly status = 409;
+  constructor(message = 'Exclusão em andamento: já existe uma atestação ativa para este workspace.') {
+    super(message);
+    this.name = 'WorkspaceDeletionFenceActiveError';
   }
 }
 
@@ -132,11 +150,13 @@ export const readWorkspaceDeletionFence = (
  * observar o inventário — writers concorrentes passam a recusar a partir
  * daqui, fechando a janela por construção.
  *
- * R2 finding 3 — NUNCA sobrescreve cegamente: com fence válido ativo, a
- * segunda tentativa PRESERVA a geração (mesmo epoch/expiresAt — tentativas
- * serializadas na mesma geração). Só instala quando ausente/expirado.
- * Storage ilegível lança indisponível (o attest recusa, nunca atesta sem
- * fechar a janela).
+ * R3 — NUNCA compartilha geração: com fence válido ativo, LANÇA
+ * `WorkspaceDeletionFenceActiveError` (409 `agent.deletion_fence_active`,
+ * fail-closed). A tentativa recusada NÃO é dona de geração alguma e NÃO
+ * limpa nada; cada attest bem-sucedido é dono exclusivo da sua geração e
+ * toda limpeza é condicional ao epoch próprio. Só instala quando
+ * ausente/expirado. Storage ilegível lança indisponível (o attest recusa,
+ * nunca atesta sem fechar a janela).
  */
 export const installWorkspaceDeletionFence = (
   sql: WorkspaceDeletionFenceSqlLike,
@@ -150,7 +170,7 @@ export const installWorkspaceDeletionFence = (
     if (error instanceof WorkspaceDeletionFenceUnavailableError) throw error;
     throw new WorkspaceDeletionFenceUnavailableError();
   }
-  if (existing) return existing;
+  if (existing) throw new WorkspaceDeletionFenceActiveError();
   const epoch =
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()

@@ -118,6 +118,7 @@ import {
   clearWorkspaceDeletionFence,
   installWorkspaceDeletionFence,
   WorkspaceDeletionFencedError,
+  WorkspaceDeletionFenceActiveError,
   WorkspaceDeletionFenceUnavailableError,
 } from "./workspace-deletion-fence.js";
 
@@ -3475,15 +3476,26 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     // FIX-WS-D2-FENCE — fence PRIMEIRO (antes do snapshot): writers
     // concorrentes passam a recusar a partir daqui. Drena writers admitidos
     // em voo antes de observar, para o snapshot ver o estado assentado.
-    // R2: o install preserva a geração válida existente (finding 3); a prova
+    // R3: geração ATIVA recusa a nova tentativa (409
+    // `agent.deletion_fence_active`) SEM limpar o fence alheio — cada
+    // attest bem-sucedido é dono exclusivo da sua geração; a prova
     // herda o expiresAt do fence — UM deadline absoluto (finding 2); sem
     // assentamento no limite o attest RECUSA (finding 1); toda limpeza é
-    // condicional ao epoch (finding 3 — depósito falho nunca limpa fence
-    // alheio/válido).
+    // condicional ao epoch próprio (finding 3 — depósito falho nunca limpa
+    // fence alheio/válido).
     let fence: { workspaceId: string; epoch: string; expiresAt: string };
     try {
       fence = installWorkspaceDeletionFence(fenceSql as never, workspaceId, Date.now());
-    } catch {
+    } catch (error) {
+      if (error instanceof WorkspaceDeletionFenceActiveError) {
+        return Response.json(
+          {
+            code: "agent.deletion_fence_active",
+            message: "Exclusão em andamento: já existe uma atestação ativa para este workspace.",
+          },
+          { status: 409 },
+        );
+      }
       return Response.json(
         {
           code: "agent.attestation_unavailable",

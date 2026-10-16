@@ -124,13 +124,24 @@ describe('R2 finding 2 — TTL: prova herda o expiresAt do fence (deadline únic
 });
 
 describe('R2 finding 3 — epoch: install preserva, release/remove condicionais', () => {
-  it('dupla tentativa preserva o fence válido (não sobrescreve cegamente)', () => {
+  it('R3: segunda tentativa com fence válido é RECUSADA (nunca compartilha o epoch)', () => {
     const sql = createSql();
     const now = Date.now();
     const first = installWorkspaceDeletionFence(sql, WS_ID, now);
-    const second = installWorkspaceDeletionFence(sql, WS_ID, now + 1000);
-    expect(second.epoch).toBe(first.epoch);
-    expect(second.expiresAt).toBe(first.expiresAt);
+    const error = (() => {
+      try {
+        installWorkspaceDeletionFence(sql, WS_ID, now + 1000);
+        throw new Error('expected rejection');
+      } catch (cause) {
+        return cause as { code?: string; status?: number; name?: string };
+      }
+    })();
+    expect(error.code).toBe('agent.deletion_fence_active');
+    expect(error.status).toBe(409);
+    // O fence de A segue intacto: a tentativa recusada não tocou na geração.
+    const intact = readWorkspaceDeletionFence(sql, WS_ID, now + 1000);
+    expect(intact?.epoch).toBe(first.epoch);
+    expect(intact?.expiresAt).toBe(first.expiresAt);
   });
 
   it('clear com epoch divergente NÃO limpa fence alheio/válido; com epoch igual limpa', () => {
