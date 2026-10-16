@@ -32,15 +32,21 @@ const H = '11111111-1111-4111-8111-111111111111';
 
 type Row = Record<string, unknown>;
 
-/** Minimal fake pool: canned rows in call order. */
+/** Minimal fake pool: canned rows in call order (tx-control e guarda de lifecycle consomem slots próprios, nunca a sequência do teste). */
 const fakePool = (rowsByCall: Row[][]): Pool => {
   let n = 0;
+  const query = async (text: unknown) => {
+    const t = String(text ?? '');
+    if (/^\s*(BEGIN|COMMIT|ROLLBACK)\b/i.test(t)) return { rows: [], rowCount: 0 };
+    if (/^\s*SELECT status FROM households\b/i.test(t)) return { rows: [{ status: 'active' }], rowCount: 1 };
+    const rows = rowsByCall[Math.min(n, rowsByCall.length - 1)]!;
+    n += 1;
+    return { rows, rowCount: rows.length };
+  };
+  const client = { query, release: () => undefined };
   return {
-    query: async () => {
-      const rows = rowsByCall[Math.min(n, rowsByCall.length - 1)]!;
-      n += 1;
-      return { rows, rowCount: rows.length };
-    },
+    query,
+    connect: async () => client,
   } as unknown as Pool;
 };
 

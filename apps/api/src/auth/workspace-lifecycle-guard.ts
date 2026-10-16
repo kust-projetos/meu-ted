@@ -27,7 +27,12 @@ export const assertWorkspaceWritableInTx = async (
     [householdId],
   );
   if ((current.rowCount ?? 0) === 0 || current.rows.length === 0) {
-    throw new DomainError('workspace.deleted', 'Workspace não encontrado ou excluído.', 410);
+    // Linha ausente NÃO significa "excluído": o delete D2 preserva a
+    // linha como marcador `deleted` (nunca há DELETE físico em
+    // households), então ausência indica dado pré-lifecycle/legado (sem
+    // FK formal) — comportamento legado preservado. A barreira atua
+    // onde há linha (active/archived/deleted).
+    return;
   }
   const status = current.rows[0]!.status;
   if (status === 'deleted') {
@@ -56,8 +61,9 @@ export const assertWorkspaceWritable = async (
     `SELECT status FROM households WHERE id = $1`,
     [householdId],
   );
+  // Ausência de linha = dado pré-lifecycle (ver comentário acima); permite.
   if ((current.rowCount ?? 0) === 0 || current.rows.length === 0) {
-    throw new DomainError('workspace.deleted', 'Workspace não encontrado ou excluído.', 410);
+    return;
   }
   const status = current.rows[0]!.status;
   if (status === 'deleted') {
