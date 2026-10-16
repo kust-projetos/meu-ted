@@ -34,10 +34,20 @@ import {
   setMemoryEnabled,
   currentSession,
   endSession,
+  peekOpenSession,
   type CategoryCatalogEntry,
   type MemorySql,
   type Skill,
 } from "./agent-config/index.js";
+import {
+  canAccessMessage,
+  defaultCollectiveAudience,
+  isPrivateViewsEnabled,
+  persistConversationSummary,
+  resolveCreationVisibility,
+  stampMessageAudience,
+  type ConversationAudience,
+} from "./privacy/conversation-visibility.js";
 import {
   checkUsageLimit,
   DEFAULT_POLICY,
@@ -272,6 +282,15 @@ export type Env = {
    */
   TED_ATTACHMENTS_ENABLED?: string;
   TED_ATTACHMENTS_COHORT?: string;
+  /**
+   * ADR-027 D3 — visões privadas opt-in por conversa: default-off,
+   * fail-closed. Precisa ser exatamente `'1'` (sem trim); ausente/vazio/
+   * outro valor ⇒ só conversas coletivas podem ser criadas. Flag off NUNCA
+   * converte conversas existentes (nem coletivo→privado, nem
+   * privado→coletivo): apenas bloqueia NOVAS privadas; as existentes
+   * permanecem como estão (rollback = desabilitar a flag).
+   */
+  TED_PRIVATE_VIEWS_ENABLED?: string;
   /**
    * A14/R12: STT de áudio via Groq (G05) — default-off com TRAVA TRIPLA.
    * `GROQ_API_KEY` é a credencial (lida no call time, nunca logada),
@@ -1198,6 +1217,55 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /**
+   * ADR-027 D3 — audiência da conversa aberta do ator (carimbo de escrita e
+   * filtro de leitura). Leitura pura (`peek`, sem criar): sem sessão aberta
+   * ⇒ default coletivo-com-atribuição. Nunca usa `actorId='ted'` como prova
+   * de nada — o dono de privada é sempre o ator humano da sessão.
+   */
+  private conversationAudienceFor(workspaceId: string, actorId: string): ConversationAudience {
+    try {
+      const sql = this.memorySql();
+      if (sql) {
+        const open = peekOpenSession(sql, workspaceId, actorId);
+        if (open) {
+          return {
+            workspaceId,
+            visibility: open.visibility,
+            ownerActorId: open.ownerActorId || actorId,
+            conversationId: open.conversationId || open.id,
+          };
+        }
+      }
+    } catch {
+      // Best-effort: sem leitura, o default coletivo-com-atribuição vale.
+    }
+    return defaultCollectiveAudience({ workspaceId, ownerActorId: actorId, conversationId: '' });
+  }
+
+  /**
+   * D3 — contexto LLM só com turnos acessíveis ao ator (leitura, WS/SDK,
+   * caches e compactação passam por aqui; o armazenado permanece intacto).
+   */
+  private sdkVisibleTurns(actorId: string, workspaceId: string): Array<{ role: 'user' | 'assistant'; content: string }> {
+    const visible = (Array.isArray(this.messages) ? this.messages : []).filter((message) =>
+      canAccessMessage({
+        actorId,
+        workspaceId,
+        meta: (message.metadata ?? {}) as { workspaceId?: unknown; visibility?: unknown; ownerActorId?: unknown; actorId?: unknown },
+      }),
+    );
+    return toContextTurns(
+      visible.map((message) => {
+        const parts = Array.isArray(message.parts) ? message.parts : [];
+        return {
+          role: message.role === 'assistant' ? 'assistant' : 'user',
+          content: parts.map((part) => (typeof part.text === 'string' ? part.text : '')).join(''),
+        };
+      }),
+    );
+  }
+
+  /**
    * H-03: per-turn authority re-verification (epoch + rollout/canary),
    * applied on BOTH legs right after the snapshot resolves and before any
    * attempt executes. A bumped epoch invalidates the cached row and aborts
@@ -1392,11 +1460,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           id: `msg-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           role: 'user',
           parts: [{ type: 'text', text: input.text }],
-          metadata: {
-            actorId: input.actorId,
-            workspaceId: input.workspaceId,
-            createdAt: new Date().toISOString(),
-          },
+          metadata: stampMessageAudience(
+            {
+              actorId: input.actorId,
+              workspaceId: input.workspaceId,
+              createdAt: new Date().toISOString(),
+            },
+            this.conversationAudienceFor(input.workspaceId, input.actorId),
+          ),
         } as unknown as UIMessage;
         await this.persistMessages([userMessage]);
       }
@@ -2087,8 +2158,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           memoryTools,
         );
         // Compacted context: summaries replace old turns sent to the model
-        // (stored history is preserved untouched).
-        const historyTurns = this.sdkTurns();
+        // (stored history is preserved untouched). D3: o contexto LLM só
+        // carrega turnos acessíveis ao ator (privado de outro ator, legado
+        // sem proveniência e outro workspace nunca entram no prompt).
+        const historyTurns = this.sdkVisibleTurns(actorId, memoryWorkspace);
         const compaction = await compactContext(historyTurns, {
           summarize: async (turns) => {
             const transcript = turns.map((turn) => `${turn.role === 'user' ? 'Usuário' : 'TED'}: ${turn.content}`).join('\n');
@@ -2103,13 +2176,19 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         });
         if (compaction.compacted && sql && compaction.summary && !isProhibitedFinancialMemory(compaction.summary)) {
           try {
-            rememberFact(sql, {
-              workspaceId: memoryWorkspace,
-              actor: '',
-              kind: 'summary',
-              content: compaction.summary,
-              salience: 0.7,
-            });
+            // D3.7: resumo com escopo de ator, NUNCA shared — privado nunca
+            // vaza para memória compartilhada (nem coletivo vira broadcast).
+            await persistConversationSummary(
+              (input) =>
+                rememberFact(sql, {
+                  workspaceId: input.workspaceId,
+                  actor: input.actor,
+                  kind: input.kind,
+                  content: input.content,
+                  salience: input.salience,
+                }),
+              { workspaceId: memoryWorkspace, actorId, summary: compaction.summary, salience: 0.7 },
+            );
           } catch {
             // Summary persistence is best-effort.
           }
@@ -3915,6 +3994,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           // A genuine read has none of the three and keeps this branch.
           const isDraftContinuation = turnResult.clarification?.draft !== undefined;
           const isRetryTurn = isRetryText(decisionText);
+          // ADR-027 D3 — audiência carimbada em todo par Q&A persistido
+          // (user + assistant, ambos os ramos): privada carrega owner = ator
+          // do turno; 'ted' nunca é prova de público.
+          const turnAudience = this.conversationAudienceFor(identity.workspaceId, identity.actorId);
           const persistStablePair =
             turnResult.plan.mode === 'mutation-proposal' ||
             turnResult.plan.mode === 'confirmation' ||
@@ -3933,7 +4016,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
                 id: `msg-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                 role: 'user',
                 parts: [{ type: 'text', text: restInput.text }],
-                metadata: { actorId: identity.actorId, workspaceId: identity.workspaceId, createdAt: new Date().toISOString() },
+                metadata: stampMessageAudience(
+                  { actorId: identity.actorId, workspaceId: identity.workspaceId, createdAt: new Date().toISOString() },
+                  turnAudience,
+                ),
               } as unknown as UIMessage;
               await this.persistMessages([failClosedUserMessage]);
             }
@@ -3941,7 +4027,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
               id: `msg-asst-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
               role: 'assistant',
               parts: [{ type: 'text', text: turnResult.response.text }],
-              metadata: { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: new Date().toISOString() },
+              metadata: stampMessageAudience(
+                { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: new Date().toISOString() },
+                turnAudience,
+              ),
             } as unknown as UIMessage;
             try {
               await this.persistMessages([assistantMessage]);
@@ -4002,7 +4091,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
                 id: mutationUserId,
                 role: 'user',
                 parts: [{ type: 'text', text: scrubForPersistence(restInput.text) }],
-                metadata: { actorId: identity.actorId, workspaceId: identity.workspaceId, createdAt: mutationNowIso, intentionId },
+                metadata: stampMessageAudience(
+                  { actorId: identity.actorId, workspaceId: identity.workspaceId, createdAt: mutationNowIso, intentionId },
+                  turnAudience,
+                ),
               } as unknown as UIMessage);
             }
             if (!existingIds.has(mutationAsstId)) {
@@ -4010,7 +4102,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
                 id: mutationAsstId,
                 role: 'assistant',
                 parts: [{ type: 'text', text: scrubForPersistence(turnResult.response.text) }],
-                metadata: { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: mutationNowIso, intentionId },
+                metadata: stampMessageAudience(
+                  { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: mutationNowIso, intentionId },
+                  turnAudience,
+                ),
               } as unknown as UIMessage);
             }
             if (mutationToPersist.length > 0) {
@@ -4147,10 +4242,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       return Response.json({ ok: true, enabled });
     }
 
-    // Part B: "Nova sessão" — archives the current session (count + best-
-    // effort summary) into the registry, clears the model context (SDK
-    // messages), and starts a fresh session. Stored history rows are
-    // preserved in the registry summary; durable memories are untouched.
+    // Part B: "Nova sessão" — ADR-027 D3: renovação fecha a sessão aberta
+    // (arquivando resumo) e abre uma NOVA conversa, SEM APAGAR nada (nem a
+    // tabela SDK, nem o espelho em memória, nem memórias duráveis). Trocar de
+    // modo (coletivo↔privado) cria nova conversa SEM mudar a audiência
+    // retroativa da anterior. Privado é opt-in por conversa (`{ visibility:
+    // 'private' }`), gated pela flag server-side `TED_PRIVATE_VIEWS_ENABLED`
+    // (só exato '1'); flag off ⇒ 403 tipado, sem converter nada.
     if (url.pathname === "/rpc/session/new" && request.method === "POST") {
       const actorId = request.headers.get("x-agent-actor");
       const workspaceId = request.headers.get("x-agent-workspace");
@@ -4168,7 +4266,26 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       if (sessionFence) {
         return Response.json(sessionFence, { status: sessionFence.status });
       }
-      const turns = this.sdkTurns();
+      // Opt-in explícito por conversa (PWA envia; ausente = herda a aberta
+      // com flag on, coletivo com flag off — nunca conversão retroativa).
+      let requestedVisibility: unknown;
+      try {
+        const body = (await request.json()) as { visibility?: unknown };
+        requestedVisibility = body?.visibility;
+      } catch {
+        requestedVisibility = undefined;
+      }
+      const privateViewsEnabled = isPrivateViewsEnabled(this.env ?? undefined);
+      const resolved = resolveCreationVisibility({ requested: requestedVisibility, privateViewsEnabled });
+      if (!resolved.ok) {
+        return Response.json(
+          { ok: false, code: resolved.code, message: 'Visões privadas estão desabilitadas neste workspace.' },
+          { status: 403 },
+        );
+      }
+      // D3: o resumo de fechamento só usa turnos acessíveis ao solicitante —
+      // o privado de outro ator nunca entra no resumo da minha sessão.
+      const turns = this.sdkVisibleTurns(identity.actorId, identity.workspaceId);
       const messageCount = turns.length;
       let summary: string | null = null;
       if (messageCount > 0) {
@@ -4178,50 +4295,45 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           summary = null;
         }
       }
-      // FIX-P1-SESS #177: renovação com escopo por ator, fail-closed.
-      //
-      // O DO é por workspace (compartilhado pelos membros), mas o registry
-      // (`agent_sessions`) já é por (workspace, actor). O apagão GLOBAL da
-      // tabela SDK (`DELETE FROM cf_ai_chat_agent_messages` sem WHERE) foi
-      // removido: B iniciando nova sessão destruía o contexto de A.
-      //
-      // Escolha documentada (sem migração destrutiva, sem deletar dados
-      // reais): remove SOMENTE linhas atribuíveis ao solicitante
-      // (`message` é JSON; `metadata.actorId` é gravado pelo persist do
-      // chat). Linhas sem atribuição (legadas, sem metadata) e de outros
-      // atores (incl. respostas `ted`, compartilhadas) são MANTIDAS — o
-      // isolamento pleno do contexto por ator (coletivo-vs-privado) fica
-      // como ADR pendente (D3). O espelho em memória usa o mesmo predicado,
-      // então nada "ressuscita" no restart do DO.
-      //
-      // SECREVIEW-P1-SESS: renovação ATÔMICA (tudo-ou-nada).
-      //
-      // O DELETE com escopo + currentSession/endSession rodam numa ÚNICA
-      // `runMemoryTransaction` (primitiva `transactionSync` do DO; fallback
-      // `BEGIN IMMEDIATE` em `node:sqlite`). Falha em qualquer ponto =>
-      // ROLLBACK integral: a tabela SDK, o registry e o espelho `this.messages`
-      // (atualizado SOMENTE após sucesso) ficam 100% preservados — resposta
-      // 500 com `ok:false`, NUNCA `ok:true`, e restart sem desaparecimento.
+      // SECREVIEW-P1-SESS (forma D3): o fecha/abre roda numa ÚNICA
+      // `runMemoryTransaction` (tudo-ou-nada). Falha em qualquer ponto ⇒
+      // ROLLBACK integral: registry 100% preservado — resposta 500 com
+      // `ok:false`, NUNCA `ok:true`.
       let previous: { id: string } | null = null;
       let next: { id: string };
+      let nextVisibility: 'workspace' | 'private' = 'workspace';
       try {
         const result = runMemoryTransaction(sql, () => {
-          sql.exec(
-            `DELETE FROM cf_ai_chat_agent_messages WHERE json_extract(message, '$.metadata.actorId') = ?`,
-            identity.actorId,
-          );
-          // Ensure a registry row exists even for the very first session, so the
-          // archived history is never lost when no session was opened before.
           // Empty renewals only reset the context without archiving noise.
           let prev: { id: string } | null = null;
+          const open = peekOpenSession(sql, identity.workspaceId, identity.actorId);
           if (messageCount > 0) {
             currentSession(sql, identity.workspaceId, identity.actorId);
             prev = endSession(sql, identity.workspaceId, identity.actorId, {
               ...(summary ? { summary } : {}),
               messageCount,
             });
+          } else if (
+            requestedVisibility !== undefined &&
+            open &&
+            resolved.visibility !== open.visibility
+          ) {
+            // Troca de modo com contexto vazio: fecha a aberta SEM resumo e
+            // abre nova conversa no modo pedido (nunca converte a anterior).
+            prev = endSession(sql, identity.workspaceId, identity.actorId, { messageCount: 0 });
           }
-          const nxt = currentSession(sql, identity.workspaceId, identity.actorId);
+          // Nova conversa: modo pedido, ou herança da aberta (flag on), ou
+          // coletivo (flag off — criar coletiva nova NÃO converte a anterior).
+          nextVisibility =
+            requestedVisibility !== undefined
+              ? resolved.visibility
+              : privateViewsEnabled && open
+                ? open.visibility
+                : 'workspace';
+          const nxt = currentSession(sql, identity.workspaceId, identity.actorId, {
+            visibility: nextVisibility,
+            ownerActorId: identity.actorId,
+          });
           return { prev, nxt };
         });
         previous = result.prev;
@@ -4232,20 +4344,16 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           { status: 500 },
         );
       }
-      if (Array.isArray(this.messages)) {
-        const kept = this.messages.filter((message) => {
-          const actor = (message.metadata as { actorId?: string } | undefined)?.actorId;
-          return actor !== identity.actorId;
-        });
-        this.messages.length = 0;
-        this.messages.push(...kept);
-      }
+      // D3: espelho em memória PRESERVADO — renovação não apaga; a leitura
+      // (`/rpc/history`, contexto LLM) aplica o predicado de visibilidade.
       return Response.json({
         ok: true,
         sessionId: next.id,
         previousSessionId: previous?.id ?? null,
         messageCount,
         summarized: summary !== null,
+        visibility: nextVisibility,
+        privateViewsEnabled,
       });
     }
 
@@ -4260,9 +4368,19 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
 
       const allMessages = Array.isArray(this.messages) ? this.messages : [];
       // Isolamento por workspace: filtrar mensagens cujo workspaceId difere (defesa em profundidade, DO já é por workspace)
+      // ADR-027 D3: predicado de visibilidade em TODOS os canais de leitura —
+      // coletivo visível ao membro; privado só ao dono; legado sem
+      // proveniência = preservado-não-publicado ('ted' nunca prova público).
       const rawMessages = allMessages.filter((msg) => {
-        const ws = (msg.metadata as { workspaceId?: string } | undefined)?.workspaceId;
-        return !ws || ws === identity.workspaceId;
+        const meta = (msg.metadata ?? {}) as {
+          workspaceId?: unknown;
+          visibility?: unknown;
+          ownerActorId?: unknown;
+          actorId?: unknown;
+        };
+        const ws = typeof meta.workspaceId === 'string' ? meta.workspaceId : undefined;
+        if (ws && ws !== identity.workspaceId) return false;
+        return canAccessMessage({ actorId: identity.actorId, workspaceId: identity.workspaceId, meta });
       });
 
       const items = rawMessages.map((msg) => {

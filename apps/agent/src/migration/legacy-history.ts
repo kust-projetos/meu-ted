@@ -37,6 +37,10 @@ export type SdkUIMessage = {
     workspaceId: string;
     createdAt: string;
     intentionId?: string;
+    /** ADR-027 D3 — audiência aditiva (ver `privacy/conversation-visibility`). */
+    visibility?: 'workspace' | 'private';
+    ownerActorId?: string;
+    conversationId?: string;
   };
 };
 
@@ -100,6 +104,10 @@ export const transformLegacyMessages = (
       msg.role === 'assistant' ? 'assistant' : msg.role === 'system' ? 'system' : 'user';
     const actorId = validRole === 'assistant' ? 'ted' : msg.actor_id;
 
+    // ADR-027 D3.8 — legado sem audiência: COM proveniência (ator atribuído)
+    // ⇒ coletivo; SEM proveniência ⇒ preservado-não-publicado (privado sem
+    // dono real: o predicado nega a todos, nunca publica).
+    const attributed = typeof actorId === 'string' && actorId.trim().length > 0;
     return {
       id: msg.id,
       role: validRole,
@@ -108,6 +116,9 @@ export const transformLegacyMessages = (
         actorId,
         workspaceId,
         createdAt: msg.created_at,
+        visibility: attributed ? 'workspace' : 'private',
+        ownerActorId: attributed ? actorId : '',
+        conversationId: '',
       },
     };
   });
