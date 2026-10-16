@@ -252,7 +252,10 @@ describe('POST /rpc/session/new — Nova sessão (Part B)', () => {
       summarized: boolean;
     };
     expect(body.ok).toBe(true);
-    expect(body.messageCount).toBe(2);
+    // FIX-WS-D3-R2 finding 4: legado atribuído a 'ted' sem proveniência
+    // humana é preservado-não-publicado — entra no espelho/tabela (nada é
+    // apagado), mas NUNCA no resumo de outra sessão (só o turno humano).
+    expect(body.messageCount).toBe(1);
     expect(body.summarized).toBe(true);
     // D3: renovação NÃO apaga — espelho e tabela intactos; o predicado de
     // visibilidade (não o DELETE) isola o contexto por ator na leitura.
@@ -265,7 +268,8 @@ describe('POST /rpc/session/new — Nova sessão (Part B)', () => {
     expect(sessions).toHaveLength(2);
     const archived = sessions.find((s) => s['ended_at'] !== null);
     expect(archived!['summary']).toContain('Nubank');
-    expect(archived!['message_count']).toBe(2);
+    expect(archived!['summary']).not.toContain('Anotado!');
+    expect(archived!['message_count']).toBe(1);
   });
 
   it('keeps durable memories across renewal', async () => {

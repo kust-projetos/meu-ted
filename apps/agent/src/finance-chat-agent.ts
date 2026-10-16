@@ -1217,27 +1217,43 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /**
+   * FIX-WS-D3-R2 (findings 1/3/5) — leitura da sessão aberta com registry
+   * garantido: o schema é idempotente, então "tabela ausente" vira ausência
+   * comprovada (null); sem store, sessão aberta é impossível (null).
+   * Qualquer OUTRO erro de leitura é fail-closed
+   * `agent.persistence_unavailable` — erro de registry ≠ ausência.
+   */
+  private readOpenSessionOrThrow(workspaceId: string, actorId: string) {
+    const sql = this.memorySql();
+    if (!sql) return null;
+    try {
+      initializeSessionSchema(sql);
+      return peekOpenSession(sql, workspaceId, actorId);
+    } catch {
+      throw Object.assign(new Error('agent.persistence_unavailable'), {
+        code: 'agent.persistence_unavailable',
+        status: 503,
+      });
+    }
+  }
+
+  /**
    * ADR-027 D3 — audiência da conversa aberta do ator (carimbo de escrita e
    * filtro de leitura). Leitura pura (`peek`, sem criar): sem sessão aberta
    * ⇒ default coletivo-com-atribuição. Nunca usa `actorId='ted'` como prova
    * de nada — o dono de privada é sempre o ator humano da sessão.
    */
   private conversationAudienceFor(workspaceId: string, actorId: string): ConversationAudience {
-    try {
-      const sql = this.memorySql();
-      if (sql) {
-        const open = peekOpenSession(sql, workspaceId, actorId);
-        if (open) {
-          return {
-            workspaceId,
-            visibility: open.visibility,
-            ownerActorId: open.ownerActorId || actorId,
-            conversationId: open.conversationId || open.id,
-          };
-        }
-      }
-    } catch {
-      // Best-effort: sem leitura, o default coletivo-com-atribuição vale.
+    // FIX-WS-D3-R2 finding 3: erro de registry lança (fail-closed); ausência
+    // comprovada (sem store / sem sessão aberta) mantém o default coletivo.
+    const open = this.readOpenSessionOrThrow(workspaceId, actorId);
+    if (open) {
+      return {
+        workspaceId,
+        visibility: open.visibility,
+        ownerActorId: open.ownerActorId || actorId,
+        conversationId: open.conversationId || open.id,
+      };
     }
     return defaultCollectiveAudience({ workspaceId, ownerActorId: actorId, conversationId: '' });
   }
@@ -1246,14 +1262,39 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
    * D3 — contexto LLM só com turnos acessíveis ao ator (leitura, WS/SDK,
    * caches e compactação passam por aqui; o armazenado permanece intacto).
    */
-  private sdkVisibleTurns(actorId: string, workspaceId: string): Array<{ role: 'user' | 'assistant'; content: string }> {
-    const visible = (Array.isArray(this.messages) ? this.messages : []).filter((message) =>
-      canAccessMessage({
-        actorId,
-        workspaceId,
-        meta: (message.metadata ?? {}) as { workspaceId?: unknown; visibility?: unknown; ownerActorId?: unknown; actorId?: unknown },
-      }),
-    );
+  private sdkVisibleTurns(actorId: string, workspaceId: string, opts?: { conversationId?: string }): Array<{ role: 'user' | 'assistant'; content: string }> {
+    // FIX-WS-D3-R2 (findings 1/5): escopo da conversa aberta — com sessão
+    // aberta, SÓ turnos dela (+legado sem conversationId, ainda gated pelo
+    // predicado); o arquivado de outras conversas fica fora do contexto e
+    // do resumo de fechamento. Sem sessão aberta/sem store: comportamento
+    // anterior (só predicado). Erro de registry: [] (fail-closed — sem
+    // contexto em vez de cruzar audiências).
+    let scope: string | null = null;
+    if (opts?.conversationId !== undefined) {
+      scope = opts.conversationId;
+    } else {
+      try {
+        scope = this.readOpenSessionOrThrow(workspaceId, actorId)?.conversationId ?? null;
+      } catch {
+        return [];
+      }
+    }
+    const visible = (Array.isArray(this.messages) ? this.messages : []).filter((message) => {
+      const meta = (message.metadata ?? {}) as {
+        workspaceId?: unknown;
+        visibility?: unknown;
+        ownerActorId?: unknown;
+        actorId?: unknown;
+        conversationId?: unknown;
+      };
+      if (scope) {
+        const cid = typeof meta.conversationId === 'string' ? meta.conversationId : '';
+        // Conversa arquivada (id distinto) fica fora; legado sem
+        // conversationId cai no predicado abaixo (sem apagar nada).
+        if (cid && cid !== scope) return false;
+      }
+      return canAccessMessage({ actorId, workspaceId, meta });
+    });
     return toContextTurns(
       visible.map((message) => {
         const parts = Array.isArray(message.parts) ? message.parts : [];
@@ -1456,6 +1497,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       // as a normal user turn.
       const isCorrectionRetry = input.internalCorrection === true;
       if (!isCorrectionRetry) {
+        // FIX-WS-D3-R2 finding 2: a pergunta carimba a audiência capturada
+        // UMA vez na entrada do turno (`input.audience`, server-side) — a
+        // re-consulta só acontece quando o canal não a transportou.
+        const turnAudience = input.audience ?? this.conversationAudienceFor(input.workspaceId, input.actorId);
         const userMessage: UIMessage = {
           id: `msg-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           role: 'user',
@@ -1466,7 +1511,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
               workspaceId: input.workspaceId,
               createdAt: new Date().toISOString(),
             },
-            this.conversationAudienceFor(input.workspaceId, input.actorId),
+            turnAudience,
           ),
         } as unknown as UIMessage;
         await this.persistMessages([userMessage]);
@@ -3787,6 +3832,20 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         workspaceId,
         role: (request.headers.get("x-agent-role") === "owner" ? "owner" : "member") as "owner" | "member",
       });
+      // FIX-WS-D3-R2 finding 2: audiência/conversa capturada UMA vez ANTES
+      // de qualquer await do turno e vinculada ao turno inteiro (pergunta +
+      // resposta + redelivery com stable ids). Uma renovação
+      // (`POST /rpc/session/new`) concorrente não divide o turno: Q e A
+      // carimbam a MESMA conversa. Erro de registry ⇒ 503 fail-closed.
+      let turnAudience: ConversationAudience;
+      try {
+        turnAudience = this.conversationAudienceFor(identity.workspaceId, identity.actorId);
+      } catch {
+        return Response.json(
+          { code: 'agent.persistence_unavailable', message: 'Session storage is not available' },
+          { status: 503 },
+        );
+      }
       // H-12: device binding — gateway-stamped (x-agent-device) and
       // cross-checked against the connection token claims in
       // assertConnectionBinding above; never a free client header.
@@ -3887,7 +3946,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // server-side as admitted grounding support for READ narration
         // (attachment-extracted ONLY — never typed text, never client
         // input; empties are dropped by `normalize`, not trusted here).
-        { typedText: unredactedText, hasAttachmentData: hasAcceptedAttachmentData(attachmentData), attachmentTexts: attachmentData.map((item) => item.text) },
+        { typedText: unredactedText, hasAttachmentData: hasAcceptedAttachmentData(attachmentData), attachmentTexts: attachmentData.map((item) => item.text), audience: turnAudience },
       );
       if (typeof this.persistMessages !== 'function') {
         return Response.json({ code: 'agent.persistence_unavailable', message: 'SDK persistence is not available' }, { status: 503 });
@@ -3997,7 +4056,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           // ADR-027 D3 — audiência carimbada em todo par Q&A persistido
           // (user + assistant, ambos os ramos): privada carrega owner = ator
           // do turno; 'ted' nunca é prova de público.
-          const turnAudience = this.conversationAudienceFor(identity.workspaceId, identity.actorId);
+          // FIX-WS-D3-R2 finding 2: `turnAudience` é a audiência capturada
+          // na entrada do turno — nunca re-consultada no meio (Q, A e
+          // redelivery com stable ids carimbam a MESMA conversa).
           const persistStablePair =
             turnResult.plan.mode === 'mutation-proposal' ||
             turnResult.plan.mode === 'confirmation' ||
@@ -4283,8 +4344,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           { status: 403 },
         );
       }
-      // D3: o resumo de fechamento só usa turnos acessíveis ao solicitante —
-      // o privado de outro ator nunca entra no resumo da minha sessão.
+      // D3 (FIX-WS-D3-R2 finding 1): o resumo de fechamento usa SÓ turnos
+      // da conversa encerrada acessíveis ao solicitante (`sdkVisibleTurns`
+      // escopa pela aberta = a que será fechada) — o privado de outro ator
+      // e o de OUTRA conversa do próprio ator nunca entram no resumo.
       const turns = this.sdkVisibleTurns(identity.actorId, identity.workspaceId);
       const messageCount = turns.length;
       let summary: string | null = null;
@@ -4371,15 +4434,33 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       // ADR-027 D3: predicado de visibilidade em TODOS os canais de leitura —
       // coletivo visível ao membro; privado só ao dono; legado sem
       // proveniência = preservado-não-publicado ('ted' nunca prova público).
+      // FIX-WS-D3-R2 finding 5: separação por conversa — com sessão aberta,
+      // SÓ turnos dela (+legado sem conversationId, ainda gated); o
+      // arquivado de outras conversas fica fora (sem apagar nada). Erro de
+      // registry ⇒ 503 fail-closed (erro ≠ ausência).
+      let historyScope: string | null = null;
+      try {
+        historyScope = this.readOpenSessionOrThrow(identity.workspaceId, identity.actorId)?.conversationId ?? null;
+      } catch {
+        return Response.json(
+          { code: 'agent.persistence_unavailable', message: 'Session storage is not available' },
+          { status: 503 },
+        );
+      }
       const rawMessages = allMessages.filter((msg) => {
         const meta = (msg.metadata ?? {}) as {
           workspaceId?: unknown;
           visibility?: unknown;
           ownerActorId?: unknown;
           actorId?: unknown;
+          conversationId?: unknown;
         };
         const ws = typeof meta.workspaceId === 'string' ? meta.workspaceId : undefined;
         if (ws && ws !== identity.workspaceId) return false;
+        if (historyScope) {
+          const cid = typeof meta.conversationId === 'string' ? meta.conversationId : '';
+          if (cid && cid !== historyScope) return false;
+        }
         return canAccessMessage({ actorId: identity.actorId, workspaceId: identity.workspaceId, meta });
       });
 
@@ -4398,6 +4479,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // como fallback legado. Eco estrito: só string não vazia vinda do
         // metadata, nunca id inventado aqui.
         const intentionId = (msg.metadata as { intentionId?: string } | undefined)?.intentionId;
+        // FIX-WS-D3-R2 finding 5: eco da conversa para separação no cliente
+        // (ativa vs. arquivada); só string não vazia vinda do metadata.
+        const conversationId = (msg.metadata as { conversationId?: unknown } | undefined)?.conversationId;
         return {
           id: String(msg.id ?? `msg-${Date.now()}`),
           actorId: msgActorId,
@@ -4406,6 +4490,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           text: contentText,
           createdAt: typeof createdAt === "string" ? createdAt : undefined,
           isOwn,
+          ...(typeof conversationId === "string" && conversationId ? { conversationId } : {}),
           ...(attachments ? { attachments } : {}),
           ...(typeof intentionId === "string" && intentionId ? { intentionId } : {}),
         };
