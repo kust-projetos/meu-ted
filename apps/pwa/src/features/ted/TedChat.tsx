@@ -32,7 +32,7 @@ import { routePatrimonio } from "@/lib/routes";
 import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 import type { PendingOperationDecision, UndoDecision } from "@/lib/api/agent-client";
 import { notifyPendingOperationsChanged } from "@/lib/state/use-pending-operations";
-import { Sparkles, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, Trash2, RefreshCw } from "lucide-react";
+import { Sparkles, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, Trash2, RefreshCw, Lock } from "lucide-react";
 
 const HISTORY_LOAD_ERROR = "Não foi possível carregar o histórico. Tente novamente.";
 const ACTIVE_LOAD_ERROR = "Não foi possível carregar as aprovações agora.";
@@ -1219,6 +1219,32 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     }
   };
 
+  // ADR-027 D3: opt-in explícito por conversa privada (gated server-side;
+  // 403 com flag off vira aviso honesto, sem expor ids).
+  const handleNewPrivateSession = async () => {
+    if (!activeWorkspace || loading) return;
+    cleanupRecordingMedia();
+    clearAttachments();
+    discardDrafts();
+    setError(null);
+    try {
+      const renewal = await renewAgentSession(activeWorkspace.id, { visibility: 'private' });
+      setMessages([]);
+      setPendingOps([]);
+      setUndoProposals([]);
+      setHistoryLoaded(false);
+      setInput("");
+      flashNotice(
+        renewal.visibility === 'private'
+          ? "Conversa privada iniciada — só você vê este contexto."
+          : "Nova sessão iniciada — o TED mantém o que aprendeu.",
+      );
+      await loadHistory();
+    } catch {
+      setError("Conversas privadas estão desabilitadas neste workspace. Tente novamente.");
+    }
+  };
+
   return (
     <section
       role="region"
@@ -1246,6 +1272,16 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => void handleNewPrivateSession()}
+              disabled={loading}
+              aria-label="Nova conversa privada"
+              title="Nova conversa privada (só você vê)"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-surface-3 text-text-secondary shadow-xs transition-colors hover:bg-surface-4 hover:text-text-primary disabled:opacity-50 cursor-pointer"
+            >
+              <Lock size={14} />
+            </button>
             <button
               type="button"
               onClick={() => void handleNewSession()}

@@ -175,6 +175,15 @@ provider + **G07**; transporte, credencial, modelo e preço não foram definidos
 - Compactação aos 40 msgs (resumo via modelo, fallback extrativo silencioso;
   storage preservado); `POST /rpc/session/new` renova arquivando resumo;
   `POST /rpc/memory/prefs` alterna o opt-out.
+- **ADR-027 D3 — visibilidade (coletivo default, privado opt-in):** cada
+  conversa carrega `visibility (workspace|private) + owner_actor_id +
+  conversation_id` (colunas aditivas em `agent_sessions`, metadados nas
+  mensagens; ver `privacy/conversation-visibility.ts`). Flag server-side
+  `TED_PRIVATE_VIEWS_ENABLED` (só exato `1` cria privadas; off = 403 sem
+  converter). Predicado em leitura/detalhe/busca/WS/export/anexos/resumos/
+  caches/LLM: membro + workspace + (coletivo OU (privado E dono)); `ted` nunca
+  prova público; legado sem atribuição = preservado-não-publicado. Renovação
+  fecha/abre SEM apagar; resumos persistem com escopo de ator, nunca shared.
 - Nunca persistem secrets ou números de cartão (filtro + redaction);
   isolamento por (workspace, actor) em memórias e sessões.
 
