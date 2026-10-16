@@ -25,8 +25,12 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     if (!pool) throw new Error("database pool not initialized");
     return createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_SECRET });
   };
-  const agentProofFor = (workspaceId: string, inventoryVersion: string) =>
-    signAgentEmptyProof(
+  const depositFor = async (
+    store: ReturnType<typeof testStore>,
+    workspaceId: string,
+    inventoryVersion: string,
+  ): Promise<string> => {
+    const proof = signAgentEmptyProof(
       {
         workspaceId,
         inventoryVersion,
@@ -34,6 +38,8 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
       },
       TEST_SECRET,
     );
+    return (await store.depositEmptyAttestation({ proof })).attestationId;
+  };
   beforeAll(() => {
     // Segredo HMAC só-teste também no env (cobertura dos caminhos que
     // resolvem via process.env): sem ele, a emissão fail-closed recusa
@@ -62,14 +68,16 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     return result.rows[0]!.id;
   };
 
-  itIfDatabase("V062 aplicada: tabelas de fechamento existem e CHECK aceita deleted", async () => {
+  itIfDatabase("V063 aplicada: tabelas de fechamento e depósito existem e CHECK aceita deleted", async () => {
     if (!pool) throw new Error("database pool not initialized");
     const tomb = await pool.query(`SELECT to_regclass('public.workspace_tombstones') AS r`);
     const log = await pool.query(`SELECT to_regclass('public.workspace_closure_log') AS r`);
-    // FIX-WS-D2-R2 item 6: sem skip — o PG descartável aplica V061+V062
+    const deposits = await pool.query(`SELECT to_regclass('public.workspace_empty_attestations') AS r`);
+    // FIX-WS-D2-R5: sem skip — o PG descartável aplica V061+V062+V063
     // via job/migrate antes da suite; ausência aqui é falha fechada.
     expect(tomb.rows[0]?.['r']).toBe('workspace_tombstones');
     expect(log.rows[0]?.['r']).toBe('workspace_closure_log');
+    expect(deposits.rows[0]?.['r']).toBe('workspace_empty_attestations');
   });
 
   itIfDatabase("vazio deleta de verdade; com-dados recusa; purge bloqueado", async () => {
@@ -82,14 +90,14 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     const authUser = `auth-${randomUUID()}`;
     await seedUser(pool, authUser, `wsd2-${randomUUID()}@example.com`);
 
-    // Workspace vazio: inventário vazio → delete OK com a prova HMAC
-    // do lado Agent (white-box: mesmo segredo compartilhado); sem prova,
-    // `unverified` bloqueia fail-closed.
+    // Workspace vazio: inventário vazio → delete OK com o handle opaco
+    // do depósito server-side (white-box: mesmo segredo compartilhado);
+    // sem handle, `unverified` bloqueia fail-closed.
     const empty = await store.create({ authUserId: authUser, name: "Vazio", kind: "shared" });
     const inventory = await store.deletionInventory({ authUserId: authUser, householdId: empty.id });
     expect(inventory.empty).toBe(true);
     expect(inventory.agentAttestation).toBe('unverified');
-    // Barreira cross-store sob PG real: sem prova, nunca conclui.
+    // Barreira cross-store sob PG real: sem handle, nunca conclui.
     await expect(
       store.deleteEmpty({
         authUserId: authUser,
@@ -103,6 +111,9 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
         }),
       }),
     ).rejects.toMatchObject({ code: 'workspace.agent_unverified' });
+    const attestationId = await depositFor(store, empty.id, inventory.inventoryVersion);
+    // O handle é opaco: só UUID, sem conteúdo/HMAC no valor.
+    expect(attestationId).toMatch(/^[0-9a-f-]{36}$/i);
     const receipt = await store.deleteEmpty({
       authUserId: authUser,
       householdId: empty.id,
@@ -112,7 +123,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
         inventoryVersion: inventory.inventoryVersion,
         expiresAt: inventory.expiresAt,
         agentAttestation: 'unverified',
-        agentProof: agentProofFor(empty.id, inventory.inventoryVersion),
+        attestationId,
       }),
     });
     expect(receipt.id).toBe(empty.id);
@@ -195,18 +206,21 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     await seedUser(pool, authUser, `wsd2c-${randomUUID()}@example.com`);
     const ws = await store.create({ authUserId: authUser, name: "Corrida", kind: "shared" });
     const inventory = await store.deletionInventory({ authUserId: authUser, householdId: ws.id });
-    const confirmation = () =>
+    // Cada concorrente tem seu próprio depósito (handles distintos).
+    const attestationA = await depositFor(store, ws.id, inventory.inventoryVersion);
+    const attestationB = await depositFor(store, ws.id, inventory.inventoryVersion);
+    const confirmation = (attestationId: string) =>
       buildDeleteConfirmation({
         workspaceId: ws.id,
         actor: authUser,
         inventoryVersion: inventory.inventoryVersion,
         expiresAt: inventory.expiresAt,
         agentAttestation: 'unverified',
-        agentProof: agentProofFor(ws.id, inventory.inventoryVersion),
+        attestationId,
       });
     const results = await Promise.allSettled([
-      store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation: confirmation() }),
-      store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation: confirmation() }),
+      store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation: confirmation(attestationA) }),
+      store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation: confirmation(attestationB) }),
     ]);
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
     const rejected = results.filter((r) => r.status === 'rejected');
@@ -216,6 +230,130 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     expect(rejected).toHaveLength(1);
     const reason = (rejected[0] as PromiseRejectedResult).reason as { code?: string };
     expect(['workspace.deleted', 'workspace.confirmation_invalid', 'workspace.not_empty']).toContain(reason.code);
+  });
+
+  itIfDatabase("FIX-WS-D2-R5: mesmo handle em dois deletes — single-use (um conclui, outro recusa)", async () => {
+    if (!pool) throw new Error("database pool not initialized");
+    const store = testStore();
+
+    const authUser = `auth-${randomUUID()}`;
+    await seedUser(pool, authUser, `wsd2s-${randomUUID()}@example.com`);
+    const ws = await store.create({ authUserId: authUser, name: "SingleUse", kind: "shared" });
+    const inventory = await store.deletionInventory({ authUserId: authUser, householdId: ws.id });
+    const attestationId = await depositFor(store, ws.id, inventory.inventoryVersion);
+    const confirmation = () =>
+      buildDeleteConfirmation({
+        workspaceId: ws.id,
+        actor: authUser,
+        inventoryVersion: inventory.inventoryVersion,
+        expiresAt: inventory.expiresAt,
+        agentAttestation: 'unverified',
+        attestationId,
+      });
+    const results = await Promise.allSettled([
+      store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation: confirmation() }),
+      store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation: confirmation() }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    // O handle nunca conclui dois deletes: o segundo encontra o depósito
+    // já consumido (agent_unverified) ou o tombstone (deleted).
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const reason = (rejected[0] as PromiseRejectedResult).reason as { code?: string };
+    expect(['workspace.deleted', 'workspace.agent_unverified']).toContain(reason.code);
+    // Consumo registrado exatamente uma vez.
+    const consumed = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM workspace_empty_attestations WHERE id = $1 AND consumed_at IS NOT NULL`,
+      [attestationId],
+    );
+    expect(consumed.rows[0]?.['c']).toBe(1);
+  });
+
+  itIfDatabase("FIX-WS-D2-R5: depósito expirado recusa sem efeito (nada tocado)", async () => {
+    if (!pool) throw new Error("database pool not initialized");
+    const store = testStore();
+
+    const authUser = `auth-${randomUUID()}`;
+    await seedUser(pool, authUser, `wsd2e-${randomUUID()}@example.com`);
+    const ws = await store.create({ authUserId: authUser, name: "Expirado", kind: "shared" });
+    const inventory = await store.deletionInventory({ authUserId: authUser, householdId: ws.id });
+    // Depósito expirado inserido direto (setup de teste, não caminho de
+    // produto — o depósito real sempre expira no futuro e a verificação
+    // HMAC cobre a expiração): o consumo deve recusar pelo predicado
+    // `expires_at > NOW()`.
+    const expiredId = randomUUID();
+    await pool.query(
+      `INSERT INTO workspace_empty_attestations (id, household_id, inventory_version, counts, expires_at)
+        VALUES ($1, $2, $3, $4::jsonb, NOW() - INTERVAL '1 minute')`,
+      [expiredId, ws.id, inventory.inventoryVersion, JSON.stringify({ sessions: 0, messages: 0, memories: 0, attachments: 0 })],
+    );
+    await expect(
+      store.deleteEmpty({
+        authUserId: authUser,
+        householdId: ws.id,
+        confirmation: buildDeleteConfirmation({
+          workspaceId: ws.id,
+          actor: authUser,
+          inventoryVersion: inventory.inventoryVersion,
+          expiresAt: inventory.expiresAt,
+          agentAttestation: 'unverified',
+          attestationId: expiredId,
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'workspace.agent_unverified' });
+    // Nada foi tocado: workspace segue ativo e sem tombstone.
+    const status = await pool.query(`SELECT status FROM households WHERE id = $1`, [ws.id]);
+    expect(status.rows[0]?.['status']).toBe('active');
+    const tombRow = await pool.query(`SELECT * FROM workspace_tombstones WHERE household_id = $1`, [ws.id]);
+    expect(tombRow.rowCount).toBe(0);
+  });
+
+  itIfDatabase("FIX-WS-D2-R5: depósito de outro workspace recusa sem consumir", async () => {
+    if (!pool) throw new Error("database pool not initialized");
+    const store = testStore();
+
+    const authUser = `auth-${randomUUID()}`;
+    await seedUser(pool, authUser, `wsd2d-${randomUUID()}@example.com`);
+    const wsA = await store.create({ authUserId: authUser, name: "Alvo", kind: "shared" });
+    const wsB = await store.create({ authUserId: authUser, name: "Outro", kind: "shared" });
+    const invA = await store.deletionInventory({ authUserId: authUser, householdId: wsA.id });
+    const invB = await store.deletionInventory({ authUserId: authUser, householdId: wsB.id });
+    const attestationId = await depositFor(store, wsA.id, invA.inventoryVersion);
+    // Handle de A no delete de B: recusa, sem consumir.
+    await expect(
+      store.deleteEmpty({
+        authUserId: authUser,
+        householdId: wsB.id,
+        confirmation: buildDeleteConfirmation({
+          workspaceId: wsB.id,
+          actor: authUser,
+          inventoryVersion: invB.inventoryVersion,
+          expiresAt: invB.expiresAt,
+          agentAttestation: 'unverified',
+          attestationId,
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'workspace.agent_unverified' });
+    const consumed = await pool.query(
+      `SELECT consumed_at FROM workspace_empty_attestations WHERE id = $1`,
+      [attestationId],
+    );
+    expect(consumed.rows[0]?.['consumed_at']).toBeNull();
+    // O depósito legítimo segue válido: delete de A conclui.
+    const receipt = await store.deleteEmpty({
+      authUserId: authUser,
+      householdId: wsA.id,
+      confirmation: buildDeleteConfirmation({
+        workspaceId: wsA.id,
+        actor: authUser,
+        inventoryVersion: invA.inventoryVersion,
+        expiresAt: invA.expiresAt,
+        agentAttestation: 'unverified',
+        attestationId,
+      }),
+    });
+    expect(receipt.id).toBe(wsA.id);
   });
 
   itIfDatabase("FIX-WS-D2-R2 item 5: replay com expiresAt adulterado recusa em PG real", async () => {
@@ -271,7 +409,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
         inventoryVersion: doomedInventory.inventoryVersion,
         expiresAt: doomedInventory.expiresAt,
         agentAttestation: 'unverified',
-        agentProof: agentProofFor(doomed.id, doomedInventory.inventoryVersion),
+        attestationId: await depositFor(store, doomed.id, doomedInventory.inventoryVersion),
       }),
     });
     await expect(
@@ -305,7 +443,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
       inventoryVersion: inventory.inventoryVersion,
       expiresAt: inventory.expiresAt,
       agentAttestation: 'unverified',
-      agentProof: agentProofFor(ws.id, inventory.inventoryVersion),
+      attestationId: await depositFor(store, ws.id, inventory.inventoryVersion),
     });
     const results = await Promise.allSettled([
       store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation }),
@@ -347,7 +485,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
       inventoryVersion: inventory.inventoryVersion,
       expiresAt: inventory.expiresAt,
       agentAttestation: 'unverified',
-      agentProof: agentProofFor(ws.id, inventory.inventoryVersion),
+      attestationId: await depositFor(store, ws.id, inventory.inventoryVersion),
     });
     const results = await Promise.allSettled([
       store.setStatus({ authUserId: authUser, householdId: ws.id, status: 'active' }),
