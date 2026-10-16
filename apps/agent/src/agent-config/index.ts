@@ -13,7 +13,7 @@ export type { Skill } from './skills/index.js';
 export { memoriaSkill } from './skills/memoria.js';
 export { initializeMemorySchema, isMemoryEnabled, setMemoryEnabled, rememberFact, recallMemories, renderMemoryBlock, containsCardNumber, textSimilarity, bumpTurnCount, MEMORY_BUDGET_CHARS, MEMORY_RECALL_LIMIT, isProhibitedFinancialMemory, isCurrentFinancialState, MEMORY_UNTRUSTED_PREAMBLE } from './memory/store.js';
 export type { MemoryItem, MemoryKind, MemorySql, RememberResult } from './memory/store.js';
-export { initializeSessionSchema, currentSession, endSession, listPastSessions, getSessionSummary } from './memory/sessions.js';
+export { initializeSessionSchema, currentSession, endSession, listPastSessions, getSessionSummary, peekOpenSession, listVisiblePastSessions, getVisibleSessionSummary } from './memory/sessions.js';
 export type { ChatSession } from './memory/sessions.js';
 export { COMPACT_THRESHOLD_MESSAGES, COMPACT_KEEP_RECENT, compactContext, extractiveSummary, toContextTurns } from './memory/compact.js';
 export type { ContextTurn, CompactionResult, SummarizeFn } from './memory/compact.js';

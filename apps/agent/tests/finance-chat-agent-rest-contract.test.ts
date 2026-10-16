@@ -337,7 +337,10 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
         id: "msg-2",
         role: "assistant",
         parts: [{ type: "text", text: "Resposta do assistente TED para User A" }],
-        metadata: { actorId: "ted", createdAt: "2026-08-30T10:00:05Z" },
+        // ADR-027 D3 (FIX-WS-D3-R2 finding 4): audiência coletiva explícita
+        // (forma que o /rpc/chat carimba em produção); 'ted' sozinho nunca
+        // prova público, então o seed carrega a audiência explícita.
+        metadata: { actorId: "ted", createdAt: "2026-08-30T10:00:05Z", visibility: "workspace", ownerActorId: "user-a", conversationId: "" },
       },
       {
         id: "msg-3",

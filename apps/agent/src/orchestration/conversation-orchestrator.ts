@@ -70,6 +70,7 @@ import {
   proposeForgetMemory,
 } from '../agent-config/memory/forget-proposals.js';
 import type { MemorySql } from '../agent-config/memory/store.js';
+import type { MessageAudienceStamp } from '../privacy/conversation-visibility.js';
 import { UndoProposalService } from '../mutations/undo-proposal.js';
 import { isUndoNegation } from '../mutations/undo-proposal.js';
 import { isAutoExecutionEligible } from '../safety/auto-execution.js';
@@ -149,6 +150,15 @@ export type TurnInput = Readonly<{
    * internal status (it persists as a normal user turn).
    */
   internalCorrection?: boolean;
+  /**
+   * FIX-WS-D3-R2 finding 2: a audiência/conversa do turno, capturada UMA vez
+   * pelo adapter servidor ANTES do processamento e vinculada ao turno inteiro
+   * (pergunta + resposta + redelivery com stable ids). Set EXCLUSIVAMENTE via
+   * `NormalizeOptions` — `normalize` nunca lê do `body`, então um campo
+   * `audience` enviado pelo cliente é ignorado como `decisionText`.
+   * Ausente = o consumidor consulta o registry (comportamento anterior).
+   */
+  audience?: MessageAudienceStamp;
 }>;
 
 export type PlannedOperation = Readonly<{ name: string; kind: 'read' | 'mutation' }>;
@@ -554,7 +564,7 @@ const correctionOutcome = (text: string): CorrectionOutcome => {
  * Internal-only construction options. They are passed by the SERVER adapter, not
  * read from `body`: a client-supplied `decisionText`/`typedText` is ignored.
  */
-export type NormalizeOptions = Readonly<{ typedText?: string; hasAttachmentData?: boolean; attachmentTexts?: readonly string[] }>;
+export type NormalizeOptions = Readonly<{ typedText?: string; hasAttachmentData?: boolean; attachmentTexts?: readonly string[]; audience?: MessageAudienceStamp }>;
 
 const normalize = (
   body: Body,
@@ -618,6 +628,9 @@ const normalize = (
     // / `isInternalCorrectionRetry` field in `body` is deliberately NOT read,
     // so untrusted text can never mark its own turn as an internal retry.
     internalCorrection: false,
+    // FIX-WS-D3-R2 finding 2: audiência do turno vem SÓ das opções
+    // server-side — `body.audience` é deliberadamente ignorado.
+    ...(options?.audience ? { audience: freeze({ ...options.audience }) } : {}),
     ...(pendingOperationIds ? { pendingOperationIds: freeze(pendingOperationIds) } : {}),
   });
 };

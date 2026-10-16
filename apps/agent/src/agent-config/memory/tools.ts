@@ -7,7 +7,7 @@
  */
 
 import { tool, jsonSchema } from 'ai';
-import { listPastSessions, getSessionSummary } from './sessions.js';
+import { listVisiblePastSessions, getVisibleSessionSummary } from './sessions.js';
 import {
   recallMemories,
   rememberFact,
@@ -82,12 +82,13 @@ export const buildMemoryTools = (ctx: MemoryToolContext): Record<string, ReturnT
     description: 'Lista sessões de conversa anteriores encerradas deste workspace.',
     inputSchema: jsonSchema({ type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 20 } } }),
     execute: async (params: Record<string, unknown>) => {
-      const sessions = listPastSessions(
-        ctx.sql,
-        ctx.workspaceId,
-        ctx.actorId,
-        typeof params.limit === 'number' ? params.limit : 5,
-      );
+      // D3: coletivo por default — listagem por workspace + predicado de
+      // visibilidade (privada só ao dono; sem proveniência = invisível).
+      const sessions = listVisiblePastSessions(ctx.sql, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.actorId,
+        limit: typeof params.limit === 'number' ? params.limit : 5,
+      });
       return {
         found: sessions.length,
         sessions: sessions.map((session) => ({
@@ -109,7 +110,12 @@ export const buildMemoryTools = (ctx: MemoryToolContext): Record<string, ReturnT
       required: ['sessionId'],
     }),
     execute: async (params: Record<string, unknown>) => {
-      const session = getSessionSummary(ctx.sql, ctx.workspaceId, ctx.actorId, String(params.sessionId ?? ''));
+      // D3: detalhe gated pelo predicado (sem oráculo de existência).
+      const session = getVisibleSessionSummary(ctx.sql, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.actorId,
+        sessionId: String(params.sessionId ?? ''),
+      });
       if (!session) return { found: false, message: 'Sessão não encontrada neste workspace.' };
       return {
         found: true,

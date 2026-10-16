@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { scrubForPersistence } from '../privacy/dlp.js';
+import { isSystemActorId } from '../privacy/conversation-visibility.js';
 
 export type LegacyMessage = {
   id: string;
@@ -37,6 +38,10 @@ export type SdkUIMessage = {
     workspaceId: string;
     createdAt: string;
     intentionId?: string;
+    /** ADR-027 D3 — audiência aditiva (ver `privacy/conversation-visibility`). */
+    visibility?: 'workspace' | 'private';
+    ownerActorId?: string;
+    conversationId?: string;
   };
 };
 
@@ -100,6 +105,15 @@ export const transformLegacyMessages = (
       msg.role === 'assistant' ? 'assistant' : msg.role === 'system' ? 'system' : 'user';
     const actorId = validRole === 'assistant' ? 'ted' : msg.actor_id;
 
+    // ADR-027 D3.8 — legado sem audiência: COM proveniência HUMANA
+    // verificável (ator humano atribuído) ⇒ coletivo; SEM proveniência
+    // (vazio, 'ted' ou outro id de sistema) ⇒ preservado-não-publicado
+    // (privado sem dono real: o predicado nega a todos, nunca publica).
+    // FIX-WS-D3-R2 finding 4: a resposta do assistente ('ted') NÃO é prova
+    // de público — só o ator humano de origem prova.
+    const rawActor = typeof msg.actor_id === 'string' ? msg.actor_id.trim() : '';
+    const humanActor = rawActor && !isSystemActorId(rawActor) ? rawActor : '';
+    const attributed = humanActor.length > 0;
     return {
       id: msg.id,
       role: validRole,
@@ -108,6 +122,9 @@ export const transformLegacyMessages = (
         actorId,
         workspaceId,
         createdAt: msg.created_at,
+        visibility: attributed ? 'workspace' : 'private',
+        ownerActorId: attributed ? humanActor : '',
+        conversationId: '',
       },
     };
   });

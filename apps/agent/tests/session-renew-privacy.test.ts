@@ -1,16 +1,17 @@
 /**
- * FIX-P1-SESS #177 (RED): `POST /rpc/session/new` apagava GLOBALMENTE a
- * tabela SDK (`DELETE FROM cf_ai_chat_agent_messages` sem WHERE) — o ator B,
- * ao iniciar nova sessão, destruía o contexto do ator A no mesmo workspace
- * (o DO é por workspace, compartilhado pelos membros) — e engolia falha SQL
- * retornando `ok:true` mesmo assim.
+ * ADR-027 D3 (supersede FIX-P1-SESS #177): `POST /rpc/session/new` fecha a
+ * sessão aberta (arquivando resumo) e abre uma NOVA conversa — SEM APAGAR
+ * nada (nem a tabela SDK, nem o espelho em memória, nem memórias duráveis).
+ * O isolamento por ator que o #177 fazia via DELETE com escopo agora vive no
+ * predicado de visibilidade D3 (leitura, detalhe, busca, WS, export, anexos,
+ * resumos, caches, contexto LLM) — ver `workspace-d3-private-views.test.ts`.
  *
  * Contrato exigido:
- * - renovação de B preserva o histórico de A (registry por ator + contexto
- *   só remove linhas atribuíveis ao solicitante; linhas sem atribuição são
- *   MANTIDAS — D3 coletivo-vs-privado segue como ADR pendente, sem deletar
- *   dados reais);
- * - falha SQL no DELETE => NUNCA `ok:true` (fail-closed 500), sem ressurgimento.
+ * - renovação de B preserva 100% do histórico (tabela + memória + registry
+ *   dos demais);
+ * - nenhum DELETE na tabela SDK em nenhuma renovação;
+ * - falha SQL no registry => NUNCA `ok:true` (fail-closed 500), rollback
+ *   integral via `runMemoryTransaction`, sem ressurgimento.
  */
 import { describe, expect, it, beforeEach } from 'vitest';
 import { FinanceChatAgent } from '../src/finance-chat-agent.js';
@@ -30,7 +31,6 @@ const msgRow = (id: string, actorId: string | undefined, text: string): Row => (
 type SqlMock = {
   tables: Map<string, Row[]>;
   queries: string[];
-  failOnMessagesDelete: boolean;
   failOnRegistry: boolean;
   exec<T = Row>(query: string, ...bindings: unknown[]): Iterable<T>;
 };
@@ -45,7 +45,6 @@ const createSql = (): SqlMock => {
   const mock: SqlMock = {
     tables,
     queries,
-    failOnMessagesDelete: false,
     failOnRegistry: false,
     exec<T = Row>(query: string, ...bindings: unknown[]): Iterable<T> {
       const q = query.trim().replace(/\s+/g, ' ');
@@ -55,34 +54,34 @@ const createSql = (): SqlMock => {
         if (name && !tables.has(name)) tables.set(name, []);
         return [] as T[];
       }
+      if (q.startsWith('ALTER TABLE')) return [] as T[];
       if (q.startsWith('DELETE FROM cf_ai_chat_agent_messages')) {
-        if (mock.failOnMessagesDelete) throw new Error('SQL failure (injected)');
-        const rows = tables.get('cf_ai_chat_agent_messages')!;
-        // Apagão global é proibido: só remove com predicado por ator.
-        if (!q.includes('WHERE')) throw new Error('unscoped messages delete is forbidden');
-        const actor = bindings[0];
-        tables.set(
-          'cf_ai_chat_agent_messages',
-          rows.filter((r) => {
-            try {
-              const parsed = JSON.parse(String(r['message'] ?? '{}')) as {
-                metadata?: { actorId?: string };
-              };
-              return parsed.metadata?.actorId !== actor;
-            } catch {
-              return true;
-            }
-          }),
-        );
-        return [] as T[];
+        throw new Error('D3 forbids messages delete on renewal: close/open without erasing');
       }
       if (q.startsWith('INSERT INTO agent_sessions')) {
         if (mock.failOnRegistry) throw new Error('SQL failure (injected registry)');
-        const [id, workspaceId, actorId, startedAt] = bindings;
-        tables.get('agent_sessions')!.push({
-          id, workspace_id: workspaceId, actor_id: actorId, started_at: startedAt,
-          ended_at: null, message_count: 0, summary: null,
+        const cols = q.slice(q.indexOf('(') + 1, q.indexOf(')')).split(',').map((c) => c.trim());
+        const valuesPart = q.slice(q.indexOf('VALUES') + 'VALUES'.length).trim();
+        const tokens = valuesPart
+          .slice(valuesPart.indexOf('(') + 1, valuesPart.lastIndexOf(')'))
+          .split(',')
+          .map((t) => t.trim());
+        const row: Row = {};
+        let binding = 0;
+        cols.forEach((column, index) => {
+          const token = tokens[index] ?? '?';
+          if (token === '?') {
+            row[column] = bindings[binding];
+            binding += 1;
+          } else if (/^NULL$/i.test(token)) {
+            row[column] = null;
+          } else if (token !== '' && !Number.isNaN(Number(token))) {
+            row[column] = Number(token);
+          } else {
+            row[column] = token.replace(/^'(.*)'$/, '$1');
+          }
         });
+        tables.get('agent_sessions')!.push(row);
         return [] as T[];
       }
       if (q.startsWith('UPDATE agent_sessions')) {
@@ -191,13 +190,13 @@ const seedSharedContext = (sql: SqlMock, agent: ReturnType<typeof createAgent>) 
   ];
 };
 
-describe('P1 #177 — session/new com escopo por ator', () => {
+describe('D3 — session/new fecha/abre sem apagar', () => {
   let sql: SqlMock;
   beforeEach(() => {
     sql = createSql();
   });
 
-  it('renovação de B preserva o histórico de A (tabela + memória)', async () => {
+  it('renovação de B preserva 100% do histórico (tabela + memória)', async () => {
     const agent = createAgent(sql);
     seedSharedContext(sql, agent);
     const res = await agent.fetch(
@@ -206,11 +205,11 @@ describe('P1 #177 — session/new com escopo por ator', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean };
     expect(body.ok).toBe(true);
-    // Linhas de A, do TED e legadas sobrevivem; só as de B saem.
+    // D3: NADA é apagado — nem linhas do solicitante, nem de outros, nem legadas.
     const remaining = sql.tables.get('cf_ai_chat_agent_messages')!.map((r) => r['id']).sort();
-    expect(remaining).toEqual(['m-a1', 'm-legacy', 'm-t1']);
+    expect(remaining).toEqual(['m-a1', 'm-b1', 'm-legacy', 'm-t1']);
     const memIds = agent.messages.map((m) => m['id']).sort();
-    expect(memIds).toEqual(['m-a1', 'm-legacy', 'm-t1']);
+    expect(memIds).toEqual(['m-a1', 'm-b1', 'm-legacy', 'm-t1']);
   });
 
   it('registry: sessão de A segue aberta após renovação de B', async () => {
@@ -219,57 +218,28 @@ describe('P1 #177 — session/new com escopo por ator', () => {
     await agent.fetch(new Request('https://agent.test/rpc/session/new', { method: 'POST', headers: headersFor('actor-A') }));
     await agent.fetch(new Request('https://agent.test/rpc/session/new', { method: 'POST', headers: headersFor('actor-B') }));
     const sessions = sql.tables.get('agent_sessions')!;
-    // A renovou 1x (arquivada + fresca aberta); B renovou 1x (arquivada + fresca).
+    // A renovou 1x (fresca aberta, sem resumo: espelho vazio); B idem.
     const openA = sessions.filter((s) => s['actor_id'] === 'actor-A' && s['ended_at'] == null);
     const openB = sessions.filter((s) => s['actor_id'] === 'actor-B' && s['ended_at'] == null);
     expect(openA).toHaveLength(1);
     expect(openB).toHaveLength(1);
   });
 
-  it('nunca apaga globalmente: nenhum DELETE sem WHERE', async () => {
+  it('nunca apaga: nenhum DELETE na tabela SDK em nenhuma renovação', async () => {
     const agent = createAgent(sql);
     seedSharedContext(sql, agent);
     await agent.fetch(new Request('https://agent.test/rpc/session/new', { method: 'POST', headers: headersFor('actor-B') }));
     const deletes = sql.queries.filter((q) => q.startsWith('DELETE FROM cf_ai_chat_agent_messages'));
-    expect(deletes.length).toBeGreaterThan(0);
-    for (const q of deletes) expect(q).toContain('WHERE');
+    expect(deletes).toHaveLength(0);
   });
 
-  it('falha SQL no DELETE => nunca ok:true (fail-closed), sem ressurgimento', async () => {
+  it('falha SQL no registry => nunca ok:true (fail-closed), rollback integral', async () => {
     const agent = createAgent(sql);
     seedSharedContext(sql, agent);
-    // B já tem sessão aberta antes da falha (a 1ª renovação remove,
-    // legitimamente e com escopo, as linhas do próprio B — m-b1 sai aqui).
     await agent.fetch(new Request('https://agent.test/rpc/session/new', { method: 'POST', headers: headersFor('actor-B') }));
     const sessionsBefore = sql.tables.get('agent_sessions')!.length;
     const rowsBefore = sql.tables.get('cf_ai_chat_agent_messages')!.map((r) => r['id']).sort();
     const memBefore = agent.messages.map((m) => m['id']).sort();
-    sql.failOnMessagesDelete = true;
-    const res = await agent.fetch(
-      new Request('https://agent.test/rpc/session/new', { method: 'POST', headers: headersFor('actor-B') }),
-    );
-    expect(res.status).toBe(500);
-    const body = (await res.json()) as { ok: boolean };
-    expect(body.ok).not.toBe(true);
-    // Falha atômica: nada mudou em relação ao instante da falha — nem
-    // registry duplicado, nem tabela/memória tocadas (sem ressurgimento).
-    expect(sql.tables.get('agent_sessions')!.length).toBe(sessionsBefore);
-    expect(sql.tables.get('cf_ai_chat_agent_messages')!.map((r) => r['id']).sort()).toEqual(rowsBefore);
-    expect(agent.messages.map((m) => m['id']).sort()).toEqual(memBefore);
-  });
-
-  it('SECREVIEW-P1-SESS: falha no registry pós-DELETE => rollback integral (500, estado 100% preservado)', async () => {
-    const agent = createAgent(sql);
-    seedSharedContext(sql, agent);
-    // B renova 1x (m-b1 sai com escopo, sessão B aberta) e produz um turno novo.
-    await agent.fetch(new Request('https://agent.test/rpc/session/new', { method: 'POST', headers: headersFor('actor-B') }));
-    const freshB = msgRow('m-b2', 'actor-B', 'Novo extrato do cartão');
-    sql.tables.get('cf_ai_chat_agent_messages')!.push(freshB);
-    agent.messages.push(JSON.parse(String(freshB['message'])) as Record<string, unknown>);
-    const sessionsBefore = sql.tables.get('agent_sessions')!.length;
-    const rowsBefore = sql.tables.get('cf_ai_chat_agent_messages')!.map((r) => r['id']).sort();
-    const memBefore = agent.messages.map((m) => m['id']).sort();
-    // Falha injetada no registry APÓS o DELETE com escopo (SELECT/INSERT/UPDATE).
     sql.failOnRegistry = true;
     const res = await agent.fetch(
       new Request('https://agent.test/rpc/session/new', { method: 'POST', headers: headersFor('actor-B') }),
@@ -277,16 +247,10 @@ describe('P1 #177 — session/new com escopo por ator', () => {
     expect(res.status).toBe(500);
     const body = (await res.json()) as { ok: boolean };
     expect(body.ok).not.toBe(true);
-    // Tudo-ou-nada: DELETE revertido + registry intocado + espelho intacto.
+    // Falha atômica: registry intocado, tabela e memória intactas.
     expect(sql.tables.get('agent_sessions')!.length).toBe(sessionsBefore);
     expect(sql.tables.get('cf_ai_chat_agent_messages')!.map((r) => r['id']).sort()).toEqual(rowsBefore);
     expect(agent.messages.map((m) => m['id']).sort()).toEqual(memBefore);
-    // Restart do DO: nada desaparece (a mensagem nova de B sobrevive).
-    const restarted = createAgent(sql);
-    restarted.messages = sql.tables
-      .get('cf_ai_chat_agent_messages')!
-      .map((r) => JSON.parse(String(r['message']))) as unknown as typeof restarted.messages;
-    expect(restarted.messages.map((m) => m['id']).sort()).toEqual(rowsBefore);
   });
 
   it('reinício do DO: dados de A intactos após renovação de B', async () => {

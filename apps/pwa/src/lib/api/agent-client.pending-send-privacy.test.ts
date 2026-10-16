@@ -195,3 +195,54 @@ describe("P1 #176 — rascunho isolado por ator", () => {
     }
   });
 });
+
+describe("D3 — opt-in explícito de conversa privada (sem expor ids)", () => {
+  it("renewAgentSession com visibility privada envia o opt-in e lê a audiência", async () => {
+    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("tok");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          sessionId: "s-priv",
+          previousSessionId: "s1",
+          messageCount: 0,
+          summarized: false,
+          visibility: "private",
+          privateViewsEnabled: true,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    try {
+      const res = await renewAgentSession(WS, { visibility: "private" });
+      expect(res.visibility).toBe("private");
+      expect(res.privateViewsEnabled).toBe(true);
+      const body = JSON.parse(String((fetchSpy.mock.calls[0]?.[1] as RequestInit)?.body ?? "{}")) as {
+        visibility?: string;
+      };
+      expect(body.visibility).toBe("private");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("renewAgentSession default não envia visibility (coletivo server-side)", async () => {
+    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("tok");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, sessionId: "s2", previousSessionId: "s1", messageCount: 0, summarized: false }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    try {
+      const res = await renewAgentSession(WS);
+      expect(res.visibility).toBeUndefined();
+      const body = JSON.parse(String((fetchSpy.mock.calls[0]?.[1] as RequestInit)?.body ?? "{}")) as {
+        visibility?: string;
+      };
+      expect(body.visibility).toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});

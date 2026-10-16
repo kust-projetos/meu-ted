@@ -25,23 +25,9 @@ const createSql = () => {
         return [] as T[];
       }
       if (q.startsWith('DELETE FROM cf_ai_chat_agent_messages')) {
-        // FIX-P1-SESS #177: apagão global proibido — só com predicado por ator.
-        if (!q.includes('WHERE')) throw new Error('unscoped messages delete is forbidden');
-        const actor = bindings[0];
-        tables.set(
-          'cf_ai_chat_agent_messages',
-          tables.get('cf_ai_chat_agent_messages')!.filter((r) => {
-            try {
-              const parsed = JSON.parse(String(r['message'] ?? '{}')) as {
-                metadata?: { actorId?: string };
-              };
-              return parsed.metadata?.actorId !== actor;
-            } catch {
-              return true;
-            }
-          }),
-        );
-        return [] as T[];
+        // ADR-027 D3: renovação fecha/abre SEM apagar — qualquer DELETE na
+        // tabela SDK é proibido (o isolamento vive no predicado de leitura).
+        throw new Error('D3 forbids messages delete on renewal: close/open without erasing');
       }
       if (q.startsWith('INSERT INTO agent_memory')) {
         const [id, workspaceId, actor, kind, content, salience, createdAt, lastSeenAt, expiresAt] = bindings;
@@ -78,11 +64,28 @@ const createSql = () => {
       }
       if (q.startsWith('UPDATE agent_memory SET last_seen_at')) return [] as T[];
       if (q.startsWith('INSERT INTO agent_sessions')) {
-        const [id, workspaceId, actorId, startedAt] = bindings;
-        tables.get('agent_sessions')!.push({
-          id, workspace_id: workspaceId, actor_id: actorId, started_at: startedAt,
-          ended_at: null, message_count: 0, summary: null,
+        const cols = q.slice(q.indexOf('(') + 1, q.indexOf(')')).split(',').map((c) => c.trim());
+        const valuesPart = q.slice(q.indexOf('VALUES') + 'VALUES'.length).trim();
+        const tokens = valuesPart
+          .slice(valuesPart.indexOf('(') + 1, valuesPart.lastIndexOf(')'))
+          .split(',')
+          .map((t) => t.trim());
+        const row: Row = {};
+        let binding = 0;
+        cols.forEach((column, index) => {
+          const token = tokens[index] ?? '?';
+          if (token === '?') {
+            row[column] = bindings[binding];
+            binding += 1;
+          } else if (/^NULL$/i.test(token)) {
+            row[column] = null;
+          } else if (token !== '' && !Number.isNaN(Number(token))) {
+            row[column] = Number(token);
+          } else {
+            row[column] = token.replace(/^'(.*)'$/, '$1');
+          }
         });
+        tables.get('agent_sessions')!.push(row);
         return [] as T[];
       }
       if (q.startsWith('UPDATE agent_sessions')) {
@@ -101,17 +104,17 @@ const createSql = () => {
           (r) => r['workspace_id'] === workspaceId && r['actor_id'] === actorId && r['ended_at'] == null,
         ) as T[];
       }
-      if (q.startsWith('SELECT * FROM agent_sessions WHERE workspace_id = ? AND actor_id = ? AND ended_at IS NOT NULL')) {
-        const [workspaceId, actorId, limit] = bindings;
-        return tables.get('agent_sessions')!
-          .filter((r) => r['workspace_id'] === workspaceId && r['actor_id'] === actorId && r['ended_at'] != null)
-          .slice(0, Number(limit)) as T[];
-      }
-      if (q.startsWith('SELECT * FROM agent_sessions WHERE id = ?')) {
-        const [id, workspaceId, actorId] = bindings;
+      // D3: listagem por workspace + predicado em código (sem limite no SQL).
+      if (q.startsWith('SELECT * FROM agent_sessions WHERE workspace_id = ? AND ended_at IS NOT NULL')) {
+        const [workspaceId] = bindings;
         return tables.get('agent_sessions')!.filter(
-          (r) => r['id'] === id && r['workspace_id'] === workspaceId && r['actor_id'] === actorId,
+          (r) => r['workspace_id'] === workspaceId && r['ended_at'] != null,
         ) as T[];
+      }
+      // D3: detalhe por id + predicado em código (workspace conferido fora).
+      if (q.startsWith('SELECT * FROM agent_sessions WHERE id = ?')) {
+        const [id] = bindings;
+        return tables.get('agent_sessions')!.filter((r) => r['id'] === id) as T[];
       }
       // FIX-WS-D2-FENCE R2 — `workspace_deletion_fence` é estado durável real
       // do DO: SELECT por workspace (sem fence → []), upsert por workspace_id
@@ -189,7 +192,7 @@ describe('memory model tools (Part B)', () => {
     expect(none.found).toBe(0);
   });
 
-  it('list/get session tools stay workspace-scoped', async () => {
+  it('list/get session tools aplicam o predicado D3 (coletivo visível, sem oráculo)', async () => {
     const agent = createAgent(sql);
     const first = await agent.fetch(
       new Request('https://agent.test/rpc/session/new', { method: 'POST', headers }),
@@ -220,7 +223,7 @@ describe('POST /rpc/session/new — Nova sessão (Part B)', () => {
     expect(res.status).toBe(401);
   });
 
-  it('archives history into the registry and clears only the requester context (scoped, #177)', async () => {
+  it('archives history into the registry without erasing anything (D3 fecha/abre)', async () => {
     const agent = createAgent(sql);
     const row = (id: string, actorId: string | undefined, text: string) => ({
       id,
@@ -249,20 +252,24 @@ describe('POST /rpc/session/new — Nova sessão (Part B)', () => {
       summarized: boolean;
     };
     expect(body.ok).toBe(true);
-    expect(body.messageCount).toBe(2);
+    // FIX-WS-D3-R2 finding 4: legado atribuído a 'ted' sem proveniência
+    // humana é preservado-não-publicado — entra no espelho/tabela (nada é
+    // apagado), mas NUNCA no resumo de outra sessão (só o turno humano).
+    expect(body.messageCount).toBe(1);
     expect(body.summarized).toBe(true);
-    // Scoped clearing: only actor-1 rows leave; actor-2 rows survive.
-    expect(agent.messages.map((m) => m['id'])).toEqual(['m-2']);
-    expect(sql.tables.get('cf_ai_chat_agent_messages')!.map((r) => r['id'])).toEqual(['m-a2']);
+    // D3: renovação NÃO apaga — espelho e tabela intactos; o predicado de
+    // visibilidade (não o DELETE) isola o contexto por ator na leitura.
+    expect(agent.messages.map((m) => m['id'])).toEqual(['m-a1', 'm-2']);
+    expect(sql.tables.get('cf_ai_chat_agent_messages')!.map((r) => r['id']).sort()).toEqual(['m-a1', 'm-a2']);
     const deletes = sql.queries.filter((q) => q.startsWith('DELETE FROM cf_ai_chat_agent_messages'));
-    expect(deletes.length).toBeGreaterThan(0);
-    for (const q of deletes) expect(q).toContain('WHERE');
+    expect(deletes).toHaveLength(0);
     // Registry holds the archived session with its summary (plus the fresh one).
     const sessions = sql.tables.get('agent_sessions')!;
     expect(sessions).toHaveLength(2);
     const archived = sessions.find((s) => s['ended_at'] !== null);
     expect(archived!['summary']).toContain('Nubank');
-    expect(archived!['message_count']).toBe(2);
+    expect(archived!['summary']).not.toContain('Anotado!');
+    expect(archived!['message_count']).toBe(1);
   });
 
   it('keeps durable memories across renewal', async () => {

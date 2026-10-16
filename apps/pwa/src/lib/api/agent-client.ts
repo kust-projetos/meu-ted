@@ -1139,6 +1139,8 @@ export type AgentSessionRenewal = {
   previousSessionId: string | null;
   messageCount: number;
   summarized: boolean;
+  visibility?: 'workspace' | 'private';
+  privateViewsEnabled?: boolean;
 };
 
 const agentSessionRenewalSchema = z.object({
@@ -1147,6 +1149,9 @@ const agentSessionRenewalSchema = z.object({
   previousSessionId: z.string().nullable(),
   messageCount: z.number(),
   summarized: z.boolean(),
+  // ADR-027 D3 (opt-in explícito por conversa, sem expor ids).
+  visibility: z.enum(['workspace', 'private']).optional(),
+  privateViewsEnabled: z.boolean().optional(),
 });
 
 /**
@@ -1154,8 +1159,15 @@ const agentSessionRenewalSchema = z.object({
  * the session registry and clears the model context. Durable memories are
  * kept. Plain fetch (same shape as sendAgentMessage) — intentionally not
  * an apiFetch endpoint write.
+ *
+ * ADR-027 D3: `opts.visibility: 'private'` é o opt-in explícito por
+ * conversa (gated server-side pela flag `TED_PRIVATE_VIEWS_ENABLED`;
+ * 403 quando desabilitado). Ausente = coletiva (ou herança server-side).
  */
-export async function renewAgentSession(workspaceId: string): Promise<AgentSessionRenewal> {
+export async function renewAgentSession(
+  workspaceId: string,
+  opts?: { visibility?: 'workspace' | 'private' },
+): Promise<AgentSessionRenewal> {
   const baseUrl = agentBaseUrl();
   const response = await fetchWithAgentAuth(
     workspaceId,
@@ -1167,7 +1179,7 @@ export async function renewAgentSession(workspaceId: string): Promise<AgentSessi
         "content-type": "application/json",
         "X-Workspace-Id": workspaceId,
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify(opts?.visibility ? { visibility: opts.visibility } : {}),
     },
   );
   if (!response.ok) throw new Error("Não foi possível iniciar uma nova sessão.");
