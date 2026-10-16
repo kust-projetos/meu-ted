@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyAuthSignal,
+  classifySessionProbeSignal,
   decideRoute,
   isMembershipRevocation,
   type AuthState,
@@ -21,15 +22,36 @@ describe("auth state machine (SPEC §12.1)", () => {
     expect(decideRoute(state, false)).toBe("login");
   });
 
-  it("maps 403 to unauthenticated (→ login, never offline mode)", () => {
+  it("maps 403 auth.workspace_forbidden to unauthenticated (→ login, never offline mode)", () => {
+    // FIX-168: só a revogação de membership tira a sessão do ar — é o
+    // removeMember/leave com o code explícito do contrato servidor.
     const state: AuthState = classifyAuthSignal({
       kind: "http",
       status: 403,
-      code: "workspace.forbidden",
+      code: "auth.workspace_forbidden",
     });
     expect(state).toBe("unauthenticated");
     // A clearly invalid session must not unlock offline data.
     expect(decideRoute(state, true)).toBe("login");
+  });
+
+  it("maps non-revocation 403 (permission denial, missing header) to unreachable", () => {
+    // FIX-168: workspace.forbidden (owner-only), auth.workspace_required
+    // (sem header) e 403 sem code NÃO matam a sessão — a sessão pode seguir
+    // válida; logout aqui era o multiplicador dos 403 em massa.
+    for (const code of [
+      "workspace.forbidden",
+      "auth.workspace_required",
+      "auth.admin_forbidden",
+      undefined,
+    ]) {
+      const state: AuthState = classifyAuthSignal({
+        kind: "http",
+        status: 403,
+        code,
+      });
+      expect(state).toBe("unreachable");
+    }
   });
 
   it("maps timeout to unreachable (→ offline snapshot when available)", () => {
@@ -71,6 +93,33 @@ describe("auth state machine (SPEC §12.1)", () => {
     for (const state of noResponse) {
       expect(state).not.toBe("unauthenticated");
     }
+  });
+});
+
+describe("classifySessionProbeSignal (sonda canônica /auth/session — estrita, SPEC V4.1 INV-05)", () => {
+  it("maps ANY 403 to unauthenticated — including codeless or non-revocation codes (fail-closed, nunca offline)", () => {
+    // A sonda responde sobre a SESSÃO: /auth/session retorna 401 para
+    // sessão ausente, então qualquer 403 explícito — mesmo sem code legível
+    // ou corpo ilegível — é "sem sessão". O estreitamento FIX-168
+    // (classifyAuthSignal) vale SÓ para o escopo financeiro.
+    for (const code of [
+      "auth.workspace_forbidden",
+      "workspace.forbidden",
+      "auth.workspace_required",
+      "auth.admin_forbidden",
+      undefined,
+    ]) {
+      expect(classifySessionProbeSignal({ kind: "http", status: 403, code })).toBe("unauthenticated");
+    }
+    expect(classifySessionProbeSignal({ kind: "http", status: 401 })).toBe("unauthenticated");
+  });
+
+  it("keeps transport/server faults unreachable (never a false logout)", () => {
+    expect(classifySessionProbeSignal({ kind: "network-error" })).toBe("unreachable");
+    expect(classifySessionProbeSignal({ kind: "offline" })).toBe("unreachable");
+    expect(classifySessionProbeSignal({ kind: "http", status: 500 })).toBe("unreachable");
+    expect(classifySessionProbeSignal({ kind: "http", status: 503 })).toBe("unreachable");
+    expect(classifySessionProbeSignal({ kind: "success" })).toBe("authenticated");
   });
 });
 

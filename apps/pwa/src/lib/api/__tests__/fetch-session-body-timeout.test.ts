@@ -88,7 +88,7 @@ describe("FIX-SESSION-STATUS-BODY-TIMEOUT", () => {
     expect(result).toMatchObject({ user: null, status: "unauthenticated" });
   });
 
-  it("fetchSession: 403 com corpo travado → unauthenticated (nunca unreachable)", async () => {
+  it("fetchSession: 403 com corpo travado → unauthenticated (sonda estrita: status 403 preservado é rejeição explícita, nunca unreachable)", async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(stalledResponse(403));
     const pending = fetchSession();
@@ -102,6 +102,9 @@ describe("FIX-SESSION-STATUS-BODY-TIMEOUT", () => {
     await vi.advanceTimersByTimeAsync(DEFAULT_API_TIMEOUT_MS + 1000);
     const result = await observed;
     expect(result).not.toBe(guard);
+    // Sonda estrita (SPEC V4.1 INV-05): o timeout preserva o status 403
+    // (nunca 408), e qualquer 403 no probe é "sem sessão" — purge + login,
+    // nunca avaliação de snapshot offline pelo AuthGate.
     expect(result).toMatchObject({ user: null, status: "unauthenticated" });
   });
 

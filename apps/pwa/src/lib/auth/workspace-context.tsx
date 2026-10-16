@@ -39,33 +39,63 @@ import {
   type WorkspaceMember,
 } from "@/lib/api/workspaces";
 import { requestAgentEmptyAttestation as requestAgentEmptyAttestationRequest } from "@/lib/api/agent-client";
+import { isMembershipRevocation } from "./auth-state-machine";
+
+/**
+ * FIX-168 (P0 #168): falha de auth/membership ESTRITA — só o que prova
+ * sessão morta ou membership revogado limpa header/binding e sinaliza
+ * `isAuthError`:
+ * - 401 qualquer code (sessão expirada/inválida — contrato inalterado);
+ * - 403 SOMENTE com o code de revogação do allowlist
+ *   (auth.workspace_forbidden — sem membership ativo).
+ *
+ * Todo outro 403 — auth.workspace_required (header ausente após
+ * archive/clear), permission/scope denials, 403 sem code — NÃO é falha de
+ * auth: a sessão pode seguir válida e a seleção anterior confirmada deve
+ * ser preservada. Tratar qualquer 403 como logout era o multiplicador dos
+ * 403 em massa (#168): um 403 stale virava purge+login indevidos.
+ */
+function getFailureStatus(cause: unknown): number | undefined {
+  if (cause instanceof ApiError) return cause.status;
+  if (cause && typeof cause === "object" && "status" in cause) {
+    const status = (cause as { status: unknown }).status;
+    return typeof status === "number" ? status : undefined;
+  }
+  return undefined;
+}
+
+function getFailureCode(cause: unknown): string | undefined {
+  if (cause instanceof ApiError) {
+    return cause.code.length > 0 ? cause.code : undefined;
+  }
+  if (cause && typeof cause === "object" && "code" in cause) {
+    const code = (cause as { code: unknown }).code;
+    return typeof code === "string" && code.length > 0 ? code : undefined;
+  }
+  return undefined;
+}
 
 function isAuthFailure(cause: unknown): boolean {
-  if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
-    return true;
-  }
-  if (
-    cause &&
-    typeof cause === "object" &&
-    "status" in cause &&
-    ((cause as { status: unknown }).status === 401 || (cause as { status: unknown }).status === 403)
-  ) {
-    return true;
+  const status = getFailureStatus(cause);
+  if (status === 401) return true;
+  if (status === 403) {
+    return isMembershipRevocation(status, getFailureCode(cause));
   }
   if (cause instanceof Error) {
     const msg = cause.message.toLowerCase();
+    // Sem status: só sinais 401-like ou o literal de revogação contam.
+    // "forbidden"/"403"/"auth." genéricos NÃO — sem code não há como
+    // distinguir revogação real de header stale (FIX-168).
+    if (msg.includes("auth.workspace_forbidden")) return true;
     return (
       msg.includes("token inválido") ||
       msg.includes("token invalido") ||
       msg.includes("unauthorized") ||
       msg.includes("não autorizado") ||
       msg.includes("nao autorizado") ||
-      msg.includes("forbidden") ||
       msg.includes("sessão expirada") ||
       msg.includes("sessao expirada") ||
-      msg.includes("auth.") ||
-      msg.includes("401") ||
-      msg.includes("403")
+      msg.includes("401")
     );
   }
   return false;

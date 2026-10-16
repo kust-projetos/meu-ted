@@ -206,8 +206,11 @@ describe("WorkspaceProvider", () => {
     expect(screen.getByText("Não autorizado")).toBeInTheDocument();
   });
 
-  it("flags isAuthError and does not classify typed ApiError 403 Forbidden as Offline", async () => {
-    api.fetchWorkspaces.mockRejectedValue(new ApiError(403, "workspace.forbidden", "Acesso restrito"));
+  it("flags isAuthError and does not classify typed ApiError 403 revocation as Offline", async () => {
+    // FIX-168: só o code de revogação do allowlist (auth.workspace_forbidden)
+    // é falha de auth — permission denials (workspace.forbidden) e 403 sem
+    // code preservam a seleção e não sinalizam isAuthError.
+    api.fetchWorkspaces.mockRejectedValue(new ApiError(403, "auth.workspace_forbidden", "Acesso restrito"));
     render(
       <WorkspaceProvider>
         <Probe />

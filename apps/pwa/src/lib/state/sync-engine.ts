@@ -7,13 +7,43 @@
  */
 
 import * as endpoints from "@/lib/api/endpoints";
-import { ApiError } from "@/lib/api/client";
+import { ApiError, getActiveWorkspaceId } from "@/lib/api/client";
+import { getOfflineSubjectId } from "@/lib/auth/offline-subject";
 import { isMembershipRevocation } from "@/lib/auth/auth-state-machine";
 import { type DomainKey, type AppStateAction, ESSENTIAL_DOMAIN_KEYS } from "./state-reducer";
 import { saveSnapshotDomain, saveV3SnapshotDomain } from "./snapshot-store";
+import type { WriteV2SnapshotOptions } from "./snapshot-db";
 import type { Account, Profile, QuickInsight, Transaction } from "./types";
 
 type Dispatch = (action: AppStateAction) => void;
+
+/**
+ * Domains published by runBootstrap (subscriptions lazy-load separately).
+ * Used to park every domain the engine owns when there is no workspace to
+ * address the payload to (FIX-168 zero-I/O / tardy-discard).
+ */
+const ENGINE_BOOTSTRAP_DOMAINS: DomainKey[] = [
+  "accounts",
+  "categories",
+  "transactions",
+  "payables",
+  "budgets",
+  "goals",
+  "cardStatements",
+];
+
+/**
+ * FIX-168 (P0 #168): parks the bootstrap without any network I/O and without
+ * publishing live data. Mirrors the provider tardy-discard
+ * (app-state-context): every engine-owned domain goes unavailable (read-only
+ * derives from that) and the boot completes so no loader hangs.
+ */
+function parkBootstrapWithoutWorkspace(dispatch: Dispatch): void {
+  for (const domain of ENGINE_BOOTSTRAP_DOMAINS) {
+    dispatch({ type: "DOMAIN_UNAVAILABLE", domain });
+  }
+  dispatch({ type: "BOOTSTRAP_COMPLETE" });
+}
 
 export interface PaginationOptions {
   page?: number;
@@ -67,6 +97,26 @@ export async function runBootstrap(
 ): Promise<BootstrapExtras> {
   dispatch({ type: "BOOTSTRAP_START" });
 
+  // FIX-168 (P0 #168): sem workspace ativo nenhum endpoint financeiro
+  // responde 2xx — cada GET falharia fechado server-side (403
+  // auth.workspace_required). Estaciona com zero I/O em vez de coletar
+  // rejeições que o descarte tardio não poderia cancelar.
+  if (getActiveWorkspaceId() === undefined) {
+    parkBootstrapWithoutWorkspace(dispatch);
+    return { profile: null, quickInsights: [] };
+  }
+
+  // FIX-168-FIX2 (HIGH — descarte tardio verifica identidade, não só
+  // ausência): vincula o bootstrap à identidade capturada na entrada. Se a
+  // seleção trocar mid-flight (A→B), o payload em voo pertence a A mas a
+  // sessão endereça B — descarta antes de publicar/persistir, em vez de
+  // entregar dado órfão à partição corrente.
+  // FIX-168-FIX3: transporta também o subject (partição do snapshot V2)
+  // capturado aqui — a persistência usa o capturado e descarta gravações
+  // tardias cuja identidade mudou nos gaps assíncronos (fingerprint/lock).
+  const bootstrapWorkspaceId = getActiveWorkspaceId();
+  const bootstrapSubject = getOfflineSubjectId();
+
   const results = await Promise.allSettled([
     endpoints.fetchAccounts(),
     endpoints.fetchCategories(),
@@ -99,6 +149,18 @@ export async function runBootstrap(
     return { profile: null, quickInsights: [] };
   }
 
+  // FIX-168-FIX3: identidade = workspace + subject (partição V2). O
+  // subject é consultado na gravação (snapshot-db), por isso a checagem é
+  // por IDENTIDADE (inalterada desde a entrada), não só por ausência —
+  // publicar resposta de A com B ativo atribuiria dado à partição corrente.
+  if (
+    getActiveWorkspaceId() !== bootstrapWorkspaceId ||
+    getOfflineSubjectId() !== bootstrapSubject
+  ) {
+    parkBootstrapWithoutWorkspace(dispatch);
+    return { profile: null, quickInsights: [] };
+  }
+
   // Profile/insights are fetched here and returned to the caller — never
   // re-fetched by the provider (boot dedupe).
   const profileResult = results[8];
@@ -112,7 +174,11 @@ export async function runBootstrap(
   // Skipped cookie-only (token undefined): without an owner-checkable key
   // no snapshot write is safe — Phase 3 (V3) reintroduces it keyed by
   // authenticated identity.
+  // FIX-168-FIX3: cada escrita V2 carrega a identidade capturada na entrada;
+  // a persistência descarta gravações tardias cuja partição mudou nos gaps
+  // assíncronos em vez de re-atribuí-las ao subject vigente.
   const savePromises: Promise<void>[] = [];
+  const v2WriteOpts: WriteV2SnapshotOptions = { expectedSubject: bootstrapSubject };
 
   // ── Accounts + credit cards merge ────────────────────────
   {
@@ -132,7 +198,7 @@ export async function runBootstrap(
         else merged.push(c);
       }
       dispatch({ type: "DOMAIN_LIVE", domain: "accounts", data: merged, syncedAt: new Date().toISOString() });
-      if (token !== undefined) savePromises.push(saveSnapshotDomain(token, "accounts", merged));
+      if (token !== undefined) savePromises.push(saveSnapshotDomain(token, "accounts", merged, v2WriteOpts));
       if (v3Identity !== undefined) {
         savePromises.push(
           saveV3SnapshotDomain(v3Identity.principalId, v3Identity.workspaceId, "accounts", merged).catch(() => {}),
@@ -141,7 +207,7 @@ export async function runBootstrap(
     } else if (cardsData.length > 0) {
       merged = cardsData;
       dispatch({ type: "DOMAIN_LIVE", domain: "accounts", data: cardsData, syncedAt: new Date().toISOString() });
-      if (token !== undefined) savePromises.push(saveSnapshotDomain(token, "accounts", cardsData));
+      if (token !== undefined) savePromises.push(saveSnapshotDomain(token, "accounts", cardsData, v2WriteOpts));
       if (v3Identity !== undefined) {
         savePromises.push(
           saveV3SnapshotDomain(v3Identity.principalId, v3Identity.workspaceId, "accounts", cardsData).catch(() => {}),
@@ -164,7 +230,7 @@ export async function runBootstrap(
     if (result.status === "fulfilled") {
       const value = result.value;
       dispatch({ type: "DOMAIN_LIVE", domain, data: value, syncedAt: new Date().toISOString() });
-      if (token !== undefined) savePromises.push(saveSnapshotDomain(token, domain, value as never));
+      if (token !== undefined) savePromises.push(saveSnapshotDomain(token, domain, value as never, v2WriteOpts));
       if (v3Identity !== undefined) {
         savePromises.push(
           saveV3SnapshotDomain(v3Identity.principalId, v3Identity.workspaceId, domain, value as never).catch(() => {}),
@@ -188,7 +254,7 @@ export async function runBootstrap(
     if (txResult.status === "fulfilled") {
       const items = (txResult.value as { items: unknown }).items;
       dispatch({ type: "DOMAIN_LIVE", domain: "transactions", data: items, syncedAt: new Date().toISOString() });
-      if (token !== undefined) savePromises.push(saveSnapshotDomain(token, "transactions", items as never));
+      if (token !== undefined) savePromises.push(saveSnapshotDomain(token, "transactions", items as never, v2WriteOpts));
       if (v3Identity !== undefined) {
         savePromises.push(
           saveV3SnapshotDomain(v3Identity.principalId, v3Identity.workspaceId, "transactions", items as never).catch(() => {}),
@@ -237,15 +303,22 @@ export async function syncTransactionsPage(
 ): Promise<{ items: Transaction[]; total: number; page: number; limit: number }> {
   const page = options.page ?? 1;
   const limit = options.limit ?? 50;
+  // FIX-168-FIX3: vincula à identidade vigente antes do fetch — sem ela, uma
+  // troca A→B em voo publicaria/persistiria a página de A sob B.
+  const pageWorkspaceId = getActiveWorkspaceId();
+  const pageSubject = getOfflineSubjectId();
   const res = await endpoints.fetchTransactions({ page, limit });
   if (dispatch) {
+    if (getActiveWorkspaceId() !== pageWorkspaceId || getOfflineSubjectId() !== pageSubject) {
+      return { items: res.items, total: res.total, page, limit };
+    }
     dispatch({
       type: "DOMAIN_LIVE",
       domain: "transactions",
       data: res.items,
       syncedAt: new Date().toISOString(),
     });
-    if (token !== undefined) void saveSnapshotDomain(token, "transactions", res.items);
+    if (token !== undefined) void saveSnapshotDomain(token, "transactions", res.items, { expectedSubject: pageSubject });
   }
   return {
     items: res.items,

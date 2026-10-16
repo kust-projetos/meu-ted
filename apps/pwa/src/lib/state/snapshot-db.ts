@@ -407,11 +407,17 @@ export interface WriteV2SnapshotOptions {
    * online-authenticated moment, so the stamp must exist.
    */
   lastOnlineAuthenticatedAt?: string;
+  /**
+   * FIX-168-FIX3 (HIGH REVIEWER-168-R2): identidade capturada pelo chamador
+   * (bootstrap) antes dos gaps assíncronos. Gravações tardias cuja partição
+   * corrente divergiu da esperada são descartadas — nunca re-atribuídas ao
+   * subject vigente.
+   */
+  expectedSubject?: string | null;
 }
 
 /** Build a fresh envelope base stamped with subject + age. */
-function freshEnvelope(fp: string, authenticatedAt: string): V2Envelope {
-  const subject = getOfflineSubjectId();
+function freshEnvelope(fp: string, authenticatedAt: string, subject: string | null): V2Envelope {
   return {
     schema: 2,
     ownerFingerprint: fp,
@@ -440,12 +446,25 @@ export async function writeV2Snapshot<K extends DomainKey>(
 ): Promise<void> {
   // D10 optional disable: persist nothing while disabled.
   if (!isOfflineSnapshotEnabled()) return;
+  // FIX-168-FIX3: captura a identidade ANTES do primeiro await. O
+  // fingerprint (SHA-256) e o lock de escrita cedem o event loop — uma troca
+  // A→B nesse gap não pode re-atribuir o payload ao subject vigente.
+  const entrySubject = getOfflineSubjectId();
   const fp = await fingerprint(token);
   const authenticatedAt = resolveAuthenticatedAt(opts?.lastOnlineAuthenticatedAt);
   const subject = getOfflineSubjectId();
+  // Descarte tardio na persistência: a identidade mudou durante o
+  // fingerprint, ou divergiu da capturada pelo bootstrap na entrada.
+  if (subject !== entrySubject) return;
+  if (opts?.expectedSubject !== undefined && subject !== opts.expectedSubject) return;
   // Serialize the read-modify-write so concurrent bootstrap writes (one per
   // domain) cannot read a stale envelope and overwrite each other's data.
   await withWriteLock(async () => {
+    // Revalida após a fila do lock: a seleção pode ter mudado com a escrita
+    // enfileirada (cancelamento/remount não cancela gravações pendentes).
+    const lockedSubject = getOfflineSubjectId();
+    if (lockedSubject !== subject) return;
+    if (opts?.expectedSubject !== undefined && lockedSubject !== opts.expectedSubject) return;
     const existing = await readV2Envelope();
     // Adopt only the same partition (fingerprint + subject). A subjectless
     // writer never adopts a subject-stamped envelope (it may belong to a
@@ -453,10 +472,16 @@ export async function writeV2Snapshot<K extends DomainKey>(
     const samePartition =
       existing &&
       existing.ownerFingerprint === fp &&
-      (subject === null ? !existing.offlineSubjectId : existing.offlineSubjectId === subject);
+      (lockedSubject === null ? !existing.offlineSubjectId : existing.offlineSubjectId === lockedSubject);
     const base: V2Envelope = samePartition
       ? existing
-      : freshEnvelope(fp, authenticatedAt);
+      : freshEnvelope(fp, authenticatedAt, lockedSubject);
+
+    // A new partition base already carries the stamp; an adopted envelope
+    // is refreshed because this write is an online-authenticated moment.
+    // Legacy adopted envelopes (no subject field) gain the current subject
+    // only when one is present — never a credential-derived value.
+    if (lockedSubject && !base.offlineSubjectId) base.offlineSubjectId = lockedSubject;
 
     // A new partition base already carries the stamp; an adopted envelope
     // is refreshed because this write is an online-authenticated moment.
@@ -528,9 +553,15 @@ export async function migrateV1toV2(token: string): Promise<void> {
   // All IndexedDB access is isolated: any failure PRESERVES v1 (never deletes),
   // so an interrupted migration cannot lose the only copy of the data.
   try {
+    // FIX-168-FIX3: mesma captura pré-await do write — a migração não pode
+    // re-atribuir o v1 de A ao subject vigente após uma troca A→B no gap do
+    // fingerprint. Abortar preserva o v1 (nada é deletado aqui).
+    const entrySubject = getOfflineSubjectId();
     const fp = await fingerprint(token);
+    if (getOfflineSubjectId() !== entrySubject) return;
     const existing = await readV2Envelope();
     const subject = getOfflineSubjectId();
+    if (subject !== entrySubject) return;
     const authenticatedAt = new Date().toISOString();
     const samePartition =
       existing &&
@@ -538,7 +569,7 @@ export async function migrateV1toV2(token: string): Promise<void> {
       (subject === null ? !existing.offlineSubjectId : existing.offlineSubjectId === subject);
     const base: V2Envelope = samePartition
       ? existing
-      : freshEnvelope(fp, authenticatedAt);
+      : freshEnvelope(fp, authenticatedAt, subject);
 
     for (const domain of Object.keys(v1.data)) {
       base.domains[domain as keyof SnapshotDomains] = v1.data[domain] as never;

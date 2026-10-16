@@ -1,6 +1,6 @@
 import { apiFetch, apiGet, ApiError } from "./client";
 import { getSessionToken } from "@/lib/auth/token-store";
-import { classifyAuthSignal } from "@/lib/auth/auth-state-machine";
+import { classifySessionProbeSignal } from "@/lib/auth/auth-state-machine";
 
 export type VerifyAccountInviteResult = {
   email: string;
@@ -136,7 +136,13 @@ export async function fetchSession(): Promise<SessionProbeResult> {
     return { user: res.user, status: "authenticated" };
   } catch (e) {
     if (e instanceof ApiError) {
-      const state = classifyAuthSignal({ kind: "http", status: e.status, code: e.code });
+      // Strict probe contract (SPEC V4.1 INV-05 fail-closed): the probe
+      // answers about the SESSION itself, so ANY 401/403 — including a 403
+      // with an unreadable/missing body or no legible code — is an explicit
+      // "no session" (unauthenticated → purge + login). The narrow FIX-168
+      // classifier (classifyAuthSignal) applies ONLY to financial
+      // authorization scope, never to this probe.
+      const state = classifySessionProbeSignal({ kind: "http", status: e.status, code: e.code });
       return { user: null, status: state === "unauthenticated" ? "unauthenticated" : "unreachable" };
     }
     // FIX-SESSION-RESPONSE-CLASSIFICATION (B): a 2xx answered-but-unparseable

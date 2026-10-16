@@ -19,6 +19,7 @@ import {
   writeV2Snapshot, readV2Snapshot, migrateV1toV2 as migrateV1toV2Impl,
   writeV3Snapshot, readV3Snapshot,
   migrateV2toV3 as migrateV2toV3Impl, type V2ToV3MigrationOptions,
+  type WriteV2SnapshotOptions,
 } from "./snapshot-db";
 
 export type DomainKey =
@@ -35,9 +36,9 @@ export interface SnapshotDomains {
 
 /** Save one domain to the v2 (IndexedDB) snapshot. Only a SHA-256 fingerprint of the token is stored. */
 export async function saveSnapshotDomain<K extends DomainKey>(
-  token: string, domain: K, data: SnapshotDomains[K],
+  token: string, domain: K, data: SnapshotDomains[K], opts?: WriteV2SnapshotOptions,
 ): Promise<void> {
-  await writeV2Snapshot(token, domain, data);
+  await writeV2Snapshot(token, domain, data, opts);
 }
 
 /** Read one domain from the v2 snapshot. Returns null on owner mismatch, corrupt, or missing. */

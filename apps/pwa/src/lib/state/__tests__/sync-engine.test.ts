@@ -12,6 +12,7 @@ import { runBootstrap, type SnapshotPreload } from "../sync-engine";
 import type { AppStateAction } from "../state-reducer";
 import * as endpoints from "@/lib/api/endpoints";
 import { ApiError } from "@/lib/api/client";
+import { clearActiveWorkspaceId, setActiveWorkspaceId } from "@/lib/api/client";
 import type { Account } from "../types";
 import * as snapshotStore from "../snapshot-store";
 
@@ -29,6 +30,10 @@ describe("PWA Sync Engine — sync-engine.ts", () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
     localStorage.clear();
+    // O engine exige workspace ativo (FIX-168 zero-I/O): os boots felizes
+    // assumem workspace presente — declarado explicitamente aqui.
+    clearActiveWorkspaceId();
+    setActiveWorkspaceId("ws-test-1");
     vi.spyOn(snapshotStore, "saveSnapshotDomain").mockResolvedValue(undefined);
     const dbs = await indexedDB.databases();
     for (const db of dbs) {

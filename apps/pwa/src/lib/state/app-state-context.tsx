@@ -888,6 +888,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // expireSession is read via ref: its identity can churn when no
         // SessionProvider is present, and a dep change here would cancel the
         // in-flight bootstrap continuation.
+        // FIX-168-FIX2 (HIGH — descarte tardio por identidade): vincula o
+        // boot à identidade capturada aqui. Troca A→B antes da resolução
+        // passa no gate de ausência (há workspace ativo) mas o payload é
+        // de A — toda publicação abaixo exige identidade inalterada.
+        const bootWorkspaceId = getActiveWorkspaceId();
         const boot = await runBootstrap(
           token,
           bootstrapDispatch,
@@ -899,13 +904,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
 
         // FIX-168 (P0 #168): tardy-bootstrap verification — the active
-        // workspace vanished while the bootstrap was in flight (archived or
-        // cleared without a remount racing us). The live payload belongs to
-        // no selected workspace: discard it and park every domain as
-        // unavailable (read-only derives from that) instead of rendering
-        // data the session can no longer address. A later remount with an
-        // active workspace re-bootstraps from a fresh instance.
-        if (!getActiveWorkspaceId()) {
+        // workspace vanished OR CHANGED while the bootstrap was in flight
+        // (archived, cleared, or A→B selection without a remount racing
+        // us). The live payload belongs to no selected workspace (or to a
+        // workspace that is no longer current): discard it and park every
+        // domain as unavailable (read-only derives from that) instead of
+        // rendering data the session can no longer address. A later remount
+        // with an active workspace re-bootstraps from a fresh instance.
+        if (getActiveWorkspaceId() !== bootWorkspaceId) {
           for (const domain of ALL_DOMAINS) {
             bootstrapDispatch({ type: "DOMAIN_UNAVAILABLE", domain });
           }
@@ -941,20 +947,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const bootProfile = boot.profile;
         // FIX-168-R3 (descarte tardio): despachos internos do boot nunca
         // publicam sem workspace (archive entre o tardy check e aqui).
-        if (!cancelled && hasActiveWorkspace() && bootProfile)
+        // FIX-168-FIX2: identidade, não só ausência — troca A→B publica
+        // zero (resposta de A nunca aparece com B ativo).
+        const bootIdentityIntact =
+          !cancelled && getActiveWorkspaceId() === bootWorkspaceId;
+        if (bootIdentityIntact && bootProfile)
           setProfile((prev) => mergeProfileFlags(prev, bootProfile));
-        if (!cancelled && hasActiveWorkspace()) setQuickInsights(boot.quickInsights);
+        if (bootIdentityIntact) setQuickInsights(boot.quickInsights);
         // FIX-168-R4 (P2 SECREVIEW-168-R3): gate pré-fetch — o workspace
         // pode ter sumido nos awaits acima (migrate/lock); sem workspace o
         // resumo seria um request órfão (403 workspace_required). Zero I/O.
-        if (!cancelled && hasActiveWorkspace()) {
+        if (bootIdentityIntact) {
           try {
             const summary = await endpoints.fetchDashboardSummary();
-            // FIX-168-R2 (descarte tardio): workspace sumiu entre o tardy check
-            // e o fetch do resumo — nunca publica resumo órfão.
-            if (!cancelled && hasActiveWorkspace()) setDashboardSummary(summary);
+            // FIX-168-R2 (descarte tardio): workspace sumiu ou TROCOU entre
+            // o tardy check e o fetch do resumo — nunca publica resumo órfão.
+            if (!cancelled && getActiveWorkspaceId() === bootWorkspaceId) setDashboardSummary(summary);
           } catch {
-            if (!cancelled && hasActiveWorkspace()) setDashboardSummary(null);
+            if (!cancelled && getActiveWorkspaceId() === bootWorkspaceId) setDashboardSummary(null);
           }
         }
       } catch (cause) {
@@ -1028,7 +1038,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bootstrapDispatch, preloadV3Snapshot]);
 
   // ── Write actions ─────────────────────────────────────────────────
