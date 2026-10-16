@@ -8,6 +8,7 @@
 import type { Pool, PoolClient } from 'pg';
 import type { Subscription } from '../types/domain.js';
 import { withTransaction } from '../db/pool.js';
+import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
 import { domainErrors } from '../writes/errors.js';
 import type { CreateSubscriptionInput, SubscriptionStore, } from './store.js';
 
@@ -42,6 +43,8 @@ export const createSubscriptionInTx = async (
   householdId: string,
   input: CreateSubscriptionInput,
 ): Promise<Subscription> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const res = await client.query<Row>(
     `INSERT INTO subscriptions (id, household_id, name, amount_cents, cycle, day, payment_method, status, created_at)
      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'active', NOW())
@@ -79,6 +82,8 @@ export const createPostgresSubscriptionStore = (pool: Pool): SubscriptionStore =
 
     async cancelSubscription(householdId, id) {
       return withTransaction(pool, async (client) => {
+        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+        await assertWorkspaceWritableInTx(client, householdId);
         const existing = await client.query<Row>(
           `SELECT id, household_id, name, amount_cents, cycle, day, payment_method, status, created_at, cancelled_at
              FROM subscriptions
@@ -113,6 +118,8 @@ export const createPostgresSubscriptionStore = (pool: Pool): SubscriptionStore =
 
     async updateSubscription(householdId, id, input) {
       return withTransaction(pool, async (client) => {
+        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+        await assertWorkspaceWritableInTx(client, householdId);
         const existing = await client.query<Row>(
           `SELECT id FROM subscriptions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
           [id, householdId],

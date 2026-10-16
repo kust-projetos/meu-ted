@@ -44,6 +44,39 @@ const createMemorySql = (): Sql => {
       const rows = (tables.get('undo_proposals') ?? []).filter((r) => r.request_id === bindings[0]);
       return (rows as unknown as T[])[Symbol.iterator]();
     }
+    // FIX-WS-D2-FENCE R2 — `workspace_deletion_fence` é estado durável real
+    // do DO: SELECT por workspace (sem fence → vazio), upsert por
+    // workspace_id e DELETE por workspace, condicional ao epoch.
+    if (q.startsWith('SELECT EPOCH, EXPIRES_AT FROM WORKSPACE_DELETION_FENCE')) {
+      const rows = (tables.get('workspace_deletion_fence') ?? []).filter((r) => r.workspace_id === bindings[0]);
+      return (rows.map((r) => ({ epoch: r.epoch, expires_at: r.expires_at })) as unknown as T[])[Symbol.iterator]();
+    }
+    if (q.startsWith('DELETE FROM WORKSPACE_DELETION_FENCE')) {
+      const rows = tables.get('workspace_deletion_fence') ?? [];
+      const [workspaceId, epoch] = bindings as [unknown, unknown];
+      tables.set(
+        'workspace_deletion_fence',
+        rows.filter((r) => {
+          if (r.workspace_id !== workspaceId) return true;
+          if (bindings.length > 1 && r.epoch !== epoch) return true;
+          return false;
+        }),
+      );
+      return [][Symbol.iterator]() as IterableIterator<T>;
+    }
+    if (q.startsWith('INSERT INTO WORKSPACE_DELETION_FENCE')) {
+      const [workspaceId, epoch, expiresAt] = bindings as [unknown, unknown, unknown];
+      const rows = tables.get('workspace_deletion_fence') ?? [];
+      const existing = rows.find((r) => r.workspace_id === workspaceId);
+      if (existing) {
+        existing.epoch = epoch;
+        existing.expires_at = expiresAt;
+      } else {
+        rows.push({ workspace_id: workspaceId, epoch, expires_at: expiresAt });
+      }
+      tables.set('workspace_deletion_fence', rows);
+      return [][Symbol.iterator]() as IterableIterator<T>;
+    }
     if (q.startsWith('UPDATE UNDO_PROPOSALS SET STATUS')) {
       const rows = tables.get('undo_proposals') ?? [];
       const guard = /AND STATUS = '(\w+)'/.exec(q)?.[1]?.toLowerCase();

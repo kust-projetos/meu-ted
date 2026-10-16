@@ -11,6 +11,7 @@ import type { Pool, PoolClient } from 'pg';
 import type { Account, Transaction, Statement, StatementDetail, StatementPurchase, RecurringPurchase } from '../types/domain.js';
 import type { CardStore } from './store.js';
 import { withTransaction } from '../db/pool.js';
+import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
 import { domainErrors } from '../writes/errors.js';
 import { resolveExpenseCategoryInTx, resolveSubcategoryInTx } from '../writes/postgres.js';
 import { installmentDates } from '../shared/billing-month.js';
@@ -390,6 +391,8 @@ const createCardPurchaseInTx = async (
   householdId: string,
   input: CreateCardPurchaseInput,
 ): Promise<Transaction[]> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   // M-05: same active/expense-kind category rule as plain entries.
   if (input.categoryId) {
     await resolveExpenseCategoryInTx(client, householdId, input.categoryId);
@@ -464,6 +467,8 @@ const createCardInstallmentsInTx = async (
   householdId: string,
   input: CreateCardInstallmentsInput,
 ): Promise<Transaction[]> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const cardRows = await client.query<Row>(
     `SELECT id, kind, closing_day, due_day FROM accounts WHERE id = $1 AND household_id = $2 AND status = 'active' AND deleted_at IS NULL`,
     [input.accountId, householdId],
@@ -575,6 +580,8 @@ const createRecurringPurchaseInTx = async (
   householdId: string,
   input: CreateRecurringPurchaseInput,
 ): Promise<RecurringPurchase> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   // Task 2.18: same validation as the normal purchase path — card must
   // exist, be active and be a credit card with closing/due configured;
   // category must be an active expense-kind category.
@@ -611,6 +618,8 @@ const payStatementInTx = async (
   statementId: string,
   input: PayStatementInput,
 ): Promise<Statement> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   // Task 2.9 (SPEC §9.5): BEGIN → lock statement → read paid → compute
   // remaining → validate → create payment → update paid/status → COMMIT.
   // Two concurrent payments serialize on the row lock: the second sees
@@ -681,6 +690,8 @@ const cancelPurchaseInTx = async (
   householdId: string,
   purchaseId: string,
 ): Promise<void> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   // Idempotência: se já deletado, retorna
   const already = await client.query<Row>(
     `SELECT id FROM transactions WHERE id = $1 AND household_id = $2 AND deleted_at IS NOT NULL`,
@@ -740,6 +751,8 @@ const updatePurchaseCoreInTx = async (
   purchaseId: string,
   input: UpdatePurchaseInput,
 ): Promise<string> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   if (input.categoryId) {
     // FINAL REVIEW: PATCH must apply the same active/expense rule as
     // creation (M-05) — not just existence.
@@ -858,6 +871,8 @@ const createCardInTx = async (
   householdId: string,
   input: CreateCardInput,
 ): Promise<Account> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const res = await client.query<Row>(
     `INSERT INTO accounts (id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day)
      VALUES (gen_random_uuid(), $1, $2, 'credit_card', 0, 'active', $3, $4, $5)
@@ -873,6 +888,8 @@ const updateCardInTx = async (
   id: string,
   input: UpdateCardInput,
 ): Promise<Account> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   // SPEC §9.3: $1/$2 are the row keys — first column binds at $3.
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -1078,17 +1095,16 @@ export const createPostgresCardStore = (pool: Pool): CardStore => {
     },
 
     async createCard(householdId, input) {
-      const res = await query<Row>(
-        `INSERT INTO accounts (id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day)
-         VALUES (gen_random_uuid(), $1, $2, 'credit_card', 0, 'active', $3, $4, $5)
-         RETURNING id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day`,
-        [householdId, input.name, input.creditLimitCents, input.closingDay, input.dueDay],
-      );
-      return mapAccount(res[0]!);
+      // FIX-WS-D2-R3 item 2: guarda FOR SHARE + INSERT na mesma
+      // transação (reusa o core client-bound; antes era check-then-act
+      // fora de transação, com janela delete-vs-create).
+      return withTransaction(pool, (client) => createCardInTx(client, householdId, input));
     },
 
     async updateCard(householdId, id, input) {
       return withTransaction(pool, async (client) => {
+        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+        await assertWorkspaceWritableInTx(client, householdId);
         // SPEC §9.3: $1/$2 are the row keys — first column binds at $3.
         const sets: string[] = [];
         const params: unknown[] = [];

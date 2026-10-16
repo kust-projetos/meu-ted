@@ -27,11 +27,18 @@ import {
   revokeWorkspaceInvite,
   archiveWorkspace as archiveWorkspaceRequest,
   restoreWorkspace as restoreWorkspaceRequest,
+  fetchDeletionInventory as fetchDeletionInventoryRequest,
+  deleteWorkspace as deleteWorkspaceRequest,
+  type EmptyDeposit,
+  type DeleteConfirmationInput,
+  type DeletionInventory,
+  type DeleteReceipt,
   type OwnershipTransfer,
   type PendingInvite,
   type Workspace,
   type WorkspaceMember,
 } from "@/lib/api/workspaces";
+import { requestAgentEmptyAttestation as requestAgentEmptyAttestationRequest } from "@/lib/api/agent-client";
 
 function isAuthFailure(cause: unknown): boolean {
   if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
@@ -93,6 +100,13 @@ export interface WorkspaceContextValue {
   renameWorkspace: (workspaceId: string, name: string) => Promise<void>;
   archiveWorkspace: (workspaceId: string) => Promise<void>;
   restoreWorkspace: (workspaceId: string) => Promise<void>;
+  fetchDeletionInventory: (workspaceId: string) => Promise<DeletionInventory>;
+  /**
+   * FIX-WS-D2-R4 — prova HMAC de vazio do lado Agent (passo 2 do fluxo:
+   * inventário PG → atestação Agent → delete API). O PWA só transporta.
+   */
+  requestAgentEmptyAttestation: (workspaceId: string, inventoryVersion: string) => Promise<EmptyDeposit>;
+  deleteWorkspace: (workspaceId: string, confirmation: DeleteConfirmationInput) => Promise<DeleteReceipt>;
   inviteMember: (email: string) => Promise<void>;
   resendInvite: (inviteId: string) => Promise<void>;
   revokeInvite: (inviteId: string) => Promise<void>;
@@ -124,13 +138,15 @@ function resolveActiveWorkspaceId(
   current: string | undefined,
   principalId: string | null,
 ): string | undefined {
+  // D2: `archived` e `deleted` nunca viram ativo. Status ausente conta
+  // como elegível (o schema defaultea para active em payloads legados).
   const eligible = (id: string | null | undefined): id is string =>
     typeof id === "string" &&
-    list.some((workspace) => workspace.id === id && workspace.status !== "archived");
+    list.some((workspace) => workspace.id === id && workspace.status !== "archived" && workspace.status !== "deleted");
   if (eligible(current)) return current;
   const stored = principalId ? readActiveWorkspacePreference(principalId) : null;
   if (eligible(stored)) return stored;
-  return list.find((workspace) => workspace.status !== "archived")?.id;
+  return list.find((workspace) => workspace.status !== "archived" && workspace.status !== "deleted")?.id;
 }
 
 /**
@@ -485,7 +501,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       // same-active revalidation).
       const fresh = await fetchWorkspaces();
       if (isStale()) return;
-      if (!fresh.some((workspace) => workspace.id === workspaceId && workspace.status !== "archived")) {
+      if (!fresh.some((workspace) => workspace.id === workspaceId && workspace.status !== "archived" && workspace.status !== "deleted")) {
         // Adopt the server truth instead of the revoked destination: fall
         // back under the same principal and persist the fallback so no
         // label/header divergence is left behind.
@@ -561,7 +577,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           principal === startPrincipal &&
           current !== undefined &&
           knownWorkspaces.some(
-            (workspace) => workspace.id === current && workspace.status !== "archived",
+            (workspace) => workspace.id === current && workspace.status !== "archived" && workspace.status !== "deleted",
           );
         if (restorable && current !== undefined) {
           // `current` was a member in the server-authoritative list known at
@@ -604,6 +620,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const restoreWorkspace = useCallback(async (workspaceId: string) => {
     await restoreWorkspaceRequest(workspaceId);
     await refreshWorkspaces();
+  }, [refreshWorkspaces]);
+
+  const fetchDeletionInventory = useCallback(async (workspaceId: string) => {
+    return fetchDeletionInventoryRequest(workspaceId);
+  }, []);
+
+  const requestAgentEmptyAttestation = useCallback(async (workspaceId: string, inventoryVersion: string) => {
+    return requestAgentEmptyAttestationRequest(workspaceId, inventoryVersion);
+  }, []);
+
+  const deleteWorkspace = useCallback(async (workspaceId: string, confirmation: DeleteConfirmationInput) => {
+    const receipt = await deleteWorkspaceRequest(workspaceId, confirmation);
+    await refreshWorkspaces();
+    return receipt;
   }, [refreshWorkspaces]);
 
   const createWorkspace = useCallback(async (input: { name: string; kind: "personal" | "shared" }) => {
@@ -705,6 +735,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     renameWorkspace,
     archiveWorkspace,
     restoreWorkspace,
+    fetchDeletionInventory,
+    requestAgentEmptyAttestation,
+    deleteWorkspace,
     inviteMember,
     resendInvite,
     revokeInvite,
@@ -713,7 +746,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     transferOwnership,
     acceptTransfer,
     leave,
-  }), [workspaces, activeWorkspace, members, pendingInvites, ownershipTransfers, loading, membersLoading, pendingInvitesLoading, ownershipTransfersLoading, error, isAuthError, selectWorkspace, refreshWorkspaces, refreshMembers, refreshPendingInvites, refreshOwnershipTransfers, createWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, inviteMember, resendInvite, revokeInvite, acceptInvite, removeMember, transferOwnership, acceptTransfer, leave]);
+  }), [workspaces, activeWorkspace, members, pendingInvites, ownershipTransfers, loading, membersLoading, pendingInvitesLoading, ownershipTransfersLoading, error, isAuthError, selectWorkspace, refreshWorkspaces, refreshMembers, refreshPendingInvites, refreshOwnershipTransfers, createWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, fetchDeletionInventory, requestAgentEmptyAttestation, deleteWorkspace, inviteMember, resendInvite, revokeInvite, acceptInvite, removeMember, transferOwnership, acceptTransfer, leave]);
 
   if (loading) return <main className="flex h-dvh items-center justify-center text-text-secondary">Carregando workspaces…</main>;
   return (

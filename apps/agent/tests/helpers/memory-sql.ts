@@ -201,6 +201,39 @@ export const createMemorySql = (): MemorySqlMock => {
       }
       if (q.startsWith('CREATE INDEX') || q.startsWith('CREATE UNIQUE INDEX')) return [] as T[];
 
+      // FIX-WS-D2-FENCE R2 — `workspace_deletion_fence` é estado durável real
+      // do DO (fence de exclusão): modelado com fidelidade mínima — SELECT por
+      // workspace, upsert por workspace_id (ON CONFLICT DO UPDATE nunca
+      // duplica) e DELETE por workspace, condicional ao epoch quando
+      // vinculado (finding 3). Sem fence → [] (allow, fail-open seguro).
+      if (q.startsWith('SELECT epoch, expires_at FROM workspace_deletion_fence')) {
+        return table('workspace_deletion_fence')
+          .filter((row) => row['workspace_id'] === bindings[0])
+          .map((row) => ({ epoch: row['epoch'], expires_at: row['expires_at'] })) as T[];
+      }
+      if (q.startsWith('DELETE FROM workspace_deletion_fence')) {
+        const rows = table('workspace_deletion_fence');
+        const [workspaceId, epoch] = bindings;
+        for (let index = rows.length - 1; index >= 0; index -= 1) {
+          if (rows[index]!['workspace_id'] !== workspaceId) continue;
+          if (bindings.length > 1 && rows[index]!['epoch'] !== epoch) continue;
+          rows.splice(index, 1);
+        }
+        return [] as T[];
+      }
+      if (q.startsWith('INSERT INTO workspace_deletion_fence')) {
+        const [workspaceId, epoch, expiresAt] = bindings;
+        const rows = table('workspace_deletion_fence');
+        const existing = rows.find((row) => row['workspace_id'] === workspaceId);
+        if (existing) {
+          existing['epoch'] = epoch;
+          existing['expires_at'] = expiresAt;
+        } else {
+          rows.push({ workspace_id: workspaceId, epoch, expires_at: expiresAt });
+        }
+        return [] as T[];
+      }
+
       // Review P1-double-fix: `mutation_confirmations` is load-bearing for
       // the financial confirmation path (immutable CAS + `RETURNING *`
       // verdicts + sighting sentinels + adoption + receipt-strip hygiene),

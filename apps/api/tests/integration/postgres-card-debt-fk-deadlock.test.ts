@@ -54,6 +54,10 @@ const makeFakeCardPool = () => {
     const t = text.replace(/\s+/g, ' ').trim();
     sqlLog.push(t);
     if (t === 'BEGIN' || t === 'COMMIT' || t === 'ROLLBACK') return { rows: [], rowCount: 0 };
+    // Lifecycle guard (workspace-lifecycle-guard.ts): workspace ativo.
+    if (t.startsWith('SELECT status FROM households')) {
+      return { rows: [{ status: 'active' }], rowCount: 1 };
+    }
     if (t.includes('ON CONFLICT')) {
       const cycle = values[2] as string;
       if (!stmts.has(cycle)) stmts.set(cycle, `stmt-${cycle}`);

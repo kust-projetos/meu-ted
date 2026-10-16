@@ -9,6 +9,7 @@ import { DomainError, domainErrors } from "../writes/errors.js";
 import { assertCategoryKind } from "../categories/resolve.js";
 import { addMonthsSafe } from "../shared/billing-month.js";
 import { withTransaction, } from "../db/pool.js";
+import { assertWorkspaceWritableInTx } from "../auth/workspace-lifecycle-guard.js";
 import type { PayableStore } from "./store.js";
 
 type Row = Record<string, unknown>;
@@ -39,6 +40,8 @@ const createPayableInTx = async (
   householdId: string,
   input: CreatePayableInput,
 ): Promise<Payable> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   // V4.1 Task 2.15: same category gate as the plain path.
   if (input.categoryId !== undefined) {
     await assertPayableCategoryInTx(clientQueryFn(client), householdId, input.categoryId);
@@ -52,6 +55,8 @@ const markPayablePaidInTx = async (
   payableId: string,
   input: PayPayableInput,
 ): Promise<Payable> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   // V4.1 Task 2.2: serialize concurrent payments on the payable row.
   // The status check below the lock is the single decision point, so
   // two concurrent payers converge on exactly one financial effect.
@@ -144,6 +149,8 @@ const updatePayableInTx = async (
   payableId: string,
   input: UpdatePayableInput,
 ): Promise<Payable> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const existing = await client.query<Row>(
     `SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
     [payableId, householdId],
@@ -202,6 +209,8 @@ const createTemplateInTx = async (
   householdId: string,
   input: CreateTemplateInput,
 ): Promise<PayableTemplate> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const id = randomUUID();
   await client.query(
     `INSERT INTO payable_templates (id, household_id, account_id, name, description, amount_cents, frequency, day_of_month, reminder_days_before, notes, active)
@@ -231,6 +240,8 @@ const createPayableFromTemplateInTx = async (
   householdId: string,
   input: FromTemplateInput,
 ): Promise<Payable> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   let t: PayableTemplate | undefined;
   if (input.templateId) {
     const rows = await client.query<Row>(
@@ -268,6 +279,8 @@ const createPayableWithTemplateInTx = async (
   householdId: string,
   input: WithTemplateInput,
 ): Promise<Payable> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const templateId = randomUUID();
   await client.query(
     `INSERT INTO payable_templates (id, household_id, account_id, name, description, amount_cents, frequency, day_of_month, reminder_days_before, notes, active)
@@ -331,6 +344,8 @@ const autoCreateFromTemplatesInTx = async (
   householdId: string,
   daysAhead = 30,
 ): Promise<Payable[]> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const q = clientQueryFn(client);
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
@@ -363,6 +378,8 @@ const refreshPayableStatusInTx = async (
   client: PoolClient,
   householdId: string,
 ): Promise<Payable[]> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   // Single UPDATE statement: already atomic row-wise, but it must still run
   // on the caller's client so it joins the claim tx under idempotency.
   const today = todayISO();
@@ -587,6 +604,98 @@ function getNextDue(currentDue: string, frequency: string): string | null {
   }
 }
 
+/**
+ * FIX-WS-D2-R3 item 2 — cores client-bound: guarda FOR SHARE + efeito no
+ * MESMO cliente (antes eram check-then-act fora de transação, com janela
+ * delete-vs-create / archive-vs-create). Sem efeito em workspace
+ * arquivado/excluído.
+ */
+const cancelPayableInTx = async (
+  client: PoolClient,
+  householdId: string,
+  payableId: string,
+): Promise<Payable> => {
+  await assertWorkspaceWritableInTx(client, householdId);
+  const existing = await client.query<Row>(
+    `SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
+    [payableId, householdId],
+  );
+  if (existing.rowCount === 0 || existing.rows.length === 0) throw domainErrors.notFound("Conta a pagar");
+  await client.query(
+    `UPDATE accounts_payable SET status = 'cancelled', updated_at = NOW() WHERE id = $1 AND household_id = $2`,
+    [payableId, householdId],
+  );
+  const rows = await client.query<Row>(
+    `SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2`,
+    [payableId, householdId],
+  );
+  return mapPayable(rows.rows[0]!);
+};
+
+type ConfigureNotificationInput = Parameters<PayableStore["configureNotification"]>[1];
+
+const configureNotificationInTx = async (
+  client: PoolClient,
+  householdId: string,
+  input: ConfigureNotificationInput,
+): Promise<NotificationConfig> => {
+  await assertWorkspaceWritableInTx(client, householdId);
+  const q = clientQueryFn(client);
+  const existing = await q<Row>(
+    `SELECT * FROM notification_configs WHERE household_id = $1 AND chat_id = $2 AND notification_type = $3`,
+    [householdId, input.chatId, input.notificationType],
+  );
+  if (existing.length > 0) {
+    await q(
+      `UPDATE notification_configs SET enabled = $1, schedule_hour = $2, schedule_minute = $3, schedule_window_minutes = $4, days_of_week = $5, threshold_days = $6, timezone = $7, updated_at = NOW()
+       WHERE id = $8 AND household_id = $9`,
+      [
+        input.enabled,
+        input.scheduleHour ?? 9,
+        input.scheduleMinute ?? 0,
+        input.scheduleWindowMinutes ?? 60,
+        input.daysOfWeek ?? [1, 2, 3, 4, 5],
+        input.thresholdDays ?? 1,
+        input.timezone ?? "UTC",
+        existing[0]!["id"],
+        householdId,
+      ],
+    );
+    const rows = await q<Row>(
+      `SELECT * FROM notification_configs WHERE id = $1 AND household_id = $2`,
+      [existing[0]!["id"], householdId],
+    );
+    const row = rows[0];
+    if (!row) throw domainErrors.notFound("Notificação");
+    return mapNotification(row);
+  }
+  const id = randomUUID();
+  await q(
+    `INSERT INTO notification_configs (id, household_id, chat_id, notification_type, enabled, schedule_hour, schedule_minute, schedule_window_minutes, days_of_week, threshold_days, timezone)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [
+      id,
+      householdId,
+      input.chatId,
+      input.notificationType,
+      input.enabled,
+      input.scheduleHour ?? 9,
+      input.scheduleMinute ?? 0,
+      input.scheduleWindowMinutes ?? 60,
+      input.daysOfWeek ?? [1, 2, 3, 4, 5],
+      input.thresholdDays ?? 1,
+      input.timezone ?? "UTC",
+    ],
+  );
+  const rows = await q<Row>(
+    `SELECT * FROM notification_configs WHERE id = $1 AND household_id = $2`,
+    [id, householdId],
+  );
+  const row = rows[0];
+  if (!row) throw domainErrors.notFound("Notificação");
+  return mapNotification(row);
+};
+
 export const createPostgresPayableStore = (pool: Pool): PayableStore => {
   const query = async <R extends Row = Row>(
     text: string,
@@ -636,20 +745,9 @@ export const createPostgresPayableStore = (pool: Pool): PayableStore => {
 
 
     async cancelPayable(householdId, payableId, _reason) {
-      const existing = await query<Row>(
-        `SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
-        [payableId, householdId],
-      );
-      if (existing.length === 0) throw domainErrors.notFound("Conta a pagar");
-      await query(
-        `UPDATE accounts_payable SET status = 'cancelled', updated_at = NOW() WHERE id = $1 AND household_id = $2`,
-        [payableId, householdId],
-      );
-      const rows = await query<Row>(
-        `SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2`,
-        [payableId, householdId],
-      );
-      return mapPayable(rows[0]!);
+      // FIX-WS-D2-R3 item 2: guarda FOR SHARE + efeito na mesma
+      // transação (antes era check-then-act fora de transação).
+      return withTransaction(pool, (client) => cancelPayableInTx(client, householdId, payableId));
     },
 
     async updatePayable(householdId, payableId, input) {
@@ -658,6 +756,8 @@ export const createPostgresPayableStore = (pool: Pool): PayableStore => {
 
     async undoPayablePayment(householdId, payableId, opts) {
       return withTransaction(pool, async (client) => {
+        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+        await assertWorkspaceWritableInTx(client, householdId);
         const existing = await client.query<Row>(
           `SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
           [payableId, householdId],
@@ -798,59 +898,9 @@ export const createPostgresPayableStore = (pool: Pool): PayableStore => {
       );
     },
     async configureNotification(householdId, input) {
-      const existing = await query<Row>(
-        `SELECT * FROM notification_configs WHERE household_id = $1 AND chat_id = $2 AND notification_type = $3`,
-        [householdId, input.chatId, input.notificationType],
-      );
-      if (existing.length > 0) {
-        await query(
-          `UPDATE notification_configs SET enabled = $1, schedule_hour = $2, schedule_minute = $3, schedule_window_minutes = $4, days_of_week = $5, threshold_days = $6, timezone = $7, updated_at = NOW()
-           WHERE id = $8 AND household_id = $9`,
-          [
-            input.enabled,
-            input.scheduleHour ?? 9,
-            input.scheduleMinute ?? 0,
-            input.scheduleWindowMinutes ?? 60,
-            input.daysOfWeek ?? [1, 2, 3, 4, 5],
-            input.thresholdDays ?? 1,
-            input.timezone ?? "UTC",
-            existing[0]!["id"],
-            householdId,
-          ],
-        );
-        const rows = await query<Row>(
-          `SELECT * FROM notification_configs WHERE id = $1 AND household_id = $2`,
-          [existing[0]!["id"], householdId],
-        );
-        const row = rows[0];
-        if (!row) throw domainErrors.notFound("Notificação");
-        return mapNotification(row);
-      }
-      const id = randomUUID();
-      await query(
-        `INSERT INTO notification_configs (id, household_id, chat_id, notification_type, enabled, schedule_hour, schedule_minute, schedule_window_minutes, days_of_week, threshold_days, timezone)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [
-          id,
-          householdId,
-          input.chatId,
-          input.notificationType,
-          input.enabled,
-          input.scheduleHour ?? 9,
-          input.scheduleMinute ?? 0,
-          input.scheduleWindowMinutes ?? 60,
-          input.daysOfWeek ?? [1, 2, 3, 4, 5],
-          input.thresholdDays ?? 1,
-          input.timezone ?? "UTC",
-        ],
-      );
-      const rows = await query<Row>(
-        `SELECT * FROM notification_configs WHERE id = $1 AND household_id = $2`,
-        [id, householdId],
-      );
-      const row = rows[0];
-      if (!row) throw domainErrors.notFound("Notificação");
-      return mapNotification(row);
+      // FIX-WS-D2-R3 item 2: guarda FOR SHARE + efeito na mesma
+      // transação (antes era check-then-act fora de transação).
+      return withTransaction(pool, (client) => configureNotificationInTx(client, householdId, input));
     },
   };
   // V4.1 Phase 3 (UOW2): expose the client-bound cores as non-contractual

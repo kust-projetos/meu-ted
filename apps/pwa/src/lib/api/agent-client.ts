@@ -1297,3 +1297,65 @@ export async function fetchActivePendingOperations(workspaceId: string): Promise
   }
   return parsed.data.items;
 }
+
+/**
+ * FIX-WS-D2-R5 — handle opaco do depósito server-side do lado Agent.
+ *
+ * O Agent observa o próprio SQLite/R2 e DEPOSITA a prova DIRETAMENTE na
+ * API (server-to-server); o PWA recebe SÓ este UUID opaco e o devolve no
+ * delete. O PWA nunca recebe, nunca persiste e nunca submete conteúdo,
+ * contagens ou HMAC da prova (invariante A8) — nunca forja, nunca assina
+ * e nunca interpreta nada além do id. Falhas distinguem o lado: 409
+ * `agent.workspace_not_empty` (Agent tem conteúdo, com contagens) vs
+ * 409 `agent.attestation_unavailable` (depósito indisponível) — o `code`
+ * cruza para a UX dizer qual lado falhou, sem vazar segredo.
+ */
+export const emptyDepositSchema = z
+  .object({
+    attestationId: z.string().uuid(),
+  });
+
+export type EmptyDeposit = z.infer<typeof emptyDepositSchema>;
+
+export async function requestAgentEmptyAttestation(
+  workspaceId: string,
+  inventoryVersion: string,
+): Promise<EmptyDeposit> {
+  const baseUrl = agentBaseUrl();
+  const response = await fetchWithAgentAuth(
+    workspaceId,
+    `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/workspace/${encodeURIComponent(workspaceId)}/attest-empty`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "content-type": "application/json",
+        "X-Workspace-Id": workspaceId,
+      },
+      body: JSON.stringify({ inventoryVersion }),
+    },
+  );
+  if (!response.ok) {
+    let errorMsg = "Não foi possível atestar o lado Agent.";
+    let errorCode: string | undefined;
+    try {
+      const errBody = (await response.json()) as { message?: string; code?: string };
+      if (errBody?.message) errorMsg = errBody.message;
+      if (typeof errBody?.code === "string" && errBody.code) errorCode = errBody.code;
+    } catch {
+      // use default message
+    }
+    const err = new Error(errorMsg) as Error & { status?: number; code?: string };
+    err.status = response.status;
+    if (errorCode) err.code = errorCode;
+    throw err;
+  }
+  const parsed = emptyDepositSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    // Nunca inventar handle que o Agent não depositou.
+    const err = new Error("Depósito do Agent inválido.") as Error & { code?: string };
+    err.code = "agent.invalid_attestation_response";
+    throw err;
+  }
+  return parsed.data;
+}

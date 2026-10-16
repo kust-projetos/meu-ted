@@ -300,6 +300,22 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
             return reply.code(403).send({ code: 'auth.workspace_forbidden', message: 'Acesso ao workspace proibido.' });
           }
 
+          // D2 (ADR-027): archive CONGELA mutações no plano sessão+header
+          // (o path device-token congela via device-access). O status vem
+          // da mesma query da decisão de acesso (access.status); ausente
+          // em stores legados = fail-open pré-D2. Tombstone (`deleted`)
+          // bloqueia tudo (410); `archived` bloqueia tudo exceto o
+          // allowlist de lifecycle/leitura (isArchivedMutationAllowed).
+          if (access.status === 'deleted') {
+            return reply.code(410).send({ code: 'workspace.deleted', message: 'Workspace excluído permanentemente.' });
+          }
+          if (access.status && access.status !== 'active') {
+            const { isArchivedMutationAllowed } = await import("../auth/workspace-deletion.js");
+            if (!isArchivedMutationAllowed(request.method, request.url)) {
+              return reply.code(403).send({ code: 'workspace.archived', message: 'Workspace arquivado: mutações congeladas até restaurar.' });
+            }
+          }
+
           // T2.2 / T0.4.1 (SPEC §24.1): conta o uso EFETIVO do fallback bearer
           // legado — somente quando o cookie/session NÃO autenticaria sozinho
           // e o bearer foi o autenticador efetivo. Sonda fail-closed: qualquer
@@ -876,6 +892,7 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
         store: deps.workspaceStore,
         idempotency,
         ...(deps.workspaceAccess ? { workspaceAccess: deps.workspaceAccess } : {}),
+        agentServiceToken: agentServiceToken,
       });
     }
 

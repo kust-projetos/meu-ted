@@ -6,6 +6,7 @@ import './request-context.js';
 import type { ReconnectTokenStore } from './reconnect-tokens.js';
 import type { ReconnectSocketRegistry } from './reconnect-sockets.js';
 import type { WorkspaceAccessStore } from './workspace-access.js';
+import { verifyAgentServiceToken } from '../routes/agent-auth.js';
 import { DomainError } from '../writes/errors.js';
 import { createInMemoryIdempotencyStore, requireIdempotencyKey, type IdempotencyStore } from '../writes/idempotency.js';
 
@@ -18,13 +19,18 @@ export type {
   WorkspaceStore,
   WorkspaceSummary,
 } from './workspaces-store.js';
+export type {
+  AgentEmptyProof,
+  DeleteConfirmation,
+  DeleteReceipt,
+  DeletionInventory,
+} from './workspace-deletion.js';
 export {
   WorkspaceError,
   createInMemoryWorkspaceStore,
 } from './workspaces-store.js';
 import {
   type WorkspaceStore,
-  type WorkspaceStatus,
   WorkspaceError,
 } from './workspaces-store.js';
 
@@ -48,6 +54,48 @@ const workspaceBody = z.object({
   kind: z.enum(['personal', 'shared']).default('shared'),
 });
 
+// D2 (ADR-027): confirmação forte vinculada (UUID/ator/ação/versão/expiração).
+// O `actor` NÃO vem do cliente: é injetado da sessão server-side no
+// handler (nunca confiar em claim do cliente). `agentAttestation` segue no
+// contrato de fio mas NUNCA é prova (string declarada é ignorada); o que
+// conclui o delete é `attestationId` (FIX-WS-D2-R5: handle opaco do
+// depósito server-side Agent→API — a prova nunca cruza o browser;
+// ausente/inválido/expirado/consumido → 409 workspace.agent_unverified,
+// fail-closed).
+const agentEmptyProofBody = z.object({
+  workspaceId: workspaceId,
+  inventoryVersion: z.string().regex(/^[0-9a-f]{64}$/),
+  counts: z.object({
+    sessions: z.number().int(),
+    messages: z.number().int(),
+    memories: z.number().int(),
+    attachments: z.number().int(),
+  }),
+  expiresAt: z.string().datetime(),
+  hmac: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+// FIX-WS-D2-R5: corpo do depósito server-side (chamado SÓ pelo Agent,
+// nunca pelo browser). A prova HMAC é verificada no store antes de
+// registrar; `actorId` identifica o dono para o owner-check (resolvido
+// server-side via workspaceAccess, nunca confiado como role).
+const emptyAttestationDepositBody = z.object({
+  actorId: z.string().trim().min(1).max(200),
+  proof: agentEmptyProofBody,
+});
+
+const deleteBody = z.object({
+  confirmation: z.object({
+    workspaceId: workspaceId,
+    action: z.literal('workspace.delete'),
+    inventoryVersion: z.string().regex(/^[0-9a-f]{64}$/),
+    expiresAt: z.string().datetime(),
+    agentAttestation: z.enum(['unverified', 'verified-empty']),
+    attestationId: z.string().uuid().optional(),
+  }),
+  purge: z.boolean().optional(),
+});
+
 export const registerWorkspaceRoutes = (app: FastifyInstance, opts: {
   auth: BetterAuth;
   store: WorkspaceStore;
@@ -55,6 +103,12 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, opts: {
   reconnectTokens?: ReconnectTokenStore;
   reconnectSockets?: ReconnectSocketRegistry;
   idempotency?: IdempotencyStore;
+  /**
+   * FIX-WS-D2-R5: token de serviço Agent→API da rota interna de
+   * depósito (mesmo `AGENT_AUTH_SERVICE_TOKEN` das rotas
+   * `/internal/agent/*`). Ausente = depósito indisponível fail-closed.
+   */
+  agentServiceToken?: string | undefined;
 }): void => {
 
   const idempotency = opts.idempotency ?? createInMemoryIdempotencyStore();
@@ -165,7 +219,7 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, opts: {
     });
   });
 
-  const registerStatusRoute = (status: WorkspaceStatus, operation: string) => {
+  const registerStatusRoute = (status: 'active' | 'archived', operation: string) => {
     app.post(`/workspaces/:householdId/${status === 'archived' ? 'archive' : 'restore'}`, async (request, reply) => {
       const authSession = await session(request, reply);
       if (!authSession) return;
@@ -187,6 +241,80 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, opts: {
 
   registerStatusRoute('archived', 'workspace.archive');
   registerStatusRoute('active', 'workspace.restore');
+
+  // D2 (ADR-027) — inventário autoritativo de exclusão (owner-only).
+  app.get('/workspaces/:householdId/deletion-inventory', async (request, reply) => {
+    const authSession = await session(request, reply);
+    if (!authSession) return;
+    const parsed = workspaceParams.safeParse(request.params);
+    if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
+    if (!await requireOwnerAccess(authSession.userId, parsed.data.householdId, reply)) return;
+    try {
+      const inventory = await opts.store.deletionInventory({
+        authUserId: authSession.userId,
+        householdId: parsed.data.householdId,
+      });
+      return reply.send(inventory);
+    } catch (error) {
+      return sendWorkspaceError(reply, error);
+    }
+  });
+
+  // FIX-WS-D2-R5 — depósito server-side da prova de vazio (Agent→API
+  // direto, sem cruzar o browser). Auth em duas camadas: service token
+  // do Agent (a chamada é server-to-server, nunca do browser) + owner
+  // revalidado server-side via workspaceAccess (a role NUNCA vem do
+  // chamador). Retorna SÓ o handle opaco `{ attestationId }` —
+  // conteúdo, contagens e HMAC nunca saem daqui. Sem service token
+  // configurado, indisponível fail-closed (401, nunca deposita).
+  app.post('/internal/agent/empty-attestations', async (request, reply) => {
+    const serviceToken = opts.agentServiceToken ?? process.env.AGENT_AUTH_SERVICE_TOKEN ?? '';
+    if (!verifyAgentServiceToken(request, serviceToken)) {
+      return reply.code(401).send({ code: 'auth.invalid_service_token', message: 'Invalid or missing agent service authentication token' });
+    }
+    const parsed = emptyAttestationDepositBody.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
+    if (opts.workspaceAccess) {
+      const access = await opts.workspaceAccess.resolve(parsed.data.actorId, parsed.data.proof.workspaceId);
+      if (!access || access.role !== 'owner') {
+        return reply.code(403).send({ code: 'workspace.forbidden', message: 'only an owner can deposit an empty attestation' });
+      }
+    }
+    try {
+      const deposited = await opts.store.depositEmptyAttestation({ proof: parsed.data.proof });
+      return reply.code(201).send(deposited);
+    } catch (error) {
+      return sendWorkspaceError(reply, error);
+    }
+  });
+
+  // D2 (ADR-027) — delete SÓ-vazio, permanente, com confirmação forte.
+  // `purge: true` (com-dados) recusa com 409 dedicado sem tocar nos dados.
+  app.delete('/workspaces/:householdId', async (request, reply) => {
+    const authSession = await session(request, reply);
+    if (!authSession) return;
+    const parsedParams = workspaceParams.safeParse(request.params);
+    const parsedBody = deleteBody.safeParse(request.body ?? {});
+    if (!parsedParams.success || !parsedBody.success) {
+      return reply.code(400).send({ code: 'validation.error', issues: [...(parsedParams.success ? [] : parsedParams.error.issues), ...(parsedBody.success ? [] : parsedBody.error.issues)] });
+    }
+    if (!await requireOwnerAccess(authSession.userId, parsedParams.data.householdId, reply)) return;
+    return runIdempotent({
+      request,
+      reply,
+      userId: authSession.userId,
+      householdId: parsedParams.data.householdId,
+      operation: 'workspace.delete',
+      payload: { householdId: parsedParams.data.householdId, ...parsedBody.data },
+      status: 200,
+      producer: () => opts.store.deleteEmpty({
+        authUserId: authSession.userId,
+        householdId: parsedParams.data.householdId,
+        confirmation: { ...parsedBody.data.confirmation, actor: authSession.userId },
+        purge: parsedBody.data.purge,
+      }),
+    });
+  });
 
   app.get('/workspaces/:householdId/members', async (request, reply) => {
     const authSession = await session(request, reply);

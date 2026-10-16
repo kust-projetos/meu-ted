@@ -4,6 +4,7 @@ import type { Goal, } from '../types/domain.js';
 import type { GoalStore } from './store.js';
 import { domainErrors } from '../writes/errors.js';
 import { withTransaction } from '../db/pool.js';
+import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
 type Row = Record<string, unknown>;
 
 type CreateGoalInput = Parameters<GoalStore['createGoal']>[1];
@@ -22,6 +23,8 @@ const createGoalInTx = async (
   householdId: string,
   input: CreateGoalInput,
 ): Promise<Goal> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const id = randomUUID();
   await client.query(`INSERT INTO goals (id,household_id,name,goal_type,target_amount_cents,start_date,target_date,description,category_id,account_id,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [id, householdId, input.name, input.goalType, input.targetAmountCents, input.startDate, input.targetDate ?? null, input.description ?? null, input.categoryId ?? null, input.accountId ?? null, input.notes ?? null]);
   return { id, householdId, name: input.name, goalType: input.goalType as Goal['goalType'], targetAmountCents: input.targetAmountCents, currentAmountCents: 0, startDate: input.startDate, status: 'active' as const };
@@ -33,6 +36,8 @@ const contributeToGoalInTx = async (
   goalId: string,
   input: ContributeGoalInput,
 ) => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   // V4.1 SPEC §9.6: atomic increment — never read-modify-write. The
   // single UPDATE both adds the contribution and flips status, so N
   // concurrent contributions sum exactly (goal.current == SUM).
@@ -60,6 +65,8 @@ const updateGoalInTx = async (
   goalId: string,
   input: UpdateGoalInput,
 ): Promise<Goal> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const existing = await client.query<Row>(`SELECT * FROM goals WHERE id=$1 AND household_id=$2`, [goalId, householdId]);
   if (existing.rowCount === 0 || existing.rows.length === 0) throw domainErrors.notFound('Meta');
 
@@ -80,6 +87,24 @@ const updateGoalInTx = async (
   return { id: r['id'] as string, householdId: r['household_id'] as string, name: r['name'] as string, goalType: r['goal_type'] as Goal['goalType'], targetAmountCents: Number(r['target_amount_cents']), currentAmountCents: Number(r['current_amount_cents']), startDate: (r['start_date'] as Date).toISOString().slice(0, 10), ...(r['target_date'] ? { targetDate: (r['target_date'] as Date).toISOString().slice(0, 10) } : {}), status: r['status'] as Goal['status'] } as Goal;
 };
 
+/**
+ * FIX-WS-D2-R3 item 2 — core client-bound do cancelamento: guarda
+ * FOR SHARE + efeito no MESMO cliente (antes era check-then-act fora de
+ * transação). Sem efeito em workspace arquivado/excluído.
+ */
+const cancelGoalInTx = async (
+  client: PoolClient,
+  householdId: string,
+  goalId: string,
+) => {
+  await assertWorkspaceWritableInTx(client, householdId);
+  const existing = await client.query<Row>(`SELECT * FROM goals WHERE id=$1 AND household_id=$2`, [goalId, householdId]);
+  if (existing.rowCount === 0 || existing.rows.length === 0) throw domainErrors.notFound('Meta');
+  await client.query(`UPDATE goals SET status='cancelled', updated_at=NOW() WHERE id=$1 AND household_id=$2`, [goalId, householdId]);
+  const r = existing.rows[0]!;
+  return { id: goalId, householdId, name: r['name'] as string, goalType: r['goal_type'] as Goal['goalType'], targetAmountCents: Number(r['target_amount_cents']), currentAmountCents: Number(r['current_amount_cents']), startDate: (r['start_date'] as Date).toISOString().slice(0, 10), status: 'cancelled' as const };
+};
+
 export const createPostgresGoalStore = (pool: Pool): GoalStore => {
   const query = async <R extends Row = Row>(t: string, v: unknown[] = []) => { const r = await pool.query<R>(t, v); return r.rows; };
   const store: GoalStore = {
@@ -94,10 +119,9 @@ export const createPostgresGoalStore = (pool: Pool): GoalStore => {
       return withTransaction(pool, (client) => contributeToGoalInTx(client, householdId, goalId, input));
     },
     async cancelGoal(householdId, goalId, _reason) {
-      const rows = await query<Row>(`SELECT * FROM goals WHERE id=$1 AND household_id=$2`, [goalId, householdId]);
-      if (rows.length === 0) throw domainErrors.notFound('Meta');
-      await query(`UPDATE goals SET status='cancelled', updated_at=NOW() WHERE id=$1 AND household_id=$2`, [goalId, householdId]);
-      return { id: goalId, householdId, name: rows[0]!['name'] as string, goalType: rows[0]!['goal_type'] as Goal['goalType'], targetAmountCents: Number(rows[0]!['target_amount_cents']), currentAmountCents: Number(rows[0]!['current_amount_cents']), startDate: (rows[0]!['start_date'] as Date).toISOString().slice(0,10), status: 'cancelled' as const };
+      // FIX-WS-D2-R3 item 2: guarda FOR SHARE + efeito na mesma
+      // transação (antes era check-then-act fora de transação).
+      return withTransaction(pool, (client) => cancelGoalInTx(client, householdId, goalId));
     },
 
     async updateGoal(householdId, goalId, input) {

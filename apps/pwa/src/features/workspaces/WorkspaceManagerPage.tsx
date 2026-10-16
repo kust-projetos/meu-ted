@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, type FormEvent } from "react";
-import { Archive, Check, FolderKanban, Pencil, Plus, RotateCcw, Users, X, History, Send } from "lucide-react";
+import { Archive, Check, FolderKanban, Pencil, Plus, RotateCcw, Trash2, Users, X, History, Send } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
 import StatusBar from "@/components/StatusBar";
 import { Button } from "@/components/ui/Button";
@@ -9,7 +9,7 @@ import Card from "@/components/ui/Card";
 import Dialog from "@/components/ui/Dialog";
 import EmptyState from "@/components/ui/EmptyState";
 import { useWorkspace } from "@/lib/auth/workspace-context";
-import type { Workspace } from "@/lib/api/workspaces";
+import type { Workspace, DeletionInventory } from "@/lib/api/workspaces";
 import { createWorkspaceInvite } from "@/lib/api/workspaces";
 import { ApiError } from "@/lib/api/client";
 import { fetchAuditLogs, type AuditLog } from "@/lib/api/endpoints";
@@ -48,6 +48,9 @@ export default function WorkspaceManagerPage() {
     renameWorkspace,
     archiveWorkspace,
     restoreWorkspace,
+    fetchDeletionInventory,
+    requestAgentEmptyAttestation,
+    deleteWorkspace,
     inviteMember,
     resendInvite,
     revokeInvite,
@@ -59,6 +62,20 @@ export default function WorkspaceManagerPage() {
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
   const [editingName, setEditingName] = useState("");
   const [archiveTarget, setArchiveTarget] = useState<Workspace | null>(null);
+  // D2 (ADR-027): exclusão permanente só de workspace vazio, com
+  // confirmação forte (inventário versionado + expiração + nome digitado).
+  const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
+  const [deleteInventory, setDeleteInventory] = useState<DeletionInventory | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  // FIX-WS-D2-R5 — passo 2 do fluxo: handle opaco do depósito
+  // server-side do lado Agent (o Agent deposita direto na API; o PWA
+  // recebe SÓ o UUID e o devolve no delete — nunca conteúdo/HMAC).
+  const [depositId, setDepositId] = useState<string | null>(null);
+  const [attestLoading, setAttestLoading] = useState(false);
+  const [attestError, setAttestError] = useState<string | null>(null);
+  const [attestAttempt, setAttestAttempt] = useState(0);
+  const [deleteConfirmName, setDeleteConfirmName] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [busyWorkspaceId, setBusyWorkspaceId] = useState<string | null>(null);
   const [formBusy, setFormBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -296,6 +313,107 @@ export default function WorkspaceManagerPage() {
     }
   }
 
+  // Reset do fluxo de exclusão executado nos handlers que fecham o
+  // diálogo (nunca dentro de effect — react-hooks/set-state-in-effect).
+  function resetDeleteFlow() {
+    setDeleteTarget(null);
+    setDeleteInventory(null);
+    setDepositId(null);
+    setAttestError(null);
+    setDeleteConfirmName("");
+  }
+
+  useEffect(() => {
+    if (!deleteTarget) return;
+    let cancelled = false;
+    async function loadInventory() {
+      setDeleteLoading(true);
+      setActionError(null);
+      setDepositId(null);
+      setAttestError(null);
+      try {
+        const inventory = await fetchDeletionInventory(deleteTarget!.id);
+        if (!cancelled) setDeleteInventory(inventory);
+      } catch (cause) {
+        if (!cancelled) setActionError(cause instanceof Error ? cause.message : "Não foi possível verificar o workspace.");
+      } finally {
+        if (!cancelled) setDeleteLoading(false);
+      }
+    }
+    void loadInventory();
+    return () => { cancelled = true; };
+  }, [deleteTarget, fetchDeletionInventory]);
+
+  // FIX-WS-D2-R5 — passo 2: com o inventário PG vazio em mãos, pede ao
+  // Agent o depósito server-side vinculado à versão e guarda SÓ o handle
+  // opaco (o vínculo de versão é resolvido server-side no delete; o PWA
+  // nunca vê conteúdo/HMAC). Falha aqui mostra QUAL lado falhou (Agent
+  // com conteúdo / depósito indisponível) sem tentar o delete.
+  useEffect(() => {
+    if (!deleteTarget || !deleteInventory?.empty) return;
+    // Um depósito por ciclo de inventário: o handle é opaco e
+    // single-use; novo inventário (ou retry) gera novo depósito.
+    if (depositId) return;
+    let cancelled = false;
+    async function loadDeposit() {
+      setAttestLoading(true);
+      setAttestError(null);
+      try {
+        const deposited = await requestAgentEmptyAttestation(deleteTarget!.id, deleteInventory!.inventoryVersion);
+        if (!cancelled) setDepositId(deposited.attestationId);
+      } catch (cause) {
+        if (!cancelled) {
+          const code = cause && typeof cause === "object" && "code" in cause
+            ? String((cause as { code?: unknown }).code ?? "")
+            : "";
+          setDepositId(null);
+          setAttestError(
+            code === "agent.workspace_not_empty"
+              ? "O lado Agent (conversas e arquivos) ainda possui conteúdo deste workspace. Nenhuma exclusão foi executada."
+              : code === "agent.attestation_unavailable"
+                ? "Atestação do lado Agent indisponível no momento. Nenhuma exclusão foi executada."
+                : cause instanceof Error ? cause.message : "Não foi possível atestar o lado Agent.",
+          );
+        }
+      } finally {
+        if (!cancelled) setAttestLoading(false);
+      }
+    }
+    void loadDeposit();
+    return () => { cancelled = true; };
+  }, [deleteTarget, deleteInventory, depositId, attestAttempt, requestAgentEmptyAttestation]);
+
+  async function handleDelete() {
+    if (!deleteTarget || !deleteInventory?.empty || !depositId) return;
+    // Só o handle opaco viaja: o PWA nunca recebe nem interpreta a prova
+    // — a API resolve tudo server-side (fail-closed sem depósito válido).
+    setDeleteBusy(true);
+    setActionError(null);
+    try {
+      await deleteWorkspace(deleteTarget.id, {
+        workspaceId: deleteTarget.id,
+        inventoryVersion: deleteInventory.inventoryVersion,
+        expiresAt: deleteInventory.expiresAt,
+        agentAttestation: "unverified",
+        attestationId: depositId,
+      });
+      resetDeleteFlow();
+    } catch (cause) {
+      const code = cause && typeof cause === "object" && "code" in cause
+        ? String((cause as { code?: unknown }).code ?? "")
+        : "";
+      // Depósito morto (expirado/consumido/divergente): descarta o handle
+      // e re-pede um depósito fresco automaticamente.
+      if (code === "workspace.agent_unverified") {
+        setDepositId(null);
+        setAttestAttempt((attempt) => attempt + 1);
+      }
+      setActionError(cause instanceof Error ? cause.message : "Não foi possível excluir o workspace.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   function renderWorkspaceCard(workspace: Workspace) {
     const isActive = workspace.id === activeWorkspace?.id;
     const isArchived = workspace.status === "archived";
@@ -370,16 +488,31 @@ export default function WorkspaceManagerPage() {
                   <Pencil size={15} />
                 </Button>
                 {isArchived ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Restaurar ${workspace.name}`}
-                    onClick={() => void handleRestore(workspace)}
-                    loading={busy}
-                  >
-                    <RotateCcw size={15} />
-                  </Button>
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Restaurar ${workspace.name}`}
+                      onClick={() => void handleRestore(workspace)}
+                      loading={busy}
+                    >
+                      <RotateCcw size={15} />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Excluir ${workspace.name}`}
+                      onClick={() => {
+                        setDeleteTarget(workspace);
+                        setActionError(null);
+                      }}
+                      disabled={busy}
+                    >
+                      <Trash2 size={15} />
+                    </Button>
+                  </>
                 ) : (
                   <Button
                     type="button"
@@ -753,6 +886,84 @@ export default function WorkspaceManagerPage() {
           <Button type="button" variant="ghost" onClick={() => setArchiveTarget(null)}>Cancelar</Button>
           <Button type="button" variant="danger" loading={busyWorkspaceId === archiveTarget?.id} onClick={() => void handleArchive()}>Arquivar workspace</Button>
         </div>
+      </Dialog>
+
+      <Dialog open={deleteTarget !== null} onClose={() => resetDeleteFlow()} title="Excluir workspace permanentemente?" description="Exclusão permanente só é permitida para workspace vazio. Com dados, a exclusão é recusada — purge com-dados está bloqueado.">
+        {deleteLoading ? (
+          <p className="py-4 text-center text-[13px] text-text-muted">Verificando conteúdo do workspace…</p>
+        ) : deleteInventory && !deleteInventory.empty ? (
+          <div className="space-y-3">
+            <div className="rounded-[12px] border border-warning/30 bg-warning-tint p-3 text-[13px] font-medium text-warning">
+              Este workspace possui dados e não pode ser excluído. Remova o conteúdo ou arquive-o novamente após limpar.
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => resetDeleteFlow()}>Fechar</Button>
+            </div>
+          </div>
+        ) : deleteInventory?.empty ? (
+          attestLoading ? (
+            <div className="space-y-3">
+              <p className="py-4 text-center text-[13px] text-text-muted">Atestando o lado Agent (conversas e arquivos)…</p>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={() => resetDeleteFlow()}>Fechar</Button>
+              </div>
+            </div>
+          ) : attestError || !depositId ? (
+            <div className="space-y-3">
+              <div className="rounded-[12px] border border-warning/30 bg-warning-tint p-3 text-[13px] font-medium text-warning">
+                {attestError ?? "Exclusão bloqueada: o lado Agent (conversas e arquivos) ainda não atestou que este workspace está vazio. Nenhuma exclusão foi executada."}
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={() => resetDeleteFlow()}>Fechar</Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setAttestError(null);
+                    setDepositId(null);
+                    setAttestAttempt((attempt) => attempt + 1);
+                  }}
+                >
+                  Tentar novamente
+                </Button>
+              </div>
+            </div>
+          ) : (
+          <div className="space-y-4">
+            <div className="rounded-[12px] border border-danger/20 bg-danger-tint p-3 text-[13px] font-medium text-danger">
+              O workspace &ldquo;{deleteTarget?.name}&rdquo; está vazio e será excluído permanentemente. Auditoria e registros de idempotência são preservados; o identificador nunca será reutilizado.
+            </div>
+            <div>
+              <label htmlFor="delete-confirm-name" className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">
+                Digite &ldquo;{deleteTarget?.name}&rdquo; para confirmar
+              </label>
+              <input
+                id="delete-confirm-name"
+                value={deleteConfirmName}
+                onChange={(event) => setDeleteConfirmName(event.target.value)}
+                autoFocus
+                className="h-11 w-full rounded-[12px] border border-border-subtle bg-surface-2 px-3 text-[13px] font-medium text-text-primary outline-none focus:border-danger"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => resetDeleteFlow()}>Cancelar</Button>
+              <Button
+                type="button"
+                variant="danger"
+                loading={deleteBusy}
+                disabled={deleteConfirmName.trim() !== deleteTarget?.name}
+                onClick={() => void handleDelete()}
+              >
+                Excluir permanentemente
+              </Button>
+            </div>
+          </div>
+          )
+        ) : (
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => resetDeleteFlow()}>Fechar</Button>
+          </div>
+        )}
       </Dialog>
 
       <Dialog open={revokeTarget !== null} onClose={() => setRevokeTarget(null)} title="Revogar convite?" description="O destinatário não conseguirá mais entrar neste workspace com este convite.">

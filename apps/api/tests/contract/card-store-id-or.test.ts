@@ -24,7 +24,14 @@ describe('card store category IDOR protection', () => {
     ['canonical', createPostgresCardStore],
     ['legacy', createLegacyPostgresCardStore],
   ])('rejects a category from another household in %s store', async (_name, createStore) => {
-    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    // FIX-WS-D2-R2 item 2: a guarda de lifecycle responde active; o
+    // downstream IDOR (categoria de outro household) segue 404.
+    const query = vi.fn(async (text: string) => {
+      if (typeof text === 'string' && text.includes('FROM households')) {
+        return { rows: [{ status: 'active' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
     const store = createStore(fakePool(query) as never);
 
     await expect(store.createCardPurchase(HOUSEHOLD_A, {
@@ -45,7 +52,14 @@ describe('card store category IDOR protection', () => {
     ['canonical', createPostgresCardStore],
     ['legacy', createLegacyPostgresCardStore],
   ])('rejects a recurring purchase account from another household in %s store', async (_name, createStore) => {
-    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    // FIX-WS-D2-R2 item 2: a guarda de lifecycle responde active; o
+    // downstream IDOR (conta de outro household) segue 404.
+    const query = vi.fn(async (text: string) => {
+      if (typeof text === 'string' && text.includes('FROM households')) {
+        return { rows: [{ status: 'active' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
     const store = createStore(fakePool(query) as never);
 
     await expect(store.createRecurringPurchase(HOUSEHOLD_A, {
@@ -63,15 +77,23 @@ describe('card store category IDOR protection', () => {
   });
 
   it('canonical update rejects a foreign purchase without querying the legacy table', async () => {
-    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    // FIX-WS-D2-R2 item 2: a guarda de lifecycle responde active (1ª
+    // query); o peek do downstream segue 404 sem tocar em card_purchases.
+    const query = vi.fn(async (text: string) => {
+      if (typeof text === 'string' && text.includes('FROM households')) {
+        return { rows: [{ status: 'active' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
     const store = createPostgresCardStore(fakePool(query) as never);
 
     await expect(store.updatePurchase(HOUSEHOLD_A, 'foreign-purchase-id', {
       description: 'attempted update',
     })).rejects.toMatchObject({ code: 'not_found' });
 
-    expect(query).toHaveBeenCalledTimes(1);
-    expect(query.mock.calls[0]?.[0]).not.toContain('card_purchases');
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[0]?.[0]).toContain('FROM households');
+    expect(query.mock.calls[1]?.[0]).not.toContain('card_purchases');
   });
 
   it('does not return a foreign category id from the canonical statement read', async () => {

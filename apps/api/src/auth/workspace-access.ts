@@ -6,6 +6,12 @@ export type WorkspaceAccess = {
   householdId: string;
   role: 'owner' | 'member';
   kind: 'personal' | 'shared';
+  /**
+   * D2 (ADR-027): lifecycle do workspace na mesma query da decisão de
+   * acesso (sem TOCTOU entre resolve e list). Ausente em fakes legados —
+   * os gates tratam ausência como "desconhecido" (fail-open pré-D2).
+   */
+  status?: 'active' | 'archived' | 'deleted';
 };
 
 export type WorkspaceAccessStore = {
@@ -31,7 +37,7 @@ type Row = Record<string, unknown>;
 export const createPostgresWorkspaceAccessStore = (pool: Pool): WorkspaceAccessStore => ({
   async resolve(authUserId, householdId) {
     const result = await queryInTransaction<Row>(pool,
-      `SELECT u.id AS user_id, m.household_id, m.role, h.kind
+      `SELECT u.id AS user_id, m.household_id, m.role, h.kind, h.status
          FROM users u
          JOIN memberships m ON m.user_id = u.id
          JOIN households h ON h.id = m.household_id
@@ -43,11 +49,14 @@ export const createPostgresWorkspaceAccessStore = (pool: Pool): WorkspaceAccessS
     );
     const row = result.rows[0];
     if (!row) return undefined;
+    const status = row['status'] as WorkspaceAccess['status'];
     return {
       userId: row['user_id'] as string,
       householdId: row['household_id'] as string,
       role: row['role'] as WorkspaceAccess['role'],
       kind: row['kind'] as WorkspaceAccess['kind'],
+      // Status ausente (schema antigo) = indefinido; gates fail-open pré-D2.
+      ...(status ? { status } : {}),
     };
   },
 });

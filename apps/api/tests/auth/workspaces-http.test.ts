@@ -221,4 +221,39 @@ describe('workspace management HTTP', () => {
     expect(store.setStatus).not.toHaveBeenCalled();
     await app.close();
   });
+
+  it('R3 item 1 (HIGH atestação): agentAttestation forjada no body é recusada (409, sem efeito)', async () => {
+    const app = Fastify({ logger: false });
+    // Segredo explícito de teste (nunca default embutido; sem ele a
+    // emissão/verificação recusam fail-closed — sem depender de env).
+    const store = createInMemoryWorkspaceStore(undefined, { deletionHmacSecret: 'test-only-workspace-deletion-hmac-secret' });
+    registerWorkspaceRoutes(app, { auth, store });
+    await app.ready();
+
+    const created = await store.create({ authUserId: 'auth-user-1', name: 'Vazio', kind: 'shared' });
+    const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: created.id });
+    expect(inventory.empty).toBe(true);
+
+    // String 'verified-empty' declarada pelo cliente, sem prova server-side:
+    // indistinguível de falsificação — recusada com 409 dedicado.
+    const forged = await app.inject({
+      method: 'DELETE',
+      url: `/workspaces/${created.id}`,
+      headers: { 'idempotency-key': 'delete-forged-1' },
+      payload: {
+        confirmation: {
+          workspaceId: created.id,
+          action: 'workspace.delete',
+          inventoryVersion: inventory.inventoryVersion,
+          expiresAt: inventory.expiresAt,
+          agentAttestation: 'verified-empty',
+        },
+      },
+    });
+    expect(forged.statusCode).toBe(409);
+    expect(forged.json()).toMatchObject({ code: 'workspace.agent_unverified' });
+    // Sem efeito: workspace segue listado e ativo.
+    expect((await store.list('auth-user-1')).map((w) => w.id)).toContain(created.id);
+    await app.close();
+  });
 });

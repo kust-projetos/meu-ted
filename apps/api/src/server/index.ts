@@ -103,6 +103,10 @@ const start = async (): Promise<void> => {
         await revocationTargets.tokens.revokeAllForUserWorkspace(userId, householdId);
         await revocationTargets.push.removeAllForUserWorkspace(householdId, userId);
       },
+    }, {
+      // FIX-WS-D2-R3 item 3: HMAC da confirmação de exclusão. Sem a env,
+      // emissão/verificação recusam fail-closed (operador: ver gate).
+      deletionHmacSecret: process.env.WORKSPACE_DELETION_HMAC_SECRET,
     });
     const ownershipTransferStore = createPostgresOwnershipTransferStore(pool);
     const inviteDelivery = (() => {

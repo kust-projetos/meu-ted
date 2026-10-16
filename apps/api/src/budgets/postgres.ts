@@ -5,6 +5,7 @@ import type { BudgetStore } from './store.js';
 import { assertCategoryKind } from '../categories/resolve.js';
 import { domainErrors } from '../writes/errors.js';
 import { withTransaction } from '../db/pool.js';
+import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
 
 type Row = Record<string, unknown>;
 
@@ -25,6 +26,8 @@ const createBudgetInTx = async (
   householdId: string,
   input: CreateBudgetInput,
 ): Promise<Budget> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const gate = async <R extends Row = Row>(text: string, values: unknown[] = []): Promise<R[]> =>
     (await client.query<R>(text, values)).rows;
   // V4.1 Task 2.15: budgets had no category validation at all.
@@ -40,6 +43,8 @@ const updateBudgetInTx = async (
   budgetId: string,
   patch: UpdateBudgetInput,
 ): Promise<Budget> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
   const existing = await client.query<Row>(`SELECT * FROM budgets WHERE id=$1 AND household_id=$2`, [budgetId, householdId]);
   if ((existing.rowCount ?? 0) === 0) throw domainErrors.notFound('Orçamento');
   if (patch.amountCents !== undefined) await client.query(`UPDATE budgets SET amount_cents=$1, updated_at=NOW() WHERE id=$2 AND household_id=$3`, [patch.amountCents, budgetId, householdId]);

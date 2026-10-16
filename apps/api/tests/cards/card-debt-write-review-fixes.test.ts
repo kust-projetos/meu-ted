@@ -113,6 +113,11 @@ const makeFakePool = (opts: FakeOpts = {}) => {
       log.push({ seq: seq++, client: name, kind, ...extra });
     };
     if (t === 'BEGIN' || t === 'COMMIT' || t === 'ROLLBACK') return { rows: [], rowCount: 0 };
+    // FIX-WS-D2-R2 item 2: guarda de lifecycle dos writers (workspace active).
+    if (t.includes('FROM households')) {
+      push('other');
+      return { rows: [{ status: 'active' }], rowCount: 1 };
+    }
     if (t.includes('ON CONFLICT')) {
       const cycle = values[2] as string;
       if (!stmts.has(cycle)) {

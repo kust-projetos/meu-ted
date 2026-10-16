@@ -2,6 +2,17 @@ import type { Pool } from 'pg';
 import { withTransaction, queryInTransaction } from '../db/pool.js';
 import type { WorkspaceKind, WorkspaceMember, WorkspaceRevocationHooks, WorkspaceRole, WorkspaceStatus, WorkspaceStore, WorkspaceSummary } from './workspaces-store.js';
 import { WorkspaceError } from './workspaces-store.js';
+import type { AgentEmptyProof, DeletionInventory, DeletionInventoryCounts } from './workspace-deletion.js';
+import {
+  agentAttestationUnavailable,
+  agentUnverified,
+  boundInventoryVersion,
+  deletionInventoryExpiry,
+  hashInventoryCounts,
+  resolveDeletionHmacSecret,
+  verifyAgentEmptyProof,
+  verifyDeleteConfirmation,
+} from './workspace-deletion.js';
 
 type Row = Record<string, unknown>;
 
@@ -13,7 +24,87 @@ const mapWorkspace = (row: Row): WorkspaceSummary => ({
   status: (row['status'] as WorkspaceStatus | undefined) ?? 'active',
 });
 
-export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevocationHooks): WorkspaceStore => {
+const deletedWorkspace = (householdId: string): WorkspaceError =>
+  new WorkspaceError('workspace.deleted', 410, 'Workspace excluído permanentemente.');
+
+/**
+ * D2 (ADR-027) — prova autoritativa de "vazio" em UMA statement (scalar
+ * subselects, sem N+1). Inclui soft-deleted (COUNT(*) sem filtro de
+ * deleted_at), histórico de domínio, pendings/incertos V1+V2, intentions
+ * não-vinculadas, convites pendentes, transfers pendentes e exige
+ * exatamente 1 membership ativo (o owner).
+ *
+ * EXCLUÍDO por desenho (evidência append-only preservada pelo delete,
+ * nunca apagada para "esvaziar"): audit_logs, operation_records
+ * terminais, idempotency_keys. operation_records `processing` AINDA
+ * acionável (retry_until futuro) bloqueia como "incerto". device_tokens
+ * (material de auth) morre com o workspace via gates de acesso e não
+ * bloqueia; push_subscriptions ATIVAS bloqueiam (entrega para workspace
+ * morto seria resíduo). account_invites é signup-level (sem household).
+ * Lado Agent (DO/R2/memória) não é observável daqui: barreira
+ * cross-store pendente, atestação registrada como unverified.
+ */
+const INVENTORY_SELECT = `
+  SELECT
+    (SELECT COUNT(*) FROM accounts WHERE household_id = $1) AS accounts,
+    (SELECT COUNT(*) FROM categories WHERE household_id = $1) AS categories,
+    (SELECT COUNT(*) FROM transactions WHERE household_id = $1) AS transactions,
+    (SELECT COUNT(*) FROM statements WHERE household_id = $1) AS statements,
+    (SELECT COUNT(*) FROM recurring_purchases WHERE household_id = $1) AS recurring_purchases,
+    (SELECT COUNT(*) FROM accounts_payable WHERE household_id = $1) AS accounts_payable,
+    (SELECT COUNT(*) FROM payable_templates WHERE household_id = $1) AS payable_templates,
+    (SELECT COUNT(*) FROM notification_configs WHERE household_id = $1) AS notification_configs,
+    (SELECT COUNT(*) FROM budgets WHERE household_id = $1) AS budgets,
+    (SELECT COUNT(*) FROM goals WHERE household_id = $1) AS goals,
+    (SELECT COUNT(*) FROM goal_contributions gc JOIN goals g ON g.id = gc.goal_id WHERE g.household_id = $1) AS goal_contributions,
+    (SELECT COUNT(*) FROM subscriptions WHERE household_id = $1) AS subscriptions,
+    (SELECT COUNT(*) FROM profiles WHERE household_id = $1) AS profiles,
+    (SELECT COUNT(*) FROM card_purchases WHERE household_id = $1) AS card_purchases,
+    (SELECT COUNT(*) FROM push_subscriptions WHERE workspace_id = $2) AS push_subscriptions,
+    (SELECT COUNT(*) FROM pending_operations WHERE workspace_id = $2 AND status NOT IN ('rejected', 'expired')) AS pending_operations_v1,
+    (SELECT COUNT(*) FROM pending_operations WHERE workspace_id = $2 AND protocol_version = 2 AND (execution_status IS NULL OR execution_status IN ('proposed', 'confirmed', 'executing'))) AS pending_operations_v2,
+    (SELECT COUNT(*) FROM operation_records WHERE workspace_id = $2 AND status = 'processing' AND retry_until > NOW()) AS operation_records_processing,
+    (SELECT COUNT(*) FROM pending_operation_confirmation_intentions WHERE workspace_id = $2::text AND operation_id IS NULL) AS confirmation_intentions,
+    (SELECT COUNT(*) FROM invites WHERE household_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()) AS invites,
+    (SELECT COUNT(*) FROM ownership_transfers WHERE household_id = $1 AND status = 'pending') AS ownership_transfers,
+    (SELECT COUNT(*) FROM memberships WHERE household_id = $1 AND status = 'active') AS memberships_active
+`;
+
+const toCounts = (row: Row): DeletionInventoryCounts => {
+  const counts: DeletionInventoryCounts = {};
+  for (const [key, value] of Object.entries(row)) {
+    counts[key] = typeof value === 'number' ? value : Number(value ?? 0);
+  }
+  return counts;
+};
+
+const inventoryFromRow = (householdId: string, row: Row, secret: string): DeletionInventory => {
+  const counts = toCounts(row);
+  const empty =
+    Object.entries(counts).every(([key, value]) =>
+      key === 'memberships_active' ? value === 1 : value === 0,
+    );
+  // A versão vincula contagens + expiração sob HMAC server-side
+  // (FIX-WS-D2-R3 item 3): a expiração apresentada no delete precisa
+  // ser esta mesma — e só o servidor emite versões válidas.
+  const expiresAt = deletionInventoryExpiry();
+  return {
+    workspaceId: householdId,
+    inventoryVersion: hashInventoryCounts(householdId, counts, expiresAt, secret),
+    expiresAt,
+    empty,
+    counts,
+    purgeBlocked: true,
+    agentAttestation: 'unverified',
+  };
+};
+
+export type PostgresWorkspaceStoreOptions = {
+  /** Segredo HMAC da confirmação de exclusão (item 3); sem ele, emissão/verificação recusam fail-closed. */
+  deletionHmacSecret?: string | undefined;
+};
+
+export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevocationHooks, opts?: PostgresWorkspaceStoreOptions): WorkspaceStore => {
   const assertMembership = async (authUserId: string, householdId: string): Promise<{ userId: string; role: WorkspaceRole }> => {
     const result = await queryInTransaction<Row>(
       pool,
@@ -47,6 +138,7 @@ export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevoca
           WHERE (u.auth_user_id = $1 OR u.id::text = $1)
             AND u.status = 'active'
             AND m.status = 'active'
+            AND h.status <> 'deleted'
           ORDER BY (h.status = 'active') DESC, (h.kind = 'personal') DESC, h.created_at ASC, h.id ASC`,
         [authUserId],
       );
@@ -97,15 +189,28 @@ export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevoca
     async rename({ authUserId, householdId, name }) {
       await assertActiveMembershipRole(authUserId, householdId, ['owner']);
       return withTransaction(pool, async (client) => {
+        // FIX-WS-D2-R2 itens 3–4: lifecycle serializado sob o lock da
+        // linha; o congelamento de archived vale pelo workspace
+        // efetivamente mutado (path), nunca pelo header opcional.
+        const current = await client.query<Row>(
+          `SELECT status FROM households WHERE id = $1 FOR UPDATE`,
+          [householdId],
+        );
+        if (current.rows[0]?.['status'] === 'deleted') throw deletedWorkspace(householdId);
+        // D2 §1: rename sobre archived congela (só restore/re-archive
+        // idempotente, delete-vazio, saída e revogação passam).
+        if (current.rows[0]?.['status'] === 'archived') {
+          throw new WorkspaceError('workspace.archived', 403, 'Workspace arquivado: mutações congeladas até restaurar.');
+        }
         const result = await client.query<Row>(
           `UPDATE households
               SET name = $1
-            WHERE id = $2
+            WHERE id = $2 AND status <> 'deleted'
             RETURNING id, name, kind, status`,
           [name, householdId],
         );
         const workspace = result.rows[0];
-        if (!workspace) throw new WorkspaceError('workspace.not_found', 404, 'Workspace não encontrado.');
+        if (!workspace) throw deletedWorkspace(householdId);
         return mapWorkspace({ ...workspace, role: 'owner' });
       });
     },
@@ -113,17 +218,187 @@ export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevoca
     async setStatus({ authUserId, householdId, status }) {
       await assertActiveMembershipRole(authUserId, householdId, ['owner']);
       return withTransaction(pool, async (client) => {
+        // FIX-WS-D2-R2 item 3: lifecycle serializado sob o MESMO lock do
+        // efeito (FOR UPDATE); o tombstone é a proibição autoritativa de
+        // reativação — restore de tombstone recusa mesmo em corrida.
+        const current = await client.query<Row>(
+          `SELECT status FROM households WHERE id = $1 FOR UPDATE`,
+          [householdId],
+        );
+        if (!current.rows[0]) throw new WorkspaceError('workspace.not_found', 404, 'Workspace não encontrado.');
+        // D2: delete é permanente — restore de tombstone recusa.
+        if (current.rows[0]?.['status'] === 'deleted') throw deletedWorkspace(householdId);
+        const tombstone = await client.query<Row>(
+          `SELECT 1 FROM workspace_tombstones WHERE household_id = $1`,
+          [householdId],
+        );
+        if ((tombstone.rowCount ?? 0) > 0) throw deletedWorkspace(householdId);
         const result = await client.query<Row>(
           `UPDATE households
               SET status = $1,
                   archived_at = CASE WHEN $1 = 'archived' THEN COALESCE(archived_at, NOW()) ELSE NULL END
-            WHERE id = $2
+            WHERE id = $2 AND status <> 'deleted'
             RETURNING id, name, kind, status`,
           [status, householdId],
         );
         const workspace = result.rows[0];
-        if (!workspace) throw new WorkspaceError('workspace.not_found', 404, 'Workspace não encontrado.');
+        // UPDATE condicional: zero linhas = delete concorrente venceu a
+        // corrida — o tombstone (proibição autoritativa) decide.
+        if (!workspace) throw deletedWorkspace(householdId);
         return mapWorkspace({ ...workspace, role: 'owner' });
+      });
+    },
+
+    async deletionInventory({ authUserId, householdId }) {
+      await assertActiveMembershipRole(authUserId, householdId, ['owner']);
+      const household = await queryInTransaction<Row>(
+        pool,
+        `SELECT id, status FROM households WHERE id = $1`,
+        [householdId],
+      );
+      if (!household.rows[0]) throw new WorkspaceError('workspace.not_found', 404, 'Workspace não encontrado.');
+      if (household.rows[0]['status'] === 'deleted') throw deletedWorkspace(householdId);
+      const result = await queryInTransaction<Row>(pool, INVENTORY_SELECT, [householdId, householdId]);
+      let secret: string;
+      try {
+        secret = resolveDeletionHmacSecret(opts?.deletionHmacSecret);
+      } catch {
+        // FIX-WS-D2-R4: sem segredo, a emissão é indisponível — 409
+        // fail-closed (nunca emite versão forjável sem HMAC).
+        throw agentAttestationUnavailable();
+      }
+      return inventoryFromRow(householdId, result.rows[0] ?? {}, secret);
+    },
+
+    async depositEmptyAttestation({ proof }: { proof: AgentEmptyProof }) {
+      // FIX-WS-D2-R5: o HMAC é verificado AQUI (server-side, a prova
+      // nunca cruzou o browser): segredo ausente ou prova inválida =
+      // indisponível/bloqueio fail-closed, sem registrar nada.
+      verifyAgentEmptyProof(
+        proof,
+        {
+          workspaceId: proof.workspaceId,
+          inventoryVersion: proof.inventoryVersion,
+          secret: opts?.deletionHmacSecret,
+        },
+      );
+      const household = await queryInTransaction<Row>(
+        pool,
+        `SELECT id FROM households WHERE id = $1`,
+        [proof.workspaceId],
+      );
+      if (!household.rows[0]) throw new WorkspaceError('workspace.not_found', 404, 'Workspace não encontrado.');
+      const inserted = await queryInTransaction<Row>(
+        pool,
+        `INSERT INTO workspace_empty_attestations (household_id, inventory_version, counts, expires_at)
+          VALUES ($1, $2, $3::jsonb, $4)
+         RETURNING id`,
+        [proof.workspaceId, proof.inventoryVersion, JSON.stringify(proof.counts), proof.expiresAt],
+      );
+      const attestationId = inserted.rows[0]?.['id'];
+      if (typeof attestationId !== 'string') {
+        throw new WorkspaceError('workspace.invalid', 500, 'Depósito de atestação indisponível.');
+      }
+      return { attestationId };
+    },
+
+    async deleteEmpty({ authUserId, householdId, confirmation, purge }) {
+      await assertActiveMembershipRole(authUserId, householdId, ['owner']);
+      return withTransaction(pool, async (client) => {
+        // Barreira de concorrência: trava a linha antes do inventário final.
+        const locked = await client.query<Row>(
+          `SELECT id, name, kind, status FROM households WHERE id = $1 FOR UPDATE`,
+          [householdId],
+        );
+        const household = locked.rows[0];
+        if (!household) throw new WorkspaceError('workspace.not_found', 404, 'Workspace não encontrado.');
+        if (household['status'] === 'deleted') throw deletedWorkspace(householdId);
+        // Purge com-dados BLOQUEADO: recusa dedicada, sem tocar nos dados.
+        if (purge === true) {
+          throw new WorkspaceError(
+            'workspace.purge_blocked',
+            409,
+            'Purge com-dados bloqueado: retenção/exportação/política pendentes (D2).',
+          );
+        }
+        // Inventário final recomputado SOB o lock: vínculo (contagens +
+        // expiração apresentada, sob HMAC server-side), vazio real e
+        // handle opaco do depósito server-side antes de qualquer efeito.
+        // A ordem é intencional: `not_empty` precede o handle para
+        // preservar o diagnóstico, e o depósito fail-closed
+        // (ausente/inválido/expirado/consumido, ou string declarada pelo
+        // cliente) BLOQUEIA tudo antes de qualquer efeito — o delete
+        // nunca conclui sem depósito emitido server-side pelo Agent
+        // (FIX-WS-D2-R5: a prova nunca cruza o browser).
+        const probed = await client.query<Row>(INVENTORY_SELECT, [householdId, householdId]);
+        const liveCounts = toCounts(probed.rows[0] ?? {});
+        const liveEmpty = Object.entries(liveCounts).every(([key, value]) =>
+          key === 'memberships_active' ? value === 1 : value === 0,
+        );
+        if (!liveEmpty) {
+          throw new WorkspaceError(
+            'workspace.not_empty',
+            409,
+            'Workspace com dados: delete só é permitido vazio; purge com-dados está bloqueado (D2).',
+          );
+        }
+        let secret: string;
+        try {
+          secret = resolveDeletionHmacSecret(opts?.deletionHmacSecret);
+        } catch {
+          // FIX-WS-D2-R5: sem segredo, a verificação é indisponível —
+          // 409 fail-closed (nunca conclui sem depósito verificável).
+          throw agentAttestationUnavailable();
+        }
+        const boundVersion = boundInventoryVersion(
+          householdId,
+          liveCounts,
+          confirmation.expiresAt,
+          secret,
+        );
+        verifyDeleteConfirmation(confirmation, {
+          workspaceId: householdId,
+          actor: authUserId,
+          inventoryVersion: boundVersion,
+        });
+        // FIX-WS-D2-R5: consumo atômico single-use do depósito
+        // server-side (join workspace + versão vinculada + expiração +
+        // não-consumido, sob o lock do delete). Divergência recusa SEM
+        // consumir — o depósito segue válido para o dono legítimo; o
+        // mesmo handle nunca conclui dois deletes (o segundo encontra
+        // `consumed_at` preenchido).
+        const consumed = await client.query<Row>(
+          `UPDATE workspace_empty_attestations SET consumed_at = NOW()
+            WHERE id = $1 AND household_id = $2 AND inventory_version = $3
+              AND expires_at > NOW() AND consumed_at IS NULL
+           RETURNING id`,
+          [confirmation.attestationId, householdId, boundVersion],
+        );
+        if ((consumed.rowCount ?? 0) === 0) throw agentUnverified();
+        await client.query(
+          `INSERT INTO workspace_tombstones (household_id, deleted_by, inventory_version)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (household_id) DO NOTHING`,
+          [householdId, authUserId, confirmation.inventoryVersion],
+        );
+        await client.query(
+          `INSERT INTO workspace_closure_log (household_id, closed_by, action, inventory_version, agent_attestation)
+           VALUES ($1, $2, 'workspace.delete', $3, $4)
+           ON CONFLICT (household_id) DO NOTHING`,
+          [householdId, authUserId, confirmation.inventoryVersion, confirmation.agentAttestation],
+        );
+        const flipped = await client.query(
+          `UPDATE households SET status = 'deleted' WHERE id = $1 AND status <> 'deleted'`,
+          [householdId],
+        );
+        // UPDATE condicional: zero linhas = corrida perdida (segundo
+        // delete) — sem reescrever nada, recusa como tombstone.
+        if ((flipped.rowCount ?? 0) === 0) throw deletedWorkspace(householdId);
+        return {
+          id: householdId,
+          deletedAt: new Date().toISOString(),
+          inventoryVersion: confirmation.inventoryVersion,
+        };
       });
     },
 
@@ -154,11 +429,12 @@ export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevoca
       }
       const revokedUserId = await withTransaction(pool, async (client) => {
         const householdResult = await client.query<Row>(
-          `SELECT kind, owner_user_id FROM households WHERE id = $1`,
+          `SELECT kind, owner_user_id, status FROM households WHERE id = $1`,
           [householdId],
         );
         const household = householdResult.rows[0];
         if (!household) throw new WorkspaceError('workspace.not_found', 404, 'Workspace não encontrado.');
+        if (household['status'] === 'deleted') throw deletedWorkspace(householdId);
         if (household['kind'] === 'personal') {
           throw new WorkspaceError('workspace.personal', 400, 'Workspace pessoal não permite remoção de membros.');
         }
@@ -199,11 +475,12 @@ export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevoca
       const { userId, role } = await assertMembership(authUserId, householdId);
       const revoked = await withTransaction(pool, async (client) => {
         const householdResult = await client.query<Row>(
-          `SELECT kind, owner_user_id FROM households WHERE id = $1`,
+          `SELECT kind, owner_user_id, status FROM households WHERE id = $1`,
           [householdId],
         );
         const household = householdResult.rows[0];
         if (!household) throw new WorkspaceError('workspace.not_found', 404, 'Workspace não encontrado.');
+        if (household['status'] === 'deleted') throw deletedWorkspace(householdId);
         if (household['kind'] === 'personal' && household['owner_user_id'] === userId) {
           throw new WorkspaceError('workspace.personal', 400, 'O owner não pode sair do workspace pessoal.');
         }
