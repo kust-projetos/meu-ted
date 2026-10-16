@@ -892,6 +892,7 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
         store: deps.workspaceStore,
         idempotency,
         ...(deps.workspaceAccess ? { workspaceAccess: deps.workspaceAccess } : {}),
+        agentServiceToken: agentServiceToken,
       });
     }
 

@@ -6,6 +6,7 @@ import './request-context.js';
 import type { ReconnectTokenStore } from './reconnect-tokens.js';
 import type { ReconnectSocketRegistry } from './reconnect-sockets.js';
 import type { WorkspaceAccessStore } from './workspace-access.js';
+import { verifyAgentServiceToken } from '../routes/agent-auth.js';
 import { DomainError } from '../writes/errors.js';
 import { createInMemoryIdempotencyStore, requireIdempotencyKey, type IdempotencyStore } from '../writes/idempotency.js';
 
@@ -57,9 +58,10 @@ const workspaceBody = z.object({
 // O `actor` NÃO vem do cliente: é injetado da sessão server-side no
 // handler (nunca confiar em claim do cliente). `agentAttestation` segue no
 // contrato de fio mas NUNCA é prova (string declarada é ignorada); o que
-// conclui o delete é `agentProof` (FIX-WS-D2-R4: atestação HMAC emitida
-// server-side pelo Agent, verificada com o segredo compartilhado —
-// ausente/inválida → 409 workspace.agent_unverified, fail-closed).
+// conclui o delete é `attestationId` (FIX-WS-D2-R5: handle opaco do
+// depósito server-side Agent→API — a prova nunca cruza o browser;
+// ausente/inválido/expirado/consumido → 409 workspace.agent_unverified,
+// fail-closed).
 const agentEmptyProofBody = z.object({
   workspaceId: workspaceId,
   inventoryVersion: z.string().regex(/^[0-9a-f]{64}$/),
@@ -73,6 +75,15 @@ const agentEmptyProofBody = z.object({
   hmac: z.string().regex(/^[0-9a-f]{64}$/),
 });
 
+// FIX-WS-D2-R5: corpo do depósito server-side (chamado SÓ pelo Agent,
+// nunca pelo browser). A prova HMAC é verificada no store antes de
+// registrar; `actorId` identifica o dono para o owner-check (resolvido
+// server-side via workspaceAccess, nunca confiado como role).
+const emptyAttestationDepositBody = z.object({
+  actorId: z.string().trim().min(1).max(200),
+  proof: agentEmptyProofBody,
+});
+
 const deleteBody = z.object({
   confirmation: z.object({
     workspaceId: workspaceId,
@@ -80,7 +91,7 @@ const deleteBody = z.object({
     inventoryVersion: z.string().regex(/^[0-9a-f]{64}$/),
     expiresAt: z.string().datetime(),
     agentAttestation: z.enum(['unverified', 'verified-empty']),
-    agentProof: agentEmptyProofBody.optional(),
+    attestationId: z.string().uuid().optional(),
   }),
   purge: z.boolean().optional(),
 });
@@ -92,6 +103,12 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, opts: {
   reconnectTokens?: ReconnectTokenStore;
   reconnectSockets?: ReconnectSocketRegistry;
   idempotency?: IdempotencyStore;
+  /**
+   * FIX-WS-D2-R5: token de serviço Agent→API da rota interna de
+   * depósito (mesmo `AGENT_AUTH_SERVICE_TOKEN` das rotas
+   * `/internal/agent/*`). Ausente = depósito indisponível fail-closed.
+   */
+  agentServiceToken?: string | undefined;
 }): void => {
 
   const idempotency = opts.idempotency ?? createInMemoryIdempotencyStore();
@@ -238,6 +255,34 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, opts: {
         householdId: parsed.data.householdId,
       });
       return reply.send(inventory);
+    } catch (error) {
+      return sendWorkspaceError(reply, error);
+    }
+  });
+
+  // FIX-WS-D2-R5 — depósito server-side da prova de vazio (Agent→API
+  // direto, sem cruzar o browser). Auth em duas camadas: service token
+  // do Agent (a chamada é server-to-server, nunca do browser) + owner
+  // revalidado server-side via workspaceAccess (a role NUNCA vem do
+  // chamador). Retorna SÓ o handle opaco `{ attestationId }` —
+  // conteúdo, contagens e HMAC nunca saem daqui. Sem service token
+  // configurado, indisponível fail-closed (401, nunca deposita).
+  app.post('/internal/agent/empty-attestations', async (request, reply) => {
+    const serviceToken = opts.agentServiceToken ?? process.env.AGENT_AUTH_SERVICE_TOKEN ?? '';
+    if (!verifyAgentServiceToken(request, serviceToken)) {
+      return reply.code(401).send({ code: 'auth.invalid_service_token', message: 'Invalid or missing agent service authentication token' });
+    }
+    const parsed = emptyAttestationDepositBody.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
+    if (opts.workspaceAccess) {
+      const access = await opts.workspaceAccess.resolve(parsed.data.actorId, parsed.data.proof.workspaceId);
+      if (!access || access.role !== 'owner') {
+        return reply.code(403).send({ code: 'workspace.forbidden', message: 'only an owner can deposit an empty attestation' });
+      }
+    }
+    try {
+      const deposited = await opts.store.depositEmptyAttestation({ proof: parsed.data.proof });
+      return reply.code(201).send(deposited);
     } catch (error) {
       return sendWorkspaceError(reply, error);
     }

@@ -26,7 +26,12 @@ export type AgentAuthDeps = {
   resolveDeviceToken?: ((token: string | undefined) => Promise<DeviceContext>) | undefined;
 };
 
-const verifyServiceToken = (req: FastifyRequest, serviceToken: string): boolean => {
+/**
+ * Verificador do token de serviço Agent→API (server-to-server).
+ * Reutilizado pela rota interna de depósito do delete-vazio (R5): o
+ * chamador é o Agent (Worker/DO), nunca o browser.
+ */
+export const verifyAgentServiceToken = (req: FastifyRequest, serviceToken: string): boolean => {
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
   let bearerToken: string | undefined;
   if (typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
@@ -48,6 +53,8 @@ const verifyServiceToken = (req: FastifyRequest, serviceToken: string): boolean 
 
   return crypto.timingSafeEqual(expectedBuffer, providedBuffer);
 };
+
+const verifyServiceToken = verifyAgentServiceToken;
 
 export const registerAgentAuthRoutes = (app: FastifyInstance, deps: AgentAuthDeps): void => {
   // 1. Issue short-lived connection token for PWA / authenticated user
