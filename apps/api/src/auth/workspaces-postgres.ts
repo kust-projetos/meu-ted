@@ -47,7 +47,7 @@ export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevoca
           WHERE (u.auth_user_id = $1 OR u.id::text = $1)
             AND u.status = 'active'
             AND m.status = 'active'
-          ORDER BY (h.kind = 'personal') DESC, h.created_at ASC`,
+          ORDER BY (h.status = 'active') DESC, (h.kind = 'personal') DESC, h.created_at ASC, h.id ASC`,
         [authUserId],
       );
       return result.rows.map(mapWorkspace);
@@ -63,15 +63,15 @@ export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevoca
       if (!userRow) throw new WorkspaceError('workspace.invalid', 400, 'Usuário ativo não encontrado.');
       const userId = userRow['id'] as string;
 
-      if (kind === 'personal') {
-        const existing = await queryInTransaction<Row>(
-          pool,
-          `SELECT h.id FROM households h JOIN memberships m ON m.household_id = h.id
-            WHERE h.owner_user_id = $1 AND h.kind = 'personal' AND m.user_id = $1 AND m.status = 'active'`,
-          [userId],
-        );
-        if (existing.rows[0]) throw new WorkspaceError('workspace.invalid', 409, 'user already has a personal workspace');
-      }
+      // D1 (ADR-027): N personal workspaces per user. The one-personal
+      // 409 refusal was removed together with the V021 partial unique
+      // index (see V061 — V021 itself is never edited). Personal stays
+      // owner-exclusive via the preserved V021 triggers (no invites, no
+      // transfer, no leave, no conversion); only the cardinality is
+      // lifted. Concurrency: each create inserts an independent household
+      // row (no per-user lock needed); same-Idempotency-Key dedup is
+      // enforced by the workspace.create idempotency record in the HTTP
+      // layer, distinct keys create distinct workspaces.
 
       return withTransaction(pool, async (client) => {
         const householdResult = await client.query<Row>(

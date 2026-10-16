@@ -109,6 +109,7 @@ export const LEGACY_EXCLUDED_JUSTIFICATIONS: Record<string, string> = {
   V058: 'canonical-only materialized-balance anchor (accounts.initial_balance_cents); legacy already carries the column but its production ledger tops at V054 and verifySchema fails closed on a V058 manifest entry',
   V059: 'canonical-only pending-operation authorization audit columns (ADR-026); the legacy archive ledger tops at V054 and verifySchema fails closed on a V059 manifest entry, and only the canonical V2 confirm/authorize paths write authorization metadata',
   V060: 'TEMPORARY canonical-only pending-operation confirmation-intention bindings (pure new table, dual-schema safe like V051/V052); stays out of the legacy manifest until the approved VPS migration job (docs/runbooks/api-migration-v2.md) advances the legacy ledger past V054 — promote to legacy-safe together with that job plus updating the V054-top test to 60',
+  V061: 'canonical-only D1 N-personal lift (ADR-027): drops ONLY the V021 partial unique index memberships_personal_user_uidx and adds an equivalent non-unique lookup; V021 triggers untouched; the legacy ledger tops at V054 and verifySchema fails closed on a V061 manifest entry',
 };
 
 export const migrationChecksum = (sql: string): string =>

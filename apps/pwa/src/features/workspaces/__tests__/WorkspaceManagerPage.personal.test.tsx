@@ -1,8 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@/lib/test-utils";
+import { render, screen } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import WorkspaceManagerPage from "../WorkspaceManagerPage";
-import { ApiError } from "@/lib/api/client";
 import type { WorkspaceContextValue } from "@/lib/auth/workspace-context";
 
 const context: WorkspaceContextValue = vi.hoisted(() => ({
@@ -44,57 +43,43 @@ vi.mock("@/lib/auth/workspace-context", () => ({
 }));
 
 /**
- * FIX-168-167 (P0 #167): creating a second personal workspace answers 409
- * workspace.invalid (the one-personal rule counts archived workspaces too —
- * kept by design, D1/D2 pending). The UI must explain this BEFORE any POST
- * and offer the restore path instead of surfacing a raw 409.
- *
- * RED first: no explanation, no restore affordance, POST fires blindly.
+ * D1 (ADR-027): N personal workspaces per user. The one-personal FIX-167
+ * gate (disabled kind + restore guidance + 409 mapping) is gone: creating
+ * another personal workspace POSTs normally.
  */
-describe("WorkspaceManagerPage — existing personal workspace (FIX-167)", () => {
+describe("WorkspaceManagerPage — N personal workspaces (D1)", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("explains that a personal workspace already exists and offers restore instead of a blind create", async () => {
-    const user = userEvent.setup();
+  it("keeps the Pessoal kind enabled even with an existing (archived) personal workspace", () => {
     render(<WorkspaceManagerPage />);
 
-    // The archived personal workspace is visible for restore (card action…
-    // …plus the form-level restore affordance added by FIX-167).
-    expect(
-      screen.getAllByRole("button", { name: "Restaurar Minhas Finanças" }),
-    ).toHaveLength(2);
-
-    // …the Pessoal kind is disabled with an explanation…
     const kindSelect = screen.getByLabelText("Tipo");
     const personalOption = kindSelect.querySelector('option[value="personal"]');
     expect(personalOption).not.toBeNull();
-    expect(personalOption).toHaveAttribute("disabled");
-    expect(screen.getByText(/você já possui um workspace pessoal/i)).toBeInTheDocument();
-
-    // …and attempting a personal create never POSTs (stale/programmatic kind
-    // selection — the disabled option already blocks the pointer path).
-    await user.type(screen.getByLabelText("Nome do workspace"), "Outra pessoal");
-    fireEvent.change(screen.getByLabelText("Tipo"), { target: { value: "personal" } });
-    await user.click(screen.getByRole("button", { name: "Criar workspace" }));
-    expect(context.createWorkspace).not.toHaveBeenCalled();
-    await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent(/você já possui um workspace pessoal/i),
-    );
+    expect(personalOption).not.toHaveAttribute("disabled");
+    expect(screen.queryByText(/você já possui um workspace pessoal/i)).not.toBeInTheDocument();
   });
 
-  it("maps a 409 workspace.invalid create rejection to the friendly restore guidance", async () => {
+  it("creates a second personal workspace without a pre-POST block", async () => {
     const user = userEvent.setup();
-    vi.mocked(context.createWorkspace).mockRejectedValueOnce(
-      new ApiError(409, "workspace.invalid", "Usuário já possui um workspace pessoal."),
-    );
+    render(<WorkspaceManagerPage />);
+
+    await user.type(screen.getByLabelText("Nome do workspace"), "Outra pessoal");
+    await user.selectOptions(screen.getByLabelText("Tipo"), "personal");
+    await user.click(screen.getByRole("button", { name: "Criar workspace" }));
+
+    expect(context.createWorkspace).toHaveBeenCalledWith({ name: "Outra pessoal", kind: "personal" });
+  });
+
+  it("surfaces server errors verbatim instead of the one-personal restore guidance", async () => {
+    const user = userEvent.setup();
+    vi.mocked(context.createWorkspace).mockRejectedValueOnce(new Error("Falha de rede."));
     render(<WorkspaceManagerPage />);
 
     await user.type(screen.getByLabelText("Nome do workspace"), "Time novo");
     await user.click(screen.getByRole("button", { name: "Criar workspace" }));
 
     expect(context.createWorkspace).toHaveBeenCalledWith({ name: "Time novo", kind: "shared" });
-    await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent(/você já possui um workspace pessoal/i),
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Falha de rede.");
   });
 });

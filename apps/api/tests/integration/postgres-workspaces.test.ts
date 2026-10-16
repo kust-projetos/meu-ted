@@ -60,10 +60,18 @@ describe("Postgres workspace store integration", () => {
       const personal = await store.create({ authUserId: authUser, name: "Só eu", kind: "personal" });
       expect(personal.kind).toBe("personal");
 
-      // List returns both (personal first)
+      // D1 (ADR-027): a second personal workspace for the same user is allowed.
+      const personal2 = await store.create({ authUserId: authUser, name: "Só eu 2", kind: "personal" });
+      expect(personal2.kind).toBe("personal");
+      expect(personal2.id).not.toBe(personal.id);
+
+      // List returns all three (D1 order: active personals oldest-first, then shared)
       const list = await store.list(authUser);
-      expect(list.map((w) => w.id).sort()).toEqual([shared.id, personal.id].sort());
+      expect(list.map((w) => w.id).sort()).toEqual([shared.id, personal.id, personal2.id].sort());
       expect(list.find((w) => w.id === personal.id)!.role).toBe("owner");
+      expect(list.findIndex((w) => w.id === personal.id)).toBeLessThan(
+        list.findIndex((w) => w.id === shared.id),
+      );
 
       // Members includes owner (listMembers.userId is the Better Auth id —
       // removeMember accepts both forms, see workspaces-postgres.ts).
@@ -110,7 +118,7 @@ describe("Postgres workspace store integration", () => {
       ).rejects.toThrow(WorkspaceError);
 
       // Cleanup
-      await pool.query(`DELETE FROM households WHERE id = ANY($1::uuid[])`, [[shared.id, personal.id]]);
+      await pool.query(`DELETE FROM households WHERE id = ANY($1::uuid[])`, [[shared.id, personal.id, personal2.id]]);
       await pool.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [[userId, member2Id]]);
       await pool.query(`DELETE FROM "user" WHERE id = ANY($1::text[])`, [[authUser, member2Auth]]);
     },
