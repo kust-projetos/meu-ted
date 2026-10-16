@@ -57,6 +57,10 @@ permissions:
 jobs:
   promote:
     name: Promote — validar tudo, taguear por último
+    # Enforcement contra dispatches apressados: dispatches futuros pausam
+    # para aprovação do reviewer do environment `release` antes de qualquer
+    # step executar (tag/release só após aprovação explícita).
+    environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
