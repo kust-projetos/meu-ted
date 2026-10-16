@@ -32,6 +32,10 @@ const createMemorySql = (): Sql => {
       return [][Symbol.iterator]() as IterableIterator<T>;
     }
     if (q.startsWith('CREATE INDEX')) return [][Symbol.iterator]() as IterableIterator<T>;
+    // ADR-027 D3 (FIX-WS-D3-R2): o registry de sessões existe em produção
+    // (boot idempotente). ALTERs aditivos são no-op; registry vazio.
+    if (q.startsWith('ALTER TABLE AGENT_SESSIONS')) return [][Symbol.iterator]() as IterableIterator<T>;
+    if (q.startsWith('SELECT * FROM AGENT_SESSIONS')) return ([] as unknown as T[])[Symbol.iterator]();
     if (q.startsWith('INSERT INTO UNDO_PROPOSALS')) {
       const rows = tables.get('undo_proposals') ?? [];
       const [request_id, workspace_id, actor_id, device_id, target_last_operation_id, idempotency_key, status, created_at, expires_at, decided_at, result_json] = bindings as Array<string | null>;

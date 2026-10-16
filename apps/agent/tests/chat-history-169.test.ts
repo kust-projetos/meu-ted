@@ -303,6 +303,12 @@ describe("FIX-melhorias item 2: ?limit= no /rpc/history (default 200, shape inta
         actorId: role === "assistant" ? "ted" : "actor-169",
         workspaceId: "workspace-169",
         createdAt,
+        // ADR-027 D3 (FIX-WS-D3-R2 finding 4): linhas com audiência explícita
+        // (forma que o /rpc/chat carimba em produção); 'ted' sozinho nunca
+        // prova público, então o seed carrega a audiência coletiva explícita.
+        ...(role === "assistant"
+          ? { visibility: "workspace", ownerActorId: "actor-169", conversationId: "" }
+          : {}),
       },
     }) as unknown as UIMessage;
 
@@ -433,7 +439,9 @@ describe("FIX-melhorias item 6 (#169 conversa-longa): persist em volume 40+ turn
         id: `vol-asst-${i}`,
         role: "assistant",
         parts: [{ type: "text", text: `resposta volume ${i}` }],
-        metadata: { actorId: "ted", workspaceId: "workspace-169", createdAt: stamp, intentionId },
+        // ADR-027 D3 (FIX-WS-D3-R2 finding 4): audiência coletiva explícita
+        // (forma de produção); 'ted' sozinho nunca prova público.
+        metadata: { actorId: "ted", workspaceId: "workspace-169", createdAt: stamp, intentionId, visibility: "workspace", ownerActorId: "actor-169", conversationId: "" },
       } as unknown as UIMessage);
     }
     await agent.persistMessages(batch);
