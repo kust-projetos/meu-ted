@@ -5,6 +5,7 @@ import {
   fetchAgentHistory,
   formatCentsToBRL,
   formatDateToBR,
+  requestAgentEmptyAttestation,
   sendAgentMessage,
 } from "./agent-client";
 import * as agentAuth from "./agent-auth";
@@ -669,6 +670,63 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
 
       await expect(sendAgentMessage("ws-1", "confirma")).rejects.toMatchObject({
         code: "agent.execution_outcome_unknown",
+      });
+    });
+  });
+
+  describe("requestAgentEmptyAttestation (FIX-WS-D2-R4)", () => {
+    const proof = {
+      workspaceId: "ws-1",
+      inventoryVersion: "a".repeat(64),
+      counts: { sessions: 0, messages: 0, memories: 0, attachments: 0 },
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      hmac: "b".repeat(64),
+    };
+
+    it("transporta a prova opaca do Agent vinculada à versão (POST attest-empty)", async () => {
+      vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
+      vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("signed-token-123");
+      let capturedUrl = "";
+      let capturedInit: RequestInit | undefined;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+        capturedUrl = String(url);
+        capturedInit = init;
+        return new Response(JSON.stringify(proof), { status: 200 });
+      });
+
+      await expect(requestAgentEmptyAttestation("ws-1", proof.inventoryVersion)).resolves.toEqual(proof);
+      expect(capturedUrl).toBe(
+        "https://agent.example.test/agents/finance-chat-agent/ws-1/rpc/workspace/ws-1/attest-empty",
+      );
+      expect(capturedInit?.method).toBe("POST");
+      expect(JSON.parse(String(capturedInit?.body))).toEqual({ inventoryVersion: proof.inventoryVersion });
+    });
+
+    it("propaga o code do Agent (qual lado falhou) sem mascarar", async () => {
+      vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
+      vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("signed-token-123");
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        new Response(
+          JSON.stringify({ code: "agent.workspace_not_empty", message: "Exclusão bloqueada." }),
+          { status: 409 },
+        ),
+      );
+
+      await expect(requestAgentEmptyAttestation("ws-1", proof.inventoryVersion)).rejects.toMatchObject({
+        code: "agent.workspace_not_empty",
+        status: 409,
+      });
+    });
+
+    it("rejeita payload sem prova válida (nunca inventa atestação)", async () => {
+      vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
+      vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("signed-token-123");
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        new Response(JSON.stringify({ workspaceId: "ws-1" }), { status: 200 }),
+      );
+
+      await expect(requestAgentEmptyAttestation("ws-1", proof.inventoryVersion)).rejects.toMatchObject({
+        code: "agent.invalid_attestation_response",
       });
     });
   });
