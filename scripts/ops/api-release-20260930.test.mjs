@@ -4,7 +4,7 @@
 // contact, no real docker daemon state). Covers: dry-run purity, flag refusal,
 // happy digest lane, curl-gate failure -> verified rollback, divergent
 // rollback-tag refusal (no swap), same-SHA idempotent no-op, source-lane cwd
-// + absolute Dockerfile. The release script itself is NEVER executed against
+// + absolute Dockerfile, edge-gate retry on transients (issue #208). The release script itself is NEVER executed against
 // production here. Requires docker (explicit skip otherwise — a skip is not
 // proof). Run: node --test scripts/ops/api-release-20260930.test.mjs
 import assert from 'node:assert/strict';
@@ -82,9 +82,27 @@ exit 99
 `;
 
 const FAKE_CURL = `#!/usr/bin/env bash
+echo "curl \${@: -1}" >> "$FAKE_STATE/curls.log"
 url="\${@: -1}"
+seq_next() {
+  idx_file="$FAKE_STATE/curl.health.idx"
+  [ -f "$idx_file" ] || printf '0' > "$idx_file"
+  idx="$(cat "$idx_file")"
+  printf '%s' "$((idx + 1))" > "$idx_file"
+  printf '%s' "\${FAKE_HEALTH_SEQ:-}" | cut -d, -f"$((idx + 1))"
+}
 case "$url" in
   */health)
+    if [ -n "\${FAKE_HEALTH_SEQ:-}" ]; then
+      item="$(seq_next)"
+      case "$item" in
+        FAIL) exit 22 ;;
+        NOSHA) printf '{"status":"ok"}' ;;
+        SHA:*) printf '{"status":"ok","gitSha":"%s"}' "\${item#SHA:}" ;;
+        *) printf '{"status":"ok","gitSha":"%s"}' "\${FAKE_HEALTH_SHA:-}" ;;
+      esac
+      exit 0
+    fi
     if [ "\${FAKE_CURL_FAIL:-0}" = "1" ]; then exit 22; fi
     printf '{"status":"ok","gitSha":"%s"}' "\${FAKE_HEALTH_SHA:-}" ;;
   */ready) exit "\${FAKE_READY_CODE:-0}" ;;
@@ -116,7 +134,8 @@ function resetState(extraImages = '') {
   writeFileSync(join(ctx.state, 'images.map'), `pi-finance-api:main=${PRE_ID}\n${extraImages}`);
   writeFileSync(join(ctx.state, 'container.image'), PRE_ID);
   writeFileSync(join(ctx.state, 'calls.log'), '');
-  for (const f of ['build.pwd', 'build.args']) rmSync(join(ctx.state, f), { force: true });
+  writeFileSync(join(ctx.state, 'curls.log'), '');
+  for (const f of ['build.pwd', 'build.args', 'curl.health.idx']) rmSync(join(ctx.state, f), { force: true });
   for (const f of ['manifests']) rmSync(join(ctx.state, f), { recursive: true, force: true });
   mkdirSync(join(ctx.state, 'manifests'));
 }
@@ -150,6 +169,7 @@ function runRelease(args, extraEnv = {}) {
   }
 }
 const calls = () => readFileSync(join(ctx.state, 'calls.log'), 'utf8');
+const curls = () => readFileSync(join(ctx.state, 'curls.log'), 'utf8').split('\n').filter(Boolean);
 const gate = (t) => {
   if (!dockerAvailable()) { t.skip('requires docker (fake-daemon behavioral tests); skip is not proof'); return false; }
   return true;
@@ -193,9 +213,34 @@ test('curl gate failure rolls back to verified PRE_IMAGE (exit 4)', (t) => {
   const r = runRelease(['--digest', DIGEST, '--execute'], { FAKE_HEALTH_SHA: 'f'.repeat(40) });
   assert.equal(r.exit, 4, r.out);
   assert.match(r.out, /ROLLED-BACK-VERIFIED/);
+  // Persistent SHA mismatch exhausts the bounded edge retries (#208) before
+  // rolling back: pre-flight(1) + gate attempts(6) + rollback verify(1).
+  assert.match(r.out, /attempt 6\/6/);
+  const healthCalls = curls().filter((l) => l.endsWith('/health'));
+  assert.equal(healthCalls.length, 8, `expected 8 /health calls, got: ${healthCalls.join(' | ')}`);
   const mf = JSON.parse(readFileSync(join(ctx.state, 'manifests', `release-manifest-${SHA}.json`), 'utf8'));
   assert.equal(mf.outcome, 'rolled-back-verified');
   assert.equal(readFileSync(join(ctx.state, 'container.image'), 'utf8'), PRE_ID);
+});
+
+test('edge gate retries transients and releases without rollback (issue #208)', (t) => {
+  if (!gate(t)) return;
+  resetState();
+  // Pre-flight sees the old SHA; the post-swap edge gate then hits the #208
+  // propagation window (unreachable, unreachable) before converging on the
+  // new SHA at the 3rd attempt -> RELEASE OK, no rollback.
+  const OLD = 'e'.repeat(40);
+  const r = runRelease(['--digest', DIGEST, '--execute'], {
+    FAKE_HEALTH_SEQ: `SHA:${OLD},FAIL,FAIL,SHA:${SHA}`,
+  });
+  assert.equal(r.exit, 0, r.out);
+  assert.match(r.out, /RELEASE OK/);
+  const mf = JSON.parse(readFileSync(join(ctx.state, 'manifests', `release-manifest-${SHA}.json`), 'utf8'));
+  assert.equal(mf.outcome, 'released');
+  assert.equal(mf.health_sha, SHA);
+  assert.equal(readFileSync(join(ctx.state, 'container.image'), 'utf8'), NEW_ID);
+  const healthCalls = curls().filter((l) => l.endsWith('/health'));
+  assert.equal(healthCalls.length, 4, `expected pre-flight + 3 gate attempts, got: ${healthCalls.join(' | ')}`);
 });
 
 test('divergent pre-existing rollback tag refuses with no swap', (t) => {
