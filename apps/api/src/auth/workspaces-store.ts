@@ -77,12 +77,21 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks): 
 
   return {
     async list(authUserId) {
-      return workspaces.filter((workspace) => workspace.ownerAuthUserId === authUserId).map(toSummary);
+      // D1 (ADR-027) ordering: active first, personal before shared,
+      // insertion order within a group (stable sort ≈ created_at, id).
+      return workspaces
+        .filter((workspace) => workspace.ownerAuthUserId === authUserId)
+        .sort(
+          (a, b) =>
+            Number(b.status === 'active') - Number(a.status === 'active') ||
+            Number(b.kind === 'personal') - Number(a.kind === 'personal'),
+        )
+        .map(toSummary);
     },
     async create(input) {
-      if (input.kind === 'personal' && workspaces.some((workspace) => workspace.ownerAuthUserId === input.authUserId && workspace.kind === 'personal')) {
-        throw new WorkspaceError('workspace.invalid', 409, 'Usuário já possui um workspace pessoal.');
-      }
+      // D1 (ADR-027): N personal workspaces per user — no 409 on
+      // cardinality (mirrors the Postgres store + V061). Owner-exclusive
+      // vetos below (removeMember/leave) are preserved.
       const summary: StoredWorkspace = {
         id: randomUUID(),
         name: input.name,

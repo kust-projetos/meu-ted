@@ -1,7 +1,6 @@
 import type { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { createPostgresWorkspaceStore } from '../../src/auth/workspaces-postgres.js';
-import { WorkspaceError } from '../../src/auth/workspaces-http.js';
 
 describe('Postgres workspace store unit tests', () => {
   it('creates a shared workspace with owner_user_id set to the active user id (V022 invariant)', async () => {
@@ -52,31 +51,41 @@ describe('Postgres workspace store unit tests', () => {
     expect(householdInsert?.values?.[2]).toBe('00000000-0000-4000-8000-000000000001');
   });
 
-  it('rejects creating a second personal workspace when one already exists', async () => {
+  it('allows creating a second personal workspace (D1 N-personal, ADR-027)', async () => {
     const client = {
-      query: async (text: string) => {
+      query: async (text: string, values?: unknown[]) => {
         if (text.includes('SELECT id FROM users')) {
           return { rows: [{ id: '00000000-0000-4000-8000-000000000001' }], rowCount: 1 };
         }
-        if (text.includes('FROM households') && text.includes("kind = 'personal'")) {
-          return { rows: [{ id: 'existing-personal-ws' }], rowCount: 1 };
+        if (text.includes('INSERT INTO households')) {
+          return {
+            rows: [{
+              id: '22222222-2222-4222-8222-222222222222',
+              name: values?.[0],
+              kind: values?.[1],
+              status: 'active',
+            }],
+            rowCount: 1,
+          };
         }
         return { rows: [], rowCount: 0 };
       },
       release: () => undefined,
     };
     const pool = {
-      query: async (text: string) => client.query(text),
+      query: async (text: string, values?: unknown[]) => client.query(text, values),
       connect: async () => client,
     } as unknown as Pool;
 
     const store = createPostgresWorkspaceStore(pool);
-    await expect(
-      store.create({
-        authUserId: 'auth-user-1',
-        name: 'My Personal 2',
-        kind: 'personal',
-      }),
-    ).rejects.toThrow(WorkspaceError);
+    // Even with an existing personal workspace, D1 allows another one —
+    // the store must not issue a 409 cardinality refusal.
+    const result = await store.create({
+      authUserId: 'auth-user-1',
+      name: 'My Personal 2',
+      kind: 'personal',
+    });
+    expect(result.kind).toBe('personal');
+    expect(result.role).toBe('owner');
   });
 });

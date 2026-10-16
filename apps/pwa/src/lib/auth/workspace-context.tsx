@@ -108,11 +108,16 @@ const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 /**
  * Resolve which workspace becomes active after a (re)load.
  *
- * Priority: the in-memory selection (same-mount switches/refreshes) →
- * the persisted preference, honored ONLY when still present and
- * non-archived in the server-side list (the list is the authority) →
- * the first non-archived workspace. The caller persists the outcome so a
- * stale stored id is overwritten by the fallback.
+ * D1 (ADR-027) deterministic fallback: the server lists workspaces ordered
+ * by (active first, personal before shared, created_at, id), i.e. oldest
+ * active personal → oldest active shared → id. Priority here: the in-memory
+ * selection (same-mount switches/refreshes) → the persisted preference,
+ * honored ONLY when still present and non-archived in the server-side list
+ * (the list is the authority; principal-bound, never cross-user) → the
+ * first non-archived workspace of the D1-ordered list. The caller persists
+ * the outcome so a stale stored id is overwritten by the fallback. Writes
+ * never resolve silently: every financial/device path requires an explicit
+ * x-workspace-id header (auth.workspace_required without it).
  */
 function resolveActiveWorkspaceId(
   list: Workspace[],
