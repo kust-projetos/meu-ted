@@ -19,6 +19,7 @@ export type {
   WorkspaceSummary,
 } from './workspaces-store.js';
 export type {
+  AgentEmptyProof,
   DeleteConfirmation,
   DeleteReceipt,
   DeletionInventory,
@@ -54,9 +55,24 @@ const workspaceBody = z.object({
 
 // D2 (ADR-027): confirmação forte vinculada (UUID/ator/ação/versão/expiração).
 // O `actor` NÃO vem do cliente: é injetado da sessão server-side no
-// handler (nunca confiar em claim do cliente). `agentAttestation` é
-// declarada pelo cliente mas só `verified-empty` conclui (barreira
-// cross-store fail-closed; `unverified` → 409 workspace.agent_unverified).
+// handler (nunca confiar em claim do cliente). `agentAttestation` segue no
+// contrato de fio mas NUNCA é prova (string declarada é ignorada); o que
+// conclui o delete é `agentProof` (FIX-WS-D2-R4: atestação HMAC emitida
+// server-side pelo Agent, verificada com o segredo compartilhado —
+// ausente/inválida → 409 workspace.agent_unverified, fail-closed).
+const agentEmptyProofBody = z.object({
+  workspaceId: workspaceId,
+  inventoryVersion: z.string().regex(/^[0-9a-f]{64}$/),
+  counts: z.object({
+    sessions: z.number().int(),
+    messages: z.number().int(),
+    memories: z.number().int(),
+    attachments: z.number().int(),
+  }),
+  expiresAt: z.string().datetime(),
+  hmac: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
 const deleteBody = z.object({
   confirmation: z.object({
     workspaceId: workspaceId,
@@ -64,6 +80,7 @@ const deleteBody = z.object({
     inventoryVersion: z.string().regex(/^[0-9a-f]{64}$/),
     expiresAt: z.string().datetime(),
     agentAttestation: z.enum(['unverified', 'verified-empty']),
+    agentProof: agentEmptyProofBody.optional(),
   }),
   purge: z.boolean().optional(),
 });

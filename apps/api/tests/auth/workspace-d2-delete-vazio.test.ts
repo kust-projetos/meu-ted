@@ -11,6 +11,7 @@ import {
   DELETION_CONFIRM_ACTION,
   DELETION_INVENTORY_TTL_MS,
   buildDeleteConfirmation,
+  hashInventoryCounts,
   isArchivedMutationAllowed,
   verifyDeleteConfirmation,
 } from '../../src/auth/workspace-deletion.js';
@@ -37,6 +38,10 @@ const mockPool = (handlers: Record<string, Handler>, seen: string[] = []) => {
 
 const OWNER_ID = '00000000-0000-4000-8000-000000000001';
 const WS_ID = '11111111-1111-4111-8111-111111111111';
+
+// FIX-WS-D2-R3 item 3: segredo HMAC explícito de teste (nunca default
+// embutido no produto; sem ele, emissão/verificação recusam fail-closed).
+const TEST_HMAC_SECRET = 'test-only-workspace-deletion-hmac-secret';
 
 const membershipOwner = () => ({
   rows: [{ id: OWNER_ID, user_id: OWNER_ID, role: 'owner' }],
@@ -95,7 +100,7 @@ const withInventoryProbe = (
 describe('D2 — delete só-vazio (ADR-027)', () => {
   it('inventário de workspace vazio retorna empty:true com versão e expiração', async () => {
     const pool = withInventoryProbe({});
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
     expect(inventory.workspaceId).toBe(WS_ID);
     expect(inventory.empty).toBe(true);
@@ -104,7 +109,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
     expect(inventory.purgeBlocked).toBe(true);
   });
 
-  it('vazio deleta: tombstone + status deleted, com barreira FOR UPDATE', async () => {
+  it('vazio sem prova server-side BLOQUEIA (fail-closed, sem prova = sem delete)', async () => {
     const seen: string[] = [];
     const pool = withInventoryProbe(
       {
@@ -117,8 +122,10 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
       },
       seen,
     );
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
+    // Mesmo vazio e com confirmação vinculada válida, `verified-empty`
+    // declarado no body é forjado: sem prova HMAC server-side, bloqueia.
     const confirmation = buildDeleteConfirmation({
       workspaceId: WS_ID,
       actor: 'auth-user-1',
@@ -126,25 +133,96 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
       expiresAt: inventory.expiresAt,
       agentAttestation: 'verified-empty',
     });
+    await expect(
+      store.deleteEmpty({
+        authUserId: 'auth-user-1',
+        householdId: WS_ID,
+        confirmation,
+      }),
+    ).rejects.toMatchObject({ code: 'workspace.agent_unverified', statusCode: 409 });
+    // Barreira de concorrência e vínculo continuam verificados antes do
+    // bloqueio: a linha é travada e o inventário final é recomputado sob
+    // o lock (FOR UPDATE presente), mas NENHUM efeito ocorre.
+    expect(seen.some((sql) => sql.includes('FOR UPDATE'))).toBe(true);
+    expect(seen.some((sql) => /INTO workspace_tombstones|INTO workspace_closure_log|SET status = 'deleted'/.test(sql))).toBe(false);
+  });
+
+  it('vazio COM prova HMAC válida conclui (FIX-WS-D2-R4: emissor server-side)', async () => {
+    const seen: string[] = [];
+    const pool = withInventoryProbe(
+      {
+        'INTO workspace_tombstones': () => ({ rows: [], rowCount: 1 }),
+        'INTO workspace_closure_log': () => ({ rows: [], rowCount: 1 }),
+        "SET status = 'deleted'": () => ({ rows: [], rowCount: 1 }),
+      },
+      seen,
+    );
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
+    const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
+    expect(inventory.empty).toBe(true);
+    // Prova white-box do lado Agent (o Agent real emite com o mesmo
+    // segredo compartilhado): contagens zeradas, vinculada à versão.
+    const { signAgentEmptyProof } = await import('../../src/auth/workspace-deletion.js');
+    const agentProof = signAgentEmptyProof(
+      {
+        workspaceId: WS_ID,
+        inventoryVersion: inventory.inventoryVersion,
+        counts: { sessions: 0, messages: 0, memories: 0, attachments: 0 },
+      },
+      TEST_HMAC_SECRET,
+    );
     const receipt = await store.deleteEmpty({
       authUserId: 'auth-user-1',
       householdId: WS_ID,
-      confirmation,
+      confirmation: buildDeleteConfirmation({
+        workspaceId: WS_ID,
+        actor: 'auth-user-1',
+        inventoryVersion: inventory.inventoryVersion,
+        expiresAt: inventory.expiresAt,
+        agentAttestation: 'unverified',
+        agentProof,
+      }),
     });
     expect(receipt.id).toBe(WS_ID);
-    expect(receipt.inventoryVersion).toBe(inventory.inventoryVersion);
-    // Barreira de concorrência: a linha é travada antes do inventário final.
-    expect(seen.some((sql) => sql.includes('FOR UPDATE'))).toBe(true);
-    // Tombstone anti-reuso gravado; status vira deleted (linha preservada).
-    expect(seen.some((sql) => sql.includes('workspace_tombstones'))).toBe(true);
-    expect(seen.some((sql) => sql.includes('workspace_closure_log'))).toBe(true);
-    expect(seen.some((sql) => sql.includes("'deleted'"))).toBe(true);
+    expect(seen.some((sql) => sql.includes('INTO workspace_tombstones'))).toBe(true);
+    expect(seen.some((sql) => sql.includes("SET status = 'deleted'"))).toBe(true);
+  });
+
+  it('prova adulterada recusa sem efeito (fail-closed, sem tombstone)', async () => {
+    const seen: string[] = [];
+    const pool = withInventoryProbe({}, seen);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
+    const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
+    const { signAgentEmptyProof } = await import('../../src/auth/workspace-deletion.js');
+    const agentProof = signAgentEmptyProof(
+      {
+        workspaceId: WS_ID,
+        inventoryVersion: inventory.inventoryVersion,
+        counts: { sessions: 0, messages: 0, memories: 0, attachments: 0 },
+      },
+      TEST_HMAC_SECRET,
+    );
+    await expect(
+      store.deleteEmpty({
+        authUserId: 'auth-user-1',
+        householdId: WS_ID,
+        confirmation: buildDeleteConfirmation({
+          workspaceId: WS_ID,
+          actor: 'auth-user-1',
+          inventoryVersion: inventory.inventoryVersion,
+          expiresAt: inventory.expiresAt,
+          agentAttestation: 'unverified',
+          agentProof: { ...agentProof, hmac: 'f'.repeat(64) },
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'workspace.agent_unverified', statusCode: 409 });
+    expect(seen.some((sql) => /INTO workspace_tombstones|INTO workspace_closure_log|SET status = 'deleted'/.test(sql))).toBe(false);
   });
 
   it('com-dados recusa com 409 workspace.not_empty e não toca nos dados', async () => {
     const seen: string[] = [];
     const pool = withInventoryProbe({}, seen, { ...zeroInventoryRow(), accounts: '2' });
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
     expect(inventory.empty).toBe(false);
     const confirmation = buildDeleteConfirmation({
@@ -164,7 +242,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
   it('purge com-dados PERMANECE BLOQUEADO (409 dedicado, nunca executa)', async () => {
     const seen: string[] = [];
     const pool = withInventoryProbe({}, seen);
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
     const confirmation = buildDeleteConfirmation({
       workspaceId: WS_ID,
@@ -182,7 +260,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
   it('confirmação expirada ou divergente é recusada sem tocar nos dados', async () => {
     const seen: string[] = [];
     const pool = withInventoryProbe({}, seen);
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
     // Expirada.
     await expect(
@@ -239,7 +317,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
         rowCount: 1,
       }),
     });
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     await expect(
       store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID }),
     ).rejects.toMatchObject({ code: 'workspace.deleted' });
@@ -263,7 +341,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
   });
 
   it('in-memory store espelha delete-vazio + tombstone (paridade de contrato)', async () => {
-    const store = createInMemoryWorkspaceStore();
+    const store = createInMemoryWorkspaceStore(undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const created = await store.create({ authUserId: 'u1', name: 'Vazio', kind: 'shared' });
     const inventory = await store.deletionInventory({ authUserId: 'u1', householdId: created.id });
     expect(inventory.empty).toBe(true);
@@ -282,19 +360,8 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
         purge: true,
       }),
     ).rejects.toMatchObject({ code: 'workspace.purge_blocked' });
-    const receipt = await store.deleteEmpty({
-      authUserId: 'u1',
-      householdId: created.id,
-      confirmation: buildDeleteConfirmation({
-        workspaceId: created.id,
-        actor: 'u1',
-        inventoryVersion: inventory.inventoryVersion,
-        agentAttestation: 'verified-empty',
-        expiresAt: inventory.expiresAt,
-      }),
-    });
-    expect(receipt.id).toBe(created.id);
-    expect(await store.list('u1')).toEqual([]);
+    // Sem prova HMAC server-side, o delete bloqueia — mesmo com
+    // `verified-empty` declarado pelo cliente.
     await expect(
       store.deleteEmpty({
         authUserId: 'u1',
@@ -307,32 +374,78 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
           expiresAt: inventory.expiresAt,
         }),
       }),
+    ).rejects.toMatchObject({ code: 'workspace.agent_unverified', statusCode: 409 });
+    // Sem efeito: segue listado e ativo.
+    expect((await store.list('u1')).map((w) => w.id)).toContain(created.id);
+    // Com prova HMAC válida (FIX-WS-D2-R4), conclui com tombstone.
+    const { signAgentEmptyProof } = await import('../../src/auth/workspace-deletion.js');
+    const agentProof = signAgentEmptyProof(
+      {
+        workspaceId: created.id,
+        inventoryVersion: inventory.inventoryVersion,
+        counts: { sessions: 0, messages: 0, memories: 0, attachments: 0 },
+      },
+      TEST_HMAC_SECRET,
+    );
+    const receipt = await store.deleteEmpty({
+      authUserId: 'u1',
+      householdId: created.id,
+      confirmation: buildDeleteConfirmation({
+        workspaceId: created.id,
+        actor: 'u1',
+        inventoryVersion: inventory.inventoryVersion,
+        agentAttestation: 'unverified',
+        expiresAt: inventory.expiresAt,
+        agentProof,
+      }),
+    });
+    expect(receipt.id).toBe(created.id);
+    expect((await store.list('u1')).map((w) => w.id)).not.toContain(created.id);
+    // Tombstone é terminal para delete posterior.
+    await expect(
+      store.deleteEmpty({
+        authUserId: 'u1',
+        householdId: created.id,
+        confirmation: buildDeleteConfirmation({
+          workspaceId: created.id,
+          actor: 'u1',
+          inventoryVersion: inventory.inventoryVersion,
+          agentAttestation: 'unverified',
+          expiresAt: inventory.expiresAt,
+          agentProof,
+        }),
+      }),
     ).rejects.toMatchObject({ code: 'workspace.deleted' });
   });
 
-  it('verifyDeleteConfirmation é pura e fail-closed (ação vinculada, TTL limitado)', () => {
+  it('verifyDeleteConfirmation é pura e fail-closed (vínculo + barreira + TTL limitado)', () => {
     const version = createHash('sha256').update('inv').digest('hex');
-    const valid = buildDeleteConfirmation({
+    const forged = buildDeleteConfirmation({
       workspaceId: WS_ID,
       actor: 'auth-user-1',
       inventoryVersion: version,
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       agentAttestation: 'verified-empty',
     });
+    // FIX-WS-D2-R3 item 1: sem emissor server-side, NENHUM valor de
+    // atestação conclui — a barreira precede até a validação temporal
+    // (as checagens de TTL/expiração seguem no código como defesa em
+    // profundidade para quando o emissor existir).
     expect(() =>
-      verifyDeleteConfirmation(valid, { workspaceId: WS_ID, actor: 'auth-user-1', inventoryVersion: version }),
-    ).not.toThrow();
-    // Ação errada.
+      verifyDeleteConfirmation(forged, { workspaceId: WS_ID, actor: 'auth-user-1', inventoryVersion: version }),
+    ).toThrow(expect.objectContaining({ code: 'workspace.agent_unverified' }));
+    // Ação errada (vínculo, antes da barreira).
     expect(() =>
-      verifyDeleteConfirmation({ ...valid, action: 'workspace.purge' as never }, { workspaceId: WS_ID, actor: 'auth-user-1', inventoryVersion: version }),
+      verifyDeleteConfirmation({ ...forged, action: 'workspace.purge' as never }, { workspaceId: WS_ID, actor: 'auth-user-1', inventoryVersion: version }),
     ).toThrow(expect.objectContaining({ code: 'workspace.confirmation_invalid' }));
-    // Expiração além do TTL máximo (relógio do cliente não estende a janela).
+    // Expiração além do TTL máximo: a barreira fail-closed precede a
+    // validação temporal enquanto não há emissor server-side.
     expect(() =>
       verifyDeleteConfirmation(
-        { ...valid, expiresAt: new Date(Date.now() + DELETION_INVENTORY_TTL_MS * 10).toISOString() },
+        { ...forged, expiresAt: new Date(Date.now() + DELETION_INVENTORY_TTL_MS * 10).toISOString() },
         { workspaceId: WS_ID, actor: 'auth-user-1', inventoryVersion: version },
       ),
-    ).toThrow(expect.objectContaining({ code: 'workspace.confirmation_invalid' }));
+    ).toThrow(expect.objectContaining({ code: 'workspace.agent_unverified' }));
     expect(DELETION_CONFIRM_ACTION).toBe('workspace.delete');
   });
 
@@ -376,7 +489,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
         rowCount: 1,
       }),
     });
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const error = await store
       .deleteEmpty({
         authUserId: 'auth-user-1',
@@ -451,7 +564,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
   it('FIX-WS-D2-R2 item 1 (HIGH cross-store): unverified BLOQUEIA o delete, sem tocar nos dados', async () => {
     const seen: string[] = [];
     const pool = withInventoryProbe({}, seen);
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
     expect(inventory.agentAttestation).toBe('unverified');
     // Confirmação de resto válida (versão + expiração), mas sem atestação.
@@ -472,7 +585,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
   it('FIX-WS-D2-R2 item 5 (MEDIUM confirmação): replay com expiresAt adulterado diverge e recusa', async () => {
     const seen: string[] = [];
     const pool = withInventoryProbe({}, seen);
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
     // Replay: mesma versão, expiração re-carimbada AINDA VÁLIDA na janela
     // (o ataque renova a validade reemitindo `expiresAt`; sem vínculo, a
@@ -503,7 +616,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
         rowCount: 1,
       }),
     });
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     await expect(
       store.rename({ authUserId: 'auth-user-1', householdId: WS_ID, name: 'Novo nome' }),
     ).rejects.toMatchObject({ code: 'workspace.archived', statusCode: 403 });
@@ -526,7 +639,7 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
       },
       seen,
     );
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     const restored = await store.setStatus({ authUserId: 'auth-user-1', householdId: WS_ID, status: 'active' });
     expect(restored.status).toBe('active');
     // Restore travou a linha (FOR UPDATE), consultou o tombstone
@@ -545,9 +658,76 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
         rowCount: 1,
       }),
     });
-    const store = createPostgresWorkspaceStore(pool);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
     await expect(
       store.setStatus({ authUserId: 'auth-user-1', householdId: WS_ID, status: 'active' }),
     ).rejects.toMatchObject({ code: 'workspace.deleted', statusCode: 410 });
+  });
+});
+
+describe('FIX-WS-D2-R3 (residuais REVIEW-WS-D2-R2) — RED first', () => {
+  it('R3 item 1 (HIGH atestação): verified-empty declarado no body é FORJADO — delete bloqueia sem prova server-side', async () => {
+    const seen: string[] = [];
+    const pool = withInventoryProbe({}, seen);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
+    const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
+    expect(inventory.empty).toBe(true);
+    // Workspace vazio, confirmação "perfeita" com atestação declarada pelo
+    // cliente: sem emissor server-side, a string é indistinguível de
+    // falsificação — o delete NUNCA conclui (fail-closed).
+    const confirmation = buildDeleteConfirmation({
+      workspaceId: WS_ID,
+      actor: 'auth-user-1',
+      inventoryVersion: inventory.inventoryVersion,
+      expiresAt: inventory.expiresAt,
+      agentAttestation: 'verified-empty',
+    });
+    await expect(
+      store.deleteEmpty({ authUserId: 'auth-user-1', householdId: WS_ID, confirmation }),
+    ).rejects.toMatchObject({ code: 'workspace.agent_unverified', statusCode: 409 });
+    expect(seen.some((sql) => /INTO workspace_tombstones|INTO workspace_closure_log|SET status = 'deleted'/.test(sql))).toBe(false);
+  });
+
+  it('R3 item 1 (HIGH atestação): verifyDeleteConfirmation é fail-closed mesmo com verified-empty', () => {
+    const version = createHash('sha256').update('inv').digest('hex');
+    const forged = buildDeleteConfirmation({
+      workspaceId: WS_ID,
+      actor: 'auth-user-1',
+      inventoryVersion: version,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      agentAttestation: 'verified-empty',
+    });
+    expect(() =>
+      verifyDeleteConfirmation(forged, { workspaceId: WS_ID, actor: 'auth-user-1', inventoryVersion: version }),
+    ).toThrow(expect.objectContaining({ code: 'workspace.agent_unverified' }));
+  });
+
+  it('R3 item 3 (MEDIUM expiração): adulteração CONJUNTA expiração+hash recusa (confirmation_invalid)', async () => {
+    const seen: string[] = [];
+    const pool = withInventoryProbe({}, seen);
+    const store = createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_HMAC_SECRET });
+    const inventory = await store.deletionInventory({ authUserId: 'auth-user-1', householdId: WS_ID });
+    // Ataque: expiração re-carimbada (ainda na janela) + versão
+    // RECOMPUTADA pelo atacante com o algoritmo público sobre as
+    // contagens vazias (trivialmente adivinháveis). Sem segredo
+    // server-side, o vínculo casa e o delete prosseguiria.
+    const tamperedExpiresAt = new Date(Date.parse(inventory.expiresAt) - 5 * 60 * 1000).toISOString();
+    expect(Date.parse(tamperedExpiresAt)).toBeGreaterThan(Date.now());
+    const zeroCounts: Record<string, number> = {};
+    for (const [key, value] of Object.entries(zeroInventoryRow())) zeroCounts[key] = Number(value);
+    // Atacante sem o segredo: HMAC com segredo errado (ou o SHA-256
+    // público antigo) nunca casa com a emissão do servidor.
+    const forgedVersion = hashInventoryCounts(WS_ID, zeroCounts, tamperedExpiresAt, 'attacker-without-secret');
+    const confirmation = buildDeleteConfirmation({
+      workspaceId: WS_ID,
+      actor: 'auth-user-1',
+      inventoryVersion: forgedVersion,
+      expiresAt: tamperedExpiresAt,
+      agentAttestation: 'verified-empty',
+    });
+    await expect(
+      store.deleteEmpty({ authUserId: 'auth-user-1', householdId: WS_ID, confirmation }),
+    ).rejects.toMatchObject({ code: 'workspace.confirmation_invalid' });
+    expect(seen.some((sql) => /INTO workspace_tombstones|INTO workspace_closure_log|SET status = 'deleted'/.test(sql))).toBe(false);
   });
 });

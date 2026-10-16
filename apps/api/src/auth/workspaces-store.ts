@@ -5,9 +5,11 @@ import type {
   DeletionInventory,
 } from './workspace-deletion.js';
 import {
+  agentAttestationUnavailable,
   boundInventoryVersion,
   deletionInventoryExpiry,
   hashInventoryCounts,
+  resolveDeletionHmacSecret,
   verifyDeleteConfirmation,
 } from './workspace-deletion.js';
 
@@ -97,7 +99,12 @@ export class WorkspaceError extends Error {
   }
 }
 
-export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks): WorkspaceStore => {
+export type InMemoryWorkspaceStoreOptions = {
+  /** Segredo HMAC da confirmação de exclusão (item 3); sem ele, emissão/verificação recusam fail-closed. */
+  deletionHmacSecret?: string;
+};
+
+export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks, opts?: InMemoryWorkspaceStoreOptions): WorkspaceStore => {
   type StoredWorkspace = WorkspaceSummary & { ownerAuthUserId: string };
   const workspaces: StoredWorkspace[] = [];
   const members: Array<{ householdId: string; member: WorkspaceMember }> = [];
@@ -127,14 +134,22 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks): 
   };
 
   // O fallback in-memory não tem tabelas de domínio: o inventário é
-  // trivialmente vazio (paridade de contrato com o Postgres). A versão
-  // vincula a expiração (mesmo contrato do Postgres).
+  // trivialmente vazio (paridade de contrato com o Postgres). A versão é
+  // HMAC server-side sobre contagens + expiração (mesmo contrato do
+  // Postgres, FIX-WS-D2-R3 item 3).
   const emptyInventory = (householdId: string): DeletionInventory => {
     const counts = {};
     const expiresAt = deletionInventoryExpiry();
+    let secret: string;
+    try {
+      secret = resolveDeletionHmacSecret(opts?.deletionHmacSecret);
+    } catch {
+      // FIX-WS-D2-R4: sem segredo, emissão indisponível (409 fail-closed).
+      throw agentAttestationUnavailable();
+    }
     return {
       workspaceId: householdId,
-      inventoryVersion: hashInventoryCounts(householdId, counts, expiresAt),
+      inventoryVersion: hashInventoryCounts(householdId, counts, expiresAt, secret),
       expiresAt,
       empty: true,
       counts,
@@ -237,8 +252,17 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks): 
         );
       }
       const inventory = emptyInventory(input.householdId);
-      // Versão vinculada: recomputada sobre as contagens vivas E o
-      // `expiresAt` apresentado — expiração adulterada diverge aqui.
+      // Versão vinculada sob HMAC server-side: recomputada sobre as
+      // contagens vivas E o `expiresAt` apresentado — expiração
+      // adulterada (mesmo com hash re-carimbado sem o segredo) diverge
+      // aqui. A prova HMAC do lado Agent é verificada em seguida
+      // (FIX-WS-D2-R4; sem prova válida, fail-closed).
+      let secret: string;
+      try {
+        secret = resolveDeletionHmacSecret(opts?.deletionHmacSecret);
+      } catch {
+        throw agentAttestationUnavailable();
+      }
       verifyDeleteConfirmation(
         input.confirmation,
         {
@@ -248,7 +272,9 @@ export const createInMemoryWorkspaceStore = (hooks?: WorkspaceRevocationHooks): 
             input.householdId,
             inventory.counts,
             input.confirmation.expiresAt,
+            secret,
           ),
+          agentProofSecret: secret,
         },
       );
       workspace.status = 'deleted';
