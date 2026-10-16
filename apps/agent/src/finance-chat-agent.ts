@@ -49,6 +49,10 @@ import {
   type ConversationAudience,
 } from "./privacy/conversation-visibility.js";
 import {
+  ensureTurnAudienceBinding,
+  initializeTurnAudienceBindingSchema,
+} from "./privacy/turn-audience-bindings.js";
+import {
   checkUsageLimit,
   DEFAULT_POLICY,
   estimateTokens,
@@ -1259,6 +1263,44 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /**
+   * FIX-WS-D3-R3 — audiência vinculada à intenção (durable bind, antes dos
+   * awaits do turno). `current` é a audiência da sessão aberta capturada na
+   * entrada do turno; o vínculo `(workspace, actor, intentionId)` é
+   * first-writer-wins: o redelivery com o MESMO intentionId reutiliza a
+   * audiência ORIGINAL, nunca a sessão corrente (uma renovação
+   * privado→coletiva no meio nunca republica a pergunta/resposta).
+   * Sem store ⇒ `current` (o turno falha adiante em `persistMessages`;
+   * nunca se inventa audiência). Erro de store ⇒ exceção tipada
+   * `agent.persistence_unavailable` (fail-closed, nunca default coletivo).
+   */
+  private boundTurnAudienceFor(
+    workspaceId: string,
+    actorId: string,
+    intentionId: string,
+    current: ConversationAudience,
+  ): ConversationAudience {
+    const sql = this.memorySql();
+    if (!sql) return current;
+    try {
+      initializeTurnAudienceBindingSchema(sql);
+      return ensureTurnAudienceBinding(sql, {
+        workspaceId,
+        actorId,
+        intentionId,
+        audience: current,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      const code = (err as { code?: unknown }).code;
+      if (code === 'agent.persistence_unavailable' || code === 'agent.invalid_message') throw err;
+      throw Object.assign(new Error('agent.persistence_unavailable'), {
+        code: 'agent.persistence_unavailable',
+        status: 503,
+      });
+    }
+  }
+
+  /**
    * D3 — contexto LLM só com turnos acessíveis ao ator (leitura, WS/SDK,
    * caches e compactação passam por aqui; o armazenado permanece intacto).
    */
@@ -1500,7 +1542,16 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // FIX-WS-D3-R2 finding 2: a pergunta carimba a audiência capturada
         // UMA vez na entrada do turno (`input.audience`, server-side) — a
         // re-consulta só acontece quando o canal não a transportou.
-        const turnAudience = input.audience ?? this.conversationAudienceFor(input.workspaceId, input.actorId);
+        // FIX-WS-D3-R3: a re-consulta vincula duravelmente à intenção
+        // (first-writer-wins) — redelivery reutiliza o vínculo, nunca a
+        // sessão corrente.
+        const turnAudience = input.audience
+          ?? this.boundTurnAudienceFor(
+            input.workspaceId,
+            input.actorId,
+            input.intentionId,
+            this.conversationAudienceFor(input.workspaceId, input.actorId),
+          );
         const userMessage: UIMessage = {
           id: `msg-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           role: 'user',
@@ -2074,11 +2125,21 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     // T2.1: the SDK adapter normalizes into the canonical pipeline. Body
     // identity is only a compatibility hint here; authenticated gateway
     // identity remains authoritative at the REST boundary.
+    // FIX-WS-D3-R3: a audiência vincula-se à intenção ANTES de qualquer await
+    // do turno (first-writer-wins) e viaja server-side em `input.audience` —
+    // `provideUnifiedResponse` nunca re-lê a sessão corrente no redelivery.
     const sdkInput = normalizeSdkTurn(payload, {
       actorId,
       workspaceId: sdkWorkspace,
       role: "member",
       deviceId: null,
+    }, {
+      audience: this.boundTurnAudienceFor(
+        sdkWorkspace,
+        actorId,
+        intentionId,
+        this.conversationAudienceFor(sdkWorkspace, actorId),
+      ),
     });
     let turnResult;
     try {
@@ -3886,6 +3947,23 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         : typeof body.messageId === "string" && body.messageId.trim() ? body.messageId.trim() : "";
       if (!intentionId || intentionId.length > 128) {
         return Response.json({ code: "agent.invalid_message" }, { status: 400 });
+      }
+      // FIX-WS-D3-R3: vínculo durável (workspace, actor, intentionId) →
+      // audiência ANTES dos awaits do turno (first-writer-wins). O redelivery
+      // com o MESMO intentionId após renovação reutiliza o vínculo ORIGINAL
+      // (privado), nunca a sessão corrente (coletiva). Erro de store ⇒ 503
+      // fail-closed.
+      try {
+        turnAudience = this.boundTurnAudienceFor(identity.workspaceId, identity.actorId, intentionId, turnAudience);
+      } catch (err) {
+        const code = (err as { code?: unknown }).code;
+        if (code === 'agent.persistence_unavailable') {
+          return Response.json(
+            { code: 'agent.persistence_unavailable', message: 'Session storage is not available' },
+            { status: 503 },
+          );
+        }
+        throw err;
       }
       // A13: resolve every `{type, ref, name?}` reference BEFORE the turn input
       // is built. Possession (workspace + actor), expiry and kind are

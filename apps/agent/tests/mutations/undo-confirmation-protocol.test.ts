@@ -36,6 +36,24 @@ const createMemorySql = (): Sql => {
     // (boot idempotente). ALTERs aditivos são no-op; registry vazio.
     if (q.startsWith('ALTER TABLE AGENT_SESSIONS')) return [][Symbol.iterator]() as IterableIterator<T>;
     if (q.startsWith('SELECT * FROM AGENT_SESSIONS')) return ([] as unknown as T[])[Symbol.iterator]();
+    // FIX-WS-D3-R3: vínculo durável de audiência por intention (tabela
+    // própria; first-writer-wins). Registry vazio = intenção ainda livre.
+    if (q.startsWith('SELECT * FROM AGENT_TURN_AUDIENCE_BINDINGS')) {
+      const rows = (tables.get('agent_turn_audience_bindings') ?? []).filter(
+        (r) => r.intention_id === bindings[0] && r.workspace_id === bindings[1] && r.actor_id === bindings[2],
+      );
+      return (rows as unknown as T[])[Symbol.iterator]();
+    }
+    if (q.startsWith('INSERT INTO AGENT_TURN_AUDIENCE_BINDINGS')) {
+      const rows = tables.get('agent_turn_audience_bindings') ?? [];
+      const [workspace_id, actor_id, intention_id, visibility, owner_actor_id, conversation_id, created_at] = bindings as Array<string>;
+      if (rows.some((r) => r.intention_id === intention_id && r.workspace_id === workspace_id && r.actor_id === actor_id)) {
+        throw new Error('UNIQUE constraint failed: agent_turn_audience_bindings');
+      }
+      rows.push({ workspace_id, actor_id, intention_id, visibility, owner_actor_id, conversation_id, created_at });
+      tables.set('agent_turn_audience_bindings', rows);
+      return [][Symbol.iterator]() as IterableIterator<T>;
+    }
     if (q.startsWith('INSERT INTO UNDO_PROPOSALS')) {
       const rows = tables.get('undo_proposals') ?? [];
       const [request_id, workspace_id, actor_id, device_id, target_last_operation_id, idempotency_key, status, created_at, expires_at, decided_at, result_json] = bindings as Array<string | null>;
