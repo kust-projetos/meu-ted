@@ -144,8 +144,8 @@ const openSessionRow = (overrides: Partial<Row> = {}): Row => ({
 
 const userMsg = (id: string, text: string, meta: Record<string, unknown>) => ({
   id,
-  role: 'user',
-  parts: [{ type: 'text', text }],
+  role: 'user' as const,
+  parts: [{ type: 'text' as const, text }],
   metadata: { workspaceId: 'ws-1', ...meta },
 });
 
