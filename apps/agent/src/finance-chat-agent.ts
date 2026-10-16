@@ -103,11 +103,14 @@ import { buildRuntimeCapabilityInventory } from "./attachments/runtime-capabilit
 // FIX-WS-D2-R4: emissor server-side da atestação de vazio (lado Agent) —
 // o Agent observa seu próprio SQLite/R2 e assina a prova HMAC que a API
 // verifica com o segredo compartilhado. Ownership continua na API.
+// FIX-WS-D2-R5: a prova é DEPOSITADA DIRETAMENTE na API
+// (server-to-server) — o browser recebe SÓ o handle opaco.
 import {
   AgentAttestationError,
   attestWorkspaceEmpty,
   countR2WorkspaceAttachments,
 } from "./workspace-deletion-attestation.js";
+import { depositEmptyAttestationProof } from "./workspace-deletion-deposit.js";
 
 /**
  * A19 — DO-storage-backed checkpoint for the piggybacked attachment TTL sweep.
@@ -211,6 +214,13 @@ export type Env = {
   AGENT_CONNECTION_TOKEN_SECRET?: string;
   AGENT_CONFIG_TOKEN?: string;
   AGENT_RUNTIME_ADMIN_TOKEN?: string;
+  /**
+   * FIX-WS-D2-R5 — service token do depósito server-side Agent→API
+   * (`POST /internal/agent/empty-attestations`). Mesmo
+   * `AGENT_AUTH_SERVICE_TOKEN` do Worker (o DO recebe o mesmo env).
+   * Ausente = depósito indisponível (409 fail-closed).
+   */
+  AGENT_AUTH_SERVICE_TOKEN?: string;
   AGENT_RELAY_TIMEOUT_MS?: string | number;
   OPENCODE_ZEN_API_KEY?: string;
   OPENCODE_GO_API_KEY?: string;
@@ -3209,20 +3219,23 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /**
-   * FIX-WS-D2-R4 — `POST /rpc/workspace/:id/attest-empty`: emite a prova
-   * HMAC de vazio do lado Agent (SQLite + R2 próprios).
+   * FIX-WS-D2-R5 — `POST /rpc/workspace/:id/attest-empty`: atesta o vazio
+   * do lado Agent (SQLite + R2 próprios) e DEPOSITA a prova DIRETAMENTE
+   * na API (server-to-server). O browser recebe SÓ `{ attestationId }`
+   * (handle opaco) — conteúdo, contagens e HMAC nunca cruzam o browser.
    *
    * Auth espelha as demais rotas RPC: identidade SOMENTE dos headers
    * verificados pelo gateway (`x-agent-actor`/`x-agent-workspace`, com o
    * binding do connection token revalidado acima); o `:id` do path precisa
    * ser o workspace estampado (403 senão). Ownership (owner-only) fica na
-   * API — aqui NÃO se checa role.
+   * API — aqui NÃO se checa role (a rota de depósito revalida).
    *
    * Corpo estrito `{inventoryVersion}` (versão do inventário PG à qual a
-   * prova se vincula). Vazio → 200 com a prova assinada; não-vazio → 409
-   * `agent.workspace_not_empty` com as contagens (sem assinar); sem
-   * segredo/binding/SQLite → 409 `agent.attestation_unavailable`.
-   * Fail-closed em todos os cantos; nunca conclui delete aqui (só atesta).
+   * prova se vincula). Vazio → depósito + 200 SÓ com o handle; não-vazio
+   * → 409 `agent.workspace_not_empty` com as contagens (sem assinar);
+   * sem segredo/binding/SQLite/service-token/depósito → 409
+   * `agent.attestation_unavailable`. Fail-closed em todos os cantos;
+   * nunca conclui delete aqui (só atesta + deposita).
    */
   private async handleWorkspaceAttestEmpty(request: Request, pathWorkspaceId: string): Promise<Response> {
     const actorId = request.headers.get("x-agent-actor")?.trim();
@@ -3250,6 +3263,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       return Response.json({ code: "agent.invalid_message", message: "Corpo ilegível." }, { status: 400 });
     }
     const secret = (this.env as { WORKSPACE_DELETION_HMAC_SECRET?: string } | undefined)?.WORKSPACE_DELETION_HMAC_SECRET;
+    const apiOrigin = this.env?.API_ORIGIN ?? 'https://api.synkroo.com.br';
+    const serviceToken = this.env?.AGENT_AUTH_SERVICE_TOKEN?.trim();
     const memory = this.memorySql();
     const durable = this.durableSql();
     const bucket = (this.env as { TED_ATTACHMENTS_BUCKET?: unknown } | undefined)?.TED_ATTACHMENTS_BUCKET;
@@ -3301,7 +3316,36 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           },
         },
       );
-      return Response.json(proof, { status: 200 });
+      // FIX-WS-D2-R5: vazio confirmado → deposita a prova DIRETAMENTE na
+      // API (server-to-server) e retorna SÓ o handle opaco. Sem service
+      // token ou com depósito recusado/falho, indisponível fail-closed
+      // (409, sem vazar conteúdo/HMAC ao browser).
+      if (!serviceToken) {
+        return Response.json(
+          {
+            code: "agent.attestation_unavailable",
+            message: "Depósito da atestação indisponível no momento.",
+          },
+          { status: 409 },
+        );
+      }
+      try {
+        const { attestationId } = await depositEmptyAttestationProof({
+          apiOrigin,
+          serviceToken,
+          actorId,
+          proof,
+        });
+        return Response.json({ attestationId }, { status: 200 });
+      } catch (error) {
+        if (error instanceof AgentAttestationError) {
+          return Response.json(
+            { code: error.code, message: error.message },
+            { status: error.status },
+          );
+        }
+        return Response.json({ code: "agent.inference_error", message: "Falha ao atestar o workspace." }, { status: 502 });
+      }
     } catch (error) {
       if (error instanceof AgentAttestationError) {
         return Response.json(
