@@ -36,9 +36,6 @@ type SqlMock = {
   exec<T = Row>(query: string, ...bindings: unknown[]): Iterable<T>;
 };
 
-const BINDING_SELECT =
-  'SELECT * FROM agent_turn_audience_bindings WHERE intention_id = ? AND workspace_id = ? AND actor_id = ?';
-
 const createSql = (): SqlMock => {
   const tables = new Map<string, Row[]>([
     ['agent_sessions', []],
