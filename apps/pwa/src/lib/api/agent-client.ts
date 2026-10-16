@@ -1299,36 +1299,28 @@ export async function fetchActivePendingOperations(workspaceId: string): Promise
 }
 
 /**
- * FIX-WS-D2-R4 — prova HMAC de vazio do lado Agent.
+ * FIX-WS-D2-R5 — handle opaco do depósito server-side do lado Agent.
  *
- * O Agent observa o próprio SQLite/R2 e assina a prova com o segredo
- * compartilhado; o PWA só TRANSPORTA o objeto opaco até a API (que
- * verifica). O PWA nunca forja, nunca assina e nunca interpreta o HMAC.
- * Falhas distinguem o lado: 409 `agent.workspace_not_empty` (Agent tem
- * conteúdo, com contagens) vs 409 `agent.attestation_unavailable`
- * (segredo/binding indisponível) — o `code` cruza para a UX dizer qual
- * lado falhou, sem vazar segredo.
+ * O Agent observa o próprio SQLite/R2 e DEPOSITA a prova DIRETAMENTE na
+ * API (server-to-server); o PWA recebe SÓ este UUID opaco e o devolve no
+ * delete. O PWA nunca recebe, nunca persiste e nunca submete conteúdo,
+ * contagens ou HMAC da prova (invariante A8) — nunca forja, nunca assina
+ * e nunca interpreta nada além do id. Falhas distinguem o lado: 409
+ * `agent.workspace_not_empty` (Agent tem conteúdo, com contagens) vs
+ * 409 `agent.attestation_unavailable` (depósito indisponível) — o `code`
+ * cruza para a UX dizer qual lado falhou, sem vazar segredo.
  */
-export const agentEmptyProofSchema = z
+export const emptyDepositSchema = z
   .object({
-    workspaceId: z.string(),
-    inventoryVersion: z.string(),
-    counts: z.object({
-      sessions: z.number(),
-      messages: z.number(),
-      memories: z.number(),
-      attachments: z.number(),
-    }),
-    expiresAt: z.string(),
-    hmac: z.string(),
+    attestationId: z.string().uuid(),
   });
 
-export type AgentEmptyProof = z.infer<typeof agentEmptyProofSchema>;
+export type EmptyDeposit = z.infer<typeof emptyDepositSchema>;
 
 export async function requestAgentEmptyAttestation(
   workspaceId: string,
   inventoryVersion: string,
-): Promise<AgentEmptyProof> {
+): Promise<EmptyDeposit> {
   const baseUrl = agentBaseUrl();
   const response = await fetchWithAgentAuth(
     workspaceId,
@@ -1358,10 +1350,10 @@ export async function requestAgentEmptyAttestation(
     if (errorCode) err.code = errorCode;
     throw err;
   }
-  const parsed = agentEmptyProofSchema.safeParse(await response.json());
+  const parsed = emptyDepositSchema.safeParse(await response.json());
   if (!parsed.success) {
-    // Nunca inventar prova que o Agent não emitiu.
-    const err = new Error("Atestação do Agent inválida.") as Error & { code?: string };
+    // Nunca inventar handle que o Agent não depositou.
+    const err = new Error("Depósito do Agent inválido.") as Error & { code?: string };
     err.code = "agent.invalid_attestation_response";
     throw err;
   }

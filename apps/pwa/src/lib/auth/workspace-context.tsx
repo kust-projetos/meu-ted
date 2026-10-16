@@ -29,7 +29,7 @@ import {
   restoreWorkspace as restoreWorkspaceRequest,
   fetchDeletionInventory as fetchDeletionInventoryRequest,
   deleteWorkspace as deleteWorkspaceRequest,
-  type AgentEmptyProof,
+  type EmptyDeposit,
   type DeleteConfirmationInput,
   type DeletionInventory,
   type DeleteReceipt,
@@ -105,7 +105,7 @@ export interface WorkspaceContextValue {
    * FIX-WS-D2-R4 — prova HMAC de vazio do lado Agent (passo 2 do fluxo:
    * inventário PG → atestação Agent → delete API). O PWA só transporta.
    */
-  requestAgentEmptyAttestation: (workspaceId: string, inventoryVersion: string) => Promise<AgentEmptyProof>;
+  requestAgentEmptyAttestation: (workspaceId: string, inventoryVersion: string) => Promise<EmptyDeposit>;
   deleteWorkspace: (workspaceId: string, confirmation: DeleteConfirmationInput) => Promise<DeleteReceipt>;
   inviteMember: (email: string) => Promise<void>;
   resendInvite: (inviteId: string) => Promise<void>;

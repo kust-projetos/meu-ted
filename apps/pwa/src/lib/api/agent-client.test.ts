@@ -674,16 +674,11 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
     });
   });
 
-  describe("requestAgentEmptyAttestation (FIX-WS-D2-R4)", () => {
-    const proof = {
-      workspaceId: "ws-1",
-      inventoryVersion: "a".repeat(64),
-      counts: { sessions: 0, messages: 0, memories: 0, attachments: 0 },
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
-      hmac: "b".repeat(64),
-    };
+  describe("requestAgentEmptyAttestation (FIX-WS-D2-R5: só o handle opaco)", () => {
+    const handle = { attestationId: "22222222-2222-4222-8222-222222222222" };
+    const inventoryVersion = "a".repeat(64);
 
-    it("transporta a prova opaca do Agent vinculada à versão (POST attest-empty)", async () => {
+    it("recebe SÓ o handle opaco do depósito (POST attest-empty)", async () => {
       vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
       vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("signed-token-123");
       let capturedUrl = "";
@@ -691,15 +686,36 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
       vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
         capturedUrl = String(url);
         capturedInit = init;
-        return new Response(JSON.stringify(proof), { status: 200 });
+        return new Response(JSON.stringify(handle), { status: 200 });
       });
 
-      await expect(requestAgentEmptyAttestation("ws-1", proof.inventoryVersion)).resolves.toEqual(proof);
+      await expect(requestAgentEmptyAttestation("ws-1", inventoryVersion)).resolves.toEqual(handle);
       expect(capturedUrl).toBe(
         "https://agent.example.test/agents/finance-chat-agent/ws-1/rpc/workspace/ws-1/attest-empty",
       );
       expect(capturedInit?.method).toBe("POST");
-      expect(JSON.parse(String(capturedInit?.body))).toEqual({ inventoryVersion: proof.inventoryVersion });
+      expect(JSON.parse(String(capturedInit?.body))).toEqual({ inventoryVersion });
+    });
+
+    it("rejeita corpo com conteúdo/HMAC (a prova nunca cruza o browser)", async () => {
+      vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
+      vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("signed-token-123");
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        new Response(
+          JSON.stringify({
+            workspaceId: "ws-1",
+            inventoryVersion,
+            counts: { sessions: 0, messages: 0, memories: 0, attachments: 0 },
+            expiresAt: new Date().toISOString(),
+            hmac: "b".repeat(64),
+          }),
+          { status: 200 },
+        ),
+      );
+
+      await expect(requestAgentEmptyAttestation("ws-1", inventoryVersion)).rejects.toMatchObject({
+        code: "agent.invalid_attestation_response",
+      });
     });
 
     it("propaga o code do Agent (qual lado falhou) sem mascarar", async () => {
@@ -712,20 +728,20 @@ describe("FinanceChatAgent Canonical REST Client & Legacy Adapters", () => {
         ),
       );
 
-      await expect(requestAgentEmptyAttestation("ws-1", proof.inventoryVersion)).rejects.toMatchObject({
+      await expect(requestAgentEmptyAttestation("ws-1", inventoryVersion)).rejects.toMatchObject({
         code: "agent.workspace_not_empty",
         status: 409,
       });
     });
 
-    it("rejeita payload sem prova válida (nunca inventa atestação)", async () => {
+    it("rejeita payload sem handle válido (nunca inventa depósito)", async () => {
       vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
       vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("signed-token-123");
       vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
         new Response(JSON.stringify({ workspaceId: "ws-1" }), { status: 200 }),
       );
 
-      await expect(requestAgentEmptyAttestation("ws-1", proof.inventoryVersion)).rejects.toMatchObject({
+      await expect(requestAgentEmptyAttestation("ws-1", inventoryVersion)).rejects.toMatchObject({
         code: "agent.invalid_attestation_response",
       });
     });

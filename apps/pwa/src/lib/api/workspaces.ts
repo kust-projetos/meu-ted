@@ -121,12 +121,13 @@ export type DeleteReceipt = {
 };
 
 /**
- * FIX-WS-D2-R4 — prova HMAC de vazio emitida server-side pelo Agent.
- * O PWA só transporta o objeto opaco (revalidado pelo schema); a API
- * verifica o HMAC com o segredo compartilhado. Importado do contrato
- * do agent-client para nunca divergir do que o Agent emite.
+ * FIX-WS-D2-R5 — handle opaco do depósito server-side do lado Agent. O
+ * PWA só transporta este UUID (recebido do Agent, devolvido no delete);
+ * conteúdo, contagens e HMAC da prova nunca cruzam o browser
+ * (invariante A8). Importado do contrato do agent-client para nunca
+ * divergir do que o Agent deposita.
  */
-export type { AgentEmptyProof } from "./agent-client";
+export type { EmptyDeposit } from "./agent-client";
 
 export async function fetchDeletionInventory(workspaceId: string): Promise<DeletionInventory> {
   return apiFetch<DeletionInventory>(`/workspaces/${encodeURIComponent(workspaceId)}/deletion-inventory`, {
@@ -140,13 +141,13 @@ export type DeleteConfirmationInput = {
   inventoryVersion: string;
   expiresAt: string;
   /**
-   * Barreira cross-store (FIX-WS-D2-R4): a string é legado de fio e
+   * Barreira cross-store (FIX-WS-D2-R5): a string é legado de fio e
    * ignorada como prova pelo servidor. O que conclui o delete é
-   * `agentProof` (atestação HMAC emitida pelo Agent); ausente/inválida
-   * → 409 workspace.agent_unverified, fail-closed.
+   * `attestationId` (handle opaco do depósito server-side Agent→API);
+   * ausente/inválido/expirado/consumido → 409, fail-closed.
    */
   agentAttestation: "unverified" | "verified-empty";
-  agentProof?: import("./agent-client").AgentEmptyProof;
+  attestationId?: string;
 };
 
 /**

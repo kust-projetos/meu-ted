@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import WorkspaceManagerPage from "../WorkspaceManagerPage";
 import type { WorkspaceContextValue } from "@/lib/auth/workspace-context";
-import type { AgentEmptyProof, DeletionInventory } from "@/lib/api/workspaces";
+import type { DeletionInventory, EmptyDeposit } from "@/lib/api/workspaces";
 
 const emptyInventory: DeletionInventory = {
   workspaceId: "ws-arquivado",
@@ -15,12 +15,8 @@ const emptyInventory: DeletionInventory = {
   agentAttestation: "unverified",
 };
 
-const agentProof: AgentEmptyProof = {
-  workspaceId: "ws-arquivado",
-  inventoryVersion: emptyInventory.inventoryVersion,
-  counts: { sessions: 0, messages: 0, memories: 0, attachments: 0 },
-  expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
-  hmac: "b".repeat(64),
+const deposited: EmptyDeposit = {
+  attestationId: "22222222-2222-4222-8222-222222222222",
 };
 
 const fullInventory: DeletionInventory = {
@@ -70,16 +66,17 @@ vi.mock("@/lib/auth/workspace-context", () => ({
 }));
 
 /**
- * D2 (ADR-027) + FIX-WS-D2-R4: exclusão permanente só de workspace vazio,
- * em 2 passos (1. inventário PG; 2. atestação HMAC do Agent) com
- * confirmação forte (versão + nome digitado). O PWA só transporta a prova
- * opaca. Purge com-dados nunca é oferecido.
+ * D2 (ADR-027) + FIX-WS-D2-R5: exclusão permanente só de workspace vazio,
+ * em 2 passos (1. inventário PG; 2. depósito server-side do Agent com
+ * handle opaco) com confirmação forte (versão + nome digitado). O PWA só
+ * transporta o UUID opaco — nunca conteúdo/HMAC (invariante A8). Purge
+ * com-dados nunca é oferecido.
  */
-describe("WorkspaceManagerPage — delete só-vazio (D2 + R4)", () => {
+describe("WorkspaceManagerPage — delete só-vazio (D2 + R5)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(context.fetchDeletionInventory).mockResolvedValue(emptyInventory);
-    vi.mocked(context.requestAgentEmptyAttestation).mockResolvedValue(agentProof);
+    vi.mocked(context.requestAgentEmptyAttestation).mockResolvedValue(deposited);
     vi.mocked(context.deleteWorkspace).mockResolvedValue({
       id: "ws-arquivado",
       deletedAt: new Date().toISOString(),
@@ -87,7 +84,7 @@ describe("WorkspaceManagerPage — delete só-vazio (D2 + R4)", () => {
     });
   });
 
-  it("fluxo em 2 passos: inventário PG vazio → atestação Agent → delete com a prova opaca", async () => {
+  it("fluxo em 2 passos: inventário PG vazio → depósito Agent → delete com SÓ o handle opaco", async () => {
     const user = userEvent.setup();
     render(<WorkspaceManagerPage />);
 
@@ -95,7 +92,7 @@ describe("WorkspaceManagerPage — delete só-vazio (D2 + R4)", () => {
     await waitFor(() =>
       expect(context.fetchDeletionInventory).toHaveBeenCalledWith("ws-arquivado"),
     );
-    // Passo 2: a prova é pedida ao Agent vinculada à versão do inventário.
+    // Passo 2: o depósito é pedido ao Agent vinculado à versão do inventário.
     await waitFor(() =>
       expect(context.requestAgentEmptyAttestation).toHaveBeenCalledWith(
         "ws-arquivado",
@@ -117,9 +114,13 @@ describe("WorkspaceManagerPage — delete só-vazio (D2 + R4)", () => {
         inventoryVersion: emptyInventory.inventoryVersion,
         expiresAt: emptyInventory.expiresAt,
         agentAttestation: "unverified",
-        agentProof,
+        attestationId: deposited.attestationId,
       }),
     );
+    // O fio nunca carrega conteúdo/HMAC da prova — só o handle opaco.
+    const sent = vi.mocked(context.deleteWorkspace).mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(JSON.stringify(sent)).not.toContain("hmac");
+    expect(JSON.stringify(sent)).not.toContain("sessions");
   });
 
   it("Agent com conteúdo bloqueia e mostra qual lado falhou (sem tentar o delete)", async () => {
