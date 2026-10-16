@@ -62,7 +62,8 @@ const zeroInventoryRow = () => ({
   goals: '0',
   goal_contributions: '0',
   subscriptions: '0',
-  profiles: '0',
+  // profiles NÃO entra na prova (scaffolding owned removido pela
+  // operação — ver INVENTORY_SELECT): manter fora da shape mockada.
   card_purchases: '0',
   push_subscriptions: '0',
   pending_operations_v1: '0',
@@ -194,6 +195,9 @@ describe('D2 — delete só-vazio (ADR-027)', () => {
     expect(receipt.id).toBe(WS_ID);
     expect(seen.some((sql) => sql.includes('INTO workspace_tombstones'))).toBe(true);
     expect(seen.some((sql) => sql.includes("SET status = 'deleted'"))).toBe(true);
+    // Scaffolding owned removido pela operação (achado live 16/10:
+    // profile auto-provisionado nunca bloqueia a prova de vazio).
+    expect(seen.some((sql) => sql.includes('DELETE FROM profiles'))).toBe(true);
   });
 
   it('prova adulterada recusa NO DEPÓSITO; handle desconhecido recusa sem efeito', async () => {

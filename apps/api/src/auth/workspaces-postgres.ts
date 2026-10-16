@@ -41,7 +41,11 @@ const deletedWorkspace = (householdId: string): WorkspaceError =>
  * (material de auth) morre com o workspace via gates de acesso e não
  * bloqueia; push_subscriptions ATIVAS bloqueiam (entrega para workspace
  * morto seria resíduo). account_invites é signup-level (sem household).
- * Lado Agent (DO/R2/memória) não é observável daqui: barreira
+ * `profiles` NÃO entra na prova: é scaffolding owned provisionado na
+ * criação (PK = household_id, sem FKs apontando para ela), removido
+ * DENTRO da transação do delete — sem isso, nenhum workspace seria
+ * deletável (todo workspace nasce com 1 profile). Lado Agent
+ * (DO/R2/memória) não é observável daqui: barreira
  * cross-store pendente, atestação registrada como unverified.
  */
 const INVENTORY_SELECT = `
@@ -58,7 +62,8 @@ const INVENTORY_SELECT = `
     (SELECT COUNT(*) FROM goals WHERE household_id = $1) AS goals,
     (SELECT COUNT(*) FROM goal_contributions gc JOIN goals g ON g.id = gc.goal_id WHERE g.household_id = $1) AS goal_contributions,
     (SELECT COUNT(*) FROM subscriptions WHERE household_id = $1) AS subscriptions,
-    (SELECT COUNT(*) FROM profiles WHERE household_id = $1) AS profiles,
+    -- profiles é scaffolding owned (PK household_id, sem FKs): removido
+    -- pela operação, nunca bloqueia a prova (ver comentário acima).
     (SELECT COUNT(*) FROM card_purchases WHERE household_id = $1) AS card_purchases,
     (SELECT COUNT(*) FROM push_subscriptions WHERE workspace_id = $2) AS push_subscriptions,
     (SELECT COUNT(*) FROM pending_operations WHERE workspace_id = $2 AND status NOT IN ('rejected', 'expired')) AS pending_operations_v1,
@@ -375,6 +380,9 @@ export const createPostgresWorkspaceStore = (pool: Pool, hooks?: WorkspaceRevoca
           [confirmation.attestationId, householdId, boundVersion],
         );
         if ((consumed.rowCount ?? 0) === 0) throw agentUnverified();
+        // Scaffolding owned do workspace (PK household_id, sem FKs
+        // apontando): removido pela operação, nunca bloqueia a prova.
+        await client.query(`DELETE FROM profiles WHERE household_id = $1`, [householdId]);
         await client.query(
           `INSERT INTO workspace_tombstones (household_id, deleted_by, inventory_version)
            VALUES ($1, $2, $3)

@@ -94,6 +94,14 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     // do depósito server-side (white-box: mesmo segredo compartilhado);
     // sem handle, `unverified` bloqueia fail-closed.
     const empty = await store.create({ authUserId: authUser, name: "Vazio", kind: "shared" });
+    // Achado live 16/10: profile auto-provisionado (scaffolding owned,
+    // PK household_id, sem FKs) NÃO bloqueia a prova de vazio — é
+    // removido DENTRO da transação do delete.
+    await pool.query(
+      `INSERT INTO profiles (household_id, name, email, phone, avatar_color, greeting_style)
+       VALUES ($1, 'Ws', '', '', '#0E8C5A', 'auto')`,
+      [empty.id],
+    );
     const inventory = await store.deletionInventory({ authUserId: authUser, householdId: empty.id });
     expect(inventory.empty).toBe(true);
     expect(inventory.agentAttestation).toBe('unverified');
@@ -132,6 +140,9 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     expect(tombRow.rowCount).toBe(1);
     const statusRow = await pool.query(`SELECT status FROM households WHERE id = $1`, [empty.id]);
     expect(statusRow.rows[0]?.['status']).toBe('deleted');
+    // Scaffolding removido pela operação (não bloqueou, não restou).
+    const profileRow = await pool.query(`SELECT COUNT(*)::int AS c FROM profiles WHERE household_id = $1`, [empty.id]);
+    expect(profileRow.rows[0]?.['c']).toBe(0);
     // Fora da lista; segundo delete recusa.
     expect((await store.list(authUser)).some((w) => w.id === empty.id)).toBe(false);
     await expect(
