@@ -92,6 +92,11 @@ describe('durableSql: single ctx.storage.sql accessor (same root cause as undo/a
           return tables.get('agent_prefs')!.filter((r) => r['workspace_id'] === bindings[0]) as unknown as Iterable<T>;
         }
         if (q.startsWith('SELECT * FROM agent_memory')) return [] as unknown as Iterable<T>;
+        // FIX-WS-D2-FENCE R2 — `workspace_deletion_fence` é estado durável
+        // real do DO: sem fence → [] (allow, fail-open seguro).
+        if (q.startsWith('SELECT epoch, expires_at FROM workspace_deletion_fence')) {
+          return [] as unknown as Iterable<T>;
+        }
         throw new Error(`unhandled: ${q.slice(0, 60)}`);
       }) as ExecFn,
     };

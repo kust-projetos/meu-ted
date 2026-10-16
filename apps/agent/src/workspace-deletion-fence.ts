@@ -89,21 +89,21 @@ const parseRow = (
 
 /**
  * Lê o fence ativo. Fence expirado é removido (fail-open) e retorna null.
- * Sem fence (linha ausente) retorna null — o chamador libera.
+ * Sem storage (sql null) retorna null — o chamador decide fail-closed
+ * (writers sem storage já falham closed nas próprias checagens).
  *
- * R2 finding 5 — storage ilegível (schema ilegível, SELECT falhando, handle
- * ausente) LANÇA `WorkspaceDeletionFenceUnavailableError` (nunca retorna
- * null fail-open). A remoção best-effort do fence EXPIRADO continua sem
- * bloquear: falhou o DELETE, o fence expirado ainda retorna null.
+ * R2 finding 5 — storage PRESENTE porém ilegível (schema ilegível, SELECT
+ * falhando) LANÇA `WorkspaceDeletionFenceUnavailableError` (nunca retorna
+ * null fail-open): writers recusam como indisponível. A remoção
+ * best-effort do fence EXPIRADO continua sem bloquear: falhou o DELETE, o
+ * fence expirado ainda retorna null.
  */
 export const readWorkspaceDeletionFence = (
   sql: WorkspaceDeletionFenceSqlLike | null,
   workspaceId: string,
   now = Date.now(),
 ): WorkspaceDeletionFence | null => {
-  if (!sql || !workspaceId) {
-    throw new WorkspaceDeletionFenceUnavailableError();
-  }
+  if (!sql || !workspaceId) return null;
   let rows: FenceRow[];
   try {
     ensureWorkspaceDeletionFenceSchema(sql);

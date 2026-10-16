@@ -333,8 +333,16 @@ describe('PR-B sink — upload RPC emite eventos best-effort', () => {
       value: {
         storage: {
           sql: {
-            exec: () => {
-              throw new Error('sink down');
+            exec: (query: string, ..._bindings: unknown[]) => {
+              // Falha ESCOPADA ao sink (o alvo do teste): o fence de exclusão
+              // e o restante do storage seguem íntegros — upload 200 com o
+              // sink best-effort. Outage geral do storage é outro cenário
+              // (recusa 503 `agent.persistence_unavailable`, coberto em
+              // `workspace-deletion-fence-r2.test.ts`).
+              if (String(query).includes('attachment_observability_events')) {
+                throw new Error('sink down');
+              }
+              return [][Symbol.iterator]();
             },
           },
           transactionSync: <T>(fn: () => T): T => fn(),

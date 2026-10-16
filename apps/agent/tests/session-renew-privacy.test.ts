@@ -103,6 +103,43 @@ const createSql = (): SqlMock => {
           (r) => r['workspace_id'] === workspaceId && r['actor_id'] === actorId && r['ended_at'] == null,
         ) as T[];
       }
+      // FIX-WS-D2-FENCE R2 — `workspace_deletion_fence` é estado durável real
+      // do DO (independente do registry/sessões: os flags de fault injection
+      // acima não o afetam). SELECT por workspace (sem fence → []), upsert
+      // por workspace_id e DELETE por workspace, condicional ao epoch.
+      if (q.startsWith('SELECT epoch, expires_at FROM workspace_deletion_fence')) {
+        const rows = tables.get('workspace_deletion_fence') ?? [];
+        return rows.filter((r) => r['workspace_id'] === bindings[0]).map((r) => ({
+          epoch: r['epoch'],
+          expires_at: r['expires_at'],
+        })) as T[];
+      }
+      if (q.startsWith('DELETE FROM workspace_deletion_fence')) {
+        const rows = tables.get('workspace_deletion_fence') ?? [];
+        const [workspaceId, epoch] = bindings;
+        tables.set(
+          'workspace_deletion_fence',
+          rows.filter((r) => {
+            if (r['workspace_id'] !== workspaceId) return true;
+            if (bindings.length > 1 && r['epoch'] !== epoch) return true;
+            return false;
+          }),
+        );
+        return [] as T[];
+      }
+      if (q.startsWith('INSERT INTO workspace_deletion_fence')) {
+        const [workspaceId, epoch, expiresAt] = bindings;
+        const rows = tables.get('workspace_deletion_fence') ?? [];
+        const existing = rows.find((r) => r['workspace_id'] === workspaceId);
+        if (existing) {
+          existing['epoch'] = epoch;
+          existing['expires_at'] = expiresAt;
+        } else {
+          rows.push({ workspace_id: workspaceId, epoch, expires_at: expiresAt });
+        }
+        tables.set('workspace_deletion_fence', rows);
+        return [] as T[];
+      }
       throw new Error(`unhandled query in mock: ${q.slice(0, 90)}`);
     },
   };
