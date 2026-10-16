@@ -205,6 +205,14 @@ if [ "$RUN_ID" != "$NEW_ID" ]; then
 fi
 
 # 6. Gates (bounded curl; every failure path rolls back first).
+#    Post-swap edge propagation via Traefik is eventually consistent (~13s
+#    observed in #208: edge 502 ~3s, then 404 ~8-10s before converging on
+#    the new SHA). The container-health loop above already bounds startup;
+#    the EDGE gate below therefore retries transients (unreachable / no
+#    gitSha / divergent SHA / /ready failure) with bounded backoff:
+#    6 attempts, 5s sleep between attempts (~25s sleep + curl time, above
+#    the observed window). A mismatch that persists after all attempts is
+#    a real failure and rolls back exactly as before (exit codes kept).
 for _ in $(seq 1 18); do
   ST="$(docker inspect "$SERVICE" --format '{{.State.Health.Status}}' 2>/dev/null || true)"
   [ "$ST" = "healthy" ] && break
@@ -213,15 +221,23 @@ done
 GATE_FAIL=""
 [ "$ST" = "healthy" ] || GATE_FAIL="container not healthy after 180s"
 if [ -z "$GATE_FAIL" ]; then
-  if ! HEALTH_JSON="$(curl_get "$API_ORIGIN/health")"; then
-    GATE_FAIL="/health unreachable"
-  elif ! GOT_SHA="$(extract_sha "$HEALTH_JSON")" || [ -z "$GOT_SHA" ]; then
-    GATE_FAIL="/health has no gitSha"
-  elif [ "$GOT_SHA" != "$SHA" ]; then
-    GATE_FAIL="/health gitSha $GOT_SHA != $SHA"
-  elif ! curl_get "$API_ORIGIN/ready" >/dev/null; then
-    GATE_FAIL="/ready failed"
-  fi
+  GATE_EDGE_ATTEMPTS=6
+  GATE_EDGE_SLEEP=5
+  for TRY in $(seq 1 "$GATE_EDGE_ATTEMPTS"); do
+    GATE_FAIL=""
+    if ! HEALTH_JSON="$(curl_get "$API_ORIGIN/health")"; then
+      GATE_FAIL="/health unreachable (attempt $TRY/$GATE_EDGE_ATTEMPTS)"
+    elif ! GOT_SHA="$(extract_sha "$HEALTH_JSON")" || [ -z "$GOT_SHA" ]; then
+      GATE_FAIL="/health has no gitSha (attempt $TRY/$GATE_EDGE_ATTEMPTS)"
+    elif [ "$GOT_SHA" != "$SHA" ]; then
+      GATE_FAIL="/health gitSha $GOT_SHA != $SHA (attempt $TRY/$GATE_EDGE_ATTEMPTS)"
+    elif ! curl_get "$API_ORIGIN/ready" >/dev/null; then
+      GATE_FAIL="/ready failed (attempt $TRY/$GATE_EDGE_ATTEMPTS)"
+    else
+      break
+    fi
+    [ "$TRY" -lt "$GATE_EDGE_ATTEMPTS" ] && sleep "$GATE_EDGE_SLEEP"
+  done
 fi
 if [ -n "$GATE_FAIL" ]; then
   do_rollback
