@@ -192,9 +192,14 @@ const isEmpty = (counts: AgentEmptyCounts): boolean =>
 /**
  * Emite a prova de vazio (workspace vazio) ou recusa com as contagens
  * (não-vazio). Nunca assina vazio falso; sem segredo, indisponível.
+ *
+ * R2 finding 2 (TTL compartilhado fence↔prova): com `expiresAt` explícito e
+ * válido, a prova HERDA o deadline do fence (UM deadline absoluto — a prova
+ * nunca sobrevive ao fence). Sem override, calcula o TTL próprio (5min a
+ * partir de `now`), como antes.
  */
 export const attestWorkspaceEmpty = async (
-  input: { workspaceId: string; inventoryVersion: string; deps: AttestationDeps; secret: string | undefined },
+  input: { workspaceId: string; inventoryVersion: string; deps: AttestationDeps; secret: string | undefined; expiresAt?: string },
   now = Date.now(),
 ): Promise<AgentEmptyProof> => {
   if (!input.workspaceId || !/^[0-9a-f]{64}$/.test(input.inventoryVersion)) {
@@ -210,7 +215,10 @@ export const attestWorkspaceEmpty = async (
       counts,
     );
   }
-  const expiresAt = new Date(now + AGENT_ATTESTATION_TTL_MS).toISOString();
+  const inherited = typeof input.expiresAt === 'string' ? Date.parse(input.expiresAt) : NaN;
+  const expiresAt = Number.isFinite(inherited)
+    ? new Date(inherited).toISOString()
+    : new Date(now + AGENT_ATTESTATION_TTL_MS).toISOString();
   const canonical = agentEmptyProofCanonical(input.workspaceId, input.inventoryVersion, counts, expiresAt);
   return {
     workspaceId: input.workspaceId,
