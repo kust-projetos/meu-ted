@@ -29,6 +29,7 @@ import {
   restoreWorkspace as restoreWorkspaceRequest,
   fetchDeletionInventory as fetchDeletionInventoryRequest,
   deleteWorkspace as deleteWorkspaceRequest,
+  type AgentEmptyProof,
   type DeleteConfirmationInput,
   type DeletionInventory,
   type DeleteReceipt,
@@ -37,6 +38,7 @@ import {
   type Workspace,
   type WorkspaceMember,
 } from "@/lib/api/workspaces";
+import { requestAgentEmptyAttestation as requestAgentEmptyAttestationRequest } from "@/lib/api/agent-client";
 
 function isAuthFailure(cause: unknown): boolean {
   if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
@@ -99,6 +101,11 @@ export interface WorkspaceContextValue {
   archiveWorkspace: (workspaceId: string) => Promise<void>;
   restoreWorkspace: (workspaceId: string) => Promise<void>;
   fetchDeletionInventory: (workspaceId: string) => Promise<DeletionInventory>;
+  /**
+   * FIX-WS-D2-R4 — prova HMAC de vazio do lado Agent (passo 2 do fluxo:
+   * inventário PG → atestação Agent → delete API). O PWA só transporta.
+   */
+  requestAgentEmptyAttestation: (workspaceId: string, inventoryVersion: string) => Promise<AgentEmptyProof>;
   deleteWorkspace: (workspaceId: string, confirmation: DeleteConfirmationInput) => Promise<DeleteReceipt>;
   inviteMember: (email: string) => Promise<void>;
   resendInvite: (inviteId: string) => Promise<void>;
@@ -619,6 +626,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return fetchDeletionInventoryRequest(workspaceId);
   }, []);
 
+  const requestAgentEmptyAttestation = useCallback(async (workspaceId: string, inventoryVersion: string) => {
+    return requestAgentEmptyAttestationRequest(workspaceId, inventoryVersion);
+  }, []);
+
   const deleteWorkspace = useCallback(async (workspaceId: string, confirmation: DeleteConfirmationInput) => {
     const receipt = await deleteWorkspaceRequest(workspaceId, confirmation);
     await refreshWorkspaces();
@@ -725,6 +736,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     archiveWorkspace,
     restoreWorkspace,
     fetchDeletionInventory,
+    requestAgentEmptyAttestation,
     deleteWorkspace,
     inviteMember,
     resendInvite,
@@ -734,7 +746,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     transferOwnership,
     acceptTransfer,
     leave,
-  }), [workspaces, activeWorkspace, members, pendingInvites, ownershipTransfers, loading, membersLoading, pendingInvitesLoading, ownershipTransfersLoading, error, isAuthError, selectWorkspace, refreshWorkspaces, refreshMembers, refreshPendingInvites, refreshOwnershipTransfers, createWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, fetchDeletionInventory, deleteWorkspace, inviteMember, resendInvite, revokeInvite, acceptInvite, removeMember, transferOwnership, acceptTransfer, leave]);
+  }), [workspaces, activeWorkspace, members, pendingInvites, ownershipTransfers, loading, membersLoading, pendingInvitesLoading, ownershipTransfersLoading, error, isAuthError, selectWorkspace, refreshWorkspaces, refreshMembers, refreshPendingInvites, refreshOwnershipTransfers, createWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, fetchDeletionInventory, requestAgentEmptyAttestation, deleteWorkspace, inviteMember, resendInvite, revokeInvite, acceptInvite, removeMember, transferOwnership, acceptTransfer, leave]);
 
   if (loading) return <main className="flex h-dvh items-center justify-center text-text-secondary">Carregando workspaces…</main>;
   return (

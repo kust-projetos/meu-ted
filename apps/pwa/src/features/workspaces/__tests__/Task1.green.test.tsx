@@ -34,6 +34,7 @@ const baseContext = vi.hoisted(() => ({
   archiveWorkspace: vi.fn(),
   restoreWorkspace: vi.fn(),
   fetchDeletionInventory: vi.fn(),
+  requestAgentEmptyAttestation: vi.fn(),
   deleteWorkspace: vi.fn(),
   inviteMember: vi.fn(),
   resendInvite: vi.fn(),

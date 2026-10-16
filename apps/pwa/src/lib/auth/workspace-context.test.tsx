@@ -28,6 +28,7 @@ const api = vi.hoisted(() => ({
   archiveWorkspace: vi.fn(),
   restoreWorkspace: vi.fn(),
   fetchDeletionInventory: vi.fn(),
+  requestAgentEmptyAttestation: vi.fn(),
   deleteWorkspace: vi.fn(),
   acceptWorkspaceInvite: vi.fn(),
   closeAllSockets: vi.fn(),

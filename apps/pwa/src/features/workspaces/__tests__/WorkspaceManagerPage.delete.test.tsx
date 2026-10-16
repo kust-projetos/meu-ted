@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import WorkspaceManagerPage from "../WorkspaceManagerPage";
 import type { WorkspaceContextValue } from "@/lib/auth/workspace-context";
-import type { DeletionInventory } from "@/lib/api/workspaces";
+import type { AgentEmptyProof, DeletionInventory } from "@/lib/api/workspaces";
 
 const emptyInventory: DeletionInventory = {
   workspaceId: "ws-arquivado",
@@ -15,9 +15,12 @@ const emptyInventory: DeletionInventory = {
   agentAttestation: "unverified",
 };
 
-const verifiedEmptyInventory: DeletionInventory = {
-  ...emptyInventory,
-  agentAttestation: "verified-empty",
+const agentProof: AgentEmptyProof = {
+  workspaceId: "ws-arquivado",
+  inventoryVersion: emptyInventory.inventoryVersion,
+  counts: { sessions: 0, messages: 0, memories: 0, attachments: 0 },
+  expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+  hmac: "b".repeat(64),
 };
 
 const fullInventory: DeletionInventory = {
@@ -49,6 +52,7 @@ const context: WorkspaceContextValue = vi.hoisted(() => ({
   archiveWorkspace: vi.fn(),
   restoreWorkspace: vi.fn(),
   fetchDeletionInventory: vi.fn(),
+  requestAgentEmptyAttestation: vi.fn(),
   deleteWorkspace: vi.fn(),
   inviteMember: vi.fn(),
   resendInvite: vi.fn(),
@@ -66,14 +70,16 @@ vi.mock("@/lib/auth/workspace-context", () => ({
 }));
 
 /**
- * D2 (ADR-027): exclusão permanente só de workspace vazio, com
- * confirmação forte (inventário versionado + nome digitado).
- * Purge com-dados nunca é oferecido.
+ * D2 (ADR-027) + FIX-WS-D2-R4: exclusão permanente só de workspace vazio,
+ * em 2 passos (1. inventário PG; 2. atestação HMAC do Agent) com
+ * confirmação forte (versão + nome digitado). O PWA só transporta a prova
+ * opaca. Purge com-dados nunca é oferecido.
  */
-describe("WorkspaceManagerPage — delete só-vazio (D2)", () => {
+describe("WorkspaceManagerPage — delete só-vazio (D2 + R4)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(context.fetchDeletionInventory).mockResolvedValue(emptyInventory);
+    vi.mocked(context.requestAgentEmptyAttestation).mockResolvedValue(agentProof);
     vi.mocked(context.deleteWorkspace).mockResolvedValue({
       id: "ws-arquivado",
       deletedAt: new Date().toISOString(),
@@ -81,14 +87,20 @@ describe("WorkspaceManagerPage — delete só-vazio (D2)", () => {
     });
   });
 
-  it("abre o diálogo de exclusão com inventário e exige o nome digitado", async () => {
+  it("fluxo em 2 passos: inventário PG vazio → atestação Agent → delete com a prova opaca", async () => {
     const user = userEvent.setup();
-    vi.mocked(context.fetchDeletionInventory).mockResolvedValueOnce(verifiedEmptyInventory);
     render(<WorkspaceManagerPage />);
 
     await user.click(screen.getByRole("button", { name: "Excluir Antigo" }));
     await waitFor(() =>
       expect(context.fetchDeletionInventory).toHaveBeenCalledWith("ws-arquivado"),
+    );
+    // Passo 2: a prova é pedida ao Agent vinculada à versão do inventário.
+    await waitFor(() =>
+      expect(context.requestAgentEmptyAttestation).toHaveBeenCalledWith(
+        "ws-arquivado",
+        emptyInventory.inventoryVersion,
+      ),
     );
     expect(await screen.findByText(/será excluído permanentemente/i)).toBeInTheDocument();
 
@@ -102,27 +114,56 @@ describe("WorkspaceManagerPage — delete só-vazio (D2)", () => {
     await waitFor(() =>
       expect(context.deleteWorkspace).toHaveBeenCalledWith("ws-arquivado", {
         workspaceId: "ws-arquivado",
-        inventoryVersion: verifiedEmptyInventory.inventoryVersion,
-        expiresAt: verifiedEmptyInventory.expiresAt,
-        agentAttestation: "verified-empty",
+        inventoryVersion: emptyInventory.inventoryVersion,
+        expiresAt: emptyInventory.expiresAt,
+        agentAttestation: "unverified",
+        agentProof,
       }),
     );
   });
 
-  it("bloqueia a exclusão sem atestação cross-store (unverified nunca conclui)", async () => {
+  it("Agent com conteúdo bloqueia e mostra qual lado falhou (sem tentar o delete)", async () => {
     const user = userEvent.setup();
+    const notEmpty = Object.assign(new Error("Exclusão bloqueada: o lado Agent possui conteúdo."), {
+      code: "agent.workspace_not_empty",
+      status: 409,
+    });
+    vi.mocked(context.requestAgentEmptyAttestation).mockRejectedValueOnce(notEmpty);
     render(<WorkspaceManagerPage />);
 
     await user.click(screen.getByRole("button", { name: "Excluir Antigo" }));
     await waitFor(() =>
-      expect(context.fetchDeletionInventory).toHaveBeenCalledWith("ws-arquivado"),
+      expect(context.requestAgentEmptyAttestation).toHaveBeenCalledWith(
+        "ws-arquivado",
+        emptyInventory.inventoryVersion,
+      ),
     );
-    expect(await screen.findByText(/ainda não atestou que este workspace está vazio/i)).toBeInTheDocument();
+    expect(await screen.findByText(/lado Agent.*ainda possui conteúdo/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Excluir permanentemente" })).not.toBeInTheDocument();
     expect(context.deleteWorkspace).not.toHaveBeenCalled();
   });
 
-  it("bloqueia a exclusão quando o inventário não está vazio (sem purge)", async () => {
+  it("Agent indisponível mostra indisponibilidade (sem tentar o delete, com retry)", async () => {
+    const user = userEvent.setup();
+    const unavailable = Object.assign(new Error("Atestação indisponível."), {
+      code: "agent.attestation_unavailable",
+      status: 409,
+    });
+    vi.mocked(context.requestAgentEmptyAttestation).mockRejectedValueOnce(unavailable);
+    render(<WorkspaceManagerPage />);
+
+    await user.click(screen.getByRole("button", { name: "Excluir Antigo" }));
+    expect(await screen.findByText(/Atestação do lado Agent indisponível/i)).toBeInTheDocument();
+    expect(context.deleteWorkspace).not.toHaveBeenCalled();
+    // Retry re-pede a atestação (o mock seguinte resolve → diálogo conclui).
+    await user.click(screen.getByRole("button", { name: "Tentar novamente" }));
+    await waitFor(() =>
+      expect(context.requestAgentEmptyAttestation).toHaveBeenCalledTimes(2),
+    );
+    expect(await screen.findByText(/será excluído permanentemente/i)).toBeInTheDocument();
+  });
+
+  it("bloqueia a exclusão quando o inventário não está vazio (sem purge, sem atestação)", async () => {
     const user = userEvent.setup();
     vi.mocked(context.fetchDeletionInventory).mockResolvedValueOnce(fullInventory);
     render(<WorkspaceManagerPage />);
@@ -130,6 +171,7 @@ describe("WorkspaceManagerPage — delete só-vazio (D2)", () => {
     await user.click(screen.getByRole("button", { name: "Excluir Antigo" }));
     expect(await screen.findByText(/possui dados e não pode ser excluído/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Excluir permanentemente" })).not.toBeInTheDocument();
+    expect(context.requestAgentEmptyAttestation).not.toHaveBeenCalled();
     expect(context.deleteWorkspace).not.toHaveBeenCalled();
   });
 });

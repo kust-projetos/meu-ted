@@ -9,7 +9,7 @@ import Card from "@/components/ui/Card";
 import Dialog from "@/components/ui/Dialog";
 import EmptyState from "@/components/ui/EmptyState";
 import { useWorkspace } from "@/lib/auth/workspace-context";
-import type { Workspace, DeletionInventory } from "@/lib/api/workspaces";
+import type { Workspace, DeletionInventory, AgentEmptyProof } from "@/lib/api/workspaces";
 import { createWorkspaceInvite } from "@/lib/api/workspaces";
 import { ApiError } from "@/lib/api/client";
 import { fetchAuditLogs, type AuditLog } from "@/lib/api/endpoints";
@@ -49,6 +49,7 @@ export default function WorkspaceManagerPage() {
     archiveWorkspace,
     restoreWorkspace,
     fetchDeletionInventory,
+    requestAgentEmptyAttestation,
     deleteWorkspace,
     inviteMember,
     resendInvite,
@@ -66,6 +67,12 @@ export default function WorkspaceManagerPage() {
   const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
   const [deleteInventory, setDeleteInventory] = useState<DeletionInventory | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  // FIX-WS-D2-R4 — passo 2 do fluxo: atestação HMAC do lado Agent
+  // (o Agent assina; o PWA só transporta a prova opaca até a API).
+  const [attestation, setAttestation] = useState<AgentEmptyProof | null>(null);
+  const [attestLoading, setAttestLoading] = useState(false);
+  const [attestError, setAttestError] = useState<string | null>(null);
+  const [attestAttempt, setAttestAttempt] = useState(0);
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [busyWorkspaceId, setBusyWorkspaceId] = useState<string | null>(null);
@@ -308,6 +315,8 @@ export default function WorkspaceManagerPage() {
   useEffect(() => {
     if (!deleteTarget) {
       setDeleteInventory(null);
+      setAttestation(null);
+      setAttestError(null);
       setDeleteConfirmName("");
       return;
     }
@@ -315,6 +324,8 @@ export default function WorkspaceManagerPage() {
     async function loadInventory() {
       setDeleteLoading(true);
       setActionError(null);
+      setAttestation(null);
+      setAttestError(null);
       try {
         const inventory = await fetchDeletionInventory(deleteTarget!.id);
         if (!cancelled) setDeleteInventory(inventory);
@@ -328,11 +339,49 @@ export default function WorkspaceManagerPage() {
     return () => { cancelled = true; };
   }, [deleteTarget, fetchDeletionInventory]);
 
-  async function handleDelete() {
+  // FIX-WS-D2-R4 — passo 2: com o inventário PG vazio em mãos, pede ao
+  // Agent a prova HMAC vinculada à versão. Falha aqui mostra QUAL lado
+  // falhou (Agent com conteúdo / Agent indisponível) sem tentar o delete.
+  useEffect(() => {
     if (!deleteTarget || !deleteInventory?.empty) return;
-    // Barreira cross-store fail-closed: sem atestação do lado Agent, o
-    // servidor recusa (409) — nem tenta.
-    if (deleteInventory.agentAttestation !== "verified-empty") return;
+    // Prova anterior de outra versão não é reaproveitada.
+    if (attestation && attestation.inventoryVersion === deleteInventory.inventoryVersion) return;
+    let cancelled = false;
+    async function loadAttestation() {
+      setAttestLoading(true);
+      setAttestError(null);
+      // Prova de versão anterior nunca é reaproveitada: limpa antes de
+      // pedir a vinculada à versão atual (o servidor recusa divergência).
+      setAttestation(null);
+      try {
+        const proof = await requestAgentEmptyAttestation(deleteTarget!.id, deleteInventory!.inventoryVersion);
+        if (!cancelled) setAttestation(proof);
+      } catch (cause) {
+        if (!cancelled) {
+          const code = cause && typeof cause === "object" && "code" in cause
+            ? String((cause as { code?: unknown }).code ?? "")
+            : "";
+          setAttestation(null);
+          setAttestError(
+            code === "agent.workspace_not_empty"
+              ? "O lado Agent (conversas e arquivos) ainda possui conteúdo deste workspace. Nenhuma exclusão foi executada."
+              : code === "agent.attestation_unavailable"
+                ? "Atestação do lado Agent indisponível no momento. Nenhuma exclusão foi executada."
+                : cause instanceof Error ? cause.message : "Não foi possível atestar o lado Agent.",
+          );
+        }
+      } finally {
+        if (!cancelled) setAttestLoading(false);
+      }
+    }
+    void loadAttestation();
+    return () => { cancelled = true; };
+  }, [deleteTarget, deleteInventory, attestation, attestAttempt, requestAgentEmptyAttestation]);
+
+  async function handleDelete() {
+    if (!deleteTarget || !deleteInventory?.empty || !attestation) return;
+    // A prova viaja opaca: o PWA nunca forja nem interpreta o HMAC — a
+    // API verifica com o segredo compartilhado (fail-closed sem ela).
     setDeleteBusy(true);
     setActionError(null);
     try {
@@ -340,7 +389,8 @@ export default function WorkspaceManagerPage() {
         workspaceId: deleteTarget.id,
         inventoryVersion: deleteInventory.inventoryVersion,
         expiresAt: deleteInventory.expiresAt,
-        agentAttestation: deleteInventory.agentAttestation,
+        agentAttestation: "unverified",
+        agentProof: attestation,
       });
       setDeleteTarget(null);
     } catch (cause) {
@@ -837,13 +887,31 @@ export default function WorkspaceManagerPage() {
             </div>
           </div>
         ) : deleteInventory?.empty ? (
-          deleteInventory.agentAttestation !== "verified-empty" ? (
+          attestLoading ? (
+            <div className="space-y-3">
+              <p className="py-4 text-center text-[13px] text-text-muted">Atestando o lado Agent (conversas e arquivos)…</p>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={() => setDeleteTarget(null)}>Fechar</Button>
+              </div>
+            </div>
+          ) : attestError || !attestation ? (
             <div className="space-y-3">
               <div className="rounded-[12px] border border-warning/30 bg-warning-tint p-3 text-[13px] font-medium text-warning">
-                Exclusão bloqueada: o lado Agent (conversas e arquivos) ainda não atestou que este workspace está vazio. Nenhuma exclusão foi executada.
+                {attestError ?? "Exclusão bloqueada: o lado Agent (conversas e arquivos) ainda não atestou que este workspace está vazio. Nenhuma exclusão foi executada."}
               </div>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="ghost" onClick={() => setDeleteTarget(null)}>Fechar</Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setAttestError(null);
+                    setAttestation(null);
+                    setAttestAttempt((attempt) => attempt + 1);
+                  }}
+                >
+                  Tentar novamente
+                </Button>
               </div>
             </div>
           ) : (

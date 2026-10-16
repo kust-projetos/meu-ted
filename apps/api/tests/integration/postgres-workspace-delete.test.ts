@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPool } from "../../src/db/pool.js";
 import { createPostgresWorkspaceStore } from "../../src/auth/workspaces-postgres.js";
-import { buildDeleteConfirmation } from "../../src/auth/workspace-deletion.js";
+import { buildDeleteConfirmation, signAgentEmptyProof } from "../../src/auth/workspace-deletion.js";
 
 /**
  * D2 (ADR-027) em Postgres real descartável: migration V062, delete
@@ -16,7 +16,29 @@ const itIfDatabase = ENABLED ? it : it.skip;
 let pool: Pool | undefined;
 
 describe("Postgres workspace D2 delete-vazio integration", () => {
+  // Segredo HMAC só-teste, explícito por store (nunca segredo real —
+  // SOMENTE DATABASE_URL_TEST). A prova do lado Agent é assinada
+  // white-box com ele (o Agent real emite com o mesmo segredo
+  // compartilhado); sem segredo, tudo bloqueia fail-closed.
+  const TEST_SECRET = 'test-only-workspace-deletion-hmac-secret';
+  const testStore = () => {
+    if (!pool) throw new Error("database pool not initialized");
+    return createPostgresWorkspaceStore(pool, undefined, { deletionHmacSecret: TEST_SECRET });
+  };
+  const agentProofFor = (workspaceId: string, inventoryVersion: string) =>
+    signAgentEmptyProof(
+      {
+        workspaceId,
+        inventoryVersion,
+        counts: { sessions: 0, messages: 0, memories: 0, attachments: 0 },
+      },
+      TEST_SECRET,
+    );
   beforeAll(() => {
+    // Segredo HMAC só-teste também no env (cobertura dos caminhos que
+    // resolvem via process.env): sem ele, a emissão fail-closed recusa
+    // tudo. Nunca segredo real — SOMENTE DATABASE_URL_TEST.
+    process.env.WORKSPACE_DELETION_HMAC_SECRET ??= TEST_SECRET;
     if (DB_URL) pool = createPool({ connectionString: DB_URL, max: 4 });
   });
 
@@ -55,18 +77,19 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     // FIX-WS-D2-R2 item 6: sem skip — V062 é pré-requisito aplicado.
     const tomb = await pool.query(`SELECT to_regclass('public.workspace_tombstones') AS r`);
     expect(tomb.rows[0]?.['r']).toBe('workspace_tombstones');
-    const store = createPostgresWorkspaceStore(pool);
+    const store = testStore();
 
     const authUser = `auth-${randomUUID()}`;
     await seedUser(pool, authUser, `wsd2-${randomUUID()}@example.com`);
 
-    // Workspace vazio: inventário vazio → delete OK (com atestação
-    // cross-store verificada na confirmação; `unverified` bloqueia).
+    // Workspace vazio: inventário vazio → delete OK com a prova HMAC
+    // do lado Agent (white-box: mesmo segredo compartilhado); sem prova,
+    // `unverified` bloqueia fail-closed.
     const empty = await store.create({ authUserId: authUser, name: "Vazio", kind: "shared" });
     const inventory = await store.deletionInventory({ authUserId: authUser, householdId: empty.id });
     expect(inventory.empty).toBe(true);
     expect(inventory.agentAttestation).toBe('unverified');
-    // Barreira cross-store sob PG real: sem atestação, nunca conclui.
+    // Barreira cross-store sob PG real: sem prova, nunca conclui.
     await expect(
       store.deleteEmpty({
         authUserId: authUser,
@@ -88,7 +111,8 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
         actor: authUser,
         inventoryVersion: inventory.inventoryVersion,
         expiresAt: inventory.expiresAt,
-        agentAttestation: 'verified-empty',
+        agentAttestation: 'unverified',
+        agentProof: agentProofFor(empty.id, inventory.inventoryVersion),
       }),
     });
     expect(receipt.id).toBe(empty.id);
@@ -165,7 +189,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     // FIX-WS-D2-R2 item 6: sem skip — V062 é pré-requisito aplicado.
     const tomb = await pool.query(`SELECT to_regclass('public.workspace_tombstones') AS r`);
     expect(tomb.rows[0]?.['r']).toBe('workspace_tombstones');
-    const store = createPostgresWorkspaceStore(pool);
+    const store = testStore();
 
     const authUser = `auth-${randomUUID()}`;
     await seedUser(pool, authUser, `wsd2c-${randomUUID()}@example.com`);
@@ -177,7 +201,8 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
         actor: authUser,
         inventoryVersion: inventory.inventoryVersion,
         expiresAt: inventory.expiresAt,
-        agentAttestation: 'verified-empty',
+        agentAttestation: 'unverified',
+        agentProof: agentProofFor(ws.id, inventory.inventoryVersion),
       });
     const results = await Promise.allSettled([
       store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation: confirmation() }),
@@ -195,7 +220,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
 
   itIfDatabase("FIX-WS-D2-R2 item 5: replay com expiresAt adulterado recusa em PG real", async () => {
     if (!pool) throw new Error("database pool not initialized");
-    const store = createPostgresWorkspaceStore(pool);
+    const store = testStore();
 
     const authUser = `auth-${randomUUID()}`;
     await seedUser(pool, authUser, `wsd2r-${randomUUID()}@example.com`);
@@ -228,7 +253,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
   itIfDatabase("FIX-WS-D2-R2 item 2: delete-vs-create e archive-vs-create reais", async () => {
     if (!pool) throw new Error("database pool not initialized");
     const { createPostgresWriteStore } = await import("../../src/writes/postgres.js");
-    const store = createPostgresWorkspaceStore(pool);
+    const store = testStore();
     const writes = createPostgresWriteStore({ pool });
 
     const authUser = `auth-${randomUUID()}`;
@@ -245,7 +270,8 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
         actor: authUser,
         inventoryVersion: doomedInventory.inventoryVersion,
         expiresAt: doomedInventory.expiresAt,
-        agentAttestation: 'verified-empty',
+        agentAttestation: 'unverified',
+        agentProof: agentProofFor(doomed.id, doomedInventory.inventoryVersion),
       }),
     });
     await expect(
@@ -266,7 +292,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
   itIfDatabase("FIX-WS-D2-R2 item 2: delete-vs-create concorrente — sem escrita em workspace morto", async () => {
     if (!pool) throw new Error("database pool not initialized");
     const { createPostgresWriteStore } = await import("../../src/writes/postgres.js");
-    const store = createPostgresWorkspaceStore(pool);
+    const store = testStore();
     const writes = createPostgresWriteStore({ pool });
 
     const authUser = `auth-${randomUUID()}`;
@@ -278,7 +304,8 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
       actor: authUser,
       inventoryVersion: inventory.inventoryVersion,
       expiresAt: inventory.expiresAt,
-      agentAttestation: 'verified-empty',
+      agentAttestation: 'unverified',
+      agentProof: agentProofFor(ws.id, inventory.inventoryVersion),
     });
     const results = await Promise.allSettled([
       store.deleteEmpty({ authUserId: authUser, householdId: ws.id, confirmation }),
@@ -307,7 +334,7 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
 
   itIfDatabase("FIX-WS-D2-R2 item 3: restore-vs-delete concorrente em PG real", async () => {
     if (!pool) throw new Error("database pool not initialized");
-    const store = createPostgresWorkspaceStore(pool);
+    const store = testStore();
 
     const authUser = `auth-${randomUUID()}`;
     await seedUser(pool, authUser, `wsd2rd-${randomUUID()}@example.com`);
@@ -319,7 +346,8 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
       actor: authUser,
       inventoryVersion: inventory.inventoryVersion,
       expiresAt: inventory.expiresAt,
-      agentAttestation: 'verified-empty',
+      agentAttestation: 'unverified',
+      agentProof: agentProofFor(ws.id, inventory.inventoryVersion),
     });
     const results = await Promise.allSettled([
       store.setStatus({ authUserId: authUser, householdId: ws.id, status: 'active' }),
@@ -344,5 +372,42 @@ describe("Postgres workspace D2 delete-vazio integration", () => {
     await expect(
       store.setStatus({ authUserId: authUser, householdId: ws.id, status: 'active' }),
     ).rejects.toMatchObject({ code: 'workspace.deleted' });
+  });
+
+  itIfDatabase("R4: sem segredo HMAC = indisponível (409 agent_unverified, sem efeito)", async () => {
+    if (!pool) throw new Error("database pool not initialized");
+    const saved = process.env.WORKSPACE_DELETION_HMAC_SECRET;
+    delete process.env.WORKSPACE_DELETION_HMAC_SECRET;
+    try {
+      const secretless = createPostgresWorkspaceStore(pool);
+      const authUser = `auth-${randomUUID()}`;
+      await seedUser(pool, authUser, `wsd2s-${randomUUID()}@example.com`);
+      const ws = await secretless.create({ authUserId: authUser, name: "SemSegredo", kind: "shared" });
+      // Inventário indisponível sem segredo (não emite versão forjável).
+      await expect(
+        secretless.deletionInventory({ authUserId: authUser, householdId: ws.id }),
+      ).rejects.toMatchObject({ code: 'workspace.agent_unverified' });
+      // Delete indisponível sem segredo (nunca conclui sem prova verificável).
+      await expect(
+        secretless.deleteEmpty({
+          authUserId: authUser,
+          householdId: ws.id,
+          confirmation: buildDeleteConfirmation({
+            workspaceId: ws.id,
+            actor: authUser,
+            inventoryVersion: 'f'.repeat(64),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            agentAttestation: 'unverified',
+          }),
+        }),
+      ).rejects.toMatchObject({ code: 'workspace.agent_unverified' });
+      // Sem efeito: workspace segue ativo e sem tombstone.
+      const status = await pool.query(`SELECT status FROM households WHERE id = $1`, [ws.id]);
+      expect(status.rows[0]?.['status']).toBe('active');
+      const tombRow = await pool.query(`SELECT * FROM workspace_tombstones WHERE household_id = $1`, [ws.id]);
+      expect(tombRow.rowCount).toBe(0);
+    } finally {
+      if (saved !== undefined) process.env.WORKSPACE_DELETION_HMAC_SECRET = saved;
+    }
   });
 });

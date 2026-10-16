@@ -1297,3 +1297,73 @@ export async function fetchActivePendingOperations(workspaceId: string): Promise
   }
   return parsed.data.items;
 }
+
+/**
+ * FIX-WS-D2-R4 — prova HMAC de vazio do lado Agent.
+ *
+ * O Agent observa o próprio SQLite/R2 e assina a prova com o segredo
+ * compartilhado; o PWA só TRANSPORTA o objeto opaco até a API (que
+ * verifica). O PWA nunca forja, nunca assina e nunca interpreta o HMAC.
+ * Falhas distinguem o lado: 409 `agent.workspace_not_empty` (Agent tem
+ * conteúdo, com contagens) vs 409 `agent.attestation_unavailable`
+ * (segredo/binding indisponível) — o `code` cruza para a UX dizer qual
+ * lado falhou, sem vazar segredo.
+ */
+export const agentEmptyProofSchema = z
+  .object({
+    workspaceId: z.string(),
+    inventoryVersion: z.string(),
+    counts: z.object({
+      sessions: z.number(),
+      messages: z.number(),
+      memories: z.number(),
+      attachments: z.number(),
+    }),
+    expiresAt: z.string(),
+    hmac: z.string(),
+  });
+
+export type AgentEmptyProof = z.infer<typeof agentEmptyProofSchema>;
+
+export async function requestAgentEmptyAttestation(
+  workspaceId: string,
+  inventoryVersion: string,
+): Promise<AgentEmptyProof> {
+  const baseUrl = agentBaseUrl();
+  const response = await fetchWithAgentAuth(
+    workspaceId,
+    `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/workspace/${encodeURIComponent(workspaceId)}/attest-empty`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "content-type": "application/json",
+        "X-Workspace-Id": workspaceId,
+      },
+      body: JSON.stringify({ inventoryVersion }),
+    },
+  );
+  if (!response.ok) {
+    let errorMsg = "Não foi possível atestar o lado Agent.";
+    let errorCode: string | undefined;
+    try {
+      const errBody = (await response.json()) as { message?: string; code?: string };
+      if (errBody?.message) errorMsg = errBody.message;
+      if (typeof errBody?.code === "string" && errBody.code) errorCode = errBody.code;
+    } catch {
+      // use default message
+    }
+    const err = new Error(errorMsg) as Error & { status?: number; code?: string };
+    err.status = response.status;
+    if (errorCode) err.code = errorCode;
+    throw err;
+  }
+  const parsed = agentEmptyProofSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    // Nunca inventar prova que o Agent não emitiu.
+    const err = new Error("Atestação do Agent inválida.") as Error & { code?: string };
+    err.code = "agent.invalid_attestation_response";
+    throw err;
+  }
+  return parsed.data;
+}
