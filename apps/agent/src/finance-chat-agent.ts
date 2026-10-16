@@ -100,6 +100,14 @@ import {
 // GET read-only existente — só leitura (env + SELECT de frescor no sink),
 // nunca escrita/ativação.
 import { buildRuntimeCapabilityInventory } from "./attachments/runtime-capability-inventory.js";
+// FIX-WS-D2-R4: emissor server-side da atestação de vazio (lado Agent) —
+// o Agent observa seu próprio SQLite/R2 e assina a prova HMAC que a API
+// verifica com o segredo compartilhado. Ownership continua na API.
+import {
+  AgentAttestationError,
+  attestWorkspaceEmpty,
+  countR2WorkspaceAttachments,
+} from "./workspace-deletion-attestation.js";
 
 /**
  * A19 — DO-storage-backed checkpoint for the piggybacked attachment TTL sweep.
@@ -3200,6 +3208,115 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     return next;
   }
 
+  /**
+   * FIX-WS-D2-R4 — `POST /rpc/workspace/:id/attest-empty`: emite a prova
+   * HMAC de vazio do lado Agent (SQLite + R2 próprios).
+   *
+   * Auth espelha as demais rotas RPC: identidade SOMENTE dos headers
+   * verificados pelo gateway (`x-agent-actor`/`x-agent-workspace`, com o
+   * binding do connection token revalidado acima); o `:id` do path precisa
+   * ser o workspace estampado (403 senão). Ownership (owner-only) fica na
+   * API — aqui NÃO se checa role.
+   *
+   * Corpo estrito `{inventoryVersion}` (versão do inventário PG à qual a
+   * prova se vincula). Vazio → 200 com a prova assinada; não-vazio → 409
+   * `agent.workspace_not_empty` com as contagens (sem assinar); sem
+   * segredo/binding/SQLite → 409 `agent.attestation_unavailable`.
+   * Fail-closed em todos os cantos; nunca conclui delete aqui (só atesta).
+   */
+  private async handleWorkspaceAttestEmpty(request: Request, pathWorkspaceId: string): Promise<Response> {
+    const actorId = request.headers.get("x-agent-actor")?.trim();
+    const workspaceId = request.headers.get("x-agent-workspace")?.trim();
+    if (!actorId || !workspaceId) {
+      return Response.json(
+        { code: "agent.unauthorized", message: "Missing authenticated actor or workspace" },
+        { status: 401 },
+      );
+    }
+    if (pathWorkspaceId !== workspaceId) {
+      return Response.json(
+        { code: "agent.workspace_forbidden", message: "Workspace mismatch" },
+        { status: 403 },
+      );
+    }
+    let inventoryVersion: string;
+    try {
+      const body = (await request.json()) as { inventoryVersion?: unknown };
+      if (typeof body.inventoryVersion !== "string" || !/^[0-9a-f]{64}$/.test(body.inventoryVersion)) {
+        return Response.json({ code: "agent.invalid_message", message: "inventoryVersion inválido." }, { status: 400 });
+      }
+      inventoryVersion = body.inventoryVersion;
+    } catch {
+      return Response.json({ code: "agent.invalid_message", message: "Corpo ilegível." }, { status: 400 });
+    }
+    const secret = (this.env as { WORKSPACE_DELETION_HMAC_SECRET?: string } | undefined)?.WORKSPACE_DELETION_HMAC_SECRET;
+    const memory = this.memorySql();
+    const durable = this.durableSql();
+    const bucket = (this.env as { TED_ATTACHMENTS_BUCKET?: unknown } | undefined)?.TED_ATTACHMENTS_BUCKET;
+    try {
+      const proof = await attestWorkspaceEmpty(
+        {
+          workspaceId,
+          inventoryVersion,
+          secret,
+          deps: {
+            sql: memory,
+            countChatMessages: (ws) => {
+              if (!durable) {
+                throw new AgentAttestationError(
+                  "agent.attestation_unavailable",
+                  "Atestação indisponível: histórico de conversas inacessível.",
+                  409,
+                );
+              }
+              try {
+                const rows = [
+                  ...durable.exec<{ c: unknown }>(
+                    `SELECT COUNT(*) AS c FROM cf_ai_chat_agent_messages WHERE json_extract(message, '$.metadata.workspaceId') = ?`,
+                    ws,
+                  ),
+                ];
+                const value = rows[0]?.c;
+                const parsed = typeof value === "number" ? value : Number(value ?? 0);
+                if (!Number.isInteger(parsed) || parsed < 0) throw new Error("invalid chat message count");
+                return parsed;
+              } catch (error) {
+                if (error instanceof AgentAttestationError) throw error;
+                throw new AgentAttestationError(
+                  "agent.attestation_unavailable",
+                  "Atestação indisponível: histórico de conversas ilegível.",
+                  409,
+                );
+              }
+            },
+            countAttachments: (ws) =>
+              countR2WorkspaceAttachments(
+                bucket as { list: (options?: { prefix?: string; cursor?: string; include?: string[] }) => Promise<{
+                  objects: Array<{ key: string; customMetadata?: Record<string, string> }>;
+                  truncated?: boolean;
+                  cursor?: string;
+                }> } | null,
+                ws,
+              ),
+          },
+        },
+      );
+      return Response.json(proof, { status: 200 });
+    } catch (error) {
+      if (error instanceof AgentAttestationError) {
+        return Response.json(
+          {
+            code: error.code,
+            message: error.message,
+            ...(error.counts ? { counts: error.counts } : {}),
+          },
+          { status: error.status },
+        );
+      }
+      return Response.json({ code: "agent.inference_error", message: "Falha ao atestar o workspace." }, { status: 502 });
+    }
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     // H-07 defense in depth: the gateway authenticates and stamps
@@ -3246,6 +3363,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     const undoVerifyMatch = url.pathname.match(/^\/rpc\/undo\/([^/]+)\/verify-target$/);
     if (undoVerifyMatch && request.method === "POST") {
       return this.handleUndoVerifyTarget(request, decodeURIComponent(undoVerifyMatch[1]!));
+    }
+    // FIX-WS-D2-R4: emissor da atestação de vazio (prova HMAC que a API
+    // verifica no delete-vazio). O `:id` é vinculado ao workspace
+    // estampado dentro do handler (403 em divergência).
+    const attestMatch = url.pathname.match(/^\/rpc\/workspace\/([^/]+)\/attest-empty$/);
+    if (attestMatch && request.method === "POST") {
+      return this.handleWorkspaceAttestEmpty(request, decodeURIComponent(attestMatch[1]!));
     }
     if (url.pathname === "/rpc/chat" && request.method === "POST") {
       const actorId = request.headers.get("x-agent-actor");

@@ -204,7 +204,10 @@ export const agentEmptyProofCanonical = (
   counts: AgentEmptyCounts,
   expiresAt: string,
 ): string => {
-  const pairs = AGENT_EMPTY_COUNT_KEYS.map((key) => [key, counts[key]]);
+  // Chaves ORDENADAS — igual ao Agent: o canônico é byte-idêntico nos
+  // dois lados, ou a verificação quebra fail-closed. Não reordenar sem
+  // mudar junto o Agent.
+  const pairs = [...AGENT_EMPTY_COUNT_KEYS].sort().map((key) => [key, counts[key]]);
   return JSON.stringify({ workspaceId, inventoryVersion, counts: pairs, expiresAt });
 };
 

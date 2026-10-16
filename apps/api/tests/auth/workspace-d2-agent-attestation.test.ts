@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  agentEmptyProofCanonical,
   signAgentEmptyProof,
   verifyAgentEmptyProof,
   type AgentEmptyCounts,
@@ -100,5 +101,15 @@ describe('R4 — atestação HMAC do lado Agent (emissão/verificação puras)',
     expect(() =>
       verifyAgentEmptyProof(proof, { workspaceId: WS_ID, inventoryVersion: VERSION, secret: 'attacker-without-secret' }),
     ).toThrow(expect.objectContaining({ code: 'workspace.agent_unverified' }));
+  });
+
+  it('canônico é byte-idêntico ao do Agent (vetor fixo cross-runtime)', () => {
+    // Pino contra o Agent (`agentEmptyProofCanonical` em
+    // `apps/agent/src/workspace-deletion-attestation.ts`): chaves
+    // ordenadas, mesma ordem de campos. Mudar aqui sem mudar lá quebra
+    // fail-closed.
+    expect(agentEmptyProofCanonical(WS_ID, VERSION, ZERO, '2026-10-16T00:00:00.000Z')).toBe(
+      `{"workspaceId":"${WS_ID}","inventoryVersion":"${VERSION}","counts":[["attachments",0],["memories",0],["messages",0],["sessions",0]],"expiresAt":"2026-10-16T00:00:00.000Z"}`,
+    );
   });
 });

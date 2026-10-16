@@ -33,6 +33,13 @@ type Env = {
   AGENT_AUTH_SERVICE_TOKEN?: string;
   AGENT_DELEGATION_SECRET?: string;
   AGENT_RUNTIME_ADMIN_TOKEN?: string;
+  /**
+   * FIX-WS-D2-R4 — segredo compartilhado da atestação de vazio Agent→API
+   * (HMAC-SHA256). Provisionado como secret (`wrangler secret put
+   * WORKSPACE_DELETION_HMAC_SECRET`), NUNCA em `vars`/código. Ausente =
+   * emissão indisponível (409 fail-closed).
+   */
+  WORKSPACE_DELETION_HMAC_SECRET?: string;
   OPENCODE_ZEN_API_KEY?: string;
   OPENCODE_GO_API_KEY?: string;
   OPENAI_API_KEY?: string;
@@ -348,7 +355,7 @@ export default {
       // T4.3 (SPEC section 11 E4): the retired legacy-agent migration gate
       // is gone — the canonical RPC surface talks to FinanceChatAgent
       // directly (INV-07, single runtime).
-      const isRestRpc = subPath === "/rpc/chat" || subPath === "/rpc/history" || subPath === "/rpc/session/new" || subPath === "/rpc/memory/prefs" || subPath === "/rpc/pending-operations/active" || subPath === "/rpc/undo/active" || subPath === "/rpc/undo/decision" || subPath === "/rpc/attachments" || subPath === "/rpc/attachments/observability" || /^\/rpc\/undo\/[^/]+\/verify-target$/.test(subPath) || /^\/rpc\/pending-operations\/[^/]+\/decision$/.test(subPath);
+      const isRestRpc = subPath === "/rpc/chat" || subPath === "/rpc/history" || subPath === "/rpc/session/new" || subPath === "/rpc/memory/prefs" || subPath === "/rpc/pending-operations/active" || subPath === "/rpc/undo/active" || subPath === "/rpc/undo/decision" || subPath === "/rpc/attachments" || subPath === "/rpc/attachments/observability" || /^\/rpc\/undo\/[^/]+\/verify-target$/.test(subPath) || /^\/rpc\/pending-operations\/[^/]+\/decision$/.test(subPath) || /^\/rpc\/workspace\/[^/]+\/attest-empty$/.test(subPath);
 
       if (isRestRpc) {
         const financeAgent = env.FINANCE_CHAT_AGENT.get(env.FINANCE_CHAT_AGENT.idFromName(canonicalId));
