@@ -11,7 +11,7 @@ import type { Pool, PoolClient } from 'pg';
 import type { Account, Transaction, Statement, StatementDetail, StatementPurchase, RecurringPurchase } from '../types/domain.js';
 import type { CardStore } from './store.js';
 import { withTransaction } from '../db/pool.js';
-import { assertWorkspaceWritable, assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
+import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
 import { domainErrors } from '../writes/errors.js';
 import { resolveExpenseCategoryInTx, resolveSubcategoryInTx } from '../writes/postgres.js';
 import { installmentDates } from '../shared/billing-month.js';
@@ -1095,15 +1095,10 @@ export const createPostgresCardStore = (pool: Pool): CardStore => {
     },
 
     async createCard(householdId, input) {
-      // FIX-WS-D2-R2 item 2: sem efeito em workspace arquivado/excluído.
-      await assertWorkspaceWritable(pool, householdId);
-      const res = await query<Row>(
-        `INSERT INTO accounts (id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day)
-         VALUES (gen_random_uuid(), $1, $2, 'credit_card', 0, 'active', $3, $4, $5)
-         RETURNING id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day`,
-        [householdId, input.name, input.creditLimitCents, input.closingDay, input.dueDay],
-      );
-      return mapAccount(res[0]!);
+      // FIX-WS-D2-R3 item 2: guarda FOR SHARE + INSERT na mesma
+      // transação (reusa o core client-bound; antes era check-then-act
+      // fora de transação, com janela delete-vs-create).
+      return withTransaction(pool, (client) => createCardInTx(client, householdId, input));
     },
 
     async updateCard(householdId, id, input) {

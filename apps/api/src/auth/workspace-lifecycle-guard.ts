@@ -43,9 +43,10 @@ export const assertWorkspaceWritableInTx = async (
 };
 
 /**
- * Variante sem transação (caminhos legados sem tx própria, ex.:
- * cancelPayable/configureNotification): leitura simples, sem lock.
- * Os caminhos transacionais (regra) usam `assertWorkspaceWritableInTx`.
+ * Variante sem transação (uso residual; writers de produto usam
+ * `assertWorkspaceWritableInTx` — FIX-WS-D2-R3 item 2 moveu os últimos
+ * caminhos check-then-act para dentro da transação do efeito).
+ * Leitura simples, sem lock: NUNCA usar antes de efeito financeiro.
  */
 export const assertWorkspaceWritable = async (
   pool: Pool,
