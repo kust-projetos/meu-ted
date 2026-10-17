@@ -1,25 +1,29 @@
 /**
  * Única abstração de armazenamento de sessão (V4 T2.2 B2).
  *
- * Todo write/leitura das chaves legadas (`pi-finance:token`,
- * `pi-finance:session-token`) passa por este módulo — AuthGate, convite e o
- * client HTTP delegam para cá (nenhum `localStorage.setItem` direto dessas
- * chaves fora daqui).
+ * Duas chaves com contratos DISTINTOS (T04, remediação wave1-pwa):
  *
- * Janela de compatibilidade (ADR-015 Opção C, B3): a ESCRITA fica atrás de
- * `NEXT_PUBLIC_LEGACY_BEARER_COMPAT` (default true = janela aberta; leitura
- * em call-time para `vi.stubEnv` nos testes). Com a flag off, nenhum bearer
- * legado é persistido — a sessão opera 100% via cookie HttpOnly
- * (`credentials: "include"` no client). Revisão/remoção: 2026-12-01
- * (janela ADR-011/T5.4).
+ * - `pi-finance:token` = DEVICE token (vínculo H-12, emitido por
+ *   POST /auth/devices/register). NÃO é bearer legado: persiste SEMPRE,
+ *   independente da janela de compat — o mint do Agent (`agent-auth.ts`
+ *   self-heal) depende dele, e com a flag off cada request repetiria o
+ *   register (storm sequencial que bloqueia o flip da Release B). Nunca é
+ *   anexado como `Authorization` (T2.5 removeu o attach universal; só vai
+ *   como `x-device-token` explícito em fluxos escopados).
+ * - `pi-finance:session-token` = bearer legado de sessão (fallback
+ *   `Authorization` da janela ADR-011/015). Escrita+leitura atrás de
+ *   `NEXT_PUBLIC_LEGACY_BEARER_COMPAT` (default true = janela aberta; leitura
+ *   em call-time para `vi.stubEnv` nos testes). Com a flag off, nenhum bearer
+ *   legado é persistido — a sessão opera 100% via cookie HttpOnly
+ *   (`credentials: "include"` no client). Revisão/remoção: 2026-12-01
+ *   (janela ADR-011/T5.4).
  *
- * T2.3 (B3 passos 4–6, DECISÃO: flag única, sem sub-flag): a mesma flag
- * controla leitura+escrita juntas. Com a flag off, a LEITURA também é
- * removida — os getters retornam null mesmo com token órfão em localStorage
- * (XLT-02 endurecido: nenhuma leitura de credencial no caminho de
- * requisição) e `cleanupOrphanedLegacyTokens()` (chamado no boot via
- * RootProviders) apaga as duas chaves legadas. Com a flag on, coexistência
- * B3.1 preservada (lê e preserva).
+ * T2.3 (B3 passos 4–6, DECISÃO: flag única, sem sub-flag) controlava
+ * leitura+escrita juntas das DUAS chaves; a T04 desgaterou só a chave de
+ * device (o bearer legado continua gateado como está). `clearToken()` nunca
+ * foi gateado (logout/invalidação funcionam com qualquer flag) e
+ * `cleanupOrphanedLegacyTokens()` (boot via RootProviders) apaga só o
+ * session-token órfão — o device é preservado.
  */
 
 const PREFIX = "pi-finance:";
@@ -57,8 +61,9 @@ function getStorage(): Storage | null {
 }
 
 export function getToken(): string | null {
-  // T2.3 B3.5: flag off => leitura removida (órfão ignorado, zero reads).
-  if (!isLegacyBearerCompatEnabled()) return null;
+  // T04: chave de DEVICE (vínculo H-12) — fora do gate de compat do bearer
+  // legado. O mint do Agent precisa reler o token persistido com a flag off;
+  // sem isso, cada request repetiria POST /auth/devices/register.
   try {
     return getStorage()?.getItem(`${PREFIX}token`) ?? null;
   } catch {
@@ -66,8 +71,8 @@ export function getToken(): string | null {
   }
 }
 export function setToken(token: string): void {
-  // B3 coexistência: sem a janela de compat, o bearer legado não é persistido.
-  if (!isLegacyBearerCompatEnabled()) return;
+  // T04: device persiste sempre (ver doc do módulo). O gate de compat segue
+  // valendo só para o bearer legado de sessão (setSessionToken).
   try {
     getStorage()?.setItem(`${PREFIX}token`, token);
   } catch {
@@ -111,13 +116,14 @@ export function clearSessionToken(): void {
 }
 
 /**
- * T2.3 (B3 passo 4–6, caminho de limpeza do B2): remove os tokens órfãos
- * legados no boot quando a janela de compat está fechada. Com a flag on,
- * no-op (coexistência B3.1 — nunca apaga sessão ativa legada no meio da
- * janela). Chamado uma vez no boot via RootProviders.
+ * T2.3 (B3 passo 4–6, caminho de limpeza do B2) + T04: remove o bearer legado
+ * de sessão órfão no boot quando a janela de compat está fechada. Com a flag
+ * on, no-op (coexistência B3.1 — nunca apaga sessão ativa legada no meio da
+ * janela). Chamado uma vez no boot via RootProviders. O DEVICE token
+ * (`pi-finance:token`) é PRESERVADO em qualquer flag — apagá-lo no boot
+ * recriaria o register storm do mint a cada carregamento (T04).
  */
 export function cleanupOrphanedLegacyTokens(): void {
   if (isLegacyBearerCompatEnabled()) return;
-  clearToken();
   clearSessionToken();
 }

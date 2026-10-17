@@ -81,13 +81,99 @@ export const abortAgentConnections = (): void => {
  * session; the attached bearer is the one stored locally, and it is expected
  * to be that same session because that is the premise of the compat window
  * (cookie primary, stored bearer only as a fallback) — an assumption this call
- * does not verify. After the flag is off the stored-bearer read is removed
- * and the call is cookie-only, with no change here.
+ * does not verify. After the flag is off the stored SESSION-bearer read is
+ * removed and the register call is cookie-only, with no change here.
+ *
+ * T04: the DEVICE store (`pi-finance:token`, token-store.ts) is independent
+ * of that flag — it persists and reads back with compat off, so sequential
+ * mints reuse one registration instead of storming
+ * POST /auth/devices/register per request. T04 follow-up: when the storage
+ * itself is unavailable (private-mode throws), a session-bound in-memory
+ * fallback (`memoryDeviceToken`, storage-first with read-back verification)
+ * covers SEQUENTIAL mints; concurrent ones still coalesce on the
+ * single-flight. Bound to the session generation, dropped by
+ * `clearAgentSession` with it, never persisted.
  *
  * Never throws: a rejected/empty registration resolves to `null` so callers
  * keep the deviceless path exactly as before.
  */
 let pendingDeviceSelfHeal: Promise<string | null> | null = null;
+
+/**
+ * T04 follow-up (review wave1-fix-pwa): cache em memória do device token,
+ * APENAS para storage indisponível (ex.: Safari privado — `getItem`/`setItem`
+ * lançam e a token-store descarta a escrita). O single-flight
+ * (`pendingDeviceSelfHeal`) só coalesce mints concorrentes; sem este cache,
+ * mints SEQUENCIAIS re-registrariam a cada request.
+ *
+ * Storage-first: a leitura tenta o persistido (`getToken()`) antes da
+ * memória, e a escrita sempre tenta `setToken()` — a memória é populada
+ * somente quando a persistência falha (verificado por read-back). Vinculado
+ * à sessão: escrito só na geração corrente e zerado por `clearAgentSession`
+ * (logout/purge/switch/revogação passam por lá); nunca sobrescreve um valor
+ * persistido presente, nunca é persistido em disco.
+ */
+let memoryDeviceToken: string | null = null;
+
+/**
+ * T04 wave1-fix-pwa-2: valor persistido que uma persistência falhou em
+ * substituir (o read-back de `persistDeviceToken` divergiu). Enquanto o
+ * storage devolver exatamente esse obsoleto, ele não é autoritativo e a
+ * memória (token da sessão) vence; qualquer OUTRO valor — convergência real
+ * ou mudança externa legítima (ex.: novo login) — volta a ser autoridade do
+ * storage. Limpo junto com a memória em `clearAgentSession`.
+ */
+let supersededPersistedToken: string | null = null;
+
+/**
+ * Leitura storage-first com distinção de obsoleto (T04 wave1-fix-pwa-2):
+ * persistido legítimo sempre vence a memória; só o valor marcado como
+ * substituído-com-falha perde para ela.
+ */
+const readDeviceToken = (): string | null => {
+  const persisted = getToken();
+  if (persisted !== null && persisted === memoryDeviceToken) {
+    // Convergência real: o storage voltou a conter o token da sessão — o
+    // estado de supersede (e a memória, redundante) é descartado.
+    memoryDeviceToken = null;
+    supersededPersistedToken = null;
+    return persisted;
+  }
+  if (persisted !== null && persisted === supersededPersistedToken) {
+    // Storage travado no obsoleto que falhamos em substituir: a memória
+    // (token da sessão) é a autoridade.
+    return memoryDeviceToken;
+  }
+  if (
+    persisted !== null &&
+    persisted !== memoryDeviceToken &&
+    persisted !== supersededPersistedToken
+  ) {
+    // Mudança externa legítima (ex.: novo login persistiu outro device): o
+    // token em memória pertence à sessão anterior — descartado com o
+    // supersede para nunca mascarar o valor atual do storage.
+    memoryDeviceToken = null;
+    supersededPersistedToken = null;
+  }
+  return persisted ?? memoryDeviceToken;
+};
+
+/**
+ * Persistência storage-first: sempre tenta o storage; popula a memória
+ * somente se o read-back provar que a escrita não pegou, marcando o valor
+ * que falhou em ser substituído como superseded.
+ */
+const persistDeviceToken = (token: string): void => {
+  setToken(token);
+  const persisted = getToken();
+  if (persisted === token) {
+    memoryDeviceToken = null;
+    supersededPersistedToken = null;
+  } else {
+    memoryDeviceToken = token;
+    supersededPersistedToken = persisted;
+  }
+};
 
 /**
  * Session generation: bumped by `clearAgentSession` (the central cleanup —
@@ -116,7 +202,7 @@ const ensureDeviceToken = async (): Promise<string | null> => {
       if (res?.token) {
         // Overwrite, never clear: the stale token stays harmless because the
         // scoped device flow (T2.5) never presents it.
-        setToken(res.token);
+        persistDeviceToken(res.token);
         return res.token;
       }
       return null;
@@ -189,7 +275,7 @@ export const fetchAgentConnectionToken = async (
     // error). A presented-but-rejected device (401: stale/revoked) is
     // re-registered ONCE and the mint repeated with the new token.
     const generationAtMint = sessionGeneration;
-    const deviceToken = getToken() ?? (await ensureDeviceToken());
+    const deviceToken = readDeviceToken() ?? (await ensureDeviceToken());
     const mint = (token: string | null) =>
       apiFetch<AgentConnectionTokenResponse>("/auth/agent-token", {
         method: "POST",
@@ -263,6 +349,11 @@ export const clearAgentSession = (): void => {
   // registers its own device instead of joining the previous session's.
   sessionGeneration += 1;
   pendingDeviceSelfHeal = null;
+  // T04 follow-up: o cache em memória pertence à sessão — cai junto com ela
+  // (todo clearSensitiveSession, logout, 401/403, switch passa por aqui),
+  // com o marcador de supersede (wave1-fix-pwa-2).
+  memoryDeviceToken = null;
+  supersededPersistedToken = null;
   try {
     clearAgentConnectionTokenCache();
   } catch {
