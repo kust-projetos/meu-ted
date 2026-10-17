@@ -4,6 +4,7 @@ import { runBootstrap } from "../sync-engine";
 import type { AppStateAction } from "../state-reducer";
 import * as endpoints from "@/lib/api/endpoints";
 import { ApiError } from "@/lib/api/client";
+import { clearActiveWorkspaceId, setActiveWorkspaceId } from "@/lib/api/client";
 import * as snapshotStore from "../snapshot-store";
 
 /**
@@ -16,6 +17,9 @@ describe("bootstrap revocation (D10)", () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
     localStorage.clear();
+    // Revogação pressupõe boot com workspace (FIX-168 zero-I/O no engine).
+    clearActiveWorkspaceId();
+    setActiveWorkspaceId("ws-test-1");
     vi.spyOn(snapshotStore, "saveSnapshotDomain").mockResolvedValue(undefined);
     const dbs = await indexedDB.databases();
     for (const db of dbs) if (db.name) indexedDB.deleteDatabase(db.name);

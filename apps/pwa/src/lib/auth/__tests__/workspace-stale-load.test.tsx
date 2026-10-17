@@ -557,12 +557,16 @@ describe("WorkspaceProvider — stale load suppression on principal switch", () 
     expect(screen.getByTestId("provider-auth")).toHaveTextContent("ok");
   });
 
+  // FIX-168: o caso 403 carrega o code de revogação do contrato servidor
+  // (auth.workspace_forbidden) — 403 sem code ou com outro code NÃO é
+  // falha de auth (preserva seleção; coberto em
+  // fix-168-workspace-required-no-purge.test.tsx).
   it.each([
-    { status: 401, message: "Unauthorized" },
-    { status: 403, message: "Forbidden" },
+    { status: 401, message: "Unauthorized", code: undefined },
+    { status: 403, message: "Forbidden", code: "auth.workspace_forbidden" },
   ])(
     "selectWorkspace: an auth rejection ($status) on revalidation fails closed and flags the auth error",
-    async ({ status, message }) => {
+    async ({ status, message, code }) => {
       const user = userEvent.setup();
       setOfflinePrincipalId("user-A");
       api.fetchWorkspaces.mockResolvedValue([
@@ -586,7 +590,7 @@ describe("WorkspaceProvider — stale load suppression on principal switch", () 
       expect(clientState.active).toBeUndefined();
 
       await act(async () => {
-        revalGate.reject(Object.assign(new Error(message), { status }));
+        revalGate.reject(Object.assign(new Error(message), { status, code }));
       });
       await waitFor(() => expect(selectCapture.status).toBe("resolved"));
       await waitFor(() =>
@@ -606,12 +610,13 @@ describe("WorkspaceProvider — stale load suppression on principal switch", () 
     },
   );
 
+  // FIX-168: 403 com o code de revogação (ver nota no caso acima).
   it.each([
-    { status: 401, message: "Unauthorized" },
-    { status: 403, message: "Forbidden" },
+    { status: 401, message: "Unauthorized", code: undefined },
+    { status: 403, message: "Forbidden", code: "auth.workspace_forbidden" },
   ])(
     "selectWorkspace: same-current selection with an auth rejection ($status) clears the offline workspace binding",
-    async ({ status, message }) => {
+    async ({ status, message, code }) => {
       const user = userEvent.setup();
       setOfflinePrincipalId("user-A");
       api.fetchWorkspaces.mockResolvedValue([
@@ -640,7 +645,7 @@ describe("WorkspaceProvider — stale load suppression on principal switch", () 
       await waitFor(() => expect(api.fetchWorkspaces).toHaveBeenCalledTimes(2));
 
       await act(async () => {
-        revalGate.reject(Object.assign(new Error(message), { status }));
+        revalGate.reject(Object.assign(new Error(message), { status, code }));
       });
       await waitFor(() =>
         expect(screen.getByTestId("provider-error")).toHaveTextContent(message),
@@ -1034,12 +1039,13 @@ describe("WorkspaceProvider — stale load suppression on principal switch", () 
     );
   });
 
+  // FIX-168: 403 com o code de revogação (ver nota no caso acima).
   it.each([
-    { status: 401, message: "Unauthorized" },
-    { status: 403, message: "Forbidden" },
+    { status: 401, message: "Unauthorized", code: undefined },
+    { status: 403, message: "Forbidden", code: "auth.workspace_forbidden" },
   ])(
     "refreshWorkspaces: an auth rejection ($status) fails closed and clears header/state/preference/binding",
-    async ({ status, message }) => {
+    async ({ status, message, code }) => {
       const user = userEvent.setup();
       setOfflinePrincipalId("user-A");
       api.fetchWorkspaces.mockResolvedValue([
@@ -1057,7 +1063,7 @@ describe("WorkspaceProvider — stale load suppression on principal switch", () 
       expect(getOfflineWorkspaceId()).toBe(WS_A);
 
       api.fetchWorkspaces.mockRejectedValueOnce(
-        Object.assign(new Error(message), { status }),
+        Object.assign(new Error(message), { status, code }),
       );
       await user.click(screen.getByRole("button", { name: "Refresh" }));
       await waitFor(() =>

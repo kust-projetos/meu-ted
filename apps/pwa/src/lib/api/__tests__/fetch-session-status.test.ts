@@ -56,13 +56,27 @@ describe("fetchSession probe (AUTH-04: 2xx vs 401/403 vs unreachable)", () => {
     expect(res.status).toBe("unauthenticated");
   });
 
-  it("403 → unauthenticated (revogação: purge+login, nunca offline)", async () => {
+  it("403 auth.workspace_forbidden → unauthenticated (revogação: purge+login, nunca offline)", async () => {
+    // Sonda estrita (SPEC V4.1 INV-05 fail-closed): QUALQUER 403 no probe
+    // é "sem sessão" — o classificador estreito do FIX-168
+    // (classifyAuthSignal) vale SÓ para o escopo financeiro, nunca aqui.
     mockFetchOnce(
-      new Response(JSON.stringify({ code: "workspace.forbidden" }), { status: 403 }),
+      new Response(JSON.stringify({ code: "auth.workspace_forbidden" }), { status: 403 }),
     );
     const res = await fetchSession();
     expect(res.user).toBeNull();
     expect(res.status).toBe("unauthenticated");
+  });
+
+  it("403 sem code de revogação → unauthenticated (sonda estrita: qualquer 403 no probe é 'sem sessão', nunca offline)", async () => {
+    for (const code of ["workspace.forbidden", "auth.workspace_required", "auth.admin_forbidden"]) {
+      mockFetchOnce(
+        new Response(JSON.stringify({ code }), { status: 403 }),
+      );
+      const res = await fetchSession();
+      expect(res.user).toBeNull();
+      expect(res.status).toBe("unauthenticated");
+    }
   });
 
   it("falha de rede → unreachable (nunca vira logout)", async () => {
@@ -100,7 +114,7 @@ describe("fetchSession probe (AUTH-04: 2xx vs 401/403 vs unreachable)", () => {
     expect(res.status).toBe("unauthenticated");
   });
 
-  it("FIX-SESSION-RESPONSE-CLASSIFICATION (A): 403 com corpo JSON null → unauthenticated (nunca unreachable)", async () => {
+  it("FIX-SESSION-RESPONSE-CLASSIFICATION (A): 403 com corpo JSON null → unauthenticated (sonda estrita: qualquer 403 no probe é 'sem sessão', SPEC V4.1 INV-05)", async () => {
     mockFetchOnce(new Response("null", { status: 403 }));
     const res = await fetchSession();
     expect(res.user).toBeNull();
