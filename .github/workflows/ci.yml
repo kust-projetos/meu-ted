@@ -471,12 +471,31 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-      - run: |
-          if [ -n "$GITHUB_BASE_SHA" ]; then
-            pnpm governance:check -- --base "$GITHUB_BASE_SHA"
+      - name: Resolve governance base (fail-closed)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE="$PR_BASE"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            BASE="$PUSH_BEFORE"
           else
-            pnpm governance:check
+            echo "governance: unsupported event $EVENT_NAME (fail-closed)" >&2
+            exit 1
           fi
+          if ! printf '%s' "$BASE" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+            echo "governance: base is missing or not a 40-hex SHA (fail-closed)" >&2
+            exit 1
+          fi
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "governance: base is the zero SHA (fail-closed)" >&2
+            exit 1
+          fi
+          echo "GITHUB_BASE_SHA=$BASE" >> "$GITHUB_ENV"
+      - run: pnpm governance:check -- --base "$GITHUB_BASE_SHA"
       - run: node --test scripts/check-decision-governance.test.mjs
 
   # ─── Security gates ───────────────────────────────────────────────────
