@@ -254,6 +254,143 @@ export function resolveForwardOrigin(
   return origin;
 }
 
+/**
+ * T10 — backend upstream allowlist (pure, no env access).
+ *
+ * The backend proxy forwards the auth cookie, so its target must never be an
+ * arbitrary host taken from the environment. The allowed set is NOT expanded:
+ * the pinned production API origin, or a well-formed HTTP loopback upstream
+ * (`localhost` / `127.0.0.1`, any port — the E2E fixture and local API run on
+ * ephemeral ports with ALLOW_LOCAL_ORIGIN=0). Anything else throws and the
+ * route answers 500 upstream_misconfigured WITHOUT contacting the target.
+ * Blank/unset keeps the historical production default.
+ */
+export function resolveBackendOrigin(raw: string | undefined | null): string {
+  const value = raw?.trim();
+  if (!value) return PRODUCTION_API_ORIGIN;
+  if (isExpectedOrigin(value, PRODUCTION_API_ORIGIN)) return PRODUCTION_API_ORIGIN;
+  const loopback = parseLoopbackBackendUpstream(value);
+  if (loopback) return loopback;
+  throw new Error(
+    "FATAL: PWA_BACKEND_PROXY_ORIGIN must be the production API origin or a well-formed http://localhost|127.0.0.1 upstream; refusing to forward credentials elsewhere.",
+  );
+}
+
+/**
+ * T10 — strict well-formed HTTP loopback upstream check (pure, no env).
+ * Mirrors the shape of parseLoopbackAgentUpstream (no userinfo, no path
+ * beyond "/", no query, no fragment). Port is allowed: the E2E fixture and
+ * local dev API bind ephemeral ports. This function alone never authorizes
+ * anything — resolveBackendOrigin decides.
+ */
+function parseLoopbackBackendUpstream(value: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:") return null;
+  if (parsed.username !== "" || parsed.password !== "") return null;
+  if (parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") return null;
+  if (parsed.pathname !== "" && parsed.pathname !== "/") return null;
+  if (parsed.search !== "" || parsed.hash !== "") return null;
+  return parsed.origin;
+}
+
+/**
+ * T10 — Fetch Metadata gate for requests WITHOUT Origin (pure, no env).
+ *
+ * Legit non-browser clients (curl, server-to-server, health checks) send
+ * neither Origin nor Fetch Metadata and keep passing. A browser cross-site
+ * request always carries `Sec-Fetch-Site: cross-site`, so a mutation that
+ * claims to have no Origin but carries that marker is refused. The Origin
+ * allowlist itself stays where it already is; this only closes the
+ * no-Origin hole.
+ */
+export function isCrossSiteWithoutOrigin(
+  origin: string | null,
+  secFetchSite: string | null | undefined,
+): boolean {
+  if (origin) return false;
+  return (secFetchSite ?? "").trim().toLowerCase() === "cross-site";
+}
+
+export type BoundedBodyResult =
+  | { body?: ArrayBuffer }
+  | { error: "too_large" }
+  | { error: "aborted" };
+
+/**
+ * T10 — reads the request body up to `limit` bytes, cutting the stream BEFORE
+ * buffering the excess (mirrors the Agent proxy `readBoundedBody` ceiling
+ * semantics; kept as a shared pure helper so both proxies agree).
+ *
+ * A declared Content-Length above the ceiling is rejected before reading a
+ * single byte, but the declared value is never trusted: the stream is still
+ * measured chunk by chunk and cancelled the moment the ceiling is crossed, so
+ * a missing or lying Content-Length can no longer buy an unbounded buffer.
+ * A read failure/abort mid-stream returns `aborted` (the route answers 4xx)
+ * instead of throwing a 500.
+ */
+export async function readBoundedBody(
+  request: Request,
+  limit: number,
+): Promise<BoundedBodyResult> {
+  if (request.method === "GET" || request.method === "HEAD") return {};
+  const declared = request.headers.get("content-length");
+  if (declared !== null) {
+    const length = Number(declared);
+    if (Number.isFinite(length) && length > limit) return { error: "too_large" };
+  }
+  const stream = request.body;
+  if (!stream) {
+    // Fallback only: some runtimes hand over a Request without an exposed
+    // body stream. The ceiling is re-checked after buffering so the fallback
+    // never becomes a hole in it; a failed read is an abort, not a 500.
+    let buffered: ArrayBuffer;
+    try {
+      buffered = await request.arrayBuffer();
+    } catch {
+      return { error: "aborted" };
+    }
+    if (buffered.byteLength > limit) return { error: "too_large" };
+    return buffered.byteLength === 0 ? {} : { body: buffered };
+  }
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      let next: ReadableStreamReadResult<Uint8Array>;
+      try {
+        next = await reader.read();
+      } catch {
+        await reader.cancel().catch(() => {});
+        return { error: "aborted" };
+      }
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > limit) {
+        // Stop reading NOW: cancel the source instead of draining the rest.
+        await reader.cancel().catch(() => {});
+        return { error: "too_large" };
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (total === 0) return {};
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { body: merged.buffer as ArrayBuffer };
+}
+
 /** Canonical security headers applied to every response. */
 export const SECURITY_HEADERS: Record<string, string> = {
   "Strict-Transport-Security": "max-age=31536000; includeSubDomains",

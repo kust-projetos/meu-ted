@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import {
   isBrowserOriginAllowed,
+  isCrossSiteWithoutOrigin,
+  readBoundedBody,
+  resolveBackendOrigin,
   resolveForwardOrigin,
 } from "@/proxy-utils";
 
-/** Overridable for local development (e.g. PWA_BACKEND_PROXY_ORIGIN=http://127.0.0.1:3001). */
-const API_ORIGIN = process.env.PWA_BACKEND_PROXY_ORIGIN?.trim() || "https://api.synkroo.com.br";
-/** Upstream budget: slightly above the PWA client's 15s apiFetch timeout. */
 const UPSTREAM_TIMEOUT_MS = 20_000;
+/** Request body budget (1 MB): enforced WHILE streaming, before buffering. */
 const MAX_BODY_BYTES = 1_048_576;
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -21,9 +22,9 @@ const HOP_BY_HOP_HEADERS = new Set([
 
 type RouteContext = { params: Promise<{ path: string[] }> };
 
-function upstreamUrl(path: string[], search: string): string {
+function upstreamUrl(apiOrigin: string, path: string[], search: string): string {
   const encodedPath = path.map((segment) => encodeURIComponent(segment)).join("/");
-  return `${API_ORIGIN}/${encodedPath}${search}`;
+  return `${apiOrigin}/${encodedPath}${search}`;
 }
 
 function forwardHeaders(request: Request): Headers {
@@ -71,21 +72,43 @@ function isTimeoutError(cause: unknown): boolean {
 }
 
 async function proxy(request: Request, context: RouteContext): Promise<NextResponse> {
-  if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !hasValidBrowserOrigin(request)) {
+  // T10: the upstream target is validated per request (module import time is
+  // too early for the allowlist decision, and the env must never silently
+  // become an open proxy for the auth cookie). A disallowed target answers
+  // 500 WITHOUT contacting it.
+  let apiOrigin: string;
+  try {
+    apiOrigin = resolveBackendOrigin(process.env.PWA_BACKEND_PROXY_ORIGIN);
+  } catch (err) {
+    console.error(`backend-proxy.invalid_upstream_origin: ${(err as Error).message}`);
+    return upstreamErrorResponse(500, "upstream_misconfigured", "A API não está configurada. Tente novamente mais tarde.");
+  }
+  // T10: mutation without Origin but with cross-site Fetch Metadata is a
+  // browser cross-site request hiding its Origin — refuse it. Legit
+  // non-browser clients (no Origin, no Fetch Metadata) keep passing.
+  if (isCrossSiteWithoutOrigin(request.headers.get("origin"), request.headers.get("sec-fetch-site"))) {
     return upstreamErrorResponse(403, "csrf.origin_mismatch", "Origem da requisição não autorizada.");
   }
-  const declaredLength = Number(request.headers.get("content-length") ?? 0);
-  if (declaredLength > MAX_BODY_BYTES) {
-    return upstreamErrorResponse(413, "request.body_too_large", "O corpo da requisição excede o limite permitido.");
+  // T10: OPTIONS is no longer exempt — a preflight with a disallowed Origin
+  // is refused locally instead of being forwarded upstream. GET/HEAD stay
+  // exempt (safe methods, same as the Agent proxy).
+  if (!["GET", "HEAD"].includes(request.method) && !hasValidBrowserOrigin(request)) {
+    return upstreamErrorResponse(403, "csrf.origin_mismatch", "Origem da requisição não autorizada.");
   }
   const { path } = await context.params;
-  const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
-  if (body && body.byteLength > MAX_BODY_BYTES) {
-    return upstreamErrorResponse(413, "request.body_too_large", "O corpo da requisição excede o limite permitido.");
+  // T10: the ceiling is enforced WHILE the body is read, not after buffering
+  // it: a missing or lying Content-Length used to let the whole body land in
+  // memory before the 413, and an abort mid-read threw a 500.
+  const bounded = await readBoundedBody(request, MAX_BODY_BYTES);
+  if ("error" in bounded) {
+    return bounded.error === "too_large"
+      ? upstreamErrorResponse(413, "request.body_too_large", "O corpo da requisição excede o limite permitido.")
+      : upstreamErrorResponse(400, "request.body_aborted", "A leitura do corpo foi interrompida. Tente novamente.");
   }
+  const body = bounded.body;
   let upstream: Response;
   try {
-    upstream = await fetch(upstreamUrl(path, new URL(request.url).search), {
+    upstream = await fetch(upstreamUrl(apiOrigin, path, new URL(request.url).search), {
       method: request.method,
       headers: forwardHeaders(request),
       ...(body ? { body } : {}),

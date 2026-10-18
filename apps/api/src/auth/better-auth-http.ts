@@ -54,8 +54,14 @@ export const registerBetterAuthRoutes = (
       // CORS preflight must be answered with 204 before reaching the
       // better-auth handler (which returns 404 for OPTIONS, breaking the
       // browser preflight flow for /auth/sign-in/email and friends).
-      reply.header('Access-Control-Allow-Origin', request.headers.origin ?? '*');
-      reply.header('Access-Control-Allow-Credentials', 'true');
+      // T10: never reflect an arbitrary Origin — echo only a trusted one,
+      // with the same exact-match validation as the mutation gate below
+      // (and server/cors.ts). Untrusted/missing Origin still gets 204, but
+      // without ACAO/credentials headers.
+      if (isTrustedAuthOrigin(request, auth)) {
+        reply.header('Access-Control-Allow-Origin', request.headers.origin);
+        reply.header('Access-Control-Allow-Credentials', 'true');
+      }
       reply.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
       reply.header('Access-Control-Allow-Headers', 'Content-Type, X-Device-Token, Idempotency-Key, Accept, Authorization, X-Workspace-Id');
       reply.header('Access-Control-Expose-Headers', 'set-auth-token');
@@ -102,11 +108,31 @@ export const registerBetterAuthRoutes = (
   });
 };
 
+const isTrustedAuthOrigin = (request: FastifyRequest, auth: BetterAuth): boolean => {
+  const origin = request.headers.origin;
+  if (!origin) return false;
+  if (typeof auth.options.trustedOrigins !== 'object' || !Array.isArray(auth.options.trustedOrigins)) return false;
+  return auth.options.trustedOrigins.includes(origin);
+};
+
+const isCrossSiteWithoutOrigin = (request: FastifyRequest): boolean => {
+  if (request.headers.origin) return false;
+  const site = request.headers['sec-fetch-site'];
+  const value = Array.isArray(site) ? site[0] : site;
+  return (value ?? '').trim().toLowerCase() === 'cross-site';
+};
+
 const isUntrustedMutation = (request: FastifyRequest, auth: BetterAuth): boolean => {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) return false;
+  // T10: a mutation with no Origin but cross-site Fetch Metadata is a browser
+  // cross-site request hiding its Origin — refuse it. Legit non-browser
+  // clients (no Origin, no Fetch Metadata) keep passing.
+  if (isCrossSiteWithoutOrigin(request)) return true;
   const origin = request.headers.origin;
-  if (!origin || typeof auth.options.trustedOrigins !== 'object' || !Array.isArray(auth.options.trustedOrigins)) return false;
-  return !auth.options.trustedOrigins.includes(origin);
+  if (!origin) return false;
+  // T10: fail closed when the allowlist is unavailable — an Origin that cannot
+  // be validated is not trusted.
+  return !isTrustedAuthOrigin(request, auth);
 };
 
 const toWebRequest = (request: FastifyRequest, baseURL: string): Request => {
