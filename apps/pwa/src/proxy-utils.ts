@@ -356,28 +356,22 @@ export async function readBoundedBody(
     const length = Number(declared);
     if (Number.isFinite(length) && length > limit) return { error: "too_large" };
   }
-  // Resolves when the request signal aborts; unsubscribed once the body is
-  // fully read (see stopWatching in the finally blocks below).
-  let onAbort: (() => void) | undefined;
-  const aborted =
-    signal === undefined
-      ? null
-      : new Promise<"aborted">((resolve) => {
-          onAbort = () => resolve("aborted");
-          signal.addEventListener("abort", onAbort, { once: true });
-          // Abort fired in the gap between the early check and subscribe.
-          if (signal.aborted) resolve("aborted");
-        });
-  const stopWatching = (): void => {
-    if (signal !== undefined && onAbort !== undefined) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  };
   const stream = request.body;
   if (!stream) {
     // Fallback only: some runtimes hand over a Request without an exposed
     // body stream. The ceiling is re-checked after buffering so the fallback
     // never becomes a hole in it; a failed read is an abort, not a 500.
+    // Single race (ONE reaction, no loop): no per-chunk accumulation here.
+    let onAbort: (() => void) | undefined;
+    const aborted =
+      signal === undefined
+        ? null
+        : new Promise<"aborted">((resolve) => {
+            onAbort = () => resolve("aborted");
+            signal.addEventListener("abort", onAbort, { once: true });
+            // Abort fired in the gap between the early check and subscribe.
+            if (signal.aborted) resolve("aborted");
+          });
     try {
       const buffered =
         aborted === null
@@ -389,35 +383,46 @@ export async function readBoundedBody(
     } catch {
       return { error: "aborted" };
     } finally {
-      stopWatching();
+      if (signal !== undefined && onAbort !== undefined) {
+        signal.removeEventListener("abort", onAbort);
+      }
     }
   }
+  // R10-r2: SINGLE-listener abort pattern. ONE `abort` listener is registered
+  // once before the loop; on fire it sets a local flag and cancels the reader
+  // so a pending `read()` settles promptly. Each iteration is a plain
+  // `await reader.read()` followed by a flag check — no race, no new
+  // reactions on any shared promise — so 1 MiB in 1-byte chunks iterates ~1M
+  // times with zero accumulation. The listener is removed once in `finally`.
   const reader = stream.getReader();
+  let abortedFlag = false;
+  const onAbort = (): void => {
+    abortedFlag = true;
+    void reader.cancel().catch(() => {});
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
   let buffer = new Uint8Array(0);
   let total = 0;
   try {
+    // Abort fired in the gap between the early check and subscribe.
+    if (signal?.aborted) abortedFlag = true;
     for (;;) {
-      let next: ReadableStreamReadResult<Uint8Array> | "aborted";
+      let next: ReadableStreamReadResult<Uint8Array>;
       try {
-        next =
-          aborted === null
-            ? await reader.read()
-            : await Promise.race([reader.read(), aborted]);
+        next = await reader.read();
       } catch {
         await reader.cancel().catch(() => {});
         return { error: "aborted" };
       }
-      if (next === "aborted") {
+      // An abort racing the read (pending or delivered chunk) always wins:
+      // partial bytes are discarded and the caller sees `aborted`, never a
+      // partial body. Checked BEFORE `done` so a cancel-settled read can
+      // never surface as a clean empty body.
+      if (abortedFlag || signal?.aborted) {
         await reader.cancel().catch(() => {});
         return { error: "aborted" };
       }
       if (next.done) break;
-      // An abort racing a delivered chunk still wins: partial bytes are
-      // discarded and the caller sees `aborted`, never a partial body.
-      if (signal?.aborted) {
-        await reader.cancel().catch(() => {});
-        return { error: "aborted" };
-      }
       const chunk = next.value;
       // Ceiling enforced BEFORE retaining: the over-limit chunk is dropped
       // and the source cancelled instead of drained.
@@ -439,7 +444,7 @@ export async function readBoundedBody(
       total += chunk.byteLength;
     }
   } finally {
-    stopWatching();
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
   if (total === 0) return {};

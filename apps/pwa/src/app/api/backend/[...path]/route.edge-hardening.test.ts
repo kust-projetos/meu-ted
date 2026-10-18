@@ -476,4 +476,61 @@ describe("backend proxy edge hardening (T10)", () => {
     },
   );
 
+  it(
+    "R10-r2: 1 MiB em chunks de 1 byte — bytes exatos sem reação por chunk",
+    { timeout: 180_000 },
+    async () => {
+      const { readBoundedBody } = await import("@/proxy-utils");
+      const SIZE = 1_048_576;
+      let pulls = 0;
+      let delivered = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulls += 1;
+          if (delivered >= SIZE) {
+            controller.close();
+            return;
+          }
+          delivered += 1;
+          controller.enqueue(new Uint8Array([(delivered - 1) % 256]));
+        },
+      });
+      // Contagem de Promise.race durante a leitura: o padrão antigo registrava
+      // 2 reações na promise `aborted` compartilhada POR CHUNK (~1M aqui); o
+      // padrão de listener único nunca corre race no caminho de stream.
+      const raceSpy = vi.spyOn(Promise, "race");
+      const raceBefore = raceSpy.mock.calls.length;
+      const result = await readBoundedBody(
+        new Request(URL, {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream", origin: ORIGIN },
+          body: stream,
+          // @ts-expect-error duplex exigido para corpo em stream fora do browser
+          duplex: "half",
+        }),
+        BACKEND_LIMIT,
+      );
+      const raceDelta = raceSpy.mock.calls.length - raceBefore;
+      raceSpy.mockRestore();
+      // Cada byte chegou pelo seu próprio pull: o loop iterou ~1M de vezes.
+      expect(pulls).toBeGreaterThanOrEqual(SIZE);
+      expect(delivered).toBe(SIZE);
+      // Bytes exatos, sem corpo parcial.
+      expect("body" in result).toBe(true);
+      const buf = new Uint8Array(
+        (result as { body?: ArrayBuffer }).body ?? new ArrayBuffer(0),
+      );
+      expect(buf.byteLength).toBe(SIZE);
+      let mismatch = -1;
+      for (let i = 0; i < SIZE; i += 1) {
+        if (buf[i] !== i % 256) {
+          mismatch = i;
+          break;
+        }
+      }
+      expect(mismatch).toBe(-1);
+      // Nenhuma reação/race por chunk: await direto + listener único.
+      expect(raceDelta).toBeLessThan(10);
+    },
+  );
 });
