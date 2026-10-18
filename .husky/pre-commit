@@ -7,6 +7,7 @@ set -e
 
 pnpm docs:lint
 pnpm action-pins:check
+pnpm workflows-yaml:check
 pnpm test:skip-gate
 pnpm capabilities:check
 pnpm write-policy:check
