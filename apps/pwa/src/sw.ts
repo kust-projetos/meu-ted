@@ -86,9 +86,10 @@ export const SHELL_PRECACHE_ENTRIES: ReadonlyArray<{
   },
   {
     url: OFFLINE_JS,
-    // T2.6: shell now enforces the offline lock (subject partition + age
-    // check) before rendering — revision bumped to the new content hash.
-    revision: "sha256-b51a4571410f6d634572597e795fa28ca0d7e7a9bd541382055fbccf6f5ac9c5",
+    // T07b: shell reads the V3 single-slot (ownerKey + TTL) with a legacy
+    // V2 fallback, covering /compromissos and /hub/* — revision bumped to
+    // the new content hash.
+    revision: "sha256-3a300c75e08ec151a839713df94ce9c5c9c6191509d7b3247de2548881d1a43f",
   },
 ];
 

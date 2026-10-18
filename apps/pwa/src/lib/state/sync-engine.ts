@@ -295,11 +295,17 @@ export async function runBootstrap(
 
 /**
  * Synchronizes a paginated slice of transactions.
+ *
+ * @param v3Identity — validated offline identity (same contract as
+ *   runBootstrap): the fetched page is also written to the V3 slot when the
+ *   live offline identity still matches at commit time. `writeV3Snapshot`
+ *   drops stale/divergent owners — never re-attributed by heuristic.
  */
 export async function syncTransactionsPage(
   token: string | undefined,
   options: PaginationOptions = { page: 1, limit: 50 },
   dispatch?: Dispatch,
+  v3Identity?: V3SnapshotIdentity,
 ): Promise<{ items: Transaction[]; total: number; page: number; limit: number }> {
   const page = options.page ?? 1;
   const limit = options.limit ?? 50;
@@ -319,6 +325,17 @@ export async function syncTransactionsPage(
       syncedAt: new Date().toISOString(),
     });
     if (token !== undefined) void saveSnapshotDomain(token, "transactions", res.items, { expectedSubject: pageSubject });
+    if (v3Identity !== undefined) {
+      // Awaited (unlike the legacy V2 fire-and-forget above): callers may
+      // read-after-write, mirroring runBootstrap awaiting every save before
+      // completion. Stale/divergent owners are dropped inside — never throw.
+      await saveV3SnapshotDomain(
+        v3Identity.principalId,
+        v3Identity.workspaceId,
+        "transactions",
+        res.items,
+      ).catch(() => {});
+    }
   }
   return {
     items: res.items,
