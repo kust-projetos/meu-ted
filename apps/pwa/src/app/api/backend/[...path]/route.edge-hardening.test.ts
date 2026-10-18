@@ -319,4 +319,161 @@ describe("backend proxy edge hardening (T10)", () => {
     expect((await captured!.arrayBuffer()).byteLength).toBe(payload.length);
     expect(BACKEND_LIMIT).toBe(1_048_576);
   });
+
+  it("R10-1: lê corpo de 1 KiB em chunks de 1 byte com forma idêntica", async () => {
+    vi.stubEnv("PWA_BACKEND_PROXY_ORIGIN", "");
+    const { POST } = await loadRoute();
+    let captured: Request | null = null;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      captured = new Request(input as string, init);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const SIZE = 1024;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < SIZE; i += 1) controller.enqueue(new Uint8Array([i % 256]));
+        controller.close();
+      },
+    });
+
+    const res = await POST(
+      new Request(URL, {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream", origin: ORIGIN },
+        body: stream,
+        // @ts-expect-error duplex exigido para corpo em stream fora do browser
+        duplex: "half",
+      }),
+      ctx(),
+    );
+
+    // O número de chunks não afeta a forma do resultado: corpo completo e exato.
+    expect(res.status).toBe(200);
+    expect(captured).not.toBeNull();
+    const buf = await captured!.arrayBuffer();
+    expect(buf.byteLength).toBe(SIZE);
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < SIZE; i += 1) expect(bytes[i]).toBe(i % 256);
+  });
+
+  it(
+    "R10-2a: fonte pendente + abort durante a leitura resolve aborted e cancela o stream",
+    { timeout: 10_000 },
+    async () => {
+      vi.stubEnv("PWA_BACKEND_PROXY_ORIGIN", "");
+      const { POST } = await loadRoute();
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("must-not-fetch"));
+      let cancels = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull() {
+          // Nunca entrega: leitura fica pendente até o abort.
+        },
+        cancel() {
+          cancels += 1;
+        },
+      });
+      const ac = new AbortController();
+      const pending = POST(
+        new Request(URL, {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream", origin: ORIGIN },
+          body: stream,
+          signal: ac.signal,
+          // @ts-expect-error duplex exigido para corpo em stream fora do browser
+          duplex: "half",
+        }),
+        ctx(),
+      );
+      // Dá um giro ao loop de leitura antes de abortar.
+      await new Promise((r) => setTimeout(r, 50));
+      ac.abort();
+      const res = await pending;
+
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+        "request.body_aborted",
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(cancels).toBeGreaterThanOrEqual(1);
+    },
+  );
+
+  it("R10-2b: signal já aborted ao entrar resolve aborted sem ler", async () => {
+    vi.stubEnv("PWA_BACKEND_PROXY_ORIGIN", "");
+    const { POST } = await loadRoute();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("must-not-fetch"));
+    const ac = new AbortController();
+    ac.abort();
+
+    const res = await POST(
+      new Request(URL, {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream", origin: ORIGIN },
+        body: "hello-pre-aborted",
+        signal: ac.signal,
+        // @ts-expect-error duplex exigido para corpo em stream fora do browser
+        duplex: "half",
+      }),
+      ctx(),
+    );
+
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "request.body_aborted",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it(
+    "R10-2c: abort depois de chunks parciais resolve aborted (400 request.body_aborted)",
+    { timeout: 10_000 },
+    async () => {
+      vi.stubEnv("PWA_BACKEND_PROXY_ORIGIN", "");
+      const { POST } = await loadRoute();
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("must-not-fetch"));
+      let pulls = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulls += 1;
+          if (pulls <= 2) controller.enqueue(new Uint8Array(64));
+          // A partir do 3º pull fica pendente: só o abort destrava.
+        },
+      });
+      const ac = new AbortController();
+      const pending = POST(
+        new Request(URL, {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream", origin: ORIGIN },
+          body: stream,
+          signal: ac.signal,
+          // @ts-expect-error duplex exigido para corpo em stream fora do browser
+          duplex: "half",
+        }),
+        ctx(),
+      );
+      for (let i = 0; i < 200 && pulls < 2; i += 1) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(pulls).toBeGreaterThanOrEqual(2);
+      ac.abort();
+      const res = await pending;
+
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+        "request.body_aborted",
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
 });

@@ -332,63 +332,118 @@ export type BoundedBodyResult =
  * a missing or lying Content-Length can no longer buy an unbounded buffer.
  * A read failure/abort mid-stream returns `aborted` (the route answers 4xx)
  * instead of throwing a 500.
+ *
+ * R10-1: bytes accumulate in ONE contiguous buffer grown by bounded
+ * reallocation (capped at `limit`). Chunk objects are copied on arrival and
+ * never retained, so a 1 MiB body in 1-byte chunks holds ~1 MiB — not one
+ * object per byte. The ceiling is enforced BEFORE retaining, so the store
+ * never holds more than `limit` bytes.
+ *
+ * R10-2: the request AbortSignal is observed. An already-aborted signal
+ * short-circuits before any read; an abort racing a pending `reader.read()`
+ * (or a delivered chunk) cancels the reader and resolves `aborted`
+ * (the route answers 400 `request.body_aborted`).
  */
 export async function readBoundedBody(
   request: Request,
   limit: number,
 ): Promise<BoundedBodyResult> {
   if (request.method === "GET" || request.method === "HEAD") return {};
+  const signal = request.signal;
+  if (signal?.aborted) return { error: "aborted" };
   const declared = request.headers.get("content-length");
   if (declared !== null) {
     const length = Number(declared);
     if (Number.isFinite(length) && length > limit) return { error: "too_large" };
   }
+  // Resolves when the request signal aborts; unsubscribed once the body is
+  // fully read (see stopWatching in the finally blocks below).
+  let onAbort: (() => void) | undefined;
+  const aborted =
+    signal === undefined
+      ? null
+      : new Promise<"aborted">((resolve) => {
+          onAbort = () => resolve("aborted");
+          signal.addEventListener("abort", onAbort, { once: true });
+          // Abort fired in the gap between the early check and subscribe.
+          if (signal.aborted) resolve("aborted");
+        });
+  const stopWatching = (): void => {
+    if (signal !== undefined && onAbort !== undefined) {
+      signal.removeEventListener("abort", onAbort);
+    }
+  };
   const stream = request.body;
   if (!stream) {
     // Fallback only: some runtimes hand over a Request without an exposed
     // body stream. The ceiling is re-checked after buffering so the fallback
     // never becomes a hole in it; a failed read is an abort, not a 500.
-    let buffered: ArrayBuffer;
     try {
-      buffered = await request.arrayBuffer();
+      const buffered =
+        aborted === null
+          ? await request.arrayBuffer()
+          : await Promise.race([request.arrayBuffer(), aborted]);
+      if (buffered === "aborted") return { error: "aborted" };
+      if (buffered.byteLength > limit) return { error: "too_large" };
+      return buffered.byteLength === 0 ? {} : { body: buffered };
     } catch {
       return { error: "aborted" };
+    } finally {
+      stopWatching();
     }
-    if (buffered.byteLength > limit) return { error: "too_large" };
-    return buffered.byteLength === 0 ? {} : { body: buffered };
   }
   const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
+  let buffer = new Uint8Array(0);
   let total = 0;
   try {
     for (;;) {
-      let next: ReadableStreamReadResult<Uint8Array>;
+      let next: ReadableStreamReadResult<Uint8Array> | "aborted";
       try {
-        next = await reader.read();
+        next =
+          aborted === null
+            ? await reader.read()
+            : await Promise.race([reader.read(), aborted]);
       } catch {
         await reader.cancel().catch(() => {});
         return { error: "aborted" };
       }
+      if (next === "aborted") {
+        await reader.cancel().catch(() => {});
+        return { error: "aborted" };
+      }
       if (next.done) break;
-      total += next.value.byteLength;
-      if (total > limit) {
+      // An abort racing a delivered chunk still wins: partial bytes are
+      // discarded and the caller sees `aborted`, never a partial body.
+      if (signal?.aborted) {
+        await reader.cancel().catch(() => {});
+        return { error: "aborted" };
+      }
+      const chunk = next.value;
+      // Ceiling enforced BEFORE retaining: the over-limit chunk is dropped
+      // and the source cancelled instead of drained.
+      if (total + chunk.byteLength > limit) {
         // Stop reading NOW: cancel the source instead of draining the rest.
         await reader.cancel().catch(() => {});
         return { error: "too_large" };
       }
-      chunks.push(next.value);
+      if (total + chunk.byteLength > buffer.byteLength) {
+        const capacity = Math.min(
+          limit,
+          Math.max(buffer.byteLength * 2, total + chunk.byteLength),
+        );
+        const grown = new Uint8Array(capacity);
+        grown.set(buffer.subarray(0, total));
+        buffer = grown;
+      }
+      buffer.set(chunk, total);
+      total += chunk.byteLength;
     }
   } finally {
+    stopWatching();
     reader.releaseLock();
   }
   if (total === 0) return {};
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return { body: merged.buffer as ArrayBuffer };
+  return { body: buffer.slice(0, total).buffer as ArrayBuffer };
 }
 
 /** Canonical security headers applied to every response. */
