@@ -58,6 +58,8 @@ echo "[run-ci] API base URL: $NEXT_PUBLIC_PI_FINANCE_API_BASE_URL"
 # the build) — never in a subprocess expecting the caller's shell to inherit.
 REPEAT_EACH_RAW="${E2E_RUNTIME_REPEAT_EACH:-}"
 REPEAT_EACH_ARGS=()
+# JS safe-integer ceiling — mirrors Number.isSafeInteger in repeat-each.ts.
+REPEAT_EACH_MAX="9007199254740991"
 if [ -n "$REPEAT_EACH_RAW" ]; then
   case "$REPEAT_EACH_RAW" in
     ''|*[!0-9]*)
@@ -65,10 +67,36 @@ if [ -n "$REPEAT_EACH_RAW" ]; then
       exit 2
       ;;
   esac
-  if [ "$REPEAT_EACH_RAW" -ge 2 ]; then
-    REPEAT_EACH_ARGS=(--repeat-each="$REPEAT_EACH_RAW")
-    echo "[run-ci] E2E_RUNTIME_REPEAT_EACH=$REPEAT_EACH_RAW (runtime gates repeat each scenario ${REPEAT_EACH_RAW}x; any rep failure fails the run)"
+  # Magnitude check with NO arithmetic on the raw value: `test -ge` overflows
+  # past int64 and — inside an `if` under `set -e` — degrades to a silent
+  # single run (fail-open). Strip leading zeros, then compare digit length +
+  # (equal length) lexicographic order against the ceiling.
+  _repeat_digits="$REPEAT_EACH_RAW"
+  case "$_repeat_digits" in
+    *[!0]*) _repeat_digits="${_repeat_digits#"${_repeat_digits%%[!0]*}"}" ;;
+    *) _repeat_digits="0" ;;
+  esac
+  [ -n "$_repeat_digits" ] || _repeat_digits="0"
+  _repeat_len="${#_repeat_digits}"
+  _repeat_over=0
+  if [ "$_repeat_len" -gt 16 ]; then
+    _repeat_over=1
+  elif [ "$_repeat_len" -eq 16 ]; then
+    if [[ "$_repeat_digits" > "$REPEAT_EACH_MAX" ]]; then
+      _repeat_over=1
+    fi
   fi
+  if [ "$_repeat_over" -eq 1 ]; then
+    echo "[run-ci] ERROR: invalid E2E_RUNTIME_REPEAT_EACH=${REPEAT_EACH_RAW} (exceeds max ${REPEAT_EACH_MAX})" >&2
+    exit 2
+  fi
+  case "$_repeat_digits" in
+    0|1) ;;
+    *)
+      REPEAT_EACH_ARGS=(--repeat-each="$REPEAT_EACH_RAW")
+      echo "[run-ci] E2E_RUNTIME_REPEAT_EACH=$REPEAT_EACH_RAW (runtime gates repeat each scenario ${REPEAT_EACH_RAW}x; any rep failure fails the run)"
+      ;;
+  esac
 fi
 
 # ── Build Next.js (servers are Playwright-managed per gate below) ───────────
