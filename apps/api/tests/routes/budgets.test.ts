@@ -97,6 +97,58 @@ describe('GET /budgets/check', () => {
   });
 });
 
+describe('GET /budgets/check (API-06 functional)', () => {
+  it('returns total equal to the filtered items length', async () => {
+    const { app, state } = buildTestApp(seed, () => new Date('2026-06-15T12:00:00Z'));
+    await app.inject({
+      method: 'POST', url: '/budgets',
+      headers: { ...auth(TOKEN_A), 'idempotency-key': crypto.randomUUID(), 'Content-Type': 'application/json' },
+      payload: { categoryId: CATEGORY_FOOD_A.id, name: 'Mercado', amountCents: 1_000_00, period: 'monthly', startDate: '2026-06-01', alertThreshold: 50 },
+    });
+    state.transactions.push({ id: 'tx1', householdId: seed.accounts[0]!.householdId ?? 'h1', kind: 'expense', description: 'Feira', amountCents: 600_00, date: '2026-06-15', accountId: ACCOUNT_A1.id, categoryId: CATEGORY_FOOD_A.id });
+    const res = await app.inject({ method: 'GET', url: '/budgets/check', headers: auth(TOKEN_A) });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.items.length).toBeGreaterThanOrEqual(1);
+    expect(body.total).toBe(body.items.length);
+  });
+
+  it('returns total 0 with empty items', async () => {
+    const { app } = buildTestApp(seed, () => new Date('2026-06-15T12:00:00Z'));
+    const res = await app.inject({ method: 'GET', url: '/budgets/check', headers: auth(TOKEN_A) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items).toHaveLength(0);
+    expect(res.json().total).toBe(0);
+  });
+});
+
+describe('GET /budgets/:id/trends query validation (API-06)', () => {
+  const createBudget = async (app: ReturnType<typeof buildTestApp>['app']) => {
+    const create = await app.inject({
+      method: 'POST', url: '/budgets',
+      headers: { ...auth(TOKEN_A), 'idempotency-key': crypto.randomUUID(), 'Content-Type': 'application/json' },
+      payload: { categoryId: CATEGORY_FOOD_A.id, name: 'Mercado', amountCents: 1_000_00, period: 'monthly', startDate: '2026-06-01' },
+    });
+    return create.json().id as string;
+  };
+
+  it.each(['abc', '0', '13', '1.5', ''])('returns 400 with validation code for monthsBack=%s', async (monthsBack) => {
+    const { app } = buildTestApp(seed, () => new Date('2026-06-15T12:00:00Z'));
+    const id = await createBudget(app);
+    const res = await app.inject({ method: 'GET', url: `/budgets/${id}/trends?monthsBack=${monthsBack}`, headers: auth(TOKEN_A) });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('validation.error');
+  });
+
+  it('defaults to 3 months when monthsBack is absent', async () => {
+    const { app } = buildTestApp(seed, () => new Date('2026-06-15T12:00:00Z'));
+    const id = await createBudget(app);
+    const res = await app.inject({ method: 'GET', url: `/budgets/${id}/trends`, headers: auth(TOKEN_A) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items).toHaveLength(3);
+  });
+});
+
 describe('GET /budgets/:id/trends', () => {
   it('returns N months of trend data', async () => {
     const { app } = buildTestApp(seed, () => new Date('2026-06-15T12:00:00Z'));

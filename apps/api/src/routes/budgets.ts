@@ -138,7 +138,8 @@ export const registerBudgetRoutes = (
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     try {
       const items = await opts.budgetStore.listBudgets(ctx.householdId);
-      return reply.code(200).send({ items: items.filter(b => b.percentUsed >= b.alertThreshold), total: 0 });
+      const filtered = items.filter(b => b.percentUsed >= b.alertThreshold);
+      return reply.code(200).send({ items: filtered, total: filtered.length });
     } catch (e) { return handleError(e, reply); }
   });
 
@@ -146,7 +147,9 @@ export const registerBudgetRoutes = (
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
-    const monthsBack = z.coerce.number().int().min(1).max(12).optional().parse(req.query ? (req.query as any).monthsBack : undefined) ?? 3;
+    const parsedQuery = budgetTrendQuerySchema.safeParse(req.query ?? {});
+    if (!parsedQuery.success) return reply.code(400).send({ code: 'validation.error', issues: parsedQuery.error.issues });
+    const monthsBack = parsedQuery.data.monthsBack ?? 3;
     try {
       const items = await opts.budgetStore.getBudgetTrends(ctx.householdId, params.data.id, monthsBack);
       return reply.code(200).send({ items, total: items.length });
