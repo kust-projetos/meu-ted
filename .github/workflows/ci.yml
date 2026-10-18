@@ -35,7 +35,7 @@ jobs:
         run: pnpm --filter @pi-finance/llm-contracts build
       - name: Contracts - typecheck + test
         run: pnpm --filter @pi-finance/llm-contracts typecheck && pnpm --filter @pi-finance/llm-contracts test
-      - name: Contracts - lint (T13 GOV-06: shared contracts covered in CI)
+      - name: "Contracts - lint (T13 GOV-06: shared contracts covered in CI)"
         run: pnpm --filter @pi-finance/llm-contracts --fail-if-no-match lint
       - run: pnpm --filter meu-ted-api --fail-if-no-match lint
       - run: pnpm --filter meu-ted-api --fail-if-no-match typecheck
