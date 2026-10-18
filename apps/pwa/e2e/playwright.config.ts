@@ -25,6 +25,11 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
+  // NOTE: scenario repetition for flake detection is NOT configured here.
+  // The opt-in E2E_RUNTIME_REPEAT_EACH env is validated by e2e/run-ci.sh and
+  // passed as `--repeat-each=N` only to the pwa-runtime / push-runtime gates
+  // (repeatEach is top-level and would leak into the functional gates if set
+  // here). Contract + unit tests: e2e/support/repeat-each.ts.
 
   use: {
     baseURL: `http://127.0.0.1:${HARNESS_PORT}`,
