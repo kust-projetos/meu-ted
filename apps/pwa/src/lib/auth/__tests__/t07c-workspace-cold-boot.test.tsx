@@ -6,12 +6,14 @@ import { SessionProvider } from "../session-context";
 import {
   resetSessionStatus,
   setSessionStatus,
+  getSessionStatus,
 } from "../session-authority";
 import {
   setOfflinePrincipalId,
   setOfflineWorkspaceId,
 } from "../offline-identity";
 import { writeV3Snapshot } from "@/lib/state/snapshot-db";
+import { AuthGate } from "@/features/auth/AuthGate";
 
 /**
  * T07c — contexto de workspace: cold boot unreachable (PWA).
@@ -76,6 +78,45 @@ vi.mock("@/lib/api/client", () => ({
   },
 }));
 
+/**
+ * T07c-F1: controllable gate on the V3 lock read. Lets a test park the
+ * offline evaluation mid-await (entry checks done, IndexedDB read pending),
+ * flip the session authority, then release — proving the post-await
+ * authority re-check. Default: passthrough to the real implementation.
+ */
+const v3Gate = vi.hoisted(() => ({
+  deferred: null as null | Promise<void>,
+  resolve: null as null | (() => void),
+  entered: false,
+}));
+vi.mock("@/lib/state/snapshot-db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/state/snapshot-db")>();
+  return {
+    ...actual,
+    getV3OfflineLockState: (...args: Parameters<typeof actual.getV3OfflineLockState>) => {
+      if (v3Gate.deferred) {
+        v3Gate.entered = true;
+        return v3Gate.deferred.then(() => actual.getV3OfflineLockState(...args));
+      }
+      return actual.getV3OfflineLockState(...args);
+    },
+  };
+});
+function armV3Gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  v3Gate.deferred = promise;
+  v3Gate.resolve = resolve;
+  v3Gate.entered = false;
+}
+function releaseV3Gate() {
+  v3Gate.resolve?.();
+  v3Gate.deferred = null;
+  v3Gate.resolve = null;
+}
+
 type LooseContext = {
   isOfflineReadOnly?: unknown;
   offlineWorkspaceId?: unknown;
@@ -127,6 +168,10 @@ beforeEach(async () => {
   clientState.active = undefined;
   resetSessionStatus();
   vi.clearAllMocks();
+  // Release any gate leaked by a failed test; the torn-down continuation is
+  // stale-guarded and commits nothing.
+  releaseV3Gate();
+  v3Gate.entered = false;
   const dbs = await indexedDB.databases();
   for (const db of dbs) if (db.name) indexedDB.deleteDatabase(db.name);
   api.fetchWorkspaceMembers.mockResolvedValue([]);
@@ -358,5 +403,169 @@ describe("T07c: reconexão revalida membership/lifecycle antes de reabrir mutaç
     });
     expect(screen.getByTestId("workspaces-json")).not.toHaveTextContent(WS_UUID);
     expect(screen.getByTestId("is-offline-read-only")).toHaveTextContent("false");
+  });
+});
+
+describe("T07c-F1: flip de autoridade durante o V3 read em await", () => {
+  it("flip mid-await com efeito disponível: revalida exatamente uma vez, nunca estaciona offline", async () => {
+    setSessionStatus({ status: "unreachable", offlinePrincipalId: PRINCIPAL });
+    setOfflinePrincipalId(PRINCIPAL);
+    setOfflineWorkspaceId(WS_UUID);
+    await seedValidV3();
+    api.fetchWorkspaces.mockRejectedValueOnce(new Error("fetch failed"));
+    api.fetchWorkspaces.mockResolvedValue([
+      { id: WS_OTHER, name: "Equipe", kind: "shared", role: "member", status: "active" },
+    ]);
+
+    armV3Gate();
+    const { rerender } = render(
+      <SessionProvider
+        value={{
+          expireSession: () => {},
+          session: { status: "unreachable", offlinePrincipalId: PRINCIPAL } as const,
+        }}
+      >
+        <WorkspaceProvider>
+          <Probe />
+        </WorkspaceProvider>
+      </SessionProvider>,
+    );
+    // A avaliação offline está estacionada no gate (entry checks feitos,
+    // V3 read pendente) — o flip abaixo cai dentro do await.
+    await waitFor(() => expect(v3Gate.entered).toBe(true));
+
+    rerender(
+      <SessionProvider
+        value={{
+          expireSession: () => {},
+          session: { status: "authenticated", user: { userId: PRINCIPAL } },
+        }}
+      >
+        <WorkspaceProvider>
+          <Probe />
+        </WorkspaceProvider>
+      </SessionProvider>,
+    );
+    releaseV3Gate();
+
+    // O efeito consumiu o flag armado na entrada (F1-a) e revalidou; o
+    // caminho direto pós-await virou no-op (flag já consumida) — bounded:
+    // exatamente boot + 1 revalidação, sem terceiro refresh.
+    await waitFor(() => {
+      expect(screen.getByTestId("active")).toHaveTextContent("Equipe");
+    });
+    expect(screen.getByTestId("is-offline-read-only")).toHaveTextContent("false");
+    expect(screen.getByTestId("offline-workspace-id")).toHaveTextContent("none");
+    expect(screen.getByTestId("offline-blocked-reason")).toHaveTextContent("none");
+    expect(api.fetchWorkspaces.mock.calls.length).toBe(2);
+  });
+
+  it("flip mid-await sem efeito (contexto congelado): não aplica offline, revalida direto uma vez", async () => {
+    setSessionStatus({ status: "unreachable", offlinePrincipalId: PRINCIPAL });
+    setOfflinePrincipalId(PRINCIPAL);
+    setOfflineWorkspaceId(WS_UUID);
+    await seedValidV3();
+    api.fetchWorkspaces.mockRejectedValueOnce(new Error("fetch failed"));
+    api.fetchWorkspaces.mockResolvedValue([
+      { id: WS_OTHER, name: "Equipe", kind: "shared", role: "member", status: "active" },
+    ]);
+
+    armV3Gate();
+    // SessionProvider congelado em unreachable e nunca re-renderizado: o
+    // efeito não enxerga o flip (só o caminho direto F1-b pode revalidar).
+    // Sem isso, o fallback de useSession releria o módulo no re-render do
+    // próprio apply e o teste não discriminaria o buraco.
+    render(
+      <SessionProvider
+        value={{
+          expireSession: () => {},
+          session: { status: "unreachable", offlinePrincipalId: PRINCIPAL } as const,
+        }}
+      >
+        <WorkspaceProvider>
+          <Probe />
+        </WorkspaceProvider>
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(v3Gate.entered).toBe(true));
+
+    // Flip visível só no store modular (efeito cego a ele).
+    setSessionStatus({ status: "authenticated", user: { userId: PRINCIPAL } });
+    releaseV3Gate();
+
+    // O resultado do await pertence à autoridade superada: nunca vira
+    // isOfflineReadOnly=true sob authenticated — limpa e revalida direto.
+    await waitFor(() => {
+      expect(screen.getByTestId("active")).toHaveTextContent("Equipe");
+    });
+    expect(screen.getByTestId("is-offline-read-only")).toHaveTextContent("false");
+    expect(screen.getByTestId("offline-workspace-id")).toHaveTextContent("none");
+    expect(screen.getByTestId("offline-blocked-reason")).toHaveTextContent("none");
+    expect(api.fetchWorkspaces.mock.calls.length).toBe(2);
+  });
+});
+
+describe("T07c-F2: recuperação real via AuthGate (online → reprobe → flip → revalidação)", () => {
+  it("network recovery dispara reprobe, flipa para authenticated e o provider revalida", async () => {
+    // Transporte do probe: começa fora do ar; o teste o religa.
+    const probeUrls: string[] = [];
+    const client = (await import("@/lib/api/client")) as unknown as {
+      apiFetch: { mockImplementation: (fn: (url: unknown) => Promise<unknown>) => void };
+    };
+    let probeUp = false;
+    client.apiFetch.mockImplementation(async (url: unknown) => {
+      if (String(url).includes("/auth/session")) {
+        probeUrls.push(String(url));
+        if (!probeUp) throw new TypeError("fetch failed");
+        return {
+          user: { id: PRINCIPAL, email: "user@example.com", name: "U" },
+          session: {},
+        };
+      }
+      return undefined;
+    });
+
+    setOfflinePrincipalId(PRINCIPAL);
+    setOfflineWorkspaceId(WS_UUID);
+    await seedValidV3();
+    api.fetchWorkspaces.mockRejectedValueOnce(new Error("fetch failed"));
+    api.fetchWorkspaces.mockResolvedValue([
+      { id: WS_OTHER, name: "Equipe", kind: "shared", role: "member", status: "active" },
+    ]);
+
+    // Fluxo real: AuthGate de verdade (boot probe indisponível → unlock
+    // offline via V3) com WorkspaceProvider de verdade embaixo.
+    render(
+      <AuthGate>
+        <WorkspaceProvider>
+          <Probe />
+        </WorkspaceProvider>
+      </AuthGate>,
+    );
+
+    // Boot real estacionou offline (sem transição fabricada).
+    expect(await screen.findByTestId("is-offline-read-only")).toHaveTextContent("true");
+    expect(getSessionStatus().status).toBe("unreachable");
+    expect(probeUrls.length).toBe(1);
+
+    // A rede volta: o `online` do browser dispara o reprobe do AuthGate.
+    probeUp = true;
+    window.dispatchEvent(new Event("online"));
+
+    // Flip real da autoridade → efeito do provider revalida membership.
+    await waitFor(() => {
+      expect(screen.getByTestId("active")).toHaveTextContent("Equipe");
+    });
+    expect(getSessionStatus().status).toBe("authenticated");
+    expect(screen.getByTestId("is-offline-read-only")).toHaveTextContent("false");
+    // Boot + exatamente 1 reprobe (sem loops, sem polling): eventos `online`
+    // adicionais com autoridade authenticated são no-op.
+    window.dispatchEvent(new Event("online"));
+    window.dispatchEvent(new Event("online"));
+    await waitFor(() => {
+      expect(screen.getByTestId("is-offline-read-only")).toHaveTextContent("false");
+    });
+    expect(probeUrls.length).toBe(2);
+    expect(api.fetchWorkspaces.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });

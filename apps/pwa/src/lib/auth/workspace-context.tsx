@@ -319,7 +319,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
    * keep the fail-closed purge (T07a single revocation signal untouched);
    * non-auth failures consult the offline route when the authority is
    * unreachable. Runs synchronously through the purge; the offline
-   * evaluation is the only awaited gap, re-validated for staleness.
+   * evaluation is the only awaited gap, re-validated for staleness AND for
+   * a mid-await authority change (T07c-F1) before anything is applied.
    */
   const applyLoadFailure = useCallback(
     async (cause: unknown, isStale: () => boolean): Promise<void> => {
@@ -348,23 +349,45 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         setIsOfflineReadOnly(false);
         setOfflineWorkspaceId(null);
         setOfflineBlockedReason(revoked ? "revoked" : null);
+        // T07c-F1 hygiene (r1 tester residual): an explicit rejection ends
+        // any parked offline state — a later reconnect starts from the
+        // failure contract, never from a stale revalidation flag.
+        needsRevalidationRef.current = false;
       } else {
+        // T07c-F1a: arm BEFORE the first await so an authority transition
+        // during the awaited V3 read still triggers the effect-driven
+        // revalidation. The flag is only meaningful while parking under an
+        // unreachable authority.
+        const entryAuthority = getSessionStatus().status;
+        if (entryAuthority === "unreachable") {
+          needsRevalidationRef.current = true;
+        }
         const offline = await evaluateOfflineWorkspaceState();
         if (isStale()) return;
-        if (offline?.mode === "offline-read-only") {
+        // T07c-F1b/c/d: compare the LIVE authority, not only
+        // generation/principal. When it moved mid-await, the awaited result
+        // belongs to a superseded authority and must never flip offline
+        // state. Fail closed on cleared flags; landing off `unreachable`
+        // revalidates directly (bounded single flight via
+        // scheduleRevalidation — declared below, resolved at call time; the
+        // effect may already have consumed the armed flag while we awaited).
+        const liveAuthority = getSessionStatus().status;
+        if (liveAuthority !== "unreachable") {
+          setIsOfflineReadOnly(false);
+          setOfflineWorkspaceId(null);
+          setOfflineBlockedReason(null);
+          if (liveAuthority !== entryAuthority) scheduleRevalidation();
+        } else if (offline?.mode === "offline-read-only") {
           setIsOfflineReadOnly(true);
           setOfflineWorkspaceId(offline.workspaceId);
           setOfflineBlockedReason(null);
-          needsRevalidationRef.current = true;
           setIsAuthError(false);
           setError(OFFLINE_WORKSPACE_READONLY_MESSAGE);
           return;
-        }
-        if (offline) {
+        } else if (offline) {
           setIsOfflineReadOnly(false);
           setOfflineWorkspaceId(null);
           setOfflineBlockedReason(offline.reason);
-          needsRevalidationRef.current = true;
         }
       }
       setIsAuthError(auth);
@@ -486,20 +509,29 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, [applyLoadFailure]);
 
-  // T07c: reconnection revalidates membership/lifecycle before mutations
-  // reopen. Fires only on a transition INTO an authenticated authority
-  // while a previous load parked the provider offline/blocked — the flag
-  // is consumed before the refresh so a failed revalidation never loops.
-  // Workspace mutations themselves always revalidate server-side; the
-  // AppState write guard additionally requires an authenticated authority.
-  useEffect(() => {
-    if (session.status !== "authenticated") return;
+  // T07c-F1: single-flight revalidation scheduler shared by the
+  // authority-transition effect and the mid-await authority-change path.
+  // Consumes the armed flag, so concurrent triggers collapse into one
+  // refresh; the load generation guards application. Never loops: the flag
+  // is only re-armed by parking in offline/blocked state.
+  const scheduleRevalidation = useCallback(() => {
     if (!needsRevalidationRef.current) return;
     needsRevalidationRef.current = false;
     void refreshWorkspaces().catch(() => {
       /* the failure is modeled in context error state by the refresh itself */
     });
-  }, [session.status, refreshWorkspaces]);
+  }, [refreshWorkspaces]);
+
+  // T07c (+F1): reconnection revalidates membership/lifecycle before
+  // mutations reopen. Fires on a transition INTO an authenticated authority
+  // while a previous load parked the provider offline/blocked — the flag is
+  // consumed before the refresh so a failed revalidation never loops.
+  // Workspace mutations themselves always revalidate server-side; the
+  // AppState write guard additionally requires an authenticated authority.
+  useEffect(() => {
+    if (session.status !== "authenticated") return;
+    scheduleRevalidation();
+  }, [session.status, scheduleRevalidation]);
 
   const activeWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,

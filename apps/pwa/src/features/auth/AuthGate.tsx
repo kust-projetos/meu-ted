@@ -7,7 +7,7 @@ import { ApiError, clearActiveWorkspaceId } from "@/lib/api/client";
 import { signInWithEmail, registerDeviceToken, verifyDeviceToken, fetchSession, type SessionUser, type SessionProbeStatus } from "@/lib/api/auth";
 import { clearSensitiveSession } from "@/lib/session";
 import { SessionProvider, type SessionSnapshot } from "@/lib/auth/session-context";
-import { setSessionStatus } from "@/lib/auth/session-authority";
+import { setSessionStatus, getSessionStatus } from "@/lib/auth/session-authority";
 import {
   setOfflinePrincipalId,
   getOfflinePrincipalId,
@@ -261,6 +261,56 @@ export function AuthGate({ children }: Props) {
 
     return () => {
       cancelled = true;
+    };
+  }, [publishSession, bindPrincipal]);
+
+  // T07c-F2: network-recovery reprobe. The boot probe runs once; without a
+  // reprobe an offline-booted shell stays `unreachable` forever even after
+  // the network returns, so WorkspaceProvider never revalidates. There is
+  // no shared online-state signal in the app (app-state-context consumes
+  // none — no `online` listener, no `navigator.onLine` anywhere; verified
+  // T07c-F2), so this owned-side `window "online"` listener is the
+  // documented equivalent. Recovery-only: flips unreachable→authenticated
+  // on a server-confirmed user and never flips down (live 401/403 still
+  // drive expireSession); single-flight guarded, no polling, no purge.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    let inFlight = false;
+    const onOnline = () => {
+      if (cancelled || inFlight) return;
+      // Only an unreachable authority is eligible: authenticated stays put
+      // (no-op) and unauthenticated stays on login (login re-probes
+      // explicitly on submit).
+      if (getSessionStatus().status !== "unreachable") return;
+      inFlight = true;
+      void (async () => {
+        try {
+          const probe = await fetchSession();
+          if (cancelled) return;
+          // Server-confirmed principal only (INV-03/W1-item-2): bind + flip.
+          // Anything else leaves the authority untouched — unreachability is
+          // not a rejection (never purge here), and explicit rejections stay
+          // owned by the live expireSession paths, never by a background
+          // recovery probe.
+          if (probe?.user) {
+            bindPrincipal(probe.user);
+            publishSession({
+              status: "authenticated",
+              user: { userId: probe.user.id, email: probe.user.email, name: probe.user.name },
+            });
+          }
+        } catch {
+          /* transport failure = still unreachable; a later `online` retries */
+        } finally {
+          inFlight = false;
+        }
+      })();
+    };
+    window.addEventListener("online", onOnline);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("online", onOnline);
     };
   }, [publishSession, bindPrincipal]);
 
