@@ -169,9 +169,13 @@ export const createPostgresBudgetStore = (pool: Pool): BudgetStore => {
       const now = new Date();
       // Meses em ordem ascendente; boundaries via getPeriodBounds idênticas
       // às da versão por-linha (inclusivas, `YYYY-MM-DD`, UTC).
+      // T12d: ancora no PRIMEIRO dia do mês antes de deslocar — `setUTCMonth`
+      // sobre dia 31 transborda o mês curto (31/Fev -> 3-Mar) e repetiria o
+      // ym no VALUES, com o `GROUP BY m.ym` somando a entrada dobrada.
+      const anchor = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
       const months: Array<{ ym: string; start: string; end: string }> = [];
       for (let i = monthsBack - 1; i >= 0; i--) {
-        const d = new Date(now); d.setUTCMonth(d.getUTCMonth() - i);
+        const d = new Date(anchor); d.setUTCMonth(d.getUTCMonth() - i);
         const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`;
         const { start, end } = getPeriodBounds(`${ym}-01`, b['period'] as string);
         months.push({ ym, start, end });

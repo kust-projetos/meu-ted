@@ -114,4 +114,47 @@ describe('postgres getBudgetTrends aggregation (API-06)', () => {
       expect(Number.isInteger(t.spentCents)).toBe(true);
     }
   });
+
+  it('regression T12d: monthsBack=3 anchored on 2026-03-31 yields 3 distinct months (no doubled March)', async () => {
+    // Ancora no dia 31: `setUTCMonth` sobre Mar-31 transborda Fev (31/Fev ->
+    // 3-Mar), repetindo "2026-03" no VALUES; o `GROUP BY m.ym` do Postgres
+    // somaria AMBAS as entradas (despesa 1000 em março => 2000). O mock
+    // abaixo modela esse GROUP BY: spent = ocorrências do ym × 1000.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-03-31T12:00:00.000Z'));
+      const { pool, calls } = makePool((text, values) => {
+        if (text.includes('GROUP BY')) {
+          const requested = [values[2], values[5], values[8]];
+          const counts = new Map<unknown, number>();
+          for (const ym of requested) counts.set(ym, (counts.get(ym) ?? 0) + 1);
+          return { rows: [...counts].map(([ym, n]) => ({ ym, spent: String(n * 1000) })) };
+        }
+        return { rows: [budgetRow({ id: 'b1', amount_cents: 100_000 })] };
+      });
+      const store = createPostgresBudgetStore(pool);
+
+      const trends = await store.getBudgetTrends('h1', 'b1', 3);
+
+      // Probe de contagem preservado: budget + 1 agregação.
+      expect(calls).toHaveLength(2);
+      const agg = calls[1]!;
+      const ymParams = [agg.values[2], agg.values[5], agg.values[8]];
+      expect(ymParams).toEqual(['2026-01', '2026-02', '2026-03']);
+      expect(new Set(ymParams).size).toBe(3);
+      // Bounds derivam dos ym normalizados: mês corrente cobre Mar inteiro.
+      expect(agg.values).toContain('2026-01-01');
+      expect(agg.values).toContain('2026-01-31');
+      expect(agg.values).toContain('2026-02-01');
+      expect(agg.values).toContain('2026-02-28');
+      expect(agg.values).toContain('2026-03-01');
+      expect(agg.values).toContain('2026-03-31');
+      // Lista exata em ordem ascendente (mesma ordenação do SQL atual).
+      expect(trends.map((t) => t.yearMonth)).toEqual(['2026-01', '2026-02', '2026-03']);
+      // Despesa de 1000 centavos em março aparece UMA vez, não dobrada.
+      expect(trends[2]).toMatchObject({ yearMonth: '2026-03', spentCents: 1000 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
