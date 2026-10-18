@@ -3976,25 +3976,35 @@ export class ConversationOrchestrator {
       this.emitTurnBudget(result);
       return read;
     }
+    // T08-F1 fail-closed incondicional: um turno `unsupported` com dado
+    // admitido de anexo NUNCA alcança o provider com texto generativo. O
+    // caminho suportado (resolveAttachmentContentQuery) já rodou na entrada
+    // do turno e é dono das perguntas delimitadas sobre o anexo — chegar
+    // aqui significa que o texto digitado NÃO é uma content-query
+    // delimitada, logo o turno não tem resposta determinística com
+    // evidência. O fato material é o mesmo nas duas sub-causas (conteúdo
+    // não verificado do anexo dispara a ambiguidade
+    // unsupported/leitura-financeira): responde fail-closed com
+    // ATTACHMENT_CONTENT_UNVERIFIED_TEXT, tripando ou não o guard
+    // makesUnverifiedFinancialClaim(input.text). Turnos SEM dado admitido
+    // mantêm o fluxo legado byte-idêntico abaixo. Mutation/draft turns
+    // retornam acima, então isto nunca os intercepta.
+    if (plan.mode === 'unsupported' && input.hasAttachmentData === true) {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({ ...result, failClosed: true as const, response: freeze({ text: ATTACHMENT_CONTENT_UNVERIFIED_TEXT }) });
+    }
     // INV-06 fail-closed: an `unsupported` turn that still makes a financial
     // claim (amount pattern or finance noun + claim cue) would otherwise
     // reach the LLM with NO evidence, letting prompt injection fabricate
     // balances. Reply deterministically without calling the provider.
     // Mutation/draft turns return above, so this never intercepts them.
+    // T08-F1: turns WITH admitted data returned above; this branch now owns
+    // ONLY turns without admitted data (byte-identical legacy reply).
     if (plan.mode === 'unsupported' && makesUnverifiedFinancialClaim(input.text)) {
-      // T08: an unsupported turn WITH admitted attachment data tripped the
-      // guard on attachment-derived content — not on a failed ledger read.
-      // `FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT` ("couldn't access your financial
-      // data") is the READ-path failure (runGroundedRead: null/error envelope);
-      // emitting it here would assert a ledger read was attempted and failed —
-      // unproven, since no read was routed. The cause here is unverified
-      // attachment content, so the reply names that cause and guides to typed
-      // input. No figures, no provider call, fail-closed like the path below.
-      // Turns WITHOUT admitted data keep the byte-identical legacy reply.
-      const text =
-        input.hasAttachmentData === true
-          ? ATTACHMENT_CONTENT_UNVERIFIED_TEXT
-          : FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT;
+      // Turns WITH admitted data returned in the T08-F1 branch above, so
+      // this owns ONLY turns without admitted data: the byte-identical
+      // legacy READ-failure reply.
+      const text = FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT;
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
       return freeze({ ...result, failClosed: true as const, response: freeze({ text }) });
     }
