@@ -20,6 +20,9 @@
 import { getOfflineSubjectId } from "@/lib/auth/offline-subject";
 import {
   computeOwnerKey,
+  getOfflineGeneration,
+  getOfflinePrincipalId,
+  getOfflineWorkspaceId,
   isOfflineWorkspaceId,
 } from "@/lib/auth/offline-identity";
 import { getMaxOfflineAuthAgeMs, isOfflineSnapshotEnabled } from "@/lib/capabilities";
@@ -189,13 +192,28 @@ export async function refreshOfflineAuthAge(nowIso?: string): Promise<boolean> {
   if (!isOfflineSnapshotEnabled()) return false;
   const at = nowIso ?? new Date().toISOString();
   if (Number.isNaN(Date.parse(at))) return false;
+  // T07a-R3 liveness guard: same stale-commit window as the snapshot writes.
+  // A teardown crossing the envelope read or the commit open must not renew
+  // the stamp of a revoked session's envelope (repopulation). On abort
+  // return false — the sole production caller (revalidateOfflineSession in
+  // app-state-context) ignores the value (`.catch(() => false)`, always
+  // unlocks + returns true), so the happy path is untouched.
+  const entryGeneration = getOfflineGeneration();
+  const entrySubject = getOfflineSubjectId();
+  const stillValid = (): boolean =>
+    getOfflineGeneration() === entryGeneration &&
+    getOfflineSubjectId() === entrySubject;
   let refreshed = false;
   await withWriteLock(async () => {
     const existing = await readV2Envelope();
     if (!existing) return;
+    // T07a-R2/R3: the envelope read is an awaited gap — revalidate before
+    // the put.
+    if (!stillValid()) return;
     existing.lastOnlineAuthenticatedAt = at;
-    await writeV2Envelope(existing);
-    refreshed = true;
+    await writeV2Envelope(existing, stillValid);
+    // The guarded put may have aborted on a teardown inside the commit open.
+    refreshed = stillValid();
   });
   return refreshed;
 }
@@ -288,8 +306,23 @@ async function readV2Envelope(): Promise<V2Envelope | null> {
   });
 }
 
-async function writeV2Envelope(env: V2Envelope): Promise<void> {
+/**
+ * T07a-R2 liveness predicate: re-checked after EVERY awaited step between
+ * the entry gate and the final put. A teardown crossing any gap aborts the
+ * write before anything hits disk — the openSnapshotDb await below is itself
+ * a gap, so the guard runs after it resolves and before `store.put`.
+ * Silent abort (no write, no throw): same semantics the entry gate gives a
+ * revoked writer, and the caller's post-write validation (migration reread)
+ * treats a missing envelope as "not applied".
+ */
+type LivenessGuard = () => boolean;
+
+async function writeV2Envelope(env: V2Envelope, isStillValid?: LivenessGuard): Promise<void> {
   const db = await openSnapshotDb();
+  if (isStillValid && !isStillValid()) {
+    db.close();
+    return;
+  }
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
@@ -366,6 +399,11 @@ export async function readV2Snapshot<K extends DomainKey>(
 ): Promise<{ data: SnapshotDomains[K]; syncedAt: string } | null> {
   // D10 optional disable: serve nothing while disabled.
   if (!isOfflineSnapshotEnabled()) return null;
+  // T07a state gate: revocation/logout/switch clears the subject partition
+  // synchronously — fail closed in the same tick without touching IndexedDB,
+  // so reads stay blocked even when IDB is slow or failing. The envelope is
+  // kept for its rightful owner instead of being deleted on a transient miss.
+  if (getOfflineSubjectId() === null) return null;
   try {
     const fp = await fingerprint(token);
     const env = await readV2Envelope();
@@ -446,6 +484,10 @@ export async function writeV2Snapshot<K extends DomainKey>(
 ): Promise<void> {
   // D10 optional disable: persist nothing while disabled.
   if (!isOfflineSnapshotEnabled()) return;
+  // T07a: capture the offline generation BEFORE the first await. A teardown
+  // (revocation/logout/switch) landing in any async gap drops the write —
+  // stale responses never re-populate the snapshot.
+  const entryGeneration = getOfflineGeneration();
   // FIX-168-FIX3: captura a identidade ANTES do primeiro await. O
   // fingerprint (SHA-256) e o lock de escrita cedem o event loop — uma troca
   // A→B nesse gap não pode re-atribuir o payload ao subject vigente.
@@ -454,18 +496,32 @@ export async function writeV2Snapshot<K extends DomainKey>(
   const authenticatedAt = resolveAuthenticatedAt(opts?.lastOnlineAuthenticatedAt);
   const subject = getOfflineSubjectId();
   // Descarte tardio na persistência: a identidade mudou durante o
-  // fingerprint, ou divergiu da capturada pelo bootstrap na entrada.
+  // fingerprint, ou divergiu da capturada pelo bootstrap na entrada, ou um
+  // teardown avançou a geração no gap.
+  if (getOfflineGeneration() !== entryGeneration) return;
   if (subject !== entrySubject) return;
   if (opts?.expectedSubject !== undefined && subject !== opts.expectedSubject) return;
+  // T07a-R2 liveness guard: re-checked after EVERY awaited step below — a
+  // teardown crossing any gap aborts the write before anything hits disk.
+  const stillValid = (): boolean =>
+    getOfflineGeneration() === entryGeneration &&
+    getOfflineSubjectId() === subject &&
+    (opts?.expectedSubject === undefined || getOfflineSubjectId() === opts.expectedSubject);
   // Serialize the read-modify-write so concurrent bootstrap writes (one per
   // domain) cannot read a stale envelope and overwrite each other's data.
   await withWriteLock(async () => {
     // Revalida após a fila do lock: a seleção pode ter mudado com a escrita
-    // enfileirada (cancelamento/remount não cancela gravações pendentes).
+    // enfileirada (cancelamento/remount não cancela gravações pendentes), ou
+    // um teardown pode ter avançado a geração com a escrita enfileirada.
+    if (getOfflineGeneration() !== entryGeneration) return;
     const lockedSubject = getOfflineSubjectId();
     if (lockedSubject !== subject) return;
     if (opts?.expectedSubject !== undefined && lockedSubject !== opts.expectedSubject) return;
     const existing = await readV2Envelope();
+    // T07a-R2: the envelope read is an awaited gap — revalidate before
+    // building the put. A teardown (or same-subject re-bind of a newer
+    // generation) landing here aborts the stale write.
+    if (!stillValid()) return;
     // Adopt only the same partition (fingerprint + subject). A subjectless
     // writer never adopts a subject-stamped envelope (it may belong to a
     // session whose subject was lost) — it starts a fresh base instead.
@@ -492,7 +548,7 @@ export async function writeV2Snapshot<K extends DomainKey>(
     base.domains[domain] = data;
     base.syncedAt[domain] = new Date().toISOString();
 
-    await writeV2Envelope(base);
+    await writeV2Envelope(base, stillValid);
   });
 }
 
@@ -557,9 +613,17 @@ export async function migrateV1toV2(token: string): Promise<void> {
     // re-atribuir o v1 de A ao subject vigente após uma troca A→B no gap do
     // fingerprint. Abortar preserva o v1 (nada é deletado aqui).
     const entrySubject = getOfflineSubjectId();
+    const entryGeneration = getOfflineGeneration();
+    // T07a-R2 liveness guard: re-checked after EVERY awaited step below.
+    const stillValid = (): boolean =>
+      getOfflineGeneration() === entryGeneration &&
+      getOfflineSubjectId() === entrySubject;
     const fp = await fingerprint(token);
     if (getOfflineSubjectId() !== entrySubject) return;
+    if (getOfflineGeneration() !== entryGeneration) return;
     const existing = await readV2Envelope();
+    // T07a-R2: the envelope read is an awaited gap — revalidate before the put.
+    if (!stillValid()) return;
     const subject = getOfflineSubjectId();
     if (subject !== entrySubject) return;
     const authenticatedAt = new Date().toISOString();
@@ -582,10 +646,13 @@ export async function migrateV1toV2(token: string): Promise<void> {
     }
     // Migration runs inside an authenticated bootstrap: the adopted or fresh
     // base carries the current subject partition and a fresh age stamp.
+    // A teardown landing anywhere in the gaps above drops the migration —
+    // a stale bootstrap must never populate the snapshot.
+    if (!stillValid()) return;
     if (subject && !base.offlineSubjectId) base.offlineSubjectId = subject;
     base.lastOnlineAuthenticatedAt = authenticatedAt;
 
-    await writeV2Envelope(base);
+    await writeV2Envelope(base, stillValid);
 
     // Validation: reread v2 and confirm our data actually landed before we
     // are allowed to delete the v1 source.
@@ -678,8 +745,13 @@ async function readV3Envelope(): Promise<V3Envelope | null> {
   });
 }
 
-async function writeV3Envelope(env: V3Envelope): Promise<void> {
+async function writeV3Envelope(env: V3Envelope, isStillValid?: LivenessGuard): Promise<void> {
   const db = await openSnapshotDb();
+  // T07a-R2: same commit-open gap as writeV2Envelope — abort before the put.
+  if (isStillValid && !isStillValid()) {
+    db.close();
+    return;
+  }
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
@@ -755,8 +827,34 @@ export async function readV3Snapshot<K extends DomainKey>(
 ): Promise<{ data: SnapshotDomains[K]; syncedAt: string } | null> {
   if (!isOfflineSnapshotEnabled()) return null;
   if (!isValidV3Owner(principalId, workspaceId)) return null;
+  // T07a state gate: the caller-supplied owner args must match the LIVE
+  // offline identity — a revoked/torn-down session (identity cleared
+  // synchronously) reads null in the same tick, even with stale args and
+  // even when IndexedDB is slow or failing. Never serve, never delete,
+  // never re-attribute by heuristic.
+  if (
+    getOfflinePrincipalId() !== principalId ||
+    getOfflineWorkspaceId() !== workspaceId
+  ) {
+    return null;
+  }
+  // T07a-R2: capture the generation — revalidated after the envelope read
+  // resolves (see below).
+  const entryGeneration = getOfflineGeneration();
   try {
     const env = await readV3Envelope();
+    // T07a-R2: the envelope read is an awaited gap — a teardown crossing it
+    // (including teardown → same-owner re-login, which moves the generation)
+    // must not deliver data to the pre-teardown caller. The later purge
+    // delete cannot invalidate the already-read object, so delivery itself
+    // is gated here.
+    if (getOfflineGeneration() !== entryGeneration) return null;
+    if (
+      getOfflinePrincipalId() !== principalId ||
+      getOfflineWorkspaceId() !== workspaceId
+    ) {
+      return null;
+    }
     if (!env || env.schema !== V3_SCHEMA) {
       if (env) await deleteV3Snapshot();
       return null;
@@ -840,10 +938,40 @@ export async function writeV3Snapshot<K extends DomainKey>(
   if (!isValidV3Owner(principalId, workspaceId)) {
     throw new Error("offline V3 write requires a validated principal + workspace");
   }
+  // T07a stale-write guard: the owner args must match the LIVE offline
+  // identity both at entry and inside the serialized lock — a write spanning
+  // (or starting after) a revocation/teardown is dropped, never reviving
+  // snapshot data under a torn-down session. The generation covers the gap
+  // the identity check cannot (re-bind with identical args after the
+  // teardown): equality holds only for work that never crossed a teardown.
+  const entryGeneration = getOfflineGeneration();
+  if (
+    getOfflinePrincipalId() !== principalId ||
+    getOfflineWorkspaceId() !== workspaceId
+  ) {
+    return;
+  }
+  // T07a-R2 liveness guard: re-checked after EVERY awaited step below — a
+  // teardown crossing any gap aborts the write before anything hits disk.
+  const stillValid = (): boolean =>
+    getOfflineGeneration() === entryGeneration &&
+    getOfflinePrincipalId() === principalId &&
+    getOfflineWorkspaceId() === workspaceId;
   const authenticatedAt = resolveAuthenticatedAt(opts?.lastOnlineAuthenticatedAt);
   const ownerKey = computeOwnerKey(principalId, workspaceId);
   await withWriteLock(async () => {
+    if (getOfflineGeneration() !== entryGeneration) return;
+    if (
+      getOfflinePrincipalId() !== principalId ||
+      getOfflineWorkspaceId() !== workspaceId
+    ) {
+      return;
+    }
     const existing = await readV3Envelope();
+    // T07a-R2: the envelope read is an awaited gap — revalidate before the
+    // put. A teardown (or same-owner re-bind of a newer generation) landing
+    // here aborts the stale write.
+    if (!stillValid()) return;
     const sameOwner =
       existing !== null &&
       existing.schema === V3_SCHEMA &&
@@ -858,7 +986,7 @@ export async function writeV3Snapshot<K extends DomainKey>(
     base.lastOnlineAuthenticatedAt = authenticatedAt;
     base.domains[domain] = data;
     base.syncedAt[domain] = new Date().toISOString();
-    await writeV3Envelope(base);
+    await writeV3Envelope(base, stillValid);
   });
 }
 
@@ -900,8 +1028,21 @@ export async function migrateV2toV3(
   }
   if (!isOfflineSnapshotEnabled()) return { migrated: false, reason: "disabled" };
   try {
+    const entryGeneration = getOfflineGeneration();
+    // T07a-R2 liveness guard: the migration targets identity-scoped data —
+    // re-checked after EVERY awaited step below.
+    const stillValid = (): boolean =>
+      getOfflineGeneration() === entryGeneration &&
+      getOfflinePrincipalId() === principalId &&
+      getOfflineWorkspaceId() === workspaceId;
     const fp = await fingerprint(token);
+    // T07a-R2: the fingerprint is an awaited gap — a teardown crossing it
+    // aborts before any IndexedDB access.
+    if (!stillValid()) return { migrated: false, reason: "error" };
     const v2 = await readV2Envelope();
+    // T07a-R2: the envelope read is an awaited gap — revalidate before
+    // trusting the source.
+    if (!stillValid()) return { migrated: false, reason: "error" };
     if (!v2 || v2.schema !== 2 || v2.ownerFingerprint !== fp) {
       return { migrated: false, reason: "no-source" };
     }
@@ -941,8 +1082,16 @@ export async function migrateV2toV3(
     }
     const authenticatedAt = new Date().toISOString();
     const ownerKey = computeOwnerKey(principalId, workspaceId);
+    // Tracks whether the guarded commit below actually landed: a teardown
+    // aborting inside the lock must report "not applied" and keep the V2
+    // source, never claim a migration that never hit disk.
+    let applied = false;
     await withWriteLock(async () => {
+      // A teardown landing anywhere in the gaps above drops the migration.
+      if (!stillValid()) return;
       const existing = await readV3Envelope();
+      // T07a-R2: revalidate after the envelope read, before the put.
+      if (!stillValid()) return;
       const sameOwner =
         existing !== null &&
         existing.schema === V3_SCHEMA &&
@@ -960,8 +1109,12 @@ export async function migrateV2toV3(
         }
       }
       base.lastOnlineAuthenticatedAt = authenticatedAt;
-      await writeV3Envelope(base);
+      await writeV3Envelope(base, stillValid);
+      // The guarded put may have aborted on a teardown that landed inside
+      // the commit open — only claim the migration when still live.
+      applied = stillValid();
     });
+    if (!applied) return { migrated: false, reason: "error" };
     await deleteV2Snapshot();
     return { migrated: true, reason: "migrated" };
   } catch {

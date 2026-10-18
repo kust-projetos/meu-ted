@@ -21,6 +21,7 @@ import { clearOfflineSubjectId } from "@/lib/auth/offline-subject";
 import {
   clearOfflineIdentity,
   clearOfflineWorkspaceBinding,
+  advanceOfflineGeneration,
 } from "@/lib/auth/offline-identity";
 import { clearActiveWorkspacePreference } from "@/lib/auth/active-workspace-preference";
 import { deleteV2Snapshot, deleteV3Snapshot } from "@/lib/state/snapshot-db";
@@ -98,6 +99,13 @@ export interface ClearSessionOptions {
  * Clear sensitive session data.
  * Each store is attempted independently; all are awaited; no rejection escapes.
  * All flags default to `false` — opt-in per call.
+ *
+ * T07a teardown semantics: any teardown (token / snapshot / offline-identity
+ * / workspace-binding) advances the offline generation and clears
+ * localStorage-backed identity INLINE at call time — synchronously, in the
+ * same tick. Snapshot reads fail closed immediately and in-flight writes are
+ * dropped, even when IndexedDB is slow or failing. Bare `{}` (no teardown
+ * flag) never advances: purge is teardown, not sweep.
  */
 export async function clearSensitiveSession(
   options: ClearSessionOptions,
@@ -111,88 +119,68 @@ export async function clearSensitiveSession(
     clearMemory,
   } = options;
 
-  // Independent tasks — each isolated so one store's failure cannot abort
-  // cleanup of the others. Every task is awaited via allSettled below.
-  const tasks: Promise<void>[] = [];
+  // T07a revocation gate — synchronous teardown entry. Bumped before any
+  // await so work already in flight is stale by the time it resumes.
+  const isTeardown = doToken || doSnapshot || doOfflineIdentity || doWorkspaceBinding;
+  if (isTeardown) {
+    advanceOfflineGeneration();
+  }
 
+  // SYNC phase: localStorage-backed clears run inline (same tick) so the
+  // teardown is observable immediately. Each clear is failure-isolated;
+  // semantics are unchanged (idempotent, never throws).
   if (doToken) {
-    tasks.push(
-      Promise.resolve().then(() => { try { clearToken(); } catch { /* noop */ } }),
-    );
-    tasks.push(
-      Promise.resolve().then(() => { try { clearSessionToken(); } catch { /* noop */ } }),
-    );
-    tasks.push(
-      Promise.resolve().then(() => { try { localStorage.removeItem("pi-finance:session-token"); } catch { /* noop */ } }),
-    );
-    tasks.push(
-      Promise.resolve().then(() => { try { clearActiveWorkspaceId(); } catch { /* noop */ } }),
-    );
+    try { clearToken(); } catch { /* noop */ }
+    try { clearSessionToken(); } catch { /* noop */ }
+    try { localStorage.removeItem("pi-finance:session-token"); } catch { /* noop */ }
+    try { clearActiveWorkspaceId(); } catch { /* noop */ }
     // T2.2 B4: logout com limpeza de token também limpa o offlineSubjectId
     // (a repartição offline cai junto com a sessão; T2.6 detalha o lock).
     // Troca de workspace (sem clearToken) preserva o subject até o re-set.
-    tasks.push(
-      Promise.resolve().then(() => { try { clearOfflineSubjectId(); } catch { /* noop */ } }),
-    );
+    try { clearOfflineSubjectId(); } catch { /* noop */ }
     // T2.6 D1: o carimbo de última autenticação online cai junto — sem ele,
     // qualquer snapshot residual seria avaliado contra idade ausente
     // (não-confiável) em vez de parecer válido.
-    tasks.push(
-      Promise.resolve().then(() => { try { clearLastOnlineAuthenticatedAt(); } catch { /* noop */ } }),
-    );
+    try { clearLastOnlineAuthenticatedAt(); } catch { /* noop */ }
   }
   if (doSnapshot) {
-    tasks.push(
-      Promise.resolve().then(() => {
-        try { localStorage.removeItem(SNAPSHOT_KEY); } catch { /* noop */ }
-      }),
-    );
+    try { localStorage.removeItem(SNAPSHOT_KEY); } catch { /* noop */ }
   }
   if (doProfile) {
-    tasks.push(
-      Promise.resolve().then(() => {
-        try { localStorage.removeItem(PROFILE_KEY); } catch { /* noop */ }
-      }),
-    );
+    try { localStorage.removeItem(PROFILE_KEY); } catch { /* noop */ }
   }
   // Phase 3 (AUTH-T06/T07): explicit offline-identity teardown per case.
   // Logout/revocation clears principal + workspace + subject; workspace
   // switch clears the workspace side (binding + subject + stamp) while the
   // user principal survives for rebinding.
   if (doOfflineIdentity) {
-    tasks.push(
-      Promise.resolve().then(() => { try { clearOfflineIdentity(); } catch { /* noop */ } }),
-    );
-    tasks.push(
-      Promise.resolve().then(() => { try { clearLastOnlineAuthenticatedAt(); } catch { /* noop */ } }),
-    );
+    try { clearOfflineIdentity(); } catch { /* noop */ }
+    try { clearLastOnlineAuthenticatedAt(); } catch { /* noop */ }
     // The active-workspace preference is bound to the principal being torn
     // down — a later login (possibly another user on a shared device) must
     // never remount on the previous session's workspace.
-    tasks.push(
-      Promise.resolve().then(() => { try { clearActiveWorkspacePreference(); } catch { /* noop */ } }),
-    );
+    try { clearActiveWorkspacePreference(); } catch { /* noop */ }
   }
   if (doWorkspaceBinding) {
-    // Workspace-switch teardown ordering guarantee (AUTH-T07 race review):
-    // these localStorage clears are queued as microtasks AT CALL TIME, so
-    // they always complete before any LATER task (e.g. B's login/binding)
-    // can run — a B binding written after this call starts can never be
-    // clobbered by it. The only deferred work below is the IndexedDB
-    // snapshot deletes, which never touch localStorage keys; and this path
-    // never touches the principal-bound active-workspace preference, so B's
-    // fresh preference survives unconditionally. Callers additionally guard
-    // every post-purge write with a generation + principal check, so even a
-    // principal switch landing mid-purge commits nothing under the new
-    // principal. Covered by `workspace-stale-load` (deferred-IDB + B
-    // binding test).
-    tasks.push(
-      Promise.resolve().then(() => { try { clearOfflineWorkspaceBinding(); } catch { /* noop */ } }),
-    );
-    tasks.push(
-      Promise.resolve().then(() => { try { clearLastOnlineAuthenticatedAt(); } catch { /* noop */ } }),
-    );
+    // Workspace-switch teardown ordering (AUTH-T07 race review, T07a sync):
+    // these localStorage clears run INLINE at call time, so they always
+    // complete before any LATER task (e.g. B's login/binding) can run — a B
+    // binding written after this call starts can never be clobbered by it.
+    // The only deferred work below is the IndexedDB snapshot deletes, which
+    // never touch localStorage keys; and this path never touches the
+    // principal-bound active-workspace preference, so B's fresh preference
+    // survives unconditionally. Every post-purge write additionally checks
+    // the offline generation, so even a write spanning this teardown commits
+    // nothing afterwards. Covered by `workspace-stale-load` (deferred-IDB +
+    // B binding test).
+    try { clearOfflineWorkspaceBinding(); } catch { /* noop */ }
+    try { clearLastOnlineAuthenticatedAt(); } catch { /* noop */ }
   }
+
+  // ASYNC phase: everything deferred or failure-prone is queued and awaited
+  // via allSettled below — no rejection escapes.
+  const tasks: Promise<void>[] = [];
+
   if (clearMemory) {
     tasks.push(
       Promise.resolve().then(() => { try { clearMemory(); } catch { /* noop */ } }),
