@@ -24,6 +24,11 @@
  *      undo.nothing_to_undo (never not_found).
  *  R4. Legitimate sequential undo with explicit lastOperationId + same-key
  *      replay/takeover still converge.
+ *  T09 (own-actor-only implicit undo, ADR-028): implicit election is scoped
+ *      to the caller's own rows on real PG —
+ *  T09a. Stranger implicit undo → undo.nothing_to_undo, no silent reversal.
+ *  T09e. Stranger explicit lastOperationId (same workspace) → 200 + receipt.
+ *  T09b. Own implicit undo with a newer foreign row → own newest, foreign kept.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -649,5 +654,75 @@ describeIfDb('FIX-188 — undo fail-closed + cross-key concurrency (real Postgre
     expect(replayed).toEqual(older);
 
     expect(await readBalance(pool, fx)).toBe(fx.initialBalance);
+  });
+
+  it('T09a — implicit undo by a different actor in the same workspace fails closed (real PG)', async () => {
+    const fx = await seedTwoExpenses(pool);
+    households.push(fx.householdId);
+    const undo = makeUndo(pool);
+
+    const stranger = `undo-t09-stranger-${randomUUID().slice(0, 8)}`;
+    const code = await undoCodeOf(undo.undo(fx.householdId, stranger, `u188-t09a-${randomUUID()}`));
+    expect(code).toBe('undo.nothing_to_undo');
+
+    // No silent reversal of another actor's head: both rows stay active.
+    expect(await isDeleted(pool, fx.householdId, fx.headTxId)).toBe(false);
+    expect(await isDeleted(pool, fx.householdId, fx.oldTxId)).toBe(false);
+    expect(await readBalance(pool, fx)).toBe(fx.initialBalance - fx.oldAmount - fx.headAmount);
+  });
+
+  it('T09e — explicit lastOperationId naming a same-workspace foreign op succeeds (real PG)', async () => {
+    const fx = await seedTwoExpenses(pool);
+    households.push(fx.householdId);
+    const undo = makeUndo(pool);
+
+    const stranger = `undo-t09-stranger-${randomUUID().slice(0, 8)}`;
+    const result = await undo.undo(fx.householdId, stranger, `u188-t09e-${randomUUID()}`, fx.headOpId);
+    expect(result.undone.entityId).toBe(fx.headTxId);
+    expect(result.receipt.entity).toMatchObject({ type: 'transaction', id: fx.headTxId });
+    expect(await isDeleted(pool, fx.householdId, fx.headTxId)).toBe(true);
+    expect(await isDeleted(pool, fx.householdId, fx.oldTxId)).toBe(false);
+  });
+
+  it('T09b — implicit undo reverses the caller own newest, not a newer foreign row (real PG)', async () => {
+    const fx = await seedTwoExpenses(pool);
+    households.push(fx.householdId);
+    const stranger = `undo-t09-stranger-${randomUUID().slice(0, 8)}`;
+    const writes = createPostgresWriteStore({ pool });
+    const idempotency = createPostgresIdempotencyStore({ pool });
+    const booked = await idempotency.lookupOrRecord(
+      createIdempotencyRequest(
+        { householdId: fx.householdId, deviceId: stranger },
+        'transactions.expense.create',
+        `u188-t09b-${randomUUID()}`,
+      ),
+      { seed: 'u188-t09b' },
+      async () => {
+        const tx = await writes.createExpense(fx.householdId, {
+          description: 'U188 foreign expense',
+          amountCents: 1_000,
+          date: '2026-10-10',
+          accountId: fx.accountId,
+          categoryId: (await pool.query<{ id: string }>(
+            'SELECT id FROM categories WHERE household_id = $1 LIMIT 1',
+            [fx.householdId],
+          )).rows[0]!.id,
+        });
+        return { ...tx, transactionId: tx.id };
+      },
+    );
+    const foreignTxId = (booked.response as { transactionId: string }).transactionId;
+    const base = Date.parse('2026-10-10T12:00:00.000Z');
+    await pool.query(
+      `UPDATE audit_logs SET created_at = to_timestamp($3 / 1000.0)
+        WHERE workspace_id = $1 AND effect_ref = $2`,
+      [fx.householdId, foreignTxId, base + 120_000],
+    );
+
+    const undo = makeUndo(pool);
+    const result = await undo.undo(fx.householdId, fx.actorId, `u188-t09b-${randomUUID()}`);
+    expect(result.undone.entityId).toBe(fx.headTxId);
+    expect(await isDeleted(pool, fx.householdId, fx.headTxId)).toBe(true);
+    expect(await isDeleted(pool, fx.householdId, foreignTxId)).toBe(false);
   });
 });
