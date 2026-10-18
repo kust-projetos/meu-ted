@@ -9,11 +9,13 @@ import {
 
 /**
  * T2.3 — Cookie-first: remoção gradual do localStorage (SPEC §8 B3 passos
- * 4–7, ADR-015). Uma única flag NEXT_PUBLIC_LEGACY_BEARER_COMPAT controla
- * leitura+escrita juntas (DECISÃO T2.3: manter simples, sem sub-flag).
+ * 4–7, ADR-015). A flag NEXT_PUBLIC_LEGACY_BEARER_COMPAT controla
+ * leitura+escrita do bearer legado de SESSÃO (DECISÃO T2.3: manter simples,
+ * sem sub-flag).
  *
- * RED primeiro: estes testes falham enquanto a leitura não for gated
- * (token órfão ainda anexado) e enquanto o cleanup de bootstrap não existir.
+ * T04: a chave de DEVICE (`pi-finance:token`, vínculo H-12) NÃO é bearer
+ * legado — persiste e é legível com a flag off, e o cleanup de bootstrap a
+ * preserva. Só o session-token continua gateado.
  */
 
 function mockOkFetch(): ReturnType<typeof vi.spyOn> {
@@ -48,13 +50,16 @@ describe("T2.3 B3.5: compat off => leitura removida (token órfão ignorado)", (
     expect(headers["x-device-token"]).toBeUndefined();
   });
 
-  it("flag off => zero reads (getters retornam null mesmo com órfão presente)", () => {
+  it("flag off => session-bearer reads removidas; device reads preservadas (T04)", () => {
     vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", "false");
     localStorage.setItem("pi-finance:session-token", "sess-orphan");
     localStorage.setItem("pi-finance:token", "dev-orphan");
 
+    // O bearer legado de sessão é ignorado…
     expect(getSessionToken()).toBeNull();
-    expect(getToken()).toBeNull();
+    // …mas a chave de device NÃO é bearer legado: continua legível para o
+    // mint do Agent não repetir o register com a flag off.
+    expect(getToken()).toBe("dev-orphan");
   });
 
   it("flag on (default) => coexistência preservada (lê órfão)", () => {
@@ -70,7 +75,7 @@ describe("T2.3 B3.5: compat off => leitura removida (token órfão ignorado)", (
 });
 
 describe("T2.3 B3/B2: bootstrap cleanup de token órfão", () => {
-  it("flag off => apaga as duas chaves legadas", () => {
+  it("flag off => apaga só o bearer legado de sessão; device é preservado (T04)", () => {
     vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", "false");
     localStorage.setItem("pi-finance:session-token", "sess-orphan");
     localStorage.setItem("pi-finance:token", "dev-orphan");
@@ -78,7 +83,7 @@ describe("T2.3 B3/B2: bootstrap cleanup de token órfão", () => {
     cleanupOrphanedLegacyTokens();
 
     expect(localStorage.getItem("pi-finance:session-token")).toBeNull();
-    expect(localStorage.getItem("pi-finance:token")).toBeNull();
+    expect(localStorage.getItem("pi-finance:token")).toBe("dev-orphan");
   });
 
   it("flag on => preserva as chaves (coexistência)", () => {
