@@ -99,25 +99,28 @@ describe("T2.2 compat flag: writes gated behind NEXT_PUBLIC_LEGACY_BEARER_COMPAT
     expect(localStorage.getItem("pi-finance:session-token")).toBe("sess-1");
   });
 
-  it("performs NO localStorage writes with compat off", () => {
+  it("performs NO session-bearer writes with compat off (device token persists — T04)", () => {
     vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", "false");
     const setItemSpy = vi.spyOn(window.localStorage, "setItem");
 
-    setToken("dev-1");
     setSessionToken("sess-1");
 
     expect(setItemSpy).not.toHaveBeenCalled();
-    expect(localStorage.getItem("pi-finance:token")).toBeNull();
     expect(localStorage.getItem("pi-finance:session-token")).toBeNull();
-    expect(getToken()).toBeNull();
     expect(getSessionToken()).toBeNull();
+
+    // T04: a chave de device NÃO é bearer legado — persiste com a flag off
+    // para o mint do Agent não repetir POST /auth/devices/register.
+    setToken("dev-1");
+    expect(localStorage.getItem("pi-finance:token")).toBe("dev-1");
+    expect(getToken()).toBe("dev-1");
   });
 
-  it("treats explicit falsy spellings as off", () => {
+  it("treats explicit falsy spellings as off (session bearer only — T04)", () => {
     for (const value of ["0", "no", "FALSE"]) {
       vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", value);
       const setItemSpy = vi.spyOn(window.localStorage, "setItem");
-      setToken("dev-1");
+      setSessionToken("sess-1");
       expect(setItemSpy).not.toHaveBeenCalled();
       setItemSpy.mockRestore();
     }

@@ -1,17 +1,10 @@
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import process from 'node:process';
 import { validateTrivyignoreFile } from './trivyignore-policy.mjs';
 
 const images = ['pi-finance-api:ci', 'pi-finance-codex-broker:ci'];
 const repoPath = process.cwd();
-const ignoreValidation = validateTrivyignoreFile(repoPath);
-if (!ignoreValidation.ok) {
-  console.error('Refusing container scan: .trivyignore failed expiry validation (fail-closed).');
-  for (const error of ignoreValidation.errors) console.error(` - ${error}`);
-  console.error('Each ignored CVE needs a parseable, unexpired `Expiry: YYYY-MM-DD` declaration.');
-  process.exit(1);
-}
-const hasIgnore = ignoreValidation.entries.length > 0;
-
 const commonArgs = [
   'run',
   '--rm',
@@ -30,24 +23,73 @@ const commonArgs = [
   '--severity',
   'HIGH,CRITICAL',
   '--ignore-unfixed',
-  ...(hasIgnore ? ['--ignorefile', '/repo/.trivyignore'] : []),
 ];
 
-const checkDocker = spawnSync('docker', ['info'], { stdio: 'ignore', shell: false });
-if (checkDocker.status !== 0) {
-  console.log('Docker daemon not running locally. Skipping containerized trivy (verified in CI).');
-  process.exit(0);
+export function isCiEnv(env = process.env) {
+  return env.CI === 'true';
 }
 
-for (const image of images) {
+// Injectable gate: dockerAvailable is the `docker info` outcome, runImage
+// runs one scan and returns its spawnSync-like {status, error?} result.
+// Reasons stay generic: vulnerability report content is never echoed into
+// error logs; the redacted scanner output above is the record.
+export function executeContainersGate({ env = process.env, dockerAvailable, runImage } = {}) {
+  if (!dockerAvailable) {
+    if (isCiEnv(env)) {
+      return {
+        exitCode: 1,
+        reason: 'docker is not available in CI; failing closed without a container scan.',
+      };
+    }
+    return {
+      exitCode: 0,
+      reason: 'Docker daemon not running locally. Skipping containerized trivy (verified in CI).',
+    };
+  }
+  for (const image of images) {
+    const result = runImage(image);
+    if (result.error) {
+      return { exitCode: 1, reason: `Unable to run Docker/Trivy: ${result.error.message}` };
+    }
+    if (result.status !== 0) {
+      return {
+        exitCode: result.status ?? 1,
+        reason: `container scan failed for ${image} (see redacted scanner output above).`,
+      };
+    }
+  }
+  return { exitCode: 0, reason: '' };
+}
 
-  const result = spawnSync('docker', [...commonArgs, image], {
+export function main(env = process.env) {
+  const ignoreValidation = validateTrivyignoreFile(repoPath);
+  if (!ignoreValidation.ok) {
+    console.error('Refusing container scan: .trivyignore failed expiry validation (fail-closed).');
+    for (const error of ignoreValidation.errors) console.error(` - ${error}`);
+    console.error('Each ignored CVE needs a parseable, unexpired `Expiry: YYYY-MM-DD` declaration.');
+    process.exitCode = 1;
+    return { exitCode: 1, reason: 'trivyignore validation failed' };
+  }
+  const ignoreValidationEntries = ignoreValidation.entries;
+  const hasIgnore = ignoreValidationEntries.length > 0;
+
+  const checkDocker = spawnSync('docker', ['info'], { stdio: 'ignore', shell: false });
+  const runImage = (image) => spawnSync('docker', [
+    ...commonArgs,
+    ...(hasIgnore ? ['--ignorefile', '/repo/.trivyignore'] : []),
+    image,
+  ], {
     stdio: 'inherit',
     shell: false,
   });
-  if (result.error) {
-    console.error(`Unable to run Docker/Trivy: ${result.error.message}`);
-    process.exit(1);
+  const result = executeContainersGate({ env, dockerAvailable: checkDocker.status === 0, runImage });
+  if (result.exitCode === 0) {
+    if (result.reason) console.log(result.reason);
+  } else {
+    console.error(result.reason);
   }
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  process.exitCode = result.exitCode;
+  return result;
 }
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

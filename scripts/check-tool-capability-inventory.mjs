@@ -20,7 +20,8 @@ const RISKS = new Set(['low', 'medium', 'high', 'critical']);
  * tool without a row is still rejected below by the name-level check.
  */
 const CANONICAL_GENERATED_TOOLS = 54;
-const EXPECTED_CAPABILITY_ROWS = 74;
+// CAP-075 classifies detect_duplicate (real route POST /transactions/detect-duplicate).
+const EXPECTED_CAPABILITY_ROWS = 75;
 
 const normalizeToolName = (value) => value.trim().replace(/^`|`$/g, '').replace(/_/g, '').toLowerCase().replace(/tool$/, '');
 
@@ -113,13 +114,13 @@ export function validateInventory(inventoryPath, registeredTools) {
   const toolCounts = new Map();
   for (const tool of inventoryTools) toolCounts.set(tool, (toolCounts.get(tool) ?? 0) + 1);
   for (const [tool, count] of toolCounts) if (count > 1) errors.push(`inventory tool ${tool} is duplicated ${count}x`);
-  const isFallback = registeredTools.length === CANONICAL_GENERATED_TOOLS;
-  if (!isFallback) for (const tool of registeredSet) if (!inventorySet.has(tool)) errors.push(`registered tool ${tool} has no inventory row`);
+  for (const tool of registeredSet) if (!inventorySet.has(tool)) errors.push(`registered tool ${tool} has no inventory row`);
 
 
 
   const columnIndex = Object.fromEntries(columns.map((column, index) => [column, index]));
   for (const row of rows) {
+    const id = row[0] ?? 'unknown row';
     const statusCell = row[columnIndex.status];
     const tool = normalizeToolName(row[1] ?? '');
     if (statusCell === 'api') {

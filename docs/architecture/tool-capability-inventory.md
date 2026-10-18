@@ -1,7 +1,7 @@
 # Tool capability inventory — G2.3.1 / G2.3.2 / G2.3.3
 
 **Snapshot:** 2026-10-04  
-**Source of truth for tool count:** `apps/agent/src/generated/http-tools.ts` (regenerated via `scripts/generate-agent-tools.mjs` from `apps/api/openapi/agent-tools.openapi.json`) — 54 generated API tools; 74 classified rows total (53 api + 21 planned).  
+**Source of truth for tool count:** `apps/agent/src/generated/http-tools.ts` (regenerated via `scripts/generate-agent-tools.mjs` from `apps/api/openapi/agent-tools.openapi.json`) — 54 generated API tools; 75 classified rows total (54 api + 21 planned).  
 **API comparison:** `apps/api/src/routes/`.  
 **UI comparison:** canonical PWA pages under `apps/pwa/src/features/`.
 
@@ -97,6 +97,7 @@ Capability IDs are stable inventory identifiers, not tool names. One registered 
 | CAP-072 | `updateBudgetTool` | Update budget limit and alert settings | member | daily | high | `PATCH /budgets/:id` | Budgets | UI | covered | command | PATCH | /budgets/:id | - | budgets-update | - | policy | api |
 | CAP-073 | `analytics_kpis` | Period KPI totals (income, expense, balance, open invoices, savings rate) | member | daily | low | `GET /analytics/kpis` | PWA charts-data/useAnalytics.ts (kpis) | chat | covered | query | GET | /analytics/kpis | analytics_kpis | analytics-kpis | analyticsKpisTool | none | api |
 | CAP-074 | `analytics_category_breakdown` | Expense/income totals per category (one-level macro rollup) in a period | member | daily | low | `GET /analytics/category-breakdown` | PWA charts-data/useAnalytics.ts (category breakdown) | chat | covered | query | GET | /analytics/category-breakdown | analytics_category_breakdown | analytics-category-breakdown | analyticsCategoryBreakdownTool | none | api |
+| CAP-075 | `detect_duplicate` | Check whether a transaction would duplicate an existing one before creation | member | daily | low | `POST /transactions/detect-duplicate` | Records (NewTransactionSheet pre-save check) | UI | covered | query | POST | /transactions/detect-duplicate | detect_duplicate | transactions-detect-duplicate | detectDuplicateTool | none | api |
 
 ## Coverage summary
 

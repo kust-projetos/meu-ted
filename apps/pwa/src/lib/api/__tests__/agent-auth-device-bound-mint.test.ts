@@ -729,3 +729,397 @@ describe("FIX-AGENT-MINT-SELF-HEAL — 401 with a presented device token re-regi
     expect(mintCalls).toBe(2);
   });
 });
+
+/**
+ * T04 (remediação wave1-pwa): o device token (`pi-finance:token`, vínculo
+ * H-12) é independente do gate de compat do bearer legado
+ * (`NEXT_PUBLIC_LEGACY_BEARER_COMPAT`). Com a flag off, o mint do Agent deve
+ * registrar o device UMA vez e reutilizar o token persistido nos mints
+ * seguintes — sem o storm sequencial (register por request) que bloqueia o
+ * flip da Release B.
+ */
+describe("T04 — device token persiste com compat off (sem register storm)", () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_API_BASE_URL", ORIGINAL);
+    clearAgentConnectionTokenCache();
+    // Baseline de geração limpa (incrementos são cumulativos).
+    clearAgentSession();
+  });
+
+  afterEach(() => {
+    clearToken();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it.each(["0", "off"])(
+    "compat %s: três mints SEQUENCIAIS ⇒ 1 register + 3 mints device-bound (persistido após o primeiro)",
+    async (flag) => {
+      vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", flag);
+      clearToken();
+      let registerCalls = 0;
+      routeFetch((url) => {
+        if (url.includes(DEVICE_REGISTER_PATH)) {
+          registerCalls += 1;
+          return deviceResponse("device-persisted");
+        }
+        return mintResponse("conn-jwt");
+      });
+
+      for (let i = 0; i < 3; i += 1) {
+        await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+      }
+
+      expect(registerCalls).toBe(1);
+      expect(callIndexesFor(MINT_PATH)).toHaveLength(3);
+      // O token emitido persiste independente da flag…
+      expect(getToken()).toBe("device-persisted");
+      // …e cada mint levou o vínculo H-12 explícito.
+      for (const callIndex of callIndexesFor(MINT_PATH)) {
+        expect(headersAt(callIndex)["x-device-token"]).toBe("device-persisted");
+      }
+    },
+  );
+
+  it("compat off: 2 mints CONCORRENTES coalescem em 1 register (single-flight preservado)", async () => {
+    vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", "off");
+    clearToken();
+    let registerCalls = 0;
+    routeFetch((url) => {
+      if (url.includes(DEVICE_REGISTER_PATH)) {
+        registerCalls += 1;
+        return deviceResponse("device-fresh");
+      }
+      return mintResponse("conn-jwt");
+    });
+
+    const [first, second] = await Promise.all([
+      fetchAgentConnectionToken("ws-1", true),
+      fetchAgentConnectionToken("ws-1", true),
+    ]);
+
+    expect(first).toBe("conn-jwt");
+    expect(second).toBe("conn-jwt");
+    expect(registerCalls).toBe(1);
+    expect(getToken()).toBe("device-fresh");
+  });
+
+  it("compat off: clearToken (logout) remove o device token independente da flag", async () => {
+    vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", "off");
+    routeFetch((url) =>
+      url.includes(DEVICE_REGISTER_PATH) ? deviceResponse("device-fresh") : mintResponse("conn-jwt"),
+    );
+
+    await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+    expect(getToken()).toBe("device-fresh");
+
+    clearToken();
+    expect(getToken()).toBeNull();
+  });
+
+  it("compat off: mint 401 com device apresentado ⇒ re-register UMA vez e persiste o novo token", async () => {
+    vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", "off");
+    // Semeia o store com a flag LIGADA (único caminho que persistia antes da
+    // T04) para provar que o recovery funciona a partir de um device legado.
+    vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", "1");
+    setToken("device-stale");
+    vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", "off");
+    let registerCalls = 0;
+    let mintCalls = 0;
+    routeFetch((url) => {
+      if (url.includes(DEVICE_REGISTER_PATH)) {
+        registerCalls += 1;
+        return deviceResponse("device-fresh");
+      }
+      mintCalls += 1;
+      if (mintCalls === 1) {
+        return jsonResponse(
+          { code: "auth.session_required", message: "Token de autenticação inválido ou expirado." },
+          401,
+        );
+      }
+      return mintResponse("conn-jwt-2");
+    });
+
+    await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt-2");
+
+    expect(registerCalls).toBe(1);
+    expect(mintCalls).toBe(2);
+    expect(getToken()).toBe("device-fresh");
+  });
+
+  it("compat off: register 401 NÃO persiste token e o 401 definitivo do mint é anunciado uma vez", async () => {
+    vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", "off");
+    clearToken();
+    let unauthorizedEvents = 0;
+    const countUnauthorized = () => {
+      unauthorizedEvents += 1;
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, countUnauthorized);
+    try {
+      const unauthorized401 = (): Response =>
+        jsonResponse(
+          { code: "auth.session_required", message: "Token de autenticação inválido ou expirado." },
+          401,
+        );
+      routeFetch(() => unauthorized401());
+
+      await expect(fetchAgentConnectionToken("ws-1", true)).rejects.toMatchObject({ status: 401 });
+
+      expect(getToken()).toBeNull();
+      // Sem revive via promessa in-flight: o próximo mint tenta registrar de
+      // novo em vez de reutilizar um token fantasma.
+      routeFetch((url) =>
+        url.includes(DEVICE_REGISTER_PATH) ? deviceResponse("device-2") : mintResponse("conn-jwt"),
+      );
+      await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+      expect(getToken()).toBe("device-2");
+      expect(unauthorizedEvents).toBe(1);
+    } finally {
+      window.removeEventListener(UNAUTHORIZED_EVENT, countUnauthorized);
+    }
+  });
+});
+
+/**
+ * T04 follow-up (review wave1-fix-pwa): storage indisponível (ex.: Safari
+ * privado — `getItem`/`setItem` lançam). O single-flight só coalesce mints
+ * CONCORRENTES; mints SEQUENCIAIS re-registrariam a cada request porque nada
+ * persiste. O cache em memória vinculado à sessão cobre esse cenário:
+ * storage-first (sempre tenta persistir), memória como fallback verificado.
+ */
+describe("T04 follow-up — storage indisponível: cache em memória vinculado à sessão", () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_API_BASE_URL", ORIGINAL);
+    clearAgentConnectionTokenCache();
+    // Baseline de geração limpa (incrementos são cumulativos).
+    clearAgentSession();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  /** Safari privado: toda leitura/escrita do storage lança. */
+  const breakStorage = (): void => {
+    vi.spyOn(window.localStorage, "getItem").mockImplementation(() => {
+      throw new Error("storage indisponível");
+    });
+    vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
+      throw new Error("storage indisponível");
+    });
+  };
+
+  it("storage quebrado: três mints SEQUENCIAIS ⇒ 1 register + 3 mints com o token em memória", async () => {
+    breakStorage();
+    let registerCalls = 0;
+    routeFetch((url) => {
+      if (url.includes(DEVICE_REGISTER_PATH)) {
+        registerCalls += 1;
+        return deviceResponse("device-memory-only");
+      }
+      return mintResponse("conn-jwt");
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+    }
+
+    expect(registerCalls).toBe(1);
+    expect(callIndexesFor(MINT_PATH)).toHaveLength(3);
+    for (const callIndex of callIndexesFor(MINT_PATH)) {
+      expect(headersAt(callIndex)["x-device-token"]).toBe("device-memory-only");
+    }
+  });
+
+  it("storage quebrado: logout (clearAgentSession) invalida o cache — próximo mint registra de novo", async () => {
+    breakStorage();
+    const issued: string[] = [];
+    routeFetch((url) => {
+      if (url.includes(DEVICE_REGISTER_PATH)) {
+        const token = `device-mem-${issued.length + 1}`;
+        issued.push(token);
+        return deviceResponse(token);
+      }
+      return mintResponse("conn-jwt");
+    });
+
+    await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+    expect(issued).toEqual(["device-mem-1"]);
+
+    // Logout/purge central: o cache em memória cai junto com a sessão.
+    clearAgentSession();
+
+    await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+    expect(issued).toEqual(["device-mem-1", "device-mem-2"]);
+  });
+
+  it("storage quebrado: register 401 não popula o cache e o 401 definitivo é anunciado uma vez", async () => {
+    breakStorage();
+    let unauthorizedEvents = 0;
+    const countUnauthorized = () => {
+      unauthorizedEvents += 1;
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, countUnauthorized);
+    try {
+      const unauthorized401 = (): Response =>
+        jsonResponse(
+          { code: "auth.session_required", message: "Token de autenticação inválido ou expirado." },
+          401,
+        );
+      routeFetch(() => unauthorized401());
+
+      await expect(fetchAgentConnectionToken("ws-1", true)).rejects.toMatchObject({ status: 401 });
+      expect(unauthorizedEvents).toBe(1);
+
+      // Nada foi cacheado: com a sessão restaurada, o próximo mint registra
+      // de novo em vez de reapresentar um device fantasma.
+      let registerCalls = 0;
+      routeFetch((url) => {
+        if (url.includes(DEVICE_REGISTER_PATH)) {
+          registerCalls += 1;
+          return deviceResponse("device-mem-fresh");
+        }
+        return mintResponse("conn-jwt");
+      });
+      await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+      expect(registerCalls).toBe(1);
+    } finally {
+      window.removeEventListener(UNAUTHORIZED_EVENT, countUnauthorized);
+    }
+  });
+});
+
+/**
+ * T04 wave1-fix-pwa-2 (review fix-pwa NOT-RESOLVED, cenário parcial): falha
+ * PARCIAL do storage — token antigo T1 legível, `setItem` lançando. O
+ * `getToken() ?? memória` dá precedência ao T1 obsoleto cuja substituição
+ * falhou: cada mint sequencial reapresenta T1 (401) e re-registra. O fix
+ * distingue o valor persistido substituído-com-falha (`superseded`): só ele
+ * perde para a memória; qualquer outro valor do storage volta a ser
+ * autoridade.
+ */
+describe("T04 wave1-fix-pwa-2 — storage parcialmente falho: obsoleto legível não vence a sessão", () => {
+  const STALE_T1 = "device-stale-T1";
+
+  /** Storage fake controlável: leitura funciona, escrita falha sob demanda. */
+  let fake: Record<string, string>;
+  let writesFail: boolean;
+
+  const mintTokens: string[] = [];
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_API_BASE_URL", ORIGINAL);
+    clearAgentConnectionTokenCache();
+    // Baseline de geração limpa (incrementos são cumulativos).
+    clearAgentSession();
+    fake = { "pi-finance:token": STALE_T1 };
+    writesFail = true;
+    mintTokens.length = 0;
+    vi.spyOn(window.localStorage, "getItem").mockImplementation(
+      (key: string) => fake[key] ?? null,
+    );
+    vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string, value: string) => {
+      if (writesFail) throw new Error("setItem falhando");
+      fake[key] = value;
+    });
+    vi.spyOn(window.localStorage, "removeItem").mockImplementation((key: string) => {
+      delete fake[key];
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const unauthorized401 = (): Response =>
+    jsonResponse(
+      { code: "auth.session_required", message: "Token de autenticação inválido ou expirado." },
+      401,
+    );
+
+  /** Register emite device-reg-<n>; mint nega o T1 obsoleto e aceita o resto. */
+  const routePartialFailure = (registerCalls: { count: number }): void => {
+    fetchMock.mockImplementation(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes(DEVICE_REGISTER_PATH)) {
+        registerCalls.count += 1;
+        return deviceResponse(`device-reg-${registerCalls.count}`);
+      }
+      const presented = ((init?.headers ?? {}) as Record<string, string>)["x-device-token"];
+      mintTokens.push(presented);
+      if (presented === STALE_T1) return unauthorized401();
+      return mintResponse("conn-jwt");
+    });
+  };
+
+  it("T1 legível + setItem falhando: 3 mints SEQUENCIAIS ⇒ 1 register; mints usam o token da sessão (T2), não T1", async () => {
+    const registerCalls = { count: 0 };
+    routePartialFailure(registerCalls);
+
+    for (let i = 0; i < 3; i += 1) {
+      await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+    }
+
+    // Sem storm: um único register para os três mints sequenciais.
+    expect(registerCalls.count).toBe(1);
+    // O T1 obsoleto foi apresentado UMA vez (a sonda inicial, negada com
+    // 401 e recuperada); todos os demais mints levaram o token da sessão.
+    expect(mintTokens.filter((t) => t === STALE_T1)).toHaveLength(1);
+    expect(mintTokens.filter((t) => t === "device-reg-1")).toHaveLength(3);
+  });
+
+  it("convergência legítima: storage volta a ser autoridade; obsoleto posterior não é mascarado", async () => {
+    const registerCalls = { count: 0 };
+    routePartialFailure(registerCalls);
+
+    // Fase 1 — supersede: T1 negado uma vez, register emite T2-em-memória.
+    await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+    expect(registerCalls.count).toBe(1);
+    expect(mintTokens).toEqual([STALE_T1, "device-reg-1"]);
+
+    // Fase 2 — convergência: escrita volta a funcionar e o storage passa a
+    // conter exatamente o token da sessão (ex.: persistência tardia convergiu).
+    writesFail = false;
+    setToken("device-reg-1");
+    await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+    expect(registerCalls.count).toBe(1);
+    expect(mintTokens[mintTokens.length - 1]).toBe("device-reg-1");
+
+    // Fase 3 — mudança externa legítima: novo login persiste outro device.
+    setToken("device-external-T3");
+    await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+    expect(registerCalls.count).toBe(1);
+    expect(mintTokens[mintTokens.length - 1]).toBe("device-external-T3");
+
+    // Fase 4 — o storage volta ao T1: sem estado de supersede pendente, T1 é
+    // autoridade (apresentado de novo), negado, e o recovery registra UMA vez.
+    fake["pi-finance:token"] = STALE_T1;
+    await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+    expect(registerCalls.count).toBe(2);
+    expect(mintTokens[mintTokens.length - 2]).toBe(STALE_T1);
+    expect(mintTokens[mintTokens.length - 1]).toBe("device-reg-2");
+  });
+
+  it("limpeza: clearAgentSession após supersede ⇒ próximo mint re-registra EXATAMENTE 1 vez (sem revive)", async () => {
+    const registerCalls = { count: 0 };
+    routePartialFailure(registerCalls);
+
+    await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+    expect(registerCalls.count).toBe(1);
+
+    // Logout/purge central limpa memória E supersede: nada revive.
+    clearAgentSession();
+
+    await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
+    expect(registerCalls.count).toBe(2);
+    // Reapresentou o T1 do storage (autoridade), negado, recuperado com T2-novo.
+    expect(mintTokens.filter((t) => t === STALE_T1)).toHaveLength(2);
+    expect(mintTokens[mintTokens.length - 1]).toBe("device-reg-2");
+  });
+});
