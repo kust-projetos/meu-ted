@@ -39,6 +39,10 @@ export function AuthGate({ children }: Props) {
   // (session-authority is a plain setter), so this AuthGate-local counter is
   // the documented equivalent.
   const probeEpochRef = useRef(0);
+  // T07c-F2R2-F3-F1: purge-in-flight guard. Set synchronously at expiry
+  // entry, cleared when the purge settles — new reprobos are ineligible
+  // until the purge completes.
+  const purgeInFlightRef = useRef(false);
   const [session, setSessionValue] = useState<SessionSnapshot>({ status: "unknown" });
   const publishSession = useCallback((next: SessionSnapshot) => {
     probeEpochRef.current += 1;
@@ -357,15 +361,30 @@ export function AuthGate({ children }: Props) {
   }, [bindPrincipal]);
 
   const expireSession = useCallback(async (message?: string) => {
-    // 401/403: explicit server rejection → purge everything offline (V1/V2/V3
-    // snapshots, tokens, profile, offline identity + stamp) + login. Never
-    // offline mode on this path (AUTH-T04/T05, INV-05).
-    await clearSensitiveSession({
-      clearToken: true,
-      clearV1Snapshot: true,
-      clearProfile: true,
-      clearOfflineIdentity: true,
-    });
+    // T07c-F2R2-F3-F1: synchronous invalidation at expiry ENTRY. The purge
+    // below awaits IndexedDB; without this, an in-flight reprobe resolves
+    // mid-purge while the authority is still `unreachable` and the epoch is
+    // unchanged, restoring authenticated/principal over the purge. Bumping
+    // here discards it; the post-publish bump geometry is unchanged (the
+    // final publish still invalidates anything started after entry).
+    probeEpochRef.current += 1;
+    // Purge-in-flight guard: new reprobos are ineligible until the purge
+    // completes, and a probe racing the purge cannot resume into a
+    // half-torn-down identity (its epoch is already stale).
+    purgeInFlightRef.current = true;
+    try {
+      // 401/403: explicit server rejection → purge everything offline (V1/V2/V3
+      // snapshots, tokens, profile, offline identity + stamp) + login. Never
+      // offline mode on this path (AUTH-T04/T05, INV-05).
+      await clearSensitiveSession({
+        clearToken: true,
+        clearV1Snapshot: true,
+        clearProfile: true,
+        clearOfflineIdentity: true,
+      });
+    } finally {
+      purgeInFlightRef.current = false;
+    }
     // 401/403: explicit server rejection → unauthenticated (purge + login).
     publishSession({ status: "unauthenticated" });
     setError(message ?? "Sessão expirada. Faça login novamente.");
@@ -399,6 +418,10 @@ export function AuthGate({ children }: Props) {
     let inFlight = false;
     const onOnline = () => {
       if (cancelled || inFlight) return;
+      // Purge in flight (expiry entry ran, purge not settled): new reprobos
+      // are ineligible until it completes — the epoch bump at entry already
+      // retired any probe started before it.
+      if (purgeInFlightRef.current) return;
       // Only an unreachable authority is eligible: authenticated stays put
       // (no-op) and unauthenticated stays on login (login re-probes
       // explicitly on submit).

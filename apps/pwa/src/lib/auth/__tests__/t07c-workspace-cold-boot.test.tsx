@@ -90,6 +90,18 @@ const v3Gate = vi.hoisted(() => ({
   resolve: null as null | (() => void),
   entered: false,
 }));
+/**
+ * T07c-F2R2-F3-F1: controllable gate on the V3 snapshot delete. Lets a test
+ * hold `clearSensitiveSession`'s async purge pending while a stale probe
+ * response arrives — proving the expiry-entry invalidation. Default:
+ * passthrough (the delete still runs after release, so the purge is real).
+ */
+const purgeGate = vi.hoisted(() => ({
+  armed: false,
+  entered: false,
+  promise: null as null | Promise<void>,
+  resolve: null as null | (() => void),
+}));
 vi.mock("@/lib/state/snapshot-db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/state/snapshot-db")>();
   return {
@@ -100,6 +112,13 @@ vi.mock("@/lib/state/snapshot-db", async (importOriginal) => {
         return v3Gate.deferred.then(() => actual.getV3OfflineLockState(...args));
       }
       return actual.getV3OfflineLockState(...args);
+    },
+    deleteV3Snapshot: () => {
+      if (purgeGate.armed && purgeGate.promise) {
+        purgeGate.entered = true;
+        return purgeGate.promise.then(() => actual.deleteV3Snapshot());
+      }
+      return actual.deleteV3Snapshot();
     },
   };
 });
@@ -116,6 +135,22 @@ function releaseV3Gate() {
   v3Gate.resolve?.();
   v3Gate.deferred = null;
   v3Gate.resolve = null;
+}
+function armPurgeGate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  purgeGate.promise = promise;
+  purgeGate.resolve = resolve;
+  purgeGate.armed = true;
+  purgeGate.entered = false;
+}
+function releasePurgeGate() {
+  purgeGate.armed = false;
+  purgeGate.resolve?.();
+  purgeGate.promise = null;
+  purgeGate.resolve = null;
 }
 
 /**
@@ -209,6 +244,8 @@ beforeEach(async () => {
   // stale-guarded and commits nothing.
   releaseV3Gate();
   v3Gate.entered = false;
+  releasePurgeGate();
+  purgeGate.entered = false;
   // Reset the probe transport and (re)install the routing apiFetch impl —
   // set after clearAllMocks so it always survives it.
   transport.sessionProbe = "unreachable";
@@ -820,5 +857,51 @@ describe("T07c-F2R2-F2: rejeição explícita no reprobe segue o caminho canôni
     expect(getSessionStatus().status).toBe("unreachable");
     expect(screen.getByTestId("is-offline-read-only")).toHaveTextContent("true");
     expect(getOfflinePrincipalId()).toBe(PRINCIPAL);
+  });
+});
+
+describe("T07c-F2R2-F3-F1: resposta do probe durante o purge pendente", () => {
+  it("resposta válida com purge V3 pendente: sem restore de authenticated/principal", async () => {
+    setOfflinePrincipalId(PRINCIPAL);
+    setOfflineWorkspaceId(WS_UUID);
+    await seedValidV3();
+    api.fetchWorkspaces.mockRejectedValue(new Error("fetch failed"));
+
+    render(
+      <AuthGate>
+        <SessionControls />
+        <WorkspaceProvider>
+          <Probe />
+        </WorkspaceProvider>
+      </AuthGate>,
+    );
+    expect(await screen.findByTestId("is-offline-read-only")).toHaveTextContent("true");
+
+    // Reprobe pende; expira; o purge V3 pende; SÓ ENTÃO a resposta chega.
+    armProbeGate();
+    window.dispatchEvent(new Event("online"));
+    await waitFor(() => expect(transport.probeGateEntered).toBe(true));
+    armPurgeGate();
+    fireEvent.click(screen.getByRole("button", { name: "expire-session" }));
+    await waitFor(() => expect(purgeGate.entered).toBe(true));
+
+    // Mid-purge: a resposta tardia (usuário válido!) não restaura nada —
+    // autoridade segue unreachable, principal segue purgado.
+    await act(async () => {
+      releaseProbeGate(userProbeBody(PRINCIPAL));
+    });
+    expect(getSessionStatus().status).toBe("unreachable");
+    expect(getOfflinePrincipalId()).toBeNull();
+
+    // Purge completa: login canônico, sem re-bind da identidade antiga.
+    await act(async () => {
+      releasePurgeGate();
+    });
+    await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
+    expect(getSessionStatus().status).toBe("unauthenticated");
+    expect(getOfflinePrincipalId()).toBeNull();
+    await waitFor(async () => {
+      expect(await resolveUnreachableOfflineRoute(PRINCIPAL, WS_UUID)).toBe("login");
+    });
   });
 });

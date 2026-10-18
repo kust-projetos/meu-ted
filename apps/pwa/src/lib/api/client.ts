@@ -37,7 +37,7 @@ import {
   getToken as getStoredDeviceToken,
 } from "@/lib/auth/token-store";
 import { setOfflineSubjectId } from "@/lib/auth/offline-subject";
-import { setOfflineWorkspaceId, noteAuthoritativeRevocation } from "@/lib/auth/offline-identity";
+import { setOfflineWorkspaceId, noteAuthoritativeRevocation, getOfflineGeneration } from "@/lib/auth/offline-identity";
 import { isMembershipRevocation } from "@/lib/auth/auth-state-machine";
 import { noteLegacyAuthUsage } from "@/lib/auth/legacy-usage";
 
@@ -273,6 +273,17 @@ export async function apiFetch<T>(
     skipUnauthorizedEvent = false,
     ...rest
   } = options;
+  // T07c-F2R2-F3-F2: generation-tagged rejection side effects (T07a
+  // LivenessGuard generalized). The offline generation advances
+  // synchronously at every teardown/bind entry, so capturing it here ties
+  // this request to the session it started under. A mismatch at rejection
+  // time means the response belongs to a superseded session: the global
+  // side effects below (expiry event, revocation purge + event) are skipped
+  // while the ApiError still returns to the caller (whose own
+  // epoch/generation guards then discard it). Current-generation responses
+  // keep byte-identical behavior. No parallel generation source is
+  // invented: this is the source the round-1 revocation work already reads.
+  const requestGeneration = getOfflineGeneration();
   // T2.5 (ADR-015 Opção C, session-first): the device token is attached
   // ONLY when passed explicitly (scoped device flows). Normal calls
   // authenticate via the cookie (+ compat session bearer) and MUST NOT
@@ -337,7 +348,9 @@ export async function apiFetch<T>(
       // A caller that opted out owns the recovery (see `skipUnauthorizedEvent`):
       // the refused connection is still torn down, but the session-expiry
       // signal is not broadcast behind its back.
-      if (!skipUnauthorizedEvent) announceUnauthorized();
+      // T07c-F2R2-F3-F2: plus the generation gate — a stale 401 (teardown or
+      // re-bind landed mid-flight) must not expire the current session.
+      if (!skipUnauthorizedEvent && requestGeneration === getOfflineGeneration()) announceUnauthorized();
       throw new ApiError(
         401,
         (body.code as string) ?? "auth.error",
@@ -358,7 +371,10 @@ export async function apiFetch<T>(
       // State machine (SPEC §12.1): 403 is an explicit server rejection →
       // unauthenticated, never offline mode. Revocation-coded 403s additionally
       // purge the offline snapshot (D10) and notify listeners.
-      if (isMembershipRevocation(403, body.code as string | undefined)) {
+      // T07c-F2R2-F3-F2: generation-gated like the 401 path — a stale
+      // revocation must not purge the current session's identity/snapshots
+      // nor notify listeners; the ApiError below still reaches the caller.
+      if (isMembershipRevocation(403, body.code as string | undefined) && requestGeneration === getOfflineGeneration()) {
         closeAllSockets("workspace access revoked");
         purgeOfflineSnapshotOnRevocation();
         if (typeof window !== "undefined") {
@@ -409,7 +425,9 @@ export async function apiFetch<T>(
         if (observedAuthStatus === 401) {
           closeAllSockets("session expired");
           // Same opt-out as the body-parsed path above (see the option docs).
-          if (!skipUnauthorizedEvent) announceUnauthorized();
+          // T07c-F2R2-F3-F2: same generation gate — a stale timeout on a
+          // superseded session must not expire the current one.
+          if (!skipUnauthorizedEvent && requestGeneration === getOfflineGeneration()) announceUnauthorized();
           reject(new ApiError(401, "auth.error", "Token inválido"));
           return;
         }
