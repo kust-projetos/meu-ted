@@ -69,6 +69,23 @@ function getEnv(db,key){
     req.onerror=function(){res(null)};
   });
 }
+/**
+ * Strict V3 read (three-state): resolves {present,env} on success — genuine
+ * absence is {present:false,env:null} — and REJECTS on any read/open error
+ * (thrown exception or req.onerror). A failed read NEVER coerces to "absent":
+ * falha não comprova ausência (main locks instead of releasing V2).
+ * The error event is not swallowed: no preventDefault/stopPropagation, the
+ * original error (or equivalent) propagates to the caller.
+ */
+function getEnvStrict(db,key){
+  return new Promise(function(res,rej){
+    var req;
+    try{req=db.transaction(STORE,"readonly").objectStore(STORE).get(key)}
+    catch(e){rej(e);return}
+    req.onsuccess=function(){var v=req.result||null;res({present:v!==null,env:v})};
+    req.onerror=function(){rej(req.error||new Error("v3-read-error"))};
+  });
+}
 function ls(k){
   try{return window.localStorage?window.localStorage.getItem(k):null}
   catch(e){return null}
@@ -136,12 +153,18 @@ async function main(){
   try{db=await o()}catch{document.getElementById("content").innerHTML='<div class="empty">Snapshot não disponível</div>';return}
   // V3 single-slot first: only the online-linked principal/workspace renders.
   // The SAME IndexedDB connection stays open through the entire V3→V2
-  // decision; it is closed once selection completes (see getEnv).
-  var v3=null,env=null;
+  // decision; it is closed exactly once when selection completes (finally).
+  // Three-state V3 read: genuine absence (present:false) is the ONLY state
+  // that enables the V2 fallback — a read ERROR locks (no render, no V2).
+  var v3=null,env=null,v3Verified=false;
   try{
-    v3=await getEnv(db,V3_KEY);
-    if(!v3)env=await getEnv(db,V2_KEY);
-  }finally{try{db.close()}catch(e){}}
+    var got=await getEnvStrict(db,V3_KEY);
+    v3Verified=true;
+    if(got.present)v3=got.env;
+    else env=await getEnv(db,V2_KEY);
+  }catch(e){v3Verified=false}
+  finally{try{db.close()}catch(e){}}
+  if(!v3Verified){lock();return}
   if(v3){
     if(v3Ok(v3,ls(PRINCIPAL_KEY),ls(WORKSPACE_KEY))){render(v3,route,title,dom);return}
     lock();return;

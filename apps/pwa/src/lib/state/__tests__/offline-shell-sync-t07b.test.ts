@@ -222,6 +222,14 @@ describe("T07b-R1 execução real do offline-shell.js (findings do review)", () 
 
   const contentText = () => document.getElementById("content")?.textContent ?? "";
 
+  async function openProbeDb(): Promise<IDBDatabase> {
+    return new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open("pi-finance-snapshot", 1);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   function v2Envelope(overrides: Record<string, unknown> = {}) {
     return {
       domains: {
@@ -301,5 +309,56 @@ describe("T07b-R1 execução real do offline-shell.js (findings do review)", () 
     expect(errors).toEqual([]);
     expect(contentText()).toContain("Mercado V3");
     expect(contentText()).not.toContain(LOCK_TEXT);
+  });
+
+  it("f) falha ao ABRIR/executar a leitura V3 → lock, sem fallback V2, close único", async () => {
+    await seedStore({ v2: v2Envelope() });
+    setShellIdentity(USER_A, WS_X, SUBJECT_S);
+    // Fault injection na camada de leitura: a primeira transação (a V3) lança.
+    const probe = await openProbeDb();
+    const dbProto = Object.getPrototypeOf(probe) as IDBDatabase;
+    probe.close();
+    const closeSpy = vi.spyOn(dbProto, "close");
+    const txSpy = vi.spyOn(dbProto, "transaction").mockImplementationOnce(() => {
+      throw new Error("injected-v3-open-failure");
+    });
+    const errors = await runShell("/");
+    expect(errors).toEqual([]);
+    expect(contentText()).toContain(LOCK_TEXT);
+    expect(contentText()).not.toContain("Conta V2 Legada");
+    expect(txSpy.mock.calls.length).toBe(1); // V2 nunca tentado
+    expect(closeSpy.mock.calls.length).toBe(1); // close exatamente uma vez
+  });
+
+  it("g) req.onerror na leitura V3 → lock, V2 nunca lido", async () => {
+    await seedStore({ v2: v2Envelope() });
+    setShellIdentity(USER_A, WS_X, SUBJECT_S);
+    // Fault injection: só o get da chave "v3" dispara onerror, como um
+    // request real falho faria; o get V2 segue o caminho real.
+    const probe = await openProbeDb();
+    const tx0 = probe.transaction("snapshots", "readonly");
+    const storeProto = Object.getPrototypeOf(
+      tx0.objectStore("snapshots"),
+    ) as IDBObjectStore;
+    probe.close();
+    const origGet = storeProto.get;
+    const getSpy = vi.spyOn(storeProto, "get").mockImplementation(function (
+      this: IDBObjectStore,
+      ...args: any[]
+    ) {
+      if (args[0] === "v3") {
+        const stub = {} as any;
+        setTimeout(() => {
+          stub.onerror?.(new Event("error"));
+        }, 0);
+        return stub as IDBRequest;
+      }
+      return (origGet as (...a: any[]) => IDBRequest).apply(this, args);
+    });
+    const errors = await runShell("/");
+    expect(errors).toEqual([]);
+    expect(contentText()).toContain(LOCK_TEXT);
+    expect(contentText()).not.toContain("Conta V2 Legada");
+    expect(getSpy.mock.calls.map((c) => c[0])).toEqual(["v3"]); // V2 nunca lido
   });
 });
