@@ -266,6 +266,53 @@ test('runbook documents smoke before and rollback after a release', () => {
   assert.match(runbook, /same read-only production smoke workflow/i);
 });
 
+// ── T11c (GOV-05): reproducible smoke environment ───────────────────────────
+// The manual production-smoke workflow must pin its own toolchain (explicit
+// pnpm + Node, no volta), install the Playwright Chromium browser, and
+// validate the dispatch input URL through the pinned-origin helper BEFORE
+// the smoke run consumes it. Textual on purpose (no YAML dependency).
+
+test('production smoke pins explicit pnpm + Node setup and drops volta', () => {
+  assert.doesNotMatch(workflow, /volta-cli\/action/);
+  assert.match(workflow, /pnpm\/action-setup@[0-9a-f]{40}.*#\s*v\d+\.\d+\.\d+/);
+  assert.match(workflow, /actions\/setup-node@[0-9a-f]{40}.*#\s*v\d+\.\d+\.\d+/);
+  assert.match(workflow, /node-version:\s*22/);
+  assert.match(workflow, /version:\s*10/);
+});
+
+test('production smoke installs the Playwright Chromium browser', () => {
+  assert.match(workflow, /playwright install --with-deps chromium/);
+});
+
+test('production smoke validates the dispatch URL via the pinned-origin helper before the smoke run', () => {
+  assert.ok(
+    workflow.includes('validate-deploy-origins.mjs --name PRODUCTION_SMOKE_URL --expect pwa --env-file'),
+    'smoke must validate PRODUCTION_SMOKE_URL via the helper with --expect pwa',
+  );
+  const validateAt = workflow.indexOf('--name PRODUCTION_SMOKE_URL');
+  const smokeAt = workflow.indexOf('--project=production-smoke');
+  assert.ok(smokeAt !== -1, 'expected the production-smoke playwright invocation');
+  assert.ok(validateAt !== -1 && validateAt < smokeAt, 'validation must precede the smoke run');
+});
+
+test('production smoke never interpolates the raw dispatch input into run: script text', () => {
+  const hits = workflow.split('\n').filter((line) => line.includes('inputs.production_url'));
+  assert.equal(hits.length, 1, `raw input must enter once, via env: mapping (got ${hits.length})`);
+  assert.match(hits[0], /PRODUCTION_SMOKE_URL:\s*\$\{\{\s*inputs\.production_url\s*\}\}/);
+  assert.match(workflow, /E2E_PRODUCTION_URL:\s*\$\{\{\s*env\.PRODUCTION_SMOKE_URL\s*\}\}/);
+});
+
+test('production smoke stays manual-only (no live-deploy trigger)', () => {
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.doesNotMatch(workflow, /workflow_run:/);
+});
+
+test('production smoke runs no fixture server and only the read-only project without retries', () => {
+  assert.doesNotMatch(workflow, /next start|standalone-server|webServer/);
+  assert.match(workflow, /--project=production-smoke/);
+  assert.match(workflow, /--retries=0/);
+});
+
 test('release identity is exposed by all three runtimes (V4.1 Task 9.9)', () => {
   assert.match(buildInfoRoute, /build-info/);
   assert.match(buildInfoRoute, /getBuildInfo/);
