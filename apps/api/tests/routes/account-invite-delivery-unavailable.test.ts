@@ -192,7 +192,34 @@ describe('account invite delivery unavailable (API-03)', () => {
 
   it('pins the active bootstrap fallback as typed InviteError 503 (not generic Error)', () => {
     const source = readFileSync(new URL('../../src/server/index.ts', import.meta.url), 'utf8');
-    expect(source).not.toContain('throw new Error("invite delivery is not configured")');
-    expect(source).toContain('invite.delivery_unavailable');
+    // Anchor to the ACTIVE `deliver` fallback wired into the bootstrap
+    // (`deliver: inviteDelivery ?? (async () => { ... })`). A global
+    // `toContain('invite.delivery_unavailable')` anywhere in the file would
+    // stay green under a 503->500 mutation of this block, so every assertion
+    // below targets the extracted block text, not the whole file.
+    const anchor = 'deliver: inviteDelivery ??';
+    const anchorIndex = source.indexOf(anchor);
+    expect(anchorIndex).toBeGreaterThanOrEqual(0);
+    const block = source.slice(anchorIndex, anchorIndex + 600);
+    expect(block).toContain('async () => {');
+    const isTypedFallback = (text: string): boolean =>
+      text.includes('InviteError') &&
+      text.includes('invite.delivery_unavailable') &&
+      text.includes('503') &&
+      !text.includes('new Error(');
+    // (a)-(d) jointly on the SAME active block.
+    expect(block).toContain('InviteError');
+    expect(block).toContain('invite.delivery_unavailable');
+    expect(block).toContain('503');
+    expect(block).not.toContain('new Error(');
+    expect(isTypedFallback(block)).toBe(true);
+    // In-memory mutation proof (no source file touched): the same predicate
+    // must reject a 503->500 regression and an InviteError->Error regression.
+    expect(isTypedFallback(block.replace('503', '500'))).toBe(false);
+    expect(isTypedFallback(block.replace('InviteError', 'Error'))).toBe(false);
+    // NOTE: `src/server/index.ts` builds the full production server
+    // (pool/env/config), so it is not importable as a unit; the HTTP cases
+    // above exercise the route contract with an injected service while this
+    // textual guard pins the real bootstrap wiring.
   });
 });
