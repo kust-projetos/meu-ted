@@ -62,7 +62,8 @@ describe('T12f — famílias com trim: só "1" aparado liga', () => {
 
     it(`${name}: ausente/não-string nunca liga e nunca lança (fail-closed total)`, () => {
       expect(parse(undefined)).toBe(false);
-      expect(parse(null)).toBe(false);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(parse(null as any)).toBe(false);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect(parse('não-objeto' as any)).toBe(false);
       for (const bad of [1, true, {}, [], 0] as const) {
