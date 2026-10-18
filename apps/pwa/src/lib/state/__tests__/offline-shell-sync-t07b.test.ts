@@ -343,15 +343,18 @@ describe("T07b-R1 execução real do offline-shell.js (findings do review)", () 
     probe.close();
     const origOpenCursor = storeProto.openCursor;
     const cursorSpy = vi.spyOn(storeProto, "openCursor").mockImplementation(
-      function (this: IDBObjectStore, ...args: any[]) {
+      function (
+        this: IDBObjectStore,
+        ...args: Parameters<IDBObjectStore["openCursor"]>
+      ) {
         if (args[0] === "v3") {
-          const stub = {} as any;
+          const stub: { onerror?: ((ev: Event) => void) | null } = {};
           setTimeout(() => {
             stub.onerror?.(new Event("error"));
           }, 0);
-          return stub as IDBRequest;
+          return stub as unknown as IDBRequest;
         }
-        return (origOpenCursor as (...a: any[]) => IDBRequest).apply(this, args);
+        return origOpenCursor.apply(this, args);
       },
     );
     const getSpy = vi.spyOn(storeProto, "get");

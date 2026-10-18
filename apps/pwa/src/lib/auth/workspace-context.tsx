@@ -314,6 +314,24 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const needsRevalidationRef = useRef(false);
   const { session } = useSession();
 
+  // T07c-F1: single-flight revalidation scheduler shared by the
+  // authority-transition effect and the mid-await authority-change path.
+  // Consumes the armed flag, so concurrent triggers collapse into one
+  // refresh; the load generation guards application. Never loops: the flag
+  // is only re-armed by parking in offline/blocked state.
+  // Declared BEFORE applyLoadFailure (its caller below) to satisfy
+  // declaration order; it reaches the refresh declared further below through
+  // refreshWorkspacesRef, keeping the applyLoadFailure <-> refreshWorkspaces
+  // cycle broken without changing the single-flight semantics.
+  const refreshWorkspacesRef = useRef<() => Promise<void>>(async () => {});
+  const scheduleRevalidation = useCallback(() => {
+    if (!needsRevalidationRef.current) return;
+    needsRevalidationRef.current = false;
+    void refreshWorkspacesRef.current().catch(() => {
+      /* the failure is modeled in context error state by the refresh itself */
+    });
+  }, []);
+
   /**
    * T07c shared failure path for boot + refreshWorkspaces. Auth failures
    * keep the fail-closed purge (T07a single revocation signal untouched);
@@ -369,7 +387,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         // belongs to a superseded authority and must never flip offline
         // state. Fail closed on cleared flags; landing off `unreachable`
         // revalidates directly (bounded single flight via
-        // scheduleRevalidation — declared below, resolved at call time; the
+        // scheduleRevalidation — declared above; the
         // effect may already have consumed the armed flag while we awaited).
         const liveAuthority = getSessionStatus().status;
         if (liveAuthority !== "unreachable") {
@@ -393,7 +411,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setIsAuthError(auth);
       setError(cause instanceof Error ? cause.message : "Não foi possível carregar os workspaces.");
     },
-    [],
+    [scheduleRevalidation],
   );
 
   const refreshWorkspaces = useCallback(async () => {
@@ -455,6 +473,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [applyLoadFailure]);
 
+  // Keeps the scheduler's indirection pointed at the latest refresh. Runs
+  // before the authority-transition effect below on every render, so any
+  // scheduleRevalidation call always reaches a mounted refresh.
+  useEffect(() => {
+    refreshWorkspacesRef.current = refreshWorkspaces;
+  }, [refreshWorkspaces]);
+
   useEffect(() => {
     if (!isApiConfigured()) {
       return;
@@ -508,19 +533,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       clearActiveWorkspaceId();
     };
   }, [applyLoadFailure]);
-
-  // T07c-F1: single-flight revalidation scheduler shared by the
-  // authority-transition effect and the mid-await authority-change path.
-  // Consumes the armed flag, so concurrent triggers collapse into one
-  // refresh; the load generation guards application. Never loops: the flag
-  // is only re-armed by parking in offline/blocked state.
-  const scheduleRevalidation = useCallback(() => {
-    if (!needsRevalidationRef.current) return;
-    needsRevalidationRef.current = false;
-    void refreshWorkspaces().catch(() => {
-      /* the failure is modeled in context error state by the refresh itself */
-    });
-  }, [refreshWorkspaces]);
 
   // T07c (+F1): reconnection revalidates membership/lifecycle before
   // mutations reopen. Fires on a transition INTO an authenticated authority
