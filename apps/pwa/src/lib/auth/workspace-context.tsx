@@ -9,7 +9,10 @@ import {
   readActiveWorkspacePreference,
   writeActiveWorkspacePreference,
 } from "./active-workspace-preference";
-import { getOfflinePrincipalId, clearOfflineWorkspaceBinding } from "./offline-identity";
+import { getOfflinePrincipalId, getOfflineWorkspaceId, clearOfflineWorkspaceBinding } from "./offline-identity";
+import { getSessionStatus } from "./session-authority";
+import { useSession } from "./session-context";
+import { getV3OfflineLockState } from "@/lib/state/snapshot-db";
 import {
   acceptOwnershipTransfer,
   acceptWorkspaceInvite,
@@ -121,6 +124,20 @@ export interface WorkspaceContextValue {
   ownershipTransfersLoading: boolean;
   error: string | null;
   isAuthError?: boolean;
+  /**
+   * T07c — explicit offline workspace state. `isOfflineReadOnly` is true
+   * only when a load failed on the network while the session authority is
+   * `unreachable` AND the V3 envelope for the bound (principal, workspace)
+   * identity is valid and within TTL: reads stay restricted to the linked
+   * workspace, mutations stay closed until a server revalidation.
+   * `offlineWorkspaceId` is the linkage UUID only — membership, role, and
+   * status are never synthesized from a locally stored id. When offline
+   * reads are closed, `offlineBlockedReason` names the explicit blocked
+   * cause instead of a silent read-heavy fallback.
+   */
+  isOfflineReadOnly: boolean;
+  offlineWorkspaceId: string | null;
+  offlineBlockedReason: OfflineWorkspaceBlockReason | null;
   selectWorkspace: (workspaceId: string) => Promise<void>;
   refreshWorkspaces: () => Promise<void>;
   refreshMembers: () => Promise<void>;
@@ -195,6 +212,57 @@ function persistActiveWorkspacePreference(workspaceId: string | undefined): void
   }
 }
 
+/**
+ * T07c — explicit blocked causes for the offline workspace route. `revoked`
+ * is the single server-confirmed membership revocation
+ * (403 auth.workspace_forbidden, T07a semantics); the offline lock states
+ * map to `no-binding` (no usable identity linkage), `no-snapshot` (nothing
+ * readable for this binding), and `expired` (a stale envelope, never data).
+ */
+export type OfflineWorkspaceBlockReason =
+  | "no-binding"
+  | "no-snapshot"
+  | "expired"
+  | "revoked";
+
+/**
+ * Explicit offline copy: announces the linked-workspace read-only state
+ * without mimicking any auth signal (it must never contain the literals
+ * WorkspaceSwitcher classifies as authorization errors).
+ */
+export const OFFLINE_WORKSPACE_READONLY_MESSAGE =
+  "Sem conexão — dados locais do workspace vinculado (somente leitura).";
+
+/**
+ * Evaluate the offline workspace route for the current session authority
+ * and bound identity. Returns null when the offline route does not apply
+ * (any non-unreachable authority — explicit rejections purge + login and
+ * never land here — or an evaluation failure, which keeps the generic
+ * error path). Never synthesizes membership: the read-only mode carries
+ * the linkage UUID only, never a role/status.
+ */
+async function evaluateOfflineWorkspaceState(): Promise<
+  | { mode: "offline-read-only"; workspaceId: string }
+  | { mode: "blocked"; reason: Exclude<OfflineWorkspaceBlockReason, "revoked"> }
+  | null
+> {
+  if (getSessionStatus().status !== "unreachable") return null;
+  const principalId = getOfflinePrincipalId();
+  const workspaceId = getOfflineWorkspaceId();
+  if (!principalId || !workspaceId) return { mode: "blocked", reason: "no-binding" };
+  let lock;
+  try {
+    lock = await getV3OfflineLockState(principalId, workspaceId);
+  } catch {
+    return null;
+  }
+  if (lock.state === "ok") return { mode: "offline-read-only", workspaceId };
+  if (lock.state === "locked") {
+    return { mode: "blocked", reason: lock.reason === "expired" ? "expired" : "no-binding" };
+  }
+  return { mode: "blocked", reason: "no-snapshot" };
+}
+
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>(() =>
     isApiConfigured() ? [] : [MOCK_DEFAULT_WORKSPACE],
@@ -233,6 +301,77 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [ownershipTransfersLoading, setOwnershipTransfersLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAuthError, setIsAuthError] = useState(false);
+  const [isOfflineReadOnly, setIsOfflineReadOnly] = useState(false);
+  const [offlineWorkspaceId, setOfflineWorkspaceId] = useState<string | null>(null);
+  const [offlineBlockedReason, setOfflineBlockedReason] =
+    useState<OfflineWorkspaceBlockReason | null>(null);
+  /**
+   * T07c: a load parked the provider in offline/blocked state — the next
+   * transition INTO an authenticated authority must revalidate
+   * membership/lifecycle server-side before mutations reopen. Consumed
+   * before the refresh so a failed revalidation never loops.
+   */
+  const needsRevalidationRef = useRef(false);
+  const { session } = useSession();
+
+  /**
+   * T07c shared failure path for boot + refreshWorkspaces. Auth failures
+   * keep the fail-closed purge (T07a single revocation signal untouched);
+   * non-auth failures consult the offline route when the authority is
+   * unreachable. Runs synchronously through the purge; the offline
+   * evaluation is the only awaited gap, re-validated for staleness.
+   */
+  const applyLoadFailure = useCallback(
+    async (cause: unknown, isStale: () => boolean): Promise<void> => {
+      const auth = isAuthFailure(cause);
+      if (auth) {
+        // Explicit auth/membership failure (401/403): the previously
+        // validated active workspace is no longer server-confirmed under
+        // this principal — fail closed instead of preserving it. Non-auth
+        // network failures keep the last validated selection below.
+        activeWorkspaceIdRef.current = undefined;
+        setActiveWorkspaceIdState(undefined);
+        clearActiveWorkspaceId();
+        persistActiveWorkspacePreference(undefined);
+        try {
+          clearOfflineWorkspaceBinding();
+        } catch {
+          /* noop */
+        }
+        // T07c: the server-confirmed revocation is a named blocked cause; a
+        // 401 session expiry stays modeled by isAuthError alone (never
+        // mislabeled as a membership revocation).
+        const revoked =
+          isMembershipRevocation(getFailureStatus(cause) ?? -1, getFailureCode(cause)) ||
+          (cause instanceof Error &&
+            cause.message.toLowerCase().includes("auth.workspace_forbidden"));
+        setIsOfflineReadOnly(false);
+        setOfflineWorkspaceId(null);
+        setOfflineBlockedReason(revoked ? "revoked" : null);
+      } else {
+        const offline = await evaluateOfflineWorkspaceState();
+        if (isStale()) return;
+        if (offline?.mode === "offline-read-only") {
+          setIsOfflineReadOnly(true);
+          setOfflineWorkspaceId(offline.workspaceId);
+          setOfflineBlockedReason(null);
+          needsRevalidationRef.current = true;
+          setIsAuthError(false);
+          setError(OFFLINE_WORKSPACE_READONLY_MESSAGE);
+          return;
+        }
+        if (offline) {
+          setIsOfflineReadOnly(false);
+          setOfflineWorkspaceId(null);
+          setOfflineBlockedReason(offline.reason);
+          needsRevalidationRef.current = true;
+        }
+      }
+      setIsAuthError(auth);
+      setError(cause instanceof Error ? cause.message : "Não foi possível carregar os workspaces.");
+    },
+    [],
+  );
 
   const refreshWorkspaces = useCallback(async () => {
     if (!isApiConfigured()) {
@@ -255,6 +394,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (isStale()) return;
       setError(null);
       setIsAuthError(false);
+      setIsOfflineReadOnly(false);
+      setOfflineWorkspaceId(null);
+      setOfflineBlockedReason(null);
+      needsRevalidationRef.current = false;
       const current = activeWorkspaceIdRef.current;
       const selected = resolveActiveWorkspaceId(next, current, getOfflinePrincipalId());
       if (current && selected !== current) {
@@ -279,31 +422,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       persistActiveWorkspacePreference(selected);
     } catch (cause) {
       if (isStale()) return;
-      const auth = isAuthFailure(cause);
-      if (auth) {
-        // Explicit auth/membership failure (401/403): the previously
-        // validated active workspace is no longer server-confirmed under
-        // this principal — fail closed instead of preserving it. Non-auth
-        // network failures keep the last validated selection below.
-        activeWorkspaceIdRef.current = undefined;
-        setActiveWorkspaceIdState(undefined);
-        clearActiveWorkspaceId();
-        persistActiveWorkspacePreference(undefined);
-        try {
-          clearOfflineWorkspaceBinding();
-        } catch {
-          /* noop */
-        }
-      }
-      setIsAuthError(auth);
-      setError(cause instanceof Error ? cause.message : "Não foi possível carregar os workspaces.");
+      await applyLoadFailure(cause, isStale);
+      if (isStale()) return;
       throw cause;
     } finally {
       // Identity-free spinner reset: a principal switch with no newer request
       // still releases the spinner; a superseded request leaves it to its owner.
       if (!isSuperseded()) setLoading(false);
     }
-  }, []);
+  }, [applyLoadFailure]);
 
   useEffect(() => {
     if (!isApiConfigured()) {
@@ -321,6 +448,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (isStale()) return;
         setError(null);
         setIsAuthError(false);
+        setIsOfflineReadOnly(false);
+        setOfflineWorkspaceId(null);
+        setOfflineBlockedReason(null);
+        needsRevalidationRef.current = false;
         const current = activeWorkspaceIdRef.current;
         const selected = resolveActiveWorkspaceId(next, current, getOfflinePrincipalId());
         if (current && selected !== current) {
@@ -339,25 +470,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         else clearActiveWorkspaceId();
         persistActiveWorkspacePreference(selected);
       } catch (cause) {
-        if (!isStale()) {
-          const auth = isAuthFailure(cause);
-          if (auth) {
-            // Same fail-closed as refreshWorkspaces: an explicit
-            // auth/membership failure clears any active binding instead of
-            // preserving a stale selection. Non-auth failures preserve.
-            activeWorkspaceIdRef.current = undefined;
-            setActiveWorkspaceIdState(undefined);
-            clearActiveWorkspaceId();
-            persistActiveWorkspacePreference(undefined);
-            try {
-              clearOfflineWorkspaceBinding();
-            } catch {
-              /* noop */
-            }
-          }
-          setIsAuthError(auth);
-          setError(cause instanceof Error ? cause.message : "Não foi possível carregar os workspaces.");
-        }
+        if (isStale()) return;
+        await applyLoadFailure(cause, isStale);
       } finally {
         if (!isSuperseded()) setLoading(false);
       }
@@ -370,7 +484,22 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       loadSeqRef.current += 1;
       clearActiveWorkspaceId();
     };
-  }, []);
+  }, [applyLoadFailure]);
+
+  // T07c: reconnection revalidates membership/lifecycle before mutations
+  // reopen. Fires only on a transition INTO an authenticated authority
+  // while a previous load parked the provider offline/blocked — the flag
+  // is consumed before the refresh so a failed revalidation never loops.
+  // Workspace mutations themselves always revalidate server-side; the
+  // AppState write guard additionally requires an authenticated authority.
+  useEffect(() => {
+    if (session.status !== "authenticated") return;
+    if (!needsRevalidationRef.current) return;
+    needsRevalidationRef.current = false;
+    void refreshWorkspaces().catch(() => {
+      /* the failure is modeled in context error state by the refresh itself */
+    });
+  }, [session.status, refreshWorkspaces]);
 
   const activeWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
@@ -756,6 +885,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     ownershipTransfersLoading,
     error,
     isAuthError,
+    isOfflineReadOnly,
+    offlineWorkspaceId,
+    offlineBlockedReason,
     selectWorkspace,
     refreshWorkspaces,
     refreshMembers,
@@ -776,7 +908,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     transferOwnership,
     acceptTransfer,
     leave,
-  }), [workspaces, activeWorkspace, members, pendingInvites, ownershipTransfers, loading, membersLoading, pendingInvitesLoading, ownershipTransfersLoading, error, isAuthError, selectWorkspace, refreshWorkspaces, refreshMembers, refreshPendingInvites, refreshOwnershipTransfers, createWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, fetchDeletionInventory, requestAgentEmptyAttestation, deleteWorkspace, inviteMember, resendInvite, revokeInvite, acceptInvite, removeMember, transferOwnership, acceptTransfer, leave]);
+  }), [workspaces, activeWorkspace, members, pendingInvites, ownershipTransfers, loading, membersLoading, pendingInvitesLoading, ownershipTransfersLoading, error, isAuthError, isOfflineReadOnly, offlineWorkspaceId, offlineBlockedReason, selectWorkspace, refreshWorkspaces, refreshMembers, refreshPendingInvites, refreshOwnershipTransfers, createWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, fetchDeletionInventory, requestAgentEmptyAttestation, deleteWorkspace, inviteMember, resendInvite, revokeInvite, acceptInvite, removeMember, transferOwnership, acceptTransfer, leave]);
 
   if (loading) return <main className="flex h-dvh items-center justify-center text-text-secondary">Carregando workspaces…</main>;
   return (
