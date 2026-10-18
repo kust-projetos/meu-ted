@@ -23,17 +23,33 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+const SEMVER_FULL = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
 /**
- * Normalizes a `wrangler --version` capture for comparison. Trims surrounding
- * whitespace, collapses internal runs, and extracts the first semver-like
- * token when the capture carries a prefix (e.g. `wrangler 3.114.0`).
- * Returns "" for blank input. Case-insensitive by construction.
+ * Normalizes a `wrangler --version` capture for comparison. Accepts ONLY
+ * strings (non-string ⇒ null); trims, collapses internal whitespace runs to
+ * one space, strips the KNOWN decorative prefix only (cloud emoji/symbols
+ * from the real `wrangler --version` output plus the literal "wrangler",
+ * case-insensitive), then requires the REMAINDER to be a complete semver
+ * `X.Y.Z` (digits; prerelease/build tails allowed by the canonical regex).
+ * Short forms ("3.114"), "v"-prefixed forms, and ANY residual text
+ * ("wranlg …", "ERROR … failed", "3.114.0 extra") ⇒ null — the helper never
+ * skips forward to the first semver-looking token. Blank input ⇒ null.
  */
 export function normalizeWranglerVersion(raw) {
-  const collapsed = String(raw ?? "").trim().replace(/\s+/g, " ");
-  if (collapsed === "") return "";
-  const match = collapsed.match(/\d+\.\d+\.\d+[^\s]*/);
-  return (match ? match[0] : collapsed).toLowerCase();
+  if (typeof raw !== "string") return null;
+  const collapsed = raw.trim().replace(/\s+/g, " ");
+  if (collapsed === "") return null;
+  let rest = collapsed.replace(/^[^A-Za-z0-9]+/, "");
+  if (rest === "") return null;
+  const prefix = rest.match(/^wrangler(?:\s+|$)/i);
+  if (prefix) {
+    rest = rest.slice(prefix[0].length).trim();
+    if (rest === "") return null;
+  }
+  const lowered = rest.toLowerCase();
+  if (!SEMVER_FULL.test(lowered)) return null;
+  return lowered;
 }
 
 /**
@@ -73,7 +89,7 @@ export function verifyDeployManifest(manifest, expected = {}) {
   }
   const manifestWrangler = normalizeWranglerVersion(manifest.wranglerVersion);
   const expectedWrangler = normalizeWranglerVersion(expected.wranglerVersion);
-  if (manifestWrangler === "" || expectedWrangler === "") {
+  if (!manifestWrangler || !expectedWrangler) {
     return { ok: false, reason: "wrangler-version-missing" };
   }
   if (manifestWrangler !== expectedWrangler) {

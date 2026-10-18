@@ -10,7 +10,8 @@
  * workflows intentionally contain NO automatic skip today (structural tests
  * assert no `dedupe` logic bypasses any deploy): any future second-event
  * skip must satisfy `decideDeployDedupe(...) === { dedupe: true }`, i.e. the
- * same manifest sigil (SHA + lockfile hash + normalized Wrangler) PLUS live
+ * same manifest sigil (SHA + lockfile hash + normalized Wrangler +
+ * environment + target) PLUS live
  * checks performed NOW — gate success, deploy readiness, freshness
  * (main still equals the candidate SHA), and a manifest re-verification in
  * this run. Every other scenario (both events flaked, one still running, a
@@ -27,9 +28,12 @@ import { normalizeWranglerVersion } from "./validate-deploy-manifest.mjs";
 /**
  * Decides whether the current deploy event may be deduplicated against a
  * prior attestation. Inputs:
- * - `current`: `{ sha, lockfileHash, wranglerVersion }` of THIS event.
+ * - `current`: `{ sha, lockfileHash, wranglerVersion, environment, target }`
+ *   of THIS event.
  * - `previous`: prior attestation record or null/undefined —
- *   `{ attestation, sha, lockfileHash, wranglerVersion }`.
+ *   `{ attestation, sha, lockfileHash, wranglerVersion, environment, target }`.
+ *   `environment`/`target` must be non-empty strings EQUAL on both sides;
+ *   divergent or absent (either side) ⇒ `{ dedupe: false }` (fail-closed).
  * - `live`: liveness checks performed NOW —
  *   `{ gateSuccess, deployReady, mainMatchesSha, manifestVerified }`.
  * Returns `{ dedupe: boolean, reason: string }` (reason names the rule only).
@@ -53,8 +57,26 @@ export function decideDeployDedupe({ current, previous, live } = {}) {
   }
   const previousWrangler = normalizeWranglerVersion(previous.wranglerVersion);
   const currentWrangler = normalizeWranglerVersion(current?.wranglerVersion);
-  if (previousWrangler === "" || currentWrangler === "" || previousWrangler !== currentWrangler) {
+  if (!previousWrangler || !currentWrangler || previousWrangler !== currentWrangler) {
     return { dedupe: false, reason: "identity-changed" };
+  }
+  if (
+    typeof previous.environment !== "string" ||
+    typeof current.environment !== "string" ||
+    previous.environment === "" ||
+    current.environment === "" ||
+    previous.environment !== current.environment
+  ) {
+    return { dedupe: false, reason: "environment-changed" };
+  }
+  if (
+    typeof previous.target !== "string" ||
+    typeof current.target !== "string" ||
+    previous.target === "" ||
+    current.target === "" ||
+    previous.target !== current.target
+  ) {
+    return { dedupe: false, reason: "target-changed" };
   }
   if (!live || live.gateSuccess !== true || live.deployReady !== true) {
     return { dedupe: false, reason: "gate-not-ready-now" };

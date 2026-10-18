@@ -157,8 +157,59 @@ function goodExpected(overrides = {}) {
 test("normalizeWranglerVersion trims whitespace but preserves the version", () => {
   assert.equal(normalizeWranglerVersion("  3.114.0\n"), "3.114.0");
   assert.equal(normalizeWranglerVersion("3.114.0"), "3.114.0");
-  assert.equal(normalizeWranglerVersion(""), "");
-  assert.equal(normalizeWranglerVersion("   \n "), "");
+  // Blank input carries no identity: null (never ""), so callers fail closed.
+  assert.equal(normalizeWranglerVersion(""), null);
+  assert.equal(normalizeWranglerVersion("   \n "), null);
+});
+
+// T11a review remediation (FINDING 1 P1): strict identity — SOMENTE string,
+// prefixos decorativos conhecidos, semver completa ancorada, sem texto residual.
+test("normalizeWranglerVersion accepts only strings (non-string ⇒ null)", () => {
+  for (const bad of [["3.114.0"], { version: "3.114.0" }, 31140, null, undefined, true]) {
+    assert.equal(normalizeWranglerVersion(bad), null, `non-string ${JSON.stringify(bad)} must be null`);
+  }
+});
+
+test("normalizeWranglerVersion normalizes known decorative prefixes only", () => {
+  // Positivas reais: literal "wrangler" + colapso de whitespace + emoji de nuvem.
+  assert.equal(normalizeWranglerVersion("wrangler 3.114.0"), "3.114.0");
+  assert.equal(normalizeWranglerVersion("wrangler  3.114.0"), "3.114.0");
+  assert.equal(normalizeWranglerVersion("  wrangler\t3.114.0\n"), "3.114.0");
+  assert.equal(normalizeWranglerVersion("Wrangler 3.114.0"), "3.114.0");
+  assert.equal(normalizeWranglerVersion("⛅️ wrangler 3.114.0"), "3.114.0");
+  assert.equal(normalizeWranglerVersion("☁️ wrangler  3.114.0"), "3.114.0");
+  // Prerelease/build extras permitidos via regex canônica.
+  assert.equal(normalizeWranglerVersion("wrangler 3.114.0-beta.1"), "3.114.0-beta.1");
+  assert.equal(normalizeWranglerVersion("3.114.0+build.5"), "3.114.0+build.5");
+});
+
+test("normalizeWranglerVersion requires a complete X.Y.Z semver (no short forms)", () => {
+  // INTENÇÃO DOCUMENTADA: somente três componentes + cauda semver opcional.
+  // "3.114" (sem patch) é rejeitado; prefixo "v" também (não é semver canônica,
+  // o wrangler real nunca o emite — fail-closed em vez de adivinhar).
+  for (const bad of ["wrangler 3.114", "3.114", "3", "v3.114.0", "wrangler v3.114.0", "3.114.0.1"]) {
+    assert.equal(normalizeWranglerVersion(bad), null, `${JSON.stringify(bad)} must be null`);
+  }
+});
+
+test("normalizeWranglerVersion rejects any residual text (never skips to first semver)", () => {
+  for (const bad of [
+    "wranlg 3.114.0",
+    "ERROR not wrangler 3.114.0 failed",
+    "3.114.0 extra",
+    "not 3.114.0",
+    "wrangler 3.114.0 failed",
+    "version 3.114.0",
+  ]) {
+    assert.equal(normalizeWranglerVersion(bad), null, `${JSON.stringify(bad)} must be null`);
+  }
+});
+
+test("verifyDeployManifest blocks non-string wranglerVersion (fail-closed)", () => {
+  for (const bad of [["3.114.0"], { version: "3.114.0" }, 31140, null]) {
+    const result = verifyDeployManifest(goodManifest({ wranglerVersion: bad }), goodExpected());
+    assert.equal(result.ok, false, `non-string wranglerVersion ${JSON.stringify(bad)} must block`);
+  }
 });
 
 test("verifyDeployManifest accepts the exact same-installation identity", () => {
@@ -224,12 +275,20 @@ test("verifyDeployManifest blocks runId mismatch against the resolved CI run", (
 // actually ran" is NOT an attestation, so there is no automatic skip in the
 // workflows — this policy is the only safe future condition, proven here.
 
-const CURRENT = { sha: GOOD_SHA, lockfileHash: GOOD_HASH, wranglerVersion: GOOD_WRANGLER };
+const CURRENT = {
+  sha: GOOD_SHA,
+  lockfileHash: GOOD_HASH,
+  wranglerVersion: GOOD_WRANGLER,
+  environment: "production",
+  target: "agent",
+};
 const PRIOR_ATTESTED = {
   attestation: "ATTESTED",
   sha: GOOD_SHA,
   lockfileHash: GOOD_HASH,
   wranglerVersion: GOOD_WRANGLER,
+  environment: "production",
+  target: "agent",
 };
 const LIVE_OK = { gateSuccess: true, deployReady: true, mainMatchesSha: true, manifestVerified: true };
 
@@ -296,6 +355,43 @@ test("dedupe: whitespace-normalized Wrangler equality still dedupes", () => {
   const previous = { ...PRIOR_ATTESTED, wranglerVersion: "  3.114.0\n" };
   const result = decideDeployDedupe({ current: { ...CURRENT }, previous, live: { ...LIVE_OK } });
   assert.equal(result.dedupe, true);
+});
+
+// T11a review remediation (FINDING 2 P2): environment + target integram a
+// identidade — divergentes ou ausentes de qualquer lado ⇒ dedupe:false.
+test("dedupe: divergent environment (stage vs production) never dedupes", () => {
+  const previous = { ...PRIOR_ATTESTED, environment: "stage" };
+  const result = decideDeployDedupe({
+    current: { ...CURRENT, environment: "production" },
+    previous,
+    live: { ...LIVE_OK },
+  });
+  assert.equal(result.dedupe, false);
+  assert.match(result.reason, /environment/);
+});
+
+test("dedupe: divergent target never dedupes", () => {
+  const previous = { ...PRIOR_ATTESTED, target: "pwa" };
+  const result = decideDeployDedupe({
+    current: { ...CURRENT, target: "agent" },
+    previous,
+    live: { ...LIVE_OK },
+  });
+  assert.equal(result.dedupe, false);
+  assert.match(result.reason, /target/);
+});
+
+test("dedupe: missing environment/target on either side never dedupes (fail-closed)", () => {
+  const cases = [
+    [{ ...CURRENT, environment: undefined }, { ...PRIOR_ATTESTED }],
+    [{ ...CURRENT }, { ...PRIOR_ATTESTED, environment: undefined }],
+    [{ ...CURRENT, target: undefined }, { ...PRIOR_ATTESTED }],
+    [{ ...CURRENT }, { ...PRIOR_ATTESTED, target: undefined }],
+  ];
+  for (const [current, previous] of cases) {
+    const result = decideDeployDedupe({ current, previous, live: { ...LIVE_OK } });
+    assert.equal(result.dedupe, false, "absent environment/target must fail closed");
+  }
 });
 
 // ─── T11a structural: triggers, permissions, gates, wiring ──────────────────
