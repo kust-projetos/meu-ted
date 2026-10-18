@@ -1,9 +1,23 @@
 #!/usr/bin/env node
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { collectRegisteredTools } from "./check-tool-capability-inventory.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// T13: facts are derived from the checkout, never hardcoded. Three version
+// kinds stay distinct: factsSchemaVersion (shape of this JSON), productVersion
+// (monorepo release in package.json) and live production state (SHAs, flags,
+// ledger — documented only in MEU-TED-V1-FINAL-STATE.md from authorized
+// evidence, never asserted here because this generator cannot probe live).
+const FACTS_SCHEMA_VERSION = "1.0.0";
+
+function countCapabilityInventoryRows() {
+  const src = fs.readFileSync(path.join(ROOT, "docs", "architecture", "tool-capability-inventory.md"), "utf8");
+  return src.split("\n").filter((l) => /^\| CAP-/.test(l)).length;
+}
 
 export function generateRuntimeFacts() {
   const pwaPkg = JSON.parse(fs.readFileSync(path.join(ROOT, "apps", "pwa", "package.json"), "utf8"));
@@ -27,8 +41,16 @@ export function generateRuntimeFacts() {
   const routeMatches = [...inventorySource.matchAll(/id:\s*'([^']+)'/g)].map((m) => m[1]);
   const uniqueRoutes = Array.from(new Set(routeMatches));
 
+  // Derived, not hardcoded: registered adapters come from the generated
+  // http-tools (same source as capabilities:check); rows come from the
+  // canonical inventory table. Both drift together with the OpenAPI contract.
+  const registeredTools = collectRegisteredTools();
+  const inventoryRows = countCapabilityInventoryRows();
+  const rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+
   return {
-    version: "1.2.0",
+    factsSchemaVersion: FACTS_SCHEMA_VERSION,
+    productVersion: rootPkg.version ?? "0.0.0",
     lastVerified: new Date().toISOString().slice(0, 10),
     activeWorkspaces: ["apps/api", "apps/pwa", "apps/agent"],
     apps: {
@@ -54,8 +76,8 @@ export function generateRuntimeFacts() {
       apiRoutes: uniqueRoutes.length,
       databaseMigrations: migrations.length,
       latestMigration: migrations[migrations.length - 1] || "V030__bridge_phone_identity.sql",
-      capabilitiesTotal: 72,
-      capabilitiesInApiMode: 51,
+      capabilitiesTotal: registeredTools.length,
+      capabilityInventoryRows: inventoryRows,
     },
     architecture: {
       sourceOfTruth: "Fastify PostgreSQL API (apps/api)",
@@ -67,9 +89,40 @@ export function generateRuntimeFacts() {
     production: {
       vpsProvider: "Contabo VPS",
       edgeProvider: "Cloudflare",
-      database: "PostgreSQL 16+",
+      // Topology label, not a live probe: canonical docs record PostgreSQL 15
+      // on the VPS (CI uses a disposable postgres:16 only for tests).
+      database: "PostgreSQL 15",
     },
   };
+}
+
+export function assertRuntimeFactsMatch(generated, published) {
+  // T13-R1: pure structural comparator — JSON-versioned × generated. Compares
+  // every field EXCEPT lastVerified (a YYYY-MM-DD generation stamp that
+  // legitimately changes day to day). lastVerified is validated as a present,
+  // well-formed ISO date on both sides, never value-compared. Any other drift
+  // (counts, latestMigration, productVersion, factsSchemaVersion, database
+  // label, apps/architecture topology) fails closed. Pure in-memory: evil
+  // fixtures mutate clones, never the committed JSON on disk.
+  const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  for (const [label, facts] of [
+    ["generated", generated],
+    ["published", published],
+  ]) {
+    assert.match(
+      facts?.lastVerified ?? "",
+      ISO_DATE_RE,
+      `${label} lastVerified must be a YYYY-MM-DD string (got ${JSON.stringify(facts?.lastVerified)})`,
+    );
+    assert.ok(!Number.isNaN(Date.parse(facts.lastVerified)), `${label} lastVerified must be a valid date`);
+  }
+  const { lastVerified: _generatedStamp, ...generatedRest } = generated;
+  const { lastVerified: _publishedStamp, ...publishedRest } = published;
+  assert.deepStrictEqual(
+    publishedRest,
+    generatedRest,
+    "published docs/architecture/runtime-facts.json drifted from generateRuntimeFacts() — regenerate and commit",
+  );
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {

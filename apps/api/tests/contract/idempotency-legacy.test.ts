@@ -13,8 +13,10 @@ describe('G2 — legacy idempotency audit boundary', () => {
           return { rowCount: 0, rows: [] };
         }
         if (text.includes('INSERT INTO operation_records')) {
-          if (text.includes('household_id') || text.includes('request_payload') || text.includes('actor_type')) {
-            throw new Error('column "household_id" of relation "operation_records" does not exist');
+          // Canonical operation_records carries actor_type/actor_id per V016+T09; household_id/request_payload were never columns here.
+          const offender = text.includes('household_id') ? 'household_id' : text.includes('request_payload') ? 'request_payload' : null;
+          if (offender) {
+            throw new Error(`column "${offender}" of relation "operation_records" does not exist`);
           }
           if (text.includes('ON CONFLICT (workspace_id, idempotency_key) DO NOTHING')) {
             return { rowCount: 1, rows: [{ id: '00000000-0000-4000-8000-000000000001', status: 'processing', response: null, effect_ref: null }] };
@@ -41,6 +43,8 @@ describe('G2 — legacy idempotency audit boundary', () => {
     expect(result.replayed).toBe(false);
     const operationInsert = sql.find((statement) => statement.includes('INSERT INTO operation_records'));
     expect(operationInsert).toContain('workspace_id');
+    expect(operationInsert).toContain('actor_id');
+    expect(operationInsert).toContain('actor_type');
     expect(operationInsert).toContain('payload_hash');
     expect(operationInsert).toContain('status');
     expect(operationInsert).toContain('lease_until');

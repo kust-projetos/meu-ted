@@ -254,6 +254,203 @@ export function resolveForwardOrigin(
   return origin;
 }
 
+/**
+ * T10 — backend upstream allowlist (pure, no env access).
+ *
+ * The backend proxy forwards the auth cookie, so its target must never be an
+ * arbitrary host taken from the environment. The allowed set is NOT expanded:
+ * the pinned production API origin, or a well-formed HTTP loopback upstream
+ * (`localhost` / `127.0.0.1`, any port — the E2E fixture and local API run on
+ * ephemeral ports with ALLOW_LOCAL_ORIGIN=0). Anything else throws and the
+ * route answers 500 upstream_misconfigured WITHOUT contacting the target.
+ * Blank/unset keeps the historical production default.
+ */
+export function resolveBackendOrigin(raw: string | undefined | null): string {
+  const value = raw?.trim();
+  if (!value) return PRODUCTION_API_ORIGIN;
+  if (isExpectedOrigin(value, PRODUCTION_API_ORIGIN)) return PRODUCTION_API_ORIGIN;
+  const loopback = parseLoopbackBackendUpstream(value);
+  if (loopback) return loopback;
+  throw new Error(
+    "FATAL: PWA_BACKEND_PROXY_ORIGIN must be the production API origin or a well-formed http://localhost|127.0.0.1 upstream; refusing to forward credentials elsewhere.",
+  );
+}
+
+/**
+ * T10 — strict well-formed HTTP loopback upstream check (pure, no env).
+ * Mirrors the shape of parseLoopbackAgentUpstream (no userinfo, no path
+ * beyond "/", no query, no fragment). Port is allowed: the E2E fixture and
+ * local dev API bind ephemeral ports. This function alone never authorizes
+ * anything — resolveBackendOrigin decides.
+ */
+function parseLoopbackBackendUpstream(value: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:") return null;
+  if (parsed.username !== "" || parsed.password !== "") return null;
+  if (parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") return null;
+  if (parsed.pathname !== "" && parsed.pathname !== "/") return null;
+  if (parsed.search !== "" || parsed.hash !== "") return null;
+  return parsed.origin;
+}
+
+/**
+ * T10 — Fetch Metadata gate for requests WITHOUT Origin (pure, no env).
+ *
+ * Legit non-browser clients (curl, server-to-server, health checks) send
+ * neither Origin nor Fetch Metadata and keep passing. A browser cross-site
+ * request always carries `Sec-Fetch-Site: cross-site`, so a mutation that
+ * claims to have no Origin but carries that marker is refused. The Origin
+ * allowlist itself stays where it already is; this only closes the
+ * no-Origin hole.
+ */
+export function isCrossSiteWithoutOrigin(
+  origin: string | null,
+  secFetchSite: string | null | undefined,
+): boolean {
+  if (origin) return false;
+  return (secFetchSite ?? "").trim().toLowerCase() === "cross-site";
+}
+
+export type BoundedBodyResult =
+  | { body?: ArrayBuffer }
+  | { error: "too_large" }
+  | { error: "aborted" };
+
+/**
+ * T10 — reads the request body up to `limit` bytes, cutting the stream BEFORE
+ * buffering the excess (mirrors the Agent proxy `readBoundedBody` ceiling
+ * semantics; kept as a shared pure helper so both proxies agree).
+ *
+ * A declared Content-Length above the ceiling is rejected before reading a
+ * single byte, but the declared value is never trusted: the stream is still
+ * measured chunk by chunk and cancelled the moment the ceiling is crossed, so
+ * a missing or lying Content-Length can no longer buy an unbounded buffer.
+ * A read failure/abort mid-stream returns `aborted` (the route answers 4xx)
+ * instead of throwing a 500.
+ *
+ * R10-1: bytes accumulate in ONE contiguous buffer grown by bounded
+ * reallocation (capped at `limit`). Chunk objects are copied on arrival and
+ * never retained, so a 1 MiB body in 1-byte chunks holds ~1 MiB — not one
+ * object per byte. The ceiling is enforced BEFORE retaining, so the store
+ * never holds more than `limit` bytes.
+ *
+ * R10-2: the request AbortSignal is observed. An already-aborted signal
+ * short-circuits before any read; an abort racing a pending `reader.read()`
+ * (or a delivered chunk) cancels the reader and resolves `aborted`
+ * (the route answers 400 `request.body_aborted`).
+ */
+export async function readBoundedBody(
+  request: Request,
+  limit: number,
+): Promise<BoundedBodyResult> {
+  if (request.method === "GET" || request.method === "HEAD") return {};
+  const signal = request.signal;
+  if (signal?.aborted) return { error: "aborted" };
+  const declared = request.headers.get("content-length");
+  if (declared !== null) {
+    const length = Number(declared);
+    if (Number.isFinite(length) && length > limit) return { error: "too_large" };
+  }
+  const stream = request.body;
+  if (!stream) {
+    // Fallback only: some runtimes hand over a Request without an exposed
+    // body stream. The ceiling is re-checked after buffering so the fallback
+    // never becomes a hole in it; a failed read is an abort, not a 500.
+    // Single race (ONE reaction, no loop): no per-chunk accumulation here.
+    let onAbort: (() => void) | undefined;
+    const aborted =
+      signal === undefined
+        ? null
+        : new Promise<"aborted">((resolve) => {
+            onAbort = () => resolve("aborted");
+            signal.addEventListener("abort", onAbort, { once: true });
+            // Abort fired in the gap between the early check and subscribe.
+            if (signal.aborted) resolve("aborted");
+          });
+    try {
+      const buffered =
+        aborted === null
+          ? await request.arrayBuffer()
+          : await Promise.race([request.arrayBuffer(), aborted]);
+      if (buffered === "aborted") return { error: "aborted" };
+      if (buffered.byteLength > limit) return { error: "too_large" };
+      return buffered.byteLength === 0 ? {} : { body: buffered };
+    } catch {
+      return { error: "aborted" };
+    } finally {
+      if (signal !== undefined && onAbort !== undefined) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    }
+  }
+  // R10-r2: SINGLE-listener abort pattern. ONE `abort` listener is registered
+  // once before the loop; on fire it sets a local flag and cancels the reader
+  // so a pending `read()` settles promptly. Each iteration is a plain
+  // `await reader.read()` followed by a flag check — no race, no new
+  // reactions on any shared promise — so 1 MiB in 1-byte chunks iterates ~1M
+  // times with zero accumulation. The listener is removed once in `finally`.
+  const reader = stream.getReader();
+  let abortedFlag = false;
+  const onAbort = (): void => {
+    abortedFlag = true;
+    void reader.cancel().catch(() => {});
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  let buffer = new Uint8Array(0);
+  let total = 0;
+  try {
+    // Abort fired in the gap between the early check and subscribe.
+    if (signal?.aborted) abortedFlag = true;
+    for (;;) {
+      let next: ReadableStreamReadResult<Uint8Array>;
+      try {
+        next = await reader.read();
+      } catch {
+        await reader.cancel().catch(() => {});
+        return { error: "aborted" };
+      }
+      // An abort racing the read (pending or delivered chunk) always wins:
+      // partial bytes are discarded and the caller sees `aborted`, never a
+      // partial body. Checked BEFORE `done` so a cancel-settled read can
+      // never surface as a clean empty body.
+      if (abortedFlag || signal?.aborted) {
+        await reader.cancel().catch(() => {});
+        return { error: "aborted" };
+      }
+      if (next.done) break;
+      const chunk = next.value;
+      // Ceiling enforced BEFORE retaining: the over-limit chunk is dropped
+      // and the source cancelled instead of drained.
+      if (total + chunk.byteLength > limit) {
+        // Stop reading NOW: cancel the source instead of draining the rest.
+        await reader.cancel().catch(() => {});
+        return { error: "too_large" };
+      }
+      if (total + chunk.byteLength > buffer.byteLength) {
+        const capacity = Math.min(
+          limit,
+          Math.max(buffer.byteLength * 2, total + chunk.byteLength),
+        );
+        const grown = new Uint8Array(capacity);
+        grown.set(buffer.subarray(0, total));
+        buffer = grown;
+      }
+      buffer.set(chunk, total);
+      total += chunk.byteLength;
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    reader.releaseLock();
+  }
+  if (total === 0) return {};
+  return { body: buffer.slice(0, total).buffer as ArrayBuffer };
+}
+
 /** Canonical security headers applied to every response. */
 export const SECURITY_HEADERS: Record<string, string> = {
   "Strict-Transport-Security": "max-age=31536000; includeSubDomains",

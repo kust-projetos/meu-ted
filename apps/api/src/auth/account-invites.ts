@@ -48,13 +48,26 @@ export const createAccountInviteService = (deps: {
       invitedByUserId: input.invitedByUserId,
     };
 
-    await deps.deliver({
-      inviteId: record.id,
-      householdId: 'account',
-      email: record.email,
-      token,
-      expiresAt: record.expiresAt,
-    });
+    // Deliver before commit: if delivery fails, nothing is persisted in the store.
+    // A missing or broken delivery dependency fails CLOSED with a typed 503
+    // (`invite.delivery_unavailable`) — never a generic 500, never success.
+    // Semantic InviteErrors from the provider pass through untouched.
+    try {
+      await deps.deliver({
+        inviteId: record.id,
+        householdId: 'account',
+        email: record.email,
+        token,
+        expiresAt: record.expiresAt,
+      });
+    } catch (error) {
+      if (error instanceof InviteError) throw error;
+      throw new InviteError(
+        'invite delivery is not configured',
+        'invite.delivery_unavailable',
+        503,
+      );
+    }
 
     await deps.store.insertAccountInvite(record);
 

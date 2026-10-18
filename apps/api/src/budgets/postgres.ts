@@ -112,25 +112,44 @@ export const createPostgresBudgetStore = (pool: Pool): BudgetStore => {
     const res = await pool.query<R>(text, values); return res.rows;
   };
 
-  const calcSpent = async (budgetId: string, categoryId: string, householdId: string, period: string): Promise<number> => {
+  // API-06: gasto agregado em UMA query (sem N+1, sem fan-out paralelo).
+  // Boundaries idênticas ao calcSpent por-linha anterior: `t.date >= start
+  // AND t.date <= end` (inclusivo nos dois lados), com os pares
+  // (start,end) calculados pelo mesmo `getPeriodBounds` em JS (UTC,
+  // `YYYY-MM-DD`). Workspace duplamente filtrado (`b.household_id = $1` +
+  // join por `t.household_id = b.household_id`); valores em centavos
+  // inteiros (BIGINT somado no Postgres, `Number()` sem float).
+  const spentByBudget = async (householdId: string): Promise<Map<string, number>> => {
     const today = new Date().toISOString().slice(0, 10);
-    const { start, end } = getPeriodBounds(today, period);
+    const monthly = getPeriodBounds(today, 'monthly');
+    const quarterly = getPeriodBounds(today, 'quarterly');
+    const yearly = getPeriodBounds(today, 'yearly');
     const rows = await query<Row>(
-      `SELECT COALESCE(SUM(amount_cents), 0) AS spent FROM transactions WHERE household_id=$1 AND category_id=$2 AND kind='expense' AND date>=$3 AND date<=$4 AND deleted_at IS NULL`,
-      [householdId, categoryId, start, end],
+      `SELECT b.id AS budget_id, COALESCE(SUM(t.amount_cents), 0) AS spent
+         FROM budgets b
+         LEFT JOIN transactions t
+           ON t.household_id = b.household_id
+          AND t.category_id = b.category_id
+          AND t.kind = 'expense'
+          AND t.deleted_at IS NULL
+          AND t.date >= CASE b.period WHEN 'monthly' THEN $2::date WHEN 'quarterly' THEN $4::date ELSE $6::date END
+          AND t.date <= CASE b.period WHEN 'monthly' THEN $3::date WHEN 'quarterly' THEN $5::date ELSE $7::date END
+        WHERE b.household_id = $1
+        GROUP BY b.id`,
+      [householdId, monthly.start, monthly.end, quarterly.start, quarterly.end, yearly.start, yearly.end],
     );
-    return Number(rows[0]!['spent']);
+    return new Map(rows.map((r) => [String(r['budget_id']), Number(r['spent'])]));
   };
 
   const store: BudgetStore = {
     async listBudgets(householdId) {
       const rows = await query<Row>(`SELECT * FROM budgets WHERE household_id=$1 ORDER BY amount_cents DESC`, [householdId]);
-      const result: BudgetStatus[] = [];
-      for (const r of rows) {
+      const spentById = await spentByBudget(householdId);
+      const result: BudgetStatus[] = rows.map((r) => {
         const b: Budget = { id: r['id'] as string, householdId, categoryId: r['category_id'] as string, name: r['name'] as string, amountCents: Number(r['amount_cents']), period: r['period'] as Budget['period'], startDate: (r['start_date'] as Date).toISOString().slice(0,10), alertThreshold: Number(r['alert_threshold']), rollover: r['rollover'] as boolean };
-        const spent = await calcSpent(b.id, b.categoryId, householdId, b.period);
-        result.push({ ...b, spentCents: spent, remainingCents: Math.max(0, b.amountCents - spent), percentUsed: Math.round((spent / b.amountCents) * 100) });
-      }
+        const spent = spentById.get(b.id) ?? 0;
+        return { ...b, spentCents: spent, remainingCents: Math.max(0, b.amountCents - spent), percentUsed: Math.round((spent / b.amountCents) * 100) };
+      });
       result.sort((a, b) => b.percentUsed - a.percentUsed);
       return result;
     },
@@ -147,17 +166,46 @@ export const createPostgresBudgetStore = (pool: Pool): BudgetStore => {
       const existing = await query<Row>(`SELECT * FROM budgets WHERE id=$1 AND household_id=$2`, [budgetId, householdId]);
       if (existing.length === 0) throw domainErrors.notFound('Orçamento');
       const b = existing[0]!;
-      const trends: BudgetTrend[] = [];
       const now = new Date();
+      // Meses em ordem ascendente; boundaries via getPeriodBounds idênticas
+      // às da versão por-linha (inclusivas, `YYYY-MM-DD`, UTC).
+      // T12d: ancora no PRIMEIRO dia do mês antes de deslocar — `setUTCMonth`
+      // sobre dia 31 transborda o mês curto (31/Fev -> 3-Mar) e repetiria o
+      // ym no VALUES, com o `GROUP BY m.ym` somando a entrada dobrada.
+      const anchor = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+      const months: Array<{ ym: string; start: string; end: string }> = [];
       for (let i = monthsBack - 1; i >= 0; i--) {
-        const d = new Date(now); d.setUTCMonth(d.getUTCMonth() - i);
+        const d = new Date(anchor); d.setUTCMonth(d.getUTCMonth() - i);
         const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`;
         const { start, end } = getPeriodBounds(`${ym}-01`, b['period'] as string);
-        const rows = await query<Row>(`SELECT COALESCE(SUM(amount_cents),0) AS spent FROM transactions WHERE household_id=$1 AND category_id=$2 AND kind='expense' AND date>=$3 AND date<=$4 AND deleted_at IS NULL`,
-          [householdId, b['category_id'], start, end]);
-        trends.push({ yearMonth: ym, budgetCents: Number(b['amount_cents']), spentCents: Number(rows[0]!['spent']) });
+        months.push({ ym, start, end });
       }
-      return trends;
+      // UMA query: VALUES (ym, start, end) com LEFT JOIN agregado por mês.
+      const values: unknown[] = [householdId, b['category_id']];
+      const tuples = months.map((m, idx) => {
+        const base = 3 + idx * 3;
+        values.push(m.ym, m.start, m.end);
+        return `($${base}::text, $${base + 1}::date, $${base + 2}::date)`;
+      });
+      const spentRows = await query<Row>(
+        `SELECT m.ym AS ym, COALESCE(SUM(t.amount_cents), 0) AS spent
+           FROM (VALUES ${tuples.join(', ')}) AS m(ym, start_date, end_date)
+           LEFT JOIN transactions t
+             ON t.household_id = $1
+            AND t.category_id = $2
+            AND t.kind = 'expense'
+            AND t.deleted_at IS NULL
+            AND t.date >= m.start_date
+            AND t.date <= m.end_date
+          GROUP BY m.ym`,
+        values,
+      );
+      const spentByYm = new Map(spentRows.map((r) => [String(r['ym']), Number(r['spent'])]));
+      return months.map((m): BudgetTrend => ({
+        yearMonth: m.ym,
+        budgetCents: Number(b['amount_cents']),
+        spentCents: spentByYm.get(m.ym) ?? 0,
+      }));
     },
   };
   // V4.1 Phase 3 (UOW2): expose the client-bound cores as non-contractual

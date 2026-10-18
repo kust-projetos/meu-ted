@@ -44,6 +44,61 @@ export E2E_PRODUCTION_SMOKE="0"
 export E2E_PRODUCTION_URL=""
 echo "[run-ci] API base URL: $NEXT_PUBLIC_PI_FINANCE_API_BASE_URL"
 
+# ── E2E_RUNTIME_REPEAT_EACH (opt-in flake detector, default unset = single run)
+# Repeats EACH scenario N times in the same execution, runtime gates only
+# (pwa-runtime + push-runtime — the known click-timeout flake family).
+# Unset/0/1 = current behavior untouched (no flag passed). Integer >= 2 =
+# `--repeat-each=N` on the two runtime gates below. Anything else fails the
+# runner fail-closed BEFORE the build. Read the result as: every rep fails =
+# consistent FAIL (deterministic bug); some reps fail = FLAKE (sample more,
+# do not green it with retries); all pass = stable at this sample size.
+# Pure detection: the run still fails when ANY repetition fails (CI stays
+# red). Semantics contract + unit tests: e2e/support/repeat-each.ts.
+# NOTE: validated/exported in THIS process (the one that pins the env before
+# the build) — never in a subprocess expecting the caller's shell to inherit.
+REPEAT_EACH_RAW="${E2E_RUNTIME_REPEAT_EACH:-}"
+REPEAT_EACH_ARGS=()
+# JS safe-integer ceiling — mirrors Number.isSafeInteger in repeat-each.ts.
+REPEAT_EACH_MAX="9007199254740991"
+if [ -n "$REPEAT_EACH_RAW" ]; then
+  case "$REPEAT_EACH_RAW" in
+    ''|*[!0-9]*)
+      echo "[run-ci] ERROR: invalid E2E_RUNTIME_REPEAT_EACH=${REPEAT_EACH_RAW} (want integer >= 0)" >&2
+      exit 2
+      ;;
+  esac
+  # Magnitude check with NO arithmetic on the raw value: `test -ge` overflows
+  # past int64 and — inside an `if` under `set -e` — degrades to a silent
+  # single run (fail-open). Strip leading zeros, then compare digit length +
+  # (equal length) lexicographic order against the ceiling.
+  _repeat_digits="$REPEAT_EACH_RAW"
+  case "$_repeat_digits" in
+    *[!0]*) _repeat_digits="${_repeat_digits#"${_repeat_digits%%[!0]*}"}" ;;
+    *) _repeat_digits="0" ;;
+  esac
+  [ -n "$_repeat_digits" ] || _repeat_digits="0"
+  _repeat_len="${#_repeat_digits}"
+  _repeat_over=0
+  if [ "$_repeat_len" -gt 16 ]; then
+    _repeat_over=1
+  elif [ "$_repeat_len" -eq 16 ]; then
+    if [[ "$_repeat_digits" > "$REPEAT_EACH_MAX" ]]; then
+      _repeat_over=1
+    fi
+  fi
+  if [ "$_repeat_over" -eq 1 ]; then
+    echo "[run-ci] ERROR: invalid E2E_RUNTIME_REPEAT_EACH=${REPEAT_EACH_RAW} (exceeds max ${REPEAT_EACH_MAX})" >&2
+    exit 2
+  fi
+  case "$_repeat_digits" in
+    0|1) ;;
+    *)
+      REPEAT_EACH_ARGS=(--repeat-each="$REPEAT_EACH_RAW")
+      echo "[run-ci] E2E_RUNTIME_REPEAT_EACH=$REPEAT_EACH_RAW (runtime gates repeat each scenario ${REPEAT_EACH_RAW}x; any rep failure fails the run)"
+      ;;
+  esac
+fi
+
 # ── Build Next.js (servers are Playwright-managed per gate below) ───────────
 echo "[run-ci] building Next.js..."
 pushd "$PWA" >/dev/null
@@ -67,7 +122,7 @@ PLAYWRIGHT_HTML_OUTPUT_DIR=test-results/report-pwa-runtime pnpm exec playwright 
   --config=e2e/playwright.config.ts \
   --project=pwa-runtime \
   --output=test-results/pwa-runtime \
-  --workers=1 --retries=0 || RESULT=1
+  --workers=1 --retries=0 "${REPEAT_EACH_ARGS[@]}" || RESULT=1
 popd >/dev/null
 # ── Run push runtime E2E with real Service Worker + browser Permission API ─────
 echo "[run-ci] push runtime E2E..."
@@ -76,7 +131,7 @@ PLAYWRIGHT_HTML_OUTPUT_DIR=test-results/report-push-runtime pnpm exec playwright
   --config=e2e/playwright.config.ts \
   --project=push-runtime \
   --output=test-results/push-runtime \
-  --workers=1 --retries=0 || RESULT=1
+  --workers=1 --retries=0 "${REPEAT_EACH_ARGS[@]}" || RESULT=1
 popd >/dev/null
 # ── Run desktop E2E (representative only) ───────────────────────────────────
 echo "[run-ci] desktop E2E..."
@@ -92,7 +147,7 @@ popd >/dev/null
 # ── Run matrix gate ─────────────────────────────────────────────────────────
 echo "[run-ci] matrix gate..."
 pushd "$PWA" >/dev/null
-pnpm exec tsx --test e2e/support/matrix.test.ts || RESULT=1
+pnpm exec tsx --test e2e/support/matrix.test.ts e2e/support/repeat-each.test.ts || RESULT=1
 popd >/dev/null
 
 # ── Report ──────────────────────────────────────────────────────────────────

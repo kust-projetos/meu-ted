@@ -10,7 +10,7 @@ export type HmacEnvelope = {
 };
 
 export type NonceReplayStore = {
-  consume(nonce: string, timestamp: number): boolean;
+  consume(nonce: string, timestamp: number, now?: number): boolean;
   clear(): void;
 };
 
@@ -18,9 +18,10 @@ export const createInMemoryNonceReplayStore = (): NonceReplayStore => {
   const seen = new Map<string, number>();
 
   return {
-    consume(nonce: string, timestamp: number): boolean {
-      const now = Date.now();
-      // Purge expired nonces (>60s old)
+    consume(nonce: string, timestamp: number, now: number = Date.now()): boolean {
+      // Purge expired nonces (>60s old) with the caller-supplied clock so
+      // the sweep stays coherent with the skew check in verifyEnvelope
+      // (BRK-02): the envelope carries its own timestamp, never wall time.
       for (const [k, exp] of seen) {
         if (exp < now) {
           seen.delete(k);
@@ -85,8 +86,9 @@ export const verifyEnvelope = (
     return { valid: false, reason: 'invalid_signature' };
   }
 
-  // Atomically consume nonce
-  const consumed = replayStore.consume(envelope.nonce, envelope.timestamp);
+  // Atomically consume nonce, forwarding the skew-check clock so the
+  // purge inside the store cannot diverge from it (BRK-02).
+  const consumed = replayStore.consume(envelope.nonce, envelope.timestamp, now);
   if (!consumed) {
     return { valid: false, reason: 'nonce_replayed' };
   }

@@ -99,7 +99,7 @@ describe('Codex Broker Server (Task 5A)', () => {
     };
     const signature = signEnvelope(envelope, SIGNING_KEY);
 
-    // 1. Valid request succeeds
+    // 1. Valid request reaches the (unwired) runtime and fails closed typed.
     const res = await app.inject({
       method: 'POST',
       url: '/v1/chat/completions',
@@ -113,10 +113,8 @@ describe('Codex Broker Server (Task 5A)', () => {
       payload,
     });
 
-    expect(res.statusCode).toBe(200);
-    const data = res.json();
-    expect(data.model).toBe('gpt-4o');
-    expect(data.choices[0]?.message?.content).toBeDefined();
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: 'codex_runtime_not_configured' });
 
     // 2. Tampered body is rejected
     const tamperedPayload = { ...payload, model: 'o1' };
@@ -166,9 +164,10 @@ describe('Codex Broker Server (Task 5A)', () => {
       'content-type': 'application/json',
     };
 
-    // First attempt -> OK
+    // First attempt -> reaches the unwired runtime (typed 503), consuming the nonce
     const res1 = await app.inject({ method: 'POST', url: '/v1/chat/completions', headers, payload });
-    expect(res1.statusCode).toBe(200);
+    expect(res1.statusCode).toBe(503);
+    expect(res1.json()).toMatchObject({ error: 'codex_runtime_not_configured' });
 
     // Second attempt with exact same nonce -> 401 nonce_replayed
     const res2 = await app.inject({ method: 'POST', url: '/v1/chat/completions', headers, payload });

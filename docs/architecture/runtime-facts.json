@@ -1,6 +1,7 @@
 {
-  "version": "1.2.1",
-  "lastVerified": "2026-10-14",
+  "factsSchemaVersion": "1.0.0",
+  "productVersion": "0.1.0",
+  "lastVerified": "2026-10-18",
   "activeWorkspaces": [
     "apps/api",
     "apps/pwa",
@@ -28,11 +29,11 @@
     }
   },
   "counts": {
-    "apiRoutes": 127,
-    "databaseMigrations": 58,
-    "latestMigration": "V060__pending_operation_confirmation_intentions.sql",
-    "capabilitiesTotal": 72,
-    "capabilitiesInApiMode": 51
+    "apiRoutes": 120,
+    "databaseMigrations": 61,
+    "latestMigration": "V063__workspace_empty_attestation_deposit.sql",
+    "capabilitiesTotal": 54,
+    "capabilityInventoryRows": 75
   },
   "architecture": {
     "sourceOfTruth": "Fastify PostgreSQL API (apps/api)",

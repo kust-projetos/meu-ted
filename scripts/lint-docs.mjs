@@ -74,6 +74,12 @@ export function lintAllDocumentation() {
     "docs/superpowers/plans/2026-09-14-meu-ted-v3-hardening.md",
     "docs/superpowers/plans/2026-09-15-meu-ted-v4-hardening.md",
     "docs/runbooks/backup-restore.md",
+    // T13: living V1 docs + audit evidence (additive only — never remove entries).
+    "docs/MEU-TED-V1-FINAL-STATE.md",
+    "docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md",
+    "docs/RELEASE-PROCESS.md",
+    "docs/agent/2026-10-18-ted-agent-flag-matrix.md",
+    "docs/reports/2026-10-17-full-project-review.md",
   ];
 
   const allIssues = [];

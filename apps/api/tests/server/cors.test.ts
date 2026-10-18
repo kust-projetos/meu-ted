@@ -125,4 +125,36 @@ describe('CORS', () => {
     expect(res.statusCode).toBe(204);
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
+
+  // ── T10: configured entries must be well-formed origins ──
+
+  it('ignores malformed configured entries but still echoes a valid one', async () => {
+    process.env.CORS_ORIGIN = 'not-a-valid-origin,https://pi.example.com';
+    const app = buildTestApp().app;
+    const res = await app.inject({ method: 'GET', url: '/health', headers: { origin: 'https://pi.example.com' } });
+    expect(res.headers['access-control-allow-origin']).toBe('https://pi.example.com');
+  });
+
+  it('never echoes a malformed configured entry even when the request matches it exactly', async () => {
+    process.env.CORS_ORIGIN = 'not-a-valid-origin';
+    const app = buildTestApp().app;
+    const res = await app.inject({ method: 'GET', url: '/health', headers: { origin: 'not-a-valid-origin' } });
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+  });
+
+  it('drops configured entries with userinfo and never echoes them', async () => {
+    process.env.CORS_ORIGIN = 'https://user:pass@pi.example.com';
+    const app = buildTestApp().app;
+    const res = await app.inject({ method: 'GET', url: '/health', headers: { origin: 'https://user:pass@pi.example.com' } });
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
+  });
+
+  it('disables CORS echo when every configured entry is malformed', async () => {
+    process.env.CORS_ORIGIN = 'not-a-url,://broken';
+    const app = buildTestApp().app;
+    const res = await app.inject({ method: 'GET', url: '/health', headers: { origin: 'https://pi.example.com' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
+  });
 });

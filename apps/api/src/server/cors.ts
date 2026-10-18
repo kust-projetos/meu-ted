@@ -1,7 +1,21 @@
 import type { FastifyInstance } from 'fastify';
 
+const isWellFormedOrigin = (value: string): boolean => {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  if (parsed.username !== '' || parsed.password !== '') return false;
+  if (parsed.pathname !== '' && parsed.pathname !== '/') return false;
+  if (parsed.search !== '' || parsed.hash !== '') return false;
+  return true;
+};
+
 const parseOrigins = (env: string): string[] =>
-  env.split(',').map((s) => s.trim()).filter(Boolean);
+  env.split(',').map((s) => s.trim()).filter((s) => s !== '' && isWellFormedOrigin(s));
 
 const LOCAL_DEVELOPMENT_ORIGINS = 'http://localhost:3000,http://127.0.0.1:3000';
 

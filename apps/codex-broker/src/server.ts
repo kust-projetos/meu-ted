@@ -20,6 +20,8 @@ export type ServerOptions = {
   adapter?: CodexRuntimeAdapter;
   /** ChatGPT OAuth code exchange (injected; default rejects — see browser-login.ts). */
   codeExchange?: (code: string) => Promise<CodeExchangeResult>;
+  /** Injectable wall clock for pending-login expiry (BRK-02); defaults to Date.now. */
+  now?: () => number;
   /**
    * Explicit escape hatch (SPEC §15.2, env BROKER_TRUST_PRIVATE_NETWORK=1):
    * allow requests without Cloudflare Access credentials. Never implicit —
@@ -39,7 +41,8 @@ export const buildCodexBrokerApp = (opts: ServerOptions): FastifyInstance => {
   const replayStore = opts.replayStore ?? createInMemoryNonceReplayStore();
   const loginManager = new BrowserLoginManager(
     authManager,
-    ...(opts.codeExchange ? [opts.codeExchange] : [] as const),
+    opts.codeExchange,
+    opts.now,
   );
 
   const verifyCloudflareAccess = (req: FastifyRequest): boolean => {
@@ -149,6 +152,15 @@ export const buildCodexBrokerApp = (opts: ServerOptions): FastifyInstance => {
       const result = await adapter.executeCompletion(parsed.data, authStatus);
       return reply.code(200).send(result);
     } catch (e) {
+      const err = e as { code?: unknown; statusCode?: unknown; message?: unknown };
+      // BRK-01: no runtime is wired — fail closed with the typed error,
+      // preserving the endpoint shape ({ error, message }).
+      if (err?.code === 'codex_runtime_not_configured' || err?.message === 'codex_runtime_not_configured') {
+        return reply.code(503).send({
+          error: 'codex_runtime_not_configured',
+          message: 'Codex runtime not configured',
+        });
+      }
       const message = (e as Error).message;
       return reply.code(500).send({
         error: 'codex_execution_failed',
@@ -194,13 +206,21 @@ export const buildCodexBrokerApp = (opts: ServerOptions): FastifyInstance => {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'invalid_request_schema', issues: parsed.error.issues });
     }
-    const login = loginManager.beginLogin(parsed.data.callbackUrl);
-    return reply.code(200).send({
-      verificationUri: login.verificationUri,
-      userCode: login.userCode,
-      state: login.state,
-      expiresAt: login.expiresAt,
-    });
+    try {
+      const login = loginManager.beginLogin(parsed.data.callbackUrl);
+      return reply.code(200).send({
+        verificationUri: login.verificationUri,
+        userCode: login.userCode,
+        state: login.state,
+        expiresAt: login.expiresAt,
+      });
+    } catch (e) {
+      const err = e as { statusCode?: unknown; code?: unknown };
+      if (typeof err?.statusCode === 'number') {
+        return reply.code(err.statusCode).send({ error: err.code ?? 'login_failed' });
+      }
+      return reply.code(500).send({ error: 'login_failed' });
+    }
   });
 
   app.post('/auth/callback', async (req, reply) => {

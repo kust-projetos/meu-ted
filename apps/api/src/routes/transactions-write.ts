@@ -4,7 +4,7 @@ import { DEVICE_TOKEN_HEADER } from '../auth/device-token.js';
 import type { ReadModelStore } from '../read-models/store.js';
 import type { WriteStore } from '../writes/store.js';
 import type { CardStore } from '../cards/store.js';
-import type { IdempotencyStore } from '../writes/idempotency.js';
+import type { IdempotencyStore, IdempotencyActorContext } from '../writes/idempotency.js';
 import { createExpenseInputSchema, createIncomeInputSchema, createTransferInputSchema, updateTransactionInputSchema } from '../writes/types.js';
 import type { CreateExpenseInput, CreateIncomeInput } from '../writes/types.js';
 import { runTransactionMutation } from '../writes/keyed-mutations.js';
@@ -61,6 +61,17 @@ export const registerTransactionWriteRoutes = (
     const token = req.headers[DEVICE_TOKEN_HEADER];
     return opts.resolveToken(Array.isArray(token) ? token[0] : token);
   };
+  /**
+   * T09 — ator da sessão autenticada para novos idempotency records.
+   * Deriva SOMENTE do contexto resolvido server-side (preHandler
+   * unificado ou device token): nunca do body. Fallback legado
+   * (resolveToken sem actorId) atribui o próprio device como ator.
+   */
+  const actorOf = (ctx: { deviceId: string; actorId?: unknown; actorType?: unknown }): IdempotencyActorContext => {
+    const actorId = typeof ctx.actorId === 'string' && ctx.actorId.trim() !== '' ? ctx.actorId : ctx.deviceId;
+    const actorType = ctx.actorType === 'user' ? 'user' : ('device' as const);
+    return { actorId, actorType };
+  };
   const handleError = (err: unknown, reply: import('fastify').FastifyReply) => {
     if (err instanceof DomainError) return reply.code(err.statusCode).send({ code: err.code, message: err.message });
     if ((err as { statusCode?: number }).statusCode) {
@@ -78,12 +89,13 @@ export const registerTransactionWriteRoutes = (
     identity: { route: string; resourceId?: string; origin?: string },
     payload: unknown,
     producer: (claimTx?: unknown) => Promise<T>,
+    actor?: IdempotencyActorContext,
   ): Promise<T> => {
     const raw = req.headers[IDEMPOTENCY_HEADER] ?? req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
     if (raw === undefined) return producer(undefined);
     const key = requireIdempotencyKey(req.headers);
     if (!opts.idempotency) return producer(undefined);
-    return (await opts.idempotency.lookupOrRecord(householdId, key, httpIdempotencyPayload(identity, payload), producer)).response;
+    return (await opts.idempotency.lookupOrRecord(householdId, key, httpIdempotencyPayload(identity, payload), producer, actor)).response;
   };
   const idemKey = (req: import('fastify').FastifyRequest): string | undefined => {
     const raw = req.headers[IDEMPOTENCY_HEADER] ?? req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
@@ -99,7 +111,7 @@ export const registerTransactionWriteRoutes = (
       const key = idemKey(req);
       const fn = async (claimTx?: unknown) => producer(ctx, parsed.data, claimTx);
       try {
-        const result = key && opts.idempotency ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: `POST ${path}` }, parsed.data), fn) : { response: await fn(), replayed: false };
+        const result = key && opts.idempotency ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: `POST ${path}` }, parsed.data), fn, actorOf(ctx)) : { response: await fn(), replayed: false };
         if (result.replayed) reply.header('Idempotent-Replayed', 'true');
         return reply.code(result.response.status).send(result.response.body);
       } catch (e) { return handleError(e, reply); }
@@ -131,7 +143,7 @@ export const registerTransactionWriteRoutes = (
         const originIdentity = origin.fromCard
           ? `card:${String((parsed.data as { cardId?: unknown }).cardId ?? origin.accountId)}`
           : `account:${String((parsed.data as { accountId?: unknown }).accountId ?? origin.accountId)}`;
-        const result = key && opts.idempotency ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: `POST ${path}`, origin: originIdentity }, normalized.data), fn) : { response: await fn(), replayed: false };
+        const result = key && opts.idempotency ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: `POST ${path}`, origin: originIdentity }, normalized.data), fn, actorOf(ctx)) : { response: await fn(), replayed: false };
         if (result.replayed) reply.header('Idempotent-Replayed', 'true');
         return reply.code(result.response.status).send(result.response.body);
       } catch (e) { return handleError(e, reply); }
@@ -204,7 +216,7 @@ export const registerTransactionWriteRoutes = (
       }
       return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
     }
-    try { return reply.code(200).send(await runIdempotent(req, ctx.householdId, { route: 'PATCH /transactions/:id', resourceId: params.data.id }, { id: params.data.id, ...parsed.data }, async (claimTx) => attachMutationReceipt(await runTransactionMutation(opts.writes, claimTx, ctx.householdId, 'update', { id: params.data.id, patch: parsed.data }), 'transaction.update', { type: 'transaction', id: params.data.id }))); }
+    try { return reply.code(200).send(await runIdempotent(req, ctx.householdId, { route: 'PATCH /transactions/:id', resourceId: params.data.id }, { id: params.data.id, ...parsed.data }, async (claimTx) => attachMutationReceipt(await runTransactionMutation(opts.writes, claimTx, ctx.householdId, 'update', { id: params.data.id, patch: parsed.data }), 'transaction.update', { type: 'transaction', id: params.data.id }), actorOf(ctx))); }
     catch (e) { return handleError(e, reply); }
   });
 
@@ -219,6 +231,7 @@ export const registerTransactionWriteRoutes = (
       // 204 cannot carry a body. Second delete still 404s (tombstone kept).
       const deleted = await runIdempotent(req, ctx.householdId, { route: 'DELETE /transactions/:id', resourceId: params.data.id }, { id: params.data.id }, async (claimTx) =>
         attachMutationReceipt(await runTransactionMutation(opts.writes, claimTx, ctx.householdId, 'softDelete', { id: params.data.id }), 'transaction.delete', { type: 'transaction', id: params.data.id }),
+        actorOf(ctx),
       );
       return reply.code(200).send(deleted);
     }

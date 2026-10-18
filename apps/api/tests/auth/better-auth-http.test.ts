@@ -159,4 +159,108 @@ describe('Better Auth HTTP boundary', () => {
       await auth.close();
     }
   });
+
+  it('answers preflight only for trusted origins, never reflecting an arbitrary origin', async () => {
+    const auth = makeAuth();
+    const app = Fastify({ logger: false });
+    registerBetterAuthRoutes(app, auth);
+
+    try {
+      const evil = await app.inject({
+        method: 'OPTIONS',
+        url: '/auth/sign-up/email',
+        headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' },
+      });
+      expect(evil.statusCode).toBe(204);
+      expect(evil.headers['access-control-allow-origin']).toBeUndefined();
+      expect(evil.headers['access-control-allow-credentials']).toBeUndefined();
+
+      const missing = await app.inject({
+        method: 'OPTIONS',
+        url: '/auth/sign-up/email',
+        headers: { 'access-control-request-method': 'POST' },
+      });
+      expect(missing.statusCode).toBe(204);
+      expect(missing.headers['access-control-allow-origin']).toBeUndefined();
+
+      const trusted = await app.inject({
+        method: 'OPTIONS',
+        url: '/auth/sign-up/email',
+        headers: { origin: 'http://localhost:3000', 'access-control-request-method': 'POST' },
+      });
+      expect(trusted.statusCode).toBe(204);
+      expect(trusted.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+      expect(trusted.headers['access-control-allow-credentials']).toBe('true');
+    } finally {
+      await app.close();
+      await auth.close();
+    }
+  });
+
+  it('rejects a mutation without Origin when Fetch Metadata says cross-site', async () => {
+    const auth = makeAuth();
+    const app = Fastify({ logger: false });
+    registerBetterAuthRoutes(app, auth);
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/auth/sign-up/email',
+        headers: { 'sec-fetch-site': 'cross-site' },
+        payload: { email: 'attacker@example.com', password: 'test-password-123', name: 'Attacker' },
+      });
+
+      expect(response.statusCode).toBe(403);
+    } finally {
+      await app.close();
+      await auth.close();
+    }
+  });
+
+  it('keeps allowing non-browser mutations without Origin and without Fetch Metadata', async () => {
+    const auth = makeAuth();
+    const app = Fastify({ logger: false });
+    registerBetterAuthRoutes(app, auth);
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/auth/sign-up/email',
+        payload: { email: 'legit@example.com', password: 'test-password-123', name: 'Legit' },
+      });
+
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await app.close();
+      await auth.close();
+    }
+  });
+
+  it('fails closed when the trusted-origin allowlist is unavailable', async () => {
+    const auth = makeAuth();
+    Object.defineProperty(auth.options, 'trustedOrigins', { value: undefined, configurable: true });
+    const app = Fastify({ logger: false });
+    registerBetterAuthRoutes(app, auth);
+
+    try {
+      const mutation = await app.inject({
+        method: 'POST',
+        url: '/auth/sign-up/email',
+        headers: { origin: 'http://localhost:3000' },
+        payload: { email: 'attacker@example.com', password: 'test-password-123', name: 'Attacker' },
+      });
+      expect(mutation.statusCode).toBe(403);
+
+      const preflight = await app.inject({
+        method: 'OPTIONS',
+        url: '/auth/sign-up/email',
+        headers: { origin: 'http://localhost:3000', 'access-control-request-method': 'POST' },
+      });
+      expect(preflight.statusCode).toBe(204);
+      expect(preflight.headers['access-control-allow-origin']).toBeUndefined();
+    } finally {
+      await app.close();
+      await auth.close();
+    }
+  });
 });

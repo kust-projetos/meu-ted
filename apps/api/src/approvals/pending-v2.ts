@@ -196,6 +196,34 @@ export const PENDING_V2_EXECUTION_LEASE_MS = 60_000;
 export const PENDING_V2_MAX_TTL_MS = 30 * 60_000;
 
 /**
+ * T12b / API-04: teto explícito do buffer diagnóstico `store.audit`.
+ * O array `audit` é superfície de diagnóstico/teste apenas — nenhum caminho
+ * de produção o lê (o estado autoritativo vive nos records/linhas do DB; a
+ * auditoria durável de negócio vive em `audit_logs`). Sem teto, ele acumulava
+ * um evento por operação durante toda a vida do processo. Acima do teto, a
+ * política é drop-oldest: o mais antigo é evictado e `auditDropped` conta
+ * deterministicamente os evictados para truncamento observável em testes.
+ * Escolha do valor: 200 cobre vários lifecycles completos de debug
+ * (propose→confirm→execute→succeeded = ~3 eventos/op) sem pesar na memória
+ * do processo. Push+evict é síncrono e atômico no event loop JS (sem
+ * await entre eles), logo sem race entre writers concorrentes.
+ */
+export const PENDING_V2_AUDIT_BUFFER_MAX = 200;
+
+const pushAuditEvent = (
+  events: PendingAuditEvent[],
+  dropped: { count: number },
+  event: PendingAuditEvent,
+): void => {
+  events.push(event);
+  if (events.length > PENDING_V2_AUDIT_BUFFER_MAX) {
+    const overflow = events.length - PENDING_V2_AUDIT_BUFFER_MAX;
+    events.splice(0, overflow);
+    dropped.count += overflow;
+  }
+};
+
+/**
  * SPEC §11 (T2.4): lease duration is configurable — explicit override wins,
  * then `PENDING_V2_EXECUTION_LEASE_MS` env, then the 60s default constant
  * (which stays the default source). Claim (TX1) and the reconciler renew
@@ -370,6 +398,13 @@ export type PendingOperationV2Store = {
     opts?: { leaseMs?: number },
   ): Promise<PendingOperationV2Record>;
   readonly audit: readonly PendingAuditEvent[];
+  /**
+   * T12b / API-04: contador determinístico de eventos evictados pelo teto
+   * PENDING_V2_AUDIT_BUFFER_MAX (política drop-oldest). Indicação de
+   * truncamento observável sem inventar schema de DB — 0 quando nada foi
+   * evictado.
+   */
+  readonly auditDropped: number;
 };
 
 type PendingV2Row = Record<string, unknown>;
@@ -458,6 +493,10 @@ export const createPostgresPendingOperationV2Store = (
   options?: PendingOperationV2StoreOptions,
 ): PendingOperationV2Store => {
   const events: PendingAuditEvent[] = [];
+  const auditDropped = { count: 0 };
+  const recordEvent = (event: PendingAuditEvent): void => {
+    pushAuditEvent(events, auditDropped, event);
+  };
   const fail = (code: string, message: string, statusCode = 409): never => { throw new PendingOperationV2Error(code, message, statusCode); };
   const read = async (client: PoolClient, id: string, identity: PendingIdentity, forUpdate = false): Promise<PendingV2Row> => {
     const result = await client.query<PendingV2Row>(`SELECT * FROM pending_operations WHERE id = $1 AND workspace_id = $2 AND protocol_version = 2${forUpdate ? ' FOR UPDATE' : ''}`, [id, identity.workspaceId]);
@@ -468,6 +507,7 @@ export const createPostgresPendingOperationV2Store = (
   };
   return {
     get audit() { return events; },
+    get auditDropped() { return auditDropped.count; },
     async propose(operation) {
       // HIGH integrity fix: bind the synchronous schema snapshot BEFORE any
       // await and use it for everything below — no later reads from the
@@ -486,7 +526,7 @@ export const createPostgresPendingOperationV2Store = (
       const row = result.rows[0]!;
       if (String(row.proposal_hash) !== snapshot.proposalHash) fail('idempotency.conflict', 'Chave de idempotência já utilizada com proposta diferente.');
       const existing = row.is_insert === false;
-      events.push({ operationId: String(row.id), event: 'propose', actorId: snapshot.actorId, at: nowIso() });
+      recordEvent({ operationId: String(row.id), event: 'propose', actorId: snapshot.actorId, at: nowIso() });
       return { ...mapV2(row), existing };
     },
     async get(id, identity) { return mapV2(await read({ query: pool.query.bind(pool) } as unknown as PoolClient, id, identity)); },
@@ -515,7 +555,7 @@ export const createPostgresPendingOperationV2Store = (
         [identity.workspaceId, identity.actorId, identity.deviceId],
       );
       for (const row of expired.rows) {
-        events.push({ operationId: String(row.id), event: 'expire', actorId: String(row.actor_id), at: nowIso() });
+        recordEvent({ operationId: String(row.id), event: 'expire', actorId: String(row.actor_id), at: nowIso() });
       }
       const result = await pool.query<PendingV2Row>(
         `SELECT * FROM pending_operations WHERE workspace_id = $1 AND actor_id = $2 AND device_id = $3 AND protocol_version = 2 AND execution_status IN ('proposed','confirmed','executing','failed') ORDER BY created_at DESC`,
@@ -549,7 +589,7 @@ export const createPostgresPendingOperationV2Store = (
         operationId: existing.rows[0].operation_id ? String(existing.rows[0].operation_id) : null,
       };
     },
-    async confirm(id, identity, authorization: PendingAuthorization = { mode: 'manual', reason: 'policy_required', riskTier: null }, options?: { intentionId?: string }) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); const status = String(row.execution_status); if (Date.parse(String(row.expires_at)) <= Date.now()) { await client.query("UPDATE pending_operations SET execution_status='expired' WHERE id=$1", [id]); events.push({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return fail('approval.expired', 'A proposta expirou.'); } if (options?.intentionId !== undefined) { await bindIntentionToOperation(client, identity, options.intentionId, id, fail); } if (status === 'confirmed') {
+    async confirm(id, identity, authorization: PendingAuthorization = { mode: 'manual', reason: 'policy_required', riskTier: null }, options?: { intentionId?: string }) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); const status = String(row.execution_status); if (Date.parse(String(row.expires_at)) <= Date.now()) { await client.query("UPDATE pending_operations SET execution_status='expired' WHERE id=$1", [id]); recordEvent({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return fail('approval.expired', 'A proposta expirou.'); } if (options?.intentionId !== undefined) { await bindIntentionToOperation(client, identity, options.intentionId, id, fail); } if (status === 'confirmed') {
       // SPEC §9 (H-03) recoverable confirm: lost confirm responses re-emit.
       // Unconsumed attestation rotates atomically in this same transaction:
       // new hash replaces the old (old token invalid), only the new token
@@ -557,10 +597,10 @@ export const createPostgresPendingOperationV2Store = (
       if (row.attestation_consumed_at !== null && row.attestation_consumed_at !== undefined) return mapV2(row);
       const reissued = attestation();
       const reemitted = await client.query<PendingV2Row>("UPDATE pending_operations SET attestation_hash=$2, attestation_issued_at=NOW() WHERE id=$1 RETURNING *", [id, hashAttestation(reissued)]);
-      events.push({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() });
+      recordEvent({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() });
       return mapV2(reemitted.rows[0]!, reissued);
-     } if (status !== 'proposed') return fail('approval.not_pending', 'A operação não está pendente.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_issued_at=NOW(), authorization_mode=$3, authorization_reason=$4, risk_tier=$5, authorized_at=NOW() WHERE id=$1 RETURNING *", [id, hashAttestation(token), authorization.mode, authorization.reason, authorization.riskTier]); events.push({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!, token); }); },
-    async authorize(id, identity, authorization) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); const status = String(row.execution_status); if (Date.parse(String(row.expires_at)) <= Date.now()) { await client.query("UPDATE pending_operations SET execution_status='expired' WHERE id=$1", [id]); events.push({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return fail('approval.expired', 'A proposta expirou.'); } if (status !== 'proposed') return fail('approval.not_pending', 'A operação não está pendente.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_issued_at=NOW(), authorization_mode=$3, authorization_reason=$4, risk_tier=$5, authorized_at=NOW() WHERE id=$1 AND execution_status='proposed' RETURNING *", [id, hashAttestation(token), authorization.mode, authorization.reason, authorization.riskTier]); if (!updated.rows[0]) return fail('approval.not_pending', 'A operação não está pendente.'); events.push({ operationId: id, event: 'authorize', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0], token); }); },
+     } if (status !== 'proposed') return fail('approval.not_pending', 'A operação não está pendente.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_issued_at=NOW(), authorization_mode=$3, authorization_reason=$4, risk_tier=$5, authorized_at=NOW() WHERE id=$1 RETURNING *", [id, hashAttestation(token), authorization.mode, authorization.reason, authorization.riskTier]); recordEvent({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!, token); }); },
+    async authorize(id, identity, authorization) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); const status = String(row.execution_status); if (Date.parse(String(row.expires_at)) <= Date.now()) { await client.query("UPDATE pending_operations SET execution_status='expired' WHERE id=$1", [id]); recordEvent({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return fail('approval.expired', 'A proposta expirou.'); } if (status !== 'proposed') return fail('approval.not_pending', 'A operação não está pendente.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_issued_at=NOW(), authorization_mode=$3, authorization_reason=$4, risk_tier=$5, authorized_at=NOW() WHERE id=$1 AND execution_status='proposed' RETURNING *", [id, hashAttestation(token), authorization.mode, authorization.reason, authorization.riskTier]); if (!updated.rows[0]) return fail('approval.not_pending', 'A operação não está pendente.'); recordEvent({ operationId: id, event: 'authorize', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0], token); }); },
     async execute(token, identity, executor, expectedId?, opts?: { intentionId?: string }) {
       // TX1 — claim. Consumes the attestation, marks `executing`, writes the
       // lease columns, and COMMITS before the executor runs: a failure after
@@ -603,7 +643,7 @@ export const createPostgresPendingOperationV2Store = (
             return fail('approval.intention_conflict', 'Esta confirmação já está vinculada a outra operação.', 409);
           }
         }
-        events.push({ operationId: String(row.id), event: 'execute', actorId: identity.actorId, at: nowIso() });
+        recordEvent({ operationId: String(row.id), event: 'execute', actorId: identity.actorId, at: nowIso() });
         return row;
       });
       // T6.1 stale-finalization guard: the attempt captured at claim. Every
@@ -640,7 +680,7 @@ export const createPostgresPendingOperationV2Store = (
           await client.query("UPDATE pending_operations SET execution_status='failed', failed_at=NOW(), failure_code=$2 WHERE id=$1", [String(claimed.id), sanitizePendingV2FailureCode(error)]);
           return true;
         });
-        if (persistedFailure) events.push({ operationId: String(claimed.id), event: 'fail', actorId: identity.actorId, at: nowIso() });
+        if (persistedFailure) recordEvent({ operationId: String(claimed.id), event: 'fail', actorId: identity.actorId, at: nowIso() });
         throw error;
       }
       if (!isCompleteExecutorResult(result)) {
@@ -703,7 +743,7 @@ export const createPostgresPendingOperationV2Store = (
         const leaseExpiresAt = leaseValue instanceof Date ? leaseValue.getTime() : Date.parse(String(leaseValue));
         if (!Number.isNaN(leaseExpiresAt) && leaseExpiresAt > Date.now()) return fail('approval.execution_in_progress', 'Execução já em andamento.');
         const next = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_lease_expires_at=NOW() + ($2 * INTERVAL '1 millisecond'), execution_attempt_count=execution_attempt_count+1 WHERE id=$1 RETURNING *", [id, resolvePendingV2LeaseMs(opts?.leaseMs ?? options?.leaseMs)]);
-        events.push({ operationId: id, event: 'execute', actorId: identity.actorId, at: nowIso() });
+        recordEvent({ operationId: id, event: 'execute', actorId: identity.actorId, at: nowIso() });
         return next.rows[0]!;
       });
       // V4 T3.1 / T0.4.6: the operation ENTERS reconcile here (lease renewed,
@@ -740,7 +780,7 @@ export const createPostgresPendingOperationV2Store = (
           await client.query("UPDATE pending_operations SET execution_status='failed', failed_at=NOW(), failure_code=$2 WHERE id=$1", [id, sanitizePendingV2FailureCode(error)]);
           return true;
         });
-        if (persistedFailure) events.push({ operationId: id, event: 'fail', actorId: identity.actorId, at: nowIso() });
+        if (persistedFailure) recordEvent({ operationId: id, event: 'fail', actorId: identity.actorId, at: nowIso() });
         throw error;
       }
       if (!isCompleteExecutorResult(result)) {
@@ -775,9 +815,9 @@ export const createPostgresPendingOperationV2Store = (
       });
       return mapV2(updated);
     },
-    async retry(id, identity) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); if (String(row.execution_status) !== 'failed') return fail('approval.retry_not_allowed', 'Retry disponível somente após falha.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_consumed_at=NULL, attestation_issued_at=NOW() WHERE id=$1 RETURNING *", [id, hashAttestation(token)]); events.push({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!, token); }); },
-    async cancel(id, identity) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); if (!['proposed','confirmed'].includes(String(row.execution_status))) return fail('approval.not_pending', 'A operação não está pendente.'); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='cancelled' WHERE id=$1 RETURNING *", [id]); events.push({ operationId: id, event: 'cancel', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!); }); },
-    async expire(id, identity) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); if (!['proposed','confirmed'].includes(String(row.execution_status))) return fail('approval.not_pending', 'A operação não está pendente.'); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='expired' WHERE id=$1 RETURNING *", [id]); events.push({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!); }); },
+    async retry(id, identity) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); if (String(row.execution_status) !== 'failed') return fail('approval.retry_not_allowed', 'Retry disponível somente após falha.'); const token = attestation(); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='confirmed', attestation_hash=$2, attestation_consumed_at=NULL, attestation_issued_at=NOW() WHERE id=$1 RETURNING *", [id, hashAttestation(token)]); recordEvent({ operationId: id, event: 'confirm', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!, token); }); },
+    async cancel(id, identity) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); if (!['proposed','confirmed'].includes(String(row.execution_status))) return fail('approval.not_pending', 'A operação não está pendente.'); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='cancelled' WHERE id=$1 RETURNING *", [id]); recordEvent({ operationId: id, event: 'cancel', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!); }); },
+    async expire(id, identity) { return withTransaction(pool, async (client) => { const row = await read(client, id, identity, true); if (!['proposed','confirmed'].includes(String(row.execution_status))) return fail('approval.not_pending', 'A operação não está pendente.'); const updated = await client.query<PendingV2Row>("UPDATE pending_operations SET execution_status='expired' WHERE id=$1 RETURNING *", [id]); recordEvent({ operationId: id, event: 'expire', actorId: identity.actorId, at: nowIso() }); return mapV2(updated.rows[0]!); }); },
   };
 };
 
@@ -810,13 +850,17 @@ export const createInMemoryPendingOperationV2Store = (
   const intentionKey = (identity: PendingIdentity, intentionId: string): string =>
     [identity.workspaceId, identity.actorId, identity.deviceId, intentionId].join('|');
   const events: PendingAuditEvent[] = [];
+  const auditDropped = { count: 0 };
+  const recordEvent = (event: PendingAuditEvent): void => {
+    pushAuditEvent(events, auditDropped, event);
+  };
   const fail = (code: string, message: string, statusCode = 409): never => { throw new PendingOperationV2Error(code, message, statusCode); };
   const resolve = (id: string, identity: PendingIdentity): PendingOperationV2Record => {
     const record = records.get(id);
     if (!record) return fail('approval.not_found', 'Operação pendente não encontrada.', 404);
     if (!identityMatches(record, identity)) return fail('approval.binding_mismatch', 'A operação não pertence ao contexto autenticado.', 403);
     if (record.status === 'proposed' || record.status === 'confirmed') {
-      if (Date.parse(record.expiresAt) <= Date.now()) { record.status = 'expired'; events.push({ operationId: id, event: 'expire', actorId: record.actorId, at: nowIso() }); }
+      if (Date.parse(record.expiresAt) <= Date.now()) { record.status = 'expired'; recordEvent({ operationId: id, event: 'expire', actorId: record.actorId, at: nowIso() }); }
     }
     return record;
   };
@@ -851,6 +895,7 @@ export const createInMemoryPendingOperationV2Store = (
 
   return {
     get audit() { return events; },
+    get auditDropped() { return auditDropped.count; },
     async propose(operation) {
       // HIGH integrity fix: bind the synchronous schema snapshot BEFORE any
       // await and use it for everything below — no later reads from the
@@ -883,7 +928,7 @@ export const createInMemoryPendingOperationV2Store = (
         createdAt: authoritativeCreatedAt, expiresAt: effectiveExpiresAt, id: randomUUID(), status: 'proposed', executionAttemptCount: 0,
       };
       records.set(record.id, record);
-      events.push({ operationId: record.id, event: 'propose', actorId: snapshot.actorId, at: nowIso() });
+      recordEvent({ operationId: record.id, event: 'propose', actorId: snapshot.actorId, at: nowIso() });
       return { ...expose(record), existing: false };
     },
     async get(id, identity) {
@@ -929,7 +974,7 @@ export const createInMemoryPendingOperationV2Store = (
         current.consumed = true;
         record.attestationIssuedAt = nowIso();
         issue(record);
-        events.push({ operationId: id, event: 'confirm', actorId: record.actorId, at: nowIso() });
+        recordEvent({ operationId: id, event: 'confirm', actorId: record.actorId, at: nowIso() });
         return issued(record);
       }
       if (record.status !== 'proposed') fail('approval.not_pending', 'A proposta não está pendente.');
@@ -940,7 +985,7 @@ export const createInMemoryPendingOperationV2Store = (
       record.status = 'confirmed';
       record.attestationIssuedAt = nowIso();
       issue(record);
-      events.push({ operationId: id, event: 'confirm', actorId: record.actorId, at: nowIso() });
+      recordEvent({ operationId: id, event: 'confirm', actorId: record.actorId, at: nowIso() });
       return issued(record);
     },
     async authorize(id, identity, authorization) {
@@ -954,7 +999,7 @@ export const createInMemoryPendingOperationV2Store = (
       record.status = 'confirmed';
       record.attestationIssuedAt = nowIso();
       issue(record);
-      events.push({ operationId: id, event: 'authorize', actorId: record.actorId, at: nowIso() });
+      recordEvent({ operationId: id, event: 'authorize', actorId: record.actorId, at: nowIso() });
       return issued(record);
     },
     async execute(token, identity, executor, expectedId?, opts?: { intentionId?: string }) {
@@ -1009,7 +1054,7 @@ export const createInMemoryPendingOperationV2Store = (
       const claimAttempt = record.executionAttemptCount ?? 0;
       const stillOurs = (): boolean =>
         record.status === 'executing' && (record.executionAttemptCount ?? 0) === claimAttempt;
-      events.push({ operationId: record.id, event: 'execute', actorId: record.actorId, at: nowIso() });
+      recordEvent({ operationId: record.id, event: 'execute', actorId: record.actorId, at: nowIso() });
       let result: unknown;
       try {
         // T3.3 parity with Postgres mapV2(claimed): the executor callback
@@ -1030,7 +1075,7 @@ export const createInMemoryPendingOperationV2Store = (
         if (stillOurs()) {
           record.status = 'failed';
           record.failureCode = sanitizePendingV2FailureCode(error);
-          events.push({ operationId: record.id, event: 'fail', actorId: record.actorId, at: nowIso() });
+          recordEvent({ operationId: record.id, event: 'fail', actorId: record.actorId, at: nowIso() });
         }
         throw error;
       }
@@ -1093,7 +1138,7 @@ export const createInMemoryPendingOperationV2Store = (
       const renewAttempt = record.executionAttemptCount ?? 0;
       const stillRenewed = (): boolean =>
         record.status === 'executing' && (record.executionAttemptCount ?? 0) === renewAttempt;
-      events.push({ operationId: id, event: 'execute', actorId: record.actorId, at: nowIso() });
+      recordEvent({ operationId: id, event: 'execute', actorId: record.actorId, at: nowIso() });
       // The SAME executor runs with the SAME persisted idempotencyKey.
       let result: unknown;
       try {
@@ -1110,7 +1155,7 @@ export const createInMemoryPendingOperationV2Store = (
         if (stillRenewed()) {
           record.status = 'failed';
           record.failureCode = sanitizePendingV2FailureCode(error);
-          events.push({ operationId: id, event: 'fail', actorId: record.actorId, at: nowIso() });
+          recordEvent({ operationId: id, event: 'fail', actorId: record.actorId, at: nowIso() });
         }
         throw error;
       }
@@ -1146,21 +1191,21 @@ export const createInMemoryPendingOperationV2Store = (
       record.status = 'confirmed';
       record.attestationIssuedAt = nowIso();
       issue(record);
-      events.push({ operationId: id, event: 'confirm', actorId: record.actorId, at: nowIso() });
+      recordEvent({ operationId: id, event: 'confirm', actorId: record.actorId, at: nowIso() });
       return issued(record);
     },
     async cancel(id, identity) {
       const record = resolve(id, identity);
       if (!['proposed', 'confirmed'].includes(record.status)) fail('approval.not_pending', 'A operação não está pendente.');
       record.status = 'cancelled';
-      events.push({ operationId: id, event: 'cancel', actorId: record.actorId, at: nowIso() });
+      recordEvent({ operationId: id, event: 'cancel', actorId: record.actorId, at: nowIso() });
       return expose(record);
     },
     async expire(id, identity) {
       const record = resolve(id, identity);
       if (!['proposed', 'confirmed'].includes(record.status)) throw new PendingOperationV2Error('approval.not_pending', 'A operação não está pendente.');
       record.status = 'expired';
-      events.push({ operationId: id, event: 'expire', actorId: record.actorId, at: nowIso() });
+      recordEvent({ operationId: id, event: 'expire', actorId: record.actorId, at: nowIso() });
       return expose(record);
     },
     /**
@@ -1180,7 +1225,7 @@ export const createInMemoryPendingOperationV2Store = (
         if (!['proposed', 'confirmed'].includes(record.status)) continue;
         if (Date.parse(record.expiresAt) <= Date.now()) {
           record.status = 'expired';
-          events.push({ operationId: record.id, event: 'expire', actorId: record.actorId, at: nowIso() });
+          recordEvent({ operationId: record.id, event: 'expire', actorId: record.actorId, at: nowIso() });
         }
       }
       return [...records.values()]

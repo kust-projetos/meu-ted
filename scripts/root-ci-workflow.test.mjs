@@ -15,6 +15,11 @@ test('root CI runs the write policy checker', () => {
   assert.match(workflow, /node --test scripts\/check-write-policy\.test\.mjs/);
 });
 
+test('root CI lints shared contracts and enforces the PWA command boundary (T13 GOV-06/07)', () => {
+  assert.match(workflow, /pnpm --filter @pi-finance\/llm-contracts --fail-if-no-match lint/);
+  assert.match(workflow, /pnpm boundary:check/);
+});
+
 test('root CI runs workspace builds and tests', () => {
   assert.match(workflow, /pnpm --filter meu-ted-api --fail-if-no-match build/);
   assert.match(workflow, /pnpm --filter pi-finance-agent --fail-if-no-match build/);

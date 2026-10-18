@@ -95,6 +95,15 @@ Estado vigente: API `bd1ed9b` na VPS Contabo (release 2026-10-04 via wrapper,
 na Cloudflare (deploy 2026-10-07, build `37631044197`; ver
 [relatório](reports/2026-10-07-ted-agent-a19-controlled-rollout.md)).
 
+> **Nota de vigência (T13, 2026-10-18):** o snapshot acima é histórico
+> preservado — o estado vigente de produção vive em
+> [`MEU-TED-V1-FINAL-STATE.md`](MEU-TED-V1-FINAL-STATE.md) (14/10/2026:
+> API `fd3481f` na Contabo, Agent/PWA `715b2cf` na Cloudflare, código
+> V1-textual `fd3481f`). Nenhum SHA foi trocado automaticamente por HEAD
+> aqui; fatos de código (migrations, capabilities) derivam de
+> [`runtime-facts.json`](architecture/runtime-facts.json), fatos live só
+> por evidência autorizada.
+
 ## Dados e esquema
 
 - A API de produção serve o esquema canônico (`DB_SCHEMA=canonical`, banco
@@ -107,7 +116,11 @@ na Cloudflare (deploy 2026-10-07, build `37631044197`; ver
 - O uso de bearer legado é registrado em sink durável em `audit_logs`
   (`auth.request.legacy_bearer_used`, PRs #51/#52); a janela Release B foi
   **reiniciada** no corte para a VPS Contabo — contagem a partir de
-  2026-10-02T21:36:06Z (115 eventos, idênticos nas duas origens), fechando em
-  **2026-10-16T21:36:06Z** ([`reports/2026-10-03-vps-migration-contabo.md`](reports/2026-10-03-vps-migration-contabo.md)).
+  2026-10-02T21:36:06Z (115 eventos, idênticos nas duas origens). Releitura
+  de 13/10 com filtro exclusivo `> 2026-10-02T21:36:06Z`: COUNT=136, MAX
+  `2026-10-10T22:09:01.594968Z`; nova janela zero-14-dias fecha
+  **~2026-10-24T22:09Z** se nada mais ocorrer (ver
+  [`ROADMAP.md`](ROADMAP.md) e
+  [`reports/2026-10-03-vps-migration-contabo.md`](reports/2026-10-03-vps-migration-contabo.md)).
   O flip (`SESSION_BEARER_FALLBACK_ENABLED=off` + rebuild do PWA com
   `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`) permanece gate humano.

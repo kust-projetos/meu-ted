@@ -18,7 +18,11 @@ function makeLegacyPool(): { pool: Pool; sql: string[] } {
         return { rowCount: 0, rows: [] };
       }
       if (text.includes("INSERT INTO operation_records")) {
-        if (text.includes("household_id") || text.includes("request_payload") || text.includes("actor_type")) {
+        // V016 adiciona `actor_type` a operation_records (incondicional,
+        // com CHECK IN ('device','user')); só `household_id` (coluna
+        // inexistente no canônico, que usa `workspace_id`) e
+        // `request_payload` (envelope legado inexistente) seguem recusados.
+        if (text.includes("household_id") || text.includes("request_payload")) {
           throw new Error(
             'column "household_id" of relation "operation_records" does not exist',
           );
@@ -124,6 +128,9 @@ describe("legacy production idempotency wiring", () => {
       expect(operationInsert).toContain("ON CONFLICT (workspace_id, idempotency_key) DO NOTHING");
       expect(operationInsert).not.toContain("household_id");
       expect(operationInsert).not.toContain("request_payload");
+      // T09: o claim canônico transporta o ator autenticado (V016:
+      // `actor_type` existe em operation_records desde a migration).
+      expect(operationInsert).toContain("actor_type");
 
       const auditInsert = sql.find((statement) =>
         statement.includes("INSERT INTO audit_logs"),
@@ -138,6 +145,9 @@ describe("legacy production idempotency wiring", () => {
       expect(auditInsert).not.toContain("operation_record_id");
       expect(auditInsert).not.toContain("workspace_id");
       expect(auditInsert).not.toContain("payload_hash");
+      // V016 só adiciona `actor_type` ao audit_logs quando `workspace_id`
+      // existe — nunca no audit legacy hybrid (sem workspace_id).
+      expect(auditInsert).not.toContain("actor_type");
     } finally {
       await app.close();
     }

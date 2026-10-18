@@ -16,7 +16,7 @@ import { DEFAULT_CATEGORY_CATALOG } from '../categories/catalog.js';
 import { assertCategoryKind, CARD_EXPENSE_KIND_MESSAGE } from '../categories/resolve.js';
 import { withTransaction } from '../db/pool.js';
 import { domainErrors, DomainError } from './errors.js';
-import { buildIdempotencyKey, hashPayloadV2, matchesPayloadHash, type IdempotencyProducer } from './idempotency.js';
+import { buildIdempotencyKey, hashPayloadV2, matchesPayloadHash, type IdempotencyActorContext, type IdempotencyProducer } from './idempotency.js';
 import { runKeyedMutation } from './pending-idempotency.js';
 import type { ApplyDefaultsResult, DeleteCategoryResult, WriteStore } from './store.js';
 import { resolveApplicationUserId } from '../auth/resolve-user-id.js';
@@ -1458,6 +1458,88 @@ export const resolveCanonicalAuditOperation = (response: unknown, operation?: st
   }
 };
 
+/**
+ * T09 (fatia FÁTICA) — valida o ator da sessão para novos records.
+ *
+ * Contrato fail-closed: `actorId`/`actorType` vêm SOMENTE da sessão
+ * autenticada (nunca do body). Qualquer string com whitespace EM
+ * QUALQUER posição — bordas ou interior (`/\s/`) — indica entrada
+ * contaminada e é REJEITADA como "sem ator explícito": o callsite
+ * descarta o valor manchado e o claim cai nos defaults históricos
+ * (`actor_id='device'` no canônico, `'unknown'` no legacy;
+ * `actor_type='device'`), sem nunca fabricar autoria. Sessão
+ * autenticada nunca fabrica espaços, então a regra estrita não tem
+ * falso-positivo legítimo. `actorId` vazio ou `actorType` fora de
+ * ('device','user') seguem inválidos (throw) — só o whitespace é
+ * degradado para defaults, pois indica contaminação de um ator que
+ * de outra forma seria válido. Chamadas sem ator (forma string
+ * legada) preservam os defaults históricos.
+ */
+const parseExplicitActor = (actor: unknown): IdempotencyActorContext => {
+  if (typeof actor !== 'object' || actor === null || Array.isArray(actor)) {
+    throw domainErrors.invalid('actor', 'actor must be an authenticated session context');
+  }
+  const record = actor as Record<string, unknown>;
+  if (typeof record['actorId'] !== 'string' || record['actorId'].trim() === '') {
+    throw domainErrors.invalid('actorId', 'actorId must come from the authenticated session');
+  }
+  if (/\s/.test(record['actorId'])) {
+    throw domainErrors.invalid('actorId', 'actorId must not contain whitespace');
+  }
+  if (record['actorType'] !== 'device' && record['actorType'] !== 'user') {
+    throw domainErrors.invalid('actorType', "actorType must be 'device' or 'user'");
+  }
+  return { actorId: record['actorId'], actorType: record['actorType'] };
+};
+
+/**
+ * T09-r1: detecta ator explícito contaminado com whitespace (bordas ou
+ * interior) antes de validar. Valor manchado = sem ator explícito —
+ * o chamador preserva `undefined` e o claim cai nos defaults
+ * históricos abaixo (fail-closed, nunca persiste string contaminada).
+ *
+ * T09-r2: o taint é CONJUNTO — qualquer campo contaminado contamina o
+ * contexto inteiro (id E tipo descartados juntos; nunca par misto).
+ * A checagem estrutural roda ANTES do taint (ver
+ * `assertStringFormActorStructurallyValid`): só o whitespace degrada
+ * para defaults; vazio/inválido fora do enum continua lançando.
+ */
+const isTaintedExplicitActor = (actor: unknown): boolean => {
+  if (typeof actor !== 'object' || actor === null || Array.isArray(actor)) return false;
+  const record = actor as Record<string, unknown>;
+  return (
+    (typeof record['actorId'] === 'string' && /\s/.test(record['actorId'])) ||
+    (typeof record['actorType'] === 'string' && /\s/.test(record['actorType']))
+  );
+};
+
+const hasActorWhitespace = (value: unknown): value is string =>
+  typeof value === 'string' && /\s/.test(value);
+
+/**
+ * T09-r2 P2-2: validação estrutural da forma string (5º parâmetro,
+ * ator obrigatório quando presente). Roda ANTES do taint: `actorId`
+ * vazio e `actorType` fora do enum estrito lançam mesmo com o campo
+ * irmão manchado. Valores com whitespace são deformação por
+ * contaminação — NÃO lançam aqui; caem no descarte integral via
+ * `isTaintedExplicitActor` (defaults históricos, fail-closed).
+ */
+const assertStringFormActorStructurallyValid = (actor: unknown): void => {
+  if (typeof actor !== 'object' || actor === null || Array.isArray(actor)) {
+    parseExplicitActor(actor);
+    return;
+  }
+  const record = actor as Record<string, unknown>;
+  const rawId = record['actorId'];
+  if (typeof rawId !== 'string' || rawId.trim() === '') {
+    throw domainErrors.invalid('actorId', 'actorId must come from the authenticated session');
+  }
+  const rawType = record['actorType'];
+  if ((rawType !== 'device' && rawType !== 'user') && !hasActorWhitespace(rawType)) {
+    throw domainErrors.invalid('actorType', "actorType must be 'device' or 'user'");
+  }
+};
+
 export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: boolean }): import('./idempotency.js').IdempotencyStore => {
   const { pool, legacy } = opts;
   // V4.1 Phase 3 Tasks 3.6/3.7: new claims hash V2 (SHA-256 over canonical
@@ -1465,19 +1547,58 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
   // replay — reads compare tolerantly via matchesPayloadHash.
   const hash = (payload: unknown): string => hashPayloadV2(payload);
   return {
-    async lookupOrRecord(scopeOrHouseholdId: any, keyOrPayload: any, payloadOrProducer: any, maybeProducer?: any) {
+    async lookupOrRecord(scopeOrHouseholdId: any, keyOrPayload: any, payloadOrProducer: any, maybeProducer?: any, maybeActor?: any) {
       let householdId: string;
       let key: string;
       let payload: unknown;
       let producer: IdempotencyProducer<any>;
       let operation: string | undefined;
       let actorId: string | undefined;
+      let actorType: 'device' | 'user' | undefined;
 
       if (typeof scopeOrHouseholdId === 'object' && scopeOrHouseholdId !== null) {
         householdId = scopeOrHouseholdId.householdId ?? scopeOrHouseholdId.workspaceId;
         key = scopeOrHouseholdId.key;
         operation = scopeOrHouseholdId.operation;
-        actorId = scopeOrHouseholdId.actorId;
+        // T09-r2 P2-1+P2-2 (forma objeto: invites/workspaces): o contexto de
+        // ator é CONJUNTO. (1) Validação estrutural primeiro — actorId vazio
+        // e actorType fora do enum ('device'|'user', CHECK da V016) lançam
+        // mesmo com o irmão manchado; whitespace NÃO lança aqui.
+        // (2) Qualquer whitespace em QUALQUER campo descarta id E tipo
+        // juntos (nunca par misto) → defaults históricos abaixo.
+        // (3) Contexto limpo persiste. Campos ausentes seguem ausentes
+        // (callsites ainda não migrados preservados).
+        const rawObjectActorId: unknown = scopeOrHouseholdId.actorId;
+        const rawObjectActorType: unknown = scopeOrHouseholdId.actorType;
+        if (rawObjectActorId !== undefined || rawObjectActorType !== undefined) {
+          if (
+            rawObjectActorId !== undefined &&
+            (typeof rawObjectActorId !== 'string' || rawObjectActorId.trim() === '')
+          ) {
+            throw domainErrors.invalid('actorId', 'actorId must come from the authenticated session');
+          }
+          if (
+            rawObjectActorType !== undefined &&
+            rawObjectActorType !== 'device' &&
+            rawObjectActorType !== 'user' &&
+            !hasActorWhitespace(rawObjectActorType)
+          ) {
+            throw domainErrors.invalid('actorType', "actorType must be 'device' or 'user'");
+          }
+          if (hasActorWhitespace(rawObjectActorId) || hasActorWhitespace(rawObjectActorType)) {
+            actorId = undefined;
+            actorType = undefined;
+          } else {
+            // T09: a forma objeto já carrega actorType (invites/workspaces) mas
+            // nunca o persistia (default 'device'). Persiste quando válido.
+            if (typeof rawObjectActorId === 'string') {
+              actorId = rawObjectActorId;
+            }
+            if (rawObjectActorType === 'device' || rawObjectActorType === 'user') {
+              actorType = rawObjectActorType;
+            }
+          }
+        }
         payload = keyOrPayload;
         producer = payloadOrProducer;
       } else {
@@ -1485,6 +1606,20 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
         key = keyOrPayload;
         payload = payloadOrProducer;
         producer = maybeProducer;
+        // T09: ator explícito da sessão autenticada (nunca do body). A
+        // chave composta NÃO inclui ator — replay/hash preservados.
+        // T09-r2 P2-1+P2-2: (1) estrutural primeiro (throw no inválido
+        // mesmo com irmão manchado); (2) whitespace em QUALQUER campo
+        // descarta id E tipo juntos (nunca par misto) → defaults
+        // históricos; (3) limpo persiste via parseExplicitActor.
+        if (maybeActor !== undefined) {
+          assertStringFormActorStructurallyValid(maybeActor);
+          if (!isTaintedExplicitActor(maybeActor)) {
+            const explicit = parseExplicitActor(maybeActor);
+            actorId = explicit.actorId;
+            actorType = explicit.actorType;
+          }
+        }
       }
 
       // Canonical composite key: raw key for the legacy string form,
@@ -1494,18 +1629,22 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
         : key;
 
       const payloadHash = hash(payload);
+      // T09: defaults históricos quando a chamada não carrega ator — nenhuma
+      // reescrita de comportamento para callsites ainda não migrados.
+      const resolvedActorId = actorId ?? (legacy ? 'unknown' : 'device');
+      const resolvedActorType = actorType ?? 'device';
       return withTransaction(pool, async (client) => {
         if (legacy) {
           // Hybrid VPS: operation_records is CANONICAL, audit_logs is LEGACY
           const claim = await client.query<{ id: string; status: string; response: unknown; effect_ref: string | null }>(
             `INSERT INTO operation_records
-               (workspace_id, actor_id, operation, idempotency_key, payload_hash, status,
+               (workspace_id, actor_id, operation, idempotency_key, payload_hash, actor_type, status,
                 lease_until, retry_until, retention_until)
-             VALUES ($1, $2, $3, $4, $5, 'processing',
+             VALUES ($1, $2, $3, $4, $5, $6, 'processing',
                      NOW() + INTERVAL '5 minutes', NOW() + INTERVAL '7 days', NOW() + INTERVAL '90 days')
              ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
              RETURNING id, status, response, effect_ref`,
-            [householdId, actorId ?? 'unknown', operation ?? 'write', compositeKey, payloadHash],
+            [householdId, resolvedActorId, operation ?? 'write', compositeKey, payloadHash, resolvedActorType],
           );
 
           if (claim.rowCount === 1) {
@@ -1577,13 +1716,13 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
         // verified receipt at each completion site.
         const claim = await client.query<{ id: string; status: string; response: unknown; effect_ref: string | null }>(
           `INSERT INTO operation_records
-             (workspace_id, actor_id, operation, idempotency_key, payload_hash, status,
+             (workspace_id, actor_id, operation, idempotency_key, payload_hash, actor_type, status,
               lease_until, retry_until, retention_until)
-           VALUES ($1, $2, $3, $4, $5, 'processing',
+           VALUES ($1, $2, $3, $4, $5, $6, 'processing',
                    NOW() + INTERVAL '5 minutes', NOW() + INTERVAL '7 days', NOW() + INTERVAL '90 days')
            ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
            RETURNING id, status, response, effect_ref`,
-          [householdId, actorId ?? 'device', operation ?? 'write', compositeKey, payloadHash],
+          [householdId, resolvedActorId, operation ?? 'write', compositeKey, payloadHash, resolvedActorType],
         );
 
         if (claim.rowCount === 1) {
@@ -1605,17 +1744,18 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
           );
           await client.query(
             `INSERT INTO audit_logs
-               (id, operation_record_id, workspace_id, actor_id, operation, event_type, payload_hash, effect_ref, metadata)
-             VALUES ($1, $2, $3, $4, $5, 'financial_effect.committed', $6, $7, $8)`,
+               (id, operation_record_id, workspace_id, actor_id, operation, event_type, payload_hash, effect_ref, metadata, actor_type)
+             VALUES ($1, $2, $3, $4, $5, 'financial_effect.committed', $6, $7, $8, $9)`,
             [
               randomUUID(),
               recordId,
               householdId,
-              actorId ?? 'device',
+              resolvedActorId,
               auditOperation,
               payloadHash,
               effectRef,
               JSON.stringify({ entityType: auditEntityType }),
+              resolvedActorType,
             ],
           );
           return { response, replayed: false };
@@ -1640,17 +1780,18 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
           );
           await client.query(
             `INSERT INTO audit_logs
-               (id, operation_record_id, workspace_id, actor_id, operation, event_type, payload_hash, effect_ref, metadata)
-             VALUES ($1, $2, $3, $4, $5, 'financial_effect.committed', $6, $7, $8)`,
+               (id, operation_record_id, workspace_id, actor_id, operation, event_type, payload_hash, effect_ref, metadata, actor_type)
+             VALUES ($1, $2, $3, $4, $5, 'financial_effect.committed', $6, $7, $8, $9)`,
             [
               randomUUID(),
               recordId,
               householdId,
-              actorId ?? 'device',
+              resolvedActorId,
               auditOperation,
               payloadHash,
               effectRef,
               JSON.stringify({ entityType: auditEntityType }),
+              resolvedActorType,
             ],
           );
           return { response, replayed: false };
