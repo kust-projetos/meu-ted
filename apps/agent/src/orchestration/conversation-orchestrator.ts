@@ -86,6 +86,19 @@ import {
 
 export type ConversationChannel = 'pwa-rest' | 'sdk' | 'broker';
 
+/**
+ * T08 — deterministic fail-closed reply for an `unsupported` turn carrying
+ * ADMITTED attachment data whose composed text trips the financial-claim
+ * guard. It names the true cause (unverified attachment content, never
+ * affirmed as a ledger record) instead of asserting a ledger-read failure —
+ * one cause must never prove the other's. No figures, no instruction
+ * surface, ends in guidance to TYPED input (voice as an authorization
+ * command stays out of scope). Guard-safe by construction: no digits, no
+ * finance noun, so the reply itself could never trip the guard above.
+ */
+export const ATTACHMENT_CONTENT_UNVERIFIED_TEXT =
+  'Não consigo confirmar valores ou saldos só pelo conteúdo do anexo. Diga por texto o que você quer consultar.';
+
 export type SafeAttachmentMetadata = Readonly<{
   name: string;
   type?: string;
@@ -3969,8 +3982,21 @@ export class ConversationOrchestrator {
     // balances. Reply deterministically without calling the provider.
     // Mutation/draft turns return above, so this never intercepts them.
     if (plan.mode === 'unsupported' && makesUnverifiedFinancialClaim(input.text)) {
+      // T08: an unsupported turn WITH admitted attachment data tripped the
+      // guard on attachment-derived content — not on a failed ledger read.
+      // `FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT` ("couldn't access your financial
+      // data") is the READ-path failure (runGroundedRead: null/error envelope);
+      // emitting it here would assert a ledger read was attempted and failed —
+      // unproven, since no read was routed. The cause here is unverified
+      // attachment content, so the reply names that cause and guides to typed
+      // input. No figures, no provider call, fail-closed like the path below.
+      // Turns WITHOUT admitted data keep the byte-identical legacy reply.
+      const text =
+        input.hasAttachmentData === true
+          ? ATTACHMENT_CONTENT_UNVERIFIED_TEXT
+          : FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT;
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
-      return freeze({ ...result, failClosed: true as const, response: freeze({ text: FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT }) });
+      return freeze({ ...result, failClosed: true as const, response: freeze({ text }) });
     }
     const responseText = plan.mode === 'read'
       ? `Consulta preparada para ${plan.domain}.`
