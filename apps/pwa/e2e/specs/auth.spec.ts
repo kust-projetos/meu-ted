@@ -37,8 +37,9 @@ test("[AUTH-01] cookie-first login confirms session and registers a device", asy
   await page.goto("/");
   await authenticate(page);
 
-  // Session cookie is the authority; the candidate build explicitly closes
-  // the legacy bearer window, so neither device nor session tokens persist.
+  // Session cookie is the authority; the candidate build closes the legacy
+  // bearer window (the session bearer never persists). T04: the device token
+  // persists independently of that window, avoiding the re-registration storm.
   const journal = await getJournal(id);
   const signInEntry = journal.find((e) => e.method === "POST" && e.path === "/auth/sign-in/email");
   const regEntry = journal.find((e) => e.method === "POST" && e.path === "/auth/devices/register");
@@ -49,10 +50,10 @@ test("[AUTH-01] cookie-first login confirms session and registers a device", asy
   expect(regEntry!.status).toBe(200);
   expect(sessionEntry).toBeDefined();
 
-  // No bearer/device secret is persisted in the cookie-only profile.
+  // The session bearer is never persisted; the device token persists (T04).
   const token = await page.evaluate((key) => localStorage.getItem(key), TOKEN_KEY);
   const sessionToken = await page.evaluate(() => localStorage.getItem("pi-finance:session-token"));
-  expect(token).toBeNull();
+  expect(token).not.toBeNull();
   expect(sessionToken).toBeNull();
 
   // Authenticated home
@@ -78,9 +79,11 @@ test("[AUTH-02] session 401 clears sensitive state and returns to login", async 
   const rejectedSession = journal.find((e) => e.method === "GET" && e.path === "/auth/session" && e.status === 401);
   expect(rejectedSession).toBeDefined();
 
-  // The candidate uses cookie-only auth and must not retain bearer identity.
+  // Cookie-only auth retains zero SESSION bearer identity. T04: a session
+  // rejection is not device revocation — the device token survives so the
+  // next login reuses the registered device instead of minting a new one.
   const tokenAfter = await page.evaluate((key) => localStorage.getItem(key), TOKEN_KEY);
-  expect(tokenAfter).toBeNull();
+  expect(tokenAfter).not.toBeNull();
   const sessionTokenAfter = await page.evaluate(() => localStorage.getItem("pi-finance:session-token"));
   expect(sessionTokenAfter).toBeNull();
 

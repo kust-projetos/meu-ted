@@ -210,10 +210,11 @@ test("[PROF-06] cookie-only logout revokes the session → login gate, no reauth
     }, { timeout: 10000 })
     .not.toHaveLength(0);
 
-  // Cookie-only profile (NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off): no bearer
-  // persists — neither the device token nor the session token.
+  // Cookie-only profile (NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off): the session
+  // bearer never persists. T04: the device token persists in this profile —
+  // persistence is independent of the legacy bearer window.
   const tokenBefore = await page.evaluate((k) => localStorage.getItem(k), TOKEN_KEY);
-  expect(tokenBefore).toBeNull();
+  expect(tokenBefore).not.toBeNull();
   const sessionTokenBefore = await page.evaluate(() => localStorage.getItem("pi-finance:session-token"));
   expect(sessionTokenBefore).toBeNull();
 
