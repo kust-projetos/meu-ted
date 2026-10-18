@@ -30,6 +30,8 @@ export type UpdatePayableInput = Parameters<PayableStore['updatePayable']>[2];
 export type CreatePayableTemplateInput = Parameters<PayableStore['createTemplate']>[1];
 export type PayableFromTemplateInput = Parameters<PayableStore['createPayableFromTemplate']>[1];
 export type CreatePayableWithTemplateInput = Parameters<PayableStore['createPayableWithTemplate']>[1];
+export type UnpayPayableInput = { expectedPaidTransactionId?: string };
+export type CancelPayableInput = { reason?: string };
 
 /**
  * V4.1 Phase 3 (UOW2) — non-contractual client-bound payable mutations of
@@ -44,6 +46,13 @@ export type PayableStoreTxExtensions = {
     input: CreatePayableWithTemplateInput,
   ): Promise<Payable>;
   markPayablePaidInTx(client: PoolClient, householdId: string, payableId: string, input: PayInput): Promise<Payable>;
+  undoPayablePaymentInTx(
+    client: PoolClient,
+    householdId: string,
+    payableId: string,
+    opts?: UnpayPayableInput,
+  ): Promise<Payable>;
+  cancelPayableInTx(client: PoolClient, householdId: string, payableId: string): Promise<Payable>;
   updatePayableInTx(
     client: PoolClient,
     householdId: string,
@@ -111,6 +120,20 @@ export async function runPayableMutation(
   store: PayableStore,
   claimTx: unknown,
   householdId: string,
+  op: 'unpay',
+  input: { id: string; opts?: UnpayPayableInput },
+): Promise<Payable>;
+export async function runPayableMutation(
+  store: PayableStore,
+  claimTx: unknown,
+  householdId: string,
+  op: 'cancel',
+  input: { id: string; reason?: string },
+): Promise<Payable>;
+export async function runPayableMutation(
+  store: PayableStore,
+  claimTx: unknown,
+  householdId: string,
   op: 'createTemplate',
   input: CreatePayableTemplateInput,
 ): Promise<PayableTemplate>;
@@ -125,12 +148,12 @@ export async function runPayableMutation(
   store: PayableStore,
   claimTx: unknown,
   householdId: string,
-  op: 'create' | 'createWithTemplate' | 'pay' | 'update' | 'createTemplate' | 'fromTemplate',
+  op: 'create' | 'createWithTemplate' | 'pay' | 'unpay' | 'cancel' | 'update' | 'createTemplate' | 'fromTemplate',
   input:
     | CreatePayableInput
     | CreatePayableWithTemplateInput
     | { id: string; input: PayInput }
-    | { id: string; patch: UpdatePayableInput }
+    | { id: string; opts?: UnpayPayableInput; reason?: string; patch?: UpdatePayableInput }
     | CreatePayableTemplateInput
     | PayableFromTemplateInput,
 ): Promise<Payable | PayableTemplate> {
@@ -161,6 +184,17 @@ export async function runPayableMutation(
           return ext.updatePayableInTx(claimTx, householdId, id, patch);
         }
         throw domainErrors.atomicMutationNotSupported();
+      case 'unpay':
+        if (typeof ext.undoPayablePaymentInTx === 'function') {
+          const { id, opts } = input as { id: string; opts?: UnpayPayableInput };
+          return ext.undoPayablePaymentInTx(claimTx, householdId, id, opts);
+        }
+        throw domainErrors.atomicMutationNotSupported();
+      case 'cancel':
+        if (typeof ext.cancelPayableInTx === 'function') {
+          return ext.cancelPayableInTx(claimTx, householdId, (input as { id: string }).id);
+        }
+        throw domainErrors.atomicMutationNotSupported();
       case 'createTemplate':
         if (typeof ext.createTemplateInTx === 'function') {
           return ext.createTemplateInTx(claimTx, householdId, input as CreatePayableTemplateInput);
@@ -185,6 +219,14 @@ export async function runPayableMutation(
     case 'update': {
       const { id, patch } = input as { id: string; patch: UpdatePayableInput };
       return store.updatePayable(householdId, id, patch);
+    }
+    case 'unpay': {
+      const { id, opts } = input as { id: string; opts?: UnpayPayableInput };
+      return store.undoPayablePayment(householdId, id, opts);
+    }
+    case 'cancel': {
+      const { id, reason } = input as { id: string; reason?: string };
+      return store.cancelPayable(householdId, id, reason);
     }
     case 'createTemplate':
       return store.createTemplate(householdId, input as CreatePayableTemplateInput);

@@ -113,15 +113,26 @@ export const registerSubscriptionRoutes = (
     } catch (e) { return handleError(e, reply); }
   });
 
-  // POST /subscriptions/:id/cancel — cancel a subscription
+  // POST /subscriptions/:id/cancel — cancel a subscription.
+  // T06: keyed through the claim tx (runSubscriptionMutation 'cancel').
   app.post('/subscriptions/:id/cancel', async (req, reply) => {
     let ctx;
     try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
+    const rawKey = req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
+    const key = rawKey !== undefined ? requireIdempotencyKey(req.headers) : undefined;
+    const payload = { id: params.data.id };
+    const fn = async (claimTx?: unknown) => {
+      const sub = await runSubscriptionMutation(opts.subscriptionStore, claimTx, ctx.householdId, 'cancel', { id: params.data.id });
+      return { status: 200 as const, body: attachMutationReceipt(sub, 'subscription.delete', { type: 'subscription', id: params.data.id }) };
+    };
     try {
-      const sub = await opts.subscriptionStore.cancelSubscription(ctx.householdId, params.data.id);
-      return reply.code(200).send(attachMutationReceipt(sub, 'subscription.delete', { type: 'subscription', id: params.data.id }));
+      const result = key
+        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'POST /subscriptions/:id/cancel', resourceId: params.data.id }, payload), fn)
+        : { response: await fn(), replayed: false };
+      if (result.replayed) reply.header('Idempotent-Replayed', 'true');
+      return reply.code(result.response.status).send(result.response.body);
     } catch (e) { return handleError(e, reply); }
   });
 
@@ -141,9 +152,23 @@ export const registerSubscriptionRoutes = (
     if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
     const parsed = updateSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
+    const rawKey = req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
+    const key = rawKey !== undefined ? requireIdempotencyKey(req.headers) : undefined;
+    // T06: keyed through the claim tx (runSubscriptionMutation 'update').
+    const payload = { id: params.data.id, ...parsed.data };
+    const fn = async (claimTx?: unknown) => {
+      const sub = await runSubscriptionMutation(opts.subscriptionStore, claimTx, ctx.householdId, 'update', {
+        id: params.data.id,
+        patch: parsed.data as Parameters<typeof opts.subscriptionStore.updateSubscription>[2],
+      });
+      return { status: 200 as const, body: attachMutationReceipt(sub, 'subscription.update', { type: 'subscription', id: params.data.id }) };
+    };
     try {
-      const sub = await opts.subscriptionStore.updateSubscription(ctx.householdId, params.data.id, parsed.data as Parameters<typeof opts.subscriptionStore.updateSubscription>[2]);
-      return reply.code(200).send(attachMutationReceipt(sub, 'subscription.update', { type: 'subscription', id: params.data.id }));
+      const result = key
+        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'PATCH /subscriptions/:id', resourceId: params.data.id }, payload), fn)
+        : { response: await fn(), replayed: false };
+      if (result.replayed) reply.header('Idempotent-Replayed', 'true');
+      return reply.code(result.response.status).send(result.response.body);
     } catch (e) { return handleError(e, reply); }
   });
 };

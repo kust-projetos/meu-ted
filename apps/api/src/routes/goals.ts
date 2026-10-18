@@ -134,8 +134,22 @@ export const registerGoalRoutes = (
   app.post('/goals/:id/cancel', async (req, reply) => {
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleErr(e, reply); }
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params); if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
-    try { const g = await opts.goalStore.cancelGoal(ctx.householdId, params.data.id); return reply.send(attachMutationReceipt(g, 'goal.delete', { type: 'goal', id: params.data.id })); }
-    catch (e) { return handleErr(e, reply); }
+    const rawKey = req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
+    const key = rawKey !== undefined ? requireIdempotencyKey(req.headers) : undefined;
+    // T06: keyed through the claim tx (runGoalMutation 'cancel') — replaying
+    // the original response even when the state is already terminal.
+    const payload = { id: params.data.id };
+    const fn = async (claimTx?: unknown) => {
+      const g = await runGoalMutation(opts.goalStore, claimTx, ctx.householdId, 'cancel', { id: params.data.id });
+      return { status: 200 as const, body: attachMutationReceipt(g, 'goal.delete', { type: 'goal', id: params.data.id }) };
+    };
+    try {
+      const result = key
+        ? await opts.idempotency.lookupOrRecord(ctx.householdId, key, httpIdempotencyPayload({ route: 'POST /goals/:id/cancel', resourceId: params.data.id }, payload), fn)
+        : { response: await fn(), replayed: false };
+      if (result.replayed) reply.header('Idempotent-Replayed', 'true');
+      return reply.code(result.response.status).send(result.response.body);
+    } catch (e) { return handleErr(e, reply); }
   });
 
   app.patch('/goals/:id', async (req, reply) => {

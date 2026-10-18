@@ -301,7 +301,10 @@ export const registerPayableRoutes = (
     }
   });
 
-  // POST /payables/:id/unpay — undo payment
+  // POST /payables/:id/unpay — undo payment.
+  // T06: keyed through the claim tx (runPayableMutation 'unpay') so the
+  // payment reversal commits atomically with claim + completion — exactly
+  // one reversal per intention/key, never a duplicated reversal.
   app.post("/payables/:id/unpay", async (req, reply) => {
     let ctx: Awaited<ReturnType<typeof resolve>>;
     try {
@@ -319,13 +322,27 @@ export const registerPayableRoutes = (
       return reply
         .code(400)
         .send({ code: "validation.error", issues: parsedUnpay.error.issues });
+    const rawKeyUnpay = req.headers[IDEMPOTENCY_HEADER] ?? req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
+    const key = rawKeyUnpay !== undefined ? requireIdempotencyKey(req.headers) : undefined;
+    const payload = { id: params.data.id, ...parsedUnpay.data };
+    const fn = async (claimTx?: unknown) => {
+      const p = await runPayableMutation(opts.payableStore, claimTx, ctx.householdId, 'unpay', {
+        id: params.data.id,
+        opts: { expectedPaidTransactionId: parsedUnpay.data.paidTransactionId },
+      });
+      return { status: 200 as const, body: attachMutationReceipt(p, 'payable.payment.undo', { type: 'payable', id: params.data.id }) };
+    };
     try {
-      const p = await opts.payableStore.undoPayablePayment(
-        ctx.householdId,
-        params.data.id,
-        { expectedPaidTransactionId: parsedUnpay.data.paidTransactionId },
-      );
-      return reply.code(200).send(attachMutationReceipt(p, 'payable.payment.undo', { type: 'payable', id: params.data.id }));
+      const result = key
+        ? await opts.idempotency.lookupOrRecord(
+            ctx.householdId,
+            key,
+            httpIdempotencyPayload({ route: 'POST /payables/:id/unpay', resourceId: params.data.id }, payload),
+            fn,
+          )
+        : { response: await fn(), replayed: false };
+      if (result.replayed) reply.header("Idempotent-Replayed", "true");
+      return reply.code(result.response.status).send(result.response.body);
     } catch (e) {
       return handleError(e, reply);
     }
@@ -397,7 +414,10 @@ export const registerPayableRoutes = (
     }
   });
 
-  // POST /payables/:id/cancel
+  // POST /payables/:id/cancel.
+  // T06: keyed through the claim tx (runPayableMutation 'cancel') so the
+  // effect commits atomically with claim + completion. An invalid body is
+  // rejected with 400 BEFORE any store call (no write).
   app.post("/payables/:id/cancel", async (req, reply) => {
     let ctx: Awaited<ReturnType<typeof resolve>>;
     try {
@@ -411,13 +431,31 @@ export const registerPayableRoutes = (
         .code(400)
         .send({ code: "validation.error", issues: params.error.issues });
     const parsed = cancelSchema.safeParse(req.body ?? {});
+    if (!parsed.success)
+      return reply
+        .code(400)
+        .send({ code: "validation.error", issues: parsed.error.issues });
+    const rawKey = req.headers[IDEMPOTENCY_HEADER] ?? req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
+    const key = rawKey !== undefined ? requireIdempotencyKey(req.headers) : undefined;
+    const payload = { id: params.data.id, ...parsed.data };
+    const fn = async (claimTx?: unknown) => {
+      const p = await runPayableMutation(opts.payableStore, claimTx, ctx.householdId, 'cancel', {
+        id: params.data.id,
+        ...(parsed.data.reason !== undefined ? { reason: parsed.data.reason } : {}),
+      });
+      return { status: 200 as const, body: attachMutationReceipt(p, 'payable.delete', { type: 'payable', id: params.data.id }) };
+    };
     try {
-      const p = await opts.payableStore.cancelPayable(
-        ctx.householdId,
-        params.data.id,
-        parsed.data?.reason,
-      );
-      return reply.code(200).send(attachMutationReceipt(p, 'payable.delete', { type: 'payable', id: params.data.id }));
+      const result = key
+        ? await opts.idempotency.lookupOrRecord(
+            ctx.householdId,
+            key,
+            httpIdempotencyPayload({ route: 'POST /payables/:id/cancel', resourceId: params.data.id }, payload),
+            fn,
+          )
+        : { response: await fn(), replayed: false };
+      if (result.replayed) reply.header("Idempotent-Replayed", "true");
+      return reply.code(result.response.status).send(result.response.body);
     } catch (e) {
       return handleError(e, reply);
     }

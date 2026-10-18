@@ -135,5 +135,6 @@ export const createPostgresGoalStore = (pool: Pool): GoalStore => {
     createGoalInTx,
     contributeToGoalInTx,
     updateGoalInTx,
+    cancelGoalInTx,
   });
 };

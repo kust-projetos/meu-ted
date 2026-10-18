@@ -696,6 +696,82 @@ const configureNotificationInTx = async (
   return mapNotification(row);
 };
 
+/**
+ * Client-bound payment-undo core (no transaction handling): shared by the
+ * plain path (own tx) and keyed route producers that join the idempotency
+ * claim transaction (T06 single-tx — no duplicated payment reversal).
+ */
+export const undoPayablePaymentInTx = async (
+  client: PoolClient,
+  householdId: string,
+  payableId: string,
+  opts?: {
+    expectedPaidTransactionId?: string;
+  },
+): Promise<Payable> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
+  const existing = await client.query<Row>(
+    `SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+    [payableId, householdId],
+  );
+  if (existing.rowCount === 0 || existing.rows.length === 0) throw domainErrors.notFound("Conta a pagar");
+  if (existing.rows[0]!.status !== "paid")
+    throw new DomainError(
+      "validation.invalid",
+      "Apenas contas pagas podem ter pagamento desfeito",
+      409,
+    );
+  const p = mapPayable(existing.rows[0]!);
+  // V4.1 Task 2.x (D4): the undo contract carries the linked
+  // paidTransactionId; a caller that knows it must present the right
+  // one, otherwise the undo is rejected instead of reversing the
+  // wrong financial effect.
+  if (
+    opts?.expectedPaidTransactionId !== undefined &&
+    p.paidTransactionId !== opts.expectedPaidTransactionId
+  ) {
+    throw new DomainError(
+      "validation.invalid",
+      "paidTransactionId não confere com o pagamento vinculado",
+      409,
+    );
+  }
+  const newStatus = todayISO() <= p.dueDate ? "pending" : "overdue";
+  await client.query(
+    `UPDATE accounts_payable SET status = $1, paid_date = NULL, paid_amount_cents = NULL, paid_transaction_id = NULL, updated_at = NOW() WHERE id = $2 AND household_id = $3`,
+    [newStatus, payableId, householdId],
+  );
+  if (p.paidTransactionId) {
+    // Reverse the debit booked by markPayablePaid in the same tx, then
+    // soft-delete the linked expense. The recurring successor (if any)
+    // is intentionally kept (D4).
+    const txRows = await client.query<Row>(
+      `SELECT amount_cents, account_id FROM transactions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
+      [p.paidTransactionId, householdId],
+    );
+    if ((txRows.rowCount ?? 0) > 0) {
+      await client.query(
+        `SELECT id FROM accounts WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+        [txRows.rows[0]!["account_id"], householdId],
+      );
+      await client.query(
+        `UPDATE accounts SET balance_cents = balance_cents + $1, updated_at = NOW() WHERE id = $2 AND household_id = $3`,
+        [Number(txRows.rows[0]!["amount_cents"]), txRows.rows[0]!["account_id"], householdId],
+      );
+    }
+    await client.query(
+      `UPDATE transactions SET deleted_at = NOW() WHERE id = $1 AND household_id = $2`,
+      [p.paidTransactionId, householdId],
+    );
+  }
+  const rows = await client.query<Row>(
+    `SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2`,
+    [payableId, householdId],
+  );
+  return mapPayable(rows.rows[0]!);
+};
+
 export const createPostgresPayableStore = (pool: Pool): PayableStore => {
   const query = async <R extends Row = Row>(
     text: string,
@@ -755,69 +831,7 @@ export const createPostgresPayableStore = (pool: Pool): PayableStore => {
     },
 
     async undoPayablePayment(householdId, payableId, opts) {
-      return withTransaction(pool, async (client) => {
-        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
-        await assertWorkspaceWritableInTx(client, householdId);
-        const existing = await client.query<Row>(
-          `SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
-          [payableId, householdId],
-        );
-        if (existing.rowCount === 0 || existing.rows.length === 0) throw domainErrors.notFound("Conta a pagar");
-        if (existing.rows[0]!.status !== "paid")
-          throw new DomainError(
-            "validation.invalid",
-            "Apenas contas pagas podem ter pagamento desfeito",
-            409,
-          );
-        const p = mapPayable(existing.rows[0]!);
-        // V4.1 Task 2.x (D4): the undo contract carries the linked
-        // paidTransactionId; a caller that knows it must present the right
-        // one, otherwise the undo is rejected instead of reversing the
-        // wrong financial effect.
-        if (
-          opts?.expectedPaidTransactionId !== undefined &&
-          p.paidTransactionId !== opts.expectedPaidTransactionId
-        ) {
-          throw new DomainError(
-            "validation.invalid",
-            "paidTransactionId não confere com o pagamento vinculado",
-            409,
-          );
-        }
-        const newStatus = todayISO() <= p.dueDate ? "pending" : "overdue";
-        await client.query(
-          `UPDATE accounts_payable SET status = $1, paid_date = NULL, paid_amount_cents = NULL, paid_transaction_id = NULL, updated_at = NOW() WHERE id = $2 AND household_id = $3`,
-          [newStatus, payableId, householdId],
-        );
-        if (p.paidTransactionId) {
-          // Reverse the debit booked by markPayablePaid in the same tx, then
-          // soft-delete the linked expense. The recurring successor (if any)
-          // is intentionally kept (D4).
-          const txRows = await client.query<Row>(
-            `SELECT amount_cents, account_id FROM transactions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
-            [p.paidTransactionId, householdId],
-          );
-          if ((txRows.rowCount ?? 0) > 0) {
-            await client.query(
-              `SELECT id FROM accounts WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
-              [txRows.rows[0]!["account_id"], householdId],
-            );
-            await client.query(
-              `UPDATE accounts SET balance_cents = balance_cents + $1, updated_at = NOW() WHERE id = $2 AND household_id = $3`,
-              [Number(txRows.rows[0]!["amount_cents"]), txRows.rows[0]!["account_id"], householdId],
-            );
-          }
-          await client.query(
-            `UPDATE transactions SET deleted_at = NOW() WHERE id = $1 AND household_id = $2`,
-            [p.paidTransactionId, householdId],
-          );
-        }
-        const rows = await client.query<Row>(
-          `SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2`,
-          [payableId, householdId],
-        );
-        return mapPayable(rows.rows[0]!);
-      });
+      return withTransaction(pool, (client) => undoPayablePaymentInTx(client, householdId, payableId, opts));
     },
 
 
@@ -911,6 +925,8 @@ export const createPostgresPayableStore = (pool: Pool): PayableStore => {
     createPayableInTx,
     createPayableWithTemplateInTx,
     markPayablePaidInTx,
+    undoPayablePaymentInTx,
+    cancelPayableInTx,
     updatePayableInTx,
     createTemplateInTx,
     createPayableFromTemplateInTx,

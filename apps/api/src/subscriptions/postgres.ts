@@ -10,7 +10,7 @@ import type { Subscription } from '../types/domain.js';
 import { withTransaction } from '../db/pool.js';
 import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
 import { domainErrors } from '../writes/errors.js';
-import type { CreateSubscriptionInput, SubscriptionStore, } from './store.js';
+import type { CreateSubscriptionInput, SubscriptionStore, UpdateSubscriptionInput } from './store.js';
 
 type Row = Record<string, unknown>;
 
@@ -54,6 +54,80 @@ export const createSubscriptionInTx = async (
   return mapSubscription(res.rows[0]!);
 };
 
+/**
+ * V4.1 Phase 3 (UOW2) — client-bound subscription-cancellation core (no
+ * transaction handling). The plain method runs it in its own transaction;
+ * the keyed route producer (see subscriptions/keyed-mutations.ts) runs it
+ * on the open idempotency claim client (T06 single-tx).
+ */
+export const cancelSubscriptionInTx = async (
+  client: PoolClient,
+  householdId: string,
+  id: string,
+): Promise<Subscription> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
+  const existing = await client.query<Row>(
+    `SELECT id, household_id, name, amount_cents, cycle, day, payment_method, status, created_at, cancelled_at
+       FROM subscriptions
+      WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
+    [id, householdId],
+  );
+  if (existing.rowCount === 0) throw domainErrors.notFound('Assinatura');
+  const sub = mapSubscription(existing.rows[0]!);
+  if (sub.status !== 'active') throw domainErrors.invalid('status', 'assinatura não está ativa');
+
+  const res = await client.query<Row>(
+    `UPDATE subscriptions
+        SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
+      WHERE id = $1 AND household_id = $2
+      RETURNING id, household_id, name, amount_cents, cycle, day, payment_method, status, created_at, cancelled_at`,
+    [id, householdId],
+  );
+  return mapSubscription(res.rows[0]!);
+};
+
+/**
+ * V4.1 Phase 3 (UOW2) — client-bound subscription-update core (no
+ * transaction handling). Same ownership as cancelSubscriptionInTx above.
+ */
+export const updateSubscriptionInTx = async (
+  client: PoolClient,
+  householdId: string,
+  id: string,
+  input: UpdateSubscriptionInput,
+): Promise<Subscription> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
+  const existing = await client.query<Row>(
+    `SELECT id FROM subscriptions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
+    [id, householdId],
+  );
+  if (existing.rowCount === 0) throw domainErrors.notFound('Assinatura');
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  // Keys id/householdId are unshifted as $1/$2 below, so the first
+  // field placeholder must be $3 (was: idx = 1 → $2, misbinding
+  // every PATCH and supplying one param too many).
+  let idx = 2;
+  if (input.name !== undefined) { sets.push(`name = $${++idx}`); params.push(input.name); }
+  if (input.amountCents !== undefined) { sets.push(`amount_cents = $${++idx}`); params.push(input.amountCents); }
+  if (input.cycle !== undefined) { sets.push(`cycle = $${++idx}`); params.push(input.cycle); }
+  if (input.day !== undefined) { sets.push(`day = $${++idx}`); params.push(input.day); }
+  if (input.paymentMethod !== undefined) { sets.push(`payment_method = $${++idx}`); params.push(input.paymentMethod); }
+  if (sets.length === 0) throw domainErrors.invalid('body', 'nenhum campo para atualizar');
+
+  params.unshift(id, householdId);
+  const res = await client.query<Row>(
+    `UPDATE subscriptions SET ${sets.join(', ')}, updated_at = NOW()
+      WHERE id = $1 AND household_id = $2
+      RETURNING id, household_id, name, amount_cents, cycle, day, payment_method, status, created_at, cancelled_at`,
+    params,
+  );
+  return mapSubscription(res.rows[0]!);
+};
+
 export const createPostgresSubscriptionStore = (pool: Pool): SubscriptionStore => {  const query = async <R extends Row = Row>(text: string, values: unknown[] = []): Promise<R[]> => {
     const res = await pool.query<R>(text, values);
     return res.rows;
@@ -81,28 +155,7 @@ export const createPostgresSubscriptionStore = (pool: Pool): SubscriptionStore =
     },
 
     async cancelSubscription(householdId, id) {
-      return withTransaction(pool, async (client) => {
-        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
-        await assertWorkspaceWritableInTx(client, householdId);
-        const existing = await client.query<Row>(
-          `SELECT id, household_id, name, amount_cents, cycle, day, payment_method, status, created_at, cancelled_at
-             FROM subscriptions
-            WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
-          [id, householdId],
-        );
-        if (existing.rowCount === 0) throw domainErrors.notFound('Assinatura');
-        const sub = mapSubscription(existing.rows[0]!);
-        if (sub.status !== 'active') throw domainErrors.invalid('status', 'assinatura não está ativa');
-
-        const res = await client.query<Row>(
-          `UPDATE subscriptions
-              SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
-            WHERE id = $1 AND household_id = $2
-            RETURNING id, household_id, name, amount_cents, cycle, day, payment_method, status, created_at, cancelled_at`,
-          [id, householdId],
-        );
-        return mapSubscription(res.rows[0]!);
-      });
+      return withTransaction(pool, (client) => cancelSubscriptionInTx(client, householdId, id));
     },
 
     async getSubscription(householdId, id) {
@@ -117,44 +170,16 @@ export const createPostgresSubscriptionStore = (pool: Pool): SubscriptionStore =
     },
 
     async updateSubscription(householdId, id, input) {
-      return withTransaction(pool, async (client) => {
-        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
-        await assertWorkspaceWritableInTx(client, householdId);
-        const existing = await client.query<Row>(
-          `SELECT id FROM subscriptions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
-          [id, householdId],
-        );
-        if (existing.rowCount === 0) throw domainErrors.notFound('Assinatura');
-
-        const sets: string[] = [];
-        const params: unknown[] = [];
-        // Keys id/householdId are unshifted as $1/$2 below, so the first
-        // field placeholder must be $3 (was: idx = 1 → $2, misbinding
-        // every PATCH and supplying one param too many).
-        let idx = 2;
-        if (input.name !== undefined) { sets.push(`name = $${++idx}`); params.push(input.name); }
-        if (input.amountCents !== undefined) { sets.push(`amount_cents = $${++idx}`); params.push(input.amountCents); }
-        if (input.cycle !== undefined) { sets.push(`cycle = $${++idx}`); params.push(input.cycle); }
-        if (input.day !== undefined) { sets.push(`day = $${++idx}`); params.push(input.day); }
-        if (input.paymentMethod !== undefined) { sets.push(`payment_method = $${++idx}`); params.push(input.paymentMethod); }
-        if (sets.length === 0) throw domainErrors.invalid('body', 'nenhum campo para atualizar');
-
-        params.unshift(id, householdId);
-        const res = await client.query<Row>(
-          `UPDATE subscriptions SET ${sets.join(', ')}, updated_at = NOW()
-            WHERE id = $1 AND household_id = $2
-            RETURNING id, household_id, name, amount_cents, cycle, day, payment_method, status, created_at, cancelled_at`,
-          params,
-        );
-        return mapSubscription(res.rows[0]!);
-      });
+      return withTransaction(pool, (client) => updateSubscriptionInTx(client, householdId, id, input));
     },
   };
-  // V4.1 Phase 3 (UOW2): expose the client-bound core as a non-contractual
-  // extension (see SubscriptionStoreTxExtensions in
+  // V4.1 Phase 3 (UOW2): expose the client-bound cores as non-contractual
+  // extensions (see SubscriptionStoreTxExtensions in
   // subscriptions/keyed-mutations.ts). The declared factory return type
   // stays SubscriptionStore.
   return Object.assign(store, {
     createSubscriptionInTx,
+    cancelSubscriptionInTx,
+    updateSubscriptionInTx,
   });
 };

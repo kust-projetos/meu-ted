@@ -8,6 +8,7 @@
  * same behavior.
  */
 
+import type { PoolClient } from 'pg';
 import type { Account, Category, Transaction } from '../types/domain.js';
 import type {
   CreateAccountInput,
@@ -97,4 +98,28 @@ export type WriteStore = {
   createTransfer(householdId: string, input: CreateTransferInput): Promise<Transaction>;
   updateTransaction(householdId: string, id: string, patch: UpdateTransactionInput): Promise<Transaction>;
   softDeleteTransaction(householdId: string, id: string): Promise<Transaction>;
+};
+
+/**
+ * T05/T06 — non-contractual client-bound account/category cores of the
+ * canonical Postgres write store (see writes/postgres.ts, same member
+ * pattern as WriteStoreMutationTxExtensions for transactions).
+ *
+ * Keyed route producers (see writes/keyed-mutations.ts runAccountMutation /
+ * runCategoryMutation) duck-type these and run the effect on the open
+ * idempotency claim client, so claim + financial effect + receipt/completion
+ * commit atomically in ONE transaction. NOT part of `WriteStore` — existing
+ * callers (in-memory, legacy) are unaffected; the dispatch falls back to
+ * the plain methods without a claim client and fails closed
+ * (`atomicMutationNotSupported`) with a claim client but no extension.
+ */
+export type WriteStoreAccountCategoryTxExtensions = {
+  createAccountInTx(client: PoolClient, householdId: string, input: CreateAccountInput): Promise<Account>;
+  updateAccountInTx(client: PoolClient, householdId: string, id: string, patch: UpdateAccountInput): Promise<Account>;
+  deactivateAccountInTx(client: PoolClient, householdId: string, id: string): Promise<Account>;
+  createCategoryInTx(client: PoolClient, householdId: string, input: CreateCategoryInput): Promise<Category>;
+  updateCategoryInTx(client: PoolClient, householdId: string, id: string, patch: UpdateCategoryInput): Promise<Category>;
+  deactivateCategoryInTx(client: PoolClient, householdId: string, id: string): Promise<Category>;
+  applyCategoryDefaultsInTx(client: PoolClient, householdId: string): Promise<ApplyDefaultsResult>;
+  deleteCategoryInTx(client: PoolClient, householdId: string, id: string, input: DeleteCategoryInput): Promise<DeleteCategoryResult>;
 };
