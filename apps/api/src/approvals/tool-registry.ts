@@ -14,6 +14,7 @@
 import type { z } from 'zod';
 import type { MutationReceipt } from '@pi-finance/llm-contracts';
 import { createExpenseInputSchema, createIncomeInputSchema } from '../writes/types.js';
+import { DomainError } from '../writes/errors.js';
 import type { WriteStore } from '../writes/store.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
 import { AUTOEXECUTION_ELIGIBLE_TOOLS } from './policy.js';
@@ -112,6 +113,14 @@ const executeExpenseCreate: ApprovalToolExecutor = async ({
   // the way back): from here the outcome is uncertain, never a deterministic
   // pre-write failure. Map every writer throw to the typed marker with a
   // safe message — the raw cause must never reach the API response.
+  //
+  // T12c: DomainError is the ONE exception. WriteStore throws DomainError
+  // only for pre-commit domain validation (every DomainError site in
+  // createExpense/createIncome runs before the INSERT inside the same
+  // transaction, so the rollback proves nothing was written). It rethrows
+  // unchanged so pending-v2 persists `failed` with retry; any other error
+  // (driver loss after commit, timeout, malformed record) may be post-write
+  // and stays uncertain.
   let transaction: { id: string };
   try {
     // V2 execution audit: the explicit tool operation + server-bound actor
@@ -120,7 +129,8 @@ const executeExpenseCreate: ApprovalToolExecutor = async ({
       idempotencyKey,
       audit: { operation: 'transactions.expense.create', actorId },
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
     throw createApprovalExecutionUncertainError();
   }
   const operationId = transaction.id;
@@ -150,6 +160,8 @@ const executeIncomeCreate: ApprovalToolExecutor = async ({
   if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
   // Same uncertainty contract as the expense path: any writer throw after
   // the write started is an unknown outcome, never a deterministic failure.
+  // T12c: same DomainError carve-out — pre-commit validation with proven
+  // rollback rethrows deterministic; anything else stays uncertain.
   let transaction: { id: string };
   try {
     // V2 execution audit: explicit tool operation + server-bound actor.
@@ -157,7 +169,8 @@ const executeIncomeCreate: ApprovalToolExecutor = async ({
       idempotencyKey,
       audit: { operation: 'transactions.income.create', actorId },
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
     throw createApprovalExecutionUncertainError();
   }
   const operationId = transaction.id;
