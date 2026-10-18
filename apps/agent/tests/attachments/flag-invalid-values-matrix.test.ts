@@ -15,8 +15,22 @@
 import { describe, expect, it, vi } from 'vitest';
 import { isUploadFlagEnabled } from '../../src/attachments/upload-gate.js';
 import { isPdfTextEnabled } from '../../src/multimodal/pdf-text.js';
-import { isAudioSttFlagEnabled } from '../../src/multimodal/groq-stt.js';
-import { isVisionFlagEnabled } from '../../src/multimodal/groq-vision.js';
+import {
+  GROQ_STT_DEFAULT_MODEL,
+  GROQ_STT_DEFAULT_TIMEOUT_MS,
+  isAudioSttFlagEnabled,
+  resolveSttModel,
+  resolveSttTimeoutMs,
+} from '../../src/multimodal/groq-stt.js';
+import {
+  GROQ_VISION_DEFAULT_TIMEOUT_MS,
+  isVisionFlagEnabled,
+  resolveVisionTimeoutMs,
+} from '../../src/multimodal/groq-vision.js';
+import {
+  GEMINI_VISION_DEFAULT_TIMEOUT_MS,
+  resolveGeminiVisionTimeoutMs,
+} from '../../src/multimodal/gemini-vision.js';
 import { isPrivateViewsEnabled } from '../../src/privacy/conversation-visibility.js';
 import { createWebSearchProvider } from '../../src/agent-config/web.js';
 
@@ -95,5 +109,81 @@ describe('T12f — famílias estritas: whitespace NEGA (sem trim universal)', ()
       fetchMock as unknown as typeof fetch,
     );
     expect(on.available).toBe(true);
+  });
+});
+
+describe('T12f — seletor de modelo STT: fora da allowlist volta ao default (nunca desliga; string inválida nunca lança)', () => {
+  it("TED_AUDIO_STT_MODEL: desconhecido/vazio/ausente/não-string ⇒ default 'whisper-large-v3-turbo'", () => {
+    for (const bad of ['gpt-4o', 'whisper-large', 'WHISPER-LARGE-V3-TURBO', '', '   ', '1']) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(resolveSttModel({ TED_AUDIO_STT_MODEL: bad } as any), JSON.stringify(bad)).toBe(
+        GROQ_STT_DEFAULT_MODEL,
+      );
+    }
+    expect(resolveSttModel({})).toBe(GROQ_STT_DEFAULT_MODEL);
+    expect(resolveSttModel(undefined)).toBe(GROQ_STT_DEFAULT_MODEL);
+    // Não-string (ex.: número) fora do tipo `GroqSttEnv`: o acesso a `.trim()`
+    // lança hoje — fora do contrato tipado, sem pin aqui e sem mudança de source.
+    expect(GROQ_STT_DEFAULT_MODEL).toBe('whisper-large-v3-turbo');
+  });
+
+  it('TED_AUDIO_STT_MODEL: os 2 deployments da allowlist passam (aparado), sem fallback de rede', () => {
+    for (const ok of ['whisper-large-v3-turbo', 'whisper-large-v3', '  whisper-large-v3  ']) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(resolveSttModel({ TED_AUDIO_STT_MODEL: ok } as any), JSON.stringify(ok)).toBe(
+        (ok as string).trim(),
+      );
+    }
+  });
+});
+
+describe('T12f — timeouts: conversão + trunc + clamp 1–120000 ms (nunca desligam, nunca lançam)', () => {
+  const CASES = [
+    { resolve: resolveSttTimeoutMs, key: 'TED_AUDIO_STT_TIMEOUT_MS', fallback: GROQ_STT_DEFAULT_TIMEOUT_MS },
+    { resolve: resolveVisionTimeoutMs, key: 'TED_VISION_TIMEOUT_MS', fallback: GROQ_VISION_DEFAULT_TIMEOUT_MS },
+    { resolve: resolveGeminiVisionTimeoutMs, key: 'TED_VISION_TIMEOUT_MS', fallback: GEMINI_VISION_DEFAULT_TIMEOUT_MS },
+  ] as const;
+
+  it('não-numérico/ausente/Infinity ⇒ default do serviço', () => {
+    for (const { resolve, key, fallback } of CASES) {
+      for (const bad of ['abc', 'NaN', 'Infinity', '12ms', '--5']) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        expect(resolve({ [key]: bad } as any), `${key}=${JSON.stringify(bad)}`).toBe(fallback);
+      }
+      expect(resolve({}), `${key} ausente`).toBe(fallback);
+      expect(resolve(undefined), `${key} env ausente`).toBe(fallback);
+    }
+  });
+
+  it("vazio ⇒ 1 ms (Number('') é 0, finito, clampado ao piso — NÃO é default)", () => {
+    for (const { resolve, key } of CASES) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(resolve({ [key]: '' } as any), key).toBe(1);
+    }
+  });
+
+  it('finito fora da banda ⇒ clamp: ≤0 vira 1, >120000 vira 120000; frações truncam', () => {
+    for (const { resolve, key } of CASES) {
+      const at = (v: string) =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        resolve({ [key]: v } as any);
+      expect(at('0'), key).toBe(1);
+      expect(at('-5'), key).toBe(1);
+      expect(at('-0.5'), key).toBe(1);
+      expect(at('0.9'), key).toBe(1);
+      expect(at('120001'), key).toBe(120_000);
+      expect(at('999999999'), key).toBe(120_000);
+      expect(at('12.9'), `${key} trunca`).toBe(12);
+      expect(at('1'), `${key} piso exato`).toBe(1);
+      expect(at('120000'), `${key} teto exato`).toBe(120_000);
+      expect(at('5000'), `${key} meio da banda`).toBe(5000);
+      expect(at('  5000  '), `${key} com whitespace numérico`).toBe(5000);
+    }
+  });
+
+  it('defaults divergem por serviço: STT 20 s, visões 30 s', () => {
+    expect(GROQ_STT_DEFAULT_TIMEOUT_MS).toBe(20_000);
+    expect(GROQ_VISION_DEFAULT_TIMEOUT_MS).toBe(30_000);
+    expect(GEMINI_VISION_DEFAULT_TIMEOUT_MS).toBe(30_000);
   });
 });

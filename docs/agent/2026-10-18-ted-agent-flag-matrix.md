@@ -1,9 +1,15 @@
 # Matriz de flags do Agent (TED_*) — 2026-10-18
 
 Tarefa T12f (plano `docs/superpowers/plans/2026-10-17-full-project-review-remediation.md`, finding AGT-02).
-Todas as flags são **default-off / fail-closed**: ausente, vazia ou inválida = capacidade desligada.
+Os **habilitadores on/off** (`TED_*_ENABLED`, coortes, keys) são **default-off / fail-closed**:
+ausente, vazia ou inválida = capacidade desligada.
 **Não aplicar trim universal**: o valor exato fail-closed é intencional para capacidades de egress,
 e as famílias abaixo divergem **de propósito**.
+**Seletores e timeouts NÃO são fail-closed**: seletores (modelos/providers) com valor
+desconhecido voltam ao **default nomeado** (nunca desligam); timeouts numéricos são
+**convertidos, truncados e clampados à banda 1–120000 ms** (`Number()` + `Math.trunc` +
+clamp; vazio `''` ⇒ `Number('')=0` ⇒ **1 ms**, não o default; só não-numérico/ausente/
+infinito ⇒ default do serviço) — ver linhas de `TED_*_MODEL`/`TED_*_TIMEOUT_MS` abaixo.
 
 ## Famílias
 
@@ -22,13 +28,13 @@ e as famílias abaixo divergem **de propósito**.
 | `TED_AUDIO_STT_ENABLED` | agent | `'1'` (com trim) | off | inválido ⇒ trava tripla fechada (`available=false`), zero rede; key sozinha nunca habilita | `tests/attachments/groq-stt.test.ts` + `flag-invalid-values-matrix.test.ts` |
 | `TED_AUDIO_STT_COHORT` | agent | CSV; `'*'` = todos | ninguém | vazia/ausente ⇒ ninguém (fail-closed) | `tests/attachments/groq-stt.test.ts` |
 | `GROQ_API_KEY` | agent | string não-vazia (lida no call time, nunca logada) | ausente | sem key ⇒ STT indisponível | `tests/attachments/groq-stt.test.ts` |
-| `TED_AUDIO_STT_MODEL` | agent | allowlist dos 2 deployments Whisper da Groq | default | desconhecido ⇒ default | `tests/attachments/groq-stt.test.ts` |
-| `TED_AUDIO_STT_TIMEOUT_MS` | agent | ms numérico | 20 s | inválido ⇒ default | `tests/attachments/groq-stt.test.ts` |
+| `TED_AUDIO_STT_MODEL` | agent | allowlist dos 2 deployments Whisper da Groq | default `whisper-large-v3-turbo` | desconhecido/vazio/ausente/não-string ⇒ default (seletor, NÃO fail-closed: nunca desliga, nunca lança) | `tests/attachments/groq-stt.test.ts` + `flag-invalid-values-matrix.test.ts` |
+| `TED_AUDIO_STT_TIMEOUT_MS` | agent | ms numérico; finito ⇒ `trunc` + clamp 1–120000 | 20 s | não-numérico/ausente/`Infinity` ⇒ default 20 s; `''` ⇒ **1 ms** (`Number('')=0` clampado ao piso); `0`/negativo ⇒ 1; `>120000` ⇒ 120000; frações truncam (timeout, NÃO fail-closed: nunca desliga, nunca lança) | `tests/attachments/groq-stt.test.ts` + `flag-invalid-values-matrix.test.ts` |
 | `TED_VISION_ENABLED` | agent | `'1'` (com trim, parser único compartilhado groq+gemini) | off | inválido ⇒ trava tripla fechada, zero rede | `tests/attachments/gemini-vision.test.ts` + `flag-invalid-values-matrix.test.ts` |
 | `TED_VISION_COHORT` | agent | CSV; `'*'` = todos | ninguém | vazia/ausente ⇒ ninguém | `tests/attachments/gemini-vision.test.ts` |
 | `TED_VISION_PROVIDER` | agent | `groq` (default) ou `gemini` | `groq` | desconhecido ⇒ `groq` (preserva legado) | `tests/attachments/gemini-vision.test.ts` |
-| `TED_VISION_MODEL` | agent | allowlist fechada do provider ativo | default do provider | desconhecido ⇒ default | `tests/attachments/gemini-vision.test.ts` |
-| `TED_VISION_TIMEOUT_MS` | agent | ms numérico (banda sã) | 30 s | inválido ⇒ default | `tests/attachments/gemini-vision.test.ts` |
+| `TED_VISION_MODEL` | agent | allowlist fechada do provider ativo | default do provider | desconhecido/vazio/ausente ⇒ default (seletor, NÃO fail-closed) | `tests/attachments/gemini-vision.test.ts` + `flag-invalid-values-matrix.test.ts` (semântica de seletor) |
+| `TED_VISION_TIMEOUT_MS` | agent | ms numérico; finito ⇒ `trunc` + clamp 1–120000 (mesma semântica do STT) | 30 s | não-numérico/ausente/`Infinity` ⇒ default 30 s; `''` ⇒ **1 ms**; `0`/negativo ⇒ 1; `>120000` ⇒ 120000; frações truncam (timeout, NÃO fail-closed) | `tests/attachments/gemini-vision.test.ts` + `flag-invalid-values-matrix.test.ts` |
 | `GROQ_API_KEY` / `GOOGLE_AI_STUDIO_KEY` | agent | string não-vazia (call time, nunca logada) | ausente | sem key do provider ativo ⇒ visão indisponível | `tests/attachments/gemini-vision.test.ts` |
 | `TED_WEB_SEARCH_ENABLED` | agent | exatamente `'1'` | off | `' 1 '` com key ⇒ `disabled`, provider nunca alcançado; key sozinha nunca habilita | `tests/cognitive-web.test.ts` + `flag-invalid-values-matrix.test.ts` |
 | `TED_WEB_FETCH_ALLOWED_HOSTS` | agent | CSV de hosts exatos | vazio (= `web_fetch` indisponível) | ausente/vazio ⇒ bloqueado; host fora da lista recusado antes de rede | `tests/cognitive-web.test.ts` |
