@@ -13,6 +13,14 @@
  * e no `audit_logs` canônico do fresh claim. Sem migration (colunas já
  * existem via V013/V016), sem mudar chave composta (replay/hash
  * preservados), sem tocar eleição FIX-188 do undo.
+ *
+ * T09-r1 (P2/MEDIUM): `parseExplicitActor` persistia ID com whitespace
+ * (`" user-123 "` chegava ao INSERT). Fail-closed: qualquer whitespace
+ * em qualquer posição indica entrada contaminada (sessão autenticada
+ * nunca fabrica espaços) ⇒ valor manchado = sem ator explícito, cai
+ * nos defaults históricos (`device` canônico / `unknown` legacy, nunca
+ * fabrica). Invariantes body-strip/key/hash + whitespace rodam SEM PG
+ * (fake pool); só fresh-claim e replay exigem PG (condicional por env).
  */
 import { describe, expect, it, afterAll, beforeAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
@@ -38,12 +46,35 @@ if (!ENABLED) {
   );
 }
 
+type Captured = { text: string; values?: unknown[] };
+
+/**
+ * Fake pool (sem PG): captura o SQL emitido e simula o fresh claim
+ * canônico/legacy (INSERT … ON CONFLICT retorna a linha `processing`).
+ * BEGIN/COMMIT/ROLLBACK caem no retorno neutro abaixo.
+ */
+const makeFakePool = (captured: Captured[], recordId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa') => {
+  const client = {
+    async query(text: string, values?: unknown[]) {
+      captured.push({ text, values });
+      if (text.includes('INSERT INTO operation_records')) {
+        return { rowCount: 1, rows: [{ id: recordId, status: 'processing', response: null, effect_ref: null }] };
+      }
+      if (text.includes('UPDATE operation_records')) return { rowCount: 1, rows: [] };
+      if (text.includes('INSERT INTO audit_logs')) return { rowCount: 1, rows: [] };
+      return { rowCount: 0, rows: [] };
+    },
+    release() {},
+  };
+  return { connect: async () => client } as unknown as Pool;
+};
+
 const sessionActor = (): IdempotencyActorContext => ({
   actorId: `user-${randomUUID()}`,
   actorType: 'user',
 });
 
-describe('T09 — actor attribution is never read from the body', () => {
+describe('T09 — actor attribution invariants (pure units, no PG)', () => {
   it('expense schema strips a smuggled actorId (server-side context only)', () => {
     const parsed = createExpenseInputSchema.safeParse({
       description: '-mercado',
@@ -74,6 +105,106 @@ describe('T09 — actor attribution is never read from the body', () => {
     const second = await store.lookupOrRecord(household, key, payload, async () => ({ ok: false }), actor);
     expect(second.replayed).toBe(true);
     expect(second.response).toEqual({ ok: true });
+  });
+
+  it('explicit actor never changes the payload hash (fake pool, no PG)', async () => {
+    const payload = httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 3000 });
+    const capturedPlain: Captured[] = [];
+    const capturedActor: Captured[] = [];
+    const plain = createPostgresIdempotencyStore({ pool: makeFakePool(capturedPlain) });
+    const withActor = createPostgresIdempotencyStore({ pool: makeFakePool(capturedActor) });
+
+    await plain.lookupOrRecord(randomUUID(), `t09-hash-a-${randomUUID()}`, payload, async () => ({ ok: true }));
+    await withActor.lookupOrRecord(
+      randomUUID(),
+      `t09-hash-b-${randomUUID()}`,
+      payload,
+      async () => ({ ok: true }),
+      sessionActor(),
+    );
+
+    const hashPlain = capturedPlain.find((c) => c.text.includes('INSERT INTO operation_records'))?.values?.[4];
+    const hashActor = capturedActor.find((c) => c.text.includes('INSERT INTO operation_records'))?.values?.[4];
+    expect(hashPlain).toBeDefined();
+    expect(hashActor).toBeDefined();
+    expect(hashActor).toBe(hashPlain);
+  });
+
+  it('tainted actorId with edge whitespace falls back to historic defaults (fake pool, no PG)', async () => {
+    const tainted: IdempotencyActorContext[] = [
+      // Caso verbatim do finding T09-r1:
+      { actorId: ' user-123 ', actorType: 'user' },
+      // Interior, tab e newline: qualquer whitespace contamina:
+      { actorId: 'user 123', actorType: 'user' },
+      { actorId: 'user\t123', actorType: 'user' },
+      { actorId: 'user\n123', actorType: 'user' },
+    ];
+    for (const actor of tainted) {
+      const captured: Captured[] = [];
+      const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured) });
+      const household = randomUUID();
+      const key = `t09-ws-${randomUUID()}`;
+      const payload = httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 });
+
+      const result = await store.lookupOrRecord(household, key, payload, async () => ({ ok: true }), actor);
+      expect(result.replayed).toBe(false);
+
+      const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
+      expect(insert).toBeDefined();
+      // values: [household, actor_id, operation, key, payload_hash, actor_type]
+      expect(insert!.values?.[1]).toBe('device');
+      expect(insert!.values?.[5]).toBe('device');
+
+      const audit = captured.find((c) => c.text.includes('INSERT INTO audit_logs'));
+      expect(audit).toBeDefined();
+      // values: [id, recordId, household, actor_id, operation, payloadHash, effectRef, metadata, actor_type]
+      expect(audit!.values?.[3]).toBe('device');
+      expect(audit!.values?.[8]).toBe('device');
+    }
+  });
+
+  it('tainted actorType with whitespace falls back to historic defaults (fake pool, no PG)', async () => {
+    const captured: Captured[] = [];
+    const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured) });
+    const household = randomUUID();
+    const key = `t09-wst-${randomUUID()}`;
+    const payload = httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 });
+
+    const result = await store.lookupOrRecord(
+      household,
+      key,
+      payload,
+      async () => ({ ok: true }),
+      { actorId: 'user-123', actorType: ' user' } as unknown as IdempotencyActorContext,
+    );
+    expect(result.replayed).toBe(false);
+
+    const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
+    expect(insert).toBeDefined();
+    expect(insert!.values?.[1]).toBe('device');
+    expect(insert!.values?.[5]).toBe('device');
+  });
+
+  it('tainted actorId on the legacy path falls back to unknown/device (fake pool, no PG)', async () => {
+    const captured: Captured[] = [];
+    const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured), legacy: true });
+    const household = randomUUID();
+    const key = `t09-ws-legacy-${randomUUID()}`;
+    const payload = httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 });
+
+    const result = await store.lookupOrRecord(
+      household,
+      key,
+      payload,
+      async () => ({ ok: true }),
+      { actorId: ' user-123 ', actorType: 'user' },
+    );
+    expect(result.replayed).toBe(false);
+
+    const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
+    expect(insert).toBeDefined();
+    expect(insert!.values?.[1]).toBe('unknown');
+    expect(insert!.values?.[5]).toBe('device');
   });
 });
 
@@ -150,28 +281,5 @@ describeIfDb('T09 — postgres persists the authenticated session actor (pool ma
       [household, key],
     );
     expect(record.rows[0]!.actor_id).toBe(firstActor.actorId);
-  });
-
-  it('payload hash is identical with or without the explicit actor', async () => {
-    const household = randomUUID();
-    households.push(household);
-    const store = createPostgresIdempotencyStore({ pool });
-    const payload = httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 3000 });
-
-    await store.lookupOrRecord(household, `t09-hash-a-${randomUUID()}`, payload, async () => ({ ok: true }));
-    await store.lookupOrRecord(
-      household,
-      `t09-hash-b-${randomUUID()}`,
-      payload,
-      async () => ({ ok: true }),
-      sessionActor(),
-    );
-
-    const hashes = await pool.query<{ payload_hash: string }>(
-      'SELECT payload_hash FROM operation_records WHERE workspace_id = $1 ORDER BY created_at',
-      [household],
-    );
-    expect(hashes.rowCount).toBe(2);
-    expect(hashes.rows[0]!.payload_hash).toBe(hashes.rows[1]!.payload_hash);
   });
 });

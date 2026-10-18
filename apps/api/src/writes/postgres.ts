@@ -1460,9 +1460,20 @@ export const resolveCanonicalAuditOperation = (response: unknown, operation?: st
 
 /**
  * T09 (fatia FÁTICA) — valida o ator da sessão para novos records.
- * Fail-closed: actorId vazio ou actorType fora de ('device','user')
- * rejeita em vez de persistir autoria genérica silenciosa. Chamadas
- * sem ator (forma string legada) preservam os defaults históricos.
+ *
+ * Contrato fail-closed: `actorId`/`actorType` vêm SOMENTE da sessão
+ * autenticada (nunca do body). Qualquer string com whitespace EM
+ * QUALQUER posição — bordas ou interior (`/\s/`) — indica entrada
+ * contaminada e é REJEITADA como "sem ator explícito": o callsite
+ * descarta o valor manchado e o claim cai nos defaults históricos
+ * (`actor_id='device'` no canônico, `'unknown'` no legacy;
+ * `actor_type='device'`), sem nunca fabricar autoria. Sessão
+ * autenticada nunca fabrica espaços, então a regra estrita não tem
+ * falso-positivo legítimo. `actorId` vazio ou `actorType` fora de
+ * ('device','user') seguem inválidos (throw) — só o whitespace é
+ * degradado para defaults, pois indica contaminação de um ator que
+ * de outra forma seria válido. Chamadas sem ator (forma string
+ * legada) preservam os defaults históricos.
  */
 const parseExplicitActor = (actor: unknown): IdempotencyActorContext => {
   if (typeof actor !== 'object' || actor === null || Array.isArray(actor)) {
@@ -1472,10 +1483,28 @@ const parseExplicitActor = (actor: unknown): IdempotencyActorContext => {
   if (typeof record['actorId'] !== 'string' || record['actorId'].trim() === '') {
     throw domainErrors.invalid('actorId', 'actorId must come from the authenticated session');
   }
+  if (/\s/.test(record['actorId'])) {
+    throw domainErrors.invalid('actorId', 'actorId must not contain whitespace');
+  }
   if (record['actorType'] !== 'device' && record['actorType'] !== 'user') {
     throw domainErrors.invalid('actorType', "actorType must be 'device' or 'user'");
   }
   return { actorId: record['actorId'], actorType: record['actorType'] };
+};
+
+/**
+ * T09-r1: detecta ator explícito contaminado com whitespace (bordas ou
+ * interior) antes de validar. Valor manchado = sem ator explícito —
+ * o chamador preserva `undefined` e o claim cai nos defaults
+ * históricos abaixo (fail-closed, nunca persiste string contaminada).
+ */
+const isTaintedExplicitActor = (actor: unknown): boolean => {
+  if (typeof actor !== 'object' || actor === null || Array.isArray(actor)) return false;
+  const record = actor as Record<string, unknown>;
+  return (
+    (typeof record['actorId'] === 'string' && /\s/.test(record['actorId'])) ||
+    (typeof record['actorType'] === 'string' && /\s/.test(record['actorType']))
+  );
 };
 
 export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: boolean }): import('./idempotency.js').IdempotencyStore => {
@@ -1499,6 +1528,12 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
         key = scopeOrHouseholdId.key;
         operation = scopeOrHouseholdId.operation;
         actorId = scopeOrHouseholdId.actorId;
+        // T09-r1: actorId da forma objeto vinha verbatim; valor manchado
+        // com whitespace = sem ator explícito (cai nos defaults
+        // históricos, nunca persiste contaminado).
+        if (typeof actorId === 'string' && /\s/.test(actorId)) {
+          actorId = undefined;
+        }
         // T09: a forma objeto já carrega actorType (invites/workspaces) mas
         // nunca o persistia (default 'device'). Persiste quando válido.
         if (scopeOrHouseholdId.actorType === 'device' || scopeOrHouseholdId.actorType === 'user') {
@@ -1513,7 +1548,10 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
         producer = maybeProducer;
         // T09: ator explícito da sessão autenticada (nunca do body). A
         // chave composta NÃO inclui ator — replay/hash preservados.
-        if (maybeActor !== undefined) {
+        // T09-r1: valor manchado com whitespace = sem ator explícito —
+        // cai nos defaults históricos (fail-closed, nunca persiste
+        // string contaminada, nunca fabrica autoria).
+        if (maybeActor !== undefined && !isTaintedExplicitActor(maybeActor)) {
           const explicit = parseExplicitActor(maybeActor);
           actorId = explicit.actorId;
           actorType = explicit.actorType;
