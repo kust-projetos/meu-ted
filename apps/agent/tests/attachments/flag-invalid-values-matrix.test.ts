@@ -113,7 +113,7 @@ describe('T12f — famílias estritas: whitespace NEGA (sem trim universal)', ()
 });
 
 describe('T12f — seletor de modelo STT: fora da allowlist volta ao default (nunca desliga; string inválida nunca lança)', () => {
-  it("TED_AUDIO_STT_MODEL: desconhecido/vazio/ausente/não-string ⇒ default 'whisper-large-v3-turbo'", () => {
+  it("TED_AUDIO_STT_MODEL: desconhecido/vazio/ausente (string) ⇒ default 'whisper-large-v3-turbo'", () => {
     for (const bad of ['gpt-4o', 'whisper-large', 'WHISPER-LARGE-V3-TURBO', '', '   ', '1']) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect(resolveSttModel({ TED_AUDIO_STT_MODEL: bad } as any), JSON.stringify(bad)).toBe(
