@@ -206,6 +206,136 @@ describe('T09 — actor attribution invariants (pure units, no PG)', () => {
     expect(insert!.values?.[1]).toBe('unknown');
     expect(insert!.values?.[5]).toBe('device');
   });
+
+  it('T09-r2 P2-1: object-form mixed pair (tainted id + clean type) discards BOTH to defaults (fake pool, no PG)', async () => {
+    // Canônico: nenhum par 'device/user' pode sobreviver.
+    {
+      const captured: Captured[] = [];
+      const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured) });
+      const result = await store.lookupOrRecord(
+        {
+          workspaceId: randomUUID(),
+          actorId: ' user-123 ',
+          actorType: 'user',
+          operation: 'expense.create',
+          key: `t09-mixed-a-${randomUUID()}`,
+        },
+        httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 }),
+        async () => ({ ok: true }),
+      );
+      expect(result.replayed).toBe(false);
+      const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
+      expect(insert).toBeDefined();
+      expect(insert!.values?.[1]).toBe('device');
+      expect(insert!.values?.[5]).toBe('device');
+    }
+    // Legacy: nenhum par 'unknown/user' pode sobreviver.
+    {
+      const captured: Captured[] = [];
+      const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured), legacy: true });
+      const result = await store.lookupOrRecord(
+        {
+          workspaceId: randomUUID(),
+          actorId: ' user-123 ',
+          actorType: 'user',
+          operation: 'expense.create',
+          key: `t09-mixed-a-legacy-${randomUUID()}`,
+        },
+        httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 }),
+        async () => ({ ok: true }),
+      );
+      expect(result.replayed).toBe(false);
+      const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
+      expect(insert).toBeDefined();
+      expect(insert!.values?.[1]).toBe('unknown');
+      expect(insert!.values?.[5]).toBe('device');
+    }
+  });
+
+  it('T09-r2 P2-1: object-form mixed pair (clean id + tainted type) discards BOTH to defaults (fake pool, no PG)', async () => {
+    // Canônico: 'user-123/device' é par misto — ambos caem nos defaults.
+    {
+      const captured: Captured[] = [];
+      const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured) });
+      const result = await store.lookupOrRecord(
+        {
+          workspaceId: randomUUID(),
+          actorId: 'user-123',
+          actorType: ' user',
+          operation: 'expense.create',
+          key: `t09-mixed-b-${randomUUID()}`,
+        },
+        httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 }),
+        async () => ({ ok: true }),
+      );
+      expect(result.replayed).toBe(false);
+      const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
+      expect(insert).toBeDefined();
+      expect(insert!.values?.[1]).toBe('device');
+      expect(insert!.values?.[5]).toBe('device');
+    }
+    // Legacy: id limpo + tipo manchado — id também cai para 'unknown'.
+    {
+      const captured: Captured[] = [];
+      const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured), legacy: true });
+      const result = await store.lookupOrRecord(
+        {
+          workspaceId: randomUUID(),
+          actorId: 'user-123',
+          actorType: ' user',
+          operation: 'expense.create',
+          key: `t09-mixed-b-legacy-${randomUUID()}`,
+        },
+        httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 }),
+        async () => ({ ok: true }),
+      );
+      expect(result.replayed).toBe(false);
+      const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
+      expect(insert).toBeDefined();
+      expect(insert!.values?.[1]).toBe('unknown');
+      expect(insert!.values?.[5]).toBe('device');
+    }
+  });
+
+  it('T09-r2 P2-2: empty actorId throws before any SQL even when the sibling field is tainted (fake pool, no PG)', async () => {
+    const captured: Captured[] = [];
+    const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured) });
+    let producerCalls = 0;
+    await expect(
+      store.lookupOrRecord(
+        randomUUID(),
+        `t09-structural-a-${randomUUID()}`,
+        httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 }),
+        async () => {
+          producerCalls += 1;
+          return { ok: true };
+        },
+        { actorId: '', actorType: ' user' } as unknown as IdempotencyActorContext,
+      ),
+    ).rejects.toThrow();
+    expect(producerCalls).toBe(0);
+    expect(captured.length).toBe(0);
+  });
+
+  it("T09-r2 P2-2: out-of-enum actorType throws before any SQL even when the sibling field is tainted (fake pool, no PG)", async () => {
+    const captured: Captured[] = [];
+    const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured) });
+    let producerCalls = 0;
+    await expect(
+      store.lookupOrRecord(
+        randomUUID(),
+        `t09-structural-b-${randomUUID()}`,
+        httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 }),
+        async () => {
+          producerCalls += 1;
+          return { ok: true };
+        },
+        { actorId: ' user-123 ', actorType: 'admin' } as unknown as IdempotencyActorContext,
+      ),
+    ).rejects.toThrow();
+    expect(producerCalls).toBe(0);
+    expect(captured.length).toBe(0);
+  });
 });
 
 describeIfDb('T09 — postgres persists the authenticated session actor (pool max:4)', () => {

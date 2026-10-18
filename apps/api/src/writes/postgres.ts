@@ -1497,6 +1497,12 @@ const parseExplicitActor = (actor: unknown): IdempotencyActorContext => {
  * interior) antes de validar. Valor manchado = sem ator explícito —
  * o chamador preserva `undefined` e o claim cai nos defaults
  * históricos abaixo (fail-closed, nunca persiste string contaminada).
+ *
+ * T09-r2: o taint é CONJUNTO — qualquer campo contaminado contamina o
+ * contexto inteiro (id E tipo descartados juntos; nunca par misto).
+ * A checagem estrutural roda ANTES do taint (ver
+ * `assertStringFormActorStructurallyValid`): só o whitespace degrada
+ * para defaults; vazio/inválido fora do enum continua lançando.
  */
 const isTaintedExplicitActor = (actor: unknown): boolean => {
   if (typeof actor !== 'object' || actor === null || Array.isArray(actor)) return false;
@@ -1505,6 +1511,33 @@ const isTaintedExplicitActor = (actor: unknown): boolean => {
     (typeof record['actorId'] === 'string' && /\s/.test(record['actorId'])) ||
     (typeof record['actorType'] === 'string' && /\s/.test(record['actorType']))
   );
+};
+
+const hasActorWhitespace = (value: unknown): value is string =>
+  typeof value === 'string' && /\s/.test(value);
+
+/**
+ * T09-r2 P2-2: validação estrutural da forma string (5º parâmetro,
+ * ator obrigatório quando presente). Roda ANTES do taint: `actorId`
+ * vazio e `actorType` fora do enum estrito lançam mesmo com o campo
+ * irmão manchado. Valores com whitespace são deformação por
+ * contaminação — NÃO lançam aqui; caem no descarte integral via
+ * `isTaintedExplicitActor` (defaults históricos, fail-closed).
+ */
+const assertStringFormActorStructurallyValid = (actor: unknown): void => {
+  if (typeof actor !== 'object' || actor === null || Array.isArray(actor)) {
+    parseExplicitActor(actor);
+    return;
+  }
+  const record = actor as Record<string, unknown>;
+  const rawId = record['actorId'];
+  if (typeof rawId !== 'string' || rawId.trim() === '') {
+    throw domainErrors.invalid('actorId', 'actorId must come from the authenticated session');
+  }
+  const rawType = record['actorType'];
+  if ((rawType !== 'device' && rawType !== 'user') && !hasActorWhitespace(rawType)) {
+    throw domainErrors.invalid('actorType', "actorType must be 'device' or 'user'");
+  }
 };
 
 export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: boolean }): import('./idempotency.js').IdempotencyStore => {
@@ -1527,17 +1560,44 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
         householdId = scopeOrHouseholdId.householdId ?? scopeOrHouseholdId.workspaceId;
         key = scopeOrHouseholdId.key;
         operation = scopeOrHouseholdId.operation;
-        actorId = scopeOrHouseholdId.actorId;
-        // T09-r1: actorId da forma objeto vinha verbatim; valor manchado
-        // com whitespace = sem ator explícito (cai nos defaults
-        // históricos, nunca persiste contaminado).
-        if (typeof actorId === 'string' && /\s/.test(actorId)) {
-          actorId = undefined;
-        }
-        // T09: a forma objeto já carrega actorType (invites/workspaces) mas
-        // nunca o persistia (default 'device'). Persiste quando válido.
-        if (scopeOrHouseholdId.actorType === 'device' || scopeOrHouseholdId.actorType === 'user') {
-          actorType = scopeOrHouseholdId.actorType;
+        // T09-r2 P2-1+P2-2 (forma objeto: invites/workspaces): o contexto de
+        // ator é CONJUNTO. (1) Validação estrutural primeiro — actorId vazio
+        // e actorType fora do enum ('device'|'user', CHECK da V016) lançam
+        // mesmo com o irmão manchado; whitespace NÃO lança aqui.
+        // (2) Qualquer whitespace em QUALQUER campo descarta id E tipo
+        // juntos (nunca par misto) → defaults históricos abaixo.
+        // (3) Contexto limpo persiste. Campos ausentes seguem ausentes
+        // (callsites ainda não migrados preservados).
+        const rawObjectActorId: unknown = scopeOrHouseholdId.actorId;
+        const rawObjectActorType: unknown = scopeOrHouseholdId.actorType;
+        if (rawObjectActorId !== undefined || rawObjectActorType !== undefined) {
+          if (
+            rawObjectActorId !== undefined &&
+            (typeof rawObjectActorId !== 'string' || rawObjectActorId.trim() === '')
+          ) {
+            throw domainErrors.invalid('actorId', 'actorId must come from the authenticated session');
+          }
+          if (
+            rawObjectActorType !== undefined &&
+            rawObjectActorType !== 'device' &&
+            rawObjectActorType !== 'user' &&
+            !hasActorWhitespace(rawObjectActorType)
+          ) {
+            throw domainErrors.invalid('actorType', "actorType must be 'device' or 'user'");
+          }
+          if (hasActorWhitespace(rawObjectActorId) || hasActorWhitespace(rawObjectActorType)) {
+            actorId = undefined;
+            actorType = undefined;
+          } else {
+            // T09: a forma objeto já carrega actorType (invites/workspaces) mas
+            // nunca o persistia (default 'device'). Persiste quando válido.
+            if (typeof rawObjectActorId === 'string') {
+              actorId = rawObjectActorId;
+            }
+            if (rawObjectActorType === 'device' || rawObjectActorType === 'user') {
+              actorType = rawObjectActorType;
+            }
+          }
         }
         payload = keyOrPayload;
         producer = payloadOrProducer;
@@ -1548,13 +1608,17 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
         producer = maybeProducer;
         // T09: ator explícito da sessão autenticada (nunca do body). A
         // chave composta NÃO inclui ator — replay/hash preservados.
-        // T09-r1: valor manchado com whitespace = sem ator explícito —
-        // cai nos defaults históricos (fail-closed, nunca persiste
-        // string contaminada, nunca fabrica autoria).
-        if (maybeActor !== undefined && !isTaintedExplicitActor(maybeActor)) {
-          const explicit = parseExplicitActor(maybeActor);
-          actorId = explicit.actorId;
-          actorType = explicit.actorType;
+        // T09-r2 P2-1+P2-2: (1) estrutural primeiro (throw no inválido
+        // mesmo com irmão manchado); (2) whitespace em QUALQUER campo
+        // descarta id E tipo juntos (nunca par misto) → defaults
+        // históricos; (3) limpo persiste via parseExplicitActor.
+        if (maybeActor !== undefined) {
+          assertStringFormActorStructurallyValid(maybeActor);
+          if (!isTaintedExplicitActor(maybeActor)) {
+            const explicit = parseExplicitActor(maybeActor);
+            actorId = explicit.actorId;
+            actorType = explicit.actorType;
+          }
         }
       }
 
