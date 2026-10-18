@@ -28,6 +28,23 @@ export const ChatCompletionRequestSchema = z.object({
 
 export type ChatCompletionRequest = z.infer<typeof ChatCompletionRequestSchema>;
 
+/**
+ * Typed marker for the unwired runtime (BRK-01, T12e). The broker ships no
+ * real Codex runtime: completion requests must fail closed with this error,
+ * never resolve a fabricated completion. Follows the broker convention of
+ * errors carrying a `code` (see browser-login.ts `login_*` errors).
+ */
+export const CODEX_RUNTIME_NOT_CONFIGURED = 'codex_runtime_not_configured';
+
+export const codexRuntimeNotConfiguredError = (): Error & {
+  code: string;
+  statusCode: number;
+} =>
+  Object.assign(new Error(CODEX_RUNTIME_NOT_CONFIGURED), {
+    code: CODEX_RUNTIME_NOT_CONFIGURED,
+    statusCode: 503,
+  });
+
 export class CodexRuntimeAdapter {
   private readonly activeControllers = new Map<string, AbortController>();
 
@@ -62,36 +79,10 @@ export class CodexRuntimeAdapter {
       throw new Error(`model_not_allowlisted: ${req.model}`);
     }
 
-    const controller = new AbortController();
-    this.activeControllers.set(req.requestId, controller);
-
-    try {
-      // In isolated container/mock adapter, process completion safely
-      const userMessage = req.messages[req.messages.length - 1]?.content ?? '';
-      const promptTokens = Math.ceil(userMessage.length / 4) + 20;
-      const responseContent = `[Codex Broker response for ${req.model}]: Processado com segurança para workspace ${req.workspaceId}.`;
-      const completionTokens = Math.ceil(responseContent.length / 4);
-
-      return {
-        id: `chatcmpl-${req.requestId}`,
-        model: req.model,
-        choices: [
-          {
-            message: {
-              role: 'assistant',
-              content: responseContent,
-            },
-            finish_reason: 'stop',
-          },
-        ],
-        usage: {
-          prompt_tokens: promptTokens,
-          completion_tokens: completionTokens,
-          total_tokens: promptTokens + completionTokens,
-        },
-      };
-    } finally {
-      this.activeControllers.delete(req.requestId);
-    }
+    // No real Codex runtime is wired in this broker (BRK-01): fail closed
+    // with the typed error above. Never synthesize a completion here; a
+    // real provider connector is a separate future ticket and must not
+    // gain async attached work in this slice.
+    throw codexRuntimeNotConfiguredError();
   }
 }

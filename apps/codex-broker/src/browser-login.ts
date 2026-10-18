@@ -28,7 +28,19 @@ export type PendingLogin = {
   expiresAt: number;
 };
 
-const LOGIN_TTL_MS = 10 * 60_000;
+export const LOGIN_TTL_MS = 10 * 60_000;
+
+/**
+ * Bound on concurrent pending browser logins (BRK-02, T12e). The operator
+ * flow creates entries one human at a time; the cap keeps a burst of
+ * unfinished logins from growing the in-memory map without bound.
+ */
+export const MAX_PENDING_LOGINS = 100;
+
+/** Injectable wall clock (BRK-02): defaults to Date.now, tests inject fakes. */
+export type BrowserLoginClock = () => number;
+
+const systemClock: BrowserLoginClock = () => Date.now();
 
 const newUserCode = (): string => {
   const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -55,9 +67,17 @@ export class BrowserLoginManager {
     private readonly exchangeCode: (code: string) => Promise<CodeExchangeResult> = async () => {
       throw new Error('exchange_not_configured');
     },
+    private readonly clock: BrowserLoginClock = systemClock,
   ) {}
 
   beginLogin(callbackUrl?: string): PendingLogin {
+    this.purgeExpired();
+    if (this.pending.size >= MAX_PENDING_LOGINS) {
+      throw Object.assign(new Error('pending login store is full'), {
+        statusCode: 429,
+        code: 'login_pending_limit_exceeded',
+      });
+    }
     const state = randomUUID().replace(/-/g, '');
     const deviceCode = randomUUID().replace(/-/g, '');
     const login: PendingLogin = {
@@ -67,7 +87,7 @@ export class BrowserLoginManager {
       verificationUri: `https://chatgpt.com/auth/login?state=${encodeURIComponent(state)}${
         callbackUrl ? `&callback=${encodeURIComponent(callbackUrl)}` : ''
       }`,
-      expiresAt: Date.now() + LOGIN_TTL_MS,
+      expiresAt: this.clock() + LOGIN_TTL_MS,
     };
     this.pending.set(state, login);
     return login;
@@ -77,13 +97,28 @@ export class BrowserLoginManager {
     return this.pending.size;
   }
 
+  /** Drop expired entries using the injected clock; returns the swept count. */
+  purgeExpired(now: number = this.clock()): number {
+    let purged = 0;
+    for (const [key, login] of this.pending) {
+      if (now >= login.expiresAt) {
+        this.pending.delete(key);
+        purged += 1;
+      }
+    }
+    return purged;
+  }
+
   async completeLogin(code: string, state?: string): Promise<{ email?: string; expiresAt?: number }> {
     let login: PendingLogin | undefined;
     if (state) {
       login = this.pending.get(state);
       if (!login) throw Object.assign(new Error('unknown login state'), { statusCode: 400, code: 'login_unknown_state' });
-      if (Date.now() >= login.expiresAt) {
-        this.pending.delete(state);
+      // Single consumption (BRK-02): claim the entry before the exchange so
+      // a repeated callback with the same state cannot re-execute it. A
+      // failed exchange consumes the login — the operator begins a new one.
+      this.pending.delete(state);
+      if (this.clock() >= login.expiresAt) {
         throw Object.assign(new Error('login session expired'), { statusCode: 410, code: 'login_expired' });
       }
     }
@@ -95,10 +130,9 @@ export class BrowserLoginManager {
     this.authManager.saveAuthCacheAtomic({
       accessToken: exchanged.accessToken,
       ...(exchanged.refreshToken ? { refreshToken: exchanged.refreshToken } : {}),
-      ...(typeof exchanged.expiresIn === 'number' ? { expiresAt: Date.now() + exchanged.expiresIn * 1000 } : {}),
+      ...(typeof exchanged.expiresIn === 'number' ? { expiresAt: this.clock() + exchanged.expiresIn * 1000 } : {}),
       ...(exchanged.email ? { email: exchanged.email } : {}),
     });
-    if (login && state) this.pending.delete(state);
     const status = this.authManager.getAuthStatus();
     return { ...(status.email ? { email: status.email } : {}), ...(status.expiresAt ? { expiresAt: status.expiresAt } : {}) };
   }
