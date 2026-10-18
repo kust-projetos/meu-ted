@@ -154,3 +154,152 @@ describe("T07b contrato estático do offline-shell.js", () => {
     expect(shell).toContain("5*60*1000");
   });
 });
+
+describe("T07b-R1 execução real do offline-shell.js (findings do review)", () => {
+  const shellSource = () =>
+    readFileSync(path.resolve(process.cwd(), "public/offline-shell.js"), "utf8");
+
+  const LOCK_TEXT = "offline session locked";
+  const SUBJECT_S = "33333333-4444-4555-8666-777777777777";
+  const SUBJECT_OTHER = "44444444-5555-4666-8777-888888888888";
+
+  async function seedStore(entries: Record<string, unknown>): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const open = indexedDB.open("pi-finance-snapshot", 1);
+      open.onupgradeneeded = () => {
+        open.result.createObjectStore("snapshots");
+      };
+      open.onsuccess = () => {
+        const db = open.result;
+        const tx = db.transaction("snapshots", "readwrite");
+        const store = tx.objectStore("snapshots");
+        for (const [k, v] of Object.entries(entries)) store.put(v as never, k);
+        tx.oncomplete = () => {
+          db.close();
+          resolve();
+        };
+        tx.onerror = () => {
+          db.close();
+          reject(tx.error);
+        };
+      };
+      open.onerror = () => reject(open.error);
+    });
+  }
+
+  function setShellIdentity(
+    principal: string | null,
+    workspace: string | null,
+    subject: string | null,
+  ): void {
+    localStorage.clear();
+    if (principal) localStorage.setItem("pi-finance:offline-principal", principal);
+    if (workspace) localStorage.setItem("pi-finance:offline-workspace", workspace);
+    if (subject) localStorage.setItem("pi-finance:offline-subject", subject);
+  }
+
+  async function runShell(pathname: string): Promise<unknown[]> {
+    document.body.innerHTML =
+      '<h1 id="page-title"></h1><p id="page-route"></p><p id="synced-at"></p><div id="content"></div>';
+    window.history.pushState({}, "", pathname);
+    const errors: unknown[] = [];
+    const onUnhandled = (e: Event) => {
+      errors.push((e as PromiseRejectionEvent).reason ?? e);
+    };
+    window.addEventListener("unhandledrejection", onUnhandled);
+    try {
+      // Executa a lógica real do shell (IIFE lê pathname + IDB + localStorage).
+      (0, eval)(shellSource());
+      if (document.readyState === "loading") {
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    } finally {
+      window.removeEventListener("unhandledrejection", onUnhandled);
+    }
+    return errors;
+  }
+
+  const contentText = () => document.getElementById("content")?.textContent ?? "";
+
+  function v2Envelope(overrides: Record<string, unknown> = {}) {
+    return {
+      domains: {
+        accounts: [{ id: "a-v2", name: "Conta V2 Legada", amountCents: 12345 }],
+      },
+      syncedAt: {},
+      offlineSubjectId: SUBJECT_S,
+      lastOnlineAuthenticatedAt: new Date().toISOString(),
+      ...overrides,
+    };
+  }
+
+  function v3Envelope(overrides: Record<string, unknown> = {}) {
+    return {
+      schema: 3,
+      domains: {
+        accounts: [{ id: "a-v3", description: "Mercado V3", amountCents: 5000 }],
+      },
+      syncedAt: { accounts: new Date().toISOString() },
+      offlinePrincipalId: USER_A,
+      offlineWorkspaceId: WS_X,
+      ownerKey: `v3:${USER_A}:${WS_X}`,
+      lastOnlineAuthenticatedAt: new Date().toISOString(),
+      ...overrides,
+    };
+  }
+
+  it("a) V3 ausente + V2 válido → renderiza o legado sem InvalidStateError", async () => {
+    await seedStore({ v2: v2Envelope() });
+    setShellIdentity(USER_A, WS_X, SUBJECT_S);
+    const errors = await runShell("/");
+    expect(errors).toEqual([]);
+    expect(contentText()).toContain("Conta V2 Legada");
+    expect(contentText()).not.toContain(LOCK_TEXT);
+  });
+
+  it("b1) V3 ausente + V2 com subject divergente → lock", async () => {
+    await seedStore({ v2: v2Envelope({ offlineSubjectId: SUBJECT_OTHER }) });
+    setShellIdentity(USER_A, WS_X, SUBJECT_S);
+    await runShell("/");
+    expect(contentText()).toContain(LOCK_TEXT);
+  });
+
+  it("b2) V3 ausente + V2 expirado → lock", async () => {
+    await seedStore({
+      v2: v2Envelope({ lastOnlineAuthenticatedAt: "2020-01-01T00:00:00.000Z" }),
+    });
+    setShellIdentity(USER_A, WS_X, SUBJECT_S);
+    await runShell("/");
+    expect(contentText()).toContain(LOCK_TEXT);
+  });
+
+  it("c) V3 com lastOnlineAuthenticatedAt como array → lock (sem coerção)", async () => {
+    await seedStore({
+      v3: v3Envelope({ lastOnlineAuthenticatedAt: [new Date().toISOString()] }),
+    });
+    setShellIdentity(USER_A, WS_X, SUBJECT_S);
+    await runShell("/");
+    expect(contentText()).toContain(LOCK_TEXT);
+    expect(contentText()).not.toContain("Mercado V3");
+  });
+
+  it("d) V3 com lastOnlineAuthenticatedAt numérico → lock", async () => {
+    await seedStore({
+      v3: v3Envelope({ lastOnlineAuthenticatedAt: Date.now() }),
+    });
+    setShellIdentity(USER_A, WS_X, SUBJECT_S);
+    await runShell("/");
+    expect(contentText()).toContain(LOCK_TEXT);
+    expect(contentText()).not.toContain("Mercado V3");
+  });
+
+  it("e) V3 válido → ainda renderiza (sem regressão)", async () => {
+    await seedStore({ v3: v3Envelope(), v2: v2Envelope() });
+    setShellIdentity(USER_A, WS_X, SUBJECT_S);
+    const errors = await runShell("/");
+    expect(errors).toEqual([]);
+    expect(contentText()).toContain("Mercado V3");
+    expect(contentText()).not.toContain(LOCK_TEXT);
+  });
+});

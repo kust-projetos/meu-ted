@@ -57,10 +57,16 @@ function o(){
   });
 }
 function getEnv(db,key){
+  // NOTE: never closes db here. The caller keeps the SAME connection open
+  // through the whole V3→V2 selection and closes it once the decision
+  // completes — closing after the V3 read would break the legacy fallback
+  // (a transaction on a closed connection throws InvalidStateError).
   return new Promise(function(res){
-    var tx=db.transaction(STORE,"readonly"),req=tx.objectStore(STORE).get(key);
-    req.onsuccess=function(){db.close();res(req.result||null)};
-    req.onerror=function(){db.close();res(null)};
+    var req;
+    try{req=db.transaction(STORE,"readonly").objectStore(STORE).get(key)}
+    catch(e){res(null);return}
+    req.onsuccess=function(){res(req.result||null)};
+    req.onerror=function(){res(null)};
   });
 }
 function ls(k){
@@ -76,7 +82,11 @@ function lock(){
 }
 /** Fail-closed age check. Returns true only when the envelope may render. */
 function ageOk(env){
-  var at=Date.parse(env.lastOnlineAuthenticatedAt||"");
+  // Mirror the app reader (snapshot-db.ts evaluateOfflineLock): the stamp
+  // must be a string BEFORE parsing — Date.parse coerces non-strings
+  // (e.g. [validIso] → validIso) and would render corrupted envelopes.
+  if(!env||typeof env.lastOnlineAuthenticatedAt!=="string")return false;
+  var at=Date.parse(env.lastOnlineAuthenticatedAt);
   if(isNaN(at))return false;
   var maxMs=MAX_AGE_HOURS*3600*1000;
   var skew=Math.max(SKEW_FLOOR_MS,maxMs*0.05);
@@ -125,14 +135,19 @@ async function main(){
   var db;
   try{db=await o()}catch{document.getElementById("content").innerHTML='<div class="empty">Snapshot não disponível</div>';return}
   // V3 single-slot first: only the online-linked principal/workspace renders.
-  var v3=await getEnv(db,V3_KEY);
+  // The SAME IndexedDB connection stays open through the entire V3→V2
+  // decision; it is closed once selection completes (see getEnv).
+  var v3=null,env=null;
+  try{
+    v3=await getEnv(db,V3_KEY);
+    if(!v3)env=await getEnv(db,V2_KEY);
+  }finally{try{db.close()}catch(e){}}
   if(v3){
     if(v3Ok(v3,ls(PRINCIPAL_KEY),ls(WORKSPACE_KEY))){render(v3,route,title,dom);return}
     lock();return;
   }
   // Legacy V2 fallback (T2.6 gates unchanged): subject partition + age
   // BEFORE any financial render. Never re-attributed, never promoted to V3.
-  var env=await getEnv(db,V2_KEY);
   if(!env||!env.domains){document.getElementById("content").innerHTML='<div class="empty">Nenhum dado offline</div>';return}
   var subject=ls(SUBJECT_KEY);
   if(!uuidOk(subject)){lock();return}
