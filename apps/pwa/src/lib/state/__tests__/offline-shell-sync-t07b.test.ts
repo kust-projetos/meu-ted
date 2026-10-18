@@ -361,4 +361,25 @@ describe("T07b-R1 execução real do offline-shell.js (findings do review)", () 
     expect(contentText()).not.toContain("Conta V2 Legada");
     expect(getSpy.mock.calls.map((c) => c[0])).toEqual(["v3"]); // V2 nunca lido
   });
+
+  it.each([{ v: false }, { v: 0 }, { v: "" }])(
+    "h/j) V3 falsy-corrompido (%#) + V2 válido → lock, V2 nunca lido",
+    async ({ v }) => {
+      await seedStore({ v3: v, v2: v2Envelope() });
+      setShellIdentity(USER_A, WS_X, SUBJECT_S);
+      // Espiona as chaves lidas com implementação real: só "v3" pode ser lido.
+      const probe = await openProbeDb();
+      const tx0 = probe.transaction("snapshots", "readonly");
+      const storeProto = Object.getPrototypeOf(
+        tx0.objectStore("snapshots"),
+      ) as IDBObjectStore;
+      probe.close();
+      const getSpy = vi.spyOn(storeProto, "get");
+      const errors = await runShell("/");
+      expect(errors).toEqual([]);
+      expect(contentText()).toContain(LOCK_TEXT);
+      expect(contentText()).not.toContain("Conta V2 Legada");
+      expect(getSpy.mock.calls.map((c) => c[0])).toEqual(["v3"]);
+    },
+  );
 });

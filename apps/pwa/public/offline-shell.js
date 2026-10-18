@@ -82,7 +82,16 @@ function getEnvStrict(db,key){
     var req;
     try{req=db.transaction(STORE,"readonly").objectStore(STORE).get(key)}
     catch(e){rej(e);return}
-    req.onsuccess=function(){var v=req.result||null;res({present:v!==null,env:v})};
+    req.onsuccess=function(){
+      // Absence is EXACTLY the IndexedDB undefined result (undefined values
+      // cannot be stored, so undefined is unambiguous absence). Any other
+      // result — even falsy/corrupt (false, 0, "") — is PRESENT and goes
+      // through the v3Ok validation path, which locks it. Never coerce with
+      // ||: a present-but-invalid record must lock, never release V2.
+      var v=req.result;
+      if(v===undefined)res({present:false,env:null});
+      else res({present:true,env:v});
+    };
     req.onerror=function(){rej(req.error||new Error("v3-read-error"))};
   });
 }
@@ -156,16 +165,17 @@ async function main(){
   // decision; it is closed exactly once when selection completes (finally).
   // Three-state V3 read: genuine absence (present:false) is the ONLY state
   // that enables the V2 fallback — a read ERROR locks (no render, no V2).
-  var v3=null,env=null,v3Verified=false;
+  var v3=null,env=null,v3Verified=false,v3Present=false;
   try{
     var got=await getEnvStrict(db,V3_KEY);
     v3Verified=true;
+    v3Present=got.present;
     if(got.present)v3=got.env;
     else env=await getEnv(db,V2_KEY);
   }catch(e){v3Verified=false}
   finally{try{db.close()}catch(e){}}
   if(!v3Verified){lock();return}
-  if(v3){
+  if(v3Present){
     if(v3Ok(v3,ls(PRINCIPAL_KEY),ls(WORKSPACE_KEY))){render(v3,route,title,dom);return}
     lock();return;
   }
