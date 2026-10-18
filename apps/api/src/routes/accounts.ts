@@ -11,6 +11,7 @@ import { createPendingApproval } from '../approvals/guard.js';
 import type { ApprovalPolicy } from '../approvals/policy.js';
 import type { PendingOperationStore } from '../approvals/pending.js';
 import { attachMutationReceipt } from '../reconciliation/effects-registry.js';
+import { runAccountMutation } from '../writes/keyed-mutations.js';
 
 /**
  * A08: opt-in widening flags are a CLOSED two-value enum on the wire, never
@@ -52,15 +53,18 @@ export const registerAccountRoutes = (
     throw err;
   };
 
-  const runIdempotent = async <T>(req: import('fastify').FastifyRequest, householdId: string, payload: unknown, producer: () => Promise<T>, route: string, resourceId?: string): Promise<T> => {
+  // T05 single-tx: the producer receives the open claim client and runs the
+  // effect on it (runAccountMutation), so claim + effect + completion commit
+  // together. Replays return the ORIGINAL status + body with
+  // `Idempotent-Replayed: true`.
+  const runIdempotent = async <T extends { status: number; body: unknown }>(req: import('fastify').FastifyRequest, householdId: string, payload: unknown, producer: (claimTx?: unknown) => Promise<T>, route: string, resourceId?: string): Promise<{ response: T; replayed: boolean }> => {
     const raw = req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
-    if (raw === undefined) return producer();
+    if (raw === undefined) return { response: await producer(), replayed: false };
     const key = requireIdempotencyKey(req.headers);
     const store = opts.idempotency;
-    if (!store) return producer();
+    if (!store) return { response: await producer(), replayed: false };
     const enveloped = httpIdempotencyPayload(resourceId !== undefined ? { route, resourceId } : { route }, payload);
-    const res = await store.lookupOrRecord(householdId, key, enveloped, async () => ({ status: 200, body: await producer() }));
-    return res.response.body as T;
+    return store.lookupOrRecord(householdId, key, enveloped, producer);
   };
 
   app.get('/accounts', async (req, reply) => {
@@ -89,7 +93,19 @@ export const registerAccountRoutes = (
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     const parsed = createAccountInputSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
-try { return reply.code(201).send(await runIdempotent(req, ctx.householdId, parsed.data, async () => { const created = await opts.writes.createAccount(ctx.householdId, parsed.data); return attachMutationReceipt(created, 'account.create', { type: 'account', id: created.id }); }, 'POST /accounts')); }
+try {
+      const result = await runIdempotent(req, ctx.householdId, parsed.data, async (claimTx) => {
+        const created = await runAccountMutation(opts.writes, claimTx, ctx.householdId, 'create', parsed.data);
+        return { status: 201 as const, body: attachMutationReceipt(created, 'account.create', { type: 'account', id: created.id }) };
+      }, 'POST /accounts');
+      if (result.replayed) reply.header('Idempotent-Replayed', 'true');
+      // P2 replay compat: pre-upgrade records stored the legacy `{status:200}`
+      // envelope while the external contract always answered 201. A stored
+      // 200 on this create route replays as the original 201 (fresh records
+      // already store 201, so only legacy replays are affected).
+      const storedStatus: number = result.response.status;
+      return reply.code(storedStatus === 200 ? 201 : storedStatus).send(result.response.body);
+    }
     catch (e) { return handleError(e, reply); }
   });
 
@@ -99,7 +115,14 @@ try { return reply.code(201).send(await runIdempotent(req, ctx.householdId, pars
     if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
     const parsed = updateAccountInputSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
-try { return reply.code(200).send(await runIdempotent(req, ctx.householdId, { id: params.data.id, ...parsed.data }, async () => { const updated = await opts.writes.updateAccount(ctx.householdId, params.data.id, parsed.data); return attachMutationReceipt(updated, 'account.update', { type: 'account', id: params.data.id }); }, 'PATCH /accounts/:id', params.data.id)); }
+try {
+      const result = await runIdempotent(req, ctx.householdId, { id: params.data.id, ...parsed.data }, async (claimTx) => {
+        const updated = await runAccountMutation(opts.writes, claimTx, ctx.householdId, 'update', { id: params.data.id, patch: parsed.data });
+        return { status: 200 as const, body: attachMutationReceipt(updated, 'account.update', { type: 'account', id: params.data.id }) };
+      }, 'PATCH /accounts/:id', params.data.id);
+      if (result.replayed) reply.header('Idempotent-Replayed', 'true');
+      return reply.code(result.response.status).send(result.response.body);
+    }
     catch (e) { return handleError(e, reply); }
   });
 
@@ -120,7 +143,14 @@ try { return reply.code(200).send(await runIdempotent(req, ctx.householdId, { id
       });
       if (pending) return reply.code(pending.status).send(pending.body);
     }
-try { return reply.code(200).send(await runIdempotent(req, ctx.householdId, { id: params.data.id }, async () => { const deactivated = await opts.writes.deactivateAccount(ctx.householdId, params.data.id); return attachMutationReceipt(deactivated, 'account.delete', { type: 'account', id: params.data.id }); }, 'POST /accounts/:id/deactivate', params.data.id)); }
+try {
+      const result = await runIdempotent(req, ctx.householdId, { id: params.data.id }, async (claimTx) => {
+        const deactivated = await runAccountMutation(opts.writes, claimTx, ctx.householdId, 'deactivate', { id: params.data.id });
+        return { status: 200 as const, body: attachMutationReceipt(deactivated, 'account.delete', { type: 'account', id: params.data.id }) };
+      }, 'POST /accounts/:id/deactivate', params.data.id);
+      if (result.replayed) reply.header('Idempotent-Replayed', 'true');
+      return reply.code(result.response.status).send(result.response.body);
+    }
     catch (e) { return handleError(e, reply); }
   });
 };

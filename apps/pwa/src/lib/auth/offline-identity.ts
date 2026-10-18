@@ -104,6 +104,10 @@ export function bindOfflineIdentity(principalId: string, workspaceId: string): b
   if (!isPrincipalId(principalId) || !isWorkspaceId(workspaceId)) return false;
   const principalOk = setOfflinePrincipalId(principalId);
   const workspaceOk = setOfflineWorkspaceId(workspaceId);
+  // T07a-R2: a fresh online-authenticated binding starts a new generation —
+  // work suspended across a teardown → re-bind boundary never validates
+  // against the pre-teardown generation, even for the same owner.
+  if (principalOk && workspaceOk) advanceOfflineGeneration();
   return principalOk && workspaceOk;
 }
 
@@ -115,6 +119,43 @@ export function bindOfflineIdentity(principalId: string, workspaceId: string): b
  */
 export function computeOwnerKey(principalId: string, workspaceId: string): string {
   return `v3:${principalId}:${workspaceId}`;
+}
+
+// ── Offline generation gate (T07a) ────────────────────────────────────
+// Monotonic in-memory generation bumped synchronously on every teardown
+// entry (authoritative revocation, logout, principal/workspace switch).
+// Snapshot read/write paths consult synchronous identity state plus this
+// generation, so a teardown takes effect in the same tick — never
+// storage-dependent. There is intentionally no reset: fresh post-teardown
+// work captures the current generation at entry, so equality checks pass
+// for legitimate new work and fail only for work that spanned a teardown.
+// A process reload resets the counter alongside all in-memory state (the
+// persisted identity itself keeps gating reads).
+let offlineGeneration = 0;
+
+/** Current offline generation (monotonic; in-memory only, never persisted). */
+export function getOfflineGeneration(): number {
+  return offlineGeneration;
+}
+
+/**
+ * Advance the generation. Called synchronously at teardown entry so that
+ * any snapshot write already in flight is stale by the time it resumes.
+ */
+export function advanceOfflineGeneration(): void {
+  offlineGeneration += 1;
+}
+
+/**
+ * Authoritative-revocation teardown (T07a): bump the generation and clear
+ * the offline identity (principal + workspace binding + subject partition)
+ * SYNCHRONOUSLY, so subsequent reads fail closed in the same tick even when
+ * IndexedDB is slow or failing. Snapshots (V2/V3) and the age stamp are
+ * purged by the caller's canonical session cleanup alongside this.
+ */
+export function noteAuthoritativeRevocation(): void {
+  advanceOfflineGeneration();
+  clearOfflineIdentity();
 }
 
 /**

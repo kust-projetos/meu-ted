@@ -4,8 +4,7 @@
  * Same single-transaction pattern as writes/keyed-mutations.ts: the route
  * producer forwards the open idempotency claim client, and the effect joins
  * that transaction. Without a claim client the plain `GoalStore` methods
- * keep their own boundary. Goal cancel accepts no Idempotency-Key and is
- * not covered (classified in the Task 3.11 inventory).
+ * keep their own boundary.
  */
 
 import type { PoolClient } from 'pg';
@@ -32,6 +31,7 @@ export type GoalStoreTxExtensions = {
     input: ContributeGoalInput,
   ): Promise<GoalContribution>;
   updateGoalInTx(client: PoolClient, householdId: string, goalId: string, input: UpdateGoalInput): Promise<Goal>;
+  cancelGoalInTx(client: PoolClient, householdId: string, goalId: string): Promise<Goal>;
 };
 
 const txExtensions = (store: GoalStore): Partial<GoalStoreTxExtensions> =>
@@ -62,8 +62,15 @@ export async function runGoalMutation(
   store: GoalStore,
   claimTx: unknown,
   householdId: string,
-  op: 'create' | 'contribute' | 'update',
-  input: CreateGoalInput | { id: string; input: ContributeGoalInput } | { id: string; patch: UpdateGoalInput },
+  op: 'cancel',
+  input: { id: string },
+): Promise<Goal>;
+export async function runGoalMutation(
+  store: GoalStore,
+  claimTx: unknown,
+  householdId: string,
+  op: 'create' | 'contribute' | 'update' | 'cancel',
+  input: CreateGoalInput | { id: string; input: ContributeGoalInput } | { id: string; patch: UpdateGoalInput } | { id: string },
 ): Promise<Goal | GoalContribution> {
   if (isTxClient(claimTx)) {
     const ext = txExtensions(store);
@@ -87,6 +94,11 @@ export async function runGoalMutation(
           return ext.updateGoalInTx(claimTx, householdId, id, patch);
         }
         throw domainErrors.atomicMutationNotSupported();
+      case 'cancel':
+        if (typeof ext.cancelGoalInTx === 'function') {
+          return ext.cancelGoalInTx(claimTx, householdId, (input as { id: string }).id);
+        }
+        throw domainErrors.atomicMutationNotSupported();
     }
   }
   switch (op) {
@@ -100,5 +112,7 @@ export async function runGoalMutation(
       const { id, patch } = input as { id: string; patch: UpdateGoalInput };
       return store.updateGoal(householdId, id, patch);
     }
+    case 'cancel':
+      return store.cancelGoal(householdId, (input as { id: string }).id);
   }
 }

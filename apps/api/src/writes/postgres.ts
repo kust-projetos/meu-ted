@@ -18,15 +18,19 @@ import { withTransaction } from '../db/pool.js';
 import { domainErrors, DomainError } from './errors.js';
 import { buildIdempotencyKey, hashPayloadV2, matchesPayloadHash, type IdempotencyProducer } from './idempotency.js';
 import { runKeyedMutation } from './pending-idempotency.js';
-import type { WriteStore } from './store.js';
+import type { ApplyDefaultsResult, DeleteCategoryResult, WriteStore } from './store.js';
 import { resolveApplicationUserId } from '../auth/resolve-user-id.js';
 import { resolveHouseholdId } from '../auth/resolve-household-id.js';
 import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
 import type {
   CreateAccountInput,
+  CreateCategoryInput,
   CreateExpenseInput,
   CreateIncomeInput,
   CreateTransferInput,
+  DeleteCategoryInput,
+  UpdateAccountInput,
+  UpdateCategoryInput,
   UpdateTransactionInput,
 } from './types.js';
 
@@ -347,6 +351,23 @@ const reverseBalanceForDelete = async (
 };
 
 /**
+ * Guarded category-defaults core (no transaction handling): runs the
+ * lifecycle lock on the SAME claim client BEFORE any insert, so a keyed
+ * request into a frozen/deleted household fails exactly like the plain
+ * path (parity). Production callers use this; `applyDefaultsInTx` below
+ * stays the unguarded insert core (documented unit-test seam).
+ */
+export const applyCategoryDefaultsInTx = async (
+  client: PoolClient,
+  householdId: string,
+): Promise<ApplyDefaultsResult> => {
+  // P1: FIX-WS-D2-R2 lifecycle active dentro da transação do efeito
+  // (antes o alias expunha o core sem guarda na claim tx).
+  await assertWorkspaceWritableInTx(client, householdId);
+  return applyDefaultsInTx(client, householdId);
+};
+
+/**
  * Idempotent catalog application inside an existing tx (M-02).
  *
  * Race-safe: INSERT ... ON CONFLICT DO NOTHING (functional unique index
@@ -602,6 +623,30 @@ export const createAccountInTx = async (
 };
 
 /**
+ * Client-bound account patch (no transaction handling): shared by the plain
+ * path (own tx) and keyed route producers that join the idempotency claim
+ * transaction (T05 single-tx).
+ */
+export const updateAccountInTx = async (
+  client: PoolClient,
+  householdId: string,
+  id: string,
+  patch: UpdateAccountInput,
+): Promise<Account> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
+  const existing = await findAccountInHousehold(client, id, householdId);
+  if (existing.status !== 'active') throw domainErrors.notFound('Conta');
+  const res = await client.query<Row>(
+    `UPDATE accounts
+        SET name = COALESCE($3, name)
+      WHERE id = $1 AND household_id = $2
+      RETURNING id, household_id, name, kind, balance_cents, status`,
+    [id, householdId, patch.name ?? null],
+  );
+  return mapAccount(res.rows[0]!);
+};
+/**
  * Client-bound account deactivation (no transaction handling).
  * FIX-UNDO: lets the `accounts.create` undo reversal join the claim tx.
  */
@@ -675,6 +720,184 @@ const deactivateCategoryInTx = async (
   // FIX-188: same durable cross-key guard as deactivateAccountInTx above.
   if (res.rowCount === 0) throw domainErrors.notFound('Categoria');
   return mapCategory(res.rows[0]!);
+};
+
+/**
+ * Client-bound category creation (no transaction handling): shared by the
+ * plain path (own tx) and keyed route producers that join the idempotency
+ * claim transaction (T05 single-tx).
+ */
+export const createCategoryInTx = async (
+  client: PoolClient,
+  householdId: string,
+  input: CreateCategoryInput,
+): Promise<Category> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
+  if (input.parentId) {
+    const parent = await findCategoryInHousehold(client, input.parentId, householdId);
+    if (parent.status !== 'active') throw domainErrors.notFound('Categoria pai');
+    if (parent.parentId) throw domainErrors.invalid('parentId', 'subcategoria não pode ter subcategoria');
+    if (parent.kind !== input.kind) {
+      throw domainErrors.invalid('parentId', 'categoria pai deve ter o mesmo kind');
+    }
+  }
+  await assertCategoryNameFree(client, householdId, {
+    name: input.name,
+    kind: input.kind,
+    ...(input.parentId ? { parentId: input.parentId } : {}),
+  });
+  const res = await client.query<Row>(
+    `INSERT INTO categories (id, household_id, name, kind, status, parent_id, icon, color, sort_order, is_default, is_system)
+     VALUES (gen_random_uuid(), $1, $2, $3, 'active', $4, $5, $6, $7, $8, false)
+     RETURNING ${CATEGORY_COLUMNS}`,
+    [
+      householdId,
+      input.name,
+      input.kind,
+      input.parentId ?? null,
+      input.icon ?? null,
+      input.color ?? null,
+      input.sortOrder ?? 0,
+      input.isDefault ?? false,
+    ],
+  );
+  return mapCategory(res.rows[0]!);
+};
+
+/**
+ * Client-bound category patch (no transaction handling): shared by the
+ * plain path (own tx) and keyed route producers that join the idempotency
+ * claim transaction (T05 single-tx).
+ */
+export const updateCategoryInTx = async (
+  client: PoolClient,
+  householdId: string,
+  id: string,
+  patch: UpdateCategoryInput,
+): Promise<Category> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
+  const existing = await findCategoryInHousehold(client, id, householdId);
+  if (existing.status !== 'active') throw domainErrors.notFound('Categoria');
+  if (patch.name !== undefined) {
+    await assertCategoryNameFree(
+      client,
+      householdId,
+      { name: patch.name, kind: existing.kind, ...(existing.parentId ? { parentId: existing.parentId } : {}) },
+      id,
+    );
+  }
+  const res = await client.query<Row>(
+    `UPDATE categories
+        SET name = COALESCE($3, name),
+            icon = COALESCE($4, icon),
+            color = COALESCE($5, color),
+            sort_order = COALESCE($6, sort_order),
+            is_default = COALESCE($7, is_default)
+      WHERE id = $1 AND household_id = $2
+     RETURNING ${CATEGORY_COLUMNS}`,
+    [
+      id,
+      householdId,
+      patch.name ?? null,
+      patch.icon ?? null,
+      patch.color ?? null,
+      patch.sortOrder ?? null,
+      patch.isDefault ?? null,
+    ],
+  );
+  return mapCategory(res.rows[0]!);
+};
+
+/**
+ * Client-bound category hard-removal (no transaction handling): shared by
+ * the plain path (own tx) and keyed route producers that join the
+ * idempotency claim transaction (T06 single-tx).
+ */
+export const deleteCategoryInTx = async (
+  client: PoolClient,
+  householdId: string,
+  id: string,
+  input: DeleteCategoryInput,
+): Promise<DeleteCategoryResult> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
+  const cat = await findCategoryInHousehold(client, id, householdId);
+  if (cat.status !== 'active') throw domainErrors.notFound('Categoria');
+  const subs = await client.query<Row>(
+    `SELECT ${CATEGORY_COLUMNS} FROM categories
+      WHERE household_id = $1 AND parent_id = $2 AND status = 'active' AND deleted_at IS NULL`,
+    [householdId, id],
+  );
+  const scopeIds = [id, ...subs.rows.map((r) => r['id'] as string)];
+  const referencing = await client.query<Row>(
+    `SELECT ${TRANSACTION_COLUMNS} FROM transactions
+      WHERE household_id = $1 AND deleted_at IS NULL
+        AND (category_id = ANY($2) OR subcategory_id = ANY($2))`,
+    [householdId, scopeIds],
+  );
+  let movedTransactions = 0;
+  let softDeletedTransactions = 0;
+  if (input.mode === 'move') {
+    if (!input.destinationCategoryId) {
+      throw domainErrors.invalid('destinationCategoryId', 'destino é obrigatório no modo move');
+    }
+    const dest = await findCategoryInHousehold(client, input.destinationCategoryId, householdId);
+    if (dest.status !== 'active') throw domainErrors.notFound('Categoria de destino');
+    if (dest.kind !== cat.kind) {
+      throw domainErrors.invalid('destinationCategoryId', 'destino deve ter o mesmo kind');
+    }
+    if (scopeIds.includes(dest.id)) {
+      throw domainErrors.invalid('destinationCategoryId', 'destino não pode ser a categoria excluída');
+    }
+    await client.query(
+      `UPDATE transactions SET category_id = $3
+        WHERE household_id = $1 AND deleted_at IS NULL AND category_id = ANY($2)`,
+      [householdId, scopeIds, dest.id],
+    );
+    await client.query(
+      `UPDATE transactions SET subcategory_id = NULL
+        WHERE household_id = $1 AND deleted_at IS NULL AND subcategory_id = ANY($2)`,
+      [householdId, scopeIds],
+    );
+    movedTransactions = referencing.rowCount ?? 0;
+  } else {
+    if (input.confirm !== true) {
+      throw domainErrors.invalid('confirm', 'exclusão em cascata exige confirm:true');
+    }
+    // C-04: every cascaded record goes through the same balance
+    // reversal as softDeleteTransaction, inside this transaction.
+    const doomed = await client.query<Row>(
+      `SELECT kind, account_id, amount_cents, transfer_to_account_id FROM transactions
+        WHERE household_id = $1 AND deleted_at IS NULL
+          AND (category_id = ANY($2) OR subcategory_id = ANY($2))`,
+      [householdId, scopeIds],
+    );
+    for (const row of doomed.rows) {
+      await reverseBalanceForDelete(client, householdId, {
+        kind: row['kind'] as Transaction['kind'],
+        accountId: row['account_id'] as string,
+        amountCents: Number(row['amount_cents']),
+        ...(row['transfer_to_account_id'] != null
+          ? { transferToAccountId: row['transfer_to_account_id'] as string }
+          : {}),
+      });
+    }
+    await client.query(
+      `UPDATE transactions SET deleted_at = NOW()
+        WHERE household_id = $1 AND deleted_at IS NULL
+          AND (category_id = ANY($2) OR subcategory_id = ANY($2))`,
+      [householdId, scopeIds],
+    );
+    softDeletedTransactions = referencing.rowCount ?? 0;
+  }
+  await client.query(
+    `UPDATE categories SET status = 'inactive'
+      WHERE household_id = $1 AND id = ANY($2)`,
+    [householdId, scopeIds],
+  );
+  return { deletedCategoryIds: scopeIds, movedTransactions, softDeletedTransactions };
 };
 
 /**
@@ -913,20 +1136,7 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
     },
 
     async updateAccount(householdId, id, patch) {
-      return withTransaction(pool, async (client) => {
-        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
-        await assertWorkspaceWritableInTx(client, householdId);
-        const existing = await findAccountInHousehold(client, id, householdId);
-        if (existing.status !== 'active') throw domainErrors.notFound('Conta');
-        const res = await client.query<Row>(
-          `UPDATE accounts
-              SET name = COALESCE($3, name)
-            WHERE id = $1 AND household_id = $2
-            RETURNING id, household_id, name, kind, balance_cents, status`,
-          [id, householdId, patch.name ?? null],
-        );
-        return mapAccount(res.rows[0]!);
-      });
+      return withTransaction(pool, async (client) => updateAccountInTx(client, householdId, id, patch));
     },
 
     async deactivateAccount(householdId, id) {
@@ -934,76 +1144,11 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
     },
 
     async createCategory(householdId, input) {
-      return withTransaction(pool, async (client) => {
-        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
-        await assertWorkspaceWritableInTx(client, householdId);
-        if (input.parentId) {
-          const parent = await findCategoryInHousehold(client, input.parentId, householdId);
-          if (parent.status !== 'active') throw domainErrors.notFound('Categoria pai');
-          if (parent.parentId) throw domainErrors.invalid('parentId', 'subcategoria não pode ter subcategoria');
-          if (parent.kind !== input.kind) {
-            throw domainErrors.invalid('parentId', 'categoria pai deve ter o mesmo kind');
-          }
-        }
-        await assertCategoryNameFree(client, householdId, {
-          name: input.name,
-          kind: input.kind,
-          ...(input.parentId ? { parentId: input.parentId } : {}),
-        });
-        const res = await client.query<Row>(
-          `INSERT INTO categories (id, household_id, name, kind, status, parent_id, icon, color, sort_order, is_default, is_system)
-           VALUES (gen_random_uuid(), $1, $2, $3, 'active', $4, $5, $6, $7, $8, false)
-           RETURNING ${CATEGORY_COLUMNS}`,
-          [
-            householdId,
-            input.name,
-            input.kind,
-            input.parentId ?? null,
-            input.icon ?? null,
-            input.color ?? null,
-            input.sortOrder ?? 0,
-            input.isDefault ?? false,
-          ],
-        );
-        return mapCategory(res.rows[0]!);
-      });
+      return withTransaction(pool, async (client) => createCategoryInTx(client, householdId, input));
     },
 
     async updateCategory(householdId, id, patch) {
-      return withTransaction(pool, async (client) => {
-        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
-        await assertWorkspaceWritableInTx(client, householdId);
-        const existing = await findCategoryInHousehold(client, id, householdId);
-        if (existing.status !== 'active') throw domainErrors.notFound('Categoria');
-        if (patch.name !== undefined) {
-          await assertCategoryNameFree(
-            client,
-            householdId,
-            { name: patch.name, kind: existing.kind, ...(existing.parentId ? { parentId: existing.parentId } : {}) },
-            id,
-          );
-        }
-        const res = await client.query<Row>(
-          `UPDATE categories
-              SET name = COALESCE($3, name),
-                  icon = COALESCE($4, icon),
-                  color = COALESCE($5, color),
-                  sort_order = COALESCE($6, sort_order),
-                  is_default = COALESCE($7, is_default)
-            WHERE id = $1 AND household_id = $2
-           RETURNING ${CATEGORY_COLUMNS}`,
-          [
-            id,
-            householdId,
-            patch.name ?? null,
-            patch.icon ?? null,
-            patch.color ?? null,
-            patch.sortOrder ?? null,
-            patch.isDefault ?? null,
-          ],
-        );
-        return mapCategory(res.rows[0]!);
-      });
+      return withTransaction(pool, async (client) => updateCategoryInTx(client, householdId, id, patch));
     },
 
     async deactivateCategory(householdId, id) {
@@ -1011,93 +1156,11 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
     },
 
     async deleteCategory(householdId, id, input) {
-      return withTransaction(pool, async (client) => {
-        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
-        await assertWorkspaceWritableInTx(client, householdId);
-        const cat = await findCategoryInHousehold(client, id, householdId);
-        if (cat.status !== 'active') throw domainErrors.notFound('Categoria');
-        const subs = await client.query<Row>(
-          `SELECT ${CATEGORY_COLUMNS} FROM categories
-            WHERE household_id = $1 AND parent_id = $2 AND status = 'active' AND deleted_at IS NULL`,
-          [householdId, id],
-        );
-        const scopeIds = [id, ...subs.rows.map((r) => r['id'] as string)];
-        const referencing = await client.query<Row>(
-          `SELECT ${TRANSACTION_COLUMNS} FROM transactions
-            WHERE household_id = $1 AND deleted_at IS NULL
-              AND (category_id = ANY($2) OR subcategory_id = ANY($2))`,
-          [householdId, scopeIds],
-        );
-        let movedTransactions = 0;
-        let softDeletedTransactions = 0;
-        if (input.mode === 'move') {
-          if (!input.destinationCategoryId) {
-            throw domainErrors.invalid('destinationCategoryId', 'destino é obrigatório no modo move');
-          }
-          const dest = await findCategoryInHousehold(client, input.destinationCategoryId, householdId);
-          if (dest.status !== 'active') throw domainErrors.notFound('Categoria de destino');
-          if (dest.kind !== cat.kind) {
-            throw domainErrors.invalid('destinationCategoryId', 'destino deve ter o mesmo kind');
-          }
-          if (scopeIds.includes(dest.id)) {
-            throw domainErrors.invalid('destinationCategoryId', 'destino não pode ser a categoria excluída');
-          }
-          await client.query(
-            `UPDATE transactions SET category_id = $3
-              WHERE household_id = $1 AND deleted_at IS NULL AND category_id = ANY($2)`,
-            [householdId, scopeIds, dest.id],
-          );
-          await client.query(
-            `UPDATE transactions SET subcategory_id = NULL
-              WHERE household_id = $1 AND deleted_at IS NULL AND subcategory_id = ANY($2)`,
-            [householdId, scopeIds],
-          );
-          movedTransactions = referencing.rowCount ?? 0;
-        } else {
-          if (input.confirm !== true) {
-            throw domainErrors.invalid('confirm', 'exclusão em cascata exige confirm:true');
-          }
-          // C-04: every cascaded record goes through the same balance
-          // reversal as softDeleteTransaction, inside this transaction.
-          const doomed = await client.query<Row>(
-            `SELECT kind, account_id, amount_cents, transfer_to_account_id FROM transactions
-              WHERE household_id = $1 AND deleted_at IS NULL
-                AND (category_id = ANY($2) OR subcategory_id = ANY($2))`,
-            [householdId, scopeIds],
-          );
-          for (const row of doomed.rows) {
-            await reverseBalanceForDelete(client, householdId, {
-              kind: row['kind'] as Transaction['kind'],
-              accountId: row['account_id'] as string,
-              amountCents: Number(row['amount_cents']),
-              ...(row['transfer_to_account_id'] != null
-                ? { transferToAccountId: row['transfer_to_account_id'] as string }
-                : {}),
-            });
-          }
-          await client.query(
-            `UPDATE transactions SET deleted_at = NOW()
-              WHERE household_id = $1 AND deleted_at IS NULL
-                AND (category_id = ANY($2) OR subcategory_id = ANY($2))`,
-            [householdId, scopeIds],
-          );
-          softDeletedTransactions = referencing.rowCount ?? 0;
-        }
-        await client.query(
-          `UPDATE categories SET status = 'inactive'
-            WHERE household_id = $1 AND id = ANY($2)`,
-          [householdId, scopeIds],
-        );
-        return { deletedCategoryIds: scopeIds, movedTransactions, softDeletedTransactions };
-      });
+      return withTransaction(pool, async (client) => deleteCategoryInTx(client, householdId, id, input));
     },
 
     async applyCategoryDefaults(householdId) {
-      return withTransaction(pool, async (client) => {
-        // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
-        await assertWorkspaceWritableInTx(client, householdId);
-        return applyDefaultsInTx(client, householdId);
-      });
+      return withTransaction(pool, async (client) => applyCategoryDefaultsInTx(client, householdId));
     },
 
     async createExpense(householdId, input, options) {
@@ -1154,9 +1217,15 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
   // extensions (see PostgresReversalTxExtensions). The declared factory
   // return type stays WriteStore, so existing callers are unaffected.
   return Object.assign(store, {
-    softDeleteTransactionInTx,
+    createAccountInTx,
+    updateAccountInTx,
     deactivateAccountInTx,
+    createCategoryInTx,
+    updateCategoryInTx,
     deactivateCategoryInTx,
+    applyCategoryDefaultsInTx,
+    deleteCategoryInTx,
+    softDeleteTransactionInTx,
     // V4.1 Phase 3 Task 3.2: client-bound financial mutations so keyed
     // route producers run the effect on the idempotency claim client
     // (claim + effect + completion in ONE transaction). See

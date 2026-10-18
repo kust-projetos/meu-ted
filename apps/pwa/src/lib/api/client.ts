@@ -36,8 +36,8 @@ import {
   getSessionToken as getStoredSessionToken,
   getToken as getStoredDeviceToken,
 } from "@/lib/auth/token-store";
-import { clearOfflineSubjectId, setOfflineSubjectId } from "@/lib/auth/offline-subject";
-import { setOfflineWorkspaceId } from "@/lib/auth/offline-identity";
+import { setOfflineSubjectId } from "@/lib/auth/offline-subject";
+import { setOfflineWorkspaceId, noteAuthoritativeRevocation } from "@/lib/auth/offline-identity";
 import { isMembershipRevocation } from "@/lib/auth/auth-state-machine";
 import { noteLegacyAuthUsage } from "@/lib/auth/legacy-usage";
 
@@ -215,19 +215,23 @@ export const announceUnauthorized = (): void => {
 export const FORBIDDEN_EVENT = "pi-finance:forbidden";
 
 /**
- * D10 revocation purge: drop the offline subject partition and delete the
- * v2 snapshot so a revoked membership keeps no readable offline data.
- * Best-effort and non-blocking — purge failures never break the request
- * path (expireSession re-purges synchronously on the login transition).
+ * T07a revocation purge: synchronously tear down the offline identity
+ * (principal + workspace binding + subject partition) via the canonical
+ * revocation gate — reads fail closed in the same tick — then delete the
+ * V2/V3 snapshots best-effort. Non-blocking: purge failures never break the
+ * request path (FORBIDDEN_EVENT → expireSession runs the full canonical
+ * clearSensitiveSession alongside this).
  */
 function purgeOfflineSnapshotOnRevocation(): void {
   try {
-    clearOfflineSubjectId();
+    noteAuthoritativeRevocation();
   } catch {
     /* noop */
   }
   void import("@/lib/state/snapshot-db")
-    .then((db) => db.deleteV2Snapshot().catch(() => {}))
+    .then((db) =>
+      Promise.allSettled([db.deleteV2Snapshot(), db.deleteV3Snapshot()]),
+    )
     .catch(() => {});
 }
 
