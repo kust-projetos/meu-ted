@@ -333,33 +333,34 @@ describe("T07b-R1 execução real do offline-shell.js (findings do review)", () 
   it("g) req.onerror na leitura V3 → lock, V2 nunca lido", async () => {
     await seedStore({ v2: v2Envelope() });
     setShellIdentity(USER_A, WS_X, SUBJECT_S);
-    // Fault injection: só o get da chave "v3" dispara onerror, como um
-    // request real falho faria; o get V2 segue o caminho real.
+    // Fault injection: só o openCursor da chave "v3" dispara onerror, como um
+    // request real falho faria; o cursor V2 segue o caminho real.
     const probe = await openProbeDb();
     const tx0 = probe.transaction("snapshots", "readonly");
     const storeProto = Object.getPrototypeOf(
       tx0.objectStore("snapshots"),
     ) as IDBObjectStore;
     probe.close();
-    const origGet = storeProto.get;
-    const getSpy = vi.spyOn(storeProto, "get").mockImplementation(function (
-      this: IDBObjectStore,
-      ...args: any[]
-    ) {
-      if (args[0] === "v3") {
-        const stub = {} as any;
-        setTimeout(() => {
-          stub.onerror?.(new Event("error"));
-        }, 0);
-        return stub as IDBRequest;
-      }
-      return (origGet as (...a: any[]) => IDBRequest).apply(this, args);
-    });
+    const origOpenCursor = storeProto.openCursor;
+    const cursorSpy = vi.spyOn(storeProto, "openCursor").mockImplementation(
+      function (this: IDBObjectStore, ...args: any[]) {
+        if (args[0] === "v3") {
+          const stub = {} as any;
+          setTimeout(() => {
+            stub.onerror?.(new Event("error"));
+          }, 0);
+          return stub as IDBRequest;
+        }
+        return (origOpenCursor as (...a: any[]) => IDBRequest).apply(this, args);
+      },
+    );
+    const getSpy = vi.spyOn(storeProto, "get");
     const errors = await runShell("/");
     expect(errors).toEqual([]);
     expect(contentText()).toContain(LOCK_TEXT);
     expect(contentText()).not.toContain("Conta V2 Legada");
-    expect(getSpy.mock.calls.map((c) => c[0])).toEqual(["v3"]); // V2 nunca lido
+    expect(cursorSpy.mock.calls.map((c) => c[0])).toEqual(["v3"]);
+    expect(getSpy.mock.calls.length).toBe(0); // V2 nunca lido
   });
 
   it.each([{ v: false }, { v: 0 }, { v: "" }])(
@@ -374,12 +375,36 @@ describe("T07b-R1 execução real do offline-shell.js (findings do review)", () 
         tx0.objectStore("snapshots"),
       ) as IDBObjectStore;
       probe.close();
+      const cursorSpy = vi.spyOn(storeProto, "openCursor");
       const getSpy = vi.spyOn(storeProto, "get");
       const errors = await runShell("/");
       expect(errors).toEqual([]);
       expect(contentText()).toContain(LOCK_TEXT);
       expect(contentText()).not.toContain("Conta V2 Legada");
-      expect(getSpy.mock.calls.map((c) => c[0])).toEqual(["v3"]);
+      expect(cursorSpy.mock.calls.map((c) => c[0])).toEqual(["v3"]);
+      expect(getSpy.mock.calls.length).toBe(0); // V2 nunca lido
     },
   );
+
+  it("k) V3 com valor undefined armazenado + V2 válido → lock, V2 nunca lido, close único", async () => {
+    await seedStore({ v3: undefined, v2: v2Envelope() });
+    setShellIdentity(USER_A, WS_X, SUBJECT_S);
+    const probe = await openProbeDb();
+    const dbProto = Object.getPrototypeOf(probe) as IDBDatabase;
+    const tx0 = probe.transaction("snapshots", "readonly");
+    const storeProto = Object.getPrototypeOf(
+      tx0.objectStore("snapshots"),
+    ) as IDBObjectStore;
+    probe.close();
+    const closeSpy = vi.spyOn(dbProto, "close");
+    const cursorSpy = vi.spyOn(storeProto, "openCursor");
+    const getSpy = vi.spyOn(storeProto, "get");
+    const errors = await runShell("/");
+    expect(errors).toEqual([]);
+    expect(contentText()).toContain(LOCK_TEXT);
+    expect(contentText()).not.toContain("Conta V2 Legada");
+    expect(cursorSpy.mock.calls.map((c) => c[0])).toEqual(["v3"]);
+    expect(getSpy.mock.calls.length).toBe(0); // V2 nunca lido
+    expect(closeSpy.mock.calls.length).toBe(1);
+  });
 });

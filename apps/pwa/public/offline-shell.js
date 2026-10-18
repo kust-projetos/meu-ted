@@ -70,27 +70,30 @@ function getEnv(db,key){
   });
 }
 /**
- * Strict V3 read (three-state): resolves {present,env} on success — genuine
- * absence is {present:false,env:null} — and REJECTS on any read/open error
- * (thrown exception or req.onerror). A failed read NEVER coerces to "absent":
- * falha não comprova ausência (main locks instead of releasing V2).
- * The error event is not swallowed: no preventDefault/stopPropagation, the
- * original error (or equivalent) propagates to the caller.
+ * Strict V3 read (three-state): resolves {present,env} on success and
+ * REJECTS on any read/open error (thrown exception or req.onerror). A failed
+ * read NEVER coerces to "absent": falha não comprova ausência (main locks
+ * instead of releasing V2). The error event is not swallowed: no
+ * preventDefault/stopPropagation, the original error (or equivalent)
+ * propagates to the caller.
+ *
+ * Presence is probed with openCursor(key) — NOT with get(): a stored
+ * undefined value and a missing key BOTH make get() return undefined, so a
+ * get()-based read cannot tell corruption apart from absence. A cursor is
+ * null ONLY on true absence; otherwise cursor.value is returned verbatim
+ * (even undefined/null/false/0/"") and falls through to the v3Ok validation
+ * path, which locks it. No cursor.continue needed (single key); the
+ * read-only transaction auto-completes.
  */
 function getEnvStrict(db,key){
   return new Promise(function(res,rej){
     var req;
-    try{req=db.transaction(STORE,"readonly").objectStore(STORE).get(key)}
+    try{req=db.transaction(STORE,"readonly").objectStore(STORE).openCursor(key)}
     catch(e){rej(e);return}
     req.onsuccess=function(){
-      // Absence is EXACTLY the IndexedDB undefined result (undefined values
-      // cannot be stored, so undefined is unambiguous absence). Any other
-      // result — even falsy/corrupt (false, 0, "") — is PRESENT and goes
-      // through the v3Ok validation path, which locks it. Never coerce with
-      // ||: a present-but-invalid record must lock, never release V2.
-      var v=req.result;
-      if(v===undefined)res({present:false,env:null});
-      else res({present:true,env:v});
+      var cur=req.result||null;
+      if(cur===null)res({present:false,env:null});
+      else res({present:true,env:cur.value});
     };
     req.onerror=function(){rej(req.error||new Error("v3-read-error"))};
   });

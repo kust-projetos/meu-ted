@@ -89,7 +89,7 @@ export const SHELL_PRECACHE_ENTRIES: ReadonlyArray<{
     // T07b: shell reads the V3 single-slot (ownerKey + TTL) with a legacy
     // V2 fallback, covering /compromissos and /hub/* — revision bumped to
     // the new content hash.
-    revision: "sha256-2245ca7b1386a05bd8490d9dd4816b32fe32566ffe8490d330cd593ca9563224",
+    revision: "sha256-3a300c75e08ec151a839713df94ce9c5c9c6191509d7b3247de2548881d1a43f",
   },
 ];
 
