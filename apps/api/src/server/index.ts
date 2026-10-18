@@ -57,6 +57,7 @@ import { createPostgresAgentReplayStore } from "../auth/agent-connection-token-r
 import { createInMemoryAgentReplayStore } from "../auth/agent-connection-token-replay.js";
 import { registerCors } from "./cors.js";
 import { createPostgresInviteRuntime, } from "./production-routes.js";
+import { InviteError } from "../auth/invites.js";
 import { createPostgresAccountInviteStore } from "../auth/account-invites-postgres.js";
 import { createAccountInviteService } from "../auth/account-invites.js";
 import { createPostgresPendingOperationV2Store } from "../approvals/pending-v2.js";
@@ -136,8 +137,14 @@ const start = async (): Promise<void> => {
     });
     const accountInviteService = createAccountInviteService({
       store: createPostgresAccountInviteStore(pool),
+      // API-03: typed fail-closed 503 (same contract as
+      // createPostgresAccountInviteRuntime) — never a generic Error (500).
       deliver: inviteDelivery ?? (async () => {
-        throw new Error("invite delivery is not configured");
+        throw new InviteError(
+          "invite delivery is not configured",
+          "invite.delivery_unavailable",
+          503,
+        );
       }),
     });
     const accountInviteRuntime = { accountInviteService };
