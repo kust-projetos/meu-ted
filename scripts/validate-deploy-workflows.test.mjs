@@ -205,6 +205,30 @@ test("normalizeWranglerVersion rejects any residual text (never skips to first s
   }
 });
 
+// T11a review remediation round 2 (R2-1 P1): generic non-alphanumeric prefix
+// stripping is FORBIDDEN — only the explicit allowlist normalizes.
+test("normalizeWranglerVersion rejects generic prefixes and unknown emoji (R2-1 allowlist)", () => {
+  for (const bad of ["-3.114.0", "!!! 3.114.0", "🚨 wrangler 3.114.0"]) {
+    assert.equal(normalizeWranglerVersion(bad), null, `${JSON.stringify(bad)} must be null`);
+  }
+});
+
+test("verifyDeployManifest blocks generic-prefix wranglerVersion (R2-1)", () => {
+  const result = verifyDeployManifest(goodManifest({ wranglerVersion: "-3.114.0" }), goodExpected());
+  assert.equal(result.ok, false, `"-3.114.0" must block, got ${result.reason}`);
+});
+
+// T11a review remediation round 2 (R2-2 P2): canonical strict semver — no
+// leading zeros, no empty prerelease identifiers, no leading-zero numerics.
+test("normalizeWranglerVersion enforces strict semver (R2-2)", () => {
+  for (const bad of ["01.114.5", "3.01.0", "3.114.01", "3.114.0-beta..1", "3.114.0-01"]) {
+    assert.equal(normalizeWranglerVersion(bad), null, `${JSON.stringify(bad)} must be null`);
+  }
+  for (const good of ["3.114.0", "3.114.0-beta.1", "3.114.0+build.2", "0.0.0", "10.20.30"]) {
+    assert.ok(normalizeWranglerVersion(good) !== null, `${JSON.stringify(good)} must normalize`);
+  }
+});
+
 test("verifyDeployManifest blocks non-string wranglerVersion (fail-closed)", () => {
   for (const bad of [["3.114.0"], { version: "3.114.0" }, 31140, null]) {
     const result = verifyDeployManifest(goodManifest({ wranglerVersion: bad }), goodExpected());

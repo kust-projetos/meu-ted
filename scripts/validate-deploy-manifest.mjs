@@ -23,29 +23,51 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-const SEMVER_FULL = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const SEMVER_FULL =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9A-Za-z-]*))*))?(?:\+(?:[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+
+// Allowlist restrita à saída REAL do `wrangler --version`: literal "wrangler"
+// opcional + emoji decorativo de nuvem conhecido (com/sem variation selector
+// U+FE0F). Longest-first: "⛅️" antes de "⛅", "☁️" antes de "☁". NENHUM outro
+// prefixo é removido — dash, pontuação ou emoji fora da allowlist ⇒ null.
+const KNOWN_CLOUD_PREFIXES = ["⛅️", "☁️", "⛅", "☁"];
 
 /**
  * Normalizes a `wrangler --version` capture for comparison. Accepts ONLY
  * strings (non-string ⇒ null); trims, collapses internal whitespace runs to
- * one space, strips the KNOWN decorative prefix only (cloud emoji/symbols
- * from the real `wrangler --version` output plus the literal "wrangler",
- * case-insensitive), then requires the REMAINDER to be a complete semver
- * `X.Y.Z` (digits; prerelease/build tails allowed by the canonical regex).
- * Short forms ("3.114"), "v"-prefixed forms, and ANY residual text
- * ("wranlg …", "ERROR … failed", "3.114.0 extra") ⇒ null — the helper never
- * skips forward to the first semver-looking token. Blank input ⇒ null.
+ * one space, then requires the WHOLE input to be exactly one allowlisted
+ * shape: (a) a pure semver `X.Y.Z` (canonical strict: no leading zeros, no
+ * empty prerelease identifiers, no leading-zero numeric prerelease ids);
+ * (b) the literal "wrangler" (case-insensitive) + space(s) + that semver;
+ * (c) ONE known cloud emoji + space(s) + (b). Short forms ("3.114"),
+ * "v"-prefixed forms, leading dash/punctuation ("-3.114.0", "!!! 3.114.0"),
+ * unknown emoji ("🚨 …"), and ANY residual text ("wranlg …",
+ * "ERROR … failed", "3.114.0 extra") ⇒ null — the helper never skips
+ * forward to the first semver-looking token. Blank input ⇒ null.
  */
 export function normalizeWranglerVersion(raw) {
   if (typeof raw !== "string") return null;
   const collapsed = raw.trim().replace(/\s+/g, " ");
   if (collapsed === "") return null;
-  let rest = collapsed.replace(/^[^A-Za-z0-9]+/, "");
-  if (rest === "") return null;
+  let rest = collapsed;
+  let hadCloudEmoji = false;
+  for (const emoji of KNOWN_CLOUD_PREFIXES) {
+    if (rest.startsWith(emoji)) {
+      const after = rest.slice(emoji.length);
+      if (!/^ +\S/.test(after)) return null;
+      rest = after.replace(/^ +/, "");
+      hadCloudEmoji = true;
+      break;
+    }
+  }
   const prefix = rest.match(/^wrangler(?:\s+|$)/i);
   if (prefix) {
     rest = rest.slice(prefix[0].length).trim();
     if (rest === "") return null;
+  } else if (hadCloudEmoji) {
+    // Allowlist shape (c) requires the literal after the emoji: a cloud
+    // emoji glued to a bare semver ("⛅️ 3.114.0") is NOT real output.
+    return null;
   }
   const lowered = rest.toLowerCase();
   if (!SEMVER_FULL.test(lowered)) return null;
