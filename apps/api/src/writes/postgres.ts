@@ -16,7 +16,7 @@ import { DEFAULT_CATEGORY_CATALOG } from '../categories/catalog.js';
 import { assertCategoryKind, CARD_EXPENSE_KIND_MESSAGE } from '../categories/resolve.js';
 import { withTransaction } from '../db/pool.js';
 import { domainErrors, DomainError } from './errors.js';
-import { buildIdempotencyKey, hashPayloadV2, matchesPayloadHash, type IdempotencyProducer } from './idempotency.js';
+import { buildIdempotencyKey, hashPayloadV2, matchesPayloadHash, type IdempotencyActorContext, type IdempotencyProducer } from './idempotency.js';
 import { runKeyedMutation } from './pending-idempotency.js';
 import type { ApplyDefaultsResult, DeleteCategoryResult, WriteStore } from './store.js';
 import { resolveApplicationUserId } from '../auth/resolve-user-id.js';
@@ -1458,6 +1458,26 @@ export const resolveCanonicalAuditOperation = (response: unknown, operation?: st
   }
 };
 
+/**
+ * T09 (fatia FÁTICA) — valida o ator da sessão para novos records.
+ * Fail-closed: actorId vazio ou actorType fora de ('device','user')
+ * rejeita em vez de persistir autoria genérica silenciosa. Chamadas
+ * sem ator (forma string legada) preservam os defaults históricos.
+ */
+const parseExplicitActor = (actor: unknown): IdempotencyActorContext => {
+  if (typeof actor !== 'object' || actor === null || Array.isArray(actor)) {
+    throw domainErrors.invalid('actor', 'actor must be an authenticated session context');
+  }
+  const record = actor as Record<string, unknown>;
+  if (typeof record['actorId'] !== 'string' || record['actorId'].trim() === '') {
+    throw domainErrors.invalid('actorId', 'actorId must come from the authenticated session');
+  }
+  if (record['actorType'] !== 'device' && record['actorType'] !== 'user') {
+    throw domainErrors.invalid('actorType', "actorType must be 'device' or 'user'");
+  }
+  return { actorId: record['actorId'], actorType: record['actorType'] };
+};
+
 export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: boolean }): import('./idempotency.js').IdempotencyStore => {
   const { pool, legacy } = opts;
   // V4.1 Phase 3 Tasks 3.6/3.7: new claims hash V2 (SHA-256 over canonical
@@ -1465,19 +1485,25 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
   // replay — reads compare tolerantly via matchesPayloadHash.
   const hash = (payload: unknown): string => hashPayloadV2(payload);
   return {
-    async lookupOrRecord(scopeOrHouseholdId: any, keyOrPayload: any, payloadOrProducer: any, maybeProducer?: any) {
+    async lookupOrRecord(scopeOrHouseholdId: any, keyOrPayload: any, payloadOrProducer: any, maybeProducer?: any, maybeActor?: any) {
       let householdId: string;
       let key: string;
       let payload: unknown;
       let producer: IdempotencyProducer<any>;
       let operation: string | undefined;
       let actorId: string | undefined;
+      let actorType: 'device' | 'user' | undefined;
 
       if (typeof scopeOrHouseholdId === 'object' && scopeOrHouseholdId !== null) {
         householdId = scopeOrHouseholdId.householdId ?? scopeOrHouseholdId.workspaceId;
         key = scopeOrHouseholdId.key;
         operation = scopeOrHouseholdId.operation;
         actorId = scopeOrHouseholdId.actorId;
+        // T09: a forma objeto já carrega actorType (invites/workspaces) mas
+        // nunca o persistia (default 'device'). Persiste quando válido.
+        if (scopeOrHouseholdId.actorType === 'device' || scopeOrHouseholdId.actorType === 'user') {
+          actorType = scopeOrHouseholdId.actorType;
+        }
         payload = keyOrPayload;
         producer = payloadOrProducer;
       } else {
@@ -1485,6 +1511,13 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
         key = keyOrPayload;
         payload = payloadOrProducer;
         producer = maybeProducer;
+        // T09: ator explícito da sessão autenticada (nunca do body). A
+        // chave composta NÃO inclui ator — replay/hash preservados.
+        if (maybeActor !== undefined) {
+          const explicit = parseExplicitActor(maybeActor);
+          actorId = explicit.actorId;
+          actorType = explicit.actorType;
+        }
       }
 
       // Canonical composite key: raw key for the legacy string form,
@@ -1494,18 +1527,22 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
         : key;
 
       const payloadHash = hash(payload);
+      // T09: defaults históricos quando a chamada não carrega ator — nenhuma
+      // reescrita de comportamento para callsites ainda não migrados.
+      const resolvedActorId = actorId ?? (legacy ? 'unknown' : 'device');
+      const resolvedActorType = actorType ?? 'device';
       return withTransaction(pool, async (client) => {
         if (legacy) {
           // Hybrid VPS: operation_records is CANONICAL, audit_logs is LEGACY
           const claim = await client.query<{ id: string; status: string; response: unknown; effect_ref: string | null }>(
             `INSERT INTO operation_records
-               (workspace_id, actor_id, operation, idempotency_key, payload_hash, status,
+               (workspace_id, actor_id, operation, idempotency_key, payload_hash, actor_type, status,
                 lease_until, retry_until, retention_until)
-             VALUES ($1, $2, $3, $4, $5, 'processing',
+             VALUES ($1, $2, $3, $4, $5, $6, 'processing',
                      NOW() + INTERVAL '5 minutes', NOW() + INTERVAL '7 days', NOW() + INTERVAL '90 days')
              ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
              RETURNING id, status, response, effect_ref`,
-            [householdId, actorId ?? 'unknown', operation ?? 'write', compositeKey, payloadHash],
+            [householdId, resolvedActorId, operation ?? 'write', compositeKey, payloadHash, resolvedActorType],
           );
 
           if (claim.rowCount === 1) {
@@ -1577,13 +1614,13 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
         // verified receipt at each completion site.
         const claim = await client.query<{ id: string; status: string; response: unknown; effect_ref: string | null }>(
           `INSERT INTO operation_records
-             (workspace_id, actor_id, operation, idempotency_key, payload_hash, status,
+             (workspace_id, actor_id, operation, idempotency_key, payload_hash, actor_type, status,
               lease_until, retry_until, retention_until)
-           VALUES ($1, $2, $3, $4, $5, 'processing',
+           VALUES ($1, $2, $3, $4, $5, $6, 'processing',
                    NOW() + INTERVAL '5 minutes', NOW() + INTERVAL '7 days', NOW() + INTERVAL '90 days')
            ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
            RETURNING id, status, response, effect_ref`,
-          [householdId, actorId ?? 'device', operation ?? 'write', compositeKey, payloadHash],
+          [householdId, resolvedActorId, operation ?? 'write', compositeKey, payloadHash, resolvedActorType],
         );
 
         if (claim.rowCount === 1) {
@@ -1605,17 +1642,18 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
           );
           await client.query(
             `INSERT INTO audit_logs
-               (id, operation_record_id, workspace_id, actor_id, operation, event_type, payload_hash, effect_ref, metadata)
-             VALUES ($1, $2, $3, $4, $5, 'financial_effect.committed', $6, $7, $8)`,
+               (id, operation_record_id, workspace_id, actor_id, operation, event_type, payload_hash, effect_ref, metadata, actor_type)
+             VALUES ($1, $2, $3, $4, $5, 'financial_effect.committed', $6, $7, $8, $9)`,
             [
               randomUUID(),
               recordId,
               householdId,
-              actorId ?? 'device',
+              resolvedActorId,
               auditOperation,
               payloadHash,
               effectRef,
               JSON.stringify({ entityType: auditEntityType }),
+              resolvedActorType,
             ],
           );
           return { response, replayed: false };
@@ -1640,17 +1678,18 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
           );
           await client.query(
             `INSERT INTO audit_logs
-               (id, operation_record_id, workspace_id, actor_id, operation, event_type, payload_hash, effect_ref, metadata)
-             VALUES ($1, $2, $3, $4, $5, 'financial_effect.committed', $6, $7, $8)`,
+               (id, operation_record_id, workspace_id, actor_id, operation, event_type, payload_hash, effect_ref, metadata, actor_type)
+             VALUES ($1, $2, $3, $4, $5, 'financial_effect.committed', $6, $7, $8, $9)`,
             [
               randomUUID(),
               recordId,
               householdId,
-              actorId ?? 'device',
+              resolvedActorId,
               auditOperation,
               payloadHash,
               effectRef,
               JSON.stringify({ entityType: auditEntityType }),
+              resolvedActorType,
             ],
           );
           return { response, replayed: false };

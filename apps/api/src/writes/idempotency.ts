@@ -25,6 +25,21 @@ export type IdempotencyRequest = {
 };
 
 /**
+ * T09 (fatia FÁTICA) — ator autenticado para novos records.
+ *
+ * Transporta o ator da SESSÃO AUTENTICADA (authenticatedContext,
+ * server-side) até o fresh claim. NUNCA vem do body: rotas derivam do
+ * `ctx` resolvido pelo preHandler unificado ou do device resolvido
+ * server-side. `actorId` vazio ou `actorType` fora do vocabulário
+ * rejeita fail-closed no Postgres; a forma string sem ator preserva
+ * exatamente os defaults históricos ('device'/`'unknown'`).
+ */
+export type IdempotencyActorContext = {
+  actorId: string;
+  actorType: 'device' | 'user';
+};
+
+/**
  * FIX-UNDO (F3, SPEC §12 F3 opção 1): producers MAY accept the claim
  * transaction client. Postgres-backed stores pass their open `PoolClient`
  * so the financial effect joins the claim transaction (single atomic
@@ -64,6 +79,7 @@ export type IdempotencyStore = {
     key: string,
     payload: unknown,
     producer: IdempotencyProducer<T>,
+    actor?: IdempotencyActorContext,
   ): Promise<{ response: T; replayed: boolean }>;
   lookupOrRecord<T>(
     request: IdempotencyRequest,
@@ -234,7 +250,11 @@ export const createInMemoryIdempotencyStore = (): IdempotencyStore => {
   };
 
   return {
-    async lookupOrRecord(scopeOrHouseholdId: any, keyOrPayload: any, payloadOrProducer: any, maybeProducer?: any) {
+    // T09: a forma string aceita o ator da sessão autenticada como 5º
+    // parâmetro opcional. O heap não tem coluna de ator — o parâmetro é
+    // aceito para paridade de contrato e IGNORADO no armazenamento; a
+    // chave composta nunca inclui ator (replay/hash estáveis).
+    async lookupOrRecord(scopeOrHouseholdId: any, keyOrPayload: any, payloadOrProducer: any, maybeProducer?: any, _actor?: any) {
       let composite: string;
       let payload: unknown;
       // In-memory has no transaction: the producer always runs with no tx.
