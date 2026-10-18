@@ -181,16 +181,16 @@ export const createUndoService = (deps: {
           target = candidates.find((log) => log.id === lastOperationId);
           if (!target) throw domainErrors.undoNothingToUndo();
         } else {
-          // FIX-188: fail-closed head election. Without an explicit
-          // lastOperationId the ONLY eligible target is the head (the
-          // actor's own newest when present, else the household newest).
-          // When the head is already consumed the call fails with
-          // `undo.nothing_to_undo` — it NEVER walks back to a predecessor
-          // silently (that elected-and-reversed an operation nobody named).
+          // T09 own-actor-only (ADR-028): without an explicit
+          // lastOperationId the ONLY eligible targets are the caller's own
+          // reversible rows, newest first. A caller with no own operations
+          // fails with `undo.nothing_to_undo` — the election NEVER falls
+          // back to the household head, so it cannot silently reverse a
+          // predecessor owned by another actor. A consumed own head surfaces
+          // below as `undo.nothing_to_undo` (row guard), never a walk-back.
           const own = candidates.filter((log) => log.actorId === actorId);
-          const pool = own.length > 0 ? own : candidates;
-          if (pool.length === 0) throw domainErrors.undoNothingToUndo();
-          target = pool[0]!;
+          if (own.length === 0) throw domainErrors.undoNothingToUndo();
+          target = own[0]!;
         }
         const entityId = resolveEntityId(target)!;
         // FIX-188: claim the target synchronously (no await between this

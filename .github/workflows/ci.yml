@@ -548,6 +548,8 @@ jobs:
       # V4.1 Phase 9 (Tasks 9.4, 9.11): no DB needed.
       - run: pnpm test:skip-gate
       - run: pnpm action-pins:check
+      - run: pnpm workflows-yaml:check
+      - run: node --test scripts/check-workflows-yaml.test.mjs
 
   # ─── Public-safety gate (V4.1 closure SPEC §13 / CI-02) ───────────────
   # Authoritative required check: --strict fails on warnings, and the

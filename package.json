@@ -42,6 +42,7 @@
     "production:smoke:contract": "node --test scripts/production-smoke-contract.test.mjs",
     "test:skip-gate": "node scripts/check-test-skips.mjs",
     "action-pins:check": "node scripts/check-action-pins.mjs",
+    "workflows-yaml:check": "node scripts/check-workflows-yaml.mjs",
     "validate:final": "node scripts/run-final-validation.mjs"
   },
   "devDependencies": {
@@ -49,7 +50,8 @@
     "@vitest/coverage-v8": "4.1.11",
     "husky": "^9.1.7",
     "typescript": "^5.7.0",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "yaml": "^2.9.1"
   },
   "pnpm": {
     "overrides": {

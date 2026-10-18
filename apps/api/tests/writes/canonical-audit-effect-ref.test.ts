@@ -381,8 +381,8 @@ describeIfPg('canonical audit effect_ref — PG e2e (create → audit bind → u
     expect(records.rows[0]).toMatchObject({ operation: 'write', status: 'completed', effect_ref: txId });
 
     // …while the AUDIT row carries the derived reversible vocabulary.
-    const audits = await pool.query<{ operation: string; effect_ref: string | null; metadata: unknown }>(
-      'SELECT operation, effect_ref, metadata FROM audit_logs WHERE workspace_id = $1 AND operation = $2',
+    const audits = await pool.query<{ id: string; operation: string; effect_ref: string | null; metadata: unknown }>(
+      'SELECT id, operation, effect_ref, metadata FROM audit_logs WHERE workspace_id = $1 AND operation = $2',
       [householdId, 'transactions.expense.create'],
     );
     expect(audits.rows).toHaveLength(1);
@@ -438,8 +438,11 @@ describeIfPg('canonical audit effect_ref — PG e2e (create → audit bind → u
       code: 'undo.nothing_to_undo',
     });
 
-    // Plain undo targets the expense and restores the balance.
-    const result = await undo.undo(householdId, actorId, `undo-${e2eUUID()}`);
+    // Explicit undo (ADR-028: naming authorizes) — the audit row was written
+    // without actor provenance (claim path without session), so implicit
+    // own-only undo correctly does not elect it; naming the target keeps the
+    // reversal deliberate. Plain undo targets the expense and restores the balance.
+    const result = await undo.undo(householdId, actorId, `undo-${e2eUUID()}`, audits.rows[0]!.id);
     expect(result.undone).toMatchObject({
       operation: 'transactions.expense.create',
       entityId: txId,

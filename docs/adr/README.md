@@ -33,6 +33,7 @@ Este diretório contém o registro imutável de decisões de arquitetura do proj
 | [ADR-025](ADR-025-canonical-converter.md) | Arquitetura do conversor Legacy→Canonical e âncora de saldo inicial | accepted | 2026-09-25 | — |
 | [ADR-026](ADR-026-risk-based-mutation-authorization.md) | Autorização de mutações baseada em risco | accepted | 2026-10-02 | — |
 | [ADR-027](ADR-027-workspace-plurality-lifecycle-views.md) | Pluralidade de workspaces, lifecycle e visibilidade de conversas (D1/D2/D3) | accepted | 2026-10-15 | D1/D2/D3 |
+| [ADR-028](ADR-028-implicit-undo-own-actor.md) | Undo implícito por ator-próprio (política de eleição de alvo) | accepted | 2026-10-18 | — |
 
 ## Template para Novos ADRs
 
