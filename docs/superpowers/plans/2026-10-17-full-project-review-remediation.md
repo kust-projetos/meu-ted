@@ -80,7 +80,7 @@ Legenda: **C** = confirmado por código; **P** = parcialmente confirmado/impacto
 3. **Onda C — comportamento:** T07b → T07c; T08 em trilha separada, sem bloquear a Release B por uma capacidade pós-V1. T10 após testes de auth/CSRF.
 4. **Onda D — confiabilidade operacional:** T11a/b/c, T12 em fatias independentes e T13. Correções documentais factuais podem começar antes; atualizações de produção dependem de evidência autorizada.
 
-**Antes de propor o flip da Release B:** T04 validado, T01–T03 restaurando confiança nos gates, CI do candidato verde e reconsulta do sink durável da Contabo. T05/T06 são prioridade de integridade, mas devem ter PRs e provas próprias, sem uma mega-release acoplada ao flip. Pendências relevantes precisam estar resolvidas ou aceitas explicitamente pelo operador, nunca ignoradas pelo cronograma.
+**Antes de propor o flip da Release B:** T04 validado, T01–T03 restaurando confiança nos gates, CI do candidato verde e reconsulta do sink durável da VPS de produção. T05/T06 são prioridade de integridade, mas devem ter PRs e provas próprias, sem uma mega-release acoplada ao flip. Pendências relevantes precisam estar resolvidas ou aceitas explicitamente pelo operador, nunca ignoradas pelo cronograma.
 
 **Data não é autorização:** `2026-10-24T22:09:01.594968Z` é a primeira data candidata da janela histórica, conforme `.github/workflows/release-b-reminder.yml:32-33`. Novo evento reancora a janela. Nenhum flip automático; A19, PDF, autoexecute-on e cutover continuam gateados.
 
@@ -212,7 +212,7 @@ Todos os testes abaixo são **aceites a implementar/executar**, não resultados 
 - **Escopo:** `scripts/generate-documentation-facts.mjs`, `docs/architecture/runtime-facts.json`, `docs/{ARCHITECTURE-CURRENT,PRODUCT,ROADMAP,MEU-TED-V1-FINAL-STATE}.md`, `README.md`, `AGENTS.md`, `.husky/pre-commit`, `ci.yml`, `scripts/{lint-docs,check-public-safety,run-final-validation}.mjs` e respectivos contratos.
 - Derivar contagens/última migration do código, distinguir versão de schema do facts de versão do produto e fatos live. Não trocar automaticamente SHAs documentados por HEAD nem chamar V061 “aplicada em produção” por existir no checkout.
 - Corrigir notas stale de lint Agent/Broker; acrescentar lint de llm-contracts no CI e sua cobertura ausente em validate:final. Incluir boundary no CI/hook segundo contrato do projeto e docs vivos na lista do lint.
-- Cobertura de metadados Contabo: fontes autorizadas e fixtures sintéticas; não copiar IPs/chaves/usuários reais para o plano, tests ou logs públicos.
+- Cobertura de metadados da VPS de produção: fontes autorizadas e fixtures sintéticas; não copiar IPs/chaves/usuários reais para o plano, tests ou logs públicos.
 - Corrigir em alteração própria os 85 links relativos do relatório original e incluí-lo na validação explícita; preservar conteúdo histórico e registrar erratas técnicas, não reescrever como se o diagnóstico original já estivesse certo.
 - Aceite: gerador não reintroduz drift, docs/links cobertos, fixtures negativas dos gates reprovam, edição inofensiva não vira exigência de ADR, nenhuma alteração em produção.
 
@@ -284,7 +284,7 @@ Offline exige teste de cold navigation com SW real, cache V3-only, owner diverge
 ## 7. Rollout futuro, recuperação e decisões humanas
 
 - **Preparação, não execução:** cada PR tem testes do próprio contrato e review independente. Required checks existentes permanecem; planos não dispensam gates.
-- **API:** release somente pelo wrapper autorizado na Contabo, após backup verificável e prova de boot da imagem candidata com o ledger atual. Mudanças propostas não exigem migration por padrão. Se surgir necessidade, replanejar e autorizar explicitamente; não editar V001..V061.
+- **API:** release somente pelo wrapper autorizado na VPS de produção, após backup verificável e prova de boot da imagem candidata com o ledger atual. Mudanças propostas não exigem migration por padrão. Se surgir necessidade, replanejar e autorizar explicitamente; não editar V001..V061.
 - **Rollback da API:** não presumir que imagem antiga sobe com ledger atual; o incidente de V060 já demonstrou o contrário. Validar compatibilidade da imagem de rollback antes do swap; sem prova, adiar ou preparar forward-fix. Backups não são licença para apagar/restaurar dados reais.
 - **Cloudflare/PWA:** artefato do SHA aprovado, smoke read-only e attestation correspondente. Compatibilidade SW/envelope deve ser testada; rollback do app não pode ressuscitar dados revogados nem reabilitar bearer legado silenciosamente.
 - **Release B:** consulta durável read-only com precisão integral e filtro exclusivo após âncora, janela zero de 14 dias, autorização humana e rebuild PWA testado. Alteração de `SESSION_BEARER_FALLBACK_ENABLED`/flag pública somente em tarefa operacional autorizada, com plano de recuperação próprio.
