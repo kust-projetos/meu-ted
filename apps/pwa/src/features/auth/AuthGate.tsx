@@ -5,13 +5,14 @@ import Image from "next/image";
 import { getToken, clearToken, setToken, setSessionToken } from "@/lib/auth/token-store";
 import { ApiError, clearActiveWorkspaceId } from "@/lib/api/client";
 import { signInWithEmail, registerDeviceToken, verifyDeviceToken, fetchSession, type SessionUser, type SessionProbeStatus } from "@/lib/api/auth";
-import { clearSensitiveSession } from "@/lib/session";
+import { clearSensitiveSession, type ClearSessionOptions } from "@/lib/session";
 import { SessionProvider, type SessionSnapshot } from "@/lib/auth/session-context";
 import { setSessionStatus, getSessionStatus } from "@/lib/auth/session-authority";
 import {
   setOfflinePrincipalId,
   getOfflinePrincipalId,
   getOfflineWorkspaceId,
+  advanceOfflineGeneration,
 } from "@/lib/auth/offline-identity";
 import { resolveUnreachableOfflineRoute } from "@/lib/state/snapshot-db";
 import { Lock, Mail, ArrowRight } from "lucide-react";
@@ -54,10 +55,36 @@ export function AuthGate({ children }: Props) {
   // device secret, or cookie value. Best-effort, never blocks the boot.
   const bindPrincipal = useCallback((user: { id: string }) => {
     try {
-      setOfflinePrincipalId(user.id);
+      if (setOfflinePrincipalId(user.id)) {
+        // T07c-F2R2-F4-F1: advance the SHARED offline generation on every
+        // persisted principal (re)bind — the same bump mechanism T07a
+        // teardowns use (offline-identity API reused here, never reinvented;
+        // no semantics changed there). ANY identity rebind (including a
+        // login WITHOUT intermediate expiry) invalidates client-gated
+        // rejection side effects for requests captured pre-bind. Probe-epoch
+        // bump below is unchanged.
+        advanceOfflineGeneration();
+      }
       probeEpochRef.current += 1;
     } catch {
       /* noop */
+    }
+  }, []);
+
+  // T07c-F2R2-F4-F2: shared expiry-teardown entry. Bumps the probe epoch and
+  // raises the purge guard SYNCHRONOUSLY, then runs the purge with the
+  // CALLER's options (expireSession clears the device token; the direct
+  // login-rejection purge preserves a freshly-registered one) — success
+  // flows untouched. Used by expireSession and the direct handleLogin
+  // rejection purge alike so a stale probe can never resume into either
+  // purge window.
+  const expireSensitiveSession = useCallback(async (options: ClearSessionOptions) => {
+    probeEpochRef.current += 1;
+    purgeInFlightRef.current = true;
+    try {
+      await clearSensitiveSession(options);
+    } finally {
+      purgeInFlightRef.current = false;
     }
   }, []);
 
@@ -330,7 +357,11 @@ export function AuthGate({ children }: Props) {
         }
         // Rejeição explícita (2xx-sem-usuário/401/403): purge + login, o
         // mesmo contrato de expireSession — nunca offline e nunca unlock.
-        await clearSensitiveSession({
+        // T07c-F2R2-F4-F2: via o entry compartilhado (epoch bump + purge
+        // guard síncronos) para que um reprobe tardio não ressuscite nada
+        // no meio deste purge; as opções preservam o device recém-registrado
+        // como antes, e o fluxo de sucesso segue intocado.
+        await expireSensitiveSession({
           clearToken: true,
           clearV1Snapshot: true,
           clearProfile: true,
@@ -358,38 +389,27 @@ export function AuthGate({ children }: Props) {
       }
       throw e;
     }
-  }, [bindPrincipal]);
+  }, [bindPrincipal, expireSensitiveSession]);
 
   const expireSession = useCallback(async (message?: string) => {
     // T07c-F2R2-F3-F1: synchronous invalidation at expiry ENTRY. The purge
     // below awaits IndexedDB; without this, an in-flight reprobe resolves
     // mid-purge while the authority is still `unreachable` and the epoch is
-    // unchanged, restoring authenticated/principal over the purge. Bumping
-    // here discards it; the post-publish bump geometry is unchanged (the
-    // final publish still invalidates anything started after entry).
-    probeEpochRef.current += 1;
-    // Purge-in-flight guard: new reprobos are ineligible until the purge
-    // completes, and a probe racing the purge cannot resume into a
-    // half-torn-down identity (its epoch is already stale).
-    purgeInFlightRef.current = true;
-    try {
-      // 401/403: explicit server rejection → purge everything offline (V1/V2/V3
-      // snapshots, tokens, profile, offline identity + stamp) + login. Never
-      // offline mode on this path (AUTH-T04/T05, INV-05).
-      await clearSensitiveSession({
-        clearToken: true,
-        clearV1Snapshot: true,
-        clearProfile: true,
-        clearOfflineIdentity: true,
-      });
-    } finally {
-      purgeInFlightRef.current = false;
-    }
+    // unchanged, restoring authenticated/principal over the purge. The entry
+    // bump + guard now live in the shared expireSensitiveSession below; the
+    // post-publish bump geometry is unchanged (the final publish still
+    // invalidates anything started after entry).
+    await expireSensitiveSession({
+      clearToken: true,
+      clearV1Snapshot: true,
+      clearProfile: true,
+      clearOfflineIdentity: true,
+    });
     // 401/403: explicit server rejection → unauthenticated (purge + login).
     publishSession({ status: "unauthenticated" });
     setError(message ?? "Sessão expirada. Faça login novamente.");
     setState("login");
-  }, [publishSession]);
+  }, [publishSession, expireSensitiveSession]);
 
   // T07c-F2: network-recovery reprobe. The boot probe runs once; without a
   // reprobe an offline-booted shell stays `unreachable` forever even after

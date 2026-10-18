@@ -259,3 +259,83 @@ describe("T07c-F2R2-F3-F2: resposta stale não vaza side effects globais (client
     expect(screen.getByTestId("authority")).toHaveTextContent("authenticated");
   });
 });
+
+describe("T07c-F2R2-F4-F1: login sem expiração intermediária invalida a geração (client real)", () => {
+  it("401 tardio do probe de A após login de B sem expire: sem evento global, B intacto", async () => {
+    // Boot direto para login (sem snapshot): autoridade unreachable, sem
+    // shell — e sobretudo SEM nenhum expireSession no fluxo.
+    render(
+      <AuthGate>
+        <AuthorityProbe />
+      </AuthGate>,
+    );
+    await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
+    expect(getSessionStatus().status).toBe("unreachable");
+
+    // Probe stale pende; login de B acontece SEM expiração intermediária.
+    armSessionGate();
+    window.dispatchEvent(new Event("online"));
+    await waitFor(() => expect(net.gateEntered).toBe(true));
+    net.gateArmed = false;
+    net.mode = "user";
+    net.userId = PRINCIPAL_B;
+    await submitLoginAs();
+    await waitFor(() => {
+      expect(screen.getByTestId("authority")).toHaveTextContent("authenticated");
+    });
+    expect(getOfflinePrincipalId()).toBe(PRINCIPAL_B);
+
+    // O 401 tardio resolve DEPOIS do login de B: geração divergiu no bind —
+    // sem UNAUTHORIZED_EVENT, sem tocar na sessão de B.
+    await act(async () => {
+      releaseSessionGate(
+        new Response(JSON.stringify({ code: "auth.session_expired", message: "expired" }), { status: 401 }),
+      );
+    });
+    expect(net.unauthorizedEvents).toBe(0);
+    expect(getSessionStatus().status).toBe("authenticated");
+    expect(getOfflinePrincipalId()).toBe(PRINCIPAL_B);
+    expect(screen.getByTestId("authority")).toHaveTextContent("authenticated");
+  });
+
+  it("403 workspace_forbidden tardio do probe de A após login de B sem expire: sem purge de B", async () => {
+    // Boot direto para login (sem snapshot, sem shell, sem expire).
+    render(
+      <AuthGate>
+        <AuthorityProbe />
+      </AuthGate>,
+    );
+    await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
+    expect(getSessionStatus().status).toBe("unreachable");
+
+    armSessionGate();
+    window.dispatchEvent(new Event("online"));
+    await waitFor(() => expect(net.gateEntered).toBe(true));
+    net.gateArmed = false;
+    net.mode = "user";
+    net.userId = PRINCIPAL_B;
+    await submitLoginAs();
+    await waitFor(() => {
+      expect(screen.getByTestId("authority")).toHaveTextContent("authenticated");
+    });
+
+    // Snapshot de B escrito pós-login (binding recriado como em seleção real).
+    setOfflineWorkspaceId(WS_UUID);
+    await seedValidV3(PRINCIPAL_B);
+    await waitFor(async () => {
+      expect((await getV3OfflineLockState(PRINCIPAL_B, WS_UUID)).state).toBe("ok");
+    });
+
+    // O 403-revogação tardio resolve DEPOIS do login de B.
+    await act(async () => {
+      releaseSessionGate(
+        new Response(JSON.stringify({ code: "auth.workspace_forbidden", message: "revoked" }), { status: 403 }),
+      );
+    });
+    expect(net.forbiddenEvents).toBe(0);
+    expect(getOfflinePrincipalId()).toBe(PRINCIPAL_B);
+    expect((await getV3OfflineLockState(PRINCIPAL_B, WS_UUID)).state).toBe("ok");
+    expect(getSessionStatus().status).toBe("authenticated");
+    expect(screen.getByTestId("authority")).toHaveTextContent("authenticated");
+  });
+});

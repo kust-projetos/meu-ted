@@ -905,3 +905,44 @@ describe("T07c-F2R2-F3-F1: resposta do probe durante o purge pendente", () => {
     });
   });
 });
+
+describe("T07c-F2R2-F4-F2: purge direto do login rejeitado com probe pendente", () => {
+  it("rejeição pós-login com purge V3 pendente: stale probe não restaura nem religa", async () => {
+    // Boot direto para login (sem snapshot): autoridade unreachable, sem shell.
+    render(
+      <AuthGate>
+        <div data-testid="kid">kid</div>
+      </AuthGate>,
+    );
+    await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
+    expect(getSessionStatus().status).toBe("unreachable");
+
+    // Reprobe pende (stale); o login rejeitado dispara o purge direto, que
+    // também pende no V3; SÓ ENTÃO a resposta stale chega.
+    armProbeGate();
+    window.dispatchEvent(new Event("online"));
+    await waitFor(() => expect(transport.probeGateEntered).toBe(true));
+    armPurgeGate();
+    // O probe pós-login NÃO passa pelo gate (só a chamada stale está
+    // gatada): desarma antes do submit.
+    transport.probeGateArmed = false;
+    transport.sessionProbe = "empty";
+    await submitLoginAs();
+    await waitFor(() => expect(purgeGate.entered).toBe(true));
+
+    // Mid-purge: a resposta tardia (usuário válido!) não restaura nada.
+    await act(async () => {
+      releaseProbeGate(userProbeBody(PRINCIPAL));
+    });
+    expect(getSessionStatus().status).toBe("unreachable");
+    expect(getOfflinePrincipalId()).toBeNull();
+
+    // Purge completa: login com erro canônico, sem re-bind.
+    await act(async () => {
+      releasePurgeGate();
+    });
+    await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
+    expect(getSessionStatus().status).toBe("unauthenticated");
+    expect(getOfflinePrincipalId()).toBeNull();
+  });
+});
