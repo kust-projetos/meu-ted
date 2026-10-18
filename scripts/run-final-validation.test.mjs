@@ -14,7 +14,14 @@ test("final validation runner", async (t) => {
     assert.match(source, /pnpm lint/);
     assert.match(source, /pnpm governance:check/);
     assert.match(source, /pnpm container:smoke/);
-    assert.doesNotMatch(source, /whatsapp-bridge|cutover-check|migration/i);
+    assert.doesNotMatch(source, /whatsapp-bridge|cutover-check/i);
+    // T13: the only legitimate "migration" reference is the read-only
+    // validation gate (VAL.18); legacy migrate/cutover commands stay banned.
+    for (const line of source.split("\n")) {
+      if (/migration/i.test(line)) {
+        assert.match(line, /migration-validate|Migration Validation/i, `unexpected migration reference: ${line.trim()}`);
+      }
+    }
   });
   await t.test("executes mock gates and passes when all exit 0", () => {
     const mockGates = [

@@ -8,7 +8,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export const VAL_GATES = [
   { id: "VAL.1", name: "Reproducible Frozen Install", command: "git diff --exit-code -- pnpm-lock.yaml" },
-  { id: "VAL.2", name: "Lint & Documentation", command: "pnpm lint && pnpm docs:lint" },
+  { id: "VAL.2", name: "Lint & Documentation", command: "pnpm --filter @pi-finance/llm-contracts --fail-if-no-match lint && pnpm lint && pnpm docs:lint" },
   { id: "VAL.3", name: "TypeScript Compilation", command: "pnpm typecheck" },
   { id: "VAL.4", name: "API Unit & Contract Tests", command: "pnpm --filter meu-ted-api --fail-if-no-match test" },
   { id: "VAL.5", name: "Agent Tests & Deterministic Evals", command: "pnpm --filter pi-finance-agent --fail-if-no-match test && pnpm --filter pi-finance-agent --fail-if-no-match eval:ted-v2" },
@@ -16,8 +16,8 @@ export const VAL_GATES = [
   { id: "VAL.7", name: "PWA Unit & Contract Tests", command: "pnpm --filter pwa --fail-if-no-match test" },
   { id: "VAL.8", name: "Architecture Invariants", command: "pnpm architecture:check" },
   { id: "VAL-V4.9", name: "Workspace Agent Decommission Guards (ARCH-V4-06a/b)", command: "node scripts/check-legacy-runtime-references.mjs --check=all" },
-  { id: "VAL.9", name: "Capabilities, Write Policy & Governance", command: "pnpm capabilities:check && pnpm write-policy:check && pnpm governance:check" },
-  { id: "VAL.10", name: "Canonical Documentation Contracts", command: "node --test scripts/canonical-docs-contract.test.mjs scripts/documentation-facts-contract.test.mjs" },
+  { id: "VAL.9", name: "Capabilities, Write Policy, Boundary & Governance", command: "pnpm capabilities:check && pnpm write-policy:check && pnpm boundary:check && pnpm governance:check" },
+  { id: "VAL.10", name: "Canonical Documentation Contracts", command: "node --test scripts/canonical-docs-contract.test.mjs scripts/documentation-facts-contract.test.mjs scripts/lint-docs.test.mjs scripts/documentation-gates-t13.test.mjs" },
   { id: "VAL.11", name: "Builds & Distribution Artifacts", command: "pnpm build:all" },
   { id: "VAL.12", name: "Security & Container Smoke", command: "pnpm security:check && pnpm container:smoke" },
   { id: "VAL.13", name: "Production Smoke Contract", command: "pnpm production:smoke:contract" },

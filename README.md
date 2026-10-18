@@ -75,17 +75,17 @@ deploy, migration de produção nem altera segredos.
 
 ## Qualidade e gates
 
-- **Hook de pré-commit (husky):** roda 7 gates rápidos (fs/git, sem build) em
+- **Hook de pré-commit (husky):** roda 8 gates rápidos (fs/git, sem build) em
   ~15s: `docs:lint`, `action-pins:check`, `test:skip-gate`, `capabilities:check`,
-  `write-policy:check`, `governance:check` e `public-safety --strict`.
+  `write-policy:check`, `governance:check`, `boundary:check` e `public-safety --strict`.
   Bypass de emergência: `git commit --no-verify` (justificar no PR).
 - **CI obrigatório (required checks):** `Gate — all checks` (`.github/workflows/ci.yml`)
   e `quality (22, 10)` (`.github/workflows/pwa-ci.yml`). Gates pesados —
   `typecheck`, `test`, `security:*`, E2E — são **CI-autoritativos**:
   não rodam no hook por custo. Nota de cobertura de lint: o CI roda `lint`
-  apenas de API (`ci.yml:36`) e PWA (`ci.yml:135`); o lint de Agent/Broker roda
-  localmente via `pnpm lint` (gate obrigatório de conclusão — regra 5 do AGENTS.md),
-  pois nenhum job de CI o executa.
+  de API, `@pi-finance/llm-contracts`, Agent, Broker e PWA (jobs `api`,
+  `agent`, `broker`, `pwa`); `pnpm lint` local cobre os mesmos cinco
+  (gate obrigatório de conclusão — regra 5 do AGENTS.md).
 - **gitleaks:** executa apenas no CI (`.gitleaks.toml` cobre `.github/workflows/`);
   localmente o script sai sem escanear no Windows por design — não confie no
   scan local de segredos.

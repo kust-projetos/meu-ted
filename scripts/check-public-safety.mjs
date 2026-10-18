@@ -13,10 +13,13 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const STRICT = process.argv.includes("--strict");
+const IS_MAIN = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
-const SECRET_RULES = [
+export const SECRET_RULES = [
   { name: "private-key-block", re: /BEGIN (?:RSA |EC |OPENSSH |PGP |)PRIVATE KEY/, severity: "error" },
   { name: "aws-access-key", re: /AKIA[0-9A-Z]{16}/, severity: "error" },
   { name: "github-token", re: /\b(?:ghp|gho|ghu|ghs)_[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b/, severity: "error" },
@@ -37,7 +40,7 @@ const SECRET_RULES = [
   },
 ];
 
-const FILENAME_RULES = [
+export const FILENAME_RULES = [
   { name: "tracked-env-file", re: /(?:^|\/)\.env(?:$|\.(?!example))/, severity: "error" },
   { name: "tracked-dev-vars", re: /(?:^|\/)\.dev\.vars$/, severity: "error" },
   { name: "private-key-file", re: /(?:^|\/)(?:id_rsa|id_dsa|id_ecdsa|id_ed25519)(?:\.[^/]*)?$|\.(?:pem|p12|pfx|keystore)$/, severity: "error" },
@@ -47,9 +50,13 @@ const FILENAME_RULES = [
 // WARN policy (prohibited operational/personal metadata — SPEC §13.4).
 // Fails only with --strict (publication gate). Currently present in tracked
 // docs; sanitization is tracked in docs/reports/v4.1-publication-readiness.md.
-const METADATA_RULES = [
+// T13: provider-agnostic shapes (ssh user with literal IP, assigned hostnames)
+// so a VPS migration cannot silently drop coverage; prose ("VPS Contabo"),
+// placeholders ("deploy@<ip-vps-contabo>") and the public edge DNS never match.
+export const METADATA_RULES = [
   { name: "production-ip", re: /187\.77\.249\.47/, severity: "warn" },
-  { name: "vps-host-or-ssh-user", re: /srv1773156|deploy@187|id_ed25519_hostinger_vps/, severity: "warn" },
+  { name: "vps-host-or-ssh-user", re: /srv1773156|deploy@\d|id_ed25519_hostinger_vps/, severity: "warn" },
+  { name: "contabo-assigned-host", re: /\bvmi\d+\.contabo\.(?:cloud|com|net)\b|\b[a-z0-9-]+\.contabo\.(?:cloud|com|net)\b/, severity: "warn" },
   { name: "personal-email", re: /walissonead@|synkrooia@|synkrooia@gmail|convidado\.teste\.pi@/, severity: "warn" },
   { name: "internal-hostname", re: /evo\.synkroo\.com\.br|pi-finance-(?:agent|pwa)\.walissonead\.workers\.dev/, severity: "warn" },
 ];
@@ -94,6 +101,9 @@ const RULE_ALLOWLIST = [
   // Detector definitions (regex source, not values).
   { rule: "vps-host-or-ssh-user", path: "scripts/check-public-safety.mjs", reason: "detector definitions" },
   { rule: "personal-email", path: "scripts/check-public-safety.mjs", reason: "detector definitions" },
+  { rule: "vps-host-or-ssh-user", path: "scripts/documentation-gates-t13.test.mjs", reason: "synthetic detector-contract fixture (RFC 5737 TEST-NET-1 IP; no real host/user)" },
+  { rule: "contabo-assigned-host", path: "scripts/documentation-gates-t13.test.mjs", reason: "fictional vmi123456.contabo.cloud placeholder pinning the detector contract (no real workspace host)" },
+  { rule: "contabo-assigned-host", path: "scripts/check-public-safety.mjs", reason: "detector definitions + contract fixture literals in this allowlist" },
   // Pinned production hosts — irreducible detector-like exceptions
   // (DEBT2-CODER-ALLOWLISTS-FIX, security review HIGH). Each literal below
   // is a value being PINNED for exact-host validation (fail-closed), not a
@@ -135,6 +145,7 @@ function redact(line, match) {
 const errors = [];
 const warnings = [];
 
+if (IS_MAIN) {
 for (const path of listTrackedFiles()) {
   if (isSkipped(path)) continue;
 
@@ -190,3 +201,4 @@ if (errors.length === 0 && warnings.length === 0) {
 const failed = errors.length > 0 || (STRICT && warnings.length > 0);
 console.log(`\nResult: ${failed ? "FAIL" : "PASS"}`);
 process.exit(failed ? 1 : 0);
+} // end IS_MAIN
