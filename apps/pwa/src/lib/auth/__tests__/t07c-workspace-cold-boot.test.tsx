@@ -1,8 +1,8 @@
 import "fake-indexeddb/auto";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@/lib/test-utils";
+import { describe, expect, it, vi, beforeEach, afterEach, type Mock } from "vitest";
+import { render, screen, waitFor, fireEvent, act } from "@/lib/test-utils";
 import { WorkspaceProvider, useWorkspace } from "../workspace-context";
-import { SessionProvider } from "../session-context";
+import { SessionProvider, useSession } from "../session-context";
 import {
   resetSessionStatus,
   setSessionStatus,
@@ -11,8 +11,9 @@ import {
 import {
   setOfflinePrincipalId,
   setOfflineWorkspaceId,
+  getOfflinePrincipalId,
 } from "../offline-identity";
-import { writeV3Snapshot } from "@/lib/state/snapshot-db";
+import { writeV3Snapshot, resolveUnreachableOfflineRoute } from "@/lib/state/snapshot-db";
 import { AuthGate } from "@/features/auth/AuthGate";
 
 /**
@@ -117,6 +118,42 @@ function releaseV3Gate() {
   v3Gate.resolve = null;
 }
 
+/**
+ * T07c-F2R2: controllable session-probe transport. The mocked
+ * `@/lib/api/client` apiFetch routes `/auth/session` through this gate so
+ * tests can pend, fail, or answer the probe deterministically while the
+ * REAL fetchSession classification + REAL AuthGate wiring run.
+ */
+const transport = vi.hoisted(() => ({
+  sessionProbe: "unreachable" as "unreachable" | "user" | "empty" | "generic403" | "server500",
+  userId: "",
+  sessionCalls: [] as string[],
+  probeGateArmed: false,
+  probeGateEntered: false,
+  probeGatePromise: null as null | Promise<unknown>,
+  probeGateResolve: null as null | ((v: unknown) => void),
+}));
+let MockApiError: new (status: number, code: string, message: string) => Error;
+function armProbeGate() {
+  let resolve!: (v: unknown) => void;
+  const promise = new Promise<unknown>((r) => {
+    resolve = r;
+  });
+  transport.probeGatePromise = promise;
+  transport.probeGateResolve = resolve;
+  transport.probeGateArmed = true;
+  transport.probeGateEntered = false;
+}
+function releaseProbeGate(value: unknown) {
+  transport.probeGateArmed = false;
+  transport.probeGateResolve?.(value);
+  transport.probeGatePromise = null;
+  transport.probeGateResolve = null;
+}
+function userProbeBody(userId: string): unknown {
+  return { user: { id: userId, email: "u@example.com", name: "U" }, session: {} };
+}
+
 type LooseContext = {
   isOfflineReadOnly?: unknown;
   offlineWorkspaceId?: unknown;
@@ -172,6 +209,40 @@ beforeEach(async () => {
   // stale-guarded and commits nothing.
   releaseV3Gate();
   v3Gate.entered = false;
+  // Reset the probe transport and (re)install the routing apiFetch impl —
+  // set after clearAllMocks so it always survives it.
+  transport.sessionProbe = "unreachable";
+  transport.userId = PRINCIPAL;
+  transport.sessionCalls = [];
+  releaseProbeGate(undefined);
+  transport.probeGateEntered = false;
+  const client = (await import("@/lib/api/client")) as unknown as {
+    apiFetch: Mock;
+    ApiError: new (status: number, code: string, message: string) => Error;
+  };
+  MockApiError = client.ApiError;
+  client.apiFetch.mockImplementation(async (url: unknown) => {
+    const u = String(url);
+    if (u.includes("/auth/session")) {
+      transport.sessionCalls.push(u);
+      if (transport.probeGateArmed && transport.probeGatePromise) {
+        transport.probeGateEntered = true;
+        return transport.probeGatePromise;
+      }
+      if (transport.sessionProbe === "unreachable") throw new TypeError("fetch failed");
+      if (transport.sessionProbe === "user") return userProbeBody(transport.userId);
+      if (transport.sessionProbe === "empty") return { user: null, session: {} };
+      if (transport.sessionProbe === "generic403") {
+        throw new MockApiError(403, "auth.forbidden", "Forbidden");
+      }
+      throw new MockApiError(500, "internal", "Server error");
+    }
+    if (u.includes("/auth/sign-in/email")) return { user: { email: "b@example.com" } };
+    if (u.includes("/auth/devices/register")) {
+      return { token: "dev-b", deviceId: "d1", householdId: "h1" };
+    }
+    return undefined;
+  });
   const dbs = await indexedDB.databases();
   for (const db of dbs) if (db.name) indexedDB.deleteDatabase(db.name);
   api.fetchWorkspaceMembers.mockResolvedValue([]);
@@ -507,24 +578,6 @@ describe("T07c-F1: flip de autoridade durante o V3 read em await", () => {
 
 describe("T07c-F2: recuperação real via AuthGate (online → reprobe → flip → revalidação)", () => {
   it("network recovery dispara reprobe, flipa para authenticated e o provider revalida", async () => {
-    // Transporte do probe: começa fora do ar; o teste o religa.
-    const probeUrls: string[] = [];
-    const client = (await import("@/lib/api/client")) as unknown as {
-      apiFetch: { mockImplementation: (fn: (url: unknown) => Promise<unknown>) => void };
-    };
-    let probeUp = false;
-    client.apiFetch.mockImplementation(async (url: unknown) => {
-      if (String(url).includes("/auth/session")) {
-        probeUrls.push(String(url));
-        if (!probeUp) throw new TypeError("fetch failed");
-        return {
-          user: { id: PRINCIPAL, email: "user@example.com", name: "U" },
-          session: {},
-        };
-      }
-      return undefined;
-    });
-
     setOfflinePrincipalId(PRINCIPAL);
     setOfflineWorkspaceId(WS_UUID);
     await seedValidV3();
@@ -546,10 +599,10 @@ describe("T07c-F2: recuperação real via AuthGate (online → reprobe → flip 
     // Boot real estacionou offline (sem transição fabricada).
     expect(await screen.findByTestId("is-offline-read-only")).toHaveTextContent("true");
     expect(getSessionStatus().status).toBe("unreachable");
-    expect(probeUrls.length).toBe(1);
+    expect(transport.sessionCalls.length).toBe(1);
 
     // A rede volta: o `online` do browser dispara o reprobe do AuthGate.
-    probeUp = true;
+    transport.sessionProbe = "user";
     window.dispatchEvent(new Event("online"));
 
     // Flip real da autoridade → efeito do provider revalida membership.
@@ -565,7 +618,207 @@ describe("T07c-F2: recuperação real via AuthGate (online → reprobe → flip 
     await waitFor(() => {
       expect(screen.getByTestId("is-offline-read-only")).toHaveTextContent("false");
     });
-    expect(probeUrls.length).toBe(2);
+    expect(transport.sessionCalls.length).toBe(2);
     expect(api.fetchWorkspaces.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/** Botão que expõe o expireSession real do SessionProvider (shell unlocked). */
+function SessionControls() {
+  const { expireSession } = useSession();
+  return <button onClick={() => void expireSession()}>expire-session</button>;
+}
+
+async function submitLoginAs(email = "b@example.com", password = "password123!") {
+  const emailInput = await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
+  fireEvent.change(emailInput, { target: { value: email } });
+  fireEvent.change(screen.getByPlaceholderText(/••••/), { target: { value: password } });
+  fireEvent.click(screen.getByRole("button", { name: /Entrar/i }));
+}
+
+describe("T07c-F2R2-F1: reprobe tardio não sobrescreve autoridade mais nova (epoch)", () => {
+  it("resposta atrasada após expireSession: sem mudança de autoridade, sem re-bind", async () => {
+    setOfflinePrincipalId(PRINCIPAL);
+    setOfflineWorkspaceId(WS_UUID);
+    await seedValidV3();
+    api.fetchWorkspaces.mockRejectedValue(new Error("fetch failed"));
+
+    render(
+      <AuthGate>
+        <SessionControls />
+        <WorkspaceProvider>
+          <Probe />
+        </WorkspaceProvider>
+      </AuthGate>,
+    );
+    expect(await screen.findByTestId("is-offline-read-only")).toHaveTextContent("true");
+
+    // Reprobe pende no gate; antes de resolver, a sessão expira de verdade.
+    armProbeGate();
+    window.dispatchEvent(new Event("online"));
+    await waitFor(() => expect(transport.probeGateEntered).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "expire-session" }));
+
+    // Purge + login executados pelo caminho canônico.
+    await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
+    expect(getSessionStatus().status).toBe("unauthenticated");
+    expect(getOfflinePrincipalId()).toBeNull();
+
+    // O reprobe tardio resolve com um usuário válido — deve ser descartado.
+    await act(async () => {
+      releaseProbeGate(userProbeBody(PRINCIPAL));
+    });
+
+    // Nada mudou: sem re-bind do principal antigo, sem flip para authenticated.
+    expect(getSessionStatus().status).toBe("unauthenticated");
+    expect(getOfflinePrincipalId()).toBeNull();
+    expect(screen.queryByTestId("is-offline-read-only")).not.toBeInTheDocument();
+  });
+
+  it("resposta atrasada após login DIFERENTE: sem overwrite, sem re-bind da identidade antiga", async () => {
+    const USER_B = "user-t07c-b";
+    setOfflinePrincipalId(PRINCIPAL);
+    setOfflineWorkspaceId(WS_UUID);
+    await seedValidV3();
+    api.fetchWorkspaces.mockRejectedValueOnce(new Error("fetch failed"));
+    api.fetchWorkspaces.mockResolvedValue([
+      { id: WS_OTHER, name: "Equipe", kind: "shared", role: "member", status: "active" },
+    ]);
+
+    render(
+      <AuthGate>
+        <SessionControls />
+        <WorkspaceProvider>
+          <Probe />
+        </WorkspaceProvider>
+      </AuthGate>,
+    );
+    expect(await screen.findByTestId("is-offline-read-only")).toHaveTextContent("true");
+
+    // Reprobe pende; expira; loga como principal DIFERENTE (fluxo real de
+    // login — o probe pós-login NÃO passa pelo gate: só o primeiro
+    // /auth/session é gatado).
+    armProbeGate();
+    window.dispatchEvent(new Event("online"));
+    await waitFor(() => expect(transport.probeGateEntered).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "expire-session" }));
+    await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
+
+    // O probe pós-login NÃO passa pelo gate (só a chamada stale está
+    // gatada): desarma antes do submit; a promise stale segue pendente.
+    transport.probeGateArmed = false;
+    transport.sessionProbe = "user";
+    transport.userId = USER_B;
+    await submitLoginAs();
+    await waitFor(() => {
+      expect(screen.getByTestId("active")).toHaveTextContent("Equipe");
+    });
+    expect(getSessionStatus().status).toBe("authenticated");
+    expect(getOfflinePrincipalId()).toBe(USER_B);
+
+    // O reprobe tardio (usuário A) chega depois do login B — descarta tudo.
+    await act(async () => {
+      releaseProbeGate(userProbeBody(PRINCIPAL));
+    });
+
+    expect(getSessionStatus().status).toBe("authenticated");
+    expect(getSessionStatus()).toEqual(
+      expect.objectContaining({ user: expect.objectContaining({ userId: USER_B }) }),
+    );
+    expect(getOfflinePrincipalId()).toBe(USER_B);
+    expect(screen.getByTestId("active")).toHaveTextContent("Equipe");
+  });
+});
+
+describe("T07c-F2R2-F2: rejeição explícita no reprobe segue o caminho canônico de expiração", () => {
+  it("2xx sem usuário → purge + login (mesma semântica do boot)", async () => {
+    setOfflinePrincipalId(PRINCIPAL);
+    setOfflineWorkspaceId(WS_UUID);
+    await seedValidV3();
+    api.fetchWorkspaces.mockRejectedValue(new Error("fetch failed"));
+
+    render(
+      <AuthGate>
+        <WorkspaceProvider>
+          <Probe />
+        </WorkspaceProvider>
+      </AuthGate>,
+    );
+    expect(await screen.findByTestId("is-offline-read-only")).toHaveTextContent("true");
+
+    transport.sessionProbe = "empty";
+    window.dispatchEvent(new Event("online"));
+
+    // Caminho canônico de expiração: login, autoridade unauthenticated,
+    // identidade offline purgada e rota V3 morta (nunca reabre snapshot).
+    await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
+    expect(getSessionStatus().status).toBe("unauthenticated");
+    expect(getOfflinePrincipalId()).toBeNull();
+    await waitFor(async () => {
+      expect(await resolveUnreachableOfflineRoute(PRINCIPAL, WS_UUID)).toBe("login");
+    });
+    expect(screen.queryByTestId("is-offline-read-only")).not.toBeInTheDocument();
+  });
+
+  it("403 genérico → purge + login (sem evento global, sem exceção)", async () => {
+    setOfflinePrincipalId(PRINCIPAL);
+    setOfflineWorkspaceId(WS_UUID);
+    await seedValidV3();
+    api.fetchWorkspaces.mockRejectedValue(new Error("fetch failed"));
+
+    render(
+      <AuthGate>
+        <WorkspaceProvider>
+          <Probe />
+        </WorkspaceProvider>
+      </AuthGate>,
+    );
+    expect(await screen.findByTestId("is-offline-read-only")).toHaveTextContent("true");
+
+    transport.sessionProbe = "generic403";
+    window.dispatchEvent(new Event("online"));
+
+    await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
+    expect(getSessionStatus().status).toBe("unauthenticated");
+    expect(getOfflinePrincipalId()).toBeNull();
+    await waitFor(async () => {
+      expect(await resolveUnreachableOfflineRoute(PRINCIPAL, WS_UUID)).toBe("login");
+    });
+    expect(screen.queryByTestId("is-offline-read-only")).not.toBeInTheDocument();
+  });
+
+  it("falha de rede / 5xx preserva o offline (sem purge, sem flip)", async () => {
+    setOfflinePrincipalId(PRINCIPAL);
+    setOfflineWorkspaceId(WS_UUID);
+    await seedValidV3();
+    api.fetchWorkspaces.mockRejectedValue(new Error("fetch failed"));
+
+    render(
+      <AuthGate>
+        <WorkspaceProvider>
+          <Probe />
+        </WorkspaceProvider>
+      </AuthGate>,
+    );
+    expect(await screen.findByTestId("is-offline-read-only")).toHaveTextContent("true");
+
+    // Transport down de novo: nada muda.
+    window.dispatchEvent(new Event("online"));
+    await waitFor(() => {
+      expect(transport.sessionCalls.length).toBeGreaterThanOrEqual(2);
+    });
+    expect(getSessionStatus().status).toBe("unreachable");
+    expect(screen.getByTestId("is-offline-read-only")).toHaveTextContent("true");
+    expect(getOfflinePrincipalId()).toBe(PRINCIPAL);
+
+    // 5xx também é indisponibilidade para o probe (não rejeição): preserva.
+    transport.sessionProbe = "server500";
+    window.dispatchEvent(new Event("online"));
+    await waitFor(() => {
+      expect(transport.sessionCalls.length).toBeGreaterThanOrEqual(3);
+    });
+    expect(getSessionStatus().status).toBe("unreachable");
+    expect(screen.getByTestId("is-offline-read-only")).toHaveTextContent("true");
+    expect(getOfflinePrincipalId()).toBe(PRINCIPAL);
   });
 });

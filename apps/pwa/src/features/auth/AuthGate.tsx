@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Image from "next/image";
 import { getToken, clearToken, setToken, setSessionToken } from "@/lib/auth/token-store";
 import { ApiError, clearActiveWorkspaceId } from "@/lib/api/client";
@@ -29,8 +29,19 @@ export function AuthGate({ children }: Props) {
   // V4.1 Closure AUTH-01: explicit session authority mirrored from the
   // probe. Written to the module store synchronously BEFORE unlocking so
   // AppStateProvider (mounted as a child) boots with the right authority.
+  //
+  // T07c-F2R2-F1: reprobe epoch. Every authority-identity change in this
+  // gate (publishSession, bindPrincipal — login, logout, expiry, and the
+  // reprobe's own flip) bumps it. A recovery probe captures the epoch at
+  // start and discards a late response on mismatch, so a stale probe can
+  // never bind/publish over a newer authority (e.g. expireSession or a
+  // different login that landed mid-flight). No shared epoch source exists
+  // (session-authority is a plain setter), so this AuthGate-local counter is
+  // the documented equivalent.
+  const probeEpochRef = useRef(0);
   const [session, setSessionValue] = useState<SessionSnapshot>({ status: "unknown" });
   const publishSession = useCallback((next: SessionSnapshot) => {
+    probeEpochRef.current += 1;
     setSessionStatus(next);
     setSessionValue(next);
   }, []);
@@ -40,6 +51,7 @@ export function AuthGate({ children }: Props) {
   const bindPrincipal = useCallback((user: { id: string }) => {
     try {
       setOfflinePrincipalId(user.id);
+      probeEpochRef.current += 1;
     } catch {
       /* noop */
     }
@@ -264,56 +276,6 @@ export function AuthGate({ children }: Props) {
     };
   }, [publishSession, bindPrincipal]);
 
-  // T07c-F2: network-recovery reprobe. The boot probe runs once; without a
-  // reprobe an offline-booted shell stays `unreachable` forever even after
-  // the network returns, so WorkspaceProvider never revalidates. There is
-  // no shared online-state signal in the app (app-state-context consumes
-  // none — no `online` listener, no `navigator.onLine` anywhere; verified
-  // T07c-F2), so this owned-side `window "online"` listener is the
-  // documented equivalent. Recovery-only: flips unreachable→authenticated
-  // on a server-confirmed user and never flips down (live 401/403 still
-  // drive expireSession); single-flight guarded, no polling, no purge.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    let cancelled = false;
-    let inFlight = false;
-    const onOnline = () => {
-      if (cancelled || inFlight) return;
-      // Only an unreachable authority is eligible: authenticated stays put
-      // (no-op) and unauthenticated stays on login (login re-probes
-      // explicitly on submit).
-      if (getSessionStatus().status !== "unreachable") return;
-      inFlight = true;
-      void (async () => {
-        try {
-          const probe = await fetchSession();
-          if (cancelled) return;
-          // Server-confirmed principal only (INV-03/W1-item-2): bind + flip.
-          // Anything else leaves the authority untouched — unreachability is
-          // not a rejection (never purge here), and explicit rejections stay
-          // owned by the live expireSession paths, never by a background
-          // recovery probe.
-          if (probe?.user) {
-            bindPrincipal(probe.user);
-            publishSession({
-              status: "authenticated",
-              user: { userId: probe.user.id, email: probe.user.email, name: probe.user.name },
-            });
-          }
-        } catch {
-          /* transport failure = still unreachable; a later `online` retries */
-        } finally {
-          inFlight = false;
-        }
-      })();
-    };
-    window.addEventListener("online", onOnline);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("online", onOnline);
-    };
-  }, [publishSession, bindPrincipal]);
-
   const handleLogin = useCallback(async (credentials: { email: string; password: string }) => {
     setError("");
     clearActiveWorkspaceId();
@@ -409,6 +371,75 @@ export function AuthGate({ children }: Props) {
     setError(message ?? "Sessão expirada. Faça login novamente.");
     setState("login");
   }, [publishSession]);
+
+  // T07c-F2: network-recovery reprobe. The boot probe runs once; without a
+  // reprobe an offline-booted shell stays `unreachable` forever even after
+  // the network returns, so WorkspaceProvider never revalidates. There is
+  // no shared online-state signal in the app (app-state-context consumes
+  // none — no `online` listener, no `navigator.onLine` anywhere; verified
+  // T07c-F2), so this owned-side `window "online"` listener is the
+  // documented equivalent. Recovery probe: flips unreachable→authenticated
+  // on a server-confirmed user; routes explicit server rejection to the
+  // canonical expiry treatment exactly as boot does (T07c-F2R2-F2); preserves
+  // the offline shell on unreachability/transport/5xx (never purge there).
+  // Single-flight guarded, no polling. Declared after expireSession so the
+  // dep array never reads it in TDZ.
+  //
+  // T07c-F2R2-F1: generation-based invalidation. The epoch is captured at
+  // probe start; after the await, an epoch mismatch means the authority
+  // moved while the probe was in flight (expireSession, login/logout —
+  // every identity change bumps the epoch via publishSession/bindPrincipal),
+  // so the late response is discarded silently: no bind, no publication.
+  // The live-authority re-check covers the same window for changes that
+  // bypassed the epoch (none exist in this gate, but the probe's offline
+  // reason must still apply at commit time).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    let inFlight = false;
+    const onOnline = () => {
+      if (cancelled || inFlight) return;
+      // Only an unreachable authority is eligible: authenticated stays put
+      // (no-op) and unauthenticated stays on login (login re-probes
+      // explicitly on submit).
+      if (getSessionStatus().status !== "unreachable") return;
+      const epoch = probeEpochRef.current;
+      inFlight = true;
+      void (async () => {
+        try {
+          const probe = await fetchSession();
+          if (cancelled) return;
+          if (probeEpochRef.current !== epoch) return;
+          if (getSessionStatus().status !== "unreachable") return;
+          // Server-confirmed principal only (INV-03/W1-item-2): bind + flip.
+          if (probe?.user) {
+            bindPrincipal(probe.user);
+            publishSession({
+              status: "authenticated",
+              user: { userId: probe.user.id, email: probe.user.email, name: probe.user.name },
+            });
+            return;
+          }
+          // Explicit server rejection (2xx-without-user, 401/403 — fetchSession
+          // classifies all three as unauthenticated): canonical expiry
+          // treatment exactly as boot does. Unreachability/transport/5xx
+          // preserves the offline shell.
+          if (probe && probe.status === "unauthenticated") {
+            await expireSession();
+          }
+        } catch {
+          /* transport failure = still unreachable; a later `online` retries */
+        } finally {
+          inFlight = false;
+        }
+      })();
+    };
+    window.addEventListener("online", onOnline);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("online", onOnline);
+    };
+  }, [publishSession, bindPrincipal, expireSession]);
 
   if (state === "unlocked")
     return <SessionProvider value={{ expireSession, session }}>{children}</SessionProvider>;
