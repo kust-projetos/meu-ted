@@ -145,7 +145,18 @@ jobs:
       # V4.1 Phase 9 (Task 9.6): same-source proof. The Agent has no compiled
       # output (tsc --noEmit; wrangler bundles deterministically from pinned
       # deps at deploy), so CI publishes a SHA-pinned manifest proving THIS
-      # exact source passed CI; deploy refuses to proceed without it.
+      # exact source passed CI; this job refuses to deploy without it.
+      # T11a FATIA 1: the comparison below is same-installation identity —
+      # the lockfile hash and Wrangler version are recomputed from THIS
+      # checkout/installation (not a global install) and must match the
+      # manifest after version normalization.
+      - name: Capture local build identity (same installation as deploy)
+        id: local-identity
+        run: |
+          LOCKFILE_HASH="$(sha256sum pnpm-lock.yaml | cut -d' ' -f1)"
+          WRANGLER_VERSION="$(pnpm --filter pi-finance-agent --fail-if-no-match exec wrangler --version)"
+          echo "lockfile-hash=$LOCKFILE_HASH" >> "$GITHUB_OUTPUT"
+          echo "wrangler-version=$WRANGLER_VERSION" >> "$GITHUB_OUTPUT"
       - name: Resolve CI manifest run for the approved SHA
         id: manifest-run
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -175,18 +186,14 @@ jobs:
           path: /tmp/agent-manifest
           run-id: ${{ steps.manifest-run.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Verify manifest SHA matches the approved SHA
+      - name: Verify manifest identity matches this installation (fail closed)
         env:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          LOCAL_LOCKFILE_HASH: ${{ steps.local-identity.outputs.lockfile-hash }}
+          LOCAL_WRANGLER_VERSION: ${{ steps.local-identity.outputs.wrangler-version }}
+          MANIFEST_RUN_ID: ${{ steps.manifest-run.outputs.run_id }}
         run: |
-          node -e "
-          const fs = require('fs');
-          const m = JSON.parse(fs.readFileSync('/tmp/agent-manifest/manifest.json', 'utf8'));
-          if (m.sha !== process.env.HEAD_SHA) { console.error('manifest sha mismatch: ' + m.sha); process.exit(1); }
-          if (!m.lockfileHash || typeof m.lockfileHash !== 'string') { console.error('manifest missing lockfileHash — refusing to deploy'); process.exit(1); }
-          if (!m.wranglerVersion || typeof m.wranglerVersion !== 'string' || m.wranglerVersion.trim() === '') { console.error('manifest missing wranglerVersion — refusing to deploy'); process.exit(1); }
-          console.log('manifest verified for ' + m.sha + ' lockfileHash=' + m.lockfileHash + ' wrangler=' + m.wranglerVersion);
-          "
+          node scripts/validate-deploy-manifest.mjs --manifest /tmp/agent-manifest/manifest.json --sha "$HEAD_SHA" --lockfile-hash "$LOCAL_LOCKFILE_HASH" --wrangler-version "$LOCAL_WRANGLER_VERSION" --run-id "$MANIFEST_RUN_ID"
       # DEBT2-CODER-ALLOWLISTS-FIX (shell-injection hardening): the repo
       # variable enters ONLY via step `env:` below — never interpolated into
       # `run:` text. The helper pins it to the exact expected PWA host and
