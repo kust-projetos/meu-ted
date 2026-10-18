@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +94,35 @@ export function generateRuntimeFacts() {
       database: "PostgreSQL 15",
     },
   };
+}
+
+export function assertRuntimeFactsMatch(generated, published) {
+  // T13-R1: pure structural comparator — JSON-versioned × generated. Compares
+  // every field EXCEPT lastVerified (a YYYY-MM-DD generation stamp that
+  // legitimately changes day to day). lastVerified is validated as a present,
+  // well-formed ISO date on both sides, never value-compared. Any other drift
+  // (counts, latestMigration, productVersion, factsSchemaVersion, database
+  // label, apps/architecture topology) fails closed. Pure in-memory: evil
+  // fixtures mutate clones, never the committed JSON on disk.
+  const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  for (const [label, facts] of [
+    ["generated", generated],
+    ["published", published],
+  ]) {
+    assert.match(
+      facts?.lastVerified ?? "",
+      ISO_DATE_RE,
+      `${label} lastVerified must be a YYYY-MM-DD string (got ${JSON.stringify(facts?.lastVerified)})`,
+    );
+    assert.ok(!Number.isNaN(Date.parse(facts.lastVerified)), `${label} lastVerified must be a valid date`);
+  }
+  const { lastVerified: _generatedStamp, ...generatedRest } = generated;
+  const { lastVerified: _publishedStamp, ...publishedRest } = published;
+  assert.deepStrictEqual(
+    publishedRest,
+    generatedRest,
+    "published docs/architecture/runtime-facts.json drifted from generateRuntimeFacts() — regenerate and commit",
+  );
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {

@@ -4,11 +4,26 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { lintAllDocumentation, lintMarkdownDocument } from "./lint-docs.mjs";
-import { generateRuntimeFacts } from "./generate-documentation-facts.mjs";
+import { generateRuntimeFacts, assertRuntimeFactsMatch } from "./generate-documentation-facts.mjs";
 import { collectRegisteredTools } from "./check-tool-capability-inventory.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8");
+
+// T13-R1: independent second count of the canonical route inventory. The
+// generator derives apiRoutes via /id:\s*'([^']+)'/ over the whole
+// route-inventory.ts file; this helper instead isolates the ROUTE_INVENTORY
+// array block and collects its `id: '...'` entries with its own minimal
+// pattern, then dedupes. Same source file (single source of truth — a route
+// addition correctly moves both together) but a separate parsing path, so a
+// generator hardcoded to `apiRoutes: 9999` is caught while legitimate source
+// edits do not create fragile duplication (no hardcoded 120 here).
+function countRoutesIndependently() {
+  const src = read("apps/api/src/routes/route-inventory.ts");
+  const block = src.split("ROUTE_INVENTORY")[1]?.split("] as const")[0] ?? src;
+  const ids = [...block.matchAll(/id\s*:\s*'([^']+)'/g)].map((m) => m[1]);
+  return new Set(ids).size;
+}
 
 function countInventoryRows() {
   const src = read("docs/architecture/tool-capability-inventory.md");
@@ -84,6 +99,46 @@ test("T13 documentation gates coverage", async (t) => {
     assert.match(source, /llm-contracts[^`]*lint/, "validate:final must lint llm-contracts explicitly");
     assert.match(source, /pnpm boundary:check/, "validate:final must run boundary:check");
     assert.match(source, /lint-docs\.test\.mjs/, "validate:final must run the docs link contract");
+  });
+
+  await t.test("published runtime-facts.json matches freshly generated facts (except lastVerified)", () => {
+    const generated = generateRuntimeFacts();
+    const published = JSON.parse(read("docs/architecture/runtime-facts.json"));
+    assertRuntimeFactsMatch(generated, published);
+  });
+
+  await t.test("apiRoutes matches an independent inventory parse (not the generator output)", () => {
+    const generated = generateRuntimeFacts();
+    const published = JSON.parse(read("docs/architecture/runtime-facts.json"));
+    const independent = countRoutesIndependently();
+    assert.equal(
+      generated.counts.apiRoutes,
+      independent,
+      `generator apiRoutes (${generated.counts.apiRoutes}) must match independent inventory parse (${independent})`,
+    );
+    assert.equal(
+      published.counts.apiRoutes,
+      independent,
+      `published apiRoutes (${published.counts.apiRoutes}) must match independent inventory parse (${independent})`,
+    );
+  });
+
+  await t.test("comparator rejects inflated apiRoutes in generated facts", () => {
+    const generated = generateRuntimeFacts();
+    const published = JSON.parse(read("docs/architecture/runtime-facts.json"));
+    const mutated = structuredClone(generated);
+    mutated.counts.apiRoutes = 9999;
+    assert.throws(() => assertRuntimeFactsMatch(mutated, published), /apiRoutes/);
+  });
+
+  await t.test("comparator rejects fake migration and inflated counts in published facts", () => {
+    const generated = generateRuntimeFacts();
+    const published = JSON.parse(read("docs/architecture/runtime-facts.json"));
+    const fake = structuredClone(published);
+    fake.counts.apiRoutes = 9999;
+    fake.counts.databaseMigrations = 9999;
+    fake.counts.latestMigration = "V999__fake.sql";
+    assert.throws(() => assertRuntimeFactsMatch(generated, fake), /9999|V999__fake|latestMigration|databaseMigrations|apiRoutes/);
   });
 
   await t.test("public-safety flags current-provider metadata shapes, not prose or placeholders", async () => {
