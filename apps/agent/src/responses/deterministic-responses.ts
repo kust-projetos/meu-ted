@@ -40,6 +40,32 @@ export const renderClarificationFallback = (subject = 'esta consulta'): string =
   `Não consegui processar ${subject} agora. Você pode reformular o que deseja consultar?`;
 
 /**
+ * Fallback pt-BR por domínio (bug prod 2026-10-19: o id interno `accounts`
+ * vazava em inglês na UX — "Não consegui processar accounts agora").
+ * Sujeito em pt-BR válido nos dois templates acima (`processar ${s}`) e em
+ * `renderUnavailable` (`consultar ${s}`). Domínios conferidos contra o
+ * roteador (`orchestration/intent-router.ts`): payables = contas a pagar /
+ * faturas / boletos; cards = cartões; budgets = orçamentos; goals = metas;
+ * memory = memórias do agente; web/general = sem escopo próprio.
+ */
+export const DOMAIN_SUBJECT_PT_BR: Readonly<Record<string, string>> = {
+  accounts: 'suas contas',
+  transactions: 'seus lançamentos',
+  cards: 'seus cartões',
+  payables: 'suas contas a pagar',
+  budgets: 'seus orçamentos',
+  goals: 'suas metas',
+  categories: 'suas categorias',
+  memory: 'suas memórias',
+  web: 'esta consulta',
+  general: 'esta consulta',
+};
+
+/** Resolve um id interno de domínio para o sujeito pt-BR do fallback; desconhecido = 'esta consulta'. */
+export const resolveDomainSubject = (domain: string): string =>
+  Object.hasOwn(DOMAIN_SUBJECT_PT_BR, domain) ? DOMAIN_SUBJECT_PT_BR[domain as keyof typeof DOMAIN_SUBJECT_PT_BR] : 'esta consulta';
+
+/**
  * T3.1 fail-closed financeiro (SPEC §14 H-06): evidence null, timeout ou
  * todos os EvidenceItems com error → esta resposta determinística, sem
  * chamar o LLM. Wording fixo da SPEC, nunca número inventado.
