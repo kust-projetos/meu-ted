@@ -46,15 +46,32 @@ const emptyStatementEnvelope: EvidenceEnvelope = {
   }],
 };
 
+/**
+ * P0-ATTACHMENT-BYPASS: the deterministic path owns tool-empty turns, so the
+ * publish path below carries a (non-covering) tool money row — the block
+ * figure publishes as an attributed citation supplementing tool evidence,
+ * never on its own.
+ */
+const supplementedStatementEnvelope: EvidenceEnvelope = {
+  version: '1',
+  items: [{
+    ref: 'statement',
+    source: 'api.transactions',
+    retrievedAt: new Date().toISOString(),
+    status: 'ok',
+    data: [{ feeCents: 1 }],
+  }],
+};
+
 const BLOCK = ['fatura do cartao Nubank total R$ 999,00 Conta principal'];
 
 describe('A19-GROUND-EVIDENCE: attachment turns publish block-grounded replies', () => {
-  it('publishes a reply citing the admitted block figure', async () => {
+  it('publishes a reply citing the admitted block figure (with tool money present)', async () => {
     const providerText = 'Segundo o anexo, a fatura é R$ 999 na Conta principal.';
     const responseProvider = vi.fn(async () => providerText);
     const orchestrator = new ConversationOrchestrator({
       plan: () => readPlan(),
-      evidenceProvider: async () => emptyStatementEnvelope,
+      evidenceProvider: async () => supplementedStatementEnvelope,
       responseProvider,
       events: () => undefined,
     });
@@ -66,6 +83,26 @@ describe('A19-GROUND-EVIDENCE: attachment turns publish block-grounded replies',
     const result = await orchestrator.runTurn(base);
     expect(responseProvider).toHaveBeenCalledTimes(1);
     expect(result.response?.text).toBe(providerText);
+  });
+
+  it('stays deterministic on a tool-empty turn instead of publishing the block figure (P0)', async () => {
+    const providerText = 'Segundo o anexo, a fatura é R$ 999 na Conta principal.';
+    const responseProvider = vi.fn(async () => providerText);
+    const orchestrator = new ConversationOrchestrator({
+      plan: () => readPlan(),
+      evidenceProvider: async () => emptyStatementEnvelope,
+      responseProvider,
+      events: () => undefined,
+    });
+    const base = normalizeRestTurn(
+      { text: 'quanto deu a fatura no pdf?', intentionId: 'intent-block-empty-tools' },
+      identity,
+      { typedText: 'quanto deu a fatura no pdf?', hasAttachmentData: true, attachmentTexts: BLOCK },
+    );
+    const result = await orchestrator.runTurn(base);
+    expect(responseProvider).not.toHaveBeenCalled();
+    expect(result.response?.text).toBe('Não há dados disponíveis para extrato.');
+    expect(result.response?.text).not.toMatch(/999/);
   });
 
   it('still rejects a reply inventing a non-block figure on an attachment turn', async () => {
@@ -82,14 +119,17 @@ describe('A19-GROUND-EVIDENCE: attachment turns publish block-grounded replies',
       { typedText: 'quanto deu a fatura no pdf?', hasAttachmentData: true, attachmentTexts: BLOCK },
     );
     const result = await orchestrator.runTurn(base);
-    expect(responseProvider).toHaveBeenCalledTimes(1);
-    expect(result.response?.text).toMatch(/Não foi possível consultar/);
+    // P0: an empty tool envelope never reaches the provider — the
+    // deterministic render answers without any figure.
+    expect(responseProvider).not.toHaveBeenCalled();
+    expect(result.response?.text).toBe('Não há dados disponíveis para extrato.');
     expect(result.response?.text).not.toMatch(/888,88/);
   });
 
   it('rejects an UNATTRIBUTED block figure: the document is not provenance', async () => {
     // V1-GROUND-ATTRIBUTION: the figure IS in the block, yet the reply
     // presents it as workspace state — a deny-list alone would publish it.
+    // P0: an empty tool envelope never reaches the provider either way.
     const responseProvider = vi.fn(async () => 'A fatura é R$ 999 na Conta principal.');
     const orchestrator = new ConversationOrchestrator({
       plan: () => readPlan(),
@@ -103,8 +143,8 @@ describe('A19-GROUND-EVIDENCE: attachment turns publish block-grounded replies',
       { typedText: 'quanto deu a fatura no pdf?', hasAttachmentData: true, attachmentTexts: BLOCK },
     );
     const result = await orchestrator.runTurn(base);
-    expect(responseProvider).toHaveBeenCalledTimes(1);
-    expect(result.response?.text).toMatch(/Não foi possível consultar/);
+    expect(responseProvider).not.toHaveBeenCalled();
+    expect(result.response?.text).toBe('Não há dados disponíveis para extrato.');
     expect(result.response?.text).not.toMatch(/999/);
   });
 

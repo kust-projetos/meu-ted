@@ -7,7 +7,7 @@
  *   (so phone numbers and random digit runs are NOT clobbered);
  * - CVV/CVC only with explicit context (cvv/cvc/código de segurança/...);
  * - CPF/CNPJ with check-digit validation;
- * - credentials/secrets via the existing `sanitizeForPersistence` +
+  * - credentials/secrets via the in-module `scrubSecrets` pattern set (single funnel) +
  *   `redactTranscript` chain (superset, never a replacement).
  *
  * Sinks forced through this module: /rpc/chat ingress (text + attachments),
@@ -25,11 +25,33 @@
  * inline-content dropping are unchanged.
  */
 
-import { sanitizeForPersistence } from './history.js';
 import { redactTranscript } from '../transcript-safety.js';
 import { ATTACHMENT_REF_PATTERN } from '../attachments/types.js';
 
 export const REDACTED = '[REDACTED]';
+
+/**
+ * P2-DLP-FUNNEL: credential/secret patterns live HERE — the single funnel.
+ * `privacy/history.ts` delegates its `sanitizeForPersistence` to
+ * `scrubForPersistence` below instead of keeping a duplicate pattern set, so
+ * every durable write goes through one secret → PAN → CVV → CPF/CNPJ →
+ * transcript chain.
+ */
+const SECRET_PATTERNS = [
+  /Bearer\s+[A-Za-z0-9._~+/-]+=*/gi,
+  /eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*/g, // JWT / Tokens
+  /sk-[A-Za-z0-9]{20,}/g, // OpenAI API Keys
+  /ghp_[A-Za-z0-9]{20,}/g,
+  /password["']?\s*[:=]\s*["'][^"']+["']/gi,
+];
+
+const scrubSecrets = (value: string): string => {
+  let sanitized = value;
+  for (const pattern of SECRET_PATTERNS) {
+    sanitized = sanitized.replace(pattern, REDACTED);
+  }
+  return sanitized;
+};
 
 /** 13–19 digits with optional single separators (PAN with variants). */
 const PAN_CANDIDATE_RE = /\b(?:\d[ \-\.]?){13,19}\b/g;
@@ -147,7 +169,7 @@ export const containsSensitiveDocument = (value: string): boolean => {
  */
 export const scrubForPersistence = (value: string): string => {
   if (!value) return '';
-  const secretsFirst = sanitizeForPersistence(value);
+  const secretsFirst = scrubSecrets(value);
   return redactTranscript(scrubDocuments(scrubCvv(scrubPan(secretsFirst))));
 };
 

@@ -1002,6 +1002,18 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       }
       const returnedPendingOperation = turn.pendingOperation;
       const returnedUndoProposal = turn.undoProposal;
+      // P1 output vazio: um 200 sem texto de resposta E sem decisão estruturada
+      // (pendingOperation/undoProposal) não é sucesso — é falha retentável.
+      // Marca o balão como failed com retry e preserva âncora/draft (sem
+      // reload de histórico, sem limpar nada), em vez do falso sucesso
+      // (sent + âncora limpa).
+      if (!turn.output?.trim() && !returnedPendingOperation && !returnedUndoProposal) {
+        if (isStaleScope(sendWorkspaceId)) return;
+        setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
+        setError(MESSAGE_SEND_ERROR);
+        setStatus("error");
+        return;
+      }
       // T3.3 (§15.4): a natural-language confirmation turn that EXECUTED in
       // the same round-trip carries the real execution receipt — reconcile
       // from it immediately (same single reconciler as the button path).

@@ -476,13 +476,18 @@ const names = (text: string): string[] => {
   const found = new Set<string>();
   for (const match of text.matchAll(/"([^"]{2,60})"/g)) found.add(match[1]!.trim());
   for (const match of text.matchAll(/(?:conta|cart[aã]o|categoria)\s+([A-Za-zÁÀÃÂÉÊÍÓÔÕÚÇáàãâéêíóôõúç][\wÁÀÃÂÉÊÍÓÔÕÚÇáàãâéêíóôõúç]*(?:\s+[A-Za-zÁÀÃÂÉÊÍÓÔÕÚÇáàãâéêíóôõúç][\wÁÀÃÂÉÊÍÓÔÕÚÇáàãâéêíóôõúç]*){0,1})/gi)) {
-    found.add(match[1]!.replace(/[.!?,]+$/, '').trim());
+    // P1-NAME-DELIMIT: a captura carrega o predicado junto (`principal
+    // está`) — delimita antes do match estrito.
+    const delimited = delimitEntity(match[1]!.replace(/[.!?,]+$/, '').trim());
+    if (delimited.length >= 2) found.add(delimited);
   }
-  for (const match of text.matchAll(/(?:na|no|em|da|do|para|conta|cartao|cartão|categoria)\s+([A-ZÁÀÃÂÉÊÍÓÔÕÚÇ][\wÁÀÃÂÉÊÍÓÔÕÚÇ]*(?:\s+[\wÁÀÃÂÉÊÍÓÔÕÚÇ]*)*)/g)) {
-    found.add(match[1]!.replace(/[.!?,]+$/, '').trim());
+  for (const match of text.matchAll(/(?:na|no|em|da|do|para|conta|cartao|cartão|categoria)\s+([A-ZÁÀÃÂÉÊÍÓÔÕÚÇ][\wÁÀÃÂÉÊÍÓÔÕÚÇáàãâéêíóôõúç]*(?:\s+[\wÁÀÃÂÉÊÍÓÔÕÚÇáàãâéêíóôõúç]*)*)/g)) {
+    const delimited = delimitEntity(match[1]!.replace(/[.!?,]+$/, '').trim());
+    if (delimited.length >= 2) found.add(delimited);
   }
   for (const match of text.matchAll(/\b([A-ZÁÀÃÂÉÊÍÓÔÕÚÇ][a-záàãâéêíóôõúç]+(?:\s+[A-ZÁÀÃÂÉÊÍÓÔÕÚÇ][a-záàãâéêíóôõúç]+)+)/g)) {
-    found.add(match[1]!.trim());
+    const delimited = delimitEntity(match[1]!.trim());
+    if (delimited.length >= 2) found.add(delimited);
   }
   return [...found].filter((name) => name.length >= 2);
 };
@@ -790,6 +795,165 @@ const attributesDocumentInClause = (folded: string, clause: { start: number; end
   return false;
 };
 
+const significantTokens = (folded: string): string[] =>
+  folded.split(/[^a-z0-9]+/).filter((token) => token.length > 2);
+
+/**
+ * P1-NAME-DELIMIT — a keyword-led capture (`conta`/`cartão`/preposição) é
+ * prosa local, não entidade: a cópula / o verbo / a conjunção depois dela
+ * abre o predicado, então `conta principal está…` rende `principal`, nunca
+ * `principal está`. Conectores (preposições/artigos/possessivos) ficam
+ * DENTRO (`Banco do Brasil`); nomes entre aspas já vêm delimitados e não
+ * passam por aqui.
+ */
+const NAME_CONNECTOR: ReadonlySet<string> = new Set([
+  'a', 'ao', 'aos', 'ante', 'apos', 'ate', 'com', 'contra', 'de', 'desde', 'em',
+  'entre', 'para', 'per', 'perante', 'por', 'sem', 'sob', 'sobre',
+  'aum', 'num', 'numa', 'na', 'no', 'nas', 'nos', 'do', 'da', 'dos', 'das',
+  'dum', 'duma', 'pro', 'pra', 'pelo', 'pela', 'pelos', 'pelas',
+  'nesta', 'neste', 'nestas', 'nestes', 'nessa', 'nesse', 'nessas', 'nesses',
+  'desta', 'deste', 'destas', 'destes', 'dessa', 'desse', 'dessas', 'desses',
+  'naquele', 'naquela', 'naqueles', 'naquelas', 'disto', 'nisso', 'disso', 'nisto',
+  'o', 'as', 'os', 'um', 'uma', 'uns', 'umas',
+  'meu', 'minha', 'seu', 'sua', 'nosso', 'nossa',
+]);
+
+/**
+ * O que encerra a entidade: todo o vocabulário funcional de
+ * `NEUTRAL_CONTINUATION` MENOS os conectores acima (e `real`/`reais`, que é
+ * moeda, não predicado) — isto é, cópulas/verbos, conjunções/conectivos,
+ * pronomes/demonstrativos (`esta` dobrado cobre o verbo `está`) — mais a
+ * negação e os verbos de relato da UX de negação (`encontrei`, `consegui`,
+ * `consultar`). Preposições/artigos nunca cortam: `Banco do Brasil`
+ * atravessa inteiro.
+ */
+const NAME_CUT: ReadonlySet<string> = new Set([
+  ...[...NEUTRAL_CONTINUATION].filter(
+    (token) => !NAME_CONNECTOR.has(token) && token !== 'real' && token !== 'reais',
+  ),
+  ...NEGATION_TOKENS,
+  'encontrei', 'encontrada', 'encontrado', 'encontrados', 'encontrar',
+  'consultar', 'consegui',
+]);
+
+/** Maiúscula inicial (incl. acentos): sinal de nome próprio no texto original. */
+const startsUppercase = (part: string): boolean => /^[A-ZÁÀÃÂÉÊÍÓÔÕÚÇ]/.test(part);
+
+/** Corta conectores à esquerda, o predicado à direita e conectores pendentes. */
+const delimitEntity = (raw: string): string => {
+  const parts = raw.split(/\s+/).filter((part) => part.length > 0);
+  let start = 0;
+  while (start < parts.length && NAME_CONNECTOR.has(fold(parts[start]!))) start += 1;
+  let end = parts.length;
+  for (let i = start + 1; i < parts.length; i += 1) {
+    if (NAME_CUT.has(fold(parts[i]!))) {
+      // P1-NAME-COMPOUND: uma palavra de corte capitalizada após um token
+      // capitalizado continua o nome próprio (`Mercado Pago`), não o
+      // predicado — predicados abrem em minúscula (`está`, `foi`). Sem isso
+      // `Mercado Pago` reduzia a `Mercado` e casava por token com qualquer
+      // evidência `Mercado …` (ex.: `Mercado Livre`), publicando nome
+      // financeiro não comprovado.
+      if (startsUppercase(parts[i]!) && startsUppercase(parts[i - 1]!)) continue;
+      end = i;
+      break;
+    }
+  }
+  while (end > start + 1 && NAME_CONNECTOR.has(fold(parts[end - 1]!))) end -= 1;
+  // P1-NAME-DELIMIT-FRAGMENT: o extrator pode cortar a palavra no acento
+  // (`está` → `est`) quando a classe do trecho não cobre o acento — um
+  // tail que é prefixo próprio (len ≥ 2) de uma palavra de corte é o
+  // predicado cortado, nunca a entidade. P1-NAME-COMPOUND: uma continuação
+  // de nome próprio capitalizada (`Pago` após `Mercado`) nunca é esse
+  // corte — o corte no acento deixa tail minúsculo (`est`), e sem esta
+  // guarda `Pago` caía como prefixo de `pagou`, reduzindo `Mercado Pago`
+  // a `Mercado`.
+  while (end > start + 1) {
+    if (startsUppercase(parts[end - 1]!) && startsUppercase(parts[end - 2]!)) break;
+    const tail = fold(parts[end - 1]!);
+    const chopped = tail.length >= 2 && [...NAME_CUT].some((cut) => cut.length > tail.length && cut.startsWith(tail));
+    if (!chopped) break;
+    end -= 1;
+  }
+  return parts.slice(start, end).join(' ');
+};
+
+/**
+ * P1-NAME-NEGATION — true quando a OCORRÊNCIA em `nameIndex` é negada na sua
+ * EXISTÊNCIA/localização (`não encontrei [a conta] X`, `não há [conta] X`,
+ * `X não existe`). O escopo é a cláusula local (a mesma de `clauseAround`),
+ * nunca a sentença inteira, e cada ocorrência é validada com seu próprio
+ * escopo — sem dedupar antes. Negativas sobre ATRIBUTOS (`não tem despesas`,
+ * `não há despesas/saldo`) preservam o nome: a entidade continua comprovada
+ * pela evidência, só o atributo foi negado.
+ */
+const EXISTENCE_DENIAL: RegExp =
+  /(nao|nunca|jamais|nem)\s+(?:[a-z0-9]+\s+){0,3}?(encontr\w*|exist\w*|ha\b|haja\b|houver\w*|localiz\w*|acha\w*)/;
+
+/** Substantivos de atributo: negados, não negam a entidade que os detém. */
+const ATTRIBUTE_NOUN: RegExp =
+  /\b(despesas?|saldos?|faturas?|valores?|extratos?|lancamentos?|transferencias?|pagamentos?|parcelas?|gastos?|receitas?|custos?|tarifas?|juros|multas?|mensalidades?|debitos?|creditos?|boletos?|movimentac\w*|transac\w*|limites?|vencimentos?)\b/;
+
+const isNegatedNameOccurrence = (foldedText: string, text: string, nameIndex: number, nameLength: number): boolean => {
+  const sentence = sentenceBoundsAround(foldedText, nameIndex);
+  const clause = clauseAround(text, nameIndex, sentence);
+  const clauseFolded = foldedText.slice(clause.start, clause.end);
+  const denial = EXISTENCE_DENIAL.exec(clauseFolded);
+  if (denial === null) return false;
+  // A negação precisa alcançar a OCORRÊNCIA: entre o verbo de existência e o
+  // nome não pode haver um substantivo de atributo — `não há despesas na
+  // conta Nubank` nega as despesas, não a conta; `não encontrei a conta
+  // Nubank` nega a entidade (só artigo/conector no caminho).
+  const verbEnd = clause.start + denial.index + denial[0]!.length;
+  const nameEnd = nameIndex + Math.max(nameLength, 1);
+  // O span do próprio nome nunca conta como ATTRIBUTE_NOUN: contas chamadas
+  // `Saldo`/`Pagamentos` negadas na existência não viram "atributo".
+  const between = verbEnd <= nameIndex
+    ? foldedText.slice(verbEnd, nameIndex)
+    : foldedText.slice(nameEnd, verbEnd);
+  return !ATTRIBUTE_NOUN.test(between);
+};
+
+/**
+ * Contenção por SEQUÊNCIA DE TOKENS (limite de entidade): `wanted` precisa
+ * aparecer em `candidate` como tokens inteiros, contíguos e na mesma ordem.
+ * `includes` puro aceita entidade diferente por substring (`Nubank Premium`
+ * dentro de `Nubank PremiumPlus`); aqui `premium` !== `premiumplus` e o
+ * match falha.
+ */
+const containsTokenSequence = (candidateFolded: string, wantedFolded: string): boolean => {
+  const hay = candidateFolded.split(/[^a-z0-9]+/).filter((token) => token.length > 0);
+  const needle = wantedFolded.split(/[^a-z0-9]+/).filter((token) => token.length > 0);
+  if (needle.length === 0) return false;
+  return hay.some((_, i) => needle.every((token, j) => hay[i + j] === token));
+};
+
+/**
+ * P1-NAME-ENTITY — whole-entity name support across both evidence axes. A
+ * multi-token claim requires its FULL folded form inside the evidence (a head
+ * token alone, e.g. "conta" for "Conta principal", never validates), and a
+ * single significant token requires an exact token match (so "principal"
+ * never rides on a longer word, and "conta" never proves "Conta principal").
+ */
+const matchesEvidenceName = (
+  folded: string,
+  foldedStrings: readonly string[],
+  envelopeText: string,
+  admittedFolded: readonly string[],
+  admittedText: string,
+): boolean => {
+  const tokens = significantTokens(folded);
+  if (tokens.length <= 1) {
+    const wanted = tokens[0] ?? folded;
+    const tokenIn = (candidate: string): boolean => candidate.split(/[^a-z0-9]+/).includes(wanted);
+    return foldedStrings.some(tokenIn) || admittedFolded.some(tokenIn);
+  }
+  if (foldedStrings.some((candidate) => containsTokenSequence(candidate, folded))) return true;
+  if (containsTokenSequence(envelopeText, folded)) return true;
+  if (admittedFolded.some((candidate) => containsTokenSequence(candidate, folded))) return true;
+  if (containsTokenSequence(admittedText, folded)) return true;
+  return false;
+};
+
 export const validateGroundedClaims = (
   text: string,
   envelope: EvidenceEnvelope,
@@ -855,7 +1019,18 @@ export const validateGroundedClaims = (
     const clause = clauseAround(text, match.index, sentence);
     const assertsRegistered = REGISTERED_STATE.test(foldedText.slice(sentence.start, sentence.end));
     const attributesDocument = attributesDocumentInClause(foldedText, clause, match.index);
-    const inDocument = attributesDocument && !assertsRegistered &&
+    // P0-ATTACHMENT-BYPASS: registered-state money requires TOOL evidence —
+    // the admitted block never grounds a figure on its own in the FINANCIAL
+    // path (envelope with items): the document axis only supplements a turn
+    // whose tool envelope already carries money, so a block figure with an
+    // empty tool envelope fails closed instead of publishing as grounded.
+    // ATTACHMENT-CONTENT-QUERY is the other side of the same wall: its
+    // envelope is EMPTY BY CONTRACT (`items: []` — zero financial reads), so
+    // a figure attributed to the document and matched in the ADMITTED block
+    // is document citation, not a registered-state claim. The registered
+    // gate (`assertsRegistered` → tool only) continues intact in both paths.
+    const contentQueryEnvelope = envelope.items.length === 0;
+    const inDocument = attributesDocument && !assertsRegistered && (toolMoney.length > 0 || contentQueryEnvelope) &&
       admittedMoney.some((support) => support.cents === claim.cents && currencyOf(support.currency) === tag);
     if (!inTools && !inDocument) {
       // The label names the marker the reply used, so a foreign-currency or
@@ -909,16 +1084,25 @@ export const validateGroundedClaims = (
   }
   for (const name of names(text)) {
     const folded = fold(name);
-    if (foldedStrings.some((candidate) => candidate.includes(folded) || folded.includes(candidate))) continue;
-    // A19-GROUND-EVIDENCE: the same name matchers consult admitted block text.
-    if (admittedFolded.some((candidate) => candidate.includes(folded) || folded.includes(candidate))) continue;
-    // Fallback for keyword-led captures with trailing context ("conta
-    // principal está…"): the claim is supported when its leading nominal
-    // token appears in evidence. Unknown proper names still fail.
-    const tokens = folded.split(/[^a-z0-9]+/).filter((token) => token.length > 2);
-    const head = tokens[0];
-    if (head && tokens.length > 1 && envelopeText.includes(head)) continue;
-    if (head && tokens.length > 1 && admittedText.includes(head)) continue;
+    // P1-NAME-NEGATION: a denial scoping ANY occurrence of the name voids the
+    // claim — each occurrence carries its own clause scope, no dedup before.
+    let negated = false;
+    for (let from = 0; ; ) {
+      const occurrence = foldedText.indexOf(folded, from);
+      if (occurrence < 0) break;
+      from = occurrence + Math.max(folded.length, 1);
+      if (isNegatedNameOccurrence(foldedText, text, occurrence, folded.length)) {
+        negated = true;
+        break;
+      }
+    }
+    if (negated) {
+      unsupportedClaims.push(name);
+      counts.name += 1;
+      continue;
+    }
+    // P1-NAME-ENTITY: whole-entity match only — no head-only fallback.
+    if (matchesEvidenceName(folded, foldedStrings, envelopeText, admittedFolded, admittedText)) continue;
     unsupportedClaims.push(name);
     counts.name += 1;
   }

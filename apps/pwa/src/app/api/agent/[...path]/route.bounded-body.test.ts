@@ -434,4 +434,55 @@ describe("Agent proxy bounded body read (A19 closure)", () => {
     expect(stats.cancels).toBe(0);
     expect(capturedInit?.body).toBeUndefined();
   });
+
+  it("forwards a body delivered in 1-byte chunks with byte-exact integrity (realloc parity)", async () => {
+    // P2: paridade com `readBoundedBody` (proxy-utils) — realocação limitada
+    // em UM buffer contíguo, sem reter 1 objeto por chunk. 4096 chunks de
+    // 1 byte devem chegar intactos ao upstream, sem cancel.
+    let captured: Request | null = null;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      captured = new Request(input as string, init);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const size = 4096;
+    const expected = new Uint8Array(size);
+    for (let i = 0; i < size; i++) expected[i] = i % 251;
+    let delivered = 0;
+    const stats = { pulls: 0, cancels: 0 };
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        stats.pulls += 1;
+        if (delivered >= size) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(expected.slice(delivered, delivered + 1));
+        delivered += 1;
+      },
+      cancel() {
+        stats.cancels += 1;
+      },
+    });
+
+    const res = await POST(
+      new Request(chatUrl, {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream", origin: ORIGIN },
+        body: stream,
+        // @ts-expect-error duplex is required for streamed bodies outside browsers
+        duplex: "half",
+      }),
+      chatContext(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(stats.cancels).toBe(0);
+    const forwarded = new Uint8Array(await captured!.arrayBuffer());
+    expect(forwarded.byteLength).toBe(size);
+    expect(forwarded).toEqual(expected);
+  });
 });

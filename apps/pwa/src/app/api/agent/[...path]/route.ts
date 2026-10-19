@@ -140,32 +140,40 @@ async function readBoundedBody(
     if (buffered.byteLength > limit) return { response: bodyTooLarge() };
     return buffered.byteLength === 0 ? {} : { body: buffered };
   }
+  // P2 (paridade com `readBoundedBody` de proxy-utils): os bytes acumulam em
+  // UM buffer contíguo com realocação limitada (teto `limit`). Cada chunk é
+  // copiado na chegada e nunca retido — 1 MiB em chunks de 1 byte ocupa
+  // ~1 MiB, não um objeto por chunk. O teto é imposto ANTES de reter, e a
+  // fonte é cancelada no momento em que ele é cruzado (sem drenar o resto).
   const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
+  let buffer = new Uint8Array(0);
   let total = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      total += value.byteLength;
-      if (total > limit) {
+      const chunk = value;
+      // Ceiling enforced BEFORE retaining: the over-limit chunk is dropped
+      // and the source cancelled instead of drained.
+      if (total + chunk.byteLength > limit) {
         // Stop reading NOW: cancel the source instead of draining the rest.
         await reader.cancel().catch(() => {});
         return { response: bodyTooLarge() };
       }
-      chunks.push(value);
+      if (total + chunk.byteLength > buffer.byteLength) {
+        const capacity = Math.min(limit, Math.max(buffer.byteLength * 2, total + chunk.byteLength));
+        const grown = new Uint8Array(capacity);
+        grown.set(buffer.subarray(0, total));
+        buffer = grown;
+      }
+      buffer.set(chunk, total);
+      total += chunk.byteLength;
     }
   } finally {
     reader.releaseLock();
   }
   if (total === 0) return {};
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return { body: merged.buffer as ArrayBuffer };
+  return { body: buffer.slice(0, total).buffer as ArrayBuffer };
 }
 
 function hasValidBrowserOrigin(request: Request, env: ProxyEnv): boolean {

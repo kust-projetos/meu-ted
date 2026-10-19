@@ -30,27 +30,41 @@ const withName = (data: unknown): EvidenceEnvelope => envelope({ accountName: 'C
 
 /** Live attachment-turn shape: no usable finance rows in the tool envelope. */
 const EMPTY_TOOLS = envelope([]);
+/**
+ * P0-ATTACHMENT-BYPASS: money ACCEPTs below carry a (non-covering) tool
+ * money field — registered-state money requires TOOL evidence, so the
+ * attribution boundary is tested with the document axis as supplement, and
+ * the same replies with EMPTY_TOOLS fail closed.
+ */
+const TOOLS_WITH_MONEY = envelope({ balanceCents: 100, accountName: 'Conta principal' });
 const BLOCK_42_50 = ['dados extraidos do anexo: valor 42,50 R$ vencimento 2026-10-09'];
 const BLOCK_PERCENT = ['taxa de juros: 12,5%'];
 
 describe('V1-GROUND-ATTRIBUTION: document-only money needs positive attribution', () => {
   it('ACCEPTS money explicitly attributed to the document', () => {
-    expect(validateGroundedClaims('O documento informa R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
-    expect(validateGroundedClaims('No anexo consta R$42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
-    expect(validateGroundedClaims('Segundo o documento, o total é R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
-    expect(validateGroundedClaims('De acordo com o anexo, o valor é R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
-    expect(validateGroundedClaims('O valor no documento é R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('No anexo consta R$42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('Segundo o documento, o total é R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('De acordo com o anexo, o valor é R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('O valor no documento é R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
     // Compound relations are natural pt-BR and stay attributed.
-    expect(validateGroundedClaims('Conforme consta no documento, a fatura é R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
-    expect(validateGroundedClaims('Como mostra o PDF, o valor é R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
-    expect(validateGroundedClaims('Pelos dados do anexo, o total é R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('Conforme consta no documento, a fatura é R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('Como mostra o PDF, o valor é R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('Pelos dados do anexo, o total é R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
     // The attribution itself may span a line break (a labelled block renders so).
-    expect(validateGroundedClaims('O documento informa:\nR$ 42,50', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa:\nR$ 42,50', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
+  });
+
+  it('REJECTS the same attributed money when the tool envelope is empty (P0)', () => {
+    const result = validateGroundedClaims('O documento informa R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50);
+    expect(result.valid).toBe(false);
+    expect(result.counts.money).toBeGreaterThanOrEqual(1);
   });
 
   it('REJECTS unattributed document money, with no registered marker anywhere', () => {
     // The deny-list alone cannot decide this: nothing here asserts registered
     // state, and the document still must not prove the workspace's figures.
+    // Tool money is present so the test isolates the attribution rule.
     const unattributed = [
       'A fatura é R$ 42,50 na Conta principal.',
       'O total é R$ 42,50.',
@@ -58,7 +72,7 @@ describe('V1-GROUND-ATTRIBUTION: document-only money needs positive attribution'
       'Resumo\nO total\nR$42,50',
     ];
     for (const text of unattributed) {
-      const result = validateGroundedClaims(text, EMPTY_TOOLS, BLOCK_42_50);
+      const result = validateGroundedClaims(text, TOOLS_WITH_MONEY, BLOCK_42_50);
       expect(result.valid).toBe(false);
       expect(result.counts.money).toBeGreaterThanOrEqual(1);
     }
@@ -76,9 +90,10 @@ describe('V1-GROUND-ATTRIBUTION: document-only money needs positive attribution'
 
   it('never false-accepts when the SAME sentence also asserts registered state', () => {
     // Defense in depth: the deny-list WINS over the positive attribution.
-    expect(validateGroundedClaims('O documento informa que seu saldo registrado é R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(false);
-    expect(validateGroundedClaims('Segundo o anexo, seu saldo atual é R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(false);
-    expect(validateGroundedClaims('O documento informa que a despesa lançada é R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(false);
+    // Tool money is present so the test isolates the deny-list (not the P0 gate).
+    expect(validateGroundedClaims('O documento informa que seu saldo registrado é R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(false);
+    expect(validateGroundedClaims('Segundo o anexo, seu saldo atual é R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(false);
+    expect(validateGroundedClaims('O documento informa que a despesa lançada é R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(false);
   });
 
   it('keeps authoritative API money grounding the same claim with NO document attribution', () => {
@@ -129,8 +144,9 @@ describe('V1-GROUND-ATTRIBUTION: figure-free document claims need no attribution
     const block = ['fatura do cartao Nubank total R$ 999,00 Conta principal vencimento 2026-03-12'];
     expect(validateGroundedClaims('Vence em 12/03/2026 na Conta principal.', EMPTY_TOOLS, block).valid).toBe(true);
     expect(validateGroundedClaims('No cartao Nubank está tudo certo.', EMPTY_TOOLS, block).valid).toBe(true);
-    // The same block still grounds the money claim once it is attributed.
-    expect(validateGroundedClaims('Segundo o anexo, a fatura é R$ 999 na Conta principal.', EMPTY_TOOLS, block).valid).toBe(true);
+    // The same block still grounds the money claim once it is attributed —
+    // with tool money present (P0: the block never grounds money on its own).
+    expect(validateGroundedClaims('Segundo o anexo, a fatura é R$ 999 na Conta principal.', TOOLS_WITH_MONEY, block).valid).toBe(true);
   });
 });
 
@@ -141,12 +157,24 @@ describe('V1-GROUND-E2E: publication enforces the attribution boundary', () => {
   };
 
   it('publishes an attributed document figure verbatim', async () => {
-    const result = await createGroundedResponseWithRetry('O documento informa R$ 42,50.', EMPTY_TOOLS, {
+    const result = await createGroundedResponseWithRetry('O documento informa R$ 42,50.', TOOLS_WITH_MONEY, {
       attachmentTexts: BLOCK_42_50,
       sink: () => {},
     });
     expect(result).toMatchObject({ grounded: true, rejected: false });
     expect(result.text).toBe('O documento informa R$ 42,50.');
+  });
+
+  it('falls back safe for an attributed document figure with an empty tool envelope (P0)', async () => {
+    const events: Array<{ type: string; fields: Record<string, unknown> }> = [];
+    const result = await createGroundedResponseWithRetry('O documento informa R$ 42,50.', EMPTY_TOOLS, {
+      attachmentTexts: BLOCK_42_50,
+      sink: (type, fields) => events.push({ type, fields }),
+      intentionId: 'intent-p0-empty-tools',
+    });
+    expect(result).toMatchObject({ grounded: false, rejected: true });
+    expect(result.text).not.toContain('42,50');
+    expect(result.text).toMatch(/Não foi possível consultar/);
   });
 
   it('falls back safe for an unattributed document figure, even after one correction', async () => {
@@ -215,11 +243,11 @@ describe('V1-GROUND-E2E: publication enforces the attribution boundary', () => {
  */
 describe('V1-GROUND-ATTRIBUTION-CLAUSE: the attribution must govern the figure', () => {
   it('ACCEPTS an attribution in the same clause as the figure, including across a line break', () => {
-    expect(validateGroundedClaims('O documento informa o total: R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
-    expect(validateGroundedClaims('No anexo consta R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
-    expect(validateGroundedClaims('O documento informa:\nR$ 42,50', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa o total: R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('No anexo consta R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa:\nR$ 42,50', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
     // The figure may also follow the attribution inside the very same clause.
-    expect(validateGroundedClaims('R$ 42,50, conforme o documento informa.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('R$ 42,50, conforme o documento informa.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
   });
 
   it('REJECTS the reviewer example: the figure sits in an adversative second clause', () => {
@@ -249,8 +277,8 @@ describe('V1-GROUND-ATTRIBUTION-CLAUSE: the attribution must govern the figure',
   });
 
   it('keeps a POSITIVE attribution after a negated one or an adversative clause (no over-blocking)', () => {
-    expect(validateGroundedClaims('O documento não informa a data, mas o anexo informa R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
-    expect(validateGroundedClaims('Não consegui ler a data, mas o PDF informa o total: R$ 42,50.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('O documento não informa a data, mas o anexo informa R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('Não consegui ler a data, mas o PDF informa o total: R$ 42,50.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
   });
 
   it('REJECTS the coordinated example: an affirmative `e` starts a new clause (final review P2)', () => {
@@ -272,9 +300,9 @@ describe('V1-GROUND-ATTRIBUTION-CLAUSE: the attribution must govern the figure',
   it('PRESERVES the direct and multi-line citation forms the rule exists to protect', () => {
     // A comma, a colon and a LINE BREAK are still not breaks, and a negation
     // AFTER the figure still denies another object, not this figure.
-    expect(validateGroundedClaims('O documento informa: R$ 42,50.', EMPTY_TOOLS, ['valor: 42,50 R$']).valid).toBe(true);
-    expect(validateGroundedClaims('O documento informa:\nR$ 42,50', EMPTY_TOOLS, ['valor: 42,50 R$']).valid).toBe(true);
-    expect(validateGroundedClaims('O documento informa o total de R$ 42,50 e não informa a data.', EMPTY_TOOLS, ['valor: 42,50 R$']).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa: R$ 42,50.', TOOLS_WITH_MONEY, ['valor: 42,50 R$']).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa:\nR$ 42,50', TOOLS_WITH_MONEY, ['valor: 42,50 R$']).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa o total de R$ 42,50 e não informa a data.', TOOLS_WITH_MONEY, ['valor: 42,50 R$']).valid).toBe(true);
   });
 
   it('binds the percent axis to the same clause and refuses a negated source', () => {
@@ -303,15 +331,15 @@ describe('V1-GROUND-ATTRIBUTION-CLAUSE: the attribution must govern the figure',
  */
 describe('V1-GROUND-ATTRIBUTION-MARKER: only a marked figure is document-money evidence', () => {
   it('ACCEPTS a valid cited PDF figure (exact cents and sign preserved)', () => {
-    expect(validateGroundedClaims('O documento informa R$ 42,50.', EMPTY_TOOLS, ['fatura do cartao — valor: 42,50 R$ — vencimento 09/10/2026']).valid).toBe(true);
-    expect(validateGroundedClaims('O documento informa -R$ 42,50.', EMPTY_TOOLS, ['fatura — valor: -42.50 R$']).valid).toBe(true);
-    expect(validateGroundedClaims('O documento informa R$ 42,50.', EMPTY_TOOLS, ['fatura — valor: 42.49 R$']).valid).toBe(false);
+    expect(validateGroundedClaims('O documento informa R$ 42,50.', TOOLS_WITH_MONEY, ['fatura do cartao — valor: 42,50 R$ — vencimento 09/10/2026']).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa -R$ 42,50.', TOOLS_WITH_MONEY, ['fatura — valor: -42.50 R$']).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa R$ 42,50.', TOOLS_WITH_MONEY, ['fatura — valor: 42.49 R$']).valid).toBe(false);
   });
 
   it('ACCEPTS a valid cited Gemini figure (real renderer output) and refuses its unreadable-currency sibling', () => {
     const fields = { merchant: 'Padaria', date: '2026-10-09', amount: '42.50', currency: 'BRL', suggestedCategory: 'Padaria', confidence: 'high' };
     expect(renderVisionFields(fields)).toContain('valor: 42.50 BRL');
-    expect(validateGroundedClaims('O documento informa R$ 42,50.', EMPTY_TOOLS, [renderVisionFields(fields)]).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa R$ 42,50.', TOOLS_WITH_MONEY, [renderVisionFields(fields)]).valid).toBe(true);
     // `currency: unknown` stays honest and never becomes implicit reais.
     expect(validateGroundedClaims('O documento informa R$ 42,50.', EMPTY_TOOLS, [renderVisionFields({ ...fields, currency: 'unknown' })]).valid).toBe(false);
   });
@@ -348,7 +376,7 @@ describe('V1-GROUND-ATTRIBUTION-MARKER: only a marked figure is document-money e
 
 describe('V1-GROUND-E2E: publication enforces the clause bound and the marker requirement', () => {
   it('publishes a valid cited PDF figure and a valid cited document percent verbatim', async () => {
-    const pdf = await createGroundedResponseWithRetry('O documento informa R$ 42,50.', EMPTY_TOOLS, {
+    const pdf = await createGroundedResponseWithRetry('O documento informa R$ 42,50.', TOOLS_WITH_MONEY, {
       attachmentTexts: ['fatura do cartao — valor: 42,50 R$ — vencimento 09/10/2026'],
       sink: () => {},
     });
@@ -364,7 +392,7 @@ describe('V1-GROUND-E2E: publication enforces the clause bound and the marker re
 
   it('publishes a valid cited Gemini figure verbatim, with exact cents', async () => {
     const fields = { merchant: 'Padaria', date: '2026-10-09', amount: '42.50', currency: 'BRL', suggestedCategory: 'Padaria', confidence: 'high' };
-    const result = await createGroundedResponseWithRetry('O documento informa R$ 42,50.', EMPTY_TOOLS, {
+    const result = await createGroundedResponseWithRetry('O documento informa R$ 42,50.', TOOLS_WITH_MONEY, {
       attachmentTexts: [renderVisionFields(fields)],
       sink: () => {},
     });
@@ -446,20 +474,21 @@ describe('V1-GROUND-E2E: publication enforces the clause bound and the marker re
     }
   });
 
-  it('publishes the correction retry that actually attributes the figure to the document', async () => {
+  it('falls back safe when the correction retry still has no tool money (P0)', async () => {
     const events: Array<{ type: string; fields: Record<string, unknown> }> = [];
     const result = await createGroundedResponseWithRetry('O total da sua fatura é R$42,50.', EMPTY_TOOLS, {
       attachmentTexts: BLOCK_42_50,
       retry: async () => 'O anexo informa o total: R$42,50.',
       sink: (type, fields) => events.push({ type, fields }),
-      intentionId: 'intent-clause-corrected',
+      intentionId: 'intent-clause-corrected-empty-tools',
     });
-    expect(result).toMatchObject({ grounded: true, rejected: false });
-    expect(result.text).toBe('O anexo informa o total: R$42,50.');
+    expect(result).toMatchObject({ grounded: false, rejected: true });
+    expect(result.text).not.toContain('42,50');
+    expect(result.text).toMatch(/Não foi possível consultar/);
     expect(events.map((event) => event.type)).toEqual([
       'agent.grounding.correction_attempted',
       'agent.grounding.correction_completed',
-      'agent.grounding.validated',
+      'agent.grounding.rejected',
     ]);
   });
 });

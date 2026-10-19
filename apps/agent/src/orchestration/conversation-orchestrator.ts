@@ -652,6 +652,18 @@ export const normalizeRestTurn = (body: Body, identity: AuthenticatedIdentity, o
 export const normalizeSdkTurn = (body: Body, identity: AuthenticatedIdentity, options?: NormalizeOptions): TurnInput => normalize(body, identity, 'sdk', options);
 export const normalizeBrokerTurn = (body: Body, identity: AuthenticatedIdentity, options?: NormalizeOptions): TurnInput => normalize(body, identity, 'broker', options);
 
+/**
+ * P0-ATTACHMENT-BYPASS: true when an `ok` envelope item carries usable rows.
+ * An `ok` item with `null`/`undefined`, an empty array or an empty object is
+ * an empty tool envelope — it never authorizes the attachment bypass.
+ */
+const hasEvidenceData = (data: unknown): boolean => {
+  if (data === null || data === undefined) return false;
+  if (Array.isArray(data)) return data.length > 0;
+  if (typeof data === 'object') return Object.keys(data).length > 0;
+  return true;
+};
+
 export class ConversationOrchestrator {
   constructor(private readonly dependencies: {
     plan?: (input: TurnInput) => TurnPlan;
@@ -946,15 +958,18 @@ export class ConversationOrchestrator {
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
       return freeze({ ...base, failClosed: true as const, response: freeze({ text: FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT }) });
     }
-    // A19-READ-BYPASS: a read turn carrying accepted attachment extraction
-    // MUST consult the model — the composed text already carries the
-    // carrier-marked block plus the DATA-precedence instruction, and the
-    // deterministic render below would answer from (empty) tool evidence
-    // without ever consulting it. Skipped ONLY on the explicit server-side
-    // flag; every fail-closed path above (null/error envelopes) and below
-    // (no provider, grounding rejection) is preserved.
+    // P0-ATTACHMENT-BYPASS: the deterministic render is skipped ONLY for a
+    // turn carrying accepted attachment extraction AND a tool envelope with
+    // usable rows. With an empty tool envelope the turn stays on the
+    // deterministic path (absence render or figure-free unavailability) — a
+    // block figure with no tool evidence never reaches the provider as
+    // grounded narration. Every fail-closed path above (null/error
+    // envelopes) and below (no provider, grounding rejection) is preserved.
     const hasAttachmentData = input.hasAttachmentData === true;
-    if (!hasAttachmentData) {
+    const hasUsableToolData = (envelope?.items ?? []).some(
+      (item) => item.status === 'ok' && hasEvidenceData(item.data),
+    );
+    if (!hasAttachmentData || !hasUsableToolData) {
       const deterministic = this.renderDeterministicFromEvidence(input, plan, envelope);
       if (deterministic !== null) {
         this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
@@ -4009,7 +4024,7 @@ export class ConversationOrchestrator {
       return freeze({ ...result, failClosed: true as const, response: freeze({ text }) });
     }
     const responseText = plan.mode === 'read'
-      ? `Consulta preparada para ${plan.domain}.`
+      ? `Consulta preparada para ${resolveDomainSubject(plan.domain)}.`
       : plan.mode === 'advice' || plan.mode === 'conversation'
         ? 'Posso ajudar com consultas e orientações financeiras. Descreva o que você precisa.'
         : plan.mode === 'unsupported'

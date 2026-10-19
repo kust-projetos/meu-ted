@@ -6,7 +6,7 @@ export const saldoExtratoSkill: Skill = {
   when: 'saber quanto tem, ver saldo por conta ou puxar o extrato recente',
   keywords: [
     'saldo', 'quanto tenho', 'quanto tem', 'extrato', 'movimentação', 'movimentacao',
-    'conta', 'mostrar', 'ver ', 'consultar', 'quanto sobrou', 'sobrou',
+    'consultar', 'quanto sobrou', 'sobrou',
   ],
   tools: ['get_balance', 'list_accounts', 'list_recent_transactions', 'get_month_summary'],
   steps: [

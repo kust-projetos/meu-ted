@@ -737,14 +737,36 @@ export type PendingOperationDecision =
       receipt?: never;
     };
 
+/**
+ * Error shapes do caminho do Agent. O Agent emite `{ code, message }`
+ * top-level e o proxy same-origin repassa o corpo do upstream intacto — mas
+ * os erros GERADOS pelo próprio proxy (misconfig, csrf, 413, timeout 504,
+ * 502 upstream_unavailable) usam o envelope `{ ok:false, error:{code,message} }`
+ * (route.ts upstreamErrorResponse). Ambos os shapes são server-authored e
+ * exibíveis; este leitor aceita os dois para nenhum 502 perder code+message.
+ */
+function readAgentErrorFields(body: unknown): { code?: string; message?: string } {
+  if (!body || typeof body !== "object") return {};
+  const raw = body as Record<string, unknown>;
+  const nested = raw.error;
+  const nestedFields =
+    nested && typeof nested === "object" ? (nested as Record<string, unknown>) : undefined;
+  const code = raw.code ?? nestedFields?.code;
+  const message = raw.message ?? nestedFields?.message;
+  return {
+    ...(typeof code === "string" && code ? { code } : {}),
+    ...(typeof message === "string" && message ? { message } : {}),
+  };
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let errorMsg = "Operação do agente falhou.";
     let errorCode: string | undefined;
     try {
-      const body = await response.json() as { message?: string; code?: string };
-      if (body?.message) errorMsg = body.message;
-      if (typeof body?.code === "string" && body.code) errorCode = body.code;
+      const fields = readAgentErrorFields(await response.json());
+      if (fields.message) errorMsg = fields.message;
+      if (fields.code) errorCode = fields.code;
     } catch {
       // fallback
     }
@@ -766,7 +788,7 @@ async function agentAuthHeaders(workspaceId: string, forceFresh = false): Promis
 
 const peekErrorCode = async (response: Response): Promise<string | undefined> => {
   try {
-    return ((await response.clone().json()) as { code?: string })?.code;
+    return readAgentErrorFields(await response.clone().json()).code;
   } catch {
     return undefined;
   }
@@ -856,9 +878,9 @@ export async function uploadAttachment(
     let errorMsg = "Não foi possível enviar o anexo.";
     let errorCode: string | undefined;
     try {
-      const errBody = (await response.json()) as { message?: string; code?: string };
-      if (errBody?.message) errorMsg = errBody.message;
-      if (typeof errBody?.code === "string") errorCode = errBody.code;
+      const fields = readAgentErrorFields(await response.json());
+      if (fields.message) errorMsg = fields.message;
+      if (fields.code) errorCode = fields.code;
     } catch {
       /* keep the default message */
     }
@@ -909,9 +931,9 @@ export async function sendAgentMessage(
     let errorMsg = "Operação do agente falhou.";
     let errorCode: string | undefined;
     try {
-      const errBody = await response.json() as { message?: string; code?: string };
-      if (errBody?.message) errorMsg = errBody.message;
-      if (errBody?.code) errorCode = errBody.code;
+      const fields = readAgentErrorFields(await response.json());
+      if (fields.message) errorMsg = fields.message;
+      if (fields.code) errorCode = fields.code;
     } catch {
       // use default message
     }
@@ -929,7 +951,14 @@ export async function sendAgentMessage(
   // The turn landed: the in-flight record is no longer needed. On failure
   // (including an unlinked succeeded receipt) it stays, so retry reuses the
   // same idempotent messageId.
-  clearPendingChatSend(workspaceId);
+  // P2-1 (retry pós-reload): um 200 sem output E sem decisão estruturada
+  // (pendingOperation/undoProposal) NÃO é sucesso — é falha retentável, então
+  // a âncora/storage SOBREVIVE para o retry reusar a MESMA identidade §7.7
+  // mesmo após reload/remount. Só sucesso real limpa.
+  const hasRealResult = Boolean(data.output?.trim() || pendingOperation || undoProposal);
+  if (hasRealResult) {
+    clearPendingChatSend(workspaceId);
+  }
   return {
     turnId: data.turnId ?? data.intentionId ?? `turn-${Date.now()}`,
     status: data.status ?? "completed",
@@ -961,7 +990,34 @@ export async function decidePendingOperation(
       body: JSON.stringify({ decision, requestId }),
     },
   );
-  const parsed = pendingDecisionSchema.parse(await parseJson<unknown>(response));
+  let rawDecision: unknown;
+  try {
+    rawDecision = await parseJson<unknown>(response);
+  } catch (parseErr) {
+    // Resposta de erro (!ok) mantém o fluxo original do parseJson (mensagem
+    // + code do Agent) — só corpo 2xx indecodificável (vazio/truncado) é
+    // outcome NÃO verificado: a decisão pode já ter executado.
+    if (!response.ok) throw parseErr;
+    const err = new Error(
+      "O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão.",
+    ) as Error & { code?: string };
+    err.code = "agent.execution_outcome_unknown";
+    throw err;
+  }
+  // P2-2: falhas de parsing/validação da resposta de decisão são resultado
+  // NÃO verificado (ex.: `succeeded` com campo extra rejeitado pelo
+  // `.strict()`). Sem receipt canônico vinculado, a decisão pode já ter
+  // executado — o card trava como unverified (lock + reconciliação
+  // obrigatória), nunca com botões de decisão. Nunca `ZodError` cru.
+  const decisionResult = pendingDecisionSchema.safeParse(rawDecision);
+  if (!decisionResult.success) {
+    const err = new Error(
+      "O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão.",
+    ) as Error & { code?: string };
+    err.code = "agent.execution_outcome_unknown";
+    throw err;
+  }
+  const parsed = decisionResult.data;
   const receipt = sanitizeMutationReceipt(parsed.receipt);
   const safe = {
     operationId: parsed.operationId,
@@ -1222,9 +1278,9 @@ export async function fetchAgentHistory(workspaceId: string): Promise<AgentMessa
     let errorMsg = "Não foi possível carregar o histórico do agente.";
     let errorCode: string | undefined;
     try {
-      const errBody = await response.json() as { message?: string; code?: string };
-      if (errBody?.message) errorMsg = errBody.message;
-      if (errBody?.code) errorCode = errBody.code;
+      const fields = readAgentErrorFields(await response.json());
+      if (fields.message) errorMsg = fields.message;
+      if (fields.code) errorCode = fields.code;
     } catch {
       // use default message
     }
@@ -1351,9 +1407,9 @@ export async function requestAgentEmptyAttestation(
     let errorMsg = "Não foi possível atestar o lado Agent.";
     let errorCode: string | undefined;
     try {
-      const errBody = (await response.json()) as { message?: string; code?: string };
-      if (errBody?.message) errorMsg = errBody.message;
-      if (typeof errBody?.code === "string" && errBody.code) errorCode = errBody.code;
+      const fields = readAgentErrorFields(await response.json());
+      if (fields.message) errorMsg = fields.message;
+      if (fields.code) errorCode = fields.code;
     } catch {
       // use default message
     }

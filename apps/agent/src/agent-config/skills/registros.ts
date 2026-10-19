@@ -7,7 +7,7 @@ export const registrosSkill: Skill = {
   keywords: [
     'lanç', 'gasto', 'gastei', 'despesa', 'receita', 'recebi', 'registr', 'anotar',
     'parcela', 'parcel', 'compra', 'paguei', 'pagar', 'editar', 'corrigir', 'excluir',
-    'apagar', 'reembolso', 'pix', 'boleto', 'desfaz', 'desfazer', 'undo',
+    'apagar', 'reembolso', 'pix', 'boleto',
   ],
   tools: [
     'create_expense',

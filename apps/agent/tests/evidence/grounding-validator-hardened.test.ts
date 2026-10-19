@@ -27,9 +27,11 @@ describe('AGENT-005 hardened grounding validator', () => {
 
   it('validates account/card/category names case- and accent-insensitively', () => {
     const env = envelope({ accountName: 'Conta principal', cardName: 'Cartão Nubank' });
-    expect(validateGroundedClaims('Na conta principal está tudo certo.', env).valid).toBe(true);
-    expect(validateGroundedClaims('No cartao Nubank está tudo certo.', env).valid).toBe(true);
-    const unsupported = validateGroundedClaims('No Cartão Inter está tudo certo.', env);
+    // P1-NAME-ENTITY: quoted exact entities (the extractor yields exactly
+    // the quoted name, without keyword-led trailing context).
+    expect(validateGroundedClaims('Na conta "Conta principal" está tudo certo.', env).valid).toBe(true);
+    expect(validateGroundedClaims('No cartão "Nubank" está tudo certo.', env).valid).toBe(true);
+    const unsupported = validateGroundedClaims('No "Cartão Inter" está tudo certo.', env);
     expect(unsupported.valid).toBe(false);
     expect(unsupported.unsupportedClaims.some((claim) => claim.includes('Inter'))).toBe(true);
   });

@@ -155,7 +155,11 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
   const isUncertainOutcome = (e: unknown): boolean => {
     const code = (e as { code?: unknown }).code;
     // A retry that cannot prove its outcome may already have executed.
-    return code === "agent.execution_outcome_unknown" || code === "approval.execution_uncertain";
+    if (code === "agent.execution_outcome_unknown" || code === "approval.execution_uncertain") return true;
+    // P2-2 (defesa em profundidade): um erro cru de validação que escape o
+    // mapeamento do cliente também é outcome não verificado — nunca erro
+    // comum retentável com botões de decisão.
+    return (e as { name?: unknown }).name === "ZodError";
   };
 
   // Shared approve/retry lock: the decision may have reached the API and
@@ -196,8 +200,16 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
     setError(null);
     try {
       await resolve("confirm");
-    } catch {
-      lockUnverified();
+    } catch (e) {
+      // Só incerteza real (resultado pós-write desconhecido) trava como
+      // não-verificado. 502/timeout/offline e demais erros são retentáveis
+      // e distinguíveis — mesmo padrão do retry acima.
+      if (isDefinitiveTerminal(lastRemoteStatusRef.current)) return;
+      if (isUncertainOutcome(e)) {
+        lockUnverified();
+      } else {
+        setError((e as Error).message);
+      }
     } finally {
       setLoading(false);
     }
