@@ -1067,21 +1067,23 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // indisponível com erro acionável (sem spinner, sem purga, sem logout).
     const offlineEntryActive = getActiveWorkspaceId();
     const offlineEntrySubject = getOfflineSubjectId();
-    if (!isOfflineCoherent(offlineEntryActive, offlineEntrySubject, workspaceId)) {
-      loadedRef.current = true;
-      bootstrapDispatch({ type: "BOOTSTRAP_START" });
-      for (const domain of ALL_DOMAINS) {
-        bootstrapDispatch({ type: "DOMAIN_UNAVAILABLE", domain });
-      }
-      bootstrapDispatch({ type: "SET_ERROR", error: OFFLINE_COHERENCE_RELOAD_MESSAGE });
-      bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
-      return;
-    }
+    // #215: avaliado aqui, despachado dentro de loadOffline (async) para não
+    // chamar setState de forma síncrona no corpo do effect (regra de lint).
+    const offlineEntryIncoherent = !isOfflineCoherent(offlineEntryActive, offlineEntrySubject, workspaceId);
     loadedRef.current = true;
 
     let cancelled = false;
 
     const loadOffline = async () => {
+      if (offlineEntryIncoherent) {
+        bootstrapDispatch({ type: "BOOTSTRAP_START" });
+        for (const domain of ALL_DOMAINS) {
+          bootstrapDispatch({ type: "DOMAIN_UNAVAILABLE", domain });
+        }
+        bootstrapDispatch({ type: "SET_ERROR", error: OFFLINE_COHERENCE_RELOAD_MESSAGE });
+        bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+        return;
+      }
       bootstrapDispatch({ type: "BOOTSTRAP_START" });
       try {
         const preload = await preloadV3Snapshot({ principalId, workspaceId }).catch((): SnapshotPreload => ({}));
