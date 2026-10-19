@@ -43,7 +43,7 @@ import { emitSanitizedEvent } from '../observability/events.js';
 import type { EvidenceEnvelope } from '../evidence/evidence-envelope.js';
 import { createGroundedResponseWithRetry } from '../responses/grounded-response.js';
 import { stripToolCallMarkup } from '../responses/tool-call-sanitizer.js';
-import { renderEmpty, renderInconclusive, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
+import { renderEmpty, renderInconclusive, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, resolveDomainSubject, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
 import { routeIntent } from './intent-router.js';
 import { TurnBudget, type RecoveryPermit, type ResolutionRecoveryRequest } from './turn-budget.js';
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
@@ -963,7 +963,7 @@ export class ConversationOrchestrator {
     }
     if (!this.dependencies.responseProvider) {
       this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
-      return freeze({ ...base, response: freeze({ text: renderUnavailable(plan.domain) }) });
+      return freeze({ ...base, response: freeze({ text: renderUnavailable(resolveDomainSubject(plan.domain)) }) });
     }
     // Provider failures are operational, never a fabricated success.
     const text = await this.dependencies.responseProvider(input, plan);
@@ -974,7 +974,7 @@ export class ConversationOrchestrator {
     // figure present in NEITHER still fails. Fail-closed paths above and
     // the no-provider path are untouched.
     const grounded = await createGroundedResponseWithRetry(text, envelope, {
-      fallbackSubject: plan.domain,
+      fallbackSubject: resolveDomainSubject(plan.domain),
       ...(input.attachmentTexts && input.attachmentTexts.length > 0 ? { attachmentTexts: input.attachmentTexts } : {}),
       ...(this.dependencies.correctionProvider ? { retry: (claims) => this.dependencies.correctionProvider!(input, plan, claims) } : {}),
       sink: (eventType, fields) => this.emit(eventType, fields),
