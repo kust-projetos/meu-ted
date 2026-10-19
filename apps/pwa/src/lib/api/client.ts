@@ -37,6 +37,7 @@ import {
   getToken as getStoredDeviceToken,
 } from "@/lib/auth/token-store";
 import { setOfflineSubjectId } from "@/lib/auth/offline-subject";
+import { noteActiveWorkspaceForCoherence } from "@/lib/auth/offline-coherence";
 import { setOfflineWorkspaceId, noteAuthoritativeRevocation, getOfflineGeneration } from "@/lib/auth/offline-identity";
 import { isMembershipRevocation } from "@/lib/auth/auth-state-machine";
 import { noteLegacyAuthUsage } from "@/lib/auth/legacy-usage";
@@ -59,6 +60,13 @@ let activeWorkspaceId: string | undefined;
 
 export function setActiveWorkspaceId(workspaceId: string | undefined): void {
   activeWorkspaceId = workspaceId;
+  // #215: espelha a seleção da aba (por aba, in-memory) para o gate de
+  // coerência sem ciclo de import (snapshot-db lê o espelho, não o client).
+  try {
+    noteActiveWorkspaceForCoherence(workspaceId);
+  } catch {
+    /* noop */
+  }
   // T2.2 B4/D-V4-11: o id do workspace ativo (UUID opaco, não-credencial) é
   // persistido como offlineSubjectId no momento em que é definido após auth
   // válida — todo set passa por este choke point (workspace-context). Chave
@@ -86,6 +94,11 @@ export function getActiveWorkspaceId(): string | undefined {
 
 export function clearActiveWorkspaceId(): void {
   activeWorkspaceId = undefined;
+  try {
+    noteActiveWorkspaceForCoherence(undefined);
+  } catch {
+    /* noop */
+  }
 }
 /**
  * Base-URL resolution order (V4.1 Phase 5, SPEC §12.6):

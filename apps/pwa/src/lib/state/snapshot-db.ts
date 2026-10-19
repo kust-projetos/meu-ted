@@ -18,6 +18,7 @@
  * forcing online sync.
  */
 import { getOfflineSubjectId } from "@/lib/auth/offline-subject";
+import { getNotedActiveWorkspace } from "@/lib/auth/offline-coherence";
 import {
   computeOwnerKey,
   getOfflineGeneration,
@@ -847,6 +848,23 @@ function isValidV3Owner(principalId: unknown, workspaceId: unknown): boolean {
   );
 }
 
+/**
+ * #215 (coherence fail-closed): a seleção da aba (in-memory por aba,
+ * espelhada pelo client sem ciclo de import) prevalece sobre a identidade
+ * compartilhada. Com seleção UUID válida divergente do slot lido/gravado —
+ * ou divergente do subject V2 — a operação falha fechada SEM deletar (o
+ * envelope pode pertencer à outra aba; nunca servir, nunca re-atribuir).
+ * Sem seleção (ou seleção não-UUID legada) o gate compartilhado decide.
+ */
+function activeTabBlocksV3(workspaceId: string): boolean {
+  const active = getNotedActiveWorkspace();
+  if (active === undefined || !isOfflineWorkspaceId(active)) return false;
+  if (active !== workspaceId) return true;
+  const subject = getOfflineSubjectId();
+  if (subject !== null && subject !== active) return true;
+  return false;
+}
+
 async function readV3Envelope(): Promise<V3Envelope | null> {
   const db = await openSnapshotDb();
   return new Promise((resolve, reject) => {
@@ -975,6 +993,11 @@ export async function readV3Snapshot<K extends DomainKey>(
   ) {
     return null;
   }
+  // #215: valida contra a seleção da aba, não só a identidade compartilhada
+  // (duas abas dividem o localStorage; a aba A nunca serve o cache de B).
+  if (activeTabBlocksV3(workspaceId)) {
+    return null;
+  }
   // T07a-R2: capture the generation — revalidated after the envelope read
   // resolves (see below).
   const entryGeneration = getOfflineGeneration();
@@ -992,6 +1015,8 @@ export async function readV3Snapshot<K extends DomainKey>(
     ) {
       return null;
     }
+    // #215: a aba pode ter trocado durante a leitura (gap assíncrono).
+    if (activeTabBlocksV3(workspaceId)) return null;
     if (!env || env.schema !== V3_SCHEMA) {
       if (env) await deleteV3Snapshot();
       return null;
@@ -1088,12 +1113,22 @@ export async function writeV3Snapshot<K extends DomainKey>(
   ) {
     return;
   }
+  // #215: escrita sob seleção de aba divergente é descartada (nunca gravada
+  // sob outro workspace, nunca re-atribuída) — sem deletar nada.
+  if (activeTabBlocksV3(workspaceId)) {
+    return;
+  }
   // T07a-R2 liveness guard: re-checked after EVERY awaited step below — a
   // teardown crossing any gap aborts the write before anything hits disk.
+  // #215: a coerência aba×subject (espelho getNotedActiveWorkspace) viaja
+  // JUNTO no predicado — revalidada após o `await openSnapshotDb()` dentro
+  // de writeV3Envelope. Uma troca A→B na abertura do commit aborta o
+  // late-commit sem deletar nada (fail-closed).
   const stillValid = (): boolean =>
     getOfflineGeneration() === entryGeneration &&
     getOfflinePrincipalId() === principalId &&
-    getOfflineWorkspaceId() === workspaceId;
+    getOfflineWorkspaceId() === workspaceId &&
+    !activeTabBlocksV3(workspaceId);
   const authenticatedAt = resolveAuthenticatedAt(opts?.lastOnlineAuthenticatedAt);
   const ownerKey = computeOwnerKey(principalId, workspaceId);
   await withWriteLock(async () => {
@@ -1108,7 +1143,9 @@ export async function writeV3Snapshot<K extends DomainKey>(
     // T07a-R2: the envelope read is an awaited gap — revalidate before the
     // put. A teardown (or same-owner re-bind of a newer generation) landing
     // here aborts the stale write.
+    // #215: a seleção da aba pode ter mudado com a escrita enfileirada.
     if (!stillValid()) return;
+    if (activeTabBlocksV3(workspaceId)) return;
     const sameOwner =
       existing !== null &&
       existing.schema === V3_SCHEMA &&

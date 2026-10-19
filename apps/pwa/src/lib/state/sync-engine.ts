@@ -9,6 +9,11 @@
 import * as endpoints from "@/lib/api/endpoints";
 import { ApiError, getActiveWorkspaceId } from "@/lib/api/client";
 import { getOfflineSubjectId } from "@/lib/auth/offline-subject";
+import { getOfflineWorkspaceId } from "@/lib/auth/offline-identity";
+import {
+  OFFLINE_COHERENCE_RELOAD_MESSAGE,
+  isOfflineCoherent,
+} from "@/lib/auth/offline-coherence";
 import { isMembershipRevocation } from "@/lib/auth/auth-state-machine";
 import { type DomainKey, type AppStateAction, ESSENTIAL_DOMAIN_KEYS } from "./state-reducer";
 import { saveSnapshotDomain, saveV3SnapshotDomain } from "./snapshot-store";
@@ -43,6 +48,39 @@ function parkBootstrapWithoutWorkspace(dispatch: Dispatch): void {
     dispatch({ type: "DOMAIN_UNAVAILABLE", domain });
   }
   dispatch({ type: "BOOTSTRAP_COMPLETE" });
+}
+
+/**
+ * #215 (coherence fail-closed): estaciona o bootstrap sem I/O e sem
+ * publicar/gravar quando a aba, o subject V2 e o workspace V3 divergem.
+ * Conclui o boot (sem spinner) e informa recarregar/revalidar — nunca
+ * reescreve subject, purga cache ou desloga.
+ */
+function parkBootstrapIncoherent(dispatch: Dispatch): void {
+  for (const domain of ENGINE_BOOTSTRAP_DOMAINS) {
+    dispatch({ type: "DOMAIN_UNAVAILABLE", domain });
+  }
+  // Erro acionável antes da conclusão (ordem canônica: SET_ERROR precede
+  // BOOTSTRAP_COMPLETE, como no caminho de falha essencial abaixo).
+  dispatch({ type: "SET_ERROR", error: OFFLINE_COHERENCE_RELOAD_MESSAGE });
+  dispatch({ type: "BOOTSTRAP_COMPLETE" });
+}
+
+/**
+ * #215: coerência viva da aba contra as partições compartilhadas. O V3 em
+ * uso é a identidade validada quando presente, senão o binding persistido.
+ * `v3WorkspaceId === undefined` restringe ao par aba×subject (gate de fetch);
+ * com o V3 informado, exige a tripla (gate de persistência/publicação V3).
+ */
+function liveCoherence(v3WorkspaceId?: string | null): boolean {
+  if (v3WorkspaceId === undefined) {
+    return isOfflineCoherent(getActiveWorkspaceId(), getOfflineSubjectId(), null);
+  }
+  return isOfflineCoherent(
+    getActiveWorkspaceId(),
+    getOfflineSubjectId(),
+    v3WorkspaceId ?? getOfflineWorkspaceId(),
+  );
 }
 
 export interface PaginationOptions {
@@ -106,6 +144,16 @@ export async function runBootstrap(
     return { profile: null, quickInsights: [] };
   }
 
+  // #215 (coherence fail-closed, pré-fetch): o par aba × subject V2 precisa
+  // concordar ANTES de qualquer I/O. Par estável A/B (sem troca mid-flight,
+  // só divergência) estaciona com zero fetch/publicação/gravação. A tripla
+  // com o V3 é exigida na persistência/publicação V3 (rejeição cirúrgica —
+  // a via V2 coerente segue intacta).
+  if (!liveCoherence(undefined)) {
+    parkBootstrapIncoherent(dispatch);
+    return { profile: null, quickInsights: [] };
+  }
+
   // FIX-168-FIX2 (HIGH — descarte tardio verifica identidade, não só
   // ausência): vincula o bootstrap à identidade capturada na entrada. Se a
   // seleção trocar mid-flight (A→B), o payload em voo pertence a A mas a
@@ -116,6 +164,7 @@ export async function runBootstrap(
   // tardias cuja identidade mudou nos gaps assíncronos (fingerprint/lock).
   const bootstrapWorkspaceId = getActiveWorkspaceId();
   const bootstrapSubject = getOfflineSubjectId();
+  const bootstrapV3Workspace = v3Identity?.workspaceId ?? getOfflineWorkspaceId();
 
   const results = await Promise.allSettled([
     endpoints.fetchAccounts(),
@@ -153,13 +202,35 @@ export async function runBootstrap(
   // subject é consultado na gravação (snapshot-db), por isso a checagem é
   // por IDENTIDADE (inalterada desde a entrada), não só por ausência —
   // publicar resposta de A com B ativo atribuiria dado à partição corrente.
+  // #215: além da estabilidade, o par precisa seguir coerente na saída —
+  // resposta tardia pós-troca não publica nem grava sob outro workspace,
+  // mesmo quando cada lado parece "estável" sozinho. A tripla com o V3 é
+  // revalidada por escrita (v3WriteOk): V3 divergente é rejeitado sem
+  // estacionar a via V2 coerente.
+  const v3EntryCoherent =
+    v3Identity === undefined ||
+    isOfflineCoherent(bootstrapWorkspaceId, bootstrapSubject, bootstrapV3Workspace);
+  const v3ExitCoherent = (): boolean =>
+    v3Identity === undefined ||
+    isOfflineCoherent(
+      getActiveWorkspaceId(),
+      getOfflineSubjectId(),
+      v3Identity.workspaceId,
+    );
   if (
     getActiveWorkspaceId() !== bootstrapWorkspaceId ||
-    getOfflineSubjectId() !== bootstrapSubject
+    getOfflineSubjectId() !== bootstrapSubject ||
+    !isOfflineCoherent(getActiveWorkspaceId(), getOfflineSubjectId(), null)
   ) {
-    parkBootstrapWithoutWorkspace(dispatch);
+    parkBootstrapIncoherent(dispatch);
     return { profile: null, quickInsights: [] };
   }
+
+  // #215: a via V3 persiste somente com a tripla coerente na entrada e na
+  // saída (header=subject=A com V3=B = rejeição cirúrgica da via V3; a via
+  // V2 coerente segue intacta). Sem awaits até o allSettled, um cálculo basta.
+  const v3Persist =
+    v3Identity !== undefined && v3EntryCoherent && v3ExitCoherent();
 
   // Profile/insights are fetched here and returned to the caller — never
   // re-fetched by the provider (boot dedupe).
@@ -199,7 +270,7 @@ export async function runBootstrap(
       }
       dispatch({ type: "DOMAIN_LIVE", domain: "accounts", data: merged, syncedAt: new Date().toISOString() });
       if (token !== undefined) savePromises.push(saveSnapshotDomain(token, "accounts", merged, v2WriteOpts));
-      if (v3Identity !== undefined) {
+      if (v3Identity !== undefined && v3Persist) {
         savePromises.push(
           saveV3SnapshotDomain(v3Identity.principalId, v3Identity.workspaceId, "accounts", merged).catch(() => {}),
         );
@@ -208,7 +279,7 @@ export async function runBootstrap(
       merged = cardsData;
       dispatch({ type: "DOMAIN_LIVE", domain: "accounts", data: cardsData, syncedAt: new Date().toISOString() });
       if (token !== undefined) savePromises.push(saveSnapshotDomain(token, "accounts", cardsData, v2WriteOpts));
-      if (v3Identity !== undefined) {
+      if (v3Identity !== undefined && v3Persist) {
         savePromises.push(
           saveV3SnapshotDomain(v3Identity.principalId, v3Identity.workspaceId, "accounts", cardsData).catch(() => {}),
         );
@@ -231,7 +302,7 @@ export async function runBootstrap(
       const value = result.value;
       dispatch({ type: "DOMAIN_LIVE", domain, data: value, syncedAt: new Date().toISOString() });
       if (token !== undefined) savePromises.push(saveSnapshotDomain(token, domain, value as never, v2WriteOpts));
-      if (v3Identity !== undefined) {
+      if (v3Identity !== undefined && v3Persist) {
         savePromises.push(
           saveV3SnapshotDomain(v3Identity.principalId, v3Identity.workspaceId, domain, value as never).catch(() => {}),
         );
@@ -255,7 +326,7 @@ export async function runBootstrap(
       const items = (txResult.value as { items: unknown }).items;
       dispatch({ type: "DOMAIN_LIVE", domain: "transactions", data: items, syncedAt: new Date().toISOString() });
       if (token !== undefined) savePromises.push(saveSnapshotDomain(token, "transactions", items as never, v2WriteOpts));
-      if (v3Identity !== undefined) {
+      if (v3Identity !== undefined && v3Persist) {
         savePromises.push(
           saveV3SnapshotDomain(v3Identity.principalId, v3Identity.workspaceId, "transactions", items as never).catch(() => {}),
         );
@@ -311,11 +382,20 @@ export async function syncTransactionsPage(
   const limit = options.limit ?? 50;
   // FIX-168-FIX3: vincula à identidade vigente antes do fetch — sem ela, uma
   // troca A→B em voo publicaria/persistiria a página de A sob B.
+  // #215 (coherence fail-closed, pré-fetch): o par aba×subject faz zero
+  // fetch quando divergente; o V3 divergente é rejeitado só na persistência.
   const pageWorkspaceId = getActiveWorkspaceId();
   const pageSubject = getOfflineSubjectId();
+  if (!isOfflineCoherent(pageWorkspaceId, pageSubject, null)) {
+    return { items: [], total: 0, page, limit };
+  }
   const res = await endpoints.fetchTransactions({ page, limit });
   if (dispatch) {
-    if (getActiveWorkspaceId() !== pageWorkspaceId || getOfflineSubjectId() !== pageSubject) {
+    if (
+      getActiveWorkspaceId() !== pageWorkspaceId ||
+      getOfflineSubjectId() !== pageSubject ||
+      !isOfflineCoherent(getActiveWorkspaceId(), getOfflineSubjectId(), null)
+    ) {
       return { items: res.items, total: res.total, page, limit };
     }
     dispatch({
@@ -325,7 +405,15 @@ export async function syncTransactionsPage(
       syncedAt: new Date().toISOString(),
     });
     if (token !== undefined) void saveSnapshotDomain(token, "transactions", res.items, { expectedSubject: pageSubject });
-    if (v3Identity !== undefined) {
+    // #215: a página só cai no slot V3 com a tripla coerente na entrada e no
+    // commit (header=subject=A com V3=B = rejeição da via V3, sem bloquear a
+    // publicação live/V2 coerente). O writer interno também descarta donos
+    // obsoletos — nunca re-atribui por heurística.
+    if (
+      v3Identity !== undefined &&
+      isOfflineCoherent(pageWorkspaceId, pageSubject, v3Identity.workspaceId) &&
+      isOfflineCoherent(getActiveWorkspaceId(), getOfflineSubjectId(), v3Identity.workspaceId)
+    ) {
       // Awaited (unlike the legacy V2 fire-and-forget above): callers may
       // read-after-write, mirroring runBootstrap awaiting every save before
       // completion. Stale/divergent owners are dropped inside — never throw.
