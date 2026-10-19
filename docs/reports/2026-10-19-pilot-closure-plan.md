@@ -59,8 +59,10 @@ Login/sessão · criar/selecionar workspaces · contas/categorias/lançamentos �
 
 ## 6. Checklist de liberação
 
-- [ ] #214 + #216 corrigidos, testados, revisados, CI verde.
-- [ ] #215 decidido e mitigado (ou corrigido).
-- [ ] #170 provado live com modelo real.
-- [ ] Smokes live verdes no SHA candidato; backup/rollback disponíveis.
-- [ ] Limitações residuais documentadas (§3, linhas P2/operador).
+- [x] #214 + #216 corrigidos, testados, revisados, CI verde (PR #226).
+- [x] #215 decidido e corrigido (architect opção a; tester + reviewer APPROVED).
+- [x] #170 provado live com modelo real (live-ted-conversation PASS em `0405fba`).
+- [x] Smokes live verdes no SHA candidato; backup/rollback disponíveis.
+- [x] Release executado 19/10: API Contabo RELEASE OK `0405fba` + Agent/PWA ATTESTED; E2E live-mobile-full + live-ted-conversation PASS; limpeza 0 restante.
+- [x] Issues #169–#173, #175, #176, #214–#216 CLOSED com evidência.
+- [x] Limitações residuais documentadas (relatório de fecho §4).
