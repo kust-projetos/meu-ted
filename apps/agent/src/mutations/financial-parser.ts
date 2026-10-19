@@ -6,7 +6,7 @@ const bareAmountToken = String.raw`(?:\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{1,12}(
 const explicitAmountToken = String.raw`(?:\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{1,12}(?:,\d{1,2})?)`;
 const explicitMoney = new RegExp(`r\\$\\s*(${explicitAmountToken})(?![\\d.,])`, 'i');
 const verbAnchoredMoney = new RegExp(
-  `\\b(?:gastei|gasto|paguei|compra|despesa|recebi|ganhei|entrou|renda|sal[aá]rio|receita|lancei|lancar|lan[cç]amento|lancamento)\\b[^\\d]*?(${bareAmountToken})(?![\\d.,])`,
+  `\\b(?:gastei|gasto|comprei|paguei|compra|despesa|recebi|ganhei|entrou|renda|sal[aá]rio|receita|lancei|lancar|lan[cç]amento|lancamento)\\b[^\\d]*?(${bareAmountToken})(?![\\d.,])`,
   'i',
 );
 const secondAmountConnector = new RegExp(
@@ -29,13 +29,13 @@ const secondAmountConnectorLabelled = new RegExp(
   'i',
 );
 const preAmountConnector = /(?:\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)\s*(?:\be\b|\bmais\b|\+)\s*$/i;
-const firstFiniteVerb = /\b(?:gastei|gasto|paguei|recebi|ganhei|entrou|lancei|lancar)\b/i;
+const firstFiniteVerb = /\b(?:gastei|gasto|comprei|paguei|recebi|ganhei|entrou|lancei|lancar)\b/i;
 const scopedPriorAmountConnector = new RegExp(
   String.raw`(?<![\d\w.,])(?:\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)(?:\s+[A-Za-zÀ-ÿ]+){0,8}\s*(?:\be\b|\bmais\b|\+)\s*$`,
   'i',
 );
-const finiteMutationVerb = /\b(?:gastei|gasto|paguei|recebi|ganhei|entrou|lancei|lancar)\b/gi;
-const finiteExpenseVerb = /\b(?:gastei|gasto|paguei)\b/i;
+const finiteMutationVerb = /\b(?:gastei|gasto|comprei|paguei|recebi|ganhei|entrou|lancei|lancar)\b/gi;
+const finiteExpenseVerb = /\b(?:gastei|gasto|comprei|paguei)\b/i;
 const finiteIncomeVerb = /\b(?:recebi|ganhei|entrou)\b/i;
 const neutralFiniteVerb = /\b(?:lancei|lancar)\b/i;
 const incomeNoun = /\b(?:renda|sal[aá]rio|receita)\b/i;
@@ -78,6 +78,14 @@ export const parseFinancialMutation = (text: string, options: { now?: Date; time
   if (markers.length > 1) return { kind: 'none', reason: 'missing_amount' };
   const match = markers.length === 1 ? text.match(explicitMoney) : text.match(verbAnchoredMoney);
   if (!match) return { kind: 'none', reason: 'missing_amount' };
+  // Installment-count guard: a number immediately followed by an installment
+  // COUNT ("parcela em 10 x", "10 parcelas de 250", "10x") names the count,
+  // never a monetary value — matching it here would invent R$10 out of thin
+  // air. Unconditional: a monetary label (`parcela`) after the number does
+  // NOT make the number a value, so no exemption applies — the amount, when
+  // present, sits after "de" and is matched (or not) on its own turn text.
+  const guardTail = text.slice((match.index ?? 0) + match[0].length);
+  if (/^\s*(?:x\b|vezes\b|parcelas?\b|presta[cç](?:[aã]o(?:es)?|[oõ]es?)\b)/i.test(guardTail)) return { kind: 'none', reason: 'missing_amount' };
   const matchIndex = match.index ?? 0;
   const prefix = text.slice(Math.max(0, matchIndex - 48), matchIndex);
   if (preAmountConnector.test(prefix)) return { kind: 'none', reason: 'unsupported' };
@@ -146,4 +154,4 @@ export const resolveRelativeDateFragment = (
 
 /** Shared mutation-utterance signal (SPEC §7.6): one definition for router + plan builder. */
 export const isClearlyMutating = (text: string): boolean =>
-  /\b(gastei|gasto|paguei|compra|despesa|recebi|ganhei|renda|sal[aá]rio|receita|lancei|lancar|lançamento|lancamento)\b/i.test(text);
+  /\b(gastei|gasto|comprei|paguei|compra|despesa|recebi|ganhei|renda|sal[aá]rio|receita|lancei|lancar|lançamento|lancamento)\b/i.test(text);
