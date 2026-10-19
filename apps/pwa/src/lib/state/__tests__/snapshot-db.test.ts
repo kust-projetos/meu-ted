@@ -19,6 +19,7 @@ STORE_NAME,
   V2_ENVELOPE_KEY,
 } from "../snapshot-db";
 import { setOfflineSubjectId } from "@/lib/auth/offline-subject";
+import { advanceOfflineGeneration } from "@/lib/auth/offline-identity";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -38,6 +39,62 @@ function seedV1(token: string, domain = "accounts", data = [{ id: "acc-1", name:
       data: { [domain]: data },
     }),
   );
+}
+
+/**
+ * Suspend the Nth IndexedDB.open call (1-based), letting all others pass
+ * through to fake-indexeddb. Exposes the exact await windows (envelope read
+ * vs commit open vs validation reread) deterministically.
+ */
+function suspendNthIdbOpen(n: number): { release: () => void; openCalls: () => number } {
+  const realOpen = indexedDB.open.bind(indexedDB);
+  let calls = 0;
+  let released = false;
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = () => resolve();
+  });
+  const spy = vi.spyOn(indexedDB, "open").mockImplementation((...args: unknown[]) => {
+    calls += 1;
+    if (calls !== n) {
+      return (realOpen as (...a: unknown[]) => IDBOpenDBRequest)(...args);
+    }
+    const pending: Array<[string, unknown]> = [];
+    let real: IDBOpenDBRequest | null = null;
+    void gate.then(() => {
+      real = (realOpen as (...a: unknown[]) => IDBOpenDBRequest)(...args);
+      for (const [k, v] of pending) {
+        (real as unknown as Record<string, unknown>)[k] = v;
+      }
+    });
+    return new Proxy({} as IDBOpenDBRequest, {
+      set(_t, p: string, v: unknown): boolean {
+        if (real) (real as unknown as Record<string, unknown>)[p] = v;
+        else pending.push([p, v]);
+        return true;
+      },
+      get(_t, p: string): unknown {
+        if (p === "then") return undefined;
+        if (real) {
+          const v = (real as unknown as Record<string, unknown>)[p];
+          return typeof v === "function"
+            ? (v as (...a: unknown[]) => unknown).bind(real)
+            : v;
+        }
+        return undefined;
+      },
+    });
+  });
+  return {
+    openCalls: () => calls,
+    release: () => {
+      if (!released) {
+        released = true;
+        releaseGate();
+        spy.mockRestore();
+      }
+    },
+  };
 }
 
 describe("PWA State Snapshot DB — snapshot-db.ts", () => {
@@ -168,8 +225,7 @@ describe("PWA State Snapshot DB — snapshot-db.ts", () => {
       expect(loaded!.data).toEqual([{ id: "c-special" }]);
 });
 
-    it("3.4 PRIVACY: never stores the raw token in IndexedDB (only its SHA-256 fingerprint)", async () => {
-      await writeV2Snapshot(TEST_TOKEN, "accounts", [{ id: "a1", name: "Nubank" }] as never);
+    it("3.4 PRIVACY: never stores the raw token in IndexedDB (only its SHA-256 fingerprint)", async () => {      await writeV2Snapshot(TEST_TOKEN, "accounts", [{ id: "a1", name: "Nubank" }] as never);
 
       const rawDb = await openSnapshotDb();
       const raw = await new Promise<unknown>((resolve, reject) => {
@@ -181,6 +237,221 @@ describe("PWA State Snapshot DB — snapshot-db.ts", () => {
       const serialized = JSON.stringify(raw);
       expect(serialized).not.toContain(TEST_TOKEN);
       expect((raw as { ownerFingerprint?: string } | null)?.ownerFingerprint).not.toBe(TEST_TOKEN);
+    });
+
+    it("FIX-216: migration runs serialized with writers — a concurrent write is not lost", async () => {
+      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig" }]);
+      // Gate the migration's commit open (read #1 passes, commit #2 held).
+      const suspend = suspendNthIdbOpen(2);
+      try {
+        const migrating = migrateV1toV2(TEST_TOKEN);
+        await vi.waitFor(() => expect(suspend.openCalls()).toBe(2));
+        // A concurrent writer starts while the migration holds the commit.
+        let writeDone = false;
+        const writing = writeV2Snapshot(TEST_TOKEN, "accounts", [{ id: "a-concurrent" }] as never)
+          .then(() => { writeDone = true; });
+        // Give the writer a chance to (incorrectly, pre-fix) slip through.
+        await new Promise((r) => setTimeout(r, 100));
+        const slippedThrough = writeDone;
+        suspend.release();
+        await migrating;
+        await writing;
+        // Serialized: the writer waits for the migration's lock.
+        expect(slippedThrough).toBe(false);
+        expect(writeDone).toBe(true);
+        // Neither domain is lost and the v1 source is consumed.
+        const accounts = await readV2Snapshot(TEST_TOKEN, "accounts");
+        const budgets = await readV2Snapshot(TEST_TOKEN, "budgets");
+        expect(accounts?.data).toEqual([{ id: "a-concurrent" }]);
+        expect(budgets?.data).toEqual([{ id: "b-mig" }]);
+        expect(localStorage.getItem("pi-finance:snapshot:v1")).toBeNull();
+      } finally {
+        suspend.release();
+      }
+    });
+
+    it("P2: cross-tab V2 written between commit and validation reread survives; V1 preserved", async () => {
+      const SUBJECT_B = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
+      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig" }]);
+      const sha256Hex = async (s: string): Promise<string> => {
+        const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+        return Array.from(new Uint8Array(hash))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+      };
+      const putRawEnvelope = async (env: unknown): Promise<void> => {
+        const db = await openSnapshotDb();
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, "readwrite");
+          tx.objectStore(STORE_NAME).put(env, V2_ENVELOPE_KEY);
+          tx.oncomplete = () => { db.close(); resolve(); };
+          tx.onerror = () => { db.close(); reject(tx.error); };
+          tx.onabort = () => { db.close(); reject(tx.error); };
+        });
+      };
+      const getRawEnvelope = async (): Promise<{
+        ownerFingerprint?: string;
+        offlineSubjectId?: string;
+        domains?: Record<string, unknown>;
+      } | null> => {
+        const db = await openSnapshotDb();
+        try {
+          return await new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, "readonly");
+            const req = tx.objectStore(STORE_NAME).get(V2_ENVELOPE_KEY);
+            req.onsuccess = () => resolve((req.result as never) ?? null);
+            req.onerror = () => reject(req.error);
+          });
+        } finally {
+          db.close();
+        }
+      };
+      // Gate the validation reread (commit #2 already landed, reread #3 held).
+      const suspend = suspendNthIdbOpen(3);
+      try {
+        const migrating = migrateV1toV2(TEST_TOKEN);
+        await vi.waitFor(() => expect(suspend.openCalls()).toBe(3));
+        // Another tab (no shared withWriteLock — only the local module
+        // instance is serialized) commits its own V2 while our reread is held.
+        const fpB = await sha256Hex(ALT_TOKEN);
+        const now = new Date().toISOString();
+        await putRawEnvelope({
+          schema: 2,
+          ownerFingerprint: fpB,
+          offlineSubjectId: SUBJECT_B,
+          lastOnlineAuthenticatedAt: now,
+          domains: { accounts: [{ id: "b-acc" }] },
+          syncedAt: { accounts: now },
+        });
+        suspend.release();
+        await migrating;
+        // A's v1 source is preserved for its rightful owner...
+        expect(localStorage.getItem("pi-finance:snapshot:v1")).not.toBeNull();
+        // ...and B's slot is untouched by A's failed validation cleanup.
+        const raw = await getRawEnvelope();
+        expect(raw?.ownerFingerprint).toBe(fpB);
+        expect(raw?.offlineSubjectId).toBe(SUBJECT_B);
+        expect(raw?.domains?.accounts).toEqual([{ id: "b-acc" }]);
+      } finally {
+        suspend.release();
+      }
+    });
+
+    it("FIX-216: subject switch between commit and validation reread preserves V1", async () => {      const SUBJECT_B = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
+      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig" }]);
+      // Gate the validation reread (commit #2 already landed, reread #3 held).
+      const suspend = suspendNthIdbOpen(3);
+      try {
+        const migrating = migrateV1toV2(TEST_TOKEN);
+        await vi.waitFor(() => expect(suspend.openCalls()).toBe(3));
+        // A→B switch lands after the commit, before the validation reread.
+        setOfflineSubjectId(SUBJECT_B);
+        suspend.release();
+        await migrating;
+        // The partition changed mid-migration: v1 is preserved for its
+        // rightful owner instead of being deleted under a stale validation.
+        expect(localStorage.getItem("pi-finance:snapshot:v1")).not.toBeNull();
+      } finally {
+        suspend.release();
+      }
+      // Control: back on the rightful subject the migration still applies.
+      setOfflineSubjectId(TEST_SUBJECT);
+      await migrateV1toV2(TEST_TOKEN);
+      expect(localStorage.getItem("pi-finance:snapshot:v1")).toBeNull();
+      expect((await readV2Snapshot(TEST_TOKEN, "budgets"))?.data).toEqual([{ id: "b-mig" }]);
+    });
+
+    it("P2-liveness: stale validation cleanup after teardown/rebind preserves a fresh same-owner envelope; V1 preserved", async () => {
+      const SUBJECT_B = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
+      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig" }]);
+      const sha256Hex = async (s: string): Promise<string> => {
+        const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+        return Array.from(new Uint8Array(hash))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+      };
+      const putRawEnvelope = async (env: unknown): Promise<void> => {
+        const db = await openSnapshotDb();
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, "readwrite");
+          tx.objectStore(STORE_NAME).put(env, V2_ENVELOPE_KEY);
+          tx.oncomplete = () => { db.close(); resolve(); };
+          tx.onerror = () => { db.close(); reject(tx.error); };
+          tx.onabort = () => { db.close(); reject(tx.error); };
+        });
+      };
+      const getRawEnvelope = async (): Promise<{
+        ownerFingerprint?: string;
+        offlineSubjectId?: string;
+        domains?: Record<string, unknown>;
+      } | null> => {
+        const db = await openSnapshotDb();
+        try {
+          return await new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, "readonly");
+            const req = tx.objectStore(STORE_NAME).get(V2_ENVELOPE_KEY);
+            req.onsuccess = () => resolve((req.result as never) ?? null);
+            req.onerror = () => reject(req.error);
+          });
+        } finally {
+          db.close();
+        }
+      };
+      // Hold the validation reread (#3) to force a validation failure with a
+      // foreign envelope; the stale cleanup's own open (#4 → 2nd spy #1) is
+      // then held to open the teardown/rebind window inside the helper.
+      const suspendReread = suspendNthIdbOpen(3);
+      let suspendCleanup: { release: () => void; openCalls: () => number } | null = null;
+      try {
+        const migrating = migrateV1toV2(TEST_TOKEN);
+        await vi.waitFor(() => expect(suspendReread.openCalls()).toBe(3));
+        // Foreign envelope lands between commit (#2) and reread (#3): the
+        // reread will see B, validation fails, the stale cleanup is armed
+        // with stillValid() true at call time.
+        const fpB = await sha256Hex(ALT_TOKEN);
+        const nowB = new Date().toISOString();
+        await putRawEnvelope({
+          schema: 2,
+          ownerFingerprint: fpB,
+          offlineSubjectId: SUBJECT_B,
+          lastOnlineAuthenticatedAt: nowB,
+          domains: { accounts: [{ id: "b-acc" }] },
+          syncedAt: { accounts: nowB },
+        });
+        suspendReread.release();
+        // Arm the cleanup gate synchronously: the reread still resolves via
+        // IndexedDB async, so the cleanup open lands on the new spy.
+        suspendCleanup = suspendNthIdbOpen(1);
+        await vi.waitFor(() => expect(suspendCleanup!.openCalls()).toBe(1));
+        // Stale window inside deleteV2SnapshotIfOwned's open: teardown
+        // advances the generation and rebinds, then another tab commits a
+        // FRESH envelope for the ORIGINAL owner (same fp + same subject).
+        advanceOfflineGeneration();
+        setOfflineSubjectId(SUBJECT_B);
+        const fpA = await sha256Hex(TEST_TOKEN);
+        const nowA = new Date().toISOString();
+        await putRawEnvelope({
+          schema: 2,
+          ownerFingerprint: fpA,
+          offlineSubjectId: TEST_SUBJECT,
+          lastOnlineAuthenticatedAt: nowA,
+          domains: { accounts: [{ id: "fresh-a" }] },
+          syncedAt: { accounts: nowA },
+        });
+        suspendCleanup.release();
+        await migrating;
+        // The stale cleanup must preserve: V1 kept for its rightful owner…
+        expect(localStorage.getItem("pi-finance:snapshot:v1")).not.toBeNull();
+        // …and the fresh same-owner envelope untouched (fail-closed).
+        const raw = await getRawEnvelope();
+        expect(raw?.ownerFingerprint).toBe(fpA);
+        expect(raw?.offlineSubjectId).toBe(TEST_SUBJECT);
+        expect(raw?.domains?.accounts).toEqual([{ id: "fresh-a" }]);
+      } finally {
+        suspendReread.release();
+        suspendCleanup?.release();
+        setOfflineSubjectId(TEST_SUBJECT);
+      }
     });
 
     it("3.5 rejects when an IndexedDB transaction never completes", async () => {

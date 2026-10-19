@@ -4,6 +4,8 @@
 
 import type { Subscription } from "./types";
 import * as endpoints from "@/lib/api/endpoints";
+import { getActiveWorkspaceId } from "@/lib/api/client";
+import { getOfflineSubjectId } from "@/lib/auth/offline-subject";
 import { saveSnapshotDomain, loadSnapshotDomain } from "./snapshot-store";
 
 export interface SubscriptionsAdapterOptions {
@@ -38,12 +40,30 @@ export function createSubscriptionsAdapter(options: SubscriptionsAdapterOptions)
   async function refresh(): Promise<RefreshResult | null> {
     if (!online) return null;
 
+    // FIX-214: capture the identity BEFORE the fetch. A subject/workspace
+    // switch landing in the fetch gap must not persist A's payload under B.
+    const entrySubject = getOfflineSubjectId();
+    const entryWorkspace = getActiveWorkspaceId() ?? null;
+
     try {
       const data = await endpoints.fetchSubscriptions();
       // Best-effort: persist to v2 snapshot (failure must not break UI).
       // Skipped cookie-only (no owner-checkable key until V3).
       if (token !== undefined) {
-        await saveSnapshotDomain(token, "subscriptions", data).catch(() => {});
+        // Post-fetch revalidation: identity moved mid-fetch → drop the
+        // persist (live data still serves the UI below). Otherwise forward
+        // the pre-fetch subject so the writer revalidates it inside its own
+        // serialized lock (defense in depth against a switch in the next gap).
+        if (
+          getOfflineSubjectId() !== entrySubject ||
+          (getActiveWorkspaceId() ?? null) !== entryWorkspace
+        ) {
+          // Identity moved — no write.
+        } else {
+          await saveSnapshotDomain(token, "subscriptions", data, {
+            expectedSubject: entrySubject,
+          }).catch(() => {});
+        }
       }
       return {
         data,

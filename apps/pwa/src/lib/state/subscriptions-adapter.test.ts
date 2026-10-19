@@ -5,14 +5,22 @@ import { createSubscriptionsAdapter } from "./subscriptions-adapter";
 import * as endpoints from "@/lib/api/endpoints";
 import type { Subscription } from "./types";
 import * as snapshotStore from "./snapshot-store";
+import { setOfflineSubjectId } from "@/lib/auth/offline-subject";
+import { setActiveWorkspaceId, clearActiveWorkspaceId } from "@/lib/api/client";
 
 const TOKEN = "test-token";
+const SUBJECT_A = "11111111-2222-4333-8444-555555555555";
+const SUBJECT_B = "66666666-7777-4888-8999-000000000000";
 const SUBS: Subscription[] = [
   { id: "s1", name: "Netflix", amountCents: 5590, cycle: "monthly", day: 15, paymentMethod: "credit_card", status: "active" },
 ];
 
 describe("subscriptions adapter — refresh", () => {
-  beforeEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+    clearActiveWorkspaceId();
+  });
 
   it("fetch success: returns data with source 'live'", async () => {
     vi.spyOn(endpoints, "fetchSubscriptions").mockResolvedValue(SUBS as never);
@@ -30,7 +38,7 @@ describe("subscriptions adapter — refresh", () => {
     vi.spyOn(endpoints, "fetchSubscriptions").mockResolvedValue(SUBS as never);
     const adapter = createSubscriptionsAdapter({ token: TOKEN, online: true });
     await adapter.refresh();
-    expect(spy).toHaveBeenCalledWith(TOKEN, "subscriptions", SUBS);
+    expect(spy).toHaveBeenCalledWith(TOKEN, "subscriptions", SUBS, { expectedSubject: null });
   });
 
   it("returns null when offline", async () => {
@@ -67,5 +75,50 @@ describe("subscriptions adapter — refresh", () => {
     const result = await adapter.refresh();
     expect(result!.source).toBe("live");
     expect(result!.data).toEqual(SUBS);
+  });
+
+  it("FIX-214: passes the pre-fetch identity as expectedSubject to the writer", async () => {
+    setActiveWorkspaceId(SUBJECT_A);
+    const spy = vi.spyOn(snapshotStore, "saveSnapshotDomain").mockResolvedValue(undefined);
+    vi.spyOn(endpoints, "fetchSubscriptions").mockResolvedValue(SUBS as never);
+    const adapter = createSubscriptionsAdapter({ token: TOKEN, online: true });
+    await adapter.refresh();
+    expect(spy).toHaveBeenCalledWith(TOKEN, "subscriptions", SUBS, { expectedSubject: SUBJECT_A });
+  });
+
+  it("FIX-214: discards the snapshot write when subject/workspace switches mid-fetch (A→B)", async () => {
+    setActiveWorkspaceId(SUBJECT_A);
+    const spy = vi.spyOn(snapshotStore, "saveSnapshotDomain").mockResolvedValue(undefined);
+    let resolveFetch!: (value: Subscription[]) => void;
+    vi.spyOn(endpoints, "fetchSubscriptions").mockImplementation(
+      () => new Promise<Subscription[]>((resolve) => { resolveFetch = resolve; }),
+    );
+    const adapter = createSubscriptionsAdapter({ token: TOKEN, online: true });
+    const pending = adapter.refresh();
+    // Workspace switch A→B lands while the fetch is in flight.
+    setActiveWorkspaceId(SUBJECT_B);
+    resolveFetch(SUBS);
+    const result = await pending;
+    // Live data still serves the UI; only the cross-owner persist is dropped.
+    expect(result).not.toBeNull();
+    expect(result!.data).toEqual(SUBS);
+    expect(result!.source).toBe("live");
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("FIX-214: discards the snapshot write when only the subject flips mid-fetch", async () => {
+    setOfflineSubjectId(SUBJECT_A);
+    const spy = vi.spyOn(snapshotStore, "saveSnapshotDomain").mockResolvedValue(undefined);
+    let resolveFetch!: (value: Subscription[]) => void;
+    vi.spyOn(endpoints, "fetchSubscriptions").mockImplementation(
+      () => new Promise<Subscription[]>((resolve) => { resolveFetch = resolve; }),
+    );
+    const adapter = createSubscriptionsAdapter({ token: TOKEN, online: true });
+    const pending = adapter.refresh();
+    setOfflineSubjectId(SUBJECT_B);
+    resolveFetch(SUBS);
+    const result = await pending;
+    expect(result!.source).toBe("live");
+    expect(spy).not.toHaveBeenCalled();
   });
 });
