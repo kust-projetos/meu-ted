@@ -204,6 +204,18 @@ const READ_ABSENCE_SUBJECT: Readonly<Record<string, string>> = {
   accounts: 'contas',
   transactions: 'lançamentos',
   categories: 'categorias',
+  // Non-possessive forms: these subjects complete "Não há ${subject}…" and
+  // "Ainda não encontrei ${subject}…", where the possessive DOMAIN_SUBJECT_PT_BR
+  // forms ("seus cartões") would break the grammar. Never reuse that map here.
+  // `cards` names the READING (`OPERATION_TO_READ.list_cards` resolves to the
+  // statements read `/cards/statements` = faturas — channel-evidence.ts), not
+  // the requested domain: an empty statement list proves no faturas in scope,
+  // never the absence of cards (listing cards is the separate `/cards/accounts`
+  // read), so claiming "no cartões" here would be false when cards exist
+  // without statements in the period.
+  cards: 'faturas',
+  payables: 'contas a pagar',
+  budgets: 'orçamentos',
 };
 
 /**
@@ -526,11 +538,22 @@ const UNDO_PREVIOUS_SELECTOR_RE =
   /^(?:(?:desfaz(?:er)?|desfaca|undo)\s+(?:a\s+)?(?:acao\s+)?anterior|a\s+(?:acao\s+)?anterior|anterior)$/;
 const UNDO_PENDING_SELECTOR_RE =
   /^(?:(?:cancela(?:r)?|cancele|desfaz(?:er)?|desfaca|undo)\s+(?:a\s+)?pendente|a\s+pendente|pendente)$/;
-
 const isUndoPreviousSelector = (text: string): boolean =>
   UNDO_PREVIOUS_SELECTOR_RE.test(foldSelectorText(text));
 const isUndoPendingSelector = (text: string): boolean =>
   UNDO_PENDING_SELECTOR_RE.test(foldSelectorText(text));
+
+/**
+ * CORREÇÃO 2 (P2-2) — the missing-amount gate's exclusion lists, tested
+ * against the FOLDED text (case/diacritic/whitespace-normalized) in ANY
+ * position: an interrogative word or a `?` marks a question (a read, never
+ * a missing amount), and a read cue (`mostra`, `extrato`, …) marks an
+ * explicit read request the evidence layer must answer.
+ */
+const MISSING_AMOUNT_INTERROGATIVE_RE =
+  /\b(?:quanto|quantos|quantas|qual|quais|onde|quando|como|por\s*que|porque|quem)\b/;
+const MISSING_AMOUNT_READ_CUE_RE =
+  /\b(?:mostra|mostre|mostrar|lista|liste|listar|exibe|exibir|ver|veja|consulta|consultar|extrato|historico|resumo)\b/;
 
 type CorrectionOutcome =
   | Readonly<{ kind: 'amount'; amountCents: number }>
@@ -935,6 +958,65 @@ export class ConversationOrchestrator {
     // figure): fail closed with a figure-free reply.
     if (seeksAccountBalance(input.text)) return renderUnavailable('os saldos');
     return null;
+  }
+
+  /**
+   * CORREÇÃO 2 (P2-2) — deterministic missing-amount terminal, single
+   * implementation. Fires on `read` AND `unsupported` turns whose text
+   * carries a mutation signal yet parses to nothing for lack of a value
+   * ("comprei uma bicicleta no cartão", "comprei uma bicicleta parcela em
+   * 10 x"): neither an evidence read nor a model call can supply the absent
+   * amount, and routing the turn on would let the model promise a
+   * registration it cannot make. Returns null when the turn is not eligible.
+   *
+   * The gate is channel- and provider-independent: with no value, no
+   * inference path — with or without tools — can execute the creation (a
+   * creation tool only executes with a value), and a tool-less single-shot
+   * path (relay, grounded, Codex broker) cannot clarify conversationally
+   * either. The deterministic clarification is therefore the honest answer
+   * on every channel. There is deliberately NO per-channel exception: the
+   * SDK direct leg also reaches the tool-less Codex broker leg
+   * (`provideUnifiedResponse` → `isCodexProviderId` → `runCodexBrokerText`),
+   * where an amount-less turn would fall through to the model with no
+   * evidence and no tools — exactly what this gate prevents.
+   *
+   * Eligibility: mutation signal + `unparsed`/`missing_amount`, and NOT an
+   * interrogative (`?` or a question word anywhere — a question is a read)
+   * and NOT an explicit read request (read cue anywhere — the evidence
+   * layer owns it). Attachment turns are eligible too but answer with the
+   * attachment fail-closed copy: admitted content is unverified, so the
+   * missing-amount copy must not speak over it. Draft/mutation/
+   * confirmation/cancel/retry turns return above this gate and never reach
+   * it; the T08-F1 branch below keeps owning the non-eligible
+   * unsupported+attachment turns.
+   */
+  private missingAmountGate(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+  ): TurnResult | null {
+    if (plan.mode !== 'read' && plan.mode !== 'unsupported') return null;
+    if (!hasMutationIntentSignal(input.text)) return null;
+    const interpretation = interpretMutationUtterance(input.text);
+    if (interpretation.status !== 'unparsed' || interpretation.reason !== 'missing_amount') return null;
+    const folded = foldSelectorText(input.text);
+    if (/\?/.test(input.text)) return null;
+    if (MISSING_AMOUNT_INTERROGATIVE_RE.test(folded)) return null;
+    if (MISSING_AMOUNT_READ_CUE_RE.test(folded)) return null;
+    const attachment = input.hasAttachmentData === true;
+    const text = attachment
+      ? ATTACHMENT_CONTENT_UNVERIFIED_TEXT
+      : 'Não identifiquei o valor a registrar. Informe o valor e a descrição.';
+    const blockedPlan = freeze({ ...plan, missingFields: freeze(['amount']) });
+    this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+    return freeze({
+      ...base,
+      plan: blockedPlan,
+      ...(attachment ? { failClosed: true as const } : {}),
+      clarification: freeze({ missingFields: blockedPlan.missingFields, text }),
+      response: freeze({ text }),
+    });
   }
 
   /** Read path: deterministic render when evidence allows, else grounded provider text with ONE retry. */
@@ -3982,6 +4064,13 @@ export class ConversationOrchestrator {
     ) {
       return this.runRetryTurn(input, plan, client, startedAt, result);
     }
+    // CORREÇÃO 2 (P2-2): the missing-amount gate runs BEFORE the evidence
+    // read — a read-mode purchase without a value ("comprei uma bicicleta no
+    // cartão") must not be answered as a card statement query. Draft/
+    // mutation/confirmation/cancel/retry turns returned above and never
+    // reach it.
+    const missingAmount = this.missingAmountGate(input, plan, startedAt, result);
+    if (missingAmount) return missingAmount;
     if (plan.mode === 'read' && this.dependencies.evidenceProvider) {
       // Evidence-backed read: deterministic render or validated grounded text.
       const read = await this.runGroundedRead(input, plan, startedAt, result);

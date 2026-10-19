@@ -70,7 +70,12 @@ const createChatAgent = (snapshot: Record<string, unknown>) => {
     messages: UIMessage[];
     persistMessages: (msgs: UIMessage[]) => Promise<void>;
   };
-  agent.messages = [];
+  // The real SDK `persistMessages` reloads `this.messages` from durable
+  // storage after every write (agents/dist/ai-chat-agent.js), so the mock
+  // shares the array: the /rpc/chat handler dedupes by stable id against
+  // `this.messages`, and a decoupled array would hide provider-persisted
+  // rows and manufacture a duplicate that production never writes.
+  agent.messages = persisted;
   agent.persistMessages = vi.fn(async (msgs: UIMessage[]) => {
     persisted.push(...msgs);
   });

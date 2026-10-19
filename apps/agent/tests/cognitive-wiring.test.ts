@@ -141,11 +141,13 @@ describe('onChatMessage cognitive wiring (Part A)', () => {
       OPENCODE_ZEN_API_KEY: 'zen-key-test',
     };
     withDurableSql(agent);
-    // Amount-less on purpose: a parseable mutation attempt takes the
-    // authoritative approval pipeline (SPEC §7, device-bound), not the
-    // provider path — curation itself is what this test guards.
+    // Amount-less NON-interrogative mutations ("Lança um gasto no mercado
+    // hoje") are answered deterministically by the missing-amount gate on
+    // every channel — they never reach the provider. This interrogative
+    // turn (asking HOW to register) is not gate-eligible, so it reaches
+    // the provider and pins the mutation-tool curation.
     await agent.onChatMessage({
-      text: 'Lança um gasto no mercado hoje',
+      text: 'Como faço para lançar um gasto no mercado hoje?',
       intentionId: 'intent-wiring-2',
       actorId: 'actor-1',
     });
@@ -156,5 +158,58 @@ describe('onChatMessage cognitive wiring (Part A)', () => {
     };
     expect(Object.keys(args.tools)).toContain('create_expense');
     expect(args.system).toContain('registros:');
+  });
+
+  it('sdk + codex provider: amount-less mutation turn answers deterministically without streamText or broker fetch', async () => {
+    const brokerOrigin = 'https://codex-broker.test';
+    const codexSnapshotBody = {
+      ...snapshotBody,
+      runtime: {
+        ...snapshotBody.runtime,
+        activeProviderId: 'openai-codex-subscription',
+        activeModelId: 'openai-codex-subscription:gpt-5-codex',
+      },
+    };
+    // Route-aware override for the Codex snapshot: the runtime snapshot
+    // body answers the config/authority reads, LIST routes answer the shape
+    // the API really declares, and ANY call to the broker origin is a
+    // test failure signal (recorded, then answered so a bypass cannot
+    // hide behind a fetch throw).
+    vi.mocked(globalThis.fetch).mockImplementation(async (url: unknown) => {
+      const target = String(url);
+      if (target.startsWith(brokerOrigin)) {
+        return new Response(
+          JSON.stringify({
+            id: 'broker-should-not-be-called',
+            model: 'gpt-5-codex',
+            choices: [{ message: { role: 'assistant', content: 'broker-text' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+          { status: 200 },
+        );
+      }
+      const listRead = ['/accounts', '/transactions', '/categories', '/budgets', '/goals', '/payables', '/cards/statements']
+        .some((path) => target.includes(path));
+      return new Response(JSON.stringify(listRead ? { items: [], total: 0 } : codexSnapshotBody), { status: 200 });
+    });
+    const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent;
+    (agent as unknown as { env: unknown }).env = {
+      API_ORIGIN: 'https://api.example.test',
+      AGENT_CONFIG_TOKEN: 'config-token-test',
+      CODEX_BROKER_ORIGIN: brokerOrigin,
+      CODEX_BROKER_REQUEST_SIGNING_KEY: 'signing-key-test',
+    };
+    withDurableSql(agent);
+    const result = (await agent.onChatMessage({
+      text: 'comprei uma bicicleta parcela em 10 x',
+      intentionId: 'intent-wiring-codex-gate',
+      actorId: 'actor-1',
+    })) as { text?: string };
+
+    expect(result).toEqual({ text: 'Não identifiquei o valor a registrar. Informe o valor e a descrição.' });
+    expect(mockedStreamText).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url).startsWith(brokerOrigin)),
+    ).toBe(false);
   });
 });

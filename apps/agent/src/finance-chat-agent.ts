@@ -4165,11 +4165,20 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             isRetryTurn ||
             turnResult.mutation !== undefined;
           if (!persistStablePair) {
-            // T3.1 (SPEC §14): a fail-closed read never reaches the response
-            // provider, which is where the user message is otherwise
-            // persisted — persist it here so history keeps the Q&A pair
-            // (fail-closed only ever happens on the read path, so the
-            // mutation Q&A persistence in the `else` branch is unaffected).
+            // T3.1 (SPEC §14) + F1: the response provider is where the user
+            // message is otherwise persisted — persist it here so history
+            // keeps the Q&A pair on EVERY answered deterministic read turn,
+            // not only the fail-closed ones (a non-fail-closed deterministic
+            // render never reaches the provider either, so without this the
+            // history shows the answer with no question). Dedupe by stable
+            // id: a provider-answered turn already persisted the user bubble
+            // under this id (see provideUnifiedResponse's userAlreadyPersisted
+            // check), and a redelivery reuses the same ids and persists zero
+            // new rows. The internal grounding-correction retry never reaches
+            // this handler: it reenters the response provider with
+            // internalCorrection: true, while normalize always builds
+            // restInput.internalCorrection as false — so no guard is needed
+            // here (a client-supplied flag is ignored by construction).
             // P1-STABLE-IDS: intention-derived ids in BOTH messages, deduped
             // against durable history — a redelivery after a lost response
             // reuses the same ids and persists zero new rows.
@@ -4178,8 +4187,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             );
             const readUserId = stableHistoryMessageId('user', intentionId);
             const readAsstId = stableHistoryMessageId('assistant', intentionId);
-            if (turnResult.failClosed && !readExistingIds.has(readUserId)) {
-              const failClosedUserMessage: UIMessage = {
+            if (!readExistingIds.has(readUserId)) {
+              const readUserMessage: UIMessage = {
                 id: readUserId,
                 role: 'user',
                 parts: [{ type: 'text', text: restInput.text }],
@@ -4188,7 +4197,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
                   turnAudience,
                 ),
               } as unknown as UIMessage;
-              await this.persistMessages([failClosedUserMessage]);
+              await this.persistMessages([readUserMessage]);
             }
             if (readExistingIds.has(readAsstId)) {
               // Redelivery: the durable answer already exists — skip the
