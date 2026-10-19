@@ -240,7 +240,7 @@ describe("PWA State Snapshot DB — snapshot-db.ts", () => {
     });
 
     it("FIX-216: migration runs serialized with writers — a concurrent write is not lost", async () => {
-      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig" }]);
+      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig", name: "Mig" }]);
       // Gate the migration's commit open (read #1 passes, commit #2 held).
       const suspend = suspendNthIdbOpen(2);
       try {
@@ -263,7 +263,7 @@ describe("PWA State Snapshot DB — snapshot-db.ts", () => {
         const accounts = await readV2Snapshot(TEST_TOKEN, "accounts");
         const budgets = await readV2Snapshot(TEST_TOKEN, "budgets");
         expect(accounts?.data).toEqual([{ id: "a-concurrent" }]);
-        expect(budgets?.data).toEqual([{ id: "b-mig" }]);
+        expect(budgets?.data).toEqual([{ id: "b-mig", name: "Mig" }]);
         expect(localStorage.getItem("pi-finance:snapshot:v1")).toBeNull();
       } finally {
         suspend.release();
@@ -272,7 +272,7 @@ describe("PWA State Snapshot DB — snapshot-db.ts", () => {
 
     it("P2: cross-tab V2 written between commit and validation reread survives; V1 preserved", async () => {
       const SUBJECT_B = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
-      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig" }]);
+      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig", name: "Mig" }]);
       const sha256Hex = async (s: string): Promise<string> => {
         const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
         return Array.from(new Uint8Array(hash))
@@ -338,7 +338,7 @@ describe("PWA State Snapshot DB — snapshot-db.ts", () => {
     });
 
     it("FIX-216: subject switch between commit and validation reread preserves V1", async () => {      const SUBJECT_B = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
-      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig" }]);
+      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig", name: "Mig" }]);
       // Gate the validation reread (commit #2 already landed, reread #3 held).
       const suspend = suspendNthIdbOpen(3);
       try {
@@ -358,12 +358,12 @@ describe("PWA State Snapshot DB — snapshot-db.ts", () => {
       setOfflineSubjectId(TEST_SUBJECT);
       await migrateV1toV2(TEST_TOKEN);
       expect(localStorage.getItem("pi-finance:snapshot:v1")).toBeNull();
-      expect((await readV2Snapshot(TEST_TOKEN, "budgets"))?.data).toEqual([{ id: "b-mig" }]);
+      expect((await readV2Snapshot(TEST_TOKEN, "budgets"))?.data).toEqual([{ id: "b-mig", name: "Mig" }]);
     });
 
     it("P2-liveness: stale validation cleanup after teardown/rebind preserves a fresh same-owner envelope; V1 preserved", async () => {
       const SUBJECT_B = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
-      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig" }]);
+      seedV1(TEST_TOKEN, "budgets", [{ id: "b-mig", name: "Mig" }]);
       const sha256Hex = async (s: string): Promise<string> => {
         const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
         return Array.from(new Uint8Array(hash))
