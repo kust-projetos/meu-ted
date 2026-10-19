@@ -47,8 +47,9 @@ Nenhum P0 aberto no escopo do piloto: sem perda/duplicação financeira, sem byp
 3. [x] Fix #216 (mesma branch/PR — tester + reviewer APPROVED).
 4. [x] #215 (architect → coder → tester → reviewer APPROVED; commit `28bd7dc` no PR #226).
 5. [ ] Gates focados: `docs:lint`, `typecheck`, testes focados PWA/Agent/API, `governance:check`, `capabilities:check`, `write-policy:check`, `boundary:check`, `public-safety --strict`.
-6. [ ] PR #226 + CI verde; merge/deploy só com go do operador.
-7. [ ] Smokes live read-only (`/health`, `/ready`, build-info) no candidato.
+6. [x] PR #226 + CI verde (CI `39238326768` + PWA CI `39238326769` success em `604d68d`; required checks `Gate — all checks` + `quality (22, 10)` SUCCESS; mergeable CLEAN).
+7. [ ] Merge + deploy só com go do operador (API via wrapper na Contabo; Agent/PWA via Cloudflare com attestation).
+8. [ ] Smokes live read-only (`/health`, `/ready`, build-info) no candidato pós-deploy.
 8. [ ] E2E live com modelo real + usuário sintético (requer credenciais/sessão do operador) — matriz §5.
 9. [ ] Relatório final com veredito.
 
