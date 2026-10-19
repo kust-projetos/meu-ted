@@ -104,8 +104,8 @@ const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve,
 const INPUT_PLACEHOLDER = "Pergunte sobre gastos, metas ou pagamentos…";
 const SEND = /enviar mensagem/i;
 const RETRY = /tentar novamente/i;
-const okTurn = (turnId: string, output?: string): agentClient.AgentTurn =>
-  ({ turnId, status: "completed", ...(output ? { output } : {}) }) as agentClient.AgentTurn;
+const okTurn = (turnId: string, output = "Resposta de teste do TED."): agentClient.AgentTurn =>
+  ({ turnId, status: "completed", output }) as agentClient.AgentTurn;
 
 const userMsg = (id: string, content: string): agentClient.AgentMessage => ({
   id,

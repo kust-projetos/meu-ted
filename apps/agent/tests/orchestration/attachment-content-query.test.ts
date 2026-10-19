@@ -234,6 +234,8 @@ describe('attachment-content-query: pergunta generativa usa proveniência do ane
   });
 
   it('grounding admite figura do bloco com atribuição ao áudio (sem API financeira)', () => {
+    // Caminho real do runAttachmentContentQuery: envelope vazio por contrato
+    // (items: []), zero leituras financeiras.
     const envelope: EvidenceEnvelope = { version: '1', items: [] };
     const result = validateGroundedClaims('O áudio informa R$ 42,50.', envelope, [
       'compra no mercado valor 42,50 R$ pago',

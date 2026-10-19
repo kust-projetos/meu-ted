@@ -38,6 +38,11 @@ const readPlan = (domain: 'accounts' | 'transactions' = 'accounts') => ({
  * Live-case envelope (A19-READ-BYPASS root cause): finance tools return NO
  * usable rows, so the old code answered deterministically ("sem dados")
  * without ever consulting the composed attachment block.
+ *
+ * P0-ATTACHMENT-BYPASS: with an empty tool envelope the turn stays on the
+ * deterministic path (provider untouched) — the block never grounds a
+ * figure on its own. The bypass fires only with usable tool rows; the
+ * supplemented envelope below keeps covering that path.
  */
 const emptyStatementEnvelope: EvidenceEnvelope = {
   version: '1',
@@ -50,15 +55,27 @@ const emptyStatementEnvelope: EvidenceEnvelope = {
   }],
 };
 
+/** Same statement shape with a (non-covering) tool money row: bypass fires. */
+const supplementedStatementEnvelope: EvidenceEnvelope = {
+  version: '1',
+  items: [{
+    ref: 'statement',
+    source: 'api.transactions',
+    retrievedAt: new Date().toISOString(),
+    status: 'ok',
+    data: [{ feeCents: 1 }],
+  }],
+};
+
 /** Provider text with NO financial claims (money/dates/names) → grounding passes. */
 const ATTACHMENT_PROVIDER_TEXT = 'leitura do anexo concluida sem valores.';
 
 describe('A19-READ-BYPASS: attachment data skips the deterministic read render', () => {
-  it('read WITH attachment data calls the provider instead of rendering deterministically', async () => {
+  it('read WITH attachment data AND usable tool rows calls the provider instead of rendering deterministically', async () => {
     const responseProvider = vi.fn(async () => ATTACHMENT_PROVIDER_TEXT);
     const orchestrator = new ConversationOrchestrator({
       plan: () => readPlan('transactions'),
-      evidenceProvider: async () => emptyStatementEnvelope,
+      evidenceProvider: async () => supplementedStatementEnvelope,
       responseProvider,
       events: () => undefined,
     });
@@ -67,6 +84,21 @@ describe('A19-READ-BYPASS: attachment data skips the deterministic read render',
     const result = await orchestrator.runTurn(input);
     expect(responseProvider).toHaveBeenCalledTimes(1);
     expect(result.response?.text).toBe(ATTACHMENT_PROVIDER_TEXT);
+  });
+
+  it('read WITH attachment data but an EMPTY tool envelope stays deterministic (P0, provider untouched)', async () => {
+    const responseProvider = vi.fn(async () => ATTACHMENT_PROVIDER_TEXT);
+    const orchestrator = new ConversationOrchestrator({
+      plan: () => readPlan('transactions'),
+      evidenceProvider: async () => emptyStatementEnvelope,
+      responseProvider,
+      events: () => undefined,
+    });
+    const base = normalizeRestTurn({ text: 'quanto deu a fatura no pdf?', intentionId: 'intent-bypass-empty-tools' }, identity);
+    const input = { ...base, hasAttachmentData: true };
+    const result = await orchestrator.runTurn(input);
+    expect(responseProvider).not.toHaveBeenCalled();
+    expect(result.response?.text).toBe('Não há dados disponíveis para extrato.');
   });
 
   it('read WITHOUT attachment data keeps the deterministic render (provider untouched)', async () => {
@@ -150,8 +182,10 @@ describe('A19-GROUND-FORMATS: smuggled figures rejected on attachment turns', ()
       identity,
     );
     const result = await orchestrator.runTurn({ ...base, hasAttachmentData: true });
-    expect(responseProvider).toHaveBeenCalledTimes(1);
-    expect(result.response?.text).toMatch(/Não foi possível consultar/);
+    // P0: an empty tool envelope never reaches the provider — the
+    // deterministic render answers without any figure.
+    expect(responseProvider).not.toHaveBeenCalled();
+    expect(result.response?.text).toBe('Não há dados disponíveis para extrato.');
     expect(result.response?.text).not.toMatch(/999/);
   });
 
@@ -170,8 +204,9 @@ describe('A19-GROUND-FORMATS: smuggled figures rejected on attachment turns', ()
       identity,
     );
     const result = await orchestrator.runTurn({ ...base, hasAttachmentData: true });
-    expect(correctionProvider).toHaveBeenCalledTimes(1);
-    expect(result.response?.text).toMatch(/Não foi possível consultar/);
+    expect(responseProvider).not.toHaveBeenCalled();
+    expect(correctionProvider).not.toHaveBeenCalled();
+    expect(result.response?.text).toBe('Não há dados disponíveis para extrato.');
     expect(result.response?.text).not.toMatch(/999/);
   });
 

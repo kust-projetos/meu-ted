@@ -350,6 +350,16 @@ export const MAX_CHAT_ATTACHMENTS = 10;
  * Attachment-derived data is DATA: it can complete a proposal, and it can never
  * decide — the decision routing reads the typed text alone (F1).
  */
+
+/**
+ * P1-STABLE-IDS: history message ids derived from the turn's intentionId, so
+ * every branch (relay user bubble, read Q&A, mutation Q&A) persists a
+ * redelivery under the SAME ids and dedupes to zero extra rows. Two distinct
+ * sends carry distinct intentionIds and still persist two pairs.
+ */
+export const stableHistoryMessageId = (role: 'user' | 'assistant', intentionId: string): string =>
+  role === 'user' ? `msg-user-${intentionId}` : `msg-asst-${intentionId}`;
+
 export const composeTurnTextWithAttachmentData = (input: {
   userText: string;
   data: ReadonlyArray<{ kind: AttachmentKind; text: string }>;
@@ -1552,20 +1562,30 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             input.intentionId,
             this.conversationAudienceFor(input.workspaceId, input.actorId),
           );
-        const userMessage: UIMessage = {
-          id: `msg-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          role: 'user',
-          parts: [{ type: 'text', text: input.text }],
-          metadata: stampMessageAudience(
-            {
-              actorId: input.actorId,
-              workspaceId: input.workspaceId,
-              createdAt: new Date().toISOString(),
-            },
-            turnAudience,
-          ),
-        } as unknown as UIMessage;
-        await this.persistMessages([userMessage]);
+        // P1-STABLE-IDS: the user bubble carries the intention-derived id, so
+        // a redelivery after a lost response reuses it and persists zero
+        // extra rows instead of duplicating the question.
+        const stableUserId = stableHistoryMessageId('user', input.intentionId);
+        const userAlreadyPersisted = (Array.isArray(this.messages) ? this.messages : []).some(
+          (m) => String((m as { id?: unknown }).id ?? '') === stableUserId,
+        );
+        if (!userAlreadyPersisted) {
+          const userMessage: UIMessage = {
+            id: stableUserId,
+            role: 'user',
+            parts: [{ type: 'text', text: input.text }],
+            metadata: stampMessageAudience(
+              {
+                actorId: input.actorId,
+                workspaceId: input.workspaceId,
+                createdAt: new Date().toISOString(),
+                intentionId: input.intentionId,
+              },
+              turnAudience,
+            ),
+          } as unknown as UIMessage;
+          await this.persistMessages([userMessage]);
+        }
       }
       const relayOrigin = this.env?.API_ORIGIN ?? 'https://api.synkroo.com.br';
       // Item 5 (Onda 2): failover restrito do relay — no máximo 1 primária +
@@ -4150,40 +4170,53 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             // persisted — persist it here so history keeps the Q&A pair
             // (fail-closed only ever happens on the read path, so the
             // mutation Q&A persistence in the `else` branch is unaffected).
-            if (turnResult.failClosed) {
+            // P1-STABLE-IDS: intention-derived ids in BOTH messages, deduped
+            // against durable history — a redelivery after a lost response
+            // reuses the same ids and persists zero new rows.
+            const readExistingIds = new Set(
+              (Array.isArray(this.messages) ? this.messages : []).map((m) => String((m as { id?: unknown }).id ?? "")),
+            );
+            const readUserId = stableHistoryMessageId('user', intentionId);
+            const readAsstId = stableHistoryMessageId('assistant', intentionId);
+            if (turnResult.failClosed && !readExistingIds.has(readUserId)) {
               const failClosedUserMessage: UIMessage = {
-                id: `msg-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                id: readUserId,
                 role: 'user',
                 parts: [{ type: 'text', text: restInput.text }],
                 metadata: stampMessageAudience(
-                  { actorId: identity.actorId, workspaceId: identity.workspaceId, createdAt: new Date().toISOString() },
+                  { actorId: identity.actorId, workspaceId: identity.workspaceId, createdAt: new Date().toISOString(), intentionId },
                   turnAudience,
                 ),
               } as unknown as UIMessage;
               await this.persistMessages([failClosedUserMessage]);
             }
-            const assistantMessage: UIMessage = {
-              id: `msg-asst-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              role: 'assistant',
-              parts: [{ type: 'text', text: turnResult.response.text }],
-              metadata: stampMessageAudience(
-                { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: new Date().toISOString() },
-                turnAudience,
-              ),
-            } as unknown as UIMessage;
-            try {
-              await this.persistMessages([assistantMessage]);
-            } catch (persistError) {
-              // §40 (issue #99): a pergunta publicada é a evidência do turno —
-              // se a persistência falhou (502), pendings de forget criados POR
-              // ESTE turno nunca foram vistos e não podem ser confirmáveis.
-              // Compensação best-effort antes de propagar o erro.
-              this.revertUnpublishedTurnProposals({
-                workspaceId: identity.workspaceId,
-                actorId: identity.actorId,
-                intentionId,
-              });
-              throw persistError;
+            if (readExistingIds.has(readAsstId)) {
+              // Redelivery: the durable answer already exists — skip the
+              // write (and its failure compensation) without touching it.
+            } else {
+              const assistantMessage: UIMessage = {
+                id: readAsstId,
+                role: 'assistant',
+                parts: [{ type: 'text', text: turnResult.response.text }],
+                metadata: stampMessageAudience(
+                  { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: new Date().toISOString(), intentionId },
+                  turnAudience,
+                ),
+              } as unknown as UIMessage;
+              try {
+                await this.persistMessages([assistantMessage]);
+              } catch (persistError) {
+                // §40 (issue #99): a pergunta publicada é a evidência do turno —
+                // se a persistência falhou (502), pendings de forget criados POR
+                // ESTE turno nunca foram vistos e não podem ser confirmáveis.
+                // Compensação best-effort antes de propagar o erro.
+                this.revertUnpublishedTurnProposals({
+                  workspaceId: identity.workspaceId,
+                  actorId: identity.actorId,
+                  intentionId,
+                });
+                throw persistError;
+              }
             }
             // The durable turn evidence now EXISTS (it was just persisted).
             // A persistence failure above propagates to the 502 below having
@@ -4218,8 +4251,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             // deterministic reply (never raw provider output). Eventual
             // consistency: the PWA keeps its `sent` bubble until this
             // history converges.
-            const mutationUserId = `msg-user-${intentionId}`;
-            const mutationAsstId = `msg-asst-${intentionId}`;
+            const mutationUserId = stableHistoryMessageId('user', intentionId);
+            const mutationAsstId = stableHistoryMessageId('assistant', intentionId);
             const existingIds = new Set(
               (Array.isArray(this.messages) ? this.messages : []).map((m) => String((m as { id?: unknown }).id ?? "")),
             );

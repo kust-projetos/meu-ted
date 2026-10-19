@@ -71,7 +71,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const okTurn = { turnId: "t1", status: "completed" } as const;
+const okTurn = { turnId: "t1", status: "completed", output: "Resposta de teste do TED." } as const;
 const INPUT_PLACEHOLDER = "Pergunte sobre gastos, metas ou pagamentos…";
 
 async function renderWithHistoryLoaded() {

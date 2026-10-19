@@ -82,7 +82,11 @@ export const validateProviderOutput = (raw: ProviderOutput): ValidatedProviderOu
   const plan = validatePlan(payload.plan);
   const responseValue = payload.response;
   const text: unknown = responseValue === undefined ? '' : isRecord(responseValue) ? responseValue.text : responseValue;
-  if (typeof text !== 'string' || text.length > 20_000) invalid();
+  // P2-TOKEN-CAPS: the provider text cap matches the single-leg output slice
+  // (`maxOutputTokens * 4` chars ≈ one reservation) — a longer reply could
+  // never have been reserved, so it fails validation instead of being
+  // trusted. The total budgets in DEFAULT_POLICY are unchanged.
+  if (typeof text !== 'string' || text.length > 8_000) invalid();
   if (isRecord(responseValue)) rejectAuthority(responseValue);
   return Object.freeze({
     plan,

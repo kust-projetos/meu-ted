@@ -38,7 +38,7 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
   return {
     ...actual,
     fetchAgentHistory: vi.fn().mockResolvedValue([]),
-    sendAgentMessage: vi.fn().mockResolvedValue({ turnId: "t", status: "completed" }),
+    sendAgentMessage: vi.fn().mockResolvedValue({ turnId: "t", status: "completed", output: "Resposta de teste do TED." }),
     renewAgentSession: vi.fn().mockResolvedValue({ ok: true, sessionId: "s2" }),
     // A13: the REAL upload returns an opaque ref (never a CDN URL). Tests that
     // only exercise the local preview override this per case.

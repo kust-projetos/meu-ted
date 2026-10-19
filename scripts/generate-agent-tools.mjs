@@ -17,6 +17,16 @@ const routeInventory = fs.readFileSync(routeInventoryPath, 'utf8');
 const actualRoutes = [...routeInventory.matchAll(/method: '([A-Z]+)', path: '([^']+)'/g)].map((match) => `${match[1]} ${match[2]}`);
 const normalizeRoute = (value) => value.replace(/\{[^}]+\}/g, ':id');
 
+// Debt-pending-v1-v2 (#152): V1 pending routes retired permanently (v2Only).
+// Their specs stay in the registry on purpose (filtered from the model surface
+// by RETIRED_MODEL_TOOLS in apps/agent/src/agent-config/tools.ts), so the
+// inventory check below exempts exactly these three routes.
+const RETIRED_ROUTE_EXEMPTIONS = new Set([
+  'GET /pending-operations/details',
+  'POST /pending-operations/approve',
+  'POST /pending-operations/reject',
+]);
+
 const schemaType = (schema, optional = false) => {
   let expression;
   if (schema.enum) expression = `Type.Union([${schema.enum.map((value) => `Type.Literal(${JSON.stringify(value)})`).join(', ')}])`;
@@ -59,7 +69,11 @@ for (const [routePath, pathItem] of Object.entries(document.paths ?? {})) {
 
 for (const spec of specs) {
   const route = `${spec.method} ${normalizeRoute(spec.path)}`;
-  if (!actualRoutes.includes(route)) throw new Error(`OpenAPI tool route is not declared by API route inventory: ${route}`);
+  // Debt-pending-v1-v2 (#152): the V1 pending routes were retired permanently
+  // (v2Only), but the generated registry intentionally keeps their specs —
+  // apps/agent/src/agent-config/tools.ts RETIRED_MODEL_TOOLS filters them from
+  // the model surface. Exempt exactly these routes; everything else fails closed.
+  if (!actualRoutes.includes(route) && !RETIRED_ROUTE_EXEMPTIONS.has(route)) throw new Error(`OpenAPI tool route is not declared by API route inventory: ${route}`);
 }
 
 // --- authoritative validation: refuse malformed contracts (no partial adapters) ---

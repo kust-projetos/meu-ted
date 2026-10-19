@@ -14,6 +14,14 @@ const envelope = (data: unknown): EvidenceEnvelope => ({
 const withName = (data: unknown): EvidenceEnvelope => envelope({ accountName: 'Conta principal', ...(data as Record<string, unknown>) });
 
 /**
+ * P0-ATTACHMENT-BYPASS: registered-state money requires TOOL evidence. Money
+ * ACCEPTs on the admitted document axis carry a (non-covering) tool money
+ * field so they keep testing their own rule; the same reply with an empty
+ * tool envelope fails closed.
+ */
+const TOOLS_WITH_MONEY = envelope({ feeCents: 1 });
+
+/**
  * V1-GROUND-SCHEMA / UNITS / CURRENCY / PROVENANCE.
  *
  * The money axis of grounding is decided by the API read contract's field
@@ -114,8 +122,8 @@ describe('V1-GROUND-SCHEMA-EXACT: G-B string cents fields ground money exactly',
   });
 
   it('keeps the exact figure equally exact on the document axis', () => {
-    expect(validateGroundedClaims('O documento informa R$ 9.007.199.254.740.993,93.', envelope([]), ['total: 9.007.199.254.740.993,93 R$']).valid).toBe(true);
-    expect(validateGroundedClaims('O documento informa R$ 9.007.199.254.740.993,92.', envelope([]), ['total: 9.007.199.254.740.993,93 R$']).valid).toBe(false);
+    expect(validateGroundedClaims('O documento informa R$ 9.007.199.254.740.993,93.', TOOLS_WITH_MONEY, ['total: 9.007.199.254.740.993,93 R$']).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa R$ 9.007.199.254.740.993,92.', TOOLS_WITH_MONEY, ['total: 9.007.199.254.740.993,93 R$']).valid).toBe(false);
   });
 
   it('REJECTS the float-rounded reading and every neighbouring cent when BOTH siblings exist', () => {
@@ -179,7 +187,7 @@ describe('V1-GROUND-SCHEMA-TEXT: arbitrary backend text is not API financial evi
   });
 
   it('keeps document-attributed support intact for the same figures (admitted axis unchanged)', () => {
-    expect(validateGroundedClaims('O documento informa que o total é R$ 42,50.', envelope([]), ['invoice total BRL 42,50']).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa que o total é R$ 42,50.', TOOLS_WITH_MONEY, ['invoice total BRL 42,50']).valid).toBe(true);
     expect(validateGroundedClaims('O documento informa que a taxa é 12,5%.', envelope([]), ['taxa de poupança: 12,5%']).valid).toBe(true);
     // Registered state still fails closed even with the document figure …
     expect(validateGroundedClaims('Seu saldo registrado é R$ 42,50.', envelope([]), ['invoice total BRL 42,50']).valid).toBe(false);
@@ -328,9 +336,9 @@ describe('V1-GROUND-SIGN: a negative figure is grounded only by a negative value
 
   it('keeps the sign on the document side as well', () => {
     const NEGATIVE_DOC = ['valor: -42.50 R$'];
-    expect(validateGroundedClaims('O documento informa -R$ 42,50.', envelope([]), NEGATIVE_DOC).valid).toBe(true);
-    expect(validateGroundedClaims('O documento informa R$ 42,50.', envelope([]), NEGATIVE_DOC).valid).toBe(false);
-    expect(validateGroundedClaims('O documento informa -R$ 42,50.', envelope([]), ['valor: 42.50 R$']).valid).toBe(false);
+    expect(validateGroundedClaims('O documento informa -R$ 42,50.', TOOLS_WITH_MONEY, NEGATIVE_DOC).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa R$ 42,50.', TOOLS_WITH_MONEY, NEGATIVE_DOC).valid).toBe(false);
+    expect(validateGroundedClaims('O documento informa -R$ 42,50.', TOOLS_WITH_MONEY, ['valor: 42.50 R$']).valid).toBe(false);
   });
 
   it('keeps the sign on the percent axis', () => {
@@ -349,8 +357,9 @@ describe('V1-GROUND-CURRENCY: an unsupported or unreadable currency is never BRL
     expect(validateGroundedClaims('O total é R$ 42,50.', envelope({ note: 'invoice total EUR 42,50' })).valid).toBe(false);
     expect(validateGroundedClaims('O total é R$ 42,50.', envelope({ note: 'billed £ 42,50' })).valid).toBe(false);
     expect(validateGroundedClaims('O total é R$ 42,50.', envelope({ note: 'invoice total BRL 42,50' })).valid).toBe(false);
-    // The same figure admitted as document-attributed data still grounds the claim.
-    expect(validateGroundedClaims('Segundo o documento, o total é R$ 42,50.', envelope([]), ['invoice total BRL 42,50']).valid).toBe(true);
+    // The same figure admitted as document-attributed data still grounds the
+    // claim — with tool money present (P0: the block never grounds alone).
+    expect(validateGroundedClaims('Segundo o documento, o total é R$ 42,50.', TOOLS_WITH_MONEY, ['invoice total BRL 42,50']).valid).toBe(true);
   });
 
   it('REJECTS a BRL claim grounded by a foreign-currency figure in a document', () => {
@@ -412,9 +421,10 @@ describe('V1-GROUND-CURRENCY: BRL does not ground USD', () => {
 
   it('ACCEPTS a claim and its evidence in the SAME currency', () => {
     // The same discipline on the admitted document axis: same currency grounds,
-    // the other one does not — no implicit conversion either way.
-    expect(validateGroundedClaims('Segundo o documento, o total é US$ 999,00.', envelope([]), ['invoice total US$ 999,00']).valid).toBe(true);
-    expect(validateGroundedClaims('Segundo o documento, o total é R$ 999,00.', envelope([]), ['invoice total R$ 999,00']).valid).toBe(true);
+    // the other one does not — no implicit conversion either way. Tool money is
+    // present (P0) so the test isolates the currency rule.
+    expect(validateGroundedClaims('Segundo o documento, o total é US$ 999,00.', TOOLS_WITH_MONEY, ['invoice total US$ 999,00']).valid).toBe(true);
+    expect(validateGroundedClaims('Segundo o documento, o total é R$ 999,00.', TOOLS_WITH_MONEY, ['invoice total R$ 999,00']).valid).toBe(true);
   });
 });
 
@@ -434,7 +444,7 @@ describe('V1-GROUND-PROVENANCE: document money never proves registered state', (
 
   it('ACCEPTS the same figure when it is attributed to the document', () => {
     expect(validateGroundedClaims('O documento informa R$ 42,50.', REGISTERED_EXPENSE, BLOCK_42_50).valid).toBe(true);
-    expect(validateGroundedClaims('No anexo consta R$ 42,50.', envelope([]), BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('No anexo consta R$ 42,50.', envelope({ balanceCents: 100 }), BLOCK_42_50).valid).toBe(true);
   });
 
   it('ACCEPTS a registered figure grounded by authoritative API money', () => {
@@ -442,7 +452,7 @@ describe('V1-GROUND-PROVENANCE: document money never proves registered state', (
   });
 
   it('keeps document support for figure-free claims and attributed money (no over-blocking)', () => {
-    expect(validateGroundedClaims('A fatura do anexo é R$ 42,50 na Conta principal.', withName({}), BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('A fatura do anexo é R$ 42,50 na Conta principal.', withName({ balanceCents: 100 }), BLOCK_42_50).valid).toBe(true);
     expect(validateGroundedClaims('Vence em 09/10/2026 na Conta principal.', withName({}), BLOCK_42_50).valid).toBe(true);
   });
 
@@ -461,8 +471,8 @@ describe('V1-GROUND-PROVENANCE: document money never proves registered state', (
   });
 
   it('ACCEPTS a document attribution that itself spans a line break', () => {
-    expect(validateGroundedClaims('O documento informa:\nR$ 42,50', withName({}), BLOCK_42_50).valid).toBe(true);
-    expect(validateGroundedClaims('No anexo consta:\nR$ 42,50', envelope([]), BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa:\nR$ 42,50', withName({ balanceCents: 100 }), BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('No anexo consta:\nR$ 42,50', envelope({ balanceCents: 100 }), BLOCK_42_50).valid).toBe(true);
   });
 
   it('decides each sentence separately when a reply mixes a registered and a documented figure', () => {
@@ -470,14 +480,16 @@ describe('V1-GROUND-PROVENANCE: document money never proves registered state', (
     // The registered figure still needs the API; the documented one is fine.
     expect(validateGroundedClaims(mixed, withName({ balanceCents: 123456 }), BLOCK_42_50).valid).toBe(true);
     expect(validateGroundedClaims(mixed, withName({}), BLOCK_42_50).valid).toBe(false);
-    expect(validateGroundedClaims(mixed, withName({}), BLOCK_42_50).counts.money).toBe(1);
+    // P0: with an empty tool envelope BOTH figures fail (registered for lack
+    // of API money, documented for lack of tool money).
+    expect(validateGroundedClaims(mixed, withName({}), BLOCK_42_50).counts.money).toBe(2);
   });
 });
 
 describe('V1-GROUND-VISION-RENDER: amount 42.50 with currency R$ reaches grounding', () => {
   it('recognises the renderer shape "42.50 R$" as money (digits before the symbol)', () => {
-    expect(validateGroundedClaims('O documento informa que o valor é R$ 42,50.', envelope([]), ['valor: 42.50 R$']).valid).toBe(true);
-    expect(validateGroundedClaims('O documento informa que o valor é R$ 42,50.', envelope([]), ['valor: 42.50 US$']).valid).toBe(false);
+    expect(validateGroundedClaims('O documento informa que o valor é R$ 42,50.', TOOLS_WITH_MONEY, ['valor: 42.50 R$']).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa que o valor é R$ 42,50.', TOOLS_WITH_MONEY, ['valor: 42.50 US$']).valid).toBe(false);
   });
 
   it('normalizes the provider contract currency while preserving the amount', () => {
@@ -490,7 +502,7 @@ describe('V1-GROUND-VISION-RENDER: amount 42.50 with currency R$ reaches groundi
     expect(fields!.currency).toBe('BRL');
     const rendered = renderVisionFields(fields!);
     expect(rendered).toContain('42.50');
-    expect(validateGroundedClaims('O documento informa que o valor é R$ 42,50.', envelope([]), [rendered]).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa que o valor é R$ 42,50.', TOOLS_WITH_MONEY, [rendered]).valid).toBe(true);
   });
 
   it('keeps an unreadable currency honest (never invents one)', () => {
@@ -516,13 +528,15 @@ describe('V1-GROUND-E2E: publication enforces the grounding rules', () => {
     events.push({ type, fields });
   };
 
-  it('publishes a document-attributed figure verbatim', async () => {
+  it('falls back safe for a document-attributed figure with an empty tool envelope (P0)', async () => {
     const result = await createGroundedResponseWithRetry('O documento informa R$ 42,50.', envelope([]), {
       attachmentTexts: BLOCK,
       sink,
+      intentionId: 'intent-p0-empty-tools',
     });
-    expect(result).toMatchObject({ grounded: true, rejected: false });
-    expect(result.text).toBe('O documento informa R$ 42,50.');
+    expect(result).toMatchObject({ grounded: false, rejected: true });
+    expect(result.text).not.toContain('42,50');
+    expect(result.text).toMatch(/Não foi possível consultar/);
   });
 
   it('publishes a negative API-grounded figure verbatim', async () => {
@@ -746,9 +760,11 @@ describe('V1-GROUND-UNKNOWN-EDGES: unknown unit/currency suffixes never become B
     expect(validateGroundedClaims('O valor é R$ 12,50.', noMoney).valid).toBe(false);
     expect(validateGroundedClaims('A fatura totaliza 12,50 reais.', noMoney).valid).toBe(false);
     expect(validateGroundedClaims('O documento informa que o valor é 42.50 BRL.', envelope([]), []).valid).toBe(false);
-    // Positive control: grounded once the matching cents/marker evidence exists.
+    // Positive control: grounded once the matching cents/marker evidence exists
+    // (tool money present per P0 for the document axis; the feeCents field
+    // does not cover the claim, so the admitted block does the grounding).
     expect(validateGroundedClaims('O valor é R$ 12,50.', with1250).valid).toBe(true);
-    expect(validateGroundedClaims('Segundo o documento, o valor é 42.50 BRL.', envelope([]), ['valor 42.50 BRL']).valid).toBe(true);
+    expect(validateGroundedClaims('Segundo o documento, o valor é 42.50 BRL.', TOOLS_WITH_MONEY, ['valor 42.50 BRL']).valid).toBe(true);
   });
 
   it('E2E: falls back safe (no publication) for an unknown-currency figure even after one stubborn correction', async () => {

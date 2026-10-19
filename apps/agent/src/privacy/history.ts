@@ -6,22 +6,16 @@ export type MessageRecord = {
   createdAt: string;
 };
 
-const SECRET_PATTERNS = [
-  /Bearer\s+[A-Za-z0-9._~+/-]+=*/gi,
-  /eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*/g, // JWT / Tokens
-  /sk-[A-Za-z0-9]{20,}/g, // OpenAI API Keys
-  /ghp_[A-Za-z0-9]{20,}/g,
-  /password["']?\s*[:=]\s*["'][^"']+["']/gi,
-];
+import { scrubForPersistence } from './dlp.js';
 
-export const sanitizeForPersistence = (text: string): string => {
-  if (!text) return '';
-  let sanitized = text;
-  for (const pattern of SECRET_PATTERNS) {
-    sanitized = sanitized.replace(pattern, '[REDACTED_SECRET]');
-  }
-  return sanitized;
-};
+/**
+ * P2-DLP-FUNNEL: single funnel — persistence sanitization IS the central DLP
+ * scrub (secrets → PAN → CVV → CPF/CNPJ → transcript redaction). The former
+ * local SECRET_PATTERNS duplicate was removed in favor of this delegation;
+ * behavior is a strict superset (redacts everything it did before, plus
+ * card/document patterns, under the shared `[REDACTED]` marker).
+ */
+export const sanitizeForPersistence = (text: string): string => scrubForPersistence(text ?? '');
 
 export const canActorClearHistory = (
   actorRole: string,

@@ -9,23 +9,29 @@ const envelope = (data: unknown): EvidenceEnvelope => ({
 
 /**
  * A19-GROUND-EVIDENCE + V1-GROUND-ATTRIBUTION: attachment-extracted texts
- * are admitted as a source-tagged support set for READ narration. The tool
- * envelope below carries no usable finance data (the live attachment-turn
- * shape); the admitted block text is what grounds the figure.
+ * are admitted as a source-tagged support set for READ narration.
  *
- * V1-GROUND-ATTRIBUTION: MONEY from the admitted set needs positive explicit
- * attribution in the figure's own sentence ("Segundo o anexo, a fatura é
- * R$ 999…"), never a bare workspace-shaped narration — a document can never
- * prove registered state. Dates and names are figure-free and keep their
- * support without attribution.
+ * P0-ATTACHMENT-BYPASS: registered-state money requires TOOL evidence — the
+ * admitted block never grounds a money figure on its own. Money ACCEPTs
+ * below therefore carry a (non-covering) tool money field and keep testing
+ * the attribution boundary; with an empty tool envelope the same replies
+ * fail closed. Dates and names are figure-free and keep their support
+ * without attribution (whole-entity match per P1-NAME-ENTITY).
  */
 const EMPTY_TOOLS = envelope([]);
+const TOOLS_WITH_MONEY = envelope({ balanceCents: 100, accountName: 'Conta' });
 const BLOCK = ['fatura do cartao Nubank total R$ 999,00 Conta principal vencimento 2026-03-12'];
 
 describe('A19-GROUND-EVIDENCE: attachment-admitted figures ground read narration', () => {
   it('accepts a block figure absent from the tool envelope when the reply attributes it to the document', () => {
-    const result = validateGroundedClaims('Segundo o anexo, a fatura é R$ 999 na Conta principal.', EMPTY_TOOLS, BLOCK);
+    const result = validateGroundedClaims('Segundo o anexo, a fatura é R$ 999 na Conta principal.', TOOLS_WITH_MONEY, BLOCK);
     expect(result.valid).toBe(true);
+  });
+
+  it('rejects the same attributed block figure when the tool envelope is empty (P0)', () => {
+    const result = validateGroundedClaims('Segundo o anexo, a fatura é R$ 999 na Conta principal.', EMPTY_TOOLS, BLOCK);
+    expect(result.valid).toBe(false);
+    expect(result.counts.money).toBeGreaterThanOrEqual(1);
   });
 
   it('accepts a block date absent from the tool envelope', () => {
@@ -40,7 +46,7 @@ describe('A19-GROUND-EVIDENCE: attachment-admitted figures ground read narration
 
   it('accepts an alternate-format block figure (BR-decimal with an explicit monetary marker)', () => {
     const block = ['extrato total R$ 1.234,56 Conta principal'];
-    expect(validateGroundedClaims('Segundo o extrato, o total é R$ 1.234,56 na Conta principal.', EMPTY_TOOLS, block).valid).toBe(true);
+    expect(validateGroundedClaims('Segundo o extrato, o total é R$ 1.234,56 na Conta principal.', TOOLS_WITH_MONEY, block).valid).toBe(true);
   });
 
   it('REJECTS an unmarked block figure (V1-GROUND-ATTRIBUTION-MARKER: a bare decimal is not document money)', () => {

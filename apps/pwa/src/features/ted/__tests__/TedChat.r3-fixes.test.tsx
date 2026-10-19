@@ -85,8 +85,8 @@ const RETRY = /tentar novamente/i;
 const INPUT_PLACEHOLDER = "Pergunte sobre gastos, metas ou pagamentos…";
 const SEND = /enviar mensagem/i;
 const ATTACH_LIMIT_ERROR = /no máximo 10 arquivos/i;
-const okTurn = (turnId: string, output?: string): agentClient.AgentTurn =>
-  ({ turnId, status: "completed", ...(output ? { output } : {}) }) as agentClient.AgentTurn;
+const okTurn = (turnId: string, output = "Resposta de teste do TED."): agentClient.AgentTurn =>
+  ({ turnId, status: "completed", output }) as agentClient.AgentTurn;
 
 const ownMsg = (
   id: string,

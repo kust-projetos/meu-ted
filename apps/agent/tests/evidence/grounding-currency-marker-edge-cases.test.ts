@@ -27,6 +27,8 @@ const envelope = (data: unknown): EvidenceEnvelope => ({
 });
 
 const EMPTY_TOOLS = envelope([]);
+// P0: document-axis money ACCEPTs carry non-covering tool money.
+const TOOLS_WITH_MONEY = envelope({ feeCents: 1 });
 const BLOCK_42_50 = ['dados extraidos do anexo: valor 42,50 R$ vencimento 2026-10-09'];
 const POSITIVE_WALLET = envelope({ balanceCents: 4250, accountName: 'Conta principal' });
 const NEGATIVE_WALLET = envelope({ balanceCents: -4250, accountName: 'Conta principal' });
@@ -187,10 +189,10 @@ describe('V1-GROUND-ATTRIBUTION-CLAUSE: a negated coordinated clause is not prov
   });
 
   it('PRESERVES the direct citations the rule exists to protect', () => {
-    expect(validateGroundedClaims('O documento informa: R$42.50', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa: R$42.50', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
     // The attribution may follow the figure inside the same clause.
-    expect(validateGroundedClaims('R$ 42,50, conforme o documento informa.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('R$ 42,50, conforme o documento informa.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
     // A negation AFTER the figure denies another object, not this figure.
-    expect(validateGroundedClaims('O documento informa o total de R$ 42,50 e não informa a data.', EMPTY_TOOLS, BLOCK_42_50).valid).toBe(true);
+    expect(validateGroundedClaims('O documento informa o total de R$ 42,50 e não informa a data.', TOOLS_WITH_MONEY, BLOCK_42_50).valid).toBe(true);
   });
 });

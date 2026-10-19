@@ -184,3 +184,33 @@ describe('user skills inside the existing selection budget', () => {
     expect(withUser.system).not.toMatch(/alias-padaria: /);
   });
 });
+
+// Issue #242 ([post-V1] Remover keywords genericas de skills): hyper-generic
+// keywords hijack turns that belong to other skills (or to no skill at all).
+// `conta`/`mostrar`/`ver ` (saldo-extrato) match almost any sentence with a
+// verb or an account noun; `desfaz`/`desfazer`/`undo` (registros) route undo
+// turns to a skill whose own steps say undo "NÃO é tool do modelo" (undo is
+// decided by the deterministic orchestrator + authenticated PWA RPC).
+describe('issue #242: generic keywords must not hijack routing', () => {
+  it.each([['mostrar conta'], ['quero ver minha conta']])(
+    'does not route generic-only "%s" to saldo-extrato',
+    (message) => {
+      const fit = fitSkills(message, 100);
+      expect(fit.selected).toBeNull();
+    },
+  );
+
+  it.each([['desfaz isso'], ['undo']])('does not route undo-only "%s" to registros', (message) => {
+    const fit = fitSkills(message, 100);
+    expect(fit.selected).toBeNull();
+  });
+
+  it('keeps legit recall without the generic keywords', () => {
+    // 'ver extrato' still routes via the content word 'extrato', not 'ver '.
+    expect(fitSkills('ver extrato do mês', 100).selected?.name).toBe('saldo-extrato');
+    expect(fitSkills('qual o meu saldo?', 100).selected?.name).toBe('saldo-extrato');
+    expect(fitSkills('lancei um gasto no mercado hoje', 100).selected?.name).toBe('registros');
+    // A content word still anchors registros even next to an undo verb.
+    expect(fitSkills('desfazer o lançamento duplicado', 100).selected?.name).toBe('registros');
+  });
+});
