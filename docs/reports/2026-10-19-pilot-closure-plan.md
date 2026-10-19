@@ -29,9 +29,9 @@
 
 | ID | Causa-raiz | Classe piloto | Ação |
 |---|---|---|---|
-| #214 | `subscriptions-adapter` persiste sem identidade pré-fetch (fetch-A→switch-B→write-B) | **P1** (contaminação de cache offline; backend autoritativo intacto) | **CORRIGIR agora**: capturar subject+workspace pré-fetch, descartar se mudou, `expectedSubject` no writer + teste RED→GREEN |
-| #215 | header por aba × subject compartilhado; estabilidade ≠ coerência; V3 também afetada | **P1** — decisão architect: **opção (a) coherence check fail-closed** nas fronteiras de publicação/cache (bootstrap + paginação + fallback/preload + publicação offline); autoridade por aba é pós-piloto; só-documentar foi rejeitado | Correção delimitada após #214/#216 (mesma área), aceite: par A/B = zero fetch/publicação/gravação; sem spinner preso nem purga global |
-| #216 | `migrateV1toV2` fora do `withWriteLock`, valida só fingerprint sem workspace | **P1** (corrida rara pode deletar V1 achando que migrou) | **CORRIGIR agora**: serializar com writers + validar partição/conteúdo antes de remover V1 + teste |
+| #214 | `subscriptions-adapter` persiste sem identidade pré-fetch (fetch-A→switch-B→write-B) | **P1** — **CORRIGIDO nesta sessão** (captura pré-fetch + descarte + `expectedSubject`; tester PASS 40/40–52/52; reviewer APPROVED) | PR #226, commit `a9f305a` |
+| #215 | header por aba × subject compartilhado; estabilidade ≠ coerência; V3 também afetada | **P1** — **CORRIGIDO nesta sessão** (decisão architect: coherence check fail-closed em bootstrap/paginação/fallback/preload/publicação/commit V3; tester PASS 158 + 7/7; reviewer APPROVED após 2 rodadas) | PR #226, commit `28bd7dc` |
+| #216 | `migrateV1toV2` fora do `withWriteLock`, valida só fingerprint sem workspace | **P1** — **CORRIGIDO nesta sessão** (serializado + validação partição/conteúdo + cleanup condicional com liveness; tester PASS; reviewer APPROVED) | PR #226, commit `a9f305a` |
 | #170-live | sem prova live do caso `gastei 90 com carne → mercado` com modelo real | **P1** (prova, não código) | E2E live com usuário sintético + modelo real (requer credenciais do operador) |
 | PWA-05 | causa exata dos flakes não provada | **P2** (CI-only) | pós-piloto |
 | AGT-03 | monólitos 4.6k/4.0k linhas | **P2** (dívida, DEFERRED) | pós-piloto |
@@ -43,11 +43,11 @@ Nenhum P0 aberto no escopo do piloto: sem perda/duplicação financeira, sem byp
 ## 4. Execução (em curso)
 
 1. [x] Inventário + verificação read-only (4 explorers).
-2. [ ] Fix #214 (coder → tester → reviewer, branch `fix/pilot-offline-identity-214-216`).
-3. [ ] Fix #216 (mesma branch, serializado — mesmos arquivos de snapshot).
-4. [ ] Decisão #215 (architect) + mitigação mínima ou correção delimitada.
+2. [x] Fix #214 (coder → tester → reviewer, branch `fix/pilot-offline-identity-214-216`, PR #226).
+3. [x] Fix #216 (mesma branch/PR — tester + reviewer APPROVED).
+4. [x] #215 (architect → coder → tester → reviewer APPROVED; commit `28bd7dc` no PR #226).
 5. [ ] Gates focados: `docs:lint`, `typecheck`, testes focados PWA/Agent/API, `governance:check`, `capabilities:check`, `write-policy:check`, `boundary:check`, `public-safety --strict`.
-6. [ ] PR + CI verde; merge/deploy só com go do operador.
+6. [ ] PR #226 + CI verde; merge/deploy só com go do operador.
 7. [ ] Smokes live read-only (`/health`, `/ready`, build-info) no candidato.
 8. [ ] E2E live com modelo real + usuário sintético (requer credenciais/sessão do operador) — matriz §5.
 9. [ ] Relatório final com veredito.
