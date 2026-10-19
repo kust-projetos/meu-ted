@@ -18,6 +18,7 @@
  * forcing online sync.
  */
 import { getOfflineSubjectId } from "@/lib/auth/offline-subject";
+import { getNotedActiveWorkspace } from "@/lib/auth/offline-coherence";
 import {
   computeOwnerKey,
   getOfflineGeneration,
@@ -381,6 +382,77 @@ export async function deleteV2Snapshot(): Promise<void> {
   });
 }
 
+/**
+ * P2 cross-tab guard: delete the V2 slot ONLY while it still belongs to the
+ * given owner (fingerprint + subject partition), checked and deleted inside
+ * a SINGLE readwrite transaction. `withWriteLock` serializes only this
+ * module instance — another tab may commit its own V2 between our commit
+ * and our validation reread; an unconditional delete would destroy that
+ * foreign envelope. A non-matching slot (or a read failure) is preserved.
+ *
+ * Liveness (teardown/rebind race): the caller's entry liveness check runs
+ * BEFORE `openSnapshotDb()` — itself an awaited gap. A teardown/rebind
+ * landing in that gap (plus a fresh same-owner commit from another tab)
+ * would let the stale cleanup delete the new cache. The optional
+ * `isStillValid` guard is therefore re-checked AFTER the open resolves and
+ * again inside `getReq.onsuccess` immediately before the delete; any
+ * divergence preserves the slot (fail-closed).
+ */
+async function deleteV2SnapshotIfOwned(
+  ownerFingerprint: string,
+  subject: string | null,
+  isStillValid?: LivenessGuard,
+): Promise<void> {
+  const db = await openSnapshotDb();
+  if (isStillValid && !isStillValid()) {
+    db.close();
+    return;
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      db.close();
+      resolve();
+    }, SNAPSHOT_OPERATION_TIMEOUT_MS);
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    try {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      const store = tx.objectStore(STORE_NAME);
+      const getReq = store.get(V2_ENVELOPE_KEY);
+      getReq.onsuccess = () => {
+        try {
+          // Liveness revalidation at delete time: a teardown/rebind (or a
+          // same-owner re-bind of a newer generation) crossing the commit
+          // open or the get must not delete the fresh envelope.
+          if (isStillValid && !isStillValid()) return;
+          const env = getReq.result as V2Envelope | undefined;
+          const owned =
+            !!env &&
+            env.schema === 2 &&
+            env.ownerFingerprint === ownerFingerprint &&
+            (subject === null ? !env.offlineSubjectId : env.offlineSubjectId === subject);
+          if (owned) store.delete(V2_ENVELOPE_KEY);
+        } catch {
+          /* fall through — tx events finish */
+        }
+      };
+      // Read failure: never delete — the slot ownership is unverified.
+      tx.oncomplete = () => { db.close(); finish(); };
+      tx.onerror = () => { db.close(); finish(); }; // swallow
+      tx.onabort = () => { db.close(); finish(); }; // swallow
+    } catch {
+      db.close();
+      finish();
+    }
+  });
+}
+
 // ── Public API ─────────────────────────────────────────────────────
 
 /**
@@ -605,6 +677,15 @@ export async function migrateV1toV2(token: string): Promise<void> {
   // session can migrate it later. Never mix owners or delete another user's cache.
   if (v1.token !== token) return;
 
+  // Cleanup identity for the failure paths below: the validation-failure
+  // discard and the catch-all may only remove a V2 slot that still belongs
+  // to THIS migration (fingerprint + entry subject). Armed once the entry
+  // identity is captured; a foreign slot is always preserved.
+  let cleanupFp: string | null = null;
+  let cleanupSubject: string | null = null;
+  let cleanupGeneration: number | null = null;
+  let cleanupArmed = false;
+
   // ── Step 3: migrate under the active session, validate, then delete ──
   // All IndexedDB access is isolated: any failure PRESERVES v1 (never deletes),
   // so an interrupted migration cannot lose the only copy of the data.
@@ -614,66 +695,123 @@ export async function migrateV1toV2(token: string): Promise<void> {
     // fingerprint. Abortar preserva o v1 (nada é deletado aqui).
     const entrySubject = getOfflineSubjectId();
     const entryGeneration = getOfflineGeneration();
+    cleanupSubject = entrySubject;
+    cleanupGeneration = entryGeneration;
     // T07a-R2 liveness guard: re-checked after EVERY awaited step below.
     const stillValid = (): boolean =>
       getOfflineGeneration() === entryGeneration &&
       getOfflineSubjectId() === entrySubject;
     const fp = await fingerprint(token);
+    cleanupFp = fp;
+    cleanupArmed = true;
     if (getOfflineSubjectId() !== entrySubject) return;
     if (getOfflineGeneration() !== entryGeneration) return;
-    const existing = await readV2Envelope();
-    // T07a-R2: the envelope read is an awaited gap — revalidate before the put.
-    if (!stillValid()) return;
-    const subject = getOfflineSubjectId();
-    if (subject !== entrySubject) return;
-    const authenticatedAt = new Date().toISOString();
-    const samePartition =
-      existing &&
-      existing.ownerFingerprint === fp &&
-      (subject === null ? !existing.offlineSubjectId : existing.offlineSubjectId === subject);
-    const base: V2Envelope = samePartition
-      ? existing
-      : freshEnvelope(fp, authenticatedAt, subject);
+    // FIX-216: the whole read-modify-write + validation runs serialized
+    // with the writers inside withWriteLock. A concurrent writer landing
+    // between our read and our put no longer loses its domains to our
+    // stale-base overwrite, and our validation reread observes the lock.
+    let migrated = false;
+    await withWriteLock(async () => {
+      const existing = await readV2Envelope();
+      // T07a-R2: the envelope read is an awaited gap — revalidate before the put.
+      if (!stillValid()) return;
+      const subject = getOfflineSubjectId();
+      if (subject !== entrySubject) return;
+      const authenticatedAt = new Date().toISOString();
+      const samePartition =
+        existing &&
+        existing.ownerFingerprint === fp &&
+        (subject === null ? !existing.offlineSubjectId : existing.offlineSubjectId === subject);
+      const base: V2Envelope = samePartition
+        ? existing
+        : freshEnvelope(fp, authenticatedAt, subject);
 
-    for (const domain of Object.keys(v1.data)) {
-      base.domains[domain as keyof SnapshotDomains] = v1.data[domain] as never;
-    }
-    for (const domain of Object.keys(v1.data)) {
-      // Fall back to now when the v1 envelope lacks a per-domain syncedAt so
-      // the v2 read path (which requires syncedAt) never discards valid data.
-      base.syncedAt[domain as DomainKey] =
-        v1.syncedAt[domain] ?? new Date().toISOString();
-    }
-    // Migration runs inside an authenticated bootstrap: the adopted or fresh
-    // base carries the current subject partition and a fresh age stamp.
-    // A teardown landing anywhere in the gaps above drops the migration —
-    // a stale bootstrap must never populate the snapshot.
-    if (!stillValid()) return;
-    if (subject && !base.offlineSubjectId) base.offlineSubjectId = subject;
-    base.lastOnlineAuthenticatedAt = authenticatedAt;
+      for (const domain of Object.keys(v1.data)) {
+        base.domains[domain as keyof SnapshotDomains] = v1.data[domain] as never;
+      }
+      for (const domain of Object.keys(v1.data)) {
+        // Fall back to now when the v1 envelope lacks a per-domain syncedAt so
+        // the v2 read path (which requires syncedAt) never discards valid data.
+        base.syncedAt[domain as DomainKey] =
+          v1.syncedAt[domain] ?? new Date().toISOString();
+      }
+      // Migration runs inside an authenticated bootstrap: the adopted or fresh
+      // base carries the current subject partition and a fresh age stamp.
+      // A teardown landing anywhere in the gaps above drops the migration —
+      // a stale bootstrap must never populate the snapshot.
+      if (!stillValid()) return;
+      if (subject && !base.offlineSubjectId) base.offlineSubjectId = subject;
+      base.lastOnlineAuthenticatedAt = authenticatedAt;
 
-    await writeV2Envelope(base, stillValid);
+      await writeV2Envelope(base, stillValid);
 
-    // Validation: reread v2 and confirm our data actually landed before we
-    // are allowed to delete the v1 source.
-    const reread = await readV2Envelope();
-    const migrated =
-      reread !== null &&
-      reread.schema === 2 &&
-      reread.ownerFingerprint === fp &&
-      Object.keys(v1.data).every((d) => d in reread.domains);
+      // Validation: reread v2 and confirm our data actually landed in OUR
+      // partition before we are allowed to delete the v1 source. Fingerprint
+      // alone is not enough: an A→B switch between the commit and this reread
+      // must preserve v1 for its rightful owner instead of deleting it under
+      // a stale fingerprint-only validation.
+      const reread = await readV2Envelope();
+      const currentSubject = getOfflineSubjectId();
+      const workspaceBinding = getOfflineWorkspaceId();
+      const partitionOk =
+        reread !== null &&
+        reread.schema === 2 &&
+        reread.ownerFingerprint === fp &&
+        currentSubject === entrySubject &&
+        (currentSubject === null
+          ? !reread.offlineSubjectId
+          : reread.offlineSubjectId === currentSubject) &&
+        (workspaceBinding === null || workspaceBinding === currentSubject) &&
+        stillValid();
+      const contentOk =
+        partitionOk &&
+        reread !== null &&
+        Object.keys(v1.data).every(
+          (d) => d in reread.domains && reread.syncedAt[d as DomainKey] !== undefined,
+        );
 
-    if (!migrated) {
-      // Write didn't stick — discard any partial v2 for this owner, keep v1.
-      await deleteV2Snapshot().catch(() => {});
-      return;
-    }
+      if (!partitionOk || !contentOk) {
+        // Write didn't stick — discard a partial v2 ONLY while the slot
+        // still belongs to this migration. Another tab may have committed
+        // its own V2 between our commit and this reread (withWriteLock is
+        // local-only); that foreign envelope must survive. A teardown
+        // crossing the migration (stillValid() false) also preserves: the
+        // slot may already belong to a new session. v1 is always kept here.
+        if (stillValid() && cleanupFp !== null) {
+          await deleteV2SnapshotIfOwned(cleanupFp, cleanupSubject, stillValid).catch(() => {});
+        }
+        return;
+      }
+      migrated = true;
+    });
+
+    if (!migrated) return;
 
     // Success: only now delete the v1 source.
     localStorage.removeItem(V1_KEY);
   } catch {
-    // Migration failed (storage/IndexedDB error). Preserve v1; discard partial v2.
-    await deleteV2Snapshot().catch(() => {});
+    // Migration failed (storage/IndexedDB error). Preserve v1; discard a
+    // partial v2 only when it is provably ours (see above) — never a
+    // foreign slot. A teardown crossing the migration also preserves: the
+    // slot may already belong to a new session (same-subject re-login would
+    // otherwise lose its fresh envelope to our stale cleanup).
+    if (
+      cleanupArmed &&
+      cleanupFp !== null &&
+      cleanupGeneration !== null &&
+      getOfflineGeneration() === cleanupGeneration &&
+      getOfflineSubjectId() === cleanupSubject
+    ) {
+      // Liveness travels INTO the helper: the open + get gaps below are
+      // revalidated there, so a teardown/rebind landing mid-cleanup (with a
+      // fresh same-owner commit from another tab) preserves the new cache.
+      const expectedGeneration = cleanupGeneration;
+      const expectedSubject = cleanupSubject;
+      const stillValid = (): boolean =>
+        getOfflineGeneration() === expectedGeneration &&
+        getOfflineSubjectId() === expectedSubject;
+      await deleteV2SnapshotIfOwned(cleanupFp, cleanupSubject, stillValid).catch(() => {});
+    }
   }
 }
 
@@ -708,6 +846,23 @@ function isValidV3Owner(principalId: unknown, workspaceId: unknown): boolean {
     principalId.length > 0 &&
     isOfflineWorkspaceId(workspaceId)
   );
+}
+
+/**
+ * #215 (coherence fail-closed): a seleção da aba (in-memory por aba,
+ * espelhada pelo client sem ciclo de import) prevalece sobre a identidade
+ * compartilhada. Com seleção UUID válida divergente do slot lido/gravado —
+ * ou divergente do subject V2 — a operação falha fechada SEM deletar (o
+ * envelope pode pertencer à outra aba; nunca servir, nunca re-atribuir).
+ * Sem seleção (ou seleção não-UUID legada) o gate compartilhado decide.
+ */
+function activeTabBlocksV3(workspaceId: string): boolean {
+  const active = getNotedActiveWorkspace();
+  if (active === undefined || !isOfflineWorkspaceId(active)) return false;
+  if (active !== workspaceId) return true;
+  const subject = getOfflineSubjectId();
+  if (subject !== null && subject !== active) return true;
+  return false;
 }
 
 async function readV3Envelope(): Promise<V3Envelope | null> {
@@ -838,6 +993,11 @@ export async function readV3Snapshot<K extends DomainKey>(
   ) {
     return null;
   }
+  // #215: valida contra a seleção da aba, não só a identidade compartilhada
+  // (duas abas dividem o localStorage; a aba A nunca serve o cache de B).
+  if (activeTabBlocksV3(workspaceId)) {
+    return null;
+  }
   // T07a-R2: capture the generation — revalidated after the envelope read
   // resolves (see below).
   const entryGeneration = getOfflineGeneration();
@@ -855,6 +1015,8 @@ export async function readV3Snapshot<K extends DomainKey>(
     ) {
       return null;
     }
+    // #215: a aba pode ter trocado durante a leitura (gap assíncrono).
+    if (activeTabBlocksV3(workspaceId)) return null;
     if (!env || env.schema !== V3_SCHEMA) {
       if (env) await deleteV3Snapshot();
       return null;
@@ -951,12 +1113,22 @@ export async function writeV3Snapshot<K extends DomainKey>(
   ) {
     return;
   }
+  // #215: escrita sob seleção de aba divergente é descartada (nunca gravada
+  // sob outro workspace, nunca re-atribuída) — sem deletar nada.
+  if (activeTabBlocksV3(workspaceId)) {
+    return;
+  }
   // T07a-R2 liveness guard: re-checked after EVERY awaited step below — a
   // teardown crossing any gap aborts the write before anything hits disk.
+  // #215: a coerência aba×subject (espelho getNotedActiveWorkspace) viaja
+  // JUNTO no predicado — revalidada após o `await openSnapshotDb()` dentro
+  // de writeV3Envelope. Uma troca A→B na abertura do commit aborta o
+  // late-commit sem deletar nada (fail-closed).
   const stillValid = (): boolean =>
     getOfflineGeneration() === entryGeneration &&
     getOfflinePrincipalId() === principalId &&
-    getOfflineWorkspaceId() === workspaceId;
+    getOfflineWorkspaceId() === workspaceId &&
+    !activeTabBlocksV3(workspaceId);
   const authenticatedAt = resolveAuthenticatedAt(opts?.lastOnlineAuthenticatedAt);
   const ownerKey = computeOwnerKey(principalId, workspaceId);
   await withWriteLock(async () => {
@@ -971,7 +1143,9 @@ export async function writeV3Snapshot<K extends DomainKey>(
     // T07a-R2: the envelope read is an awaited gap — revalidate before the
     // put. A teardown (or same-owner re-bind of a newer generation) landing
     // here aborts the stale write.
+    // #215: a seleção da aba pode ter mudado com a escrita enfileirada.
     if (!stillValid()) return;
+    if (activeTabBlocksV3(workspaceId)) return;
     const sameOwner =
       existing !== null &&
       existing.schema === V3_SCHEMA &&

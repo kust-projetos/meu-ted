@@ -48,6 +48,11 @@ import {
   getOfflinePrincipalId,
   getOfflineWorkspaceId,
 } from "@/lib/auth/offline-identity";
+import { getOfflineSubjectId } from "@/lib/auth/offline-subject";
+import {
+  OFFLINE_COHERENCE_RELOAD_MESSAGE,
+  isOfflineCoherent,
+} from "@/lib/auth/offline-coherence";
 import { loadV3SnapshotDomain, migrateV2toV3Snapshot } from "./snapshot-store";
 import type { V3SnapshotIdentity } from "./sync-engine";
 import {
@@ -854,6 +859,26 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           ? { principalId: authority.user.userId, workspaceId: boundWorkspace }
           : undefined;
 
+      // #215 (coherence fail-closed, pré-fetch): o par aba×subject precisa
+      // concordar antes de qualquer I/O (migrate/preload/bootstrap). Par
+      // estável A/B estaciona aqui com zero fetch — sem reescrever subject,
+      // sem purgar cache, sem logout. A tripla com o V3 é exigida só na via
+      // V3 (rejeição cirúrgica: sem V3 coerente o boot segue V2-only).
+      const preActive = getActiveWorkspaceId();
+      const preSubject = getOfflineSubjectId();
+      if (!isOfflineCoherent(preActive, preSubject, null)) {
+        for (const domain of ALL_DOMAINS) {
+          bootstrapDispatch({ type: "DOMAIN_UNAVAILABLE", domain });
+        }
+        bootstrapDispatch({ type: "SET_ERROR", error: OFFLINE_COHERENCE_RELOAD_MESSAGE });
+        bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+        return;
+      }
+      const coherentV3: V3SnapshotIdentity | undefined =
+        v3Identity !== undefined && isOfflineCoherent(preActive, preSubject, v3Identity.workspaceId)
+          ? v3Identity
+          : undefined;
+
       try {
         // 1. Migrate v1 → v2 (reads v1 localStorage, writes v2 IndexedDB, deletes v1)
         if (token) {
@@ -873,12 +898,22 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // durante o preload dispararia runBootstrap sem workspace ativo.
         // Estaciona como o descarte tardio (domínios indisponíveis + boot
         // completo) em vez de emitir requests órfãos.
+        // #215: revalida também o par aba×subject — divergência estável
+        // estaciona com erro acionável (recarregar/revalidar), sem I/O.
         if (cancelled) return;
-        if (!hasActiveWorkspace()) {
+        if (
+          !hasActiveWorkspace() ||
+          !isOfflineCoherent(getActiveWorkspaceId(), getOfflineSubjectId(), null)
+        ) {
           for (const domain of ALL_DOMAINS) {
             bootstrapDispatch({ type: "DOMAIN_UNAVAILABLE", domain });
           }
-          bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+          if (!hasActiveWorkspace()) {
+            bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+          } else {
+            bootstrapDispatch({ type: "SET_ERROR", error: OFFLINE_COHERENCE_RELOAD_MESSAGE });
+            bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+          }
           return;
         }
 
@@ -892,13 +927,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // boot à identidade capturada aqui. Troca A→B antes da resolução
         // passa no gate de ausência (há workspace ativo) mas o payload é
         // de A — toda publicação abaixo exige identidade inalterada.
+        // #215: captura também o subject (par aba×subject) para o descarte
+        // tardio por coerência.
         const bootWorkspaceId = getActiveWorkspaceId();
+        const bootSubject = getOfflineSubjectId();
         const boot = await runBootstrap(
           token,
           bootstrapDispatch,
           () => expireSessionRef.current(),
           snapshotPreload,
-          v3Identity,
+          coherentV3,
         );
 
         if (cancelled) return;
@@ -911,11 +949,23 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // domain as unavailable (read-only derives from that) instead of
         // rendering data the session can no longer address. A later remount
         // with an active workspace re-bootstraps from a fresh instance.
-        if (getActiveWorkspaceId() !== bootWorkspaceId) {
+        // #215: o par aba×subject também precisa estar intacto E coerente —
+        // resposta tardia pós-troca não publica sob outro workspace; o boot
+        // conclui (sem spinner) com erro acionável, sem purgar cache alheio.
+        if (
+          getActiveWorkspaceId() !== bootWorkspaceId ||
+          getOfflineSubjectId() !== bootSubject ||
+          !isOfflineCoherent(getActiveWorkspaceId(), getOfflineSubjectId(), null)
+        ) {
           for (const domain of ALL_DOMAINS) {
             bootstrapDispatch({ type: "DOMAIN_UNAVAILABLE", domain });
           }
-          bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+          if (getActiveWorkspaceId() === undefined) {
+            bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+          } else {
+            bootstrapDispatch({ type: "SET_ERROR", error: OFFLINE_COHERENCE_RELOAD_MESSAGE });
+            bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+          }
           return;
         }
 
@@ -932,8 +982,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           // session is proven online with a known owner. Migration backfills
           // only domains V3 lacks and invalidates untrustworthy V2 sources;
           // failures never block the boot (V3 keeps the live-written data).
-          if (token !== undefined && v3Identity !== undefined) {
-            await migrateV2toV3Snapshot({ token, ...v3Identity }).catch(() => {});
+          if (token !== undefined && coherentV3 !== undefined) {
+            await migrateV2toV3Snapshot({ token, ...coherentV3 }).catch(() => {});
           }
           if (!cancelled) setOfflineLocked(false);
         } else {
@@ -949,8 +999,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // publicam sem workspace (archive entre o tardy check e aqui).
         // FIX-168-FIX2: identidade, não só ausência — troca A→B publica
         // zero (resposta de A nunca aparece com B ativo).
+        // #215: exige também o subject intacto e o par coerente.
         const bootIdentityIntact =
-          !cancelled && getActiveWorkspaceId() === bootWorkspaceId;
+          !cancelled &&
+          getActiveWorkspaceId() === bootWorkspaceId &&
+          getOfflineSubjectId() === bootSubject &&
+          isOfflineCoherent(getActiveWorkspaceId(), getOfflineSubjectId(), null);
         if (bootIdentityIntact && bootProfile)
           setProfile((prev) => mergeProfileFlags(prev, bootProfile));
         if (bootIdentityIntact) setQuickInsights(boot.quickInsights);
@@ -962,9 +1016,20 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
             const summary = await endpoints.fetchDashboardSummary();
             // FIX-168-R2 (descarte tardio): workspace sumiu ou TROCOU entre
             // o tardy check e o fetch do resumo — nunca publica resumo órfão.
-            if (!cancelled && getActiveWorkspaceId() === bootWorkspaceId) setDashboardSummary(summary);
+            // #215: o par aba×subject também é revalidado antes de publicar.
+            if (
+              !cancelled &&
+              getActiveWorkspaceId() === bootWorkspaceId &&
+              getOfflineSubjectId() === bootSubject &&
+              isOfflineCoherent(getActiveWorkspaceId(), getOfflineSubjectId(), null)
+            ) setDashboardSummary(summary);
           } catch {
-            if (!cancelled && getActiveWorkspaceId() === bootWorkspaceId) setDashboardSummary(null);
+            if (
+              !cancelled &&
+              getActiveWorkspaceId() === bootWorkspaceId &&
+              getOfflineSubjectId() === bootSubject &&
+              isOfflineCoherent(getActiveWorkspaceId(), getOfflineSubjectId(), null)
+            ) setDashboardSummary(null);
           }
         }
       } catch (cause) {
@@ -996,15 +1061,47 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     const principalId = getOfflinePrincipalId();
     const workspaceId = getOfflineWorkspaceId();
     if (!principalId || !workspaceId) return;
+    // #215 (coherence fail-closed, publicação offline): a seleção da aba
+    // prevalece sobre o compartilhado — cache B nunca aparece em aba A,
+    // inclusive offline. Com seleção UUID divergente do V3/subject, estaciona
+    // indisponível com erro acionável (sem spinner, sem purga, sem logout).
+    const offlineEntryActive = getActiveWorkspaceId();
+    const offlineEntrySubject = getOfflineSubjectId();
+    // #215: avaliado aqui, despachado dentro de loadOffline (async) para não
+    // chamar setState de forma síncrona no corpo do effect (regra de lint).
+    const offlineEntryIncoherent = !isOfflineCoherent(offlineEntryActive, offlineEntrySubject, workspaceId);
     loadedRef.current = true;
 
     let cancelled = false;
 
     const loadOffline = async () => {
+      if (offlineEntryIncoherent) {
+        bootstrapDispatch({ type: "BOOTSTRAP_START" });
+        for (const domain of ALL_DOMAINS) {
+          bootstrapDispatch({ type: "DOMAIN_UNAVAILABLE", domain });
+        }
+        bootstrapDispatch({ type: "SET_ERROR", error: OFFLINE_COHERENCE_RELOAD_MESSAGE });
+        bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+        return;
+      }
       bootstrapDispatch({ type: "BOOTSTRAP_START" });
       try {
         const preload = await preloadV3Snapshot({ principalId, workspaceId }).catch((): SnapshotPreload => ({}));
         if (cancelled) return;
+        // #215: revalida a coerência após o gap assíncrono — resposta tardia
+        // pós-troca não publica nem grava sob outro workspace.
+        if (
+          getOfflinePrincipalId() !== principalId ||
+          getOfflineWorkspaceId() !== workspaceId ||
+          !isOfflineCoherent(getActiveWorkspaceId(), getOfflineSubjectId(), workspaceId)
+        ) {
+          for (const domain of ALL_DOMAINS) {
+            bootstrapDispatch({ type: "DOMAIN_UNAVAILABLE", domain });
+          }
+          bootstrapDispatch({ type: "SET_ERROR", error: OFFLINE_COHERENCE_RELOAD_MESSAGE });
+          bootstrapDispatch({ type: "BOOTSTRAP_COMPLETE" });
+          return;
+        }
         const served = ALL_DOMAINS.filter((d) => preload[d] !== undefined);
         if (served.length === 0) {
           // Valid route but no domains (or lock raced): no data to gate —
