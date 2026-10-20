@@ -139,6 +139,33 @@ export const mentionsBalance = (text: string): boolean =>
 
 export const seeksAccountBalance = (text: string): boolean => mentionsBalance(text);
 
+const LISTING_VERB_RE = /\b(liste|listar|lista|listagem|mostre|mostrar|mostra|exiba|exibir|quais|ver|veja|diga|diz)\b/;
+const ACCOUNT_NOUN_RE = /\b(conta|contas)\b/;
+// Scopes a listing must never steal: bills, statements and mutations.
+// "liste minhas contas a pagar" is a payables turn, "liste minhas faturas" a
+// statements turn, "crie uma conta" a mutation — none of them is an account
+// listing even though each carries "conta(s)". A `sem cartão` negation is an
+// exclusion, not a card request, so it stays listable (checked below via
+// isNegatedCardExclusion rather than a blanket card-word ban).
+const LISTING_EXCLUSION_RE = /\b(pagar|venc|boleto|fatura|extrato|transac|lancamento)\b/;
+const LISTING_MUTATION_RE = /\b(crie|criar|criacao|cadastr|adicion|nova|novo|abra|abrir)\b/;
+
+/**
+ * True for a plain account-listing turn ("liste minhas contas") that carries
+ * NO balance word. Such turns used to fall through to the generative provider
+ * — where a small model emits tool-call markup, the sanitizer strips it, and
+ * the turn collapses into the clarification fallback despite healthy evidence.
+ */
+export const seeksAccountListing = (text: string): boolean => {
+  const folded = fold(text).replace(/\s+/g, ' ').trim();
+  if (!LISTING_VERB_RE.test(folded)) return false;
+  if (!ACCOUNT_NOUN_RE.test(folded)) return false;
+  if (LISTING_EXCLUSION_RE.test(folded)) return false;
+  if (!isNegatedCardExclusion(folded) && mentionsCard(folded)) return false;
+  if (LISTING_MUTATION_RE.test(folded)) return false;
+  return true;
+};
+
 const TOTAL_PATTERN = /\b(total|totais|soma|somando|somado|tudo junto|geral|consolidado|somatorio)\b/;
 
 export const asksForTotal = (text: string): boolean => TOTAL_PATTERN.test(fold(text).replace(/\s+/g, ' '));
@@ -178,6 +205,19 @@ const renderAccountLine = (account: GroundedAccount): string => {
   if (account.kind === 'unknown') return `- ${account.name} (tipo não confirmado): ${value}.`;
   return `- ${account.name}: ${value}.`;
 };
+
+/**
+ * Kind label for the deterministic account LISTING ("liste minhas contas"):
+ * every listed row names its type explicitly — bank/cash rows never render
+ * bare — while card and unconfirmed rows keep the exact labels the balance
+ * path already uses. Zero/negative bank/cash figures pass through untouched
+ * (ADR-018, no clamp).
+ */
+const accountTypeLabel = (kind: AccountKind): string =>
+  kind === 'bank' ? 'Banco' : kind === 'cash' ? 'Espécie' : kind === 'credit_card' ? 'cartão — dívida' : 'tipo não confirmado';
+
+const renderAccountListLine = (account: GroundedAccount): string =>
+  `- ${account.name} (${accountTypeLabel(account.kind)}): ${formatCents(account.balanceCents)}.`;
 
 /**
  * Full token set of an account name, INCLUDING short (2-letter) tokens such
@@ -846,6 +886,73 @@ const renderPartialNote = (evidence: AccountsEvidence, listed: number, total: nu
 };
 
 /**
+ * Deterministic non-empty account LISTING ("liste minhas contas").
+ *
+ * Every line comes from evidence — figures are never invented — and the turn
+ * never reaches the relay, so a small model can no longer collapse it into
+ * tool-call markup that the sanitizer strips. The balance path above is
+ * untouched: this branch fires ONLY when no balance word is present.
+ *
+ * Invariants mirror the balance renderer: a named listing resolves exactly
+ * like a named balance (one fully-named account renders alone; an unmatched
+ * qualifier or an unresolvable ambiguity clarifies with NO figures, never
+ * another account's balance); a funds marker scopes to non-card rows; long
+ * lists cap at 20 with an explicit note. Returns null when the listing owns
+ * nothing — an empty pool stays with the read-absence renderer (cadastro
+ * offer) and a card-only pool stays with the existing paths.
+ */
+const renderAccountsListing = (scopeText: string, evidence: AccountsEvidence): string | null => {
+  const { accounts } = evidence;
+  if (accounts.length === 0) return null;
+  const fundsScoped = mentionsFundsMarker(scopeText) || isNegatedCardExclusion(scopeText);
+  const pool = fundsScoped ? accounts.filter((account) => account.kind !== 'credit_card') : [...accounts];
+  if (pool.length === 0) return null;
+  const notFound = (noun: 'conta' | 'contas'): string =>
+    noun === 'conta'
+      ? `Não encontrei essa conta. ` +
+        `Contas disponíveis: ${availableNames(accounts)}. ` +
+        `Qual delas você quer ver?${partialSuffix(evidence)}`
+      : `Não consegui identificar qual conta você quer ver. ` +
+        `Contas disponíveis: ${availableNames(accounts)}. ` +
+        `Qual delas você quer ver?${partialSuffix(evidence)}`;
+  const renderSingleListLine = (account: GroundedAccount): string => {
+    const single = renderAccountListLine(account);
+    const note = renderPartialNote(evidence, 1, pool.length);
+    return note ? `${single}\n${note}` : single;
+  };
+  const named = matchAccountsByName(scopeText, pool);
+  if (named.length === 1 && named[0]) {
+    if (hasUnmatchedQualifier(scopeText, named[0]) || !isFullyNamed(scopeText, named[0])) return notFound('conta');
+    return renderSingleListLine(named[0]);
+  }
+  if (named.length > 1) {
+    const { candidates, narrowed } = selectMostSpecific(scopeText, named);
+    if (candidates.length === 1 && candidates[0]) {
+      if (hasUnmatchedQualifier(scopeText, candidates[0]) || !isFullyNamed(scopeText, candidates[0])) {
+        return notFound('conta');
+      }
+      return renderSingleListLine(candidates[0]);
+    }
+    if (candidates.length > 1 && !narrowed && candidates.every((candidate) => isFullyNamed(scopeText, candidate))) {
+      const listed = candidates.slice(0, MAX_LISTED_ACCOUNTS);
+      const lines = listed.map(renderAccountListLine).join('\n');
+      const note = renderMultiListNote(evidence, listed.length, candidates.length);
+      const body = `Suas contas:\n${lines}`;
+      return note ? `${body}\n${note}` : body;
+    }
+    return notFound('contas');
+  }
+  // No name matched: a leftover specific token names something absent —
+  // clarify with NO figures. A genuinely generic listing shows the pool.
+  if (tokens(scopeText).some((token) => !isGenericBalanceWord(token))) return notFound('conta');
+  const listed = pool.slice(0, MAX_LISTED_ACCOUNTS);
+  const lines = listed.map(renderAccountListLine).join('\n');
+  const note = renderPartialNote(evidence, listed.length, pool.length);
+  const body = `Suas contas:\n${lines}`;
+  return note ? `${body}\n${note}` : body;
+};
+
+/**
  * Deterministic account-balance answer. Returns null when this module
  * should NOT own the turn (no accounts evidence, or a non-balance query
  * such as a pure statement/fatura request that the legacy renderers own).
@@ -864,9 +971,12 @@ export const renderAccountsAnswer = (text: string, evidence: AccountsEvidence | 
   const negatedCardExclusion = isNegatedCardExclusion(scopeText);
   const cardQuestion = mentionsCard(scopeText) && !negatedCardExclusion;
   const balanceQuestion = seeksAccountBalance(scopeText);
+  const listingQuestion = seeksAccountListing(scopeText);
   // Pure fatura/extrato questions without balance words stay with the
-  // legacy statement renderers — never a balance, never a card debt.
-  if (!balanceQuestion) return null;
+  // legacy statement renderers — never a balance, never a card debt. A pure
+  // account listing ("liste minhas contas") is owned by the deterministic
+  // listing below — never the generative provider.
+  if (!balanceQuestion && !listingQuestion) return null;
   // Unsupported corrente/poupança subtype fail-closes before ANY numeric
   // answer: the store has only broad bank/cash with no such dimension.
   if (isUnsupportedSubtypeQuery(scopeText)) {
@@ -877,6 +987,13 @@ export const renderAccountsAnswer = (text: string, evidence: AccountsEvidence | 
       `Contas disponíveis: ${availableNames(accounts)}. ` +
       `Quer refinar o escopo?${partialSuffix(evidence)}`
     );
+  }
+  // Deterministic account listing: a non-empty pool renders name + kind +
+  // balance without ever calling the relay. An empty pool returns null so the
+  // read-absence renderer keeps the cadastro offer; the balance path below is
+  // reached only when a balance word is present and is byte-for-byte intact.
+  if (listingQuestion && !balanceQuestion) {
+    return renderAccountsListing(scopeText, evidence);
   }
   const matched = matchAccountsByName(scopeText, accounts);
   const creditCards = accounts.filter((account) => account.kind === 'credit_card');
