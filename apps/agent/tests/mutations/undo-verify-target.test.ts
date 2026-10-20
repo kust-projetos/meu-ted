@@ -189,7 +189,10 @@ describe('closure-undo-verify: service readonly verify', () => {
 
   it('rejects invalid expectedEntity', async () => {
     const { service } = setup(async () => [auditItem('op-fixed-1', ENT_A)]);
-    await expect(service.verify({ requestId: 'req-verify-1', expectedEntity: { type: 'account', id: ENT_A } as unknown as { type: 'transaction'; id: string }, identity: baseIdentity })).rejects.toMatchObject({ code: 'undo.invalid_target' });
+    // accounts-draft-agent: `{ type: 'account' }` is ADMITTED (undo of
+    // `accounts.create`) — only malformed ids stay rejected here.
+    const accepted = await service.verify({ requestId: 'req-verify-1', expectedEntity: { type: 'account', id: ENT_A }, identity: baseIdentity });
+    expect(accepted).toMatchObject({ matches: true });
     await expect(service.verify({ requestId: 'req-verify-1', expectedEntity: { type: 'transaction', id: 'not-a-uuid' }, identity: baseIdentity })).rejects.toMatchObject({ code: 'undo.invalid_target' });
   });
 });

@@ -108,10 +108,10 @@ export const appendOriginMessage = (
 /** Definitive propose outcome once the API answered authoritatively. */
 export type DraftProposeOutcome = 'created' | 'existing' | 'rejected' | 'unknown';
 
-export type DraftTool = TedApprovalTool;
+export type DraftTool = TedApprovalTool | 'accounts.create';
 
 export type MutationDraftResolvedArgs = Readonly<{
-  kind: 'expense' | 'income';
+  kind: 'expense' | 'income' | 'account';
   amountCents: number;
   description: string;
   date: string;
@@ -123,8 +123,15 @@ export type MutationDraftResolvedArgs = Readonly<{
    * authoritative lists at propose time. Never executed, never authority —
    * the API re-validates the canonical IDs. Optional so pre-existing
    * in-flight drafts keep working (card degrades to IDs/legacy shape).
+   *
+   * accounts.create reuses `accountName` as the human account name, plus the
+   * NEVER-inferred kind (`bank`|`cash`) and the signed opening balance
+   * (zero/negative legitimate, ADR-018). `description` mirrors the account
+   * name so draft listings stay human-readable on every path.
    */
   accountName?: string;
+  accountKind?: 'bank' | 'cash';
+  initialBalanceCents?: number;
   categoryName?: string;
 }>;
 
@@ -547,7 +554,12 @@ export const toChannelMessage = (
 ): MutationDraftChannelMessage =>
   Object.freeze({
     draftId: draft.draftId,
-    tool: draft.tool,
+    // `accounts.create` is an agent-local draft tool until the shared
+    // channel contract (`tedApprovalToolSchema`) admits it: the string rides
+    // through unchanged so the PWA can route it, never remapped to another
+    // tool. Follow-up: admit `accounts.create` in `@pi-finance/llm-contracts`
+    // (packages/ — owned outside this scope).
+    tool: draft.tool as TedApprovalTool,
     missingFields: [...draft.missingFields],
     question: question ?? draft.lastQuestion,
     expiresAt: draft.expiresAt,
@@ -578,6 +590,17 @@ export const patchTouchesResolution = (patch: DraftRecordPatch): boolean =>
  * false means "clarify, never propose".
  */
 export const validateCompleteArgs = (args: MutationDraftResolvedArgs): boolean => {
+  // accounts.create gate (contrato fixado accounts-draft-agent): the human
+  // name, an EXPLICIT kind (`bank`|`cash` — never defaulted, never inferred
+  // from the name) and a signed integer opening balance (zero/negative OK).
+  // Canonical IDs (`accountId`/`categoryId`) belong to transactions and are
+  // not required here.
+  if (args.kind === 'account') {
+    if (typeof args.accountName !== 'string' || !args.accountName.trim()) return false;
+    if (args.accountKind !== 'bank' && args.accountKind !== 'cash') return false;
+    if (!Number.isInteger(args.initialBalanceCents)) return false;
+    return true;
+  }
   if (args.kind !== 'expense' && args.kind !== 'income') return false;
   if (!Number.isInteger(args.amountCents) || args.amountCents <= 0) return false;
   if (!args.description || !args.description.trim()) return false;

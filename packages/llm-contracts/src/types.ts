@@ -379,6 +379,7 @@ export type RefreshTarget = (typeof REFRESH_TARGETS)[number];
 export const TED_APPROVAL_TOOLS = [
   'transactions.expense.create',
   'transactions.income.create',
+  'accounts.create',
 ] as const;
 export type TedApprovalTool = (typeof TED_APPROVAL_TOOLS)[number];
 
@@ -457,6 +458,14 @@ export interface PendingOperationPresentation {
   date?: string;
   account?: PendingOperationPresentationLabel;
   category?: PendingOperationPresentationLabel;
+  /**
+   * Account-creation display fields (tool `accounts.create` only): the card
+   * shows the account name/kind/initial balance instead of the
+   * transaction tuple (amount/description/date/account/category).
+   */
+  accountName?: string;
+  accountKind?: string;
+  initialBalanceCents?: number;
   expiresAt: string;
   warnings: string[];
 }
@@ -472,18 +481,26 @@ const isPresentationLabel = (value: unknown): value is PendingOperationPresentat
 
 /**
  * Fail-closed actionability gate (SPEC §16, INV-02): true only when the
- * full financial context the user must see before confirming is present —
- * title, description, amountCents, date, and both account and category
- * labels. A presentation failing this predicate must render as a degraded,
- * non-actionable card: Cancel stays (it moves no money), Confirm never
- * renders. The schema keeps every field optional for transport; this
- * predicate is the single rule deciding whether Confirm may be offered.
+ * full financial context the user must see before confirming is present.
+ * Transaction tools require title, description, amountCents, date, and
+ * both account and category labels. The `accounts.create` tool requires
+ * its own display tuple instead — title, accountName, accountKind and a
+ * finite initialBalanceCents (a card missing any of them renders
+ * degraded/non-actionable: Cancel stays, Confirm never renders). The
+ * schema keeps every field optional for transport; this predicate is the
+ * single rule deciding whether Confirm may be offered.
  */
 export const isActionablePendingOperationPresentation = (
   presentation: PendingOperationPresentation,
 ): boolean => {
   if (!presentation || typeof presentation !== 'object') return false;
   if (!isNonEmptyString(presentation.title)) return false;
+  if (presentation.tool === 'accounts.create') {
+    if (!isNonEmptyString(presentation.accountName)) return false;
+    if (!isNonEmptyString(presentation.accountKind)) return false;
+    if (typeof presentation.initialBalanceCents !== 'number' || !Number.isFinite(presentation.initialBalanceCents)) return false;
+    return true;
+  }
   if (!isNonEmptyString(presentation.description)) return false;
   if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents)) return false;
   if (!isNonEmptyString(presentation.date)) return false;
@@ -529,6 +546,7 @@ export type MutationEffectsEntry =
 export const MUTATION_EFFECTS_REGISTRY: Record<MutationKind, MutationEffectsEntry> = {
   'transactions.expense.create': { mutationKind: 'transactions.expense.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transactions.income.create': { mutationKind: 'transactions.income.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
+  'accounts.create': { mutationKind: 'accounts.create', affectedTargets: ['accounts', 'dashboard-summary'] },
   'transaction.create': { mutationKind: 'transaction.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transaction.update': { mutationKind: 'transaction.update', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transaction.delete': { mutationKind: 'transaction.delete', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },

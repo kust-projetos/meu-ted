@@ -30,6 +30,7 @@ import { getChatAttachmentCapabilities } from "@/lib/capabilities";
 import { useOptionalAppState } from "@/lib/state/app-state-context";
 import { routePatrimonio } from "@/lib/routes";
 import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
+import { isActionablePendingOperationPresentation } from "@pi-finance/llm-contracts/types";
 import type { PendingOperationDecision, UndoDecision } from "@/lib/api/agent-client";
 import { notifyPendingOperationsChanged } from "@/lib/state/use-pending-operations";
 import { Sparkles, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, Trash2, RefreshCw, Lock } from "lucide-react";
@@ -101,6 +102,34 @@ function toLiveCard(item: ActivePendingOperation): TedPendingOperation | null {
     ...(typeof item.description === "string" && item.description ? { summary: item.description } : {}),
     ...(item.presentation ? { presentation: item.presentation } : {}),
   };
+}
+
+/**
+ * accounts-card-pwa-round2: o `pendingOperation` do turno pode chegar sem
+ * `presentation` (ou não-acionável) enquanto a active list autoritativa já
+ * tem o card acionável do MESMO id (evidência live: op de accounts.create
+ * pending com payload completo no servidor, card do turno "incompleto").
+ * O merge nunca degrada: card acionável existente vence o turno
+ * não-acionável; sem presentation existente, o turno ainda minta o card
+ * (eventual consistency). Sem card existente, o turno entra normalmente.
+ */
+function mergeTurnPendingOperation(
+  previous: TedPendingOperation[],
+  incoming: TedPendingOperation,
+): TedPendingOperation[] {
+  const existing = previous.find((op) => op.id === incoming.id);
+  if (!existing) return [incoming, ...previous];
+  const existingActionable =
+    existing.presentation !== undefined &&
+    isActionablePendingOperationPresentation(existing.presentation);
+  const incomingActionable =
+    incoming.presentation !== undefined &&
+    isActionablePendingOperationPresentation(incoming.presentation);
+  // Nunca degrada um card acionável para a forma incompleta do turno.
+  if (existingActionable && !incomingActionable) return previous;
+  // Prefere quem carrega presentation (dados revisáveis) sobre quem não tem.
+  if (existing.presentation !== undefined && incoming.presentation === undefined) return previous;
+  return [incoming, ...previous.filter((operation) => operation.id !== incoming.id)];
 }
 
 /**
@@ -1071,12 +1100,16 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       }
       // The turn response is authoritative too. Apply it AFTER the history
       // reload so an eventually consistent history read cannot erase the card
-      // just returned by the Agent.
+      // just returned by the Agent. accounts-card-pwa-round2: the merge never
+      // downgrades an actionable active-list card to the turn's
+      // presentation-less shape (same id) — see mergeTurnPendingOperation.
       if (returnedPendingOperation && returnedPendingOperation.status !== "succeeded") {
-        setPendingOps((previous) => [
-          returnedPendingOperation,
-          ...previous.filter((operation) => operation.id !== returnedPendingOperation.id),
-        ]);
+        setPendingOps((previous) =>
+          mergeTurnPendingOperation(
+            previous,
+            returnedPendingOperation as TedPendingOperation,
+          ),
+        );
       }
       // debt-undo-confirmation-protocol: the structured turn field is the
       // ONLY source of the undo card — output text never mints one.
@@ -1462,7 +1495,20 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
 
           {error && <div role="alert" className="my-3 rounded-[14px] border border-danger/30 bg-danger-tint px-3.5 py-2.5 text-xs font-semibold text-danger">{error}</div>}
 
-          <div ref={messagesEndRef} />
+          {/* approval-card-overlap: the live-tail sentinel carries a bottom
+              scroll-margin ≥ the fixed BottomNav height (`--tab-bar-height`
+              72px + safe-area) plus composer clearance. `scrollIntoView`
+              with `block: "end"` scrolls EVERY scrollable ancestor including
+              the viewport — without this margin the tail aligns to the
+              viewport bottom (behind the fixed nav) and the last approval
+              card's Confirm button lands under "Início". Covers transaction
+              and account cards (both render above this sentinel). */}
+          <div
+            ref={messagesEndRef}
+            data-testid="ted-live-tail"
+            aria-hidden="true"
+            className="scroll-mb-[calc(var(--tab-bar-height)+env(safe-area-inset-bottom)+5rem)]"
+          />
         </div>
 
         {/* FIX-P1-UX #173: parked readers recover the live tail on demand.

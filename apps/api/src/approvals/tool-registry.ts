@@ -13,7 +13,7 @@
  */
 import type { z } from 'zod';
 import type { MutationReceipt } from '@pi-finance/llm-contracts';
-import { createExpenseInputSchema, createIncomeInputSchema } from '../writes/types.js';
+import { createAccountInputSchema, createExpenseInputSchema, createIncomeInputSchema } from '../writes/types.js';
 import { DomainError } from '../writes/errors.js';
 import type { WriteStore } from '../writes/store.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
@@ -22,6 +22,7 @@ import { AUTOEXECUTION_ELIGIBLE_TOOLS } from './policy.js';
 export const APPROVAL_TOOL_IDS = [
   'transactions.expense.create',
   'transactions.income.create',
+  'accounts.create',
 ] as const;
 
 export type ApprovalToolId = (typeof APPROVAL_TOOL_IDS)[number];
@@ -187,6 +188,45 @@ const executeIncomeCreate: ApprovalToolExecutor = async ({
   };
 };
 
+const executeAccountCreate: ApprovalToolExecutor = async ({
+  writes,
+  workspaceId,
+  args,
+  actorId,
+}) => {
+  const parsed = createAccountInputSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_account_arguments');
+  // Fail-closed actor binding (same contract as the transaction paths).
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  // ADR-018 and workspace scoping ride on the existing write path
+  // (createAccountInputSchema + WriteStore.createAccount) — never reinvented
+  // here. T12c carve-out mirrors the transaction paths: DomainError is
+  // pre-commit validation (duplicate name, credit_card negative) and
+  // rethrows deterministic; anything else stays uncertain. NOTE: account
+  // writes carry no idempotencyKey (WriteStore.createAccount takes no
+  // keyed options), so a reconcile re-run after an uncertain outcome fails
+  // closed on the duplicate-name guard instead of deduping to one row.
+  let account: { id: string };
+  try {
+    account = await writes.createAccount(workspaceId, parsed.data);
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  const operationId = account.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('accounts.create', operationId, { type: 'account', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId,
+    receipt,
+  };
+};
+
 const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
   'transactions.expense.create': {
     tool: 'transactions.expense.create',
@@ -203,6 +243,14 @@ const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
     authorizationPolicy: 'risk_based',
     autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('transactions.income.create'),
     executor: executeIncomeCreate,
+  },
+  'accounts.create': {
+    tool: 'accounts.create',
+    inputSchema: createAccountInputSchema,
+    approvalRequired: true, // Manual-only: never auto-executed (not in AUTOEXECUTION_ELIGIBLE_TOOLS).
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('accounts.create'),
+    executor: executeAccountCreate,
   },
 };
 

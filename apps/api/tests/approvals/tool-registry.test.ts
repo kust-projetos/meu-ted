@@ -16,16 +16,17 @@ import {
   validateApprovalToolArgs,
 } from '../../src/approvals/tool-registry.js';
 import {
+  createAccountInputSchema,
   createExpenseInputSchema,
   createIncomeInputSchema,
 } from '../../src/writes/types.js';
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
 import { createInMemoryStores } from '../../src/writes/in-memory.js';
 
-const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create'] as const;
+const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'accounts.create'] as const;
 
 describe('T0.1: Approval Tool Contract registry', () => {
-  it('registers exactly the two V2 mutable tools', () => {
+  it('registers exactly the three V2 mutable tools', () => {
     expect([...APPROVAL_TOOL_IDS].sort()).toEqual([...EXPECTED_TOOLS].sort());
     for (const tool of EXPECTED_TOOLS) {
       expect(getApprovalToolContract(tool)).toBeDefined();
@@ -48,6 +49,9 @@ describe('T0.1: Approval Tool Contract registry', () => {
     );
     expect(requireApprovalToolContract('transactions.income.create').inputSchema).toBe(
       createIncomeInputSchema,
+    );
+    expect(requireApprovalToolContract('accounts.create').inputSchema).toBe(
+      createAccountInputSchema,
     );
   });
 
@@ -95,7 +99,9 @@ describe('T0.1: Approval Tool Contract registry', () => {
         ['approvalRequired', 'authorizationPolicy', 'autoExecutionEligible', 'executor', 'inputSchema', 'tool'].sort(),
       );
       expect(contract.authorizationPolicy).toBe('risk_based');
-      expect(contract.autoExecutionEligible).toBe(true);
+      // Manual-only pin: transaction tools stay auto-executable-eligible,
+      // accounts.create never is.
+      expect(contract.autoExecutionEligible).toBe(tool !== 'accounts.create');
     }
   });
 

@@ -110,10 +110,9 @@ export const clampPendingV2ExpiresAt = (requestedExpiresAt: string, nowMs = Date
  * registry-derived mutationKind/affectedTargets and the origin operationId.
  *
  * The trusted executor path runs a validated TED tool with the SAME
- * persisted idempotencyKey and returns the actual persisted transaction id
+ * persisted idempotencyKey and returns the actual persisted entity id
  * in `result.operationId`. The receipt is ALWAYS rebuilt canonically via
- * buildTedReceipt(tool, pendingOperationId, {type:'transaction', id:
- * transactionId}) — executor-supplied mutationKind/affectedTargets/
+ * buildTedReceipt(tool, pendingOperationId, {type, id: entityId}) — executor-supplied mutationKind/affectedTargets/
  * entity.type are never trusted (a stale or mismatched executor receipt
  * must not fail the post-write persist). Only a valid executor mutationId
  * string is preserved so receipt identity stays stable across the
@@ -122,14 +121,15 @@ export const clampPendingV2ExpiresAt = (requestedExpiresAt: string, nowMs = Date
  * partial success) and the execute/reconcile callers map it to execution
  * uncertainty (`approval.execution_uncertain`, kept `executing` for lease
  * recovery) — the executor may already have written, so it must never
- * become a retryable `failed`. An unknown tool or an empty transaction id
+ * become a retryable `failed`. An unknown tool or an empty entity id
  * fails closed the same way — the idempotency key and the reconciler
  * protect the already-persisted write.
  *
  * Identity rule (safety-critical): `pendingOperationId` is the origin
  * pending-operation id (claimed.id) and ALWAYS lands in
- * `receipt.operationId`; `result.operationId` is the persisted transaction
- * id and ALWAYS lands in `receipt.entity.id`. Never confuse the two.
+ * `receipt.operationId`; `result.operationId` is the persisted entity id
+ * (transaction or account, per tool) and ALWAYS lands in
+ * `receipt.entity.id`. Never confuse the two.
  */
 const withTedReceipt = (
   result: { status: string; operationId: string; receipt?: unknown },
@@ -140,17 +140,20 @@ const withTedReceipt = (
     throw new PendingOperationV2Error('approval.incomplete_result', 'Executor retornou resultado incompleto.');
   };
   const pendingId = typeof pendingOperationId === 'string' ? pendingOperationId.trim() : '';
-  const transactionId = typeof result.operationId === 'string' ? result.operationId.trim() : '';
-  if (!pendingId || !transactionId) failClosed();
+  const entityId = typeof result.operationId === 'string' ? result.operationId.trim() : '';
+  if (!pendingId || !entityId) failClosed();
   // Trusted tool only: the canonical receipt derives kind/targets from the
   // persisted operation's registry contract, never from executor output.
   if (!getApprovalToolContract(tool)) failClosed();
+  // Entity type follows the tool: account-creation tools resolve to an
+  // account entity, every other registered tool to a transaction entity.
+  const entityType = tool === 'accounts.create' ? 'account' : 'transaction';
   let canonical: { mutationId: string };
   try {
     canonical = buildTedReceipt(
-      tool as 'transactions.expense.create' | 'transactions.income.create',
+      tool as 'transactions.expense.create' | 'transactions.income.create' | 'accounts.create',
       pendingId,
-      { type: 'transaction', id: transactionId },
+      { type: entityType, id: entityId },
     );
   } catch {
     failClosed();

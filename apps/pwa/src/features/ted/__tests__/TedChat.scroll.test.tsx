@@ -235,4 +235,15 @@ describe("TedChat scroll preserves reading (FIX-P1-UX #173)", () => {
     expect(await screen.findByText("nova resposta")).toBeInTheDocument();
     expect(scrollIntoViewMock).toHaveBeenCalled();
   });
+
+  it("live-tail sentinel keeps clearance above the fixed BottomNav (approval-card-overlap)", async () => {
+    render(<TedChat />);
+    await waitFor(() => expect(agentClient.fetchAgentHistory).toHaveBeenCalled());
+    const tail = screen.getByTestId("ted-live-tail");
+    // Structural pin: the sentinel scrolled via `scrollIntoView({block:"end"})`
+    // must carry a bottom scroll-margin ≥ the fixed nav height, otherwise the
+    // last approval card's Confirm button lands under "Início".
+    expect(tail.className ?? "").toMatch(/scroll-mb-/);
+    expect(tail.className ?? "").toMatch(/tab-bar-height/);
+  });
 });

@@ -9,6 +9,19 @@ import {
   type SemanticInterpretation,
 } from '../mutations/semantic-interpretation.js';
 import { parseFinancialMutation, parseMoneyToCents, resolveRelativeDateFragment } from '../mutations/financial-parser.js';
+import {
+  ACCOUNT_CREATE_TOOL,
+  accountMissingFields,
+  accountQuestion,
+  extractAccountName,
+  hasAccountCreationSignal,
+  isConfirmCreateText,
+  isShortAffirmative,
+  parseAccountBalance,
+  parseAccountCreation,
+  parseAccountKind,
+  type AccountDraftKind,
+} from '../mutations/account-creation.js';
 import { resolveMutationEntities, revalidateResolvedEntities, entityResolutionSignals, type EntityReader, type EntityResolutionTrace } from '../mutations/entity-resolver.js';
 import type { MutationApiClient, MutationIdentity } from '../mutations/mutation-api-client.js';
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
@@ -1637,6 +1650,15 @@ export class ConversationOrchestrator {
   private isNonContributingTurn(input: TurnInput): boolean {
     const store = this.dependencies.draftStore;
     if (!store) return false;
+    // accounts.create (account-only path): with an ACTIVE account draft, a
+    // turn carrying a slot contribution ("nubank o saldo atual é 145") IS a
+    // continuation even though it mentions "saldo" — for account drafts the
+    // balance word is slot vocabulary, not a read signal. A value-less
+    // balance question ("qual meu saldo?") contributes nothing and keeps the
+    // pure-read gate below, so the read flow is preserved. Transaction drafts
+    // never reach this branch (no account draft active).
+    const accountDraft = this.activeAccountDraft(input);
+    if (accountDraft && this.accountContributionOf(input.text, accountDraft)) return false;
     if (isPureReadForDraft(input.text)) return true;
     const ctx = this.draftContext(input);
     const now = this.draftNowMs();
@@ -1714,6 +1736,36 @@ export class ConversationOrchestrator {
     draft: MutationDraftRecord,
   ): boolean {
     if (isResetText(text)) return true;
+    // accounts.create (account-only path): an explicit creation turn never
+    // continues a transaction draft — booking the opening balance as a
+    // transaction amount would invent money movement. It replaces the draft
+    // (the same rule a new transaction intention already follows), and the
+    // fresh flow reopens it as an account draft. Against an account draft,
+    // only a creation turn naming a DIFFERENT name/balance/kind replaces;
+    // restating the same (or answering a slot) continues.
+    if (hasAccountCreationSignal(text)) {
+      if (draft.tool !== ACCOUNT_CREATE_TOOL && draft.resolvedArgs.kind !== 'account') return true;
+      const parsed = parseAccountCreation(text);
+      const stored = draft.resolvedArgs;
+      const sameName = (a?: string, b?: string): boolean =>
+        !a || !b || !a.trim() || !b.trim() || a.trim().toLowerCase() === b.trim().toLowerCase();
+      if (!sameName(parsed.name, stored.accountName)) return true;
+      if (
+        parsed.initialBalanceCents !== undefined &&
+        stored.initialBalanceCents !== undefined &&
+        parsed.initialBalanceCents !== stored.initialBalanceCents
+      ) {
+        return true;
+      }
+      if (
+        parsed.accountKind !== undefined &&
+        (stored.accountKind === 'bank' || stored.accountKind === 'cash') &&
+        parsed.accountKind !== stored.accountKind
+      ) {
+        return true;
+      }
+      return false;
+    }
     // R06/A06: an ambiguous or clipped-but-unparsable utterance is not a new
     // intention; it never inherits fields from the active draft.
     const interpretation = this.interpretTurn(text);
@@ -1829,6 +1881,11 @@ export class ConversationOrchestrator {
     draft: MutationDraftRecord,
     client: MutationApiClient,
   ): Promise<TurnResult> {
+    // accounts.create (account-only path): account drafts propose through
+    // the manual-only account handoff (never auto-executed).
+    if (draft.tool === ACCOUNT_CREATE_TOOL || draft.resolvedArgs.kind === 'account') {
+      return this.executeProposeAccount(input, plan, startedAt, base, draft, client);
+    }
     const store = this.dependencies.draftStore!;
     const maxAttempts = this.dependencies.draftMaxProposeAttempts ?? DEFAULT_MAX_PROPOSE_ATTEMPTS;
     const args = draft.resolvedArgs;
@@ -2267,6 +2324,496 @@ export class ConversationOrchestrator {
     });
   }
 
+  /**
+   * accounts.create (account-only path): first ACTIVE account draft in this
+   * identity, if any. Expense/income drafts are invisible here — the account
+   * flow never reads, writes or replaces them except through the explicit
+   * replacement rule in `isReplacement`.
+   */
+  private activeAccountDraft(input: TurnInput): MutationDraftRecord | undefined {
+    const store = this.dependencies.draftStore;
+    if (!store) return undefined;
+    const now = this.draftNowMs();
+    return store.listActive(this.draftContext(input), now).find(
+      (draft) => draft.tool === ACCOUNT_CREATE_TOOL || draft.resolvedArgs.kind === 'account',
+    );
+  }
+
+  /**
+   * accounts.create (account-only path): what this turn contributes to an
+   * account draft, if anything. A contribution is a balance the user WROTE
+   * (signed number, explicit zero), a name for a missing name, a kind marker
+   * for a missing kind, or an explicit creation confirmation for an already
+   * complete draft. Interrogative turns (`?`) never contribute a NAME — a
+   * question ("qual meu saldo?") is a read, never a slot fill — but a turn
+   * carrying a written value still fills the balance even when it mentions
+   * "saldo" (for account drafts "saldo" IS the slot vocabulary, not a read
+   * signal; this is the narrow, account-only exception to the balance-query
+   * guard, and the reason a bare "qual meu saldo?" still routes to the read
+   * flow: it carries no value).
+   */
+  private accountContributionOf(
+    text: string,
+    draft: MutationDraftRecord,
+  ): Readonly<{ name?: string; initialBalanceCents?: number; accountKind?: AccountDraftKind; confirm?: boolean }> | null {
+    const args = draft.resolvedArgs;
+    const missingName = !args.accountName || !args.accountName.trim();
+    const missingBalance = args.initialBalanceCents === undefined || !Number.isInteger(args.initialBalanceCents);
+    const missingKind = args.accountKind !== 'bank' && args.accountKind !== 'cash';
+    const isQuestion = /\?/.test(text);
+    if (!missingName && !missingBalance && !missingKind) {
+      return isConfirmCreateText(text) ? { confirm: true } : null;
+    }
+    let name: string | undefined;
+    let initialBalanceCents: number | undefined;
+    let accountKind: AccountDraftKind | undefined;
+    const balance = parseAccountBalance(text);
+    if (missingBalance) {
+      if (balance) {
+        initialBalanceCents = balance.cents;
+      } else if (missingName || !isQuestion) {
+        // Bare-value fill (parity with #255 follow-ups): "2500" completes a
+        // missing balance even without a finite verb. A lone "0"/"zero" is
+        // an explicit zero, never an absence.
+        const bareZero = /^\s*(zero|zerad[oa]|0)\s*$/i.test(text);
+        if (bareZero) {
+          initialBalanceCents = 0;
+        } else if (!isQuestion) {
+          const followUp = followUpAmountCents(text);
+          if (followUp !== undefined) initialBalanceCents = followUp;
+        }
+      }
+    }
+    if (missingName) {
+      const candidate = extractAccountName(text);
+      if (candidate && (!isQuestion || initialBalanceCents !== undefined)) name = candidate;
+    }
+    if (missingKind) {
+      const kind = parseAccountKind(text);
+      if (kind) accountKind = kind;
+    }
+    if (name === undefined && initialBalanceCents === undefined && accountKind === undefined) return null;
+    return { ...(name !== undefined ? { name } : {}), ...(initialBalanceCents !== undefined ? { initialBalanceCents } : {}), ...(accountKind !== undefined ? { accountKind } : {}) };
+  }
+
+  /**
+   * accounts.create (account-only path): short offer-acceptance ("quero",
+   * "sim", "pode criar") with NO recoverable draft anywhere. Guarded to
+   * `unsupported`/`conversation` plans so confirmations, cancels, reads and
+   * mutation proposals keep their flows, and to draft-free turns so an
+   * active expense/income draft is never stolen by a bare "sim".
+   */
+  private isOfferAcceptance(input: TurnInput, plan: TurnPlan): boolean {
+    if (plan.mode !== 'unsupported' && plan.mode !== 'conversation') return false;
+    if (!isShortAffirmative(input.text)) return false;
+    return !this.hasDraftForTurn(input);
+  }
+
+  private accountConfirmAsk(draft: MutationDraftRecord): string {
+    const name = draft.resolvedArgs.accountName?.trim() || 'a conta';
+    const kind = draft.resolvedArgs.accountKind === 'bank' || draft.resolvedArgs.accountKind === 'cash'
+      ? ` (${draft.resolvedArgs.accountKind === 'bank' ? 'conta no banco' : 'dinheiro em espécie'})`
+      : '';
+    const cents = draft.resolvedArgs.initialBalanceCents ?? 0;
+    const value = `R$ ${(cents / 100).toFixed(2).replace('.', ',').replace('-', '-')}`;
+    return `Posso criar a conta "${name}"${kind}, com saldo inicial ${value}? Responda "pode criar" para confirmar.`;
+  }
+
+  /**
+   * accounts.create (account-only path): persists a fresh creation draft
+   * from an explicit creation turn (or a short offer-acceptance). Never
+   * proposes synchronously without a transport: a complete turn without a
+   * client persists the draft and asks for an explicit "pode criar"; with a
+   * client it proposes immediately under the same idempotency key the
+   * redelivery path reuses. NUNCA auto_execute — the manual-confirmation
+   * pin lives in `executeProposeAccount` (no eligibility check at all).
+   */
+  private async accountFreshFlow(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    client: MutationApiClient | null,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const parsed = parseAccountCreation(input.text);
+    const name = parsed.name;
+    const initialBalanceCents = parsed.initialBalanceCents;
+    const accountKind = parsed.accountKind;
+    const missing = accountMissingFields({ ...(name ? { name } : {}), ...(accountKind ? { accountKind } : {}), ...(initialBalanceCents !== undefined ? { initialBalanceCents } : {}) });
+    const question = accountQuestion(missing, name);
+    const now = this.draftNowMs();
+    const candidate = buildDraftRecord({
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      deviceId: input.deviceId ?? null,
+      intentionId: input.intentionId,
+      tool: ACCOUNT_CREATE_TOOL,
+      resolvedArgs: {
+        kind: 'account',
+        amountCents: 0,
+        // `description` mirrors the account name so every generic draft
+        // listing (ambiguity options, redelivery summaries) stays readable.
+        description: name ?? '',
+        date: '',
+        ...(name ? { accountName: name } : {}),
+        ...(accountKind ? { accountKind } : {}),
+        ...(initialBalanceCents !== undefined ? { initialBalanceCents } : {}),
+      },
+      missingFields: [...missing],
+      question,
+      ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+      nowMs: now,
+    });
+    const { record } = store.getOrCreate(candidate);
+    if (missing.length === 0) {
+      if (!client) return this.clarifyDraft(input, plan, startedAt, base, record, this.accountConfirmAsk(record));
+      const cas = store.cas(record.draftId, 'active', 'proposing', {
+        updatedAt: new Date(now).toISOString(),
+        lastIntentionId: input.intentionId,
+      });
+      if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+      return this.executeProposeAccount(input, plan, startedAt, base, cas.record, client);
+    }
+    return this.clarifyDraft(input, plan, startedAt, base, record, question);
+  }
+
+  /**
+   * accounts.create (account-only path): slot-fill continuation for an
+   * ACTIVE account draft. Same machinery as the transaction continuation
+   * (revision-guarded `writeDraftContinuation`, deterministic questions,
+   * atomic CAS consumption, recoverable propose handoff); only the slots
+   * differ (`name`/`kind`/`initialBalanceCents`, never `accountId`/
+   * `categoryId`, never entity resolution against authoritative lists —
+   * there is nothing to resolve: the user names a NEW account).
+   */
+  private async continueAccountDraft(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+  ): Promise<TurnResult> {
+    const text = input.text ?? '';
+    // Defense in depth: routing only reaches here with a contribution, but a
+    // pure read must never consume — the draft survives untouched.
+    const contribution = this.accountContributionOf(text, draft);
+    if (isPureReadForDraft(text) && !contribution) {
+      return this.clarifyDraft(input, plan, startedAt, base, draft, draft.lastQuestion);
+    }
+    // A reset ("na verdade ...", "esquece") replaces the draft and restarts
+    // the account flow on the same turn (parity with `isReplacement`).
+    if (isResetText(text)) {
+      const store = this.dependencies.draftStore!;
+      store.update(draft.draftId, {
+        status: 'replaced',
+        updatedAt: new Date(this.draftNowMs()).toISOString(),
+        lastIntentionId: input.intentionId,
+      });
+      return this.accountFreshFlow(input, plan, startedAt, base, client);
+    }
+    // Same semantic guards as a #255 follow-up value: a foreign currency, an
+    // approximation or an alternative fills NOTHING — the draft stays intact
+    // and the turn clarifies.
+    if (MONETARY_ALTERNATIVE.test(text)) {
+      return this.clarifyDraft(input, plan, startedAt, base, draft, ALTERNATIVE_AMOUNT_TEXT);
+    }
+    if (hasUnsupportedCurrency(text)) {
+      return this.clarifyDraft(input, plan, startedAt, base, draft, ambiguityClarificationText('unsupported_currency'));
+    }
+    if (hasApproximateAmount(text)) {
+      return this.clarifyDraft(input, plan, startedAt, base, draft, ambiguityClarificationText('approximate_amount'));
+    }
+    const stamp = new Date(this.draftNowMs()).toISOString();
+    // Already complete (fresh turn carried every slot but no transport):
+    // only an explicit "pode criar" proposes — anything else re-asks.
+    const entryMissing = accountMissingFields({
+      ...(draft.resolvedArgs.accountName ? { name: draft.resolvedArgs.accountName } : {}),
+      ...(draft.resolvedArgs.accountKind ? { accountKind: draft.resolvedArgs.accountKind } : {}),
+      ...(draft.resolvedArgs.initialBalanceCents !== undefined ? { initialBalanceCents: draft.resolvedArgs.initialBalanceCents } : {}),
+    });
+    if (entryMissing.length === 0) {
+      if (contribution?.confirm) {
+        const store = this.dependencies.draftStore!;
+        const cas = store.cas(draft.draftId, 'active', 'proposing', {
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+        });
+        if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+        return this.executeProposeAccount(input, plan, startedAt, base, cas.record, client);
+      }
+      return this.clarifyDraft(input, plan, startedAt, base, draft, this.accountConfirmAsk(draft));
+    }
+    if (!contribution) {
+      const missing = accountMissingFields({
+        ...(draft.resolvedArgs.accountName ? { name: draft.resolvedArgs.accountName } : {}),
+        ...(draft.resolvedArgs.accountKind ? { accountKind: draft.resolvedArgs.accountKind } : {}),
+        ...(draft.resolvedArgs.initialBalanceCents !== undefined ? { initialBalanceCents: draft.resolvedArgs.initialBalanceCents } : {}),
+      });
+      return this.clarifyDraft(input, plan, startedAt, base, draft, accountQuestion(missing, draft.resolvedArgs.accountName));
+    }
+    const written = this.writeDraftContinuation(draft.draftId, (current) => {
+      const prev = current.resolvedArgs;
+      const nextName = contribution.name !== undefined ? contribution.name : prev.accountName;
+      const nextBalance = contribution.initialBalanceCents !== undefined ? contribution.initialBalanceCents : prev.initialBalanceCents;
+      const nextKind = contribution.accountKind !== undefined ? contribution.accountKind : prev.accountKind;
+      const overwrote =
+        (contribution.name !== undefined && prev.accountName && prev.accountName.trim() && contribution.name.trim() !== prev.accountName.trim()) ||
+        (contribution.initialBalanceCents !== undefined && prev.initialBalanceCents !== undefined && contribution.initialBalanceCents !== prev.initialBalanceCents) ||
+        (contribution.accountKind !== undefined && (prev.accountKind === 'bank' || prev.accountKind === 'cash') && contribution.accountKind !== prev.accountKind);
+      const missing = accountMissingFields({
+        ...(nextName ? { name: nextName } : {}),
+        ...(nextKind ? { accountKind: nextKind } : {}),
+        ...(nextBalance !== undefined ? { initialBalanceCents: nextBalance } : {}),
+      });
+      return {
+        resolvedArgs: {
+          ...prev,
+          description: nextName ?? '',
+          ...(nextName !== undefined ? { accountName: nextName } : {}),
+          ...(nextKind !== undefined ? { accountKind: nextKind } : {}),
+          ...(nextBalance !== undefined ? { initialBalanceCents: nextBalance } : {}),
+        },
+        missingFields: [...missing],
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        lastQuestion: accountQuestion(missing, nextName),
+        ...this.turnMetadata(input, current, overwrote ? 'correction' : 'continuation'),
+      };
+    });
+    if (!written.ok) {
+      return this.refuseDraftWrite(input, plan, startedAt, base, written.current, accountQuestion(
+        accountMissingFields({
+          ...(draft.resolvedArgs.accountName ? { name: draft.resolvedArgs.accountName } : {}),
+          ...(draft.resolvedArgs.accountKind ? { accountKind: draft.resolvedArgs.accountKind } : {}),
+          ...(draft.resolvedArgs.initialBalanceCents !== undefined ? { initialBalanceCents: draft.resolvedArgs.initialBalanceCents } : {}),
+        }),
+        draft.resolvedArgs.accountName,
+      ));
+    }
+    const record = written.record;
+    const missing = accountMissingFields({
+      ...(record.resolvedArgs.accountName ? { name: record.resolvedArgs.accountName } : {}),
+      ...(record.resolvedArgs.accountKind ? { accountKind: record.resolvedArgs.accountKind } : {}),
+      ...(record.resolvedArgs.initialBalanceCents !== undefined ? { initialBalanceCents: record.resolvedArgs.initialBalanceCents } : {}),
+    });
+    if (missing.length > 0) {
+      return this.clarifyDraft(input, plan, startedAt, base, record, record.lastQuestion);
+    }
+    const store = this.dependencies.draftStore!;
+    const cas = store.cas(record.draftId, 'active', 'proposing', {
+      updatedAt: stamp,
+      lastIntentionId: input.intentionId,
+    });
+    if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+    return this.executeProposeAccount(input, plan, startedAt, base, cas.record, client);
+  }
+
+  /**
+   * accounts.create (account-only path): proposes the account draft through
+   * the SAME pending-operation transport (stable `proposalIdempotencyKey`
+   * derived from the draft identity — the same recoverable handoff as
+   * transactions) with the fixed-contract args `{ name, kind,
+   * initialBalanceCents }`.
+   *
+   * NUNCA auto_execute: this path performs NO eligibility check, mints NO
+   * elevated client and runs NO duplicate probe — an account is always
+   * proposed for MANUAL confirmation, even when every slot arrived in one
+   * turn. (The API contract pins the same rule server-side:
+   * `approvalRequired: true`, not auto-execution eligible.)
+   */
+  private async executeProposeAccount(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const maxAttempts = this.dependencies.draftMaxProposeAttempts ?? DEFAULT_MAX_PROPOSE_ATTEMPTS;
+    const args = draft.resolvedArgs;
+    const name = args.accountName?.trim() ?? '';
+    const kind = args.accountKind;
+    const initialBalanceCents = args.initialBalanceCents;
+    if (!name || (kind !== 'bank' && kind !== 'cash') || !Number.isInteger(initialBalanceCents)) {
+      return this.clarifyDraft(
+        input,
+        plan,
+        startedAt,
+        base,
+        store.get(draft.draftId) ?? draft,
+        accountQuestion(accountMissingFields({
+          ...(name ? { name } : {}),
+          ...(kind === 'bank' || kind === 'cash' ? { accountKind: kind } : {}),
+          ...(Number.isInteger(initialBalanceCents) ? { initialBalanceCents: initialBalanceCents as number } : {}),
+        }), name || undefined),
+      );
+    }
+    const identity: MutationIdentity = {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+    };
+    const normalizedArgs = { name, kind, initialBalanceCents: initialBalanceCents as number };
+    for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt += 1) {
+      try {
+        // R10 (AC30) parity: the attempt is accounted the moment it leaves.
+        this.budgetFor(base).noteProposeAttempt();
+        const proposal = await client.propose({
+          tool: ACCOUNT_CREATE_TOOL,
+          normalizedArgs,
+          summary: name,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        });
+        store.update(draft.draftId, {
+          status: 'consumed',
+          proposalId: proposal.id,
+          proposeOutcome: proposal.existing ? 'existing' : 'created',
+          updatedAt: new Date(this.draftNowMs()).toISOString(),
+          lastIntentionId: input.intentionId,
+        });
+        // Review round 4 P1-A3 parity: the proposal card shows this operation
+        // to the user — record the presentation so a later "sim" may confirm
+        // it. R6 ledgered (compensated if the response never publishes).
+        this.recordPresentedOperations(store, this.draftContext(input), [proposal.id]);
+        return this.completeTurn(input, plan, startedAt, base, {
+          policy: freeze({ ...base.policy, authorizationMode: 'manual' }),
+          mutation: freeze({ operationId: proposal.id, status: 'proposed' }),
+          response: freeze({ text: renderMutationResult('proposed', proposal.summary) }),
+        });
+      } catch (error) {
+        if (isDefinitiveProposeError(error)) {
+          store.update(draft.draftId, {
+            status: 'discarded',
+            discardReason: 'propose_rejected',
+            proposeOutcome: 'rejected',
+            updatedAt: new Date(this.draftNowMs()).toISOString(),
+            lastIntentionId: input.intentionId,
+          });
+          this.emit('mutation.blocked', {
+            intentionId: input.intentionId,
+            traceId: input.traceId,
+            channel: input.channel,
+            domain: plan.domain,
+            mode: plan.mode,
+            status: 'blocked',
+          });
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: renderMutationResult('failed') }),
+          });
+        }
+        if (attempt >= Math.max(1, maxAttempts)) {
+          store.update(draft.draftId, {
+            proposeOutcome: 'unknown',
+            updatedAt: new Date(this.draftNowMs()).toISOString(),
+            lastIntentionId: input.intentionId,
+          });
+          this.emit('mutation.blocked', {
+            intentionId: input.intentionId,
+            traceId: input.traceId,
+            channel: input.channel,
+            domain: plan.domain,
+            mode: plan.mode,
+            status: 'blocked',
+          });
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: renderInconclusive() }),
+          });
+        }
+      }
+    }
+    return this.completeTurn(input, plan, startedAt, base, {
+      response: freeze({ text: renderInconclusive() }),
+    });
+  }
+
+  /** Restart-recovery re-emission for `proposing` account drafts (same key). */
+  private async executeProposeAccountSilent(
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+    input: TurnInput,
+  ): Promise<void> {
+    const store = this.dependencies.draftStore!;
+    const identity: MutationIdentity = {
+      workspaceId: draft.workspaceId,
+      actorId: draft.actorId,
+      deviceId: draft.deviceId ?? input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+    };
+    const args = draft.resolvedArgs;
+    try {
+      const proposal = await client.propose({
+        tool: ACCOUNT_CREATE_TOOL,
+        normalizedArgs: {
+          name: args.accountName?.trim() ?? '',
+          kind: args.accountKind ?? '',
+          initialBalanceCents: args.initialBalanceCents ?? 0,
+        },
+        summary: args.accountName?.trim() || args.description,
+        identity,
+        idempotencyKey: draft.proposalIdempotencyKey,
+      });
+      store.update(draft.draftId, {
+        status: 'consumed',
+        proposalId: proposal.id,
+        proposeOutcome: proposal.existing ? 'existing' : 'created',
+        updatedAt: new Date(this.draftNowMs()).toISOString(),
+      });
+    } catch (error) {
+      if (isDefinitiveProposeError(error)) {
+        store.update(draft.draftId, {
+          status: 'discarded',
+          discardReason: 'propose_rejected',
+          proposeOutcome: 'rejected',
+          updatedAt: new Date(this.draftNowMs()).toISOString(),
+        });
+        return;
+      }
+      store.update(draft.draftId, {
+        proposeOutcome: 'unknown',
+        updatedAt: new Date(this.draftNowMs()).toISOString(),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * accounts.create (account-only path): entry point for creation turns that
+   * arrive under a non-mutation plan (the router maps "criar conta ..." to a
+   * read). With a transport it delegates to the full `runMutationTurn`
+   * (redelivery, recovery, cancel, replacement, continuation); without one
+   * (fresh turn, no draft yet) it still persists the draft and clarifies —
+   * proposing is impossible without a device-bound client, inventing a
+   * proposal is never an option.
+   */
+  private async runAccountCreationTurn(
+    input: TurnInput,
+    plan: TurnPlan,
+    client: MutationApiClient | null,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    decisionText: string,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const ctx = this.draftContext(input);
+    const now = this.draftNowMs();
+    store.expireStale(ctx, now);
+    // "cancela" on the account path cancels with the existing semantics.
+    if (isCancelText(decisionText)) {
+      return this.runCancelTurn(input, plan, client, startedAt, base, decisionText);
+    }
+    if (!client) {
+      const actives = store.listActive(ctx, now);
+      if (actives.length === 0) return this.accountFreshFlow(input, plan, startedAt, base, null);
+      return this.clarifyDraft(input, plan, startedAt, base, actives[0]!, actives[0]!.lastQuestion);
+    }
+    const actives = store.listActive(ctx, now);
+    if (actives.length === 0) return this.accountFreshFlow(input, plan, startedAt, base, client);
+    return this.runMutationTurn(input, plan, client, startedAt, base, decisionText);
+  }
+
   private async continueDraft(
     input: TurnInput,
     plan: TurnPlan,
@@ -2275,6 +2822,14 @@ export class ConversationOrchestrator {
     draft: MutationDraftRecord,
     client: MutationApiClient,
   ): Promise<TurnResult> {
+    // accounts.create (account-only path): an account draft NEVER flows
+    // through the expense/income continuation below (a "saldo 145" follow-up
+    // would otherwise be booked as a transaction amount). Slot-fill lives in
+    // `continueAccountDraft`; the guards, writes and CAS are the same
+    // machinery, only the slots differ.
+    if (draft.tool === ACCOUNT_CREATE_TOOL || draft.resolvedArgs.kind === 'account') {
+      return this.continueAccountDraft(input, plan, startedAt, base, draft, client);
+    }
     const store = this.dependencies.draftStore!;
     // A07/AC15 — a value correction ("não, 500") against an ACTIVE draft
     // replaces the stored amount instead of asking the pending question again.
@@ -2692,6 +3247,13 @@ export class ConversationOrchestrator {
   ): Promise<TurnResult> {
     const store = this.dependencies.draftStore!;
     const ctx = this.draftContext(input);
+    // accounts.create (account-only path): an explicit creation turn that
+    // reaches the fresh flow (via replacement of a transaction draft) opens
+    // an account draft — the transaction interpretation below would persist
+    // a bogus partial expense draft for "criar conta ...".
+    if (hasAccountCreationSignal(input.text)) {
+      return this.accountFreshFlow(input, plan, startedAt, base, client);
+    }
     // R06/A06: interpret once, then keep the historical flow. An ambiguous
     // utterance (AC13) stops before entity resolution: no read, no draft, no
     // proposal, and no invented value.
@@ -3190,19 +3752,33 @@ export class ConversationOrchestrator {
       // turn's own `proposing` draft is handled above with a response), so it
       // is deliberately NOT charged to this turn's propose axis: the snapshot
       // reports what THIS turn proposed.
-      const proposal = await client.propose({
-        tool: draft.tool,
-        normalizedArgs: {
-          amountCents: args.amountCents,
-          description: args.description,
-          date: args.date,
-          accountId: args.accountId!,
-          categoryId: args.categoryId!,
-        },
-        summary: args.description,
-        identity,
-        idempotencyKey: draft.proposalIdempotencyKey,
-      });
+      // accounts.create (account-only path): account drafts re-emit the
+      // fixed-contract args, never the transaction tuple.
+      const proposal = draft.tool === ACCOUNT_CREATE_TOOL || draft.resolvedArgs.kind === 'account'
+        ? await client.propose({
+          tool: ACCOUNT_CREATE_TOOL,
+          normalizedArgs: {
+            name: args.accountName?.trim() ?? '',
+            kind: args.accountKind ?? '',
+            initialBalanceCents: args.initialBalanceCents ?? 0,
+          },
+          summary: args.accountName?.trim() || args.description,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        })
+        : await client.propose({
+          tool: draft.tool,
+          normalizedArgs: {
+            amountCents: args.amountCents,
+            description: args.description,
+            date: args.date,
+            accountId: args.accountId!,
+            categoryId: args.categoryId!,
+          },
+          summary: args.description,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        });
       store.update(draft.draftId, {
         status: 'consumed',
         proposalId: proposal.id,
@@ -3867,6 +4443,19 @@ export class ConversationOrchestrator {
     if (plan.mode === 'mutation-proposal' && client && this.dependencies.draftStore) {
       return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
     }
+    // accounts.create (account-only path): an explicit creation intent
+    // ("criar conta ...", short offer-acceptance "quero") arrives under a
+    // non-mutation plan — the router maps it to a read — but it is a
+    // mutation candidate for a CONTA, never a balance read. It opens an
+    // account draft instead of looping the read offer. Reads without a
+    // creation signal ("qual meu saldo?") keep the normal flow below.
+    if (
+      this.dependencies.draftStore &&
+      (plan.mode === 'unsupported' || plan.mode === 'conversation' || plan.mode === 'read') &&
+      (hasAccountCreationSignal(input.text) || this.isOfferAcceptance(input, plan))
+    ) {
+      return this.runAccountCreationTurn(input, plan, client ?? null, startedAt, result, decisionText);
+    }
     // Draft continuation under a non-mutation plan: a bare answer ("Nubank")
     // routes `unsupported`, but with a recoverable draft and a client it is a
     // missing-field answer, not a new turn. Reads keep their normal flow — a
@@ -3885,8 +4474,22 @@ export class ConversationOrchestrator {
     // `read`, but with a recoverable draft awaiting the account it is a
     // missing-field answer, not a new read. A balance query still never
     // completes a draft (`seeksAccountBalance` keeps the read flow).
+    // accounts.create (account-only path): a slot contribution under a `read`
+    // plan ("nubank o saldo atual é 145", "conta no banco") with an ACTIVE
+    // account draft is a missing-field answer, not a new read. The balance
+    // guards below still protect transaction drafts and value-less balance
+    // questions: this branch requires an account draft AND a written
+    // contribution, so "qual meu saldo?" keeps the read flow.
     // Issue #255 (a): pure reads (`isPureReadForDraft`) never continue —
     // even with a partial draft pending.
+    if (
+      this.dependencies.draftStore && client &&
+      plan.mode === 'read' &&
+      this.activeAccountDraft(input) !== undefined &&
+      this.accountContributionOf(input.text ?? '', this.activeAccountDraft(input)!) !== null
+    ) {
+      return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
+    }
     if (
       this.dependencies.draftStore && client &&
       plan.mode === 'read' &&

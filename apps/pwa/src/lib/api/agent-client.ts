@@ -104,6 +104,12 @@ const pendingOperationPresentationSchema = z
     date: z.string().optional(),
     account: pendingOperationPresentationLabelSchema.optional(),
     category: pendingOperationPresentationLabelSchema.optional(),
+    // accounts.create display tuple (contrato packages/llm-contracts):
+    // nome + tipo + saldo inicial em vez da tupla transacional. Ausente em
+    // payloads legados — o card degrada para a forma enxuta.
+    accountName: z.string().min(1).max(120).optional(),
+    accountKind: z.string().min(1).max(32).optional(),
+    initialBalanceCents: z.number().int().optional(),
     expiresAt: z.string(),
     warnings: z.array(z.string()),
   })
@@ -243,16 +249,25 @@ function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"]
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
   // A server-asserted success may reach chat output/reconciliation only with
-  // the canonical receipt linked to both the pending operation and tx.
+  // the canonical receipt linked to both the pending operation and the
+  // persisted entity (transaction for transaction tools, account for
+  // accounts.create).
   if (raw.status === "succeeded") {
     const candidateId = typeof raw.id === "string" ? raw.id : "";
     const candidateReceipt = sanitizeMutationReceipt(raw.receipt);
     const entityId = typeof candidateReceipt?.entity?.id === "string" ? candidateReceipt.entity.id.trim() : "";
+    // accounts-card-pwa-round2: a entidade vinculada respeita o kind — conta
+    // só em accounts.create, transação nos demais (preserva o gate estrito
+    // de transação e admite o sucesso de criação de conta).
+    const entityMatchesKind =
+      candidateReceipt?.mutationKind === "accounts.create"
+        ? candidateReceipt?.entity?.type === "account"
+        : candidateReceipt?.entity?.type === "transaction";
     if (
       !candidateId.trim() ||
       !candidateReceipt ||
       candidateReceipt.operationId !== candidateId ||
-      candidateReceipt.entity?.type !== "transaction" ||
+      !entityMatchesKind ||
       !entityId
     ) {
       throw executionOutcomeUnknown();
@@ -1033,16 +1048,21 @@ export async function decidePendingOperation(
   }
   // Fail-closed succeeded: the API+Agent contract guarantees a successful
   // execute carries the pending ID + nested succeeded execution + canonical
-  // receipt (receipt.operationId === pending ID, entity {type:'transaction',
-  // id: transactionID}). A succeeded decision without that receipt cannot be
-  // reconciled, so it must reject — never resolve as success. Other statuses
-  // (cancelled/failed/proposed/expired) carry no receipt by contract.
+  // receipt (receipt.operationId === pending ID, entity {type:'transaction' |
+  // 'account', id: persistedId} com o tipo vinculado ao kind: conta só em
+  // accounts.create, transação nos demais). A succeeded decision without that receipt
+  // cannot be reconciled, so it must reject — never resolve as success. Other
+  // statuses (cancelled/failed/proposed/expired) carry no receipt by contract.
   if (safe.status === "succeeded") {
     const entityId = typeof receipt?.entity?.id === "string" ? receipt.entity.id.trim() : "";
+    const entityMatchesKind =
+      receipt?.mutationKind === "accounts.create"
+        ? receipt?.entity?.type === "account"
+        : receipt?.entity?.type === "transaction";
     if (
       !receipt ||
       receipt.operationId !== operationId ||
-      receipt.entity?.type !== "transaction" ||
+      !entityMatchesKind ||
       !entityId
     ) {
       const err = new Error(

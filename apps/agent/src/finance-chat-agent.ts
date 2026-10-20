@@ -3475,10 +3475,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   /**
    * closure-undo-verify: read-only target check
    * (`POST /rpc/undo/:requestId/verify-target`). Strict
-   * `{ expectedEntity: { type: 'transaction', id: UUID } }` body, identity
-   * SOLELY from the gateway-verified headers, narrow `financial.read`
+   * `{ expectedEntity: { type: 'transaction' | 'account', id: UUID } }` body,
+   * identity SOLELY from the gateway-verified headers, narrow `financial.read`
    * delegation for the audit read. Answers `{ requestId, matches }` and
    * persists nothing — never tools, never the model, never preview/decide.
+   * (`account` admitted for accounts-draft-agent: undo of `accounts.create`.)
    */
    private async handleUndoVerifyTarget(request: Request, proposalId: string): Promise<Response> {
      const actorId = request.headers.get("x-agent-actor")?.trim();
@@ -3504,7 +3505,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         !expected || typeof expected !== 'object' || Array.isArray(expected) ||
         Object.keys(record).length !== 1 || !('expectedEntity' in record) ||
         expectedKeys.length !== 2 || !expectedKeys.includes('type') || !expectedKeys.includes('id') ||
-        expected.type !== 'transaction' ||
+        expected.type !== 'transaction' && expected.type !== 'account' ||
         typeof expected.id !== 'string' || !UNDO_UUID_RE.test(expected.id)
       ) {
        return Response.json({ code: "agent.invalid_payload" }, { status: 400 });
@@ -3552,7 +3553,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
      try {
        const outcome = await service.verify({
          requestId: proposalId,
-         expectedEntity: { type: 'transaction', id: expected.id as string },
+         expectedEntity: { type: expected.type as 'transaction' | 'account', id: expected.id as string },
          identity,
        });
        return Response.json({ requestId: proposalId, matches: outcome.matches });

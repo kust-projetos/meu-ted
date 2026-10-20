@@ -393,6 +393,9 @@ export const pendingOperationPresentationSchema = z
       .optional(),
     account: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
     category: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
+    accountName: z.string().trim().min(1).max(120).optional(),
+    accountKind: z.string().trim().min(1).max(32).optional(),
+    initialBalanceCents: z.number().int().optional(),
     expiresAt: z.string().datetime({ offset: true }),
     warnings: z.array(z.string().trim().min(1)),
   })

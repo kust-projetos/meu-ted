@@ -21,7 +21,7 @@ import {
 } from '@pi-finance/llm-contracts';
 
 export const derivePresentationTitle = (tool: string): string =>
-  tool.includes('income') ? 'Confirmar receita' : tool.includes('expense') ? 'Confirmar despesa' : 'Confirmar operação';
+  tool.includes('income') ? 'Confirmar receita' : tool.includes('expense') ? 'Confirmar despesa' : tool.includes('account') ? 'Confirmar conta' : 'Confirmar operação';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
@@ -38,6 +38,30 @@ export const buildPendingOperationPresentation = (input: {
 }): PendingOperationPresentation | null => {
   const args = isRecord(input.normalizedArgs) ? input.normalizedArgs : null;
   if (!args) return null;
+  if (input.tool === 'accounts.create') {
+    const { name, kind, initialBalanceCents } = args;
+    if (
+      typeof name !== 'string' ||
+      typeof kind !== 'string' ||
+      typeof initialBalanceCents !== 'number'
+    ) {
+      return null;
+    }
+    const candidate: Record<string, unknown> = {
+      id: input.id,
+      status: input.status,
+      tool: input.tool,
+      title: derivePresentationTitle(input.tool),
+      accountName: name,
+      accountKind: kind,
+      initialBalanceCents,
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    if (!parsed.success) return null;
+    return parsed.data as PendingOperationPresentation;
+  }
   const { amountCents, description, date, accountId, categoryId } = args;
   if (
     typeof amountCents !== 'number' ||

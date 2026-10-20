@@ -35,7 +35,18 @@ interface TedApprovalCardProps {
 const deriveFallbackTitle = (operation: TedPendingOperation): string => {
   if (operation.operation.includes("income")) return "Confirmar receita";
   if (operation.operation.includes("expense")) return "Confirmar despesa";
+  if (operation.operation.includes("account")) return "Confirmar conta";
   return operation.summary || "Confirmar operação";
+};
+
+/**
+ * Rótulo pt-BR do tipo de conta (accounts.create). O servidor envia
+ * `bank`|`cash`; qualquer valor desconhecido passa cru (nunca inventado).
+ */
+const describeAccountKind = (kind: string): string => {
+  if (kind === "bank") return "Banco";
+  if (kind === "cash") return "Espécie";
+  return kind;
 };
 
 /**
@@ -258,6 +269,24 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
               <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
             </div>
           )}
+          {presentation.accountName && (
+            <div className="flex justify-between gap-2">
+              <dt className="opacity-70">Conta</dt>
+              <dd className="font-semibold">{presentation.accountName}</dd>
+            </div>
+          )}
+          {presentation.accountKind && (
+            <div className="flex justify-between gap-2">
+              <dt className="opacity-70">Tipo</dt>
+              <dd className="font-semibold">{describeAccountKind(presentation.accountKind)}</dd>
+            </div>
+          )}
+          {typeof presentation.initialBalanceCents === "number" && (
+            <div className="flex justify-between gap-2">
+              <dt className="opacity-70">Saldo inicial</dt>
+              <dd className="font-bold">{formatCentsToBRL(presentation.initialBalanceCents)}</dd>
+            </div>
+          )}
           {presentation.account && (
             <div className="flex justify-between gap-2">
               <dt className="opacity-70">Conta</dt>
@@ -328,6 +357,24 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
                 <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
               </div>
             )}
+            {presentation.accountName && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Conta</dt>
+                <dd className="font-semibold">{presentation.accountName}</dd>
+              </div>
+            )}
+            {presentation.accountKind && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Tipo</dt>
+                <dd className="font-semibold">{describeAccountKind(presentation.accountKind)}</dd>
+              </div>
+            )}
+            {typeof presentation.initialBalanceCents === "number" && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Saldo inicial</dt>
+                <dd className="font-bold">{formatCentsToBRL(presentation.initialBalanceCents)}</dd>
+              </div>
+            )}
             {presentation.account && (
               <div className="flex justify-between gap-2">
                 <dt className="text-text-muted">Conta</dt>
@@ -381,6 +428,24 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
             <div className="flex justify-between gap-2">
               <dt className="text-text-muted">Descrição</dt>
               <dd className="font-semibold">{presentation.description}</dd>
+            </div>
+          )}
+          {presentation.accountName && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Conta</dt>
+              <dd className="font-semibold">{presentation.accountName}</dd>
+            </div>
+          )}
+          {presentation.accountKind && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Tipo</dt>
+              <dd className="font-semibold">{describeAccountKind(presentation.accountKind)}</dd>
+            </div>
+          )}
+          {typeof presentation.initialBalanceCents === "number" && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Saldo inicial</dt>
+              <dd className="font-bold">{formatCentsToBRL(presentation.initialBalanceCents)}</dd>
             </div>
           )}
           {typeof presentation.amountCents === "number" && (

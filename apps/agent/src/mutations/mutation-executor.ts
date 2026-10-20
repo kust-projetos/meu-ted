@@ -60,6 +60,10 @@ const receiptFromExecution = (
   if (!entity || typeof entity !== 'object') return undefined;
   // Semantic linkage: a transaction execution always carries a transaction
   // entity naming the persisted transaction id — never another type/id.
+  // accounts.create executions NEVER satisfy this branch: an `accounts.create`
+  // receipt carrying a `transaction` entity (or any swapped shape) is a
+  // mismatched result and must fail closed (see `receiptFromAccountExecution`).
+  if (data.mutationKind === 'accounts.create') return undefined;
   if (entity.type !== 'transaction') return undefined;
   if (entity.id !== transactionId) return undefined;
   // Identity linkage: when the execution names a mutationId it must agree
@@ -73,6 +77,48 @@ const receiptFromExecution = (
     return undefined;
   }
   return data;
+};
+
+/**
+ * accounts.create receipt (contrato fixado accounts-draft-agent, programado
+ * contra mocks até a API aceitar a tool): `{ mutationKind:
+ * 'accounts.create', operationId: <pendingId>, entity: { type: 'account', id:
+ * <accountId> } }`.
+ *
+ * The shared `mutationReceiptSchema` (packages/, owned outside this scope)
+ * does not admit the `accounts.create` kind yet, so the shape is validated
+ * field-by-field here with the SAME strictness as the canonical path
+ * (origin pending-operation linkage + persisted-entity linkage + mutationId
+ * agreement). A receipt that fails EITHER validator is `undefined` and the
+ * caller fails closed — a swapped receipt (transaction entity, divergent
+ * operationId) is never a partial success.
+ */
+const receiptFromAccountExecution = (
+  execution: unknown,
+  pendingOperationId: string,
+  accountId: string,
+): MutationReceipt | undefined => {
+  if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return undefined;
+  const receipt = (execution as { receipt?: unknown }).receipt;
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return undefined;
+  const data = receipt as Record<string, unknown>;
+  if (data.mutationKind !== 'accounts.create') return undefined;
+  if (data.status !== 'succeeded') return undefined;
+  if (typeof data.mutationId !== 'string' || data.mutationId.trim().length === 0) return undefined;
+  if (data.operationId !== pendingOperationId) return undefined;
+  const entity = data.entity as { type?: unknown; id?: unknown } | undefined;
+  if (!entity || typeof entity !== 'object') return undefined;
+  if (entity.type !== 'account') return undefined;
+  if (entity.id !== accountId) return undefined;
+  const executionMutationId = (execution as { mutationId?: unknown }).mutationId;
+  if (
+    typeof executionMutationId === 'string' &&
+    executionMutationId.trim().length > 0 &&
+    data.mutationId !== executionMutationId
+  ) {
+    return undefined;
+  }
+  return receipt as MutationReceipt;
 };
 
 export class MutationExecutor {
@@ -134,7 +180,8 @@ export class MutationExecutor {
     if (execRecord.status !== 'succeeded') failClosed();
     if (typeof execRecord.operationId !== 'string' || execRecord.operationId.trim().length === 0) failClosed();
     const transactionId = (execRecord.operationId as string).trim();
-    const receipt = receiptFromExecution(execution, pendingId, transactionId);
+    const receipt = receiptFromExecution(execution, pendingId, transactionId)
+      ?? receiptFromAccountExecution(execution, pendingId, transactionId);
     if (!receipt) failClosed();
     this.emit('mutation.executed', { status: 'succeeded' });
     return { status: 'succeeded', operationId: input.operationId, receipt };

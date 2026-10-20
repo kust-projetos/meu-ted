@@ -736,7 +736,11 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
           "x-agent-actor": actor,
           "x-agent-workspace": workspace,
         },
-        body: JSON.stringify({ text: "quero", intentionId: "intent-followup-9" }),
+        // NOTE (accounts-draft-agent): a bare "quero" after an offer no
+        // longer relays — it opens an `accounts.create` draft (see
+        // tests/accounts-draft-agent.test.ts). This relay-context test uses
+        // a neutral follow-up so the generative path is still exercised.
+        body: JSON.stringify({ text: "pode me detalhar melhor o cadastro?", intentionId: "intent-followup-9" }),
       }),
     );
 
@@ -748,7 +752,7 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
     expect(prompt).toContain(OFFER);
     expect(prompt!.split(PRIOR_USER).length - 1).toBe(1);
     expect(prompt!.split(OFFER).length - 1).toBe(1);
-    expect(prompt!.split("quero").length - 1).toBe(1);
+    expect(prompt!.split("detalhar").length - 1).toBe(1);
     // Audience scoping holds: neither the other actor's private turn nor the
     // other conversation's turn reaches the upstream prompt.
     expect(prompt).not.toContain(PRIVATE_OTHER);
