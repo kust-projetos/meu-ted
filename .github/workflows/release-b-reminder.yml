@@ -2,9 +2,10 @@ name: Release B Gate Reminder
 
 # V4.1 closure follow-up: reminds the owner to verify the Release B (D11)
 # bearer-removal gate once the 14-day legacy_bearer_used window closes.
-# The window restarted at the 2026-10-03 VPS migration cutover (last event
-# 2026-10-10T22:09:01.594968Z), so the gate is 2026-10-24T22:09:01.594968Z — see
-# docs/reports/2026-10-03-vps-migration-contabo.md.
+# The window restarted at the last event found in the 2026-10-20 read-only
+# Contabo probing (last event 2026-10-19T13:23:55.399917Z, zero events after
+# it), so the gate is 2026-11-02T13:23:55Z — see the #254 comment with the
+# evidence.
 # This workflow NEVER touches production (no SSH, no secrets);
 # it only opens a single idempotent reminder issue.
 on:
@@ -29,8 +30,8 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const WINDOW_START = '2026-10-10T22:09:01.594968Z';
-            const GATE_AT = '2026-10-24T22:09:01.594968Z';
+            const WINDOW_START = '2026-10-19T13:23:55.399917Z';
+            const GATE_AT = '2026-11-02T13:23:55Z';
             const LABEL = 'release-b-gate';
             const TITLE = 'Release B gate — conferir janela D11-R2 (legacy_bearer_used)';
             const owner = context.repo.owner;
@@ -67,7 +68,7 @@ jobs:
                   repo,
                   name: LABEL,
                   color: 'B60205',
-                  description: 'Release B bearer-removal gate (D11 window closing 2026-10-24T22:09:01.594968Z)',
+                  description: 'Release B bearer-removal gate (D11 window closing 2026-11-02T13:23:55Z)',
                 });
                 core.info(`Created missing label '${LABEL}'.`);
               } else {
@@ -76,7 +77,7 @@ jobs:
             }
 
             const body = [
-              'A janela D11-R2 do gate Release B (reiniciada) fecha em **2026-10-24T22:09:01.594968Z** — 14 dias após o último evento `auth.request.legacy_bearer_used` em `2026-10-10T22:09:01.594968Z`.',
+              'A janela D11-R2 do gate Release B (reiniciada) fecha em **2026-11-02T13:23:55Z** — 14 dias após o último evento `auth.request.legacy_bearer_used` em `2026-10-19T13:23:55.399917Z`.',
               'Reinício no corte de migração para a VPS Contabo (2026-10-03): 115 eventos na janela anterior (≥ `2026-10-01T20:14Z`), idênticos nas duas origens. Substitui o gate de 2026-10-15 (D11-R2 original) e o de 2026-10-02 (INCONCLUSIVO — o evento só ia para logs pino do container, recriados nos deploys).',
               '',
               '## Consulta read-only na VPS Contabo (somente SELECT; DB canônico, shape canônico)',
@@ -85,10 +86,10 @@ jobs:
               '',
               '```sh',
               'docker exec -i pi-finance-postgres psql -U postgres -d pi_financeiro_canonical \\',
-              '  -c "SELECT COUNT(*), MIN(created_at), MAX(created_at) FROM audit_logs WHERE event_type = \'auth.request.legacy_bearer_used\' AND created_at > \'2026-10-10T22:09:01.594968Z\';"',
+              '  -c "SELECT COUNT(*), MIN(created_at), MAX(created_at) FROM audit_logs WHERE event_type = \'auth.request.legacy_bearer_used\' AND created_at > \'2026-10-19T13:23:55.399917Z\';"',
               '```',
               '',
-              '(O filtro `> 2026-10-10T22:09:01.594968Z` é EXCLUSIVO no evento âncora: exclui os 115 eventos da janela anterior, o smoke pré-janela de 2026-10-01T20:13:42Z E o próprio evento âncora que reiniciou a contagem — sem isso o gate nunca zeraria.)',
+              '(O filtro `> 2026-10-19T13:23:55.399917Z` é EXCLUSIVO no evento âncora: exclui os 115 eventos da janela anterior, o smoke pré-janela de 2026-10-01T20:13:42Z E o próprio evento âncora que reiniciou a contagem — sem isso o gate nunca zeraria.)',
               '',
               '## Critério',
               '',
