@@ -201,3 +201,87 @@ describe('issue #255 (a) partial draft', () => {
     expect(h.responseProvider).not.toHaveBeenCalled();
   });
 });
+
+describe('issue #255 review fixes (HIGH/HIGH/MEDIUM)', () => {
+  it('9) follow-up in unsupported currency does not fill the draft (clarify in BRL)', async () => {
+    const h = harness(Date.parse('2026-10-19T12:00:00Z'));
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'comprei uma bicicleta parcela em 10 x', intentionId: 'i255-f1-t1' }, identity),
+    );
+    const r2 = await h.orchestrator.runTurn(
+      normalizeRestTurn(
+        { text: '2500 dólares com o cartao nubank categoria mercado', intentionId: 'i255-f1-t2' },
+        identity,
+      ),
+    );
+    expect(h.request).not.toHaveBeenCalled();
+    expect(r2.mutation).toBeUndefined();
+    expect(r2.response?.text).toMatch(/reais/i);
+    const actives = h.store.listActive(
+      { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null },
+      Date.parse('2026-10-19T12:01:00Z'),
+    );
+    expect(actives).toHaveLength(1);
+    expect(actives[0]!.resolvedArgs.amountCents).toBeLessThanOrEqual(0);
+    expect(actives[0]!.missingFields).toContain('amount');
+  });
+
+  it('10) approximate follow-up value does not fill the draft (asks exact value)', async () => {
+    const h = harness(Date.parse('2026-10-19T12:00:00Z'));
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'comprei uma bicicleta parcela em 10 x', intentionId: 'i255-f2-t1' }, identity),
+    );
+    const r2 = await h.orchestrator.runTurn(
+      normalizeRestTurn(
+        { text: 'uns 2500 com o cartao nubank', intentionId: 'i255-f2-t2' },
+        identity,
+      ),
+    );
+    expect(h.request).not.toHaveBeenCalled();
+    expect(r2.mutation).toBeUndefined();
+    expect(r2.response?.text).toMatch(/exato/i);
+    const actives = h.store.listActive(
+      { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null },
+      Date.parse('2026-10-19T12:01:00Z'),
+    );
+    expect(actives).toHaveLength(1);
+    expect(actives[0]!.resolvedArgs.amountCents).toBeLessThanOrEqual(0);
+    expect(actives[0]!.missingFields).toContain('amount');
+  });
+
+  it('11) category-first answer keeps the amount pending until a valid value arrives', async () => {
+    const h = harness(Date.parse('2026-10-19T12:00:00Z'));
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'comprei uma bicicleta', intentionId: 'i255-f3-t1' }, identity),
+    );
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'categoria mercado', intentionId: 'i255-f3-t2' }, identity),
+    );
+    const mid = h.store.listActive(
+      { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null },
+      Date.parse('2026-10-19T12:01:00Z'),
+    );
+    expect(mid).toHaveLength(1);
+    expect(mid[0]!.missingFields).toContain('amount');
+    const r3 = await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: '2500 com o cartao nubank', intentionId: 'i255-f3-t3' }, identity),
+    );
+    expect(r3.mutation?.status).toBe('proposed');
+    const body = h.request.mock.calls[0]?.[2] as { body?: { normalizedArgs?: Record<string, unknown> } };
+    expect(body?.body?.normalizedArgs).toMatchObject({ amountCents: 250000, accountId: ACCOUNT_NUBANK.id });
+  });
+
+  it('12) partial draft keeps the relative date of the opening turn with provenance', async () => {
+    const h = harness(Date.parse('2026-10-19T12:00:00Z'));
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'comprei uma bicicleta ontem', intentionId: 'i255-f4-t1' }, identity),
+    );
+    const actives = h.store.listActive(
+      { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null },
+      Date.parse('2026-10-19T12:01:00Z'),
+    );
+    expect(actives).toHaveLength(1);
+    expect(actives[0]!.resolvedArgs.date).toBe('2026-10-18');
+    expect(actives[0]!.fieldProvenance?.date?.value).toBe('2026-10-18');
+  });
+});

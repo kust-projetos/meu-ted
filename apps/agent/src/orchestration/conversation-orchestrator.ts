@@ -3,6 +3,7 @@ import {
   hasMutationIntentSignal,
   interpretMutationUtterance,
   ambiguityClarificationText,
+  hasApproximateAmount,
   hasNegation,
   hasUnsupportedCurrency,
   type SemanticInterpretation,
@@ -567,6 +568,20 @@ const PARTIAL_DRAFT_AMOUNT_SENTINEL = 0;
 const PARTIAL_DRAFT_QUESTION =
   'Não identifiquei o valor a registrar. Informe o valor e a descrição.';
 
+/**
+ * Issue #255 review fix (HIGH) — a partial draft's missing `amount` survives
+ * every continuation write while the sentinel (<= 0) persists. An entity
+ * answer ("categoria mercado") must not drop it from `missingFields`, or the
+ * later value ("2500") finds no pending field to fill and the draft becomes
+ * unrecoverable.
+ */
+const withPartialAmountPending = (missing: readonly string[], current: MutationDraftRecord): string[] =>
+  (!Number.isInteger(current.resolvedArgs.amountCents) || current.resolvedArgs.amountCents <= 0) &&
+  current.missingFields.includes('amount') &&
+  !missing.includes('amount')
+    ? ['amount', ...missing]
+    : [...missing];
+
 /** A pure read never continues a draft — even a partial one (anti-hijack). */
 const isPureReadForDraft = (text: string): boolean => {
   if (seeksAccountBalance(text)) return true;
@@ -1107,9 +1122,18 @@ export class ConversationOrchestrator {
       const redelivered = store.findByIntention(ctx, input.intentionId);
       if (redelivered) return redelivered;
       if (store.listActive(ctx, now).length > 0 || store.listProposing(ctx, now).length > 0) return undefined;
-      const base = new Date(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(now)) + 'T12:00:00Z');
-      const date = Number.isNaN(base.getTime()) ? new Date(now).toISOString().slice(0, 10) : base.toISOString().slice(0, 10);
+      const nowDate = new Date(now);
+      // Issue #255 review fix (MEDIUM) — the opening turn's relative date
+      // fragment ("comprei uma bicicleta ontem") dates the partial through
+      // the parser's own `dateFor` (same timezone as the fresh path), instead
+      // of always stamping today. No fragment (or an ambiguous one) keeps the
+      // previous today-fallback; an ambiguous fragment is not a guess.
+      const fragment = resolveRelativeDateFragment(input.text, { now: nowDate });
+      const fallback = new Date(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(nowDate) + 'T12:00:00Z');
+      const fallbackDate = Number.isNaN(fallback.getTime()) ? new Date(now).toISOString().slice(0, 10) : fallback.toISOString().slice(0, 10);
+      const date = fragment.status === 'date' ? fragment.date : fallbackDate;
       const kind = inferPartialKind(input.text);
+      const dateRaw = fragment.status === 'date' ? (/\b(anteontem|ontem|hoje)\b/i.exec(input.text)?.[1] ?? '') : '';
       const candidate = buildDraftRecord({
         workspaceId: ctx.workspaceId,
         actorId: ctx.actorId,
@@ -1126,6 +1150,11 @@ export class ConversationOrchestrator {
         question: PARTIAL_DRAFT_QUESTION,
         ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
         nowMs: now,
+        // The relative date came from the user's own token — provenance keeps
+        // the fragment so a later correction has a baseline to point at.
+        ...(fragment.status === 'date'
+          ? { fieldProvenance: { date: { source: 'token' as const, raw: dateRaw, value: date } } }
+          : {}),
       });
       return store.getOrCreate(candidate).record;
     } catch {
@@ -2258,6 +2287,31 @@ export class ConversationOrchestrator {
       // amount even without a finite verb ("2500", "2500 sendo 10x 250 com o
       // cartão nubank"). Same guarded write as a correction; pure reads never
       // reach here (anti-hijack gate above).
+      //
+      // Issue #255 review fix (HIGH) — the follow-up goes through the SAME
+      // semantic guards as a fresh utterance: a foreign currency ("2500
+      // dólares") or an approximation ("uns 2500") is a clarification that
+      // fills NOTHING, instead of a value silently booked in reais.
+      if (hasUnsupportedCurrency(input.text)) {
+        return this.stopDraftCorrection(
+          input,
+          plan,
+          startedAt,
+          base,
+          draft,
+          ambiguityClarificationText('unsupported_currency'),
+        );
+      }
+      if (hasApproximateAmount(input.text)) {
+        return this.stopDraftCorrection(
+          input,
+          plan,
+          startedAt,
+          base,
+          draft,
+          ambiguityClarificationText('approximate_amount'),
+        );
+      }
       const followUp = followUpAmountCents(input.text);
       if (followUp !== undefined) {
         const applied = this.applyDraftCorrection(input, draft, followUp);
@@ -2446,7 +2500,7 @@ export class ConversationOrchestrator {
         (draft.lastQuestion === CATEGORY_IMPASSE_TEXT || resolution.clarification === draft.lastQuestion)
       ) {
         const settled = this.writeDraftContinuation(draft.draftId, (current) => ({
-          missingFields: [...resolution.missingFields],
+          missingFields: withPartialAmountPending(resolution.missingFields, current),
           updatedAt: stamp,
           lastIntentionId: input.intentionId,
           lastQuestion: CATEGORY_IMPASSE_TEXT,
@@ -2476,7 +2530,7 @@ export class ConversationOrchestrator {
           (turnCategoryQuery !== undefined && current.resolvedArgs.categoryQuery === observedBefore.categoryQuery);
         return {
           ...(adoptsTurnArgs ? { resolvedArgs: argsOver(current) } : {}),
-          missingFields: [...resolution.missingFields],
+          missingFields: withPartialAmountPending(resolution.missingFields, current),
           updatedAt: stamp,
           lastIntentionId: input.intentionId,
           lastQuestion: resolution.clarification,
@@ -2503,16 +2557,37 @@ export class ConversationOrchestrator {
     });
     if (!validateCompleteArgs(completeArgs(currentDraft, resolution))) {
       // Canonical gate failed agent-side: never propose, clarify again.
+      //
+      // Issue #255 review fix (HIGH): a partial draft fails this gate BY
+      // DESIGN (sentinel amount), so the failure is not a reason to drop
+      // this turn's verified entities and contributions. They are stored and
+      // only `amount` stays pending, with the value question kept until a
+      // valid fill arrives. Non-partial drafts keep the previous fail-closed
+      // shape (question only).
+      const partialAmountPendingWrite = (current: MutationDraftRecord): boolean =>
+        (!Number.isInteger(current.resolvedArgs.amountCents) || current.resolvedArgs.amountCents <= 0) &&
+        current.missingFields.includes('amount');
       const question = 'Não foi possível validar os dados com segurança. Descreva novamente o lançamento.';
-      const written = this.writeDraftContinuation(draft.draftId, (current) => ({
-        missingFields: ['accountId', 'categoryId'],
-        updatedAt: stamp,
-        lastIntentionId: input.intentionId,
-        lastQuestion: question,
-        ...this.turnMetadata(input, current, relation),
-      }));
-      if (!written.ok) return this.refuseDraftWrite(input, plan, startedAt, base, written.current, question);
-      return this.clarifyDraft(input, plan, startedAt, base, written.record, question);
+      const written = this.writeDraftContinuation(draft.draftId, (current) => {
+        const partial = partialAmountPendingWrite(current);
+        return {
+          ...(partial ? { resolvedArgs: completeArgs(current, resolution) } : {}),
+          missingFields: withPartialAmountPending(['accountId', 'categoryId'], current),
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+          lastQuestion: partial ? PARTIAL_DRAFT_QUESTION : question,
+          ...this.turnMetadata(input, current, relation),
+        };
+      });
+      if (!written.ok) {
+        const current = written.current;
+        const partial = current !== undefined && partialAmountPendingWrite(current);
+        const text = partial ? PARTIAL_DRAFT_QUESTION : question;
+        return this.refuseDraftWrite(input, plan, startedAt, base, current, text);
+      }
+      const record = written.record;
+      const text = partialAmountPendingWrite(record) ? PARTIAL_DRAFT_QUESTION : question;
+      return this.clarifyDraft(input, plan, startedAt, base, record, text);
     }
     // A08/R08: existence, activity and scope are re-checked IMMEDIATELY before
     // the write (the CAS below is what arms the propose). This is the SAME
@@ -2522,7 +2597,7 @@ export class ConversationOrchestrator {
     this.emitEntityResolution(input, plan, verified.trace);
     if (!verified.complete) {
       const written = this.writeDraftContinuation(draft.draftId, (current) => ({
-        missingFields: [...verified.missingFields],
+        missingFields: withPartialAmountPending(verified.missingFields, current),
         updatedAt: stamp,
         lastIntentionId: input.intentionId,
         lastQuestion: verified.clarification,
