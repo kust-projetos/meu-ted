@@ -31,9 +31,9 @@ services:
         BUILD_TIME: local
     container_name: ted-local-api
     ports:
-      - "3001:3001"
-      - "3000:3000"
-      - "8787:8787"
+      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:8787:8787"
     environment:
       - PORT=3001
       - HOST=0.0.0.0
@@ -110,7 +110,7 @@ services:
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=ted_local
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - ted-local-pgdata:/var/lib/postgresql/data
     healthcheck:
