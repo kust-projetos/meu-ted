@@ -11,3 +11,5 @@ data
 .env.local
 .env.pi
 .env.pi.example
+
+docker/local/.env*

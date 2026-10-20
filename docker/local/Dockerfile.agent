@@ -1,0 +1,29 @@
+# Agent TED local (wrangler dev --local). Build da raiz do repo:
+# docker build -f docker/local/Dockerfile.agent .
+# O worker roda em modo 100% local (Durable Objects + R2 emulados, --local).
+# Nenhum deploy é feito por este Dockerfile.
+# Base Debian (não Alpine): o binário workerd do Cloudflare exige glibc —
+# no Alpine (musl) o spawn falha com ENOENT mesmo com o arquivo presente.
+FROM node:24-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends bash curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g pnpm@10.34.1
+WORKDIR /monorepo
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY packages/llm-contracts/package.json packages/llm-contracts/package.json
+COPY apps/agent/package.json apps/agent/package.json
+COPY apps/api/package.json apps/api/package.json
+COPY apps/codex-broker/package.json apps/codex-broker/package.json
+COPY apps/pwa/package.json apps/pwa/package.json
+RUN pnpm install --frozen-lockfile --ignore-scripts=false
+COPY packages/llm-contracts packages/llm-contracts
+COPY apps/agent apps/agent
+# Contrato compartilhado precisa estar compilado (o worker importa o pacote).
+RUN pnpm --filter @pi-finance/llm-contracts build
+# .dev.vars é gerado no entrypoint a partir das envs do compose
+# (fonte única de config; nada de segredo vai para a imagem).
+COPY docker/local/agent-entrypoint.sh /usr/local/bin/agent-entrypoint.sh
+RUN chmod +x /usr/local/bin/agent-entrypoint.sh
+WORKDIR /monorepo/apps/agent
+EXPOSE 8787
+ENTRYPOINT ["/usr/local/bin/agent-entrypoint.sh"]

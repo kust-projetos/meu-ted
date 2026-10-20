@@ -1,0 +1,124 @@
+# Stack local do Meu Ted (gerenciada via Docker).
+# Uso:  docker compose -f docker/local/docker-compose.yml --project-name ted-local up --build -d
+#       docker compose -f docker/local/docker-compose.yml --project-name ted-local ps
+#       docker compose -f docker/local/docker-compose.yml --project-name ted-local down
+# URLs: PWA http://localhost:3000 · API http://localhost:3001/health · Agent (wrangler dev) http://localhost:8787
+#
+# - API com Postgres local persistente (banco ted_local, migrations V1–V63
+#   aplicadas pelo job docs/runbooks/api-migration-v2.md). Segredos do relay
+#   LLM vêm de docker/local/.env.agent-local (gitignored, nunca commitar).
+# - PWA fala com a API pelo proxy same-origin
+#   (PWA_BACKEND_PROXY_ORIGIN); o browser nunca precisa de CORS nem de env
+#   NEXT_PUBLIC_*. Login funciona: sign-up aberto no local
+#   (DISABLE_SIGN_UP=false) + criação de workspace pelo onboarding.
+# - TED roda no worker local (serviço `agent`, wrangler dev --local) com o
+#   modelo ativo configurado no banco local (agent_llm_runtime_config).
+#   Nenhuma chamada sai para produção a partir desta stack.
+# - Postgres faz parte do stack padrão (sobe junto com `up`, sem --profile).
+#   Banco ted_local (alinhado à DATABASE_URL da API); migrations V1–V63 via
+#   job docs/runbooks/api-migration-v2.md. Sem DATABASE_URL a API cai em
+#   in-memory (dados evaporam) — no local a DATABASE_URL está sempre setada.
+name: ted-local
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+      args:
+        BUILD_SHA: local
+        BUILD_ID: local
+        BUILD_TIME: local
+    container_name: ted-local-api
+    ports:
+      - "3001:3001"
+      - "3000:3000"
+      - "8787:8787"
+    environment:
+      - PORT=3001
+      - HOST=0.0.0.0
+      - NODE_ENV=development
+      - DISABLE_SIGN_UP=false
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/ted_local
+      # Par HMAC de delegação com o agent (mesmo valor; local-only).
+      - PI_DELEGATED_TOKEN_SECRET=dev-agent-delegation-secret-32-chars!
+      # Persistência via Postgres local (banco ted_local + migrations V1–V63
+      # aplicadas pelo job docs/runbooks/api-migration-v2.md).
+      # Sem DATABASE_URL, a API cai para stores in-memory (dados evaporam).
+    env_file:
+      - .env.agent-local
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  pwa:
+    build:
+      context: ../..
+      dockerfile: docker/local/Dockerfile.pwa
+    container_name: ted-local-pwa
+    # Mesma network namespace da API: "localhost" aqui é o loopback
+    # compartilhado (api:3001 + pwa:3000). Exigido pelos allowlists dos
+    # proxies (só aceitam produção ou http://localhost|127.0.0.1).
+    network_mode: "service:api"
+    environment:
+      - PWA_BACKEND_PROXY_ORIGIN=http://localhost:3001
+      - PWA_AGENT_PROXY_ORIGIN=http://127.0.0.1:8787
+      - ALLOW_LOCAL_ORIGIN=1
+      - NODE_ENV=development
+    depends_on:
+      api:
+        condition: service_healthy
+
+  agent:
+    build:
+      context: ../..
+      dockerfile: docker/local/Dockerfile.agent
+    container_name: ted-local-agent
+    # Mesmo network namespace da API: o PWA alcança o worker via
+    # http://127.0.0.1:8787 e o worker alcança a API via http://localhost:3001.
+    network_mode: "service:api"
+    environment:
+      - API_ORIGIN=http://localhost:3001
+      - AGENT_CONFIG_TOKEN=dev-agent-config-token-32-chars-minimum!
+      - AGENT_RUNTIME_ADMIN_TOKEN=dev-agent-runtime-admin-token-32-chars!
+      # Default dev espelhando a API não-prod (local-only, sem efeito produção).
+      - AGENT_CONNECTION_TOKEN_SECRET=dev-agent-connection-secret-at-least-32-chars!
+      - AGENT_AUTH_SERVICE_TOKEN=dev-agent-auth-service-token-32-chars!
+      # Par HMAC de delegação com a API (mesmo valor nos dois lados; local-only).
+      - AGENT_DELEGATION_SECRET=dev-agent-delegation-secret-32-chars!
+      - PWA_ORIGIN=http://localhost:3000
+      - ALLOW_LOCAL_ORIGIN=1
+      - AGENT_PORT=8787
+    volumes:
+      - ted-local-agent-state:/state
+    depends_on:
+      api:
+        condition: service_healthy
+
+  postgres:
+    # Parte do stack padrão: sobe junto com `up` (sem --profile).
+    image: postgres:15-alpine
+    container_name: ted-local-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=ted_local
+    ports:
+      - "5433:5432"
+    volumes:
+      - ted-local-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  ted-local-pgdata:
+  ted-local-agent-state:

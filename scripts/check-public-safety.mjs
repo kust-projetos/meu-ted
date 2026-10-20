@@ -84,6 +84,7 @@ const RULE_ALLOWLIST = [
   { rule: "url-embedded-credentials", path: "scripts/capture-production-topology.test.mjs", reason: "redaction unit-test fixture with fake strings (supersecret/abc123xyz)" },
   { rule: "url-embedded-credentials", path: "docs/ops/2026-08-18-postgres-integration-status.md", reason: "local CI test container (postgres:postgres@127.0.0.1) — ephemeral, no production credential" },
   { rule: "url-embedded-credentials", path: "docs/superpowers/goal-runs/2026-08-24-v032-v033.md", reason: "local rehearsal container (rehearse:rehearse@localhost) — ephemeral, no production credential" },
+  { rule: "url-embedded-credentials", path: "docker/local/docker-compose.yml", reason: "local-only dev stack (postgres:postgres@postgres) — ephemeral, no production credential" },
   // Metadata WARN allowlist (DEBT2-CODER-ALLOWLISTS 2026-09-18): the
   // production endpoint constants migrated out of the repo. Deploy URLs
   // live in gh repo variables (vars.PWA_PROD_URL / vars.AGENT_PROD_URL);
