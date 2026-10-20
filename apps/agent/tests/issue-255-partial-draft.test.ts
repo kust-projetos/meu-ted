@@ -27,10 +27,16 @@ const identity: AuthenticatedIdentity = {
 
 const ACCOUNT_NUBANK = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
 const CATEGORY_MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' };
+const CATEGORY_SAUDE = { id: '00000000-0000-4000-8000-000000000012', name: 'Saúde' };
 
 const reader = (): EntityReader => ({
   listAccounts: async () => [ACCOUNT_NUBANK],
   listCategories: async () => [CATEGORY_MERCADO],
+});
+
+const multiCategoryReader = (): EntityReader => ({
+  listAccounts: async () => [ACCOUNT_NUBANK],
+  listCategories: async () => [CATEGORY_MERCADO, CATEGORY_SAUDE],
 });
 
 const mockClient = () => {
@@ -42,7 +48,7 @@ const mockClient = () => {
   return { api: new MutationApiClient({ request }), request };
 };
 
-const harness = (nowMs: number) => {
+const harness = (nowMs: number, entityReader?: EntityReader) => {
   let now = nowMs;
   const store = new InMemoryMutationDraftStore();
   const { api, request } = mockClient();
@@ -62,7 +68,7 @@ const harness = (nowMs: number) => {
   }) as never);
   const orchestrator = new ConversationOrchestrator({
     mutationApiClient: api,
-    entityReader: reader(),
+    entityReader: entityReader ?? reader(),
     draftStore: store,
     draftNow: () => now,
     responseProvider,
@@ -250,7 +256,9 @@ describe('issue #255 review fixes (HIGH/HIGH/MEDIUM)', () => {
   });
 
   it('11) category-first answer keeps the amount pending until a valid value arrives', async () => {
-    const h = harness(Date.parse('2026-10-19T12:00:00Z'));
+    // Multi-category fixture: with a single category the resolver could not
+    // misattribute, so this pins the stored answer AND the final selection.
+    const h = harness(Date.parse('2026-10-19T12:00:00Z'), multiCategoryReader());
     await h.orchestrator.runTurn(
       normalizeRestTurn({ text: 'comprei uma bicicleta', intentionId: 'i255-f3-t1' }, identity),
     );
@@ -263,12 +271,78 @@ describe('issue #255 review fixes (HIGH/HIGH/MEDIUM)', () => {
     );
     expect(mid).toHaveLength(1);
     expect(mid[0]!.missingFields).toContain('amount');
+    // The intermediate turn persists the named category (ids only resolve at
+    // propose time; the query is the stored answer the resolver must honor).
+    expect(mid[0]!.resolvedArgs.categoryQuery).toBe('mercado');
     const r3 = await h.orchestrator.runTurn(
       normalizeRestTurn({ text: '2500 com o cartao nubank', intentionId: 'i255-f3-t3' }, identity),
     );
     expect(r3.mutation?.status).toBe('proposed');
     const body = h.request.mock.calls[0]?.[2] as { body?: { normalizedArgs?: Record<string, unknown> } };
-    expect(body?.body?.normalizedArgs).toMatchObject({ amountCents: 250000, accountId: ACCOUNT_NUBANK.id });
+    expect(body?.body?.normalizedArgs).toMatchObject({
+      amountCents: 250000,
+      accountId: ACCOUNT_NUBANK.id,
+      categoryId: CATEGORY_MERCADO.id,
+    });
+  });
+
+  it('13) monetary alternative follow-up does not fill the draft (asks for a single value)', async () => {
+    const h = harness(Date.parse('2026-10-19T12:00:00Z'), multiCategoryReader());
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'comprei uma bicicleta parcela em 10 x', intentionId: 'i255-r2-t1' }, identity),
+    );
+    const r2 = await h.orchestrator.runTurn(
+      normalizeRestTurn(
+        { text: '2500 ou 250 com o cartao nubank categoria mercado', intentionId: 'i255-r2-t2' },
+        identity,
+      ),
+    );
+    expect(h.request).not.toHaveBeenCalled();
+    expect(r2.mutation).toBeUndefined();
+    expect(r2.response?.text).toMatch(/nico valor/i);
+    const actives = h.store.listActive(
+      { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null },
+      Date.parse('2026-10-19T12:01:00Z'),
+    );
+    expect(actives).toHaveLength(1);
+    expect(actives[0]!.resolvedArgs.amountCents).toBeLessThanOrEqual(0);
+    expect(actives[0]!.missingFields).toContain('amount');
+  });
+
+  it('14) entities-complete but valueless follow-up keeps the value question with args persisted', async () => {
+    const h = harness(Date.parse('2026-10-19T12:00:00Z'), multiCategoryReader());
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'comprei uma bicicleta parcela em 10 x', intentionId: 'i255-r2g-t1' }, identity),
+    );
+    // Entities resolve, amount still missing: the canonical gate fails, the
+    // value question is kept, and the verified args are persisted.
+    const r2 = await h.orchestrator.runTurn(
+      normalizeRestTurn(
+        { text: 'com o cartao nubank categoria mercado', intentionId: 'i255-r2g-t2' },
+        identity,
+      ),
+    );
+    expect(h.request).not.toHaveBeenCalled();
+    expect(r2.mutation).toBeUndefined();
+    expect(r2.response?.text).toBe(MISSING_AMOUNT_TEXT);
+    const mid = h.store.listActive(
+      { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null },
+      Date.parse('2026-10-19T12:01:00Z'),
+    );
+    expect(mid).toHaveLength(1);
+    expect(mid[0]!.missingFields).toContain('amount');
+    expect(mid[0]!.resolvedArgs.accountId).toBe(ACCOUNT_NUBANK.id);
+    expect(mid[0]!.resolvedArgs.categoryId).toBe(CATEGORY_MERCADO.id);
+    const r3 = await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: '2500', intentionId: 'i255-r2g-t3' }, identity),
+    );
+    expect(r3.mutation?.status).toBe('proposed');
+    const body = h.request.mock.calls[0]?.[2] as { body?: { normalizedArgs?: Record<string, unknown> } };
+    expect(body?.body?.normalizedArgs).toMatchObject({
+      amountCents: 250000,
+      accountId: ACCOUNT_NUBANK.id,
+      categoryId: CATEGORY_MERCADO.id,
+    });
   });
 
   it('12) partial draft keeps the relative date of the opening turn with provenance', async () => {

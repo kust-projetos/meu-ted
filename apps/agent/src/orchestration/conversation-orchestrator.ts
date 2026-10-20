@@ -496,6 +496,21 @@ const CORRECTION_PATTERNS: readonly Readonly<{ pattern: RegExp; openTail: boolea
 /** The numeric run exactly as typed; a trailing `.`/`,` is punctuation, not part of it. */
 const TYPED_NUMBER_RUN = /^\d[\d.,]*/;
 const DISJUNCTIVE_ALTERNATIVE = /\bou\b/iu;
+
+/**
+ * Issue #255 review round 2 (P1) — a monetary alternative ("2500 ou 250")
+ * is a question, never a value. Follow-up guard, checked BEFORE any write.
+ *
+ * Parity note (verified 2026-10-19): the FRESH path does NOT reject `ou` —
+ * `parseFinancialMutation` only fails `e`/`mais`/`+` via
+ * `secondAmountConnector`, so a fresh "comprei 2500 ou 250 …" takes the FIRST
+ * value. The follow-up is intentionally stricter: filling the amount sentinel
+ * with the first branch would invent the user's choice. A fresh-path change
+ * is deliberately out of scope here.
+ */
+const MONETARY_ALTERNATIVE = /(\d[\d.,]*)\s+ou\s+(\d[\d.,]*)/iu;
+const ALTERNATIVE_AMOUNT_TEXT =
+  'Identifiquei dois valores na sua mensagem. Informe um único valor em reais para eu registrar.';
 /** The ONLY unit a pt-BR correction may carry; anything else is a foreign currency. */
 const BRL_UNIT = /^(?:reais?|rs\.?)\b/iu;
 const LETTER = /\p{L}/u;
@@ -2292,6 +2307,21 @@ export class ConversationOrchestrator {
       // semantic guards as a fresh utterance: a foreign currency ("2500
       // dólares") or an approximation ("uns 2500") is a clarification that
       // fills NOTHING, instead of a value silently booked in reais.
+      // Issue #255 review round 2 (P1) — a monetary alternative ("2500 ou
+      // 250 …") is a question, never a value: clarify BEFORE any write, so
+      // neither branch fills the sentinel. The draft stays intact and nothing
+      // is proposed. Checked before the currency/approximation guards because
+      // it is the most specific refusal for this shape.
+      if (MONETARY_ALTERNATIVE.test(input.text)) {
+        return this.stopDraftCorrection(
+          input,
+          plan,
+          startedAt,
+          base,
+          draft,
+          ALTERNATIVE_AMOUNT_TEXT,
+        );
+      }
       if (hasUnsupportedCurrency(input.text)) {
         return this.stopDraftCorrection(
           input,
