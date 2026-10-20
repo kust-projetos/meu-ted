@@ -360,6 +360,49 @@ export const MAX_CHAT_ATTACHMENTS = 10;
 export const stableHistoryMessageId = (role: 'user' | 'assistant', intentionId: string): string =>
   role === 'user' ? `msg-user-${intentionId}` : `msg-asst-${intentionId}`;
 
+/**
+ * Teto do prompt do relay REST (snapshot de follow-up + turno vivo).
+ */
+export const REST_RELAY_PROMPT_MAX_CHARS = 15_000;
+
+/**
+ * Compõe o prompt do relay REST a partir do histórico de follow-up e do
+ * turno atual.
+ *
+ * - Sem histórico: `currentText` fatiado no teto (byte-idêntico ao legado).
+ * - Com histórico que cabe: composição legada byte-idêntica
+ *   (`histórico\nUsuário: <turno>`).
+ * - Com histórico acima do teto (P2a): o turno atual vai INTEGRAL
+ *   (separador + texto reservados primeiro) e o restante do orçamento é
+ *   preenchido com o histórico MAIS RECENTE — as linhas mais antigas são
+ *   evitadas primeiro; uma única linha ainda excedente é cortada pelo
+ *   início (corte de chars). O slice único legado eliminava o turno vivo.
+ * - Com turno atual sozinho acima do teto (P2 round 3): o histórico é
+ *   zerado e o TEXTO ATUAL é truncado para caber após o prefixo
+ *   "Usuário: " — o total final NUNCA excede o teto.
+ */
+export const composeRestRelayPrompt = (
+  history: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>,
+  currentText: string,
+): string => {
+  if (history.length === 0) return currentText.slice(0, REST_RELAY_PROMPT_MAX_CHARS);
+  const currentTail = `\nUsuário: ${currentText}`;
+  if (currentTail.length > REST_RELAY_PROMPT_MAX_CHARS) {
+    const prefix = "Usuário: ";
+    return `${prefix}${currentText.slice(0, REST_RELAY_PROMPT_MAX_CHARS - prefix.length)}`;
+  }
+  let historyBudget = REST_RELAY_PROMPT_MAX_CHARS - currentTail.length;
+  if (historyBudget < 0) historyBudget = 0;
+  const lines = history.map((turn) => `${turn.role === 'assistant' ? 'TED' : 'Usuário'}: ${turn.content}`);
+  let block = lines.join('\n');
+  while (block.length > historyBudget && lines.length > 1) {
+    lines.shift();
+    block = lines.join('\n');
+  }
+  if (block.length > historyBudget) block = block.slice(block.length - historyBudget);
+  return block.length > 0 ? `${block}${currentTail}` : currentTail.slice(1);
+};
+
 export const composeTurnTextWithAttachmentData = (input: {
   userText: string;
   data: ReadonlyArray<{ kind: AttachmentKind; text: string }>;
@@ -1313,8 +1356,15 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   /**
    * D3 — contexto LLM só com turnos acessíveis ao ator (leitura, WS/SDK,
    * caches e compactação passam por aqui; o armazenado permanece intacto).
+   *
+   * `opts.conversationId` fixa o escopo SEM reconsultar a sessão aberta
+   * (redelivery usa a audiência vinculada à intenção); ausente = sessão
+   * aberta corrente (comportamento anterior). `opts.excludeMessageIds`
+   * remove bolhas pelo id estável ANTES de projetar (redelivery/retry com
+   * texto acrescido não deduparia por conteúdo); ausente = sem exclusão
+   * (comportamento idêntico para os chamadores SDK atuais).
    */
-  private sdkVisibleTurns(actorId: string, workspaceId: string, opts?: { conversationId?: string }): Array<{ role: 'user' | 'assistant'; content: string }> {
+  private sdkVisibleTurns(actorId: string, workspaceId: string, opts?: { conversationId?: string; excludeMessageIds?: readonly string[] }): Array<{ role: 'user' | 'assistant'; content: string }> {
     // FIX-WS-D3-R2 (findings 1/5): escopo da conversa aberta — com sessão
     // aberta, SÓ turnos dela (+legado sem conversationId, ainda gated pelo
     // predicado); o arquivado de outras conversas fica fora do contexto e
@@ -1331,6 +1381,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         return [];
       }
     }
+    const excludedIds = new Set(opts?.excludeMessageIds ?? []);
     const visible = (Array.isArray(this.messages) ? this.messages : []).filter((message) => {
       const meta = (message.metadata ?? {}) as {
         workspaceId?: unknown;
@@ -1339,6 +1390,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         actorId?: unknown;
         conversationId?: unknown;
       };
+      if (excludedIds.size > 0) {
+        const mid = (message as { id?: unknown }).id;
+        if (typeof mid === 'string' && mid !== '' && excludedIds.has(mid)) return false;
+      }
       if (scope) {
         const cid = typeof meta.conversationId === 'string' ? meta.conversationId : '';
         // Conversa arquivada (id distinto) fica fora; legado sem
@@ -1548,6 +1603,38 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       // internal status (normalize builds it as false), so it persists once
       // as a normal user turn.
       const isCorrectionRetry = input.internalCorrection === true;
+      // REST follow-up context: snapshot do histórico visível ANTES de
+      // persistir a bolha do turno corrente, pelo MESMO gerenciador com
+      // escopo de audiência do caminho SDK/compactação (`sdkVisibleTurns`:
+      // predicado ADR-027; fail-closed [] sem sessão ou em erro de registry).
+      // Sem histórico prévio, o prompt segue byte-idêntico ao anterior.
+      // routeIntent/decisionText/confirmação/mutações intactos.
+      // P1 (round 2): o escopo é a conversa VINCULADA À INTENÇÃO
+      // (`input.audience`, first-writer-wins) — passada EXPLICITAMENTE a
+      // `sdkVisibleTurns`, sem reconsultar a sessão aberta (um redelivery da
+      // coletiva A após o ator abrir a privada B receberia o histórico de B
+      // com resposta carimbada em A). Sem vínculo/conversa resolvível, o
+      // snapshot é vazio (fail-closed: prompt byte-idêntico, sem histórico).
+      // P2b (round 2): a bolha do turno corrente sai pelo ID ESTÁVEL
+      // (`stableHistoryMessageId('user', intentionId)`) ANTES de projetar —
+      // o retry de correção interna acresce instruções ao `input.text`
+      // (channel-evidence) e a igualdade de conteúdo falhava, duplicando a
+      // pergunta no prompt.
+      const restFollowupHistory = (() => {
+        const boundConversationId =
+          typeof input.audience?.conversationId === 'string' ? input.audience.conversationId : undefined;
+        if (boundConversationId === undefined || boundConversationId === '') return [];
+        let turns: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+        try {
+          turns = this.sdkVisibleTurns(input.actorId, input.workspaceId, {
+            conversationId: boundConversationId,
+            excludeMessageIds: [stableHistoryMessageId('user', input.intentionId)],
+          });
+        } catch {
+          turns = [];
+        }
+        return turns;
+      })();
       if (!isCorrectionRetry) {
         // FIX-WS-D3-R2 finding 2: a pergunta carimba a audiência capturada
         // UMA vez na entrada do turno (`input.audience`, server-side) — a
@@ -1620,7 +1707,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             'agent.persistence_unavailable: durable usage storage is not available',
           );
         }
-        const promptText = input.text.slice(0, 15_000);
+        const promptText = composeRestRelayPrompt(restFollowupHistory, input.text);
         const systemText = cognition.system.slice(0, 7_900);
         const estimatedInputTokens = estimateTokens(`${systemText}${promptText}`);
         const maxOutputTokens = DEFAULT_POLICY.maxOutputTokens;

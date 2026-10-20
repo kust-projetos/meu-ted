@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import type { UIMessage } from "agents/ai-chat-agent";
-import { FinanceChatAgent } from "../src/finance-chat-agent.js";
+import { FinanceChatAgent, composeRestRelayPrompt, stableHistoryMessageId } from "../src/finance-chat-agent.js";
 import { attachRelayUsageStorage } from "./helpers/relay-usage-storage.js";
 import worker from "../src/worker.js";
 import * as apiClient from "../src/tools/api-client.js";
@@ -665,5 +665,287 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
     expect(body.code).toBe("agent.persistence_unavailable");
     // Ensure messages array was not mutated as fallback
     expect(agent.messages).toHaveLength(0);
+  });
+
+  it("(9) POST /rpc/chat carries visible follow-up context in the relay prompt without leaking other-actor or other-conversation turns", async () => {
+    const { agent, persisted } = createTestAgent();
+    const actor = "user-followup-1";
+    const workspace = "ws-followup-1";
+    const CONV = "conv-current-1";
+    const OTHER_CONV = "conv-other-1";
+    const OTHER_ACTOR = "user-other-1";
+    const PRIOR_USER = "liste minhas contas";
+    const OFFER = "Ainda não encontrei contas aqui. Quer que eu te guie no cadastro? [OFERTA-UNICA-9]";
+    const PRIVATE_OTHER = "SEGREDO-PRIVADO-OUTRO-ATOR-9";
+    const OTHER_CONV_TEXT = "TEXTO-OUTRA-CONVERSA-9";
+    const at = "2026-10-20T10:00:00.000Z";
+    persisted.push(
+      {
+        id: "seed-user-1",
+        role: "user",
+        parts: [{ type: "text", text: PRIOR_USER }],
+        metadata: { actorId: actor, workspaceId: workspace, visibility: "workspace", ownerActorId: actor, conversationId: CONV, createdAt: at },
+      },
+      {
+        id: "seed-asst-1",
+        role: "assistant",
+        parts: [{ type: "text", text: OFFER }],
+        metadata: { actorId: "ted", workspaceId: workspace, visibility: "workspace", ownerActorId: actor, conversationId: CONV, createdAt: at },
+      },
+      {
+        id: "seed-private-other",
+        role: "user",
+        parts: [{ type: "text", text: PRIVATE_OTHER }],
+        metadata: { actorId: OTHER_ACTOR, workspaceId: workspace, visibility: "private", ownerActorId: OTHER_ACTOR, conversationId: CONV, createdAt: at },
+      },
+      {
+        id: "seed-other-conv",
+        role: "user",
+        parts: [{ type: "text", text: OTHER_CONV_TEXT }],
+        metadata: { actorId: actor, workspaceId: workspace, visibility: "workspace", ownerActorId: actor, conversationId: OTHER_CONV, createdAt: at },
+      },
+    );
+    // Production has an open session on CONV; the harness mock storage has
+    // none, so the open conversation is provided directly (the manager itself
+    // is reused unchanged — only its pre-existing session precondition).
+    (agent as unknown as { readOpenSessionOrThrow: () => unknown }).readOpenSessionOrThrow = () => ({ conversationId: CONV });
+    vi.spyOn(apiClient, "requestPiApiJson").mockResolvedValue({ items: [], total: 0 });
+    const RELAY_TEXT = "Entendido, vou te guiar no cadastro passo a passo.";
+    let capturedRelayBody: { prompt?: string } = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (info, init) => {
+      if (String(info).includes("/internal/agent/llm-config")) {
+        return new Response(JSON.stringify(snapshotBody()), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (init?.body) {
+        capturedRelayBody = JSON.parse(init.body as string);
+      }
+      return new Response(JSON.stringify({ text: RELAY_TEXT, providerAttempted: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const res = await agent.fetch(
+      new Request("https://agent.test.local/rpc/chat", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-agent-actor": actor,
+          "x-agent-workspace": workspace,
+        },
+        body: JSON.stringify({ text: "quero", intentionId: "intent-followup-9" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const prompt = capturedRelayBody.prompt;
+    expect(typeof prompt).toBe("string");
+    // Prior pair is carried exactly once each; the live turn exactly once.
+    expect(prompt).toContain(PRIOR_USER);
+    expect(prompt).toContain(OFFER);
+    expect(prompt!.split(PRIOR_USER).length - 1).toBe(1);
+    expect(prompt!.split(OFFER).length - 1).toBe(1);
+    expect(prompt!.split("quero").length - 1).toBe(1);
+    // Audience scoping holds: neither the other actor's private turn nor the
+    // other conversation's turn reaches the upstream prompt.
+    expect(prompt).not.toContain(PRIVATE_OTHER);
+    expect(prompt).not.toContain(OTHER_CONV_TEXT);
+  });
+
+  it("(10) P1-redelivery: redelivery da conversa coletiva A após abrir privada B usa o histórico de A (vínculo da intenção), nunca o de B", async () => {
+    const { agent, persisted } = createTestAgent();
+    const actor = "user-redelivery-a";
+    const workspace = "ws-redelivery-a";
+    const CONV_A = "conv-coletiva-a-10";
+    const CONV_B = "conv-privada-b-10";
+    const at = "2026-10-20T11:00:00.000Z";
+    const HIST_A_USER = "HIST-A-PERGUNTA-COLETIVA-10";
+    const HIST_A_ASST = "HIST-A-RESPOSTA-COLETIVA-10";
+    const HIST_B_PRIVATE = "HIST-B-SEGREDO-PRIVADO-10";
+    persisted.push(
+      {
+        id: "seed-a-user-10",
+        role: "user",
+        parts: [{ type: "text", text: HIST_A_USER }],
+        metadata: { actorId: actor, workspaceId: workspace, visibility: "workspace", ownerActorId: actor, conversationId: CONV_A, createdAt: at },
+      },
+      {
+        id: "seed-a-asst-10",
+        role: "assistant",
+        parts: [{ type: "text", text: HIST_A_ASST }],
+        metadata: { actorId: "ted", workspaceId: workspace, visibility: "workspace", ownerActorId: actor, conversationId: CONV_A, createdAt: at },
+      },
+      {
+        id: "seed-b-private-10",
+        role: "user",
+        parts: [{ type: "text", text: HIST_B_PRIVATE }],
+        metadata: { actorId: actor, workspaceId: workspace, visibility: "private", ownerActorId: actor, conversationId: CONV_B, createdAt: at },
+      },
+    );
+    // O ator abriu a privada B DEPOIS da intenção (sessão aberta atual = B),
+    // mas a intenção foi vinculada à coletiva A (first-writer-wins durável —
+    // aqui simulado por stub, pois o harness não tem storage durável).
+    (agent as unknown as { readOpenSessionOrThrow: () => unknown }).readOpenSessionOrThrow = () => ({ conversationId: CONV_B });
+    const boundA = { workspaceId: workspace, visibility: "workspace", ownerActorId: actor, conversationId: CONV_A } as const;
+    (agent as unknown as { boundTurnAudienceFor: () => unknown }).boundTurnAudienceFor = () => ({ ...boundA });
+    vi.spyOn(apiClient, "requestPiApiJson").mockResolvedValue({ items: [], total: 0 });
+    const RELAY_TEXT = "Resposta simples sem números.";
+    let capturedRelayBody: { prompt?: string } = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (info, init) => {
+      if (String(info).includes("/internal/agent/llm-config")) {
+        return new Response(JSON.stringify(snapshotBody()), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (init?.body) {
+        capturedRelayBody = JSON.parse(init.body as string);
+      }
+      return new Response(JSON.stringify({ text: RELAY_TEXT, providerAttempted: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const res = await agent.fetch(
+      new Request("https://agent.test.local/rpc/chat", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-agent-actor": actor,
+          "x-agent-workspace": workspace,
+        },
+        body: JSON.stringify({ text: "continuando o assunto", intentionId: "intent-redelivery-a-10" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const prompt = capturedRelayBody.prompt;
+    expect(typeof prompt).toBe("string");
+    // O relay recebe o histórico da audiência VINCULADA (A), nunca o da
+    // sessão aberta no momento do redelivery (B).
+    expect(prompt).toContain(HIST_A_USER);
+    expect(prompt).toContain(HIST_A_ASST);
+    expect(prompt).not.toContain(HIST_B_PRIVATE);
+    // A resposta mantém a audiência vinculada (A), não a sessão corrente (B).
+    const userMessage = persisted.find((m) => m.id === stableHistoryMessageId("user", "intent-redelivery-a-10"));
+    expect(userMessage).toBeDefined();
+    expect((userMessage!.metadata as { conversationId?: unknown } | undefined)?.conversationId).toBe(CONV_A);
+    // Security (não-bloqueante): a resposta também carrega a audiência
+    // vinculada (A), nunca a sessão corrente (B).
+    const assistantMessage = persisted.find((m) => m.id === stableHistoryMessageId("assistant", "intent-redelivery-a-10"));
+    expect(assistantMessage).toBeDefined();
+    expect(assistantMessage!.role).toBe("assistant");
+    expect((assistantMessage!.metadata as { conversationId?: unknown } | undefined)?.conversationId).toBe(CONV_A);
+    expect((assistantMessage!.metadata as { visibility?: unknown } | undefined)?.visibility).toBe("workspace");
+  });
+
+  it("(11) P2a: histórico longo acima do teto preserva o turno atual integral (corta o histórico pelo início)", async () => {
+    const OLDEST_MARK = "ANTIGA-EVITADA-11";
+    const NEWEST_MARK = "RECENTE-MANTIDA-11";
+    const CURRENT = "MARCADOR-TURNO-ATUAL-P2A-11";
+    const oldest = `${"X".repeat(14_950)}-${OLDEST_MARK}`;
+    const history = [
+      { role: "user" as const, content: oldest },
+      { role: "assistant" as const, content: NEWEST_MARK },
+    ];
+    // Documenta o bug legado: o slice único sobre (histórico + turno) corta
+    // o turno vivo quando o histórico estoura o teto.
+    const legacy = `${history.map((turn) => `${turn.role === "assistant" ? "TED" : "Usuário"}: ${turn.content}`).join("\n")}\nUsuário: ${CURRENT}`.slice(0, 15_000);
+    expect(legacy).not.toContain(CURRENT);
+    // Após o fix: o turno vivo vai integral; o histórico mais recente
+    // permanece; o mais antigo é evitado primeiro.
+    const prompt = composeRestRelayPrompt(history, CURRENT);
+    expect(prompt).toContain(`Usuário: ${CURRENT}`);
+    expect(prompt).toContain(NEWEST_MARK);
+    expect(prompt).not.toContain(OLDEST_MARK);
+    expect(prompt.length).toBeLessThanOrEqual(15_000);
+    // P2 (teto não garantido): turno atual sozinho acima do teto com
+    // histórico não-vazio zerava o histórico mas devolvia o turno integral
+    // com prefixo — total final > 15 000. O fix trunca o TEXTO ATUAL para
+    // caber após o prefixo "Usuário: ".
+    const GIANT_CURRENT = `${"C".repeat(15_000)}-MARCADOR-TURNO-GIGANTE-11`;
+    const giantPrompt = composeRestRelayPrompt(history, GIANT_CURRENT);
+    expect(giantPrompt.length).toBeLessThanOrEqual(15_000);
+    expect(giantPrompt.startsWith("Usuário: ")).toBe(true);
+    expect(giantPrompt).toContain("C".repeat(100));
+    expect(giantPrompt).not.toContain(OLDEST_MARK);
+    expect(giantPrompt).not.toContain(NEWEST_MARK);
+    // Históricos que cabem mantêm a composição legada byte-idêntica.
+    const smallPrompt = composeRestRelayPrompt(
+      [
+        { role: "user" as const, content: "liste minhas contas" },
+        { role: "assistant" as const, content: "sem contas aqui" },
+      ],
+      "quero",
+    );
+    expect(smallPrompt).toBe("Usuário: liste minhas contas\nTED: sem contas aqui\nUsuário: quero");
+    expect(smallPrompt.length).toBeLessThanOrEqual(15_000);
+    // Sem histórico, o prompt segue byte-idêntico ao anterior.
+    expect(composeRestRelayPrompt([], "quero")).toBe("quero");
+    expect(composeRestRelayPrompt([], "C".repeat(20_000)).length).toBeLessThanOrEqual(15_000);
+  });
+
+  it("(12) P2b: retry de correção interna não duplica a pergunta (dedup pelo id estável, não pelo conteúdo)", async () => {
+    const { agent, persisted } = createTestAgent();
+    const actor = "user-dedup-12";
+    const workspace = "ws-dedup-12";
+    const CONV = "conv-dedup-12";
+    const at = "2026-10-20T13:00:00.000Z";
+    const INTENTION = "intent-dedup-12";
+    const ORIGINAL = "PERGUNTA-ORIGINAL-DEDUP-12";
+    // A bolha original já persiste sob o id estável da intenção.
+    persisted.push({
+      id: stableHistoryMessageId("user", INTENTION),
+      role: "user",
+      parts: [{ type: "text", text: ORIGINAL }],
+      metadata: { actorId: actor, workspaceId: workspace, visibility: "workspace", ownerActorId: actor, conversationId: CONV, createdAt: at, intentionId: INTENTION },
+    });
+    (agent as unknown as { readOpenSessionOrThrow: () => unknown }).readOpenSessionOrThrow = () => ({ conversationId: CONV });
+    let capturedRelayBody: { prompt?: string } = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (info, init) => {
+      if (String(info).includes("/internal/agent/llm-config")) {
+        return new Response(JSON.stringify(snapshotBody()), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (init?.body) {
+        capturedRelayBody = JSON.parse(init.body as string);
+      }
+      return new Response(JSON.stringify({ text: "Resposta simples sem números.", providerAttempted: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const provide = (agent as unknown as {
+      provideUnifiedResponse: (input: Record<string, unknown>, plan: Record<string, unknown>) => Promise<string>;
+    }).provideUnifiedResponse.bind(agent);
+    // O retry de grounding carrega instruções extras no texto (channel-evidence
+    // compõe `[Correção de grounding: …]`), então a igualdade de conteúdo com
+    // a bolha persistida falha — o dedup precisa ser pelo id estável.
+    const output = await provide(
+      {
+        intentionId: INTENTION,
+        traceId: INTENTION,
+        text: `${ORIGINAL}\n\n[Correção de grounding: trecho sem suporte. Responda usando APENAS os dados apurados.]`,
+        actorId: actor,
+        workspaceId: workspace,
+        role: "member",
+        deviceId: null,
+        attachments: [],
+        channel: "pwa-rest",
+        internalCorrection: true,
+        audience: { workspaceId: workspace, visibility: "workspace", ownerActorId: actor, conversationId: CONV },
+      },
+      { version: "2", mode: "read", domain: "general", skillNames: [], requestedOperations: [], missingFields: [], ambiguity: null, confidence: 1 },
+    );
+    expect(typeof output).toBe("string");
+    const prompt = capturedRelayBody.prompt;
+    expect(typeof prompt).toBe("string");
+    expect(prompt!.split(ORIGINAL).length - 1).toBe(1);
   });
 });
