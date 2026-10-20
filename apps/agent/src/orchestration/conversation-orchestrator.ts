@@ -215,6 +215,13 @@ const READ_ABSENCE_SUBJECT: Readonly<Record<string, string>> = {
   // (listing cards is the separate `/cards/accounts` read), so claiming "no
   // faturas" here would be false when cards exist without statements.
   cards: 'cartões',
+  // `statements` names the FATURA reading (`OPERATION_TO_READ.list_statements`
+  // resolves to the `statements` read `listStatements` — channel-evidence.ts,
+  // source `api.statements`). A fatura nua ("Mostre minhas faturas") roteia
+  // com domain `payables` (não há domain `statements` no contrato), mas a
+  // ausência provada por `api.statements` é ausência de faturas, nunca de
+  // "contas a pagar" (payables reais: vencidas/boleto/"a pagar").
+  statements: 'faturas',
   payables: 'contas a pagar',
   budgets: 'orçamentos',
 };
@@ -1031,7 +1038,10 @@ export class ConversationOrchestrator {
       // without a proven reason keeps its previous grounded path.
       const absence = envelope.items.find((item) => item.status === 'empty' && item.reason !== undefined);
       if (absence && absence.status === 'empty' && absence.reason !== undefined) {
-        return renderReadAbsence(absence.reason, READ_ABSENCE_SUBJECT[plan.domain] ?? 'dados');
+        // H-STATEMENTS: a fatura nua roteia com domain `payables`, mas a
+        // ausência provada por `api.statements` é ausência de faturas.
+        const absenceSubjectKey = absence.source === 'api.statements' ? 'statements' : plan.domain;
+        return renderReadAbsence(absence.reason, READ_ABSENCE_SUBJECT[absenceSubjectKey] ?? 'dados');
       }
       return null;
     }
