@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseFinancialMutation } from '../src/mutations/financial-parser.js';
-import { resolveEntity } from '../src/tools/entity-resolution.js';
+import { resolveMutationEntities } from '../src/mutations/entity-resolver.js';
 import { MutationExecutor } from '../src/mutations/mutation-executor.js';
 
 describe('T2.4 mutation pipeline', () => {
@@ -126,9 +126,20 @@ describe('T2.4 mutation pipeline', () => {
     expect(parseFinancialMutation('Gastei R$ 12.34 no mercado')).toMatchObject({ kind: 'none', reason: 'missing_amount' });
   });
 
-  it('resolves only an unambiguous entity and asks for similar names', async () => {
-    const request = vi.fn().mockResolvedValue({ items: [{ id: '1', name: 'Nubank Reserva' }, { id: '2', name: 'Nubank Reserve' }] });
-    await expect(resolveEntity({ type: 'account', query: 'Nubank', request })).rejects.toMatchObject({ code: 'entity.ambiguous' });
+  it('asks clarification for an ambiguous account instead of selecting silently (R08)', async () => {
+    const resolution = await resolveMutationEntities(
+      { kind: 'expense', amountCents: 1000, description: 'mercado', date: '2026-09-14' },
+      'Nubank',
+      {
+        listAccounts: async () => [{ id: '1', name: 'Nubank Reserva' }, { id: '2', name: 'Nubank Reserve' }],
+        listCategories: async () => [{ id: 'c1', name: 'mercado' }],
+      },
+    );
+    expect(resolution.complete).toBe(false);
+    if (!resolution.complete) {
+      expect(resolution.missingFields).toContain('accountId');
+      expect(resolution.trace.account.homonyms).toHaveLength(2);
+    }
   });
 
   it('executes with opaque attestation and derives success from API result', async () => {

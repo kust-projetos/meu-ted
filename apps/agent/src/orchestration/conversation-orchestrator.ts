@@ -45,7 +45,7 @@ import type { EvidenceEnvelope } from '../evidence/evidence-envelope.js';
 import { createGroundedResponseWithRetry } from '../responses/grounded-response.js';
 import { stripToolCallMarkup } from '../responses/tool-call-sanitizer.js';
 import { renderEmpty, renderInconclusive, renderMonthSummary, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, resolveDomainSubject, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
-import { routeIntent } from './intent-router.js';
+import { UNSUPPORTED_YEAR_TEXT, routeIntent } from './intent-router.js';
 import { TurnBudget, type RecoveryPermit, type ResolutionRecoveryRequest } from './turn-budget.js';
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
 import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
@@ -4377,6 +4377,17 @@ export class ConversationOrchestrator {
     // reach it.
     const missingAmount = this.missingAmountGate(input, plan, startedAt, result);
     if (missingAmount) return missingAmount;
+    // P2c: ano isolado sem mês — limitação honesta determinística, sem
+    // provider e sem leitura (o plano não carrega operação nem tool). Nunca o
+    // mês corrente em silêncio.
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'unsupported_year') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['period']), text: UNSUPPORTED_YEAR_TEXT }),
+        response: freeze({ text: UNSUPPORTED_YEAR_TEXT }),
+      });
+    }
     if (plan.mode === 'read' && this.dependencies.evidenceProvider) {
       // Evidence-backed read: deterministic render or validated grounded text.
       const read = await this.runGroundedRead(input, plan, startedAt, result);
