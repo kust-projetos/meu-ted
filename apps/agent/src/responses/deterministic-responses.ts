@@ -95,6 +95,37 @@ export const renderStatement = (entries: readonly unknown[], subject = 'extrato'
   return `${subject}:\n${lines.join('\n')}`;
 };
 
+/**
+ * #256 P1 — TOTAL do período a partir do `get_month_summary`. Precedência
+ * determinística sobre a listagem: quando o plano pede o resumo e a leitura
+ * `api.month-summary` voltou `ok`, a resposta é o total — nunca o extrato.
+ * Retorna null quando o payload não carrega nenhum total (o orquestrador cai
+ * no caminho generativo com a evidência, nunca no extrato determinístico).
+ */
+export const renderMonthSummary = (data: unknown): string | null => {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  const num = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : null;
+  const expense = num(record.expenseCents) ?? num(record.expense_cents) ?? num(record.expense);
+  const income = num(record.incomeCents) ?? num(record.income_cents) ?? num(record.income);
+  const balance = num(record.balanceCents) ?? num(record.balance_cents) ?? num(record.balance);
+  const count = num(record.transactionCount) ?? num(record.entryCount) ?? num(record.count);
+  const yearMonth = typeof record.yearMonth === 'string'
+    ? record.yearMonth
+    : typeof record.year_month === 'string'
+      ? record.year_month
+      : null;
+  if (expense === null && income === null && balance === null) return null;
+  const parts: string[] = [];
+  if (expense !== null) parts.push(`gastos ${formatCents(expense)}`);
+  if (income !== null) parts.push(`receitas ${formatCents(income)}`);
+  if (balance !== null) parts.push(`saldo ${formatCents(balance)}`);
+  const period = yearMonth ?? 'do mês';
+  const suffix = count !== null ? ` (${count} lançamentos)` : '';
+  return `Resumo ${period}: ${parts.join(', ')}${suffix}.`;
+};
+
 export type MutationOutcome = 'proposed' | 'succeeded' | 'failed' | 'cancelled' | 'expired';
 
 /**

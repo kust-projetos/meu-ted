@@ -44,7 +44,7 @@ import { emitSanitizedEvent } from '../observability/events.js';
 import type { EvidenceEnvelope } from '../evidence/evidence-envelope.js';
 import { createGroundedResponseWithRetry } from '../responses/grounded-response.js';
 import { stripToolCallMarkup } from '../responses/tool-call-sanitizer.js';
-import { renderEmpty, renderInconclusive, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, resolveDomainSubject, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
+import { renderEmpty, renderInconclusive, renderMonthSummary, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, resolveDomainSubject, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
 import { routeIntent } from './intent-router.js';
 import { TurnBudget, type RecoveryPermit, type ResolutionRecoveryRequest } from './turn-budget.js';
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
@@ -208,13 +208,13 @@ const READ_ABSENCE_SUBJECT: Readonly<Record<string, string>> = {
   // Non-possessive forms: these subjects complete "Não há ${subject}…" and
   // "Ainda não encontrei ${subject}…", where the possessive DOMAIN_SUBJECT_PT_BR
   // forms ("seus cartões") would break the grammar. Never reuse that map here.
-  // `cards` names the READING (`OPERATION_TO_READ.list_cards` resolves to the
-  // statements read `/cards/statements` = faturas — channel-evidence.ts), not
-  // the requested domain: an empty statement list proves no faturas in scope,
-  // never the absence of cards (listing cards is the separate `/cards/accounts`
-  // read), so claiming "no cartões" here would be false when cards exist
-  // without statements in the period.
-  cards: 'faturas',
+  // `cards` names the CARD POOL reading (`OPERATION_TO_READ.list_cards`
+  // resolves to the `cards` read `GET /cards/accounts` — channel-evidence.ts),
+  // not faturas: an empty card pool proves no cartões in scope. An empty
+  // statement list proves no faturas in scope, never the absence of cards
+  // (listing cards is the separate `/cards/accounts` read), so claiming "no
+  // faturas" here would be false when cards exist without statements.
+  cards: 'cartões',
   payables: 'contas a pagar',
   budgets: 'orçamentos',
 };
@@ -1036,6 +1036,20 @@ export class ConversationOrchestrator {
       return null;
     }
     const lists = ok.filter(Array.isArray);
+    // #256 P1: precedência do resumo — plano com `get_month_summary` (ou
+    // `spending_insights`) e leitura `api.month-summary` ok responde o TOTAL,
+    // nunca o extrato, mesmo quando a evidência carrega lançamentos (legado
+    // com as duas leituras). Resumo provado mas fora do formato renderizável
+    // cai no caminho generativo com a evidência, nunca no extrato.
+    const wantsSummary = plan.requestedOperations.some((operation) => operation.name === 'get_month_summary' || operation.name === 'spending_insights');
+    if (wantsSummary) {
+      const summaryItem = envelope.items.find((item) => item.source === 'api.month-summary' && item.status === 'ok');
+      if (summaryItem && summaryItem.status === 'ok') {
+        const rendered = renderMonthSummary(summaryItem.data);
+        if (rendered !== null) return rendered;
+        return null;
+      }
+    }
     if (plan.domain === 'transactions' || lists.length > 0) {
       for (const list of lists) {
         const rendered = renderStatement(list as readonly unknown[], 'extrato');

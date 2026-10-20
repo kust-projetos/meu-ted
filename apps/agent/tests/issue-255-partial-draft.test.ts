@@ -154,7 +154,9 @@ describe('issue #255 (a) partial draft', () => {
       normalizeRestTurn({ text: 'liste meus cartões', intentionId: 'i255-s5-read' }, identity),
     );
     expect(read.mutation).toBeUndefined();
-    expect(read.response?.text).toMatch(/faturas/i);
+    // #257: ausência no pool de cartões responde "cartões", nunca "faturas".
+    expect(read.response?.text).toMatch(/cart/i);
+    expect(read.response?.text).not.toMatch(/fatura/i);
     expect(h.request).not.toHaveBeenCalled();
     const actives = h.store.listActive(
       { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null },

@@ -67,6 +67,8 @@ const stubTools = (overrides: Partial<ChannelReadTools> = {}): ChannelReadTools 
     transactionCount: 0,
   }),
   listStatements: async () => ({ items: [], total: 0 }),
+  // #257: pool de cartões (`GET /cards/accounts`), nunca planejado aqui.
+  listCards: async () => ({ items: [], total: 0 }),
   listAccountsPayable: async () => ({ items: [], total: 0 }),
   listBudgets: failingBudgets,
   listGoals: hangingGoals,

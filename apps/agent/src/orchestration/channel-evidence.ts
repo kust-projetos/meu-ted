@@ -20,6 +20,7 @@
 import { declareAnalyticsEnvelope, normalizeAnalyticsQuery } from '../agent-config/analytics-envelope.js';
 import { classifyReadFailure, createEvidenceEnvelope, resolveEnvelopeRejection, type EvidenceEnvelope, type EvidenceInput, type ReadAbsenceReason } from '../evidence/evidence-envelope.js';
 import { generatedHttpTools, type ToolRequestAuth } from '../generated/http-tools.js';
+import { requestPiApiJson } from '../tools/api-client.js';
 import { isUsageQuotaPassthroughError } from '../llm/relay-failover.js';
 import { emitSanitizedEvent } from '../observability/events.js';
 import type { TurnInput, TurnPlan } from './conversation-orchestrator.js';
@@ -38,6 +39,14 @@ export type ChannelReadTools = {
   listAccounts: ChannelReadFn;
   listRecentTransactions: ChannelReadFn;
   getMonthSummary: ChannelReadFn;
+  /**
+   * #257 — o pool de cartões (`GET /cards/accounts`). Não existe tool
+   * gerada para esta rota (só `list_statements` → `/cards/statements`), por
+   * isso o default chama `requestPiApiJson` direto, com a mesma semântica de
+   * credencial por invocação das tools geradas (chave explícita, nunca o
+   * slot global legado — ver `extractRequestAuth` no gerado).
+   */
+  listCards: ChannelReadFn;
   listStatements: ChannelReadFn;
   listAccountsPayable: ChannelReadFn;
   listBudgets: ChannelReadFn;
@@ -65,6 +74,14 @@ export const defaultChannelReadTools = (): ChannelReadTools => ({
   listAccounts: bindGenerated('list_accounts'),
   listRecentTransactions: bindGenerated('list_recent_transactions'),
   getMonthSummary: bindGenerated('get_month_summary'),
+  // #257: sem tool gerada para `GET /cards/accounts` — chamada direta com a
+  // mesma semântica de credencial (chaves explícitas suprimem o fallback
+  // global, igual a `extractRequestAuth` no gerado). A rota não recebe query:
+  // o workspace sai do token delegado, como nas demais leituras.
+  listCards: (_params, auth) => requestPiApiJson<unknown>('GET', '/cards/accounts', {
+    ...(auth && 'delegatedToken' in auth ? { delegatedToken: auth.delegatedToken } : {}),
+    ...(auth?.apiOrigin !== undefined ? { apiOrigin: auth.apiOrigin } : {}),
+  }),
   listStatements: bindGenerated('list_statements'),
   listAccountsPayable: bindGenerated('list_accounts_payable'),
   listBudgets: bindGenerated('list_budgets'),
@@ -90,6 +107,11 @@ export type ChannelGroundingDeps = {
   /** Per-read budget; a slow read degrades to an `error` item, never a hang. */
   readTimeoutMs?: number;
   /**
+   * #256 P2a — relógio injetável (testes). Default = relógio real. Fixa a
+   * janela corrente/passada sem mock global de `Date`.
+   */
+  now?: () => Date;
+  /**
    * Sanitized lifecycle event sink for evidence reads (defaults to
    * `emitSanitizedEvent`). Receives `tool.started` / `tool.completed` with
    * allowlisted fields only (tool name, status, latency) — never params,
@@ -111,6 +133,7 @@ type ReadKind =
   | 'accounts'
   | 'transactions'
   | 'month-summary'
+  | 'cards'
   | 'statements'
   | 'payables'
   | 'budgets'
@@ -127,9 +150,9 @@ const OPERATION_TO_READ: Record<string, ReadKind> = {
   list_recent_transactions: 'transactions',
   get_month_summary: 'month-summary',
   spending_insights: 'month-summary',
+  list_cards: 'cards',
   list_statements: 'statements',
   get_statement_details: 'statements',
-  list_cards: 'statements',
   list_payables: 'payables',
   list_accounts_payable: 'payables',
   check_payable_reminders: 'payables',
@@ -149,7 +172,8 @@ const OPERATION_TO_READ: Record<string, ReadKind> = {
 const DOMAIN_DEFAULT_READ: Record<string, ReadKind | null> = {
   accounts: 'accounts',
   transactions: 'transactions',
-  cards: 'statements',
+  // #257: `cards` lê o pool de cartões, nunca statements (faturas).
+  cards: 'cards',
   payables: 'payables',
   budgets: 'budgets',
   goals: 'goals',
@@ -163,6 +187,7 @@ const READ_SOURCE: Record<ReadKind, string> = {
   accounts: 'api.accounts',
   transactions: 'api.transactions',
   'month-summary': 'api.month-summary',
+  cards: 'api.cards',
   statements: 'api.statements',
   payables: 'api.payables',
   budgets: 'api.budgets',
@@ -177,6 +202,9 @@ const READ_TOOL_NAME: Record<ReadKind, string> = {
   accounts: 'list_accounts',
   transactions: 'list_recent_transactions',
   'month-summary': 'get_month_summary',
+  // #257: rótulo lógico da operação — não há tool gerada para
+  // `GET /cards/accounts`; o default lê a rota direto (`listCards`).
+  cards: 'list_cards',
   statements: 'list_statements',
   payables: 'list_accounts_payable',
   budgets: 'list_budgets',
@@ -195,8 +223,29 @@ const selectReads = (plan: TurnPlan): readonly ReadKind[] => {
     if (selected.length >= MAX_EVIDENCE_READS) return selected;
   }
   const fallback = DOMAIN_DEFAULT_READ[plan.domain] ?? null;
-  if (fallback && !selected.includes(fallback) && selected.length < MAX_EVIDENCE_READS) selected.push(fallback);
+  // #256 P1: plano com `get_month_summary` (ou `spending_insights`) NUNCA
+  // soma `list_transactions` via fallback de domínio — a segunda leitura
+  // alimentava o render determinístico de extrato e suplantava o TOTAL.
+  const hasSummary = selected.includes('month-summary');
+  if (fallback && !selected.includes(fallback) && selected.length < MAX_EVIDENCE_READS && !(hasSummary && fallback === 'transactions')) selected.push(fallback);
   return selected;
+};
+
+/**
+ * #256 P2a — janela do resumo a partir do texto (corrente vs. passada).
+ * Relativo mínimo: "mês passado" ("último mês", "mês anterior") resolve o
+ * `yearMonth` anterior; todo o resto usa o mês corrente. Base UTC como o
+ * caminho anterior (`toISOString().slice(0, 7)`), nunca mês inventado.
+ */
+export const resolveSummaryYearMonth = (text: string, now: Date = new Date()): string => {
+  const normalized = text.normalize('NFD').replace(/[\u0300-\u036b]/g, '').toLowerCase();
+  const current = now.toISOString().slice(0, 7);
+  if (/\bmes\s+passado\b|\bultimo\s+mes\b|\bmes\s+anterior\b/.test(normalized)) {
+    const [year, month] = current.split('-').map(Number);
+    const prev = new Date(Date.UTC(year ?? 1970, (month ?? 1) - 2, 1));
+    return prev.toISOString().slice(0, 7);
+  }
+  return current;
 };
 
 const withTimeout = async <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
@@ -556,6 +605,12 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
       ...(deps.apiOrigin !== undefined ? { apiOrigin: deps.apiOrigin } : {}),
     };
     const householdId = input.workspaceId;
+    // #256 P2a: a janela (corrente vs. passada) sai do texto do turno, com
+    // relógio injetável — "mês passado" consulta o `yearMonth` anterior, nunca
+    // o mês corrente errado. A rota exige `yearMonth`, então todo valor aqui
+    // é suportado pelo backend (sem "período não suportado" neste caminho).
+    const nowDate = deps.now?.() ?? new Date();
+    const summaryYearMonth = resolveSummaryYearMonth(input.text, nowDate);
     /**
      * A09-int: the analytics reads are period-bounded, and `from`/`to` are
      * silently DROPPED by the API without `period=custom` (spike §3.1) — the
@@ -569,7 +624,7 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
      */
     const analyticsWindow = (): Record<string, unknown> => {
       const normalized = normalizeAnalyticsQuery({
-        yearMonth: new Date().toISOString().slice(0, 7),
+        yearMonth: summaryYearMonth,
       });
       if (!normalized.ok) throw new Error(`agent.analytics_window:${normalized.reason}`);
       return normalized.query;
@@ -578,8 +633,11 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
       accounts: async () => mapAccounts(await tools.listAccounts({ householdId }, auth)),
       transactions: async () => mapTransactions(await tools.listRecentTransactions({ householdId, limit: 20 }, auth)),
       'month-summary': async () => mapMonthSummary(
-        await tools.getMonthSummary({ householdId, yearMonth: new Date().toISOString().slice(0, 7) }, auth),
+        await tools.getMonthSummary({ householdId, yearMonth: summaryYearMonth }, auth),
       ),
+      // #257: o pool de cartões tem forma `{items,total}` como as demais
+      // listas de entidade — reusa o mapper único, com ref/fonte próprias.
+      cards: async () => mapEntityList('cards', 'cards', await tools.listCards({ householdId }, auth)),
       statements: async () => mapEntityList('statements', 'statements', await tools.listStatements({ householdId }, auth)),
       payables: async () => mapEntityList('payables', 'payables', await tools.listAccountsPayable({ householdId }, auth)),
       budgets: async () => mapEntityList('budgets', 'budgets', await tools.listBudgets({ householdId }, auth)),
