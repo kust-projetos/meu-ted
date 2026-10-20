@@ -380,6 +380,13 @@ export const hasNegation = (text: string): boolean => NEGATION.test(text);
 
 export const hasUnsupportedCurrency = (text: string): boolean => UNSUPPORTED_CURRENCY.test(text);
 
+/**
+ * Issue #255 review fix (HIGH) — the follow-up VALUE of a partial draft goes
+ * through the SAME approximation guard as a fresh utterance. Exported so the
+ * continuation grammar reuses it instead of a private copy of the table.
+ */
+export const hasApproximateAmount = (text: string): boolean => APPROXIMATION.test(text);
+
 export const ambiguityClarificationText = (ambiguity: SemanticAmbiguity): string =>
   CLARIFICATION[ambiguity].text;
 
