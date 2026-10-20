@@ -113,9 +113,32 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   }
   const operations: PlannedOperation[] = [];
   let domain: TurnPlanV2['domain'] = 'general';
+  // #256: pergunta de TOTAL do período ("quanto gastei esse mês?", "total
+  // mensal", "resumo do mês") roteia para `get_month_summary`, nunca SÓ para
+  // `list_transactions`. "extrato/transações" e "gastos de <categoria>" (sem
+  // mês) continuam transacionais abaixo.
+  // P2b: pedido explícito de LISTAGEM (`extrato`/`transações`/`lançamentos`)
+  // vence o predicado mensal — "mostre o extrato dos gastos deste mês" é
+  // extrato com filtro, não TOTAL. Qualificador de categoria ("gastos DE
+  // supermercado neste mês") também é listagem filtrada, não resumo. O
+  // predicado de categoria cobre `de|em|com|no|na|nos|nas|do|da|dos|das`
+  // para alcançar "gastei NO mercado/NA farmácia/DO ifood". O lookahead
+  // `(?!mes\b|mensal\b)` protege o período ("gastei NO mês passado" continua
+  // resumo); o `\s` após a preposição impede casar o prefixo "na" de "não".
+  // FIX3: `isExplicitListing` e o gatilho `list_transactions` abaixo usam os
+  // radicais truncados SEM `\b` final — o boundary após `transac`/`lancamento`
+  // `extrato` impedia o match dos plurais ("transacoes", "lancamentos",
+  // "extratos"). O radical `transac` só ocorre em palavras de listagem.
+  const wantsMonthTotal = /\bquanto\s+gastei\b/.test(normalized)
+    || (/\bgast/.test(normalized) && /\b(mes|mensal)\b/.test(normalized))
+    || /\b(total\s+mensal|resumo\s+do\s+mes)\b/.test(normalized);
+  const isExplicitListing = /\b(extrato|transac|lancamento)/.test(normalized);
+  const isCategoryQualified = /\bgast\w*\s+(de|em|com|no|na|nos|nas|do|da|dos|das)\s+(?!mes\b|mensal\b)[a-z]+\b/.test(normalized);
+  const isMonthSummary = wantsMonthTotal && !isExplicitListing && !isCategoryQualified;
+  if (isMonthSummary) { domain = 'transactions'; operations.push(operation('get_month_summary')); }
   if (/\b(saldo|quanto tenho|quanto eu tenho)\b/.test(normalized)) { domain = 'accounts'; operations.push(operation('get_balance')); }
   if (/\b(conta|contas)\b/.test(normalized)) { domain = 'accounts'; operations.push(operation('list_accounts')); }
-  if (/\b(extrato|transac|lancamento|gast\w*|despesas?)\b/.test(normalized)) { domain = 'transactions'; operations.push(operation('list_transactions')); }
+  if (/\b(extrato|transac|lancamento|gast\w*|despesas?)/.test(normalized) && !isMonthSummary) { domain = 'transactions'; operations.push(operation('list_transactions')); }
   if (/\b(fatura|faturas|cartao|cartoes)\b/.test(normalized)) { domain = /fatura/.test(normalized) ? 'payables' : 'cards'; operations.push(operation(/fatura/.test(normalized) ? 'list_payables' : 'list_cards')); }
   // T3.1 (SPEC §14): finance-seeking asks must map to evidence reads, never
   // fall through to unsupported/general (which yields evidence=null).

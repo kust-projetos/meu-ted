@@ -55,6 +55,8 @@ const stubReads = (accountsPayload: unknown): ChannelReadTools => {
     listRecentTransactions: fail,
     getMonthSummary: fail,
     listStatements: async () => ({ items: [] }),
+    // #257: pool de cartões (`GET /cards/accounts`), nunca planejado aqui.
+    listCards: fail,
     listAccountsPayable: fail,
     listBudgets: fail,
     listGoals: fail,

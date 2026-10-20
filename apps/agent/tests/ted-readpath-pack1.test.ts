@@ -155,7 +155,7 @@ describe('F2: read-absence copy per domain', () => {
     }) as never;
 
   it.each([
-    ['cards', 'faturas'],
+    ['cards', 'cartões'],
     ['payables', 'contas a pagar'],
     ['budgets', 'orçamentos'],
   ] as const)('domain %s answers absence with "%s" and never "dados"', async (domain, noun) => {
@@ -169,7 +169,7 @@ describe('F2: read-absence copy per domain', () => {
     expect(result.response?.text).not.toContain('dados');
   });
 
-  it('real router: "liste meus cartões" routes read/cards; absence names the statements read (faturas)', async () => {
+  it('real router: "liste meus cartões" routes read/cards; absence names the card pool (cartões), never faturas', async () => {
     const plan = routeIntent('liste meus cartões');
     expect(plan.mode).toBe('read');
     expect(plan.domain).toBe('cards');
@@ -183,14 +183,17 @@ describe('F2: read-absence copy per domain', () => {
     const result = await orchestrator.runTurn(turn('liste meus cartões', 'intent-f2-cards-real'));
     expect(evidenceProvider).toHaveBeenCalledTimes(1);
     expect(responseProvider).not.toHaveBeenCalled();
-    expect(result.response?.text).toContain('faturas');
+    // #257: ausência no pool de cartões é ausência de cartões — faturas têm
+    // leitura e ausência próprias (statements), nunca herdadas daqui.
+    expect(result.response?.text).toContain('cartões');
+    expect(result.response?.text).not.toContain('faturas');
     expect(result.response?.text).not.toContain('dados');
   });
 
   it('renderReadAbsence unit pins (no fallback "dados")', () => {
-    // `cards` names the statements read (`/cards/statements` = faturas), not
-    // the card pool: an empty statement list must never claim "no cartões".
-    expect(renderReadAbsence('setup_incomplete', 'faturas')).toContain('faturas');
+    // `cards` names the card pool (`GET /cards/accounts` = cartões), not
+    // faturas: an empty card pool must never claim "no faturas".
+    expect(renderReadAbsence('setup_incomplete', 'cartões')).toContain('cartões');
     expect(renderReadAbsence('period_empty', 'contas a pagar')).toContain('contas a pagar');
     expect(renderReadAbsence('period_empty', 'orçamentos')).toContain('orçamentos');
   });
@@ -476,7 +479,9 @@ describe('F1: /rpc/chat persists user+assistant on deterministic reads', () => {
     const res = await post(agent, 'mostre meus cartões', 'intent-f1-read');
     expect(res.status).toBe(200);
     const body = (await res.json()) as { output?: string };
-    expect(body.output).toContain('faturas');
+    // #257: ausência no pool de cartões responde "cartões", nunca "faturas".
+    expect(body.output).toContain('cartões');
+    expect(body.output).not.toContain('faturas');
 
     const userIds = persisted.filter((m) => m.role === 'user').map((m) => String((m as { id?: unknown }).id ?? ''));
     const asstIds = persisted
