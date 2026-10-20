@@ -7,7 +7,7 @@ import {
   hasUnsupportedCurrency,
   type SemanticInterpretation,
 } from '../mutations/semantic-interpretation.js';
-import { parseMoneyToCents, resolveRelativeDateFragment } from '../mutations/financial-parser.js';
+import { parseFinancialMutation, parseMoneyToCents, resolveRelativeDateFragment } from '../mutations/financial-parser.js';
 import { resolveMutationEntities, revalidateResolvedEntities, entityResolutionSignals, type EntityReader, type EntityResolutionTrace } from '../mutations/entity-resolver.js';
 import type { MutationApiClient, MutationIdentity } from '../mutations/mutation-api-client.js';
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
@@ -555,6 +555,71 @@ const MISSING_AMOUNT_INTERROGATIVE_RE =
 const MISSING_AMOUNT_READ_CUE_RE =
   /\b(?:mostra|mostre|mostrar|lista|liste|listar|exibe|exibir|ver|veja|consulta|consultar|extrato|historico|resumo)\b/;
 
+/**
+ * Issue #255 (a) — partial draft helpers. A turn that carries a mutation
+ * signal but no parseable value persists a PARTIAL draft (amount sentinel)
+ * instead of answering statelessly, so a follow-up value can resume it.
+ * R06/A06 intact: no value is ever invented — the sentinel (`0`) fails
+ * `validateCompleteArgs`, and only a deterministically parsed follow-up
+ * amount fills it.
+ */
+const PARTIAL_DRAFT_AMOUNT_SENTINEL = 0;
+const PARTIAL_DRAFT_QUESTION =
+  'Não identifiquei o valor a registrar. Informe o valor e a descrição.';
+
+/** A pure read never continues a draft — even a partial one (anti-hijack). */
+const isPureReadForDraft = (text: string): boolean => {
+  if (seeksAccountBalance(text)) return true;
+  const folded = foldSelectorText(text);
+  if (/\?/.test(text)) return true;
+  if (MISSING_AMOUNT_INTERROGATIVE_RE.test(folded)) return true;
+  if (MISSING_AMOUNT_READ_CUE_RE.test(folded)) return true;
+  return false;
+};
+
+/**
+ * A follow-up value WITHOUT a finite verb ("2500", "2500 sendo 10x 250 com
+ * o cartão nubank"). The synthetic `comprei` prefix reuses the parser's own
+ * installment guard, so "10x 250" never becomes R$10 — the amount sits after
+ * "de" or leads the turn and is matched (or not) on its own. Bare tokens
+ * ("2500", "R$ 2500") are accepted only as the WHOLE turn.
+ */
+const followUpAmountCents = (text: string): number | undefined => {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const bare = /^\s*(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{1,12}(?:[.,]\d{1,2})?)\s*(?:reais?|rs\.?)?\s*$/iu.exec(trimmed)?.[1];
+  if (bare !== undefined) {
+    try {
+      const cents = parseMoneyToCents(bare);
+      if (Number.isInteger(cents) && cents > 0) return cents;
+    } catch {
+      // Fall through to the synthetic parse below.
+    }
+  }
+  const synthetic = parseFinancialMutation(`comprei ${trimmed}`);
+  if (synthetic.kind !== 'none' && Number.isInteger(synthetic.amountCents) && synthetic.amountCents > 0) {
+    return synthetic.amountCents;
+  }
+  return undefined;
+};
+
+const inferPartialKind = (text: string): 'expense' | 'income' =>
+  /\b(?:gastei|gasto|comprei|compra|despesa|paguei)\b/i.test(text)
+    ? 'expense'
+    : /\b(?:recebi|ganhei|entrou|renda|sal[aá]rio|receita)\b/i.test(text)
+      ? 'income'
+      : 'expense';
+
+/** Keeps a human-readable fragment ("bicicleta"), never the whole sentence. */
+const partialDescription = (text: string): string => {
+  const stripped = text
+    .trim()
+    .replace(/^(?:comprei|gastei|gasto|paguei|recebi|ganhei|entrou|lancei|lan[cç]ar)\s+(?:uma?|o|a|os|as)?\s*/i, '')
+    .replace(/\s*(?:parcela|parcelas|presta[cç](?:[aã]o(?:es)?|[oõ]es)?|vezes|\bx\b).*$/i, '')
+    .trim();
+  return (stripped || text.trim()).slice(0, 280);
+};
+
 type CorrectionOutcome =
   | Readonly<{ kind: 'amount'; amountCents: number }>
   | Readonly<{ kind: 'ambiguous'; clarification: string }>
@@ -1007,16 +1072,65 @@ export class ConversationOrchestrator {
     const attachment = input.hasAttachmentData === true;
     const text = attachment
       ? ATTACHMENT_CONTENT_UNVERIFIED_TEXT
-      : 'Não identifiquei o valor a registrar. Informe o valor e a descrição.';
+      : PARTIAL_DRAFT_QUESTION;
     const blockedPlan = freeze({ ...plan, missingFields: freeze(['amount']) });
+    // Issue #255 (a): persist the partial draft BEFORE answering, so a
+    // follow-up value resumes THIS intention. No store (legacy/contract
+    // paths) = stateless copy, byte-identical to before.
+    const draft = attachment ? undefined : this.getOrCreatePartialDraft(input);
+    const clarification = draft
+      ? freeze({ missingFields: blockedPlan.missingFields, text, draft: toChannelMessage(draft, text) })
+      : freeze({ missingFields: blockedPlan.missingFields, text });
     this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
     return freeze({
       ...base,
       plan: blockedPlan,
       ...(attachment ? { failClosed: true as const } : {}),
-      clarification: freeze({ missingFields: blockedPlan.missingFields, text }),
+      clarification,
       response: freeze({ text }),
     });
+  }
+
+  /**
+   * Issue #255 (a) — builds (or reuses by intention) the partial draft for
+   * an amount-less mutation turn. Sentinel amount `0` fails
+   * `validateCompleteArgs`, so nothing can propose or execute until a
+   * follow-up supplies a real value. Never throws: a store failure falls
+   * back to the stateless copy.
+   */
+  private getOrCreatePartialDraft(input: TurnInput): MutationDraftRecord | undefined {
+    const store = this.dependencies.draftStore;
+    if (!store) return undefined;
+    try {
+      const ctx = this.draftContext(input);
+      const now = this.draftNowMs();
+      const redelivered = store.findByIntention(ctx, input.intentionId);
+      if (redelivered) return redelivered;
+      if (store.listActive(ctx, now).length > 0 || store.listProposing(ctx, now).length > 0) return undefined;
+      const base = new Date(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(now)) + 'T12:00:00Z');
+      const date = Number.isNaN(base.getTime()) ? new Date(now).toISOString().slice(0, 10) : base.toISOString().slice(0, 10);
+      const kind = inferPartialKind(input.text);
+      const candidate = buildDraftRecord({
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.actorId,
+        deviceId: ctx.deviceId,
+        intentionId: input.intentionId,
+        tool: kind === 'income' ? 'transactions.income.create' : 'transactions.expense.create',
+        resolvedArgs: {
+          kind,
+          amountCents: PARTIAL_DRAFT_AMOUNT_SENTINEL,
+          description: partialDescription(input.text),
+          date,
+        },
+        missingFields: ['amount'],
+        question: PARTIAL_DRAFT_QUESTION,
+        ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+        nowMs: now,
+      });
+      return store.getOrCreate(candidate).record;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Read path: deterministic render when evidence allows, else grounded provider text with ONE retry. */
@@ -1441,6 +1555,38 @@ export class ConversationOrchestrator {
         },
       }
     );
+  }
+
+  /**
+   * Issue #255 (a) — small-talk guard for partial-amount drafts. When EVERY
+   * recoverable draft is a partial (amount sentinel missing), a turn that
+   * contributes NOTHING (no mutation signal, no follow-up amount, no
+   * category answer, no date fragment, no reset/cancel) is not a
+   * continuation: it keeps the legacy unsupported/conversation flow so the
+   * draft survives untouched. Drafts pending other fields keep the
+   * pre-existing routing byte-identical.
+   */
+  private isNonContributingTurn(input: TurnInput): boolean {
+    const store = this.dependencies.draftStore;
+    if (!store) return false;
+    if (isPureReadForDraft(input.text)) return true;
+    const ctx = this.draftContext(input);
+    const now = this.draftNowMs();
+    const actives = [...store.listActive(ctx, now), ...store.listProposing(ctx, now)];
+    if (actives.length === 0) return false;
+    const allPartialAmount = actives.every(
+      (draft) =>
+        draft.missingFields.includes('amount') &&
+        (!Number.isInteger(draft.resolvedArgs.amountCents) || draft.resolvedArgs.amountCents <= 0),
+    );
+    if (!allPartialAmount) return false;
+    if (hasMutationIntentSignal(input.text)) return false;
+    if (isCancelText(input.text) || isResetText(input.text)) return false;
+    if (correctionOutcome(input.text).kind !== 'none') return false;
+    if (followUpAmountCents(input.text) !== undefined) return false;
+    if (categoryQueryFrom(input.text, { allowBareFragment: true }) !== undefined) return false;
+    if (resolveRelativeDateFragment(input.text).status !== 'none') return false;
+    return true;
   }
 
   private completeTurn(
@@ -2095,6 +2241,7 @@ export class ConversationOrchestrator {
       categoryQuery: draft.resolvedArgs.categoryQuery,
     };
     let currentDraft = draft;
+    let effectiveCorrectionCents = correctionCents;
     if (correctionCents !== undefined) {
       const applied = this.applyDraftCorrection(input, draft, correctionCents);
       if (!applied.ok) {
@@ -2102,6 +2249,24 @@ export class ConversationOrchestrator {
         return this.stopDraftCorrection(input, plan, startedAt, base, applied.current ?? draft);
       }
       currentDraft = applied.record;
+    } else if (
+      draft.missingFields.includes('amount') &&
+      (!Number.isInteger(draft.resolvedArgs.amountCents) || draft.resolvedArgs.amountCents <= 0) &&
+      !isPureReadForDraft(input.text)
+    ) {
+      // Issue #255 (a) — a follow-up VALUE fills the partial draft's missing
+      // amount even without a finite verb ("2500", "2500 sendo 10x 250 com o
+      // cartão nubank"). Same guarded write as a correction; pure reads never
+      // reach here (anti-hijack gate above).
+      const followUp = followUpAmountCents(input.text);
+      if (followUp !== undefined) {
+        const applied = this.applyDraftCorrection(input, draft, followUp);
+        if (!applied.ok) {
+          return this.stopDraftCorrection(input, plan, startedAt, base, applied.current ?? draft);
+        }
+        currentDraft = applied.record;
+        effectiveCorrectionCents = followUp;
+      }
     }
     /**
      * A16/R15 — the ONLY optional consultation in the turn, and it sits AFTER
@@ -2115,7 +2280,7 @@ export class ConversationOrchestrator {
     // other turn resolves the heuristic relation synchronously (default-off:
     // no promise, no await) and only awaits when a provider is available.
     let relation: DraftRelation = 'correction';
-    if (correctionCents === undefined) {
+    if (effectiveCorrectionCents === undefined) {
       const resolved = this.continuationRelation(input, draft);
       relation = typeof resolved === 'string' ? resolved : await resolved;
     }
@@ -2134,7 +2299,15 @@ export class ConversationOrchestrator {
     // own — a real utterance is still routed as a new/replacement intention.
     const turnInterpretation = this.interpretTurn(input.text);
     const allowBareFragment = turnInterpretation.status !== 'candidate';
-    const turnCategory = draft.missingFields.includes('categoryId')
+    // Issue #255 (a): a partial draft (amount sentinel) may receive the
+    // category TOGETHER with the value ("2500 ... categoria mercado"), so
+    // the explicit answer is extracted even though `categoryId` is not yet
+    // listed as pending. Bare-name guard below still prevents silent
+    // misattribution when the account is also pending.
+    const partialAmountPending =
+      draft.missingFields.includes('amount') &&
+      (!Number.isInteger(draft.resolvedArgs.amountCents) || draft.resolvedArgs.amountCents <= 0);
+    const turnCategory = draft.missingFields.includes('categoryId') || partialAmountPending
       ? categoryQueryFrom(input.text, { allowBareFragment })
       : undefined;
     // FIX-170: a BARE name is adopted as the category answer ONLY when the
@@ -2181,8 +2354,8 @@ export class ConversationOrchestrator {
      */
     const argsOver = (base: MutationDraftRecord): MutationDraftResolvedArgs => {
         const amountCents =
-          correctionCents !== undefined && base.resolvedArgs.amountCents === correctionCents
-            ? correctionCents
+          effectiveCorrectionCents !== undefined && base.resolvedArgs.amountCents === effectiveCorrectionCents
+            ? effectiveCorrectionCents
             : base.resolvedArgs.amountCents;
         const date = turnDate !== undefined && base.resolvedArgs.date === observedBefore.date ? turnDate : base.resolvedArgs.date;
         const query =
@@ -2298,7 +2471,7 @@ export class ConversationOrchestrator {
         // only when some contribution of this turn still has a field the fresh
         // base left untouched.
         const adoptsTurnArgs =
-          (correctionCents !== undefined && current.resolvedArgs.amountCents === correctionCents) ||
+          (effectiveCorrectionCents !== undefined && current.resolvedArgs.amountCents === effectiveCorrectionCents) ||
           (turnDate !== undefined && current.resolvedArgs.date === observedBefore.date) ||
           (turnCategoryQuery !== undefined && current.resolvedArgs.categoryQuery === observedBefore.categoryQuery);
         return {
@@ -2413,12 +2586,18 @@ export class ConversationOrchestrator {
     }
     if (interpretation.status !== 'candidate') {
       // SPEC §7.6: missing amount/date is a real missing field, never [].
+      // Issue #255 (a): an amount-less mutation turn persists a partial
+      // draft (sentinel amount) instead of answering statelessly.
       const missing = interpretation.status === 'unparsed' && interpretation.reason === 'missing_amount' ? ['amount'] : [...plan.missingFields];
       const blockedPlan = freeze({ ...plan, missingFields: freeze([...missing]) });
       const text =
         interpretation.status === 'unparsed' && interpretation.reason === 'missing_amount'
-          ? 'Não identifiquei o valor a registrar. Informe o valor e a descrição.'
+          ? PARTIAL_DRAFT_QUESTION
           : 'Não foi possível preparar a mutação com segurança. Esclareça valor e descrição.';
+      const draft =
+        interpretation.status === 'unparsed' && interpretation.reason === 'missing_amount'
+          ? this.getOrCreatePartialDraft(input)
+          : undefined;
       this.emit('mutation.blocked', {
         intentionId: input.intentionId,
         traceId: input.traceId,
@@ -2429,7 +2608,9 @@ export class ConversationOrchestrator {
       });
       return this.completeTurn(input, blockedPlan, startedAt, base, {
         plan: blockedPlan,
-        clarification: freeze({ missingFields: blockedPlan.missingFields, text }),
+        clarification: draft
+          ? freeze({ missingFields: blockedPlan.missingFields, text, draft: toChannelMessage(draft, text) })
+          : freeze({ missingFields: blockedPlan.missingFields, text }),
         response: freeze({ text }),
       });
     }
@@ -3560,11 +3741,14 @@ export class ConversationOrchestrator {
     // Draft continuation under a non-mutation plan: a bare answer ("Nubank")
     // routes `unsupported`, but with a recoverable draft and a client it is a
     // missing-field answer, not a new turn. Reads keep their normal flow — a
-    // balance query never completes a draft.
+    // balance query never completes a draft. Issue #255 (a): a PURE read
+    // never continues a draft, and small talk never consumes a partial-amount
+    // draft that it cannot contribute to.
     if (
       this.dependencies.draftStore && client &&
       (plan.mode === 'unsupported' || plan.mode === 'conversation') &&
-      this.hasDraftForTurn(input)
+      this.hasDraftForTurn(input) &&
+      !this.isNonContributingTurn(input)
     ) {
       return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
     }
@@ -3572,10 +3756,13 @@ export class ConversationOrchestrator {
     // `read`, but with a recoverable draft awaiting the account it is a
     // missing-field answer, not a new read. A balance query still never
     // completes a draft (`seeksAccountBalance` keeps the read flow).
+    // Issue #255 (a): pure reads (`isPureReadForDraft`) never continue —
+    // even with a partial draft pending.
     if (
       this.dependencies.draftStore && client &&
       plan.mode === 'read' &&
       !seeksAccountBalance(input.text ?? '') &&
+      !isPureReadForDraft(input.text ?? '') &&
       this.hasDraftForTurn(input)
     ) {
       return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
