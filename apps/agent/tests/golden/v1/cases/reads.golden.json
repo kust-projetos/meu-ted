@@ -72,7 +72,7 @@
         "backend": { "proposalsCreated": 1, "executionsSucceeded": 0, "maxLedgerEntries": 1 },
         "response": { "mustMatch": ["Confirma\\?"] },
         "budget": { "maxTurns": 3 },
-        "plan": { "skillsContain": ["financial-analysis"] }
+        "plan": { "skillsContain": ["registros"] }
       }
     }
   ]

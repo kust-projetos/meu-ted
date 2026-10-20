@@ -12,6 +12,10 @@
  * endpoints) instead of resolving server-side in GET /v2/active, which
  * stays a lean label-free listing for disambiguation. Incomplete args
  * yield `null` (defense: the canonical gate already blocks propose).
+ *
+ * Role contract: this constructor only BUILDS the card from the canonical
+ * args plus labels — it never decides confirmation, never filters the relay
+ * listing, never creates financial rules.
  */
 import {
   pendingOperationPresentationSchema,

@@ -190,3 +190,14 @@ sem camadas concorrentes.
 
 Simplificar o TED em torno de LLM com reads/tools reais, preservando backend e
 integridade. Sucesso = tarefas reais concluídas corretamente, não mecanismos.
+
+## 12. Confirmação pós-POC (2026-10-20, `docs/agent-recovery/04-poc-comparison.md`)
+
+POC reads-only (8 cenários): protótipo B 8/8 roteamento correto; runtime atual
+A com 2 bugs reais (S7 conceito→`list_cards`, S8 ano-como-valor→mutação) —
+ambos corrigidos com teste (S7 conceito→general, S8 janela explícita
+`<mês> de <ano>`, nunca mutação); C (modelo de referência) não executado por
+gate de custo. Decisão CONFIRMADA: `deterministic_fix`; `sdk_loop` segue
+experimento isolado. `llm/*` mantido sem colapso (P8: sem bug demonstrado).
+`undoLastAction` direto-API na página de pendências documentado como legado
+conhecido (unificar exige decisão arquitetural própria).

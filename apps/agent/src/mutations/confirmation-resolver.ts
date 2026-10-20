@@ -10,7 +10,8 @@ const affirmative = /^(sim|s[ií]m|confirmo|confirmado|pode|pode sim|autorizo|va
  */
 const negative = /\b(n[aã]o|não|cancela|cancelar|deixa|desist|pare|desfaz|desfazer|desfaç)\b/i;
 
-/** Resolves confirmation text without reconstructing or modifying proposal arguments. */
+/** Resolves confirmation text without reconstructing or modifying proposal arguments.
+ * Role contract: this guard only DECIDES (confirm/cancel/clarify) — it never builds cards, never filters listings, never creates financial rules. */
 export const resolveConfirmation = (text: string, pendingOperationIds: readonly string[]): ConfirmationDecision => {
   if (negative.test(text)) return { kind: 'cancel', reason: 'explicit_negation' };
   if (!affirmative.test(text.trim())) return { kind: 'clarify', reason: 'not_explicit_confirmation' };

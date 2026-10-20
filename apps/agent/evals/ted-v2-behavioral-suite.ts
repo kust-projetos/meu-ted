@@ -12,7 +12,7 @@
  * - channel normalization: normalizeRestTurn/SdkTurn/BrokerTurn
  * - mutation parsing: parseFinancialMutation
  * - confirmation text: resolveConfirmation
- * - entity disambiguation: resolveEntity
+ * - entity disambiguation: resolveMutationEntities (R08 authoritative)
  * - proposal/confirmation flow: ConversationOrchestrator + MutationApiClient
  *   with a fake pending-operations API (in-memory, binding-checked)
  * - replay/incomplete attestation: MutationExecutor with fake transport
@@ -41,15 +41,14 @@ import {
   type AuthenticatedIdentity,
   type TurnPlan,
 } from '../src/orchestration/conversation-orchestrator.js';
-import { SKILL_INVENTORY } from '../src/orchestration/skill-inventory.js';
+import { toolSkillMap } from '../src/agent-config/tools.js';
 import { parseFinancialMutation } from '../src/mutations/financial-parser.js';
 import { resolveConfirmation } from '../src/mutations/confirmation-resolver.js';
 import { MutationApiClient } from '../src/mutations/mutation-api-client.js';
 import { InMemoryMutationDraftStore } from '../src/mutations/mutation-draft.js';
 import { MutationExecutor } from '../src/mutations/mutation-executor.js';
 import { MUTATION_EFFECTS_REGISTRY } from '@pi-finance/llm-contracts';
-import { resolveEntity, EntityResolutionError } from '../src/tools/entity-resolution.js';
-import type { EntityReader } from '../src/mutations/entity-resolver.js';
+import { resolveMutationEntities, type EntityReader } from '../src/mutations/entity-resolver.js';
 import { createEvidenceEnvelope, isCurrentEvidence } from '../src/evidence/evidence-envelope.js';
 import { collectEvidence } from '../src/evidence/evidence-collector.js';
 import { validateGroundedClaims } from '../src/evidence/grounding-validator.js';
@@ -104,7 +103,7 @@ export interface MatrixReport {
   results: ScenarioOutcome[];
 }
 
-const INVENTORY_TOOLS = new Set(SKILL_INVENTORY.flatMap((skill) => [...skill.tools]));
+const INVENTORY_TOOLS = new Set(Object.keys(toolSkillMap()));
 
 const DEFAULT_IDENTITY: AuthenticatedIdentity = {
   actorId: 'actor-eval',
@@ -417,26 +416,58 @@ const runConfirm = (scenario: BehavioralScenario): string => {
 
 const runResolve = async (scenario: BehavioralScenario): Promise<string> => {
   const { id, exec, expect } = scenario;
+  // R08 authoritative axis (the `tools/entity-resolution` duplicate is gone):
+  // scenarios resolve against `resolveMutationEntities` with the matrix
+  // `items` as the authoritative list for the exercised axis. The OTHER axis
+  // is seeded to resolve deterministically, so the outcome isolates one axis.
+  const type = exec.type === 'category' ? 'category' : 'account';
+  const query = String(exec.query ?? '');
   const items = (exec.items ?? []) as { id: string; name: string }[];
-  const fakeList = async (): Promise<unknown> => ({ items });
-  try {
-    const candidate = await resolveEntity({
-      type: exec.type === 'category' ? 'category' : 'account',
-      query: String(exec.query ?? ''),
-      request: fakeList as Parameters<typeof resolveEntity>[0]['request'],
-    });
-    if (expect.errorCode !== undefined) throw new EvalAssertion(`${id}: expected "${expect.errorCode}", entity resolved to ${candidate.id}`);
-    if (expect.resolvedId !== undefined) eq(candidate.id, expect.resolvedId, 'resolved entity', id);
-    return `resolved ${candidate.id}`;
-  } catch (error) {
-    if (error instanceof EvalAssertion) throw error;
-    if (expect.errorCode === undefined) throw new EvalAssertion(`${id}: unexpected resolution failure — ${(error as Error).message}`);
-    expectCode(error, String(expect.errorCode), id);
-    if (expect.candidateCount !== undefined) {
-      eq(error instanceof EntityResolutionError ? error.candidates.length : -1, expect.candidateCount, 'candidate count', id);
+  const reader: EntityReader =
+    type === 'account'
+      ? {
+          listAccounts: async () => items,
+          listCategories: async () => [{ id: '00000000-0000-4000-8000-000000000001', name: 'mercado' }],
+        }
+      : {
+          listAccounts: async () => [{ id: '00000000-0000-4000-8000-0000000000a1', name: 'Conta eval' }],
+          listCategories: async () => items,
+        };
+  const resolution = await resolveMutationEntities(
+    {
+      kind: 'expense',
+      amountCents: 1000,
+      description: 'mercado',
+      date: '2026-09-14',
+      ...(type === 'category' ? { categoryQuery: query } : {}),
+    },
+    query,
+    reader,
+  );
+  if (expect.errorCode !== undefined) {
+    // Authoritative fail-closed is a clarification, never a throw: an
+    // ambiguous axis keeps its homonyms visible, a missing one asks again.
+    ok(!resolution.complete, `expected "${String(expect.errorCode)}", resolution completed`, id);
+    if (!resolution.complete) {
+      const field = type === 'account' ? 'accountId' : 'categoryId';
+      ok(resolution.missingFields.includes(field), `expected missing ${field}`, id);
+      if (expect.candidateCount !== undefined) {
+        const homonyms = type === 'account' ? resolution.trace.account.homonyms : resolution.trace.category.homonyms;
+        eq(homonyms.length, expect.candidateCount, 'candidate count', id);
+      }
+      return `blocked (${resolution.clarification.split('\n')[0]})`;
     }
-    return `blocked (${(error as Error).message})`;
+    throw new EvalAssertion(`${id}: expected "${String(expect.errorCode)}", resolution completed`);
   }
+  if (expect.resolvedId !== undefined) {
+    ok(resolution.complete, 'expected a complete resolution', id);
+    if (resolution.complete) {
+      eq(type === 'account' ? resolution.accountId : resolution.categoryId, expect.resolvedId, 'resolved entity', id);
+      return `resolved ${String(expect.resolvedId)}`;
+    }
+    throw new EvalAssertion(`${id}: expected resolution to ${String(expect.resolvedId)}, got clarification`);
+  }
+  return 'resolved';
 };
 
 const mutationPlan = (mode: 'mutation-proposal' | 'confirmation'): TurnPlan => ({

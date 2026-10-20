@@ -7,6 +7,10 @@
  * FIX-P1: the canonical `presentation` (SPEC §16) is allowlisted as an
  * opaque-but-validated DTO — strict schema parse only; a poisoned
  * presentation is dropped while the lean record still relays.
+ *
+ * Role contract: this projection only FILTERS to the lean allowlist — it
+ * never decides confirmation, never builds financial content, never
+ * creates financial rules.
  */
 import { pendingOperationPresentationSchema } from '@pi-finance/llm-contracts';
 import type { ActiveOperationRecord } from './mutation-api-client.js';

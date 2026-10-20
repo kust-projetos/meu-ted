@@ -233,12 +233,20 @@ const selectReads = (plan: TurnPlan): readonly ReadKind[] => {
 
 /**
  * #256 P2a — janela do resumo a partir do texto (corrente vs. passada).
- * Relativo mínimo: "mês passado" ("último mês", "mês anterior") resolve o
- * `yearMonth` anterior; todo o resto usa o mês corrente. Base UTC como o
+ * Relativo minimo: "mês passado" ("último mês", "mês anterior") resolve o
+ * `yearMonth` anterior; S8 (POC Fase 2): "<mês> de <ano>" explícito resolve
+ * o `yearMonth` pedido (o backend `/dashboard/month-summary` aceita qualquer
+ * YYYY-MM válido). Todo o resto usa o mês corrente. Base UTC como o
  * caminho anterior (`toISOString().slice(0, 7)`), nunca mês inventado.
  */
 export const resolveSummaryYearMonth = (text: string, now: Date = new Date()): string => {
   const normalized = text.normalize('NFD').replace(/[\u0300-\u036b]/g, '').toLowerCase();
+  const explicit = /\b(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+de\s+((?:19|20)\d{2})\b/.exec(normalized);
+  if (explicit) {
+    const months: Readonly<Record<string, string>> = { janeiro: '01', fevereiro: '02', marco: '03', abril: '04', maio: '05', junho: '06', julho: '07', agosto: '08', setembro: '09', outubro: '10', novembro: '11', dezembro: '12' };
+    const month = months[explicit[1]!];
+    if (month) return `${explicit[2]}-${month}`;
+  };
   const current = now.toISOString().slice(0, 7);
   if (/\bmes\s+passado\b|\bultimo\s+mes\b|\bmes\s+anterior\b/.test(normalized)) {
     const [year, month] = current.split('-').map(Number);
