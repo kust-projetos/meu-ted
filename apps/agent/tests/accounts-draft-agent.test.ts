@@ -242,6 +242,22 @@ describe('accounts.create draft flow', () => {
     expect(h.request).not.toHaveBeenCalled();
   });
 
+  it('(4d) repetir "Nubank" com nome conhecido NÃO preenche kind (sem inferência pelo nome)', async () => {
+    const h = harness(T0);
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'criar conta Nubank com saldo 145', intentionId: 'acct-nr-t1' }, identity),
+    );
+    const r = await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'Nubank', intentionId: 'acct-nr-t2' }, identity),
+    );
+    // "Nubank" contém "bank" como substring, mas é nome — kind segue pendente.
+    const actives = h.store.listActive(ctx, T0 + 2000);
+    expect(actives).toHaveLength(1);
+    expect(actives[0]!.missingFields).toEqual(['kind']);
+    expect(h.request).not.toHaveBeenCalled();
+    expect(r.response?.text).toMatch(/banco|espécie|especie/i);
+  });
+
   it('(7a) "cancela" com rascunho de conta descarta o rascunho (semântica existente)', async () => {
     const h = harness(T0);
     await h.orchestrator.runTurn(

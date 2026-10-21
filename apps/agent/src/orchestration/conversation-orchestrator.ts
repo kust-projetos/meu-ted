@@ -3155,7 +3155,21 @@ export class ConversationOrchestrator {
     if (!client) {
       const actives = store.listActive(ctx, now);
       if (actives.length === 0) return this.deactivateFreshFlow(input, plan, startedAt, base, null);
-      return this.clarifyDraft(input, plan, startedAt, base, actives[0]!, actives[0]!.lastQuestion);
+      // Complete draft without transport: restate the pending selection —
+      // never publish the draft's empty lastQuestion (it would render as
+      // silence). Incomplete drafts keep clarifying their real question.
+      const first = actives[0]!;
+      if (
+        (first.tool === ACCOUNT_DEACTIVATE_TOOL || first.resolvedArgs.kind === 'account-deactivate') &&
+        (first.resolvedArgs.accountId?.trim() ?? '').length > 0 &&
+        (first.resolvedArgs.accountName?.trim() ?? '').length > 0 &&
+        first.missingFields.length === 0
+      ) {
+        return this.completeTurn(input, plan, startedAt, base, {
+          response: freeze({ text: deactivateReadyNoProposalText(first.resolvedArgs.accountName!.trim()) }),
+        });
+      }
+      return this.clarifyDraft(input, plan, startedAt, base, first, first.lastQuestion);
     }
     return this.runMutationTurn(input, plan, client, startedAt, base, decisionText);
   }

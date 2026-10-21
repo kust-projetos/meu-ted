@@ -71,6 +71,20 @@ const FOREIGN_DOMAIN_NOUNS = [
 ];
 
 /**
+ * Nouns that pin a generic removal verb to a NON-account object: "exclua a
+ * despesa de ontem da conta Nubank" is about the transaction, never an
+ * account deactivation — even though an account anchor is present. Checked
+ * AFTER account-specific verbs (explicit "desative" wins) and BEFORE the
+ * anchor rule. Anaphora-only turns ("delete ela") carry none of these nouns
+ * and keep flowing to deactivation.
+ */
+const TRANSACTION_OBJECT_NOUNS = [
+  'despesa', 'despesas', 'receita', 'receitas',
+  'lancamento', 'lancamentos', 'transacao', 'transacoes',
+  'transferencia', 'transferencias', 'fatura', 'faturas',
+];
+
+/**
  * Explicit deactivation signal: an account-specific verb anywhere, or a
  * generic removal verb next to an account anchor (noun or anaphora) without
  * a foreign-domain noun stealing the turn.
@@ -78,6 +92,7 @@ const FOREIGN_DOMAIN_NOUNS = [
 export const hasAccountDeactivationSignal = (text: string): boolean => {
   const folded = fold(text);
   if (wordRe(ACCOUNT_SPECIFIC_VERBS).test(folded)) return true;
+  if (wordRe(TRANSACTION_OBJECT_NOUNS).test(folded)) return false;
   if (!wordRe(GENERIC_REMOVAL_VERBS).test(folded)) return false;
   if (!wordRe(ACCOUNT_ANCHORS).test(folded)) return false;
   if (wordRe(FOREIGN_DOMAIN_NOUNS).test(folded) && !/\bcontas?\b/.test(folded)) return false;

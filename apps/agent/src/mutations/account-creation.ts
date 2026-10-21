@@ -102,7 +102,9 @@ export const parseAccountKind = (text: string, opts?: { allowBare?: boolean }): 
   const folded = ` ${fold(text)} `;
   if (CASH_KIND_MARKERS.some((m) => folded.includes(m))) return 'cash';
   if (BANK_KIND_MARKERS.some((m) => folded.includes(m))) return 'bank';
-  if (opts?.allowBare && BARE_BANK_MARKERS.some((m) => folded.includes(m))) return 'bank';
+  // Bare answers ("banco") match on WORD BOUNDARIES only: "Nubank" contains
+  // "bank" as a substring but is a name, never a kind answer.
+  if (opts?.allowBare && wordRe(BARE_BANK_MARKERS).test(folded)) return 'bank';
   // NOTE: the bare word "conta" deliberately fills NOTHING — the kind must
   // be asked, never inferred from the name or from the generic noun.
   return undefined;

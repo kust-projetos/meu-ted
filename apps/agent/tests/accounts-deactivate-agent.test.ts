@@ -158,6 +158,16 @@ describe('accounts.deactivate intent signal', () => {
     expect(hasAccountDeactivationSignal('exclua a transação de ontem')).toBe(false);
     expect(hasAccountDeactivationSignal('cancela')).toBe(false);
   });
+
+  it('verbo genérico com objeto transacional NÃO abre desativação (mesmo com âncora "conta")', () => {
+    expect(hasAccountDeactivationSignal('exclua a despesa de ontem da conta Nubank')).toBe(false);
+    expect(hasAccountDeactivationSignal('exclua a fatura da conta Nubank')).toBe(false);
+    expect(hasAccountDeactivationSignal('apague a receita da conta Nubank')).toBe(false);
+    // Anáfora pura segue valendo (sem substantivo estrangeiro).
+    expect(hasAccountDeactivationSignal('delete ela')).toBe(true);
+    // Verbo explícito de desativação segue vencendo.
+    expect(hasAccountDeactivationSignal('desative a despesa')).toBe(true);
+  });
 });
 
 describe('accounts.deactivate draft flow', () => {
@@ -459,5 +469,43 @@ describe('accounts.deactivate resolution unit', () => {
     expect(multi.kind).toBe('ambiguous');
     const empty = resolveDeactivationTarget('delete ela', rows([]));
     expect(empty.kind).toBe('none');
+  });
+});
+
+describe('accounts.deactivate sem transporte (P2-3: nunca silêncio)', () => {
+  const harnessNoClient = (nowMs: number, accounts: AccountRow[]) => {
+    let now = nowMs;
+    const store = new InMemoryMutationDraftStore();
+    const responseProvider = vi.fn(async () => 'invented by model');
+    const evidenceProvider = vi.fn(async () => ({
+      version: '1' as const,
+      items: [],
+    }) as never);
+    const orchestrator = new ConversationOrchestrator({
+      entityReader: { listAccounts: async () => accounts, listCategories: async () => [] },
+      draftStore: store,
+      draftNow: () => now,
+      responseProvider,
+      evidenceProvider,
+      events: () => undefined,
+    });
+    return { store, orchestrator };
+  };
+
+  it('rascunho completo sem client responde a seleção pendente (nunca texto vazio)', async () => {
+    const h = harnessNoClient(T0, ACCOUNTS);
+    const r1 = await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'desative a conta nubank', intentionId: 'deact-nc-1' }, identity),
+    );
+    // Fresh flow sem transporte: cria o draft completo e responde a limitação.
+    const actives = h.store.listActive(ctx, T0 + 1000);
+    expect(actives).toHaveLength(1);
+    expect(actives[0]!.missingFields).toEqual([]);
+    expect((r1.response?.text ?? '').length).toBeGreaterThan(0);
+    // Segundo turno: declara a seleção pendente em vez de publicar pergunta vazia.
+    const r2 = await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'desative a conta nubank', intentionId: 'deact-nc-2' }, identity),
+    );
+    expect(r2.response?.text ?? '').toMatch(/ainda não há proposta ativa/);
   });
 });
