@@ -10,9 +10,12 @@
  * zero and negative are legitimate opening balances, cf. ADR-018).
  *
  * Hard rules (contract):
- * - the account `kind` is NEVER inferred from the name ("Nubank" does not
- *   imply `bank`): only an explicit kind marker (`conta corrente`, `no
- *   banco`, `dinheiro`, `especie`, ...) fills it, otherwise the turn asks;
+ * - the account `kind` is NEVER inferred from the name, with ONE deliberate
+ *   exception (itau-kind-bank, operator-authorized): known bank-institution
+ *   names listed in `KNOWN_BANK_NAMES` (folded, case-insensitive — currently
+ *   only `itau`, matching "Itaú"/"Itau"/"itau") fill `bank`. The original
+ *   name spelling is always preserved ("Itaú", never rewritten). Any other
+ *   name ("Nubank", "Banco do Brasil", ...) fills NOTHING — the turn asks;
  * - no value is ever invented: a missing slot stays missing and becomes a
  *   deterministic question, never a default (no `bank` default, no `0`
  *   default — "sem saldo" written by the user IS an explicit zero, which is
@@ -98,10 +101,29 @@ const CASH_KIND_MARKERS = [
 // "Banco do Brasil" — never infer from the name.
 const BARE_BANK_MARKERS = ['banco', 'bank'];
 
+/**
+ * Known bank-institution names (FOLDED forms: lowercase, no diacritics —
+ * compare against `fold(text)`). Deliberate, operator-authorized exception
+ * to the never-infer-from-the-name rule (itau-kind-bank): these fill
+ * `bank` while the extracted name keeps the user's original spelling.
+ *
+ * Minimal scope: only `itau` in this diff. Extend by appending the folded
+ * form here — no re-architecture needed. NEVER add ambiguous names.
+ */
+const KNOWN_BANK_NAMES = ['itau'];
+
+const KNOWN_BANK_NAME_RE = wordRe(KNOWN_BANK_NAMES);
+
 export const parseAccountKind = (text: string, opts?: { allowBare?: boolean }): AccountDraftKind | undefined => {
   const folded = ` ${fold(text)} `;
   if (CASH_KIND_MARKERS.some((m) => folded.includes(m))) return 'cash';
   if (BANK_KIND_MARKERS.some((m) => folded.includes(m))) return 'bank';
+  // Deliberate exception (itau-kind-bank): a known bank-institution name
+  // fills `bank` on ANY turn (fresh or continuation, regardless of
+  // `allowBare`) — it is a specific name, not a bare generic answer. Word
+  // boundaries only, so "itau" never matches inside another word. Explicit
+  // cash markers above keep precedence; a bare name alone NEVER yields cash.
+  if (KNOWN_BANK_NAME_RE.test(folded)) return 'bank';
   // Bare answers ("banco") match on WORD BOUNDARIES only: "Nubank" contains
   // "bank" as a substring but is a name, never a kind answer.
   if (opts?.allowBare && wordRe(BARE_BANK_MARKERS).test(folded)) return 'bank';

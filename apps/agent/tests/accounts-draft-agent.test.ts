@@ -8,7 +8,8 @@
  * `{ mutationKind: 'accounts.create', operationId, entity: { type: 'account',
  * id } }`; NUNCA auto_execute; draft fields name/kind(bank|cash)/
  * initialBalanceCents (signed, zero/negativo OK); kind nunca inferido pelo
- * nome; idempotência derivada da intenção (mesmo mecanismo das transações).
+ * nome, EXCETO nomes de banco conhecido (KNOWN_BANK_NAMES: só "itau" —
+ * exceção deliberada itau-kind-bank, autorizada pelo operador); idempotência derivada da intenção (mesmo mecanismo das transações).
  */
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -231,6 +232,8 @@ describe('accounts.create draft flow', () => {
   });
 
   it('(4c) "Banco do Brasil" no turno fresh NÃO infere kind (pergunta preservada)', async () => {
+    // NOTA (itau-kind-bank): exceção deliberada só para "Itaú"/"itau"
+    // (KNOWN_BANK_NAMES); demais nomes seguem sem inferência.
     const h = harness(T0);
     await h.orchestrator.runTurn(
       normalizeRestTurn({ text: 'criar conta Banco do Brasil com saldo 100', intentionId: 'acct-bb-t1' }, identity),
@@ -243,6 +246,10 @@ describe('accounts.create draft flow', () => {
   });
 
   it('(4d) repetir "Nubank" com nome conhecido NÃO preenche kind (sem inferência pelo nome)', async () => {
+    // NOTA (itau-kind-bank, mudança deliberada autorizada pelo operador):
+    // "Itaú"/"itau" é a ÚNICA exceção — nome de banco conhecido preenche
+    // kind=bank via KNOWN_BANK_NAMES. "Nubank"/"Banco do Brasil" seguem sem
+    // inferência (lista mínima: só Itaú neste diff).
     const h = harness(T0);
     await h.orchestrator.runTurn(
       normalizeRestTurn({ text: 'criar conta Nubank com saldo 145', intentionId: 'acct-nr-t1' }, identity),
@@ -256,6 +263,67 @@ describe('accounts.create draft flow', () => {
     expect(actives[0]!.missingFields).toEqual(['kind']);
     expect(h.request).not.toHaveBeenCalled();
     expect(r.response?.text).toMatch(/banco|espécie|especie/i);
+  });
+
+  it('(4e) "criar conta Itaú com saldo 145" preenche kind=bank pelo nome do banco (exceção deliberada)', async () => {
+    // Exceção deliberada ao "nunca inferir pelo nome" (itau-kind-bank,
+    // autorizada pelo operador): nome de banco conhecido (KNOWN_BANK_NAMES,
+    // só "itau" neste diff) preenche kind=bank; o nome preserva a grafia
+    // original ("Itaú").
+    const h = harness(T0);
+    const r = await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'criar conta Itaú com saldo 145', intentionId: 'acct-itau-t1' }, identity),
+    );
+    expect(r.mutation?.status).toBe('proposed');
+    const propose = h.calls.find((c) => c.path === '/pending-operations/v2/propose');
+    expect(propose).toBeDefined();
+    const body = (propose!.options as { body?: Record<string, unknown> }).body as Record<string, unknown>;
+    expect(body.tool).toBe('accounts.create');
+    expect(body.normalizedArgs).toMatchObject({
+      name: 'Itaú',
+      kind: 'bank',
+      initialBalanceCents: 14500,
+    });
+  });
+
+  it('(4f) responder "Itaú" com kind faltante preenche kind=bank sem alterar nome/saldo', async () => {
+    const h = harness(T0);
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'criar conta reserva com saldo 145', intentionId: 'acct-itau-c-t1' }, identity),
+    );
+    expect(h.store.listActive(ctx, T0 + 1000)[0]!.missingFields).toEqual(['kind']);
+    const r = await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'Itaú', intentionId: 'acct-itau-c-t2' }, identity),
+    );
+    expect(r.mutation?.status).toBe('proposed');
+    const propose = h.calls.find((c) => c.path === '/pending-operations/v2/propose');
+    expect(propose).toBeDefined();
+    const body = (propose!.options as { body?: Record<string, unknown> }).body as Record<string, unknown>;
+    // Nome e saldo originais preservados; só o kind foi preenchido.
+    expect(body.normalizedArgs).toMatchObject({
+      name: 'reserva',
+      kind: 'bank',
+      initialBalanceCents: 14500,
+    });
+  });
+
+  it('(4g) "itau" minúsculo/sem acento também preenche kind=bank (pós-fold)', async () => {
+    const h = harness(T0);
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'criar conta reserva com saldo 145', intentionId: 'acct-itau-f-t1' }, identity),
+    );
+    const r = await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'itau', intentionId: 'acct-itau-f-t2' }, identity),
+    );
+    expect(r.mutation?.status).toBe('proposed');
+    const propose = h.calls.find((c) => c.path === '/pending-operations/v2/propose');
+    expect(propose).toBeDefined();
+    const body = (propose!.options as { body?: Record<string, unknown> }).body as Record<string, unknown>;
+    expect(body.normalizedArgs).toMatchObject({
+      name: 'reserva',
+      kind: 'bank',
+      initialBalanceCents: 14500,
+    });
   });
 
   it('(7a) "cancela" com rascunho de conta descarta o rascunho (semântica existente)', async () => {
