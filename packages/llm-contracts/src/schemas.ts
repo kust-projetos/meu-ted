@@ -396,6 +396,7 @@ export const pendingOperationPresentationSchema = z
     accountName: z.string().trim().min(1).max(120).optional(),
     accountKind: z.string().trim().min(1).max(32).optional(),
     initialBalanceCents: z.number().int().optional(),
+    balanceCents: z.number().int().optional(),
     expiresAt: z.string().datetime({ offset: true }),
     warnings: z.array(z.string().trim().min(1)),
   })

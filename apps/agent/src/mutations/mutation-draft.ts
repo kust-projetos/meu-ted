@@ -108,10 +108,10 @@ export const appendOriginMessage = (
 /** Definitive propose outcome once the API answered authoritatively. */
 export type DraftProposeOutcome = 'created' | 'existing' | 'rejected' | 'unknown';
 
-export type DraftTool = TedApprovalTool | 'accounts.create';
+export type DraftTool = TedApprovalTool | 'accounts.create' | 'accounts.deactivate';
 
 export type MutationDraftResolvedArgs = Readonly<{
-  kind: 'expense' | 'income' | 'account';
+  kind: 'expense' | 'income' | 'account' | 'account-deactivate';
   amountCents: number;
   description: string;
   date: string;
@@ -599,6 +599,14 @@ export const validateCompleteArgs = (args: MutationDraftResolvedArgs): boolean =
     if (typeof args.accountName !== 'string' || !args.accountName.trim()) return false;
     if (args.accountKind !== 'bank' && args.accountKind !== 'cash') return false;
     if (!Number.isInteger(args.initialBalanceCents)) return false;
+    return true;
+  }
+  // accounts.deactivate gate (contrato fixado accounts-deactivate-agent):
+  // the resolved NAME (display-only) plus the authoritative `accountId`
+  // (UUID). No amount/date/category — a deactivation names an account.
+  if (args.kind === 'account-deactivate') {
+    if (typeof args.accountName !== 'string' || !args.accountName.trim()) return false;
+    if (!args.accountId || !UUID.test(args.accountId)) return false;
     return true;
   }
   if (args.kind !== 'expense' && args.kind !== 'income') return false;

@@ -22,7 +22,17 @@ import {
   parseAccountKind,
   type AccountDraftKind,
 } from '../mutations/account-creation.js';
-import { resolveMutationEntities, revalidateResolvedEntities, entityResolutionSignals, type EntityReader, type EntityResolutionTrace } from '../mutations/entity-resolver.js';
+import {
+  ACCOUNT_DEACTIVATE_TOOL,
+  DEACTIVATE_READ_FAILURE_TEXT,
+  deactivateNoTransportText,
+  deactivateProposeSummary,
+  deactivateReadyNoProposalText,
+  hasAccountDeactivationSignal,
+  isConfirmDeactivateText,
+  resolveDeactivationTarget,
+} from '../mutations/account-deactivation.js';
+import { normalizeEntities, resolveMutationEntities, revalidateResolvedEntities, entityResolutionSignals, type EntityReader, type EntityResolutionTrace, type EntitySummary } from '../mutations/entity-resolver.js';
 import type { MutationApiClient, MutationIdentity } from '../mutations/mutation-api-client.js';
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
 import {
@@ -1528,7 +1538,7 @@ export class ConversationOrchestrator {
           status: 'succeeded' as const,
           ...(validated.kind === 'valid' ? { receipt: validated.receipt as unknown as MutationReceipt } : {}),
         }),
-        response: freeze({ text: renderMutationResult('succeeded') }),
+        response: freeze({ text: renderMutationResult('succeeded', 'operação', validated.kind === 'valid' ? validated.receipt as unknown as { mutationKind?: unknown } : undefined) }),
       });
     }
     // Tombstone, reservation, or untrusted receipt: reconcile by operationId.
@@ -1743,6 +1753,16 @@ export class ConversationOrchestrator {
     // fresh flow reopens it as an account draft. Against an account draft,
     // only a creation turn naming a DIFFERENT name/balance/kind replaces;
     // restating the same (or answering a slot) continues.
+    // accounts.deactivate (account-only path): an explicit deactivation
+    // turn never continues a transaction/creation draft — it replaces the
+    // draft (the same rule a new transaction intention already follows),
+    // and the fresh flow opens it as a deactivation draft. Against a
+    // deactivation draft the turn continues (target re-resolution happens
+    // in `continueDeactivateDraft`, never here).
+    if (hasAccountDeactivationSignal(text)) {
+      if (draft.tool !== ACCOUNT_DEACTIVATE_TOOL && draft.resolvedArgs.kind !== 'account-deactivate') return true;
+      return false;
+    }
     if (hasAccountCreationSignal(text)) {
       if (draft.tool !== ACCOUNT_CREATE_TOOL && draft.resolvedArgs.kind !== 'account') return true;
       const parsed = parseAccountCreation(text);
@@ -1885,6 +1905,11 @@ export class ConversationOrchestrator {
     // the manual-only account handoff (never auto-executed).
     if (draft.tool === ACCOUNT_CREATE_TOOL || draft.resolvedArgs.kind === 'account') {
       return this.executeProposeAccount(input, plan, startedAt, base, draft, client);
+    }
+    // accounts.deactivate (account-only path): deactivation drafts propose
+    // through the manual-only deactivation handoff (never auto-executed).
+    if (draft.tool === ACCOUNT_DEACTIVATE_TOOL || draft.resolvedArgs.kind === 'account-deactivate') {
+      return this.executeProposeDeactivate(input, plan, startedAt, base, draft, client);
     }
     const store = this.dependencies.draftStore!;
     const maxAttempts = this.dependencies.draftMaxProposeAttempts ?? DEFAULT_MAX_PROPOSE_ATTEMPTS;
@@ -2389,7 +2414,9 @@ export class ConversationOrchestrator {
       if (candidate && (!isQuestion || initialBalanceCents !== undefined)) name = candidate;
     }
     if (missingKind) {
-      const kind = parseAccountKind(text);
+      // Bare "banco" counts only with the name already known (kind answer);
+      // on a fresh turn it would infer kind from names like "Banco do Brasil".
+      const kind = parseAccountKind(text, { allowBare: !missingName });
       if (kind) accountKind = kind;
     }
     if (name === undefined && initialBalanceCents === undefined && accountKind === undefined) return null;
@@ -2780,6 +2807,360 @@ export class ConversationOrchestrator {
   }
 
   /**
+   * accounts.deactivate (account-only path): authoritative account list,
+   * fail-closed on unreadable payloads (contract-parity with the entity
+   * resolver: an unreadable read is never an empty workspace).
+   */
+  private async readDeactivationAccounts(): Promise<{ accounts: EntitySummary[]; scope?: string } | null> {
+    const reader = this.entityReaderOrClosed();
+    try {
+      const accounts = normalizeEntities(await reader.listAccounts());
+      const scope = reader.scope?.workspaceId;
+      return scope ? { accounts, scope } : { accounts };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * accounts.deactivate (account-only path): persists a fresh deactivation
+   * draft from an explicit deactivation turn. A resolved target with a
+   * transport proposes immediately under the draft-derived idempotency key
+   * (the same recoverable handoff as transactions); every other outcome
+   * clarifies or answers honestly — NUNCA auto_execute (no eligibility
+   * check at all) and NEVER a confirmation ask without a proposal
+   * (hard rule 3).
+   */
+  private async deactivateFreshFlow(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    client: MutationApiClient | null,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const read = await this.readDeactivationAccounts();
+    if (!read) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: DEACTIVATE_READ_FAILURE_TEXT }),
+      });
+    }
+    const resolution = resolveDeactivationTarget(input.text, read.accounts, read.scope);
+    const now = this.draftNowMs();
+    const identity = {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      deviceId: input.deviceId ?? null,
+    };
+    if (resolution.kind === 'resolved') {
+      const account = resolution.account;
+      const candidate = buildDraftRecord({
+        ...identity,
+        intentionId: input.intentionId,
+        tool: ACCOUNT_DEACTIVATE_TOOL,
+        resolvedArgs: {
+          kind: 'account-deactivate',
+          amountCents: 0,
+          // `description` mirrors the account name so every generic draft
+          // listing stays readable.
+          description: account.name,
+          date: '',
+          accountId: account.id,
+          accountName: account.name,
+        },
+        missingFields: [],
+        question: '',
+        ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+        nowMs: now,
+      });
+      const { record } = store.getOrCreate(candidate);
+      if (!client) {
+        const text = deactivateNoTransportText(account.name);
+        return this.completeTurn(input, plan, startedAt, base, {
+          clarification: freeze({ missingFields: freeze([]), text, draft: toChannelMessage(record, text) }),
+          response: freeze({ text }),
+        });
+      }
+      const cas = store.cas(record.draftId, 'active', 'proposing', {
+        updatedAt: new Date(now).toISOString(),
+        lastIntentionId: input.intentionId,
+      });
+      if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+      return this.executeProposeDeactivate(input, plan, startedAt, base, cas.record, client);
+    }
+    if (resolution.kind === 'ambiguous' || resolution.reason === 'no-match') {
+      // Disambiguation (never a confirmation ask): the follow-up name
+      // resolves against a fresh authoritative read in
+      // `continueDeactivateDraft`.
+      const candidate = buildDraftRecord({
+        ...identity,
+        intentionId: input.intentionId,
+        tool: ACCOUNT_DEACTIVATE_TOOL,
+        resolvedArgs: {
+          kind: 'account-deactivate',
+          amountCents: 0,
+          description: '',
+          date: '',
+        },
+        missingFields: ['accountId'],
+        question: resolution.clarification,
+        ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+        nowMs: now,
+      });
+      const { record } = store.getOrCreate(candidate);
+      return this.clarifyDraft(input, plan, startedAt, base, record, record.lastQuestion);
+    }
+    // reason 'empty': honest limitation, no draft, no proposal.
+    return this.completeTurn(input, plan, startedAt, base, {
+      response: freeze({ text: resolution.clarification }),
+    });
+  }
+
+  /**
+   * accounts.deactivate (account-only path): target-resolution
+   * continuation for an ACTIVE deactivation draft. Same machinery as the
+   * other continuations (revision-guarded writes, deterministic questions,
+   * atomic CAS consumption, recoverable propose handoff); only the slot
+   * differs (`accountId` resolved against the authoritative list — never
+   * `accountId`/`categoryId` from transaction resolution, never invented).
+   */
+  private async continueDeactivateDraft(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const text = input.text ?? '';
+    // A reset ("na verdade ...", "esquece") replaces the draft and restarts
+    // the deactivation flow on the same turn (parity with `isReplacement`).
+    if (isResetText(text)) {
+      store.update(draft.draftId, {
+        status: 'replaced',
+        updatedAt: new Date(this.draftNowMs()).toISOString(),
+        lastIntentionId: input.intentionId,
+      });
+      return this.deactivateFreshFlow(input, plan, startedAt, base, client);
+    }
+    const stamp = new Date(this.draftNowMs()).toISOString();
+    const storedId = draft.resolvedArgs.accountId?.trim() ?? '';
+    const storedName = draft.resolvedArgs.accountName?.trim() ?? '';
+    const isComplete =
+      storedId.length > 0 && storedName.length > 0 && draft.missingFields.length === 0;
+    // Already complete (fresh turn carried every slot but no transport):
+    // only an explicit "pode desativar" proposes — anything else states
+    // the pending selection, never asks (hard rule 3).
+    if (isComplete) {
+      if (isConfirmDeactivateText(text)) {
+        const cas = store.cas(draft.draftId, 'active', 'proposing', {
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+        });
+        if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+        return this.executeProposeDeactivate(input, plan, startedAt, base, cas.record, client);
+      }
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: deactivateReadyNoProposalText(storedName) }),
+      });
+    }
+    // A pure read never resolves ("qual meu saldo?" keeps the draft intact).
+    if (isPureReadForDraft(text)) {
+      return this.clarifyDraft(input, plan, startedAt, base, draft, draft.lastQuestion);
+    }
+    const read = await this.readDeactivationAccounts();
+    if (!read) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        clarification: freeze({ missingFields: freeze(['accountId']), text: DEACTIVATE_READ_FAILURE_TEXT }),
+        response: freeze({ text: DEACTIVATE_READ_FAILURE_TEXT }),
+      });
+    }
+    const resolution = resolveDeactivationTarget(text, read.accounts, read.scope);
+    if (resolution.kind !== 'resolved') {
+      const updated = store.update(draft.draftId, {
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        lastQuestion: resolution.clarification,
+        ...this.turnMetadata(input, draft, 'continuation'),
+      });
+      return this.clarifyDraft(input, plan, startedAt, base, updated ?? draft, resolution.clarification);
+    }
+    const account = resolution.account;
+    const overwrote = storedId !== '' && storedId.toLowerCase() !== account.id.toLowerCase();
+    const written = this.writeDraftContinuation(draft.draftId, (current) => ({
+      resolvedArgs: {
+        ...current.resolvedArgs,
+        description: account.name,
+        accountId: account.id,
+        accountName: account.name,
+      },
+      missingFields: [],
+      updatedAt: stamp,
+      lastIntentionId: input.intentionId,
+      lastQuestion: '',
+      ...this.turnMetadata(input, current, overwrote ? 'correction' : 'continuation'),
+    }));
+    if (!written.ok) {
+      return this.refuseDraftWrite(
+        input, plan, startedAt, base, written.current, (written.current ?? draft).lastQuestion,
+      );
+    }
+    const record = written.record;
+    const cas = store.cas(record.draftId, 'active', 'proposing', {
+      updatedAt: stamp,
+      lastIntentionId: input.intentionId,
+    });
+    if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+    return this.executeProposeDeactivate(input, plan, startedAt, base, cas.record, client);
+  }
+
+  /**
+   * accounts.deactivate (account-only path): proposes the deactivation
+   * draft through the SAME pending-operation transport (stable
+   * `proposalIdempotencyKey` derived from the draft identity — the same
+   * recoverable handoff as transactions) with the fixed-contract args
+   * `{ accountId }` (+`accountName` for presentation).
+   *
+   * NUNCA auto_execute: this path performs NO eligibility check, mints NO
+   * elevated client and runs NO duplicate probe — a deactivation is always
+   * proposed for MANUAL confirmation, even when the target resolved in one
+   * turn. (The API contract pins the same rule server-side:
+   * `approvalRequired: true`, not auto-execution eligible.)
+   */
+  private async executeProposeDeactivate(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const maxAttempts = this.dependencies.draftMaxProposeAttempts ?? DEFAULT_MAX_PROPOSE_ATTEMPTS;
+    const args = draft.resolvedArgs;
+    const accountId = args.accountId?.trim() ?? '';
+    const name = args.accountName?.trim() ?? '';
+    if (!validateCompleteArgs({ kind: 'account-deactivate', amountCents: 0, description: name || 'conta', date: '', accountId, accountName: name })) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: DEACTIVATE_READ_FAILURE_TEXT }),
+      });
+    }
+    const identity: MutationIdentity = {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+    };
+    const summary = deactivateProposeSummary(name);
+    const normalizedArgs = { accountId, accountName: name };
+    for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt += 1) {
+      try {
+        // R10 (AC30) parity: the attempt is accounted the moment it leaves.
+        this.budgetFor(base).noteProposeAttempt();
+        const proposal = await client.propose({
+          tool: ACCOUNT_DEACTIVATE_TOOL,
+          normalizedArgs,
+          summary,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        });
+        store.update(draft.draftId, {
+          status: 'consumed',
+          proposalId: proposal.id,
+          proposeOutcome: proposal.existing ? 'existing' : 'created',
+          updatedAt: new Date(this.draftNowMs()).toISOString(),
+          lastIntentionId: input.intentionId,
+        });
+        // Review round 4 P1-A3 parity: the proposal card shows this operation
+        // to the user — record the presentation so a later "sim" may confirm
+        // it. R6 ledgered (compensated if the response never publishes).
+        this.recordPresentedOperations(store, this.draftContext(input), [proposal.id]);
+        return this.completeTurn(input, plan, startedAt, base, {
+          policy: freeze({ ...base.policy, authorizationMode: 'manual' }),
+          mutation: freeze({ operationId: proposal.id, status: 'proposed' as const }),
+          response: freeze({ text: renderMutationResult('proposed', summary) }),
+        });
+      } catch (error) {
+        if (isDefinitiveProposeError(error)) {
+          store.update(draft.draftId, {
+            status: 'discarded',
+            discardReason: 'propose_rejected',
+            proposeOutcome: 'rejected',
+            updatedAt: new Date(this.draftNowMs()).toISOString(),
+            lastIntentionId: input.intentionId,
+          });
+          this.emit('mutation.blocked', {
+            intentionId: input.intentionId,
+            traceId: input.traceId,
+            channel: input.channel,
+            domain: plan.domain,
+            mode: plan.mode,
+            status: 'blocked',
+          });
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: renderMutationResult('failed') }),
+          });
+        }
+        if (attempt >= Math.max(1, maxAttempts)) {
+          store.update(draft.draftId, {
+            proposeOutcome: 'unknown',
+            updatedAt: new Date(this.draftNowMs()).toISOString(),
+            lastIntentionId: input.intentionId,
+          });
+          this.emit('mutation.blocked', {
+            intentionId: input.intentionId,
+            traceId: input.traceId,
+            channel: input.channel,
+            domain: plan.domain,
+            mode: plan.mode,
+            status: 'blocked',
+          });
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: renderInconclusive() }),
+          });
+        }
+      }
+    }
+    return this.completeTurn(input, plan, startedAt, base, {
+      response: freeze({ text: renderInconclusive() }),
+    });
+  }
+
+  /**
+   * accounts.deactivate (account-only path): entry point for deactivation
+   * turns that arrive under a non-mutation plan (the router maps "desative
+   * a conta ..." to a read and "delete ela" to `unsupported`). With a
+   * transport it delegates to the full `runMutationTurn` (redelivery,
+   * recovery, cancel, replacement, continuation); without one (fresh turn,
+   * no draft yet) it still persists the draft and clarifies — proposing
+   * is impossible without a device-bound client, inventing a proposal is
+   * never an option.
+   */
+  private async runDeactivateTurn(
+    input: TurnInput,
+    plan: TurnPlan,
+    client: MutationApiClient | null,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    decisionText: string,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const ctx = this.draftContext(input);
+    const now = this.draftNowMs();
+    store.expireStale(ctx, now);
+    // "cancela" on the deactivation path cancels with the existing semantics.
+    if (isCancelText(decisionText)) {
+      return this.runCancelTurn(input, plan, client, startedAt, base, decisionText);
+    }
+    if (!client) {
+      const actives = store.listActive(ctx, now);
+      if (actives.length === 0) return this.deactivateFreshFlow(input, plan, startedAt, base, null);
+      return this.clarifyDraft(input, plan, startedAt, base, actives[0]!, actives[0]!.lastQuestion);
+    }
+    return this.runMutationTurn(input, plan, client, startedAt, base, decisionText);
+  }
+
+  /**
    * accounts.create (account-only path): entry point for creation turns that
    * arrive under a non-mutation plan (the router maps "criar conta ..." to a
    * read). With a transport it delegates to the full `runMutationTurn`
@@ -2822,6 +3203,13 @@ export class ConversationOrchestrator {
     draft: MutationDraftRecord,
     client: MutationApiClient,
   ): Promise<TurnResult> {
+    // accounts.deactivate (account-only path): a deactivation draft NEVER
+    // flows through the expense/income continuation below. Target
+    // re-resolution lives in `continueDeactivateDraft`; the guards, writes
+    // and CAS are the same machinery, only the slots differ.
+    if (draft.tool === ACCOUNT_DEACTIVATE_TOOL || draft.resolvedArgs.kind === 'account-deactivate') {
+      return this.continueDeactivateDraft(input, plan, startedAt, base, draft, client);
+    }
     // accounts.create (account-only path): an account draft NEVER flows
     // through the expense/income continuation below (a "saldo 145" follow-up
     // would otherwise be booked as a transaction amount). Slot-fill lives in
@@ -3247,6 +3635,13 @@ export class ConversationOrchestrator {
   ): Promise<TurnResult> {
     const store = this.dependencies.draftStore!;
     const ctx = this.draftContext(input);
+    // accounts.deactivate (account-only path): an explicit deactivation
+    // turn that reaches the fresh flow (via replacement of another draft)
+    // opens a deactivation draft — the transaction interpretation below
+    // would persist a bogus partial expense draft for "desative a conta".
+    if (hasAccountDeactivationSignal(input.text)) {
+      return this.deactivateFreshFlow(input, plan, startedAt, base, client);
+    }
     // accounts.create (account-only path): an explicit creation turn that
     // reaches the fresh flow (via replacement of a transaction draft) opens
     // an account draft — the transaction interpretation below would persist
@@ -3752,9 +4147,22 @@ export class ConversationOrchestrator {
       // turn's own `proposing` draft is handled above with a response), so it
       // is deliberately NOT charged to this turn's propose axis: the snapshot
       // reports what THIS turn proposed.
+      // accounts.deactivate (account-only path): deactivation drafts
+      // re-emit the fixed-contract args, never the transaction tuple.
       // accounts.create (account-only path): account drafts re-emit the
       // fixed-contract args, never the transaction tuple.
-      const proposal = draft.tool === ACCOUNT_CREATE_TOOL || draft.resolvedArgs.kind === 'account'
+      const proposal = draft.tool === ACCOUNT_DEACTIVATE_TOOL || draft.resolvedArgs.kind === 'account-deactivate'
+        ? await client.propose({
+          tool: ACCOUNT_DEACTIVATE_TOOL,
+          normalizedArgs: {
+            accountId: args.accountId ?? '',
+            ...(args.accountName?.trim() ? { accountName: args.accountName.trim() } : {}),
+          },
+          summary: args.accountName?.trim() || args.description,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        })
+        : draft.tool === ACCOUNT_CREATE_TOOL || draft.resolvedArgs.kind === 'account'
         ? await client.propose({
           tool: ACCOUNT_CREATE_TOOL,
           normalizedArgs: {
@@ -4153,7 +4561,7 @@ export class ConversationOrchestrator {
           status: 'succeeded' as const,
           ...(result.receipt ? { receipt: result.receipt } : {}),
         }),
-        response: freeze({ text: renderMutationResult('succeeded') }),
+        response: freeze({ text: renderMutationResult('succeeded', 'operação', result.receipt as unknown as { mutationKind?: unknown } | undefined) }),
       });
     } catch {
       this.emit('mutation.blocked', {
@@ -4442,6 +4850,22 @@ export class ConversationOrchestrator {
     // handoff). Without a store the legacy single-turn block above applies.
     if (plan.mode === 'mutation-proposal' && client && this.dependencies.draftStore) {
       return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
+    }
+    // accounts.deactivate (account-only path): an explicit deactivation
+    // intent ("desative a conta ...", "delete ela") arrives under a
+    // non-mutation plan — the router maps it to a read (`conta` matches
+    // `list_accounts`) or to `unsupported` (bare anaphora) — but it is a
+    // deactivation candidate for an EXISTING account, never a balance read.
+    // It opens a deactivation draft instead of looping the read offer.
+    // Reads without a deactivation signal ("qual meu saldo?") keep the
+    // normal flow below. `mutation-proposal`/`confirmation`/`cancel` plans
+    // keep their flows (a "sim" resolves through the coordinator listing).
+    if (
+      this.dependencies.draftStore &&
+      (plan.mode === 'unsupported' || plan.mode === 'conversation' || plan.mode === 'read') &&
+      hasAccountDeactivationSignal(input.text)
+    ) {
+      return this.runDeactivateTurn(input, plan, client ?? null, startedAt, result, decisionText);
     }
     // accounts.create (account-only path): an explicit creation intent
     // ("criar conta ...", short offer-acceptance "quero") arrives under a
@@ -4885,7 +5309,7 @@ export class ConversationOrchestrator {
             status: 'succeeded' as const,
             ...(confirmed.receipt ? { receipt: confirmed.receipt } : {}),
           }),
-          response: freeze({ text: renderMutationResult('succeeded') }),
+          response: freeze({ text: renderMutationResult('succeeded', 'operação', confirmed.receipt as unknown as { mutationKind?: unknown } | undefined) }),
         });
       } catch (error) {
         this.emit('mutation.blocked', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'blocked' });

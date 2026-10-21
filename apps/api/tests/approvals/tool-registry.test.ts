@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   APPROVAL_TOOL_IDS,
+  deactivateAccountArgsSchema,
   getApprovalToolContract,
   requireApprovalToolContract,
   validateApprovalToolArgs,
@@ -23,10 +24,14 @@ import {
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
 import { createInMemoryStores } from '../../src/writes/in-memory.js';
 
-const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'accounts.create'] as const;
+const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'accounts.create', 'accounts.deactivate'] as const;
+
+// Manual-only tools: never auto-executed (absent from
+// AUTOEXECUTION_ELIGIBLE_TOOLS, contract pin autoExecutionEligible=false).
+const MANUAL_ONLY_TOOLS = ['accounts.create', 'accounts.deactivate'] as const;
 
 describe('T0.1: Approval Tool Contract registry', () => {
-  it('registers exactly the three V2 mutable tools', () => {
+  it('registers exactly the four V2 mutable tools', () => {
     expect([...APPROVAL_TOOL_IDS].sort()).toEqual([...EXPECTED_TOOLS].sort());
     for (const tool of EXPECTED_TOOLS) {
       expect(getApprovalToolContract(tool)).toBeDefined();
@@ -53,6 +58,19 @@ describe('T0.1: Approval Tool Contract registry', () => {
     expect(requireApprovalToolContract('accounts.create').inputSchema).toBe(
       createAccountInputSchema,
     );
+    // accounts.deactivate is a V2-protocol envelope (accountId key +
+    // display-only extras), not a WriteStore input shape, so its schema is
+    // protocol-owned here — keyed on accountId, strict against unknowns.
+    expect(requireApprovalToolContract('accounts.deactivate').inputSchema).toBe(
+      deactivateAccountArgsSchema,
+    );
+    expect(
+      deactivateAccountArgsSchema.safeParse({ accountId: '00000000-0000-4000-8000-000000000001' }).success,
+    ).toBe(true);
+    expect(deactivateAccountArgsSchema.safeParse({ accountId: 'not-a-uuid' }).success).toBe(false);
+    expect(
+      deactivateAccountArgsSchema.safeParse({ accountId: '00000000-0000-4000-8000-000000000001', bogus: 1 }).success,
+    ).toBe(false);
   });
 
   it('unknown/unregistered mutable tool lookup resolves to undefined', () => {
@@ -100,8 +118,10 @@ describe('T0.1: Approval Tool Contract registry', () => {
       );
       expect(contract.authorizationPolicy).toBe('risk_based');
       // Manual-only pin: transaction tools stay auto-executable-eligible,
-      // accounts.create never is.
-      expect(contract.autoExecutionEligible).toBe(tool !== 'accounts.create');
+      // account tools never are.
+      expect(contract.autoExecutionEligible).toBe(
+        !(MANUAL_ONLY_TOOLS as readonly string[]).includes(tool),
+      );
     }
   });
 

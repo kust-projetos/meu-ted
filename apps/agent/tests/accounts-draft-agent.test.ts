@@ -214,6 +214,34 @@ describe('accounts.create draft flow', () => {
     expect(h.calls.filter((c) => c.path === '/pending-operations/v2/propose')).toHaveLength(1);
   });
 
+  it('(4b) resposta curta "banco" com nome conhecido preenche kind=bank e propõe', async () => {
+    const h = harness(T0);
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'criar conta teste copy com saldo 10', intentionId: 'acct-bare-t1' }, identity),
+    );
+    const r = await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'banco', intentionId: 'acct-bare-t2' }, identity),
+    );
+    expect(r.mutation?.status).toBe('proposed');
+    const propose = h.calls.find((c) => c.path === '/pending-operations/v2/propose');
+    expect(propose).toBeDefined();
+    const body = (propose!.options as { body?: Record<string, unknown> }).body as Record<string, unknown>;
+    expect(body.tool).toBe('accounts.create');
+    expect(body.normalizedArgs).toMatchObject({ kind: 'bank', initialBalanceCents: 1000 });
+  });
+
+  it('(4c) "Banco do Brasil" no turno fresh NÃO infere kind (pergunta preservada)', async () => {
+    const h = harness(T0);
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'criar conta Banco do Brasil com saldo 100', intentionId: 'acct-bb-t1' }, identity),
+    );
+    const actives = h.store.listActive(ctx, T0 + 1000);
+    expect(actives).toHaveLength(1);
+    expect(actives[0]!.resolvedArgs.accountName).toBe('Banco do Brasil');
+    expect(actives[0]!.missingFields).toEqual(['kind']);
+    expect(h.request).not.toHaveBeenCalled();
+  });
+
   it('(7a) "cancela" com rascunho de conta descarta o rascunho (semântica existente)', async () => {
     const h = harness(T0);
     await h.orchestrator.runTurn(

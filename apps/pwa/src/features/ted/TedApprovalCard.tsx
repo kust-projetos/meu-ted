@@ -33,6 +33,7 @@ interface TedApprovalCardProps {
 }
 
 const deriveFallbackTitle = (operation: TedPendingOperation): string => {
+  if (operation.operation.includes("deactivate")) return "Desativar conta";
   if (operation.operation.includes("income")) return "Confirmar receita";
   if (operation.operation.includes("expense")) return "Confirmar despesa";
   if (operation.operation.includes("account")) return "Confirmar conta";
@@ -269,7 +270,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
               <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
             </div>
           )}
-          {presentation.accountName && (
+          {presentation.accountName && !presentation.account && (
             <div className="flex justify-between gap-2">
               <dt className="opacity-70">Conta</dt>
               <dd className="font-semibold">{presentation.accountName}</dd>
@@ -285,6 +286,12 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
             <div className="flex justify-between gap-2">
               <dt className="opacity-70">Saldo inicial</dt>
               <dd className="font-bold">{formatCentsToBRL(presentation.initialBalanceCents)}</dd>
+            </div>
+          )}
+          {typeof presentation.balanceCents === "number" && (
+            <div className="flex justify-between gap-2">
+              <dt className="opacity-70">Saldo atual</dt>
+              <dd className="font-bold">{formatCentsToBRL(presentation.balanceCents)}</dd>
             </div>
           )}
           {presentation.account && (
@@ -357,7 +364,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
                 <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
               </div>
             )}
-            {presentation.accountName && (
+            {presentation.accountName && !presentation.account && (
               <div className="flex justify-between gap-2">
                 <dt className="text-text-muted">Conta</dt>
                 <dd className="font-semibold">{presentation.accountName}</dd>
@@ -373,6 +380,12 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
               <div className="flex justify-between gap-2">
                 <dt className="text-text-muted">Saldo inicial</dt>
                 <dd className="font-bold">{formatCentsToBRL(presentation.initialBalanceCents)}</dd>
+              </div>
+            )}
+            {typeof presentation.balanceCents === "number" && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Saldo atual</dt>
+                <dd className="font-bold">{formatCentsToBRL(presentation.balanceCents)}</dd>
               </div>
             )}
             {presentation.account && (
@@ -430,7 +443,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
               <dd className="font-semibold">{presentation.description}</dd>
             </div>
           )}
-          {presentation.accountName && (
+          {presentation.accountName && !presentation.account && (
             <div className="flex justify-between gap-2">
               <dt className="text-text-muted">Conta</dt>
               <dd className="font-semibold">{presentation.accountName}</dd>
@@ -446,6 +459,12 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
             <div className="flex justify-between gap-2">
               <dt className="text-text-muted">Saldo inicial</dt>
               <dd className="font-bold">{formatCentsToBRL(presentation.initialBalanceCents)}</dd>
+            </div>
+          )}
+          {typeof presentation.balanceCents === "number" && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Saldo atual</dt>
+              <dd className="font-bold">{formatCentsToBRL(presentation.balanceCents)}</dd>
             </div>
           )}
           {typeof presentation.amountCents === "number" && (

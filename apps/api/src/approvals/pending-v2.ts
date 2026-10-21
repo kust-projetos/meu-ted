@@ -145,13 +145,13 @@ const withTedReceipt = (
   // Trusted tool only: the canonical receipt derives kind/targets from the
   // persisted operation's registry contract, never from executor output.
   if (!getApprovalToolContract(tool)) failClosed();
-  // Entity type follows the tool: account-creation tools resolve to an
+  // Entity type follows the tool: account tools resolve to an
   // account entity, every other registered tool to a transaction entity.
-  const entityType = tool === 'accounts.create' ? 'account' : 'transaction';
+  const entityType = tool === 'accounts.create' || tool === 'accounts.deactivate' ? 'account' : 'transaction';
   let canonical: { mutationId: string };
   try {
     canonical = buildTedReceipt(
-      tool as 'transactions.expense.create' | 'transactions.income.create' | 'accounts.create',
+      tool as 'transactions.expense.create' | 'transactions.income.create' | 'accounts.create' | 'accounts.deactivate',
       pendingId,
       { type: entityType, id: entityId },
     );

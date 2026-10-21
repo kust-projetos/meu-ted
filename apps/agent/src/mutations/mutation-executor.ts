@@ -60,10 +60,12 @@ const receiptFromExecution = (
   if (!entity || typeof entity !== 'object') return undefined;
   // Semantic linkage: a transaction execution always carries a transaction
   // entity naming the persisted transaction id — never another type/id.
-  // accounts.create executions NEVER satisfy this branch: an `accounts.create`
-  // receipt carrying a `transaction` entity (or any swapped shape) is a
-  // mismatched result and must fail closed (see `receiptFromAccountExecution`).
+  // accounts.create / accounts.deactivate executions NEVER satisfy this
+  // branch: an account receipt carrying a `transaction` entity (or any
+  // swapped shape) is a mismatched result and must fail closed (see
+  // `receiptFromAccountExecution`).
   if (data.mutationKind === 'accounts.create') return undefined;
+  if (data.mutationKind === 'accounts.deactivate') return undefined;
   if (entity.type !== 'transaction') return undefined;
   if (entity.id !== transactionId) return undefined;
   // Identity linkage: when the execution names a mutationId it must agree
@@ -80,13 +82,14 @@ const receiptFromExecution = (
 };
 
 /**
- * accounts.create receipt (contrato fixado accounts-draft-agent, programado
- * contra mocks até a API aceitar a tool): `{ mutationKind:
- * 'accounts.create', operationId: <pendingId>, entity: { type: 'account', id:
- * <accountId> } }`.
+ * accounts.create / accounts.deactivate receipt (contratos fixados
+ * accounts-draft-agent / accounts-deactivate-agent, programados contra
+ * mocks até a API aceitar as tools): `{ mutationKind:
+ * 'accounts.create' | 'accounts.deactivate', operationId: <pendingId>,
+ * entity: { type: 'account', id: <accountId> } }`.
  *
  * The shared `mutationReceiptSchema` (packages/, owned outside this scope)
- * does not admit the `accounts.create` kind yet, so the shape is validated
+ * does not admit the account kinds yet, so the shape is validated
  * field-by-field here with the SAME strictness as the canonical path
  * (origin pending-operation linkage + persisted-entity linkage + mutationId
  * agreement). A receipt that fails EITHER validator is `undefined` and the
@@ -102,7 +105,7 @@ const receiptFromAccountExecution = (
   const receipt = (execution as { receipt?: unknown }).receipt;
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return undefined;
   const data = receipt as Record<string, unknown>;
-  if (data.mutationKind !== 'accounts.create') return undefined;
+  if (data.mutationKind !== 'accounts.create' && data.mutationKind !== 'accounts.deactivate') return undefined;
   if (data.status !== 'succeeded') return undefined;
   if (typeof data.mutationId !== 'string' || data.mutationId.trim().length === 0) return undefined;
   if (data.operationId !== pendingOperationId) return undefined;

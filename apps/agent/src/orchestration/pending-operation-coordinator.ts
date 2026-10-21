@@ -279,7 +279,25 @@ export class PendingOperationCoordinator {
     for (const draft of store.listProposing(ctx, now)) {
       const args = draft.resolvedArgs;
       try {
-        const proposal = await this.dependencies.client.propose({
+        // accounts.deactivate (account-only path): proposing deactivation
+        // drafts settle with the fixed-contract args, never the transaction
+        // tuple (which would invent amount/date/category for an account id).
+        const proposal = draft.tool === 'accounts.deactivate' || draft.resolvedArgs.kind === 'account-deactivate'
+          ? await this.dependencies.client.propose({
+            tool: 'accounts.deactivate',
+            normalizedArgs: {
+              accountId: args.accountId!,
+              ...(args.accountName?.trim() ? { accountName: args.accountName.trim() } : {}),
+            },
+            summary: args.accountName?.trim() || args.description,
+            identity: {
+              workspaceId: draft.workspaceId,
+              actorId: draft.actorId,
+              deviceId: draft.deviceId ?? draftScope.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+            },
+            idempotencyKey: draft.proposalIdempotencyKey,
+          })
+          : await this.dependencies.client.propose({
           tool: draft.tool,
           normalizedArgs: {
             amountCents: args.amountCents,

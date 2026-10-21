@@ -11,7 +11,7 @@
  * - Propose-route validation wiring is out of scope here (T1.4); this module
  *   exposes only the registry plus lookup/validation helpers.
  */
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { MutationReceipt } from '@pi-finance/llm-contracts';
 import { createAccountInputSchema, createExpenseInputSchema, createIncomeInputSchema } from '../writes/types.js';
 import { DomainError } from '../writes/errors.js';
@@ -23,6 +23,7 @@ export const APPROVAL_TOOL_IDS = [
   'transactions.expense.create',
   'transactions.income.create',
   'accounts.create',
+  'accounts.deactivate',
 ] as const;
 
 export type ApprovalToolId = (typeof APPROVAL_TOOL_IDS)[number];
@@ -227,6 +228,81 @@ const executeAccountCreate: ApprovalToolExecutor = async ({
   };
 };
 
+/**
+ * V2-protocol envelope for `accounts.deactivate` (SPEC §7.5). Protocol-level,
+ * NOT a WriteStore input shape (the writer takes only `(householdId, id)`),
+ * so it lives here rather than in writes/types.ts:
+ * - `accountId` is the ONLY execution key (UUID);
+ * - `accountName`/`accountKind`/`balanceCents` are display-only snapshots
+ *   for the approval card (hash-bound at propose, never read by the
+ *   executor — a divergent name never redirects the mutation).
+ * Strict: unknown fields fail closed at propose (422 approval.invalid_args).
+ */
+export const deactivateAccountArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    accountName: z.string().trim().min(1).max(120).optional(),
+    accountKind: z.string().trim().min(1).max(32).optional(),
+    balanceCents: z.number().int().optional(),
+  })
+  .strict();
+
+export type DeactivateAccountArgs = z.infer<typeof deactivateAccountArgsSchema>;
+
+const executeAccountDeactivate: ApprovalToolExecutor = async ({
+  writes,
+  workspaceId,
+  args,
+  actorId,
+}) => {
+  const parsed = deactivateAccountArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_deactivate_arguments');
+  // Fail-closed actor binding (same contract as the transaction paths).
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  // The ONLY execution key is the canonical accountId — display-only extras
+  // (accountName/accountKind/balanceCents) are never consulted below.
+  const accountId = parsed.data.accountId;
+  // Deactivate converges (no duplicate-row class: the end state is one
+  // inactive account), so no keyed-write machinery is needed — unlike
+  // accounts.create, a reconcile re-run after an uncertain outcome must NOT
+  // copy the create limitation (duplicate-name guard instead of dedup).
+  // `not_found` after the attempt means the account is already inactive —
+  // either by our own pre-TX2 write (crash window) or by a concurrent
+  // same-effect path — so the intent is satisfied and the executor returns
+  // success with the key id. Reachability bound: execute is gated by the
+  // confirm presentation check (server-resolved account label, 409 when the
+  // account is unknown) and the authorize route policy-blocks this
+  // manual-only tool, so a never-existing id cannot arrive here through the
+  // API. Any other DomainError (in_use, workspace lifecycle) rethrows
+  // deterministic; non-domain throws stay uncertain for lease recovery.
+  let deactivated: { id: string };
+  try {
+    deactivated = await writes.deactivateAccount(workspaceId, accountId);
+  } catch (err) {
+    if (err instanceof DomainError) {
+      if (err.code === 'not_found') {
+        deactivated = { id: accountId };
+      } else {
+        throw err;
+      }
+    } else {
+      throw createApprovalExecutionUncertainError();
+    }
+  }
+  const operationId = deactivated.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('accounts.deactivate', operationId, { type: 'account', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId,
+    receipt,
+  };
+};
+
 const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
   'transactions.expense.create': {
     tool: 'transactions.expense.create',
@@ -251,6 +327,14 @@ const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
     authorizationPolicy: 'risk_based',
     autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('accounts.create'),
     executor: executeAccountCreate,
+  },
+  'accounts.deactivate': {
+    tool: 'accounts.deactivate',
+    inputSchema: deactivateAccountArgsSchema,
+    approvalRequired: true, // Manual-only: never auto-executed (not in AUTOEXECUTION_ELIGIBLE_TOOLS).
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('accounts.deactivate'),
+    executor: executeAccountDeactivate,
   },
 };
 

@@ -93,11 +93,16 @@ const CASH_KIND_MARKERS = [
   'dinheiro', 'especie', 'carteira', 'fisico', 'em maos', 'bolso',
   'moeda fisica',
 ];
+// Bare answers ("banco") only count when the name is already known (opt-in
+// via `allowBare`): on a fresh turn they would infer kind from names like
+// "Banco do Brasil" — never infer from the name.
+const BARE_BANK_MARKERS = ['banco', 'bank'];
 
-export const parseAccountKind = (text: string): AccountDraftKind | undefined => {
+export const parseAccountKind = (text: string, opts?: { allowBare?: boolean }): AccountDraftKind | undefined => {
   const folded = ` ${fold(text)} `;
   if (CASH_KIND_MARKERS.some((m) => folded.includes(m))) return 'cash';
   if (BANK_KIND_MARKERS.some((m) => folded.includes(m))) return 'bank';
+  if (opts?.allowBare && BARE_BANK_MARKERS.some((m) => folded.includes(m))) return 'bank';
   // NOTE: the bare word "conta" deliberately fills NOTHING — the kind must
   // be asked, never inferred from the name or from the generic noun.
   return undefined;

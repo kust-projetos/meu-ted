@@ -380,6 +380,7 @@ export const TED_APPROVAL_TOOLS = [
   'transactions.expense.create',
   'transactions.income.create',
   'accounts.create',
+  'accounts.deactivate',
 ] as const;
 export type TedApprovalTool = (typeof TED_APPROVAL_TOOLS)[number];
 
@@ -462,10 +463,17 @@ export interface PendingOperationPresentation {
    * Account-creation display fields (tool `accounts.create` only): the card
    * shows the account name/kind/initial balance instead of the
    * transaction tuple (amount/description/date/account/category).
+   *
+   * Account-deactivation display fields (tool `accounts.deactivate` only):
+   * the card shows the account id/label plus the display-only
+   * accountName/accountKind/balanceCents snapshot carried in
+   * normalizedArgs (never execution keys — the executor uses only
+   * accountId). balanceCents is the display-time balance, not an input.
    */
   accountName?: string;
   accountKind?: string;
   initialBalanceCents?: number;
+  balanceCents?: number;
   expiresAt: string;
   warnings: string[];
 }
@@ -487,7 +495,16 @@ const isPresentationLabel = (value: unknown): value is PendingOperationPresentat
  * its own display tuple instead — title, accountName, accountKind and a
  * finite initialBalanceCents (a card missing any of them renders
  * degraded/non-actionable: Cancel stays, Confirm never renders). The
- * schema keeps every field optional for transport; this predicate is the
+ * `accounts.deactivate` tool requires the account key plus a display name
+ * — title, account id and a non-empty SERVER-RESOLVED account label
+ * (`account.label`, from the authoritative read model). The display-only
+ * `accountName` snapshot may render on the card but NEVER gates Confirm:
+ * the executor converges `not_found` into success (post-crash reconcile
+ * after its own write), so a snapshot-gated confirm on a never-existing
+ * id would execute into a false receipt. Kind and balance render when
+ * carried, never as actionability gates (the fixed cross-coder contract
+ * guarantees only accountId + accountName).
+ * The schema keeps every field optional for transport; this predicate is the
  * single rule deciding whether Confirm may be offered.
  */
 export const isActionablePendingOperationPresentation = (
@@ -499,6 +516,16 @@ export const isActionablePendingOperationPresentation = (
     if (!isNonEmptyString(presentation.accountName)) return false;
     if (!isNonEmptyString(presentation.accountKind)) return false;
     if (typeof presentation.initialBalanceCents !== 'number' || !Number.isFinite(presentation.initialBalanceCents)) return false;
+    return true;
+  }
+  if (presentation.tool === 'accounts.deactivate') {
+    // Fail-closed existence proof: only the server-resolved account label
+    // proves the target exists in this workspace. The hash-bound
+    // display-only `accountName` snapshot may render, but it never gates
+    // Confirm — otherwise a never-existing id carrying a snapshot name
+    // would confirm, and the executor's not_found→success convergence
+    // would emit a receipt for an account that was never deactivated.
+    if (!isPresentationLabel(presentation.account)) return false;
     return true;
   }
   if (!isNonEmptyString(presentation.description)) return false;
@@ -547,6 +574,7 @@ export const MUTATION_EFFECTS_REGISTRY: Record<MutationKind, MutationEffectsEntr
   'transactions.expense.create': { mutationKind: 'transactions.expense.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transactions.income.create': { mutationKind: 'transactions.income.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'accounts.create': { mutationKind: 'accounts.create', affectedTargets: ['accounts', 'dashboard-summary'] },
+  'accounts.deactivate': { mutationKind: 'accounts.deactivate', affectedTargets: ['accounts', 'dashboard-summary'] },
   'transaction.create': { mutationKind: 'transaction.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transaction.update': { mutationKind: 'transaction.update', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transaction.delete': { mutationKind: 'transaction.delete', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },

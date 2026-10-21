@@ -214,6 +214,7 @@ import { routeIntent } from "./orchestration/intent-router.js";
 import { createChannelGrounding } from "./orchestration/channel-evidence.js";
 import type { EvidenceEnvelope } from "./evidence/evidence-envelope.js";
 import { hasMutationIntentSignal, interpretMutationUtterance } from "./mutations/semantic-interpretation.js";
+import { hasAccountDeactivationSignal } from "./mutations/account-deactivation.js";
 import { toActiveOperationRecords } from "./mutations/active-operation-projection.js";
 import { createRequestEntityReader, type EntityReader } from "./mutations/entity-resolver.js";
 import { MutationApiClient } from "./mutations/mutation-api-client.js";
@@ -4174,8 +4175,19 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         const needsMutation = mutationPlan !== null || hasPendingDraft
           || routed.mode === 'confirmation' || routed.mode === 'cancel'
           || isRetryText(decisionText);
-        const mutationApiClient = await this.mutationApiClientForTurn(restInput, needsMutation);
-        const entityReader = needsMutation ? await this.entityReaderForTurn(restInput) : undefined;
+        // accounts.deactivate: mesmo gating do entityReader acima — o sinal de
+        // desativação chega sob planos não-mutacionais mas runDeactivateTurn
+        // precisa propor (transporte manual; autoexecute segue separado).
+        // Turnos sem sinal seguem byte-idênticos.
+        const needsMutationClient = needsMutation || hasAccountDeactivationSignal(restInput.text);
+        const mutationApiClient = await this.mutationApiClientForTurn(restInput, needsMutationClient);
+        // accounts.deactivate: o sinal de desativação chega sob plano
+        // não-mutacional (`read`/`unsupported`/`conversation`) mas o
+        // orquestrador abre `runDeactivateTurn` → `readDeactivationAccounts`,
+        // que exige o reader. Sem ele o turno degrada para
+        // DEACTIVATE_READ_FAILURE_TEXT. Turnos sem sinal seguem byte-idênticos.
+        const needsEntityReader = needsMutation || hasAccountDeactivationSignal(restInput.text);
+        const entityReader = needsEntityReader ? await this.entityReaderForTurn(restInput) : undefined;
         turnOrchestrator = this.orchestratorForChannel({
           ...(mutationPlan ? { plan: () => mutationPlan } : {}),
           ...(mutationApiClient ? { mutationApiClient } : {}),

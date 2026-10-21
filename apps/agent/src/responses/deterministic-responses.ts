@@ -142,8 +142,20 @@ export const renderInconclusive = (subject = 'operação'): string =>
   `${subject} em processamento: o resultado não pôde ser confirmado. Verifique seus lançamentos antes de tentar de novo.`;
 
 /** Deterministic mutation/approval result: fixed wording per outcome, never model text. */
-export const renderMutationResult = (outcome: MutationOutcome, subject = 'operação'): string => {  switch (outcome) {
-    case 'succeeded': return `Lançamento registrado com sucesso.`;
+export const renderMutationResult = (
+  outcome: MutationOutcome,
+  subject = 'operação',
+  receipt?: { mutationKind?: unknown },
+): string => {
+  switch (outcome) {
+    case 'succeeded': {
+      // Account tools report their own outcome: a deactivation confirmed via
+      // the generic coordinator path must not read as a booking ("Lançamento
+      // registrado"). Unknown/absent kinds keep the legacy transaction copy.
+      if (receipt?.mutationKind === 'accounts.deactivate') return `Conta desativada com sucesso.`;
+      if (receipt?.mutationKind === 'accounts.create') return `Conta criada com sucesso.`;
+      return `Lançamento registrado com sucesso.`;
+    }
     case 'proposed': return `Proposta: ${subject}. Confirma?`;
     case 'cancelled': return `Operação cancelada com segurança.`;
     case 'expired': return `A aprovação expirou. Inicie a operação novamente.`;
