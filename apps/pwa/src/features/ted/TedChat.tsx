@@ -1250,15 +1250,48 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     clearAttachments();
     discardDrafts();
     setError(null);
+    // As listas ativas têm escopo de workspace/ator/device, não de sessão —
+    // a renovação NÃO as cancela. Este refresh pertence ao escopo que o iniciou.
+    const scopeId = activeWorkspace.id;
     try {
-      await renewAgentSession(activeWorkspace.id);
+      await renewAgentSession(scopeId);
+      // O escopo pode ter mudado durante o POST: nada da sessão antiga entra na nova.
+      if (isStaleScope(scopeId)) return;
       setMessages([]);
-      setPendingOps([]);
-      setUndoProposals([]);
-      setHistoryLoaded(false);
       setInput("");
+      // Nova sessão limpa SÓ a exibição local: o lote do /rpc/history logo
+      // após a renovação ainda pode trazer as mensagens pré-renovação
+      // (evidência live), então NÃO recarrega aqui — a recarga traria as
+      // mensagens antigas de volta para a tela. O próximo turno/mount
+      // recarrega do servidor normalmente. O POST session/new acima segue
+      // intocado (arquivamento server-side preservado).
+      setHistoryLoaded(true);
+      setStatus("ready");
       flashNotice("Nova sessão iniciada — o TED mantém o que aprendeu.");
-      await loadHistory();
+      // Reidrata SÓ as listas ativas das fontes autoritativas (mesmo filtro
+      // do loadHistory, sem recarregar mensagens): aprovações e undos vivos
+      // seguem válidos após a renovação. Falha preserva o último estado
+      // conhecido — nunca inventa cartão.
+      try {
+        const active = await fetchActivePendingOperations(scopeId);
+        if (isStaleScope(scopeId)) return;
+        const cards = new Map<string, TedPendingOperation>();
+        for (const item of active) {
+          const card = toLiveCard(item);
+          if (card && !cards.has(card.id)) cards.set(card.id, card);
+        }
+        setPendingOps([...cards.values()]);
+      } catch {
+        // Aprovações preservadas (último estado conhecido); o próximo
+        // turno/mount recarrega normalmente.
+      }
+      try {
+        const activeUndo = await fetchActiveUndoProposals(scopeId);
+        if (isStaleScope(scopeId)) return;
+        applyActiveUndoProposals(activeUndo);
+      } catch {
+        // Cartões de undo preservados (último estado conhecido).
+      }
     } catch {
       setError("Não foi possível iniciar uma nova sessão. Tente novamente.");
     }
