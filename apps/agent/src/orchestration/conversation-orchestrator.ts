@@ -93,6 +93,7 @@ import {
   isForgetRequestText,
   proposeForgetMemory,
 } from '../agent-config/memory/forget-proposals.js';
+import { listActiveForgetProposals } from '../agent-config/memory/store.js';
 import type { MemorySql } from '../agent-config/memory/store.js';
 import type { MessageAudienceStamp } from '../privacy/conversation-visibility.js';
 import { UndoProposalService } from '../mutations/undo-proposal.js';
@@ -1635,6 +1636,34 @@ export class ConversationOrchestrator {
     return store.findByIntention(this.draftContext(input), input.intentionId) !== undefined;
   }
 
+  /**
+   * offer-accept-vs-confirmation P2-2: proposta de forget pendente no MESMO
+   * contexto (workspace, actor). Um aceite curto ("quero sim") após a
+   * pergunta de esquecimento ("Quer que eu a esqueça?") pertence àquela
+   * oferta — não à oferta de cadastro. O desvio de cadastro cede para não
+   * sequestrar o fluxo nem abrir rascunho financeiro indevido (que barraria
+   * a confirmação do forget via `hasDraftForTurn` em
+   * `runForgetDecisionTurn`). Sem dep ⇒ sem pendência (contrato anterior
+   * intacto). Erro de leitura cede (fail-closed: sem efeito colateral, o
+   * ramo de confirmação responde com honestidade).
+   */
+  private hasPendingForgetForTurn(input: TurnInput): boolean {
+    const dep = this.dependencies.forgetMemory;
+    if (!dep) return false;
+    try {
+      const nowMs = dep.now?.() ?? this.draftNowMs();
+      return (
+        listActiveForgetProposals(
+          dep.sql,
+          { workspaceId: input.workspaceId, actorId: input.actorId },
+          nowMs,
+        ).length > 0
+      );
+    } catch {
+      return true;
+    }
+  }
+
   private entityReaderOrClosed(): EntityReader {
     return (
       this.dependencies.entityReader ?? {
@@ -2464,7 +2493,10 @@ export class ConversationOrchestrator {
   ): Promise<TurnResult> {
     const store = this.dependencies.draftStore!;
     const parsed = parseAccountCreation(input.text);
-    const name = parsed.name;
+    // offer-accept-vs-confirmation: um aceite curto ("quero sim") abre o
+    // fluxo mas não carrega dado de slot — o token de aceite ("sim") nunca
+    // é o nome da conta. Sem isso "quero sim" persistia `accountName: "sim"`.
+    const name = isShortAffirmative(input.text) ? undefined : parsed.name;
     const initialBalanceCents = parsed.initialBalanceCents;
     const accountKind = parsed.accountKind;
     const missing = accountMissingFields({ ...(name ? { name } : {}), ...(accountKind ? { accountKind } : {}), ...(initialBalanceCents !== undefined ? { initialBalanceCents } : {}) });
@@ -4756,6 +4788,54 @@ export class ConversationOrchestrator {
     // Null = o pipeline legado/financeiro abaixo é dono do turno.
     const forgetTurn = await this.runForgetDecisionTurn(input, plan, client, startedAt, result, decisionText);
     if (forgetTurn) return forgetTurn;
+    // offer-accept-vs-confirmation: um aceite curto com "quero" ("quero sim",
+    // "sim, quero") após a OFERTA textual de cadastro roteia `confirmation`
+    // no `routeIntent` (casa o "sim") e, sem pendência, caía no "sem operação
+    // pendente" em vez de abrir o fluxo de criação de conta. Com o forget já
+    // decidido acima e sem rascunho recuperável, sonda o listing autoritativo
+    // UMA vez: com alvo decidível o fluxo V2 abaixo segue intocado; sem alvo
+    // o turno abre o rascunho de conta (coleta de campos, sem defaults).
+    // "sim" isolado (sem "quero") mantém o caminho de confirmação — sem
+    // pendente honesto. Lido do texto DIGITADO (F1): dado de anexo nunca
+    // desvia. Falha de sondagem cai no legado (fail-closed, sem desvio).
+    // P2-1 (replay primeiro): uma reentrega — fronteira local ou da API não
+    // fresca, ou bind com erro — NUNCA desvia: o ramo de confirmação abaixo
+    // reproduz o recibo original via `replayConfirmationBinding` em vez de
+    // abrir rascunho novo. P2-2 (forget primeiro): com proposta de forget
+    // pendente no mesmo contexto o aceite pertence à oferta de esquecimento
+    // — cede sem abrir rascunho financeiro indevido.
+    if (
+      plan.mode === 'confirmation' &&
+      client &&
+      input.deviceId !== null &&
+      this.dependencies.draftStore &&
+      isShortAffirmative(decisionText) &&
+      /\bquero\b/i.test(decisionText) &&
+      !this.hasDraftForTurn(input) &&
+      !this.hasPendingForgetForTurn(input) &&
+      earlyConfirmationSightingError === undefined &&
+      (earlyConfirmationSighting === undefined || earlyConfirmationSighting.fresh) &&
+      earlyApiSightingError === undefined &&
+      (earlyApiSighting === undefined || earlyApiSighting.fresh)
+    ) {
+      try {
+        const divertIdentity: MutationIdentity = {
+          workspaceId: input.workspaceId,
+          actorId: input.actorId,
+          deviceId: input.deviceId,
+        };
+        const probe = await this.coordinatorFor(client).resolveDecisionTarget(
+          divertIdentity,
+          'decidable',
+          this.draftContext(input),
+        );
+        if (probe.kind === 'none') {
+          return this.runAccountCreationTurn(input, plan, client, startedAt, result, decisionText);
+        }
+      } catch {
+        // Unreadable listing: fall through to the normal confirmation path.
+      }
+    }
     // A proposal may never fall through to a generative response when the
     // channel was unable to construct its narrowly-scoped API client (for
     // example, a missing device binding). This keeps every mutation intent on
