@@ -5,8 +5,9 @@
  * SEGURANÇA DO HARNESS (Round3 HIGH): esta suíte NÃO provisiona nada — sem
  * CREATE DATABASE, sem criar _test_marker. O beforeAll valida a URL pelo
  * preflight puro (`src/db/validation-preflight.ts`: protocolo postgresql,
- * host loopback 127.0.0.1/localhost, porta 5433, database EXATO
- * ted_validation_20261021; companion EXATO ted_validation_20261021_legacy)
+ * host loopback 127.0.0.1/localhost e par exato do perfil selecionado:
+ * local 5433/ted_validation_20261021 (+ _legacy), ou CI explícito
+ * 5432/pi_financeiro_test (+ _legacy))
  * ANTES de qualquer I/O, e o guard de marker pré-existente
  * (requireTestDatabase) passa ANTES de migration/schema/cleanup. URL
  * arbitrária (ted_local, produção, outro host/banco) falha fechada no
@@ -26,7 +27,10 @@ import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { createPool } from '../../src/db/pool.js';
 import { requireTestDatabase } from '../../src/db/db-guard.js';
-import { prepareValidationDatabases } from '../../src/db/validation-preflight.js';
+import {
+  prepareValidationDatabases,
+  validationDatabaseProfileFromEnvironment,
+} from '../../src/db/validation-preflight.js';
 import { runMigrations } from '../../src/read-models/sql/migrate.js';
 import { createPostgresWriteStore, createAccountInTx } from '../../src/writes/postgres.js';
 import { createLegacyPostgresWriteStore, createAccountLegacyInTx } from '../../src/writes/legacy-postgres.js';
@@ -97,6 +101,7 @@ describeIfDb('accounts.create keyed PG — canonical + legacy (round2)', () => {
     // write possivel e o runMigrations, apos os dois guards.
     const prepared = await prepareValidationDatabases({
       baseUrl: DB_URL!,
+      profile: validationDatabaseProfileFromEnvironment(),
       createPool: (connectionString: string) =>
         createPool({ connectionString, max: 10 }) as unknown as Pool,
       requireGuard: (target: unknown, operation: string) =>

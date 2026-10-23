@@ -5,6 +5,9 @@ versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
 ## Unreleased (2026-10-23 — canário local TED de edição de descrição; sem release)
 
+- Segurança PWA: Next.js e `eslint-config-next` fixados em `16.4.1`, Sharp em `0.35.5`, e override `next>sharp` atualizado para a linha corrigida; removida a aceitação vigente dos dois achados críticos de runtime (GHSA-2464-fhr4-w9xw, GHSA-673q-mjm6-r5xr). A compatibilidade OpenNext/Cloudflare e os gates ainda precisam de validação; nenhuma produção alterada.
+- Segurança de testes: Vitest e `@vitest/coverage-v8` alinhados em `4.1.12` nos manifests existentes, corrigindo os advisories moderados de `@vitest/mocker` (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp); validação de compatibilidade/gates pendente.
+
 - Registro documental de canário local `transactions.update` limitado à descrição: operação manual V2, precondição literal, replay/receipt vinculado e readback sem delta financeiro observado. Não representa CRUD geral nem evidência de produção.
 - Cartões, exclusões, edição de outros campos financeiros, transferências, parcelas, assinaturas, payables e faturas/pagamentos continuam fora do aceite desta fatia; ver [relatório de fechamento](docs/reports/2026-10-23-ted-local-crud-session-closure.md) e matriz referenciada.
 - Revisões e gates finais/CI ainda pendentes; sem merge/deploy ou mutação de produção registrados nesta entrada.

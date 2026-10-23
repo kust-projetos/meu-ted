@@ -44,7 +44,7 @@ describe('in-memory pending-v2 idempotency namespace', () => {
   });
 
   it('replays the original immutable account/category/transaction snapshots after mutable state changes', async () => {
-    const { state, writes } = createInMemoryStores();
+    const { writes } = createInMemoryStores();
     const accountKey = `${KEY}-account`;
     const originalAccount = await writes.createAccount(H, { name: 'Snapshot account', kind: 'bank' }, { idempotencyKey: accountKey });
     await writes.updateAccount(H, originalAccount.id, { name: 'Renamed account' });

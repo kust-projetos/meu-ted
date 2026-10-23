@@ -234,7 +234,6 @@ export const createInMemoryWriteStore = (state: InMemoryState): WriteStore => {
   const keyedOwners = new Map<string, KeyedOwner>();
   const assertKeyOwner = (key: string, kind: 'account' | 'category' | 'transaction', payload: unknown): string => {
     const composite = `${key.length}:${key}`;
-    const payloadHash = hashPayloadV2(payload);
     const owner = keyedOwners.get(composite);
     if (owner && (owner.kind !== kind || !matchesPayloadHash(owner.payloadHash, payload))) {
       throw domainErrors.idempotencyConflict();

@@ -27,3 +27,16 @@ Os documentos de contrato relevantes já são [ADR-021](../adr/ADR-021-pending-v
 - A sessão não executou os gates finais do pacote após esta atualização documental, não esperou CI/reviews, não commitou/pushou, não fez merge/deploy, nem alterou configuração, aplicação, banco ou produção. A autorização posterior do solicitante para merge/deploy não é evidência de que tenham ocorrido.
 
 **Próximo passo:** completar revisões pendentes e rodar os gates frescos/CI definidos pelo Planner; corrigir findings antes de integrar. Só registrar merge/deploy/smokes mediante evidência correspondente. Produção permanece sem mutação conhecida.
+
+## Atualização posterior — publicação e primeiro CI
+
+Os itens acima conservam o checkpoint anterior à publicação. O commit `c19a1dc` foi criado com todos os hooks ativos e publicado na branch `feat/ted-account-deactivate-v2`, no [PR #270](https://github.com/kust-projetos/meu-ted/pull/270). A exclusão de `.claude/napkin.md` foi explicitamente confirmada pelo operador; os artefatos Playwright continuam no disco e ignorados. Gitleaks local não encontrou segredos no staged nem nos 13 commits enviados. O operador também autorizou merge e deploy deste pacote, condicionados aos gates; não houve merge ou deploy neste checkpoint.
+
+O [primeiro CI](https://github.com/kust-projetos/meu-ted/actions/runs/39985064372) passou em Agent, PWA, build Cloudflare, imagens Docker e gates documentais, mas falhou em lint da API, harnesses PostgreSQL e audit de dependências. O `quality` do PWA também bloqueou os advisories; o E2E correspondente passou. Nenhum check vermelho foi ignorado.
+
+- Os dois bindings não utilizados foram removidos. Revalidação Linux: 614 arquivos da API sem erros e 6/6 testes de idempotência cruzada.
+- O harness ganhou perfil CI opt-in fechado para loopback:5432 e as duas bases reservadas do serviço efêmero. Markers de ambas são verificados antes de migrations/DDL; o perfil local e as rejeições de destinos financeiros continuam preservados. Revisão de segurança aprovada. Repro PostgreSQL 16.15 isolado, sem portas publicadas: 16 casos de criação/idempotência, 14 de rename e 35 de preflight passaram (65/65), usando Vitest 4.1.11; o próximo CI validará o patch do runner também.
+- Os manifests e lockfile foram atualizados para Next/ESLint 16.4.1, Sharp 0.35.5 — inclusive o override raiz — e Vitest/coverage 4.1.12 alinhados. Instalação frozen, resolução dos peers, revisão estática de dependências e typecheck dos cinco workspaces passaram. O audit crítico retornou exit 0: restam 26 findings (3 low, 10 moderate, 13 high), mas nenhum crítico. Não foram adicionadas exceções para os advisories corrigidos.
+- A validação local não substitui o próximo CI: Next build passou, mas OpenNext no Windows falhou ao empacotar o módulo nativo Sharp; os artefatos locais de bundle ficaram inconsistentes. O audit isolado PWA foi bloqueado por `npm EALLOWREMOTE`, sem contornar a política. Build Cloudflare Linux, audit scoped e testes completos com Vitest 4.1.12 devem passar no novo SHA antes do merge/deploy.
+
+O próximo checkpoint deve registrar o commit corretivo, o CI do novo SHA e somente depois o merge, os deploys atestados e os smokes efetivamente executados. A conta e as duas transações QA permanecem preservadas; não repetir as operações Solar/Lunar para produzir evidência de release.

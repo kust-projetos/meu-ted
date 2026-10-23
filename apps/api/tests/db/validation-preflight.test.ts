@@ -15,6 +15,7 @@ import {
   createValidationPools,
   prepareValidationDatabases,
   validationCompanionUrl,
+  validationDatabaseProfileFromEnvironment,
 } from '../../src/db/validation-preflight.js';
 
 const GOOD = 'postgresql://127.0.0.1:5433/ted_validation_20261021';
@@ -27,6 +28,36 @@ describe('round3 HIGH: preflight da URL de validação (puro, sem I/O)', () => {
 
   it('aceita a forma localhost:5433', () => {
     expect(assertValidationDatabaseUrl(GOOD_LOCALHOST).database).toBe('ted_validation_20261021');
+  });
+
+  it('aceita somente o perfil CI explicitamente selecionado e seu par exato', () => {
+    const ciUrl = 'postgresql://localhost:5432/pi_financeiro_test';
+    expect(assertValidationDatabaseUrl(ciUrl, 'ci').database).toBe('pi_financeiro_test');
+    expect(validationCompanionUrl(ciUrl, 'ci')).toBe(
+      'postgresql://localhost:5432/pi_financeiro_test_legacy',
+    );
+    expect(() => assertValidationDatabaseUrl(ciUrl)).toThrow();
+    expect(() => assertValidationDatabaseUrl(GOOD, 'ci')).toThrow();
+  });
+
+  it('perfil de ambiente desconhecido falha fechado', () => {
+    const original = process.env.VALIDATION_DATABASE_PROFILE;
+    process.env.VALIDATION_DATABASE_PROFILE = 'anything';
+    try {
+      expect(() => validationDatabaseProfileFromEnvironment()).toThrow();
+    } finally {
+      if (original === undefined) delete process.env.VALIDATION_DATABASE_PROFILE;
+      else process.env.VALIDATION_DATABASE_PROFILE = original;
+    }
+  });
+
+  it.each([
+    'postgresql://localhost:5432/pi_financeiro_test_extra',
+    'postgresql://localhost:5433/pi_financeiro_test',
+    'postgresql://db.example.com:5432/pi_financeiro_test',
+    'postgresql://localhost:5432/ted_local',
+  ])('perfil CI rejeita destino fora do par fechado: %s', (url) => {
+    expect(() => assertValidationDatabaseUrl(url, 'ci')).toThrow();
   });
 
   it.each([

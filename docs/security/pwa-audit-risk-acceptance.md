@@ -2,15 +2,8 @@
 
 > Reviewed 2026-09-19 · Expires 2026-12-31 · Owner: project-maintainer
 >
-> Eight current vulnerabilities are accepted under strict exact-field matching.
+> Six current build-time vulnerabilities are accepted under strict exact-field matching.
 > The audit blocks immediately when a finding changes or this acceptance expires.
-
-## Runtime (2)
-
-| Package | Severity | Scope | Reason |
-|---|---|---|---|
-| `sharp` | high | Next.js image optimization | `sharp@0.35.4` contains the fixes but OpenNext Cloudflare fails to bundle its native `.node` modules on Windows. The PWA keeps the scoped `next>sharp@0.34.5` pin until compatibility is available. |
-| `next` | high | Consumer of `sharp` | This is the direct audit effect of the `sharp` exception, not an independent accepted dependency. |
 
 ## Build-Time (6)
 
@@ -24,9 +17,23 @@
   record exactly (`name`, severity, `via`, effects, and range).
 - The approval records expire on 2026-12-31; a new audit and owner decision
   are required before then.
-- `sharp@0.35.4` was tested on 2026-09-19 and failed the OpenNext Cloudflare
-  bundle because native `.node` modules could not be resolved on Windows.
+- Historical note (2026-09-19): `sharp@0.35.4` failed the OpenNext Cloudflare
+  bundle on Windows. That prior acceptance is superseded: Next.js `16.4.1`
+  requires the fixed Sharp line (`^0.35.5`), and the critical advisories
+  GHSA-2464-fhr4-w9xw and GHSA-673q-mjm6-r5xr are not covered by the old
+  acceptance. Next, eslint-config-next, and Sharp are now pinned to `16.4.1`,
+  `16.4.1`, and `0.35.5`; the scoped `next>sharp` override is `0.35.5`.
 - `wrangler` was upgraded to `4.135.0`, eliminating its former
   `miniflare`/`sharp` audit chain without an exception.
-- Review earlier if `sharp`, Next.js, OpenNext Cloudflare, or Lighthouse CI
-  publish a compatible remediation.
+- Re-evaluate the remaining exact build-time exceptions if their dependency
+  chains publish compatible remediations.
+
+## Resolved in the current patch
+
+- Next.js and `eslint-config-next` are pinned to `16.4.1`; Sharp and the
+  `next>sharp` override are pinned to `0.35.5`, resolving critical runtime
+  advisories GHSA-2464-fhr4-w9xw and GHSA-673q-mjm6-r5xr plus high
+  GHSA-p3m5-59mp-jv5r fixed in Next.js `16.4.1`.
+- Vitest and `@vitest/coverage-v8` are aligned to `4.1.12` throughout workspace
+  manifests, resolving the `@vitest/mocker` advisories GHSA-qxg6-89mg-rqv8 and
+  GHSA-xp26-3454-mjgp. These remediations are not accepted exceptions.

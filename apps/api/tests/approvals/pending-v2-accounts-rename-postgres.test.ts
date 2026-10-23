@@ -6,7 +6,9 @@
  * cria os dois pools → requireTestDatabase (marker PRÉ-EXISTENTE) nos dois
  * → testes. afterAll: guards → DELETEs por household → end. ted_local e
  * produção nunca tocados; qualquer URL fora das duas bases descartáveis
- * falha fechada no preflight antes de qualquer I/O.
+ * falha fechada no preflight antes de qualquer I/O. O perfil CI precisa ser
+ * explicitamente selecionado e permite apenas loopback:5432/pi_financeiro_test
+ * e companion _legacy; o padrão local continua restrito a 5433.
  *
  * Comandos reproduzíveis (a partir de D:/projetos/pi-financeiro):
  *   $env:DATABASE_URL_TEST='postgresql://127.0.0.1:5433/ted_validation_20261021'
@@ -21,6 +23,7 @@ import { requireTestDatabase } from '../../src/db/db-guard.js';
 import {
   assertValidationDatabaseUrl,
   createValidationPools,
+  validationDatabaseProfileFromEnvironment,
 } from '../../src/db/validation-preflight.js';
 import { createPostgresWriteStore } from '../../src/writes/postgres.js';
 import { createLegacyPostgresWriteStore } from '../../src/writes/legacy-postgres.js';
@@ -71,9 +74,11 @@ describeIfDb('accounts.update rename PG — canonical + legacy', () => {
   };
 
   beforeAll(async () => {
-    assertValidationDatabaseUrl(DB_URL!);
+    const profile = validationDatabaseProfileFromEnvironment();
+    assertValidationDatabaseUrl(DB_URL!, profile);
     const pools = createValidationPools({
       baseUrl: DB_URL!,
+      profile,
       createPool: (connectionString: string) => createPool({ connectionString, max: 10 }) as unknown as Pool,
     });
     pool = pools.main;
