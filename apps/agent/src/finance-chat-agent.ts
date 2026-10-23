@@ -2,7 +2,7 @@ import { AIChatAgent, type UIMessage } from "agents/ai-chat-agent";
 import { streamText, generateText, stepCountIs } from "ai";
 import { z } from "zod";
 import { protocolSchema } from "@pi-finance/llm-contracts/schemas";
-import { mutationReceiptSchema, pendingOperationPresentationSchema } from "@pi-finance/llm-contracts";
+import { decisionExpectedContextSchema, mutationReceiptSchema, pendingOperationOutcomeSchema, pendingOperationPresentationSchema, type PendingOperationOutcome } from "@pi-finance/llm-contracts";
 import { fetchRuntimeConfig, type RuntimeSnapshot } from "./llm/runtime-config-client.js";
 import { createLanguageModel } from "./llm/model-factory.js";
 import type { Protocol } from "./llm/provider-registry.js";
@@ -136,6 +136,33 @@ import {
   WorkspaceDeletionFenceUnavailableError,
 } from "./workspace-deletion-fence.js";
 
+type HistoryProposalLink = {
+  operationId: string;
+  tool: string;
+  expectedContext: { tool: string; entityId?: string };
+};
+
+/** Strictly projects an API outcome into non-actionable history feedback. */
+const bindPendingOutcomeToHistoryLink = (
+  outcome: PendingOperationOutcome,
+  link: HistoryProposalLink,
+): Record<string, unknown> | undefined => {
+  if (outcome.operationId !== link.operationId || outcome.tool !== link.tool) return undefined;
+  if (outcome.status === 'proposed' || outcome.status === 'confirmed' || outcome.status === 'executing') return undefined;
+  const expected = 'expectedContext' in outcome ? outcome.expectedContext : undefined;
+  if (expected && (expected.tool !== link.expectedContext.tool || expected.entityId !== link.expectedContext.entityId)) return undefined;
+  const targetRequired = outcome.tool === 'accounts.update' || outcome.tool === 'accounts.deactivate' || outcome.tool === 'categories.update' || outcome.tool === 'categories.deactivate' || outcome.tool === 'transactions.update';
+  if (targetRequired && !link.expectedContext.entityId) return undefined;
+  if (outcome.status === 'succeeded') {
+    if (outcome.expectedContext.tool !== link.expectedContext.tool || outcome.expectedContext.entityId !== link.expectedContext.entityId) return undefined;
+    return { operationId: outcome.operationId, tool: outcome.tool, status: 'succeeded', receipt: outcome.receipt, expectedContext: outcome.expectedContext };
+  }
+  if (outcome.status === 'failed') {
+    return { operationId: outcome.operationId, tool: outcome.tool, status: 'failed', ...(outcome.failureCode === 'in_use' ? { failureCode: 'in_use' } : {}) };
+  }
+  return { operationId: outcome.operationId, tool: outcome.tool, status: outcome.status };
+};
+
 /**
  * A19 — DO-storage-backed checkpoint for the piggybacked attachment TTL sweep.
  *
@@ -215,11 +242,18 @@ import { createChannelGrounding } from "./orchestration/channel-evidence.js";
 import type { EvidenceEnvelope } from "./evidence/evidence-envelope.js";
 import { hasMutationIntentSignal, interpretMutationUtterance } from "./mutations/semantic-interpretation.js";
 import { hasAccountDeactivationSignal } from "./mutations/account-deactivation.js";
+import { hasAccountRenameSignal } from "./mutations/account-rename.js";
 import { toActiveOperationRecords } from "./mutations/active-operation-projection.js";
 import { createRequestEntityReader, type EntityReader } from "./mutations/entity-resolver.js";
-import { MutationApiClient } from "./mutations/mutation-api-client.js";
+import { hasCategoryCreateSignal } from "./mutations/category-creation.js";
+import { hasCategoryRenameSignal } from "./mutations/category-rename.js";
+import { hasCategoryDeactivateSignal } from "./mutations/category-deactivation.js";
+import { hasTransactionDescriptionSignal } from "./mutations/transaction-description.js";
+import { MutationApiClient, type ActiveOperationRecord } from "./mutations/mutation-api-client.js";
+import type { MutationExpectedContext } from "./mutations/mutation-executor.js";
+import { requiresExpectedEntity, resolveExpectedContext } from "./mutations/expected-context.js";
 import { PendingOperationCoordinator, isRetryText } from "./orchestration/pending-operation-coordinator.js";
-import { initializeMutationDraftSchema, SqlMutationDraftStore, hasRecoverableDraft } from "./mutations/mutation-draft.js";
+import { initializeMutationDraftSchema, SqlMutationDraftStore, hasRecoverableDraft, type DraftContext } from "./mutations/mutation-draft.js";
 import {
   initializeUndoProposalSchema,
   SqlUndoProposalStore,
@@ -3032,6 +3066,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       return Response.json({ code: "agent.invalid_payload" }, { status: 400 });
     }
     const role = request.headers.get("x-agent-role") === "owner" ? "owner" : "member";
+    let decisionExpected: MutationExpectedContext | undefined;
     try {
       const capabilities = body.decision === "cancel"
         ? ["financial.approval.cancel"]
@@ -3048,6 +3083,43 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       }, secret);
       const requestWithApprovalToken = async <T>(method: string, path: string, opts: Parameters<typeof requestPiApiJson>[2] = {}) =>
         requestPiApiJson<T>(method, path, { ...opts, delegatedToken, apiOrigin: this.env?.API_ORIGIN });
+      // HIGH3 (round 3): the button path resolves the authoritative listing
+      // (scoped identity, read capability) BEFORE confirm/retry and binds
+      // the receipt against it — never the response as proof, never client
+      // input as context. A missing record or a sensitive tool without a
+      // resolvable target fails closed here with zero transport (no
+      // confirm, no execute, no false success).
+      if (body.decision === "confirm" || body.decision === "retry") {
+        const readToken = await createDelegatedTurnToken({
+          actorId,
+          workspaceId,
+          role,
+          capabilities: ["financial.approval.read"],
+          requestId: body.requestId.trim(),
+          deviceId,
+        }, secret);
+        const readClient = new MutationApiClient({
+          request: (async <T>(method: string, path: string, opts: Parameters<typeof requestPiApiJson>[2] = {}) =>
+            requestPiApiJson<T>(method, path, { ...opts, delegatedToken: readToken, apiOrigin: this.env?.API_ORIGIN })) as typeof requestPiApiJson,
+        });
+        let record: ActiveOperationRecord | undefined;
+        try {
+          const listing = await readClient.listActive({ workspaceId, actorId, deviceId });
+          record = listing.items.find((item) => item.id === operationId);
+        } catch {
+          record = undefined;
+        }
+        if (!record) {
+          return Response.json({ code: "agent.context_unavailable", message: "Não foi possível verificar a operação agora. Tente novamente." }, { status: 409 });
+        }
+        decisionExpected = resolveExpectedContext(record) ?? undefined;
+        if (
+          requiresExpectedEntity(record.tool ?? '') &&
+          (decisionExpected === undefined || decisionExpected.entityId === undefined)
+        ) {
+          return Response.json({ code: "agent.context_unavailable", message: "Não foi possível verificar a operação agora. Tente novamente." }, { status: 409 });
+        }
+      }
       // T1.5 (SPEC §8.1/§8.2): the approval button converges into the same
       // PendingOperationCoordinator as natural language — one decision
       // machine, no parallel path. The card names its operation, so decide()
@@ -3065,6 +3137,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         decision: body.decision as 'confirm' | 'cancel' | 'retry',
         identity: { workspaceId, actorId, deviceId },
         intentionId: body.requestId.trim(),
+        ...(decisionExpected !== undefined ? { expected: decisionExpected } : {}),
       });
       // AGENT-010: sanitized approval lifecycle events (status only — never
       // operation payloads, tokens, or financial values).
@@ -3086,6 +3159,21 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       }
       return Response.json(result);
     } catch {
+      // An executor rejection is not itself proof of a terminal outcome. Only
+      // an authoritative scoped read of this exact failed category operation
+      // can turn the transport error into the known, non-retryable in_use UX.
+      if (body.decision === 'confirm' && decisionExpected?.tool === 'categories.deactivate' && decisionExpected.entityId) {
+        try {
+          const readToken = await createDelegatedTurnToken({ actorId, workspaceId, role, capabilities: ['financial.approval.read'], requestId: body.requestId.trim(), deviceId }, secret);
+          const readClient = new MutationApiClient({ request: (async <T>(method: string, path: string, opts: Parameters<typeof requestPiApiJson>[2] = {}) =>
+            requestPiApiJson<T>(method, path, { ...opts, delegatedToken: readToken, apiOrigin: this.env?.API_ORIGIN })) as typeof requestPiApiJson });
+          const listing = await readClient.listActive({ workspaceId, actorId, deviceId });
+          const record = listing.items.find((item) => item.id === operationId);
+          if (record?.status === 'failed' && record.tool === 'categories.deactivate' && record.categoryId === decisionExpected.entityId && record.failureCode === 'in_use') {
+            return Response.json({ operationId, status: 'failed', retryable: false, failureCode: 'in_use' });
+          }
+        } catch { /* Unknown/read failure remains the existing uncertain 502. */ }
+      }
       return Response.json({ code: "agent.approval_failed", message: "Não foi possível concluir a decisão." }, { status: 502 });
     }
   }
@@ -3139,6 +3227,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     // that refuses an ambiguous one (AC13) without registering anything. The
     // intent gate stays exactly where it was.
     if (!hasMutationIntentSignal(input.text)) return null;
+    // categories.update (name-only): an explicit category rename is NEVER a
+    // transaction — a number inside a category name ("Viagem 2024") must
+    // not become an amount. The router owns this turn
+    // (`categories.update` mutation-proposal plan).
+    if (hasCategoryRenameSignal(input.text)) return null;
     const interpretation = interpretMutationUtterance(input.text);
     if (interpretation.status !== "candidate") return null;
     const parsed = interpretation.parsed;
@@ -4150,7 +4243,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // mutation plan, but with a recoverable draft it still needs the
         // mutation client + reader so the turn can complete the handoff.
         const draftStore = this.draftStoreForRequest();
-        const draftCtx = { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: deviceId ?? null };
+        const draftConversationId = restInput.audience?.visibility === 'private' ? restInput.audience.conversationId : undefined;
+        const draftCtx = {
+          workspaceId: identity.workspaceId,
+          actorId: identity.actorId,
+          deviceId: deviceId ?? null,
+          ...(draftConversationId ? { conversationId: draftConversationId } : {}),
+        };
         const hasPendingDraft = draftStore
           ? hasRecoverableDraft(
             draftStore,
@@ -4175,18 +4274,26 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         const needsMutation = mutationPlan !== null || hasPendingDraft
           || routed.mode === 'confirmation' || routed.mode === 'cancel'
           || isRetryText(decisionText);
+        // accounts.update: mesmo gating do entityReader acima — o sinal de
+        // renomeação chega sob planos não-mutacionais mas runRenameTurn
+        // precisa propor (transporte manual; autoexecute segue separado).
         // accounts.deactivate: mesmo gating do entityReader acima — o sinal de
         // desativação chega sob planos não-mutacionais mas runDeactivateTurn
         // precisa propor (transporte manual; autoexecute segue separado).
         // Turnos sem sinal seguem byte-idênticos.
-        const needsMutationClient = needsMutation || hasAccountDeactivationSignal(restInput.text);
+        const needsMutationClient = needsMutation || hasAccountDeactivationSignal(restInput.text) || hasAccountRenameSignal(restInput.text) || hasCategoryCreateSignal(restInput.text) || hasCategoryRenameSignal(restInput.text) || hasCategoryDeactivateSignal(restInput.text) || hasTransactionDescriptionSignal(restInput.text);
         const mutationApiClient = await this.mutationApiClientForTurn(restInput, needsMutationClient);
+        // accounts.update: o sinal de renomeação chega sob plano
+        // não-mutacional (`read`/`unsupported`/`conversation`) mas o
+        // orquestrador abre `runRenameTurn` → `readRenameAccounts`,
+        // que exige o reader. Sem ele o turno degrada para
+        // RENAME_READ_FAILURE_TEXT. Turnos sem sinal seguem byte-idênticos.
         // accounts.deactivate: o sinal de desativação chega sob plano
         // não-mutacional (`read`/`unsupported`/`conversation`) mas o
         // orquestrador abre `runDeactivateTurn` → `readDeactivationAccounts`,
         // que exige o reader. Sem ele o turno degrada para
         // DEACTIVATE_READ_FAILURE_TEXT. Turnos sem sinal seguem byte-idênticos.
-        const needsEntityReader = needsMutation || hasAccountDeactivationSignal(restInput.text);
+        const needsEntityReader = needsMutation || hasAccountDeactivationSignal(restInput.text) || hasAccountRenameSignal(restInput.text) || hasCategoryCreateSignal(restInput.text) || hasCategoryRenameSignal(restInput.text) || hasCategoryDeactivateSignal(restInput.text) || hasTransactionDescriptionSignal(restInput.text);
         const entityReader = needsEntityReader ? await this.entityReaderForTurn(restInput) : undefined;
         turnOrchestrator = this.orchestratorForChannel({
           ...(mutationPlan ? { plan: () => mutationPlan } : {}),
@@ -4384,7 +4491,24 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
                 role: 'assistant',
                 parts: [{ type: 'text', text: scrubForPersistence(turnResult.response.text) }],
                 metadata: stampMessageAudience(
-                  { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: mutationNowIso, intentionId },
+                  {
+                    actorId: 'ted', workspaceId: identity.workspaceId, createdAt: mutationNowIso, intentionId,
+                    ...(() => {
+                      const mutation = turnResult.mutation as { operationId?: unknown; expected?: unknown } | undefined;
+                      if (typeof mutation?.operationId !== 'string' || !mutation.operationId.trim()) return {};
+                      const explicitExpected = decisionExpectedContextSchema.safeParse(mutation.expected);
+                      const presentation = pendingOperationPresentationSchema.safeParse((mutation as { presentation?: unknown }).presentation);
+                      if (explicitExpected.success && explicitExpected.data.tool.trim()) {
+                        return { pendingProposal: { operationId: mutation.operationId, tool: explicitExpected.data.tool, expectedContext: explicitExpected.data } };
+                      }
+                      if (!presentation.success || presentation.data.id !== mutation.operationId) return {};
+                      const tool = presentation.data.tool;
+                      const target = tool.startsWith('categories.') ? presentation.data.category?.id : tool.startsWith('accounts.') ? presentation.data.account?.id : undefined;
+                      const expected = { tool, ...(target ? { entityId: target } : {}) };
+                      const checked = decisionExpectedContextSchema.safeParse(expected);
+                      return checked.success ? { pendingProposal: { operationId: mutation.operationId, tool, expectedContext: checked.data } } : {};
+                    })(),
+                  },
                   turnAudience,
                 ),
               } as unknown as UIMessage);
@@ -4420,7 +4544,14 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             ? {
                 id: turnResult.mutation.operationId,
                 status: turnResult.mutation.status,
-                operation: turnResult.plan.requestedOperations[0]?.name,
+                // HIGH3/MED (round 4): the gateway operation is the VALIDATED
+                // tool bound before execute — never the plan (a confirmation
+                // plan carries no operations) and never the response. Without
+                // a validated context the legacy plan-derived name stays
+                // (degraded, never invented).
+                operation:
+                  (turnResult.mutation as { expected?: { tool?: unknown } }).expected?.tool ??
+                  turnResult.plan.requestedOperations[0]?.name,
                 summary: turnResult.response.text,
                 // T3.4 (SPEC §16): the safe card projection derived from the
                 // canonical args. Re-validated here so only schema-conformant
@@ -4441,6 +4572,17 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
                   if (!receipt) return {};
                   const parsed = mutationReceiptSchema.safeParse(receipt);
                   return parsed.success ? { receipt: parsed.data } : {};
+                })(),
+                // HIGH3 (round 3): the authoritative expected context that
+                // bound the receipt (tool + target id, no attestation
+                // material). Re-validated with the strict contract schema
+                // so PWA parsers and history bind the receipt against it
+                // instead of trusting the response alone.
+                ...(() => {
+                  const expected = (turnResult.mutation as { expected?: unknown }).expected;
+                  if (!expected) return {};
+                  const parsed = decisionExpectedContextSchema.safeParse(expected);
+                  return parsed.success ? { expected: parsed.data } : {};
                 })(),
               }
             : undefined;
@@ -4684,6 +4826,69 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         return canAccessMessage({ actorId: identity.actorId, workspaceId: identity.workspaceId, meta });
       });
 
+      const historyDeviceId = request.headers.get("x-agent-device")?.trim() || undefined;
+      let historyDraftStore: SqlMutationDraftStore | undefined;
+      if (historyDeviceId) {
+        // Read-only construction: do not initialize/create schema on GET.
+        try {
+          const sql = this.durableSql();
+          if (sql) historyDraftStore = new SqlMutationDraftStore(sql);
+        } catch { /* legacy history remains unverified */ }
+      }
+      const proposalLinks = new Map<string, HistoryProposalLink>();
+      const proposalLinkFor = (msg: UIMessage): HistoryProposalLink | undefined => {
+        if (msg.role !== 'assistant') return undefined;
+        const meta = (msg.metadata ?? {}) as Record<string, unknown>;
+        const raw = meta.pendingProposal;
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+          const link = raw as Record<string, unknown>;
+          const expected = decisionExpectedContextSchema.safeParse(link.expectedContext);
+          const operationId = z.string().uuid().safeParse(link.operationId);
+          if (operationId.success && expected.success && expected.data.tool === link.tool) {
+            return { operationId: operationId.data, tool: expected.data.tool, expectedContext: expected.data };
+          }
+        }
+        const intentionId = typeof meta.intentionId === 'string' ? meta.intentionId : undefined;
+        if (!intentionId || !historyDraftStore || !historyDeviceId || meta.workspaceId !== identity.workspaceId) return undefined;
+        const messageActorId = typeof meta.actorId === 'string' ? meta.actorId : undefined;
+        // Assistant rows are canonically stamped actorId='ted'; their human
+        // provenance is ownerActorId. Legacy rows may instead carry the
+        // human actor directly. In either shape, require exact current-actor
+        // provenance before resolving a current-actor draft by intentionId.
+        const actorProvenanceMatches = messageActorId === identity.actorId ||
+          (msg.role === 'assistant' && messageActorId === 'ted' && meta.ownerActorId === identity.actorId);
+        if (!actorProvenanceMatches) return undefined;
+        const visibility = meta.visibility;
+        let conversationId: string | undefined;
+        if (visibility === 'private') {
+          const messageConversationId = typeof meta.conversationId === 'string' ? meta.conversationId.trim() : '';
+          if (meta.ownerActorId !== identity.actorId || !messageConversationId) return undefined;
+          conversationId = messageConversationId;
+        } else if (visibility !== 'workspace') {
+          // Missing/unknown audience metadata is not evidence that a historic
+          // assistant proposal belongs to the global workspace draft scope.
+          return undefined;
+        }
+        const ctx: DraftContext = {
+          workspaceId: identity.workspaceId,
+          actorId: identity.actorId,
+          deviceId: historyDeviceId,
+          ...(conversationId ? { conversationId } : {}),
+        };
+        const draft = historyDraftStore.findByIntention(ctx, intentionId);
+        if (!draft || draft.status !== 'consumed' || draft.lastIntentionId !== intentionId || !z.string().uuid().safeParse(draft.proposalId).success) return undefined;
+        const tool = draft.tool;
+        const args = draft.resolvedArgs as Record<string, unknown>;
+        const entityId = tool.startsWith('categories.') && typeof args.categoryId === 'string'
+          ? args.categoryId
+          : tool.startsWith('accounts.') && typeof args.accountId === 'string'
+            ? args.accountId
+            : tool === 'transactions.update' && z.string().uuid().safeParse(args.transactionId).success
+              ? args.transactionId as string
+              : undefined;
+        return { operationId: draft.proposalId!, tool, expectedContext: { tool, ...(entityId ? { entityId } : {}) } };
+      };
+
       const items = rawMessages.map((msg) => {
         const msgActorId = (msg.metadata as { actorId?: string } | undefined)?.actorId ?? (msg.role === "assistant" ? "ted" : "unknown");
         let contentText = "";
@@ -4699,6 +4904,8 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // como fallback legado. Eco estrito: só string não vazia vinda do
         // metadata, nunca id inventado aqui.
         const intentionId = (msg.metadata as { intentionId?: string } | undefined)?.intentionId;
+        const proposalLink = proposalLinkFor(msg);
+        if (proposalLink) proposalLinks.set(String(msg.id ?? ''), proposalLink);
         // FIX-WS-D3-R2 finding 5: eco da conversa para separação no cliente
         // (ativa vs. arquivada); só string não vazia vinda do metadata.
         const conversationId = (msg.metadata as { conversationId?: unknown } | undefined)?.conversationId;
@@ -4713,6 +4920,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           ...(typeof conversationId === "string" && conversationId ? { conversationId } : {}),
           ...(attachments ? { attachments } : {}),
           ...(typeof intentionId === "string" && intentionId ? { intentionId } : {}),
+          ...(proposalLink ? { proposalOperationId: proposalLink.operationId, proposalTool: proposalLink.tool } : {}),
         };
       });
 
@@ -4738,7 +4946,46 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       }
       const paged = items.slice(-historyLimit);
 
-      return Response.json({ items: paged, total: paged.length });
+      // Read only the latest bounded set of visible assistant proposal links.
+      // Failed/invalid lookups are omitted, never inferred as a financial result.
+      const lookupCandidates = paged
+        .filter((item) => item.role === 'assistant' && typeof item.proposalOperationId === 'string')
+        .slice(-16);
+      const secret = this.env?.AGENT_DELEGATION_SECRET?.trim();
+      const outcomeByOperation = new Map<string, PendingOperationOutcome>();
+      if (secret && historyDeviceId && lookupCandidates.length > 0) {
+        try {
+          const role = request.headers.get("x-agent-role") === "owner" ? "owner" : "member";
+          const delegatedToken = await createDelegatedTurnToken({ actorId: identity.actorId, workspaceId: identity.workspaceId, role, capabilities: ['financial.approval.read'], requestId: crypto.randomUUID(), deviceId: historyDeviceId }, secret);
+          const requestWithReadToken = async <T>(method: string, path: string, opts: Parameters<typeof requestPiApiJson>[2] = {}) =>
+            requestPiApiJson<T>(method, path, { ...opts, delegatedToken, apiOrigin: this.env?.API_ORIGIN });
+          const readClient = new MutationApiClient({ request: requestWithReadToken });
+          const unique = [...new Map(lookupCandidates.map((item) => [String(item.proposalOperationId), item])).values()].slice(-16);
+          for (let start = 0; start < unique.length; start += 4) {
+            const batch = unique.slice(start, start + 4);
+            const outcomes = await Promise.all(batch.map(async (item) => {
+              const operationId = String(item.proposalOperationId);
+              try { return [operationId, await readClient.getOutcome(operationId, { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: historyDeviceId })] as const; }
+              catch { return [operationId, undefined] as const; }
+            }));
+            for (const [operationId, rawOutcome] of outcomes) {
+              const outcome = pendingOperationOutcomeSchema.safeParse(rawOutcome);
+              if (!outcome.success || outcome.data.operationId !== operationId) continue;
+              outcomeByOperation.set(operationId, outcome.data);
+            }
+          }
+        } catch { /* historical feedback is optional; no provider or mutation is invoked */ }
+      }
+      for (const item of paged) {
+        const operationId = typeof item.proposalOperationId === 'string' ? item.proposalOperationId : undefined;
+        const outcome = operationId ? outcomeByOperation.get(operationId) : undefined;
+        const link = proposalLinks.get(String(item.id));
+        if (!outcome || !link) continue;
+        const feedback = bindPendingOutcomeToHistoryLink(outcome, link);
+        if (feedback) (item as Record<string, unknown>).terminalOutcome = feedback;
+      }
+
+      return Response.json({ items: paged, total: paged.length }, { headers: { 'cache-control': 'private, no-store' } });
     }
 
     return new Response("Not found", { status: 404 });

@@ -70,7 +70,7 @@ describe("accounts.deactivate no client PWA", () => {
     });
   });
 
-  it("decisão succeeded com entity account resolve (não trava como não-verificada)", async () => {
+  it("decisão succeeded com entity account resolve com expected (contexto do card)", async () => {
     vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
     stubAgentAuth();
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
@@ -80,11 +80,29 @@ describe("accounts.deactivate no client PWA", () => {
       ),
     );
 
-    const decision = await decidePendingOperation("workspace-123", "op-deact-1", "confirm");
+    const decision = await decidePendingOperation("workspace-123", "op-deact-1", "confirm", {
+      tool: "accounts.deactivate",
+      entityId: "acc-1",
+    });
 
     expect(decision.status).toBe("succeeded");
     if (decision.status === "succeeded") {
       expect(decision.receipt.entity).toMatchObject({ type: "account", id: "acc-1" });
     }
+  });
+
+  it("HIGH3 decide: sem expected, recibo deactivate falha fechado", async () => {
+    vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
+    stubAgentAuth();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json(
+        { operationId: "op-deact-1", status: "succeeded", receipt: deactivateReceipt },
+        { status: 200 },
+      ),
+    );
+
+    await expect(
+      decidePendingOperation("workspace-123", "op-deact-1", "confirm"),
+    ).rejects.toMatchObject({ code: "agent.execution_outcome_unknown" });
   });
 });

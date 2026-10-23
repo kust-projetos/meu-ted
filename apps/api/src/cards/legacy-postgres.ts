@@ -24,6 +24,7 @@ import type { Pool, PoolClient } from 'pg';
 import type { Account, Transaction, Statement, StatementDetail, StatementPurchase, RecurringPurchase } from '../types/domain.js';
 import type { CardStore } from './store.js';
 import { withTransaction } from '../db/pool.js';
+import { lockCategoryReferencesInTx } from '../auth/category-lifecycle-guard.js';
 import { domainErrors } from '../writes/errors.js';
 import { resolveExpenseCategoryLegacy, resolveSubcategoryLegacy } from '../writes/legacy-postgres.js';
 import { installmentDates } from '../shared/billing-month.js';
@@ -218,6 +219,7 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
     householdId: string,
     input: CreateCardPurchaseInput,
   ): Promise<Transaction[]> => {
+    if (input.categoryId || input.subcategoryId) await lockCategoryReferencesInTx(client, householdId);
     // M-05: same active/expense-kind category rule as plain entries.
     if (input.categoryId) {
       await resolveExpenseCategoryLegacy(client, householdId, input.categoryId);
@@ -264,6 +266,7 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
     householdId: string,
     input: CreateCardInstallmentsInput,
   ): Promise<Transaction[]> => {
+    if (input.categoryId || input.subcategoryId) await lockCategoryReferencesInTx(client, householdId);
     const card = await requireCard(householdId, input.accountId, client);
 
     // M-05: same active/expense-kind category rule as plain entries.
@@ -327,6 +330,7 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
     householdId: string,
     input: CreateRecurringPurchaseInput,
   ): Promise<RecurringPurchase> => {
+    if (input.categoryId) await lockCategoryReferencesInTx(client, householdId);
     // Task 2.18: same validation as the normal purchase path — active
     // credit card with closing/due configured; active expense-kind
     // category (shared requireCard + category resolvers).
@@ -581,12 +585,9 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
     purchaseId: string,
     input: UpdatePurchaseInput,
   ): Promise<string> => {
+    if (input.categoryId !== undefined) await lockCategoryReferencesInTx(client, householdId);
     if (input.categoryId) {
-      const catRows = await client.query<Row>(
-        `SELECT id FROM categories WHERE id = $1 AND household_id = $2`,
-        [input.categoryId, householdId],
-      );
-      if (catRows.rowCount === 0 || catRows.rows.length === 0) throw domainErrors.notFound('Categoria');
+      await resolveExpenseCategoryLegacy(client, householdId, input.categoryId);
     }
 
     // Task 2.6 (SPEC §9.3): one dynamic SET builder shared by both

@@ -88,6 +88,7 @@ describe("TedApprovalCard accounts.create", () => {
         "workspace-1",
         "op-acc-1",
         "confirm",
+        { tool: "accounts.create" },
       ),
     );
   });
@@ -117,6 +118,7 @@ describe("TedApprovalCard accounts.create", () => {
         "workspace-1",
         "op-acc-1",
         "cancel",
+        { tool: "accounts.create" },
       ),
     );
   });

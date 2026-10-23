@@ -16,6 +16,12 @@ import { describe, expect, it } from 'vitest';
 import { createChannelGrounding, type ChannelReadTools } from '../../src/orchestration/channel-evidence.js';
 import type { EvidenceEnvelope } from '../../src/evidence/evidence-envelope.js';
 import type { TurnInput, TurnPlan } from '../../src/orchestration/conversation-orchestrator.js';
+import {
+  ConversationOrchestrator,
+  normalizeRestTurn,
+  type AuthenticatedIdentity,
+} from '../../src/orchestration/conversation-orchestrator.js';
+import { routeIntent } from '../../src/orchestration/intent-router.js';
 
 const input: TurnInput = {
   intentionId: 'intent-a04',
@@ -176,5 +182,75 @@ describe('A04/R04 setup state: no global "workspace empty" claim before A09', ()
     const item = envelope.items[0];
     expect(item?.status).toBe('error');
     expect(item?.reason).toBe('permanent_error');
+  });
+});
+
+describe('payables-idiom absence (debugger payables-absence): conta preenchida + payables vazio', () => {
+  const payablesIdentity: AuthenticatedIdentity = {
+    actorId: 'actor-payables-absence',
+    workspaceId: 'ws-payables-absence',
+    role: 'member',
+    deviceId: 'device-payables-absence',
+  };
+
+  // Stub dirigido pelo plano: cada leitura planejada responde da sua
+  // fixture — contas preenchidas (ok), payables vazio ou erro. Reproduz a
+  // produção (conta preenchida mascarava o empty do payables via `ok` de
+  // outro escopo) e prova o contrato: ausência determinística sem
+  // provider; erro segue erro, nunca vazio inventado.
+  const evidenceForTurn = (payables: 'empty' | 'error') => async (_input: TurnInput, plan: TurnPlan) => {
+    const stamp = new Date().toISOString();
+    const items: Array<EvidenceEnvelope['items'][number]> = [];
+    for (const operation of plan.requestedOperations) {
+      if (operation.name === 'list_payables') {
+        items.push(
+          payables === 'empty'
+            ? { ref: 'payables', source: 'api.payables', retrievedAt: stamp, status: 'empty', data: [], reason: 'setup_incomplete' }
+            : { ref: 'payables', source: 'api.payables', retrievedAt: stamp, status: 'error', data: null, reason: 'unavailable' },
+        );
+      } else if (operation.name === 'list_accounts') {
+        items.push({
+          ref: 'accounts',
+          source: 'api.accounts',
+          retrievedAt: stamp,
+          status: 'ok',
+          data: [{ id: 'a1', name: 'Nubank', householdId: 'ws-payables-absence' }],
+        });
+      }
+    }
+    return { version: '1' as const, items };
+  };
+
+  const runPayablesTurn = async (payables: 'empty' | 'error') => {
+    const providerCalls: string[] = [];
+    const orchestrator = new ConversationOrchestrator({
+      plan: (input: TurnInput) => routeIntent(input.text) as never,
+      evidenceProvider: evidenceForTurn(payables),
+      responseProvider: async () => {
+        providerCalls.push('called');
+        return '**resumo** markup-only';
+      },
+      events: () => undefined,
+    });
+    const result = await orchestrator.runTurn(
+      normalizeRestTurn({ text: 'minhas contas a pagar', intentionId: `intent-payables-${payables}` }, payablesIdentity),
+    );
+    return { result, providerCalls };
+  };
+
+  it('conta preenchida + payables vazio responde ausência, sem provider', async () => {
+    const { result, providerCalls } = await runPayablesTurn('empty');
+    expect(result.response?.text).toMatch(/contas a pagar/i);
+    // A frase sanitizada do provider ("Não consegui processar ... agora")
+    // nunca aparece: a ausência é determinística.
+    expect(result.response?.text).not.toMatch(/processar/i);
+    expect(providerCalls).toHaveLength(0);
+  });
+
+  it('controle: payables com erro responde erro, nunca vazio inventado', async () => {
+    const { result, providerCalls } = await runPayablesTurn('error');
+    expect(result.response?.text).toMatch(/acessar seus dados financeiros/i);
+    expect(result.response?.text).not.toMatch(/contas a pagar/i);
+    expect(providerCalls).toHaveLength(0);
   });
 });

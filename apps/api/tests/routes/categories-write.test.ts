@@ -170,6 +170,7 @@ describe('POST /categories/:id/deactivate', () => {
       headers: { 'x-device-token': TOKEN_A, 'idempotency-key': crypto.randomUUID() },
     });
     expect(res.statusCode).toBe(409);
-    expect(res.json().message).toMatch(/lançamentos/);
+    expect(res.json().code).toBe('in_use');
+    expect(res.json().message).toMatch(/registros vinculados ativos/i);
   });
 });

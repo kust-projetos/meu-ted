@@ -23,6 +23,7 @@ import { domainErrors, DomainError } from '../writes/errors.js';
 import { assertCategoryKind } from '../categories/resolve.js';
 import { addMonthsSafe } from '../shared/billing-month.js';
 import { withTransaction } from '../db/pool.js';
+import { lockCategoryReferencesInTx } from '../auth/category-lifecycle-guard.js';
 
 type Row = Record<string, unknown>;
 
@@ -121,6 +122,7 @@ const createPayableInTxLegacy = async (
   householdId: string,
   input: CreatePayableInput,
 ): Promise<Payable> => {
+  if (input.categoryId !== undefined) await lockCategoryReferencesInTx(client, householdId);
   // The canonical gate inside base.createPayable would query the `status`
   // column, which does not exist on the legacy schema.
   if (input.categoryId !== undefined) {
@@ -134,6 +136,7 @@ const createPayableWithTemplateInTxLegacy = async (
   householdId: string,
   input: WithTemplateInput,
 ): Promise<Payable> => {
+  if (input.payable.categoryId !== undefined) await lockCategoryReferencesInTx(client, householdId);
   // V4.1 Task 2.15: same category gate as createPayable.
   if (input.payable.categoryId !== undefined) {
     await assertPayableCategoryLegacy(client, householdId, input.payable.categoryId);
@@ -222,6 +225,7 @@ const updatePayableInTxLegacy = async (
   payableId: string,
   input: UpdatePayableInput,
 ): Promise<Payable> => {
+  if (input.categoryId !== undefined) await lockCategoryReferencesInTx(client, householdId);
   const existing = await client.query<Row>(`SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`, [payableId, householdId]);
   if (existing.rowCount === 0 || existing.rows.length === 0) throw domainErrors.notFound('Conta a pagar');
   if (existing.rows[0]!.status === 'cancelled') throw new DomainError('validation.invalid', 'Conta cancelada não pode ser editada', 409);

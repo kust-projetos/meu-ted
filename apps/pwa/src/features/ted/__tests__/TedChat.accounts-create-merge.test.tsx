@@ -179,7 +179,9 @@ describe("TedChat accounts.create — merge turno × active list", () => {
     await user.click(await screen.findByRole("button", { name: "Cancelar" }));
 
     await waitFor(() =>
-      expect(decideSpy).toHaveBeenCalledWith("ws-1", "op-acc-live", "cancel"),
+      expect(decideSpy).toHaveBeenCalledWith("ws-1", "op-acc-live", "cancel", {
+        tool: "accounts.create",
+      }),
     );
   });
 });

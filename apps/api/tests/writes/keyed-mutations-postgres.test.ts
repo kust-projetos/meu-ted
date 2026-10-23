@@ -208,9 +208,20 @@ describeIfDb('V4.1 Phase 3 — Postgres single-tx keyed mutations', () => {
 
     // v1-sha256 fixture in idempotency_keys (pending-V2 store) replays too.
     const keyedPayload = { description: 'PG keyed old', amountCents: 50 };
+    const legacyKeyedTransaction = {
+      id: '00000000-0000-4000-8000-000000000010',
+      householdId: household,
+      kind: 'expense' as const,
+      description: 'PG keyed old',
+      amountCents: 50,
+      date: '2026-10-20',
+      accountId: '00000000-0000-4000-8000-000000000011',
+      categoryId: '00000000-0000-4000-8000-000000000012',
+      notes: 'legacy replay snapshot',
+    };
     await pool.query(
       'INSERT INTO idempotency_keys (household_id, key, payload_hash, response) VALUES ($1, $2, $3, $4)',
-      [household, 'pending-v2:pg-keyed-old', hashIdempotencyPayload(keyedPayload), JSON.stringify({ transaction: { id: 'old-keyed-tx' } })],
+      [household, 'pending-v2:pg-keyed-old', hashIdempotencyPayload(keyedPayload), JSON.stringify({ transaction: legacyKeyedTransaction })],
     );
     const keyed = await runKeyedMutation({
       pool,
@@ -221,7 +232,44 @@ describeIfDb('V4.1 Phase 3 — Postgres single-tx keyed mutations', () => {
         throw new Error('mutate must not run on replay');
       },
     });
-    expect(keyed.id).toBe('old-keyed-tx');
+    expect(keyed).toEqual(legacyKeyedTransaction);
+  }, 60_000);
+
+  it('rejects a malformed keyed transaction snapshot without effect or audit', async () => {
+    const household = track(randomUUID());
+    const key = 'pg-keyed-malformed-snapshot';
+    const payload = { tool: 'transactions.description.update', args: { transactionId: randomUUID(), description: 'new', expectedDescription: 'old' } };
+    const malformed = {
+      id: '00000000-0000-4000-8000-000000000020',
+      householdId: household,
+      kind: 'expense',
+      description: 'old',
+      amountCents: 50,
+      date: '2026-10-20',
+      // accountId intentionally absent: not a valid transaction DTO.
+    };
+    await pool.query(
+      'INSERT INTO idempotency_keys (household_id, key, payload_hash, response) VALUES ($1, $2, $3, $4)',
+      [household, `pending-v2:${key}`, hashIdempotencyPayload(payload), JSON.stringify({ transaction: malformed })],
+    );
+    let mutations = 0;
+    await expect(runKeyedMutation({
+      pool,
+      householdId: household,
+      idempotencyKey: key,
+      payload,
+      audit: {
+        operation: 'transaction.update', actorId: 'test-server-actor', schema: 'canonical',
+        idempotencyKey: key, beforeDescription: 'old', afterDescription: 'new',
+      },
+      mutate: async () => {
+        mutations += 1;
+        throw new Error('malformed snapshot must not invoke mutation');
+      },
+    })).rejects.toMatchObject({ code: 'idempotency.conflict', statusCode: 409 });
+    expect(mutations).toBe(0);
+    expect((await pool.query('SELECT COUNT(*)::int AS n FROM transactions WHERE household_id=$1', [household])).rows[0]!.n).toBe(0);
+    expect((await pool.query('SELECT COUNT(*)::int AS n FROM audit_logs WHERE workspace_id=$1', [household])).rows[0]!.n).toBe(0);
   }, 60_000);
 
   it('Phase 4 (V2 fail-closed by construction): mutate throw rolls back claim + effect together', async () => {

@@ -58,6 +58,15 @@ import { formatCents } from '../evidence/financial-formatters.js';
  *   evidence. There is no card-accounts tool with comparable semantics, so
  *   without such evidence the turn clarifies the limitation instead of
  *   borrowing another account's balance.
+ * - TED-LOCAL-ACCOUNT-PARTIAL-BALANCE: a single significant normalized
+ *   partial name match ("saldo QA Aurora" for "QA Aurora banco") may read,
+ *   and a bare anaphora ("e o saldo daquela conta") resolves only with an
+ *   unequivocal single-account scope — never on ambiguity, never with
+ *   figures from another account, never for invented/absent names. Both new
+ *   resolutions are forbidden on incomplete evidence (partial flag or
+ *   omitted rows); the existing exact-name proof is preserved as-is.
+ *   Single-character non-fillers ("Q", "1", "2") are unmatched qualifiers
+ *   (veto), never positive evidence and never silently dropped.
  */
 
 export type AccountKind = 'bank' | 'cash' | 'credit_card' | 'unknown';
@@ -193,6 +202,95 @@ export const matchAccountsByName = (text: string, accounts: readonly GroundedAcc
     return nameTokens.every((token) => utterance.has(token));
   });
 };
+
+/**
+ * TED-LOCAL-ACCOUNT-PARTIAL-BALANCE: significant partial match (no fuzzy
+ * matching, no prefixes, no invented names). An account is a partial
+ * candidate when it shares at least one NON-generic name token with the
+ * utterance AND the shared set is significant: it holds a token of length
+ * 4+ ("aurora") or at least two tokens ("qa"+"aurora"). A lone short token
+ * ("Q", "QA" alone) never identifies anything. Generic vocabulary
+ * ("banco", "conta", "saldo") never counts toward significance, so a bare
+ * "banco" or a single letter can never single-select. Generic-only names
+ * never match. Callers must require a UNIQUE candidate plus the unchanged
+ * unmatched-qualifier veto before rendering any figure.
+ */
+export const matchSignificantPartial = (
+  text: string,
+  accounts: readonly GroundedAccount[],
+): GroundedAccount[] => {
+  const utterance = new Set(tokens(text));
+  return accounts.filter((account) => {
+    if (isGenericOnlyName(account.name)) return false;
+    const shared = fullNameTokens(account.name).filter(
+      (token) => utterance.has(token) && !isGenericBalanceWord(token),
+    );
+    if (shared.length === 0) return false;
+    return shared.length >= 2 || shared.some((token) => token.length >= 4);
+  });
+};
+
+/**
+ * TED-LOCAL-ACCOUNT-PARTIAL-BALANCE: anaphoric demonstratives that point at
+ * the previously established account ("aquela conta", "essa conta"). Kept
+ * OUT of the shared generic sets on purpose: they are scope-neutral filler
+ * only inside the partial/anaphora resolution below — everywhere else they
+ * stay visible so existing vetoes keep failing closed.
+ */
+const ANAPHORA_DEMONSTRATIVES: ReadonlySet<string> = new Set([
+  'aquela',
+  'aquelas',
+  'essa',
+  'essas',
+  'esta',
+  'estas',
+  'naquela',
+  'naquelas',
+  'nessa',
+  'nessas',
+  'nesta',
+  'nestas',
+  'daquela',
+  'daquelas',
+  'dessa',
+  'dessas',
+  'desta',
+  'destas',
+]);
+
+const ANAPHORA_RE = /\b(aquel[ae]s?|ess[ae]s?|est[ae]s?|naquel[ae]s?|ness[ae]s?|nest[ae]s?|daquel[ae]s?|dess[ae]s?|dest[ae]s?)\s+(conta|contas)\b/;
+
+/** The utterance with the anaphoric phrase blanked, so demonstratives never veto a named match. */
+const withoutAnaphora = (text: string): string =>
+  fold(text).replace(new RegExp(ANAPHORA_RE.source, 'gi'), ' ');
+
+/**
+ * Single-character fillers: articles/conjunctions that carry no nominal
+ * content ("o", "a", "e" — "é" folds to "e"). Every OTHER single character
+ * ("Q", "1", "2", "X") is a potential unmatched qualifier: `tokens()` drops
+ * it, so without this the turn silently forgets something the user named.
+ * Short tokens NEVER confer positive eligibility (matching still uses
+ * `tokens()`); they only veto, conservatively.
+ */
+const SHORT_FILLER_TOKENS: ReadonlySet<string> = new Set(['e', 'o', 'a']);
+
+const shortQualifierTokens = (text: string): string[] =>
+  fold(text)
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length === 1 && !SHORT_FILLER_TOKENS.has(token));
+
+/**
+ * A bare anaphora ("e o saldo daquela conta"): the anaphoric phrase is
+ * present and every other token is generic, anaphoric, or a single-char
+ * filler — the turn points at nothing specific. A dropped qualifier ("Q",
+ * "2") breaks bareness: it vetoes. Resolvable ONLY against an unequivocal
+ * authoritative context (exactly one account in scope); with 2+ accounts it
+ * must ask.
+ */
+const isBareAnaphora = (text: string): boolean =>
+  ANAPHORA_RE.test(fold(text)) &&
+  tokens(text).every((token) => isGenericBalanceWord(token) || ANAPHORA_DEMONSTRATIVES.has(token)) &&
+  shortQualifierTokens(text).length === 0;
 
 const MAX_LISTED_ACCOUNTS = 20;
 
@@ -376,7 +474,8 @@ const GENERIC_CARD_QUERY_WORDS: ReadonlySet<string> = new Set([
 ]);
 
 const hasSpecificCardName = (text: string): boolean =>
-  tokens(text).some((token) => !GENERIC_CARD_QUERY_WORDS.has(token));
+  tokens(text).some((token) => !GENERIC_CARD_QUERY_WORDS.has(token)) ||
+  shortQualifierTokens(text).length > 0;
 
 /**
  * Extra generic vocabulary for balance questions outside the card scope
@@ -750,7 +849,19 @@ const isUnsupportedSubtypeQuery = (text: string): boolean =>
  */
 const hasUnmatchedQualifier = (text: string, account: GroundedAccount): boolean => {
   const owned = new Set(fullNameTokens(account.name));
-  return tokens(text).some((token) => !isGenericBalanceWord(token) && !owned.has(token));
+  // Single-character non-fillers ("Q", "1", "2") veto UNLESS they belong to
+  // the account's canonical name as standalone words ("Reserva 2" answers
+  // "saldo Reserva 2"; a lone qualifier never matches just because some
+  // other account's longer token contains it — matching never sees shorts).
+  const named = new Set(
+    fold(account.name)
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean),
+  );
+  return (
+    tokens(text).some((token) => !isGenericBalanceWord(token) && !owned.has(token)) ||
+    shortQualifierTokens(text).some((token) => !named.has(token))
+  );
 };
 
 const isFullyNamed = (text: string, account: GroundedAccount): boolean => {
@@ -944,7 +1055,14 @@ const renderAccountsListing = (scopeText: string, evidence: AccountsEvidence): s
   }
   // No name matched: a leftover specific token names something absent —
   // clarify with NO figures. A genuinely generic listing shows the pool.
-  if (tokens(scopeText).some((token) => !isGenericBalanceWord(token))) return notFound('conta');
+  // Single-character non-fillers count as leftovers for the same reason as
+  // in the balance path: a dropped "Q"/"2" must not widen into a listing.
+  if (
+    tokens(scopeText).some((token) => !isGenericBalanceWord(token)) ||
+    shortQualifierTokens(scopeText).length > 0
+  ) {
+    return notFound('conta');
+  }
   const listed = pool.slice(0, MAX_LISTED_ACCOUNTS);
   const lines = listed.map(renderAccountListLine).join('\n');
   const note = renderPartialNote(evidence, listed.length, pool.length);
@@ -1120,6 +1238,56 @@ export const renderAccountsAnswer = (text: string, evidence: AccountsEvidence | 
   const fundsPool = accounts.filter((account) => account.kind === 'bank' || account.kind === 'cash');
   const scopedMatched = fundsScoped ? matchAccountsByName(scopeText, fundsPool) : matched;
   const scopedPoolSize = fundsScoped ? fundsPool.length : accounts.length;
+  // TED-LOCAL-ACCOUNT-PARTIAL-BALANCE: the exact matcher above demands every
+  // long name token and the single-selection guard below demands the complete
+  // name — a partial ("saldo QA Aurora" for "QA Aurora banco") or an anaphoric
+  // ("e o saldo daquela conta") turn otherwise falls to notfound. Both are
+  // resolved here, cohesively and WITHOUT relaxing the financial guard:
+  // - bare anaphora reads ONLY with an unequivocal authoritative context
+  //   (exactly one account in the funds scope and nothing else specific in
+  //   the turn); with 2+ accounts it falls through and asks;
+  // - a significant partial reads ONLY when it singles out exactly one
+  //   account, and the unchanged unmatched-qualifier veto still drops any
+  //   turn naming something the account does not carry. No figures on
+  //   ambiguity, no borrowed balances, no invented names — ever.
+  if (scopedMatched.length === 0) {
+    const pool = fundsScoped ? fundsPool : accounts;
+    // Incomplete evidence vetoes the NEW resolutions below (round2): with a
+    // partial read (partial flag or omitted rows) a "unique" visible match
+    // may hide another candidate, so anaphora/partial single-selects are
+    // forbidden — the turn falls through and clarifies with NO figures.
+    // Existing exact-name proof is preserved as-is (it carries its own
+    // full-name + unmatched-qualifier guards plus the global partiality
+    // notes); no global warning or renderer is relaxed.
+    // NOTE (read-contract boundary): `total`-vs-rows is not signaled to this
+    // layer — the projection drops the route `total` and incompleteness
+    // arrives only via omitted rows. Workspace/inactive scoping lives
+    // upstream (workspace-scoped token, active-only default read, separate
+    // card store); grounding operates on scope-valid rows only, through the
+    // same pools as exact matching, and never invents its own filter.
+    const evidenceComplete = !evidence.partial && evidence.omittedCount === 0;
+    if (evidenceComplete) {
+      if (fundsScoped && isBareAnaphora(scopeText) && pool.length === 1 && pool[0]) {
+        const single = renderAccountLine(pool[0]);
+        const note = renderPartialNote(evidence, 1, scopedPoolSize);
+        return note ? `${single}\n${note}` : single;
+      }
+      const denuded = withoutAnaphora(scopeText);
+      const partial = matchSignificantPartial(denuded, pool);
+      if (partial.length === 1 && partial[0]) {
+        if (hasUnmatchedQualifier(denuded, partial[0])) {
+          return (
+            `Não encontrei essa conta. ` +
+            `Contas disponíveis: ${availableNames(accounts)}. ` +
+            `Qual delas você quer ver?${partialSuffix(evidence)}`
+          );
+        }
+        const single = renderAccountLine(partial[0]);
+        const note = renderPartialNote(evidence, 1, scopedPoolSize);
+        return note ? `${single}\n${note}` : single;
+      }
+    }
+  }
   if (scopedMatched.length === 1 && scopedMatched[0]) {
     // Singular funds selection requires the full name (like cards): a
     // shorter base ("Nubank?" with only "Nubank PJ" present) clarifies with
@@ -1136,7 +1304,11 @@ export const renderAccountsAnswer = (text: string, evidence: AccountsEvidence | 
     return note ? `${single}\n${note}` : single;
   }
   if (scopedMatched.length > 1) {
-    const { candidates, narrowed } = selectMostSpecific(scopeText, scopedMatched);
+    // `candidates` is reassigned below, never restored: once short labels
+    // filter the pool, the discarded accounts stay discarded for every
+    // downstream branch (no figures for "Reserva 1" when only "Reserva 2"
+    // homonyms survive).
+    let { candidates, narrowed } = selectMostSpecific(scopeText, scopedMatched);
     if (candidates.length === 1 && candidates[0]) {
       if (hasUnmatchedQualifier(scopeText, candidates[0]) || !isFullyNamed(scopeText, candidates[0])) {
         return (
@@ -1152,6 +1324,52 @@ export const renderAccountsAnswer = (text: string, evidence: AccountsEvidence | 
     const distinctNames = new Set(candidates.map((account) => fold(account.name)));
     if (candidates.length > 1 && distinctNames.size === 1) {
       return renderDuplicateClarification(candidates, 'conta', evidence);
+    }
+    // Short-label disambiguation (round3 + round4): the lenient matcher
+    // ignores one-character tokens, so "Reserva 1"/"Reserva 2" collide on
+    // "reserva". When the utterance carries short non-filler labels ("saldo
+    // Reserva 2"), the candidates whose canonical names own them all form
+    // the pool from here on — the original set is never restored. A single
+    // survivor is the exact full-name answer and resolves (leftovers still
+    // veto); zero survivors clarify with NO figures; several survivors
+    // re-run the duplicate guard on the FILTERED pool (homonyms clarify
+    // with NO figures) before any render/list.
+    if (candidates.length > 1) {
+      const shorts = shortQualifierTokens(scopeText);
+      if (shorts.length > 0) {
+        const disambiguated = candidates.filter((candidate) => {
+          const words = new Set(
+            fold(candidate.name)
+              .split(/[^a-z0-9]+/)
+              .filter(Boolean),
+          );
+          return shorts.every((token) => words.has(token));
+        });
+        if (disambiguated.length === 1 && disambiguated[0]) {
+          if (hasUnmatchedQualifier(scopeText, disambiguated[0])) {
+            return (
+              `Não encontrei essa conta. ` +
+              `Contas disponíveis: ${availableNames(accounts)}. ` +
+              `Qual delas você quer ver?${partialSuffix(evidence)}`
+            );
+          }
+          const single = renderAccountLine(disambiguated[0]);
+          const note = renderPartialNote(evidence, 1, scopedPoolSize);
+          return note ? `${single}\n${note}` : single;
+        }
+        if (disambiguated.length === 0) {
+          return (
+            `Não encontrei essa conta. ` +
+            `Contas disponíveis: ${availableNames(accounts)}. ` +
+            `Qual delas você quer ver?${partialSuffix(evidence)}`
+          );
+        }
+        const filteredNames = new Set(disambiguated.map((account) => fold(account.name)));
+        if (filteredNames.size === 1) {
+          return renderDuplicateClarification(disambiguated, 'conta', evidence);
+        }
+        candidates = disambiguated;
+      }
     }
     if (candidates.length > 1 && !narrowed) {
       // Explicitly mentioned distinct accounts (e.g. "saldo da conta
@@ -1204,7 +1422,12 @@ export const renderAccountsAnswer = (text: string, evidence: AccountsEvidence | 
   // unknown name survives as an unknown name ("banco Valor" with no such
   // account) instead of widening into a listing of other accounts.
   if (scopedMatched.length === 0 && !cardQuestion) {
-    const hasSpecificQualifier = tokens(scopeText).some((token) => !isGenericBalanceWord(token));
+    // Single-character non-fillers ("Q", "2") count as specific qualifiers
+    // even though `tokens()` drops them: the user named something, so a
+    // generic listing of other accounts' figures would invent an answer.
+    const hasSpecificQualifier =
+      tokens(scopeText).some((token) => !isGenericBalanceWord(token)) ||
+      shortQualifierTokens(scopeText).length > 0;
     if (hasSpecificQualifier) {
       return (
         `Não encontrei essa conta. ` +

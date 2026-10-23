@@ -23,6 +23,44 @@ import {
   type AccountDraftKind,
 } from '../mutations/account-creation.js';
 import {
+  blankNamedSpans,
+  governedNounIsForeign,
+} from '../mutations/account-domain-signal.js';
+import {
+  CATEGORY_CREATE_TOOL,
+  hasCategoryCreateSignal as hasCategoryCreationSignal,
+  parseCategoryCreation,
+  parseCategorySlotContribution,
+} from '../mutations/category-creation.js';
+import {
+  CATEGORY_RENAME_TOOL,
+  CATEGORY_RENAME_READ_FAILURE_TEXT,
+  categoryRenameAskNewNameText,
+  categoryRenameNoTransportText,
+  categoryRenameProposeSummary,
+  categoryRenameReadyNoProposalText,
+  categoryRenameSameNameText,
+  extractContextualCategoryName,
+  extractNewCategoryName,
+  hasCategoryRenameSignal,
+  isCategoryRenameDecisionToken,
+  isCategoryRenameForeignCommand,
+  isConfirmCategoryRenameText,
+  isFullCategoryRenameIntent,
+  isSameCategoryName,
+  parseCategoryRename,
+  resolveCategoryRenameTarget,
+} from '../mutations/category-rename.js';
+import {
+  CATEGORY_DEACTIVATE_TOOL,
+  CATEGORY_DEACTIVATE_READ_FAILURE_TEXT,
+  categoryDeactivateProposeSummary,
+  hasCategoryDeactivateSignal,
+  isCategoryDeactivateCancelText,
+  resolveCategoryDeactivateTarget,
+} from '../mutations/category-deactivation.js';
+import { TRANSACTION_DESCRIPTION_TOOL, hasTransactionDescriptionSignal, parseTransactionDescriptionEdit, resolveTransactionDescriptionTarget, resolveTransactionTargetChoice, type TransactionTargetOption } from '../mutations/transaction-description.js';
+import {
   ACCOUNT_DEACTIVATE_TOOL,
   DEACTIVATE_READ_FAILURE_TEXT,
   deactivateNoTransportText,
@@ -32,8 +70,24 @@ import {
   isConfirmDeactivateText,
   resolveDeactivationTarget,
 } from '../mutations/account-deactivation.js';
-import { normalizeEntities, resolveMutationEntities, revalidateResolvedEntities, entityResolutionSignals, type EntityReader, type EntityResolutionTrace, type EntitySummary } from '../mutations/entity-resolver.js';
+import {
+  ACCOUNT_RENAME_TOOL,
+  extractNewAccountName,
+  hasAccountRenameSignal,
+  isConfirmRenameText,
+  isSameAccountName,
+  RENAME_READ_FAILURE_TEXT,
+  renameAskNewNameText,
+  renameNoTransportText,
+  renameProposeSummary,
+  renameReadyNoProposalText,
+  renameSameNameText,
+  resolveRenameTarget,
+} from '../mutations/account-rename.js';
+import { normalizeEntities, resolveMutationEntities, revalidateResolvedEntities, entityResolutionSignals, type EntityReader, type EntityResolutionTrace, type EntitySummary, type ResolvableMutation } from '../mutations/entity-resolver.js';
 import type { MutationApiClient, MutationIdentity } from '../mutations/mutation-api-client.js';
+import type { MutationExpectedContext } from '../mutations/mutation-executor.js';
+import { requiresExpectedEntity, resolveExpectedContext } from '../mutations/expected-context.js';
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
 import {
   CONFIRMATION_OPERATION_SKEW_MS,
@@ -62,13 +116,14 @@ import {
   type MutationDraftStore,
 } from '../mutations/mutation-draft.js';
 import type { MutationDraftChannelMessage, MutationReceipt, PendingOperationPresentation } from '@pi-finance/llm-contracts';
+import { TED_APPROVAL_TOOLS } from '@pi-finance/llm-contracts';
 import { buildApprovalPresentation } from '../mutations/approval-presentation.js';
 import { emitSanitizedEvent } from '../observability/events.js';
 import type { EvidenceEnvelope } from '../evidence/evidence-envelope.js';
 import { createGroundedResponseWithRetry } from '../responses/grounded-response.js';
 import { stripToolCallMarkup } from '../responses/tool-call-sanitizer.js';
-import { renderEmpty, renderInconclusive, renderMonthSummary, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, resolveDomainSubject, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
-import { UNSUPPORTED_YEAR_TEXT, routeIntent } from './intent-router.js';
+import { renderCategories, renderCategoryBreakdown, renderEmpty, renderInconclusive, renderMonthSummary, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, resolveDomainSubject, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
+import { breakdownKindForText, hasCardCreateSignal, hasCategoryCreateSignal, UNSUPPORTED_CARD_CREATE_TEXT, UNSUPPORTED_CATEGORY_MUTATION_TEXT, AMBIGUOUS_BREAKDOWN_KIND_TEXT, AMBIGUOUS_COMPOUND_REQUEST_TEXT, CONCEPT_CATEGORIES_TEXT, UNSUPPORTED_YEAR_TEXT, routeIntent } from './intent-router.js';
 import { TurnBudget, type RecoveryPermit, type ResolutionRecoveryRequest } from './turn-budget.js';
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
 import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
@@ -323,6 +378,13 @@ export type TurnResult = Readonly<{
      * from the LLM, never carries attestation material.
      */
     receipt?: MutationReceipt;
+    /**
+     * HIGH3: safe expected context (`tool` + pre-existing target id). It is
+     * attached to a proposal when a continuation plan has no operation name,
+     * and required on success so the gateway/PWA can bind the receipt rather
+     * than trusting the response alone. It carries no execution authority.
+     */
+    expected?: MutationExpectedContext;
   }>;
   /**
    * T3.1 (SPEC §14): set on the deterministic fail-closed read reply
@@ -385,6 +447,27 @@ const isIntentionConflictError = (error: unknown): boolean => {
     record.message.includes('approval.intention_conflict')
   );
 };
+
+/**
+ * Stale rename precondition: the account's CURRENT name no longer equals
+ * the hash-bound `expectedName` (typed `account.name_conflict`, 409). The
+ * authorized rename target moved — the turn answers deterministically and
+ * guides a fresh resolution. NEVER a blind retry, NEVER a new key: a new
+ * proposal only ever comes from a new user turn with a fresh read.
+ */
+const isNameConflictError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as { code?: unknown; statusCode?: unknown; message?: unknown };
+  if (record.code === 'account.name_conflict') return true;
+  return (
+    record.statusCode === 409 &&
+    typeof record.message === 'string' &&
+    record.message.includes('account.name_conflict')
+  );
+};
+
+export const RENAME_STALE_EXPECTED_NAME_TEXT =
+  'O nome da conta mudou enquanto a operação aguardava confirmação. Me diga de novo qual conta renomear e para qual nome.';
 
 // SPEC R03: a bare answer to the category clarification ("categoria Carne
 // Bovina") states a category explicitly but carries no amount, so it is not a
@@ -637,6 +720,34 @@ const isPureReadForDraft = (text: string): boolean => {
   if (MISSING_AMOUNT_READ_CUE_RE.test(folded)) return true;
   return false;
 };
+
+/**
+ * ROUND6 — closed verb list for the foreign-contribution veto (creation +
+ * deactivation verbs, mirroring the frozen domain guards without editing
+ * them). A verb here vetoes ONLY when its governed noun is foreign
+ * (`governedNounIsForeign`): a bare name follow-up ("nubank roxo") has no
+ * verb and never vetoes, and `hasCreationSignal === false` alone proves
+ * nothing — only the positive foreign-governance test vetoes.
+ */
+const ACCOUNT_FOREIGN_GOVERNING_VERBS: readonly string[] = [
+  'criar', 'cria', 'crie', 'criam', 'criamos', 'criei', 'criou',
+  'cadastrar', 'cadastra', 'cadastre', 'cadastrei',
+  'adicionar', 'adicione', 'abrir', 'abra', 'abri', 'abriu',
+  'nova', 'novo', 'abertura',
+  'desativar', 'desative', 'desativa', 'desativem', 'desativei', 'desativou',
+  'desativado', 'desativada', 'desativando',
+  'inativar', 'inative', 'inativa', 'inativem', 'inativado', 'inativada',
+  'deletei', 'deletou',
+  'apagar', 'apague', 'apaga', 'apaguem',
+  'excluir', 'exclua', 'exclui', 'excluam', 'excluido', 'excluida',
+  'deletar', 'delete', 'deleta', 'deletem',
+  'remover', 'remove', 'remova', 'removam',
+  'fechar', 'feche', 'fecha', 'fechem',
+  'encerrar', 'encerre', 'encerra', 'encerrem',
+];
+
+const foldForeignVetoText = (value: string): string =>
+  value.normalize('NFD').replace(new RegExp('[\\u0300-\\u036f]', 'g'), '').toLowerCase();
 
 /**
  * A follow-up value WITHOUT a finite verb ("2500", "2500 sendo 10x 250 com
@@ -1054,6 +1165,31 @@ export class ConversationOrchestrator {
     // non-balance queries, which stay with the legacy renderers below.
     const accountsAnswer = renderAccountsAnswer(input.text, extractAccountsEvidence(envelope));
     if (accountsAnswer !== null) return accountsAnswer;
+    // Breakdown por categoria tem precedência: usa o analytics real, nunca o
+    // resumo simples nem o extrato. Vazio honesto com sujeito próprio.
+    const wantsBreakdown = plan.requestedOperations.some((operation) => operation.name === 'analytics_category_breakdown');
+    if (wantsBreakdown) {
+      const item = envelope.items.find((entry) => entry.source === 'api.analytics.category-breakdown');
+      if (item && item.status === 'ok') {
+        const rendered = renderCategoryBreakdown(item.data);
+        if (rendered !== null) return rendered;
+        return null;
+      }
+      if (item && item.status === 'empty' && item.reason !== undefined) {
+        return renderReadAbsence(item.reason, breakdownKindForText(input.text) === 'income' ? 'receitas por categoria' : 'gastos por categoria');
+      }
+    }
+    // Catálogo de categorias: lista determinística de nomes, nunca ids.
+    // Vazio usa a ausência genérica (sujeito `categorias` já correto).
+    const wantsCategories = plan.requestedOperations.some((operation) => operation.name === 'list_categories');
+    if (wantsCategories) {
+      const item = envelope.items.find((entry) => entry.source === 'api.categories');
+      if (item && item.status === 'ok') {
+        const rendered = renderCategories(item.data);
+        if (rendered !== null) return rendered;
+        return null;
+      }
+    }
     const ok = envelope.items.filter((item) => item.status === 'ok').map((item) => item.data);
     if (ok.length === 0) {
       // A04/R04: a typed read absence is answered deterministically and names
@@ -1343,10 +1479,16 @@ export class ConversationOrchestrator {
   // --- MutationDraft multi-turno (SPEC §7.8, ADR-014) ---
 
   private draftContext(input: TurnInput): DraftContext {
+    // ADR-027 D3: bind drafts to the conversation ONLY for private views;
+    // collective (workspace) drafts keep the global default (no conversation
+    // scope) so existing behaviour is unchanged.
+    const conversationId =
+      input.audience?.visibility === 'private' ? input.audience.conversationId : undefined;
     return {
       workspaceId: input.workspaceId,
       actorId: input.actorId,
       deviceId: input.deviceId ?? null,
+      ...(conversationId ? { conversationId } : {}),
     };
   }
 
@@ -1481,10 +1623,10 @@ export class ConversationOrchestrator {
    *   re-resolves and confirms the still-pending op normally. Never executes
    *   here, so concurrent losers can never double-effect even against a
    *   transport without dedup;
-   * - `succeeded` + unexpired + valid/absent receipt → verbatim replay;
+   * - `succeeded` + unexpired + VALID receipt only → verbatim replay;
    * - `succeeded` + expired (tombstone) or invalid receipt → reconcile by
-   *   operationId: terminal ⇒ replay (receipt when valid, else receipt-less
-   *   — the binding, written strictly post-success, is the proof); still
+   *   operationId: terminal ⇒ replay with a VALID coherent receipt only; any other receipt ⇒ inconclusive (a binding alone never proves WHAT succeeded)
+   *   — the binding, written strictly post-success, proves nothing without a valid receipt; still
    *   active or unreadable listing ⇒ inconclusive, original op preserved.
    */
   private async replayConfirmationBinding(args: {
@@ -1532,12 +1674,82 @@ export class ConversationOrchestrator {
     }
     const expired = isConfirmationExpired(prior, nowMs);
     const validated = validateConfirmationReceipt(prior.receiptJson, prior.operationId);
-    if (prior.status === 'succeeded' && !expired && (validated.kind === 'valid' || validated.kind === 'absent')) {
+    if (prior.status === 'succeeded' && !expired && validated.kind === 'valid') {
+      const replayReceipt =
+        validated.kind === 'valid' ? (validated.receipt as unknown as Record<string, unknown>) : undefined;
+      const replayKind = typeof replayReceipt?.mutationKind === 'string' ? replayReceipt.mutationKind : undefined;
+      // HIGH3 (round 4): the replay binds against the PERSISTED context —
+      // the stored tool (+ target id) written at settle time, falling back
+      // to the validated receipt's own kind/entity. A stored tool that
+      // disagrees with the receipt kind is a swapped result: reconcile,
+      // never verbatim replay. Any marker WITHOUT a validated receipt
+      // (pruned/absent/legacy) fails closed as inconclusive in the
+      // reconcile path below — never a success claim, never a false
+      // success. No listing lookup here: the persisted binding is the
+      // authority on replay.
+      if (replayKind !== undefined && !(TED_APPROVAL_TOOLS as readonly string[]).includes(replayKind)) {
+        return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_receipt_kind_rejected');
+      }
+      const storedTool = typeof prior.tool === 'string' && prior.tool.trim() ? prior.tool.trim() : undefined;
+      if (storedTool !== undefined && replayKind !== undefined && replayKind !== storedTool) {
+        return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_expected_context_mismatch');
+      }
+      const replayTool = storedTool ?? replayKind;
+      // No proof of WHAT succeeded (legacy marker: no stored tool, no
+      // receipt kind): never a success claim — inconclusive, never success.
+      if (replayTool === undefined) {
+        return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_expected_context_missing');
+      }
+      const replayEntity = replayReceipt?.entity as { type?: unknown; id?: unknown } | undefined;
+      // entity.type/kind coherence on every replay: account tools bind
+      // accounts, every other approval tool binds transactions.
+      if (validated.kind === 'valid') {
+        const replayEntityType = typeof replayEntity?.type === 'string' ? replayEntity.type : undefined;
+        const expectsAccount =
+          replayKind === 'accounts.create' || replayKind === 'accounts.update' || replayKind === 'accounts.deactivate';
+        if (
+          (expectsAccount && replayEntityType !== 'account') ||
+          (!expectsAccount && replayEntityType !== 'transaction')
+        ) {
+          return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_receipt_kind_rejected');
+        }
+      }
+      const storedEntityId =
+        typeof prior.entityId === 'string' && prior.entityId.trim() ? prior.entityId.trim() : undefined;
+      const replayEntityId =
+        replayTool !== undefined && requiresExpectedEntity(replayTool) && typeof replayEntity?.id === 'string' && replayEntity.id.trim()
+          ? replayEntity.id.trim()
+          : storedEntityId;
+      // A stored target that disagrees with the receipt entity is a swapped
+      // result: reconcile, never verbatim replay.
+      if (
+        storedEntityId !== undefined &&
+        typeof replayEntity?.id === 'string' &&
+        replayEntity.id.trim() &&
+        replayEntity.id.trim() !== storedEntityId
+      ) {
+        return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_expected_context_mismatch');
+      }
+      if (
+        replayTool !== undefined &&
+        requiresExpectedEntity(replayTool) &&
+        (replayReceipt === undefined || replayEntityId === undefined || replayEntity?.type !== 'account')
+      ) {
+        return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_expected_context_missing');
+      }
       return this.completeTurn(input, plan, startedAt, base, {
         mutation: freeze({
           operationId: prior.operationId,
           status: 'succeeded' as const,
-          ...(validated.kind === 'valid' ? { receipt: validated.receipt as unknown as MutationReceipt } : {}),
+          ...(replayReceipt !== undefined ? { receipt: replayReceipt as unknown as MutationReceipt } : {}),
+          ...(replayTool !== undefined
+            ? {
+                expected: {
+                  tool: replayTool,
+                  ...(replayEntityId !== undefined ? { entityId: replayEntityId } : {}),
+                },
+              }
+            : {}),
         }),
         response: freeze({ text: renderMutationResult('succeeded', 'operação', validated.kind === 'valid' ? validated.receipt as unknown as { mutationKind?: unknown } : undefined) }),
       });
@@ -1570,10 +1782,15 @@ export class ConversationOrchestrator {
         listingUnreadable ? 'confirmation_reconcile_unreadable' : 'confirmation_binding_preserved',
       );
     }
-    // Bound operation terminal: success is proven ONLY for a `succeeded`
-    // marker (written strictly post-success). A `reserved` marker proves
-    // nothing — inconclusive, never a success claim (criterion 6).
-    if (prior.status !== 'succeeded') {
+    // Bound operation terminal: a `reserved` marker proves nothing —
+    // inconclusive, never a success claim (criterion 6). A `succeeded`
+    // marker replays ONLY with a valid, coherent bound receipt (the proof
+    // of WHAT succeeded); any other receipt settles inconclusive with
+    // zero execute. No receipt is invented, B is untouched.
+    if (prior.status !== 'succeeded' || validated.kind !== 'valid') {
+      if (prior.status === 'succeeded') {
+        return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_receipt_unverifiable');
+      }
       try {
         store?.settleConfirmation?.({
           ctx: this.draftContext(input),
@@ -1588,11 +1805,66 @@ export class ConversationOrchestrator {
       }
       return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_reserved_terminal');
     }
+    // From here the receipt is `valid`: coherence checks against the
+    // bound original tool/entity precede the verbatim replay below —
+    // a financial success is never claimed without a valid bound receipt.
+    const fbReceipt = validated.receipt as unknown as Record<string, unknown>;
+    const fbKind = typeof fbReceipt.mutationKind === 'string' ? fbReceipt.mutationKind : undefined;
+    if (fbKind === undefined || !(TED_APPROVAL_TOOLS as readonly string[]).includes(fbKind)) {
+      return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_receipt_kind_rejected');
+    }
+    const fbStoredTool = typeof prior.tool === 'string' && prior.tool.trim() ? prior.tool.trim() : undefined;
+    if (fbStoredTool !== undefined && fbStoredTool !== fbKind) {
+      return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_expected_context_mismatch');
+    }
+    const fbEntity = fbReceipt.entity as { type?: unknown; id?: unknown } | undefined;
+    const fbEntityType = typeof fbEntity?.type === 'string' ? fbEntity.type : undefined;
+    const fbExpectsAccount =
+      fbKind === 'accounts.create' || fbKind === 'accounts.update' || fbKind === 'accounts.deactivate';
+    if (
+      (fbExpectsAccount && fbEntityType !== 'account') ||
+      (!fbExpectsAccount && fbEntityType !== 'transaction')
+    ) {
+      return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_receipt_kind_rejected');
+    }
+    const fbEntityId = typeof fbEntity?.id === 'string' && fbEntity.id.trim() ? fbEntity.id.trim() : undefined;
+    const fbStoredEntityId =
+      typeof prior.entityId === 'string' && prior.entityId.trim() ? prior.entityId.trim() : undefined;
+    if (
+      fbStoredEntityId !== undefined &&
+      (fbEntityId === undefined || fbEntityId !== fbStoredEntityId)
+    ) {
+      return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_expected_context_mismatch');
+    }
+    if (
+      fbStoredTool !== undefined &&
+      requiresExpectedEntity(fbStoredTool) &&
+      (fbEntityId === undefined || fbEntityType !== 'account')
+    ) {
+      return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_expected_context_missing');
+    }
+    if (
+      fbStoredTool === undefined &&
+      fbKind !== undefined &&
+      requiresExpectedEntity(fbKind) &&
+      (fbEntityId === undefined || fbEntityType !== 'account')
+    ) {
+      return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_expected_context_missing');
+    }
+    const fbReplayEntityId = fbStoredEntityId ?? fbEntityId;
     return this.completeTurn(input, plan, startedAt, base, {
       mutation: freeze({
         operationId: prior.operationId,
         status: 'succeeded' as const,
         ...(validated.kind === 'valid' ? { receipt: validated.receipt as unknown as MutationReceipt } : {}),
+        ...(fbKind !== undefined
+          ? {
+              expected: {
+                tool: fbStoredTool ?? fbKind,
+                ...(fbReplayEntityId !== undefined ? { entityId: fbReplayEntityId } : {}),
+              },
+            }
+          : {}),
       }),
       response: freeze({ text: renderMutationResult('succeeded') }),
     });
@@ -1788,6 +2060,11 @@ export class ConversationOrchestrator {
     // and the fresh flow opens it as a deactivation draft. Against a
     // deactivation draft the turn continues (target re-resolution happens
     // in `continueDeactivateDraft`, never here).
+    // accounts.update (account-only path): an explicit rename turn always
+    // replaces — the fresh flow re-resolves target + new name against the
+    // authoritative list on the same turn, so a re-phrasing never inherits
+    // stale slots. Non-signal follow-ups (bare names) continue below.
+    if (hasAccountRenameSignal(text)) return true;
     if (hasAccountDeactivationSignal(text)) {
       if (draft.tool !== ACCOUNT_DEACTIVATE_TOOL && draft.resolvedArgs.kind !== 'account-deactivate') return true;
       return false;
@@ -1935,10 +2212,29 @@ export class ConversationOrchestrator {
     if (draft.tool === ACCOUNT_CREATE_TOOL || draft.resolvedArgs.kind === 'account') {
       return this.executeProposeAccount(input, plan, startedAt, base, draft, client);
     }
+    // accounts.update (account-only path): rename drafts propose through
+    // the manual-only rename handoff (never auto-executed).
+    if (draft.tool === ACCOUNT_RENAME_TOOL || draft.resolvedArgs.kind === 'account-rename') {
+      return this.executeProposeRename(input, plan, startedAt, base, draft, client);
+    }
     // accounts.deactivate (account-only path): deactivation drafts propose
     // through the manual-only deactivation handoff (never auto-executed).
     if (draft.tool === ACCOUNT_DEACTIVATE_TOOL || draft.resolvedArgs.kind === 'account-deactivate') {
       return this.executeProposeDeactivate(input, plan, startedAt, base, draft, client);
+    }
+    // categories.create (fatia categories-create-v2-endtoend): category
+    // drafts propose through the manual-only category handoff (never
+    // auto-executed).
+    if (draft.tool === CATEGORY_CREATE_TOOL || draft.resolvedArgs.kind === 'category-create') {
+      return this.executeProposeCategory(input, plan, startedAt, base, draft, client);
+    }
+    // categories.update (name-only): category rename drafts propose through
+    // the manual-only rename handoff (never auto-executed).
+    if (draft.tool === CATEGORY_RENAME_TOOL || draft.resolvedArgs.kind === 'category-rename') {
+      return this.executeProposeCategoryRename(input, plan, startedAt, base, draft, client);
+    }
+    if (draft.tool === CATEGORY_DEACTIVATE_TOOL || draft.resolvedArgs.kind === 'category-deactivate') {
+      return this.executeProposeCategoryDeactivate(input, plan, startedAt, base, draft, client);
     }
     const store = this.dependencies.draftStore!;
     const maxAttempts = this.dependencies.draftMaxProposeAttempts ?? DEFAULT_MAX_PROPOSE_ATTEMPTS;
@@ -2394,6 +2690,21 @@ export class ConversationOrchestrator {
   }
 
   /**
+   * ROUND6 — foreign-contribution veto for an ACTIVE account draft. True
+   * when a verb's governed noun belongs to another domain ("Desative
+   * categoria ...", "crie parcelamento ...", the "conta a pagar" payable
+   * idiom): the follow-up contributes NOTHING — the draft stays intact and
+   * the turn clarifies. Quoted/named spans are blanked first, so `"Conta a
+   * Pagar"` and `chamada Categoria ...` keep working. A bare name ("nubank
+   * roxo") carries no verb and never vetoes here.
+   */
+  private accountForeignContributionVeto(text: string): boolean {
+    const folded = foldForeignVetoText(text ?? '');
+    if (!folded.trim()) return false;
+    return governedNounIsForeign(blankNamedSpans(folded), ACCOUNT_FOREIGN_GOVERNING_VERBS);
+  }
+
+  /**
    * accounts.create (account-only path): what this turn contributes to an
    * account draft, if anything. A contribution is a balance the user WROTE
    * (signed number, explicit zero), a name for a missing name, a kind marker
@@ -2418,6 +2729,11 @@ export class ConversationOrchestrator {
     if (!missingName && !missingBalance && !missingKind) {
       return isConfirmCreateText(text) ? { confirm: true } : null;
     }
+    // ROUND6 — a foreign-governed turn ("Desative categoria ...", "crie
+    // parcelamento ...", the payable idiom) contributes NOTHING to an
+    // account draft: no name, no amount, no kind — the draft survives
+    // untouched and the continuation clarifies honestly.
+    if (this.accountForeignContributionVeto(text)) return null;
     let name: string | undefined;
     let initialBalanceCents: number | undefined;
     let accountKind: AccountDraftKind | undefined;
@@ -2839,6 +3155,811 @@ export class ConversationOrchestrator {
   }
 
   /**
+   * categories.create (fatia categories-create-v2-endtoend): authoritative
+   * category catalog, fail-closed on unreadable payloads. Single call
+   * returns the COMPLETE catalog (no pagination params on the reader seam);
+   * resolution below requires an exact folded match — never a partial.
+   */
+  private async readCategoryCatalog(): Promise<{ categories: EntitySummary[]; scope?: string } | null> {
+    const reader = this.entityReaderOrClosed();
+    try {
+      const categories = normalizeEntities(await reader.listCategories());
+      const scope = reader.scope?.workspaceId;
+      return scope ? { categories, scope } : { categories };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * categories.create: fresh flow from an explicit creation turn. Persists a
+   * `category-create` draft and clarifies missing kind/parent; a complete
+   * turn with transport resolves the parent against the FULL catalog and
+   * proposes immediately. NUNCA auto_execute — manual-only (no eligibility
+   * check at all), idempotency key derived from the draft.
+   */
+  private async categoryFreshFlow(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    client: MutationApiClient | null,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const parsed = parseCategoryCreation(input.text ?? '');
+    const now = this.draftNowMs();
+    const identity = {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      deviceId: input.deviceId ?? null,
+    };
+    // Parent resolution happens BEFORE persisting a resolvable draft: an
+    // explicit parent query must match EXACTLY one catalog entry (folded,
+    // trimmed). Zero or 2+ matches clarify — never infer by partial.
+    let parentCategoryId: string | undefined;
+    let parentCategoryName: string | undefined;
+    let parentClarification: string | undefined;
+    if (parsed.parentQuery) {
+      const read = await this.readCategoryCatalog();
+      if (!read) {
+        return this.completeTurn(input, plan, startedAt, base, {
+          response: freeze({ text: 'Não foi possível carregar suas categorias agora. Tente de novo em instantes.' }),
+        });
+      }
+      const resolved = this.resolveCategoryParent(parsed.parentQuery, read.categories, parsed.kind, input.workspaceId);
+      if (resolved.kind === 'resolved') {
+        if (parsed.kind !== undefined && resolved.category.kind !== undefined && resolved.category.kind !== parsed.kind) {
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: 'Tipo de categoria pai incompativel.' }),
+          });
+        }
+        parentCategoryId = resolved.category.id;
+        parentCategoryName = resolved.category.name;
+      } else if (resolved.kind === 'ambiguous') {
+        parentClarification = `Encontrei mais de uma categoria parecida com "${parsed.parentQuery}": ${resolved.options.slice(0, 3).join(', ')}. Diga o nome exato da categoria pai ou "sem pai".`;
+      } else {
+        parentClarification = 'Não encontrei a categoria pai.';
+      }
+    }
+    // R7-F3: a SUBcategoria without an explicit parent clause requires a
+    // parent — clarify instead of persisting a silent macro. "sem pai" is
+    // only a valid decision as an explicit answer to this clarification
+    // (handled in the continuation), never a fresh-turn root.
+    if (parsed.requiresParent && parentCategoryId === undefined && parentClarification === undefined) {
+      parentClarification = parsed.name
+        ? `Subcategoria precisa de uma categoria pai. Diga o nome exato da categoria pai para “${parsed.name}” ou confirme criar como macro.`
+        : 'Subcategoria precisa de uma categoria pai. Diga o nome exato da categoria pai ou confirme criar como macro.';
+    }
+    // R7-F3: the sub-requires-parent gate counts as a pending parent
+    // even without an explicit parent query (mirrors the continuation's
+    // `?? '?'` sentinel so `missing` blocks the proposal).
+    const subParentPending = parentClarification !== undefined && parsed.requiresParent === true && parsed.parentQuery === undefined;
+    const missing = this.categoryMissingFields({
+      name: parsed.name,
+      kind: parsed.kind,
+      parentQuery: parentClarification !== undefined ? (parsed.parentQuery ?? '?') : undefined,
+      parentResolved: parentCategoryId !== undefined,
+      hasParentQuery: parsed.parentQuery !== undefined || subParentPending,
+    });
+    // Parent clarification precedes the generic question when it fired.
+    const question = parentClarification ?? this.categoryQuestion(missing, parsed.name);
+    const candidate = buildDraftRecord({
+      ...identity,
+      intentionId: input.intentionId,
+      ...(input.audience?.visibility === 'private' ? { conversationId: input.audience.conversationId } : {}),
+      tool: CATEGORY_CREATE_TOOL,
+      resolvedArgs: {
+        kind: 'category-create',
+        amountCents: 0,
+        description: parsed.name ?? '',
+        date: '',
+        ...(parsed.name ? { categoryName: parsed.name } : {}),
+        ...(parsed.kind ? { categoryKind: parsed.kind } : {}),
+        ...(parsed.parentQuery ? { parentQuery: parsed.parentQuery } : {}),
+        ...(parsed.requiresParent ? { requiresParent: true } : {}),
+        ...(parentCategoryId ? { parentCategoryId } : {}),
+        ...(parentCategoryName ? { parentCategoryName } : {}),
+      },
+      missingFields: [...missing],
+      question,
+      ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+      nowMs: now,
+    });
+    const { record } = store.getOrCreate(candidate);
+    if (missing.length === 0) {
+      if (!client) return this.clarifyDraft(input, plan, startedAt, base, record, `Criar a categoria “${parsed.name}” (${parsed.kind === 'income' ? 'receita' : 'despesa'})${parentCategoryName ? ` em “${parentCategoryName}”` : ''}? Confirme para eu propor.`);
+      const cas = store.cas(record.draftId, 'active', 'proposing', {
+        updatedAt: new Date(now).toISOString(),
+        lastIntentionId: input.intentionId,
+      });
+      if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+      return this.executeProposeCategory(input, plan, startedAt, base, cas.record, client);
+    }
+    return this.clarifyDraft(input, plan, startedAt, base, record, question);
+  }
+
+  private categoryMissingFields(input: {
+    name?: string;
+    kind?: 'expense' | 'income';
+    parentQuery?: string;
+    parentResolved?: boolean;
+    hasParentQuery?: boolean;
+  }): readonly string[] {
+    const missing: string[] = [];
+    if (!input.name?.trim()) missing.push('name');
+    if (input.kind !== 'expense' && input.kind !== 'income') missing.push('kind');
+    // An explicit parent that did not resolve exactly blocks the proposal
+    // until the user confirms the exact name or drops it ("sem pai").
+    if (input.hasParentQuery && !input.parentResolved) missing.push('parentId');
+    return missing;
+  }
+
+  private categoryQuestion(missing: readonly string[], name?: string): string {
+    if (missing.includes('name')) return 'Qual o nome da categoria que você quer criar?';
+    if (missing.includes('kind')) return `A categoria “${name ?? 'nova'}” é de despesa ou de receita?`;
+    if (missing.includes('parentId')) return 'Diga o nome exato da categoria pai ou “sem pai”.';
+    return 'Confirme para eu propor a criação da categoria.';
+  }
+
+  private isEligibleCategoryParent(
+    category: EntitySummary,
+    kind?: 'expense' | 'income',
+    scope?: string,
+  ): boolean {
+    if (category.parentId) return false;
+    if (category.isActive === false) return false;
+    if (typeof category.status !== 'string' || category.status.trim().toLowerCase() !== 'active') return false;
+    if (typeof category.kind !== 'string' || (category.kind !== 'expense' && category.kind !== 'income')) return false;
+    if (kind && category.kind.trim() !== kind) return false;
+    if (!scope || typeof category.scopeId !== 'string' || category.scopeId.trim() !== scope.trim()) return false;
+    return true;
+  }
+
+  private resolveCategoryParent(
+    query: string,
+    categories: readonly EntitySummary[],
+    kind?: 'expense' | 'income',
+    scope?: string,
+  ): { kind: 'resolved'; category: EntitySummary } | { kind: 'ambiguous'; options: string[] } | { kind: 'missing' } {
+    const fold = (value: string): string =>
+      value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    const needle = fold(query);
+    if (!needle) return { kind: 'missing' };
+    if (!scope) return { kind: 'missing' };
+    const eligible = categories.filter((category) => this.isEligibleCategoryParent(category, kind, scope));
+    const exact = eligible.filter((category) => fold(category.name) === needle);
+    if (exact.length === 1) return { kind: 'resolved', category: exact[0]! };
+    if (exact.length > 1) return { kind: 'ambiguous', options: exact.map((category) => category.name) };
+    return { kind: 'missing' };
+  }
+
+  /**
+   * categories.create: slot-fill continuation for an ACTIVE category draft.
+   * Same machinery as the account continuation (revision-guarded writes,
+   * deterministic questions, atomic CAS, recoverable propose handoff); only
+   * the slots differ (`categoryName`/`categoryKind`/`parentCategoryId`,
+   * never amounts/accounts). A "sem pai" answer drops the parent query.
+   */
+  private async continueCategoryDraft(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const text = input.text ?? '';
+    if (isCancelText(text)) {
+      return this.runCancelTurn(input, plan, client, startedAt, base, text);
+    }
+    if (isResetText(text)) {
+      store.update(draft.draftId, {
+        status: 'replaced',
+        updatedAt: new Date(this.draftNowMs()).toISOString(),
+        lastIntentionId: input.intentionId,
+      });
+      return this.categoryFreshFlow(input, plan, startedAt, base, client);
+    }
+    // R7-F1: slot-fill reads the contextual contribution (bare kind/name/
+    // parent answers carry no verb), never the fresh-turn detector — a
+    // "de despesa" follow-up fills kind instead of being ignored.
+    // Structural: an authoritative `confirmation` plan is a DECISION, never a
+    // slot contribution — parsing "confirmo"/"autorizo" as a name would
+    // overwrite the draft. Contribution stays empty; args are preserved.
+    const contrib = plan.mode === 'confirmation'
+      ? ({} as ReturnType<typeof parseCategorySlotContribution>)
+      : parseCategorySlotContribution(text);
+    // Slot-aware context (subcategory parent fix): when the draft is still
+    // missing its parent, a bare exact category name (or "pai X", already
+    // parsed as parentQuery) is treated as the PARENT query, not as a new
+    // child name. This preserves the child name already stored and prevents
+    // foreign commands/decisions from being stolen into the name slot.
+    if (
+      plan.mode !== 'confirmation' &&
+      contrib.name &&
+      !contrib.kind &&
+      !contrib.parentQuery &&
+      !contrib.dropParent &&
+      draft.resolvedArgs.parentCategoryId === undefined &&
+      (draft.resolvedArgs.requiresParent === true || draft.resolvedArgs.parentQuery !== undefined)
+    ) {
+      // Interpret the bare response as a parent query, not a child name, even
+      // when it is unknown or ambiguous: the resolver clarifies afterwards.
+      // Never rename the child while the parent is not resolved.
+      (contrib as { parentQuery?: string }).parentQuery = contrib.name;
+      delete (contrib as { name?: string }).name;
+    }
+    // "sem pai" drops the pending parent query explicitly.
+    const dropParent = contrib.dropParent ?? /\bsem\s+pai\b/i.test(text);
+    const nextName = contrib.name ?? draft.resolvedArgs.categoryName;
+    const nextKind = contrib.kind ?? draft.resolvedArgs.categoryKind;
+    let parentCategoryId = draft.resolvedArgs.parentCategoryId;
+    let parentCategoryName = draft.resolvedArgs.parentCategoryName;
+    let nextParentQuery = dropParent ? undefined : (contrib.parentQuery ?? draft.resolvedArgs.parentQuery);
+    let read: { categories: any[]; scope?: string } | null = null;
+    let parentClarification: string | undefined;
+    let resolvedParentId: string | undefined;
+    let resolvedParentName: string | undefined;
+    let parentResolvedThisTurn = false;
+    if (dropParent) {
+      parentCategoryId = undefined;
+      parentCategoryName = undefined;
+    } else if (contrib.parentQuery) {
+      read = await this.readCategoryCatalog();
+      if (!read) {
+        return this.clarifyDraft(input, plan, startedAt, base, draft, 'Não foi possível carregar suas categorias agora. Tente de novo em instantes.');
+      }
+      const resolved = this.resolveCategoryParent(contrib.parentQuery, read.categories, nextKind, input.workspaceId);
+      if (resolved.kind === 'resolved') {
+        const effectiveKind = nextKind;
+        if (effectiveKind !== undefined && resolved.category.kind !== undefined && resolved.category.kind !== effectiveKind) {
+          return this.clarifyDraft(input, plan, startedAt, base, draft, 'Tipo de categoria pai incompativel.');
+        }
+        parentCategoryId = resolved.category.id;
+        parentCategoryName = resolved.category.name;
+        resolvedParentId = resolved.category.id;
+        resolvedParentName = resolved.category.name;
+        parentResolvedThisTurn = true;
+      } else if (resolved.kind === 'ambiguous') {
+        parentCategoryId = undefined;
+        parentCategoryName = undefined;
+          parentClarification = `Encontrei mais de uma categoria parecida com "${contrib.parentQuery}": ${resolved.options.slice(0, 3).join(', ')}. Diga o nome exato da categoria pai ou "sem pai".`;
+      } else {
+        parentCategoryId = undefined;
+        parentCategoryName = undefined;
+        parentClarification = 'Não encontrei a categoria pai.';
+      }
+    }
+    // Late kind arrival/change: revalidate an already-resolved parent against
+    // the current catalog and kind before proposing. Incompatibility invalidates
+    // and resets the parent slot/requiresParent (no "API will catch later").
+
+    let invalidateParent = false;
+    const existingParentId = parentCategoryId ?? draft.resolvedArgs.parentCategoryId;
+    if (!dropParent && !parentClarification && contrib.kind && existingParentId) {
+      const read = await this.readCategoryCatalog();
+      const parent = read?.categories.find((category) => category.id === existingParentId);
+      const baseEligible = !!parent && this.isEligibleCategoryParent(parent, undefined, input.workspaceId);
+      const kindMismatch = baseEligible && !!contrib.kind && typeof parent.kind === 'string' && parent.kind.trim() !== contrib.kind;
+      if (!baseEligible || kindMismatch) {
+        invalidateParent = true;
+        parentCategoryId = undefined;
+        parentCategoryName = undefined;
+        nextParentQuery = '?';
+        parentClarification = kindMismatch
+          ? `A categoria pai "${parent!.name}" e de ${parent!.kind === "income" ? "receita" : "despesa"}, diferente do tipo pedido. Escolha outra categoria pai do mesmo tipo ou diga "sem pai".`
+          : 'A categoria pai informada nao esta mais disponivel. Diga o nome exato da categoria pai ou "sem pai".';
+      }
+    }
+    const draftRequiresParent = !dropParent && (draft.resolvedArgs.requiresParent === true || invalidateParent);
+    const missing = this.categoryMissingFields({
+      ...(nextName ? { name: nextName } : {}),
+      ...(nextKind ? { kind: nextKind } : {}),
+      ...(parentClarification !== undefined || (nextParentQuery && !parentCategoryId) || (draftRequiresParent && parentCategoryId === undefined) ? { parentQuery: nextParentQuery ?? '?' } : {}),
+      ...(parentCategoryId !== undefined ? { parentResolved: true } : {}),
+      ...(nextParentQuery !== undefined || draftRequiresParent ? { hasParentQuery: true } : {}),
+    });
+    const question = parentClarification ?? this.categoryQuestion(missing, nextName);
+    const stamp = new Date(this.draftNowMs()).toISOString();
+    // R7-F5: revision-guarded continuation write (parity with the account
+    // flow): re-reads the CURRENT draft inside the write, records field
+    // provenance for contributed slots, and answers a lost race from the
+    // current state instead of overwriting it.
+    if ((parentCategoryId ?? draft.resolvedArgs.parentCategoryId) && !read) {
+      read = await this.readCategoryCatalog();
+    }
+    const written = this.writeDraftContinuation(draft.draftId, (current) => {
+      const prev = current.resolvedArgs;
+      // P2-CAS: reapply ONLY this turn's contributions over the CURRENT
+      // state; never inherit stale closure values from the revision read
+      // before the (possibly deferred) parent catalog resolution.
+      const appliedName = contrib.name !== undefined ? contrib.name : prev.categoryName;
+      const appliedKind = contrib.kind !== undefined ? contrib.kind : prev.categoryKind;
+      // CAS deferred guard: revalidate any chosen parent against the CURRENT
+      // kind/workspace/status/root before writing. A stale resolved parent
+      // (resolved under an older kind) is cleared instead of being proposed.
+      let chosenParentInvalid = false;
+      const candidateParentId = dropParent || invalidateParent
+        ? undefined
+        : (parentResolvedThisTurn ? resolvedParentId : (contrib.parentQuery !== undefined ? undefined : prev.parentCategoryId));
+      if (candidateParentId) {
+        const parent = read?.categories.find((category) => category.id === candidateParentId);
+        const currentKind = contrib.kind ?? prev.categoryKind;
+        if (!parent || !this.isEligibleCategoryParent(parent, currentKind, input.workspaceId)) {
+          chosenParentInvalid = true;
+        }
+      }
+      const appliedParentQuery = dropParent
+        ? undefined
+        : (invalidateParent || chosenParentInvalid)
+          ? '?'
+          : (contrib.parentQuery !== undefined ? contrib.parentQuery : prev.parentQuery);
+      const appliedParentId = dropParent || invalidateParent || chosenParentInvalid
+        ? undefined
+        : (parentResolvedThisTurn ? resolvedParentId : (contrib.parentQuery !== undefined ? undefined : prev.parentCategoryId));
+      const appliedParentName = dropParent || invalidateParent || chosenParentInvalid
+        ? undefined
+        : (parentResolvedThisTurn ? resolvedParentName : (contrib.parentQuery !== undefined ? undefined : prev.parentCategoryName));
+      const overwrote =
+        (contrib.name !== undefined && prev.categoryName !== undefined && prev.categoryName.trim() && contrib.name.trim() !== prev.categoryName.trim()) ||
+        (contrib.kind !== undefined && (prev.categoryKind === 'expense' || prev.categoryKind === 'income') && contrib.kind !== prev.categoryKind) ||
+        (contrib.parentQuery !== undefined && prev.parentQuery !== undefined && contrib.parentQuery !== prev.parentQuery);
+      // Recompute missing/question from the CURRENT state after applying only
+      // this turn's contributions, so a stale closure cannot decide propose.
+      const currentMissing = this.categoryMissingFields({
+        ...(appliedName ? { name: appliedName } : {}),
+        ...(appliedKind ? { kind: appliedKind } : {}),
+        ...(parentClarification !== undefined || (appliedParentQuery && !appliedParentId) || (!dropParent && prev.requiresParent === true && appliedParentId === undefined) ? { parentQuery: appliedParentQuery ?? '?' } : {}),
+        ...(appliedParentId !== undefined ? { parentResolved: true } : {}),
+        ...(appliedParentQuery !== undefined || (!dropParent && prev.requiresParent === true) ? { hasParentQuery: true } : {}),
+      });
+      const currentQuestion = parentClarification ?? this.categoryQuestion(currentMissing, appliedName ?? prev.categoryName);
+      return {
+        resolvedArgs: {
+          ...prev,
+          description: appliedName ?? prev.description ?? '',
+          ...(appliedName ? { categoryName: appliedName } : { categoryName: undefined }),
+          ...(appliedKind ? { categoryKind: appliedKind } : { categoryKind: undefined }),
+          ...(appliedParentQuery ? { parentQuery: appliedParentQuery } : { parentQuery: undefined }),
+          ...(appliedParentId ? { parentCategoryId: appliedParentId } : { parentCategoryId: undefined }),
+          ...(appliedParentName ? { parentCategoryName: appliedParentName } : { parentCategoryName: undefined }),
+          ...(invalidateParent || chosenParentInvalid ? { requiresParent: true } : dropParent ? { requiresParent: false } : {}),
+        },
+        missingFields: [...currentMissing],
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        lastQuestion: currentQuestion,
+        fieldProvenance: {
+          ...(current.fieldProvenance ?? {}),
+          ...(contrib.name !== undefined ? { description: { source: 'token' as const, raw: text, value: nextName } } : {}),
+          ...(contrib.kind !== undefined ? { kind: { source: 'token' as const, raw: text, value: nextKind } } : {}),
+          ...(contrib.parentQuery !== undefined ? { categoryQuery: { source: 'token' as const, raw: text, value: contrib.parentQuery } } : {}),
+        },
+        ...this.turnMetadata(input, current, overwrote ? 'correction' : 'continuation'),
+      };
+    });
+    if (!written.ok) {
+      return this.refuseDraftWrite(input, plan, startedAt, base, written.current, written.current?.lastQuestion ?? question);
+    }
+    const current = written.record;
+    if ((current.missingFields?.length ?? 0) === 0) {
+      // A complete draft without an explicit confirmation re-asks; with a
+      // confirmation token it proposes (parity with the account flow).
+      if (/\b(pode criar|confirmar|confirma|confirmo|confirmado|autorizo|sim|quero|cria|crie|manda|faz)\b/i.test(text)) {
+        const cas = store.cas(current.draftId, 'active', 'proposing', {
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+        });
+        if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+        return this.executeProposeCategory(input, plan, startedAt, base, cas.record, client);
+      }
+      const currentName = current.resolvedArgs.categoryName ?? nextName;
+      const currentKind = current.resolvedArgs.categoryKind ?? nextKind;
+      const currentParent = current.resolvedArgs.parentCategoryName ?? parentCategoryName;
+      return this.clarifyDraft(input, plan, startedAt, base, current, `Criar a categoria “${currentName}” (${currentKind === 'income' ? 'receita' : 'despesa'})${currentParent ? ` em “${currentParent}”` : ''}? Confirme para eu propor.`);
+    }
+    return this.clarifyDraft(input, plan, startedAt, base, current, current.lastQuestion ?? question);
+  }
+
+  private async executeProposeCategory(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const maxAttempts = this.dependencies.draftMaxProposeAttempts ?? DEFAULT_MAX_PROPOSE_ATTEMPTS;
+    const args = draft.resolvedArgs;
+    const name = args.categoryName?.trim() ?? '';
+    const kind = args.categoryKind;
+    if (!name || (kind !== 'expense' && kind !== 'income')) {
+      return this.clarifyDraft(
+        input,
+        plan,
+        startedAt,
+        base,
+        store.get(draft.draftId) ?? draft,
+        this.categoryQuestion(this.categoryMissingFields({ ...(name ? { name } : {}), ...(kind === 'expense' || kind === 'income' ? { kind } : {}) }), name || undefined),
+      );
+    }
+    const identity: MutationIdentity = {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+    };
+    const normalizedArgs = {
+      name,
+      kind,
+      ...(args.parentCategoryId ? { parentId: args.parentCategoryId } : {}),
+    };
+    for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt += 1) {
+      try {
+        this.budgetFor(base).noteProposeAttempt();
+        const proposal = await client.propose({
+          tool: CATEGORY_CREATE_TOOL,
+          normalizedArgs,
+          summary: name,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        });
+        store.update(draft.draftId, {
+          status: 'consumed',
+          proposalId: proposal.id,
+          proposeOutcome: proposal.existing ? 'existing' : 'created',
+          updatedAt: new Date(this.draftNowMs()).toISOString(),
+          lastIntentionId: input.intentionId,
+        });
+        this.recordPresentedOperations(store, this.draftContext(input), [proposal.id]);
+        return this.completeTurn(input, plan, startedAt, base, {
+          policy: freeze({ ...base.policy, authorizationMode: 'manual' }),
+          mutation: freeze({ operationId: proposal.id, status: 'proposed' }),
+          response: freeze({ text: renderMutationResult('proposed', proposal.summary) }),
+        });
+      } catch (error) {
+        if (isDefinitiveProposeError(error)) {
+          store.update(draft.draftId, {
+            status: 'discarded',
+            discardReason: 'propose_rejected',
+            proposeOutcome: 'rejected',
+            updatedAt: new Date(this.draftNowMs()).toISOString(),
+            lastIntentionId: input.intentionId,
+          });
+          this.emit('mutation.blocked', {
+            intentionId: input.intentionId,
+            traceId: input.traceId,
+            channel: input.channel,
+            domain: plan.domain,
+            mode: plan.mode,
+            status: 'blocked',
+          });
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: renderMutationResult('failed') }),
+          });
+        }
+        if (attempt >= Math.max(1, maxAttempts)) {
+          store.update(draft.draftId, {
+            proposeOutcome: 'unknown',
+            updatedAt: new Date(this.draftNowMs()).toISOString(),
+            lastIntentionId: input.intentionId,
+          });
+          this.emit('mutation.blocked', {
+            intentionId: input.intentionId,
+            traceId: input.traceId,
+            channel: input.channel,
+            domain: plan.domain,
+            mode: plan.mode,
+            status: 'blocked',
+          });
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: renderInconclusive() }),
+          });
+        }
+      }
+    }
+    return this.completeTurn(input, plan, startedAt, base, {
+      response: freeze({ text: renderInconclusive() }),
+    });
+  }
+
+  /**
+   * categories.create entry point: explicit creation turns arrive under the
+   * `mutation-proposal` plan (router) or under a non-mutation plan (short
+   * follow-ups). Without a transport it persists the draft and clarifies —
+   * proposing is impossible without a device-bound client.
+   */
+  private async runCategoryCreationTurn(
+    input: TurnInput,
+    plan: TurnPlan,
+    client: MutationApiClient | null,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    decisionText: string,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const ctx = this.draftContext(input);
+    const now = this.draftNowMs();
+    const isCategoryDraft = (d: MutationDraftRecord): boolean =>
+      d.tool === CATEGORY_CREATE_TOOL || d.resolvedArgs.kind === 'category-create';
+    store.expireStale(ctx, now);
+    if (isCancelText(decisionText)) {
+      return this.runCancelTurn(input, plan, client, startedAt, base, decisionText);
+    }
+    // R7-F4 (parity with runMutationTurn, category scope): the same turn
+    // redelivered converges without new state — a replay of A never hijacks
+    // an unrelated active draft B.
+    const redelivered = store.findByIntention(ctx, input.intentionId);
+    if (redelivered && isCategoryDraft(redelivered)) {
+      if (redelivered.status === 'consumed' && redelivered.proposalId) {
+        return this.completeTurn(input, plan, startedAt, base, {
+          mutation: freeze({ operationId: redelivered.proposalId, status: 'proposed' }),
+          response: freeze({ text: renderMutationResult('proposed', redelivered.resolvedArgs.description) }),
+        });
+      }
+      if (redelivered.status === 'active' && !isExpired(redelivered, now)) {
+        return this.clarifyDraft(input, plan, startedAt, base, redelivered, redelivered.lastQuestion);
+      }
+      if (redelivered.status === 'proposing' && !isExpired(redelivered, now)) {
+        if (!client) {
+          return this.clarifyDraft(input, plan, startedAt, base, redelivered, redelivered.lastQuestion);
+        }
+        return this.executePropose(input, plan, startedAt, base, redelivered, client);
+      }
+      // Terminal/expired replay closes here: never fall through to continue
+      // an unrelated active draft B (anti-hijack).
+      if (redelivered.status === 'expired' || redelivered.status === 'discarded' || redelivered.status === 'replaced' || redelivered.status === 'consumed') {
+        return this.categoryFreshFlow(input, plan, startedAt, base, client);
+      }
+    }
+    // Restart recovery (parity with runMutationTurn, category scope):
+    // drafts left `proposing` by a crash re-emit with the same key before
+    // the current turn proceeds — the API dedup converges.
+    if (client) {
+      for (const proposing of store.listProposing(ctx, now)) {
+        if (!isCategoryDraft(proposing)) continue;
+        const args = proposing.resolvedArgs;
+        const name = args.categoryName?.trim() ?? '';
+        const kind = args.categoryKind;
+        if (!name || (kind !== 'expense' && kind !== 'income')) continue;
+        try {
+          await this.executeProposeSilent(proposing, client, input);
+        } catch {
+          // Best effort: the current turn still proceeds; the draft stays
+          // proposing with outcome unknown for the next reconciliation.
+        }
+      }
+    }
+    if (!client) {
+      const actives = store.listActive(ctx, now).filter(isCategoryDraft);
+      if (actives.length === 0) return this.categoryFreshFlow(input, plan, startedAt, base, null);
+      return this.clarifyDraft(input, plan, startedAt, base, actives[0]!, actives[0]!.lastQuestion);
+    }
+    const actives = store.listActive(ctx, now).filter(isCategoryDraft);
+    if (actives.length === 0) return this.categoryFreshFlow(input, plan, startedAt, base, client);
+    if (actives.length >= 2) {
+      // R7-F4: never continue actives[0] silently with 2+ pending category
+      // drafts — ask which intent to continue (parity with runMutationTurn).
+      const options = actives
+        .slice(0, 5)
+        .map((draft, index) => `${index + 1}. ${draft.resolvedArgs.description}`)
+        .join('\n');
+      const text = `Encontrei mais de uma intenção pendente. Qual delas você quer continuar?\n${options}`;
+      const ambiguousPlan = freeze({ ...plan, missingFields: freeze(['intent']) });
+      this.emit('mutation.blocked', {
+        intentionId: input.intentionId,
+        traceId: input.traceId,
+        channel: input.channel,
+        domain: plan.domain,
+        mode: plan.mode,
+        status: 'blocked',
+      });
+      return this.completeTurn(input, ambiguousPlan, startedAt, base, {
+        plan: ambiguousPlan,
+        clarification: freeze({ missingFields: ambiguousPlan.missingFields, text }),
+        response: freeze({ text }),
+      });
+    }
+    return this.continueCategoryDraft(input, plan, startedAt, base, actives[0]!, client);
+  }
+
+  private activeCategoryDraft(input: TurnInput): MutationDraftRecord | undefined {
+    const store = this.dependencies.draftStore;
+    if (!store || typeof store.listActive !== 'function') return undefined;
+    try {
+      const actives = store.listActive(this.draftContext(input), this.draftNowMs());
+      return actives.find((draft) => draft.tool === CATEGORY_CREATE_TOOL || draft.resolvedArgs.kind === 'category-create');
+    } catch {
+      return undefined;
+    }
+  }
+
+  private activeCategoryDeactivateDraft(input: TurnInput): MutationDraftRecord | undefined {
+    const store = this.dependencies.draftStore;
+    if (!store || typeof store.listActive !== 'function') return undefined;
+    try {
+      return store.listActive(this.draftContext(input), this.draftNowMs()).find(
+        (draft) => draft.tool === CATEGORY_DEACTIVATE_TOOL || draft.resolvedArgs.kind === 'category-deactivate',
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async executeProposeCategoryDeactivate(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const categoryId = draft.resolvedArgs.categoryId?.trim() ?? '';
+    const expectedName = draft.resolvedArgs.expectedName?.trim() ?? '';
+    if (!validateCompleteArgs({ kind: 'category-deactivate', amountCents: 0, description: expectedName || 'categoria', date: '', categoryId, expectedName })) {
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: CATEGORY_DEACTIVATE_READ_FAILURE_TEXT }) });
+    }
+    const identity: MutationIdentity = {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+    };
+    const summary = categoryDeactivateProposeSummary(expectedName);
+    try {
+      this.budgetFor(base).noteProposeAttempt();
+      const proposal = await client.propose({
+        tool: CATEGORY_DEACTIVATE_TOOL,
+        normalizedArgs: { categoryId, expectedName },
+        summary,
+        identity,
+        idempotencyKey: draft.proposalIdempotencyKey,
+      });
+      store.update(draft.draftId, {
+        status: 'consumed', proposalId: proposal.id,
+        proposeOutcome: proposal.existing ? 'existing' : 'created',
+        updatedAt: new Date(this.draftNowMs()).toISOString(), lastIntentionId: input.intentionId,
+      });
+      this.recordPresentedOperations(store, this.draftContext(input), [proposal.id]);
+      return this.completeTurn(input, plan, startedAt, base, {
+        policy: freeze({ ...base.policy, authorizationMode: 'manual' }),
+        mutation: freeze({
+          operationId: proposal.id,
+          status: 'proposed' as const,
+          expected: { tool: CATEGORY_DEACTIVATE_TOOL, entityId: categoryId },
+        }),
+        response: freeze({ text: renderMutationResult('proposed', summary) }),
+      });
+    } catch (error) {
+      if (isDefinitiveProposeError(error)) {
+        store.update(draft.draftId, { status: 'discarded', discardReason: 'propose_rejected', proposeOutcome: 'rejected', updatedAt: new Date(this.draftNowMs()).toISOString(), lastIntentionId: input.intentionId });
+        return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderMutationResult('failed') }) });
+      }
+      store.update(draft.draftId, { proposeOutcome: 'unknown', updatedAt: new Date(this.draftNowMs()).toISOString(), lastIntentionId: input.intentionId });
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) });
+    }
+  }
+
+  /** Existing-category deactivation: exact scoped resolution, durable slot fill, manual proposal only. */
+  private async runCategoryDeactivateTurn(
+    input: TurnInput,
+    plan: TurnPlan,
+    client: MutationApiClient | null,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    decisionText: string,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore;
+    if (!store) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: UNSUPPORTED_CATEGORY_MUTATION_TEXT }) });
+    const ctx = this.draftContext(input);
+    const now = this.draftNowMs();
+    store.expireStale(ctx, now);
+    const replay = store.findByIntention(ctx, input.intentionId);
+    if (replay?.tool === CATEGORY_DEACTIVATE_TOOL || replay?.resolvedArgs.kind === 'category-deactivate') {
+      if (replay.status === 'consumed' && replay.proposalId) {
+        return this.completeTurn(input, plan, startedAt, base, { mutation: freeze({ operationId: replay.proposalId, status: 'proposed' }), response: freeze({ text: renderMutationResult('proposed', categoryDeactivateProposeSummary(replay.resolvedArgs.expectedName ?? replay.resolvedArgs.description)) }) });
+      }
+      if (replay.status === 'proposing') {
+        return client
+          ? this.executeProposeCategoryDeactivate(input, plan, startedAt, base, replay, client)
+          : this.clarifyDraft(input, plan, startedAt, base, replay, replay.lastQuestion);
+      }
+      if (replay.status === 'active') {
+        return this.clarifyDraft(input, plan, startedAt, base, replay, replay.lastQuestion);
+      }
+    }
+    const freshIntent = hasCategoryDeactivateSignal(input.text);
+    const active = !freshIntent ? this.activeCategoryDeactivateDraft(input) : undefined;
+    const text = freshIntent ? input.text : decisionText;
+    if (active && isCategoryDeactivateCancelText(text)) {
+      store.update(active.draftId, { status: 'discarded', discardReason: 'user_cancelled', updatedAt: new Date(now).toISOString(), lastIntentionId: input.intentionId });
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Certo, não vou desativar a categoria.' }) });
+    }
+    if (!freshIntent && (!active || isPureReadForDraft(text) || !text.trim())) {
+      return active
+        ? this.clarifyDraft(input, plan, startedAt, base, active, active.lastQuestion)
+        : this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: UNSUPPORTED_CATEGORY_MUTATION_TEXT }) });
+    }
+    const read = await this.readCategoryCatalog();
+    if (!read) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: CATEGORY_DEACTIVATE_READ_FAILURE_TEXT }) });
+    const observedRevision = active?.revision;
+    const resolution = resolveCategoryDeactivateTarget(text, read.categories, read.scope);
+    if (active) {
+      const current = store.get(active.draftId);
+      if (!current || current.status !== 'active' || current.revision !== observedRevision) {
+        return current ? this.clarifyDraft(input, plan, startedAt, base, current, current.lastQuestion)
+          : this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) });
+      }
+    }
+    if (resolution.kind !== 'resolved') {
+      const question = resolution.clarification;
+      if (active) {
+        const written = this.writeDraftContinuation(active.draftId, (current) => ({
+          updatedAt: new Date(now).toISOString(), lastIntentionId: input.intentionId,
+          lastQuestion: question, ...this.turnMetadata(input, current, 'continuation'),
+        }));
+        if (!written.ok) return this.refuseDraftWrite(input, plan, startedAt, base, written.current, question);
+        return this.clarifyDraft(input, plan, startedAt, base, written.record, question);
+      }
+      const record = buildDraftRecord({
+        ...ctx, intentionId: input.intentionId, tool: CATEGORY_DEACTIVATE_TOOL,
+        resolvedArgs: { kind: 'category-deactivate', amountCents: 0, description: '', date: '' },
+        missingFields: ['categoryId'], question, ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS, nowMs: now,
+      });
+      const created = store.getOrCreate(record).record;
+      return this.clarifyDraft(input, plan, startedAt, base, created, created.lastQuestion);
+    }
+    const category = resolution.category;
+    const resolvedArgs: MutationDraftResolvedArgs = {
+      ...(active?.resolvedArgs ?? {}), kind: 'category-deactivate', amountCents: 0,
+      description: category.name, date: '', categoryId: category.id, expectedName: category.name,
+    };
+    let draft: MutationDraftRecord;
+    if (active) {
+      const written = this.writeDraftContinuation(active.draftId, (current) => ({
+        resolvedArgs, missingFields: [], updatedAt: new Date(now).toISOString(), lastIntentionId: input.intentionId,
+        lastQuestion: '', ...this.turnMetadata(input, current, 'continuation'),
+      }));
+      if (!written.ok) return this.refuseDraftWrite(input, plan, startedAt, base, written.current, written.current?.lastQuestion ?? '');
+      draft = written.record;
+    } else {
+      draft = store.getOrCreate(buildDraftRecord({
+        ...ctx, intentionId: input.intentionId, tool: CATEGORY_DEACTIVATE_TOOL, resolvedArgs,
+        missingFields: [], question: '', ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS, nowMs: now,
+      })).record;
+    }
+    if (!validateCompleteArgs(resolvedArgs)) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: CATEGORY_DEACTIVATE_READ_FAILURE_TEXT }) });
+    if (!client) {
+      const question = `A categoria "${category.name}" está selecionada, mas não foi possível criar a proposta agora.`;
+      store.update(draft.draftId, { lastQuestion: question, updatedAt: new Date(now).toISOString() });
+      return this.clarifyDraft(input, plan, startedAt, base, store.get(draft.draftId) ?? draft, question);
+    }
+    const cas = store.cas(draft.draftId, 'active', 'proposing', { updatedAt: new Date(now).toISOString(), lastIntentionId: input.intentionId });
+    if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+    return this.executeProposeCategoryDeactivate(input, plan, startedAt, base, cas.record, client);
+  }
+
+  /**
+   * categories.create: whether this turn can contribute to the ACTIVE
+   * category draft (name, kind marker, parent clause, "sem pai", or an
+   * explicit confirmation). Pure reads never contribute.
+   */
+  private categoryContributes(text: string, draft: MutationDraftRecord): boolean {
+    if (!text || !text.trim()) return false;
+    if (isPureReadForDraft(text)) return false;
+    // R7-F1: the contextual contribution (bare kind/name/parent/"sem pai")
+    // decides — the fresh-turn verb detector never gates a continuation.
+    const contrib = parseCategorySlotContribution(text);
+    if (contrib.name || contrib.kind || contrib.parentQuery || contrib.dropParent) return true;
+    if (/\b(despesa|despesas|gasto|gastos|receita|receitas)\b/i.test(text)) return true;
+    if (/\b(pode criar|confirma|confirmo|confirmar|sim|quero|cria|crie|manda|faz)\b/i.test(text) && draft.missingFields.length === 0) return true;
+    // Bare name answer for a draft missing its name.
+    if (draft.missingFields.includes('name') && text.trim().length >= 2 && text.trim().length <= 120) return true;
+    return false;
+  }
+
+  /**
    * accounts.deactivate (account-only path): authoritative account list,
    * fail-closed on unreadable payloads (contract-parity with the entity
    * resolver: an unreadable read is never an empty workspace).
@@ -3159,6 +4280,1299 @@ export class ConversationOrchestrator {
   }
 
   /**
+   * accounts.update (account-only path): authoritative account list,
+   * fail-closed on unreadable payloads (contract-parity with the entity
+   * resolver: an unreadable read is never an empty workspace).
+   */
+  private async readRenameAccounts(): Promise<{ accounts: EntitySummary[]; scope?: string } | null> {
+    const reader = this.entityReaderOrClosed();
+    try {
+      const accounts = normalizeEntities(await reader.listAccounts());
+      const scope = reader.scope?.workspaceId;
+      return scope ? { accounts, scope } : { accounts };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * accounts.update (account-only path): persists a fresh rename draft
+   * from an explicit rename turn. A resolved target WITH a new name
+   * proposes immediately under the draft-derived idempotency key (the same
+   * recoverable handoff as transactions); a resolved target WITHOUT a new
+   * name persists an incomplete draft and asks for it (multi-turn, never
+   * invented); every other outcome clarifies or answers honestly — NUNCA
+   * auto_execute (no eligibility check at all) and NEVER a confirmation
+   * ask without a proposal.
+   */
+  private async renameFreshFlow(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    client: MutationApiClient | null,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const read = await this.readRenameAccounts();
+    if (!read) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: RENAME_READ_FAILURE_TEXT }),
+      });
+    }
+    const resolution = resolveRenameTarget(input.text, read.accounts, read.scope);
+    const now = this.draftNowMs();
+    const identity = {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      deviceId: input.deviceId ?? null,
+    };
+    if (resolution.kind === 'same-name') {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: renameSameNameText(resolution.account.name) }),
+      });
+    }
+    if (resolution.kind === 'resolved') {
+      const account = resolution.account;
+      if (!resolution.newName) {
+        const question = renameAskNewNameText(account.name);
+        const candidate = buildDraftRecord({
+          ...identity,
+          intentionId: input.intentionId,
+          tool: ACCOUNT_RENAME_TOOL,
+          resolvedArgs: {
+            kind: 'account-rename',
+            amountCents: 0,
+            description: account.name,
+            date: '',
+            accountId: account.id,
+            accountName: '',
+            expectedName: account.name,
+          },
+          missingFields: ['name'],
+          question,
+          ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+          nowMs: now,
+        });
+        const { record } = store.getOrCreate(candidate);
+        return this.clarifyDraft(input, plan, startedAt, base, record, record.lastQuestion);
+      }
+      const candidate = buildDraftRecord({
+        ...identity,
+        intentionId: input.intentionId,
+        tool: ACCOUNT_RENAME_TOOL,
+        resolvedArgs: {
+          kind: 'account-rename',
+          amountCents: 0,
+          // `description` mirrors the NEW name so every generic draft
+          // listing stays readable.
+          description: resolution.newName,
+          date: '',
+          accountId: account.id,
+          accountName: resolution.newName,
+          expectedName: account.name,
+        },
+        missingFields: [],
+        question: '',
+        ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+        nowMs: now,
+      });
+      const { record } = store.getOrCreate(candidate);
+      if (!client) {
+        const text = renameNoTransportText(account.name);
+        return this.completeTurn(input, plan, startedAt, base, {
+          clarification: freeze({ missingFields: freeze([]), text, draft: toChannelMessage(record, text) }),
+          response: freeze({ text }),
+        });
+      }
+      const cas = store.cas(record.draftId, 'active', 'proposing', {
+        updatedAt: new Date(now).toISOString(),
+        lastIntentionId: input.intentionId,
+      });
+      if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+      return this.executeProposeRename(input, plan, startedAt, base, cas.record, client);
+    }
+    if (resolution.kind === 'ambiguous' || resolution.reason === 'no-match') {
+      // Disambiguation (never a confirmation ask): the follow-up name
+      // resolves against a fresh authoritative read in
+      // `continueRenameDraft`. A parsed new name is preserved so the
+      // follow-up only needs to name the target.
+      const probe = extractNewAccountName(input.text);
+      const candidate = buildDraftRecord({
+        ...identity,
+        intentionId: input.intentionId,
+        tool: ACCOUNT_RENAME_TOOL,
+        resolvedArgs: {
+          kind: 'account-rename',
+          amountCents: 0,
+          description: probe ?? '',
+          date: '',
+          ...(probe ? { accountName: probe } : {}),
+        },
+        missingFields: probe ? ['accountId'] : ['accountId', 'name'],
+        question: resolution.clarification,
+        ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+        nowMs: now,
+      });
+      const { record } = store.getOrCreate(candidate);
+      return this.clarifyDraft(input, plan, startedAt, base, record, record.lastQuestion);
+    }
+    // reason 'empty': honest limitation, no draft, no proposal.
+    return this.completeTurn(input, plan, startedAt, base, {
+      response: freeze({ text: resolution.clarification }),
+    });
+  }
+
+  /**
+   * accounts.update (account-only path): slot-fill continuation for an
+   * ACTIVE rename draft. Same machinery as the other continuations
+   * (revision-guarded writes, deterministic questions, atomic CAS
+   * consumption, recoverable propose handoff); only the slots differ
+   * (`accountId` resolved against the authoritative list + the free-text
+   * NEW `name`, never inferred).
+   */
+  private async continueRenameDraft(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const text = input.text ?? '';
+    // A reset ("na verdade ...", "esquece") replaces the draft and restarts
+    // the rename flow on the same turn (parity with `isReplacement`).
+    if (isResetText(text)) {
+      store.update(draft.draftId, {
+        status: 'replaced',
+        updatedAt: new Date(this.draftNowMs()).toISOString(),
+        lastIntentionId: input.intentionId,
+      });
+      return this.renameFreshFlow(input, plan, startedAt, base, client);
+    }
+    // HIGH2: an explicit unsupported turn (card creation) NEVER becomes a
+    // slot fill — answering the honest copy with zero draft writes keeps
+    // the rename draft intact (still missing the new name) with no propose
+    // and no replacement draft.
+    if (hasCardCreateSignal(text)) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: UNSUPPORTED_CARD_CREATE_TEXT }),
+      });
+    }
+    const stamp = new Date(this.draftNowMs()).toISOString();
+    const storedId = draft.resolvedArgs.accountId?.trim() ?? '';
+    const storedExpected = draft.resolvedArgs.expectedName?.trim() ?? '';
+    const storedNew = draft.resolvedArgs.accountName?.trim() ?? '';
+    const isComplete =
+      storedId.length > 0 && storedExpected.length > 0 && storedNew.length > 0 && draft.missingFields.length === 0;
+    // Already complete (fresh turn carried every slot but no transport):
+    // only an explicit "pode renomear" proposes — anything else states
+    // the pending selection, never asks.
+    if (isComplete) {
+      if (isConfirmRenameText(text)) {
+        const cas = store.cas(draft.draftId, 'active', 'proposing', {
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+        });
+        if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+        return this.executeProposeRename(input, plan, startedAt, base, cas.record, client);
+      }
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: renameReadyNoProposalText(storedExpected) }),
+      });
+    }
+    // A pure read never resolves ("qual meu saldo?") — unless it carries
+    // the missing new name, which is slot vocabulary here, not a read.
+    const missingNewOnly =
+      storedId.length > 0 && storedExpected.length > 0 && (storedNew.length === 0 || draft.missingFields.includes('name'));
+    if (!missingNewOnly && isPureReadForDraft(text)) {
+      return this.clarifyDraft(input, plan, startedAt, base, draft, draft.lastQuestion);
+    }
+    if (missingNewOnly) {
+      const candidate = extractNewAccountName(`x para ${text}`);
+      const next = (candidate ?? text).trim().slice(0, 120).trim();
+      if (!next) {
+        const question = renameAskNewNameText(storedExpected);
+        const updated = store.update(draft.draftId, {
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+          lastQuestion: question,
+          ...this.turnMetadata(input, draft, 'continuation'),
+        });
+        return this.clarifyDraft(input, plan, startedAt, base, updated ?? draft, question);
+      }
+      if (isSameAccountName(next, storedExpected)) {
+        store.update(draft.draftId, {
+          status: 'discarded',
+          discardReason: 'same_name',
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+          ...this.turnMetadata(input, draft, 'continuation'),
+        });
+        return this.completeTurn(input, plan, startedAt, base, {
+          response: freeze({ text: renameSameNameText(storedExpected) }),
+        });
+      }
+      const written = this.writeDraftContinuation(draft.draftId, (current) => ({
+        resolvedArgs: {
+          ...current.resolvedArgs,
+          description: next,
+          accountName: next,
+        },
+        missingFields: [],
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        lastQuestion: '',
+        ...this.turnMetadata(input, current, 'continuation'),
+      }));
+      if (!written.ok) {
+        return this.refuseDraftWrite(
+          input, plan, startedAt, base, written.current, (written.current ?? draft).lastQuestion,
+        );
+      }
+      const record = written.record;
+      const cas = store.cas(record.draftId, 'active', 'proposing', {
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+      });
+      if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+      return this.executeProposeRename(input, plan, startedAt, base, cas.record, client);
+    }
+    const read = await this.readRenameAccounts();
+    if (!read) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        clarification: freeze({ missingFields: freeze(['accountId']), text: RENAME_READ_FAILURE_TEXT }),
+        response: freeze({ text: RENAME_READ_FAILURE_TEXT }),
+      });
+    }
+    const resolution = resolveRenameTarget(text, read.accounts, read.scope);
+    if (resolution.kind === 'same-name') {
+      store.update(draft.draftId, {
+        status: 'discarded',
+        discardReason: 'same_name',
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        ...this.turnMetadata(input, draft, 'continuation'),
+      });
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: renameSameNameText(resolution.account.name) }),
+      });
+    }
+    if (resolution.kind !== 'resolved') {
+      const updated = store.update(draft.draftId, {
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        lastQuestion: resolution.clarification,
+        ...this.turnMetadata(input, draft, 'continuation'),
+      });
+      return this.clarifyDraft(input, plan, startedAt, base, updated ?? draft, resolution.clarification);
+    }
+    const account = resolution.account;
+    const newName = resolution.newName ?? storedNew;
+    if (!newName) {
+      const question = renameAskNewNameText(account.name);
+      const written = this.writeDraftContinuation(draft.draftId, (current) => ({
+        resolvedArgs: {
+          ...current.resolvedArgs,
+          description: account.name,
+          accountId: account.id,
+          expectedName: account.name,
+        },
+        missingFields: ['name'],
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        lastQuestion: question,
+        ...this.turnMetadata(input, current, 'continuation'),
+      }));
+      if (!written.ok) {
+        return this.refuseDraftWrite(input, plan, startedAt, base, written.current, question);
+      }
+      return this.clarifyDraft(input, plan, startedAt, base, written.record, question);
+    }
+    if (isSameAccountName(newName, account.name)) {
+      store.update(draft.draftId, {
+        status: 'discarded',
+        discardReason: 'same_name',
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        ...this.turnMetadata(input, draft, 'continuation'),
+      });
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: renameSameNameText(account.name) }),
+      });
+    }
+    const overwrote = storedId !== '' && storedId.toLowerCase() !== account.id.toLowerCase();
+    const written = this.writeDraftContinuation(draft.draftId, (current) => ({
+      resolvedArgs: {
+        ...current.resolvedArgs,
+        description: newName,
+        accountId: account.id,
+        accountName: newName,
+        expectedName: account.name,
+      },
+      missingFields: [],
+      updatedAt: stamp,
+      lastIntentionId: input.intentionId,
+      lastQuestion: '',
+      ...this.turnMetadata(input, current, overwrote ? 'correction' : 'continuation'),
+    }));
+    if (!written.ok) {
+      return this.refuseDraftWrite(
+        input, plan, startedAt, base, written.current, (written.current ?? draft).lastQuestion,
+      );
+    }
+    const record = written.record;
+    const cas = store.cas(record.draftId, 'active', 'proposing', {
+      updatedAt: stamp,
+      lastIntentionId: input.intentionId,
+    });
+    if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+    return this.executeProposeRename(input, plan, startedAt, base, cas.record, client);
+  }
+
+  /**
+   * accounts.update (account-only path): proposes the rename draft
+   * through the SAME pending-operation transport (stable
+   * `proposalIdempotencyKey` derived from the draft identity — the same
+   * recoverable handoff as transactions) with the fixed-contract args
+   * `{ accountId, name, expectedName }`.
+   *
+   * NUNCA auto_execute: this path performs NO eligibility check, mints NO
+   * elevated client and runs NO duplicate probe — a rename is always
+   * proposed for MANUAL confirmation, even when the target resolved in one
+   * turn. (The API contract pins the same rule server-side:
+   * `approvalRequired: true`, not auto-execution eligible.)
+   */
+  private async executeProposeRename(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const maxAttempts = this.dependencies.draftMaxProposeAttempts ?? DEFAULT_MAX_PROPOSE_ATTEMPTS;
+    const args = draft.resolvedArgs;
+    const accountId = args.accountId?.trim() ?? '';
+    const name = args.accountName?.trim() ?? '';
+    const expectedName = args.expectedName?.trim() ?? '';
+    if (!validateCompleteArgs({ kind: 'account-rename', amountCents: 0, description: name || 'conta', date: '', accountId, accountName: name, expectedName })) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: RENAME_READ_FAILURE_TEXT }),
+      });
+    }
+    const identity: MutationIdentity = {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+    };
+    const summary = renameProposeSummary(expectedName, name);
+    const normalizedArgs = { accountId, name, expectedName };
+    for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt += 1) {
+      try {
+        // R10 (AC30) parity: the attempt is accounted the moment it leaves.
+        this.budgetFor(base).noteProposeAttempt();
+        const proposal = await client.propose({
+          tool: ACCOUNT_RENAME_TOOL,
+          normalizedArgs,
+          summary,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        });
+        store.update(draft.draftId, {
+          status: 'consumed',
+          proposalId: proposal.id,
+          proposeOutcome: proposal.existing ? 'existing' : 'created',
+          updatedAt: new Date(this.draftNowMs()).toISOString(),
+          lastIntentionId: input.intentionId,
+        });
+        // Review round 4 P1-A3 parity: the proposal card shows this operation
+        // to the user — record the presentation so a later "sim" may confirm
+        // it. R6 ledgered (compensated if the response never publishes).
+        this.recordPresentedOperations(store, this.draftContext(input), [proposal.id]);
+        return this.completeTurn(input, plan, startedAt, base, {
+          policy: freeze({ ...base.policy, authorizationMode: 'manual' }),
+          mutation: freeze({ operationId: proposal.id, status: 'proposed' as const }),
+          response: freeze({ text: renderMutationResult('proposed', summary) }),
+        });
+      } catch (error) {
+        if (isDefinitiveProposeError(error)) {
+          store.update(draft.draftId, {
+            status: 'discarded',
+            discardReason: 'propose_rejected',
+            proposeOutcome: 'rejected',
+            updatedAt: new Date(this.draftNowMs()).toISOString(),
+            lastIntentionId: input.intentionId,
+          });
+          this.emit('mutation.blocked', {
+            intentionId: input.intentionId,
+            traceId: input.traceId,
+            channel: input.channel,
+            domain: plan.domain,
+            mode: plan.mode,
+            status: 'blocked',
+          });
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: renderMutationResult('failed') }),
+          });
+        }
+        if (attempt >= Math.max(1, maxAttempts)) {
+          store.update(draft.draftId, {
+            proposeOutcome: 'unknown',
+            updatedAt: new Date(this.draftNowMs()).toISOString(),
+            lastIntentionId: input.intentionId,
+          });
+          this.emit('mutation.blocked', {
+            intentionId: input.intentionId,
+            traceId: input.traceId,
+            channel: input.channel,
+            domain: plan.domain,
+            mode: plan.mode,
+            status: 'blocked',
+          });
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: renderInconclusive() }),
+          });
+        }
+      }
+    }
+    return this.completeTurn(input, plan, startedAt, base, {
+      response: freeze({ text: renderInconclusive() }),
+    });
+  }
+
+  /**
+   * accounts.update (account-only path): entry point for rename turns
+   * that arrive under a non-mutation plan (the router maps "renomeie a
+   * conta ..." to a read and "renomeie ela" to `unsupported`). With a
+   * transport it delegates to the full `runMutationTurn`
+   * (redelivery, recovery, cancel, replacement, continuation); without one
+   * (fresh turn, no draft yet) it still persists the draft and clarifies —
+   * proposing is impossible without a device-bound client, inventing a
+   * proposal is never an option.
+   */
+  private async runRenameTurn(
+    input: TurnInput,
+    plan: TurnPlan,
+    client: MutationApiClient | null,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    decisionText: string,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const ctx = this.draftContext(input);
+    const now = this.draftNowMs();
+    store.expireStale(ctx, now);
+    // "cancela" on the rename path cancels with the existing semantics.
+    if (isCancelText(decisionText)) {
+      return this.runCancelTurn(input, plan, client, startedAt, base, decisionText);
+    }
+    if (!client) {
+      const actives = store.listActive(ctx, now);
+      if (actives.length === 0) return this.renameFreshFlow(input, plan, startedAt, base, null);
+      // Complete draft without transport: restate the pending selection —
+      // never publish the draft's empty lastQuestion (it would render as
+      // silence). Incomplete drafts keep clarifying their real question.
+      const first = actives[0]!;
+      if (
+        (first.tool === ACCOUNT_RENAME_TOOL || first.resolvedArgs.kind === 'account-rename') &&
+        (first.resolvedArgs.accountId?.trim() ?? '').length > 0 &&
+        (first.resolvedArgs.expectedName?.trim() ?? '').length > 0 &&
+        (first.resolvedArgs.accountName?.trim() ?? '').length > 0 &&
+        first.missingFields.length === 0
+      ) {
+        return this.completeTurn(input, plan, startedAt, base, {
+          response: freeze({ text: renameReadyNoProposalText(first.resolvedArgs.expectedName!.trim()) }),
+        });
+      }
+      return this.clarifyDraft(input, plan, startedAt, base, first, first.lastQuestion);
+    }
+    return this.runMutationTurn(input, plan, client, startedAt, base, decisionText);
+  }
+
+/**
+   * categories.update (name-only): fresh flow from an explicit rename turn.
+   *
+   * Mirrors `renameFreshFlow` (accounts.update) but resolves the target
+   * against the AUTHORITATIVE category catalog: an existing category + a
+   * NEW name. A resolved target WITH a new name proposes immediately under
+   * the draft-derived idempotency key; a resolved target WITHOUT a new name
+   * persists an incomplete draft and asks for it (multi-turn, never
+   * invented); ambiguity and no-match clarify; every other outcome answers
+   * honestly — NUNCA auto_execute and NEVER a confirmation ask without a
+   * proposal.
+   */
+  private async categoryRenameFreshFlow(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    client: MutationApiClient | null,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const read = await this.readCategoryCatalog();
+    if (!read) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: CATEGORY_RENAME_READ_FAILURE_TEXT }),
+      });
+    }
+    const resolution = resolveCategoryRenameTarget(input.text, read.categories, read.scope);
+    const now = this.draftNowMs();
+    // F1 (P1): o rascunho nasce com o contexto CANÔNICO (mesmo
+    // `draftContext` do listing/lookup): a audiência da conversa privada
+    // viaja no rascunho — um rascunho privado nunca é herdado por outra
+    // conversa (nem pelo coletivo). A audiência vem SÓ do carimbo
+    // server-side; um `audience` enviado pelo cliente é ignorado.
+    const identity = this.draftContext(input);
+    // O qualificador explícito de kind viaja com o rascunho: um follow-up
+    // ("de receita") nunca perde a restrição herdada do turno original.
+    const parsedTurn = parseCategoryRename(input.text ?? '');
+    const kindQualifier = parsedTurn.kind;
+    if (resolution.kind === 'same-name') {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: categoryRenameSameNameText(resolution.category.name) }),
+      });
+    }
+    if (resolution.kind === 'resolved') {
+      const category = resolution.category;
+      if (!resolution.newName) {
+        const question = categoryRenameAskNewNameText(category.name);
+        const candidate = buildDraftRecord({
+          ...identity,
+          intentionId: input.intentionId,
+          tool: CATEGORY_RENAME_TOOL,
+          resolvedArgs: {
+            kind: 'category-rename',
+            amountCents: 0,
+            description: category.name,
+            date: '',
+            categoryId: category.id,
+            categoryName: '',
+            expectedName: category.name,
+            ...(kindQualifier ? { categoryKind: kindQualifier } : {}),
+          },
+          missingFields: ['name'],
+          question,
+          ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+          nowMs: now,
+        });
+        const { record } = store.getOrCreate(candidate);
+        return this.clarifyDraft(input, plan, startedAt, base, record, record.lastQuestion);
+      }
+      const candidate = buildDraftRecord({
+        ...identity,
+        intentionId: input.intentionId,
+        tool: CATEGORY_RENAME_TOOL,
+        resolvedArgs: {
+          kind: 'category-rename',
+          amountCents: 0,
+          // `description` mirrors the NEW name so every generic draft
+          // listing stays readable.
+          description: resolution.newName,
+          date: '',
+          categoryId: category.id,
+          categoryName: resolution.newName,
+          expectedName: category.name,
+          ...(kindQualifier ? { categoryKind: kindQualifier } : {}),
+        },
+        missingFields: [],
+        question: '',
+        ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+        nowMs: now,
+      });
+      const { record } = store.getOrCreate(candidate);
+      if (!client) {
+        const text = categoryRenameNoTransportText(category.name);
+        return this.completeTurn(input, plan, startedAt, base, {
+          clarification: freeze({ missingFields: freeze([]), text, draft: toChannelMessage(record, text) }),
+          response: freeze({ text }),
+        });
+      }
+      const cas = store.cas(record.draftId, 'active', 'proposing', {
+        updatedAt: new Date(now).toISOString(),
+        lastIntentionId: input.intentionId,
+      });
+      if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+      return this.executeProposeCategoryRename(input, plan, startedAt, base, cas.record, client);
+    }
+    if (resolution.kind === 'ambiguous' || resolution.reason === 'no-match') {
+      // Disambiguation (never a confirmation ask): the follow-up name
+      // resolves against a fresh authoritative read in
+      // `continueCategoryRenameDraft`. A parsed new name is preserved so
+      // the follow-up only needs to name the target.
+      const probe = extractNewCategoryName(input.text);
+      const candidate = buildDraftRecord({
+        ...identity,
+        intentionId: input.intentionId,
+        tool: CATEGORY_RENAME_TOOL,
+        resolvedArgs: {
+          kind: 'category-rename',
+          amountCents: 0,
+          description: probe ?? '',
+          date: '',
+          ...(probe ? { categoryName: probe } : {}),
+          ...(kindQualifier ? { categoryKind: kindQualifier } : {}),
+        },
+        missingFields: probe ? ['categoryId'] : ['categoryId', 'name'],
+        question: resolution.clarification,
+        ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+        nowMs: now,
+      });
+      const { record } = store.getOrCreate(candidate);
+      return this.clarifyDraft(input, plan, startedAt, base, record, record.lastQuestion);
+    }
+    // reason 'empty': honest limitation, no draft, no proposal.
+    return this.completeTurn(input, plan, startedAt, base, {
+      response: freeze({ text: resolution.clarification }),
+    });
+  }
+
+  /**
+   * categories.update (name-only): slot-fill continuation for an ACTIVE
+   * category-rename draft. Same machinery as the other continuations
+   * (revision-guarded writes, deterministic questions, atomic CAS
+   * consumption, recoverable propose handoff); only the slots differ
+   * (`categoryId` resolved against the authoritative catalog + the
+   * free-text NEW `name`, never inferred).
+   */
+  private async continueCategoryRenameDraft(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const text = input.text ?? '';
+    // A reset ("na verdade ...", "esquece") replaces the draft and restarts
+    // the rename flow on the same turn (parity with `isReplacement`).
+    if (isResetText(text)) {
+      store.update(draft.draftId, {
+        status: 'replaced',
+        updatedAt: new Date(this.draftNowMs()).toISOString(),
+        lastIntentionId: input.intentionId,
+      });
+      return this.categoryRenameFreshFlow(input, plan, startedAt, base, client);
+    }
+    // HIGH2: an explicit unsupported turn (card creation) NEVER becomes a
+    // slot fill — answering the honest copy with zero draft writes keeps
+    // the rename draft intact (still missing the new name) with no propose
+    // and no replacement draft.
+    if (hasCardCreateSignal(text)) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: UNSUPPORTED_CARD_CREATE_TEXT }),
+      });
+    }
+    // F2 (P2): uma intenção FRESH completa (verbo de renomear + alvo + nome
+    // NOVO) NUNCA preenche o slot de um rascunho pendente: o turno traz o
+    // próprio alvo e o próprio nome novo. O rascunho pendente é REPLACED e
+    // o fluxo fresh recomeça — renomear o alvo antigo seria trocar a
+    // categoria errada (paridade com o protocolo de contas).
+    if (isFullCategoryRenameIntent(text)) {
+      store.update(draft.draftId, {
+        status: 'replaced',
+        updatedAt: new Date(this.draftNowMs()).toISOString(),
+        lastIntentionId: input.intentionId,
+      });
+      return this.categoryRenameFreshFlow(input, plan, startedAt, base, client);
+    }
+    const stamp = new Date(this.draftNowMs()).toISOString();
+    const storedId = draft.resolvedArgs.categoryId?.trim() ?? '';
+    const storedExpected = draft.resolvedArgs.expectedName?.trim() ?? '';
+    const storedNew = draft.resolvedArgs.categoryName?.trim() ?? '';
+    // O qualificador de kind herdado do turno original (nunca inventado).
+    const storedKind = draft.resolvedArgs.categoryKind;
+    const isComplete =
+      storedId.length > 0 && storedExpected.length > 0 && storedNew.length > 0 && draft.missingFields.length === 0;
+    // Already complete (fresh turn carried every slot but no transport):
+    // only an explicit "pode renomear" proposes — anything else states
+    // the pending selection, never asks.
+    if (isComplete) {
+      if (isConfirmCategoryRenameText(text)) {
+        const cas = store.cas(draft.draftId, 'active', 'proposing', {
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+        });
+        if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+        return this.executeProposeCategoryRename(input, plan, startedAt, base, cas.record, client);
+      }
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: categoryRenameReadyNoProposalText(storedExpected) }),
+      });
+    }
+    // A pure read never resolves ("qual meu saldo?") — unless it carries
+    // the missing new name, which is slot vocabulary here, not a read.
+    const missingNewOnly =
+      storedId.length > 0 && storedExpected.length > 0 && (storedNew.length === 0 || draft.missingFields.includes('name'));
+    if (!missingNewOnly && isPureReadForDraft(text)) {
+      return this.clarifyDraft(input, plan, startedAt, base, draft, draft.lastQuestion);
+    }
+    if (missingNewOnly) {
+      // F2 (P2): o slot do nome novo NUNCA aceita um token de decisão
+      // ("pode renomear", "sim") nem um comando estrangeiro ("liste minhas
+      // categorias"): o rascunho continua asking, sem nome inventado.
+      const candidate = isCancelText(text) && !/^\s*(?:para|pra)\b/i.test(text)
+        ? undefined
+        : extractNewCategoryName(`x para ${text}`);
+      const fallbackName = isCategoryRenameDecisionToken(text) || isCategoryRenameForeignCommand(text) || isCancelText(text)
+        ? undefined
+        : text.trim().slice(0, 120).trim();
+      const next = candidate ?? fallbackName;
+      if (!next) {
+        const question = categoryRenameAskNewNameText(storedExpected);
+        const updated = store.update(draft.draftId, {
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+          lastQuestion: question,
+          ...this.turnMetadata(input, draft, 'continuation'),
+        });
+        return this.clarifyDraft(input, plan, startedAt, base, updated ?? draft, question);
+      }
+      if (isSameCategoryName(next, storedExpected)) {
+        store.update(draft.draftId, {
+          status: 'discarded',
+          discardReason: 'same_name',
+          updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+          ...this.turnMetadata(input, draft, 'continuation'),
+        });
+        return this.completeTurn(input, plan, startedAt, base, {
+          response: freeze({ text: categoryRenameSameNameText(storedExpected) }),
+        });
+      }
+      const written = this.writeDraftContinuation(draft.draftId, (current) => ({
+        resolvedArgs: {
+          ...current.resolvedArgs,
+          description: next,
+          categoryName: next,
+        },
+        missingFields: [],
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        lastQuestion: '',
+        ...this.turnMetadata(input, current, 'continuation'),
+      }));
+      if (!written.ok) {
+        return this.refuseDraftWrite(
+          input, plan, startedAt, base, written.current, (written.current ?? draft).lastQuestion,
+        );
+      }
+      const record = written.record;
+      const cas = store.cas(record.draftId, 'active', 'proposing', {
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+      });
+      if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+      return this.executeProposeCategoryRename(input, plan, startedAt, base, cas.record, client);
+    }
+    const observedRevision = draft.revision;
+    const observedCategoryId = draft.resolvedArgs.categoryId?.trim() ?? '';
+    const observedExpectedName = draft.resolvedArgs.expectedName?.trim() ?? '';
+    const read = await this.readCategoryCatalog();
+    if (!read) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        clarification: freeze({ missingFields: freeze(['categoryId']), text: CATEGORY_RENAME_READ_FAILURE_TEXT }),
+        response: freeze({ text: CATEGORY_RENAME_READ_FAILURE_TEXT }),
+      });
+    }
+    // F4 (P2): o follow-up de um rascunho SEM alvo resolvido nomeia o ALVO
+    // (contribuição contextual). O nome novo e o qualificador de kind ficam
+    // no rascunho — o follow-up não os sobrescreve. O nome contribution
+    // nunca é um token de decisão nem um comando estrangeiro.
+    const currentAfterAwait = store.get(draft.draftId);
+    if (
+      currentAfterAwait &&
+      currentAfterAwait.status === 'active' &&
+      (currentAfterAwait.revision !== observedRevision ||
+        (currentAfterAwait.resolvedArgs.categoryId?.trim() ?? '') !== observedCategoryId ||
+        (currentAfterAwait.resolvedArgs.expectedName?.trim() ?? '') !== observedExpectedName)
+    ) {
+      // Stale target: do not overwrite a newer active draft (B). Respond
+      // honestly from the current state, no proposal, no old target.
+      return this.clarifyDraft(input, plan, startedAt, base, currentAfterAwait, currentAfterAwait.lastQuestion);
+    }
+    const contextualTarget = extractContextualCategoryName(text);
+    const resolution = resolveCategoryRenameTarget(text, read.categories, read.scope, {
+      ...(contextualTarget ? { targetName: contextualTarget } : {}),
+      ...(storedKind ? { kind: storedKind } : {}),
+    });
+    if (resolution.kind === 'same-name') {
+      // F6 (P2): escrita pós-await guardada (revisão + status ACTIVE). Uma
+      // leitura obsoleta NUNCA muta terminalmente um rascunho já consumido
+      // por outro turno (o dedupe de recibo depende do terminal íntegro).
+      const written = this.writeDraftContinuation(draft.draftId, (current) => ({
+        status: 'discarded',
+        discardReason: 'same_name',
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        ...this.turnMetadata(input, current, 'continuation'),
+      }));
+      if (!written.ok) {
+        return this.refuseDraftWrite(
+          input, plan, startedAt, base, written.current, (written.current ?? draft).lastQuestion,
+        );
+      }
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: categoryRenameSameNameText(resolution.category.name) }),
+      });
+    }
+    if (resolution.kind !== 'resolved') {
+      const written = this.writeDraftContinuation(draft.draftId, (current) => ({
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        lastQuestion: resolution.clarification,
+        ...this.turnMetadata(input, current, 'continuation'),
+      }));
+      if (!written.ok) {
+        return this.refuseDraftWrite(
+          input, plan, startedAt, base, written.current, (written.current ?? draft).lastQuestion,
+        );
+      }
+      return this.clarifyDraft(input, plan, startedAt, base, written.record, resolution.clarification);
+    }
+    const category = resolution.category;
+    const newName = resolution.newName ?? storedNew;
+    if (!newName) {
+      const question = categoryRenameAskNewNameText(category.name);
+      const written = this.writeDraftContinuation(draft.draftId, (current) => ({
+        resolvedArgs: {
+          ...current.resolvedArgs,
+          description: category.name,
+          categoryId: category.id,
+          expectedName: category.name,
+        },
+        missingFields: ['name'],
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        lastQuestion: question,
+        ...this.turnMetadata(input, current, 'continuation'),
+      }));
+      if (!written.ok) {
+        return this.refuseDraftWrite(input, plan, startedAt, base, written.current, question);
+      }
+      return this.clarifyDraft(input, plan, startedAt, base, written.record, question);
+    }
+    if (isSameCategoryName(newName, category.name)) {
+      const written = this.writeDraftContinuation(draft.draftId, (current) => ({
+        status: 'discarded',
+        discardReason: 'same_name',
+        updatedAt: stamp,
+        lastIntentionId: input.intentionId,
+        ...this.turnMetadata(input, current, 'continuation'),
+      }));
+      if (!written.ok) {
+        return this.refuseDraftWrite(
+          input, plan, startedAt, base, written.current, (written.current ?? draft).lastQuestion,
+        );
+      }
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: categoryRenameSameNameText(category.name) }),
+      });
+    }
+    const overwrote = storedId !== '' && storedId.toLowerCase() !== category.id.toLowerCase();
+    const written = this.writeDraftContinuation(draft.draftId, (current) => ({
+      resolvedArgs: {
+        ...current.resolvedArgs,
+        description: newName,
+        categoryId: category.id,
+        categoryName: newName,
+        expectedName: category.name,
+      },
+      missingFields: [],
+      updatedAt: stamp,
+      lastIntentionId: input.intentionId,
+      lastQuestion: '',
+      ...this.turnMetadata(input, current, overwrote ? 'correction' : 'continuation'),
+    }));
+    if (!written.ok) {
+      return this.refuseDraftWrite(
+        input, plan, startedAt, base, written.current, (written.current ?? draft).lastQuestion,
+      );
+    }
+    const record = written.record;
+    const cas = store.cas(record.draftId, 'active', 'proposing', {
+      updatedAt: stamp,
+      lastIntentionId: input.intentionId,
+    });
+    if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+    return this.executeProposeCategoryRename(input, plan, startedAt, base, cas.record, client);
+  }
+
+  /**
+   * categories.update (name-only): proposes the rename draft through the
+   * SAME pending-operation transport (stable `proposalIdempotencyKey`
+   * derived from the draft identity) with the fixed-contract args
+   * `{ categoryId, name, expectedName }`.
+   *
+   * NUNCA auto_execute: this path performs NO eligibility check, mints NO
+   * elevated client and runs NO duplicate probe — a rename is always
+   * proposed for MANUAL confirmation, even when the target resolved in one
+   * turn. (The API contract pins the same rule server-side:
+   * `approvalRequired: true`, not auto-execution eligible.)
+   */
+  private async executeProposeCategoryRename(
+    input: TurnInput,
+    plan: TurnPlan,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    draft: MutationDraftRecord,
+    client: MutationApiClient,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const maxAttempts = this.dependencies.draftMaxProposeAttempts ?? DEFAULT_MAX_PROPOSE_ATTEMPTS;
+    const args = draft.resolvedArgs;
+    const categoryId = args.categoryId?.trim() ?? '';
+    const name = args.categoryName?.trim() ?? '';
+    const expectedName = args.expectedName?.trim() ?? '';
+    if (!validateCompleteArgs({ kind: 'category-rename', amountCents: 0, description: name || 'categoria', date: '', categoryId, categoryName: name, expectedName })) {
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: CATEGORY_RENAME_READ_FAILURE_TEXT }),
+      });
+    }
+    const identity: MutationIdentity = {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+    };
+    const summary = categoryRenameProposeSummary(expectedName, name);
+    const normalizedArgs = { categoryId, name, expectedName };
+    for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt += 1) {
+      try {
+        this.budgetFor(base).noteProposeAttempt();
+        const proposal = await client.propose({
+          tool: CATEGORY_RENAME_TOOL,
+          normalizedArgs,
+          summary,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        });
+        store.update(draft.draftId, {
+          status: 'consumed',
+          proposalId: proposal.id,
+          proposeOutcome: proposal.existing ? 'existing' : 'created',
+          updatedAt: new Date(this.draftNowMs()).toISOString(),
+          lastIntentionId: input.intentionId,
+        });
+        this.recordPresentedOperations(store, this.draftContext(input), [proposal.id]);
+        return this.completeTurn(input, plan, startedAt, base, {
+          policy: freeze({ ...base.policy, authorizationMode: 'manual' }),
+          mutation: freeze({ operationId: proposal.id, status: 'proposed' as const }),
+          response: freeze({ text: renderMutationResult('proposed', summary) }),
+        });
+      } catch (error) {
+        if (isDefinitiveProposeError(error)) {
+          store.update(draft.draftId, {
+            status: 'discarded',
+            discardReason: 'propose_rejected',
+            proposeOutcome: 'rejected',
+            updatedAt: new Date(this.draftNowMs()).toISOString(),
+            lastIntentionId: input.intentionId,
+          });
+          this.emit('mutation.blocked', {
+            intentionId: input.intentionId,
+            traceId: input.traceId,
+            channel: input.channel,
+            domain: plan.domain,
+            mode: plan.mode,
+            status: 'blocked',
+          });
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: renderMutationResult('failed') }),
+          });
+        }
+        if (attempt >= Math.max(1, maxAttempts)) {
+          store.update(draft.draftId, {
+            proposeOutcome: 'unknown',
+            updatedAt: new Date(this.draftNowMs()).toISOString(),
+            lastIntentionId: input.intentionId,
+          });
+          this.emit('mutation.blocked', {
+            intentionId: input.intentionId,
+            traceId: input.traceId,
+            channel: input.channel,
+            domain: plan.domain,
+            mode: plan.mode,
+            status: 'blocked',
+          });
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: renderInconclusive() }),
+          });
+        }
+      }
+    }
+    return this.completeTurn(input, plan, startedAt, base, {
+      response: freeze({ text: renderInconclusive() }),
+    });
+  }
+
+  /**
+   * categories.update (name-only): entry point for rename turns. With a
+   * transport it delegates to the full `runMutationTurn` (redelivery,
+   * recovery, cancel, replacement, continuation); without one (fresh turn,
+   * no draft yet) it still persists the draft and clarifies — proposing is
+   * impossible without a device-bound client, inventing a proposal is
+   * never an option.
+   */
+  private async runCategoryRenameTurn(
+    input: TurnInput,
+    plan: TurnPlan,
+    client: MutationApiClient | null,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    decisionText: string,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const ctx = this.draftContext(input);
+    const now = this.draftNowMs();
+    const isRenameDraft = (d: MutationDraftRecord): boolean =>
+      d.tool === CATEGORY_RENAME_TOOL || d.resolvedArgs.kind === 'category-rename';
+    store.expireStale(ctx, now);
+    const activeRenameDrafts = store.listActive(ctx, now).filter(isRenameDraft);
+    const hasMissingNameSlot = activeRenameDrafts.some((draft) =>
+      (draft.resolvedArgs.categoryId?.trim() ?? '').length > 0 &&
+      (draft.resolvedArgs.expectedName?.trim() ?? '').length > 0 &&
+      (!draft.resolvedArgs.categoryName?.trim() || draft.missingFields.includes('name')),
+    );
+    const parsedRename = parseCategoryRename(decisionText);
+    const explicitLiteralName = parsedRename.isRename ? parsedRename.newName : undefined;
+    const contextualLiteralName = hasMissingNameSlot && /^\s*(?:para|pra)\b/i.test(decisionText)
+      ? extractNewCategoryName(`x para ${decisionText}`)
+      : undefined;
+    const literalName = explicitLiteralName ?? contextualLiteralName;
+    // A cancel-looking substring inside a valid, contextually delimited name
+    // is data. Any cancel intent outside that exact span still wins.
+    const remainderWithoutLiteral = literalName
+      ? decisionText.replace(literalName, '')
+      : decisionText;
+    const explicitRenameNegation = /\bnao\s+renomeie\b/i.test(decisionText.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+    const exactCancelIntent = /\b(cancela|cancele|cancelar|desistir|desista|desisto|desfaz|desfazer|desfaça)\b/i;
+    const renameCancel =
+      exactCancelIntent.test(remainderWithoutLiteral) ||
+      explicitRenameNegation;
+    if (renameCancel) {
+      return this.runCancelTurn(input, plan, client, startedAt, base, decisionText);
+    }
+    if (hasMissingNameSlot && !literalName && isCancelText(decisionText)) {
+      const pending = activeRenameDrafts.find((draft) =>
+        (draft.resolvedArgs.categoryId?.trim() ?? '').length > 0 &&
+        (draft.resolvedArgs.expectedName?.trim() ?? '').length > 0 &&
+        (!draft.resolvedArgs.categoryName?.trim() || draft.missingFields.includes('name')),
+      );
+      if (pending) return this.clarifyDraft(input, plan, startedAt, base, pending, pending.lastQuestion);
+    }
+    // R7-F4 (parity with runMutationTurn, category scope): the same turn
+    // redelivered converges without new state — a replay of A never hijacks
+    // an unrelated active draft B.
+    const redelivered = store.findByIntention(ctx, input.intentionId);
+    if (redelivered && isRenameDraft(redelivered)) {
+      if (redelivered.status === 'consumed' && redelivered.proposalId) {
+        return this.completeTurn(input, plan, startedAt, base, {
+          mutation: freeze({ operationId: redelivered.proposalId, status: 'proposed' }),
+          response: freeze({ text: renderMutationResult('proposed', redelivered.resolvedArgs.description) }),
+        });
+      }
+      if (redelivered.status === 'active' && !isExpired(redelivered, now)) {
+        return this.clarifyDraft(input, plan, startedAt, base, redelivered, redelivered.lastQuestion);
+      }
+      if (redelivered.status === 'proposing' && !isExpired(redelivered, now)) {
+        if (!client) {
+          return this.clarifyDraft(input, plan, startedAt, base, redelivered, redelivered.lastQuestion);
+        }
+        return this.executeProposeCategoryRename(input, plan, startedAt, base, redelivered, client);
+      }
+      // Terminal/expired replay closes here: never fall through to continue
+      // an unrelated active draft B (anti-hijack).
+      if (redelivered.status === 'expired' || redelivered.status === 'discarded' || redelivered.status === 'replaced' || redelivered.status === 'consumed') {
+        return this.categoryRenameFreshFlow(input, plan, startedAt, base, client);
+      }
+    }
+    // F5 (P2): restart recovery (parity with runMutationTurn, rename scope):
+    // drafts left `proposing` by a crash are re-emitted with the SAME key
+    // (and the STRICT category args — never the transaction tuple) before
+    // the current turn proceeds. The API dedup converges to the ORIGINAL
+    // operation: the durable mapping survives (no 422, no discard).
+    if (client) {
+      for (const proposing of store.listProposing(ctx, now)) {
+        if (!isRenameDraft(proposing)) continue;
+        const args = proposing.resolvedArgs;
+        const categoryId = args.categoryId?.trim() ?? '';
+        const name = args.categoryName?.trim() ?? '';
+        const expectedName = args.expectedName?.trim() ?? '';
+        if (!categoryId || !name || !expectedName) continue;
+        try {
+          await this.executeProposeSilent(proposing, client, input);
+          const recovered = store.get(proposing.draftId);
+          if (recovered?.status === 'consumed' && recovered.proposalId) {
+            // Only the SAME intent may claim the recovered operation. A
+            // different current turn (B) must never be answered with A's
+            // proposal (nor discard B) �?" process B on its own merits.
+            if (proposing.lastIntentionId === input.intentionId) {
+              return this.completeTurn(input, plan, startedAt, base, {
+                mutation: freeze({ operationId: recovered.proposalId, status: 'proposed' as const }),
+                response: freeze({ text: renderMutationResult('proposed', recovered.resolvedArgs.description) }),
+              });
+            }
+            // A different intent (even with identical text) must NOT reuse A's
+            // proposal by name: it processes its own fresh proposal normally.
+          }
+        } catch {
+          // Best effort: the current turn still proceeds; the draft stays
+          // proposing with outcome unknown for the next reconciliation.
+        }
+      }
+    }
+    if (!client) {
+      const actives = store.listActive(ctx, now).filter(isRenameDraft);
+      if (actives.length === 0) return this.categoryRenameFreshFlow(input, plan, startedAt, base, null);
+      const first = actives[0]!;
+      if (
+        (first.resolvedArgs.categoryId?.trim() ?? '').length > 0 &&
+        (first.resolvedArgs.expectedName?.trim() ?? '').length > 0 &&
+        (first.resolvedArgs.categoryName?.trim() ?? '').length > 0 &&
+        first.missingFields.length === 0
+      ) {
+        return this.completeTurn(input, plan, startedAt, base, {
+          response: freeze({ text: categoryRenameReadyNoProposalText(first.resolvedArgs.expectedName!.trim()) }),
+        });
+      }
+      return this.clarifyDraft(input, plan, startedAt, base, first, first.lastQuestion);
+    }
+    const actives = store.listActive(ctx, now).filter(isRenameDraft);
+    if (actives.length === 0) return this.categoryRenameFreshFlow(input, plan, startedAt, base, client);
+    return this.continueCategoryRenameDraft(input, plan, startedAt, base, actives[0]!, client);
+  }
+
+  /** Manual-only, description-only transaction edit over the keyed proposal protocol. */
+  private async runTransactionDescriptionTurn(
+    input: TurnInput,
+    plan: TurnPlan,
+    client: MutationApiClient | null,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+    decisionText: string,
+  ): Promise<TurnResult> {
+    const store = this.dependencies.draftStore!;
+    const ctx = this.draftContext(input);
+    const now = this.draftNowMs();
+    store.expireStale(ctx, now);
+    const isDescriptionDraft = (draft: MutationDraftRecord) => draft.tool === TRANSACTION_DESCRIPTION_TOOL || draft.resolvedArgs.kind === 'transaction-description';
+    const redelivered = store.findByIntention(ctx, input.intentionId);
+    if (redelivered && isDescriptionDraft(redelivered) && redelivered.status === 'consumed' && redelivered.proposalId) {
+      return this.completeTurn(input,plan,startedAt,base,{policy:freeze({...base.policy,authorizationMode:'manual'}),mutation:freeze({operationId:redelivered.proposalId,status:'proposed'}),response:freeze({text:renderMutationResult('proposed',redelivered.resolvedArgs.description)})});
+    }
+    if (redelivered && isDescriptionDraft(redelivered) && redelivered.status === 'proposing') {
+      if (!client || !validateCompleteArgs(redelivered.resolvedArgs)) return this.completeTurn(input,plan,startedAt,base,{response:freeze({text:renderInconclusive()})});
+      const args={transactionId:redelivered.resolvedArgs.transactionId!,description:redelivered.resolvedArgs.description.trim(),expectedDescription:redelivered.resolvedArgs.expectedDescription!};
+      try {
+        this.budgetFor(base).noteProposeAttempt();
+        const proposal=await client.propose({tool:TRANSACTION_DESCRIPTION_TOOL,normalizedArgs:args,summary:`alterar a descrição de “${args.expectedDescription}” para “${args.description}”`,identity:{workspaceId:redelivered.workspaceId,actorId:redelivered.actorId,deviceId:redelivered.deviceId??input.deviceId??(()=>{throw new Error('mutation.device_required')})()},idempotencyKey:redelivered.proposalIdempotencyKey});
+        store.update(redelivered.draftId,{status:'consumed',proposalId:proposal.id,proposeOutcome:proposal.existing?'existing':'created',updatedAt:new Date(this.draftNowMs()).toISOString(),lastIntentionId:input.intentionId});
+        this.recordPresentedOperations(store,ctx,[proposal.id]);
+        return this.completeTurn(input,plan,startedAt,base,{policy:freeze({...base.policy,authorizationMode:'manual'}),mutation:freeze({operationId:proposal.id,status:'proposed'}),response:freeze({text:renderMutationResult('proposed',`alterar descrição do lançamento “${args.expectedDescription}”`)})});
+      } catch(error) {
+        if(isDefinitiveProposeError(error))store.update(redelivered.draftId,{status:'discarded',discardReason:'propose_rejected',proposeOutcome:'rejected',updatedAt:new Date(this.draftNowMs()).toISOString(),lastIntentionId:input.intentionId});
+        return this.completeTurn(input,plan,startedAt,base,{response:freeze({text:isDefinitiveProposeError(error)?renderMutationResult('failed'):renderInconclusive()})});
+      }
+    }
+    const drafts = store.listActive(ctx, now).filter(isDescriptionDraft);
+    if (drafts.length > 1) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:'Há mais de uma alteração de descrição pendente. Cancele a proposta correta antes de continuar.' }) });
+    let draft = drafts[0];
+    const explicit = hasTransactionDescriptionSignal(decisionText);
+    if (!explicit && /\bnao\s+altere\b/i.test(decisionText.normalize('NFD').replace(/[\u0300-\u036f]/g,''))) {
+      return this.completeTurn(input,plan,startedAt,base,{response:freeze({text:'Entendido — não alterei nem propus nenhuma descrição.'})});
+    }
+    if (!draft && !explicit) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:renderInconclusive() }) });
+    const delimitedDescriptionFollowup = !!draft && draft.missingFields.includes('description') && /^\s*(?:para|pra)\b/i.test(decisionText);
+    if (draft && isCancelText(decisionText) && !delimitedDescriptionFollowup) return this.runCancelTurn(input, plan, client, startedAt, base, decisionText);
+    if (draft && !explicit && /\b(?:liste|mostre|saldo|quanto|crie|criar|categoria|conta)\b/i.test(decisionText)) {
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) });
+    }
+    const reader = this.entityReaderOrClosed();
+    if (!reader.listTransactions) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:'Não consigo consultar os lançamentos agora; não criei nenhuma proposta.' }) });
+    let transactions;
+    try { transactions = await reader.listTransactions(); }
+    catch { return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:'Não foi possível validar o lançamento no seu espaço; nenhuma alteração foi proposta.' }) }); }
+    let targetId = draft?.resolvedArgs.transactionId;
+    let expectedDescription = draft?.resolvedArgs.expectedDescription;
+    let nextDescription = draft?.resolvedArgs.description;
+    let transactionCandidates: readonly TransactionTargetOption[] | undefined = draft?.resolvedArgs.transactionCandidates;
+    const parsed = explicit ? parseTransactionDescriptionEdit(decisionText) : {};
+    if (explicit) {
+      targetId = undefined;
+      expectedDescription = undefined;
+      nextDescription = parsed.description ?? '';
+    } else if (draft) {
+      if (!targetId && transactionCandidates?.length) {
+        targetId = resolveTransactionTargetChoice(decisionText,transactionCandidates);
+        if (!targetId) return this.clarifyDraft(input,plan,startedAt,base,draft,draft.lastQuestion);
+        const selected=transactions.find((row)=>row.id===targetId && row.scopeId===input.workspaceId);
+        if (!selected) return this.completeTurn(input,plan,startedAt,base,{response:freeze({text:'Não foi possível validar a opção escolhida neste espaço.'})});
+        expectedDescription=selected.description;
+        transactionCandidates=undefined;
+      } else if (!targetId) parsed.targetHint = decisionText.trim();
+      else if (!nextDescription || draft.missingFields.includes('description')) {
+        const fragment = decisionText.trim().replace(/^(?:para|pra)\s+/i, '').replace(/^["'“”]|["'“”.,!?]+$/g, '').trim();
+        if (fragment && !/^(sim|confirmar|cancela|cancelar|não|nao)$/i.test(fragment)) nextDescription = fragment.slice(0, 240);
+      }
+    }
+    if (!targetId && parsed.targetHint) {
+      const match = resolveTransactionDescriptionTarget(parsed.targetHint, transactions, input.workspaceId);
+      if (match.kind === 'resolved') { targetId = match.transaction.id; expectedDescription = match.transaction.description; }
+      else if (match.kind === 'ambiguous') {
+        const matches=transactions.filter((row)=>row.scopeId===input.workspaceId && row.kind!=='transfer' && row.description.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('pt-BR').trim()===parsed.targetHint!.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('pt-BR').trim());
+        let accountNames = new Map<string,string>();
+        try { accountNames = new Map((await reader.listAccounts()).map((account)=>[account.id,account.name])); } catch { /* names are optional; date/amount options remain explicit */ }
+        transactionCandidates=matches.map((row)=>({transactionId:row.id,date:row.date,amountCents:row.amountCents,accountId:row.accountId,...(accountNames.get(row.accountId)?{accountName:accountNames.get(row.accountId)}:{})}));
+      }
+      else if (match.kind === 'unsupported') return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:'Esse lançamento está vinculado a uma transferência e não pode ser alterado por este fluxo.' }) });
+      else return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:'Não encontrei esse lançamento entre os registros disponíveis deste espaço; nenhuma proposta foi criada.' }) });
+    }
+    if (targetId) {
+      const authoritative = transactions.find((row) => row.id === targetId && row.scopeId === input.workspaceId && (row.kind === 'expense' || row.kind === 'income'));
+      if (!authoritative) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:'Esse lançamento não está disponível para edição neste espaço.' }) });
+      if (draft?.resolvedArgs.expectedDescription && draft.resolvedArgs.expectedDescription !== authoritative.description) {
+        store.update(draft.draftId,{status:'discarded',discardReason:'target_changed',updatedAt:new Date(now).toISOString(),lastIntentionId:input.intentionId},{expectedRevision:draft.revision});
+        return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:'A descrição do lançamento mudou desde a pergunta. Refaça o pedido com a descrição atual; não criei uma proposta.' }) });
+      }
+      expectedDescription = authoritative.description;
+    }
+    if (typeof nextDescription === 'string' && nextDescription.trim() === expectedDescription) {
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:'A descrição já está igual; não criei uma proposta.' }) });
+    }
+    const missingFields = [!targetId ? 'transactionId' : '', !nextDescription?.trim() ? 'description' : ''].filter(Boolean);
+    const candidateQuestion = transactionCandidates?.length ? `Encontrei mais de um lançamento “${parsed.targetHint ?? decisionText}”. Escolha uma opção: ${transactionCandidates.map((option)=>`R$ ${(option.amountCents/100).toFixed(2).replace('.',',')} em ${option.date.slice(8,10)}/${option.date.slice(5,7)}/${option.date.slice(0,4)}${option.accountName?` na conta ${option.accountName}`:''}`).join('; ')}.` : undefined;
+    const question = !targetId ? candidateQuestion ?? 'Qual lançamento você quer alterar? Informe a descrição atual.' : !nextDescription?.trim() ? `Qual é a nova descrição para “${expectedDescription}”?` : '';
+    const candidate = buildDraftRecord({
+      ...ctx, intentionId: input.intentionId, tool: TRANSACTION_DESCRIPTION_TOOL,
+      resolvedArgs: { kind:'transaction-description', amountCents:0, description:nextDescription?.trim() ?? '', date:'', ...(targetId ? {transactionId:targetId} : {}), ...(expectedDescription ? {expectedDescription} : {}), ...(transactionCandidates ? {transactionCandidates} : {}) },
+      missingFields, question, ttlMs:this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS, nowMs:now,
+    });
+    const stored = draft
+      ? store.update(draft.draftId,{resolvedArgs:candidate.resolvedArgs,missingFields,status:'active',lastQuestion:question,updatedAt:new Date(now).toISOString(),lastIntentionId:input.intentionId},{expectedRevision:draft.revision})
+      : store.getOrCreate(candidate).record;
+    if (!stored) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:renderInconclusive() }) });
+    draft = stored;
+    if (missingFields.length) return this.clarifyDraft(input, plan, startedAt, base, draft, question);
+    if (!validateCompleteArgs(draft.resolvedArgs)) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:'Não foi possível validar a alteração; nenhuma proposta foi criada.' }) });
+    if (!client) return this.clarifyDraft(input, plan, startedAt, base, draft, 'A alteração está pronta para revisão, mas a conexão segura não está disponível. Tente novamente.');
+    const cas = store.cas(draft.draftId, 'active', 'proposing', { updatedAt:new Date(now).toISOString(), lastIntentionId:input.intentionId });
+    if (!cas.ok) return this.handleCasLoss(input, plan, startedAt, base, cas.current);
+    const args = { transactionId:targetId!, description:nextDescription!.trim(), expectedDescription:expectedDescription! };
+    try {
+      const proposal = await client.propose({ tool:TRANSACTION_DESCRIPTION_TOOL, normalizedArgs:args, summary:`alterar a descrição de “${expectedDescription}” para “${nextDescription}”`, identity:{ workspaceId:input.workspaceId, actorId:input.actorId, deviceId:input.deviceId ?? (()=>{throw new Error('mutation.device_required')})() }, idempotencyKey:draft.proposalIdempotencyKey });
+      store.update(draft.draftId,{status:'consumed',proposalId:proposal.id,proposeOutcome:proposal.existing?'existing':'created',updatedAt:new Date(this.draftNowMs()).toISOString(),lastIntentionId:input.intentionId});
+      this.recordPresentedOperations(store,ctx,[proposal.id]);
+      return this.completeTurn(input,plan,startedAt,base,{policy:freeze({...base.policy,authorizationMode:'manual'}),mutation:freeze({operationId:proposal.id,status:'proposed'}),response:freeze({text:renderMutationResult('proposed',`alterar descrição do lançamento “${expectedDescription}”`)})});
+    } catch (error) {
+      if (isDefinitiveProposeError(error)) store.update(draft.draftId,{status:'discarded',discardReason:'propose_rejected',proposeOutcome:'rejected',updatedAt:new Date(this.draftNowMs()).toISOString(),lastIntentionId:input.intentionId});
+      else store.update(draft.draftId,{proposeOutcome:'unknown',updatedAt:new Date(this.draftNowMs()).toISOString(),lastIntentionId:input.intentionId});
+      return this.completeTurn(input,plan,startedAt,base,{response:freeze({text:isDefinitiveProposeError(error)?renderMutationResult('failed'):renderInconclusive()})});
+    }
+  }
+
+  /**
    * accounts.deactivate (account-only path): entry point for deactivation
    * turns that arrive under a non-mutation plan (the router maps "desative
    * a conta ..." to a read and "delete ela" to `unsupported`). With a
@@ -3249,12 +5663,38 @@ export class ConversationOrchestrator {
     draft: MutationDraftRecord,
     client: MutationApiClient,
   ): Promise<TurnResult> {
+    // accounts.update (account-only path): a rename draft NEVER flows
+    // through the expense/income continuation below. Target + new-name
+    // slot-fill lives in `continueRenameDraft`; the guards, writes and CAS
+    // are the same machinery, only the slots differ.
+    if (draft.tool === ACCOUNT_RENAME_TOOL || draft.resolvedArgs.kind === 'account-rename') {
+      return this.continueRenameDraft(input, plan, startedAt, base, draft, client);
+    }
     // accounts.deactivate (account-only path): a deactivation draft NEVER
     // flows through the expense/income continuation below. Target
     // re-resolution lives in `continueDeactivateDraft`; the guards, writes
     // and CAS are the same machinery, only the slots differ.
     if (draft.tool === ACCOUNT_DEACTIVATE_TOOL || draft.resolvedArgs.kind === 'account-deactivate') {
       return this.continueDeactivateDraft(input, plan, startedAt, base, draft, client);
+    }
+    // categories.create: a category draft NEVER flows through the
+    // expense/income continuation below. Slot-fill lives in
+    // `continueCategoryDraft`; the guards, writes and CAS are the same
+    // machinery, only the slots differ.
+    if (draft.tool === CATEGORY_CREATE_TOOL || draft.resolvedArgs.kind === 'category-create') {
+      return this.continueCategoryDraft(input, plan, startedAt, base, draft, client);
+    }
+    // categories.update (name-only): a category-rename draft NEVER flows
+    // through the expense/income continuation below. Target + new-name
+    // slot-fill lives in `continueCategoryRenameDraft`.
+    if (draft.tool === CATEGORY_RENAME_TOOL || draft.resolvedArgs.kind === 'category-rename') {
+      return this.continueCategoryRenameDraft(input, plan, startedAt, base, draft, client);
+    }
+    if (draft.tool === CATEGORY_DEACTIVATE_TOOL || draft.resolvedArgs.kind === 'category-deactivate') {
+      if (draft.resolvedArgs.kind !== 'category-deactivate') {
+        return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) });
+      }
+      return this.runCategoryDeactivateTurn(input, plan, client, startedAt, base, input.decisionText ?? input.text ?? '');
     }
     // accounts.create (account-only path): an account draft NEVER flows
     // through the expense/income continuation below (a "saldo 145" follow-up
@@ -3404,8 +5844,19 @@ export class ConversationOrchestrator {
     const partialAmountPending =
       draft.missingFields.includes('amount') &&
       (!Number.isInteger(draft.resolvedArgs.amountCents) || draft.resolvedArgs.amountCents <= 0);
-    const turnCategory = draft.missingFields.includes('categoryId') || partialAmountPending
-      ? categoryQueryFrom(input.text, { allowBareFragment })
+    const repeatsStoredCategory = draft.missingFields.includes('accountId') &&
+      !!draft.resolvedArgs.categoryQuery &&
+      foldSelectorText(input.text) === foldSelectorText(draft.resolvedArgs.categoryQuery);
+    const explicitAccountSpecifierInDraft = /\b(?:na|no)\s+conta\b/iu.test(draft.resolvedArgs.description);
+    const categoryAnswerFromAskedSlot = draft.missingFields.includes('categoryId') &&
+      explicitAccountSpecifierInDraft
+      ? categoryQueryFrom(input.text, { allowBareFragment: true })
+      : undefined;
+    const turnCategory = draft.missingFields.includes('categoryId') || partialAmountPending ||
+      (draft.missingFields.includes('accountId') && !!draft.resolvedArgs.categoryQuery)
+      ? (categoryAnswerFromAskedSlot ?? (repeatsStoredCategory
+        ? { query: draft.resolvedArgs.categoryQuery!, fromFragment: false, bare: true }
+        : categoryQueryFrom(input.text, { allowBareFragment })))
       : undefined;
     // FIX-170: a BARE name is adopted as the category answer ONLY when the
     // category is the SOLE pending field. With the account still pending the
@@ -3413,8 +5864,11 @@ export class ConversationOrchestrator {
     // and the turn keeps the pre-existing hint behavior (account-first,
     // description-exact category) — never a silent misattribution. Explicit
     // (`categoria X`) and `de X` fragments keep their existing adoption.
+    const repeatedStoredCategory = turnCategory?.bare === true && (repeatsStoredCategory || categoryAnswerFromAskedSlot !== undefined);
     const adoptedCategory =
-      turnCategory?.bare === true && draft.missingFields.includes('accountId') ? undefined : turnCategory;
+      turnCategory?.bare === true && draft.missingFields.includes('accountId') && !repeatedStoredCategory
+        ? undefined
+        : turnCategory;
     const turnCategoryQuery = adoptedCategory?.query;
     const categoryQuery = turnCategoryQuery ?? draft.resolvedArgs.categoryQuery;
     // A07/AC14: "ontem"/"hoje" CORRECTS the stored date. Resolved through the
@@ -3483,11 +5937,17 @@ export class ConversationOrchestrator {
     // account named "Carne" it would silently select it and propose without
     // ever asking. The account therefore stays pending (and its homonyms stay
     // visible) while the fragment only feeds `categoryQuery`.
-    const resolutionHint = turnInterpretation.status === 'candidate'
+    const resolutionHint = repeatedStoredCategory
+      ? draft.resolvedArgs.description
+      : turnInterpretation.status === 'candidate'
       ? turnInterpretation.resolutionText
-      : adoptedCategory?.fromFragment
+      : adoptedCategory?.fromFragment || (adoptedCategory !== undefined && !adoptedCategory.bare)
         ? draft.resolvedArgs.description
         : `${draft.resolvedArgs.description} ${input.text}`;
+    if (merged.kind !== 'expense' && merged.kind !== 'income') {
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:'Esta alteração exige o fluxo dedicado de descrição; não propus uma mutação financeira genérica.' }) });
+    }
+    const financialMerged: ResolvableMutation = { kind: merged.kind, amountCents: merged.amountCents, description: merged.description, date: merged.date, ...(categoryQuery ? { categoryQuery } : {}) };
     const permit = this.permitResolutionRecovery(base, {
       kind: merged.kind,
       args: {
@@ -3511,7 +5971,7 @@ export class ConversationOrchestrator {
       );
     }
     const resolution = await resolveMutationEntities(
-      merged,
+      financialMerged,
       resolutionHint,
       this.entityReaderOrClosed(),
       // A08/R08 tier 2: the ids this draft already had confirmed inside the
@@ -3681,6 +6141,13 @@ export class ConversationOrchestrator {
   ): Promise<TurnResult> {
     const store = this.dependencies.draftStore!;
     const ctx = this.draftContext(input);
+    // accounts.update (account-only path): an explicit rename turn that
+    // reaches the fresh flow (via replacement of another draft) opens a
+    // rename draft — the transaction interpretation below would persist
+    // a bogus partial expense draft for "renomeie a conta".
+    if (hasAccountRenameSignal(input.text)) {
+      return this.renameFreshFlow(input, plan, startedAt, base, client);
+    }
     // accounts.deactivate (account-only path): an explicit deactivation
     // turn that reaches the fresh flow (via replacement of another draft)
     // opens a deactivation draft — the transaction interpretation below
@@ -3848,10 +6315,10 @@ export class ConversationOrchestrator {
           }
           if (authorization.kind === 'authorized') {
             try {
-              const executed = await new PendingOperationCoordinator({ client: elevated }).executeAuthorized({ operationId: proposal.id, attestation: authorization.attestation }, identity);
+              const executed = await new PendingOperationCoordinator({ client: elevated }).executeAuthorized({ operationId: proposal.id, attestation: authorization.attestation }, identity, { tool });
               return this.completeTurn(input, plan, startedAt, base, {
                 policy: freeze({ ...base.policy, authorizationMode: 'auto' }),
-                mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}) }),
+                mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}), expected: { tool } }),
                 response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${verified.accountName ? ` na conta ${verified.accountName}` : ''}. Se quiser, posso desfazer.` }),
               });
             } catch {
@@ -4162,6 +6629,15 @@ export class ConversationOrchestrator {
     }
     if (actives.length === 1 && actives[0]) {
       const draft = actives[0];
+      // ROUND6 — a foreign-governed turn never replaces an active account
+      // draft ("Desative categoria ..." must not destroy the creation
+      // draft via isReplacement): it continues to the clarify path with
+      // the draft intact (the contribution veto above yields null there).
+      const isAccountDraft =
+        draft.tool === ACCOUNT_CREATE_TOOL || draft.resolvedArgs.kind === 'account';
+      if (isAccountDraft && this.accountForeignContributionVeto(input.text ?? '')) {
+        return this.continueDraft(input, plan, startedAt, base, draft, client);
+      }
       if (this.isReplacement(input.text, draft)) {
         store.update(draft.draftId, {
           status: 'replaced',
@@ -4193,11 +6669,31 @@ export class ConversationOrchestrator {
       // turn's own `proposing` draft is handled above with a response), so it
       // is deliberately NOT charged to this turn's propose axis: the snapshot
       // reports what THIS turn proposed.
+      // accounts.update (account-only path): rename drafts re-emit the
+      // fixed-contract args, never the transaction tuple.
       // accounts.deactivate (account-only path): deactivation drafts
       // re-emit the fixed-contract args, never the transaction tuple.
       // accounts.create (account-only path): account drafts re-emit the
       // fixed-contract args, never the transaction tuple.
-      const proposal = draft.tool === ACCOUNT_DEACTIVATE_TOOL || draft.resolvedArgs.kind === 'account-deactivate'
+      // categories.create / categories.deactivate: category
+      // drafts re-emit the fixed-contract args (strict name/kind/parentId),
+      // never the transaction tuple — a silent recovery must not serialize
+      // a category as an expense/income write.
+      const isCategoryDraft =
+        draft.tool === CATEGORY_CREATE_TOOL || draft.resolvedArgs.kind === 'category-create';
+      const proposal = draft.tool === ACCOUNT_RENAME_TOOL || draft.resolvedArgs.kind === 'account-rename'
+        ? await client.propose({
+          tool: ACCOUNT_RENAME_TOOL,
+          normalizedArgs: {
+            accountId: args.accountId ?? '',
+            name: args.accountName?.trim() ?? '',
+            expectedName: args.expectedName?.trim() ?? '',
+          },
+          summary: args.accountName?.trim() || args.description,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        })
+        : draft.tool === ACCOUNT_DEACTIVATE_TOOL || draft.resolvedArgs.kind === 'account-deactivate'
         ? await client.propose({
           tool: ACCOUNT_DEACTIVATE_TOOL,
           normalizedArgs: {
@@ -4217,6 +6713,41 @@ export class ConversationOrchestrator {
             initialBalanceCents: args.initialBalanceCents ?? 0,
           },
           summary: args.accountName?.trim() || args.description,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        })
+        : isCategoryDraft
+        ? await client.propose({
+          tool: CATEGORY_CREATE_TOOL,
+          normalizedArgs: {
+            name: args.categoryName?.trim() ?? '',
+            kind: args.categoryKind ?? '',
+            ...(typeof args.parentCategoryId === 'string' && args.parentCategoryId ? { parentId: args.parentCategoryId } : {}),
+          },
+          summary: args.categoryName?.trim() || args.description,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        })
+        : draft.tool === CATEGORY_RENAME_TOOL || draft.resolvedArgs.kind === 'category-rename'
+        ? await client.propose({
+          tool: CATEGORY_RENAME_TOOL,
+          normalizedArgs: {
+            categoryId: args.categoryId?.trim() ?? '',
+            name: args.categoryName?.trim() ?? '',
+            expectedName: args.expectedName?.trim() ?? '',
+          },
+          summary: args.categoryName?.trim() || args.description,
+          identity,
+          idempotencyKey: draft.proposalIdempotencyKey,
+        })
+        : draft.tool === CATEGORY_DEACTIVATE_TOOL || draft.resolvedArgs.kind === 'category-deactivate'
+        ? await client.propose({
+          tool: CATEGORY_DEACTIVATE_TOOL,
+          normalizedArgs: {
+            categoryId: args.categoryId?.trim() ?? '',
+            expectedName: args.expectedName?.trim() ?? '',
+          },
+          summary: categoryDeactivateProposeSummary(args.expectedName?.trim() ?? ''),
           identity,
           idempotencyKey: draft.proposalIdempotencyKey,
         })
@@ -4298,6 +6829,14 @@ export class ConversationOrchestrator {
     const wantsPropose = !wantsCancel && !wantsConfirm && isForgetRequestText(decisionText);
     if (!wantsConfirm && !wantsCancel && !wantsPropose) return null;
     if (plan.mode === 'mutation-proposal') return null;
+    // Categoria CUD: a recusa financeira específica é dona do turno — a
+    // discovery de memória nunca sequestra ("exclua categoria ..." não vira
+    // proposta de forget). Confirmação/cancelamento de forget pendente passa:
+    // "sim"/"não" nunca roteiam para `unsupported_category_mutation`, então a
+    // confirmação legítima segue intacta.
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'unsupported_category_mutation') {
+      if (!wantsConfirm && !wantsCancel) return null;
+    }
     if ((wantsConfirm || wantsCancel) && this.hasDraftForTurn(input)) return null;
     if (client && (wantsConfirm || wantsCancel)) {
       try {
@@ -4398,6 +6937,29 @@ export class ConversationOrchestrator {
     }
     const ctx = this.draftContext(input);
     const now = this.draftNowMs();
+    // This wording explicitly targets the local draft, not an unrelated
+    // authoritative Pending V2 operation. Expired drafts are not active, so
+    // they produce an honest no-op without consulting the provider or API.
+    if (/^\s*cancele\s+o\s+rascunho\s*[.!?]*\s*$/i.test(decision)) {
+      if (store.listProposing(ctx, now).length > 0) {
+        return this.completeTurn(input, plan, startedAt, base, {
+          response: freeze({ text: renderInconclusive() }),
+        });
+      }
+      const stamp = new Date(now).toISOString();
+      let discarded = 0;
+      for (const draft of store.listActive(ctx, now)) {
+        store.update(draft.draftId, {
+          status: 'discarded', discardReason: 'user_cancel', updatedAt: stamp,
+          lastIntentionId: input.intentionId,
+          ...this.turnMetadata(input, draft, 'cancel_ref'),
+        });
+        discarded += 1;
+      }
+      return this.completeTurn(input, plan, startedAt, base, {
+        response: freeze({ text: discarded > 0 ? DRAFTS_DISCARDED_NO_OP_TEXT : NO_PENDING_CANCEL_TEXT }),
+      });
+    }
     // Without a transport the proposing outcome cannot be resolved — reply
     // inconclusive when a handoff is in flight, never "cancelado" (INV-10).
     // Active drafts are still discarded locally: no structured intention
@@ -4583,7 +7145,16 @@ export class ConversationOrchestrator {
       // durable API frontier (V060) verifies the binding; the retry POST
       // itself also carries it (uniform with executor.decide — the API
       // retry route ignores the body today and the execute leg enforces).
-      const result = await coordinator.retry(target.operation.id, identity, input.intentionId);
+      // HIGH3 (round 3): sensitive tools without a resolvable target fail
+      // closed here with zero transport — never a blind retry.
+      const retryExpected = resolveExpectedContext(target.operation);
+      if (
+        requiresExpectedEntity(target.operation.tool ?? '') &&
+        (retryExpected === undefined || retryExpected.entityId === undefined)
+      ) {
+        return this.inconclusiveConfirmationTurn(input, plan, startedAt, base, 'confirmation_expected_context_missing');
+      }
+      const result = await coordinator.retry(target.operation.id, identity, input.intentionId, retryExpected);
       this.emit('approval.confirmed', {
         intentionId: input.intentionId,
         traceId: input.traceId,
@@ -4606,10 +7177,28 @@ export class ConversationOrchestrator {
           operationId: result.operationId,
           status: 'succeeded' as const,
           ...(result.receipt ? { receipt: result.receipt } : {}),
+          ...(retryExpected ? { expected: retryExpected } : {}),
         }),
         response: freeze({ text: renderMutationResult('succeeded', 'operação', result.receipt as unknown as { mutationKind?: unknown } | undefined) }),
       });
-    } catch {
+    } catch (error) {
+      // Stale rename precondition (typed `account.name_conflict`, 409):
+      // deterministic failure that guides a FRESH resolution — never a
+      // blind retry, never a new proposal/key from this turn.
+      if (isNameConflictError(error)) {
+        this.emit('mutation.blocked', {
+          intentionId: input.intentionId,
+          traceId: input.traceId,
+          channel: input.channel,
+          domain: plan.domain,
+          mode: plan.mode,
+          status: 'blocked',
+          reason: 'account.name_conflict',
+        });
+        return this.completeTurn(input, plan, startedAt, base, {
+          response: freeze({ text: RENAME_STALE_EXPECTED_NAME_TEXT }),
+        });
+      }
       this.emit('mutation.blocked', {
         intentionId: input.intentionId,
         traceId: input.traceId,
@@ -4662,6 +7251,13 @@ export class ConversationOrchestrator {
     this.emit('plan.validated', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode });
     const policy = freeze({ capability: 'financial.read' as const, writeAuthorized: false as const, approvalRequired: true as const, authorizationMode: 'none' as const });
     const result: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy; mutation?: { operationId: string; status: 'proposed' | 'succeeded'; receipt?: MutationReceipt }; response?: { text: string } } = { input, plan: freeze(plan), policy };
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'ambiguous_cancel_draft_compound') {
+      const text = 'Posso cancelar o rascunho ou iniciar outro pedido, mas não os dois juntos. Qual você prefere?';
+      return this.completeTurn(input, plan, startedAt, result, {
+        clarification: freeze({ missingFields: freeze(['intent']), text }),
+        response: freeze({ text }),
+      });
+    }
     // ATTACHMENT-CONTENT-QUERY: a TYPED question about server-side admitted
     // attachment data precedes financial routing and draft continuation — the
     // composed text may carry finance words ("conta", "gastei", "R$ 42,50")
@@ -4674,6 +7270,32 @@ export class ConversationOrchestrator {
     const contentQuery = resolveAttachmentContentQuery(input, plan.mode);
     if (contentQuery) {
       return this.runAttachmentContentQuery(input, plan, contentQuery, startedAt, result);
+    }
+    // A pending rename's explicit `para/pra NAME` answer belongs to its name
+    // slot even when the router sees a cancel-looking substring in NAME.
+    // This narrow preemption uses only typed decisionText and only an active
+    // rename draft missing its name; standalone cancellation keeps its route.
+    const renameDecisionCandidate = /^\s*(?:para|pra)\b/i.test(decisionText) ||
+      /\b(cancela|cancele|cancelar|desistir|desista|desisto|desfaz|desfazer|desfaça)\b/i.test(decisionText) ||
+      /\bnao\s+renomeie\b/i.test(decisionText.normalize('NFD').replace(/[\u0300-\u036f]/g, '')) ||
+      isCancelText(decisionText);
+    if (renameDecisionCandidate && this.dependencies.draftStore && typeof this.dependencies.draftStore.listActive === 'function') {
+      const ctx = this.draftContext(input);
+      const pendingRename = this.dependencies.draftStore.listActive(ctx, this.draftNowMs()).some((draft) =>
+        (draft.tool === CATEGORY_RENAME_TOOL || draft.resolvedArgs.kind === 'category-rename') &&
+        !!draft.resolvedArgs.categoryId?.trim() &&
+        !!draft.resolvedArgs.expectedName?.trim() &&
+        (!draft.resolvedArgs.categoryName?.trim() || draft.missingFields.includes('name')),
+      );
+      const contextualName = /^\s*(?:para|pra)\b/i.test(decisionText) &&
+        !!extractNewCategoryName(`x para ${decisionText}`);
+      const renameDecision = /\b(cancela|cancele|cancelar|desistir|desista|desisto|desfaz|desfazer|desfaça)\b/i.test(decisionText) ||
+        /\bnao\s+renomeie\b/i.test(decisionText.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+      if (pendingRename && (contextualName || renameDecision || isCancelText(decisionText))) {
+        return this.runCategoryRenameTurn(
+          input, plan, this.dependencies.mutationApiClient ?? null, startedAt, result, decisionText,
+        );
+      }
     }
     // Review round 4 P1-A1: the confirmation anchor is captured SYNCHRONOUSLY
     // at turn entry, before ANY await/I/O below (undo probe, forget sondagem,
@@ -4919,9 +7541,9 @@ export class ConversationOrchestrator {
           if (authorization.kind === 'uncertain') { this.emitTurnBudget(result); return freeze({ ...result, response: freeze({ text: renderInconclusive() }) }); }
           if (authorization.kind === 'authorized') {
             try {
-              const executed = await new PendingOperationCoordinator({ client: elevated }).executeAuthorized({ operationId: proposal.id, attestation: authorization.attestation }, identity);
+              const executed = await new PendingOperationCoordinator({ client: elevated }).executeAuthorized({ operationId: proposal.id, attestation: authorization.attestation }, identity, { tool });
               this.emitTurnBudget(result);
-              return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'auto' }), mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}) }), response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${verified.accountName ? ` na conta ${verified.accountName}` : ''}. Se quiser, posso desfazer.` }) });
+              return freeze({ ...result, policy: freeze({ ...policy, authorizationMode: 'auto' }), mutation: freeze({ operationId: executed.operationId, status: 'succeeded', ...(executed.receipt ? { receipt: executed.receipt } : {}), expected: { tool } }), response: freeze({ text: `${parsed.kind === 'income' ? 'Receita' : 'Despesa'} de R$ ${(parsed.amountCents / 100).toFixed(2).replace('.', ',')} (${parsed.description}) registrada${verified.accountName ? ` na conta ${verified.accountName}` : ''}. Se quiser, posso desfazer.` }) });
             } catch {
               try {
                 const current = await elevated.listActive(identity);
@@ -4942,8 +7564,84 @@ export class ConversationOrchestrator {
     // SPEC §7.8 (ADR-014) with a draft store: the full multi-turn flow
     // (draft persistence, continuation, atomic consumption, recoverable
     // handoff). Without a store the legacy single-turn block above applies.
+    // categories.create (fatia categories-create-v2-endtoend): a
+    // categories.create plan NEVER flows through the generic transaction
+    // `runMutationTurn` (it would misread the turn as expense/income).
     if (plan.mode === 'mutation-proposal' && client && this.dependencies.draftStore) {
+      if (plan.requestedOperations.some((operation) => operation.name === 'categories.create')) {
+        return this.runCategoryCreationTurn(input, plan, client, startedAt, result, decisionText);
+      }
+      // categories.update (name-only): a categories.update plan NEVER flows
+      // through the generic transaction `runMutationTurn` (it would misread
+      // the turn as expense/income).
+      if (plan.requestedOperations.some((operation) => operation.name === 'categories.update')) {
+        return this.runCategoryRenameTurn(input, plan, client, startedAt, result, decisionText);
+      }
+      if (plan.requestedOperations.some((operation) => operation.name === 'categories.deactivate')) {
+        if (this.activeAccountDraft(input) && this.accountForeignContributionVeto(input.text ?? '')) {
+          return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
+        }
+        return this.runCategoryDeactivateTurn(input, plan, client, startedAt, result, decisionText);
+      }
       return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
+    }
+    // accounts.update (account-only path): an explicit rename intent
+    // ("renomeie a conta ...") arrives under a non-mutation plan — the
+    // router maps it to a read (`conta` matches `list_accounts`) or to
+    // `unsupported` (bare anaphora) — but it is a rename candidate for an
+    // EXISTING account, never a balance read. It opens a rename draft
+    // instead of looping the read offer. Reads without a rename signal
+    // ("qual meu saldo?") keep the normal flow below.
+    // `mutation-proposal`/`confirmation`/`cancel` plans keep their flows (a
+    // "sim" resolves through the coordinator listing).
+    if (
+      this.dependencies.draftStore &&
+      (plan.mode === 'unsupported' || plan.mode === 'conversation' || plan.mode === 'read') &&
+      hasAccountRenameSignal(input.text)
+    ) {
+      return this.runRenameTurn(input, plan, client ?? null, startedAt, result, decisionText);
+    }
+    // categories.update (name-only): an explicit category rename intent
+    // ("renomeie a categoria ...") may arrive under a non-mutation plan
+    // (the router maps it to a read, or a transaction interpretation
+    // injected its own plan) - but it is a rename candidate for an
+    // EXISTING category, never a catalogue read. It opens a rename draft
+    // instead of looping the read offer. Reads without a rename signal
+    // ("liste minhas categorias") keep the normal flow below.
+    // `mutation-proposal`/`confirmation`/`cancel` plans keep their flows (a
+    // "sim" resolves through the coordinator listing).
+    if (
+      this.dependencies.draftStore &&
+      (plan.mode === 'unsupported' || plan.mode === 'conversation' || plan.mode === 'read') &&
+      hasCategoryRenameSignal(input.text)
+    ) {
+      return this.runCategoryRenameTurn(input, plan, client ?? null, startedAt, result, decisionText);
+    }
+    const unrelatedDomainTurn = /\b(?:liste|listar|mostre|mostrar|saldo|quanto|crie|criar|categoria|conta|paguei|recebi)\b/i.test(decisionText) && !hasTransactionDescriptionSignal(decisionText);
+    let activeTransactionDescriptionDraft = false;
+    const draftStoreForDescription = this.dependencies.draftStore;
+    if (!unrelatedDomainTurn && draftStoreForDescription && typeof draftStoreForDescription.listActive === 'function') {
+      try {
+        activeTransactionDescriptionDraft = draftStoreForDescription.listActive(this.draftContext(input), this.draftNowMs()).some((draft) => draft.tool === TRANSACTION_DESCRIPTION_TOOL || draft.resolvedArgs.kind === 'transaction-description');
+      } catch { /* unavailable draft schema/store is fail-closed, never a proposal */ }
+    }
+    if (this.dependencies.draftStore && (hasTransactionDescriptionSignal(decisionText) || activeTransactionDescriptionDraft)) {
+      return this.runTransactionDescriptionTurn(input, plan, client ?? null, startedAt, result, decisionText);
+    }
+    if (
+      this.dependencies.draftStore && hasCategoryDeactivateSignal(input.text) &&
+      !(this.activeAccountDraft(input) && this.accountForeignContributionVeto(input.text ?? '')) &&
+      (plan.mode === 'unsupported' || plan.mode === 'conversation' || plan.mode === 'read')
+    ) {
+      return this.runCategoryDeactivateTurn(input, plan, client ?? null, startedAt, result, decisionText);
+    }
+    if (
+      this.dependencies.draftStore &&
+      (plan.mode === 'unsupported' || plan.mode === 'conversation' || plan.mode === 'read' || plan.mode === 'cancel') &&
+      this.activeCategoryDeactivateDraft(input) !== undefined &&
+      (isCategoryDeactivateCancelText(decisionText) || (!isPureReadForDraft(decisionText) && !this.isNonContributingTurn(input)))
+    ) {
+      return this.runCategoryDeactivateTurn(input, plan, client ?? null, startedAt, result, decisionText);
     }
     // accounts.deactivate (account-only path): an explicit deactivation
     // intent ("desative a conta ...", "delete ela") arrives under a
@@ -4974,12 +7672,95 @@ export class ConversationOrchestrator {
     ) {
       return this.runAccountCreationTurn(input, plan, client ?? null, startedAt, result, decisionText);
     }
+    // categories.create: an explicit creation intent ("criar categoria ...")
+    // arrives under the mutation-proposal plan above, but short follow-ups
+    // ("de despesa", "Mercado", "em Alimentação") may route elsewhere — with
+    // an ACTIVE category draft they are missing-field answers, never reads.
+    // Precedence: a pending financial operation keeps the confirmation executor
+    // (no hijack by a category draft).
+    // Tri-state pending guard: 'none' | 'some' | 'unknown'. Unknown (transport
+    // failure or invalid payload) fails CLOSED with an inconclusive reply — it
+    // never assumes an empty pending list and never writes/proposes.
+    let categoryPendingState: 'none' | 'some' | 'unknown' = 'none';
+    if (client && input.deviceId && (this.activeCategoryDraft(input) !== undefined || this.activeCategoryDeactivateDraft(input) !== undefined)) {
+      try {
+        const active = await client.listActive({ workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId });
+        if (!active || !Array.isArray(active.items)) {
+          categoryPendingState = 'unknown';
+        } else {
+          // Status protocol: only decidable operations (proposed/confirmed)
+          // take precedence over an active category draft. Failed ops are
+          // retry-only and must not hijack a new category draft; succeeded/
+          // cancelled/expired/executing are known non-confirmable and do not
+          // block. Unknown/malformed items or statuses fail closed.
+          let hasDecidable = false;
+          let hasUnknown = false;
+          for (const item of active.items) {
+            const rec = item as { id?: unknown; status?: unknown } | null;
+            if (!rec || typeof rec !== 'object' || typeof rec.id !== 'string' || !rec.id) {
+              hasUnknown = true;
+              break;
+            }
+            const status = rec.status;
+            if (status === 'proposed' || status === 'confirmed') {
+              hasDecidable = true;
+            } else if (
+              status === 'failed' || status === 'executing' || status === 'succeeded' ||
+              status === 'cancelled' || status === 'expired'
+            ) {
+              // known non-confirmable: does not block
+            } else {
+              hasUnknown = true;
+              break;
+            }
+          }
+          if (hasUnknown) {
+            categoryPendingState = 'unknown';
+          } else {
+            categoryPendingState = hasDecidable ? 'some' : 'none';
+          }
+        }
+      } catch {
+        categoryPendingState = 'unknown';
+      }
+    }
+    if (categoryPendingState === 'unknown') {
+      return this.completeTurn(input, plan, startedAt, result, {
+        response: freeze({ text: renderInconclusive() }),
+      });
+    }
+    const categoryPendingOps = categoryPendingState === 'some';
+    if (
+      this.dependencies.draftStore && client && !categoryPendingOps &&
+      (plan.mode === 'unsupported' || plan.mode === 'conversation' || plan.mode === 'read' || plan.mode === 'confirmation') &&
+      this.activeCategoryDraft(input) !== undefined &&
+      (hasCategoryCreationSignal(input.text) || hasCategoryCreateSignal(input.text) || parseCategoryCreation(input.text).isCreation || this.categoryContributes(input.text ?? '', this.activeCategoryDraft(input)!))
+    ) {
+      return this.runCategoryCreationTurn(input, plan, client, startedAt, result, decisionText);
+    }
     // Draft continuation under a non-mutation plan: a bare answer ("Nubank")
     // routes `unsupported`, but with a recoverable draft and a client it is a
     // missing-field answer, not a new turn. Reads keep their normal flow — a
     // balance query never completes a draft. Issue #255 (a): a PURE read
     // never continues a draft, and small talk never consumes a partial-amount
     // draft that it cannot contribute to.
+    // categories.create drafts NEVER fall through below: they continue
+    // through `runCategoryCreationTurn`, never the generic transaction path.
+    if (
+      this.dependencies.draftStore && client &&
+      (plan.mode === 'unsupported' || plan.mode === 'conversation') &&
+      this.activeCategoryDraft(input) !== undefined
+    ) {
+      return this.runCategoryCreationTurn(input, plan, client, startedAt, result, decisionText);
+    }
+    if (
+      this.dependencies.draftStore && client &&
+      (plan.mode === 'unsupported' || plan.mode === 'conversation' || plan.mode === 'read') &&
+      this.activeCategoryDeactivateDraft(input) !== undefined &&
+      !isPureReadForDraft(input.text ?? '') && !this.isNonContributingTurn(input)
+    ) {
+      return this.runCategoryDeactivateTurn(input, plan, client, startedAt, result, decisionText);
+    }
     if (
       this.dependencies.draftStore && client &&
       (plan.mode === 'unsupported' || plan.mode === 'conversation') &&
@@ -5233,6 +8014,32 @@ export class ConversationOrchestrator {
           });
         }
         confirmTargetId = target.operation.id;
+        // HIGH3 (round 3): authoritative expected context, resolved from
+        // the listing record that authorized this decision — never from
+        // the response, never from client input. Sensitive tools without
+        // a resolvable target fail closed HERE with zero transport (no
+        // confirm, no execute, no false success).
+        const confirmationExpected = resolveExpectedContext(target.operation);
+        if (
+          requiresExpectedEntity(target.operation.tool ?? '') &&
+          (confirmationExpected === undefined || confirmationExpected.entityId === undefined)
+        ) {
+          try {
+            confirmationStore.settleConfirmation!({
+              ctx: confirmationCtx,
+              intentionId: input.intentionId,
+              operationId: CONFIRMATION_UNBOUND_OPERATION_ID,
+              status: 'inconclusive',
+              receiptJson: null,
+              nowMs: this.draftNowMs(),
+            });
+          } catch {
+            // Best-effort terminal bookkeeping only.
+          }
+          return this.inconclusiveConfirmationTurn(
+            input, plan, startedAt, result, 'confirmation_expected_context_missing',
+          );
+        }
         // Review round 4 P1-B: the API already bound THIS intention to a
         // different operation (a previous confirm reached the API while the
         // agent lost its local history). Refuse before the transport — a
@@ -5346,6 +8153,8 @@ export class ConversationOrchestrator {
             intentionId: input.intentionId,
             operationId: target.operation.id,
             receiptJson: null,
+            ...(confirmationExpected?.tool !== undefined ? { tool: confirmationExpected.tool } : {}),
+            ...(confirmationExpected?.entityId !== undefined ? { entityId: confirmationExpected.entityId } : {}),
             status: 'reserved',
             nowMs: this.draftNowMs(),
           });
@@ -5377,7 +8186,7 @@ export class ConversationOrchestrator {
             claim === 'divergent' ? 'confirmation_binding_conflict' : 'confirmation_already_claimed',
           );
         }
-        const confirmed = await coordinator.confirm(target.operation.id, identity, input.intentionId);
+        const confirmed = await coordinator.confirm(target.operation.id, identity, input.intentionId, confirmationExpected);
         this.emit('approval.confirmed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'confirmed' });
         this.emit('mutation.executed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'succeeded', latencyMs: Date.now() - startedAt });
         // PR137-HARDEN (Bloco A): settle the reservation to its terminal
@@ -5392,6 +8201,8 @@ export class ConversationOrchestrator {
             operationId: confirmed.operationId,
             status: 'succeeded',
             receiptJson: confirmed.receipt ? JSON.stringify(confirmed.receipt) : null,
+            ...(confirmationExpected?.tool !== undefined ? { tool: confirmationExpected.tool } : {}),
+            ...(confirmationExpected?.entityId !== undefined ? { entityId: confirmationExpected.entityId } : {}),
             nowMs: this.draftNowMs(),
           });
         } catch {
@@ -5402,6 +8213,7 @@ export class ConversationOrchestrator {
             operationId: confirmed.operationId,
             status: 'succeeded' as const,
             ...(confirmed.receipt ? { receipt: confirmed.receipt } : {}),
+            ...(confirmationExpected ? { expected: confirmationExpected } : {}),
           }),
           response: freeze({ text: renderMutationResult('succeeded', 'operação', confirmed.receipt as unknown as { mutationKind?: unknown } | undefined) }),
         });
@@ -5431,6 +8243,28 @@ export class ConversationOrchestrator {
           }
           return this.completeTurn(input, plan, startedAt, result, {
             response: freeze({ text: renderInconclusive() }),
+          });
+        }
+        // Stale rename precondition (typed `account.name_conflict`, 409):
+        // the authorized target moved between propose and confirm. Settle
+        // terminal (best-effort) and answer the deterministic stale copy
+        // that guides a FRESH resolution — never a blind retry of the same
+        // operation, never a new proposal/key from this turn.
+        if (isNameConflictError(error)) {
+          try {
+            this.dependencies.draftStore?.settleConfirmation?.({
+              ctx: this.draftContext(input),
+              intentionId: input.intentionId,
+              operationId: confirmTargetId,
+              status: 'inconclusive',
+              receiptJson: null,
+              nowMs: this.draftNowMs(),
+            });
+          } catch {
+            // Best-effort terminal bookkeeping only.
+          }
+          return this.completeTurn(input, plan, startedAt, result, {
+            response: freeze({ text: RENAME_STALE_EXPECTED_NAME_TEXT }),
           });
         }
         // Bloco A fase 2 (issue #105): the confirm+execute above may have
@@ -5517,6 +8351,61 @@ export class ConversationOrchestrator {
         ...result,
         clarification: freeze({ missingFields: freeze(['period']), text: UNSUPPORTED_YEAR_TEXT }),
         response: freeze({ text: UNSUPPORTED_YEAR_TEXT }),
+      });
+    }
+    // Cartão imperativo ("crie cartão ... vencimento ...") — capacidade
+    // não suportada honesta: nunca um read (que responderia vazio ou
+    // prometeria cadastro) e nunca mutação de cartão. Sem provider, sem
+    // leitura — espelho do ano isolado acima.
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'unsupported_card_create') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['capability']), text: UNSUPPORTED_CARD_CREATE_TEXT }),
+        response: freeze({ text: UNSUPPORTED_CARD_CREATE_TEXT }),
+      });
+    }
+    // Categoria update/delete ("renomeie/exclua categoria ...") — capacidade
+    // não suportada honesta: nunca um read e nunca mutação. Sem provider,
+    // sem leitura — espelho do imperativo de cartão acima. Só `create` passa.
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'unsupported_category_mutation') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['capability']), text: UNSUPPORTED_CATEGORY_MUTATION_TEXT }),
+        response: freeze({ text: UNSUPPORTED_CATEGORY_MUTATION_TEXT }),
+      });
+    }
+    // Kind misto do breakdown ("receitas e gastos por categoria") — uma
+    // agregação por turno, nunca duas: clarificação determinística, sem
+    // provider e sem leitura.
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'ambiguous_breakdown_kind') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['kind']), text: AMBIGUOUS_BREAKDOWN_KIND_TEXT }),
+        response: freeze({ text: AMBIGUOUS_BREAKDOWN_KIND_TEXT }),
+      });
+    }
+    // Composto conceito+leitura — pede para separar em vez de prometer
+    // composição ampla ou fingir atendimento parcial. Sem provider e sem
+    // leitura.
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'ambiguous_compound_request') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['intent']), text: AMBIGUOUS_COMPOUND_REQUEST_TEXT }),
+        response: freeze({ text: AMBIGUOUS_COMPOUND_REQUEST_TEXT }),
+      });
+    }
+    // Conceito puro de categorias ("o que são categorias?") — resposta
+    // determinística e breve, sem leitura, sem provider e sem mutação.
+    if (plan.mode === 'conversation' && plan.ambiguity === 'concept_categories') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze([] as string[]), text: CONCEPT_CATEGORIES_TEXT }),
+        response: freeze({ text: CONCEPT_CATEGORIES_TEXT }),
       });
     }
     if (plan.mode === 'read' && this.dependencies.evidenceProvider) {

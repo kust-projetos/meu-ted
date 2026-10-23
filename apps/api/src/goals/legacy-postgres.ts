@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { GoalStore } from './store.js';
-import { createPostgresGoalStore } from './postgres.js';
+import { createGoalInTx, createPostgresGoalStore } from './postgres.js';
 import { domainErrors } from '../writes/errors.js';
 import { withTransaction } from '../db/pool.js';
 
@@ -57,6 +57,9 @@ export const createLegacyPostgresGoalStore = (pool: Pool): GoalStore => {
 
   const store: GoalStore = {
     ...base,
+    async createGoal(householdId, input) {
+      return withTransaction(pool, (client) => createGoalInTx(client, householdId, input, 'active'));
+    },
     async contributeToGoal(householdId, goalId, input) {
       return withTransaction(pool, (client) => contributeToGoalInTxLegacy(client, householdId, goalId, input));
     },
@@ -64,6 +67,8 @@ export const createLegacyPostgresGoalStore = (pool: Pool): GoalStore => {
   // UOW2: override the inherited canonical extension with the legacy core
   // (create/update extensions are schema-compatible and inherited as-is).
   return Object.assign(store, {
+    createGoalInTx: (client: PoolClient, householdId: string, input: Parameters<GoalStore['createGoal']>[1]) =>
+      createGoalInTx(client, householdId, input, 'active'),
     contributeToGoalInTx: contributeToGoalInTxLegacy,
   });
 };

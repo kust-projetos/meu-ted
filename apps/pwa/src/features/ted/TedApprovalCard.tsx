@@ -23,6 +23,7 @@ export type TedPendingOperation = Readonly<{
    * in-flight payloads — the card degrades to the summary shape.
    */
   presentation?: PendingOperationPresentation;
+  failureCode?: 'in_use';
 }>;
 
 interface TedApprovalCardProps {
@@ -33,6 +34,11 @@ interface TedApprovalCardProps {
 }
 
 const deriveFallbackTitle = (operation: TedPendingOperation): string => {
+  if (operation.operation.includes("transactions.update")) return "Alterar descrição do lançamento";
+  if (operation.operation.includes("categories.create")) return "Criar categoria";
+  if (operation.operation.includes("categories.update")) return "Renomear categoria";
+  if (operation.operation.includes("categories.deactivate")) return "Desativar categoria";
+  if (operation.operation.includes("accounts.update")) return "Renomear conta";
   if (operation.operation.includes("deactivate")) return "Desativar conta";
   if (operation.operation.includes("income")) return "Confirmar receita";
   if (operation.operation.includes("expense")) return "Confirmar despesa";
@@ -48,6 +54,32 @@ const describeAccountKind = (kind: string): string => {
   if (kind === "bank") return "Banco";
   if (kind === "cash") return "Espécie";
   return kind;
+};
+
+/**
+ * Rótulo pt-BR do tipo de categoria (categories.create). O servidor envia
+ * `expense`|`income`; qualquer valor desconhecido passa cru (nunca
+ * inventado). A copy de sucesso nunca diz "lançamento" para categoria.
+ */
+const describeCategoryKind = (kind: string): string => {
+  if (kind === "expense") return "Despesa";
+  if (kind === "income") return "Receita";
+  return kind;
+};
+
+/**
+ * Efeito do card por tool — nunca a copy de transação para uma mutação de
+ * catálogo/conta. Uma renomeação não registra valor: ela renomeia.
+ */
+const describePendingOperationEffect = (tool: string): string => {
+  if (tool === "transactions.update") return "A descrição do lançamento será alterada; valor, data e conta não serão modificados.";
+  if (tool === "categories.create") return "A categoria será criada nos seus dados.";
+  if (tool === "categories.update") return "A categoria será renomeada nos seus dados.";
+  if (tool === "categories.deactivate") return "A categoria será desativada apenas se não possuir registros ou dependências vinculados; nada será excluído.";
+  if (tool === "accounts.update") return "A conta será renomeada nos seus dados.";
+  if (tool === "accounts.create") return "A conta será criada nos seus dados.";
+  if (tool === "accounts.deactivate") return "A conta será desativada nos seus dados.";
+  return "O valor será registrado no seu histórico financeiro.";
 };
 
 /**
@@ -87,6 +119,7 @@ const APPROVAL_STATUS_RANK: Readonly<Record<TedPendingOperation["status"], numbe
 export function TedApprovalCard({ operation, workspaceId, onResolved }: TedApprovalCardProps) {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<TedPendingOperation["status"]>(operation.status);
+  const [decisionFailureCode, setDecisionFailureCode] = useState<TedPendingOperation['failureCode']>();
   const [error, setError] = useState<string | null>(null);
 
   // FIX-P1-UX #171 + FIX-P1-UX-R3: the remote `operation.status` is
@@ -134,13 +167,40 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
       setStatus(next);
     }
   }, [operation.status]);
+  const failureCode = status === 'failed' ? operation.failureCode ?? decisionFailureCode : undefined;
   const presentation = operation.presentation;
   const title = presentation?.title ?? deriveFallbackTitle(operation);
-  const operationLabel = presentation?.description ?? operation.summary ?? operation.operation ?? "operação financeira";
+  const operationLabel =
+    presentation?.tool === "categories.create" && presentation?.categoryName
+      ? presentation.categoryName
+      : (presentation?.description ?? operation.summary ?? operation.operation ?? "operação financeira");
 
   const resolve = async (decision: "confirm" | "cancel" | "retry") => {
     const remoteAtStart = lastRemoteStatusRef.current;
-    const resolved: PendingOperationDecision = await decidePendingOperation(workspaceId, operation.id, decision);
+    // HIGH3: the card presentation is the authoritative context that
+    // authorized this tap — bind the decision receipt against it (ORIGINAL
+    // tool + PRE-EXISTING target id). A receipt for another tool/entity with
+    // the same pending id fails closed in the parser below.
+    // Sensitive category tools (categories.update) bind the RENAMED target
+    // id — `categories.create` does NOT: its `category` label is the PARENT,
+    // while the receipt carries the newly created category (minted at
+    // execution).
+    const expected =
+      presentation !== undefined
+        ? {
+            tool: presentation.tool,
+            ...(presentation.tool.startsWith("accounts.") && presentation.account
+              ? { entityId: presentation.account.id }
+              : {}),
+            ...((presentation.tool === "categories.update" || presentation.tool === "categories.deactivate") && presentation.category
+              ? { entityId: presentation.category.id }
+              : {}),
+            ...(presentation.tool === "transactions.update" && presentation.transactionTargetId
+              ? { entityId: presentation.transactionTargetId }
+              : {}),
+          }
+        : undefined;
+    const resolved: PendingOperationDecision = await decidePendingOperation(workspaceId, operation.id, decision, expected);
     const latestRemote = lastRemoteStatusRef.current;
     // FIX-P1-UX #171 + FIX-P1-UX-R3: a newer remote truth that arrived while
     // this RPC was in flight wins over this verdict — never step the card
@@ -161,6 +221,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
     }
     lastRemoteStatusRef.current = resolved.status;
     setStatus(resolved.status);
+    setDecisionFailureCode(resolved.status === 'failed' ? resolved.failureCode : undefined);
     onResolved?.(resolved);
   };
 
@@ -249,6 +310,9 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
     presentation !== undefined && isActionablePendingOperationPresentation(presentation);
 
   if (status === "failed") {
+    if (failureCode === 'in_use' && presentation?.tool === 'categories.deactivate') {
+      return <div className="my-2 rounded-[14px] border border-danger/30 bg-danger-tint p-3 text-xs text-danger"><strong>A categoria possui registros ou dependências vinculados e não foi desativada.</strong></div>;
+    }
     if (!hasActionablePresentation || !presentation) {
       return (
         <div className="my-2 rounded-[14px] border border-danger/30 bg-danger-tint p-3 text-xs text-danger">
@@ -262,7 +326,9 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
       <div className="my-2 rounded-[14px] border border-danger/30 bg-danger-tint p-3 text-xs text-danger">
         <strong>Não foi possível concluir a operação — {describePendingOperationStatus("failed")}.</strong>
         <div className="mt-1 text-sm font-semibold">⚠️ {presentation.title}</div>
-        {presentation.description && <div className="mt-0.5 font-semibold">{presentation.description}</div>}
+        {presentation.tool === "transactions.update" ? (
+          <dl className="mt-2 space-y-1"><div className="flex justify-between gap-2"><dt>De (atual)</dt><dd className="font-semibold">{presentation.expectedDescription}</dd></div><div className="flex justify-between gap-2"><dt>Para (nova descrição)</dt><dd className="font-semibold">{presentation.description}</dd></div>{typeof presentation.transactionAmountCents==='number'&&<div className="flex justify-between gap-2"><dt>Valor</dt><dd className="font-bold">{formatCentsToBRL(presentation.transactionAmountCents)}</dd></div>}{presentation.transactionDate&&<div className="flex justify-between gap-2"><dt>Data</dt><dd className="font-semibold">{formatDateToBR(presentation.transactionDate)}</dd></div>}{presentation.transactionAccount&&<div className="flex justify-between gap-2"><dt>Conta</dt><dd className="font-semibold">{presentation.transactionAccount.label}</dd></div>}</dl>
+        ) : presentation.description && <div className="mt-0.5 font-semibold">{presentation.description}</div>}
         <dl className="mt-2 space-y-1">
           {typeof presentation.amountCents === "number" && (
             <div className="flex justify-between gap-2">
@@ -294,7 +360,31 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
               <dd className="font-bold">{formatCentsToBRL(presentation.balanceCents)}</dd>
             </div>
           )}
-          {presentation.account && (
+          {presentation.categoryName && presentation.tool !== "categories.deactivate" && (
+            <div className="flex justify-between gap-2">
+              <dt className="opacity-70">Categoria</dt>
+              <dd className="font-semibold">{presentation.categoryName}</dd>
+            </div>
+          )}
+          {presentation.categoryKind && (
+            <div className="flex justify-between gap-2">
+              <dt className="opacity-70">Tipo</dt>
+              <dd className="font-semibold">{describeCategoryKind(presentation.categoryKind)}</dd>
+            </div>
+          )}
+          {presentation.tool === "accounts.update" && presentation.account && (
+            <div className="flex justify-between gap-2">
+              <dt className="opacity-70">De (atual)</dt>
+              <dd className="font-semibold">{presentation.account.label}</dd>
+            </div>
+          )}
+          {presentation.tool === "accounts.update" && presentation.accountName && (
+            <div className="flex justify-between gap-2">
+              <dt className="opacity-70">Para (novo)</dt>
+              <dd className="font-semibold">{presentation.accountName}</dd>
+            </div>
+          )}
+          {presentation.tool !== "accounts.update" && presentation.account && (
             <div className="flex justify-between gap-2">
               <dt className="opacity-70">Conta</dt>
               <dd className="font-semibold">{presentation.account.label}</dd>
@@ -302,8 +392,14 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
           )}
           {presentation.category && (
             <div className="flex justify-between gap-2">
-              <dt className="opacity-70">Categoria</dt>
+              <dt className="opacity-70">{presentation.tool === "categories.create" ? "Pai" : "Categoria"}</dt>
               <dd className="font-semibold">{presentation.category.label}</dd>
+            </div>
+          )}
+          {presentation.categoryParent && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Categoria pai</dt>
+              <dd className="font-semibold">{presentation.categoryParent.label}</dd>
             </div>
           )}
           {presentation.date && (
@@ -356,7 +452,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
       return (
         <div className="my-2 rounded-[16px] border border-warning/30 bg-warning-tint p-3.5 text-xs shadow-xs">
           <div className="font-bold text-warning">⚠️ {title}</div>
-          {presentation.description && <div className="mt-1 text-sm font-semibold text-text-primary">{presentation.description}</div>}
+          {presentation.description && presentation.tool !== "transactions.update" && <div className="mt-1 text-sm font-semibold text-text-primary">{presentation.description}</div>}
           <dl className="mt-2 space-y-1 text-text-primary">
             {typeof presentation.amountCents === "number" && (
               <div className="flex justify-between gap-2">
@@ -386,6 +482,18 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
               <div className="flex justify-between gap-2">
                 <dt className="text-text-muted">Saldo atual</dt>
                 <dd className="font-bold">{formatCentsToBRL(presentation.balanceCents)}</dd>
+              </div>
+            )}
+            {presentation.categoryName && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Categoria</dt>
+                <dd className="font-semibold">{presentation.categoryName}</dd>
+              </div>
+            )}
+            {presentation.categoryKind && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Tipo</dt>
+                <dd className="font-semibold">{describeCategoryKind(presentation.categoryKind)}</dd>
               </div>
             )}
             {presentation.account && (
@@ -437,12 +545,21 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
       <div className="my-2 rounded-[16px] border border-warning/30 bg-warning-tint p-3.5 text-xs shadow-xs">
         <div className="font-bold text-warning">⚠️ {title}</div>
         <dl className="mt-2 space-y-1 text-text-primary">
-          {presentation.description && (
+          {presentation.description && presentation.tool !== "transactions.update" && (
             <div className="flex justify-between gap-2">
               <dt className="text-text-muted">Descrição</dt>
               <dd className="font-semibold">{presentation.description}</dd>
             </div>
           )}
+          {presentation.tool === "transactions.update" && presentation.expectedDescription && (
+            <div className="flex justify-between gap-2"><dt className="text-text-muted">De (atual)</dt><dd className="font-semibold">{presentation.expectedDescription}</dd></div>
+          )}
+          {presentation.tool === "transactions.update" && presentation.description && (
+            <div className="flex justify-between gap-2"><dt className="text-text-muted">Para (nova descrição)</dt><dd className="font-semibold">{presentation.description}</dd></div>
+          )}
+          {presentation.tool === "transactions.update" && typeof presentation.transactionAmountCents === "number" && <div className="flex justify-between gap-2"><dt className="text-text-muted">Valor</dt><dd className="font-bold">{formatCentsToBRL(presentation.transactionAmountCents)}</dd></div>}
+          {presentation.tool === "transactions.update" && presentation.transactionDate && <div className="flex justify-between gap-2"><dt className="text-text-muted">Data</dt><dd className="font-semibold">{formatDateToBR(presentation.transactionDate)}</dd></div>}
+          {presentation.tool === "transactions.update" && presentation.transactionAccount && <div className="flex justify-between gap-2"><dt className="text-text-muted">Conta</dt><dd className="font-semibold">{presentation.transactionAccount.label}</dd></div>}
           {presentation.accountName && !presentation.account && (
             <div className="flex justify-between gap-2">
               <dt className="text-text-muted">Conta</dt>
@@ -467,22 +584,64 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
               <dd className="font-bold">{formatCentsToBRL(presentation.balanceCents)}</dd>
             </div>
           )}
+          {presentation.categoryName && presentation.tool !== "categories.update" && presentation.tool !== "categories.deactivate" && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Categoria</dt>
+              <dd className="font-semibold">{presentation.categoryName}</dd>
+            </div>
+          )}
+          {presentation.categoryKind && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Tipo</dt>
+              <dd className="font-semibold">{describeCategoryKind(presentation.categoryKind)}</dd>
+            </div>
+          )}
           {typeof presentation.amountCents === "number" && (
             <div className="flex justify-between gap-2">
               <dt className="text-text-muted">Valor</dt>
               <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
             </div>
           )}
-          {presentation.account && (
+          {presentation.tool === "accounts.update" && presentation.account && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">De (atual)</dt>
+              <dd className="font-semibold">{presentation.account.label}</dd>
+            </div>
+          )}
+          {presentation.tool === "accounts.update" && presentation.accountName && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Para (novo)</dt>
+              <dd className="font-semibold">{presentation.accountName}</dd>
+            </div>
+          )}
+          {presentation.tool === "categories.update" && presentation.category && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">De (atual)</dt>
+              <dd className="font-semibold">{presentation.category.label}</dd>
+            </div>
+          )}
+          {presentation.tool === "categories.update" && presentation.categoryName && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Para (novo)</dt>
+              <dd className="font-semibold">{presentation.categoryName}</dd>
+            </div>
+          )}
+          {presentation.tool !== "accounts.update" && presentation.account && (
             <div className="flex justify-between gap-2">
               <dt className="text-text-muted">Conta</dt>
               <dd className="font-semibold">{presentation.account.label}</dd>
             </div>
           )}
-          {presentation.category && (
+          {presentation.category && presentation.tool !== "categories.update" && (
             <div className="flex justify-between gap-2">
-              <dt className="text-text-muted">Categoria</dt>
+              <dt className="text-text-muted">{presentation.tool === "categories.create" ? "Pai" : "Categoria"}</dt>
               <dd className="font-semibold">{presentation.category.label}</dd>
+            </div>
+          )}
+          {presentation.tool === "categories.deactivate" && presentation.categoryParent && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Categoria pai</dt>
+              <dd className="font-semibold">{presentation.categoryParent.label}</dd>
             </div>
           )}
           {presentation.date && (
@@ -499,7 +658,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
             ))}
           </ul>
         )}
-        <div className="mt-0.5 text-text-muted">O valor será registrado no seu histórico financeiro. {describePendingOperationStatus("proposed")}.</div>
+        <div className="mt-0.5 text-text-muted">{describePendingOperationEffect(presentation.tool)} {describePendingOperationStatus("proposed")}.</div>
 
         {error && <div className="mt-1 font-semibold text-danger">{error}</div>}
 

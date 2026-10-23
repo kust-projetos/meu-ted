@@ -89,6 +89,7 @@ describe("TedApprovalCard accounts.deactivate", () => {
         "workspace-1",
         "op-deact-1",
         "confirm",
+        { tool: "accounts.deactivate", entityId: "acc-1" },
       ),
     );
   });
@@ -118,6 +119,7 @@ describe("TedApprovalCard accounts.deactivate", () => {
         "workspace-1",
         "op-deact-1",
         "cancel",
+        { tool: "accounts.deactivate", entityId: "acc-1" },
       ),
     );
   });

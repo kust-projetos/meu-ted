@@ -31,7 +31,16 @@ const makeFakePool = () => {
       }
       // FIX-WS-D2-R2 item 2: guarda de lifecycle dos writers (workspace active).
       if (text.includes('FROM households')) {
-        return { rows: [{ status: 'active' }], rowCount: 1 };
+        return { rows: [{ status: 'active' }], rowCount: 0 };
+      }
+      // Round2 achado 2: serialização por household (advisory xact lock) +
+      // guarda de nome duplicado dentro da transação do efeito.
+      if (text.includes('pg_advisory_xact_lock')) {
+        return { rows: [{ pg_advisory_xact_lock: null }], rowCount: 1 };
+      }
+      if (text.includes('FROM accounts') && text.includes('lower(name)')) {
+        // Sem duplicado neste cenário → o efeito prossegue.
+        return { rows: [], rowCount: 0 };
       }
       if (text.startsWith('INSERT INTO accounts')) {
         // Simulate PG DEFAULT 0 for the anchor when the writer omits it.

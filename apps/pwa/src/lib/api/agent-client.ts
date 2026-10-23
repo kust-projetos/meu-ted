@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
+import { TED_APPROVAL_TOOLS } from "@pi-finance/llm-contracts/types";
 import { fetchAgentConnectionToken, clearAgentConnectionTokenCache, trackAgentConnection } from "./agent-auth";
 import { getOfflinePrincipalId } from "@/lib/auth/offline-identity";
 
@@ -22,6 +23,9 @@ const historyItemSchema = z.object({
   // (SPEC §7.7) — a reconciliação a usa como chave primária; ausente em
   // itens legados, que seguem a regra conteúdo+timestamp.
   intentionId: z.string().optional(),
+  proposalOperationId: z.unknown().optional(),
+  proposalTool: z.unknown().optional(),
+  terminalOutcome: z.unknown().optional(),
   // §25.4 (browser reload during proposed/executing): the server may attach
   // the authoritative pending operation so the PWA rehydrates the approval
   // card from SERVER state. Raw input — sanitized in the transform below.
@@ -30,6 +34,9 @@ const historyItemSchema = z.object({
   const pendingOperation = sanitizePendingOperation(
     item.pendingOperation as AgentTurn["pendingOperation"],
   );
+  const terminalOutcome = sanitizeTerminalOutcome(item.terminalOutcome, item.proposalOperationId, item.proposalTool);
+  const proposalOperationId = z.string().uuid().safeParse(item.proposalOperationId);
+  const proposalTool = typeof item.proposalTool === 'string' && (TED_APPROVAL_TOOLS as readonly string[]).includes(item.proposalTool) ? item.proposalTool : undefined;
   return {
     id: item.id,
     actorId: item.actorId ?? (item.role === "assistant" ? "ted" : "unknown"),
@@ -39,6 +46,9 @@ const historyItemSchema = z.object({
     isOwn: item.isOwn,
     attachments: item.attachments,
     ...(typeof item.intentionId === "string" && item.intentionId ? { intentionId: item.intentionId } : {}),
+    ...(proposalOperationId.success ? { proposalOperationId: proposalOperationId.data } : {}),
+    ...(proposalTool ? { proposalTool } : {}),
+    ...(terminalOutcome ? { terminalOutcome } : {}),
     // Invalid/absent collapses to no card — never invented data.
     ...(pendingOperation === undefined ? {} : { pendingOperation }),
   };
@@ -63,6 +73,9 @@ export type AgentMessage = {
    * ausente em itens legados (fallback conteúdo+timestamp).
    */
   intentionId?: string;
+  proposalOperationId?: string;
+  proposalTool?: string;
+  terminalOutcome?: TerminalOutcome;
   /**
    * §25.4: authoritative pending operation attached to a history item, when
    * the server emitted one. Same allowlist as the turn path — absent or
@@ -101,19 +114,29 @@ const pendingOperationPresentationSchema = z
     title: z.string(),
     amountCents: z.number().optional(),
     description: z.string().optional(),
+    expectedDescription: z.string().min(1).max(240).optional(),
+    transactionTargetId: z.string().min(1).max(128).optional(),
+    transactionAmountCents: z.number().int().min(0).optional(),
+    transactionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    transactionAccount: pendingOperationPresentationLabelSchema.optional(),
     date: z.string().optional(),
     account: pendingOperationPresentationLabelSchema.optional(),
     category: pendingOperationPresentationLabelSchema.optional(),
+    categoryParent: pendingOperationPresentationLabelSchema.optional(),
     // accounts.create display tuple (contrato packages/llm-contracts):
     // nome + tipo + saldo inicial em vez da tupla transacional. Ausente em
     // payloads legados — o card degrada para a forma enxuta.
     // accounts.deactivate carrega o snapshot display-only balanceCents
     // (saldo no momento da proposta) + account {id,label} resolvido
     // server-side (gate do Confirm) — mesmo contrato.
+    // categories.create carrega categoryName/categoryKind + parent `category`
+    // {id,label} resolvido server-side (raiz sem parent segue acionável).
     accountName: z.string().min(1).max(120).optional(),
     accountKind: z.string().min(1).max(32).optional(),
     initialBalanceCents: z.number().int().optional(),
     balanceCents: z.number().int().optional(),
+    categoryName: z.string().min(1).max(120).optional(),
+    categoryKind: z.string().min(1).max(32).optional(),
     expiresAt: z.string(),
     warnings: z.array(z.string()),
   })
@@ -149,6 +172,105 @@ function sanitizeMutationReceipt(value: unknown): PendingOperationReceipt | unde
   return parsed.success ? (parsed.data as PendingOperationReceipt) : undefined;
 }
 
+/**
+ * HIGH3 (round 3): gateway-echoed authoritative context (tool + target id,
+ * no authority material). Strict shape — anything else degrades to NO
+ * context (callers fail closed on sensitive tools without context, never
+ * accept a smuggled binding).
+ */
+function sanitizeExpectedContext(value: unknown): DecisionExpectedContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.tool !== "string" || !raw.tool.trim()) return undefined;
+  if (raw.entityId !== undefined && (typeof raw.entityId !== "string" || !raw.entityId.trim())) {
+    return undefined;
+  }
+  return raw.entityId !== undefined
+    ? { tool: raw.tool.trim(), entityId: (raw.entityId as string).trim() }
+    : { tool: raw.tool.trim() };
+}
+
+/**
+ * HIGH3: authoritative expected context for a decision/turn receipt — the
+ * ORIGINAL tool (+ the account target id when the card names a
+ * pre-existing account), from the card presentation that authorized the
+ * tap. A receipt for another tool/entity with the same pending id fails
+ * closed. Without context the parser enforces the approval-kind +
+ * linkage checks only (never accepts garbage).
+ */
+export type DecisionExpectedContext = Readonly<{
+  tool?: string;
+  entityId?: string;
+}>;
+
+export type TerminalOutcome = Readonly<
+  | { operationId: string; tool: string; status: 'succeeded'; receipt: PendingOperationReceipt; expectedContext: DecisionExpectedContext }
+  | { operationId: string; tool: string; status: 'failed'; failureCode?: 'in_use' }
+  | { operationId: string; tool: string; status: 'cancelled' | 'expired' | 'unverified' }
+>;
+
+const terminalSuccessSchema = z.object({
+  operationId: z.string().min(1), tool: z.string().min(1), status: z.literal('succeeded'),
+  receipt: mutationReceiptSchema, expectedContext: z.object({ tool: z.string().min(1), entityId: z.string().min(1).optional() }).strict(),
+}).strict();
+const terminalFailureSchema = z.object({
+  operationId: z.string().min(1), tool: z.string().min(1), status: z.literal('failed'), failureCode: z.literal('in_use').optional(),
+}).strict();
+const terminalOtherSchema = z.object({ operationId: z.string().min(1), tool: z.string().min(1), status: z.enum(['cancelled', 'expired', 'unverified']) }).strict();
+
+function sanitizeTerminalOutcome(value: unknown, proposalOperationId: unknown, proposalTool: unknown): TerminalOutcome | undefined {
+  const parsedProposalId = z.string().uuid().safeParse(proposalOperationId);
+  if (!parsedProposalId.success || typeof proposalTool !== 'string' || !APPROVAL_TOOLS.includes(proposalTool) || !value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const proposalId = parsedProposalId.data;
+  const raw = value as Record<string, unknown>;
+  if (raw.operationId !== proposalId || raw.tool !== proposalTool) return undefined;
+  if (raw.status === 'succeeded') {
+    const parsed = terminalSuccessSchema.safeParse(raw);
+    if (!parsed.success) return undefined;
+    const { receipt, expectedContext } = parsed.data;
+    if (receipt.status !== 'succeeded' || receipt.operationId !== proposalId || receipt.mutationKind !== proposalTool || !receipt.entity || expectedContext.tool !== proposalTool) return undefined;
+    const entityType = approvalEntityType(proposalTool);
+    if (!entityType) return undefined;
+    if (receipt.entity.type !== entityType) return undefined;
+    const targetRequired = proposalTool === 'transactions.update' || proposalTool === 'accounts.update' || proposalTool === 'accounts.deactivate' || proposalTool === 'categories.update' || proposalTool === 'categories.deactivate';
+    if (targetRequired && !expectedContext.entityId) return undefined;
+    if (expectedContext.entityId !== undefined && expectedContext.entityId !== receipt.entity.id) return undefined;
+    return parsed.data as TerminalOutcome;
+  }
+  if (raw.status === 'failed') {
+    const parsed = terminalFailureSchema.safeParse(raw);
+    if (!parsed.success || (parsed.data.failureCode === 'in_use' && proposalTool !== 'categories.deactivate')) return undefined;
+    return parsed.data as TerminalOutcome;
+  }
+  const parsed = terminalOtherSchema.safeParse(raw);
+  return parsed.success ? parsed.data as TerminalOutcome : undefined;
+}
+
+const APPROVAL_TOOLS = TED_APPROVAL_TOOLS as readonly string[];
+
+const isAccountApprovalTool = (tool: string): boolean => tool.startsWith("accounts.");
+const isCategoryApprovalTool = (tool: string): boolean => tool.startsWith("categories.");
+
+/** Closed approval-tool mapping; unknown tools never inherit a fallback entity type. */
+function approvalEntityType(tool: string): "transaction" | "account" | "category" | undefined {
+  switch (tool) {
+    case "transactions.expense.create":
+    case "transactions.income.create":
+    case "transactions.update":
+      return "transaction";
+    case "accounts.create":
+    case "accounts.update":
+    case "accounts.deactivate":
+      return "account";
+    case "categories.create":
+    case "categories.update":
+    case "categories.deactivate":
+      return "category";
+    default:
+      return undefined;
+  }
+}
+
 export const PENDING_OPERATION_STATUS = [
   "proposed",
   "confirmed",
@@ -166,6 +288,13 @@ type AgentTurnPendingOperationBase = Readonly<{
   operation: string;
   summary?: string;
   presentation?: PendingOperationPresentation;
+  /**
+   * HIGH3 (round 3): gateway-echoed authoritative context (tool + target
+   * id, no authority token). Binds the receipt instead of trusting the
+   * response alone. Optional: absent on legacy payloads (PWA degrades —
+   * sensitive tools fail closed without it).
+   */
+  expected?: DecisionExpectedContext;
 }>;
 
 export type AgentTurnPendingOperation =
@@ -255,25 +384,157 @@ function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"]
   // A server-asserted success may reach chat output/reconciliation only with
   // the canonical receipt linked to both the pending operation and the
   // persisted entity (transaction for transaction tools, account for
-  // accounts.create/accounts.deactivate).
+  // accounts.create/accounts.deactivate/accounts.update/categories.deactivate).
+  //
+  // HIGH3 (round 4): card-known context (presentation) precedes gateway
+  // echo — and a conflict between them is denied, never resolved by
+  // preferring echo. Echo+receipt agreement alone is never the sole
+  // proof: without any card-known or plan-derived context, sensitive
+  // tools fail closed.
   if (raw.status === "succeeded") {
     const candidateId = typeof raw.id === "string" ? raw.id : "";
     const candidateReceipt = sanitizeMutationReceipt(raw.receipt);
     const entityId = typeof candidateReceipt?.entity?.id === "string" ? candidateReceipt.entity.id.trim() : "";
-    // accounts-card-pwa-round2: a entidade vinculada respeita o kind — conta
-    // só em accounts.create/accounts.deactivate, transação nos demais
-    // (preserva o gate estrito de transação e admite o sucesso de conta).
-    const entityMatchesKind =
-      candidateReceipt?.mutationKind === "accounts.create" ||
-      candidateReceipt?.mutationKind === "accounts.deactivate"
-        ? candidateReceipt?.entity?.type === "account"
-        : candidateReceipt?.entity?.type === "transaction";
+    const presentationTool =
+      raw.presentation && typeof raw.presentation === "object"
+        ? (raw.presentation as { tool?: unknown }).tool
+        : undefined;
+    const presentationAccountId =
+      raw.presentation && typeof raw.presentation === "object"
+        ? (raw.presentation as { account?: { id?: unknown } }).account?.id
+        : undefined;
+    const echoExpected = sanitizeExpectedContext((raw as { expected?: unknown }).expected);
+    // HIGH3 (round 4): card-known context (presentation) precedes gateway
+    // echo — and a conflict between them is denied, never resolved by
+    // preferring echo. Echo+receipt agreement alone is never the sole
+    // proof: without any card-known or plan-derived context, sensitive
+    // tools fail closed.
+    let contextTool: string | undefined;
+    let contextEntityId: string | undefined;
+    if (
+      typeof presentationTool === "string" &&
+      APPROVAL_TOOLS.includes(presentationTool)
+    ) {
+      // Sensitive account targets bind ONLY with a resolved pre-existing
+      // target id (presentation.account.id). Without it the card proves no
+      // target — no context, never an arbitrary entity (fail-closed below).
+      if (isCategoryApprovalTool(presentationTool)) {
+        const presentationCategoryId =
+          raw.presentation && typeof raw.presentation === "object"
+            ? (raw.presentation as { category?: { id?: unknown } }).category?.id
+            : undefined;
+        // Sensitive category tools (categories.update) bind the RENAMED
+        // target id. `categories.create` does NOT: its `category` label is
+        // the PARENT, while the receipt carries the newly created category
+        // (minted at execution) — kind-only policy, never a false failure.
+        if (
+          (presentationTool === "categories.update" || presentationTool === "categories.deactivate") &&
+          typeof presentationCategoryId === "string" &&
+          presentationCategoryId.trim()
+        ) {
+          contextTool = presentationTool;
+          contextEntityId = presentationCategoryId.trim();
+        } else {
+          contextTool = presentationTool;
+        }
+      } else if (!isAccountApprovalTool(presentationTool)) {
+        contextTool = presentationTool;
+        if (presentationTool === "transactions.update") {
+          const transactionTargetId =
+            raw.presentation && typeof raw.presentation === "object"
+              ? (raw.presentation as { transactionTargetId?: unknown }).transactionTargetId
+              : undefined;
+          if (typeof transactionTargetId === "string" && transactionTargetId.trim()) {
+            contextEntityId = transactionTargetId.trim();
+          }
+        }
+      } else if (
+        typeof presentationAccountId === "string" &&
+        presentationAccountId.trim()
+      ) {
+        contextTool = presentationTool;
+        contextEntityId = presentationAccountId.trim();
+      }
+      if (echoExpected !== undefined && echoExpected.tool !== presentationTool) {
+        throw executionOutcomeUnknown();
+      }
+      // Card and echo name the same tool but disagree on the target: two
+      // authorizing contexts in conflict — deny, never prefer one of them.
+      if (
+        contextEntityId !== undefined &&
+        echoExpected?.entityId !== undefined &&
+        echoExpected.entityId !== contextEntityId
+      ) {
+        throw executionOutcomeUnknown();
+      }
+    } else if (echoExpected !== undefined) {
+      contextTool = echoExpected.tool;
+      contextEntityId = echoExpected.entityId;
+    }
+    const kind = candidateReceipt?.mutationKind;
     if (
       !candidateId.trim() ||
       !candidateReceipt ||
+      typeof kind !== "string" ||
+      !APPROVAL_TOOLS.includes(kind) ||
       candidateReceipt.operationId !== candidateId ||
-      !entityMatchesKind ||
       !entityId
+    ) {
+      throw executionOutcomeUnknown();
+    }
+    if (contextTool !== undefined) {
+      if (kind !== contextTool) throw executionOutcomeUnknown();
+      // entity.type/kind coherence holds in EVERY path: account tools bind
+      // accounts, categories.create binds categories, every other approval
+      // tool binds transactions.
+      const expectsAccount =
+        kind === "accounts.create" || kind === "accounts.update" || kind === "accounts.deactivate";
+      const expectsCategory = kind === "categories.create" || kind === "categories.update" || kind === "categories.deactivate";
+      if (
+        (expectsAccount && candidateReceipt?.entity?.type !== "account") ||
+        (expectsCategory && candidateReceipt?.entity?.type !== "category") ||
+        (!expectsAccount && !expectsCategory && candidateReceipt?.entity?.type !== "transaction")
+      ) {
+        throw executionOutcomeUnknown();
+      }
+      if (contextEntityId !== undefined) {
+        const expectedType = approvalEntityType(kind);
+        if (candidateReceipt.entity?.id !== contextEntityId || candidateReceipt.entity?.type !== expectedType) {
+          throw executionOutcomeUnknown();
+        }
+      }
+      // Sensitive tools always bind a pre-existing target: a bare {tool}
+      // context (no entity id from any context) never proves one.
+      if (
+        (kind === "transactions.update" || kind === "accounts.update" || kind === "accounts.deactivate" || kind === "categories.update" || kind === "categories.deactivate") &&
+        contextEntityId === undefined
+      ) {
+        throw executionOutcomeUnknown();
+      }
+    } else {
+      // No context: sensitive account targets are never accepted blind.
+      if (kind === "transactions.update" || kind === "accounts.update" || kind === "accounts.deactivate" || kind === "categories.update" || kind === "categories.deactivate") {
+        throw executionOutcomeUnknown();
+      }
+      // accounts-card-pwa-round2: a entidade vinculada respeita o kind — conta
+      // só em accounts.create, categoria só em categories.create, transação
+      // nos demais (preserva o gate estrito de transação e admite os
+      // sucessos de criação). `categories.update` nunca chega aqui: o
+      // guard acima já o recusou (alvo sensível sem contexto).
+      const entityMatchesKind =
+        kind === "accounts.create"
+          ? candidateReceipt?.entity?.type === "account"
+          : kind === "categories.create"
+            ? candidateReceipt?.entity?.type === "category"
+            : candidateReceipt?.entity?.type === "transaction";
+      if (!entityMatchesKind) throw executionOutcomeUnknown();
+    }
+    // The turn operation itself is authoritative when it names an approval
+    // tool (mutation turns): the receipt kind must equal it exactly.
+    if (
+      typeof raw.operation === "string" &&
+      APPROVAL_TOOLS.includes(raw.operation) &&
+      kind !== raw.operation
     ) {
       throw executionOutcomeUnknown();
     }
@@ -294,11 +555,13 @@ function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"]
     err.code = "agent.invalid_decision_result";
     throw err;
   }
+  const expected = sanitizeExpectedContext((raw as { expected?: unknown }).expected);
   const safeFields = {
     id,
     operation,
     ...(summary !== undefined ? { summary } : {}),
     ...(parsedPresentation && parsedPresentation.success ? { presentation: parsedPresentation.data } : {}),
+    ...(expected !== undefined ? { expected } : {}),
   };
   if (status === "succeeded") {
     if (!receipt) throw executionOutcomeUnknown();
@@ -734,6 +997,7 @@ const pendingDecisionSchema = z.object({
   operationId: z.string(),
   status: z.enum(["proposed", "succeeded", "failed", "cancelled", "expired"]),
   retryable: z.boolean().optional(),
+  failureCode: z.literal('in_use').optional(),
   // Raw receipt is parsed separately: the strict schema drops any payload
   // carrying single-use approval material or unknown keys WHOLESALE (INV-05, T3.3).
   receipt: z.unknown().optional(),
@@ -747,6 +1011,7 @@ export type PendingOperationDecision =
       operationId: string;
       status: "succeeded";
       retryable?: boolean;
+      failureCode?: 'in_use';
       /** A success is only actionable when it carries its canonical receipt. */
       receipt: PendingOperationReceipt;
     }
@@ -754,6 +1019,7 @@ export type PendingOperationDecision =
       operationId: string;
       status: Exclude<PendingOperationDecisionStatus, "succeeded">;
       retryable?: boolean;
+      failureCode?: 'in_use';
       receipt?: never;
     };
 
@@ -992,11 +1258,18 @@ export async function sendAgentMessage(
 /**
  * Sends a user decision to the authenticated Agent. The Agent, not the
  * browser, owns V2 confirmation, credential consumption and execution.
+ *
+ * HIGH3: `expected` carries the authoritative card context (ORIGINAL tool
+ * + account target id from the presentation that authorized the tap).
+ * A receipt for another tool/entity with the same pending id fails
+ * closed. Optional: without it the approval-kind + linkage checks still
+ * apply.
  */
 export async function decidePendingOperation(
   workspaceId: string,
   operationId: string,
   decision: "confirm" | "cancel" | "retry",
+  expected?: DecisionExpectedContext,
 ): Promise<PendingOperationDecision> {
   const baseUrl = agentBaseUrl();
   const requestId = crypto.randomUUID();
@@ -1043,6 +1316,7 @@ export async function decidePendingOperation(
     operationId: parsed.operationId,
     status: parsed.status,
     ...(parsed.retryable !== undefined ? { retryable: parsed.retryable } : {}),
+    ...(parsed.status === 'failed' && parsed.failureCode === 'in_use' ? { failureCode: 'in_use' as const } : {}),
   };
   if (safe.operationId !== operationId) {
     const err = new Error(
@@ -1054,22 +1328,49 @@ export async function decidePendingOperation(
   // Fail-closed succeeded: the API+Agent contract guarantees a successful
   // execute carries the pending ID + nested succeeded execution + canonical
   // receipt (receipt.operationId === pending ID, entity {type:'transaction' |
-  // 'account', id: persistedId} com o tipo vinculado ao kind: conta só em
-  // accounts.create/accounts.deactivate, transação nos demais). A succeeded decision without that receipt
+  // 'account' | 'category', id: persistedId} com o tipo vinculado ao kind:
+  // conta só em accounts.create/accounts.deactivate/accounts.update, categoria
+  // só em categories.create, transação nos demais). A succeeded decision without that receipt
   // cannot be reconciled, so it must reject — never resolve as success. Other
   // statuses (cancelled/failed/proposed/expired) carry no receipt by contract.
+  //
+  // HIGH3 (round 3): approval-path receipts always carry approval-tool
+  // kinds — a normal-write receipt with the same pending id is a swapped
+  // result, never a success. Rename/deactivate WITHOUT the card `expected`
+  // context fail closed (sensitive target, no proof); with it, the kind
+  // must equal the ORIGINAL tool and the entity must equal the ORIGINAL
+  // target id. `accounts.create`/`categories.create` keep the kind-only
+  // policy (entity minted at execution — never blocks honest creation).
   if (safe.status === "succeeded") {
     const entityId = typeof receipt?.entity?.id === "string" ? receipt.entity.id.trim() : "";
-    const entityMatchesKind =
-      receipt?.mutationKind === "accounts.create" ||
-      receipt?.mutationKind === "accounts.deactivate"
-        ? receipt?.entity?.type === "account"
-        : receipt?.entity?.type === "transaction";
+    const kind = receipt?.mutationKind;
+    const entityMatchesKind = receipt?.entity?.type === approvalEntityType(kind ?? "");
     if (
       !receipt ||
+      typeof kind !== "string" ||
+      !APPROVAL_TOOLS.includes(kind) ||
       receipt.operationId !== operationId ||
       !entityMatchesKind ||
       !entityId
+    ) {
+      const err = new Error(
+        "O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão.",
+      ) as Error & { code?: string };
+      err.code = "agent.execution_outcome_unknown";
+      throw err;
+    }
+    if (
+        (expected === undefined &&
+        (kind === "transactions.update" || kind === "accounts.update" ||
+          kind === "accounts.deactivate" ||
+          kind === "categories.update" || kind === "categories.deactivate")) ||
+      ((kind === "transactions.update" || kind === "accounts.update" ||
+        kind === "accounts.deactivate" ||
+        kind === "categories.update" || kind === "categories.deactivate") &&
+        (typeof expected?.entityId !== "string" || !expected.entityId.trim())) ||
+      (expected?.tool !== undefined && kind !== expected.tool) ||
+      (expected?.entityId !== undefined &&
+        (receipt.entity?.id !== expected.entityId || receipt.entity?.type !== approvalEntityType(kind)))
     ) {
       const err = new Error(
         "O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão.",
@@ -1095,6 +1396,7 @@ export async function decidePendingOperation(
     operationId: safe.operationId,
     status: safe.status,
     ...(safe.retryable !== undefined ? { retryable: safe.retryable } : {}),
+    ...(safe.status === 'failed' && parsed.failureCode === 'in_use' ? { failureCode: 'in_use' as const } : {}),
   };
 }
 
@@ -1343,6 +1645,7 @@ export type ActivePendingOperation = Readonly<{
   date?: string;
   accountId?: string;
   categoryId?: string;
+  failureCode?: 'in_use';
   presentation?: PendingOperationPresentation;
 }>;
 
@@ -1358,6 +1661,7 @@ const activePendingOperationSchema = z
     date: z.string().optional(),
     accountId: z.string().optional(),
     categoryId: z.string().optional(),
+    failureCode: z.literal('in_use').optional(),
     presentation: pendingOperationPresentationSchema.optional(),
   })
   .strict();

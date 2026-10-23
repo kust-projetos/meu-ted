@@ -12,6 +12,7 @@ import type { Account, Transaction, Statement, StatementDetail, StatementPurchas
 import type { CardStore } from './store.js';
 import { withTransaction } from '../db/pool.js';
 import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
+import { lockCategoryReferencesInTx } from '../auth/category-lifecycle-guard.js';
 import { domainErrors } from '../writes/errors.js';
 import { resolveExpenseCategoryInTx, resolveSubcategoryInTx } from '../writes/postgres.js';
 import { installmentDates } from '../shared/billing-month.js';
@@ -393,6 +394,7 @@ const createCardPurchaseInTx = async (
 ): Promise<Transaction[]> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  if (input.categoryId || input.subcategoryId) await lockCategoryReferencesInTx(client, householdId);
   // M-05: same active/expense-kind category rule as plain entries.
   if (input.categoryId) {
     await resolveExpenseCategoryInTx(client, householdId, input.categoryId);
@@ -469,6 +471,7 @@ const createCardInstallmentsInTx = async (
 ): Promise<Transaction[]> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  if (input.categoryId || input.subcategoryId) await lockCategoryReferencesInTx(client, householdId);
   const cardRows = await client.query<Row>(
     `SELECT id, kind, closing_day, due_day FROM accounts WHERE id = $1 AND household_id = $2 AND status = 'active' AND deleted_at IS NULL`,
     [input.accountId, householdId],
@@ -582,6 +585,7 @@ const createRecurringPurchaseInTx = async (
 ): Promise<RecurringPurchase> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  if (input.categoryId) await lockCategoryReferencesInTx(client, householdId);
   // Task 2.18: same validation as the normal purchase path — card must
   // exist, be active and be a credit card with closing/due configured;
   // category must be an active expense-kind category.
@@ -753,6 +757,7 @@ const updatePurchaseCoreInTx = async (
 ): Promise<string> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  if (input.categoryId !== undefined) await lockCategoryReferencesInTx(client, householdId);
   if (input.categoryId) {
     // FINAL REVIEW: PATCH must apply the same active/expense rule as
     // creation (M-05) — not just existence.

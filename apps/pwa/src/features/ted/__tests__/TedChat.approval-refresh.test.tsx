@@ -214,6 +214,7 @@ describe("TedChat — post-approval reconciliation (T3.3)", () => {
           "ws-1",
           operationId,
           decision,
+          { tool: "transactions.expense.create" },
         ),
       );
       expect(reconcileMutation).not.toHaveBeenCalled();

@@ -17,6 +17,9 @@ export type DomainErrorCode =
   | "idempotency.conflict"
   | "idempotency.in_progress"
   | "idempotency.atomic_mutation_not_supported"
+  | "account.name_conflict"
+  | "category.name_conflict"
+  | "transaction.description_conflict"
   | "unsupported"
   | "approval.not_found"
   | "approval.requester_only"
@@ -72,6 +75,26 @@ export const domainErrors = {
       messages.idempotencyConflict(),
       409,
     ),
+  /**
+   * Rename precondition mismatch (V2 `accounts.update`, ADR-029): the
+   * account's current name is no longer exactly `expectedName` — a
+   * concurrent rename won the race. Deterministic 409, never a retryable
+   * uncertainty: the caller's precondition is stale, not the write.
+   */
+  nameConflict: (): DomainError =>
+    new DomainError(
+      "account.name_conflict",
+      "Nome atual da conta divergiu do esperado; outra renomeação venceu.",
+      409,
+    ),
+  categoryNameConflict: (): DomainError =>
+    new DomainError(
+      "category.name_conflict",
+      "Nome atual da categoria divergiu do esperado; outra renomeacao venceu.",
+      409,
+    ),
+  transactionDescriptionConflict: (): DomainError =>
+    new DomainError("transaction.description_conflict", "A descrição atual divergiu da esperada.", 409),
   // Finding 3: a live `processing` claim owned by another worker is an
   // explicit 409 (never a null-response replay). Same key+payload retries
   // after lease expiry take over; while the lease holds the caller waits.

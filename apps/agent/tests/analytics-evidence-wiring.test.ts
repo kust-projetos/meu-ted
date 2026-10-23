@@ -156,7 +156,14 @@ describe('envelope de analytics no caminho de evidência do turno (A04/A09 pós-
   it('RED: analytics_category_breakdown carrega o decimal exato e a flag approximate (G-B)', async () => {
     const unsafe = 10_000_000_000_040_000;
     const envelope = await envelopeFor('analytics_category_breakdown', {
-      analyticsCategoryBreakdown: async () => breakdownPayload(unsafe),
+      // Forma real da API para agregado unsafe: o decimal exato ORIGINAL e a
+      // flag viajam no corpo (G-B, `exactCentsCompanion`); o agente nunca
+      // fabrica o decimal a partir do double.
+      analyticsCategoryBreakdown: async () => ({
+        ...breakdownPayload(unsafe),
+        totalCentsExact: String(unsafe),
+        approximate: true,
+      }),
     });
     const item = envelope.items[0];
     expect(item?.status).toBe('ok');
@@ -166,6 +173,21 @@ describe('envelope de analytics no caminho de evidência do turno (A04/A09 pós-
       totalCentsExact: String(unsafe),
       effectivePeriod: { from: '2026-01-01', to: '2026-01-31', toExclusive: '2026-02-01' },
     });
+  });
+
+  it('unsafe SEM exact original falha fechado antes do annotate: nunca exact fabricado', async () => {
+    // O `annotateUnsafeTotals` derivaria `totalCentsExact` do double (perda
+    // de centavos acima de 2^53) e o render o publicaria como prova. O gate
+    // do channel recusa no RAW: erro tipado, sem nenhuma cifra no envelope.
+    const unsafe = 10_000_000_000_040_000;
+    const envelope = await envelopeFor('analytics_category_breakdown', {
+      analyticsCategoryBreakdown: async () => breakdownPayload(unsafe),
+    });
+    const item = envelope.items[0];
+    expect(item?.status).toBe('error');
+    expect(item?.reason).toBe('permanent_error');
+    expect(item?.data).toBeNull();
+    expect(JSON.stringify(envelope)).not.toContain(String(unsafe));
   });
 
   it('RED: sem envelope utilizável a leitura vira FALHA tipada, sem nenhum número', async () => {

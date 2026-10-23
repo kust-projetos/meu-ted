@@ -78,6 +78,7 @@ const makeFakePool = (mode: Mode) => {
       rollbacks += 1;
       return { rows: [], rowCount: 0 };
     }
+    if (t.includes('pg_advisory_xact_lock_shared')) return { rows: [], rowCount: 1 };
     if (t.includes('FROM categories WHERE id')) {
       return { rows: [], rowCount: 0 };
     }

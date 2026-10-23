@@ -146,12 +146,13 @@ const withTedReceipt = (
   // persisted operation's registry contract, never from executor output.
   if (!getApprovalToolContract(tool)) failClosed();
   // Entity type follows the tool: account tools resolve to an
-  // account entity, every other registered tool to a transaction entity.
-  const entityType = tool === 'accounts.create' || tool === 'accounts.deactivate' ? 'account' : 'transaction';
+  // account entity, category tools to a category entity, every other
+  // registered tool to a transaction entity.
+  const entityType = tool === 'accounts.create' || tool === 'accounts.deactivate' || tool === 'accounts.update' ? 'account' : tool === 'categories.create' || tool === 'categories.update' || tool === 'categories.deactivate' ? 'category' : 'transaction';
   let canonical: { mutationId: string };
   try {
     canonical = buildTedReceipt(
-      tool as 'transactions.expense.create' | 'transactions.income.create' | 'accounts.create' | 'accounts.deactivate',
+      tool as 'transactions.expense.create' | 'transactions.income.create' | 'transactions.update' | 'accounts.create' | 'accounts.deactivate' | 'accounts.update' | 'categories.create' | 'categories.update' | 'categories.deactivate',
       pendingId,
       { type: entityType, id: entityId },
     );
@@ -340,6 +341,20 @@ export const sanitizePendingV2FailureCode = (error: unknown): string => {
 export type PendingOperationV2Store = {
   propose(operation: PendingOperationV2): Promise<PendingOperationV2Record>;
   get(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
+  /** Read-only identity-bound snapshot. Unlike get(), this never performs lazy expiry transitions. */
+  getForRead?(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
+  /**
+   * Rename-gate lookup (ADR-029): read-only replay check by idempotency key.
+   * Returns the stored id + proposal hash (or null) so the propose route can
+   * return an existing proposal BEFORE running mutable target/name
+   * validation — a replay of the same key+args must resolve to the existing
+   * record even after the target was renamed. Hash comparison stays with the
+   * caller; `get` remains the only full-record read (identity-bound).
+   */
+  findByIdempotencyKey(
+    workspaceId: string,
+    idempotencyKey: string,
+  ): Promise<{ id: string; proposalHash: string } | null>;
   /**
    * T1.5 (SPEC §8.3): authoritative listing of non-terminal operations for
    * the AUTHENTICATED identity (workspace + actor + device). Never takes
@@ -533,6 +548,19 @@ export const createPostgresPendingOperationV2Store = (
       return { ...mapV2(row), existing };
     },
     async get(id, identity) { return mapV2(await read({ query: pool.query.bind(pool) } as unknown as PoolClient, id, identity)); },
+    async getForRead(id, identity) { return mapV2(await read({ query: pool.query.bind(pool) } as unknown as PoolClient, id, identity)); },
+    async findByIdempotencyKey(workspaceId, idempotencyKey) {
+      // Read-only replay probe: no state transition, no audit event. Scoped
+      // to (workspace, key) like the propose ON CONFLICT below; the route
+      // re-checks identity via get() before returning anything.
+      const found = await pool.query<PendingV2Row>(
+        `SELECT id, proposal_hash FROM pending_operations WHERE workspace_id = $1 AND idempotency_key = $2 AND protocol_version = 2 LIMIT 1`,
+        [workspaceId, idempotencyKey],
+      );
+      const row = found.rows[0];
+      if (!row) return null;
+      return { id: String(row.id), proposalHash: String(row.proposal_hash) };
+    },
     /**
      * T1.5 (SPEC §8.3) — appended after the terminal transitions so the
      * execute/claim/lease surface above stays untouched (T2.4 owns it).
@@ -938,6 +966,22 @@ export const createInMemoryPendingOperationV2Store = (
       // Plaintext attestations never leave the store via reads: only the
       // confirm/retry responses carry the newly issued token.
       return expose(resolve(id, identity));
+    },
+    async getForRead(id, identity) {
+      const record = records.get(id);
+      if (!record) return fail('approval.not_found', 'Operação pendente não encontrada.', 404);
+      if (!identityMatches(record, identity)) return fail('approval.binding_mismatch', 'A operação não pertence ao contexto autenticado.', 403);
+      return expose(record);
+    },
+    async findByIdempotencyKey(workspaceId, idempotencyKey) {
+      // In-memory mirror of the Postgres replay probe: same (workspace, key)
+      // scope as the propose dedup below; the route re-checks identity via
+      // get() before returning anything. Read-only, no events.
+      const found = [...records.values()].find(
+        (r) => r.workspaceId === workspaceId && r.idempotencyKey === idempotencyKey,
+      );
+      if (!found) return null;
+      return { id: found.id, proposalHash: found.proposalHash };
     },
     async bindConfirmationIntention(identity, intentionId) {
       const key = intentionKey(identity, intentionId);

@@ -3,6 +3,12 @@
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 
+## Unreleased (2026-10-23 — canário local TED de edição de descrição; sem release)
+
+- Registro documental de canário local `transactions.update` limitado à descrição: operação manual V2, precondição literal, replay/receipt vinculado e readback sem delta financeiro observado. Não representa CRUD geral nem evidência de produção.
+- Cartões, exclusões, edição de outros campos financeiros, transferências, parcelas, assinaturas, payables e faturas/pagamentos continuam fora do aceite desta fatia; ver [relatório de fechamento](docs/reports/2026-10-23-ted-local-crud-session-closure.md) e matriz referenciada.
+- Revisões e gates finais/CI ainda pendentes; sem merge/deploy ou mutação de produção registrados nesta entrada.
+
 ## Unreleased (2026-10-14 - release `3de0d3a` + E2E live + higiene; docs-only, sem tag/release)
 
 - PR #161 (`feat: explicit web_search gate, golden GW-040/042, canonical docs sync, release-promote workflow`) mergeado por squash como `3de0d3a6a2ad1a297a1b2ce11714a25dd5099485` em 2026-10-14T09:37:07Z; CI main run `38543671348` success (~6m11s), PWA CI run `38543671350` success (~7m44s).

@@ -47,8 +47,14 @@ describe('tool subset + skill map', () => {
 
   it('maps every curated tool to a skill', () => {
     const map = toolSkillMap();
+    // R7-F7: category mutations are conversational-only (pending drafts);
+    // update/deactivate are unsupported and create_category never rides as a
+    // direct model tool (manual-only via approval) — hence deliberately
+    // unmapped from every skill.
+    const conversationalOnly = new Set(['create_category', 'update_category', 'deactivate_category']);
     for (const line of toolSkillLines()) {
       const name = line.split(' ')[0]!;
+      if (conversationalOnly.has(name)) continue;
       expect(map[name], name).toBeDefined();
     }
     expect(map['create_expense']).toBe('registros');

@@ -10,6 +10,7 @@ import { assertCategoryKind } from "../categories/resolve.js";
 import { addMonthsSafe } from "../shared/billing-month.js";
 import { withTransaction, } from "../db/pool.js";
 import { assertWorkspaceWritableInTx } from "../auth/workspace-lifecycle-guard.js";
+import { lockCategoryReferencesInTx } from "../auth/category-lifecycle-guard.js";
 import type { PayableStore } from "./store.js";
 
 type Row = Record<string, unknown>;
@@ -42,6 +43,7 @@ const createPayableInTx = async (
 ): Promise<Payable> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  if (input.categoryId !== undefined) await lockCategoryReferencesInTx(client, householdId);
   // V4.1 Task 2.15: same category gate as the plain path.
   if (input.categoryId !== undefined) {
     await assertPayableCategoryInTx(clientQueryFn(client), householdId, input.categoryId);
@@ -151,6 +153,7 @@ const updatePayableInTx = async (
 ): Promise<Payable> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  if (input.categoryId !== undefined) await lockCategoryReferencesInTx(client, householdId);
   const existing = await client.query<Row>(
     `SELECT * FROM accounts_payable WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
     [payableId, householdId],
@@ -281,6 +284,7 @@ const createPayableWithTemplateInTx = async (
 ): Promise<Payable> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  if (input.payable.categoryId !== undefined) await lockCategoryReferencesInTx(client, householdId);
   const templateId = randomUUID();
   await client.query(
     `INSERT INTO payable_templates (id, household_id, account_id, name, description, amount_cents, frequency, day_of_month, reminder_days_before, notes, active)

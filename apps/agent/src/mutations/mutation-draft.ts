@@ -108,10 +108,10 @@ export const appendOriginMessage = (
 /** Definitive propose outcome once the API answered authoritatively. */
 export type DraftProposeOutcome = 'created' | 'existing' | 'rejected' | 'unknown';
 
-export type DraftTool = TedApprovalTool | 'accounts.create' | 'accounts.deactivate';
+export type DraftTool = TedApprovalTool | 'accounts.create' | 'accounts.deactivate' | 'accounts.update' | 'categories.create' | 'categories.update' | 'categories.deactivate';
 
 export type MutationDraftResolvedArgs = Readonly<{
-  kind: 'expense' | 'income' | 'account' | 'account-deactivate';
+  kind: 'expense' | 'income' | 'account' | 'account-deactivate' | 'account-rename' | 'category-create' | 'category-rename' | 'category-deactivate' | 'transaction-description';
   amountCents: number;
   description: string;
   date: string;
@@ -133,6 +133,31 @@ export type MutationDraftResolvedArgs = Readonly<{
   accountKind?: 'bank' | 'cash';
   initialBalanceCents?: number;
   categoryName?: string;
+  /**
+   * categories.create slots: NEVER-inferred kind (`expense`|`income`) plus
+   * the resolved parent id (`parentCategoryId`) and its display label
+   * (`parentCategoryName`, server-resolved at propose time). `parentQuery`
+   * carries the raw parent mention until resolution; resolution requires an
+   * exact (folded, trimmed) match against the FULL catalog — partial or
+   * ambiguous matches clarify, never infer.
+   */
+  categoryKind?: 'expense' | 'income';
+  parentCategoryId?: string;
+  parentCategoryName?: string;
+  parentQuery?: string;
+  requiresParent?: boolean;
+  /**
+   * accounts.update (rename) display-only CURRENT name: the exact canonical
+   * name the target carried when resolved (`expectedName`), carried so the
+   * card renders De → Para and confirmations can be reconciled. Never
+   * execution input — the executor converges on `accountId` only.
+   */
+  expectedName?: string;
+  /** transactions.update display/CAS inputs; never carries other patch fields. */
+  transactionId?: string;
+  expectedDescription?: string;
+  /** Internal authorized disambiguation candidates; never sent to the PWA. */
+  transactionCandidates?: readonly { transactionId:string; date:string; amountCents:number; accountId:string; accountName?:string }[];
 }>;
 
 export type MutationDraftRecord = Readonly<{
@@ -346,6 +371,15 @@ export type ConfirmationRecord = Readonly<{
   operationId: string;
   /** JSON-serialized success receipt (`null` for reservations and receipt-less successes). */
   receiptJson: string | null;
+  /**
+   * HIGH3 (round 4): authoritative expected tool (+ target id when the
+   * operation names a pre-existing entity), persisted with the binding so a
+   * durable replay binds the receipt instead of trusting the response.
+   * Absent on legacy rows (compat default) — replay treats those by the
+   * legacy rule, never inventing a tool.
+   */
+  tool?: string;
+  entityId?: string;
   createdAt: string;
   expiresAt: string;
   status: ConfirmationStatus;
@@ -356,6 +390,9 @@ export type RememberConfirmationInput = Readonly<{
   intentionId: string;
   operationId: string;
   receiptJson: string | null;
+  /** HIGH3 (round 4): validated context persisted with the binding. */
+  tool?: string;
+  entityId?: string;
   nowMs: number;
   ttlMs?: number;
 }>;
@@ -392,6 +429,9 @@ export type SettleConfirmationInput = Readonly<{
   operationId: string;
   status: Extract<ConfirmationStatus, 'succeeded' | 'inconclusive'>;
   receiptJson: string | null;
+  /** HIGH3 (round 4): validated context persisted with the binding (fills legacy NULLs). */
+  tool?: string;
+  entityId?: string;
   nowMs: number;
 }>;
 
@@ -457,6 +497,8 @@ export const buildConfirmationRecord = (input: RememberConfirmationInput): Confi
     intentionId: input.intentionId,
     operationId: input.operationId,
     receiptJson: input.receiptJson,
+    ...(typeof input.tool === 'string' && input.tool ? { tool: input.tool } : {}),
+    ...(typeof input.entityId === 'string' && input.entityId ? { entityId: input.entityId } : {}),
     createdAt: stamp,
     expiresAt: new Date(now + (input.ttlMs ?? CONFIRMATION_TTL_MS)).toISOString(),
     status: 'succeeded' as ConfirmationStatus,
@@ -473,6 +515,8 @@ export const buildClaimRecord = (input: ClaimConfirmationInput): ConfirmationRec
     intentionId: input.intentionId,
     operationId: input.operationId,
     receiptJson: input.receiptJson,
+    ...(typeof input.tool === 'string' && input.tool ? { tool: input.tool } : {}),
+    ...(typeof input.entityId === 'string' && input.entityId ? { entityId: input.entityId } : {}),
     createdAt: stamp,
     expiresAt: new Date(now + (input.ttlMs ?? CONFIRMATION_TTL_MS)).toISOString(),
     status: input.status,
@@ -609,6 +653,49 @@ export const validateCompleteArgs = (args: MutationDraftResolvedArgs): boolean =
     if (!args.accountId || !UUID.test(args.accountId)) return false;
     return true;
   }
+  // accounts.update gate (contrato fixado ted-local-account-rename-client):
+  // the authoritative `accountId` (UUID), the NEW name (`accountName`,
+  // trim 1..120) and the CURRENT canonical name (`expectedName`, trim
+  // 1..120, exact at resolution time). No amount/kind/category — a rename
+  // only renames.
+  if (args.kind === 'account-rename') {
+    if (!args.accountId || !UUID.test(args.accountId)) return false;
+    if (typeof args.accountName !== 'string' || !args.accountName.trim() || args.accountName.trim().length > 120) return false;
+    if (typeof args.expectedName !== 'string' || !args.expectedName.trim() || args.expectedName.trim().length > 120) return false;
+    return true;
+  }
+  // categories.create gate (fatia categories-create-v2-endtoend): the human
+  // name (trim 1..120), an EXPLICIT kind (`expense`|`income` — never
+  // defaulted, never inferred from the name) and, when a parent was named,
+  // its resolved canonical id (UUID). No amount/date/account — a category
+  // creation only names a category.
+  if (args.kind === 'category-create') {
+    if (typeof args.categoryName !== 'string' || !args.categoryName.trim() || args.categoryName.trim().length > 120) return false;
+    if (args.categoryKind !== 'expense' && args.categoryKind !== 'income') return false;
+    if (args.parentCategoryId !== undefined && !UUID.test(args.parentCategoryId)) return false;
+    return true;
+  }
+  // categories.update gate (name-only, ADR-029-style): the authoritative
+  // `categoryId` (UUID), the NEW name (`categoryName`, trim 1..120) and the
+  // CURRENT canonical name (`expectedName`, trim 1..120, exact at resolution
+  // time). No amount/kind/parent — a rename only renames.
+  if (args.kind === 'category-rename') {
+    if (!args.categoryId || !UUID.test(args.categoryId)) return false;
+    if (typeof args.categoryName !== 'string' || !args.categoryName.trim() || args.categoryName.trim().length > 120) return false;
+    if (typeof args.expectedName !== 'string' || !args.expectedName.trim() || args.expectedName.trim().length > 120) return false;
+    return true;
+  }
+  if (args.kind === 'category-deactivate') {
+    if (!args.categoryId || !UUID.test(args.categoryId)) return false;
+    if (typeof args.expectedName !== 'string' || !args.expectedName.trim() || args.expectedName.trim().length > 120) return false;
+    return true;
+  }
+  if (args.kind === 'transaction-description') {
+    if (!args.transactionId || !UUID.test(args.transactionId)) return false;
+    if (typeof args.description !== 'string' || !args.description.trim() || args.description.trim().length > 240) return false;
+    if (typeof args.expectedDescription !== 'string' || !args.expectedDescription.trim() || args.expectedDescription.trim().length > 240) return false;
+    return true;
+  }
   if (args.kind !== 'expense' && args.kind !== 'income') return false;
   if (!Number.isInteger(args.amountCents) || args.amountCents <= 0) return false;
   if (!args.description || !args.description.trim()) return false;
@@ -640,7 +727,7 @@ export const isDefinitiveProposeError = (error: unknown): boolean => {
  * O vocabulário de cancel do forget two-step é propositalmente outro
  * (ambiguidade com undo) e NÃO muda aqui.
  */
-const CANCEL_RE = /\b(cancela|cancelar|desist|desfaz|desfazer|desfaç)/i;
+const CANCEL_RE = /\b(cancela|cancele|cancelar|desist|desfaz|desfazer|desfaç)/i;
 const RESET_RE = /esquece|deixa (pra l[aá]|quieto|isso)|na verdade|come[cç]a|recome[cç]a|nova inten/i;
 
 export const isCancelText = (text: string): boolean => CANCEL_RE.test(text);
@@ -1017,7 +1104,25 @@ export class InMemoryMutationDraftStore implements MutationDraftStore {
     }
     this.confirmations.set(
       key,
-      Object.freeze({ ...existing, status: input.status, receiptJson: input.receiptJson }),
+      Object.freeze({
+        ...existing,
+        status: input.status,
+        receiptJson: input.receiptJson,
+        // First-write wins (paridade SQL COALESCE): o binding gravado no
+        // settle anterior nunca é sobrescrito — só preenche legado NULL.
+        ...((input.tool !== undefined &&
+          (typeof existing.tool !== 'string' || !existing.tool.trim())) &&
+        typeof input.tool === 'string' &&
+        input.tool.trim()
+          ? { tool: input.tool }
+          : {}),
+        ...((input.entityId !== undefined &&
+          (typeof existing.entityId !== 'string' || !existing.entityId.trim())) &&
+        typeof input.entityId === 'string' &&
+        input.entityId.trim()
+          ? { entityId: input.entityId }
+          : {}),
+      }),
     );
     return true;
   }
@@ -1247,6 +1352,11 @@ const ensureColumn = (sql: SqlExec, column: Readonly<{ name: string; ddl: string
  */
 const MUTATION_CONFIRMATION_COMPAT_COLUMNS: readonly Readonly<{ name: string; ddl: string }>[] = [
   { name: 'status', ddl: `status TEXT NOT NULL DEFAULT 'succeeded'` },
+  // HIGH3 (round 4): validated expected context persisted with the binding
+  // (tool + target id) so a durable replay binds instead of trusting the
+  // response. Nullable: legacy rows predate it and read back without it.
+  { name: 'tool', ddl: `tool TEXT` },
+  { name: 'entity_id', ddl: `entity_id TEXT` },
 ];
 
 const ensureConfirmationColumn = (sql: SqlExec, column: Readonly<{ name: string; ddl: string }>): void => {
@@ -1277,6 +1387,8 @@ const rowToConfirmation = (row: Record<string, unknown>): ConfirmationRecord => 
     intentionId: String(row.intention_id ?? ''),
     operationId: String(row.operation_id ?? ''),
     receiptJson: (typeof row.receipt_json === 'string' ? row.receipt_json : null) as string | null,
+  ...(typeof row.tool === 'string' && row.tool ? { tool: row.tool } : {}),
+  ...(typeof row.entity_id === 'string' && row.entity_id ? { entityId: row.entity_id } : {}),
     createdAt: String(row.created_at ?? ''),
     expiresAt: String(row.expires_at ?? ''),
     status: (status === 'reserved' || status === 'inconclusive' ? status : 'succeeded') as ConfirmationStatus,
@@ -1613,8 +1725,8 @@ export class SqlMutationDraftStore implements MutationDraftStore {
     // `DO UPDATE` (silent A→B rebinding) is removed.
     const inserted = [
       ...this.sql.exec<Record<string, unknown>>(
-        `INSERT INTO mutation_confirmations (workspace_id, actor_id, device_id, intention_id, operation_id, receipt_json, created_at, expires_at, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO mutation_confirmations (workspace_id, actor_id, device_id, intention_id, operation_id, receipt_json, tool, entity_id, created_at, expires_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (workspace_id, actor_id, device_id, intention_id) DO NOTHING
          RETURNING *`,
         record.workspaceId,
@@ -1623,6 +1735,8 @@ export class SqlMutationDraftStore implements MutationDraftStore {
         record.intentionId,
         record.operationId,
         record.receiptJson,
+        record.tool ?? null,
+        record.entityId ?? null,
         record.createdAt,
         record.expiresAt,
         record.status,
@@ -1643,9 +1757,11 @@ export class SqlMutationDraftStore implements MutationDraftStore {
     if (stored.operationId === CONFIRMATION_UNBOUND_OPERATION_ID && stored.status === 'reserved') {
       const adopted = [
         ...this.sql.exec<Record<string, unknown>>(
-          `UPDATE mutation_confirmations SET operation_id = ?, receipt_json = ?, expires_at = ?, status = ? WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND intention_id = ? AND operation_id = ? AND status = 'reserved' RETURNING *`,
+          `UPDATE mutation_confirmations SET operation_id = ?, receipt_json = ?, tool = COALESCE(tool, ?), entity_id = COALESCE(entity_id, ?), expires_at = ?, status = ? WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND intention_id = ? AND operation_id = ? AND status = 'reserved' RETURNING *`,
           record.operationId,
           record.receiptJson,
+          record.tool ?? null,
+          record.entityId ?? null,
           record.expiresAt,
           record.status,
           record.workspaceId,
@@ -1693,12 +1809,15 @@ export class SqlMutationDraftStore implements MutationDraftStore {
   settleConfirmation(input: SettleConfirmationInput): boolean {
     // Terminal CAS: only a `reserved` row for THIS operation transitions.
     // `succeeded`/`inconclusive` rows are immutable — this statement can
-    // never move them, and a missing/foreign row settles nothing.
+    // never move them, and a missing/foreign row settles nothing. The
+    // validated context fills legacy NULLs (COALESCE keeps a stored one).
     const rows = [
       ...this.sql.exec<Record<string, unknown>>(
-        `UPDATE mutation_confirmations SET receipt_json = ?, status = ? WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND intention_id = ? AND operation_id = ? AND status = 'reserved' RETURNING *`,
+        `UPDATE mutation_confirmations SET receipt_json = ?, status = ?, tool = COALESCE(tool, ?), entity_id = COALESCE(entity_id, ?) WHERE workspace_id = ? AND actor_id = ? AND device_id = ? AND intention_id = ? AND operation_id = ? AND status = 'reserved' RETURNING *`,
         input.receiptJson,
         input.status,
+        input.tool ?? null,
+        input.entityId ?? null,
         input.ctx.workspaceId,
         input.ctx.actorId,
         input.ctx.deviceId ?? '',

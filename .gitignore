@@ -86,6 +86,7 @@ test-payload.json
 # Tooling runtime state
 .superpowers/
 .playwright-cli/
+/.playwright-mcp/
 
 tmp-pwa-*.log
 

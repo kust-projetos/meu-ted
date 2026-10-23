@@ -77,3 +77,40 @@ export const assertWorkspaceWritable = async (
     );
   }
 };
+
+/**
+ * Round rename-2: guarda de lifecycle para o writer legado
+ * (`renameAccountLegacyInTx`). Mapeia `assertWorkspaceWritableInTx`
+ * (mesma query `FOR SHARE`, mesmas regras active/archived/deleted,
+ * mesma tolerância a linha ausente = dado pré-lifecycle).
+ *
+ * Diferença de schema: o ledger legado real (manifest até V054, sem
+ * V020/V036) pode NÃO ter a tabela `households` (ou a coluna `status`).
+ * Nesse caso NÃO há bypass silencioso nem invenção de schema/migration:
+ * falha fechada e explicada (`unsupported`) — o rename exige lifecycle
+ * observável. Erros de conexão/query reais propagam intocados.
+ */
+export const assertWorkspaceWritableLegacyInTx = async (
+  client: PoolClient,
+  householdId: string,
+): Promise<void> => {
+  try {
+    await assertWorkspaceWritableInTx(client, householdId);
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    if (isMissingLifecycleRelation(error)) {
+      throw new DomainError(
+        'unsupported',
+        'Operação não suportada: renomeação exige lifecycle de workspace observável (households.status).',
+        400,
+      );
+    }
+    throw error;
+  }
+};
+
+/** PG `undefined_table` (42P01) / `undefined_column` (42703). */
+const isMissingLifecycleRelation = (error: unknown): boolean => {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === '42P01' || code === '42703';
+};

@@ -62,6 +62,24 @@ describe('renderMutationResult — outcome copy por kind (contas)', () => {
     );
   });
 
+  it('renomeação relata conta renomeada, nunca lançamento', () => {
+    expect(renderMutationResult('succeeded', 'operação', { mutationKind: 'accounts.update' })).toBe(
+      'Conta renomeada com sucesso.',
+    );
+  });
+
+  it('renomeação de categoria relata categoria renomeada, nunca lançamento', () => {
+    expect(renderMutationResult('succeeded', 'operação', { mutationKind: 'categories.update' })).toBe(
+      'Categoria renomeada com sucesso.',
+    );
+  });
+
+  it('falha de renomeação nunca afirma sucesso', () => {
+    expect(renderMutationResult('failed', 'operação', { mutationKind: 'accounts.update' })).toBe(
+      'Não foi possível concluir a operação.',
+    );
+  });
+
   it('transação e kinds desconhecidos mantêm o copy legado byte-idêntico', () => {
     expect(renderMutationResult('succeeded')).toBe('Lançamento registrado com sucesso.');
     expect(renderMutationResult('succeeded', 'operação', { mutationKind: 'transactions.expense.create' })).toBe(

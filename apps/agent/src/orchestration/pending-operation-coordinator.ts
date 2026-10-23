@@ -29,6 +29,7 @@ import {
 } from '../mutations/mutation-draft.js';
 import type { MutationReceipt } from '@pi-finance/llm-contracts';
 import { renderInconclusive } from '../responses/deterministic-responses.js';
+import type { MutationExpectedContext } from '../mutations/mutation-executor.js';
 
 export type DecisionScope = 'decidable' | 'retryable';
 
@@ -60,8 +61,14 @@ export type DecisionInput = Readonly<{
    * confirm and verified on execute. Required for confirm/retry: without it
    * decide() would run the unbound bypass (instance-memory anti-replay
    * only). Cancel carries no binding and ignores it.
+   *
+   * HIGH3: `expected` carries the authoritative tool/target context (from
+   * the listing record that authorized the decision) into receipt
+   * validation — a receipt for another tool/entity with the same pending
+   * id fails closed.
    */
   intentionId?: string;
+  expected?: MutationExpectedContext;
 }>;
 
 export type DecisionResult = Readonly<{
@@ -163,9 +170,9 @@ export class PendingOperationCoordinator {
   }
 
   /** Confirm + execute exactly once (T2.2 re-emission and T2.3 TX split live in the API). */
-  async confirm(operationId: string, identity: MutationIdentity, intentionId?: string): Promise<DecisionResult> {
+  async confirm(operationId: string, identity: MutationIdentity, intentionId?: string, expected?: MutationExpectedContext): Promise<DecisionResult> {
     const confirmation = await this.dependencies.client.confirm(operationId, identity, intentionId);
-    return this.executeAttested({ ...confirmation, ...(intentionId !== undefined ? { intentionId } : {}) }, identity);
+    return this.executeAttested({ ...confirmation, ...(intentionId !== undefined ? { intentionId } : {}) }, identity, expected);
   }
 
   /**
@@ -185,21 +192,22 @@ export class PendingOperationCoordinator {
     return client.bindConfirmationIntention(intentionId, identity);
   }
 
-  async authorizeAndExecute(operationId: string, identity: MutationIdentity): Promise<DecisionResult> {
+  async authorizeAndExecute(operationId: string, identity: MutationIdentity, expected?: MutationExpectedContext): Promise<DecisionResult> {
     const authorization = await this.dependencies.client.authorize(operationId, identity);
-    return this.executeAttested(authorization, identity);
+    return this.executeAttested(authorization, identity, expected);
   }
 
-  async executeAuthorized(confirmation: { operationId: string; attestation: string }, identity: MutationIdentity): Promise<DecisionResult> {
-    return this.executeAttested(confirmation, identity);
+  async executeAuthorized(confirmation: { operationId: string; attestation: string }, identity: MutationIdentity, expected?: MutationExpectedContext): Promise<DecisionResult> {
+    return this.executeAttested(confirmation, identity, expected);
   }
 
-  private async executeAttested(confirmation: { operationId: string; attestation: string; intentionId?: string }, identity: MutationIdentity): Promise<DecisionResult> {
+  private async executeAttested(confirmation: { operationId: string; attestation: string; intentionId?: string }, identity: MutationIdentity, expected?: MutationExpectedContext): Promise<DecisionResult> {
     const execution = await this.dependencies.client.execute({
       operationId: confirmation.operationId,
       attestation: confirmation.attestation,
       identity,
       ...(confirmation.intentionId !== undefined ? { intentionId: confirmation.intentionId } : {}),
+      ...(expected !== undefined ? { expected } : {}),
     });
     return {
       operationId: execution.operationId,
@@ -221,9 +229,9 @@ export class PendingOperationCoordinator {
   }
 
   /** Conversational retry (§8.2/§13): failed → confirmed (fresh attestation) → execute once. */
-  async retry(operationId: string, identity: MutationIdentity, intentionId?: string): Promise<DecisionResult> {
+  async retry(operationId: string, identity: MutationIdentity, intentionId?: string, expected?: MutationExpectedContext): Promise<DecisionResult> {
     const confirmation = await this.dependencies.client.retry(operationId, identity, intentionId);
-    return this.executeAttested({ ...confirmation, ...(intentionId !== undefined ? { intentionId } : {}) }, identity);
+    return this.executeAttested({ ...confirmation, ...(intentionId !== undefined ? { intentionId } : {}) }, identity, expected);
   }
 
   /**
@@ -242,9 +250,9 @@ export class PendingOperationCoordinator {
     const intentionId = typeof input.intentionId === 'string' ? input.intentionId.trim() : '';
     if (!intentionId) throw new Error('approval.intention_required');
     if (input.decision === 'retry') {
-      return this.retry(input.operationId, input.identity, intentionId);
+      return this.retry(input.operationId, input.identity, intentionId, input.expected);
     }
-    return this.confirm(input.operationId, input.identity, intentionId);
+    return this.confirm(input.operationId, input.identity, intentionId, input.expected);
   }
 
   /**
@@ -279,10 +287,29 @@ export class PendingOperationCoordinator {
     for (const draft of store.listProposing(ctx, now)) {
       const args = draft.resolvedArgs;
       try {
+        // accounts.update (account-only path): proposing rename drafts
+        // settle with the fixed-contract args, never the transaction
+        // tuple (which would invent amount/date/category for a rename).
         // accounts.deactivate (account-only path): proposing deactivation
         // drafts settle with the fixed-contract args, never the transaction
         // tuple (which would invent amount/date/category for an account id).
-        const proposal = draft.tool === 'accounts.deactivate' || draft.resolvedArgs.kind === 'account-deactivate'
+        const proposal = draft.tool === 'accounts.update' || draft.resolvedArgs.kind === 'account-rename'
+          ? await this.dependencies.client.propose({
+            tool: 'accounts.update',
+            normalizedArgs: {
+              accountId: args.accountId!,
+              name: args.accountName?.trim() ?? '',
+              expectedName: args.expectedName?.trim() ?? '',
+            },
+            summary: args.accountName?.trim() || args.description,
+            identity: {
+              workspaceId: draft.workspaceId,
+              actorId: draft.actorId,
+              deviceId: draft.deviceId ?? draftScope.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+            },
+            idempotencyKey: draft.proposalIdempotencyKey,
+          })
+          : draft.tool === 'accounts.deactivate' || draft.resolvedArgs.kind === 'account-deactivate'
           ? await this.dependencies.client.propose({
             tool: 'accounts.deactivate',
             normalizedArgs: {
@@ -290,6 +317,69 @@ export class PendingOperationCoordinator {
               ...(args.accountName?.trim() ? { accountName: args.accountName.trim() } : {}),
             },
             summary: args.accountName?.trim() || args.description,
+            identity: {
+              workspaceId: draft.workspaceId,
+              actorId: draft.actorId,
+              deviceId: draft.deviceId ?? draftScope.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+            },
+            idempotencyKey: draft.proposalIdempotencyKey,
+          })
+          : draft.tool === 'categories.create' || draft.resolvedArgs.kind === 'category-create'
+          ? await this.dependencies.client.propose({
+            tool: 'categories.create',
+            normalizedArgs: {
+              name: (args.categoryName ?? args.description ?? '').trim(),
+              kind: args.categoryKind === 'income' ? 'income' : 'expense',
+              ...(args.parentCategoryId ? { parentId: args.parentCategoryId } : {}),
+            },
+            summary: args.categoryName ?? args.description,
+            identity: {
+              workspaceId: draft.workspaceId,
+              actorId: draft.actorId,
+              deviceId: draft.deviceId ?? draftScope.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+            },
+            idempotencyKey: draft.proposalIdempotencyKey,
+          })
+          : draft.tool === 'categories.update' || draft.resolvedArgs.kind === 'category-rename'
+          ? await this.dependencies.client.propose({
+            tool: 'categories.update',
+            normalizedArgs: {
+              categoryId: args.categoryId!,
+              name: args.categoryName?.trim() ?? '',
+              expectedName: args.expectedName?.trim() ?? '',
+            },
+            summary: args.categoryName?.trim() || args.description,
+            identity: {
+              workspaceId: draft.workspaceId,
+              actorId: draft.actorId,
+              deviceId: draft.deviceId ?? draftScope.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+            },
+            idempotencyKey: draft.proposalIdempotencyKey,
+          })
+          : draft.tool === 'transactions.update' || draft.resolvedArgs.kind === 'transaction-description'
+          ? await this.dependencies.client.propose({
+            tool: 'transactions.update',
+            normalizedArgs: {
+              transactionId: args.transactionId!,
+              description: args.description.trim(),
+              expectedDescription: args.expectedDescription!,
+            },
+            summary: `alterar descrição do lançamento "${args.expectedDescription ?? ''}" para "${args.description.trim()}"`,
+            identity: {
+              workspaceId: draft.workspaceId,
+              actorId: draft.actorId,
+              deviceId: draft.deviceId ?? draftScope.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
+            },
+            idempotencyKey: draft.proposalIdempotencyKey,
+          })
+          : draft.tool === 'categories.deactivate' || draft.resolvedArgs.kind === 'category-deactivate'
+          ? await this.dependencies.client.propose({
+            tool: 'categories.deactivate',
+            normalizedArgs: {
+              categoryId: args.categoryId!,
+              expectedName: args.expectedName?.trim() ?? '',
+            },
+            summary: `desativar a categoria "${args.expectedName?.trim() ?? ''}"`,
             identity: {
               workspaceId: draft.workspaceId,
               actorId: draft.actorId,

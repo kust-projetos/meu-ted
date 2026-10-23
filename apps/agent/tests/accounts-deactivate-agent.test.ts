@@ -130,6 +130,7 @@ const harness = (nowMs: number, accounts: AccountRow[]) => {
         id: 'op-deact-1',
         status: 'proposed',
         tool: 'accounts.deactivate',
+        accountId: ENT_NUBANK,
         createdAt: new Date(T0).toISOString(),
         expiresAt: new Date(now + 10 * 60_000).toISOString(),
       };
@@ -316,6 +317,8 @@ describe('accounts.deactivate executor receipt', () => {
     return new MutationExecutor({ request: request as never, events: () => undefined });
   };
 
+  const deactivateExpected = { tool: 'accounts.deactivate', entityId: ENT_NUBANK };
+
   it('(4) aceita recibo de desativação de conta válido', async () => {
     const executor = executorWith(deactivationExecution());
     const out = await executor.execute(
@@ -323,6 +326,7 @@ describe('accounts.deactivate executor receipt', () => {
         operationId: 'op-deact-1',
         attestation: 'a'.repeat(32),
         identity: { workspaceId: 'ws', actorId: 'actor', deviceId: 'device' },
+        expected: deactivateExpected,
       },
       'token',
     );
@@ -340,6 +344,7 @@ describe('accounts.deactivate executor receipt', () => {
           operationId: 'op-deact-1',
           attestation: 'b'.repeat(32),
           identity: { workspaceId: 'ws', actorId: 'actor', deviceId: 'device' },
+          expected: deactivateExpected,
         },
         'token',
       ),
@@ -352,6 +357,7 @@ describe('accounts.deactivate executor receipt', () => {
           operationId: 'op-other',
           attestation: 'c'.repeat(32),
           identity: { workspaceId: 'ws', actorId: 'actor', deviceId: 'device' },
+          expected: deactivateExpected,
         },
         'token',
       ),

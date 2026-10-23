@@ -392,6 +392,8 @@ describe('accounts.create executor receipt', () => {
     return new MutationExecutor({ request: request as never, events: () => undefined });
   };
 
+  const createExpected = { tool: 'accounts.create' };
+
   it('(4a) aceita recibo de conta válido', async () => {
     const executor = executorWith(accountExecution());
     const out = await executor.execute(
@@ -399,6 +401,7 @@ describe('accounts.create executor receipt', () => {
         operationId: 'op-acct-1',
         attestation: 'a'.repeat(32),
         identity: { workspaceId: 'ws', actorId: 'actor', deviceId: 'device' },
+        expected: createExpected,
       },
       'token',
     );
@@ -416,6 +419,7 @@ describe('accounts.create executor receipt', () => {
           operationId: 'op-acct-1',
           attestation: 'b'.repeat(32),
           identity: { workspaceId: 'ws', actorId: 'actor', deviceId: 'device' },
+          expected: createExpected,
         },
         'token',
       ),
@@ -428,6 +432,7 @@ describe('accounts.create executor receipt', () => {
           operationId: 'op-other',
           attestation: 'c'.repeat(32),
           identity: { workspaceId: 'ws', actorId: 'actor', deviceId: 'device' },
+          expected: createExpected,
         },
         'token',
       ),

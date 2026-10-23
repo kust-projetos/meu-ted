@@ -393,10 +393,18 @@ export const pendingOperationPresentationSchema = z
       .optional(),
     account: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
     category: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
+    categoryParent: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
     accountName: z.string().trim().min(1).max(120).optional(),
     accountKind: z.string().trim().min(1).max(32).optional(),
     initialBalanceCents: z.number().int().optional(),
     balanceCents: z.number().int().optional(),
+    categoryName: z.string().trim().min(1).max(120).optional(),
+    expectedDescription: z.string().min(1).max(240).refine((value) => value.trim().length > 0).optional(),
+    transactionTargetId: z.string().trim().min(1).max(128).optional(),
+    transactionAmountCents: z.number().int().min(0).optional(),
+    transactionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    transactionAccount: z.object({id:z.string().trim().min(1).max(128),label:z.string().trim().min(1).max(120)}).strict().optional(),
+    categoryKind: z.string().trim().min(1).max(32).optional(),
     expiresAt: z.string().datetime({ offset: true }),
     warnings: z.array(z.string().trim().min(1)),
   })
@@ -472,6 +480,77 @@ export const mutationDraftChannelSchema = z
   .strict();
 
 /**
+ * HIGH3 (round 3): authoritative expected context for receipt binding.
+ * The ORIGINAL tool (+ the pre-existing target id when the operation
+ * names one), from the listing record that authorized the decision —
+ * never from the execution response, never from client input. Strict:
+ * only these two display-safe fields cross to the browser (no
+ * attestation/authority material by construction).
+ */
+export const decisionExpectedContextSchema = z
+  .object({
+    tool: z.string().trim().min(1).max(64),
+    entityId: z.string().trim().min(1).max(128).optional(),
+  })
+  .strict();
+
+/**
+ * Read-only Pending V2 outcome projection. Known non-terminal statuses are
+ * observational only; consumers must not render them as terminal feedback.
+ * Success requires the API's canonical receipt and its server-derived context.
+ */
+const pendingOutcomeBaseSchema = z.object({
+  operationId: z.string().uuid(),
+  tool: tedApprovalToolSchema,
+});
+const pendingOutcomeExpectedContextSchema = decisionExpectedContextSchema.optional();
+
+export const pendingOperationOutcomeSchema = z
+  .discriminatedUnion('status', [
+    pendingOutcomeBaseSchema.extend({ status: z.enum(['proposed', 'confirmed', 'executing']) }).strict(),
+    pendingOutcomeBaseSchema.extend({
+      status: z.literal('succeeded'),
+      receipt: mutationReceiptSchema,
+      expectedContext: decisionExpectedContextSchema,
+    }).strict(),
+    pendingOutcomeBaseSchema.extend({
+      status: z.literal('failed'),
+      failureCode: z.literal('in_use').optional(),
+      expectedContext: pendingOutcomeExpectedContextSchema,
+    }).strict(),
+    pendingOutcomeBaseSchema.extend({
+      status: z.enum(['cancelled', 'expired', 'unverified']),
+      expectedContext: pendingOutcomeExpectedContextSchema,
+    }).strict(),
+  ])
+  .superRefine((value, ctx) => {
+    const expected = 'expectedContext' in value ? value.expectedContext : undefined;
+    if (expected && expected.tool !== value.tool) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['expectedContext', 'tool'], message: 'Outcome context tool must match the operation tool.' });
+    }
+    if (value.status === 'failed' && value.failureCode === 'in_use' && value.tool !== 'categories.deactivate') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['failureCode'], message: 'in_use is only valid for categories.deactivate.' });
+    }
+    if (value.status !== 'succeeded') return;
+    const { receipt, expectedContext } = value;
+    const entityType = value.tool.startsWith('categories.') ? 'category'
+      : value.tool.startsWith('accounts.') ? 'account' : 'transaction';
+    if (
+      receipt.status !== 'succeeded' ||
+      receipt.operationId !== value.operationId ||
+      receipt.mutationKind !== value.tool ||
+      !receipt.entity ||
+      receipt.entity.type !== entityType ||
+      expectedContext.tool !== value.tool ||
+      (expectedContext.entityId !== undefined && expectedContext.entityId !== receipt.entity.id)
+    ) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['receipt'], message: 'Success receipt must match the operation and expected entity.' });
+    }
+  });
+
+export type PendingOperationOutcome = z.infer<typeof pendingOperationOutcomeSchema>;
+
+/**
  * Every schema whose output may reach the browser. The attestation-ban
  * test sweeps this record, so new channel types are covered by adding
  * them here.
@@ -480,6 +559,8 @@ export const BROWSER_FACING_SCHEMAS = {
   pendingOperationPresentation: pendingOperationPresentationSchema,
   mutationReceipt: mutationReceiptSchema,
   mutationDraftChannel: mutationDraftChannelSchema,
+  decisionExpectedContext: decisionExpectedContextSchema,
+  pendingOperationOutcome: pendingOperationOutcomeSchema,
 } as const;
 
 export type BrowserFacingSchemaName = keyof typeof BROWSER_FACING_SCHEMAS;

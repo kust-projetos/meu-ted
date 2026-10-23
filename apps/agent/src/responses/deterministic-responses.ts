@@ -126,6 +126,132 @@ export const renderMonthSummary = (data: unknown): string | null => {
   return `Resumo ${period}: ${parts.join(', ')}${suffix}.`;
 };
 
+/**
+ * Categorias: lista determinística do catálogo real (`GET /categories`).
+ * Só nomes (nunca IDs): a evidência carrega ids, o copy não. Retorna null
+ * quando o payload não prova nenhuma linha — o orquestrador cai no caminho
+ * generativo com a evidência, nunca num vazio inventado.
+ */
+export const renderCategories = (data: unknown): string | null => {
+  const record = (typeof data === 'object' && data !== null && !Array.isArray(data)
+    ? (data as Record<string, unknown>)
+    : null);
+  const rows: readonly unknown[] = Array.isArray(data)
+    ? data
+    : record !== null && Array.isArray(record['items'])
+      ? (record['items'] as readonly unknown[])
+      : record !== null && Array.isArray(record['categories'])
+        ? (record['categories'] as readonly unknown[])
+        : [];
+  const names: string[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const entry = row as Record<string, unknown>;
+    const name = typeof entry['name'] === 'string' && entry['name'].trim().length > 0
+      ? entry['name'].trim()
+      : null;
+    if (name === null) continue;
+    const kind = typeof entry['kind'] === 'string' ? entry['kind'] : null;
+    const label = kind === 'income' ? 'receita' : kind === 'expense' ? 'despesa' : null;
+    names.push(label === null ? name : `${name} (${label})`);
+  }
+  if (names.length === 0) return null;
+  const total = record !== null && typeof record['total'] === 'number' && Number.isFinite(record['total'])
+    ? Math.trunc(record['total'] as number)
+    : names.length;
+  const shown = names.slice(0, 60);
+  const remainder = total > shown.length ? ` (+ ${total - shown.length} outras)` : '';
+  return `Suas categorias (${total})${remainder}:\n${shown.map((name) => `- ${name}`).join('\n')}`;
+};
+
+/**
+ * Breakdown por categoria (`GET /analytics/category-breakdown`): totais em
+ * centavos com a janela UTC que a leitura declarou. Só nomes e cifras
+ * provadas (nunca ids). G-B: acima de 2^53 o double perde centavos, então a
+ * cifra honesta é o decimal exato (`totalCentsExact`) formatado SEM Number;
+ * sem decimal válido e fora do safe integer, o render recusa (null) — o
+ * orquestrador cai no caminho generativo com a evidência, nunca num total
+ * arredondado nem no extrato.
+ */
+const EXACT_CENTS_RE = /^-?\d+$/;
+
+/** Formata um decimal inteiro de centavos sem passar por Number. */
+const formatExactCents = (centsText: string): string | null => {
+  if (!EXACT_CENTS_RE.test(centsText)) return null;
+  const negative = centsText.startsWith('-');
+  const stripped = (negative ? centsText.slice(1) : centsText).replace(/^0+(?=\d)/, '');
+  const padded = stripped.length <= 2 ? stripped.padStart(3, '0') : stripped;
+  const intPart = padded.slice(0, -2);
+  const decPart = padded.slice(-2);
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return `${negative ? '-' : ''}R$ ${grouped},${decPart}`;
+};
+
+/**
+ * Cifra honesta de um campo de centavos: o decimal exato quando válido (a
+ * autoridade, inclusive quando o double veio arredondado); o double só
+ * dentro do safe integer; senão null (recusa).
+ */
+const moneyText = (entry: Record<string, unknown>): string | null => {
+  const exact = entry['totalCentsExact'];
+  if (typeof exact === 'string') return formatExactCents(exact);
+  const raw = entry['totalCents'];
+  if (typeof raw === 'number' && Number.isSafeInteger(raw)) return formatCents(raw);
+  const snake = entry['total_cents'];
+  if (typeof snake === 'number' && Number.isSafeInteger(snake)) return formatCents(snake);
+  return null;
+};
+
+export const renderCategoryBreakdown = (data: unknown): string | null => {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  const period = (typeof record['effectivePeriod'] === 'object' && record['effectivePeriod'] !== null
+    ? (record['effectivePeriod'] as Record<string, unknown>)
+    : (typeof record['period'] === 'object' && record['period'] !== null
+      ? (record['period'] as Record<string, unknown>)
+      : null));
+  const from = period !== null && typeof period['from'] === 'string' ? period['from'] : null;
+  const to = period !== null && typeof period['to'] === 'string' ? period['to'] : null;
+  const total = moneyText(record);
+  if (from === null || to === null || total === null) return null;
+  const rawSlices = Array.isArray(record['slices']) ? (record['slices'] as readonly unknown[]) : null;
+  if (rawSlices === null) return null;
+  const slices: Array<{ name: string; amount: string; pct: number | null }> = [];
+  for (const slice of rawSlices) {
+    if (!slice || typeof slice !== 'object' || Array.isArray(slice)) continue;
+    const entry = slice as Record<string, unknown>;
+    const name = typeof entry['name'] === 'string' && entry['name'].trim().length > 0
+      ? entry['name'].trim()
+      : null;
+    if (name === null) continue;
+    // Uma fatia sem cifra exata/recusável derruba o render inteiro: pular a
+    // linha quebraria a identidade total↔fatias, e um arredondado seria
+    // publicado como exato.
+    const amount = moneyText(entry);
+    if (amount === null) return null;
+    const pct = typeof entry['pct'] === 'number' && Number.isFinite(entry['pct']) ? entry['pct'] : null;
+    slices.push({ name, amount, pct });
+  }
+  if (slices.length === 0) return null;
+  const kind = record['kind'] === 'income' ? 'income' : 'expense';
+  const title = kind === 'income' ? 'Receitas por categoria' : 'Gastos por categoria';
+  const countRaw = record['transactionCount'];
+  const count = typeof countRaw === 'number' && Number.isFinite(countRaw) ? Math.trunc(countRaw)
+    : typeof record['entryCount'] === 'number' && Number.isFinite(record['entryCount']) ? Math.trunc(record['entryCount'] as number)
+      : typeof record['count'] === 'number' && Number.isFinite(record['count']) ? Math.trunc(record['count'] as number)
+        : null;
+  const basis = record['basis'] === 'liquidez' || record['basis'] === 'competencia'
+    ? String(record['basis'])
+    : record['agentRequestedBasis'] === 'liquidez' || record['agentRequestedBasis'] === 'competencia'
+      ? String(record['agentRequestedBasis'])
+      : null;
+  const head = `${title} ${from} a ${to}${count !== null ? ` (${count} lançamentos)` : ''}${basis !== null ? `, base ${basis}` : ''}`;
+  const lines = slices.map((slice) =>
+    `- ${slice.name}: ${slice.amount}${slice.pct !== null ? ` (${slice.pct}%)` : ''}`,
+  );
+  return `${head}: Total ${total} — ${lines.join('; ')}.`;
+};
+
 export type MutationOutcome = 'proposed' | 'succeeded' | 'failed' | 'cancelled' | 'expired';
 
 /**
@@ -154,6 +280,15 @@ export const renderMutationResult = (
       // registrado"). Unknown/absent kinds keep the legacy transaction copy.
       if (receipt?.mutationKind === 'accounts.deactivate') return `Conta desativada com sucesso.`;
       if (receipt?.mutationKind === 'accounts.create') return `Conta criada com sucesso.`;
+      // Rename receipt carries kind + account entity only (no names in the
+      // receipt contract), so the honest copy names the action, never De/Para.
+      if (receipt?.mutationKind === 'accounts.update') return `Conta renomeada com sucesso.`;
+      if (receipt?.mutationKind === 'categories.create') return `Categoria criada com sucesso.`;
+      // Rename receipt carries kind + category entity only (no names in the
+      // receipt contract), so the honest copy names the action, never De/Para.
+      if (receipt?.mutationKind === 'categories.update') return `Categoria renomeada com sucesso.`;
+      if (receipt?.mutationKind === 'transactions.update') return `Descrição do lançamento alterada com sucesso.`;
+      if (receipt?.mutationKind === 'categories.deactivate') return `Categoria desativada com sucesso.`;
       return `Lançamento registrado com sucesso.`;
     }
     case 'proposed': return `Proposta: ${subject}. Confirma?`;

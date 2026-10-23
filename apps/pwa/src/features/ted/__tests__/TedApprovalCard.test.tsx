@@ -29,6 +29,25 @@ describe("TedApprovalCard V2", () => {
     vi.mocked(agentClient.decidePendingOperation).mockClear();
   });
 
+  it("shows description-only De → Para and confirms with strict target context", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({
+      operationId: "op-desc", status: "succeeded",
+      receipt: { mutationId:"mut-desc", mutationKind:"transactions.update", status:"succeeded", affectedTargets:["transactions"], operationId:"op-desc", entity:{type:"transaction",id:"tx-desc"} },
+    });
+    render(<TedApprovalCard operation={{ id:"op-desc", status:"proposed", operation:"transactions.update", presentation:{
+      id:"op-desc",status:"proposed",tool:"transactions.update",title:"Alterar descrição do lançamento",
+      description:"Mercado semanal",expectedDescription:"Mercado",transactionTargetId:"tx-desc",
+      transactionAmountCents:1200,transactionDate:"2026-10-20",transactionAccount:{id:"acc-desc",label:"Conta principal"},
+      expiresAt:"2026-10-23T00:00:00.000Z",warnings:[],
+    } }} workspaceId="workspace-1" />);
+    expect(screen.getByText("Mercado")).toBeInTheDocument();
+    expect(screen.getByText("Mercado semanal")).toBeInTheDocument();
+    expect(screen.getByText("Conta principal")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name:"Confirmar" }));
+    await waitFor(() => expect(agentClient.decidePendingOperation).toHaveBeenCalledWith("workspace-1","op-desc","confirm",{tool:"transactions.update",entityId:"tx-desc"}));
+  });
+
   it("sends only a confirm decision to the authenticated Agent RPC", async () => {
     const user = userEvent.setup();
     vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({
@@ -63,6 +82,7 @@ describe("TedApprovalCard V2", () => {
         "workspace-1",
         "op-1",
         "confirm",
+        { tool: "transactions.expense.create" },
       ),
     );
     expect(JSON.stringify(vi.mocked(agentClient.decidePendingOperation).mock.calls)).not.toContain("attestation");
@@ -198,6 +218,7 @@ describe("TedApprovalCard V2", () => {
         "workspace-1",
         "legacy-2",
         "cancel",
+        undefined,
       ),
     );
     expect(
@@ -324,6 +345,7 @@ describe("TedApprovalCard mandatory presentation (production functional correcti
         "workspace-1",
         "rehydrated-proposed-1",
         "cancel",
+        undefined,
       ),
     );
     expect(
@@ -383,6 +405,7 @@ describe("TedApprovalCard mandatory presentation (production functional correcti
       "workspace-1",
       "failed-actionable-1",
       "retry",
+      { tool: "transactions.expense.create" },
     );
   });
 
@@ -476,6 +499,7 @@ describe("TedApprovalCard mandatory presentation (production functional correcti
         "workspace-1",
         "failed-actionable-1",
         "retry",
+        { tool: "transactions.expense.create" },
       ),
     );
   });

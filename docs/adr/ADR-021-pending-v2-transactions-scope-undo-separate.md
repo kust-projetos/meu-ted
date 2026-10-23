@@ -3,6 +3,8 @@
 **Status:** Aceito
 **Data:** 2026-09-19
 
+> O limite de comandos deste ADR foi parcialmente supersedido pelo [ADR-029](ADR-029-typed-pending-v2-account-rename.md) em 2026-10-21, para contas e renomeação nome-only. O texto abaixo permanece como registro histórico; undo separado e V1 fora do modelo continuam vigentes.
+
 ## Contexto
 
 A V4.1 deixou um débito aberto de migração pending-ops V1→V2 antes de remover

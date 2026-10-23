@@ -46,6 +46,14 @@ export type EntitySummary = Readonly<{
   /** 'active' rows are usable; anything else (inactive/archived) is not (R08). */
   status?: string;
   isActive?: boolean;
+  /**
+   * Account kind (`bank`|`cash`|`credit_card`, ...) when the authoritative
+   * read reports one. Absent on rows that carry no kind — callers with a
+   * kind scope must treat absence as unusable, never as a wildcard.
+   */
+  kind?: string;
+  /** Parent category id when this row is a subcategory (undefined/null for roots). */
+  parentId?: string;
   /** Scope the authoritative read reported for this row (defensive R08 check). */
   scopeId?: string;
 }>;
@@ -59,6 +67,7 @@ export type EntityReader = Readonly<{
   scope?: Readonly<{ workspaceId?: string }>;
   listAccounts(): Promise<readonly EntitySummary[]>;
   listCategories(): Promise<readonly EntitySummary[]>;
+  listTransactions?(): Promise<readonly import('./transaction-description.js').EditableTransaction[]>;
 }>;
 
 export type ResolvableMutation = Readonly<{
@@ -233,6 +242,12 @@ export const normalizeEntities = (response: unknown): EntitySummary[] => {
     if (id && name) {
       const status = typeof row.status === 'string' ? row.status : undefined;
       const isActive = typeof row.isActive === 'boolean' ? row.isActive : undefined;
+      // HIGH1 (rename kind scope): preserve the authoritative kind when the
+      // read reports one. Callers with a kind scope (rename: bank/cash only)
+      // fail closed on absence — a row without kind never becomes eligible.
+      const kind = typeof row.kind === 'string' && row.kind.trim() ? row.kind.trim() : undefined;
+      const rawParent = row.parentId ?? row.parent_id ?? row.parentCategoryId;
+      const parentId = typeof rawParent === 'string' && rawParent.trim() ? rawParent.trim() : undefined;
       // IDEMPOTENT NORMALIZATION (R08 scope axis). The raw reads carry
       // `householdId`/`workspaceId`; an `EntitySummary` that already went
       // through this function carries `scopeId`. Both forms reach here — the
@@ -251,6 +266,8 @@ export const normalizeEntities = (response: unknown): EntitySummary[] => {
         name,
         ...(status !== undefined ? { status } : {}),
         ...(isActive !== undefined ? { isActive } : {}),
+        ...(kind !== undefined ? { kind } : {}),
+        ...(parentId !== undefined ? { parentId } : {}),
         ...(scopeId !== undefined ? { scopeId } : {}),
       });
     }
@@ -274,6 +291,33 @@ export const createRequestEntityReader = (request: RequestFn, scope?: Readonly<{
   ...(scope?.workspaceId ? { scope: { workspaceId: scope.workspaceId } } : {}),
   listAccounts: async () => normalizeEntities(await request('GET', '/accounts')),
   listCategories: async () => normalizeEntities(await request('GET', '/categories')),
+  listTransactions: async () => {
+    const pageSize = 200;
+    const maxPages = 10;
+    let total: number | undefined;
+    const output: import('./transaction-description.js').EditableTransaction[] = [];
+    const seenIds = new Set<string>();
+    for (let page = 0; page < maxPages; page += 1) {
+      const offset = page * pageSize;
+      const response = await request('GET', `/transactions?limit=${pageSize}&offset=${offset}`);
+      if (!response || typeof response !== 'object' || Array.isArray(response)) throw new Error('transaction.read.invalid_response');
+      const payload = response as { items?: unknown; total?: unknown; limit?: unknown; offset?: unknown };
+      if (!Array.isArray(payload.items) || typeof payload.total !== 'number' || !Number.isInteger(payload.total) || payload.total < 0 || payload.total < offset || payload.items.length > pageSize || (payload.limit !== undefined && payload.limit !== pageSize) || (payload.offset !== undefined && payload.offset !== offset) || (total !== undefined && payload.total !== total)) {
+        throw new Error('transaction.read.invalid_response');
+      }
+      total = payload.total;
+      for (const raw of payload.items) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('transaction.read.invalid_response');
+        const row = raw as Record<string, unknown>;
+        if (typeof row.id !== 'string' || !row.id || seenIds.has(row.id) || typeof row.householdId !== 'string' || typeof row.description !== 'string' || typeof row.amountCents !== 'number' || !Number.isFinite(row.amountCents) || typeof row.date !== 'string' || typeof row.accountId !== 'string' || (row.kind !== 'expense' && row.kind !== 'income' && row.kind !== 'transfer')) throw new Error('transaction.read.invalid_response');
+        seenIds.add(row.id);
+        output.push({ id: row.id, scopeId: row.householdId, description: row.description, amountCents: row.amountCents, date: row.date, accountId: row.accountId, kind: row.kind });
+      }
+      if (output.length >= total) return output;
+      if (payload.items.length === 0) throw new Error('transaction.read.invalid_response');
+    }
+    throw new Error('transaction.read.incomplete_response');
+  },
 });
 
 // --- R08 validity axes ---------------------------------------------------------------

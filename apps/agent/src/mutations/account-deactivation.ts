@@ -18,6 +18,11 @@
  */
 
 import { foldEntityName, type EntitySummary } from './entity-resolver.js';
+import {
+  blankNamedSpans,
+  governedNounIsForeign,
+  isNegatedVerb,
+} from './account-domain-signal.js';
 
 export const ACCOUNT_DEACTIVATE_TOOL = 'accounts.deactivate' as const;
 
@@ -85,13 +90,28 @@ const TRANSACTION_OBJECT_NOUNS = [
 ];
 
 /**
- * Explicit deactivation signal: an account-specific verb anywhere, or a
- * generic removal verb next to an account anchor (noun or anaphora) without
- * a foreign-domain noun stealing the turn.
+ * Explicit deactivation signal: an account-specific verb governing an
+ * ACCOUNT object, or a generic removal verb next to an account anchor
+ * without a foreign-domain noun stealing the turn. The object is read first
+ * (ted-local-account-domain-guards): even an account-specific verb yields
+ * to an explicit foreign object ("Desative categoria QA Transporte"), and a
+ * negated verb ("nunca desative") never signals. Quoted/named spans are
+ * blanked before the check so `desative conta chamada Categoria` keeps
+ * working. Transactional nouns keep their existing contract (an explicit
+ * "desative" still wins over "despesa" and downstream resolution clarifies).
  */
 export const hasAccountDeactivationSignal = (text: string): boolean => {
   const folded = fold(text);
+  const blanked = blankNamedSpans(folded);
+  if (isNegatedVerb(blanked, [...ACCOUNT_SPECIFIC_VERBS, ...GENERIC_REMOVAL_VERBS])) return false;
+  if (governedNounIsForeign(blanked, ACCOUNT_SPECIFIC_VERBS)) return false;
   if (wordRe(ACCOUNT_SPECIFIC_VERBS).test(folded)) return true;
+  // The same governed-object veto applies to generic removal verbs
+  // ("apague conta a pagar ...", "exclua a categoria ... da conta ..."):
+  // the verb's object decides, not a bare keyword elsewhere. Transactional
+  // nouns keep their existing contract below (explicit "desative" still wins
+  // over "despesa"; generic verbs were already vetoed by it).
+  if (governedNounIsForeign(blanked, GENERIC_REMOVAL_VERBS)) return false;
   if (wordRe(TRANSACTION_OBJECT_NOUNS).test(folded)) return false;
   if (!wordRe(GENERIC_REMOVAL_VERBS).test(folded)) return false;
   if (!wordRe(ACCOUNT_ANCHORS).test(folded)) return false;

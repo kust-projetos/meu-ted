@@ -5,6 +5,7 @@ import type { GoalStore } from './store.js';
 import { domainErrors } from '../writes/errors.js';
 import { withTransaction } from '../db/pool.js';
 import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
+import { lockCategoryReferencesInTx } from '../auth/category-lifecycle-guard.js';
 type Row = Record<string, unknown>;
 
 type CreateGoalInput = Parameters<GoalStore['createGoal']>[1];
@@ -18,13 +19,22 @@ type UpdateGoalInput = Parameters<GoalStore['updateGoal']>[2];
  * claim client, so claim + effect + completion commit atomically in ONE
  * transaction. The atomic increment (§9.6) holds inside the merged tx.
  */
-const createGoalInTx = async (
+export const createGoalInTx = async (
   client: PoolClient,
   householdId: string,
   input: CreateGoalInput,
+  categoryShape: 'status' | 'active' = 'status',
 ): Promise<Goal> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  if (input.categoryId) {
+    await lockCategoryReferencesInTx(client, householdId);
+    const category = await client.query<Row>(
+      `SELECT id FROM categories WHERE id = $1 AND household_id = $2 AND ${categoryShape === 'status' ? "status = 'active'" : 'active = true'} AND deleted_at IS NULL`,
+      [input.categoryId, householdId],
+    );
+    if ((category.rowCount ?? 0) === 0) throw domainErrors.notFound('Categoria');
+  }
   const id = randomUUID();
   await client.query(`INSERT INTO goals (id,household_id,name,goal_type,target_amount_cents,start_date,target_date,description,category_id,account_id,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [id, householdId, input.name, input.goalType, input.targetAmountCents, input.startDate, input.targetDate ?? null, input.description ?? null, input.categoryId ?? null, input.accountId ?? null, input.notes ?? null]);
   return { id, householdId, name: input.name, goalType: input.goalType as Goal['goalType'], targetAmountCents: input.targetAmountCents, currentAmountCents: 0, startDate: input.startDate, status: 'active' as const };

@@ -66,6 +66,55 @@ const proposeExpense = (app: ReturnType<typeof scopedApp>['app'], key: string, a
   });
 
 describe('GET /pending-operations/v2/active (SPEC §8.3)', () => {
+  it('projects only persisted category in_use on failed category deactivation, with a lean HTTP DTO', async () => {
+    const id = { workspace: 'ws-in-use-http', actor: 'actor-in-use-http', device: 'device-in-use-http' };
+    const { app, v2Store } = scopedApp(id);
+    const identity: PendingIdentity = { workspaceId: id.workspace, actorId: id.actor, deviceId: id.device };
+    const categoryId = crypto.randomUUID();
+    const proposed = await app.inject({
+      method: 'POST', url: '/pending-operations/v2/propose', headers: { 'idempotency-key': 'category-in-use-http' },
+      payload: { tool: 'categories.deactivate', normalizedArgs: { categoryId, expectedName: 'QA category' } },
+    });
+    expect(proposed.statusCode).toBe(201);
+    const proposalId = proposed.json().id as string;
+    const confirmed = await v2Store.confirm(proposalId, identity);
+    await expect(v2Store.execute(confirmed.attestation!, identity, async () => { throw { code: 'in_use' }; }, proposalId)).rejects.toThrow();
+
+    // Use the real persisted in-memory record as the source; derive malformed
+    // and mismatched DTO variants only to exercise the route's projection gate.
+    const persisted = (await v2Store.listActive(identity)).find((item) => item.id === proposalId)!;
+    expect(persisted).toMatchObject({ status: 'failed', tool: 'categories.deactivate', failureCode: 'in_use' });
+    const variants = [
+      { ...persisted, id: 'other-tool', tool: 'transactions.expense.create' },
+      { ...persisted, id: 'category-proposed', status: 'proposed' },
+      { ...persisted, id: 'category-confirmed', status: 'confirmed' },
+      { ...persisted, id: 'category-executing', status: 'executing' },
+      { ...persisted, id: 'category-other-failure', failureCode: 'executor.failed' },
+      { ...persisted, id: 'category-malformed-code', failureCode: 'in_use\nattestation=secret' },
+    ];
+    const storeListActive = v2Store.listActive.bind(v2Store);
+    v2Store.listActive = async (scope) => scope.workspaceId === id.workspace && scope.actorId === id.actor && scope.deviceId === id.device
+      ? [persisted, ...variants] : [];
+
+    const response = await app.inject({ method: 'GET', url: '/pending-operations/v2/active' });
+    expect(response.statusCode).toBe(200);
+    const { items } = response.json() as { items: Array<Record<string, unknown>> };
+    const byId = new Map(items.map((item) => [item.id, item]));
+    expect(byId.get(proposalId)).toHaveProperty('failureCode', 'in_use');
+    for (const record of variants) expect(byId.get(record.id)).not.toHaveProperty('failureCode');
+    const allowedKeys = new Set(['id', 'status', 'tool', 'createdAt', 'expiresAt', 'categoryId', 'presentation', 'failureCode']);
+    for (const item of items) {
+      expect(Object.keys(item).every((key) => allowedKeys.has(key))).toBe(true);
+      for (const forbidden of ['normalizedArgs', 'attestation', 'attestationHash', 'proposalHash', 'idempotencyKey', 'execution', 'bindings']) {
+        expect(item).not.toHaveProperty(forbidden);
+      }
+    }
+    const outsider = await app.inject({ method: 'GET', url: '/pending-operations/v2/active', headers: { 'x-agent-workspace': 'other' } });
+    // Identity remains server-derived; an attempted header override cannot alter the scoped result.
+    expect(outsider.json().items).toHaveLength(items.length);
+    v2Store.listActive = storeListActive;
+  });
+
   it('lists the proposed operation with lean disambiguation fields', async () => {
     const id = { workspace: 'ws-a', actor: 'actor-a', device: 'device-a' };
     const { app } = scopedApp(id);

@@ -57,27 +57,58 @@ export type WriteIdempotencyOptions = {
 };
 
 /**
- * Closed V2 execution-audit vocabulary: exactly the two TED approval tools
- * that execute through keyed writes. The undo reversal vocabulary matches
- * these ids 1:1, so no receipt-kind mapping is needed on this path.
+ * Closed keyed-write audit vocabulary: the two TED approval tools plus the
+ * dedicated manual transaction-description update. No generic mutation name
+ * is admitted.
  */
 export type V2ToolAuditOperation = 'transactions.expense.create' | 'transactions.income.create';
+export type KeyedWriteAuditOperation = V2ToolAuditOperation | 'transaction.update';
 
 export type WriteAuditContext = {
   operation: V2ToolAuditOperation;
   actorId: string;
 };
 
+/**
+ * Rename-only options for `updateAccount` (V2 `accounts.update`, ADR-029).
+ * `expectedName` is the typed before-condition: the rename commits only
+ * when the account's current name still matches it exactly (checked
+ * atomically under row lock inside the effect transaction). `idempotencyKey`
+ * routes through the pending-v2 keyed path (replay key → account, no audit
+ * leg — like `accounts.create`).
+ */
+export type UpdateAccountOptions = {
+  idempotencyKey?: string;
+  expectedName?: string;
+};
+
+export type UpdateCategoryOptions = {
+  idempotencyKey?: string;
+  expectedName?: string;
+};
+
+export type DeactivateCategoryOptions = WriteIdempotencyOptions & { expectedName?: string };
+
+/** Narrow, manually-keyed description edit; no generic transaction patch. */
+export type EditTransactionDescriptionInput = {
+  transactionId: string;
+  description: string;
+  expectedDescription: string;
+};
+export type EditTransactionDescriptionOptions = { idempotencyKey: string; actorId: string };
+
 export type WriteStore = {
-  // accounts
-  createAccount(householdId: string, input: CreateAccountInput): Promise<Account>;
-  updateAccount(householdId: string, id: string, patch: UpdateAccountInput): Promise<Account>;
+  // accounts (keyed V2 execution: `{ idempotencyKey }` replays key →
+  // account without re-executing; audit legs stay transaction-only)
+  createAccount(householdId: string, input: CreateAccountInput, options?: WriteIdempotencyOptions): Promise<Account>;
+  updateAccount(householdId: string, id: string, patch: UpdateAccountInput, options?: UpdateAccountOptions): Promise<Account>;
   deactivateAccount(householdId: string, id: string): Promise<Account>;
 
-  // categories
-  createCategory(householdId: string, input: CreateCategoryInput): Promise<Category>;
-  updateCategory(householdId: string, id: string, patch: UpdateCategoryInput): Promise<Category>;
-  deactivateCategory(householdId: string, id: string): Promise<Category>;
+  // categories (keyed V2 foundation: `{ idempotencyKey }` replays key →
+  // category without re-executing; no audit leg — like `accounts.create`)
+  createCategory(householdId: string, input: CreateCategoryInput, options?: WriteIdempotencyOptions): Promise<Category>;
+  updateCategory(householdId: string, id: string, patch: UpdateCategoryInput, options?: UpdateCategoryOptions): Promise<Category>;
+  deactivateCategory(householdId: string, id: string, options?: DeactivateCategoryOptions): Promise<Category>;
   /**
    * Hard-removes a macro (and its subs) from the active set. mode 'move'
    * reassigns every referencing transaction to destinationCategoryId;
@@ -97,6 +128,7 @@ export type WriteStore = {
   createIncome(householdId: string, input: CreateIncomeInput, options?: WriteIdempotencyOptions): Promise<Transaction>;
   createTransfer(householdId: string, input: CreateTransferInput): Promise<Transaction>;
   updateTransaction(householdId: string, id: string, patch: UpdateTransactionInput): Promise<Transaction>;
+  editTransactionDescription(householdId: string, input: EditTransactionDescriptionInput, options: EditTransactionDescriptionOptions): Promise<Transaction>;
   softDeleteTransaction(householdId: string, id: string): Promise<Transaction>;
 };
 
@@ -122,4 +154,9 @@ export type WriteStoreAccountCategoryTxExtensions = {
   deactivateCategoryInTx(client: PoolClient, householdId: string, id: string): Promise<Category>;
   applyCategoryDefaultsInTx(client: PoolClient, householdId: string): Promise<ApplyDefaultsResult>;
   deleteCategoryInTx(client: PoolClient, householdId: string, id: string, input: DeleteCategoryInput): Promise<DeleteCategoryResult>;
+};
+
+/** Dedicated transaction-description operation joined to the idempotency claim. */
+export type WriteStoreTransactionDescriptionTxExtension = {
+  editTransactionDescriptionInTx(client: PoolClient, householdId: string, input: EditTransactionDescriptionInput): Promise<Transaction>;
 };

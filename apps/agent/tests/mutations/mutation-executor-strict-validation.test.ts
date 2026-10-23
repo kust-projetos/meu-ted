@@ -29,6 +29,7 @@ describe('MutationExecutor strict execute validation (RED)', () => {
     operationId: pendingId,
     attestation: 'a'.repeat(32),
     identity: { workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-1' },
+    expected: { tool: 'transactions.expense.create' },
   };
   const decisionInput = {
     operationId: pendingId,
@@ -37,6 +38,7 @@ describe('MutationExecutor strict execute validation (RED)', () => {
     delegatedToken: 'delegated-token',
     identity: input.identity,
     intentionId: 'intent-strict-1',
+    expected: { tool: 'transactions.expense.create' },
   };
 
   it('succeeds on the faithful shape with linked receipt', async () => {
