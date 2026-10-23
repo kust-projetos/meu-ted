@@ -765,8 +765,23 @@ const deactivateCategoryInTx = async (
 ): Promise<Category> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  // R2b-category reaches its barrier before exclusive serialization; the
+  // locked reread below is authoritative after competing lifecycle changes.
+  // Same predicate as the locked reread so a soft-deleted target is never
+  // misreported as a rename conflict.
+  const snapshot = await client.query<Row>(
+    `SELECT ${CATEGORY_COLUMNS} FROM categories WHERE id = $1 AND household_id = $2 AND status = 'active' AND deleted_at IS NULL`,
+    [id, householdId],
+  );
+  if (snapshot.rowCount === 0) throw domainErrors.notFound('Categoria');
+  if (expectedName !== undefined && mapCategory(snapshot.rows[0]!).name !== expectedName) throw domainErrors.categoryNameConflict();
   await lockCategoryDeactivationInTx(client, householdId);
-  const existing = expectedName === undefined ? await findCategoryInHousehold(client, id, householdId) : mapCategory((await client.query<Row>(`SELECT ${CATEGORY_COLUMNS} FROM categories WHERE id = $1 AND household_id = $2 AND status = 'active' AND deleted_at IS NULL FOR UPDATE`, [id, householdId])).rows[0] ?? (() => { throw domainErrors.notFound('Categoria'); })());
+  const locked = await client.query<Row>(
+    `SELECT ${CATEGORY_COLUMNS} FROM categories WHERE id = $1 AND household_id = $2 AND status = 'active' AND deleted_at IS NULL FOR UPDATE`,
+    [id, householdId],
+  );
+  if (locked.rowCount === 0) throw domainErrors.notFound('Categoria');
+  const existing = mapCategory(locked.rows[0]!);
   if (existing.status !== 'active') throw domainErrors.notFound('Categoria');
   if (expectedName !== undefined && existing.name !== expectedName) throw domainErrors.categoryNameConflict();
   await assertCategoryHasNoPersistedReferencesInTx(client, householdId, id);

@@ -607,6 +607,14 @@ const deactivateCategoryLegacyInTx = async (
   id: string,
   expectedName?: string,
 ): Promise<Category> => {
+  // Snapshot before exclusive serialization lets R2b-category reach its
+  // barrier; the locked reread below is authoritative.
+  const snapshot = await client.query<Row>(
+    `SELECT ${LEGACY_CATEGORY_COLUMNS} FROM categories WHERE id = $1 AND household_id = $2 AND active = true AND deleted_at IS NULL`,
+    [id, householdId],
+  );
+  if (snapshot.rowCount === 0) throw domainErrors.notFound('Categoria');
+  if (expectedName !== undefined && mapCategory(snapshot.rows[0]!).name !== expectedName) throw domainErrors.categoryNameConflict();
   await lockCategoryDeactivationInTx(client, householdId);
   const existing = await client.query<Row>(
     `SELECT ${LEGACY_CATEGORY_COLUMNS} FROM categories WHERE id = $1 AND household_id = $2 AND active = true AND deleted_at IS NULL FOR UPDATE`,
@@ -616,7 +624,7 @@ const deactivateCategoryLegacyInTx = async (
   if (expectedName !== undefined && mapCategory(existing.rows[0]!).name !== expectedName) throw domainErrors.categoryNameConflict();
   await assertCategoryHasNoPersistedReferencesInTx(client, householdId, id);
   const res = await client.query<Row>(
-    `UPDATE categories SET active = false, deleted_at = NOW() WHERE id = $1 AND household_id = $2 RETURNING ${LEGACY_CATEGORY_COLUMNS}`, [id, householdId]);
+    `UPDATE categories SET active = false, deleted_at = NOW() WHERE id = $1 AND household_id = $2 AND active = true AND deleted_at IS NULL RETURNING ${LEGACY_CATEGORY_COLUMNS}`, [id, householdId]);
   if (res.rowCount === 0) throw domainErrors.notFound('Categoria');
   return mapCategory(res.rows[0]!);
 };

@@ -284,6 +284,29 @@ describe('Postgres category lifecycle foundation', () => {
     expect(transaction.rows[0]?.['deleted_at']).not.toBeNull();
   });
 
+  itIfDatabase('treats a soft-deleted active category as not found even with a divergent expectedName', async () => {
+    if (!pool) throw new Error('test database not initialized');
+    const householdId = randomUUID();
+    const categoryId = randomUUID();
+    await pool.query(
+      `INSERT INTO categories (id, household_id, name, kind, status, parent_id, deleted_at)
+       VALUES ($1, $2, 'Lifecycle tombstoned', 'expense', 'active', NULL, NOW())`,
+      [categoryId, householdId],
+    );
+    const writes = createPostgresWriteStore({ pool });
+    // The fail-fast snapshot must share the locked reread predicate: a
+    // soft-deleted target is not found, never a rename conflict.
+    await expect(
+      writes.deactivateCategory(householdId, categoryId, {
+        idempotencyKey: randomUUID(),
+        expectedName: 'Stale',
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    const row = await pool.query(`SELECT status, deleted_at FROM categories WHERE id = $1`, [categoryId]);
+    expect(row.rows[0]?.['status']).toBe('active');
+    expect(row.rows[0]?.['deleted_at']).not.toBeNull();
+  });
+
   itIfDatabase('blocks deactivation when even an inactive child row exists', async () => {
     if (!pool) throw new Error('test database not initialized');
     const householdId = randomUUID();

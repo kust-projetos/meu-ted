@@ -92,6 +92,11 @@ describeDb('keyed category deactivate PG descartável — canonical + legacy', (
         const before = (await p.query(`SELECT status, deleted_at FROM categories WHERE id = $1`, [category.id])).rows[0];
         const key = randomUUID();
 
+        // A soft-deleted row must be reported as not_found even when the
+        // caller's expectedName diverges: the fail-fast snapshot may not
+        // surface a rename conflict for a target that no longer exists.
+        await expect(writes.deactivateCategory(household, category.id, { idempotencyKey: randomUUID(), expectedName: 'Stale' })).rejects.toMatchObject({ code: 'not_found' });
+
         await expect(writes.deactivateCategory(household, category.id, { idempotencyKey: key, expectedName: category.name })).rejects.toMatchObject({ code: 'not_found' });
 
         const after = (await p.query(`SELECT status, deleted_at FROM categories WHERE id = $1`, [category.id])).rows[0];
