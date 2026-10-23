@@ -1,15 +1,22 @@
 # PWA Audit Risk Acceptance
 
-> Reviewed 2026-09-19 · Expires 2026-12-31 · Owner: project-maintainer
+> Reviewed 2026-10-23 · Expires 2026-12-31 · Owner: project-maintainer
 >
-> Six current build-time vulnerabilities are accepted under strict exact-field matching.
+> Current findings are accepted under strict exact-field matching.
 > The audit blocks immediately when a finding changes or this acceptance expires.
 
-## Build-Time (6)
+## Runtime (1)
 
 | Package | Severity | Scope | Reason |
 |---|---|---|---|
-| `@lhci/cli`, `@lhci/utils`, `lighthouse`, `puppeteer-core`, `@puppeteer/browsers`, `extract-zip` | high | Lighthouse CI only | This is one exact-match dependency chain. Two path-traversal advisories remain in `extract-zip`; npm's proposed resolution downgrades `@lhci/cli` from `0.15.1` to `0.12.0`, so no non-breaking fix is available. |
+| `zod` | high | PWA runtime | GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404) requires an attacker-controlled large array parsed by an **unconstrained** array schema. Every PWA array schema validates trusted API/Agent responses; the only external input path (`/api/csp-report`) caps bodies at 8192 bytes and validates bounded scalar fields, not arrays. `zod` 3.x has no patched release (the fix is `4.6.6`, a major migration); migrate to zod 4 before the review. |
+
+## Build-Time (8)
+
+| Package | Severity | Scope | Reason |
+|---|---|---|---|
+| `@lhci/cli`, `@lhci/utils`, `lighthouse`, `puppeteer-core`, `chromium-bidi` | high | Lighthouse CI only | One exact-match dependency chain rooted in Lighthouse. The 2026-10-23 advisory drift re-shaped the records (`via` now includes `zod`, `proxy-agent`, and `chromium-bidi`); npm's proposed resolution still downgrades `@lhci/cli`. Build-time toolchain, never shipped to Cloudflare production. |
+| `@serwist/build`, `@serwist/next`, `@serwist/webpack-plugin` | high | Serwist build only | Affected solely through their nested `zod` copies while compiling the service worker during `pwa:build`; never runs in Cloudflare production. Resolved when the PWA migrates to zod 4. |
 
 ## Controls And Review
 
@@ -17,14 +24,9 @@
   record exactly (`name`, severity, `via`, effects, and range).
 - The approval records expire on 2026-12-31; a new audit and owner decision
   are required before then.
-- Historical note (2026-09-19): `sharp@0.35.4` failed the OpenNext Cloudflare
-  bundle on Windows. That prior acceptance is superseded: Next.js `16.4.1`
-  requires the fixed Sharp line (`^0.35.5`), and the critical advisories
-  GHSA-2464-fhr4-w9xw and GHSA-673q-mjm6-r5xr are not covered by the old
-  acceptance. Next, eslint-config-next, and Sharp are now pinned to `16.4.1`,
-  `16.4.1`, and `0.35.5`; the scoped `next>sharp` override is `0.35.5`.
-- `wrangler` was upgraded to `4.135.0`, eliminating its former
-  `miniflare`/`sharp` audit chain without an exception.
+- `wrangler` was upgraded to `4.152.0` (`miniflare` 5.20261019.2-beta →
+  `sharp` 0.35.5), eliminating its former `miniflare`/`sharp` audit chain
+  without an exception.
 - Re-evaluate the remaining exact build-time exceptions if their dependency
   chains publish compatible remediations.
 

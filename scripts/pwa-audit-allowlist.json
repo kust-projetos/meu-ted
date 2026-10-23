@@ -600,5 +600,128 @@
     "via": ["miniflare"],
     "effects": [],
     "range": "<=0.0.0-7ae5dd357 || 4.16.0 - 4.148.0"
+  },
+  {
+    "id": "pwa-2026-10-23-zod-constrained-collections",
+    "scope": "runtime",
+    "owner": "project-maintainer",
+    "justification": "GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404) requires an attacker-controlled large array parsed by an unconstrained array schema. Every PWA array schema validates trusted API/Agent responses; the only external input path (csp-report) caps bodies at 8192 bytes and uses bounded scalar fields, not array schemas. zod 3.x has no patched release (fix is 4.6.6, a major migration); the nested copies in @serwist/* and chromium-bidi are build-time only. Migrate to zod 4 before the 2026-12-31 review.",
+    "expiresOn": "2026-12-31",
+    "name": "zod",
+    "severity": "high",
+    "via": [
+      {
+        "source": 1243066,
+        "name": "zod",
+        "dependency": "zod",
+        "title": "Zod can exhaust memory while validating oversized constrained collections",
+        "url": "https://github.com/advisories/GHSA-mrhx-c7xc-m3w5",
+        "severity": "high",
+        "cwe": ["CWE-770"],
+        "cvss": {
+          "score": 7.5,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "range": "<4.6.6"
+      }
+    ],
+    "effects": ["@serwist/build", "@serwist/next", "@serwist/webpack-plugin", "chromium-bidi"],
+    "range": "<4.6.6"
+  },
+  {
+    "id": "pwa-2026-10-23-lhci-cli-via-zod-drift",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Lighthouse CI only; advisory drift 2026-10-23 re-shaped the @lhci/cli record (via now includes lighthouse and proxy-agent). Build-time toolchain, never shipped to Cloudflare production. Re-evaluate with the zod 4 migration at the 2026-12-31 review.",
+    "expiresOn": "2026-12-31",
+    "name": "@lhci/cli",
+    "severity": "high",
+    "via": ["@lhci/utils", "lighthouse", "proxy-agent"],
+    "effects": [],
+    "range": "<=0.1.1-alpha.5 || >=0.14.0"
+  },
+  {
+    "id": "pwa-2026-10-23-lhci-utils-via-lighthouse",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Lighthouse CI only; affected solely through lighthouse. Build-time toolchain, never shipped to Cloudflare production. Re-evaluate with the zod 4 migration at the 2026-12-31 review.",
+    "expiresOn": "2026-12-31",
+    "name": "@lhci/utils",
+    "severity": "high",
+    "via": ["lighthouse"],
+    "effects": [],
+    "range": ">=0.14.0"
+  },
+  {
+    "id": "pwa-2026-10-23-serwist-build-via-zod",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Serwist compiles the service worker at build time and never runs in Cloudflare production. Affected solely through its nested zod copy; resolved when the PWA migrates to zod 4.",
+    "expiresOn": "2026-12-31",
+    "name": "@serwist/build",
+    "severity": "high",
+    "via": ["zod"],
+    "effects": [],
+    "range": ">=9.0.0-preview.0"
+  },
+  {
+    "id": "pwa-2026-10-23-serwist-next-via-zod",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Serwist Next plugin builds the service worker during pwa:build and never runs in Cloudflare production. Affected through @serwist/build, @serwist/webpack-plugin, and nested zod; resolved when the PWA migrates to zod 4.",
+    "expiresOn": "2026-12-31",
+    "name": "@serwist/next",
+    "severity": "high",
+    "via": ["@serwist/build", "@serwist/webpack-plugin", "zod"],
+    "effects": [],
+    "range": ">=9.0.0-preview.0"
+  },
+  {
+    "id": "pwa-2026-10-23-serwist-webpack-plugin-via-zod",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Serwist webpack plugin builds the service worker during pwa:build and never runs in Cloudflare production. Affected through @serwist/build and nested zod; resolved when the PWA migrates to zod 4.",
+    "expiresOn": "2026-12-31",
+    "name": "@serwist/webpack-plugin",
+    "severity": "high",
+    "via": ["@serwist/build", "zod"],
+    "effects": [],
+    "range": ">=9.0.0-preview.0"
+  },
+  {
+    "id": "pwa-2026-10-23-chromium-bidi-via-zod",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Pulled by Lighthouse CI through puppeteer-core; build-time only and never shipped to Cloudflare production. Affected solely through its nested zod copy.",
+    "expiresOn": "2026-12-31",
+    "name": "chromium-bidi",
+    "severity": "high",
+    "via": ["zod"],
+    "effects": ["puppeteer-core"],
+    "range": "0.5.13 - 157.0.8081-0"
+  },
+  {
+    "id": "pwa-2026-10-23-lighthouse-via-puppeteer-core",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Lighthouse CI only; affected through puppeteer-core. Build-time toolchain, never shipped to Cloudflare production. Re-evaluate with the zod 4 migration at the 2026-12-31 review.",
+    "expiresOn": "2026-12-31",
+    "name": "lighthouse",
+    "severity": "high",
+    "via": ["puppeteer-core"],
+    "effects": ["@lhci/cli", "@lhci/utils"],
+    "range": "11.7.0-dev.20240320 - 13.3.0"
+  },
+  {
+    "id": "pwa-2026-10-23-puppeteer-core-via-chromium-bidi",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Lighthouse CI only; affected through @puppeteer/browsers and chromium-bidi. Build-time toolchain, never shipped to Cloudflare production. Re-evaluate with the zod 4 migration at the 2026-12-31 review.",
+    "expiresOn": "2026-12-31",
+    "name": "puppeteer-core",
+    "severity": "high",
+    "via": ["@puppeteer/browsers", "chromium-bidi"],
+    "effects": ["lighthouse"],
+    "range": "19.8.4 - 25.12.0"
   }
 ]
