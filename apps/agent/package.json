@@ -27,7 +27,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.4",
-    "wrangler": "4.135.0",
+    "wrangler": "4.152.0",
     "vitest": "4.1.12"
   },
   "engines": {
