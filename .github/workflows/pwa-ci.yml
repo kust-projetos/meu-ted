@@ -35,7 +35,10 @@ concurrency:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 15 minutes was enough while the scoped audit failed early. With the
+    # audit chain accepted (npm install + audit now run to completion) and
+    # the offline-shell E2E rebuilding the PWA, the job needs headroom.
+    timeout-minutes: 25
 
     strategy:
       matrix:
