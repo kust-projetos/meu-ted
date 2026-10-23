@@ -67,7 +67,7 @@ test("current pnpm v9 importer exposes exact PWA dependency versions", () => {
   assert.equal(versions.vitest, "4.1.12");
   assert.equal(versions["@vitest/coverage-v8"], "4.1.12");
   assert.equal(versions["@lhci/cli"], "0.15.1");
-  assert.equal(versions.wrangler, "4.135.0");
+  assert.equal(versions.wrangler, "4.152.0");
 });
 
 test("unlocked registry dependency fails closed", () => {
