@@ -96,6 +96,7 @@ describe('FIX-187 decide() propagates the durable intention binding (RED)', () =
       delegatedToken: 'tok-1',
       identity,
       intentionId: 'intent-187-1',
+      expected: { tool: 'transactions.expense.create' },
     });
 
     expect(result).toEqual({ operationId: 'op-1', status: 'succeeded', receipt: faithfulReceipt('op-1', 'mut-1') });
@@ -120,6 +121,7 @@ describe('FIX-187 decide() propagates the durable intention binding (RED)', () =
       delegatedToken: 'tok-9',
       identity,
       intentionId: 'intent-187-9',
+      expected: { tool: 'transactions.expense.create' },
     });
 
     expect(result.operationId).toBe('op-9');
@@ -144,6 +146,7 @@ describe('FIX-187 decide() propagates the durable intention binding (RED)', () =
       delegatedToken: 'tok-1',
       identity,
       intentionId: 'intent-187-restart',
+      expected: { tool: 'transactions.expense.create' },
     });
     expect(ok.status).toBe('succeeded');
     // Restart: brand-new instance (empty `consumed` set) replays the SAME
@@ -155,6 +158,7 @@ describe('FIX-187 decide() propagates the durable intention binding (RED)', () =
         attestation,
         identity,
         intentionId: 'intent-187-restart',
+        expected: { tool: 'transactions.expense.create' },
       }),
     ).rejects.toThrow('approval.attestation_replayed');
     expect(replay).toHaveBeenCalledTimes(1);
@@ -198,6 +202,7 @@ describe('FIX-187 decide() propagates the durable intention binding (RED)', () =
       decision: 'confirm',
       identity,
       intentionId: 'intent-coord-1',
+      expected: { tool: 'transactions.expense.create' },
     });
     expect(result.status).toBe('succeeded');
     expect(request).toHaveBeenNthCalledWith(1, 'POST', '/pending-operations/v2/op-1/confirm', expect.objectContaining({
@@ -218,6 +223,7 @@ describe('FIX-187 decide() propagates the durable intention binding (RED)', () =
       decision: 'retry',
       identity,
       intentionId: 'intent-coord-9',
+      expected: { tool: 'transactions.expense.create' },
     });
     expect(result.status).toBe('succeeded');
     expect(request).toHaveBeenNthCalledWith(2, 'POST', '/pending-operations/v2/op-9/execute', expect.objectContaining({
@@ -230,7 +236,9 @@ describe('FIX-187 decide() propagates the durable intention binding (RED)', () =
       .mockResolvedValueOnce({ id: 'op-9', attestation: 'b'.repeat(40) })
       .mockResolvedValueOnce(faithfulExecute('op-9', 'mut-op-9'));
     const coordinator = new PendingOperationCoordinator({ client: new MutationApiClient({ request }) });
-    const result = await coordinator.retry('op-9', identity, 'intent-coord-retry-9');
+    const result = await coordinator.retry('op-9', identity, 'intent-coord-retry-9', {
+      tool: 'transactions.expense.create',
+    });
     expect(result.status).toBe('succeeded');
     expect(request).toHaveBeenNthCalledWith(1, 'POST', '/pending-operations/v2/op-9/retry', expect.objectContaining({
       body: { intentionId: 'intent-coord-retry-9' },
@@ -245,7 +253,9 @@ describe('FIX-187 decide() propagates the durable intention binding (RED)', () =
       .mockResolvedValueOnce({ id: 'op-9', attestation: 'b'.repeat(40) })
       .mockResolvedValueOnce(faithfulExecute('op-9', 'mut-op-9'));
     const coordinator = new PendingOperationCoordinator({ client: new MutationApiClient({ request }) });
-    const result = await coordinator.retry('op-9', identity);
+    const result = await coordinator.retry('op-9', identity, undefined, {
+      tool: 'transactions.expense.create',
+    });
     expect(result.status).toBe('succeeded');
     expect(request).toHaveBeenNthCalledWith(1, 'POST', '/pending-operations/v2/op-9/retry', expect.not.objectContaining({
       body: expect.anything(),

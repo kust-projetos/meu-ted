@@ -379,6 +379,13 @@ export type RefreshTarget = (typeof REFRESH_TARGETS)[number];
 export const TED_APPROVAL_TOOLS = [
   'transactions.expense.create',
   'transactions.income.create',
+  'transactions.update',
+  'accounts.create',
+  'accounts.deactivate',
+  'accounts.update',
+  'categories.create',
+  'categories.update',
+  'categories.deactivate',
 ] as const;
 export type TedApprovalTool = (typeof TED_APPROVAL_TOOLS)[number];
 
@@ -391,6 +398,7 @@ export type TedApprovalTool = (typeof TED_APPROVAL_TOOLS)[number];
 export const MUTATION_KINDS = [
   ...TED_APPROVAL_TOOLS,
   'transaction.create',
+  'transactions.update',
   'transaction.update',
   'transaction.delete',
   'transfer.create',
@@ -457,6 +465,54 @@ export interface PendingOperationPresentation {
   date?: string;
   account?: PendingOperationPresentationLabel;
   category?: PendingOperationPresentationLabel;
+  /** Parent of an existing category target, when server-resolved from the catalog. */
+  categoryParent?: PendingOperationPresentationLabel;
+  /**
+   * Account-creation display fields (tool `accounts.create` only): the card
+   * shows the account name/kind/initial balance instead of the
+   * transaction tuple (amount/description/date/account/category).
+   *
+   * Account-deactivation display fields (tool `accounts.deactivate` only):
+   * the card shows the account id/label plus the display-only
+   * accountName/accountKind/balanceCents snapshot carried in
+   * normalizedArgs (never execution keys — the executor uses only
+   * accountId). balanceCents is the display-time balance, not an input.
+   *
+   * Account-rename display fields (tool `accounts.update` only): the card
+   * shows De → Para — `account` carries the CURRENT canonical name
+   * (`{ id: accountId, label: expectedName }`, server-resolved) and
+   * `accountName` carries the NEW name. Both labels gate Confirm (a card
+    * missing either renders degraded/non-actionable). For
+    * `categories.deactivate`, `category` names the existing target while
+    * optional `categoryKind` and `categoryParent` are display-only,
+    * server-resolved catalog fields.
+   */
+  accountName?: string;
+  accountKind?: string;
+  initialBalanceCents?: number;
+  balanceCents?: number;
+  /**
+   * Category-creation display fields (tool `categories.create` only): the
+   * card shows the new category name/kind instead of the transaction
+   * tuple. `category` carries the server-resolved PARENT label
+   * (`{ id: parentId, label: parentName }`, from the authoritative
+   * read model) when a parent was proposed; absent for root categories.
+   * Never invented: unknown parent yields no `category`.
+   *
+   * Category-rename display fields (tool `categories.update` only): the
+   * card shows De → Para — `category` carries the CURRENT canonical name
+   * (`{ id: categoryId, label: expectedName }`, server-resolved) and
+   * `categoryName` carries the NEW name. Both labels gate Confirm (a card
+   * missing either renders degraded/non-actionable).
+   */
+  categoryName?: string;
+  /** Description-only transaction edit, old/current and proposed text. */
+  expectedDescription?: string;
+  transactionTargetId?: string;
+  transactionAmountCents?: number;
+  transactionDate?: string;
+  transactionAccount?: PendingOperationPresentationLabel;
+  categoryKind?: string;
   expiresAt: string;
   warnings: string[];
 }
@@ -472,18 +528,83 @@ const isPresentationLabel = (value: unknown): value is PendingOperationPresentat
 
 /**
  * Fail-closed actionability gate (SPEC §16, INV-02): true only when the
- * full financial context the user must see before confirming is present —
- * title, description, amountCents, date, and both account and category
- * labels. A presentation failing this predicate must render as a degraded,
- * non-actionable card: Cancel stays (it moves no money), Confirm never
- * renders. The schema keeps every field optional for transport; this
- * predicate is the single rule deciding whether Confirm may be offered.
+ * full financial context the user must see before confirming is present.
+ * Transaction tools require title, description, amountCents, date, and
+ * both account and category labels. The `accounts.create` tool requires
+ * its own display tuple instead — title, accountName, accountKind and a
+ * finite initialBalanceCents (a card missing any of them renders
+ * degraded/non-actionable: Cancel stays, Confirm never renders). The
+ * `accounts.deactivate` tool requires the account key plus a display name
+ * — title, account id and a non-empty SERVER-RESOLVED account label
+ * (`account.label`, from the authoritative read model). The display-only
+ * `accountName` snapshot may render on the card but NEVER gates Confirm:
+ * the executor converges `not_found` into success (post-crash reconcile
+ * after its own write), so a snapshot-gated confirm on a never-existing
+ * id would execute into a false receipt. Kind and balance render when
+ * carried, never as actionability gates (the fixed cross-coder contract
+ * guarantees only accountId + accountName). The `accounts.update`
+  * (rename) tool requires BOTH labels - the server-resolved CURRENT name
+  * (`account.label` = expectedName) and the NEW name (`accountName`):
+  * either missing renders degraded/non-actionable.
+ * The schema keeps every field optional for transport; this predicate is the
+ * single rule deciding whether Confirm may be offered.
  */
 export const isActionablePendingOperationPresentation = (
   presentation: PendingOperationPresentation,
 ): boolean => {
   if (!presentation || typeof presentation !== 'object') return false;
   if (!isNonEmptyString(presentation.title)) return false;
+  if (presentation.tool === 'accounts.create') {
+    if (!isNonEmptyString(presentation.accountName)) return false;
+    if (!isNonEmptyString(presentation.accountKind)) return false;
+    if (typeof presentation.initialBalanceCents !== 'number' || !Number.isFinite(presentation.initialBalanceCents)) return false;
+    return true;
+  }
+  if (presentation.tool === 'accounts.deactivate') {
+    // Fail-closed existence proof: only the server-resolved account label
+    // proves the target exists in this workspace. The hash-bound
+    // display-only `accountName` snapshot may render, but it never gates
+    // Confirm — otherwise a never-existing id carrying a snapshot name
+    // would confirm, and the executor's not_found→success convergence
+    // would emit a receipt for an account that was never deactivated.
+    if (!isPresentationLabel(presentation.account)) return false;
+    return true;
+  }
+  if (presentation.tool === 'accounts.update') {
+    // Rename card: De (current, server-resolved) → Para (new). BOTH labels
+    // gate Confirm — either missing renders degraded/non-actionable.
+    if (!isPresentationLabel(presentation.account)) return false;
+    if (!isNonEmptyString(presentation.accountName)) return false;
+    return true;
+  }
+  if (presentation.tool === 'categories.create') {
+    // Category card: new name + kind gate Confirm. The parent label
+    // (`category`, server-resolved) renders when carried, never as a gate:
+    // root categories have no parent, and a required-but-unresolved parent
+    // never reaches this predicate — the builder returns null, so the API
+    // gate fails closed (409, no Confirm/Retry) and the PWA renders the
+    // fail-closed card. No label is ever invented for an unresolved parent.
+    if (!isNonEmptyString(presentation.categoryName)) return false;
+    if (presentation.categoryKind !== 'expense' && presentation.categoryKind !== 'income') return false;
+    return true;
+  }
+  if (presentation.tool === 'categories.update') {
+    // Rename card: De (current, server-resolved) → Para (new). BOTH labels
+    // gate Confirm — the server-resolved CURRENT name (`category.label` =
+    // expectedName) and the NEW name (`categoryName`). A stale target
+    // (concurrent rename) or an unresolvable target drops the `category`
+    // label and the card renders degraded/non-actionable: the executor
+    // would fail closed with category.name_conflict anyway.
+    if (!isPresentationLabel(presentation.category)) return false;
+    if (!isNonEmptyString(presentation.categoryName)) return false;
+    return true;
+  }
+  if (presentation.tool === 'transactions.update') {
+    return isNonEmptyString(presentation.transactionTargetId) && isNonEmptyString(presentation.expectedDescription) && isNonEmptyString(presentation.description) && typeof presentation.transactionAmountCents === 'number' && Number.isFinite(presentation.transactionAmountCents) && isNonEmptyString(presentation.transactionDate) && isPresentationLabel(presentation.transactionAccount);
+  }
+  if (presentation.tool === 'categories.deactivate') {
+    return isPresentationLabel(presentation.category);
+  }
   if (!isNonEmptyString(presentation.description)) return false;
   if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents)) return false;
   if (!isNonEmptyString(presentation.date)) return false;
@@ -529,6 +650,13 @@ export type MutationEffectsEntry =
 export const MUTATION_EFFECTS_REGISTRY: Record<MutationKind, MutationEffectsEntry> = {
   'transactions.expense.create': { mutationKind: 'transactions.expense.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transactions.income.create': { mutationKind: 'transactions.income.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
+  'accounts.create': { mutationKind: 'accounts.create', affectedTargets: ['accounts', 'dashboard-summary'] },
+  'accounts.deactivate': { mutationKind: 'accounts.deactivate', affectedTargets: ['accounts', 'dashboard-summary'] },
+  'accounts.update': { mutationKind: 'accounts.update', affectedTargets: ['accounts', 'dashboard-summary'] },
+  'categories.create': { mutationKind: 'categories.create', affectedTargets: ['categories', 'transactions'] },
+  'categories.update': { mutationKind: 'categories.update', affectedTargets: ['categories', 'transactions'] },
+  'transactions.update': { mutationKind: 'transactions.update', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
+  'categories.deactivate': { mutationKind: 'categories.deactivate', affectedTargets: ['categories', 'transactions'] },
   'transaction.create': { mutationKind: 'transaction.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transaction.update': { mutationKind: 'transaction.update', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transaction.delete': { mutationKind: 'transaction.delete', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },

@@ -4,6 +4,8 @@ import { FinanceChatAgent } from "../src/finance-chat-agent.js";
 import { InMemoryMutationDraftStore } from "../src/mutations/mutation-draft.js";
 import { attachRelayUsageStorage } from "./helpers/relay-usage-storage.js";
 
+const PENDING_ID = '00000000-0000-4000-8000-000000000169';
+
 const createTestAgent = () => {
   const persisted: UIMessage[] = [];
   const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent & {
@@ -31,10 +33,17 @@ const createTestAgent = () => {
   return { agent, persisted };
 };
 
-const mockProposalUpstream = () => {
+const mockProposalUpstream = (options: { terminalSuccess?: boolean } = {}) => {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    if (String(input).includes('/outcome') && options.terminalSuccess) {
+      return new Response(JSON.stringify({
+        operationId: PENDING_ID, tool: 'transactions.expense.create', status: 'succeeded',
+        expectedContext: { tool: 'transactions.expense.create' },
+        receipt: { mutationId: 'mutation-169-1', mutationKind: 'transactions.expense.create', status: 'succeeded', affectedTargets: ['transactions', 'accounts'], operationId: PENDING_ID, entity: { type: 'transaction', id: '00000000-0000-4000-8000-000000000170' } },
+      }), { status: 200 });
+    }
     if (String(input).includes("/pending-operations/v2/propose")) {
-      return new Response(JSON.stringify({ id: "pending-169-1" }), { status: 200 });
+      return new Response(JSON.stringify({ id: PENDING_ID }), { status: 200 });
     }
     if (String(input).includes("/accounts")) {
       return new Response(
@@ -65,6 +74,7 @@ const historyReq = () =>
     headers: {
       "x-agent-actor": "actor-169",
       "x-agent-workspace": "workspace-169",
+      "x-agent-device": "device-169",
     },
   });
 
@@ -75,7 +85,7 @@ describe("FIX-169 RED: mutation turns persist into durable history", () => {
 
   it("(a/b) POST proposal persists user+assistant and GET /rpc/history returns the pair", async () => {
     const { agent, persisted } = createTestAgent();
-    mockProposalUpstream();
+    mockProposalUpstream({ terminalSuccess: true });
     const res = await agent.fetch(
       new Request("https://agent.test.local/rpc/chat", {
         method: "POST",
@@ -89,7 +99,7 @@ describe("FIX-169 RED: mutation turns persist into durable history", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { output?: string; pendingOperation?: { id?: string } };
     expect(body.output).toBeTruthy();
-    expect(body.pendingOperation?.id).toBe("pending-169-1");
+    expect(body.pendingOperation?.id).toBe(PENDING_ID);
 
     const roles = persisted.map((m) => m.role);
     expect(roles).toContain("user");
@@ -99,10 +109,14 @@ describe("FIX-169 RED: mutation turns persist into durable history", () => {
 
     const hist = await agent.fetch(historyReq());
     expect(hist.status).toBe(200);
-    const data = (await hist.json()) as { items: Array<{ role: string; text?: string; content?: string }> };
+    const data = (await hist.json()) as { items: Array<{ role: string; text?: string; content?: string; terminalOutcome?: { operationId?: string; status?: string } }> };
     const texts = data.items.map((i) => i.text ?? i.content ?? "");
     expect(texts.some((t) => t.includes("carne"))).toBe(true);
     expect(data.items.some((i) => i.role === "assistant")).toBe(true);
+    const assistantHistory = data.items.find((i) => i.role === 'assistant') as unknown as { proposalOperationId?: string; proposalTool?: string; terminalOutcome?: { operationId?: string; status?: string } };
+    expect(assistantHistory.proposalOperationId).toBe(PENDING_ID);
+    expect(assistantHistory.proposalTool).toBe('transactions.expense.create');
+    expect(assistantHistory.terminalOutcome).toMatchObject({ operationId: PENDING_ID, status: 'succeeded' });
   });
 
   it("(d) retry with the same intentionId produces zero duplication", async () => {
@@ -188,7 +202,7 @@ describe("FIX-169 RED: mutation turns persist into durable history", () => {
     const r2 = await post("mercado", "intent-169-p21-2");
     expect(r2.status).toBe(200);
     const b2 = (await r2.json()) as { output?: string; pendingOperation?: { id?: string } };
-    expect(b2.pendingOperation?.id).toBe("pending-169-1");
+    expect(b2.pendingOperation?.id).toBe(PENDING_ID);
 
     // Reload: o Q&A dos DOIS turnos está no histórico (o user 'mercado' não some).
     const hist = await agent.fetch(historyReq());
@@ -259,7 +273,7 @@ describe("FIX-169 RED: mutation turns persist into durable history", () => {
     expect(r1.status).toBe(200);
     const b1 = (await r1.json()) as { output?: string; pendingOperation?: { id?: string } };
     expect(b1.output).toBeTruthy();
-    expect(b1.pendingOperation?.id).toBe("pending-169-1");
+    expect(b1.pendingOperation?.id).toBe(PENDING_ID);
     const countAfterLoss = persisted.length;
     expect(countAfterLoss).toBeGreaterThanOrEqual(2);
 

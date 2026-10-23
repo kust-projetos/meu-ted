@@ -1,7 +1,18 @@
 import { requestPiApiJson } from '../tools/api-client.js';
 import { emitSanitizedEvent } from '../observability/events.js';
-import { mutationReceiptSchema, type MutationReceipt } from '@pi-finance/llm-contracts';
-export type MutationExecution = { operationId: string; attestation: string; identity: { workspaceId: string; actorId: string; deviceId: string }; /** Review round 4 P1-B: propagated to confirm/execute for the API-side intentionId→operationId binding. */ intentionId?: string };
+import { TED_APPROVAL_TOOLS, mutationReceiptSchema, type MutationReceipt } from '@pi-finance/llm-contracts';
+/**
+ * HIGH3: authoritative expected context — the ORIGINAL tool + target id
+ * (from the listing record that authorized this confirmation, never from
+ * the execution response). When present the receipt must match it exactly
+ * (kind + entity id); without it the executor enforces the approval-kind
+ * + self-consistency linkage only. Never synthesized from the response.
+ */
+export type MutationExpectedContext = Readonly<{
+  tool: string;
+  entityId?: string;
+}>;
+export type MutationExecution = { operationId: string; attestation: string; identity: { workspaceId: string; actorId: string; deviceId: string }; /** Review round 4 P1-B: propagated to confirm/execute for the API-side intentionId→operationId binding. */ intentionId?: string; /** HIGH3: exact receipt binding, see `MutationExpectedContext`. */ expected?: MutationExpectedContext };
 export type ApprovalDecision = 'confirm' | 'cancel' | 'retry';
 export type ApprovalDecisionInput = {
   operationId: string;
@@ -20,11 +31,14 @@ export type ApprovalDecisionInput = {
    * when the caller carries the intention.
    */
   intentionId?: string;
+  /** HIGH3: exact receipt binding, see `MutationExpectedContext`. */
+  expected?: MutationExpectedContext;
 };
 export type ApprovalDecisionResult = {
   operationId: string;
   status: 'succeeded' | 'cancelled' | 'failed' | 'expired' | 'proposed' | 'confirmed';
   retryable?: boolean;
+  failureCode?: 'in_use';
   /**
    * T3.3 (SPEC §15.1): the REAL receipt emitted by the API on TX2 success,
    * schema-validated here and relayed to the PWA for reconciliation.
@@ -48,6 +62,7 @@ const receiptFromExecution = (
   execution: unknown,
   pendingOperationId: string,
   transactionId: string,
+  expected?: MutationExpectedContext,
 ): MutationReceipt | undefined => {
   if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return undefined;
   const receipt = (execution as { receipt?: unknown }).receipt;
@@ -58,8 +73,29 @@ const receiptFromExecution = (
   if (data.operationId !== pendingOperationId) return undefined;
   const entity = (data as { entity?: unknown }).entity as { type?: unknown; id?: unknown } | undefined;
   if (!entity || typeof entity !== 'object') return undefined;
+  // HIGH3: the approval path only ever carries approval-tool kinds — a
+  // normal-write receipt (`transaction.create`, ...) with the same pending
+  // id is a swapped result, never a success.
+  if (!(TED_APPROVAL_TOOLS as readonly string[]).includes(data.mutationKind)) return undefined;
+  // HIGH3: exact binding against the authoritative expected context (never
+  // the response as proof): a receipt for ANOTHER tool or ANOTHER entity
+  // with the same pending id fails closed — including a VALID receipt of
+  // a transaction kind when the authorized operation is an account tool.
+  if (expected !== undefined) {
+    if (data.mutationKind !== expected.tool) return undefined;
+    if (expected.entityId !== undefined && entity.id !== expected.entityId) return undefined;
+  }
   // Semantic linkage: a transaction execution always carries a transaction
   // entity naming the persisted transaction id — never another type/id.
+  // accounts.create / accounts.deactivate / accounts.update / categories.create
+  // executions NEVER satisfy this branch: an account/category receipt carrying
+  // a `transaction` entity (or any swapped shape) is a mismatched result and
+  // must fail closed (see `receiptFromAccountExecution` /
+  // `receiptFromCategoryExecution`).
+  if (data.mutationKind === 'accounts.create') return undefined;
+  if (data.mutationKind === 'accounts.deactivate') return undefined;
+  if (data.mutationKind === 'accounts.update') return undefined;
+  if (data.mutationKind === 'categories.create') return undefined;
   if (entity.type !== 'transaction') return undefined;
   if (entity.id !== transactionId) return undefined;
   // Identity linkage: when the execution names a mutationId it must agree
@@ -73,6 +109,107 @@ const receiptFromExecution = (
     return undefined;
   }
   return data;
+};
+
+/**
+ * accounts.create / accounts.deactivate / accounts.update receipt (contratos fixados
+ * accounts-draft-agent / accounts-deactivate-agent /
+ * ted-local-account-rename-client, programados contra
+ * mocks até a API aceitar as tools): `{ mutationKind:
+ * 'accounts.create' | 'accounts.deactivate' | 'accounts.update', operationId: <pendingId>,
+ * entity: { type: 'account', id: <accountId> } }`.
+ *
+ * The shared `mutationReceiptSchema` (packages/, owned outside this scope)
+ * does not admit the account kinds yet, so the shape is validated
+ * field-by-field here with the SAME strictness as the canonical path
+ * (origin pending-operation linkage + persisted-entity linkage + mutationId
+ * agreement). A receipt that fails EITHER validator is `undefined` and the
+ * caller fails closed — a swapped receipt (transaction entity, divergent
+ * operationId) is never a partial success.
+ */
+const receiptFromAccountExecution = (
+  execution: unknown,
+  pendingOperationId: string,
+  accountId: string,
+  expected?: MutationExpectedContext,
+): MutationReceipt | undefined => {
+  if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return undefined;
+  const receipt = (execution as { receipt?: unknown }).receipt;
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return undefined;
+  const data = receipt as Record<string, unknown>;
+  if (data.mutationKind !== 'accounts.create' && data.mutationKind !== 'accounts.deactivate' && data.mutationKind !== 'accounts.update') return undefined;
+  if (data.status !== 'succeeded') return undefined;
+  if (typeof data.mutationId !== 'string' || data.mutationId.trim().length === 0) return undefined;
+  if (data.operationId !== pendingOperationId) return undefined;
+  const entity = data.entity as { type?: unknown; id?: unknown } | undefined;
+  if (!entity || typeof entity !== 'object') return undefined;
+  if (entity.type !== 'account') return undefined;
+  if (entity.id !== accountId) return undefined;
+  // HIGH3: exact binding against the authoritative expected context (never
+  // the response as proof): a receipt for ANOTHER tool or ANOTHER account
+  // with the same pending id fails closed — even when the response is
+  // internally self-consistent. Rename/deactivate REQUIRE the expected
+  // entity id (sensitive target); create binds kind only (the entity does
+  // not exist yet — distinct policy, never blocks honest creation).
+  if (expected === undefined || data.mutationKind !== expected.tool) return undefined;
+  if (data.mutationKind === 'accounts.update' || data.mutationKind === 'accounts.deactivate') {
+    if (expected.entityId === undefined || entity.id !== expected.entityId) return undefined;
+  } else if (expected.entityId !== undefined && entity.id !== expected.entityId) {
+    return undefined;
+  }
+  const executionMutationId = (execution as { mutationId?: unknown }).mutationId;
+  if (
+    typeof executionMutationId === 'string' &&
+    executionMutationId.trim().length > 0 &&
+    data.mutationId !== executionMutationId
+  ) {
+    return undefined;
+  }
+  return receipt as MutationReceipt;
+};
+
+/**
+ * categories.create/update/deactivate receipt (typed category mutations):
+ * `{ mutationKind: 'categories.create', operationId: <pendingId>,
+ * entity: { type: 'category', id: <categoryId> } }`.
+ * Same strictness as the account path (origin + persisted-entity linkage +
+ * mutationId agreement). Kind-only expected binding (the entity does not
+ * exist yet): a divergent `entityId` in expected still fails closed, but an
+ * absent one never blocks honest creation.
+ */
+const receiptFromCategoryExecution = (
+  execution: unknown,
+  pendingOperationId: string,
+  categoryId: string,
+  expected?: MutationExpectedContext,
+): MutationReceipt | undefined => {
+  if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return undefined;
+  const receipt = (execution as { receipt?: unknown }).receipt;
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return undefined;
+  const data = receipt as Record<string, unknown>;
+  if (data.mutationKind !== 'categories.create' && data.mutationKind !== 'categories.update' && data.mutationKind !== 'categories.deactivate') return undefined;
+  if (data.status !== 'succeeded') return undefined;
+  if (typeof data.mutationId !== 'string' || data.mutationId.trim().length === 0) return undefined;
+  if (data.operationId !== pendingOperationId) return undefined;
+  const entity = data.entity as { type?: unknown; id?: unknown } | undefined;
+  if (!entity || typeof entity !== 'object') return undefined;
+  if (entity.type !== 'category') return undefined;
+  if (entity.id !== categoryId) return undefined;
+  if (expected === undefined || data.mutationKind !== expected.tool) return undefined;
+  if (data.mutationKind === 'categories.update' || data.mutationKind === 'categories.deactivate') {
+    if (expected.entityId === undefined || entity.id !== expected.entityId) return undefined;
+  } else if (expected.entityId !== undefined && entity.id !== expected.entityId) {
+    return undefined;
+  }
+  const executionMutationId = (execution as { mutationId?: unknown }).mutationId;
+  if (
+    typeof executionMutationId === 'string' &&
+    executionMutationId.trim().length > 0 &&
+    data.mutationId !== executionMutationId
+  ) {
+    return undefined;
+  }
+  return receipt as MutationReceipt;
 };
 
 export class MutationExecutor {
@@ -126,6 +263,13 @@ export class MutationExecutor {
     };
     const pendingId = typeof input.operationId === 'string' ? input.operationId.trim() : '';
     if (!pendingId) failClosed();
+    // HIGH3 (round 3): no receipt is accepted without the authoritative
+    // expected context — kind + target are required on every Agent call,
+    // and the receipt validators bind against it. Callers that cannot name
+    // the authorized tool fail closed here, before any transport effect is
+    // trusted.
+    const expected = input.expected;
+    if (!expected || typeof expected.tool !== 'string' || !expected.tool.trim()) failClosed();
     if (result.status !== 'succeeded') failClosed();
     if (typeof result.id !== 'string' || result.id.trim() !== pendingId) failClosed();
     const execution = result.execution;
@@ -134,7 +278,9 @@ export class MutationExecutor {
     if (execRecord.status !== 'succeeded') failClosed();
     if (typeof execRecord.operationId !== 'string' || execRecord.operationId.trim().length === 0) failClosed();
     const transactionId = (execRecord.operationId as string).trim();
-    const receipt = receiptFromExecution(execution, pendingId, transactionId);
+    const receipt = receiptFromExecution(execution, pendingId, transactionId, expected)
+      ?? receiptFromAccountExecution(execution, pendingId, transactionId, expected)
+      ?? receiptFromCategoryExecution(execution, pendingId, transactionId, expected);
     if (!receipt) failClosed();
     this.emit('mutation.executed', { status: 'succeeded' });
     return { status: 'succeeded', operationId: input.operationId, receipt };
@@ -169,6 +315,6 @@ export class MutationExecutor {
       throw new Error('approval.missing_attestation');
     }
     this.emit('approval.confirmed', { status: 'confirmed' });
-    return this.execute({ operationId: input.operationId, attestation: confirmation.attestation, identity: input.identity, intentionId }, input.delegatedToken);
+    return this.execute({ operationId: input.operationId, attestation: confirmation.attestation, identity: input.identity, intentionId, ...(input.expected !== undefined ? { expected: input.expected } : {}) }, input.delegatedToken);
   }
 }

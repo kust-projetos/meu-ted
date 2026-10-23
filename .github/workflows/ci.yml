@@ -228,6 +228,17 @@ jobs:
         run: |
           PGPASSWORD=test psql -h localhost -U test -d pi_financeiro_test \
             -c "CREATE TABLE IF NOT EXISTS _test_marker (marker_value TEXT NOT NULL); TRUNCATE _test_marker; INSERT INTO _test_marker(marker_value) VALUES ('00000000-0000-4000-8000-000000000001');"
+      - name: Prepare disposable legacy validation database and marker
+        run: |
+          PGPASSWORD=test psql -h localhost -U test -d postgres \
+            -v ON_ERROR_STOP=1 -c "CREATE DATABASE pi_financeiro_test_legacy"
+          PGPASSWORD=test psql -h localhost -U test -d pi_financeiro_test_legacy \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE TABLE _test_marker (marker_value TEXT NOT NULL); INSERT INTO _test_marker(marker_value) VALUES ('00000000-0000-4000-8000-000000000001');"
+      - name: Verify both disposable markers before migrations
+        run: |
+          test "$(PGPASSWORD=test psql -h localhost -U test -d pi_financeiro_test -Atc "SELECT count(*) FROM _test_marker WHERE marker_value = '00000000-0000-4000-8000-000000000001'")" = "1"
+          test "$(PGPASSWORD=test psql -h localhost -U test -d pi_financeiro_test_legacy -Atc "SELECT count(*) FROM _test_marker WHERE marker_value = '00000000-0000-4000-8000-000000000001'")" = "1"
       - run: pnpm --filter meu-ted-api test:integration
         env:
           DATABASE_URL_TEST: postgres://test:test@localhost:5432/pi_financeiro_test
@@ -243,6 +254,7 @@ jobs:
         env:
           DATABASE_URL_TEST: postgres://test:test@localhost:5432/pi_financeiro_test
           DB_TEST_MARKER: 00000000-0000-4000-8000-000000000001
+          VALIDATION_DATABASE_PROFILE: ci
       # V4.1 Phase 9 (Tasks 9.1–9.3, 9.5): full integration, financial
       # concurrency, and XLT suites run against this same Postgres.
       - name: API integration suite (all)

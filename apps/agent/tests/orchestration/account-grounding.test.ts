@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { formatCents } from '../../src/evidence/financial-formatters.js';
 import { ConversationOrchestrator, type TurnInput, type TurnPlan } from '../../src/orchestration/conversation-orchestrator.js';
 import { createChannelGrounding, type ChannelReadTools } from '../../src/orchestration/channel-evidence.js';
 import { routeIntent } from '../../src/orchestration/intent-router.js';
@@ -7,6 +8,8 @@ import {
   asksForTotal,
   extractAccountsEvidence,
   renderAccountsAnswer,
+  seeksAccountBalance,
+  seeksAccountListing,
   splitPresentationClause,
 } from '../../src/orchestration/account-grounding.js';
 
@@ -1454,5 +1457,81 @@ describe('FIX-TED-GROUNDING-PRESENTATION-CLAUSE RED', () => {
       const { scopeText } = splitPresentationClause(`Qual o saldo? Responda o ${demand} em reais.`);
       expect(scopeText).toContain(demand);
     }
+  });
+});
+
+describe('TED-ACCOUNT-LISTING deterministic non-empty account listing (no relay)', () => {
+  it('RED-live: "liste minhas contas" with one account renders name + type + balance exactly, without the relay', async () => {
+    // Live shape 2026-10-20 (ted-local, runtime mimo): 1 conta
+    // nubank/bank/14500 with healthy list_accounts evidence collapsed into
+    // the clarification fallback because no deterministic renderer owned the
+    // turn. runBalanceTurn throws when the relay/LLM is called.
+    const nubank = { id: 'a9', name: 'nubank', kind: 'bank', balanceCents: 14500, status: 'active' };
+    const result = await runBalanceTurn('liste minhas contas', { items: [nubank] }, 'intent-list-1');
+    expect(result.response?.text).toBe(`Suas contas:\n- nubank (Banco): ${formatCents(14500)}.`);
+  });
+
+  it('lists every account with kind labels, preserving zero/negative bank/cash (ADR-018, no clamp)', async () => {
+    const zero = { id: 'z', name: 'Carteira', kind: 'cash', balanceCents: 0, status: 'active' };
+    const negative = { id: 'n', name: 'Itaú', kind: 'bank', balanceCents: -5000, status: 'active' };
+    const result = await runBalanceTurn('liste minhas contas', { items: [zero, negative] }, 'intent-list-2');
+    expect(result.response?.text).toBe(
+      `Suas contas:\n- Carteira (Espécie): ${formatCents(0)}.\n- Itaú (Banco): ${formatCents(-5000)}.`,
+    );
+  });
+
+  it('empty listing keeps the cadastro offer unchanged', async () => {
+    const result = await runBalanceTurn('liste minhas contas', { items: [] }, 'intent-list-3');
+    expect(result.response?.text ?? '').toMatch(/guie no cadastro/);
+  });
+
+  it('balance-question path is unchanged', async () => {
+    const result = await runBalanceTurn('qual meu saldo?', { items: [bankIta, bankNubank] }, 'intent-list-4');
+    const text = result.response?.text ?? '';
+    expect(text).toContain('Itaú');
+    expect(text).toContain('Nubank');
+    expect(text).toContain('100,00');
+    expect(text).toContain('200,00');
+  });
+
+  it('unknown name in a listing clarifies with NO figures', async () => {
+    const result = await runBalanceTurn('liste a conta XP?', { items: [bankIta, bankNubank] }, 'intent-list-5');
+    const text = result.response?.text ?? '';
+    expect(text).not.toMatch(/R\$/);
+    expect(text).not.toMatch(/\d+,\d{2}/);
+  });
+
+  it('named listing single-selects with the kind label', async () => {
+    const result = await runBalanceTurn('liste a conta Nubank?', { items: [bankNubank] }, 'intent-list-6');
+    expect(result.response?.text).toBe(`- Nubank (Banco): ${formatCents(20000)}.`);
+  });
+
+  it('listing stays in funds scope: card debt figures never leak into "liste minhas contas"', async () => {
+    const result = await runBalanceTurn(
+      'liste minhas contas',
+      { items: [bankNubank, cardNubank] },
+      'intent-list-7',
+    );
+    const text = result.response?.text ?? '';
+    expect(text).toContain('Nubank');
+    expect(text).toContain('200,00');
+    expect(text).not.toContain('560,00');
+  });
+
+  it('seeksAccountListing matches listing verbs and rejects payables/fatura/mutation turns', () => {
+    for (const text of ['liste minhas contas', 'quais são minhas contas?', 'mostre minhas contas']) {
+      expect(seeksAccountListing(text)).toBe(true);
+    }
+    for (const text of [
+      'liste minhas contas a pagar',
+      'liste minhas faturas',
+      'liste meu extrato',
+      'crie uma conta',
+      'qual meu saldo?',
+      'saldo da conta Nubank?',
+    ]) {
+      expect(seeksAccountListing(text)).toBe(false);
+    }
+    expect(seeksAccountBalance('qual meu saldo?')).toBe(true);
   });
 });

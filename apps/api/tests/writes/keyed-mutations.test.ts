@@ -47,6 +47,7 @@ const makeClaimClient = (recorder: string[]) => ({
   query: vi.fn(async (text: string) => {
     recorder.push(text);
     if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') return { rows: [], rowCount: 0 };
+    if (text.includes('pg_advisory_xact_lock_shared')) return { rows: [], rowCount: 1 };
     // FIX-WS-D2-R2 item 2: guarda de lifecycle dos writers (workspace active).
     if (text.includes('FROM households')) {
       return { rows: [{ status: 'active' }], rowCount: 1 };
@@ -128,6 +129,7 @@ describe('V4.1 Phase 3 — legacy store joins the claim tx', () => {
     const claimTx = {
       query: vi.fn(async (text: string) => {
         recorded.push(text);
+        if (text.includes('pg_advisory_xact_lock_shared')) return { rows: [], rowCount: 1 };
         if (text.includes('is_credit_card')) {
           return { rows: [{ is_credit_card: false }], rowCount: 1 };
         }

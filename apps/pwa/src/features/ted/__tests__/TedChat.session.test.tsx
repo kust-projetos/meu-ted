@@ -68,7 +68,9 @@ describe("TedChat — sessão renovável e memória (Parte B)", () => {
     expect(agentClient.renewAgentSession).toHaveBeenCalledWith("ws-1");
     expect(await screen.findByRole("status")).toHaveTextContent(/Nova sessão iniciada/);
     await waitFor(() => expect(screen.queryByText("Meu saldo?")).not.toBeInTheDocument());
-    // History reloads (fresh) after renewal.
+    // Sem recarga pós-renovação: a exibição local fica vazia (o lote do
+    // /rpc/history ainda pode trazer o pré-renovação — evidência live).
+    // O histórico da sessão atual recarrega no próximo turno/mount.
     expect(agentClient.fetchAgentHistory).toHaveBeenCalled();
   });
 

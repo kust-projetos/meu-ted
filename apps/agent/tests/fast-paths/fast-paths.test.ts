@@ -7,6 +7,7 @@ describe('T3.2 deterministic fast paths', () => {
     ['Mostre os últimos lançamentos', 'recent_transactions'],
     ['confirmar', 'confirm'],
     ['pode cancelar', 'cancel'],
+    ['cancele o rascunho', 'cancel'],
   ])('%s avoids planner', (text, kind) => {
     const result = classifyFastPath(text);
     expect(result.kind).toBe(kind);
@@ -16,6 +17,13 @@ describe('T3.2 deterministic fast paths', () => {
   it('routes confirmation and cancellation as deterministic modes', () => {
     expect(routeIntent('confirmar').mode).toBe('confirmation');
     expect(routeIntent('pode cancelar').mode).toBe('cancel');
+    expect(routeIntent('cancele o rascunho').mode).toBe('cancel');
+  });
+
+  it('does not treat cancellation-looking literal edit values as cancel commands', () => {
+    expect(routeIntent('renomeie a categoria QA Viagem Jade para Cancele o rascunho').mode).not.toBe('cancel');
+    expect(routeIntent('altere a descrição do lançamento Mercado para Cancele o rascunho').mode).not.toBe('cancel');
+    expect(routeIntent('cancele o rascunho e crie uma despesa').ambiguity).toBe('ambiguous_cancel_draft_compound');
   });
 
   it('enforces stage and turn budgets with fail-closed decisions', () => {

@@ -6,6 +6,7 @@ import { assertCategoryKind } from '../categories/resolve.js';
 import { domainErrors } from '../writes/errors.js';
 import { withTransaction } from '../db/pool.js';
 import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
+import { lockCategoryReferencesInTx } from '../auth/category-lifecycle-guard.js';
 
 type Row = Record<string, unknown>;
 
@@ -28,6 +29,7 @@ const createBudgetInTx = async (
 ): Promise<Budget> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  await lockCategoryReferencesInTx(client, householdId);
   const gate = async <R extends Row = Row>(text: string, values: unknown[] = []): Promise<R[]> =>
     (await client.query<R>(text, values)).rows;
   // V4.1 Task 2.15: budgets had no category validation at all.

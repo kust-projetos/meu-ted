@@ -17,7 +17,7 @@
 
 import type { PoolClient } from 'pg';
 import type { Account, Category, Transaction } from '../types/domain.js';
-import type { ApplyDefaultsResult, DeleteCategoryResult, WriteStore } from './store.js';
+import type { ApplyDefaultsResult, DeleteCategoryResult, WriteStore, EditTransactionDescriptionInput } from './store.js';
 import type {
   CreateAccountInput,
   CreateCategoryInput,
@@ -137,6 +137,20 @@ export async function runTransactionMutation(
       return writes.softDeleteTransaction(householdId, (input as { id: string }).id);
   }
 }
+
+/** Dedicated narrow operation; an open claim must never fall back to an unkeyed writer. */
+export const runTransactionDescriptionMutation = async (
+  writes: WriteStore,
+  claimTx: unknown,
+  householdId: string,
+  input: EditTransactionDescriptionInput,
+): Promise<Transaction> => {
+  if (!isTxClient(claimTx)) throw domainErrors.atomicMutationNotSupported();
+  const extension = txExtensions(writes);
+  if (typeof extension.editTransactionDescriptionInTx !== 'function') throw domainErrors.atomicMutationNotSupported();
+  const copied = { transactionId: input.transactionId, description: input.description, expectedDescription: input.expectedDescription };
+  return extension.editTransactionDescriptionInTx(claimTx, householdId, copied);
+};
 
 const accountCategoryTxExtensions = (
   writes: WriteStore,

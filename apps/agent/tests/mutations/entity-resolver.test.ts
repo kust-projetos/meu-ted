@@ -1093,4 +1093,21 @@ describe('normalizeEntities (fail-closed contract)', () => {
       readerFrom({ items: [{ id: ACCOUNT_NUBANK.id, name: 'Nubank' }], total: 1 }).listAccounts(),
     ).resolves.toEqual([{ id: ACCOUNT_NUBANK.id, name: 'Nubank' }]);
   });
+
+  it('reads the actual paged GET /transactions envelope and fails closed on malformed or incomplete pages', async()=>{
+    const {createRequestEntityReader}=await import('../../src/mutations/entity-resolver.js');
+    const calls:string[]=[];
+    const paged=createRequestEntityReader(async(_method,path)=>{
+      calls.push(path);
+      const offset=Number(new URL(`https://api.test${path}`).searchParams.get('offset'));
+      const items=offset===0?Array.from({length:200},(_,i)=>({id:`tx-${i}`,householdId:'workspace-1',description:`item ${i}`,amountCents:100,date:'2026-10-20',accountId:'account-1',kind:'expense'})):[{id:'tx-200',householdId:'workspace-1',description:'last',amountCents:100,date:'2026-10-20',accountId:'account-1',kind:'income'}];
+      return {items,total:201,limit:200,offset};
+    },{workspaceId:'workspace-1'});
+    const rows=await paged.listTransactions!();
+    expect(rows).toHaveLength(201);
+    expect(rows[200]).toMatchObject({id:'tx-200',scopeId:'workspace-1',kind:'income'});
+    expect(calls).toEqual(['/transactions?limit=200&offset=0','/transactions?limit=200&offset=200']);
+    const malformed=createRequestEntityReader(async()=>({items:[],total:1}),{workspaceId:'workspace-1'});
+    await expect(malformed.listTransactions!()).rejects.toThrow(/invalid_response/);
+  });
 });

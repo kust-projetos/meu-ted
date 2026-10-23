@@ -5,6 +5,10 @@ Workers (`FinanceChatAgent extends AIChatAgent`, um Durable Object por
 workspace). Este arquivo resume persona, arquitetura e organização; o detalhe
 operacional vive em `docs/agent/2026-09-08-ted-cognitive-layer.md`.
 
+## Sessão ativa — tracking vivo (2026-10-21)
+
+> Estamos usando `docs/reports/2026-10-21-sessao-testes-correcoes-ted.md` como tracking vivo desta sessão de testes/correções do TED (navegador Orca + investigação de comportamento). Atualizar esse arquivo a cada passo; não duplicar o log aqui.
+
 ## Persona
 
 - pt-BR claro, sem jargão, conciso no mobile, proativo em insights.

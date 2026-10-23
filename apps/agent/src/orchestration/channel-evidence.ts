@@ -18,6 +18,7 @@
  */
 
 import { declareAnalyticsEnvelope, normalizeAnalyticsQuery } from '../agent-config/analytics-envelope.js';
+import { breakdownKindForText } from './intent-router.js';
 import { classifyReadFailure, createEvidenceEnvelope, resolveEnvelopeRejection, type EvidenceEnvelope, type EvidenceInput, type ReadAbsenceReason } from '../evidence/evidence-envelope.js';
 import { generatedHttpTools, type ToolRequestAuth } from '../generated/http-tools.js';
 import { requestPiApiJson } from '../tools/api-client.js';
@@ -227,7 +228,10 @@ const selectReads = (plan: TurnPlan): readonly ReadKind[] => {
   // soma `list_transactions` via fallback de domínio — a segunda leitura
   // alimentava o render determinístico de extrato e suplantava o TOTAL.
   const hasSummary = selected.includes('month-summary');
-  if (fallback && !selected.includes(fallback) && selected.length < MAX_EVIDENCE_READS && !(hasSummary && fallback === 'transactions')) selected.push(fallback);
+  // Breakdown por categoria é autossuficiente: nunca soma catálogo nem
+  // extrato via fallback — uma leitura por turno, sem máscara de escopo.
+  const hasBreakdown = selected.includes('analytics-breakdown');
+  if (fallback && !selected.includes(fallback) && selected.length < MAX_EVIDENCE_READS && !(hasSummary && fallback === 'transactions') && !hasBreakdown) selected.push(fallback);
   return selected;
 };
 
@@ -550,6 +554,111 @@ const mapEntityList = (kind: ReadKind, ref: string, result: unknown): EvidenceIn
 };
 
 /**
+ * R3: categorias em evidência COMPACTA. A lista real tem 60 itens
+ * (`{items,total}` = 15693 bytes) e o cliente gerado soma `categories`
+ * duplicando (21657) — o teto do envelope (10000) derrubava a leitura
+ * inteira em `error`. Remover só a duplicação não basta: as linhas cruas
+ * carregam timestamps/ids/status que nem o render nem o grounding usam. A
+ * projeção valida o shape real e publica SÓ `{name, kind}` por linha (ids
+ * nunca entram na evidência; o `project()` do envelope os removeria de todo
+ * modo), com o `total` real, teto de 60 linhas e truncamento e partialidade
+ * explícitos (`truncated`, `omittedCount`). O teto global, o gerado, a API e
+ * as permissões ficam intocados.
+ */
+const CATEGORIES_EVIDENCE_MAX_ROWS = 60;
+
+const mapCategories = (result: unknown): EvidenceInput[] => {
+  const payload = readListPayload(result);
+  if (!payload.ok) return [errorItem('categories', 'categories', 'permanent_error')];
+  if (!rowsAreEntityRecords(payload.rows)) return [errorItem('categories', 'categories', 'permanent_error')];
+  const declared = asRecord(result);
+  // `total` PRESENTE e inválido (string, null, NaN, negativo, fracionário ou
+  // menor que as linhas) falha fechado ANTES de qualquer leitura de vazio:
+  // presença se distingue por `hasOwn` — ausente mantém o caminho tolerante
+  // (total = linhas).
+  const hasTotal = declared !== null && Object.hasOwn(declared, 'total');
+  const totalRaw = hasTotal ? (declared as Record<string, unknown>)['total'] : undefined;
+  const totalNum = typeof totalRaw === 'number' && Number.isFinite(totalRaw) ? totalRaw : null;
+  if (payload.rows.length === 0) {
+    // Lista vazia legítima: total ausente ou 0. Total presente diferente de
+    // 0 (65, "65", null, NaN, ...) com items vazio é inconsistência parcial
+    // — há itens que não vieram — falha fechada, nunca `setup_incomplete`.
+    if (hasTotal && totalNum !== 0) return [errorItem('categories', 'categories', 'permanent_error')];
+    return [emptyItem('categories', 'categories', 'setup_incomplete')];
+  }
+  // Total declarado precisa ser inteiro >= 0 e nunca menor que o retornado:
+  // `total: 0` com 65 itens (ou contagem menor que as linhas) contradiz o
+  // corpo e falha fechado em vez de truncar silencioso. Ausente mantém o
+  // caminho tolerante (total = linhas).
+  if (hasTotal && (totalNum === null || !Number.isInteger(totalNum) || totalNum < 0 || totalNum < payload.rows.length)) {
+    return [errorItem('categories', 'categories', 'permanent_error')];
+  }
+  const realTotal = totalNum ?? payload.rows.length;
+  const compact: Array<{ name: string; kind?: string }> = [];
+  for (const row of payload.rows) {
+    const record = asRecord(row);
+    const name = record !== null && typeof record['name'] === 'string' && record['name'].trim().length > 0
+      ? record['name'].trim()
+      : null;
+    if (name === null) continue;
+    const kind = record !== null && typeof record['kind'] === 'string' ? record['kind'] : null;
+    compact.push(kind === null ? { name } : { name, kind });
+  }
+  // Todas as linhas inválidas: falha da projeção, nunca ausência — idem
+  // `mapAccounts` quando nenhuma linha serve.
+  if (compact.length === 0) return [errorItem('categories', 'categories', 'permanent_error')];
+  const shown = compact.slice(0, CATEGORIES_EVIDENCE_MAX_ROWS);
+  const omitted = Math.max(0, realTotal - shown.length);
+  return [{
+    ref: 'categories',
+    source: READ_SOURCE.categories,
+    retrievedAt: now(),
+    status: 'ok',
+    data: {
+      items: shown,
+      total: realTotal,
+      ...(realTotal > shown.length ? { truncated: true as const } : {}),
+      ...(omitted > 0 ? { omittedCount: omitted } : {}),
+    },
+  }];
+};
+
+/**
+ * Round2 review (G-B): o envelope ANOTA decimais locais (`annotateUnsafeTotals`
+ * dentro de `declareAnalyticsEnvelope`) quando um `totalCents` unsafe chega
+ * SEM o `totalCentsExact` original — e o render determinístico confiaria nesse
+ * decimal derivado do double como se fosse prova (a saída chegou a publicar
+ * `R$ 100.000.000.000.400,00` fabricado). A distinção "original da API vs.
+ * derivação local" só existe no payload CRU, antes do annotate: um
+ * `totalCents` unsafe sem `totalCentsExact` original válido — no topo ou em
+ * qualquer slice — é falha fechada AQUI, antes do envelope e antes de
+ * qualquer provider. O comportamento geral do envelope não muda: o gate vale
+ * só para o breakdown, cujo render publica cifras (`analytics_kpis` e as
+ * demais leituras seguem o caminho inalterado abaixo).
+ */
+const EXACT_CENTS_STRING = /^-?\d+$/;
+
+const rawCentsWithoutOriginalExact = (entry: unknown): boolean => {
+  const record = asRecord(entry);
+  if (record === null) return false;
+  const total = record['totalCents'];
+  if (typeof total === 'number' && !Number.isSafeInteger(total)) {
+    const exact = record['totalCentsExact'];
+    return !(typeof exact === 'string' && EXACT_CENTS_STRING.test(exact));
+  }
+  return false;
+};
+
+const breakdownRawHasUnsafeWithoutExact = (result: unknown): boolean => {
+  if (rawCentsWithoutOriginalExact(result)) return true;
+  const record = asRecord(result);
+  if (record === null) return false;
+  const slices = record['slices'];
+  if (!Array.isArray(slices)) return false;
+  return slices.some((slice) => rawCentsWithoutOriginalExact(slice));
+};
+
+/**
  * A09-int pós-G03 — a leitura de analytics entra na evidência COM o envelope de
  * prova que a API declarou (`effectivePeriod`/`boundary`/`basis`/`asOf`/
  * `semanticsVersion` e o decimal exato de G-B). As três saídas são as únicas
@@ -566,6 +675,11 @@ const mapEntityList = (kind: ReadKind, ref: string, result: unknown): EvidenceIn
  * 3. **Envelope utilizável** → `ok` com o payload envelopado, prova incluída.
  */
 const mapAnalytics = (kind: ReadKind, ref: string, result: unknown): EvidenceInput[] => {
+  // G-B round2: breakdown com unsafe SEM exact original falha fechado no RAW,
+  // antes do annotate fabricar um decimal local (kpis e demais: inalterados).
+  if (kind === 'analytics-breakdown' && breakdownRawHasUnsafeWithoutExact(result)) {
+    return [errorItem(kind, ref, 'permanent_error')];
+  }
   const declared = declareAnalyticsEnvelope(result);
   if (!declared.ok) {
     return [errorItem(kind, ref, 'permanent_error')];
@@ -650,7 +764,7 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
       payables: async () => mapEntityList('payables', 'payables', await tools.listAccountsPayable({ householdId }, auth)),
       budgets: async () => mapEntityList('budgets', 'budgets', await tools.listBudgets({ householdId }, auth)),
       goals: async () => mapEntityList('goals', 'goals', await tools.listGoals({ householdId }, auth)),
-      categories: async () => mapEntityList('categories', 'categories', await tools.listCategories({ householdId }, auth)),
+      categories: async () => mapCategories(await tools.listCategories({ householdId }, auth)),
       'analytics-kpis': async () => mapAnalytics(
         'analytics-kpis',
         'analytics-kpis',
@@ -659,9 +773,10 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
       'analytics-breakdown': async () => mapAnalytics(
         'analytics-breakdown',
         'analytics-breakdown',
-        // `kind` is required by the route; `expense` is the read this evidence
-        // answers ("para onde foi o dinheiro"), and the envelope declares it.
-        await tools.analyticsCategoryBreakdown({ householdId, kind: 'expense', ...analyticsWindow() }, auth),
+        // `kind` vem do texto: "receita(s)" pede income (a ausência e o
+        // título preservam receitas); o default é expense — correto para
+        // gasto/resumo geral ou sem marcador ("resumo do mês por categoria").
+        await tools.analyticsCategoryBreakdown({ householdId, kind: breakdownKindForText(input.text), ...analyticsWindow() }, auth),
       ),
     };
     const settled = await Promise.all(kinds.map(async (kind) => {

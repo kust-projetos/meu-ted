@@ -55,6 +55,8 @@ test-results*/
 
 # Local Pi runtime / secrets
 .env.pi
+# Local ted-local stack secrets (real keys; never commit)
+docker/local/.env*
 .pnpm-store/
 backups/
 # Off-repo backup bundles (e.g. pi-rewind-store-*.bundle) - NEVER delete; preserve on disk and push off-machine
@@ -84,6 +86,7 @@ test-payload.json
 # Tooling runtime state
 .superpowers/
 .playwright-cli/
+/.playwright-mcp/
 
 tmp-pwa-*.log
 

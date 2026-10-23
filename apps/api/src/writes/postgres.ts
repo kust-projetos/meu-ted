@@ -17,11 +17,12 @@ import { assertCategoryKind, CARD_EXPENSE_KIND_MESSAGE } from '../categories/res
 import { withTransaction } from '../db/pool.js';
 import { domainErrors, DomainError } from './errors.js';
 import { buildIdempotencyKey, hashPayloadV2, matchesPayloadHash, type IdempotencyActorContext, type IdempotencyProducer } from './idempotency.js';
-import { runKeyedMutation } from './pending-idempotency.js';
-import type { ApplyDefaultsResult, DeleteCategoryResult, WriteStore } from './store.js';
+import { runKeyedMutation, runKeyedAccountMutation, runKeyedCategoryMutation } from './pending-idempotency.js';
+import type { ApplyDefaultsResult, DeleteCategoryResult, WriteStore, UpdateAccountOptions, UpdateCategoryOptions, DeactivateCategoryOptions, EditTransactionDescriptionInput, EditTransactionDescriptionOptions } from './store.js';
 import { resolveApplicationUserId } from '../auth/resolve-user-id.js';
 import { resolveHouseholdId } from '../auth/resolve-household-id.js';
 import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
+import { assertCategoryHasNoPersistedReferencesInTx, lockCategoryDeactivationInTx, lockCategoryReferencesInTx } from '../auth/category-lifecycle-guard.js';
 import type {
   CreateAccountInput,
   CreateCategoryInput,
@@ -364,6 +365,7 @@ export const applyCategoryDefaultsInTx = async (
   // P1: FIX-WS-D2-R2 lifecycle active dentro da transação do efeito
   // (antes o alias expunha o core sem guarda na claim tx).
   await assertWorkspaceWritableInTx(client, householdId);
+  await lockCategoryReferencesInTx(client, householdId);
   return applyDefaultsInTx(client, householdId);
 };
 
@@ -437,6 +439,7 @@ const createExpenseInTx = async (
 ): Promise<Transaction> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  await lockCategoryReferencesInTx(client, householdId);
   // V4.1 Phase 4 Task 4.6: the paying account is locked before the
   // balance decision so concurrent expenses serialize on the row.
   const acc = await lockAccountRow(client, input.accountId, householdId);
@@ -496,6 +499,7 @@ const createIncomeInTx = async (
 ): Promise<Transaction> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  await lockCategoryReferencesInTx(client, householdId);
   const acc = await findAccountInHousehold(client, input.accountId, householdId);
   if (acc.status !== 'active') throw domainErrors.notFound('Conta');
   // H-01: income on a credit card is rejected (422), not silently booked.
@@ -598,6 +602,7 @@ export const createAccountInTx = async (
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito
   // (cobre delete-vs-create e archive-vs-create, inclusive concorrentes).
   await assertWorkspaceWritableInTx(client, householdId);
+  await lockCategoryReferencesInTx(client, householdId);
   // Negative-balance rule: only bank/cash may start negative. The route
   // schema already limits kind to bank|cash; this guards direct store
   // callers presenting any account kind — a negative initial balance for
@@ -605,6 +610,22 @@ export const createAccountInTx = async (
   if ((input.kind as string) === 'credit_card' && input.initialBalanceCents < 0) {
     throw domainErrors.invalid('initialBalanceCents', 'cartão de crédito não pode iniciar com saldo negativo');
   }
+  // Round2 achado 2 — serialização por household + guard de nome duplicado
+  // (paridade com o store em memória: escopo household, só status active,
+  // case-insensitive). O lock advisory transacional serializa creates
+  // concorrentes do mesmo household para que a corrida de chaves distintas
+  // com o mesmo nome convirja a exatamente um vencedor (os perdedores veem
+  // a linha commitada e caem em `in_use`) em vez de duplicar. Sem migration:
+  // nenhum índice novo, nenhuma DDL — só serialização + SELECT de guarda
+  // dentro da transação do efeito.
+  await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`v2.accounts.create:${householdId}`]);
+  const duplicate = await client.query(
+    `SELECT 1 FROM accounts
+       WHERE household_id = $1 AND status = 'active' AND lower(name) = lower($2)
+       LIMIT 1`,
+    [householdId, input.name],
+  );
+  if ((duplicate.rowCount ?? 0) > 0) throw domainErrors.inUse('Conta', 'nome duplicado');
   const res = await client.query<Row>(
     `INSERT INTO accounts (id, household_id, name, kind, balance_cents, initial_balance_cents, status)
       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'active')
@@ -645,6 +666,52 @@ export const updateAccountInTx = async (
     [id, householdId, patch.name ?? null],
   );
   return mapAccount(res.rows[0]!);
+};
+
+/**
+ * Rename-only account mutation (V2 `accounts.update`, ADR-029): targeted,
+ * preconditioned rename. The target row is locked (`FOR UPDATE`) and the
+ * before-condition (`expectedName` exact) is compared INSIDE the effect
+ * transaction — never a pre-transaction SELECT — so concurrent renames of
+ * the same account converge to exactly one winner (losers fail closed with
+ * the typed `account.name_conflict`, never a second effect). Only active
+ * bank/cash accounts are eligible; kind and balance are never touched. A
+ * rename to the current name is a deterministic no-op (no UPDATE issued).
+ *
+ * Exported so keyed V2 producers run inside the passed claim client
+ * instead of opening an independent transaction.
+ */
+export const renameAccountInTx = async (
+  client: PoolClient,
+  householdId: string,
+  input: { accountId: string; name: string; expectedName: string },
+): Promise<Account> => {
+  // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
+  await assertWorkspaceWritableInTx(client, householdId);
+  const res = await client.query<Row>(
+    `SELECT id, household_id, name, kind, balance_cents, status
+       FROM accounts
+      WHERE id = $1 AND household_id = $2
+      FOR UPDATE`,
+    [input.accountId, householdId],
+  );
+  if ((res.rowCount ?? 0) === 0) throw domainErrors.notFound('Conta');
+  const acc = mapAccount(res.rows[0]!);
+  if (acc.status !== 'active') throw domainErrors.notFound('Conta');
+  if (acc.kind !== 'bank' && acc.kind !== 'cash') {
+    throw domainErrors.invalid('kind', 'renomear exige conta bank/cash ativa');
+  }
+  if (acc.name !== input.expectedName) throw domainErrors.nameConflict();
+  if (acc.name === input.name) return acc;
+  const upd = await client.query<Row>(
+    `UPDATE accounts
+        SET name = $3
+      WHERE id = $1 AND household_id = $2 AND status = 'active'
+      RETURNING id, household_id, name, kind, balance_cents, status`,
+    [input.accountId, householdId, input.name],
+  );
+  if ((upd.rowCount ?? 0) === 0) throw domainErrors.notFound('Conta');
+  return mapAccount(upd.rows[0]!);
 };
 /**
  * Client-bound account deactivation (no transaction handling).
@@ -694,26 +761,34 @@ const deactivateCategoryInTx = async (
   client: PoolClient,
   householdId: string,
   id: string,
+  expectedName?: string,
 ): Promise<Category> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
-  const existing = await findCategoryInHousehold(client, id, householdId);
-  if (existing.status !== 'active') throw domainErrors.notFound('Categoria');
-  const used = await client.query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count
-        FROM transactions
-       WHERE household_id = $1
-         AND deleted_at IS NULL
-         AND (category_id = $2 OR subcategory_id = $2)`,
-    [householdId, id],
+  // R2b-category reaches its barrier before exclusive serialization; the
+  // locked reread below is authoritative after competing lifecycle changes.
+  // Same predicate as the locked reread so a soft-deleted target is never
+  // misreported as a rename conflict.
+  const snapshot = await client.query<Row>(
+    `SELECT ${CATEGORY_COLUMNS} FROM categories WHERE id = $1 AND household_id = $2 AND status = 'active' AND deleted_at IS NULL`,
+    [id, householdId],
   );
-  if (Number(used.rows[0]!.count) > 0) {
-    throw domainErrors.inUse('Categoria', 'lançamentos');
-  }
+  if (snapshot.rowCount === 0) throw domainErrors.notFound('Categoria');
+  if (expectedName !== undefined && mapCategory(snapshot.rows[0]!).name !== expectedName) throw domainErrors.categoryNameConflict();
+  await lockCategoryDeactivationInTx(client, householdId);
+  const locked = await client.query<Row>(
+    `SELECT ${CATEGORY_COLUMNS} FROM categories WHERE id = $1 AND household_id = $2 AND status = 'active' AND deleted_at IS NULL FOR UPDATE`,
+    [id, householdId],
+  );
+  if (locked.rowCount === 0) throw domainErrors.notFound('Categoria');
+  const existing = mapCategory(locked.rows[0]!);
+  if (existing.status !== 'active') throw domainErrors.notFound('Categoria');
+  if (expectedName !== undefined && existing.name !== expectedName) throw domainErrors.categoryNameConflict();
+  await assertCategoryHasNoPersistedReferencesInTx(client, householdId, id);
   const res = await client.query<Row>(
     `UPDATE categories
         SET status = 'inactive'
-      WHERE id = $1 AND household_id = $2 AND status = 'active'
+       WHERE id = $1 AND household_id = $2 AND status = 'active' AND deleted_at IS NULL
       RETURNING ${CATEGORY_COLUMNS}`,
     [id, householdId],
   );
@@ -734,6 +809,15 @@ export const createCategoryInTx = async (
 ): Promise<Category> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  await lockCategoryReferencesInTx(client, householdId);
+  // categories-create-api: serialização por household + guard de nome
+  // duplicado (paridade com accounts.create: advisory lock transacional
+  // serializa creates concorrentes do mesmo household para que a corrida
+  // de chaves distintas com o mesmo nome convirja a exatamente um vencedor).
+  // Sem migration: nenhum índice novo, só serialização + SELECT de guarda
+  // dentro da transação do efeito (o índice funcional V048 segue como
+  // backstop para o caminho legado ON CONFLICT).
+  await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`v2.categories.create:${householdId}`]);
   if (input.parentId) {
     const parent = await findCategoryInHousehold(client, input.parentId, householdId);
     if (parent.status !== 'active') throw domainErrors.notFound('Categoria pai');
@@ -778,6 +862,7 @@ export const updateCategoryInTx = async (
 ): Promise<Category> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  await lockCategoryReferencesInTx(client, householdId);
   const existing = await findCategoryInHousehold(client, id, householdId);
   if (existing.status !== 'active') throw domainErrors.notFound('Categoria');
   if (patch.name !== undefined) {
@@ -811,6 +896,67 @@ export const updateCategoryInTx = async (
 };
 
 /**
+ * Rename-only category mutation (V2 `categories.update`, name-only): targeted,
+ * preconditioned rename. The target row is locked (`FOR UPDATE`) and the
+ * before-condition (`expectedName` exact) is compared INSIDE the effect
+ * transaction. Only active categories are eligible; kind and parent are never
+ * touched. A rename to the current name is a deterministic no-op (no UPDATE
+ * issued). Name conflict within workspace/kind/parent surfaces as 409.
+ */
+export const renameCategoryInTx = async (
+  client: PoolClient,
+  householdId: string,
+  input: { categoryId: string; name: string; expectedName: string },
+): Promise<Category> => {
+  await assertWorkspaceWritableInTx(client, householdId);
+  await lockCategoryReferencesInTx(client, householdId);
+  await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`v2.categories.create:${householdId}`]);
+  const res = await client.query<Row>(
+    `SELECT ${CATEGORY_COLUMNS}
+       FROM categories
+      WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL
+      FOR UPDATE`,
+    [input.categoryId, householdId],
+  );
+  if ((res.rowCount ?? 0) === 0) throw domainErrors.notFound('Categoria');
+  const cat = mapCategory(res.rows[0]!);
+  if (cat.status !== 'active') throw domainErrors.notFound('Categoria');
+  if (cat.parentId) {
+    const parentRes = await client.query<Row>(
+      `SELECT ${CATEGORY_COLUMNS} FROM categories WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL`,
+      [cat.parentId, householdId],
+    );
+    if ((parentRes.rowCount ?? 0) === 0) throw domainErrors.notFound('Categoria pai');
+    const parent = mapCategory(parentRes.rows[0]!);
+    if (parent.status !== 'active') throw domainErrors.notFound('Categoria pai');
+    if (parent.parentId) throw domainErrors.invalid('parentId', 'subcategoria nao pode ter subcategoria');
+    if (parent.kind !== cat.kind) throw domainErrors.invalid('parentId', 'categoria pai deve ter o mesmo kind');
+  }
+  if (cat.name !== input.expectedName) throw domainErrors.categoryNameConflict();
+  if (cat.name === input.name) return cat;
+  await assertCategoryNameFree(
+    client,
+    householdId,
+    { name: input.name, kind: cat.kind, ...(cat.parentId ? { parentId: cat.parentId } : {}) },
+    cat.id,
+  );
+  try {
+    const upd = await client.query<Row>(
+      `UPDATE categories
+          SET name = $3
+        WHERE id = $1 AND household_id = $2 AND status = 'active' AND deleted_at IS NULL
+       RETURNING ${CATEGORY_COLUMNS}`,
+      [input.categoryId, householdId, input.name],
+    );
+    if ((upd.rowCount ?? 0) === 0) throw domainErrors.notFound('Categoria');
+    return mapCategory(upd.rows[0]!);
+  } catch (err) {
+    if ((err as { code?: string })?.code === '23505') throw domainErrors.inUse('Categoria', 'nome duplicado');
+    throw err;
+  }
+};
+
+/**
  * Client-bound category hard-removal (no transaction handling): shared by
  * the plain path (own tx) and keyed route producers that join the
  * idempotency claim transaction (T06 single-tx).
@@ -823,6 +969,7 @@ export const deleteCategoryInTx = async (
 ): Promise<DeleteCategoryResult> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  await lockCategoryReferencesInTx(client, householdId);
   const cat = await findCategoryInHousehold(client, id, householdId);
   if (cat.status !== 'active') throw domainErrors.notFound('Categoria');
   const subs = await client.query<Row>(
@@ -955,6 +1102,7 @@ export type WriteStoreMutationTxExtensions = {
   createIncomeInTx(client: PoolClient, householdId: string, input: CreateIncomeInput): Promise<Transaction>;
   createTransferInTx(client: PoolClient, householdId: string, input: CreateTransferInput): Promise<Transaction>;
   updateTransactionInTx(client: PoolClient, householdId: string, id: string, patch: UpdateTransactionInput): Promise<Transaction>;
+  editTransactionDescriptionInTx(client: PoolClient, householdId: string, input: EditTransactionDescriptionInput): Promise<Transaction>;
 };
 
 /**
@@ -972,6 +1120,9 @@ const updateTransactionInTx = async (
 ): Promise<Transaction> => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  if (patch.categoryId !== undefined || patch.subcategoryId !== undefined) {
+    await lockCategoryReferencesInTx(client, householdId);
+  }
   const tx = await findActiveTransaction(client, id, householdId);
   // V4.1 REVIEWFIX F3: a paid payable's payment effect is immutable
   // via PATCH — use unpay (which clears the link first).
@@ -1127,32 +1278,127 @@ const updateTransactionInTx = async (
   return mapTransaction(res.rows[0]!);
 };
 
+/** Typed description-only writer. Lock + eligibility + exact CAS precede the single-column update. */
+export const editTransactionDescriptionInTx = async (client: PoolClient, householdId: string, input: EditTransactionDescriptionInput): Promise<Transaction> => {
+  await assertWorkspaceWritableInTx(client, householdId);
+  const selected = await client.query<Row>(
+    `SELECT ${TRANSACTION_COLUMNS}, statement_id, statement_payment_id, installments_total, installment_number
+       FROM transactions WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+    [input.transactionId, householdId],
+  );
+  if (!selected.rowCount) throw domainErrors.notFound('Lançamento');
+  const row = selected.rows[0]!;
+  const transaction = mapTransaction(row);
+  if (transaction.kind !== 'expense' && transaction.kind !== 'income') throw domainErrors.unsupported('edição de descrição exige despesa ou receita simples');
+  if (row['statement_id'] != null || row['statement_payment_id'] != null || row['installments_total'] != null || row['installment_number'] != null) {
+    throw domainErrors.unsupported('lançamento vinculado a fatura, parcela ou pagamento');
+  }
+  const card = await client.query(`SELECT 1 FROM card_purchases WHERE transaction_id = $1 AND (household_id = $2 OR household_id IS NULL) LIMIT 1`, [transaction.id, householdId]);
+  if ((card.rowCount ?? 0) > 0) throw domainErrors.unsupported('lançamento vinculado a compra no cartão');
+  const payable = await client.query(`SELECT 1 FROM accounts_payable WHERE household_id = $1 AND paid_transaction_id = $2 LIMIT 1`, [householdId, transaction.id]);
+  if ((payable.rowCount ?? 0) > 0) throw domainErrors.unsupported('lançamento vinculado a pagamento de conta a pagar');
+  if (transaction.description !== input.expectedDescription) throw domainErrors.transactionDescriptionConflict();
+  const description = input.description.trim();
+  if (transaction.description === description) throw domainErrors.invalid('description', 'a descrição não foi alterada');
+  const updated = await client.query<Row>(
+    `UPDATE transactions SET description = $3, updated_at = NOW()
+      WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL AND description = $4
+      RETURNING ${TRANSACTION_COLUMNS}`,
+    [input.transactionId, householdId, description, input.expectedDescription],
+  );
+  if (!updated.rowCount) throw domainErrors.transactionDescriptionConflict();
+  return mapTransaction(updated.rows[0]!);
+};
+
 export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
   const { pool } = opts;
 
   const store: WriteStore = {
-    async createAccount(householdId, input) {
-      return withTransaction(pool, async (client) => createAccountInTx(client, householdId, input));
+    async createAccount(householdId, input, options) {
+      if (options?.idempotencyKey === undefined) {
+        return withTransaction(pool, async (client) => createAccountInTx(client, householdId, input));
+      }
+      // ted-local.account-idempotency: V2 recovery replays key → account
+      // (same tx as the effect, same pending-v2 namespace as transactions).
+      // Audit legs stay transaction-only — account callers never audit.
+      return runKeyedAccountMutation({
+        pool,
+        householdId,
+        idempotencyKey: options.idempotencyKey,
+        payload: input,
+        mutate: (client) => createAccountInTx(client, householdId, input),
+      });
     },
 
-    async updateAccount(householdId, id, patch) {
-      return withTransaction(pool, async (client) => updateAccountInTx(client, householdId, id, patch));
+    async updateAccount(householdId, id, patch, options?: UpdateAccountOptions) {
+      if (options?.idempotencyKey === undefined) {
+        return withTransaction(pool, async (client) => updateAccountInTx(client, householdId, id, patch));
+      }
+      // Rename-only V2 path (ADR-029): keyed replay + atomic before-condition.
+      // ExpectedName is REQUIRED here — an unkeyed call never renames, and a
+      // keyed call without the precondition fails closed instead of running
+      // the plain patch path.
+      if (options.expectedName === undefined || patch.name === undefined) {
+        throw domainErrors.invalid('expectedName', 'renomeação V2 exige expectedName e name');
+      }
+      const args = { accountId: id, name: patch.name, expectedName: options.expectedName };
+      return runKeyedAccountMutation({
+        pool,
+        householdId,
+        idempotencyKey: options.idempotencyKey,
+        payload: { tool: 'accounts.update' as const, args },
+        mutate: (client) => renameAccountInTx(client, householdId, args),
+      });
     },
 
     async deactivateAccount(householdId, id) {
       return withTransaction(pool, async (client) => deactivateAccountInTx(client, householdId, id));
     },
 
-    async createCategory(householdId, input) {
-      return withTransaction(pool, async (client) => createCategoryInTx(client, householdId, input));
+    async createCategory(householdId, input, options) {
+      if (options?.idempotencyKey === undefined) {
+        return withTransaction(pool, async (client) => createCategoryInTx(client, householdId, input));
+      }
+      // categories-create-api: V2 foundation replays key → category
+      // (same tx as the effect, same pending-v2 namespace). Audit legs stay
+      // transaction-only — category callers never audit.
+      return runKeyedCategoryMutation({
+        pool,
+        householdId,
+        idempotencyKey: options.idempotencyKey,
+        payload: input,
+        mutate: (client) => createCategoryInTx(client, householdId, input),
+      });
     },
 
-    async updateCategory(householdId, id, patch) {
-      return withTransaction(pool, async (client) => updateCategoryInTx(client, householdId, id, patch));
+    async updateCategory(householdId, id, patch, options?: UpdateCategoryOptions) {
+      if (options?.idempotencyKey === undefined) {
+        return withTransaction(pool, async (client) => updateCategoryInTx(client, householdId, id, patch));
+      }
+      // Rename-only V2 path (categories.update, name-only): keyed replay +
+      // atomic before-condition. ExpectedName is REQUIRED here; only `name`
+      // is allowed in the patch (strict name-only V2 payload).
+      if (patch.icon !== undefined || patch.color !== undefined || patch.sortOrder !== undefined || patch.isDefault !== undefined) {
+        throw domainErrors.invalid('patch', 'renomeacao V2 aceita apenas name');
+      }
+      if (options.expectedName === undefined || patch.name === undefined) {
+        throw domainErrors.invalid('expectedName', 'renomeacao V2 exige expectedName e name');
+      }
+      const args = { categoryId: id, name: patch.name, expectedName: options.expectedName };
+      return runKeyedCategoryMutation({
+        pool,
+        householdId,
+        idempotencyKey: options.idempotencyKey,
+        payload: { tool: 'categories.update' as const, args },
+        mutate: (client) => renameCategoryInTx(client, householdId, args),
+      });
     },
 
-    async deactivateCategory(householdId, id) {
-      return withTransaction(pool, async (client) => deactivateCategoryInTx(client, householdId, id));
+    async deactivateCategory(householdId, id, options?: DeactivateCategoryOptions) {
+      if (options?.idempotencyKey === undefined) return withTransaction(pool, (client) => deactivateCategoryInTx(client, householdId, id));
+      if (typeof options.expectedName !== 'string' || options.expectedName.trim() === '') throw domainErrors.invalid('expectedName', 'desativacao V2 exige expectedName');
+      const args = { categoryId: id, expectedName: options.expectedName };
+      return runKeyedCategoryMutation({ pool, householdId, idempotencyKey: options.idempotencyKey, payload: { tool: 'categories.deactivate' as const, args }, mutate: (client) => deactivateCategoryInTx(client, householdId, id, options.expectedName) });
     },
 
     async deleteCategory(householdId, id, input) {
@@ -1209,6 +1455,18 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
       return withTransaction(pool, async (client) => updateTransactionInTx(client, householdId, id, patch));
     },
 
+    async editTransactionDescription(householdId, input, options: EditTransactionDescriptionOptions) {
+      const copied = { transactionId: input.transactionId, description: input.description, expectedDescription: input.expectedDescription };
+      if (typeof options?.idempotencyKey !== 'string' || options.idempotencyKey.length === 0) throw domainErrors.required('Idempotency-Key');
+      if (typeof options.actorId !== 'string' || options.actorId.length === 0) throw domainErrors.required('actorId');
+      const description = copied.description.trim();
+      if (description.length < 1 || description.length > 240 || copied.expectedDescription.length < 1 || copied.expectedDescription.length > 240) throw domainErrors.invalid('description', 'deve conter de 1 a 240 caracteres');
+      return runKeyedMutation({ pool, householdId, idempotencyKey: options.idempotencyKey,
+        payload: { tool: 'transactions.description.update' as const, args: copied },
+        audit: { operation: 'transaction.update', actorId: options.actorId, schema: 'canonical', idempotencyKey: options.idempotencyKey, beforeDescription: copied.expectedDescription, afterDescription: description },
+        mutate: (client) => editTransactionDescriptionInTx(client, householdId, copied) });
+    },
+
     async softDeleteTransaction(householdId, id) {
       return withTransaction(pool, async (client) => softDeleteTransactionInTx(client, householdId, id));
     },
@@ -1234,6 +1492,7 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
     createIncomeInTx,
     createTransferInTx,
     updateTransactionInTx,
+    editTransactionDescriptionInTx,
   });
 };
 
@@ -1803,4 +2062,3 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
     },
   };
 };
-

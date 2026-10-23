@@ -27,6 +27,7 @@ export type ActiveOperationRecord = Readonly<{
   date?: string;
   accountId?: string;
   categoryId?: string;
+  failureCode?: 'in_use';
   presentation?: PendingOperationPresentation;
 }>;
 
@@ -145,6 +146,15 @@ export class MutationApiClient {
   listActive(identity: MutationIdentity): Promise<{ items: ActiveOperationRecord[]; total: number }> {
     return this.timed('transactions.listActive', () =>
       this.request<{ items: ActiveOperationRecord[]; total: number }>('GET', '/pending-operations/v2/active', {
+        headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId },
+      }),
+    );
+  }
+
+  /** Bounded history projection source; API identity and read capability remain server-derived. */
+  getOutcome(operationId: string, identity: MutationIdentity): Promise<unknown> {
+    return this.timed('transactions.getOutcome', () =>
+      this.request<unknown>('GET', `/pending-operations/v2/${encodeURIComponent(operationId)}/outcome`, {
         headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId },
       }),
     );

@@ -24,13 +24,29 @@ const ACTOR = 'actor-device-1';
 
 type Captured = { text: string; values?: unknown[] };
 
-const makeKeyedFake = () => {
+const makeKeyedFake = (options: { failAudit?: boolean } = {}) => {
   const queries: Captured[] = [];
   const keys = new Map<string, { payload_hash: unknown; response: unknown }>();
+  let committedDescription = 'before';
+  let auditCount = 0;
+  let beforeTransaction: { keys: Map<string, { payload_hash: unknown; response: unknown }>; description: string; auditCount: number } | undefined;
   const client = {
     async query(text: string, values?: unknown[]) {
       queries.push({ text, values });
-      if (/^(BEGIN|COMMIT|ROLLBACK)/.test(text)) return { rowCount: 0, rows: [] };
+      if (text === 'BEGIN') {
+        beforeTransaction = { keys: new Map(keys), description: committedDescription, auditCount };
+        return { rowCount: 0, rows: [] };
+      }
+      if (text === 'COMMIT') return { rowCount: 0, rows: [] };
+      if (text === 'ROLLBACK') {
+        if (beforeTransaction) {
+          keys.clear();
+          for (const [key, row] of beforeTransaction.keys) keys.set(key, row);
+          committedDescription = beforeTransaction.description;
+          auditCount = beforeTransaction.auditCount;
+        }
+        return { rowCount: 0, rows: [] };
+      }
       if (text.includes('FROM idempotency_keys')) {
         const row = keys.get(String(values?.[1]));
         return row ? { rowCount: 1, rows: [{ payload_hash: row.payload_hash, response: row.response }] } : { rowCount: 0, rows: [] };
@@ -39,13 +55,18 @@ const makeKeyedFake = () => {
         keys.set(String(values?.[1]), { payload_hash: values?.[2], response: values?.[3] });
         return { rowCount: 1, rows: [] };
       }
-      if (text.includes('INSERT INTO audit_logs')) return { rowCount: 1, rows: [] };
+      if (text.includes('UPDATE transactions SET description')) { committedDescription = String(values?.[0]); return { rowCount: 1, rows: [] }; }
+      if (text.includes('INSERT INTO audit_logs')) {
+        if (options.failAudit) throw new Error('audit insert fault');
+        auditCount += 1;
+        return { rowCount: 1, rows: [] };
+      }
       return { rowCount: 0, rows: [] };
     },
     release() {},
   };
   const pool = { connect: async () => client } as unknown as Pool;
-  return { pool, queries };
+  return { pool, queries, snapshot: () => ({ keys: keys.size, description: committedDescription, auditCount }) };
 };
 
 const fakeTx = () =>
@@ -138,6 +159,71 @@ describe('V2 execution audit — unit (claim-client atomicity, no replay duplica
       mutate: async () => fakeTx(),
     });
     expect(auditInserts(queries)).toHaveLength(0);
+  });
+
+  it('transaction.update: declares one lean audit correlated to workspace, actor, entity and key', async () => {
+    const { pool, queries } = makeKeyedFake();
+    await runKeyedMutation({
+      pool, householdId: HOUSEHOLD, idempotencyKey: 'description-audit-key',
+      payload: { tool: 'transactions.description.update', args: { transactionId: TX_ID, description: 'after', expectedDescription: 'before' } },
+      mutate: async (client) => {
+        await client.query('UPDATE transactions SET description = $1', ['after']);
+        return { ...fakeTx(), description: 'after' };
+      },
+      audit: { operation: 'transaction.update', actorId: ACTOR, schema: 'canonical', idempotencyKey: 'description-audit-key', beforeDescription: 'before', afterDescription: 'after' },
+    });
+    const insert = auditInserts(queries)[0]!;
+    expect(insert).toBeDefined();
+    expect(insert.text).toContain('effect_ref');
+    const values = insert.values as unknown[];
+    expect(values).toContain(HOUSEHOLD);
+    expect(values).toContain(ACTOR);
+    expect(values).toContain('transaction.update');
+    expect(values).toContain(TX_ID);
+    expect(JSON.stringify(values)).toContain('description-audit-key');
+    expect(JSON.stringify(values)).not.toContain('amountCents');
+  });
+
+  it('transaction.update: audit failure rolls back the edit and idempotency record', async () => {
+    const { pool, queries, snapshot } = makeKeyedFake({ failAudit: true });
+    await expect(runKeyedMutation({
+      pool, householdId: HOUSEHOLD, idempotencyKey: 'description-audit-rollback',
+      payload: { tool: 'transactions.description.update', args: { transactionId: TX_ID, description: 'after', expectedDescription: 'before' } },
+      mutate: async (client) => {
+        await client.query('UPDATE transactions SET description = $1', ['after']);
+        return { ...fakeTx(), description: 'after' };
+      },
+      audit: { operation: 'transaction.update', actorId: ACTOR, schema: 'canonical', idempotencyKey: 'description-audit-rollback', beforeDescription: 'before', afterDescription: 'after' },
+    })).rejects.toThrow('audit insert fault');
+    expect(queries.some((query) => query.text === 'ROLLBACK')).toBe(true);
+    expect(snapshot()).toEqual({ keys: 0, description: 'before', auditCount: 0 });
+  });
+
+  it('transaction.update legacy: records only before/after descriptions, actor and operation key; replay adds no row', async () => {
+    const { pool, queries } = makeKeyedFake();
+    const input = {
+      pool, householdId: HOUSEHOLD, idempotencyKey: 'description-legacy-key',
+      payload: { tool: 'transactions.description.update', args: { transactionId: TX_ID, description: 'after', expectedDescription: 'before' } },
+      mutate: async (client: import('pg').PoolClient) => {
+        await client.query('UPDATE transactions SET description = $1', ['after']);
+        return { ...fakeTx(), description: 'after' };
+      },
+      audit: { operation: 'transaction.update' as const, actorId: ACTOR, schema: 'legacy' as const,
+        idempotencyKey: 'description-legacy-key', beforeDescription: 'before', afterDescription: 'after' },
+    };
+    await runKeyedMutation(input);
+    let mutations = 0;
+    await runKeyedMutation({ ...input, mutate: async () => { mutations += 1; return fakeTx(); } });
+    expect(mutations).toBe(0);
+    const inserts = auditInserts(queries);
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]!.text).toContain('before_json');
+    const values = inserts[0]!.values as unknown[];
+    expect(values).toContain('transaction.update');
+    expect(values).toContain(TX_ID);
+    expect(JSON.stringify(values)).toContain('description-legacy-key');
+    expect(JSON.stringify(values)).toContain(ACTOR);
+    expect(JSON.stringify(values)).not.toContain('amountCents');
   });
 });
 

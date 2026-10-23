@@ -61,9 +61,13 @@ test("registry ranges resolve to the version pinned by the lockfile", () => {
 test("current pnpm v9 importer exposes exact PWA dependency versions", () => {
   const lockfile = fs.readFileSync(path.join(ROOT, "pnpm-lock.yaml"), "utf-8");
   const versions = parseLockfile(lockfile);
-  assert.equal(versions.next, "16.3.8");
+  assert.equal(versions.next, "16.4.1");
+  assert.equal(versions["eslint-config-next"], "16.4.1");
+  assert.equal(versions.sharp, "0.35.5");
+  assert.equal(versions.vitest, "4.1.12");
+  assert.equal(versions["@vitest/coverage-v8"], "4.1.12");
   assert.equal(versions["@lhci/cli"], "0.15.1");
-  assert.equal(versions.wrangler, "4.135.0");
+  assert.equal(versions.wrangler, "4.152.0");
 });
 
 test("unlocked registry dependency fails closed", () => {
@@ -127,12 +131,13 @@ test("audit source no longer resolves workspace packages from node_modules", () 
   assert.doesNotMatch(source, /join\(ROOT,\s*"node_modules"/);
 });
 
-test("current next>sharp override translates to nested npm overrides", () => {
+test("current security overrides translate to pinned npm overrides", () => {
   const rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
   const overrides = rootPkg.pnpm?.overrides || {};
-  assert.equal(overrides["next>sharp"], "0.34.5");
+  assert.equal(overrides["next>sharp"], "0.35.5");
+  assert.equal(overrides.vite, "8.1.6");
   const translated = translatePnpmOverridesToNpm({ "next>sharp": overrides["next>sharp"] });
-  assert.deepEqual(translated, { next: { sharp: "0.34.5" } });
+  assert.deepEqual(translated, { next: { sharp: "0.35.5" } });
 });
 
 test("plain and name@spec overrides pass through verbatim", () => {
@@ -177,8 +182,8 @@ test("conflicting flat + nested override for same parent fails closed", () => {
 test("temp manifest carries translated overrides and no pnpm-only selector leaks", () => {
   const rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
   const overrides = rootPkg.pnpm?.overrides || {};
-  const manifest = buildTempManifest({ resolvedDeps: { sharp: "0.34.5" }, overrides });
-  assert.deepEqual(manifest.overrides?.next, { sharp: "0.34.5" });
+  const manifest = buildTempManifest({ resolvedDeps: { sharp: "0.35.5" }, overrides });
+  assert.deepEqual(manifest.overrides?.next, { sharp: "0.35.5" });
   const raw = JSON.stringify(manifest);
   assert.doesNotMatch(raw, /next>sharp/);
   for (const key of Object.keys(manifest.overrides || {})) {

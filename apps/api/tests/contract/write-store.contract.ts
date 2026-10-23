@@ -152,6 +152,25 @@ export const runWriteStoreContract = (harness: WriteContractHarness): void => {
       });
     });
 
+    it('deactivateCategory blocks soft-deleted transaction references without rewriting history', async () => {
+      await setup();
+      const acc = await writes.createAccount(H1, { name: 'History account', kind: 'bank', initialBalanceCents: 5_000 });
+      const cat = await writes.createCategory(H1, { name: 'History category', kind: 'expense' });
+      const tx = await writes.createExpense(H1, {
+        description: 'Historical expense', amountCents: 100, date: '2026-06-10', accountId: acc.id, categoryId: cat.id,
+      });
+      await writes.softDeleteTransaction(H1, tx.id);
+      await expect(writes.deactivateCategory(H1, cat.id)).rejects.toMatchObject({ code: 'in_use' });
+    });
+
+    it('deactivateCategory blocks inactive child rows', async () => {
+      await setup();
+      const parent = await writes.createCategory(H1, { name: 'Parent', kind: 'expense' });
+      const child = await writes.createCategory(H1, { name: 'Child', kind: 'expense', parentId: parent.id });
+      await writes.deactivateCategory(H1, child.id);
+      await expect(writes.deactivateCategory(H1, parent.id)).rejects.toMatchObject({ code: 'in_use' });
+    });
+
     // ── transactions ─────────────────────────────────────────
     it('createExpense returns a transaction and debits the account', async () => {
       await setup();

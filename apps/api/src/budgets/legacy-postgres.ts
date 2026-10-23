@@ -14,6 +14,7 @@ import { domainErrors } from '../writes/errors.js';
 import { assertCategoryKind } from '../categories/resolve.js';
 import { createPostgresBudgetStore, insertBudgetRow } from './postgres.js';
 import { withTransaction } from '../db/pool.js';
+import { lockCategoryReferencesInTx } from '../auth/category-lifecycle-guard.js';
 import type { BudgetStore } from './store.js';
 
 type Row = Record<string, unknown>;
@@ -30,6 +31,7 @@ const createBudgetInTxLegacy = async (
   householdId: string,
   input: CreateBudgetInput,
 ) => {
+  await lockCategoryReferencesInTx(client, householdId);
   const gate = async <R extends Row = Row>(text: string, values: unknown[] = []): Promise<R[]> =>
     (await client.query<R>(text, values)).rows;
   const rows = await gate<Row>(

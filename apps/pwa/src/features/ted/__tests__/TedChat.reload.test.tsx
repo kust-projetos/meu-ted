@@ -178,6 +178,41 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
     expect(screen.queryByRole("button", { name: /confirmar|aprovar/i })).toBeNull();
   });
 
+  it('renders verified terminal feedback on the linked proposal without creating an approval card', async () => {
+    vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([{
+      id: 'msg-terminal', actorId: 'ted', role: 'assistant', content: 'Vou desativar a categoria Jade.', isOwn: false,
+      createdAt: undefined, proposalOperationId: '00000000-0000-4000-8000-000000000011', proposalTool: 'categories.deactivate',
+      terminalOutcome: {
+        operationId: '00000000-0000-4000-8000-000000000011', tool: 'categories.deactivate', status: 'succeeded',
+        expectedContext: { tool: 'categories.deactivate', entityId: 'cat-1' },
+        receipt: { mutationId: 'mut-1', mutationKind: 'categories.deactivate', status: 'succeeded', affectedTargets: ['categories', 'transactions'], operationId: '00000000-0000-4000-8000-000000000011', entity: { type: 'category', id: 'cat-1' } },
+      },
+    }]);
+    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
+
+    render(<TedChat />);
+
+    expect(await screen.findByText('Categoria desativada com sucesso.')).toBeInTheDocument();
+    expect(screen.queryByTestId('ted-approval-item')).toBeNull();
+    expect(screen.queryByRole('button', { name: /confirmar|aprovar|tentar novamente/i })).toBeNull();
+  });
+
+  it('keeps the known in-use outcome distinct from success and does not rehydrate a card', async () => {
+    vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([{
+      id: 'msg-in-use', actorId: 'ted', role: 'assistant', content: 'A categoria será desativada.', isOwn: false,
+      createdAt: undefined, proposalOperationId: '00000000-0000-4000-8000-000000000012', proposalTool: 'categories.deactivate',
+      terminalOutcome: { operationId: '00000000-0000-4000-8000-000000000012', tool: 'categories.deactivate', status: 'failed', failureCode: 'in_use' },
+    }]);
+    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
+
+    render(<TedChat />);
+
+    expect(await screen.findByText('A categoria não foi desativada porque ainda está sendo usada.')).toBeInTheDocument();
+    expect(screen.queryByText('Categoria desativada com sucesso.')).toBeNull();
+    expect(screen.queryByTestId('ted-approval-item')).toBeNull();
+    expect(screen.queryByRole('button', { name: /confirmar|aprovar|tentar novamente/i })).toBeNull();
+  });
+
   it("history fetch failure with no prior history shows error/empty state, never a fabricated card", async () => {
     vi.mocked(agentClient.fetchAgentHistory).mockRejectedValueOnce(new Error("boom"));
 

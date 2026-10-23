@@ -1,5 +1,8 @@
 import type { PlannedOperation } from './conversation-orchestrator.js';
 import { hasMutationIntentSignal, interpretMutationUtterance } from '../mutations/semantic-interpretation.js';
+import { hasCategoryRenameSignal } from '../mutations/category-rename.js';
+import { hasCategoryDeactivateSignal } from '../mutations/category-deactivation.js';
+import { hasTransactionDescriptionSignal } from '../mutations/transaction-description.js';
 import { selectToolsFor } from '../agent-config/tools.js';
 import { validateTurnPlan, type TurnPlanV2 } from './turn-plan.js';
 
@@ -72,6 +75,116 @@ const isYearAsAmountTrap = (normalized: string, amountCents: number): boolean =>
 export const UNSUPPORTED_YEAR_TEXT =
   'Ainda não consigo resumir o ano inteiro — me diga o mês que você quer (por exemplo, "quanto gastei em janeiro de 2020?").';
 
+/**
+ * Cartão imperativo ("crie cartão ...", "cadastrar cartão ..."):
+ * criação de cartão não é suportada pelo TED. Copy honesta: nunca um
+ * read (que responderia vazio ou prometeria cadastro) e nunca mutação.
+ */
+export const UNSUPPORTED_CARD_CREATE_TEXT =
+  'Criar cartões ainda não é suportado pelo TED. Posso listar seus cartões e faturas, se quiser.';
+
+/** Explicit card-creation imperative (unsupported capability, never a read). */
+export const hasCardCreateSignal = (text: string): boolean => {
+  const normalized = typoNormalize(fold(text));
+  return /\b(criar|cria|crie|criei|criou|cadastrar|cadastra|cadastre|adicionar|adicione|novo|nova)\b/.test(normalized) && /\b(cartaos?|cartoes)\b/.test(normalized);
+};
+
+/**
+ * Categoria update/delete ("renomeie/exclua categoria ..."): o RENAME tem
+ * fluxo V2 próprio (`categories.update`, nome-only, manual); o resto
+ * (excluir, mudar tipo/pai) segue sem fluxo V2 nesta fatia. Copy honesta:
+ * nunca um read (que responderia a lista como se fosse a mutação) e nunca
+ * mutação.
+ */
+export const UNSUPPORTED_CATEGORY_MUTATION_TEXT =
+  'Excluir categorias ou alterar tipo e hierarquia ainda não é suportado pelo TED. Posso renomear ou desativar uma categoria, ou listar as suas.';
+
+/** Verbo de CUD + "categoria(s)/subcategoria": mutação de catálogo, nunca leitura. */
+export const hasCategoryMutationSignal = (text: string): boolean => {
+  const normalized = typoNormalize(fold(text));
+  return /\b(criar|cria|crie|criei|criou|cadastrar|cadastra|cadastre|adicionar|adicione|renomear|renomeia|renomeie|renomeei|atualizar|atualiza|atualize|editar|edita|edite|alterar|altera|altere|excluir|exclua|exclui|excluiu|deletar|delete|desativar|desativa|desative|apagar|apague|remover|remove|nova|novo)\b/.test(normalized) && /\b(categoria|categorias|subcategoria)\b/.test(normalized);
+};
+
+/** Verbo de CRIAÇÃO + "categoria(s)/subcategoria": só `categories.create` passa. */
+export const hasCategoryCreateSignal = (text: string): boolean => {
+  const normalized = typoNormalize(fold(text));
+  return /\b(criar|cria|crie|criei|criou|cadastrar|cadastra|cadastre|adicionar|adicione|nova|novo)\b/.test(normalized) && /\b(categoria|categorias|subcategoria)\b/.test(normalized);
+};
+
+/** Verbo de UPDATE/DELETE + "categoria(s)/subcategoria": recusa específica, nunca forget. */
+export const hasCategoryUpdateDeleteSignal = (text: string): boolean => {
+  const normalized = typoNormalize(fold(text));
+  return /\b(renomear|renomeia|renomeie|renomeei|atualizar|atualiza|atualize|editar|edita|edite|alterar|altera|altere|excluir|exclua|exclui|excluiu|deletar|delete|desativar|desativa|desative|apagar|apague|remover|remove)\b/.test(normalized) && /\b(categoria|categorias|subcategoria)\b/.test(normalized);
+};
+
+/**
+ * Conceito PURO de categorias ("o que são categorias?"): pergunta sobre o
+ * conceito, sem comando, sem consulta pessoal e sem sinal de mutação. A
+ * resposta é determinística e breve, sem leitura, sem provider e sem
+ * mutação. O tolerante a typo cobre só formas do radical (`categrias`,
+ * `catgorias`) e SÓ alcança este ramo com cabeça conceitual — uma listagem
+ * com typo ("liste minhas categrias") não cai aqui.
+ */
+export const CONCEPT_CATEGORIES_TEXT =
+  'Categorias organizam seus lançamentos em grupos como Alimentação e Transporte; subcategorias detalham cada grupo. Posso listar as suas, se quiser.';
+
+const CATEGORY_CONCEPT_WORD = /\b(categorias?|subcategorias?|categrias|catgorias)\b/;
+
+// Composto com pedido de listagem ("... e liste os cartões?"): a leitura
+// executa — o ramo conceito nunca a suprime. Só verbos de pedido explícito
+// desviam para as heurísticas de leitura; substantivo solto ("O que é mesmo
+// fatura?") mantém o caminho de conversa anterior.
+const CATEGORY_CONCEPT_LISTING_REQUEST = /\b(liste|listar|listas?|mostre|mostrar|mostra|exib[aeiou]|quero|preciso|me\s+diga|me\s+mostre|trag[ao]|traz)\b/;
+
+// Exceção estreita: segundo substantivo nu de categoria ("categoria e
+// subcategoria") continua conceito puro — não há pedido, só outro nome. A
+// regex é ancorada no fim: qualquer verbo depois ("... e liste ...") mantém
+// o composto fora do conceito.
+const stripTrailingCategoryPair = (normalized: string): string =>
+  normalized.replace(/\s+e\s+(?:(?:a|o|as|os)\s+)?(categorias?|subcategorias?|categrias|catgorias)\s*[?.!]*$/, '');
+
+// Cabeça conceitual fora da análise de "extras": o `e` de "o que É ..." é
+// cópula, não cláusula — sem o strip, todo "o que é ..." seria rejeitado.
+const stripConceptHead = (normalized: string): string =>
+  normalized.replace(/^(?:o\s+que\s+(?:e|sao)|o\s+que\s+significa|como\s+funciona|me\s+expli)\b\s*/, '');
+
+const PURE_CONCEPT_EXTRA_RE = /\s+e\s+|\s+mas\s+|\s+ou\s+|\s+nem\s+|[,;]|\b(liste|listar|listas?|mostre|mostrar|mostra|exib[aeiou]|quero|preciso|me\s+diga|me\s+mostre|trag[ao]|traz)\b/;
+
+const isPureCategoryConcept = (normalized: string, text: string): boolean => {
+  if (hasMutationIntentSignal(text)) return false;
+  // Cabeça primeiro: em "o que É subcategoria?" o `e` é cópula, não
+  // conjunção — o strip do par rodando antes a comeria com a palavra toda.
+  const remainder = stripTrailingCategoryPair(stripConceptHead(normalized));
+  return CATEGORY_CONCEPT_WORD.test(remainder) && !PURE_CONCEPT_EXTRA_RE.test(remainder);
+};
+
+/**
+ * Composto conceito+leitura ("o que são categorias e liste os cartões?"): o
+ * turno pede UMA escolha por vez — nunca promete composição ampla nem finge
+ * atender listando só metade (o render anterior respondia categorias e
+ * calava os cartões). Copy honesta pedindo para separar, sem leitura, sem
+ * tool e sem provider.
+ */
+export const AMBIGUOUS_COMPOUND_REQUEST_TEXT =
+  'Esse pedido mistura explicação e consulta. Me diga um de cada vez: por exemplo, "o que são categorias?" ou "liste meus cartões".';
+
+/**
+ * Kind misto do breakdown ("receitas e gastos por categoria"): o turno agrega
+ * UM kind por vez, nunca os dois — copy honesta que pede a escolha, sem
+ * leitura, sem tool e sem provider.
+ */
+export const AMBIGUOUS_BREAKDOWN_KIND_TEXT =
+  'Você quer o resumo por categoria de receitas ou de gastos? Me diga um dos dois.';
+
+/**
+ * Kind do breakdown a partir do texto: "receita(s)" pede income; o default
+ * é expense — correto para pedido de gastos, resumo geral ou sem marcador
+ * de kind ("resumo do mês por categoria"). Fonte única usada pela evidência
+ * e pelo render determinístico.
+ */
+export const breakdownKindForText = (text: string): 'expense' | 'income' =>
+  /\breceita/.test(fold(text)) ? 'income' : 'expense';
+
 const BARE_YEAR_REF = /\b(?:em|de)\s+((?:19|20)\d{2})\b/;
 
 export type FastPathKind = 'balance' | 'recent_transactions' | 'confirm' | 'cancel' | 'none';
@@ -101,7 +214,7 @@ export const classifyFastPath = (text: string, options: FastPathOptions = {}): F
   const confirmSignal = /\b(confirmar|confirma|confirmo|confirmado|autorizo|sim)\b/.test(normalized);
   const kind: FastPathKind = negated && confirmSignal ? 'cancel'
     : confirmSignal ? 'confirm'
-    : /\b(cancelar|cancela|desistir|deixa pra la)\b/.test(normalized) ? 'cancel'
+    : /\b(cancelar|cancela|cancele|desistir|deixa pra la)\b/.test(normalized) ? 'cancel'
     : /\b(saldo|quanto tenho|quanto eu tenho)\b/.test(normalized) ? 'balance'
     : /\b(ultimos? lancamentos?|extrato recente|ultimas? transac)\b/.test(normalized) ? 'recent_transactions' : 'none';
   const apiCallBudget = kind === 'balance' ? 2 : kind === 'recent_transactions' ? 1 : kind === 'confirm' || kind === 'cancel' ? 1 : 0;
@@ -138,10 +251,16 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   // The decision surface: never attachment-derived data.
   const decision = decisionText === undefined ? normalized : typoNormalize(fold(decisionText));
   if (!normalized) return fallbackPlan();
+  if (/^cancele o rascunho\b/.test(decision) && !/^cancele o rascunho\s*[.!?]*$/.test(decision)) {
+    return ambiguousCancelDraftCompoundPlan();
+  }
   if (/\bnao\b/.test(decision) && /\b(registre|registrar|lance|lancar|crie|criar|apague|apagar|exclua|excluir|transfira|transferir)\b/.test(decision)) {
     return makePlan('cancel', 'general', [], [], ['conversation']);
   }
-  const decisionFastPath = classifyFastPath(decision);
+  // In an explicit rename/edit command, cancel-looking words in the new
+  // literal value are data, not a decision command.
+  const literalEditCommand = hasCategoryRenameSignal(decision) || hasTransactionDescriptionSignal(decision);
+  const decisionFastPath = literalEditCommand ? { kind: 'none' as const } : classifyFastPath(decision);
   // ONLY these two kinds are decision modes; `balance`/`recent_transactions`
   // are reads and stay on the full text below.
   if (decisionFastPath.kind === 'confirm') return makePlan('confirmation', 'general', [], [], ['conversation']);
@@ -159,12 +278,19 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   // "gastos"); `mes` usa alternativa fechada (`mes|meses`) para não casar o
   // filler "mesmo" ("O que é mesmo fatura?" continua conceito).
   const hasExplicitReadSignal = /\b(extrato\w*|saldo\w*|quanto\w*|gast\w*|transac\w*|lancamento\w*|fatura\w*|meses?\b|mensal\w*|periodo\w*)/.test(normalized);
-  const isPureConceptHead = /^(o\s+que\s+e|o\s+que\s+significa|como\s+funciona)/.test(normalized);
+  const isPureConceptHead = /^(o\s+que\s+e|o\s+que\s+sao|o\s+que\s+significa|como\s+funciona)/.test(normalized);
   const hasConceptBreakingSignal = /\b(extrato\w*|saldo\w*|quanto\w*|gast\w*|meses?\b|mensal\w*|periodo\w*)/.test(normalized);
-  const isConceptQuestion = /^(o\s+que\s+e|o\s+que\s+significa|como\s+funciona|me\s+expli)/.test(normalized)
+  const isConceptQuestion = /^(o\s+que\s+e|o\s+que\s+sao|o\s+que\s+significa|como\s+funciona|me\s+expli)/.test(normalized)
     && !/\b(meu|minha|meus|minhas|mim)\b/.test(normalized)
     && (isPureConceptHead ? !hasConceptBreakingSignal : !hasExplicitReadSignal);
-  if (isConceptQuestion) return makePlan('conversation', 'general', [], ['conversation']);
+  if (isConceptQuestion) {
+    if (isPureCategoryConcept(normalized, text)) return conceptCategoriesPlan();
+    // Composto conceito+leitura ("... e liste os cartões?"): clarificação
+    // determinística pedindo para separar — nunca promete composição ampla
+    // nem finge atender. Sem pedido de listagem, conversa genérica.
+    if (CATEGORY_CONCEPT_LISTING_REQUEST.test(normalized)) return ambiguousCompoundRequestPlan();
+    return makePlan('conversation', 'general', [], ['conversation']);
+  }
   // SPEC §7.6: a parseable mutation attempt carries its real missing fields
   // from the start — accountId/categoryId always pending authoritative
   // resolution (§7.2/§7.3). Never []. Amount-less or negated utterances keep
@@ -233,17 +359,94 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
     || (/\bgast/.test(normalized) && /\b(mes|mensal)\b/.test(normalized))
     || /\b(total\s+mensal|resumo\s+do\s+mes)\b/.test(normalized);
   const isExplicitListing = /\b(extrato|transac|lancamento)/.test(normalized);
+  // Resumo por categoria ("resumo do mês por categoria", "gastos por
+  // categoria"): usa o breakdown real de analytics, nunca o resumo simples.
+  // Detectado por "por categoria(s)" — "liste minhas categorias" (sem "por")
+  // continua listagem do catálogo abaixo.
+  const isBreakdown = /\bpor\s+categorias?\b/.test(normalized);
+  const isCategoryListing = /\b(categoria|categorias|subcategoria)/.test(normalized);
+  // Misto pede os dois kinds na mesma frase ("receitas e gastos ..."): sem
+  // agregação dupla — o turno só clarifica qual dos dois agregar.
+  const isMixedBreakdownKind = /\breceita/.test(normalized) && /\b(gast\w*|despesas?)\b/.test(normalized);
+  // Categoria create passa; o RENAME tem plano próprio (`categories.update`,
+  // nome-only, manual); delete (e demais edições) seguem recusa específica.
+  // O check roda antes de qualquer push de leitura — "Crie categoria ..."
+  // nunca lista nem resume, "Renomeie categoria ..." nunca vira leitura e
+  // "Exclua ..." nunca propõe.
+  if (hasCategoryCreateSignal(text)) {
+    return categoryCreatePlan();
+  }
+  if (hasCategoryRenameSignal(text)) {
+    return categoryUpdatePlan();
+  }
+  if (hasCategoryDeactivateSignal(text)) {
+    return categoryDeactivatePlan();
+  }
+  if (hasCategoryUpdateDeleteSignal(text)) {
+    return unsupportedCategoryMutationPlan();
+  }
+  // Kind misto ("receitas e gastos por categoria"): uma agregação por turno,
+  // nunca duas — clarificação determinística, sem tool e sem provider.
+  if (isBreakdown && isMixedBreakdownKind) {
+    return ambiguousBreakdownKindPlan();
+  }
+  if (isBreakdown) { domain = 'categories'; operations.push(operation('analytics_category_breakdown')); }
   // FIX3 + S8 + P1: o lookahead protege o periodo ("mes/mensal" E nomes de
   // mes — "gastei NO mes passado" e "gastei EM janeiro" sao resumo/janela,
   // nunca filtro de categoria; "gastei NO mercado" continua listagem) e o
   // marcador de moeda ("gastei EM reais EM janeiro" é total em reais, nunca
   // filtro pela "categoria" reais).
   const isCategoryQualified = /\bgast\w*\s+(de|em|com|no|na|nos|nas|do|da|dos|das)\s+(?!mes\b|mensal\b|janeiro\b|fevereiro\b|marco\b|abril\b|maio\b|junho\b|julho\b|agosto\b|setembro\b|outubro\b|novembro\b|dezembro\b|reais?\b|centavos?\b)[a-z]+\b/.test(normalized);
-  const isMonthSummary = wantsMonthTotal && !isExplicitListing && !isCategoryQualified;
+  const isMonthSummary = wantsMonthTotal && !isExplicitListing && !isCategoryQualified && !isBreakdown;
   if (isMonthSummary) { domain = 'transactions'; operations.push(operation('get_month_summary')); }
+  // Cartão imperativo ("crie cartão ...", "cadastrar cartão ...",
+  // "novo cartão ..."): criação de cartão não é suportada — nunca um
+  // read (o "vencimento" somaria `list_payables` ao `list_cards` do
+  // "cartão") e nunca promessa de cadastro. Plano sem operação; o
+  // orquestrador responde a copy honesta sem provider e sem leitura. Só
+  // vale para turnos não-mutacionais (o bloco de mutação acima já
+  // retornou), então nenhum fluxo de proposta é interceptado.
+  if (hasCardCreateSignal(text)) {
+    return unsupportedCardCreatePlan();
+  }
   if (/\b(saldo|quanto tenho|quanto eu tenho)\b/.test(normalized)) { domain = 'accounts'; operations.push(operation('get_balance')); }
-  if (/\b(conta|contas)\b/.test(normalized)) { domain = 'accounts'; operations.push(operation('list_accounts')); }
-  if (/\b(extrato|transac|lancamento|gast\w*|despesas?)/.test(normalized) && !isMonthSummary) { domain = 'transactions'; operations.push(operation('list_transactions')); }
+  // "contas vencidas"/"contas a pagar" override: o idiom payables ("a
+  // pagar", "venc*", "boleto") absorve a menção a "conta(s)" — a leitura
+  // bancária mascarava o empty do payables no gate de ausência (um `ok`
+  // de outro escopo vencia o `empty`). MED (round 3): reconhecimento por
+  // CLÁUSULAS, non-greedy — o texto é fatiado nas conjunções antes de
+  // casar, então um idiom nunca atravessa "e"/"ou"/"," para absorver uma
+  // menção de outra cláusula. Dentro da cláusula: gap de até 2 termos ou
+  // só qualificadores ("que", "já", "estão", ...); outra "conta" no gap
+  // QUEBRA a absorção (pedido explicitamente misto preserva as duas
+  // leituras).
+  const payablesOverride = /\b(venc\w*|a pagar|boleto\w*)\b/.test(normalized);
+  const CONTA_IDIOM_GAP_BLOCK = new Set(['conta', 'contas']);
+  const CONTA_IDIOM_QUALIFIERS: ReadonlySet<string> = new Set([
+    'que', 'ja', 'estao', 'esta', 'eram', 'foram', 'sejam', 'sao',
+    'minha', 'minhas', 'meu', 'meus', 'sua', 'suas', 'seu', 'seus',
+    'toda', 'todas', 'todo', 'todos', 'as', 'os', 'a', 'o',
+    'da', 'do', 'das', 'dos', 'de', 'em', 'no', 'na', 'nos', 'nas',
+  ]);
+  const contaGapAbsorbed = (gap: string): boolean => {
+    const words = gap.trim().split(/\s+/).filter((word) => word.length > 0);
+    if (words.some((word) => CONTA_IDIOM_GAP_BLOCK.has(word))) return false;
+    return words.length <= 2 || words.every((word) => CONTA_IDIOM_QUALIFIERS.has(word));
+  };
+  const stripClauseIdiom = (clause: string): string =>
+    clause
+      .replace(/\bcontas?\b((?:\s+\w+)*?)\s+(a\s+pagar|venc\w*|boleto\w*)\b/g, (match, gap: string) =>
+        contaGapAbsorbed(gap ?? '') ? ' ' : match,
+      )
+      .replace(/(a\s+pagar|venc\w*|boleto\w*)((?:\s+\w+)*?)\s+contas?\b/g, (match, head: string, gap: string) =>
+        contaGapAbsorbed(gap ?? '') ? `${head} ` : match,
+      );
+  const withoutPayablesIdiom = normalized
+    .split(/\s+e\s+|\s+mas\s+|\s+ou\s+|\s+nem\s+|[,;]/)
+    .map(stripClauseIdiom)
+    .join(' ');
+  if (/\b(conta|contas)\b/.test(payablesOverride ? withoutPayablesIdiom : normalized)) { domain = 'accounts'; operations.push(operation('list_accounts')); }
+  if (/\b(extrato|transac|lancamento|gast\w*|despesas?)/.test(normalized) && !isMonthSummary && !isBreakdown) { domain = 'transactions'; operations.push(operation('list_transactions')); }
   // S3 (#257/POC Fase 2): "fatura" nua e fatura de CARTAO (`list_statements`,
   // contrato da tool gerada + skill `contas-cartoes`) — nunca o pool de
   // cartoes (`list_cards`). O dominio segue `payables` (nao ha dominio
@@ -259,6 +462,9 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   // as formas conjugadas ("vence", "vencimento") — "quando vence minha
   // fatura?" soma payables ao statements da fatura nua.
   if (/\b(venc\w*|a pagar|boleto\w*)\b/.test(normalized)) { domain = 'payables'; operations.push(operation('list_payables')); }
+  // Categorias: listagem do catálogo real. O breakdown ("por categoria")
+  // já planejou acima e nunca soma a listagem — uma leitura por turno.
+  if (!isBreakdown && isCategoryListing) { domain = 'categories'; operations.push(operation('list_categories')); }
   if (!operations.length) return fallbackPlan();
   const skills = [...skillsForDomain(domain)].slice(0, 2);
   return makePlan('read', domain, operations.slice(0, 4), skills);
@@ -301,6 +507,124 @@ const makePlan = (mode: TurnPlanV2['mode'], domain: TurnPlanV2['domain'], reques
 const fallbackPlan = (): TurnPlanV2 => ({ version: '2', mode: 'unsupported', domain: 'general', skillNames: ['conversation'], requestedOperations: [], requestedTools: [], missingFields: ['intent'], ambiguity: 'unsupported', confidence: 0, correctionCount: 0 });
 
 /**
+ * Cartão imperativo: plano sem operação, sem tool, `missingFields`
+ * `['capability']` e `ambiguity` `unsupported_card_create`. O orquestrador
+ * responde a copy honesta sem provider e sem evidência (espelho do plano
+ * do ano isolado acima).
+ */
+const unsupportedCardCreatePlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'cards',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: ['capability'],
+    ambiguity: 'unsupported_card_create',
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * Categoria CUD: plano sem operação, sem tool, `missingFields`
+ * `['capability']` e `ambiguity` `unsupported_category_mutation`. O
+ * orquestrador responde a copy honesta sem provider e sem evidência
+ * (espelho do plano do imperativo de cartão acima).
+ */
+const unsupportedCategoryMutationPlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'categories',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: ['capability'],
+    ambiguity: 'unsupported_category_mutation',
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * Categoria create (`categories.create`, manual-only): plano `mutation-proposal`
+ * com a operação `categories.create` — o orquestrador resolve nome/kind/pai
+ * contra o catálogo completo e propõe via Pending V2 (nunca autoexecuta).
+ * Update/delete continuam na recusa acima.
+ */
+const categoryCreatePlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'mutation-proposal',
+    domain: 'categories',
+    skillNames: ['conversation'],
+    requestedOperations: [{ name: 'categories.create', kind: 'mutation' }],
+    requestedTools: [],
+    missingFields: [],
+    ambiguity: null,
+    confidence: 1,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * Categoria update (`categories.update`, nome-only, manual-only): plano
+ * `mutation-proposal` com a operação `categories.update` — o orquestrador
+ * resolve o alvo contra o catálogo autoritativo e propõe via Pending V2
+ * (nunca autoexecuta). Delete (e demais edições) continuam na recusa acima.
+ */
+const categoryUpdatePlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'mutation-proposal',
+    domain: 'categories',
+    skillNames: ['conversation'],
+    requestedOperations: [{ name: 'categories.update', kind: 'mutation' }],
+    requestedTools: [],
+    missingFields: [],
+    ambiguity: null,
+    confidence: 1,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+const categoryDeactivatePlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2', mode: 'mutation-proposal', domain: 'categories', skillNames: ['conversation'],
+    requestedOperations: [{ name: 'categories.deactivate', kind: 'mutation' }],
+    requestedTools: [], missingFields: [], ambiguity: null, confidence: 1, correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * Kind misto do breakdown: plano sem operação, sem tool, `missingFields`
+ * `['kind']` e `ambiguity` `ambiguous_breakdown_kind`. O orquestrador
+ * responde a escolha determinística sem provider e sem evidência.
+ */
+const ambiguousBreakdownKindPlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'categories',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: ['kind'],
+    ambiguity: 'ambiguous_breakdown_kind',
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
  * P2c — plano do ano isolado: sem operação, sem tool, `missingFields`
  * `['period']` e `ambiguity` `unsupported_year`. Domínio `general` (fallback
  * de evidência nulo: nenhuma leitura espúria) — o orquestrador responde a
@@ -316,6 +640,57 @@ const unsupportedYearPlan = (): TurnPlanV2 => {
     requestedTools: [],
     missingFields: ['period'],
     ambiguity: 'unsupported_year',
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+const ambiguousCancelDraftCompoundPlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2', mode: 'unsupported', domain: 'general', skillNames: ['conversation'],
+    requestedOperations: [], requestedTools: [], missingFields: ['intent'],
+    ambiguity: 'ambiguous_cancel_draft_compound', confidence: 0, correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * Conceito puro de categorias: plano `conversation` sem operação, sem tool,
+ * `ambiguity` `concept_categories`. O orquestrador responde o texto
+ * determinístico sem provider e sem leitura.
+ */
+const conceptCategoriesPlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'conversation',
+    domain: 'general',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: [],
+    ambiguity: 'concept_categories',
+    confidence: 1,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * Composto conceito+leitura: plano sem operação, sem tool, `missingFields`
+ * `['intent']` e `ambiguity` `ambiguous_compound_request`. O orquestrador
+ * responde a escolha determinística sem provider e sem evidência.
+ */
+const ambiguousCompoundRequestPlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'general',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: ['intent'],
+    ambiguity: 'ambiguous_compound_request',
     confidence: 0,
     correctionCount: 0,
   } satisfies TurnPlanV2);

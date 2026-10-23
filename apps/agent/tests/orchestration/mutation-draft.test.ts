@@ -20,6 +20,7 @@ import {
   appendDraftRelation,
   appendOriginMessage,
   buildDraftRecord,
+  isCancelText,
   type MutationDraftRecord,
   type MutationDraftStore,
 } from '../../src/mutations/mutation-draft.js';
@@ -162,6 +163,42 @@ const turn = (orchestrator: ConversationOrchestrator, text: string, intentionId:
   orchestrator.runTurn(normalizeRestTurn({ text, intentionId }, identity));
 
 describe('SPEC §25.3.1 — MutationDraft multi-turno', () => {
+  it('recognizes "cancele" and cancels only the local draft', async () => {
+    expect(isCancelText('cancele o rascunho')).toBe(true);
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const orchestrator = setup(fake, store);
+    await turn(orchestrator, 'Gastei R$ 85 no mercado', 'msg-cancele-1');
+    const cancelled = await turn(orchestrator, 'cancele o rascunho', 'msg-cancele-2');
+    expect(cancelled.response?.text).toBe(DRAFTS_DISCARDED_NO_OP_TEXT);
+    expect(store.listActive(ctxOf(), Date.now())).toHaveLength(0);
+    expect(fake.request.mock.calls.filter((call) => call[0] === 'GET' && call[1] === '/pending-operations/v2/active')).toHaveLength(0);
+    expect(fake.proposePosts()).toBe(0);
+  });
+
+  it('cancelling an absent draft gives no-op without an API call', async () => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const orchestrator = setup(fake, store, { now: () => 1_700_000_000_000 });
+    const result = await turn(orchestrator, 'cancele o rascunho', 'msg-cancele-empty');
+    expect(result.response?.text).toMatch(/nenhuma|não há|nao ha/i);
+    expect(fake.request).not.toHaveBeenCalled();
+    expect(fake.proposePosts()).toBe(0);
+  });
+
+  it('cancelling an expired draft is a no-op without consulting the API', async () => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    let now = 1_700_000_000_000;
+    const orchestrator = setup(fake, store, { now: () => now });
+    await turn(orchestrator, 'Gastei R$ 85 no mercado', 'msg-cancele-expired-seed');
+    now += 16 * 60_000;
+    const result = await turn(orchestrator, 'cancele o rascunho', 'msg-cancele-expired');
+    expect(result.response?.text).toBeTruthy();
+    expect(result.response?.text).not.toMatch(/cancelad[ao]|registrad[ao]/i);
+    expect(fake.request.mock.calls.filter((call) => call[0] === 'GET' && call[1] === '/pending-operations/v2/active')).toHaveLength(0);
+    expect(fake.proposePosts()).toBe(0);
+  });
   it('happy flow: incomplete → draft → continuation completes with correct args', async () => {
     const fake = makeFakeApi();
     const store = new InMemoryMutationDraftStore();
@@ -1456,5 +1493,29 @@ describe('A07/RR — interleaving, correção inequívoca e fragmentos', () => {
       accountId: NUBANK.id,
       categoryId: CARNE_CATEGORIA.id,
     });
+  });
+
+  it('category-slot answer is not appended to the account-resolution query', async () => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const ALIMENTACAO_CONTA = { id: '00000000-0000-4000-8000-000000000041', name: 'Alimentação' };
+    const ALIMENTACAO_CATEGORIA = { id: '00000000-0000-4000-8000-000000000042', name: 'Alimentação' };
+    let categoriesAvailable = false;
+    const orchestrator = await openDraft(fake, store, {
+      entityReader: {
+        listAccounts: async () => [ALIMENTACAO_CONTA, NUBANK],
+        listCategories: async () => categoriesAvailable ? [ALIMENTACAO_CATEGORIA] : [],
+      },
+    });
+    const draftId = store.listActive(ctxOf(), NOW_MS)[0]!.draftId;
+    expect(draftOf(store, draftId).missingFields).toEqual(['accountId', 'categoryId']);
+
+    categoriesAvailable = true;
+    const answer = await turn(orchestrator, 'categoria Alimentação', 'rr-category-slot-1');
+    expect(answer.mutation).toBeUndefined();
+    expect(fake.proposePosts()).toBe(0);
+    expect(answer.clarification?.missingFields).toContain('accountId');
+    expect(draftOf(store, draftId).resolvedArgs.accountId).toBeUndefined();
+    expect(draftOf(store, draftId).resolvedArgs.categoryQuery).toBe('Alimentação');
   });
 });

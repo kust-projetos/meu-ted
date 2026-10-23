@@ -11,9 +11,9 @@
  * - Propose-route validation wiring is out of scope here (T1.4); this module
  *   exposes only the registry plus lookup/validation helpers.
  */
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { MutationReceipt } from '@pi-finance/llm-contracts';
-import { createExpenseInputSchema, createIncomeInputSchema } from '../writes/types.js';
+import { createAccountInputSchema, createExpenseInputSchema, createIncomeInputSchema } from '../writes/types.js';
 import { DomainError } from '../writes/errors.js';
 import type { WriteStore } from '../writes/store.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
@@ -22,6 +22,13 @@ import { AUTOEXECUTION_ELIGIBLE_TOOLS } from './policy.js';
 export const APPROVAL_TOOL_IDS = [
   'transactions.expense.create',
   'transactions.income.create',
+  'transactions.update',
+  'accounts.create',
+  'accounts.deactivate',
+  'accounts.update',
+  'categories.create',
+  'categories.update',
+  'categories.deactivate',
 ] as const;
 
 export type ApprovalToolId = (typeof APPROVAL_TOOL_IDS)[number];
@@ -187,6 +194,345 @@ const executeIncomeCreate: ApprovalToolExecutor = async ({
   };
 };
 
+const executeAccountCreate: ApprovalToolExecutor = async ({
+  writes,
+  workspaceId,
+  args,
+  idempotencyKey,
+  actorId,
+}) => {
+  const parsed = createAccountInputSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_account_arguments');
+  // Fail-closed actor binding (same contract as the transaction paths).
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  // ADR-018 and workspace scoping ride on the existing write path
+  // (createAccountInputSchema + WriteStore.createAccount) — never reinvented
+  // here. T12c carve-out mirrors the transaction paths: DomainError is
+  // pre-commit validation (duplicate name, credit_card negative) and
+  // rethrows deterministic; anything else stays uncertain. ted-local.
+  // account-idempotency: the write runs keyed on the pending operation's
+  // persisted idempotencyKey (WriteStore dedup, same pending-v2 namespace
+  // as transactions, no audit leg), so a reconcile re-run after an
+  // uncertain outcome replays the original account instead of failing
+  // closed on the duplicate-name guard.
+  let account: { id: string };
+  try {
+    account = await writes.createAccount(workspaceId, parsed.data, { idempotencyKey });
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  const operationId = account.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('accounts.create', operationId, { type: 'account', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId,
+    receipt,
+  };
+};
+
+/**
+ * V2-protocol envelope for `accounts.deactivate` (SPEC §7.5). Protocol-level,
+ * NOT a WriteStore input shape (the writer takes only `(householdId, id)`),
+ * so it lives here rather than in writes/types.ts:
+ * - `accountId` is the ONLY execution key (UUID);
+ * - `accountName`/`accountKind`/`balanceCents` are display-only snapshots
+ *   for the approval card (hash-bound at propose, never read by the
+ *   executor — a divergent name never redirects the mutation).
+ * Strict: unknown fields fail closed at propose (422 approval.invalid_args).
+ */
+export const deactivateAccountArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    accountName: z.string().trim().min(1).max(120).optional(),
+    accountKind: z.string().trim().min(1).max(32).optional(),
+    balanceCents: z.number().int().optional(),
+  })
+  .strict();
+
+export type DeactivateAccountArgs = z.infer<typeof deactivateAccountArgsSchema>;
+
+const executeAccountDeactivate: ApprovalToolExecutor = async ({
+  writes,
+  workspaceId,
+  args,
+  actorId,
+}) => {
+  const parsed = deactivateAccountArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_deactivate_arguments');
+  // Fail-closed actor binding (same contract as the transaction paths).
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  // The ONLY execution key is the canonical accountId — display-only extras
+  // (accountName/accountKind/balanceCents) are never consulted below.
+  const accountId = parsed.data.accountId;
+  // Deactivate converges (no duplicate-row class: the end state is one
+  // inactive account), so no keyed-write machinery is needed — unlike
+  // accounts.create, a reconcile re-run after an uncertain outcome must NOT
+  // copy the create limitation (duplicate-name guard instead of dedup).
+  // `not_found` after the attempt means the account is already inactive —
+  // either by our own pre-TX2 write (crash window) or by a concurrent
+  // same-effect path — so the intent is satisfied and the executor returns
+  // success with the key id. Reachability bound: execute is gated by the
+  // confirm presentation check (server-resolved account label, 409 when the
+  // account is unknown) and the authorize route policy-blocks this
+  // manual-only tool, so a never-existing id cannot arrive here through the
+  // API. Any other DomainError (in_use, workspace lifecycle) rethrows
+  // deterministic; non-domain throws stay uncertain for lease recovery.
+  let deactivated: { id: string };
+  try {
+    deactivated = await writes.deactivateAccount(workspaceId, accountId);
+  } catch (err) {
+    if (err instanceof DomainError) {
+      if (err.code === 'not_found') {
+        deactivated = { id: accountId };
+      } else {
+        throw err;
+      }
+    } else {
+      throw createApprovalExecutionUncertainError();
+    }
+  }
+  const operationId = deactivated.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('accounts.deactivate', operationId, { type: 'account', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId,
+    receipt,
+  };
+};
+
+/**
+ * V2-protocol envelope for `accounts.update` (rename-only, ADR-029).
+ * Nome-only: alvo UUID autoritativo + novo nome (trim 1..120) + nome
+ * canônico anterior como precondição exata. Strict: unknown fields fail
+ * closed at propose (approval.invalid_args).
+ */
+export const renameAccountArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    name: z.string().trim().min(1).max(120),
+    expectedName: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+export type RenameAccountArgs = z.infer<typeof renameAccountArgsSchema>;
+
+/**
+ * V2-protocol envelope for `categories.create` (manual-only).
+ * Strict subset of the writer shape (writes/types.ts): only `name`,
+ * `kind` (`expense`|`income`) and optional `parentId`. Display-only
+ * extras (icon/color/sortOrder/isDefault) are rejected at propose
+ * (approval.invalid_args) — never invented, never defaulted.
+ */
+export const createCategoryArgsSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    kind: z.enum(['expense', 'income']),
+    parentId: z.string().uuid().optional(),
+  })
+  .strict();
+
+export type CreateCategoryArgs = z.infer<typeof createCategoryArgsSchema>;
+
+/**
+ * V2-protocol envelope for `categories.update` (rename-only, name-only).
+ * Strict: categoryId (UUID) + new name + expectedName precondition.
+ */
+export const renameCategoryArgsSchema = z
+  .object({
+    categoryId: z.string().uuid(),
+    name: z.string().trim().min(1).max(120),
+    expectedName: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+export type RenameCategoryArgs = z.infer<typeof renameCategoryArgsSchema>;
+
+/** Manual-only deactivation, bound to the canonical category name at propose time. */
+export const deactivateCategoryArgsSchema = z.object({
+  categoryId: z.string().uuid(),
+  expectedName: z.string().trim().min(1).max(120),
+}).strict();
+
+export type DeactivateCategoryArgs = z.infer<typeof deactivateCategoryArgsSchema>;
+
+/** Manual-only, description-only transaction edit with an exact CAS value. */
+export const editTransactionDescriptionArgsSchema = z.object({
+  transactionId: z.string().uuid(),
+  description: z.string().trim().min(1).max(240),
+  expectedDescription: z.string().min(1).max(240).refine((value) => value.trim().length > 0),
+}).strict();
+
+const executeTransactionDescriptionUpdate: ApprovalToolExecutor = async ({ writes, workspaceId, args, idempotencyKey, actorId }) => {
+  const parsed = editTransactionDescriptionArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_transaction_description_arguments');
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  let transaction: { id: string };
+  try {
+    transaction = await writes.editTransactionDescription(workspaceId, parsed.data, { idempotencyKey, actorId });
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('transactions.update', transaction.id, { type: 'transaction', id: transaction.id });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return { status: 'succeeded', operationId: transaction.id, receipt };
+};
+
+const executeCategoryCreate: ApprovalToolExecutor = async ({
+  writes,
+  workspaceId,
+  args,
+  idempotencyKey,
+  actorId,
+}) => {
+  const parsed = createCategoryArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_category_arguments');
+  // Fail-closed actor binding (same contract as the sibling V2 paths).
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  // The write runs keyed on the pending operation's persisted idempotencyKey
+  // (WriteStore dedup, same pending-v2 namespace as accounts.create — no
+  // audit leg). A reconcile re-run after an uncertain outcome replays the
+  // original category instead of failing closed on the duplicate-name guard.
+  // T12c carve-out mirrors the sibling paths: DomainError is pre-commit
+  // validation (duplicate name, foreign parent, kind mismatch) and rethrows
+  // deterministic; anything else stays uncertain.
+  let category: { id: string };
+  try {
+    category = await writes.createCategory(workspaceId, parsed.data, { idempotencyKey });
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  const operationId = category.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('categories.create', operationId, { type: 'category', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId,
+    receipt,
+  };
+};
+
+const executeCategoryUpdate: ApprovalToolExecutor = async ({
+  writes,
+  workspaceId,
+  args,
+  idempotencyKey,
+}) => {
+  const parsed = renameCategoryArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_rename_arguments');
+  let category: { id: string };
+  try {
+    category = await writes.updateCategory(
+      workspaceId,
+      parsed.data.categoryId,
+      { name: parsed.data.name },
+      { idempotencyKey, expectedName: parsed.data.expectedName },
+    );
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  const operationId = category.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('categories.update', operationId, { type: 'category', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId,
+    receipt,
+  };
+};
+
+const executeCategoryDeactivate: ApprovalToolExecutor = async ({ writes, workspaceId, args, idempotencyKey }) => {
+  const parsed = deactivateCategoryArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_deactivate_arguments');
+  let category: { id: string };
+  try {
+    category = await writes.deactivateCategory(workspaceId, parsed.data.categoryId, {
+      idempotencyKey,
+      expectedName: parsed.data.expectedName,
+    });
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('categories.deactivate', category.id, { type: 'category', id: category.id });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return { status: 'succeeded', operationId: category.id, receipt };
+};
+
+const executeAccountUpdate: ApprovalToolExecutor = async ({
+  writes,
+  workspaceId,
+  args,
+  idempotencyKey,
+  actorId,
+}) => {
+  const parsed = renameAccountArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_rename_arguments');
+  // Fail-closed actor binding (same contract as the other V2 paths).
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  // The write runs keyed on the pending operation's persisted idempotencyKey
+  // with the atomic expectedName before-condition; a reconcile re-run after
+  // an uncertain outcome replays the recorded rename instead of re-applying
+  // it. T12c carve-out mirrors the sibling paths: DomainError is pre-commit
+  // validation (not_found/invalid/name_conflict) and rethrows deterministic;
+  // anything else stays uncertain. No audit leg (account tools never audit).
+  let account: { id: string };
+  try {
+    // ADR-029: keyed payload carries tool+args so an update record can never
+    // collide with a create record under the same pending-v2 namespace.
+    account = await writes.updateAccount(
+      workspaceId,
+      parsed.data.accountId,
+      { name: parsed.data.name },
+      { idempotencyKey, expectedName: parsed.data.expectedName },
+    );
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  const operationId = account.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('accounts.update', operationId, { type: 'account', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId,
+    receipt,
+  };
+};
+
 const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
   'transactions.expense.create': {
     tool: 'transactions.expense.create',
@@ -203,6 +549,62 @@ const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
     authorizationPolicy: 'risk_based',
     autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('transactions.income.create'),
     executor: executeIncomeCreate,
+  },
+  'transactions.update': {
+    tool: 'transactions.update',
+    inputSchema: editTransactionDescriptionArgsSchema,
+    approvalRequired: true,
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: false,
+    executor: executeTransactionDescriptionUpdate,
+  },
+  'accounts.create': {
+    tool: 'accounts.create',
+    inputSchema: createAccountInputSchema,
+    approvalRequired: true, // Manual-only: never auto-executed (not in AUTOEXECUTION_ELIGIBLE_TOOLS).
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('accounts.create'),
+    executor: executeAccountCreate,
+  },
+  'accounts.deactivate': {
+    tool: 'accounts.deactivate',
+    inputSchema: deactivateAccountArgsSchema,
+    approvalRequired: true, // Manual-only: never auto-executed (not in AUTOEXECUTION_ELIGIBLE_TOOLS).
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('accounts.deactivate'),
+    executor: executeAccountDeactivate,
+  },
+  'accounts.update': {
+    tool: 'accounts.update',
+    inputSchema: renameAccountArgsSchema,
+    approvalRequired: true, // Manual-only: never auto-executed (not in AUTOEXECUTION_ELIGIBLE_TOOLS).
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('accounts.update'),
+    executor: executeAccountUpdate,
+  },
+  'categories.create': {
+    tool: 'categories.create',
+    inputSchema: createCategoryArgsSchema,
+    approvalRequired: true, // Manual-only: never auto-executed (not in AUTOEXECUTION_ELIGIBLE_TOOLS).
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('categories.create'),
+    executor: executeCategoryCreate,
+  },
+  'categories.update': {
+    tool: 'categories.update',
+    inputSchema: renameCategoryArgsSchema,
+    approvalRequired: true, // Manual-only: never auto-executed (not in AUTOEXECUTION_ELIGIBLE_TOOLS).
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('categories.update'),
+    executor: executeCategoryUpdate,
+  },
+  'categories.deactivate': {
+    tool: 'categories.deactivate',
+    inputSchema: deactivateCategoryArgsSchema,
+    approvalRequired: true,
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('categories.deactivate'),
+    executor: executeCategoryDeactivate,
   },
 };
 

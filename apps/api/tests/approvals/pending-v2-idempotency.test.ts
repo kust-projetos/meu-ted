@@ -20,6 +20,8 @@ import { createPendingOperationV2Executor } from '../../src/routes/index.js';
 import { createInMemoryPendingOperationV2Store } from '../../src/approvals/pending-v2.js';
 
 const H = 'workspace-1';
+const ACCOUNT_ID = '00000000-0000-4000-8000-000000000001';
+const CATEGORY_ID = '00000000-0000-4000-8000-000000000002';
 const IDENTITY = { workspaceId: H, actorId: 'actor-1', deviceId: 'device-1' };
 
 const seedWrites = async () => {
@@ -131,8 +133,10 @@ const txRow = (id: string) => ({
   description: 'Lunch',
   amount_cents: 1000,
   date: new Date('2026-06-10T00:00:00.000Z'),
-  account_id: 'acc-1',
-  category_id: 'cat-1',
+  account_id: ACCOUNT_ID,
+  from_account_id: ACCOUNT_ID,
+  to_account_id: null,
+  category_id: CATEGORY_ID,
   subcategory_id: null,
   transfer_to_account_id: null,
   notes: null,
@@ -150,23 +154,27 @@ const makeKeyedFakePool = () => {
       if (text.includes('FROM households')) {
         return { rows: [{ status: 'active' }], rowCount: 1 };
       }
+      if (text === 'SELECT pg_advisory_xact_lock_shared(hashtext($1))') {
+        expect(values).toEqual([`category.lifecycle:${H}`]);
+        return { rows: [], rowCount: 1 };
+      }
       if (text.includes('FROM idempotency_keys')) {
         const hit = keys.get(`${String(values[0])}::${String(values[1])}`);
         return hit ? { rows: [hit], rowCount: 1 } : { rows: [], rowCount: 0 };
       }
       if (text.includes('FROM accounts')) {
         return {
-          rows: [{ id: 'acc-1', household_id: H, name: 'A', kind: 'bank', balance_cents: 10_000, status: 'active', is_credit_card: false }],
+          rows: [{ id: ACCOUNT_ID, household_id: H, name: 'A', kind: 'bank', balance_cents: 10_000, status: 'active', is_credit_card: false }],
           rowCount: 1,
         };
       }
       if (text.includes('FROM categories')) {
         return {
-          rows: [{ id: 'cat-1', household_id: H, name: 'Food', kind: 'expense', status: 'active', active: true }],
+          rows: [{ id: CATEGORY_ID, household_id: H, name: 'Food', kind: 'expense', status: 'active', active: true }],
           rowCount: 1,
         };
       }
-      if (text.startsWith('INSERT INTO transactions')) return { rows: [txRow('tx-1')], rowCount: 1 };
+      if (text.startsWith('INSERT INTO transactions')) return { rows: [txRow('00000000-0000-4000-8000-000000000003')], rowCount: 1 };
       if (text.startsWith('UPDATE accounts')) return { rows: [], rowCount: 1 };
       if (text.startsWith('INSERT INTO idempotency_keys')) {
         const composite = `${String(values[0])}::${String(values[1])}`;
@@ -186,30 +194,35 @@ describe('P1: postgres write stores replay the recorded result (fake pool)', () 
   it('canonical store replays without a second transaction INSERT', async () => {
     const { pool, recorded } = makeKeyedFakePool();
     const writes = createPostgresWriteStore({ pool });
-    const input = { description: 'Lunch', amountCents: 1000, date: '2026-06-10', accountId: 'acc-1', categoryId: 'cat-1' };
+    const input = { description: 'Lunch', amountCents: 1000, date: '2026-06-10', accountId: ACCOUNT_ID, categoryId: CATEGORY_ID };
     const first = await writes.createExpense(H, input, { idempotencyKey: 'op-key-pg' });
     const second = await writes.createExpense(H, input, { idempotencyKey: 'op-key-pg' });
     expect(second.id).toBe(first.id);
     expect(recorded.filter((q) => q.text.startsWith('INSERT INTO transactions'))).toHaveLength(1);
+    expect(recorded.findIndex((q) => q.text === 'SELECT pg_advisory_xact_lock_shared(hashtext($1))'))
+      .toBeLessThan(recorded.findIndex((q) => q.text.startsWith('INSERT INTO transactions')));
   });
 
   it('canonical store conflicts on same key with different payload', async () => {
-    const { pool } = makeKeyedFakePool();
+    const { pool, recorded } = makeKeyedFakePool();
     const writes = createPostgresWriteStore({ pool });
-    const input = { description: 'Lunch', amountCents: 1000, date: '2026-06-10', accountId: 'acc-1', categoryId: 'cat-1' };
+    const input = { description: 'Lunch', amountCents: 1000, date: '2026-06-10', accountId: ACCOUNT_ID, categoryId: CATEGORY_ID };
     await writes.createExpense(H, input, { idempotencyKey: 'op-key-pg-conflict' });
     await expect(
       writes.createExpense(H, { ...input, amountCents: 9999 }, { idempotencyKey: 'op-key-pg-conflict' }),
     ).rejects.toMatchObject({ code: 'idempotency.conflict' });
+    expect(recorded.filter((q) => q.text.startsWith('INSERT INTO transactions'))).toHaveLength(1);
   });
 
   it('legacy store (production VPS path) replays without a second transaction INSERT', async () => {
     const { pool, recorded } = makeKeyedFakePool();
     const writes = createLegacyPostgresWriteStore({ pool });
-    const input = { description: 'Lunch', amountCents: 1000, date: '2026-06-10', accountId: 'acc-1', categoryId: 'cat-1' };
+    const input = { description: 'Lunch', amountCents: 1000, date: '2026-06-10', accountId: ACCOUNT_ID, categoryId: CATEGORY_ID };
     const first = await writes.createExpense(H, input, { idempotencyKey: 'op-key-legacy' });
     const second = await writes.createExpense(H, input, { idempotencyKey: 'op-key-legacy' });
     expect(second.id).toBe(first.id);
     expect(recorded.filter((q) => q.text.startsWith('INSERT INTO transactions'))).toHaveLength(1);
+    expect(recorded.findIndex((q) => q.text === 'SELECT pg_advisory_xact_lock_shared(hashtext($1))'))
+      .toBeLessThan(recorded.findIndex((q) => q.text.startsWith('INSERT INTO transactions')));
   });
 });

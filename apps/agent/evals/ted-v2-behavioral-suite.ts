@@ -734,12 +734,16 @@ const runExecutorSeeded = async (scenario: BehavioralScenario): Promise<string> 
   const apiMode = String(exec.apiMode ?? 'ok') as FakeApiOptions['mode'];
   const api = createFakePendingApi({ seed: [seed], mode: apiMode });
   const executor = new MutationExecutor({ request: api.request as never, events: silent });
+  // HIGH3 (round 3): the harness resolves the authorized tool from the
+  // seeded operation (the authoritative fixture side) — the receipt binds
+  // against it, never against the response.
+  const expected = { tool: 'transactions.income.create' };
   if (String(exec.case ?? '') === 'replay') {
     const confirmation = await executor.confirm(seed.id, { ...identity });
-    const first = await executor.execute({ operationId: confirmation.operationId, attestation: confirmation.attestation, identity: { ...identity } });
+    const first = await executor.execute({ operationId: confirmation.operationId, attestation: confirmation.attestation, identity: { ...identity }, expected });
     eq(first.status, 'succeeded', 'first execution', id);
     try {
-      await executor.execute({ operationId: confirmation.operationId, attestation: confirmation.attestation, identity: { ...identity } });
+      await executor.execute({ operationId: confirmation.operationId, attestation: confirmation.attestation, identity: { ...identity }, expected });
     } catch (error) {
       expectCode(error, 'approval.attestation_replayed', id);
       if (expect.executeCalls !== undefined) eq(api.calls.execute, expect.executeCalls, 'single transport execution', id);
@@ -750,7 +754,7 @@ const runExecutorSeeded = async (scenario: BehavioralScenario): Promise<string> 
   if (String(exec.case ?? '') === 'incomplete') {
     const confirmation = await executor.confirm(seed.id, { ...identity });
     try {
-      await executor.execute({ operationId: confirmation.operationId, attestation: confirmation.attestation, identity: { ...identity } });
+      await executor.execute({ operationId: confirmation.operationId, attestation: confirmation.attestation, identity: { ...identity }, expected });
     } catch (error) {
       expectCode(error, String(expect.errorCode ?? 'approval.incomplete_result'), id);
       return `incomplete blocked (${(error as Error).message})`;

@@ -230,6 +230,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
         operationId: 'op-1',
         entity: { type: 'transaction', id: 'mut-op-1' },
       },
+      expected: { tool: 'transactions.expense.create' },
     });
     expect(result.response?.text).toBe('Lançamento registrado com sucesso.');
     expect(fake.events).toEqual(['listActive', 'confirm:op-1', 'execute:op-1']);
@@ -259,6 +260,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
         operationId: 'op-1',
         entity: { type: 'transaction', id: 'mut-op-1' },
       },
+      expected: { tool: 'transactions.expense.create' },
     });
     expect(JSON.stringify(result.mutation)).not.toContain('attestation');
   });
@@ -272,7 +274,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
       },
     });
     const coordinator = new PendingOperationCoordinator({ client: fake.api });
-    const decision = await coordinator.confirm('op-1', { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! });
+    const decision = await coordinator.confirm('op-1', { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! }, undefined, { tool: 'transactions.expense.create' });
 
     expect(decision).toEqual({
       operationId: 'op-1',
@@ -291,7 +293,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
   it('auto-authorize executes through the coordinator and returns the validated receipt once', async () => {
     const fake = makeFakeApprovalApi([expenseOp('op-auto')]);
     const coordinator = new PendingOperationCoordinator({ client: fake.api });
-    const result = await coordinator.authorizeAndExecute('op-auto', { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! });
+    const result = await coordinator.authorizeAndExecute('op-auto', { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! }, { tool: 'transactions.expense.create' });
     expect(result.status).toBe('succeeded');
     expect(result.receipt?.operationId).toBe('op-auto');
     expect(fake.events).toEqual(['authorize:op-auto', 'execute:op-auto']);
@@ -314,6 +316,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
         operationId: 'op-real',
         entity: { type: 'transaction', id: 'mut-op-real' },
       },
+      expected: { tool: 'transactions.expense.create' },
     });
     expect(fake.events).not.toContain('confirm:op-forged');
     expect(fake.events).toEqual(['listActive', 'confirm:op-real', 'execute:op-real']);
@@ -384,6 +387,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
         operationId: 'op-failed',
         entity: { type: 'transaction', id: 'mut-op-failed' },
       },
+      expected: { tool: 'transactions.expense.create' },
     });
     expect(result.response?.text).toBe('Lançamento registrado com sucesso.');
     expect(fake.events).toEqual(['listActive', 'retry:op-failed', 'execute:op-failed']);
@@ -504,6 +508,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
       decision: 'confirm',
       identity: { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! },
       intentionId: 'intent-button-parity-1',
+      expected: { tool: 'transactions.expense.create' },
     });
 
     expect(nl.mutation).toEqual({
@@ -517,6 +522,7 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
         operationId: 'op-1',
         entity: { type: 'transaction', id: 'mut-op-1' },
       },
+      expected: { tool: 'transactions.expense.create' },
     });
     expect(button).toEqual({
       operationId: 'op-1',
@@ -581,6 +587,74 @@ describe('T1.5 PendingOperationCoordinator — unified decision machine (§8, §
     ).rejects.toThrow('approval.cancel_not_confirmed');
     expect(fake.request).toHaveBeenCalledTimes(1);
     expect(fake.events).not.toContain('cancel:op-1');
+  });
+
+  it('HIGH3 (round 3): decide sem expected falha fechado em recibo de outra conta (mesmo pendingId, self-consistente)', async () => {
+    const otherAccount = '33333333-3333-4333-8333-333333333333';
+    const request = vi.fn()
+      .mockResolvedValueOnce({ id: 'op-9', attestation: 'a'.repeat(40) })
+      .mockResolvedValueOnce({
+        id: 'op-9',
+        status: 'succeeded',
+        execution: {
+          status: 'succeeded',
+          operationId: otherAccount,
+          receipt: {
+            mutationId: 'mut-op-9',
+            mutationKind: 'accounts.update',
+            status: 'succeeded',
+            affectedTargets: ['accounts', 'dashboard-summary'],
+            operationId: 'op-9',
+            entity: { type: 'account', id: otherAccount },
+          },
+        },
+      });
+    const coordinator = new PendingOperationCoordinator({
+      client: new MutationApiClient({ request: request as never }),
+    });
+
+    await expect(
+      coordinator.decide({
+        operationId: 'op-9',
+        decision: 'confirm',
+        identity: { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! },
+        intentionId: 'intent-rpc-no-context-1',
+      }),
+    ).rejects.toThrow('approval.incomplete_result');
+  });
+
+  it('HIGH3 (round 3): decide sem expected falha fechado em receipt expense válido (sem contexto não há vínculo)', async () => {
+    const txId = '44444444-4444-4444-8444-444444444444';
+    const request = vi.fn()
+      .mockResolvedValueOnce({ id: 'op-9', attestation: 'b'.repeat(40) })
+      .mockResolvedValueOnce({
+        id: 'op-9',
+        status: 'succeeded',
+        execution: {
+          status: 'succeeded',
+          operationId: txId,
+          receipt: {
+            mutationId: 'mut-op-9',
+            mutationKind: 'transactions.expense.create',
+            status: 'succeeded',
+            affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'],
+            operationId: 'op-9',
+            entity: { type: 'transaction', id: txId },
+          },
+        },
+      });
+    const coordinator = new PendingOperationCoordinator({
+      client: new MutationApiClient({ request: request as never }),
+    });
+
+    await expect(
+      coordinator.decide({
+        operationId: 'op-9',
+        decision: 'confirm',
+        identity: { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId! },
+        intentionId: 'intent-rpc-no-context-2',
+      }),
+    ).rejects.toThrow('approval.incomplete_result');
   });
 });
 

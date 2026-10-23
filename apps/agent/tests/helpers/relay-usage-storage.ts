@@ -48,6 +48,8 @@ export type ConfirmationRow = {
   intention_id: string;
   operation_id: string;
   receipt_json: string | null;
+  tool?: string | null;
+  entity_id?: string | null;
   created_at: string;
   expires_at: string;
   status: string;
@@ -196,10 +198,11 @@ export const createRelayUsageStorage = (): RelayUsageTestStorage => {
         confirmations.set(key, row);
         return (q.includes('RETURNING') ? [{ ...row }] : []) as unknown as Iterable<T>;
       }
-      // Claim carries 9 (explicit status). Same PK, same conflict.
-      const [workspace_id, actor_id, device_id, intention_id, operation_id, receipt_json, created_at, expires_at] =
-        params as [string, string, string, string, string, string | null, string, string];
-      const status = params.length > 8 ? (params[8] as string) : 'reserved';
+      // Claim carries 11 (explicit status + validated context). Same PK,
+      // same conflict. Positional mapping mirrors the SQL column order.
+      const [workspace_id, actor_id, device_id, intention_id, operation_id, receipt_json, tool, entity_id, created_at, expires_at] =
+        params as [string, string, string, string, string, string | null, string | null, string | null, string, string];
+      const status = params.length > 10 ? (params[10] as string) : 'reserved';
       const key = confirmationKey(workspace_id, actor_id, device_id, intention_id);
       if (confirmations.has(key)) return [] as unknown as Iterable<T>;
       const row: ConfirmationRow = {
@@ -209,6 +212,8 @@ export const createRelayUsageStorage = (): RelayUsageTestStorage => {
         intention_id,
         operation_id,
         receipt_json,
+        ...(typeof tool === 'string' && tool ? { tool } : {}),
+        ...(typeof entity_id === 'string' && entity_id ? { entity_id } : {}),
         created_at,
         expires_at,
         status,
@@ -230,10 +235,11 @@ export const createRelayUsageStorage = (): RelayUsageTestStorage => {
       return [] as unknown as Iterable<T>;
     }
     if (q.startsWith('UPDATE mutation_confirmations SET')) {
-      if (params.length === 7) {
-        // Settle: SET receipt_json = ?, status = ? WHERE identity + op + reserved.
-        const [receipt_json, status, workspace_id, actor_id, device_id, intention_id, operation_id] =
-          params as [string | null, string, string, string, string, string, string];
+      if (params.length === 9) {
+        // Settle: SET receipt_json = ?, status = ?, tool = COALESCE(tool, ?),
+        // entity_id = COALESCE(entity_id, ?) WHERE identity + op + reserved.
+        const [receipt_json, status, tool, entity_id, workspace_id, actor_id, device_id, intention_id, operation_id] =
+          params as [string | null, string, string | null, string | null, string, string, string, string, string];
         const key = confirmationKey(workspace_id, actor_id, device_id, intention_id);
         const row = confirmations.get(key);
         if (!row || row.operation_id !== operation_id || row.status !== 'reserved') {
@@ -241,12 +247,15 @@ export const createRelayUsageStorage = (): RelayUsageTestStorage => {
         }
         row.receipt_json = receipt_json;
         row.status = status;
+        if (row.tool == null && typeof tool === 'string' && tool) row.tool = tool;
+        if (row.entity_id == null && typeof entity_id === 'string' && entity_id) row.entity_id = entity_id;
         return (q.includes('RETURNING') ? [{ ...row }] : []) as unknown as Iterable<T>;
       }
-      // Adoption: SET operation_id = ?, receipt_json = ?, expires_at = ?,
-      // status = ? WHERE identity + `operation_id = ''` + reserved.
-      const [operation_id, receipt_json, expires_at, status, workspace_id, actor_id, device_id, intention_id, expected_op] =
-        params as [string, string | null, string, string, string, string, string, string, string];
+      // Adoption: SET operation_id = ?, receipt_json = ?, tool =
+      // COALESCE(tool, ?), entity_id = COALESCE(entity_id, ?), expires_at =
+      // ?, status = ? WHERE identity + `operation_id = ''` + reserved.
+      const [operation_id, receipt_json, tool, entity_id, expires_at, status, workspace_id, actor_id, device_id, intention_id, expected_op] =
+        params as [string, string | null, string | null, string | null, string, string, string, string, string, string, string];
       const key = confirmationKey(workspace_id, actor_id, device_id, intention_id);
       const row = confirmations.get(key);
       if (!row || row.operation_id !== expected_op || row.status !== 'reserved') {
@@ -254,6 +263,8 @@ export const createRelayUsageStorage = (): RelayUsageTestStorage => {
       }
       row.operation_id = operation_id;
       row.receipt_json = receipt_json;
+      if (row.tool == null && typeof tool === 'string' && tool) row.tool = tool;
+      if (row.entity_id == null && typeof entity_id === 'string' && entity_id) row.entity_id = entity_id;
       row.expires_at = expires_at;
       row.status = status;
       return (q.includes('RETURNING') ? [{ ...row }] : []) as unknown as Iterable<T>;

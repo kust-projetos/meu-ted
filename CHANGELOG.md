@@ -1,7 +1,20 @@
 # Changelog
 
+## Unreleased (2026-10-23 — correção Vite CVE)
+
+- Segurança de dependências: override raiz fixa Vite em `8.1.6`, corrigindo GHSA-587h-7wmj-h5pm / CVE-2026-112942 identificado na imagem da API pelo Trivy; versão publicada compatível com o engine do projeto e peers existentes. Lockfile e auditorias/testes focados em validação; nenhum código ou imagem de produção alterado aqui.
+
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
+
+## Unreleased (2026-10-23 — canário local TED de edição de descrição; sem release)
+
+- Segurança PWA: Next.js e `eslint-config-next` fixados em `16.4.1`, Sharp em `0.35.5`, e override `next>sharp` atualizado para a linha corrigida; removida a aceitação vigente dos dois achados críticos de runtime (GHSA-2464-fhr4-w9xw, GHSA-673q-mjm6-r5xr). A compatibilidade OpenNext/Cloudflare e os gates ainda precisam de validação; nenhuma produção alterada.
+- Segurança de testes: Vitest e `@vitest/coverage-v8` alinhados em `4.1.12` nos manifests existentes, corrigindo os advisories moderados de `@vitest/mocker` (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp); validação de compatibilidade/gates pendente.
+
+- Registro documental de canário local `transactions.update` limitado à descrição: operação manual V2, precondição literal, replay/receipt vinculado e readback sem delta financeiro observado. Não representa CRUD geral nem evidência de produção.
+- Cartões, exclusões, edição de outros campos financeiros, transferências, parcelas, assinaturas, payables e faturas/pagamentos continuam fora do aceite desta fatia; ver [relatório de fechamento](docs/reports/2026-10-23-ted-local-crud-session-closure.md) e matriz referenciada.
+- Revisões e gates finais/CI ainda pendentes; sem merge/deploy ou mutação de produção registrados nesta entrada.
 
 ## Unreleased (2026-10-14 - release `3de0d3a` + E2E live + higiene; docs-only, sem tag/release)
 

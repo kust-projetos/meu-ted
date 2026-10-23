@@ -218,24 +218,139 @@ export const createInMemoryWriteStore = (state: InMemoryState): WriteStore => {
   // calls with the same key + payload replay without re-executing.
   const idemRecords = new Map<string, { payloadHash: string; transaction: Transaction }>();
   const idemFlights = new Map<string, { payloadHash: string; promise: Promise<Transaction> }>();
+  // ted-local.account-idempotency: V2 key → account records (same
+  // pending-v2 namespace as transactions, separate envelope so a
+  // transaction record can never replay as an account).
+  const idemAccountRecords = new Map<string, { payloadHash: string; account: Account }>();
+  const idemAccountFlights = new Map<string, { payloadHash: string; promise: Promise<Account> }>();
+  // categories-create-api: V2 key → category records (same pending-v2
+  // namespace, `{ category }` envelope — never replays as account/tx).
+  const idemCategoryRecords = new Map<string, { payloadHash: string; category: Category }>();
+  const idemCategoryFlights = new Map<string, { payloadHash: string; promise: Promise<Category> }>();
+  // All typed V2 writers share one namespace, matching PostgreSQL's single
+  // idempotency_keys envelope. Keep typed result snapshots above, but reserve
+  // ownership synchronously before any producer can run.
+  type KeyedOwner = { kind: 'account' | 'category' | 'transaction'; payloadHash: string };
+  const keyedOwners = new Map<string, KeyedOwner>();
+  const assertKeyOwner = (key: string, kind: 'account' | 'category' | 'transaction', payload: unknown): string => {
+    const composite = `${key.length}:${key}`;
+    const owner = keyedOwners.get(composite);
+    if (owner && (owner.kind !== kind || !matchesPayloadHash(owner.payloadHash, payload))) {
+      throw domainErrors.idempotencyConflict();
+    }
+    return composite;
+  };
+  // Round2 achado 3 — o registro keyed é um SNAPSHOT: a conta viva no state
+  // segue mutável (updateAccount edita in place), então persistir/retornar
+  // a referência viva contaminaria o replay. Clona no persist e em CADA
+  // retorno (hit, flight, primeira entrega) para que nem mutação do state
+  // nem mutação pelo chamador altere o snapshot.
+  const cloneAccount = (account: Account): Account => JSON.parse(JSON.stringify(account)) as Account;
+  const cloneCategory = (category: Category): Category => JSON.parse(JSON.stringify(category)) as Category;
+  const cloneTransaction = (transaction: Transaction): Transaction => JSON.parse(JSON.stringify(transaction)) as Transaction;
+  const runKeyedAccount = async (
+    householdId: string,
+    idempotencyKey: string,
+    payload: unknown,
+    producer: () => Promise<Account>,
+  ): Promise<Account> => {
+    const composite = assertKeyOwner(`${householdId}::${namespacedPendingV2Key(idempotencyKey)}`, 'account', payload);
+    const payloadHash = hashPayloadV2(payload);
+    const hit = idemAccountRecords.get(composite);
+    if (hit) {
+      if (!matchesPayloadHash(hit.payloadHash, payload)) throw domainErrors.idempotencyConflict();
+      return cloneAccount(hit.account);
+    }
+    const flight = idemAccountFlights.get(composite);
+    if (flight) {
+      if (!matchesPayloadHash(flight.payloadHash, payload)) throw domainErrors.idempotencyConflict();
+      return cloneAccount(await flight.promise);
+    }
+    let resolveFlight!: (a: Account) => void;
+    let rejectFlight!: (err: unknown) => void;
+    const promise = new Promise<Account>((res, rej) => {
+      resolveFlight = res;
+      rejectFlight = rej;
+    });
+    promise.catch(() => undefined);
+    const owner: KeyedOwner = { kind: 'account', payloadHash };
+    keyedOwners.set(composite, owner);
+    idemAccountFlights.set(composite, { payloadHash, promise });
+    try {
+      const account = await producer();
+      const snapshot = cloneAccount(account);
+      idemAccountRecords.set(composite, { payloadHash, account: snapshot });
+      resolveFlight(snapshot);
+      return cloneAccount(snapshot);
+    } catch (err) {
+      if (keyedOwners.get(composite) === owner) keyedOwners.delete(composite);
+      rejectFlight(err);
+      throw err;
+    } finally {
+      idemAccountFlights.delete(composite);
+    }
+  };
+  const runKeyedCategory = async (
+    householdId: string,
+    idempotencyKey: string,
+    payload: unknown,
+    producer: () => Promise<Category>,
+  ): Promise<Category> => {
+    const composite = assertKeyOwner(`${householdId}::${namespacedPendingV2Key(idempotencyKey)}`, 'category', payload);
+    const payloadHash = hashPayloadV2(payload);
+    const hit = idemCategoryRecords.get(composite);
+    if (hit) {
+      if (!matchesPayloadHash(hit.payloadHash, payload)) throw domainErrors.idempotencyConflict();
+      return cloneCategory(hit.category);
+    }
+    const flight = idemCategoryFlights.get(composite);
+    if (flight) {
+      if (!matchesPayloadHash(flight.payloadHash, payload)) throw domainErrors.idempotencyConflict();
+      return cloneCategory(await flight.promise);
+    }
+    let resolveFlight!: (c: Category) => void;
+    let rejectFlight!: (err: unknown) => void;
+    const promise = new Promise<Category>((res, rej) => {
+      resolveFlight = res;
+      rejectFlight = rej;
+    });
+    promise.catch(() => undefined);
+    const owner: KeyedOwner = { kind: 'category', payloadHash };
+    keyedOwners.set(composite, owner);
+    idemCategoryFlights.set(composite, { payloadHash, promise });
+    try {
+      const category = await producer();
+      const snapshot = cloneCategory(category);
+      idemCategoryRecords.set(composite, { payloadHash, category: snapshot });
+      resolveFlight(snapshot);
+      return cloneCategory(snapshot);
+    } catch (err) {
+      if (keyedOwners.get(composite) === owner) keyedOwners.delete(composite);
+      rejectFlight(err);
+      throw err;
+    } finally {
+      idemCategoryFlights.delete(composite);
+    }
+  };
+
   const runKeyed = async (
     householdId: string,
     idempotencyKey: string,
     payload: unknown,
     producer: () => Promise<Transaction>,
   ): Promise<Transaction> => {
-    const composite = `${householdId}::${namespacedPendingV2Key(idempotencyKey)}`;
+    const composite = assertKeyOwner(`${householdId}::${namespacedPendingV2Key(idempotencyKey)}`, 'transaction', payload);
     // V4.1 Phase 3 Tasks 3.6/3.7: new records hash V2; older rows replay.
     const payloadHash = hashPayloadV2(payload);
     const hit = idemRecords.get(composite);
     if (hit) {
       if (!matchesPayloadHash(hit.payloadHash, payload)) throw domainErrors.idempotencyConflict();
-      return hit.transaction;
+      return cloneTransaction(hit.transaction);
     }
     const flight = idemFlights.get(composite);
     if (flight) {
       if (!matchesPayloadHash(flight.payloadHash, payload)) throw domainErrors.idempotencyConflict();
-      return flight.promise;
+      return cloneTransaction(await flight.promise);
     }
     let resolveFlight!: (tx: Transaction) => void;
     let rejectFlight!: (err: unknown) => void;
@@ -244,13 +359,17 @@ export const createInMemoryWriteStore = (state: InMemoryState): WriteStore => {
       rejectFlight = rej;
     });
     promise.catch(() => undefined);
+    const owner: KeyedOwner = { kind: 'transaction', payloadHash };
+    keyedOwners.set(composite, owner);
     idemFlights.set(composite, { payloadHash, promise });
     try {
       const tx = await producer();
-      idemRecords.set(composite, { payloadHash, transaction: tx });
-      resolveFlight(tx);
-      return tx;
+      const snapshot = cloneTransaction(tx);
+      idemRecords.set(composite, { payloadHash, transaction: snapshot });
+      resolveFlight(snapshot);
+      return cloneTransaction(snapshot);
     } catch (err) {
+      if (keyedOwners.get(composite) === owner) keyedOwners.delete(composite);
       rejectFlight(err);
       throw err;
     } finally {
@@ -331,8 +450,10 @@ export const createInMemoryWriteStore = (state: InMemoryState): WriteStore => {
     return tx;
   };
 
-  return {
-async createAccount(householdId, input) {
+  const createAccountUnkeyed = async (
+    householdId: string,
+    input: Parameters<WriteStore['createAccount']>[1],
+  ): Promise<Account> => {
       const duplicate = state.accounts.some(
         (existing) =>
           existing.householdId === householdId &&
@@ -363,13 +484,86 @@ async createAccount(householdId, input) {
         applyDefaultsToState(state, householdId);
       }
       return acc;
+  };
+
+  const renameAccountUnkeyed = (
+    householdId: string,
+    input: { accountId: string; name: string; expectedName: string },
+  ): Account => {
+    const acc = findAccount(input.accountId, householdId);
+    if (acc.status !== 'active') throw domainErrors.notFound('Conta');
+    if (acc.kind !== 'bank' && acc.kind !== 'cash') {
+      throw domainErrors.invalid('kind', 'renomear exige conta bank/cash ativa');
+    }
+    if (acc.name !== input.expectedName) throw domainErrors.nameConflict();
+    if (acc.name === input.name) return acc;
+    acc.name = input.name;
+    return acc;
+  };
+
+  const createCategoryUnkeyed = async (
+    householdId: string,
+    input: Parameters<WriteStore['createCategory']>[1],
+  ): Promise<Category> => {
+    const duplicate = state.categories.some(
+      (existing) =>
+        existing.householdId === householdId &&
+        existing.status === 'active' &&
+        existing.name.toLowerCase() === input.name.toLowerCase(),
+    );
+    if (duplicate) throw domainErrors.inUse('Categoria', 'nome duplicado');
+    if (input.parentId) {
+      const parent = state.categories.find(
+        (c) => c.id === input.parentId && c.householdId === householdId && c.status === 'active',
+      );
+      if (!parent) throw domainErrors.notFound('Categoria pai');
+      if (parent.parentId) throw domainErrors.invalid('parentId', 'subcategoria não pode ter subcategoria');
+      if (parent.kind !== input.kind) {
+        throw domainErrors.invalid('parentId', 'categoria pai deve ter o mesmo kind');
+      }
+    }
+    const cat: Category = {
+      id: randomUUID(),
+      householdId,
+      name: input.name,
+      kind: input.kind,
+      status: 'active',
+      ...(input.parentId ? { parentId: input.parentId } : {}),
+      ...(input.icon !== undefined ? { icon: input.icon } : {}),
+      ...(input.color !== undefined ? { color: input.color } : {}),
+      ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
+      ...(input.isDefault !== undefined ? { isDefault: input.isDefault } : {}),
+    };
+    state.categories.push(cat);
+    return cat;
+  };
+
+  return {
+    async createAccount(householdId, input, options) {
+      if (options?.idempotencyKey !== undefined) {
+        // ted-local.account-idempotency: V2 recovery replays key → account.
+        return runKeyedAccount(householdId, options.idempotencyKey, input, () =>
+          createAccountUnkeyed(householdId, input),
+        );
+      }
+      return createAccountUnkeyed(householdId, input);
     },
 
-    async updateAccount(householdId, id, patch) {
-      const acc = findAccount(id, householdId);
-      if (acc.status !== 'active') throw domainErrors.notFound('Conta');
-      if (patch.name !== undefined) acc.name = patch.name;
-      return acc;
+    async updateAccount(householdId, id, patch, options) {
+      if (options?.idempotencyKey === undefined) {
+        const acc = findAccount(id, householdId);
+        if (acc.status !== 'active') throw domainErrors.notFound('Conta');
+        if (patch.name !== undefined) acc.name = patch.name;
+        return acc;
+      }
+      // Rename-only V2 path (ADR-029): keyed replay + atomic before-condition.
+      if (options.expectedName === undefined || patch.name === undefined) {
+        throw domainErrors.invalid('expectedName', 'renomeação V2 exige expectedName e name');
+      }
+      const args = { accountId: id, name: patch.name, expectedName: options.expectedName };
+      return runKeyedAccount(householdId, options.idempotencyKey, { tool: 'accounts.update', args }, async () =>
+        renameAccountUnkeyed(householdId, args),
+      );
     },
 
     async deactivateAccount(householdId, id) {
@@ -383,62 +577,89 @@ async createAccount(householdId, input) {
       return acc;
     },
 
-    async createCategory(householdId, input) {
-      const duplicate = state.categories.some(
-        (existing) =>
-          existing.householdId === householdId &&
-          existing.status === 'active' &&
-          existing.name.toLowerCase() === input.name.toLowerCase(),
-      );
-      if (duplicate) throw domainErrors.inUse('Categoria', 'nome duplicado');
-      if (input.parentId) {
-
-        const parent = state.categories.find(
-          (c) => c.id === input.parentId && c.householdId === householdId && c.status === 'active',
+    async createCategory(householdId, input, options) {
+      if (options?.idempotencyKey !== undefined) {
+        return runKeyedCategory(householdId, options.idempotencyKey, input, () =>
+          createCategoryUnkeyed(householdId, input),
         );
-        if (!parent) throw domainErrors.notFound('Categoria pai');
-        if (parent.parentId) throw domainErrors.invalid('parentId', 'subcategoria não pode ter subcategoria');
-        if (parent.kind !== input.kind) {
-          throw domainErrors.invalid('parentId', 'categoria pai deve ter o mesmo kind');
-        }
       }
-      const cat: Category = {
-        id: randomUUID(),
-        householdId,
-        name: input.name,
-        kind: input.kind,
-        status: 'active',
-        ...(input.parentId ? { parentId: input.parentId } : {}),
-        ...(input.icon !== undefined ? { icon: input.icon } : {}),
-        ...(input.color !== undefined ? { color: input.color } : {}),
-        ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
-        ...(input.isDefault !== undefined ? { isDefault: input.isDefault } : {}),
-      };
-      state.categories.push(cat);
-      return cat;
+      return createCategoryUnkeyed(householdId, input);
     },
 
-    async updateCategory(householdId, id, patch) {
-      const cat = findCategory(id, householdId);
-      if (cat.status !== 'active') throw domainErrors.notFound('Categoria');
-      if (patch.name !== undefined) cat.name = patch.name;
-      if (patch.icon !== undefined) cat.icon = patch.icon;
-      if (patch.color !== undefined) cat.color = patch.color;
-      if (patch.sortOrder !== undefined) cat.sortOrder = patch.sortOrder;
-      if (patch.isDefault !== undefined) cat.isDefault = patch.isDefault;
-      return cat;
+    async updateCategory(householdId, id, patch, options) {
+      if (options?.idempotencyKey === undefined) {
+        const cat = findCategory(id, householdId);
+        if (cat.status !== 'active') throw domainErrors.notFound('Categoria');
+        if (patch.name !== undefined) cat.name = patch.name;
+        if (patch.icon !== undefined) cat.icon = patch.icon;
+        if (patch.color !== undefined) cat.color = patch.color;
+        if (patch.sortOrder !== undefined) cat.sortOrder = patch.sortOrder;
+        if (patch.isDefault !== undefined) cat.isDefault = patch.isDefault;
+        return cat;
+      }
+      if (patch.icon !== undefined || patch.color !== undefined || patch.sortOrder !== undefined || patch.isDefault !== undefined) {
+        throw domainErrors.invalid('patch', 'renomeacao V2 aceita apenas name');
+      }
+      if (options.expectedName === undefined || patch.name === undefined) {
+        throw domainErrors.invalid('expectedName', 'renomeacao V2 exige expectedName e name');
+      }
+      const args = { categoryId: id, name: patch.name, expectedName: options.expectedName };
+      return runKeyedCategory(householdId, options.idempotencyKey, { tool: 'categories.update' as const, args }, async () => {
+        const cat = findCategory(id, householdId);
+        if (cat.status !== 'active') throw domainErrors.notFound('Categoria');
+        if (cat.parentId) {
+          const parent = state.categories.find((c) => c.id === cat.parentId && c.householdId === householdId);
+          if (!parent || parent.status !== 'active') throw domainErrors.notFound('Categoria pai');
+          if (parent.parentId) throw domainErrors.invalid('parentId', 'subcategoria nao pode ter subcategoria');
+          if (parent.kind !== cat.kind) throw domainErrors.invalid('parentId', 'categoria pai deve ter o mesmo kind');
+        }
+        if (cat.name !== options.expectedName) throw domainErrors.categoryNameConflict();
+        if (cat.name === patch.name) return cloneCategory(cat);
+        const conflict = state.categories.find(
+          (c) =>
+            c.householdId === householdId &&
+            c.status === 'active' &&
+            c.id !== cat.id &&
+            c.kind === cat.kind &&
+            (c.parentId ?? null) === (cat.parentId ?? null) &&
+            c.name.toLowerCase() === patch.name!.toLowerCase(),
+        );
+        if (conflict) throw domainErrors.inUse('Categoria', 'nome duplicado');
+        cat.name = patch.name!;
+        return cloneCategory(cat);
+      });
     },
 
-    async deactivateCategory(householdId, id) {
+    async deactivateCategory(householdId, id, options) {
+      if (options?.idempotencyKey !== undefined) {
+        if (typeof options.expectedName !== 'string' || options.expectedName.trim() === '') throw domainErrors.invalid('expectedName', 'desativacao V2 exige expectedName');
+        const args = { categoryId: id, expectedName: options.expectedName };
+        return runKeyedCategory(householdId, options.idempotencyKey, { tool: 'categories.deactivate', args }, async () => {
+          const category = findCategory(id, householdId);
+          if (category.status !== 'active') throw domainErrors.notFound('Categoria');
+          if (category.name !== options.expectedName) throw domainErrors.categoryNameConflict();
+          const referenced = state.categories.some((child) => child.householdId === householdId && child.parentId === id) || state.transactions.some((t) => t.householdId === householdId && (t.categoryId === id || t.subcategoryId === id));
+          const payableReferences = (state as unknown as { _payables?: Array<{ householdId: string; categoryId?: string }> })._payables?.some((row) => row.householdId === householdId && row.categoryId === id) ?? false;
+          if (referenced || payableReferences) throw domainErrors.inUse('Categoria', 'registros vinculados');
+          category.status = 'inactive';
+          return cloneCategory(category);
+        });
+      }
       const cat = findCategory(id, householdId);
       if (cat.status !== 'active') throw domainErrors.notFound('Categoria');
-      const referenced = state.transactions.some(
+      const referenced = state.categories.some((child) => child.householdId === householdId && child.parentId === id) ||
+        state.transactions.some(
         (t) =>
           t.householdId === householdId &&
-          !state.deletedTransactions.has(t.id) &&
           (t.categoryId === id || t.subcategoryId === id),
       );
-      if (referenced) throw domainErrors.inUse('Categoria', 'lançamentos');
+      // Some optional in-memory stores attach their persisted rows to the
+      // shared state. Inspect only those real collections; do not synthesize
+      // a cross-store cache when a store is not present.
+      const payableReferences = (state as unknown as {
+        _payables?: Array<{ householdId: string; categoryId?: string }>;
+      })._payables?.some((row) => row.householdId === householdId && row.categoryId === id) ?? false;
+      if (referenced || payableReferences) throw domainErrors.inUse('Categoria', 'registros vinculados');
       cat.status = 'inactive';
       return cat;
     },
@@ -652,6 +873,30 @@ async createAccount(householdId, input) {
       }
       if (patch.notes !== undefined) tx.notes = patch.notes;
       return tx;
+    },
+
+    async editTransactionDescription(householdId, input, options) {
+      const args = { transactionId: input.transactionId, description: input.description, expectedDescription: input.expectedDescription };
+      const description = input.description.trim();
+      if (typeof options?.idempotencyKey !== 'string' || options.idempotencyKey.length === 0) throw domainErrors.required('Idempotency-Key');
+      if (typeof options.actorId !== 'string' || options.actorId.length === 0) throw domainErrors.required('actorId');
+      if (description.length < 1 || description.length > 240 || input.expectedDescription.length < 1 || input.expectedDescription.length > 240) {
+        throw domainErrors.invalid('description', 'deve conter de 1 a 240 caracteres');
+      }
+      return runKeyed(householdId, options.idempotencyKey, { tool: 'transactions.description.update', args }, async () => {
+        const transaction = findTransaction(input.transactionId, householdId);
+        if (transaction.kind !== 'expense' && transaction.kind !== 'income') throw domainErrors.unsupported('edição de descrição exige despesa ou receita simples');
+        if (transaction.description !== input.expectedDescription) throw domainErrors.transactionDescriptionConflict();
+        if (transaction.description === description) throw domainErrors.invalid('description', 'a descrição não foi alterada');
+        const cardPurchases = (state as unknown as { _cardPurchases?: Array<{ transactionId?: string }> })._cardPurchases;
+        if (cardPurchases?.some((row) => row.transactionId === transaction.id)) throw domainErrors.unsupported('lançamento vinculado a compra no cartão');
+        const payables = (state as unknown as { _payables?: Array<{ householdId: string; paidTransactionId?: string }> })._payables;
+        if (payables?.some((row) => row.householdId === householdId && row.paidTransactionId === transaction.id)) {
+          throw domainErrors.unsupported('lançamento vinculado a pagamento de conta a pagar');
+        }
+        transaction.description = description;
+        return cloneTransaction(transaction);
+      });
     },
 
     async softDeleteTransaction(householdId, id) {

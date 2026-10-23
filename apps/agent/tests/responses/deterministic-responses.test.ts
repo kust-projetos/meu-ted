@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderInconclusive } from '../../src/responses/deterministic-responses.js';
+import { renderInconclusive, renderMutationResult } from '../../src/responses/deterministic-responses.js';
 
 /**
  * R01 (SPEC "prova de resultado e resposta tipada"): an inconclusive
@@ -46,5 +46,45 @@ describe('renderInconclusive — honest uncertainty (R01)', () => {
     expect(renderInconclusive()).toBe(
       'operação em processamento: o resultado não pôde ser confirmado. Verifique seus lançamentos antes de tentar de novo.',
     );
+  });
+});
+
+describe('renderMutationResult — outcome copy por kind (contas)', () => {
+  it('desativação relata conta desativada, nunca lançamento', () => {
+    expect(renderMutationResult('succeeded', 'operação', { mutationKind: 'accounts.deactivate' })).toBe(
+      'Conta desativada com sucesso.',
+    );
+  });
+
+  it('criação relata conta criada, nunca lançamento', () => {
+    expect(renderMutationResult('succeeded', 'operação', { mutationKind: 'accounts.create' })).toBe(
+      'Conta criada com sucesso.',
+    );
+  });
+
+  it('renomeação relata conta renomeada, nunca lançamento', () => {
+    expect(renderMutationResult('succeeded', 'operação', { mutationKind: 'accounts.update' })).toBe(
+      'Conta renomeada com sucesso.',
+    );
+  });
+
+  it('renomeação de categoria relata categoria renomeada, nunca lançamento', () => {
+    expect(renderMutationResult('succeeded', 'operação', { mutationKind: 'categories.update' })).toBe(
+      'Categoria renomeada com sucesso.',
+    );
+  });
+
+  it('falha de renomeação nunca afirma sucesso', () => {
+    expect(renderMutationResult('failed', 'operação', { mutationKind: 'accounts.update' })).toBe(
+      'Não foi possível concluir a operação.',
+    );
+  });
+
+  it('transação e kinds desconhecidos mantêm o copy legado byte-idêntico', () => {
+    expect(renderMutationResult('succeeded')).toBe('Lançamento registrado com sucesso.');
+    expect(renderMutationResult('succeeded', 'operação', { mutationKind: 'transactions.expense.create' })).toBe(
+      'Lançamento registrado com sucesso.',
+    );
+    expect(renderMutationResult('succeeded', 'operação', {})).toBe('Lançamento registrado com sucesso.');
   });
 });

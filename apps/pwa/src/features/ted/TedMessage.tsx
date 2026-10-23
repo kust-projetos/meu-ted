@@ -10,6 +10,26 @@ import { TedMarkdown } from "./TedMarkdown";
  */
 export type TedDeliveryState = "sending" | "sent" | "failed";
 
+const terminalOutcomeText = (outcome: NonNullable<AgentMessage['terminalOutcome']>): string => {
+  if (outcome.status === 'succeeded') {
+    switch (outcome.tool) {
+      case 'categories.deactivate': return 'Categoria desativada com sucesso.';
+      case 'categories.create': return 'Categoria criada com sucesso.';
+      case 'categories.update': return 'Categoria atualizada com sucesso.';
+      case 'accounts.deactivate': return 'Conta desativada com sucesso.';
+      case 'accounts.create': return 'Conta criada com sucesso.';
+      case 'accounts.update': return 'Conta atualizada com sucesso.';
+      case 'transactions.update': return 'Descrição do lançamento alterada com sucesso.';
+      default: return 'Operação concluída com sucesso.';
+    }
+  }
+  if (outcome.status === 'failed' && outcome.failureCode === 'in_use') return 'A categoria não foi desativada porque ainda está sendo usada.';
+  if (outcome.status === 'failed') return 'Não foi possível concluir a operação.';
+  if (outcome.status === 'cancelled') return 'Operação cancelada.';
+  if (outcome.status === 'expired') return 'A proposta expirou e não foi executada.';
+  return 'Não foi possível verificar o resultado da operação.';
+};
+
 interface TedMessageProps {
   message: AgentMessage;
   isCurrentUser: boolean;
@@ -68,6 +88,11 @@ export function TedMessage({ message, isCurrentUser, senderName, delivery, onRet
           <div className="whitespace-pre-wrap break-words">
             {isAssistant ? <TedMarkdown content={message.content} /> : message.content}
           </div>
+          {isAssistant && message.terminalOutcome && (
+            <p role="note" aria-label="Resultado da operação" data-testid="ted-terminal-outcome" className={`mt-2 border-t border-border-subtle pt-2 text-xs font-semibold ${message.terminalOutcome.status === 'succeeded' ? 'text-primary' : 'text-text-secondary'}`}>
+              {terminalOutcomeText(message.terminalOutcome)}
+            </p>
+          )}
           {Array.isArray((message as unknown as { attachments?: Array<{ type: string; url: string; name?: string }> }).attachments) &&
             (message as unknown as { attachments: Array<{ type: string; url: string; name?: string }> }).attachments.length > 0 && (
               <div className="mt-2 flex flex-col gap-2">

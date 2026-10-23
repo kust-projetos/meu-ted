@@ -24,13 +24,17 @@ export const UNDO_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
- * closure-undo-verify: operations whose created entity is a transaction and
- * can therefore be compared against an expected `{ type: 'transaction' }`.
+ * closure-undo-verify: operations whose created entity can be compared
+ * against an expected entity. Transaction operations compare against
+ * `{ type: 'transaction' }`; `accounts.create` (accounts-draft-agent, fixed
+ * contract) compares against `{ type: 'account' }` — same read-only
+ * resolution chain, same fail-closed gates.
  */
 export const UNDO_VERIFY_ALLOWED_OPERATIONS: ReadonlySet<string> = new Set([
   'transactions.expense.create',
   'transactions.income.create',
   'transactions.transfer.create',
+  'accounts.create',
 ]);
 
 const UNDO_INTENT_RE = /(desfaz|desfazer|desfaç|\bundo\b)/i;
@@ -424,7 +428,7 @@ export type UndoAuditItem = Readonly<{
 export type UndoAuditReader = (identity: UndoIdentity) => Promise<readonly UndoAuditItem[]>;
 
 export type UndoExpectedEntity = Readonly<{
-  type: 'transaction';
+  type: 'transaction' | 'account';
   id: string;
 }>;
 
@@ -699,7 +703,7 @@ export class UndoProposalService {
    *   be confirmed against a newer operation;
    * - the entity resolves `metadata.entityId > effectRef > metadata.after.id`
    *   with conflicting sources failing closed as ambiguous, and only
-   *   `transactions.*.create` operations are comparable;
+   *   `transactions.*.create` + `accounts.create` operations are comparable (see `UNDO_VERIFY_ALLOWED_OPERATIONS`);
    * - after the audit await the stored row is re-read and its fixed
    *   target/status/TTL/bindings must be unchanged, otherwise the check
    *   fails closed as `undo.target_changed` (lost race, retry the verify).
@@ -716,11 +720,12 @@ export class UndoProposalService {
     }
     if (
       !expectedEntity ||
-      (expectedEntity as { type?: unknown }).type !== 'transaction' ||
+      ((expectedEntity as { type?: unknown }).type !== 'transaction' &&
+        (expectedEntity as { type?: unknown }).type !== 'account') ||
       typeof (expectedEntity as { id?: unknown }).id !== 'string' ||
       !UNDO_UUID_RE.test((expectedEntity as { id: string }).id)
     ) {
-      return fail('undo.invalid_target', 'Expected entity must be { type: \'transaction\', id: UUID }.');
+      return fail('undo.invalid_target', 'Expected entity must be { type: \'transaction\' | \'account\', id: UUID }.');
     }
     const expectedId = (expectedEntity as { id: string }).id.toLowerCase();
     const stored = this.deps.store.get(requestId);

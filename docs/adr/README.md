@@ -34,6 +34,7 @@ Este diretório contém o registro imutável de decisões de arquitetura do proj
 | [ADR-026](ADR-026-risk-based-mutation-authorization.md) | Autorização de mutações baseada em risco | accepted | 2026-10-02 | — |
 | [ADR-027](ADR-027-workspace-plurality-lifecycle-views.md) | Pluralidade de workspaces, lifecycle e visibilidade de conversas (D1/D2/D3) | accepted | 2026-10-15 | D1/D2/D3 |
 | [ADR-028](ADR-028-implicit-undo-own-actor.md) | Undo implícito por ator-próprio (política de eleição de alvo) | accepted | 2026-10-18 | — |
+| [ADR-029](ADR-029-typed-pending-v2-account-rename.md) | Extensão tipada Pending V2 para renomear contas | accepted (validação local em andamento) | 2026-10-21 | — |
 
 ## Template para Novos ADRs
 

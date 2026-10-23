@@ -638,7 +638,17 @@ describe('PR137-HARDEN: idempotência de confirmação sobre SQLite real', () =>
     expect(stuck.response?.text).toBe(renderInconclusive());
   });
 
-  it('recibo corrompido/divergente/não-succeeded com A terminal: replay sem recibo falso; com A ativa: inconclusivo', async () => {
+  it('recibo corrompido/divergente/não-succeeded com A terminal: inconclusivo sem executar (nunca sucesso sem prova); com A ativa: inconclusivo', async () => {
+    // CORREÇÃO COMPORTAMENTAL (nunca supressão): um replay financeiro
+    // `succeeded` exige PROVA — recibo válido e coerente ligado à operação
+    // de origem. O binding, escrito pós-sucesso, nunca prova SOZINHO o QUE
+    // teve efeito (pode ser prune de TTL, corrupção, divergência ou um
+    // status que nunca foi sucesso), e tool desconhecida/ausente nunca
+    // autoriza sucesso. Por isso missing/invalid/corrupt/divergent/
+    // not-succeeded ⇒ inconclusivo com ZERO execute, preservando a operação
+    // posterior e o draft — FALSE_SUCCESS=0 acima de disponibilidade. O
+    // replay comprovado (recibo válido + tool/entity de origem) segue
+    // intacto no teste do tombstone abaixo e na contraprova R5-10.
     const seed = (
       sql: SqlShim,
       intentionId: string,
@@ -673,17 +683,17 @@ describe('PR137-HARDEN: idempotência de confirmação sobre SQLite real', () =>
       { name: 'not-succeeded', receipt: JSON.stringify({ operationId: 'op-A', status: 'failed' }) },
     ];
     for (const { name, receipt } of cases) {
-      // A terminal: replay de A SEM o recibo inválido (nunca sucesso falso,
-      // nunca B) — B pendente permanece intocada.
+      // A terminal: sem prova válida não há alegação de sucesso — o
+      // redelivery é inconclusivo, sem executar nada; B pendente segue
+      // intacta e o vínculo original é preservado.
       {
         const { sql } = createSql();
         const store = seed(sql, `intent-${name}`, 'op-A', receipt);
         const nowRef = { now: NOW };
         const backend = fakeBackend({ active: [{ id: 'op-B', status: 'proposed' }] });
         const replayed = await confirmTurn(orchestratorFor(backend.coordinator, store, nowRef), `intent-${name}`);
-        expect(replayed.mutation?.operationId, name).toBe('op-A');
-        expect(replayed.mutation?.receipt, name).toBeUndefined();
-        expect(replayed.response?.text, name).toBe(renderMutationResult('succeeded'));
+        expect(replayed.mutation, name).toBeUndefined();
+        expect(replayed.response?.text, name).toBe(renderInconclusive());
         expect(backend.executes, name).toHaveLength(0);
         expect(backend.active.map((op) => op.id), name).toEqual(['op-B']);
       }
