@@ -25,13 +25,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import { createPool } from '../../src/db/pool.js';
 import { requireTestDatabase } from '../../src/db/db-guard.js';
-import {
-  prepareValidationDatabases,
-  validationDatabaseProfileFromEnvironment,
-} from '../../src/db/validation-preflight.js';
-import { runMigrations } from '../../src/read-models/sql/migrate.js';
+import { validationDatabaseProfileFromEnvironment } from '../../src/db/validation-preflight.js';
+import { prepareAccountValidationDatabases } from './validation-db-fixture.js';
 import { createPostgresWriteStore, createAccountInTx } from '../../src/writes/postgres.js';
 import { createLegacyPostgresWriteStore, createAccountLegacyInTx } from '../../src/writes/legacy-postgres.js';
 import {
@@ -49,19 +45,6 @@ const describeIfDb = ENABLED ? describe : describe.skip;
 if (!ENABLED) {
   console.log('[acct-keyed-pg] SKIP: DATABASE_URL_TEST + DB_TEST_MARKER required.');
 }
-
-// Forma legada mínima para o caminho de contas (mesmo recorte de
-// xlt-07-undo-crash: canonical migrado + DDL de forma legada).
-const LEGACY_SHAPE_DDL = [
-  `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS initial_balance_cents BIGINT`,
-  `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS active BOOLEAN`,
-  `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS is_credit_card BOOLEAN NOT NULL DEFAULT FALSE`,
-  `ALTER TABLE accounts ALTER COLUMN kind DROP NOT NULL`,
-  `ALTER TABLE accounts ALTER COLUMN balance_cents DROP NOT NULL`,
-  `ALTER TABLE accounts ALTER COLUMN status DROP NOT NULL`,
-  `ALTER TABLE categories ADD COLUMN IF NOT EXISTS active BOOLEAN`,
-  `ALTER TABLE categories ALTER COLUMN status DROP NOT NULL`,
-];
 
 const deferred = (): { promise: Promise<void>; resolve: () => void } => {
   let resolve!: () => void;
@@ -99,17 +82,9 @@ describeIfDb('accounts.create keyed PG — canonical + legacy (round2)', () => {
     // Round4 MEDIUM: preflight + guards (main e legacy) ANTES de qualquer
     // migration/schema via helper. Construir pools nao escreve; o primeiro
     // write possivel e o runMigrations, apos os dois guards.
-    const prepared = await prepareValidationDatabases({
+    const prepared = await prepareAccountValidationDatabases({
       baseUrl: DB_URL!,
       profile: validationDatabaseProfileFromEnvironment(),
-      createPool: (connectionString: string) =>
-        createPool({ connectionString, max: 10 }) as unknown as Pool,
-      requireGuard: (target: unknown, operation: string) =>
-        requireTestDatabase(target as never, operation),
-      migrate: (target: unknown) => runMigrations(target as never),
-      afterMigrate: async ({ legacy }) => {
-        for (const ddl of LEGACY_SHAPE_DDL) await (legacy as Pool).query(ddl);
-      },
     });
     pool = prepared.main;
     legacyPool = prepared.legacy;

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (2026-10-23 — correção Vite CVE)
+
+- Segurança de dependências: override raiz fixa Vite em `8.1.6`, corrigindo GHSA-587h-7wmj-h5pm / CVE-2026-112942 identificado na imagem da API pelo Trivy; versão publicada compatível com o engine do projeto e peers existentes. Lockfile e auditorias/testes focados em validação; nenhum código ou imagem de produção alterado aqui.
+
 Formato: seção `Unreleased` para trabalho não lançado; releases só com
 versão/tag declarada pela governança. Nada abaixo inventa versão ou release.
 

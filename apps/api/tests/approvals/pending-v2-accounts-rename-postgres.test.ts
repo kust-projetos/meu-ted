@@ -1,10 +1,10 @@
 /**
  * accounts.update (rename-only, ADR-029): provas PG permanentes — canonical + legacy.
  *
- * Harness seguro (Round3/4): SEM provisionamento — sem CREATE DATABASE, sem
- * criar marker, sem migrations/DDL. beforeAll: preflight puro da URL →
- * cria os dois pools → requireTestDatabase (marker PRÉ-EXISTENTE) nos dois
- * → testes. afterAll: guards → DELETEs por household → end. ted_local e
+ * Harness seguro (Round3/4): SEM provisionamento — sem CREATE DATABASE nem
+ * criação de marker. beforeAll: preflight puro → ambos os guards de marker →
+ * migrations canônicas e DDL mínima da forma legada. afterAll: guards →
+ * DELETEs por household → end. ted_local e
  * produção nunca tocados; qualquer URL fora das duas bases descartáveis
  * falha fechada no preflight antes de qualquer I/O. O perfil CI precisa ser
  * explicitamente selecionado e permite apenas loopback:5432/pi_financeiro_test
@@ -18,13 +18,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
-import { createPool } from '../../src/db/pool.js';
 import { requireTestDatabase } from '../../src/db/db-guard.js';
-import {
-  assertValidationDatabaseUrl,
-  createValidationPools,
-  validationDatabaseProfileFromEnvironment,
-} from '../../src/db/validation-preflight.js';
+import { validationDatabaseProfileFromEnvironment } from '../../src/db/validation-preflight.js';
+import { prepareAccountValidationDatabases } from './validation-db-fixture.js';
 import { createPostgresWriteStore } from '../../src/writes/postgres.js';
 import { createLegacyPostgresWriteStore } from '../../src/writes/legacy-postgres.js';
 import { requireApprovalToolContract } from '../../src/approvals/tool-registry.js';
@@ -74,18 +70,13 @@ describeIfDb('accounts.update rename PG — canonical + legacy', () => {
   };
 
   beforeAll(async () => {
-    const profile = validationDatabaseProfileFromEnvironment();
-    assertValidationDatabaseUrl(DB_URL!, profile);
-    const pools = createValidationPools({
+    const pools = await prepareAccountValidationDatabases({
       baseUrl: DB_URL!,
-      profile,
-      createPool: (connectionString: string) => createPool({ connectionString, max: 10 }) as unknown as Pool,
+      profile: validationDatabaseProfileFromEnvironment(),
     });
     pool = pools.main;
     legacyPool = pools.legacy;
-    await requireTestDatabase(pool as never, 'acct-rename-pg');
-    await requireTestDatabase(legacyPool as never, 'acct-rename-pg-legacy');
-  }, 60_000);
+  }, 240_000);
 
   afterAll(async () => {
     if (pool) await requireTestDatabase(pool as never, 'acct-rename-pg-cleanup');

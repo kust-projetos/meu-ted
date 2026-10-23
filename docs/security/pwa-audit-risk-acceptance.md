@@ -37,3 +37,7 @@
 - Vitest and `@vitest/coverage-v8` are aligned to `4.1.12` throughout workspace
   manifests, resolving the `@vitest/mocker` advisories GHSA-qxg6-89mg-rqv8 and
   GHSA-xp26-3454-mjgp. These remediations are not accepted exceptions.
+- Vite is pinned by the root override to `8.1.6`, resolving
+  GHSA-587h-7wmj-h5pm (CVE-2026-112942) found in the API image. The release's
+  Node engine and the existing Vitest and React plugin peer ranges accept this
+  patch version; no scanner exception was added.

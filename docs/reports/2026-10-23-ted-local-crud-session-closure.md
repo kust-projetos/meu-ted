@@ -39,4 +39,14 @@ O [primeiro CI](https://github.com/kust-projetos/meu-ted/actions/runs/3998506437
 - Os manifests e lockfile foram atualizados para Next/ESLint 16.4.1, Sharp 0.35.5 — inclusive o override raiz — e Vitest/coverage 4.1.12 alinhados. Instalação frozen, resolução dos peers, revisão estática de dependências e typecheck dos cinco workspaces passaram. O audit crítico retornou exit 0: restam 26 findings (3 low, 10 moderate, 13 high), mas nenhum crítico. Não foram adicionadas exceções para os advisories corrigidos.
 - A validação local não substitui o próximo CI: Next build passou, mas OpenNext no Windows falhou ao empacotar o módulo nativo Sharp; os artefatos locais de bundle ficaram inconsistentes. O audit isolado PWA foi bloqueado por `npm EALLOWREMOTE`, sem contornar a política. Build Cloudflare Linux, audit scoped e testes completos com Vitest 4.1.12 devem passar no novo SHA antes do merge/deploy.
 
+## Segundo CI e correções de ordem/dependências
+
+O CI do commit `fd062ad` confirmou em Linux o build Cloudflare com Next/Sharp corrigidos e passou API, Agent, PWA, E2E, Docker e gates documentais. Falharam três pontos, todos endereçados localmente sem afrouxar checks:
+
+- **Security:** o Trivy da imagem da API encontrou Vite `8.1.4` com GHSA-587h-7wmj-h5pm / CVE-2026-112942. O override raiz foi fixado em `8.1.6` (mesmo ramo, engine e peers compatíveis), com lockfile regenerado e sem exceção de scanner.
+- **Postgres:** a suíte de rename legado dependia da preparação de schema feita pela suíte de create quando executada antes. A preparação comum foi extraída para `tests/approvals/validation-db-fixture.ts`: preflight, pools, guards dos dois markers, migrations e DDL legada, nessa ordem. A suíte de rename agora é independente; a dependência implícita de ordem foi reproduzida em PostgreSQL 16.15 (6 falhas legadas) e corrigida (rename-first 14/14; create 16/16; preflight 35/35).
+- **quality:** os asserts do contrato de auditoria ainda esperavam Next `16.3.8` e Sharp `0.34.5`. Foram atualizados para os pins reais (Next/ESLint `16.4.1`, Sharp `0.35.5`, Vitest/coverage `4.1.12`, Vite `8.1.6`), com 37/37 testes de política passando; nenhuma allowlist foi adicionada.
+
+Validação local deste patch: `pnpm install --frozen-lockfile`, `pnpm why -r vite` (somente `8.1.6`), audit crítico exit 0 (16 findings restantes não críticos), typecheck da API, docs lint e lint dos três arquivos alterados via entrada isolada do Biome. O lint global do Biome no Windows tenta varrer artefatos locais grandes e foi substituído por esse escopo; o CI Linux segue como autoridade para o job completo.
+
 O próximo checkpoint deve registrar o commit corretivo, o CI do novo SHA e somente depois o merge, os deploys atestados e os smokes efetivamente executados. A conta e as duas transações QA permanecem preservadas; não repetir as operações Solar/Lunar para produzir evidência de release.
