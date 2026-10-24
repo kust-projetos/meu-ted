@@ -1,8 +1,10 @@
 # Plano incremental de recuperação do núcleo conversacional TED
 
-**Data da auditoria:** 2026-10-24. **Status:** auditoria documental encerrada e revisada; implementação não iniciada. Gates locais parcialmente verificados: lint inconclusivo, conforme §12.
+**Registro histórico da auditoria original:** 2026-10-24, checkout `313f999` em `fix/opennext-preview-props`; seu status, gates, reviews e evidências abaixo são históricos, não validação desta branch. **Status atual deste refinamento:** alteração documental em `docs/ted-core-recovery-refinement`, checkout `9de7f20` transportado sobre `origin/main` `b21faff`; alterações não commitadas, reviewer final reportou CHANGES REQUIRED antes destas correções. Implementação, POC e integração não executadas.
 
-## 1. Contrato e baseline
+**Refinamento:** documentação nesta branch `docs/ted-core-recovery-refinement`, HEAD `9de7f20`, transportada apenas com docs sobre `origin/main` `b21faff` (proveniência de origem reportada `ede7b10`). Os relatos/checks anteriores permanecem evidência histórica e não são reexecução deste refinamento.
+
+## 1. Registro histórico — contrato e baseline da auditoria 313f999
 
 - Repositório confirmado: `https://github.com/kust-projetos/meu-ted.git`; diretório local histórico `D:/projetos/pi-financeiro`.
 - Branch: `fix/opennext-preview-props`; HEAD: `313f9991a54740917edfd02f958c431650fb01b7`.
@@ -14,11 +16,11 @@
 - CI do SHA exato: [CI 40046695553](https://github.com/kust-projetos/meu-ted/actions/runs/40046695553) e [PWA CI 40046695573](https://github.com/kust-projetos/meu-ted/actions/runs/40046695573), ambos `completed/success`, consultados nesta auditoria. `Gate — all checks`, integração PostgreSQL, testes Agent e `quality (22, 10)` passaram. Jobs de publicação main-only foram pulados: não inferir deploy a partir desses runs.
 - O comprehensive E2E usa `apps/pwa/e2e/playwright.config.ts` com `fixture-api`, standalone Next e SW harness. É evidência de interface integrada com fixture, não de Agent real → API real → PostgreSQL. `apps/pwa/e2e/live-mobile.config.ts` é uma configuração distinta, opt-in; não foi executada nesta auditoria.
 
-### Limites de autoridade
+### Limites de autoridade do pedido documental original (histórico)
 
 Somente os quatro documentos solicitados podem ser escritos. Não alterar aplicação, credenciais, migrations, flags ou dados; não executar SQL financeiro; não fazer commit, push, merge ou deploy. Nenhuma autorização histórica de release é herdada. Produção permanece fora do escopo, inclusive canary V5 e Release B.
 
-## 2. Checklist desta execução documental
+## 2. Checklist assinalado na auditoria original 313f999 (histórico; não é checklist desta revisão)
 
 - [x] Confirmar identidade do repositório, revisão, branch e working tree inicial.
 - [x] Confirmar runtime disponível e CI do SHA, separando fixture de jornada real.
@@ -26,7 +28,7 @@ Somente os quatro documentos solicitados podem ser escritos. Não alterar aplica
 - [x] Consolidar auditoria do pipeline, decisões e contratos históricos versus código atual.
 - [x] Definir arquitetura-alvo e POC anterior à seleção de inferência.
 - [x] Definir fatias, dependências, aceite, custos, migração e rollback.
-- [x] Validar referências e revisar independentemente o conjunto documental.
+- [x] Validar referências e obter revisão independente no conjunto documental original; não cobre as correções atuais nem significa APPROVED atual.
 
 ## 3. Fontes e resultados relacionados
 
@@ -46,7 +48,7 @@ Cada critério deve ter expectativa independente, comando ou jornada, revisão e
 
 Uma revisão independente por fatia é suficiente quando os critérios estão comprovados, não há finding material aberto e não houve mudança relevante posterior. Findings válidos exigem correção e repetição somente das verificações afetadas. Não abrir rodadas por estilo, preferência de framework ou hipótese sem contrato violado. Duas tentativas sem progresso exigem nova evidência/diagnóstico, não um terceiro patch especulativo.
 
-## 6. Registro de execução documental
+## 6. Registro de execução documental da auditoria original (histórico)
 
 Preflight: `MULTI_WORKER`. Workers de inventário e implementação documental usam `openai/gpt-6-luna` em lugar do Muse Spark, conforme pedido. Architect/reviewer mantêm seu pool forte. O primeiro Explorer retornou levantamento parcial e bloqueio de escrita; sua participação não é prova de inventário completo, e a tarefa foi transferida para um Coder com ownership exclusivo da matriz.
 
@@ -56,14 +58,28 @@ Todas as fases abaixo são **planejadas, não executadas nesta auditoria**. A im
 
 | Fase | Dependência / ownership | Escopo verificável | Gate de saída | Estimativa |
 | --- | --- | --- | --- | --- |
-| F0 — reconciliar baseline | Documentos desta auditoria; Planner | Inventário por operação/canal; fontes históricas versus código; limites implementado/testado/homologado | Nenhuma capability anunciada sem caminho completo ou limitação explícita; denominadores reconciliados; revisão documental encerrada | 1–2 dias, incluindo auditoria |
-| F1 — corpus e baseline | F0; Coder, teste independente | Reutilizar evals/regressões existentes; 100 casos desenvolvimento + 200 holdout; oráculos independentes e contexto fixo | Corpus versionado por famílias; casos críticos abrangidos; baseline A medida; nenhum efeito real | 2–3 dias |
-| F2 — POC interpretação | F1; custo/egress explicitamente aprovados | Comparar A e até dois B estruturados com provider/relay existentes, sem hot path nem executor financeiro | Gates da SPEC §7; métricas por domínio/canal; decisão registrada A/B ou rejeição de ambos; não selecionar por demo | 1–2 dias |
-| F3 — uma leitura vertical | F2 e escolha documentada; Coder | Mês atual/anterior ou lista de contas, mantendo readers da API; remover só o parse redundante da fatia | REST canônico validado; contrato SDK isolado se mantido, sem reabrir a borda; vazio/erro/incompleto distintos; pergunta conceitual sem read indevido; jornada integrada sintética | 2–3 dias |
-| F4 — um draft/proposta manual existente | F3; Coder + segurança/tester/reviewer quando fronteira afetada | Uma operação V2 já implementada; slots/resolução/precondição/receipt atuais; nenhuma capacidade nova | RED→GREEN; ambiguidade/cancel/replay/concorrência/timeout pós-commit e recovery; saldo e alvo readback; 0 ou 1 efeito | 3–5 dias |
-| F5 — regressão e rollback | F4; Tester independente e Reviewer | Gates do repo, jornada PWA→Agent→API→PG/modelo real sintético autorizado; ensaio sem migrations | Critérios exatos atendidos; recovery de versões persistidas preservado; nenhuma dependência de reescrita | 1–2 dias |
+| F0 — baseline e paridade | Docs/inventários existentes; owner de produto confirma denominador | Cada operação PWA traçada NL→PWA→API/schema→TED status→deps/auth/tests→slice/aceite; sem novo audit amplo; desconhecido fica gap | Revisão das quatro docs; não perder feature por taxonomy; nenhum endpoint presumido | 1–2 dias (documentação já refinada; aceite futuro por operação) |
+| F1 — baseline A | F0; tester independente | 20–30 smoke/contrato + corpus pareado 50–80; sete prompts matrix; oráculos independentes e estado fixo | Baseline quantitativa por domínio e UX metric; no writes; holdout separado | 2–3 dias |
+| F2 — POC A/B | F1; aprovação prévia explícita de custo/egress | A determinística vs no máximo 2 intérpretes estruturados via provider existente; 50–80 casos | Gates SPEC §7; budgets/call caps e stop; métricas completas; decisão registrada, inclusive rejeitar B | 1–2 dias |
+| F3 — leitura vertical | F2 aprovado; tester + reviewer | Uma leitura suportada existente (ex. resumo mensal ou contas), sem nova rota | RED/GREEN futuro; requests e resposta comparados a oracle; vazio/erro/incompleto distintos; pergunta conceitual sem read indevido; prova integrada sintética | 2–3 dias |
+| F4 — escrita manual V2 | F3; operação já executável; review de segurança | Uma operação V2 existente, manual; sem ampliar V5 nem adicionar executor | RED/GREEN; confirmação, erro, concorrência, replay/recovery, readback e receipt; exatamente 0 ou 1 efeito | 3–5 dias |
+| F5 — recuperação/rollback | F4; Tester e Reviewer independentes | PWA→Agent→API→PG em stack local isolada e dados sintéticos; histórico/pending/receipt existentes; sem migrations | confirm vs executing recovery corretos, receipt vinculado, reload/replay sem duplicação; rollback preserva formatos/dados | 1–2 dias |
+| F6 — paridade progressiva | F5; priorização explícita por domínio/operação da matriz | Rodar backlog por slices: reads, V2 já implementadas, depois decisão individual; admin/workspace preservam suas exceções explícitas | Aceite observável por operação; nenhum “CRUD genérico”; registrar em campos separados classe de obrigação (`mandatory/internal/justified exception/outside current product`) e status TED (`implemented/partial/absent/blocked`); revisão encerra lote | estimar por operação; sem total até escopo acordado |
 
-**Total inicial:** 10–17 dias de engenharia, sem release, novas capacidades, infraestrutura ou migração de superclass. Novos domínios exigem nova estimativa por operação, não “CRUD genérico”. F1 pode preparar oráculos enquanto se revisa F0, mas a decisão F2 espera inventário e baseline fechados. F3/F4 são dependentes e não devem escrever concorrentemente em `finance-chat-agent.ts`/orquestrador.
+**Total inicial:** 10–17 dias para F0–F5 conforme estimativas históricas, sem release, nova capability, infraestrutura ou migração de superclass; F6 não tem total defensável sem acordo de escopo. Novos domínios exigem estimativa por operação, nunca “CRUD genérico”. F1 pode preparar oráculos enquanto fecha F0; F2 aguarda denominador e baseline. F3/F4 dependem de resultado anterior e não escrevem concorrentemente nos mesmos arquivos.
+
+#### Checklist por operação (acompanha a matriz em F6)
+
+- [ ] frase natural e paráfrases/follow-up/histórico definidos com oracle independente
+- [ ] ação e caminho real PWA conferidos; contrato API/schema/serviço autoritativo confirmado (sem endpoint presumido)
+- [ ] status TED: implemented / partial / absent / blocked; requisito de clarificação/limitação definido
+- [ ] dependências, workspace/actor authorization, risco e confirmação humana separados
+- [ ] teste existente localizado e gap de integração anotado; inserir future CI nos harnesses existentes
+- [ ] prioridade/fase, efeito observável, receipt e recovery definidos
+- [ ] RED→GREEN em mudança comportamental; erro, replay, cancelamento/reload cobertos
+- [ ] revisão independente e evidência do ambiente exato; histórico separado de resultado atual
+
+Tentativas: após duas correções sem progresso verificável, parar e reavaliar hipótese/evidência; não fazer terceiro patch especulativo. Não reabrir a decisão de arquitetura sem evidência nova material. `ISOLATE` não remove funcionalidade: preserva operação PWA e marca explicitamente o limite conversacional até uma fatia autorizada.
 
 ### 7.1 Continuação até paridade de produto, sem reescrita
 
@@ -149,17 +165,17 @@ Rollback de deployment é apenas desenho futuro: nenhum merge/deploy está autor
 ## 11. Custos e riscos de decisão
 
 - Engenharia: 10–17 dias na fatia inicial, mais spike SDK opcional 1–2 dias; migração de superclass é orçamento separado, dependente de compatibilidade comprovada.
-- POC de inferência: até 1.800 chamadas, teto proposto US$20 com preços e autorização a confirmar; fórmula e premissas na SPEC §7. Não houve gasto de modelo de produto nesta auditoria.
+- POC futura A–D: teto condicional até 1.160 chamadas e US$20 propostos, conforme caps/stop da SPEC §7; confirmar preço e autorização antes de qualquer egress. Não houve gasto de modelo nesta auditoria.
 - Operação: custo atual/alternativo por turno e p50/p95 **não medidos**. Usar tokens faturáveis, chamadas reais, falhas e tarefa concluída, não `chars/4` como fatura. Complexidade estática medida: Agent 5.052 linhas, orquestrador 8.485, cliente 1.759; não converter LOC em desempenho ou economia monetária.
 - Riscos: widening silencioso de capability; resposta estruturada com alvo incorreto; concorrência de transcript; perda de privacidade por broadcast; rollback que abandona variante persistida; confundir fixture com prova E2E. Mitigações: registry fechado, resolver autoritativo, teste por janela/canal, compatibilidade persistida e promoção por fatia.
 - Rejeitar alternativa LLM ou Agent base é resultado válido se gates não demonstrarem benefício. Não criar trabalho apenas para justificar o experimento.
 
-## 12. Revisões e verificação desta auditoria
+## 12. Revisões e verificação da auditoria original 313f999 (histórico)
 
-- Revisão de segurança independente dos documentos de auditoria/SPEC/plano: **APPROVED**, inspeção estática, sem achado material. Confirmou import efetivo do SDK, bloqueio non-RPC, persistência compartilhada e condições de autorização V5. Não examinou matriz ainda em consolidação nem executou testes runtime.
+- Revisão de segurança independente dos documentos de auditoria/SPEC/plano da revisão `313f999`: **APPROVED** naquela revisão; não examina os deltas da branch atual nem significa aprovação atual. Confirmou import efetivo do SDK, bloqueio non-RPC, persistência compartilhada e condições de autorização V5; sem testes runtime.
 - Revisão independente de qualidade dos três documentos: **APPROVED**, leitura integral e amostragem de fontes. Revisão posterior da matriz/consistência cruzada encontrou dois MEDIUM: consumidores UI/E2E atribuídos incorretamente a recorrência/templates e 12 CAPs planned sem destino individual. Ambos corrigidos; rechecagem restrita terminou **APPROVED**, nenhum achado material remanescente.
 - Correções posteriores de caminhos de teste no relatório são documentais; não alteram a recomendação de segurança ou os contratos.
-- Verificação explícita dos quatro arquivos por `lintMarkdownDocument` e checagem das colunas de tabela após consolidação: **zero issues**. Os 49 nomes de arquivos de teste citados na matriz foram localizados; isso não atesta que cada arquivo cubra integralmente a operação citada. O gate padrão de 17 documentos não inclui os quatro novos.
+- Verificação/revisão da matriz e nomes de testes registradas na auditoria original: evidência histórica somente; não atesta conteúdo da matriz atual nem cobertura integral por operação.
 - Nenhuma evidência de revisão ou gate autoriza refatoração, consumo de modelo pago, merge ou deploy.
 
 ### 12.1 Gates de baseline executados pelo tester independente
@@ -175,10 +191,20 @@ Rollback de deployment é apenas desenho futuro: nenhum merge/deploy está autor
 
 Tester conferiu apenas presença de envs: conexões de teste e chaves de providers ausentes; não expôs valores nem executou migrations/serviços/integrações/E2E. Warnings não fatais: sourcemaps ausentes, navegação PWA não implementada em ambiente de teste e Node `DEP0190`. A evidência local é parcial; **não declarar todos os gates verdes nem integração pronta**. Lint correspondente passou no CI do SHA base, mas isso não transforma o timeout local em PASS. Revalidar lint em ambiente funcional antes de aceitar uma implementação futura.
 
-### 12.2 Veredito e próximo passo
+### 12.2 Veredito e próximo passo da auditoria original (histórico)
 
-Quatro documentos produzidos e revisados; somente esses quatro caminhos foram adicionados. HEAD/branch preservados, nenhum arquivo de aplicação, dependência ou configuração alterado. Nenhum commit/push/merge/deploy, alteração de credencial, migration ou dado real.
+O resultado acima se referia à auditoria original em `313f999`, não à branch/revisão atual.
 
 Arquitetura recomendada: preservar API/executor/V2 e AIChatAgent; consolidar interpretação/adapters incrementalmente. Escolha A/B de inferência **pendente da POC definida**, não de mais rodadas de revisão documental. O pacote permite preparar essa prova sob nova autorização; não autoriza refatoração ampla, autoexecução ampliada ou release. A jornada atual permanece não homologada, sem ocultar a indisponibilidade local nem extrapolar o canário description-only histórico.
 
 Participação material observada: Coder da matriz, especialista do core, Architect, pesquisa SDK, Explorer documental, Tester e Reviewer/Security Reviewer; workers do pool Muse foram chamados com Luna conforme pedido. O Coder Luna atingiu limite no encerramento; conteúdo preservado, integração/correções finais feitas pelo Planner e rechecadas pelo Reviewer. Não houve substituição silenciosa de modelo.
+
+### 12.3 Validação desta revisão documental
+
+- Estado de edição observado: branch `docs/ted-core-recovery-refinement`; base `origin/main` `b21faff`; HEAD de entrada `9de7f20`. Apenas os quatro documentos autorizados foram alterados; nenhum commit foi feito. Não houve produto/E2E/POC, chamada LLM, API/PG, produção, merge ou deploy.
+- Revisão independente final única, com fechamento dos achados na mesma sessão: **APPROVED**. Foram corrigidos o denominador por operação, o alinhamento semântico das colunas e a separação de evidências históricas/atuais. A aprovação cobre somente documentação, não homologa o produto nem autoriza execução da POC ou release.
+- [x] Cada linha: frase NL ou UI-only/Sem NL explícito; célula PWA→API separada; status separado da classe; operações independentes desagrupadas.
+- [x] Contagem e formato da tabela verificados: 127 operações, 9 colunas e classe válida em cada linha.
+- [x] Anchor SPEC atualizado e itens de paridade/POC removidos do checklist histórico `313f999` para o bloco atual.
+- [x] Targets UX quantitativos registrados como propostas não medidas.
+- `lintMarkdownDocument` nos quatro arquivos — 0 issues cada; script Node inline semântica/células/classes — 127 linhas, 0 falhas; `git diff --check` — PASS. Nenhum teste de produto/POC/E2E/API/PG/produção, merge, deploy ou commit.

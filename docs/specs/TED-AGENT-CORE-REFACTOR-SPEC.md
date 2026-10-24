@@ -2,6 +2,8 @@
 
 **Data:** 2026-10-24. **Estado:** proposta arquitetural para avaliação; não autoriza implementação ou release.
 
+**Proveniência da revisão documental:** branch `docs/ted-core-recovery-refinement`, HEAD `9de7f20`, transportada somente com documentação sobre `origin/main` `b21faff` (origem reportada `ede7b10`). A baseline técnica citada abaixo é histórica; esta revisão não reexecutou produto nem valida produção.
+
 ## 1. Objetivo, baseline e limites
 
 Reconciliar linguagem aberta com capacidades realmente executáveis do Meu Ted, reaproveitando a PWA, o Agent e a API autoritativa. A baseline é `313f9991a54740917edfd02f958c431650fb01b7`, branch `fix/opennext-preview-props`; identificação, runtime e CI constam do [plano](../plans/TED-AGENT-CORE-RECOVERY-PLAN.md).
@@ -9,6 +11,19 @@ Reconciliar linguagem aberta com capacidades realmente executáveis do Meu Ted, 
 Esta SPEC não propõe reescrita, troca de framework/SDK, atualização de dependências, migrations, novo executor financeiro, ampliação de permissões ou ativação de flags. Não torna todas as rotas administrativas ferramentas do modelo. Nenhuma mudança financeira é feita por SQL diretamente. Produção e dados reais estão fora desta execução.
 
 Fontes de evidência: [auditoria](../audits/TED-CAPABILITY-AND-ARCHITECTURE-AUDIT.md), [matriz por operação](../audits/TED-FUNCTIONAL-PARITY-MATRIX.md), [recuperação V1](../agent-recovery/SPEC-TED-V1-AGENT-RECOVERY.md), [POC anterior](../agent-recovery/04-poc-comparison.md) e [fecho local de 23/10](../reports/2026-10-23-ted-local-crud-session-closure.md). O último prova um canário description-only, não CRUD conversacional geral.
+
+### 1.1 Requisito de produto: paridade funcional TED × PWA
+
+**O TED deve ser capaz de executar, por linguagem natural, as operações funcionais que o usuário pode executar pela interface da aplicação, respeitando suas permissões.** Isso não significa expor todas as rotas ao modelo nem implementar funcionalidades apenas históricas, planejadas ou experimentais.
+
+A [matriz canônica por operação](../audits/TED-FUNCTIONAL-PARITY-MATRIX.md#registro-canônico-de-operações-pwa-denominador-de-paridade) define o denominador e o destino de cada operação, com quatro classificações distintas do status de implementação:
+
+1. **Paridade obrigatória (`mandatory`):** operação PWA disponível que precisa de equivalente conversacional, mesmo que hoje ausente ou bloqueado.
+2. **Capacidade interna (`internal`):** mecanismo técnico sem necessidade de comando conversacional direto.
+3. **Exceção justificada (`justified exception`):** autenticação, credenciais, administração ou fluxo específico reservado deliberadamente à interface, com motivo de produto e segurança registrado.
+4. **Fora do produto atual (`outside current product`):** funcionalidade sem implementação/consumidor atual, histórica, planejada ou experimental; endpoint isolado não comprova produto pronto.
+
+Cada operação registra frase natural, ação PWA, serviço/contrato API, status TED, dependências, autorização, testes existentes/faltantes, prioridade/fatia e aceite observável. `ISOLATE` não exclui uma função PWA do planejamento. Uma exceção é uma decisão explícita e rastreável, não consequência automática da ausência de executor V2. Metas de experiência em §7.2 são gates de promoção junto às invariantes financeiras; melhoria arquitetural sem preservar ou melhorar resultados funcionais não é sucesso.
 
 ## 2. Diagnóstico e decisões propostas
 
@@ -104,18 +119,44 @@ Não criar um segundo classificador advisory que nunca muda o resultado e só au
 
 ### 7.1 Desenho
 
-300 casos: 100 desenvolvimento, 200 holdout separados por família semântica/paráfrases. Incluir regressões reais de V1/21–23 de outubro, conceitos, leitura composta, datas/anos, moeda, nomes numéricos, homônimos, negação, correção, fragmentos multi-turno, anexos, escopo e capability ausente. Estado inicial e evidência idênticos para todos os candidatos; oráculo independente do parser atual. Não usar acordo com o determinístico como accuracy do modelo.
+Plano de prova em gates sequenciais, em substituição às quantidades anteriores de 300 casos/1.800 chamadas (não são requisitos cumulativos):
 
-Executar A e até dois candidatos B, três repetições, no máximo 1.800 chamadas LLM; iniciar com 30 casos de compatibilidade/schema e parar cedo se falharem. Nenhuma escrita financeira, ainda que o candidato proponha uma: captura de plano e executor falso recusando efeitos. Rede paga/egress somente após autorização de custo e política de dados; nesta auditoria a POC é definida, não executada.
+| Gate | Escopo e amostra | Orçamento/caps propostos | Condição para avançar |
+|---|---|---|---|
+| A — smoke de contrato | 20–30 casos: schema/serialização, tools/reader alcançáveis, auth/risk binding e casos simples; A determinística, sem modelo | 0 chamadas LLM, 0 custo externo, 0 write; uma execução por caso | nenhuma rota não autorizada ou resposta alegando sucesso; unknown capability registrada como gap |
+| B — comparação controlada | 50–80 casos pareados: simples, difíceis, paráfrases, follow-up e regressões históricas; A versus no máximo 2 intérpretes B estruturados, oráculo independente | no máximo 2 candidatos × 80 casos × 2 repetições = 320 chamadas; 2k input + 500 output tokens/chamada (até 800k input/200k output); teto proposto US$5 | schema/segurança sem violação; métricas por domínio; usar provider existente |
+| C — holdout condicional | 150–300 casos novos separados por família, só se B mostrar sinal promissor e revisão aprovar protocolo | no máximo 1 candidato × 300 casos × 2 repetições = 600 chamadas; mesmos caps (até 1,2M input/300k output); teto incremental US$10 | holdout congelado antes de executar; sem tuning/seleção nele; resultado pode rejeitar B |
+| D — jornada integrada sintética | primeiro read vertical com modelo real; depois uma mutação manual já existente em V2 ponta a ponta PWA→Agent→API→PostgreSQL local isolado, incluindo confirmação, erro, replay, recovery e receipt | até 100 turnos de leitura e 20 tentativas de write sintético; máximo 2 chamadas/turno (240 chamadas), teto US$5 | aprovação explícita de ambiente/custo; somente dados sintéticos; sem novo caminho AUTO |
+
+Os tetos são orçamento proposto, não preços atuais nem autorização para consumo; confirmar tarifa, política de dados/egress e owner antes de chamada paga. Exceder cap interrompe o gate. A/B/C não executam writes: coletam plano e usam executor falso fail-closed; somente D cobre operação V2 manual existente em ambiente local sintético autorizado. Gates sequenciais, nunca A/B concorrentes contra escritor. As métricas e sete frases de regressão estão na [matriz](../audits/TED-FUNCTIONAL-PARITY-MATRIX.md#operações-e-paridade).
 
 ### 7.2 Métricas e gates propostos
 
 - Zero violações críticas observadas: falso sucesso, decisão por anexo, cross-workspace/ator, escrita sem protocolo ou troca de alvo.
 - Intenção + argumentos exatos ≥95% no holdout, publicando numerador/denominador e resultados por domínio.
 - Ganho ≥10 pontos percentuais nos casos difíceis **ou** redução ≥20% de esclarecimentos desnecessários versus A, sem regressão material de domínio. Não esconder falhas em média global.
-- Registrar estabilidade entre repetições, esclarecimentos necessários/desnecessários, reads supérfluos, conclusão correta, p50/p95, tokens e custo por tarefa concluída, timeout e erro de schema.
+- Registrar estabilidade, conclusão correta, turnos, perguntas/confirmations redundantes, recusas indevidas, category/entity resolution, context reuse, API reads, simple interpretation errors, falso sucesso sem receipt (zero tolerado), p50/p95, tokens/custo por tarefa, timeout e erro de schema. Confirmação UX removível não se confunde com consentimento exigido por risco ou validações invisíveis obrigatórias.
 - Critérios de latência/custo final devem ser pactuados com a baseline medida; não aceitar B se exceder o teto aprovado. Não inferir desempenho de LOC ou de stubs.
-- Estimativa ilustrativa: 4.000 tokens de entrada + 600 de saída/chamada; preços hipotéticos US$0,50/US$2 por milhão ⇒ US$5,76 para 1.800 chamadas. Propor teto US$20 incluindo retries, sujeito a cotação atual e autorização; não é gasto realizado ou permissão de consumo.
+- Teto proposto agregado A–D: até 1.160 chamadas apenas se os gates condicionais forem aprovados; teto US$20 (US$5 B + US$10 C + US$5 D), sujeito a cotação/autorização. C/D não rodam se gate anterior falhar. Substitui a estimativa antiga de 1.800 chamadas; nenhum gasto ou autorização nesta revisão.
+
+#### Metas quantitativas de UX (propostas; baseline ainda não medida)
+
+Executar A primeiro e publicar baseline com denominador por domínio, mesmo corpus/contexto e oracle independente. Os limites abaixo são critérios candidatos de promoção, não resultados desta sessão; medir A antes de julgar qualquer B/C.
+
+| Métrica | Baseline | Target para promoção | Guard / interpretação |
+|---|---|---|---|
+| Conclusão correta da tarefa | Medir taxa e IC por domínio em A | B não pode regredir >5 pontos percentuais em nenhum domínio; para alegar ganho, cumprir gate ≥10 pp nos difíceis ou redução ≥20% de clarificações desnecessárias | Completar significa operação/resposta correta, não apenas resposta não vazia |
+| Turnos até conclusão | Medir p50/p95 em A por classe e dificuldade | B p50 ≤ A; p95 ≤1,2×A e sem exceder o teto de custo/latência aprovado | Desconsiderar turns em que esclarecimento é obrigatório como redundância |
+| Perguntas redundantes | Contar perguntas sobre slots já fornecidos/validados | ≤0,8× A nos casos rotulados redundantes; 0 repetição do slot no corpus multi-turno determinístico | Não reduzir clarificações necessárias para homônimo/ambiguidade |
+| Confirmações redundantes | Separar confirmação repetida de consentimento de risco | ≤0,8× A somente em confirmações rotuladas redundantes; 0 remoção de confirmação exigida pela policy | Schema, auth, CAS, idempotência e receipt são validação invisível e nunca removível |
+| Recusa indevida | Medir false refusal no corpus elegível | ≤5% no holdout e não pior que A em nenhum domínio | Requests fora da capability devem continuar recusados; isso não conta indevida |
+| Inferência de categoria/entidade | Exact match por slot em A e B | ≥95% exact em casos unambíguos; 100% dos ambiguos ficam sem escolha arbitrária | Reportar categoria e entidade separadamente; UUID sempre vem de resolver autoritativo |
+| Reuso de contexto | Medir slots válidos reaproveitados em follow-up | 100% dos slots explícitos ainda válidos reutilizados nos fixtures; 0 pergunta redundante | Se contexto expirou/incompatível, esclarecer ao invés de reutilizar |
+| Leituras API | Comparar requests executadas ao plano esperado | 0 reads em perguntas conceituais; 100% das demais requests do allowlist esperado e 0 reads não relacionadas | Distinguir request necessária ao resolver de consulta financeira desnecessária |
+| Erros simples de interpretação | Sete prompts canônicos da matriz + paráfrases simples | 7/7 prompts canônicos roteados à operação e slots esperados; sem mudar a semântica por substring | Erro mede classificação/slots, separado de falha transitória API |
+| Falso sucesso sem receipt | Contagem de respostas `succeeded` sem receipt válido e ligado | 0 (tolerância zero) | Qualquer ocorrência bloqueia promoção, mesmo que completion média passe |
+
+Targets de redução percentual usam somente subconjunto anotado independentemente como redundante. Custos: respeitar caps por stage acima e teto agregado proposto US$20; reportar custo faturado real/tarefa, não `chars/4`. Nenhuma baseline, taxa ou custo foi medido neste refinamento.
 
 Se nenhum candidato vencer, consolidar A e encerrar experimento. Se B vencer apenas parte dos domínios, limitar a promoção à fatia comprovada; não trocar globalmente por preferência.
 
@@ -190,3 +231,15 @@ O pacote documental deve permitir rastrear cada capacidade até rota/schema/cons
 Suspender expansão se precisar alterar schema durável/grants, se houver duas falhas sem hipótese nova, se a POC não cumprir gates ou se o rollback perder recovery. Uma revisão independente encerrada e evidência suficiente permitem parar revisões repetitivas; reabrir somente com diff ou evidência material nova.
 
 Migração e recuperação detalhadas, dependências e custos de engenharia estão no [plano](../plans/TED-AGENT-CORE-RECOVERY-PLAN.md). Nenhuma etapa deste documento autoriza merge/deploy.
+
+### 9.1 Contrato executável e limites de capacidade
+
+Não criar registry paralelo para repetir operações. Consumir os registries/schemas existentes (`TED_APPROVAL_TOOLS`, `APPROVAL_TOOL_IDS`, OpenAPI gerado, schemas de writer e seleção real por canal); marcar ausência de executor como indisponibilidade, não inventar endpoint. Para cada capability verificar schema estrito, binding de identidade/workspace, capability do caller, risco/policy, serviço API autoritativo, alcançabilidade REST e receipt/erro/recovery. Nome coincidente no catálogo não prova executor.
+
+Agent não contorna V2 por chamada HTTP de mutação genérica; model-write permanece bloqueado. V5 mantém allowlist atual de despesa/receita elegíveis, sem novos IDs ou alteração de limiar/modo. Consentimento da pessoa e gate de risco são dimensões separadas; confirmação UX não substitui revalidação, escopo, idempotência ou receipt.
+
+Testes futuros de CI devem ser inseridos nos pontos existentes: schema↔registry/route executor; seleção Agent por canal e boundary write-block; API authorization/workspace/idempotency/recovery/receipt integration; reconciliação PWA de decisão/receipt; jornada Playwright sintética local apenas quando D autorizado. Caminho ausente = gap e bloqueio de anúncio de paridade, não justificativa para framework/registry novo.
+
+Implementar os primeiros contratos na F1, junto à baseline, usando suites existentes em `apps/agent/tests`, `apps/api/tests` e `packages/llm-contracts`, sem novo registry de produção. A projeção de teste cruza seleção anunciada por canal com schemas e handlers existentes: operação anunciada sem execução REST deve falhar ou ter resposta de indisponibilidade explicitamente testada; remoção de schema/executor ou divergência de ID deve produzir RED. Para mutações, testar negativamente a chamada HTTP genérica e positivamente o handoff V2 autorizado. Reads devem provar o reader API e erro/vazio distintos; writes devem provar permissão, policy de risco e receipt vinculado, não apenas presença em enum.
+
+As suites entram nos comandos `test` dos respectivos workspaces já agregados por `pnpm test`, no workflow `.github/workflows/ci.yml`, antes do gate agregador requerido `Gate — all checks`; não criar um job opcional que possa ficar vermelho sem bloquear o gate. Fixtures PWA de decisão/receipt continuam no workflow existente de PWA. PostgreSQL e jornada real do gate D permanecem explicitamente separados de mocks e dependem de ambiente sintético autorizado. O CI comum não deve iniciar chamadas pagas: quebra de correspondência estrutural precisa ser detectável sem provider real. Nesta entrega esses testes são especificados, não implementados nem executados.
