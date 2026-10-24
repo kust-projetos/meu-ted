@@ -1,6 +1,6 @@
 # Plano incremental de recuperação do núcleo conversacional TED
 
-**Registro histórico da auditoria original:** 2026-10-24, checkout `313f999` em `fix/opennext-preview-props`; seu status, gates, reviews e evidências abaixo são históricos, não validação desta branch. **Status atual deste refinamento:** alteração documental em `docs/ted-core-recovery-refinement`, checkout `9de7f20` transportado sobre `origin/main` `b21faff`; alterações não commitadas, reviewer final reportou CHANGES REQUIRED antes destas correções. Implementação, POC e integração não executadas.
+**Registro histórico da auditoria original:** 2026-10-24, checkout `313f999` em `fix/opennext-preview-props`; seu status, gates, reviews e evidências abaixo são históricos, não validação desta branch. **Status atual deste refinamento:** documentação em `docs/ted-core-recovery-refinement`, transportada pelo commit `9de7f20` sobre `origin/main` `b21faff`; refinamento `0d644c5` publicado em `origin`, revisão independente encerrada como APPROVED. Implementação, POC e jornada integrada não executadas; resultados de validação separados em §12.3.
 
 **Refinamento:** documentação nesta branch `docs/ted-core-recovery-refinement`, HEAD `9de7f20`, transportada apenas com docs sobre `origin/main` `b21faff` (proveniência de origem reportada `ede7b10`). Os relatos/checks anteriores permanecem evidência histórica e não são reexecução deste refinamento.
 
@@ -201,10 +201,11 @@ Participação material observada: Coder da matriz, especialista do core, Archit
 
 ### 12.3 Validação desta revisão documental
 
-- Estado de edição observado: branch `docs/ted-core-recovery-refinement`; base `origin/main` `b21faff`; HEAD de entrada `9de7f20`. Apenas os quatro documentos autorizados foram alterados; nenhum commit foi feito. Não houve produto/E2E/POC, chamada LLM, API/PG, produção, merge ou deploy.
+- Estado observado: branch `docs/ted-core-recovery-refinement`; base `origin/main` `b21faff`; cherry-pick documental `9de7f20` originado de `ede7b10`; refinamento `0d644c5` publicado em `origin`. A branch original OpenNext foi preservada. Apenas os quatro documentos autorizados diferem da main; não há alterações incidentais de aplicação, dependência, lockfile ou infraestrutura. A publicação documental foi explicitamente autorizada no pedido atual; a proibição histórica de push em §1 não rege este pedido. Sem POC, chamadas de modelo do produto, jornada API/PG real, produção, merge ou deploy.
 - Revisão independente final única, com fechamento dos achados na mesma sessão: **APPROVED**. Foram corrigidos o denominador por operação, o alinhamento semântico das colunas e a separação de evidências históricas/atuais. A aprovação cobre somente documentação, não homologa o produto nem autoriza execução da POC ou release.
 - [x] Cada linha: frase NL ou UI-only/Sem NL explícito; célula PWA→API separada; status separado da classe; operações independentes desagrupadas.
 - [x] Contagem e formato da tabela verificados: 127 operações, 9 colunas e classe válida em cada linha.
 - [x] Anchor SPEC atualizado e itens de paridade/POC removidos do checklist histórico `313f999` para o bloco atual.
 - [x] Targets UX quantitativos registrados como propostas não medidas.
-- `lintMarkdownDocument` nos quatro arquivos — 0 issues cada; script Node inline semântica/células/classes — 127 linhas, 0 falhas; `git diff --check` — PASS. Nenhum teste de produto/POC/E2E/API/PG/produção, merge, deploy ou commit.
+- `lintMarkdownDocument` nos quatro arquivos e checagem de links/âncoras — 0 issues; script Node inline células/classes — 127 linhas, 0 falhas (88 obrigatórias, 19 exceções, 17 internas, 3 fora do produto atual); `git diff --check` — PASS. As falhas iniciais dos scripts auxiliares foram de quoting/encoding PowerShell, corrigidas por stdin e matching sem acentos; não foram falhas dos documentos.
+- Pre-commit executado sem bypass no refinamento: `docs:lint`, `action-pins:check`, `workflows-yaml:check`, `test:skip-gate`, `capabilities:check`, `write-policy:check`, `governance:check`, `boundary:check`, `public-safety --strict`: todos PASS. Gate de orquestração pós-execução: COMPLIANT, com participação material de Coder Luna, Tester Luna e Reviewer independente.
