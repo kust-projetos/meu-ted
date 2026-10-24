@@ -5,6 +5,7 @@ import type { UIMessage } from 'agents/ai-chat-agent';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { FinanceChatAgent } from '../src/finance-chat-agent.js';
 import { routeIntent } from '../src/orchestration/intent-router.js';
+import { ConversationOrchestrator, type TurnInput, type TurnResult } from '../src/orchestration/conversation-orchestrator.js';
 import * as apiClient from '../src/tools/api-client.js';
 import { currentSession, initializeSessionSchema } from '../src/agent-config/memory/sessions.js';
 import { createRelayUsageStorage } from './helpers/relay-usage-storage.js';
@@ -37,13 +38,18 @@ type Scenario = {
 };
 type ContractCase = { id: string; scenarioId: string; invariant: string; gate: 'critical' | 'quality' | 'unobservable' };
 type Dataset = { version: string; baseline: string; scenarios: Scenario[]; contractCases: ContractCase[] };
+type PipelineEvidence = {
+  input: { text: string; decisionText: string | undefined };
+  plan: { mode: string; operations: string[] };
+  result: TurnResult;
+};
 type Observation = {
   scenarioId: string;
   domain: string;
   difficulty: string;
   oracle: Scenario['oracle'];
   route: { mode: string; operations: string[]; operationsKinds: string[] };
-  rest: { httpStatus: number; status: string | null; errorCode: string | null; responseOutput: string | null; clarificationText: string | null; pendingStatus: string | null; pendingOperation: unknown; apiReads: string[]; apiReadPaths: string[]; apiRequests: string[]; readQueries: Array<{ path: string; query: Record<string, unknown> }>; v2Proposals: number; v2Decisions: number; v2ExecutionCalls: number; proposalArgs: unknown[]; syntheticRelayCalls: number; unexpectedApiRequests: string[]; unexpectedOutbound: number; unexpectedOutboundRequests: string[] };
+  rest: { pipeline: PipelineEvidence[]; httpStatus: number; status: string | null; errorCode: string | null; responseOutput: string | null; clarificationText: string | null; pendingStatus: string | null; pendingOperation: unknown; apiReads: string[]; apiReadPaths: string[]; apiRequests: string[]; readQueries: Array<{ path: string; query: Record<string, unknown> }>; v2Proposals: number; v2Decisions: number; v2ExecutionCalls: number; proposalArgs: unknown[]; syntheticRelayCalls: number; unexpectedApiRequests: string[]; unexpectedOutbound: number; unexpectedOutboundRequests: string[] };
   stateEvidence: { expectedFixtureMatches: boolean; accountsLoaded: string[]; categoriesLoaded: string[]; accountRowsLoaded: unknown[]; categoryRowsLoaded: unknown[]; transcriptMessagesLoaded: number; conversationId: string; runtimeSessionReads: number; unsupportedFixtureKinds: string[]; financialExecutions: number };
   checks: Record<string, { classification: CheckClassification; reason: string }>;
   routeOracleMatch: boolean;
@@ -207,6 +213,17 @@ async function observeRest(scenario: Scenario): Promise<Observation> {
     created_at: new Date(0).toISOString(),
   });
 
+  const pipeline: PipelineEvidence[] = [];
+  const originalRunTurn = ConversationOrchestrator.prototype.runTurn;
+  const pipelineSpy = vi.spyOn(ConversationOrchestrator.prototype, 'runTurn').mockImplementation(async function (this: ConversationOrchestrator, input: TurnInput) {
+    const result = await originalRunTurn.call(this, input);
+    pipeline.push({
+      input: { text: input.text, decisionText: input.decisionText },
+      plan: { mode: result.plan.mode, operations: result.plan.requestedOperations.map((operation) => operation.name) },
+      result,
+    });
+    return result;
+  });
   const apiReads: string[] = [];
   const apiReadPaths: string[] = [];
   const apiRequests: string[] = [];
@@ -316,6 +333,7 @@ async function observeRest(scenario: Scenario): Promise<Observation> {
       body: JSON.stringify({ text: scenario.text, intentionId: `f1-${scenario.id}` }),
     }));
   } catch (error) {
+    pipelineSpy.mockRestore();
     const plan = routeIntent(scenario.text);
     const operations = plan.requestedOperations.map((operation) => operation.name);
     const routeOracleMatch = scenario.oracle.allowedRoutePlans.some((allowed) =>
@@ -340,7 +358,7 @@ async function observeRest(scenario: Scenario): Promise<Observation> {
     return {
       scenarioId: scenario.id, domain: scenario.domain, difficulty: scenario.difficulty, oracle: scenario.oracle,
       route: { mode: plan.mode, operations, operationsKinds: plan.requestedOperations.map((operation) => operation.kind) },
-      rest: { httpStatus: 0, status: null, errorCode: error instanceof Error ? error.message : String(error), responseOutput: null, clarificationText: null, pendingStatus: null, pendingOperation: null, apiReads, apiReadPaths, apiRequests, readQueries: loadedReadQueries, v2Proposals, v2Decisions, v2ExecutionCalls: financialExecutionCalls, proposalArgs, syntheticRelayCalls, unexpectedApiRequests, unexpectedOutbound, unexpectedOutboundRequests },
+      rest: { pipeline, httpStatus: 0, status: null, errorCode: error instanceof Error ? error.message : String(error), responseOutput: null, clarificationText: null, pendingStatus: null, pendingOperation: null, apiReads, apiReadPaths, apiRequests, readQueries: loadedReadQueries, v2Proposals, v2Decisions, v2ExecutionCalls: financialExecutionCalls, proposalArgs, syntheticRelayCalls, unexpectedApiRequests, unexpectedOutbound, unexpectedOutboundRequests },
       stateEvidence: { expectedFixtureMatches: false, accountsLoaded: [...loadedAccountIds], categoriesLoaded: [...loadedCategoryIds], accountRowsLoaded: loadedAccountRows, categoryRowsLoaded: loadedCategoryRows, transcriptMessagesLoaded: fixtureMessages.length, conversationId: seededSession.conversationId, runtimeSessionReads, unsupportedFixtureKinds, financialExecutions: financialExecutionCalls },
       checks,
       routeOracleMatch,
@@ -348,6 +366,7 @@ async function observeRest(scenario: Scenario): Promise<Observation> {
       harnessElapsedMs: Number((performance.now() - startedAt).toFixed(3)),
     };
   }
+  pipelineSpy.mockRestore();
   const body = await response.json().catch(() => ({})) as { status?: unknown; code?: unknown; output?: unknown; clarification?: unknown; pendingOperation?: { status?: unknown; id?: unknown; presentation?: unknown; operation?: unknown } };
   const plan = routeIntent(scenario.text);
   const operations = plan.requestedOperations.map((operation) => operation.name);
@@ -439,13 +458,14 @@ async function observeRest(scenario: Scenario): Promise<Observation> {
       ? 'FAIL'
       : completionChecks.some((check) => check.classification === 'FAIL') ? 'FAIL'
         : completionChecks.some((check) => check.classification === 'INCONCLUSIVE') ? 'INCONCLUSIVE'
-          : scenario.oracle.completion === 'honest-limitation' && plan.mode === 'unsupported' && syntheticRelayCalls === 0 ? 'UNSUPPORTED' : 'PASS';
+          : scenario.oracle.completion === 'honest-limitation' && pipeline.at(-1)?.plan.mode === 'unsupported' && syntheticRelayCalls === 0 ? 'UNSUPPORTED' : 'PASS';
   sessionDb.close();
   vi.setSystemTime(wallClockBeforeScenario);
   return {
     scenarioId: scenario.id, domain: scenario.domain, difficulty: scenario.difficulty, oracle: scenario.oracle,
     route: { mode: plan.mode, operations, operationsKinds: plan.requestedOperations.map((operation) => operation.kind) },
     rest: {
+      pipeline,
       httpStatus: response.status,
       status: typeof body.status === 'string' ? body.status : null,
       errorCode,
@@ -490,7 +510,24 @@ function metrics(observations: Observation[]) {
   const eligibleRoute = observations;
   const routeMatched = eligibleRoute.filter((item) => item.routeOracleMatch).length;
   const domains = [...new Set(observations.map((item) => item.domain))].sort();
+  const effective = observations.filter((item) => item.rest.pipeline.length > 0);
+  const effectiveMatches = effective.filter((item) => {
+    const actual = item.rest.pipeline.at(-1)!.plan;
+    return item.oracle.allowedRoutePlans.some((allowed) => allowed.mode === actual.mode && [...allowed.operations].sort().join('\0') === [...actual.operations].sort().join('\0'));
+  }).length;
+  const divergences = effective.flatMap((item) => {
+    const actual = item.rest.pipeline.at(-1)!.plan;
+    return actual.mode === item.route.mode && [...actual.operations].sort().join('\0') === [...item.route.operations].sort().join('\0')
+      ? [] : [{ scenarioId: item.scenarioId, isolated: item.route, effective: actual }];
+  });
   return {
+    effectiveRestPlanExactMatch: {
+      status: 'OBSERVED_WITH_LIMIT', numerator: effectiveMatches, denominator: effective.length,
+      value: effective.length ? effectiveMatches / effective.length : null,
+      unavailable: observations.filter((item) => item.rest.pipeline.length === 0).map((item) => ({ scenarioId: item.scenarioId, reason: 'REST did not return an orchestrator result; no effective plan inferred from isolated classification.' })),
+      note: 'Captured from the real runTurn return; route agreement is diagnostic, not task completion.',
+    },
+    isolatedVsEffectiveDivergences: divergences,
     routeOperationExactMatch: {
       status: 'OBSERVED', numerator: routeMatched, denominator: eligibleRoute.length,
       value: eligibleRoute.length ? routeMatched / eligibleRoute.length : null,
@@ -586,7 +623,7 @@ function evaluateContractCase(contractCase: ContractCase, observation: Observati
     }),
     'historical-year-not-amount': () => ({
       classification: observation.rest.v2Proposals === 0 && noExecution(observation) && !observation.rest.apiRequests.some((request) => request.includes('/pending-operations/v2/') && request.endsWith('/execute')) ? 'PASS' : 'FAIL',
-      evidence: [`route=${observation.route.mode}:${JSON.stringify(observation.route.operations)}`, `proposal=${observation.rest.v2Proposals}`, `execute=${observation.rest.v2ExecutionCalls}`], reason: 'Safety invariant: year text cannot cause an expense proposal or execution. Route-quality mismatch is reported separately.'
+      evidence: [`isolatedRouteDiagnostic=${observation.route.mode}:${JSON.stringify(observation.route.operations)}`, `effectiveRestPlan=${JSON.stringify(observation.rest.pipeline.at(-1)?.plan ?? null)}`, `proposal=${observation.rest.v2Proposals}`, `execute=${observation.rest.v2ExecutionCalls}`], reason: 'Safety invariant: year text cannot cause an expense proposal or execution. Route-quality mismatch is reported separately.'
     }),
     'fatura-is-statement': () => ({
       classification: observation.rest.apiReadPaths.includes('GET /cards/statements') && !observation.rest.apiReadPaths.includes('GET /payables') ? 'PASS' : 'FAIL',
@@ -691,12 +728,24 @@ describe('TED F1 baseline: versioned synthetic product corpus', () => {
     expect(required.every((text) => data.scenarios.some((scenario) => scenario.text === text))).toBe(true);
   });
 
+  it('observes the effective REST pipeline independently from the isolated classifier', async () => {
+    const scenario = registrationDataset.scenarios.find((item) => item.id === 'F1-B013')!;
+    const observation = await observeRest(scenario);
+    expect(observation.rest).toHaveProperty('pipeline');
+    const pipeline = (observation.rest as unknown as { pipeline: Array<{ plan: unknown; result: unknown }> }).pipeline;
+    expect(pipeline).toHaveLength(1);
+    expect(pipeline[0]?.plan).toBeTruthy();
+    expect(pipeline[0]?.result).toBeTruthy();
+  });
+
   it('runs all scenarios through the real REST entry with only synthetic, fail-closed mocks and emits machine-readable evidence', async () => {
     const data = await loadDataset();
     const observations: Observation[] = [];
     for (const scenario of data.scenarios) observations.push(await observeRest(scenario));
     const report = {
-      schemaVersion: '1.0.0', generatedAt: new Date().toISOString(), baseline: data.baseline,
+      schemaVersion: '1.1.0', generatedAt: new Date().toISOString(), baseline: data.baseline,
+      revisionBase: '98221f5a2c92de01d18d71fc6a7b05988c8139c3',
+      measurementRevision: 'F1.1: additive actual REST runTurn evidence; original corpus and completion expectations unchanged; isolated routing remains diagnostic only.',
       execution: { environment: 'local-synthetic', providerIdentity: 'opencode-zen/zen-free-model (allowlisted; local fetch interception)', llmCalls: 0, syntheticRelayCalls: observations.reduce((sum, item) => sum + item.rest.syntheticRelayCalls, 0), externalNetwork: false, realFinancialData: false, realWriter: false },
       scenarios: observations,
       contractCases: data.contractCases.map((item) => ({ ...item, observationScenarioId: item.scenarioId })),

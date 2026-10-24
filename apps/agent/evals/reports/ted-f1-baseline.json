@@ -1,7 +1,9 @@
 {
-  "schemaVersion": "1.0.0",
-  "generatedAt": "2026-10-24T16:12:49.993Z",
+  "schemaVersion": "1.1.0",
+  "generatedAt": "2026-10-24T16:58:10.248Z",
   "baseline": "2b8a478fcc3d5df1ddbb52674795b57722a51799",
+  "revisionBase": "98221f5a2c92de01d18d71fc6a7b05988c8139c3",
+  "measurementRevision": "F1.1: additive actual REST runTurn evidence; original corpus and completion expectations unchanged; isolated routing remains diagnostic only.",
   "execution": {
     "environment": "local-synthetic",
     "providerIdentity": "opencode-zen/zen-free-model (allowlisted; local fetch interception)",
@@ -66,6 +68,86 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Gastei 50 com carne"
+            },
+            "plan": {
+              "mode": "mutation-proposal",
+              "operations": [
+                "transactions.expense.create"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B001",
+                "traceId": "f1-F1-B001",
+                "text": "Gastei 50 com carne",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B001"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "mutation-proposal",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "transactions.expense.create",
+                    "kind": "mutation"
+                  }
+                ],
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                "draft": {
+                  "draftId": "975b45d68898d2e6e92a5bf041bd92488d70dcc97bac6965d5a6fb3da5ba3f58",
+                  "tool": "transactions.expense.create",
+                  "missingFields": [
+                    "accountId",
+                    "categoryId"
+                  ],
+                  "question": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -156,7 +238,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 45.386
+      "harnessElapsedMs": 14.408
     },
     {
       "scenarioId": "F1-B002",
@@ -211,6 +293,77 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Quanto gastei este mês"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "get_month_summary"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B002",
+                "traceId": "f1-F1-B002",
+                "text": "Quanto gastei este mês",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B002"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "get_month_summary",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "get_month_summary",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_card_installments"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -296,7 +449,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 22.485
+      "harnessElapsedMs": 40.825
     },
     {
       "scenarioId": "F1-B003",
@@ -345,6 +498,97 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Crie conta chamada Nubank"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_accounts"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B003",
+                "traceId": "f1-F1-B003",
+                "text": "Crie conta chamada Nubank",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B003"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "accounts",
+                "skillNames": [
+                  "saldo-extrato",
+                  "contas-cartoes"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_accounts",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_accounts",
+                  "get_balance",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_account"
+                ],
+                "missingFields": [
+                  "initialBalanceCents",
+                  "kind"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "initialBalanceCents",
+                  "kind"
+                ],
+                "text": "Para criar a conta, me diga o saldo inicial e o tipo (conta no banco ou dinheiro em espécie).",
+                "draft": {
+                  "draftId": "53edc5f6847db7e9e4496f80794d2fbd2eabcacaa010a3a16e491b5c1785c301",
+                  "tool": "accounts.create",
+                  "missingFields": [
+                    "initialBalanceCents",
+                    "kind"
+                  ],
+                  "question": "Para criar a conta, me diga o saldo inicial e o tipo (conta no banco ou dinheiro em espécie).",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Para criar a conta, me diga o saldo inicial e o tipo (conta no banco ou dinheiro em espécie)."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -417,7 +661,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 8.424
+      "harnessElapsedMs": 13.91
     },
     {
       "scenarioId": "F1-B004",
@@ -480,6 +724,85 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Renomeie conta Aurora para Reserva"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_accounts"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B004",
+                "traceId": "f1-F1-B004",
+                "text": "Renomeie conta Aurora para Reserva",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B004"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "accounts",
+                "skillNames": [
+                  "saldo-extrato",
+                  "contas-cartoes"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_accounts",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_accounts",
+                  "get_balance",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_account"
+                ],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "intent"
+                ],
+                "text": "A intenção anterior foi encerrada. Descreva novamente o lançamento."
+              },
+              "response": {
+                "text": "A intenção anterior foi encerrada. Descreva novamente o lançamento."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -573,7 +896,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 6.756
+      "harnessElapsedMs": 17.689
     },
     {
       "scenarioId": "F1-B005",
@@ -619,6 +942,77 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Quais contas tenho que pagar"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_accounts"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B005",
+                "traceId": "f1-F1-B005",
+                "text": "Quais contas tenho que pagar",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B005"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "accounts",
+                "skillNames": [
+                  "saldo-extrato",
+                  "contas-cartoes"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_accounts",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_accounts",
+                  "get_balance",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_account"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei contas aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -702,7 +1096,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.034
+      "harnessElapsedMs": 9.785
     },
     {
       "scenarioId": "F1-B006",
@@ -767,6 +1161,94 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Corrija valor daquele gasto"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_transactions"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B006",
+                "traceId": "f1-F1-B006",
+                "text": "Corrija valor daquele gasto",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B006"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_transactions",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_recent_transactions",
+                  "get_balance",
+                  "list_accounts",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_card_installments"
+                ],
+                "missingFields": [
+                  "amount"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "amount"
+                ],
+                "text": "Não identifiquei o valor a registrar. Informe o valor e a descrição.",
+                "draft": {
+                  "draftId": "7236b402d38dec474ef509e136257b1d9ff64db6683eea895eb501f0c1529d78",
+                  "tool": "transactions.expense.create",
+                  "missingFields": [
+                    "amount"
+                  ],
+                  "question": "Não identifiquei o valor a registrar. Informe o valor e a descrição.",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Não identifiquei o valor a registrar. Informe o valor e a descrição."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -841,7 +1323,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 3.694
+      "harnessElapsedMs": 9.116
     },
     {
       "scenarioId": "F1-B007",
@@ -885,6 +1367,62 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Desfaça última ação"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B007",
+                "traceId": "f1-F1-B007",
+                "text": "Desfaça última ação",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B007"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Não há nada para desfazer ou cancelar."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -973,7 +1511,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 8.667
+      "harnessElapsedMs": 9.605
     },
     {
       "scenarioId": "F1-B008",
@@ -1009,6 +1547,68 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "O que é cartão de crédito?"
+            },
+            "plan": {
+              "mode": "conversation",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B008",
+                "traceId": "f1-F1-B008",
+                "text": "O que é cartão de crédito?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B008"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "conversation",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 1,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Cartão de crédito é uma forma de pagamento em que a instituição concede limite para compras e cobra os valores posteriormente."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -1081,7 +1681,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 4.545
+      "harnessElapsedMs": 12.694
     },
     {
       "scenarioId": "F1-B009",
@@ -1136,6 +1736,86 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Quanto gastei em janeiro de 2020?"
+            },
+            "plan": {
+              "mode": "mutation-proposal",
+              "operations": [
+                "transactions.expense.create"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B009",
+                "traceId": "f1-F1-B009",
+                "text": "Quanto gastei em janeiro de 2020?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B009"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "mutation-proposal",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "transactions.expense.create",
+                    "kind": "mutation"
+                  }
+                ],
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                "draft": {
+                  "draftId": "7798db1d80cb7f31e5c82287a8ace0ff77d2232f0a0c14e8d9a684fed6ab30f8",
+                  "tool": "transactions.expense.create",
+                  "missingFields": [
+                    "accountId",
+                    "categoryId"
+                  ],
+                  "question": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -1226,7 +1906,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.572
+      "harnessElapsedMs": 18.51
     },
     {
       "scenarioId": "F1-B010",
@@ -1272,6 +1952,76 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Mostre minhas faturas"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_statements"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B010",
+                "traceId": "f1-F1-B010",
+                "text": "Mostre minhas faturas",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B010"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "payables",
+                "skillNames": [
+                  "compromissos"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_statements",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_statements",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei faturas aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -1362,7 +2112,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.502
+      "harnessElapsedMs": 12.292
     },
     {
       "scenarioId": "F1-B011",
@@ -1408,6 +2158,76 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Como está meu orçamento?"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_budgets"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B011",
+                "traceId": "f1-F1-B011",
+                "text": "Como está meu orçamento?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B011"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "budgets",
+                "skillNames": [
+                  "orcamentos-metas"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_budgets",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_budgets",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei orçamentos aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -1491,7 +2311,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 3.132
+      "harnessElapsedMs": 13
     },
     {
       "scenarioId": "F1-B012",
@@ -1534,6 +2354,76 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Crie um orçamento de alimentação de 500 reais"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_budgets"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B012",
+                "traceId": "f1-F1-B012",
+                "text": "Crie um orçamento de alimentação de 500 reais",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B012"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "budgets",
+                "skillNames": [
+                  "orcamentos-metas"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_budgets",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_budgets",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei orçamentos aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -1617,7 +2507,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.702
+      "harnessElapsedMs": 10.535
     },
     {
       "scenarioId": "F1-B013",
@@ -1694,6 +2584,92 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Registre uma despesa de R$ 25,00 no mercado"
+            },
+            "plan": {
+              "mode": "mutation-proposal",
+              "operations": [
+                "transactions.expense.create"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B013",
+                "traceId": "f1-F1-B013",
+                "text": "Registre uma despesa de R$ 25,00 no mercado",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B013"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "mutation-proposal",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "transactions.expense.create",
+                    "kind": "mutation"
+                  }
+                ],
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "manual"
+              },
+              "mutation": {
+                "operationId": "synthetic-pending-F1-B013",
+                "status": "proposed",
+                "presentation": {
+                  "id": "synthetic-pending-F1-B013",
+                  "status": "proposed",
+                  "tool": "transactions.expense.create",
+                  "title": "Confirmar despesa",
+                  "amountCents": 2500,
+                  "description": "mercado",
+                  "date": "2026-10-24",
+                  "account": {
+                    "id": "10000000-0000-4000-8000-000000000003",
+                    "label": "Conta principal"
+                  },
+                  "category": {
+                    "id": "20000000-0000-4000-8000-000000000003",
+                    "label": "Mercado"
+                  },
+                  "expiresAt": "2026-10-24T12:30:00.000Z",
+                  "warnings": []
+                }
+              },
+              "response": {
+                "text": "Proposta: mercado. Confirma?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -1856,7 +2832,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 10.287
+      "harnessElapsedMs": 17.835
     },
     {
       "scenarioId": "F1-B014",
@@ -1910,6 +2886,86 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Recebi R$ 200,00 de salário"
+            },
+            "plan": {
+              "mode": "mutation-proposal",
+              "operations": [
+                "transactions.income.create"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B014",
+                "traceId": "f1-F1-B014",
+                "text": "Recebi R$ 200,00 de salário",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B014"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "mutation-proposal",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "transactions.income.create",
+                    "kind": "mutation"
+                  }
+                ],
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                "draft": {
+                  "draftId": "beee87de2c59d7292ba1c1fe6292e549fcfd7e13c6bbb5e0548d3759a69d3184",
+                  "tool": "transactions.income.create",
+                  "missingFields": [
+                    "accountId",
+                    "categoryId"
+                  ],
+                  "question": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -2000,7 +3056,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 4.845
+      "harnessElapsedMs": 13.285
     },
     {
       "scenarioId": "F1-B015",
@@ -2040,6 +3096,62 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Anotei cinquenta reais de carne"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B015",
+                "traceId": "f1-F1-B015",
+                "text": "Anotei cinquenta reais de carne",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B015"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -2112,7 +3224,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 3.113
+      "harnessElapsedMs": 9.812
     },
     {
       "scenarioId": "F1-B016",
@@ -2177,6 +3289,62 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Renomeie Aurora para Reserva"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B016",
+                "traceId": "f1-F1-B016",
+                "text": "Renomeie Aurora para Reserva",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B016"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -2249,7 +3417,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.728
+      "harnessElapsedMs": 11.962
     },
     {
       "scenarioId": "F1-B017",
@@ -2288,6 +3456,85 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Quanto gastei em 2020?"
+            },
+            "plan": {
+              "mode": "mutation-proposal",
+              "operations": [
+                "transactions.expense.create"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B017",
+                "traceId": "f1-F1-B017",
+                "text": "Quanto gastei em 2020?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B017"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "mutation-proposal",
+                "domain": "transactions",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "transactions.expense.create",
+                    "kind": "mutation"
+                  }
+                ],
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "ambiguity": null,
+                "confidence": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                "draft": {
+                  "draftId": "8d08d718e28ef0d62b1147e8c0bd3b42aa4620bcd304fc131dd54eafa75094e6",
+                  "tool": "transactions.expense.create",
+                  "missingFields": [
+                    "accountId",
+                    "categoryId"
+                  ],
+                  "question": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -2378,7 +3625,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 3.815
+      "harnessElapsedMs": 12.892
     },
     {
       "scenarioId": "F1-B018",
@@ -2414,6 +3661,68 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "O que é uma fatura?"
+            },
+            "plan": {
+              "mode": "conversation",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B018",
+                "traceId": "f1-F1-B018",
+                "text": "O que é uma fatura?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B018"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "conversation",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 1,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Fatura é o demonstrativo periódico de compras e valores devidos no cartão."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -2486,7 +3795,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 4.195
+      "harnessElapsedMs": 7.584
     },
     {
       "scenarioId": "F1-B019",
@@ -2532,6 +3841,76 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Liste meus cartões"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_cards"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B019",
+                "traceId": "f1-F1-B019",
+                "text": "Liste meus cartões",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B019"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "cards",
+                "skillNames": [
+                  "contas-cartoes"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_cards",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_cards",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei cartões aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -2615,7 +3994,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 2.725
+      "harnessElapsedMs": 8.27
     },
     {
       "scenarioId": "F1-B020",
@@ -2662,6 +4041,77 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Pague a conta de luz"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_accounts"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B020",
+                "traceId": "f1-F1-B020",
+                "text": "Pague a conta de luz",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B020"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "accounts",
+                "skillNames": [
+                  "saldo-extrato",
+                  "contas-cartoes"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_accounts",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_accounts",
+                  "get_balance",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_account"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei contas aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -2745,7 +4195,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.119
+      "harnessElapsedMs": 10.336
     },
     {
       "scenarioId": "F1-B021",
@@ -2791,6 +4241,62 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Foi 75, não 50"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B021",
+                "traceId": "f1-F1-B021",
+                "text": "Foi 75, não 50",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B021"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -2865,7 +4371,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.956
+      "harnessElapsedMs": 12.199
     },
     {
       "scenarioId": "F1-B022",
@@ -2908,6 +4414,62 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "E ontem"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B022",
+                "traceId": "f1-F1-B022",
+                "text": "E ontem",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B022"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -2982,7 +4544,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.495
+      "harnessElapsedMs": 13.243
     },
     {
       "scenarioId": "F1-B023",
@@ -3028,6 +4590,77 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Quais contas eu tenho?"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_accounts"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B023",
+                "traceId": "f1-F1-B023",
+                "text": "Quais contas eu tenho?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B023"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "accounts",
+                "skillNames": [
+                  "saldo-extrato",
+                  "contas-cartoes"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_accounts",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_accounts",
+                  "get_balance",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_account"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei contas aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -3111,7 +4744,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 3.695
+      "harnessElapsedMs": 8.336
     },
     {
       "scenarioId": "F1-B024",
@@ -3183,6 +4816,83 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Qual o saldo da minha conta Nubank?"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "get_balance",
+                "list_accounts"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B024",
+                "traceId": "f1-F1-B024",
+                "text": "Qual o saldo da minha conta Nubank?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B024"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "accounts",
+                "skillNames": [
+                  "saldo-extrato",
+                  "contas-cartoes"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "get_balance",
+                    "kind": "read"
+                  },
+                  {
+                    "name": "list_accounts",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_account"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "failClosed": true,
+              "response": {
+                "text": "Não consegui acessar seus dados financeiros agora. Tente novamente em instantes."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -3284,7 +4994,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 3.327
+      "harnessElapsedMs": 14.782
     },
     {
       "scenarioId": "F1-B025",
@@ -3342,6 +5052,77 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Mostre meu extrato de ontem"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_transactions"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B025",
+                "traceId": "f1-F1-B025",
+                "text": "Mostre meu extrato de ontem",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B025"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_transactions",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_recent_transactions",
+                  "get_balance",
+                  "list_accounts",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_card_installments"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -3427,7 +5208,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.891
+      "harnessElapsedMs": 20.124
     },
     {
       "scenarioId": "F1-B026",
@@ -3485,6 +5266,77 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Quanto gastei ontem?"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "get_month_summary"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B026",
+                "traceId": "f1-F1-B026",
+                "text": "Quanto gastei ontem?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B026"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "get_month_summary",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "get_month_summary",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_card_installments"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -3570,7 +5422,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 5.551
+      "harnessElapsedMs": 19.855
     },
     {
       "scenarioId": "F1-B027",
@@ -3611,6 +5463,68 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Gastei uns 50 com carne"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B027",
+                "traceId": "f1-F1-B027",
+                "text": "Gastei uns 50 com carne",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B027"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "transactions",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "amount"
+                ],
+                "ambiguity": "ambiguous:approximate_amount",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "amount"
+                ],
+                "text": "O valor parece aproximado. Informe o valor exato em reais para eu registrar."
+              },
+              "response": {
+                "text": "O valor parece aproximado. Informe o valor exato em reais para eu registrar."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -3683,7 +5597,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 2.988
+      "harnessElapsedMs": 5.856
     },
     {
       "scenarioId": "F1-B028",
@@ -3719,6 +5633,68 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Não registre um gasto de 50 reais"
+            },
+            "plan": {
+              "mode": "cancel",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B028",
+                "traceId": "f1-F1-B028",
+                "text": "Não registre um gasto de 50 reais",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B028"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "cancel",
+                "domain": "general",
+                "skillNames": [],
+                "requestedOperations": [],
+                "requestedTools": [
+                  "conversation"
+                ],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": null,
+                "confidence": 1,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "intent"
+                ],
+                "text": "Entendi que este lançamento não deve ser registrado. Nada foi criado."
+              },
+              "response": {
+                "text": "Entendi que este lançamento não deve ser registrado. Nada foi criado."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -3791,7 +5767,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 2.916
+      "harnessElapsedMs": 7.2
     },
     {
       "scenarioId": "F1-B029",
@@ -3833,6 +5809,86 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Gastei R$ 0,00 com carne"
+            },
+            "plan": {
+              "mode": "mutation-proposal",
+              "operations": [
+                "transactions.expense.create"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B029",
+                "traceId": "f1-F1-B029",
+                "text": "Gastei R$ 0,00 com carne",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B029"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "mutation-proposal",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "transactions.expense.create",
+                    "kind": "mutation"
+                  }
+                ],
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                "draft": {
+                  "draftId": "4f312ce74d7545c91ab5770f07a806380ec53aa1c6aeff7889da554e2b069265",
+                  "tool": "transactions.expense.create",
+                  "missingFields": [
+                    "accountId",
+                    "categoryId"
+                  ],
+                  "question": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -3923,7 +5979,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.231
+      "harnessElapsedMs": 12.483
     },
     {
       "scenarioId": "F1-B030",
@@ -3977,6 +6033,86 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Gastei R$ 5.000,00 com carne"
+            },
+            "plan": {
+              "mode": "mutation-proposal",
+              "operations": [
+                "transactions.expense.create"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B030",
+                "traceId": "f1-F1-B030",
+                "text": "Gastei R$ 5.000,00 com carne",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B030"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "mutation-proposal",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "transactions.expense.create",
+                    "kind": "mutation"
+                  }
+                ],
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                "draft": {
+                  "draftId": "317a341f1a854877019e34f2be8f93fbd3bcc131aff3849bde1d34d77076c3c0",
+                  "tool": "transactions.expense.create",
+                  "missingFields": [
+                    "accountId",
+                    "categoryId"
+                  ],
+                  "question": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -4067,7 +6203,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 3.01
+      "harnessElapsedMs": 11.879
     },
     {
       "scenarioId": "F1-B031",
@@ -4111,6 +6247,62 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Desfaça a última ação"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B031",
+                "traceId": "f1-F1-B031",
+                "text": "Desfaça a última ação",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B031"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Não há nada para desfazer ou cancelar."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -4198,7 +6390,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 1.924
+      "harnessElapsedMs": 6.508
     },
     {
       "scenarioId": "F1-B032",
@@ -4240,6 +6432,62 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Desfaça a operação 123"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B032",
+                "traceId": "f1-F1-B032",
+                "text": "Desfaça a operação 123",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B032"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Não há nada para desfazer ou cancelar."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -4327,7 +6575,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 1.966
+      "harnessElapsedMs": 6.352
     },
     {
       "scenarioId": "F1-B033",
@@ -4373,6 +6621,76 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Quero ver a fatura do cartão"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_statements"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B033",
+                "traceId": "f1-F1-B033",
+                "text": "Quero ver a fatura do cartão",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B033"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "payables",
+                "skillNames": [
+                  "compromissos"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_statements",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_statements",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei faturas aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -4463,7 +6781,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 3.465
+      "harnessElapsedMs": 8.784
     },
     {
       "scenarioId": "F1-B034",
@@ -4509,6 +6827,76 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Quanto falta pagar da fatura?"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_statements"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B034",
+                "traceId": "f1-F1-B034",
+                "text": "Quanto falta pagar da fatura?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B034"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "payables",
+                "skillNames": [
+                  "compromissos"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_statements",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_statements",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei faturas aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -4599,7 +6987,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.697
+      "harnessElapsedMs": 7.049
     },
     {
       "scenarioId": "F1-B035",
@@ -4654,6 +7042,77 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Quanto gastei neste mês?"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "get_month_summary"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B035",
+                "traceId": "f1-F1-B035",
+                "text": "Quanto gastei neste mês?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B035"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "get_month_summary",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "get_month_summary",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_card_installments"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -4739,7 +7198,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 3.706
+      "harnessElapsedMs": 12.291
     },
     {
       "scenarioId": "F1-B036",
@@ -4794,6 +7253,77 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Me diga o total das despesas do mês atual"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_transactions"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B036",
+                "traceId": "f1-F1-B036",
+                "text": "Me diga o total das despesas do mês atual",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B036"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_transactions",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_recent_transactions",
+                  "get_balance",
+                  "list_accounts",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_card_installments"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -4879,7 +7409,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 3.561
+      "harnessElapsedMs": 23.489
     },
     {
       "scenarioId": "F1-B037",
@@ -4935,6 +7465,62 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "E em janeiro de 2020?"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B037",
+                "traceId": "f1-F1-B037",
+                "text": "E em janeiro de 2020?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B037"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -5007,7 +7593,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.939
+      "harnessElapsedMs": 7.446
     },
     {
       "scenarioId": "F1-B038",
@@ -5053,6 +7639,75 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Quais categorias existem?"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_categories"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B038",
+                "traceId": "f1-F1-B038",
+                "text": "Quais categorias existem?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B038"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "categories",
+                "skillNames": [
+                  "categorias"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_categories",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_categories",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei categorias aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -5136,7 +7791,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 4.044
+      "harnessElapsedMs": 9.685
     },
     {
       "scenarioId": "F1-B039",
@@ -5181,6 +7836,84 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Crie a categoria Viagem"
+            },
+            "plan": {
+              "mode": "mutation-proposal",
+              "operations": [
+                "categories.create"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B039",
+                "traceId": "f1-F1-B039",
+                "text": "Crie a categoria Viagem",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B039"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "mutation-proposal",
+                "domain": "categories",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "categories.create",
+                    "kind": "mutation"
+                  }
+                ],
+                "requestedTools": [],
+                "missingFields": [
+                  "kind"
+                ],
+                "ambiguity": null,
+                "confidence": 1,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "kind"
+                ],
+                "text": "A categoria “Viagem” é de despesa ou de receita?",
+                "draft": {
+                  "draftId": "9fa90a90d918f2246098f56efa72db8b7e06ac99a6cff596b749c0d4f8e100b7",
+                  "tool": "categories.create",
+                  "missingFields": [
+                    "kind"
+                  ],
+                  "question": "A categoria “Viagem” é de despesa ou de receita?",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "A categoria “Viagem” é de despesa ou de receita?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -5253,7 +7986,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 12.097
+      "harnessElapsedMs": 13.463
     },
     {
       "scenarioId": "F1-B040",
@@ -5311,6 +8044,62 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Renomeie Mercado para Feira"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B040",
+                "traceId": "f1-F1-B040",
+                "text": "Renomeie Mercado para Feira",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B040"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -5383,7 +8172,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.42
+      "harnessElapsedMs": 8.485
     },
     {
       "scenarioId": "F1-B041",
@@ -5443,6 +8232,75 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Desative a categoria Antiga"
+            },
+            "plan": {
+              "mode": "mutation-proposal",
+              "operations": [
+                "categories.deactivate"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B041",
+                "traceId": "f1-F1-B041",
+                "text": "Desative a categoria Antiga",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B041"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "mutation-proposal",
+                "domain": "categories",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "categories.deactivate",
+                    "kind": "mutation"
+                  }
+                ],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": null,
+                "confidence": 1,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "intent"
+                ],
+                "text": "A intenção anterior foi encerrada. Descreva novamente o lançamento."
+              },
+              "response": {
+                "text": "A intenção anterior foi encerrada. Descreva novamente o lançamento."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -5535,7 +8393,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.814
+      "harnessElapsedMs": 10.291
     },
     {
       "scenarioId": "F1-B042",
@@ -5578,6 +8436,75 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Troque a cor da categoria Mercado"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_categories"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B042",
+                "traceId": "f1-F1-B042",
+                "text": "Troque a cor da categoria Mercado",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B042"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "categories",
+                "skillNames": [
+                  "categorias"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_categories",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_categories",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei categorias aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -5661,7 +8588,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.087
+      "harnessElapsedMs": 7.811
     },
     {
       "scenarioId": "F1-B043",
@@ -5700,6 +8627,63 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Transfira 100 reais para a poupança"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B043",
+                "traceId": "f1-F1-B043",
+                "text": "Transfira 100 reais para a poupança",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B043"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "failClosed": true,
+              "response": {
+                "text": "Não consegui acessar seus dados financeiros agora. Tente novamente em instantes."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -5772,7 +8756,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 1.432
+      "harnessElapsedMs": 5.516
     },
     {
       "scenarioId": "F1-B044",
@@ -5811,6 +8795,63 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Compre 3 parcelas de 120 reais"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B044",
+                "traceId": "f1-F1-B044",
+                "text": "Compre 3 parcelas de 120 reais",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B044"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "failClosed": true,
+              "response": {
+                "text": "Não consegui acessar seus dados financeiros agora. Tente novamente em instantes."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -5883,7 +8924,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 1.362
+      "harnessElapsedMs": 4.856
     },
     {
       "scenarioId": "F1-B045",
@@ -5922,6 +8963,63 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Contribua 100 reais para minha meta"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B045",
+                "traceId": "f1-F1-B045",
+                "text": "Contribua 100 reais para minha meta",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B045"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "failClosed": true,
+              "response": {
+                "text": "Não consegui acessar seus dados financeiros agora. Tente novamente em instantes."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -5994,7 +9092,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 1.566
+      "harnessElapsedMs": 5.904
     },
     {
       "scenarioId": "F1-B046",
@@ -6040,6 +9138,76 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Liste minhas contas a pagar"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_payables"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B046",
+                "traceId": "f1-F1-B046",
+                "text": "Liste minhas contas a pagar",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B046"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "payables",
+                "skillNames": [
+                  "compromissos"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_payables",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_accounts_payable",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei contas a pagar aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -6123,7 +9291,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 3.848
+      "harnessElapsedMs": 7.926
     },
     {
       "scenarioId": "F1-B047",
@@ -6169,6 +9337,76 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Tem algum boleto vencido?"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_payables"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B047",
+                "traceId": "f1-F1-B047",
+                "text": "Tem algum boleto vencido?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B047"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "payables",
+                "skillNames": [
+                  "compromissos"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_payables",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_accounts_payable",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei contas a pagar aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -6252,7 +9490,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 2.778
+      "harnessElapsedMs": 7.261
     },
     {
       "scenarioId": "F1-B048",
@@ -6298,6 +9536,76 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Tenho algum orçamento estourado?"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_budgets"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B048",
+                "traceId": "f1-F1-B048",
+                "text": "Tenho algum orçamento estourado?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B048"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "budgets",
+                "skillNames": [
+                  "orcamentos-metas"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_budgets",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_budgets",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei orçamentos aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -6381,7 +9689,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 1.86
+      "harnessElapsedMs": 6.224
     },
     {
       "scenarioId": "F1-B049",
@@ -6427,6 +9735,76 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Mostre tendências do orçamento de mercado"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_budgets"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B049",
+                "traceId": "f1-F1-B049",
+                "text": "Mostre tendências do orçamento de mercado",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B049"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "budgets",
+                "skillNames": [
+                  "orcamentos-metas"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_budgets",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_budgets",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei orçamentos aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -6510,7 +9888,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 1.812
+      "harnessElapsedMs": 9.208
     },
     {
       "scenarioId": "F1-B050",
@@ -6573,6 +9951,77 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "O que eu gastei com carne na semana passada?"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_transactions"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B050",
+                "traceId": "f1-F1-B050",
+                "text": "O que eu gastei com carne na semana passada?",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B050"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_transactions",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_recent_transactions",
+                  "get_balance",
+                  "list_accounts",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_card_installments"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -6658,7 +10107,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 3.237
+      "harnessElapsedMs": 13.238
     },
     {
       "scenarioId": "F1-B051",
@@ -6711,6 +10160,99 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Aquele gasto foi na conta Nubank"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_accounts",
+                "list_transactions"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B051",
+                "traceId": "f1-F1-B051",
+                "text": "Aquele gasto foi na conta Nubank",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B051"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_accounts",
+                    "kind": "read"
+                  },
+                  {
+                    "name": "list_transactions",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_balance",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_card_installments"
+                ],
+                "missingFields": [
+                  "amount"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "amount"
+                ],
+                "text": "Não identifiquei o valor a registrar. Informe o valor e a descrição.",
+                "draft": {
+                  "draftId": "e3325891d7d97d9fcfe1c2f19fdfd9359636f417b31fd09610d383fca83aa2f8",
+                  "tool": "transactions.expense.create",
+                  "missingFields": [
+                    "amount"
+                  ],
+                  "question": "Não identifiquei o valor a registrar. Informe o valor e a descrição.",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Não identifiquei o valor a registrar. Informe o valor e a descrição."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -6785,7 +10327,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 1.99
+      "harnessElapsedMs": 6.176
     },
     {
       "scenarioId": "F1-B052",
@@ -6832,6 +10374,62 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Era mercado, não carne"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B052",
+                "traceId": "f1-F1-B052",
+                "text": "Era mercado, não carne",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B052"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "[F1 bounded synthetic relay output; not a product/model evaluation]"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -6906,7 +10504,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.732
+      "harnessElapsedMs": 6.783
     },
     {
       "scenarioId": "F1-B053",
@@ -6965,6 +10563,94 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Corrija o valor do gasto no mercado"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_transactions"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B053",
+                "traceId": "f1-F1-B053",
+                "text": "Corrija o valor do gasto no mercado",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B053"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_transactions",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_recent_transactions",
+                  "get_balance",
+                  "list_accounts",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_card_installments"
+                ],
+                "missingFields": [
+                  "amount"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "amount"
+                ],
+                "text": "Não identifiquei o valor a registrar. Informe o valor e a descrição.",
+                "draft": {
+                  "draftId": "98ccdf6a88524dba036b041f03d95f032800e6264341f11a432a5380523afca9",
+                  "tool": "transactions.expense.create",
+                  "missingFields": [
+                    "amount"
+                  ],
+                  "question": "Não identifiquei o valor a registrar. Informe o valor e a descrição.",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Não identifiquei o valor a registrar. Informe o valor e a descrição."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -7039,7 +10725,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.721
+      "harnessElapsedMs": 7.608
     },
     {
       "scenarioId": "F1-B054",
@@ -7086,6 +10772,77 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Apague minha conta antiga"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_accounts"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B054",
+                "traceId": "f1-F1-B054",
+                "text": "Apague minha conta antiga",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B054"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "accounts",
+                "skillNames": [
+                  "saldo-extrato",
+                  "contas-cartoes"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_accounts",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_accounts",
+                  "get_balance",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall",
+                  "create_account"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Não encontrei uma memória claramente correspondente."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -7158,7 +10915,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 3.48
+      "harnessElapsedMs": 10.848
     },
     {
       "scenarioId": "F1-B055",
@@ -7210,6 +10967,86 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Registre um gasto de R$ 50,00 com carne e confirme"
+            },
+            "plan": {
+              "mode": "mutation-proposal",
+              "operations": [
+                "transactions.expense.create"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B055",
+                "traceId": "f1-F1-B055",
+                "text": "Registre um gasto de R$ 50,00 com carne e confirme",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B055"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "mutation-proposal",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "transactions.expense.create",
+                    "kind": "mutation"
+                  }
+                ],
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                "draft": {
+                  "draftId": "43695901a28f2cfda9e9b08a9f7861811865619904d5ff7be66b6fd4f203bb0b",
+                  "tool": "transactions.expense.create",
+                  "missingFields": [
+                    "accountId",
+                    "categoryId"
+                  ],
+                  "question": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -7300,7 +11137,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 3.108
+      "harnessElapsedMs": 13.529
     },
     {
       "scenarioId": "F1-B056",
@@ -7338,6 +11175,63 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Registre R$ 50,00 de carne e transfira o restante"
+            },
+            "plan": {
+              "mode": "unsupported",
+              "operations": []
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B056",
+                "traceId": "f1-F1-B056",
+                "text": "Registre R$ 50,00 de carne e transfira o restante",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B056"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "unsupported",
+                "domain": "general",
+                "skillNames": [
+                  "conversation"
+                ],
+                "requestedOperations": [],
+                "requestedTools": [],
+                "missingFields": [
+                  "intent"
+                ],
+                "ambiguity": "unsupported",
+                "confidence": 0,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "failClosed": true,
+              "response": {
+                "text": "Não consegui acessar seus dados financeiros agora. Tente novamente em instantes."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -7410,7 +11304,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 1.544
+      "harnessElapsedMs": 4.973
     },
     {
       "scenarioId": "F1-B057",
@@ -7457,6 +11351,76 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Pague metade da fatura do cartão"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "list_statements"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B057",
+                "traceId": "f1-F1-B057",
+                "text": "Pague metade da fatura do cartão",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B057"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "payables",
+                "skillNames": [
+                  "compromissos"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "list_statements",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "list_statements",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "response": {
+                "text": "Ainda não encontrei faturas aqui. Quer que eu te guie no cadastro?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -7547,7 +11511,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.058
+      "harnessElapsedMs": 7.905
     },
     {
       "scenarioId": "F1-B058",
@@ -7594,6 +11558,86 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Gastei R$ 20 em 2020"
+            },
+            "plan": {
+              "mode": "mutation-proposal",
+              "operations": [
+                "transactions.expense.create"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B058",
+                "traceId": "f1-F1-B058",
+                "text": "Gastei R$ 20 em 2020",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B058"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "mutation-proposal",
+                "domain": "transactions",
+                "skillNames": [
+                  "registros",
+                  "saldo-extrato"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "transactions.expense.create",
+                    "kind": "mutation"
+                  }
+                ],
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "ambiguity": null,
+                "confidence": 0.95
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "clarification": {
+                "missingFields": [
+                  "accountId",
+                  "categoryId"
+                ],
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                "draft": {
+                  "draftId": "13c3797e09e883f9ef53a3a3afa45b02a2a7f6c587b921a2ccd1d43162f64e71",
+                  "tool": "transactions.expense.create",
+                  "missingFields": [
+                    "accountId",
+                    "categoryId"
+                  ],
+                  "question": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+                  "expiresAt": "2026-10-24T12:15:00.000Z"
+                }
+              },
+              "response": {
+                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?"
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -7684,7 +11728,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 2.967
+      "harnessElapsedMs": 10.328
     },
     {
       "scenarioId": "F1-B059",
@@ -7720,6 +11764,7 @@
         "operationsKinds": []
       },
       "rest": {
+        "pipeline": [],
         "httpStatus": 503,
         "status": null,
         "errorCode": "synthetic.provider_unavailable",
@@ -7792,7 +11837,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "BLOCKED",
-      "harnessElapsedMs": 3.781
+      "harnessElapsedMs": 9.194
     },
     {
       "scenarioId": "F1-B060",
@@ -7848,6 +11893,77 @@
         ]
       },
       "rest": {
+        "pipeline": [
+          {
+            "input": {
+              "text": "Mostre meus gastos deste mês por categoria"
+            },
+            "plan": {
+              "mode": "read",
+              "operations": [
+                "analytics_category_breakdown"
+              ]
+            },
+            "result": {
+              "input": {
+                "intentionId": "f1-F1-B060",
+                "traceId": "f1-F1-B060",
+                "text": "Mostre meus gastos deste mês por categoria",
+                "actorId": "f1-synthetic-actor",
+                "workspaceId": "f1-synthetic-workspace",
+                "role": "member",
+                "deviceId": "f1-synthetic-device",
+                "attachments": [],
+                "channel": "pwa-rest",
+                "internalCorrection": false,
+                "audience": {
+                  "workspaceId": "f1-synthetic-workspace",
+                  "visibility": "workspace",
+                  "ownerActorId": "f1-synthetic-actor",
+                  "conversationId": "f1-conv-F1-B060"
+                }
+              },
+              "plan": {
+                "version": "2",
+                "mode": "read",
+                "domain": "categories",
+                "skillNames": [
+                  "categorias"
+                ],
+                "requestedOperations": [
+                  {
+                    "name": "analytics_category_breakdown",
+                    "kind": "read"
+                  }
+                ],
+                "requestedTools": [
+                  "analytics_category_breakdown",
+                  "get_balance",
+                  "list_accounts",
+                  "list_recent_transactions",
+                  "get_month_summary",
+                  "list_categories",
+                  "spending_insights",
+                  "recall"
+                ],
+                "missingFields": [],
+                "ambiguity": null,
+                "confidence": 0.95,
+                "correctionCount": 0
+              },
+              "policy": {
+                "capability": "financial.read",
+                "writeAuthorized": false,
+                "approvalRequired": true,
+                "authorizationMode": "none"
+              },
+              "failClosed": true,
+              "response": {
+                "text": "Não consegui acessar seus dados financeiros agora. Tente novamente em instantes."
+              }
+            }
+          }
+        ],
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
@@ -7936,7 +12052,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 2.591
+      "harnessElapsedMs": 5.055
     }
   ],
   "contractCases": [
@@ -8117,6 +12233,53 @@
     }
   ],
   "aggregate": {
+    "effectiveRestPlanExactMatch": {
+      "status": "OBSERVED_WITH_LIMIT",
+      "numerator": 29,
+      "denominator": 59,
+      "value": 0.4915254237288136,
+      "unavailable": [
+        {
+          "scenarioId": "F1-B059",
+          "reason": "REST did not return an orchestrator result; no effective plan inferred from isolated classification."
+        }
+      ],
+      "note": "Captured from the real runTurn return; route agreement is diagnostic, not task completion."
+    },
+    "isolatedVsEffectiveDivergences": [
+      {
+        "scenarioId": "F1-B009",
+        "isolated": {
+          "mode": "read",
+          "operations": [
+            "get_month_summary"
+          ],
+          "operationsKinds": [
+            "read"
+          ]
+        },
+        "effective": {
+          "mode": "mutation-proposal",
+          "operations": [
+            "transactions.expense.create"
+          ]
+        }
+      },
+      {
+        "scenarioId": "F1-B017",
+        "isolated": {
+          "mode": "unsupported",
+          "operations": [],
+          "operationsKinds": []
+        },
+        "effective": {
+          "mode": "mutation-proposal",
+          "operations": [
+            "transactions.expense.create"
+          ]
+        }
+      }
+    ],
     "routeOperationExactMatch": {
       "status": "OBSERVED",
       "numerator": 30,
@@ -8403,7 +12566,8 @@
       "gate": "critical",
       "classification": "PASS",
       "evidence": [
-        "route=read:[\"get_month_summary\"]",
+        "isolatedRouteDiagnostic=read:[\"get_month_summary\"]",
+        "effectiveRestPlan={\"mode\":\"mutation-proposal\",\"operations\":[\"transactions.expense.create\"]}",
         "proposal=0",
         "execute=0"
       ],
