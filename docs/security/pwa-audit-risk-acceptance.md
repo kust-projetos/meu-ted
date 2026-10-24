@@ -39,6 +39,11 @@
 - Vitest and `@vitest/coverage-v8` are aligned to `4.1.12` throughout workspace
   manifests, resolving the `@vitest/mocker` advisories GHSA-qxg6-89mg-rqv8 and
   GHSA-xp26-3454-mjgp. These remediations are not accepted exceptions.
+- `glob` is pinned by the root override `glob@^10` to `10.5.0`, resolving
+  GHSA-5j98-mcp5-4vw2 (CLI command injection) in the `@node-minify/core` copy
+  pulled by `@opennextjs/aws`. The `glob@13` copy used by the OpenNext adapter
+  itself is outside the affected range. This is a remediation, not an accepted
+  exception.
 - `undici` is pinned by the root override `undici@^7` to `7.30.1`, resolving
   GHSA-4qv8-2p9j-2685 (EventSource parser DoS), GHSA-f72v-6w45-q472 (SRI
   algorithm bypass), and GHSA-xjj6-f33q-929c (content-encoding DoS). The
