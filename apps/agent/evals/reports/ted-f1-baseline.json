@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.1.0",
-  "generatedAt": "2026-10-24T16:58:10.248Z",
+  "generatedAt": "2026-10-24T17:16:20.203Z",
   "baseline": "2b8a478fcc3d5df1ddbb52674795b57722a51799",
   "revisionBase": "98221f5a2c92de01d18d71fc6a7b05988c8139c3",
   "measurementRevision": "F1.1: additive actual REST runTurn evidence; original corpus and completion expectations unchanged; isolated routing remains diagnostic only.",
@@ -238,7 +238,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 14.408
+      "harnessElapsedMs": 30.256
     },
     {
       "scenarioId": "F1-B002",
@@ -449,7 +449,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 40.825
+      "harnessElapsedMs": 51.922
     },
     {
       "scenarioId": "F1-B003",
@@ -661,7 +661,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 13.91
+      "harnessElapsedMs": 38.765
     },
     {
       "scenarioId": "F1-B004",
@@ -896,7 +896,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 17.689
+      "harnessElapsedMs": 15.369
     },
     {
       "scenarioId": "F1-B005",
@@ -1096,7 +1096,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 9.785
+      "harnessElapsedMs": 12.012
     },
     {
       "scenarioId": "F1-B006",
@@ -1323,7 +1323,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 9.116
+      "harnessElapsedMs": 10.94
     },
     {
       "scenarioId": "F1-B007",
@@ -1511,7 +1511,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 9.605
+      "harnessElapsedMs": 5.841
     },
     {
       "scenarioId": "F1-B008",
@@ -1681,7 +1681,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 12.694
+      "harnessElapsedMs": 8.66
     },
     {
       "scenarioId": "F1-B009",
@@ -1906,7 +1906,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 18.51
+      "harnessElapsedMs": 19.966
     },
     {
       "scenarioId": "F1-B010",
@@ -2112,7 +2112,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 12.292
+      "harnessElapsedMs": 14.204
     },
     {
       "scenarioId": "F1-B011",
@@ -2311,7 +2311,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 13
+      "harnessElapsedMs": 7.463
     },
     {
       "scenarioId": "F1-B012",
@@ -2507,7 +2507,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 10.535
+      "harnessElapsedMs": 7.986
     },
     {
       "scenarioId": "F1-B013",
@@ -2832,7 +2832,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 17.835
+      "harnessElapsedMs": 12.72
     },
     {
       "scenarioId": "F1-B014",
@@ -3056,7 +3056,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 13.285
+      "harnessElapsedMs": 14.235
     },
     {
       "scenarioId": "F1-B015",
@@ -3224,7 +3224,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 9.812
+      "harnessElapsedMs": 13.66
     },
     {
       "scenarioId": "F1-B016",
@@ -3417,7 +3417,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 11.962
+      "harnessElapsedMs": 22.161
     },
     {
       "scenarioId": "F1-B017",
@@ -3625,7 +3625,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 12.892
+      "harnessElapsedMs": 12.175
     },
     {
       "scenarioId": "F1-B018",
@@ -3795,7 +3795,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 7.584
+      "harnessElapsedMs": 7.64
     },
     {
       "scenarioId": "F1-B019",
@@ -3994,7 +3994,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 8.27
+      "harnessElapsedMs": 8.897
     },
     {
       "scenarioId": "F1-B020",
@@ -4195,7 +4195,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 10.336
+      "harnessElapsedMs": 6.278
     },
     {
       "scenarioId": "F1-B021",
@@ -4371,7 +4371,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 12.199
+      "harnessElapsedMs": 29.153
     },
     {
       "scenarioId": "F1-B022",
@@ -4544,7 +4544,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 13.243
+      "harnessElapsedMs": 19.03
     },
     {
       "scenarioId": "F1-B023",
@@ -4744,7 +4744,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 8.336
+      "harnessElapsedMs": 26.453
     },
     {
       "scenarioId": "F1-B024",
@@ -4994,7 +4994,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 14.782
+      "harnessElapsedMs": 14.779
     },
     {
       "scenarioId": "F1-B025",
@@ -5208,7 +5208,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 20.124
+      "harnessElapsedMs": 23.369
     },
     {
       "scenarioId": "F1-B026",
@@ -5422,7 +5422,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 19.855
+      "harnessElapsedMs": 26.664
     },
     {
       "scenarioId": "F1-B027",
@@ -5597,7 +5597,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 5.856
+      "harnessElapsedMs": 6.469
     },
     {
       "scenarioId": "F1-B028",
@@ -5767,7 +5767,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 7.2
+      "harnessElapsedMs": 11.477
     },
     {
       "scenarioId": "F1-B029",
@@ -5979,7 +5979,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 12.483
+      "harnessElapsedMs": 10.334
     },
     {
       "scenarioId": "F1-B030",
@@ -6203,7 +6203,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 11.879
+      "harnessElapsedMs": 36.686
     },
     {
       "scenarioId": "F1-B031",
@@ -6390,7 +6390,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 6.508
+      "harnessElapsedMs": 7.978
     },
     {
       "scenarioId": "F1-B032",
@@ -6575,7 +6575,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 6.352
+      "harnessElapsedMs": 4.853
     },
     {
       "scenarioId": "F1-B033",
@@ -6781,7 +6781,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 8.784
+      "harnessElapsedMs": 7.321
     },
     {
       "scenarioId": "F1-B034",
@@ -6987,7 +6987,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 7.049
+      "harnessElapsedMs": 9.578
     },
     {
       "scenarioId": "F1-B035",
@@ -7198,7 +7198,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 12.291
+      "harnessElapsedMs": 40.928
     },
     {
       "scenarioId": "F1-B036",
@@ -7409,7 +7409,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 23.489
+      "harnessElapsedMs": 10.79
     },
     {
       "scenarioId": "F1-B037",
@@ -7593,7 +7593,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 7.446
+      "harnessElapsedMs": 6.458
     },
     {
       "scenarioId": "F1-B038",
@@ -7791,7 +7791,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 9.685
+      "harnessElapsedMs": 6.227
     },
     {
       "scenarioId": "F1-B039",
@@ -7986,7 +7986,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 13.463
+      "harnessElapsedMs": 23.384
     },
     {
       "scenarioId": "F1-B040",
@@ -8172,7 +8172,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 8.485
+      "harnessElapsedMs": 12.807
     },
     {
       "scenarioId": "F1-B041",
@@ -8393,7 +8393,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 10.291
+      "harnessElapsedMs": 22.322
     },
     {
       "scenarioId": "F1-B042",
@@ -8588,7 +8588,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 7.811
+      "harnessElapsedMs": 9.303
     },
     {
       "scenarioId": "F1-B043",
@@ -8756,7 +8756,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 5.516
+      "harnessElapsedMs": 6.919
     },
     {
       "scenarioId": "F1-B044",
@@ -8924,7 +8924,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.856
+      "harnessElapsedMs": 4.506
     },
     {
       "scenarioId": "F1-B045",
@@ -9092,7 +9092,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 5.904
+      "harnessElapsedMs": 3.239
     },
     {
       "scenarioId": "F1-B046",
@@ -9291,7 +9291,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 7.926
+      "harnessElapsedMs": 6.016
     },
     {
       "scenarioId": "F1-B047",
@@ -9490,7 +9490,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 7.261
+      "harnessElapsedMs": 7.059
     },
     {
       "scenarioId": "F1-B048",
@@ -9689,7 +9689,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 6.224
+      "harnessElapsedMs": 6.634
     },
     {
       "scenarioId": "F1-B049",
@@ -9888,7 +9888,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 9.208
+      "harnessElapsedMs": 19.932
     },
     {
       "scenarioId": "F1-B050",
@@ -10107,7 +10107,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 13.238
+      "harnessElapsedMs": 15.944
     },
     {
       "scenarioId": "F1-B051",
@@ -10327,7 +10327,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 6.176
+      "harnessElapsedMs": 7.861
     },
     {
       "scenarioId": "F1-B052",
@@ -10504,7 +10504,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 6.783
+      "harnessElapsedMs": 31.228
     },
     {
       "scenarioId": "F1-B053",
@@ -10725,7 +10725,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 7.608
+      "harnessElapsedMs": 8.486
     },
     {
       "scenarioId": "F1-B054",
@@ -10915,7 +10915,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 10.848
+      "harnessElapsedMs": 10.031
     },
     {
       "scenarioId": "F1-B055",
@@ -11137,7 +11137,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 13.529
+      "harnessElapsedMs": 13.642
     },
     {
       "scenarioId": "F1-B056",
@@ -11304,7 +11304,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.973
+      "harnessElapsedMs": 4.937
     },
     {
       "scenarioId": "F1-B057",
@@ -11511,7 +11511,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 7.905
+      "harnessElapsedMs": 8.589
     },
     {
       "scenarioId": "F1-B058",
@@ -11728,7 +11728,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 10.328
+      "harnessElapsedMs": 13.357
     },
     {
       "scenarioId": "F1-B059",
@@ -11837,7 +11837,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "BLOCKED",
-      "harnessElapsedMs": 9.194
+      "harnessElapsedMs": 9.678
     },
     {
       "scenarioId": "F1-B060",
@@ -12052,7 +12052,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 5.055
+      "harnessElapsedMs": 8.992
     }
   ],
   "contractCases": [
