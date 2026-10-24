@@ -209,3 +209,18 @@ Participação material observada: Coder da matriz, especialista do core, Archit
 - [x] Targets UX quantitativos registrados como propostas não medidas.
 - `lintMarkdownDocument` nos quatro arquivos e checagem de links/âncoras — 0 issues; script Node inline células/classes — 127 linhas, 0 falhas (88 obrigatórias, 19 exceções, 17 internas, 3 fora do produto atual); `git diff --check` — PASS. As falhas iniciais dos scripts auxiliares foram de quoting/encoding PowerShell, corrigidas por stdin e matching sem acentos; não foram falhas dos documentos.
 - Pre-commit executado sem bypass no refinamento: `docs:lint`, `action-pins:check`, `workflows-yaml:check`, `test:skip-gate`, `capabilities:check`, `write-policy:check`, `governance:check`, `boundary:check`, `public-safety --strict`: todos PASS. Gate de orquestração pós-execução: COMPLIANT, com participação material de Coder Luna, Tester Luna e Reviewer independente.
+
+#### Resultado final do tester independente — checkout `63801e61e34f3778cc92d6db081718c921cd43d4`
+
+| Verificação executada | Resultado observado | Limitação |
+| --- | --- | --- |
+| `pnpm docs:lint` | PASS: 17 documentos, 0 issues | Lista fixa; os quatro arquivos deste pacote também foram verificados explicitamente |
+| `pnpm typecheck` | PASS: cinco workspaces | Não comprova comportamento runtime do SDK |
+| `pnpm test` | PASS: 9.121 testes aprovados, 173 skipped | API: 172 skips e 12 arquivos skipped; Agent: 1 skip. Sem integração PostgreSQL |
+| `pnpm governance:check` | PASS | Não autoriza mudança de contrato ou release |
+| `pnpm lint` | INCONCLUSIVO: timeout após 10 minutos no lint de `llm-contracts` | Não há resultado final; não declarar PASS nem contornar o gate |
+| Lint explícito, links locais/âncoras e tabelas dos quatro documentos | PASS | Verificação documental, não paridade funcional |
+| Matriz canônica | 127 linhas, nove campos preenchidos e classes válidas; metas individualizadas | O dispatch inicial do tester ainda exigia 111 e produziu FAIL nessa comparação obsoleta; o denominador correto deste checkout é 127 |
+| `git diff --check` e escopo contra `origin/main` | PASS: árvore limpa e somente os quatro documentos autorizados | Observação no SHA acima, anterior apenas ao acréscimo deste registro de resultados |
+
+O tester retornou **FAIL** agregado por contagem esperada obsoleta e lint inconclusivo. A divergência 111→127 é do contrato inicial de validação, não defeito do produto ou falha da matriz atual; o resultado original permanece registrado, sem convertê-lo em PASS global. Os commits documentais intermediários explicam a diferença entre `0d644c5` informado no steering e `63801e6` efetivamente examinado. Nenhuma regressão foi observada nos testes executados; build, integração PostgreSQL, E2E, POC e produto em produção não foram validados. Não houve chamadas pagas do produto, serviços ou migrations. A revisão documental está encerrada; o aceite de todos os gates permanece pendente de execução conclusiva de `pnpm lint` em ambiente funcional, sem ampliar esta missão para corrigir tooling ou aplicação.
