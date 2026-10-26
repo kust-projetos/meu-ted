@@ -2,6 +2,17 @@
 
 ## F2A1 atualização (2026-10-26; somente POC)
 
+### Fecho de integração remoto — código `0c0b1d5d499c1ae10318b7ed30b34752db049cfd`
+
+- [CI `40409925179`](https://github.com/kust-projetos/meu-ted/actions/runs/40409925179): checkout **`301da30f4b23c90522d39e5e28cb7693ec30d27f`**, merge sintético do head acima com `main` `b21faff9ebd6d16353ddb85fb2fef40607dc7938`. Isso valida a integração F1 + F2-A.1, não execução isolada do head.
+- **Agent PASS**: lint, typecheck, testes, eval determinístico, arquitetura e build. O falso positivo A5 foi resolvido, sem remover a rejeição de `mutationApproved` nem liberar emissores reais. Checker local 6/6 e revisão independente **APPROVED**.
+- **PASS** no mesmo run: lint/typecheck/test de API e PWA, contratos, broker, PostgreSQL real de CI, Docker, documentação, governança, capabilities, write-policy e public-safety. A pendência de lint do código POC foi resolvida por execução Linux com a configuração real; o comando agregado local continua travando, sem ser declarado aprovado.
+- **Security FAIL**: `security:secrets` e `security:deps` passaram; `security:containers` reportou Zod `3.25.76`, `CVE-2023-54404`, HIGH, fix indicado `4.6.6`. Insumos de API/imagem/lockfile/scan não foram alterados pela POC. Isso demonstra independência pelo diff, não por repetição do scan na base. Nenhuma dependência/allowlist foi modificada e o advisory não foi descartado como falso positivo.
+- **`Gate — all checks`: SKIPPED**, não verde. Release/GHCR main-only pulados, sem deploy.
+- PWA CI separado `40409926132` (mesmo head): ainda em execução na coleta de fecho; não alegar PASS. O run anterior `40405766967`, no head `7b8841b`, passou em `quality (22, 10)` e E2E; não é prova desse novo SHA. O delta desde então é checker/testes do checker e documentação, sem mudança no código da POC.
+- **Decisão:** instrumento semântico **READY no escopo F2-A.1**, aprovado independentemente e com gates críticos observados; **integração global bloqueada pelo scan de segurança independente**. READY não equivale a CI global verde, merge autorizado, superioridade de modelo ou autorização de F2-B.
+- O PR #278 mantém a base F1. O #279 é temporário, somente validação, sem autorização de merge. A publicação de fecho é apenas documental: evidências acima pertencem ao SHA de código explicitado, não a um futuro SHA documental.
+
 ### O que mudou (comparador, parser e runner)
 
 - `ab-compare.ts`: `missingFields` e `ambiguities` comparados por **igualdade de conjuntos** (sem ordem, sem duplicata); entidades como tuplas `(kind,value,provenance)` também sem ordem; `contextProvenance` compara `origin`/`corpusId`/`turnIndex`; `requestedAction` e `capabilityAvailability` são dimensões próprias. Cada dimensão só entra no veredicto quando o oráculo a declara — declarar menos não gera `not-comparable` gratuito.
