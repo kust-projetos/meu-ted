@@ -155,9 +155,10 @@ A rodada F2A1 atua somente em:
 
 - `apps/agent/src/poc-structured/` (`structured-interpretation.ts`, `ab-compare.ts` — rastreados, modificados)
 - `apps/agent/tests/poc-structured/` (5 arquivos novos F2A1: `evaluation-runner.ts`, `f2a1-inputs.ts`, `f2a1-oracles.ts`, `f2a1-candidates.ts`, `f2a1-evaluation-runner.test.ts`; mais os testes rastreados ajustados)
+- `scripts/check-agent-v2-invariants.mjs`, `scripts/check-agent-v2-invariants.test.mjs` e `scripts/__fixtures__/agent-v2-invariants/a5-denylist/` (falso positivo A5 do CI remoto — ver "CI remoto F2A1")
 - `docs/reports/TED-F2A-POC-PREPARATION.md`
 
-`git status` desta sessão: `M` em `ab-compare.ts`, `structured-interpretation.ts`, `f2a-ab-runner.test.ts`, `f2a-structured-interpretation.test.ts`, `fixtures.ts` e este relatório; `??` nos 5 arquivos novos. Os dois relatórios F1 rastreados (`ted-f1-baseline.json`, `ted-f1-journeys.json`) aparecem como modificados pela execução dos próprios testes F1 e **não** foram tocados/restaurados aqui.
+`git status` desta sessão: `M` em `ab-compare.ts`, `structured-interpretation.ts`, `f2a-ab-runner.test.ts`, `f2a-structured-interpretation.test.ts`, `fixtures.ts` e este relatório; `??` nos 5 arquivos novos. Os dois relatórios F1 rastreados (`ted-f1-baseline.json`, `ted-f1-journeys.json`) aparecem como modificados pela execução dos próprios testes F1 e **não** foram tocados/restaurados aqui. Na correção do falso positivo A5 (seção "CI remoto F2A1"), o working tree contém apenas este relatório, `scripts/check-agent-v2-invariants.{mjs,test.mjs}` e as fixtures `a5-denylist/`.
 
 Nada de produção, corpus congelado, dependências, configs, workflows ou provider foi tocado. A correção F2-A lê as cópias empacotadas do commit congelado e não depende do estado mutável daqueles dois relatórios.
 
@@ -195,6 +196,48 @@ baseline   ca89250a7b7c0ca6d4c6ce376064677bd97cc0a8041e1ed3c2cedd087b046926  414
 ```
 
 Cada cópia foi relida do disco e comparada com os bytes do commit (`Buffer.compare === 0`): `roundtrip=true` nos três. O `.gitattributes` raiz (`* text=auto eol=lf`) mantém os arquivos em LF no índice e no worktree, então o digest não depende da plataforma.
+
+## CI remoto F2A1 (run 40405766828) — falso positivo A5 corrigido (2026-10-26)
+
+**Contexto remoto:** run `40405766828`, head `7b8841b`, checkout do merge ref `1105fa4135d424a6f1edfc2989b6e9cf84fd3ea6` (parents: `main` `b21faff9` + head `7b8841b`). O CI do Agent (lint/typecheck/test) e a avaliação passaram; a **única** falha foi `architecture:check`.
+
+**Defeito (falso positivo):** o scanner A5 (`/\\b(?:mutationApproved|approvedTool)\\b/`) acusava `apps/agent/src/poc-structured/structured-interpretation.ts:142` — o membro **literal da denylist** `FORBIDDEN_NORMALIZED_KEYS`, cuja função é justamente rejeitar `mutationApproved` vindo do modelo. É definição, não emissão.
+
+**Correção (narrow, auditável; somente o checker e seus testes):**
+
+- `scripts/check-agent-v2-invariants.mjs`: reconhece **apenas** o arquivo exato `apps/agent/src/poc-structured/structured-interpretation.ts` e **apenas** um membro que a gramática estrita aceite como **string direta** do array da declaração exata `const FORBIDDEN_NORMALIZED_KEYS ... = new Set([ ... ])`. A gramática do array é mínima: literais string cotados separados por vírgula, com whitespace/comentários (já mascarados). **Qualquer** membro não-string (objeto, array aninhado, spread, chamada computada, identificador) faz a constante inteira **falhar fechada** — nenhum membro dela é isento, como na denylist real (todos strings). Uma declaração falsa dentro de string literal não é reconhecida; comentários já são mascarados. O literal **não** foi removido nem ofuscado; não existe exclusão de arquivo/diretório nem de chave cotada em geral. Sem nova dependência.
+- Tudo o mais continua A5: emissor **antes** ou **depois** da declaração no mesmo arquivo, `{ 'mutationApproved': true }` (inclusive **depois de vírgula** num objeto aninhado ao array), array aninhado após vírgula, constante **renomeada**, e string cotada em **qualquer outro arquivo**. O arquivo nunca é isento por inteiro.
+- Fixtures novas: `scripts/__fixtures__/agent-v2-invariants/a5-denylist/{allowed,rejected}/` (parser + binding manifest, com decoy em comentário no caso aceito) e 3 testes em `scripts/check-agent-v2-invariants.test.mjs` (denylist exata aceita; membro da denylist **preservado**, não apagado; 8 violações A5 preservadas — posições 1/4/6/7/10/11 no parser, mais constante renomeada e arquivo não relacionado — incluindo o fail-closed da constante com membros não-string).
+
+**RED→GREEN (execuções reais):**
+
+```
+# RED antes da correção
+node scripts/check-agent-v2-invariants.mjs
+→ A5_MUTATION_ISSUER_OUTSIDE_EXECUTOR …structured-interpretation.ts:142
+  Agent V2 invariants RED: 1 diagnostics (540 production files scanned)   EXIT=1
+node --test scripts/check-agent-v2-invariants.test.mjs
+→ 3 failed (allowed acusa A5; rejected acusa A5 no membro da denylist além dos emissores)   EXIT=1
+
+# RED da 2ª rodada (reviewer): objeto após vírgula e array aninhado eram isentos
+node --test scripts/check-agent-v2-invariants.test.mjs
+→ 1 failed: parser com 3 A5 (esperado 6 — o membro da denylist e os dois
+  membros não-string voltavam isentos)                                    EXIT=1
+
+# GREEN depois
+node --test scripts/check-agent-v2-invariants.test.mjs
+→ 6 passed (6)                                                            EXIT=0
+node scripts/check-agent-v2-invariants.mjs
+→ Agent V2 invariants GREEN: 540 production files scanned                 EXIT=0
+pnpm --filter pi-finance-agent exec vitest run tests/poc-structured
+→ Test Files 3 passed (3) · Tests 46 passed (46)
+pnpm docs:lint
+→ 17 documentos, 0 issues, PASSED
+```
+
+Escopo: nenhuma mudança de comportamento de produção, permissões, SDK, dependências ou workflows; sem rede, provider ou commit. A denylist de runtime e seus testes (`f2a-structured-interpretation.test.ts`, NEG-06) permanecem intactos — o membro segue no array e o parser continua rejeitando o campo.
+
+**Falha de segurança do mesmo run (não resolvida aqui):** o job de container acusa `CVE-2023-54404` em Zod `3.25.76`/`4.4.3`, com correção em `4.6.6`. O achado é **herdado dos insumos** da imagem e **não foi provado** que venha da base de scan desta mudança. Por decisão de escopo, **não** foram alterados allowlist, dependências ou imagem; a falha permanece para decisão do Planner/segurança.
 
 ## Defeitos de review → correção (12/12)
 
