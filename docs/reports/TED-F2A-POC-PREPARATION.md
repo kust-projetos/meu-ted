@@ -1,22 +1,165 @@
 # TED F2-A POC — relatório de preparação (sem avaliação com modelo real)
 
-> **Status:** POC implementada, local-only, em branch `feat/ted-f2a-structured-interpretation` (arquivos ainda não commitados). **F2-B (avaliação com modelo real) é PROIBIDA nesta tarefa** e continua gateada (ver "Orçamento e gate F2-B"). Sem provider/rede, sem DB, sem SDK, sem execução financeira, sem alteração de permissões, sem mudança de produção/F1/deps/config, sem commit/push.
+## F2A1 atualização (2026-10-26; somente POC)
+
+### O que mudou (comparador, parser e runner)
+
+- `ab-compare.ts`: `missingFields` e `ambiguities` comparados por **igualdade de conjuntos** (sem ordem, sem duplicata); entidades como tuplas `(kind,value,provenance)` também sem ordem; `contextProvenance` compara `origin`/`corpusId`/`turnIndex`; `requestedAction` e `capabilityAvailability` são dimensões próprias. Cada dimensão só entra no veredicto quando o oráculo a declara — declarar menos não gera `not-comparable` gratuito.
+- `structured-interpretation.ts`: aceita `intent: 'clarify'` (com `operation: 'none'` obrigatório), campos `missingFields`/`requestedAction`, proveniência `displayed-option` e `corpusId` no formato `F2A1-*`; `missingFields` tem vocabulário fechado. Ambiguidade **sem** pergunta deixou de ser erro de schema e passou a ser divergência de comparação (o oráculo ainda exige `clarificationRequired` quando aplicável).
+- `evaluation-runner.ts` (novo): executor independente dos oráculos F2A1; injeta o contexto fornecido por caso/turno, reporta `inputContext`/`contextBinding`/`contextReasons` em cada linha e classifica `clarificationKind` (`question` vs `limitation`). Slots herdados de texto (`accountName`, `expectedName`, `description`, `yearMonth`) exigem **evidência declarada** no contexto — `suppliedValues`, texto atual, histórico permitido ou `referenceDate`; sem ela, `context-unevidenced-arg:<key>` e `FAIL`. É um conjunto fechado, não um motor de regras.
+- `f2a1-inputs.ts` (novo): contexto **obrigatório** por caso e por turno — mensagem atual exata, histórico permitido, catálogos sintéticos, opções exibidas em ordem, transações prévias, valores já fornecidos, campos resolvíveis e `referenceDate` **congelado em `2026-10-24`**. É dado estático, sem I/O e sem sessão.
+
+### Veredicto: FAIL/INCONCLUSIVE por classe de entrada
+
+| Situação | Veredicto |
+|---|---|
+| Candidato ausente (`undefined`) | `INCONCLUSIVE` (`no-candidate`) |
+| Candidato fornecido e **inválido** no schema | `FAIL` (`schema-invalid:agent.invalid_structured_interpretation`) |
+| Candidato válido com ID/entidade fora do contexto fornecido | `FAIL` (razão `context-unknown-*`) |
+| Candidato que pergunta campo já respondido pelo contexto | `FAIL` (`missing-despite-context:*`) |
+| Slot herdado sem evidência declarada (nome, descrição, período) | `FAIL` (`context-unevidenced-arg:*`) |
+| Contexto ausente para o caso | `INCONCLUSIVE` (`input-context-missing`) |
+
+### 13 cenários semânticos (6 críticos + 7 extensões)
+
+| ID | Expectativa independente |
+|---|---|
+| `F1-B005` | `read`/`list_payables`, sem pergunta, `missingFields []`, `ambiguities []` |
+| `F1-B010` | `read`/`list_statements`, sem pergunta |
+| `F1-B012` | `unsupported`, `operation none`, `requestedAction budgets.create`, `missingFields []`, `ambiguities []`, mensagem de **limitação** (não pergunta), capability nunca executável. Capability indisponível conhecida **não** é ambiguidade: `['capability']` é `FAIL` |
+| `F1-B017` | `clarify`; ano **conhecido**, falta apenas `period`; `ambiguities []` |
+| `F1-B036` | `read`/`get_month_summary` com `yearMonth 2026-10` |
+| `F1-B058` | `clarify`; entidades `amount 2000` **e** `date 2020`; falta só `date`; nunca perguntar "2020 é valor?" |
+| `F2A1-B013-catalog` | despesa 2500 / `mercado` / conta `…0003` / categoria `…0003` / `2026-10-24` |
+| `F2A1-B015-colloquial` | "cinquenta reais" → 5000 centavos, sem inventar centavos |
+| `F2A1-B027-approx` | `clarify` "valor exato"; ausência **e** ambiguidade de `amount` declaradas separadamente |
+| `F2A1-B006-reference` | `clarify` "lançamento"; `missingFields ['entity']`; nenhum alvo inventado |
+| `F2A1-B016-homonyms` | `clarify` "Aurora"; `ambiguities ['account']`, `missingFields []` |
+| `F2A1-B021-correction` | `clarify` valor; nenhuma mutação retroativa inferida |
+| `F2A1-B008-concept` | `conversation`/`none`; caso **não financeiro** |
+
+`missingFields` (slot que o contexto não responde) e `ambiguities` (duas ou mais alternativas válidas no contexto) são campos distintos e comparados separadamente em todos os cenários e turnos.
+
+### 5 jornadas avaliadas (10 turnos)
+
+| Jornada | Turno 1 | Turno 2 |
+|---|---|---|
+| `J01` | `clarify` de valor; `ambiguities []` | proposta `transactions.expense.create` (250000, carne, conta/categoria/dia) |
+| `J02` | **proposta direta** com categoria do catálogo; sem pergunta redundante | proposta consolidada com `mercado` |
+| `J03` | `clarify` de `initialBalance` + `accountKind`; `ambiguities []` | `accounts.create` (`Reserva`, `bank`, 10000); `accountName` herdado exige evidência declarada |
+| `J05` | `clarify`; `ambiguities ['account']`, `missingFields []` | `accounts.update` ligado à **primeira opção exibida** (`…0001`), args `accountId`/`expectedName`/`accountName` |
+| `J09` | `get_month_summary` `2026-10` | `get_month_summary` `2026-09` |
+
+- `J05` T2 não pergunta de novo: resolve "a primeira conta Aurora" contra as opções ordenadas do texto de clarificação congelado (`• Aurora` ×2). Escolher a segunda opção (`…0002`) é `FAIL` com `context-selection-mismatch:…0002`.
+- `J02` é **extensão semântica explícita**: o estágio congelado da F1 é `clarify → propose`, mas com o catálogo sintético a categoria é única e perguntar de novo violaria `missing-despite-context`. A restrição de estágio da F1 fica registrada como limitação separada, não como ganho semântico.
+- Veredicto global agrega **apenas** os 13 cenários + as 5 jornadas avaliadas. As outras 5 jornadas congeladas (`J04`, `J06`, `J07`, `J08`, `J10`) permanecem `INCONCLUSIVE`, com razão `journey-retained-not-evaluated`, e **não** puxam o agregado.
+- `financialCompletion` é `'unobservable'` em 100% das linhas: o POC não tem ledger, writer nem execução.
+- Evidência de contexto testada negativamente: removendo `history` **e** `suppliedValues`, `J03:T2` (`accountName "Reserva"`) vira `context-unevidenced-arg:accountName`; `J01:T2` (`description "carne"`) vira `…:description`; `J09:T2` (`yearMonth "2026-09"`) vira `…:yearMonth`. Basta **uma** fonte declarada (histórico **ou** valores) para o turno voltar a `match`; `J09:T1` continua `match` só com `referenceDate` (`2026-10`).
+
+### 8 pares declarados de extensão (7 de cenário + J02)
+
+Cada um dos 7 pares de cenário tem **corrupção negativa própria** provando `FAIL`:
+
+| Extensão | Expectativa F1 congelada | Critério comparável F2A1 | Corrupção que falha |
+|---|---|---|---|
+| `B013-catalog` | fixture F1 sem catálogo sintético | `accountId`+`categoryId` exatos | `categoryId` desconhecido |
+| `B015-colloquial` | F1 clarifica "cinquenta reais" | `amountCents 5000` | `amountCents 500` |
+| `B027-approx` | `approximateAmountCents` fora do vocabulário POC | `clarify` + ausência exata | proposta de 5000 sem pergunta |
+| `B006-reference` | alvo de despesa anterior | `clarify` + nenhum ID de alvo | mutação com `transactionId` inexistente |
+| `B016-homonyms` | cardinalidade 2 no artefato F1 | `clarify` + sem `accountId` | escolher `…0001` sem opções exibidas |
+| `B021-correction` | `prior/correctedAmountCents` | `clarify` + nenhuma mutação | `transactions.update` com alvo inexistente |
+| `B008-concept` | resposta conceitual | `conversation`/`none` | proposta `transactions.expense.create` |
+| `J02-category` | estágio `clarify → propose` | proposta direta com categoria do catálogo | pergunta redundante (`missing-despite-context:category`) |
+
+### Validação real (comandos e resultados)
+
+**RED→GREEN F2-A.1:** o teste inicial de `clarify` foi rejeitado pelo parser; após o contrato, passou. A rodada intermediária reproduziu 31 PASS/2 FAIL (ordem de `missingFields` de J03 e expectativa legada B027); o diagnóstico independente separou igualdade de conjuntos de campo realmente não representável. A extensão B013 reproduziu falha por `corpusId` não aceito; corrigido o formato experimental. Negativos isolados comprovam FAIL para entidade/proveniência inventadas, pergunta redundante, ano convertido em valor, schema inválido e perda de contexto. Os dois achados finais (nome herdado sem fonte e capability tratada como ambiguidade) têm controles positivos e negativos próprios. Nenhum teste/corpus original foi reescrito para favorecer B.
+
+**Integração:** no início, `gh pr view 278` confirmou head `fd7c080c44c082c45c2e6058e8ead8c54d1e0754`, base F1, draft, `MERGEABLE`, sem checks e árvore limpa. CI/PWA CI só disparam em PRs contra `main`, sem `workflow_dispatch` de CI equivalente. Proteção exige `Gate — all checks` e `quality (22, 10)`. Um PR temporário de validação contra `main` é permitido pelo operador: inclui F1 + F2-A, pode validar merge ref, não prova execução isolada do head e não altera a base do #278. Workflows de deploy exigem origem `push`/SHA de main; nenhum merge ou deploy é autorizado. Resultado remoto será registrado sem presumir sucesso.
+
+Após os testes finais, os dois relatórios F1 originais foram restaurados **somente depois** de verificar igualdade JSON excluindo `generatedAt`/`harnessElapsedMs`; os bytes foram recuperados do commit congelado. `frozen/` e corpus original permanecem sem diff. As notas históricas abaixo sobre relatórios temporariamente modificados descrevem apenas as rodadas anteriores.
+
+**Suíte focal — antes das correções finais (43) e depois (46), execuções reais:**
+
+```
+pnpm --filter pi-finance-agent exec vitest run tests/poc-structured
+→ antes das correções finais: Test Files 3 passed (3) · Tests 43 passed (43)
+→ depois das correções finais: Test Files 3 passed (3) · Tests 46 passed (46)
+  (f2a1-evaluation-runner 19 · f2a-structured-interpretation 18 · f2a-ab-runner 9)
+```
+
+**Suíte completa — estado final após as correções revisadas:**
+
+```
+pnpm test   (log: %TEMP%\opencode\f2a1-final-test.log)
+→ exit 0
+  @pi-finance/llm-contracts    25 passed (25)
+  meu-ted-api                2861 passed | 172 skipped (3033)
+  pi-finance-agent           3466 passed |   1 skipped (3467)
+  pi-finance-codex-broker      34 passed (34)
+  pwa                        2832 passed (2832)
+  total de testes aprovados: 9218; 173 skipped; 0 failed
+```
+
+Essa execução cobre B012, evidência de contexto e remoção de `candidateFor`. Logs finais: `%TEMP%\opencode\f2a1-final-test.log`, `f2a1-final-focal.log`, `f2a1-final-typecheck.log` e `f2a1-final-biome.log`. A execução anterior (9215 aprovados) permanece preservada como histórico, não como prova do estado final.
+
+**Gates e verificação estática executados após as correções finais:**
+
+```
+pnpm typecheck        → EXIT=0 (5 workspaces; nenhum `error TS`)
+pnpm docs:lint        → 17 documentos, 0 issues, PASSED
+pnpm governance:check → EXIT=0
+pnpm capabilities:check → EXIT=0
+pnpm write-policy:check → EXIT=0
+pnpm test:skip-gate   → EXIT=0
+```
+
+**Lint — correção de alegação histórica (NÃO é gate válido):** a rodada anterior afirmou "lint por stdin 7/7 exit 0" como prova. O tester reproduziu que esse caminho **não** é gate de repositório: o config é ignorado/interpretado de forma diferente no stdin, e a checagem externa com config **byte-idêntico** encontrou um erro real de variável não usada (`candidateFor`), agora removido. `pnpm lint` travou por **90 s no primeiro workspace (0/5)** (log `f2a1-lint.log`); a causa provável é o escopo de `files.includes` na raiz, **não comprovada em definitivo**. Portanto lint de repositório fica **pendente de CI**.
+
+**Suplemento Biome (não substitui o gate):** config externo copiado de `biome.json` com SHA-256 **idêntico** (`5bcadfaeb0d02b23c4d5b28565972fd08ce499d9e68b734e5ee64625a353370d`); `biome.exe check --colors=off --config-path=<cópia> <10 arquivos TS>` em **modo arquivo**, sem escrita → exit 0, `Checked 10 files in 11ms. No fixes applied.` Nenhum diagnóstico. O escopo relativo da configuração externa difere: é validação auxiliar das regras, não substituição do gate agregado.
+
+**Diagnóstico corrigido:** a falha focal anterior **não** era `F1-B012`. Era `F2A1-B013-catalog` retornando `INCONCLUSIVE` (`expected 'INCONCLUSIVE' to be 'PASS'`), porque o regex de `corpusId` em `checkProvenance` aceitava apenas `F1-B\d{3}`, `J\d{2}` e `LOCAL-*`. O regex passou a aceitar `F2A1-[A-Za-z0-9-]+`; `F1-B012` já passava com `requestedAction`/`capabilityAvailability` corretos.
+
+Estas fixtures são **autoria manual**: provam harness, parser e semântica declarada, **não** qualidade de modelo. Nenhum provider da POC, DB, corpus congelado, config, dependência ou código de produto foi alterado. Revisão independente final: **APPROVED**, após confirmar os dois achados corrigidos. Consultas GitHub e publicação de PR são operações de integração, não chamadas de avaliação.
+
+### Manifesto futuro B0/B1 (proposta, não autorização)
+
+| Estágio | Casos | Chamadas lógicas | Observação |
+|---|---|---|---|
+| **B0** (smoke exato) | **23** = 13 cenários single + 10 turnos | 23 | um candidato por caso; cacheável |
+| **B1** (integrado) | **77** = 60 cenários congelados + 7 extensões semânticas + 10 turnos | 77 (23 reusados do cache + 54 novos) | um candidato por caso |
+| Teto de orçamento | — | **≤ 81** | margem de 4, sem retries automáticos |
+| Dois modelos no mesmo run | — | até 154 | **exige autorização adicional** (ultrapassa 81) |
+
+- **Nenhum provider/modelo está selecionado** e **nenhum orçamento está autorizado**; a tabela é proposta.
+- IDs B0: seis `F1-B005/B010/B012/B017/B036/B058`, sete chaves `F2A1-*` enumeradas em `f2a1-oracles.ts` e `J01/J02/J03/J05/J09:T1/T2`. B1 acrescenta os outros 54 IDs do corpus original; extensões nunca substituem silenciosamente originais. Os 60 IDs são enumerados do snapshot SHA-256 pinado.
+- Cache só reutiliza output quando mensagem, contexto permitido, schema, prompt e modelo/configuração forem idênticos (chave por hash desses inputs). Sem essa igualdade, nova chamada consome orçamento; reaprovar se ultrapassar 81. Nenhum retry, inclusive por wrapper externo; concorrência 1; uma tentativa por caso e candidato.
+- Preparação de cada tentativa: carregar input sem oráculo/expected/candidato local nem saída de A; enviar apenas mensagem, contexto permitido e contrato. Salvar output bruto localmente, validar schema e executar `runF2A1` com os oráculos separados. Os casos B1 ainda sem oráculo semântico estendido não ganham PASS por ausência: usar comparador F1 nas dimensões observáveis e declarar as demais inconclusivas. Não exigir uma etapa generativa de execução.
+- Metadados por tentativa: ID, domínio/dificuldade pré-rotulados, hash de input/schema/prompt, versão do candidato, início/fim monotônicos, status/schema reason sanitizado, usage de entrada/saída fornecido pelo provider e custo com preço efetivo datado. Uso ausente = desconhecido, nunca zero; custo desconhecido impede comprovar o teto e interrompe o run antes da próxima chamada.
+- **Métricas:** intent/op/args/valor/data/contexto = matches / comparações observáveis válidas, com cobertura e inválidos apresentados separadamente; esclarecimentos redundantes = perguntas indevidas / turnos com informação suficiente; schema compatível = válidos / outputs recebidos (ausentes separados). p50/p95 somente de latências observadas (informar n e método nearest-rank); tokens somente usage medido; custo por interpretação válida = custo total medido / outputs válidos, inconclusivo se denominador zero ou custo desconhecido. Quebrar por domínio/dificuldade sem misturar execução com semântica.
+- Proposta de passagem B0→B1: schema válido 23/23, nenhum campo de autoridade/tentativa de recurso não autorizado, todos os seis casos críticos corretos nas dimensões exigidas (inclusive valor/data), nenhuma pergunta redundante nos casos de contexto suficiente e nenhuma regressão contextual nos dez turnos. Qualquer falha exige análise/aceite explícito antes de ampliar; B1 não começa automaticamente. Não há limiar de superioridade do produto definido nesta fase.
+- Separar sempre: interpretação (dimensões observadas), disponibilidade funcional (`unsupported` para `budgets.create`; demais `unknown`, sem comprovação de handler/API/permissões) e conclusão financeira (`unobservable`). Os limites abaixo e este protocolo são propostas para aceite futuro.
+- **Prontidão local:** instrumento aprovado pela revisão independente; lint agregado/CI remoto têm pendência explícita. READY nesta fase não significa superioridade de B nem autorização para executar B0/B1.
+
+> **Status:** POC local-only na branch `feat/ted-f2a-structured-interpretation`, atualização preparada para o PR #278. **F2-B (avaliação com modelo real) é PROIBIDA nesta tarefa** e continua gateada. Sem provider de avaliação, DB, SDK, execução financeira, alteração de permissões ou mudança de produção/F1/deps/config.
 >
-> Baseline: `HEAD = ef12a8ee7e4ef6c215bffce755e1d7c68c89820e`.
+> **Prontidão:** revisão independente **APPROVED**; validação funcional local verde. Lint agregado e CI serão registrados com seus SHAs e escopos, sem status verde presumido.
+>
+> Baseline: `HEAD = fd7c080c44c082c45c2e6058e8ead8c54d1e0754` (POC), com o corpus F1 congelado em `ef12a8ee7e4ef6c215bffce755e1d7c68c89820e` (ancestral do HEAD).
 >
 > **Correção de integração (2026-10-26):** o runner lia os artefatos F1 do **working tree**, que é mutável (`generatedAt`/`harnessElapsedMs` são reescritos a cada execução dos próprios testes F1), causando falha determinística no `pnpm test`. A seção "Correção de integração F2-A" abaixo registra os quatro defeitos corrigidos e a evidência RED→GREEN. Uma segunda rodada (portabilidade CI) empacotou os artefatos congelados e removeu o `git show` do runtime — ver "Portabilidade CI — artefatos congelados empacotados".
 
 ## Escopo e ownership
 
-Alterações limitadas aos caminhos novos abaixo; nenhum arquivo rastreado foi editado por esta correção:
+A rodada F2A1 atua somente em:
 
-- `apps/agent/src/poc-structured/`
-- `apps/agent/tests/poc-structured/`
+- `apps/agent/src/poc-structured/` (`structured-interpretation.ts`, `ab-compare.ts` — rastreados, modificados)
+- `apps/agent/tests/poc-structured/` (5 arquivos novos F2A1: `evaluation-runner.ts`, `f2a1-inputs.ts`, `f2a1-oracles.ts`, `f2a1-candidates.ts`, `f2a1-evaluation-runner.test.ts`; mais os testes rastreados ajustados)
 - `docs/reports/TED-F2A-POC-PREPARATION.md`
 
-`git status` mostra esses três como untracked e, além deles, apenas os dois relatórios F1 já modificados pelo tester (`ted-f1-baseline.json`, `ted-f1-journeys.json`), que **não** foram tocados/restaurados aqui.
+`git status` desta sessão: `M` em `ab-compare.ts`, `structured-interpretation.ts`, `f2a-ab-runner.test.ts`, `f2a-structured-interpretation.test.ts`, `fixtures.ts` e este relatório; `??` nos 5 arquivos novos. Os dois relatórios F1 rastreados (`ted-f1-baseline.json`, `ted-f1-journeys.json`) aparecem como modificados pela execução dos próprios testes F1 e **não** foram tocados/restaurados aqui.
 
-Nada de produção, F1, dependências, configs ou workflows foi tocado. Os dois relatórios F1 rastreados (`ted-f1-baseline.json`, `ted-f1-journeys.json`) foram regenerados pelos próprios testes F1 e **não foram restaurados nem editados aqui** (preservados para o Planner restaurar); a correção F2-A lê as cópias empacotadas do commit congelado e não depende do estado deles.
+Nada de produção, corpus congelado, dependências, configs, workflows ou provider foi tocado. A correção F2-A lê as cópias empacotadas do commit congelado e não depende do estado mutável daqueles dois relatórios.
 
 ## Correção de integração F2-A (defeitos encontrados pelo tester) — 4/4
 
@@ -25,7 +168,7 @@ Nada de produção, F1, dependências, configs ou workflows foi tocado. Os dois 
 | 1 | O runner pinava SHA-256 mas lia os arquivos do **working tree**; os geradores F1 reescrevem `generatedAt` e `harnessElapsedMs`, então `pnpm test` falhava de forma determinística (`01d7aff4…`/`594d342d…` no worktree vs. `5bdc2be4…`/`ca89250a…` pinados) | Novo `tests/poc-structured/frozen-artifacts.ts`: valida o commit com `git rev-parse --verify ef12a8ee…^{commit}`, lê cada artefato com `git show ef12a8ee…:<path>` e confere o SHA-256 dos bytes **do commit** antes de parsear (posteriormente trocado por cópias empacotadas — ver "Portabilidade CI"). O working tree nunca é consultado para o lado A. Dois testes fixam `generatedAt` do commit (`2026-10-24T17:16:20.203Z` / `…25.399Z`), provando que o corpo vem do commit e não de um relatório regenerado. |
 | 2 | Nenhuma asserção garantia que **toda** operação de `TED_APPROVAL_TOOLS` tivesse schema de args; lookups de `ARG_SPECS`/`OPERATION_ARG_KEYS` usavam a cadeia de protótipos (`key in ARG_SPECS`, `ARG_SPECS[key]`), aceitando `toString`/`constructor`/`__proto__` como vocabulário | `registry.ts` exporta `getArgSpec` e `hasOperationArgSchema` com `Object.prototype.hasOwnProperty.call`; parser e comparador usam esses acessos. Teste `RED-05` percorre `TED_APPROVAL_TOOLS` (todo op tem schema não vazio), exige spec própria para cada chave aceita em cada operação e rejeita `toString`/`constructor`/`hasOwnProperty`/`__proto__` com `args-unknown-key`. |
 | 3 | `F1-B055` era reportado **PASS global** embora seu oráculo carregue `confirmationMustBeSeparateTurn: true`, comportamento que este POC não observa (sem fronteira de turno, sem protocolo de confirmação, sem ledger) | `ab-compare.ts` declara `F1_UNOBSERVABLE_EXPECTATION_KEYS`; uma linha com expectativa comportamental não observável vira **INCONCLUSIVE** com razão `f1-expectation-unobservable:confirmationMustBeSeparateTurn` e dimensões parciais explícitas (`intent/operation/args/clarification/needles = match`). Nunca PASS global. |
-| 4 | A alegação de lint era "não executado (hang)" | Lint verificado por **stdin**, sem varrer diretórios e sem alterar config: `biome lint --write --stdin-file-path=<path>` e `biome check --write --stdin-file-path=<path>` com input via `node:child_process` (sem encoding do PowerShell). 7/7 arquivos novos: exit 0, stdout idêntico ao arquivo, disco intocado. O formatter está **desabilitado** no config do repo (por isso `biome format`/`check` sem `--write` sinalizam "contents aren't fixed"); isso é lint limpo, não um gate de formatação. |
+| 4 | A alegação de lint era "não executado (hang)" | **Alegação original (posteriormente corrigida, ver abaixo):** lint "verificado" por stdin, 7/7 exit 0. **Correção do tester:** o stdin **não é gate de repositório** — o config é ignorado nesse caminho; a checagem com config externo byte-idêntico encontrou um erro real (`candidateFor` não usado, removido nesta rodada); `pnpm lint` travou 90 s no primeiro workspace (0/5). Lint de repositório segue **pendente de CI**; o suplemento Biome é evidência auxiliar, não gate. |
 
 **Causa raiz confirmada (não corrigida aqui, fora do escopo):** `apps/agent/tests/ted-f1-baseline.test.ts:678/755` e `apps/agent/tests/ted-f1-journeys.test.ts:539` escrevem os dois relatórios rastreados durante `pnpm test`. Por isso qualquer leitura do working tree como oráculo é não determinística; a correção F2-A isola o lado A no commit `ef12a8ee…`. Uma correção estrutural dos geradores (não reescrever arquivos rastreados ou separar artefato de execução de artefato congelado) é decisão do Planner/F1.
 
@@ -75,12 +218,17 @@ Cada cópia foi relida do disco e comparada com os bytes do commit (`Buffer.comp
 - `apps/agent/src/poc-structured/registry.ts` — vocabulário canônico de operações/args, proveniência e flags `supportedInProduction`.
 - `apps/agent/src/poc-structured/structured-interpretation.ts` — parser estrito, erro tipado, bounds, `toCandidate`.
 - `apps/agent/src/poc-structured/ab-compare.ts` — comparador por dimensão e comparador de jornadas.
-- `apps/agent/tests/poc-structured/fixtures.ts` — 10 fixtures candidate-only (9 cenários + J01).
+- `apps/agent/tests/poc-structured/fixtures.ts` — 10 fixtures candidate-only F1 (9 cenários + J01).
 - `apps/agent/tests/poc-structured/frozen-artifacts.ts` — loader read-only dos artefatos F1 empacotados em `frozen/` (verificação de SHA-256 a cada load; sem Git em runtime).
 - `apps/agent/tests/poc-structured/frozen/{scenarios,journeys,baseline}.json` — cópias byte-exact dos blobs do commit `ef12a8ee…` (snapshot autorizado; SHA-256 pinado no loader).
-- `apps/agent/tests/poc-structured/f2a-structured-interpretation.test.ts` — 16 testes (adapter, registry/own-property, pureza, namespace).
-- `apps/agent/tests/poc-structured/f2a-ab-runner.test.ts` — 8 testes (hashes pinados, corpo empacotado, ausência de dependência de Git, veredictos exatos, corrupções, expectativa não observável, taxonomias, jornadas, pureza do runner).
-- Total focado: **24/24**. A suíte completa do Agent também passa a cobri-los (3443 passed / 1 skipped).
+- `apps/agent/tests/poc-structured/f2a-structured-interpretation.test.ts` — 18 testes (adapter, registry/own-property, pureza, namespace, campos F2A1).
+- `apps/agent/tests/poc-structured/f2a-ab-runner.test.ts` — 9 testes (hashes pinados, corpo empacotado, ausência de dependência de Git, veredictos exatos, corrupções, expectativa não observável, taxonomias, jornadas, pureza do runner).
+- `apps/agent/tests/poc-structured/f2a1-oracles.ts` — oráculos independentes: 13 cenários + 5 jornadas (10 turnos) + lista das 5 jornadas retidas.
+- `apps/agent/tests/poc-structured/f2a1-inputs.ts` — contexto fornecido por caso/turno (`referenceDate` `2026-10-24`; catálogos e opções sintéticas).
+- `apps/agent/tests/poc-structured/f2a1-candidates.ts` — candidatos manuais F2A1 (não são saída de modelo).
+- `apps/agent/tests/poc-structured/evaluation-runner.ts` — executor que injeta contexto, distingue `FAIL` de schema/corrupção de `INCONCLUSIVE` por ausência e agrega só o conjunto avaliado.
+- `apps/agent/tests/poc-structured/f2a1-evaluation-runner.test.ts` — 19 testes (13 cenários, 5 jornadas, contexto obrigatório, evidência de slots herdados, semântica B012/B017/B058, J02/J05, 8 extensões com corrupções negativas).
+- Total focado: **46/46** (19 + 18 + 9) após as correções finais; **43/43** antes delas. A suíte completa do Agent cobria os 24 testes das rodadas anteriores; a reexecução completa pós-correções é gate do Planner.
 
 ## Evidência (comandos e resultados reais)
 
@@ -147,13 +295,13 @@ restauração → sha256 = 5bdc2be4… (byte-a-byte idêntico ao original)
 # typecheck do workspace
 pnpm typecheck → EXIT=0 (5 workspaces, nenhum `error TS`)
 
-# lint por stdin nos 2 arquivos TS alterados
+# lint por stdin nos 2 arquivos TS alterados (NÃO é gate de repositório — ver correção do tester)
 biome lint  --write --stdin-file-path=<arquivo>  × 2 → exit 0, stdout idêntico
 biome check --write --stdin-file-path=<arquivo>  × 2 → exit 0, stdout idêntico
-(disco intocado: hash antes = depois)
+(disco intocado: hash antes = depois; resultado inválido como gate: config ignorado no stdin)
 ```
 
-### Suíte completa (duas execuções sequenciais)
+### Histórico F2-A original (não representa o estado F2-A.1 acima)
 
 ```
 pnpm test   # run 1
@@ -174,19 +322,19 @@ log: C:\Users\walis\AppData\Local\Temp\opencode\f2a-full-test-run2.log
 
 ```
 pnpm typecheck
-→ exit 0 (54.9s), 4 workspaces (llm-contracts, api, agent, pwa, broker) sem erro
+→ exit 0 (54.9s), workspaces (llm-contracts, api, agent, pwa, broker) sem erro
 
-# lint por stdin (sem varrer diretórios, sem alterar config, input via node:child_process)
-biome lint  --write --stdin-file-path=<arquivo>   × 7 arquivos novos → 7/7 exit 0
-biome check --write --stdin-file-path=<arquivo>   × 7 arquivos novos → 7/7 exit 0
+# lint por stdin (NÃO é gate de repositório — ver correção abaixo)
+biome lint  --write --stdin-file-path=<arquivo>   × 7 arquivos novos → exit 0
+biome check --write --stdin-file-path=<arquivo>   × 7 arquivos novos → exit 0
 → stdout idêntico ao arquivo em todos; disco intocado (hash antes = depois)
 ```
 
-- `biome format`/`check` sem `--write` em stdin reportam "contents aren't fixed" porque o **formatter está desabilitado** no config do repo; com `--write` (que em stdin apenas ecoa) o resultado é idêntico e exit 0 — ou seja, lint limpo, sem gate de formatação.
+- **Correção do tester:** o caminho stdin **não** aplica o config do repositório como gate; os "exit 0" acima são eco do conteúdo, não prova de lint. A checagem com config externo **byte-idêntico** revelou um erro real de variável não usada (`candidateFor`), removido nesta rodada. `pnpm lint` travou 90 s no primeiro workspace (0/5); causa provável é o escopo de `files.includes` na raiz, não comprovada em definitivo. Lint de repositório fica **pendente de CI**.
 - Agregado original do baseline (commit congelado) conferido por leitura: `PASS 12 / FAIL 41 / BLOCKED 1 / INCONCLUSIVE 6` (60 cenários). O worktree, regenerado pelos testes F1, mantém as mesmas 60 classificações; só `generatedAt`/`harnessElapsedMs` mudam.
 - Os dois relatórios F1 rastreados **não foram restaurados nem editados** nesta correção: foram preservados no estado em que o tester os deixou (e o próprio `pnpm test` os reescreve via `tests/ted-f1-baseline.test.ts`/`tests/ted-f1-journeys.test.ts`). O lado A da F2-A não depende deles.
 
-## Cobertura A/B e postura honesta
+## Cobertura A/B original F2-A (histórico; F2-A.1 descrita no início)
 
 - **60/60 cenários cobertos.** 8 produzem `PASS`: `F1-B001`, `F1-B002`, `F1-B008`, `F1-B012`, `F1-B013`, `F1-B014`, `F1-B030`, `F1-B059`. Os outros **52 são `INCONCLUSIVE`**: 51 sem candidato independente (`no-candidate`) e **`F1-B055` com expectativa comportamental não observável** (`confirmationMustBeSeparateTurn`), reportado com dimensões parciais `match` (intent/operation/args/clarification/needles) mas **nunca PASS global**.
 - **10/10 jornadas cobertas**, todas `INCONCLUSIVE`, com `originalCompletion` da F1 preservado; J01 pontua apenas presença de clarificação (`match`), nunca PASS global.
@@ -194,15 +342,15 @@ biome check --write --stdin-file-path=<arquivo>   × 7 arquivos novos → 7/7 ex
 - Classificações originais da F1 atravessam inalteradas em cada linha (teste compara com o baseline da **cópia empacotada** do commit `ef12a8ee…`, não com o working tree).
 - Nenhum ganho inventado: o A/B valida o **harness e o parser**, não a qualidade de um modelo.
 
-## Limitações conhecidas (honestas)
+## Limitações da F2-A original (histórico; evolução F2-A.1 acima)
 
 1. 51/60 cenários não têm candidato ⇒ nenhum sinal sobre eles; não são "PASS por omissão".
 2. As fixtures são **autoria manual**, não saída de modelo — a avaliação real de qualidade é F2-B (bloqueada).
-3. `clarify` e undo-proposal não são representáveis neste schema; ficam `INCONCLUSIVE` por construção.
+3. `undo-proposal` não é representável neste schema (fica `INCONCLUSIVE` por taxonomia); `clarify` **é** representável (com `operation: none`).
 4. O registry de leitura é **espelho** de `OPERATION_TO_READ` (não exportado). A paridade é garantida por teste que lê o source de produção; uma reformatação do bloco em `channel-evidence.ts` pode quebrar o teste (falha alta e explícita, por desenho).
 5. `targetReference`, `target`, `priorAmountCents`, `correctedAmountCents` existem só no vocabulário conceitual da F1 e são marcados `supportedInProduction: false` — sem paridade de produção alegada.
 6. Jornadas não têm oráculo independente global; só o primeiro estágio (`clarify`) é verificável.
-7. Lint coberto por stdin (`lint --write`/`check --write`): 7/7 limpos. O job agregado `pnpm lint` continua sendo gate do Planner/CI; o formatter está desabilitado no config e não é um requisito deste POC.
+7. **Lint:** o stdin **não** é gate de repositório (config ignorado nesse caminho). `pnpm lint` travou 90 s no primeiro workspace (0/5) e fica **pendente de CI**; causa provável é o escopo de `files.includes` na raiz, não comprovada em definitivo. O suplemento com config externo byte-idêntico (10/10 sem diagnóstico, `--write` com stdout byte-idêntico) é evidência auxiliar, **não** substituição do gate.
 8. O POC não mede latência, custo nem taxa de erro de modelo algum.
 9. `confirmationMustBeSeparateTurn` (F1-B055) não é observável aqui: sem fronteira de turno/confirmação, a linha é **INCONCLUSIVE** com dimensões parciais; não é evidência de que a confirmação separada funciona.
 10. O working tree dos dois relatórios F1 é **mutável por design dos testes F1** (`generatedAt`/`harnessElapsedMs`); o POC lê a cópia empacotada do commit `ef12a8ee…` em `frozen/`, com SHA-256 pinado (sem consultar Git em runtime). Corrigir os geradores (não reescrever arquivos rastreados ou separar artefato de execução) é trabalho F1/Planner, fora deste escopo.
@@ -215,13 +363,13 @@ biome check --write --stdin-file-path=<arquivo>   × 7 arquivos novos → 7/7 ex
 |---|---|
 | Tokens de entrada | ≤ 12 000 por chamada; ≤ 1 000 000 no total |
 | Tokens de saída | ≤ 1 000 por chamada; ≤ 81 000 no total |
-| Chamadas | ≤ 81 (60 cenários + 21 turnos de jornada) |
+| Chamadas | ≤ 81 (plano B1 = 77: 60 originais + 7 extensões + 10 turnos; 23 outputs B0 reutilizáveis somente com input idêntico) |
 | Concorrência | 1 |
 | Retries | 0 |
 | Latência por tentativa | 60 s |
 | Latência total (wall) | 30 min |
 | Custo | ≤ US$ 5,00 |
-| Stop conditions | esgotar qualquer teto; qualquer tentativa de escrita financeira não-`none`; qualquer egress fora da allowlist; erro de autenticação; primeira exceção inesperada |
+| Stop conditions | esgotar qualquer teto; tentativa de invocar writer/tool/recurso não autorizado; egress fora da futura allowlist; erro de autenticação; custo/usage não verificável; primeira exceção inesperada. Classificar uma intenção como proposta NÃO é uma tentativa de executar escrita. |
 | Pré-requisito | ensaio local sintético completo antes da primeira chamada real |
 
 O run real deve ser read-only e sandboxed (workspace sintético, sem writer financeiro, sem segredos no repo) e reportado com as mesmas regras de honestidade (inconclusivo onde não observável, sem ganho inventado).
@@ -237,13 +385,20 @@ O run real deve ser read-only e sandboxed (workspace sintético, sem writer fina
 - [x] Wrapper estrito, bounds, keys normalizadas, erro tipado
 - [x] Semântica de args exata (`null ≠ ausente`, sem args espúrios, args por operação)
 - [x] Centavos inteiros, enums reais, calendário real
-- [x] `clarify`/undo sempre `INCONCLUSIVE`
+- [x] `clarify` representável no schema F2A1 (com `operation none`); undo continua INCONCLUSIVE por taxonomia
 - [x] `confirmationMustBeSeparateTurn` não observável ⇒ `F1-B055` INCONCLUSIVE com dimensões parciais (nunca PASS global)
-- [x] Jornadas sem PASS global; F1 completion preservado
+- [x] Jornadas têm PASS de interpretação somente com todos os turnos obrigatórios corretos; conclusão financeira nunca inferida; 5 jornadas retidas separadas
 - [x] Corrupções com FAIL exato; sem asserção `PASS or FAIL`
 - [x] Namespace real sem superfície de execução; pureza de imports
-- [x] 24/24 testes focados + `pnpm typecheck` (workspace, exit 0) PASS
-- [x] `pnpm test` completo 2× sequencial, exit 0 e contagens idênticas (logs em `%TEMP%\opencode`)
-- [x] Lint por stdin (`lint --write`/`check --write`): 7/7 limpos, sem alterar config nem arquivos
-- [ ] Gates agregados `pnpm lint`/`docs:lint`/`governance:check`/E2E — Planner na integração
+- [x] `missingFields` e `ambiguities` separados; contexto fornecido obrigatório e reportado por linha
+- [x] Slots herdados (`accountName`/`expectedName`/`description`/`yearMonth`) exigem evidência declarada; sem ela ⇒ FAIL (`context-unevidenced-arg:*`)
+- [x] Candidato inválido no schema ⇒ FAIL; candidato ausente ⇒ INCONCLUSIVE
+- [x] B012: capability indisponível conhecida não é ambiguidade (`['capability']` ⇒ FAIL), `requestedAction budgets.create` preservado e nunca executável
+- [x] J05 T2 ligado à primeira opção exibida; J02 sem pergunta redundante
+- [x] 46/46 testes focados após as correções finais (19 + 18 + 9) + `pnpm typecheck` exit 0
+- [x] `pnpm test` completo **depois** das correções finais: **9218 aprovados** (25 / 2861+172skip / 3466+1skip / 34 / 2832); log `%TEMP%\opencode\f2a1-final-test.log`
+- [ ] Lint de repositório (`pnpm lint`): **pendente de CI** — travou 90 s no primeiro workspace (0/5); suplemento Biome com config externo byte-idêntico é auxiliar, não gate
+- [x] Gates rápidos após as correções finais: `docs:lint` (17/0), `governance:check`, `capabilities:check`, `write-policy:check`, `test:skip-gate` — todos exit 0
+- [ ] Gates agregados restantes/E2E — Planner na integração
 - [ ] F2-B — proibida agora; orçamento acima é proposta, não autorização
+- [x] Revisão independente final: **APPROVED**, dois findings corrigidos; situação de lint/CI registrada separadamente

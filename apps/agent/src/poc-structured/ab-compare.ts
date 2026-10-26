@@ -19,7 +19,7 @@
  */
 
 import { getArgSpec } from './registry.js';
-import type { StructuredIntent } from './structured-interpretation.js';
+import type { StructuredContextProvenance, StructuredEntity, StructuredIntent } from './structured-interpretation.js';
 
 export type DimensionVerdict = 'match' | 'mismatch' | 'not-comparable';
 
@@ -29,6 +29,10 @@ export type F2ACandidate = Readonly<{
   args: Readonly<Record<string, string | number | boolean | null>>;
   ambiguities: readonly string[];
   clarification: string | null;
+  missingFields: readonly string[];
+  entities: readonly StructuredEntity[];
+  contextProvenance: StructuredContextProvenance;
+  requestedAction?: string;
 }>;
 
 export type F2AOracle = Readonly<{
@@ -37,6 +41,11 @@ export type F2AOracle = Readonly<{
   expectedArgs: Readonly<Record<string, unknown>>;
   clarificationRequired: boolean;
   clarificationNeedles: readonly string[] | null;
+  expectedMissingFields?: readonly string[];
+  expectedAmbiguities?: readonly string[];
+  expectedEntities?: readonly StructuredEntity[];
+  expectedContextProvenance?: StructuredContextProvenance;
+  expectedRequestedAction?: string;
 }>;
 
 export type F2AComparison = Readonly<{
@@ -54,6 +63,12 @@ export type F2AComparison = Readonly<{
   /** Frozen F1 evidence classification, carried through unchanged. */
   originalF1Classification: string;
   financialCompletion: 'unobservable';
+  missingFields: DimensionVerdict;
+  ambiguities: DimensionVerdict;
+  entities: DimensionVerdict;
+  contextProvenance: DimensionVerdict;
+  requestedAction: DimensionVerdict;
+  capabilityAvailability: 'unknown' | 'unsupported';
 }>;
 
 /** F1 route modes this schema can express. `clarify` is intentionally absent. */
@@ -63,6 +78,7 @@ export const F1_MODE_TO_POC_INTENT: Readonly<Record<string, StructuredIntent>> =
   conversation: 'conversation',
   cancel: 'cancel',
   unsupported: 'unsupported',
+  clarify: 'clarify',
 });
 
 /**
@@ -99,6 +115,19 @@ const hasOwn = (record: Readonly<Record<string, unknown>>, key: string): boolean
   Object.prototype.hasOwnProperty.call(record, key);
 
 const notComparable = (): DimensionVerdict => 'not-comparable';
+
+const equalSets = (expected: readonly string[], actual: readonly string[]): boolean =>
+  expected.length === actual.length && new Set(expected).size === expected.length &&
+  actual.length === new Set(actual).size && expected.every((value) => actual.includes(value));
+
+const equalEntities = (expected: readonly StructuredEntity[], actual: readonly StructuredEntity[]): boolean => {
+  const key = (entity: StructuredEntity): string => JSON.stringify([entity.kind, entity.value, entity.provenance]);
+  return equalSets(expected.map(key), actual.map(key));
+};
+
+const equalContextProvenance = (expected: StructuredContextProvenance, actual: StructuredContextProvenance): boolean =>
+  expected.origin === actual.origin && expected.corpusId === actual.corpusId &&
+  expected.turnIndex === actual.turnIndex;
 
 const compareArgs = (
   candidate: F2ACandidate,
@@ -234,6 +263,8 @@ export const compareF2A = (input: {
       clarificationNeedlesMatched: Object.freeze([]),
       clarificationNeedlesMissing: Object.freeze([]),
       argsMismatchedKeys: Object.freeze([]),
+      missingFields: notComparable(), ambiguities: notComparable(), entities: notComparable(),
+      contextProvenance: notComparable(), requestedAction: notComparable(), capabilityAvailability: 'unknown',
     };
   }
 
@@ -257,6 +288,8 @@ export const compareF2A = (input: {
       clarificationNeedlesMatched: Object.freeze([]),
       clarificationNeedlesMissing: Object.freeze([]),
       argsMismatchedKeys: Object.freeze([]),
+      missingFields: notComparable(), ambiguities: notComparable(), entities: notComparable(),
+      contextProvenance: notComparable(), requestedAction: notComparable(), capabilityAvailability: 'unknown',
     };
   }
 
@@ -268,6 +301,7 @@ export const compareF2A = (input: {
 
   const operation = ((): DimensionVerdict => {
     if (unmappable.length > 0) return notComparable();
+    if (modes.includes('clarify')) return input.candidate!.intent === 'clarify' && input.candidate!.operation === 'none' ? 'match' : 'mismatch';
     const allowed = input.oracle.allowedOperations;
     if (allowed.length === 0) return input.candidate!.operation === 'none' ? 'match' : 'mismatch';
     return allowed.includes(input.candidate!.operation) ? 'match' : 'mismatch';
@@ -281,6 +315,17 @@ export const compareF2A = (input: {
       : compareArgs(input.candidate, input.oracle);
   const args = argsDetail.verdict;
   const clarificationDetail = compareClarification(input.candidate, input.oracle);
+  const compareOptional = (expected: readonly string[] | undefined, actual: readonly string[]): DimensionVerdict =>
+    expected === undefined ? notComparable() : equalSets(expected, actual) ? 'match' : 'mismatch';
+  const missingFields = compareOptional(input.oracle.expectedMissingFields, input.candidate.missingFields);
+  const ambiguities = compareOptional(input.oracle.expectedAmbiguities, input.candidate.ambiguities);
+  const entities = input.oracle.expectedEntities === undefined ? notComparable() :
+    equalEntities(input.oracle.expectedEntities, input.candidate.entities) ? 'match' : 'mismatch';
+  const contextProvenance = input.oracle.expectedContextProvenance === undefined ? notComparable() :
+    equalContextProvenance(input.oracle.expectedContextProvenance, input.candidate.contextProvenance) ? 'match' : 'mismatch';
+  const requestedAction = input.oracle.expectedRequestedAction === undefined ? notComparable() :
+    input.oracle.expectedRequestedAction === (input.candidate.requestedAction ?? '') ? 'match' : 'mismatch';
+  const capabilityAvailability = input.candidate.requestedAction === 'budgets.create' ? 'unsupported' : 'unknown';
   reasons.push(...argsDetail.reasons, ...clarificationDetail.reasons);
 
   const dimensions: readonly DimensionVerdict[] = [
@@ -288,7 +333,12 @@ export const compareF2A = (input: {
     operation,
     args,
     clarificationDetail.clarification,
-    clarificationDetail.needles,
+      clarificationDetail.needles,
+      ...(input.oracle.expectedMissingFields === undefined ? [] : [missingFields]),
+      ...(input.oracle.expectedAmbiguities === undefined ? [] : [ambiguities]),
+      ...(input.oracle.expectedEntities === undefined ? [] : [entities]),
+      ...(input.oracle.expectedContextProvenance === undefined ? [] : [contextProvenance]),
+      ...(input.oracle.expectedRequestedAction === undefined ? [] : [requestedAction]),
   ];
   // Behavioral expectations with no observation surface in this POC: the row
   // keeps its partial dimension evidence but cannot be reported as PASS.
@@ -321,6 +371,7 @@ export const compareF2A = (input: {
     clarificationNeedlesMatched: clarificationDetail.matched,
     clarificationNeedlesMissing: clarificationDetail.missing,
     argsMismatchedKeys: argsDetail.mismatchedKeys,
+    missingFields, ambiguities, entities, contextProvenance, requestedAction, capabilityAvailability,
   };
 };
 

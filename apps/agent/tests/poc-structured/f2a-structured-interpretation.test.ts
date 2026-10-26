@@ -38,6 +38,7 @@ const base = (overrides: Record<string, unknown> = {}): Record<string, unknown> 
   entities: [],
   ambiguities: [],
   clarification: null,
+  missingFields: [],
   ...overrides,
 });
 
@@ -65,16 +66,39 @@ describe('F2-A structured interpretation adapter', () => {
         entities: [{ kind: 'period', value: '2026-10', provenance: 'corpus-context' }],
         ambiguities: [],
         clarification: null,
+        missingFields: [],
       }),
     );
     expect(parsed.intent).toBe('read');
     expect(parsed.operation).toBe('get_month_summary');
     expect(parsed.args).toEqual({ yearMonth: '2026-10' });
     expect(parsed.clarification).toBeNull();
+    expect(parsed.missingFields).toEqual([]);
+    expect(toCandidate(parsed).contextProvenance).toEqual(parsed.contextProvenance);
     expect(Object.isFrozen(parsed)).toBe(true);
     expect(Object.isFrozen(parsed.args)).toBe(true);
     expect(Object.isFrozen(parsed.entities)).toBe(true);
     expect(toCandidate(parsed).operation).toBe('get_month_summary');
+  });
+
+  it('RED-F2A1: represents clarify explicitly with bounded missing fields, not an executable op', () => {
+    const parsed = parseStructuredLLMOutput(wrap(base({
+      intent: 'clarify', operation: 'none', args: {}, missingFields: ['period'],
+      ambiguities: [], clarification: 'Qual período?',
+    })));
+    expect(parsed.intent).toBe('clarify');
+    expect(parsed.operation).toBe('none');
+    expect(parsed.missingFields).toEqual(['period']);
+  });
+
+  it('keeps unsupported budget creation as semantic requestedAction, never as operation', () => {
+    const parsed = parseStructuredLLMOutput(wrap(base({
+      intent: 'unsupported', operation: 'none', args: {}, requestedAction: 'budgets.create',
+      clarification: 'Não é possível criar orçamentos.',
+    })));
+    expect(parsed.requestedAction).toBe('budgets.create');
+    expect(parsed.operation).toBe('none');
+    expectReason(() => parseStructuredLLMOutput(wrap(base({ requestedAction: 'invented.execute' }))), 'invalid-operation');
   });
 
   it('RED-02: accepts only the strict { interpretation } envelope (object or JSON string)', () => {
@@ -418,18 +442,10 @@ describe('F2-A structured interpretation adapter', () => {
     );
   });
 
-  it('NEG-08: ambiguities and clarification require each other', () => {
-    expectReason(
-      () =>
-        parseStructuredLLMOutput(
-          wrap(base({ ambiguities: ['account'], clarification: null })),
-        ),
-      'invalid-clarification',
-    );
-    expectReason(
-      () => parseStructuredLLMOutput(wrap(base({ ambiguities: [], clarification: 'Qual conta?' }))),
-      'invalid-clarification',
-    );
+  it('NEG-08: clarification and ambiguity can be independent; missing-field vocabulary is closed', () => {
+    expect(parseStructuredLLMOutput(wrap(base({ missingFields: ['account'], clarification: null }))).missingFields).toEqual(['account']);
+    expectReason(() => parseStructuredLLMOutput(wrap(base({ missingFields: ['invented'] }))), 'invalid-missing-fields');
+    expect(parseStructuredLLMOutput(wrap(base({ ambiguities: [], clarification: 'Qual conta?' }))).clarification).toBe('Qual conta?');
     expectReason(
       () => parseStructuredLLMOutput(wrap(base({ ambiguities: ['account'], clarification: '   ' }))),
       'invalid-clarification',

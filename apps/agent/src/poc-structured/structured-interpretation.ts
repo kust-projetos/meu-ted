@@ -27,7 +27,7 @@ import {
   isReadOperation,
 } from './registry.js';
 
-export type StructuredIntent = TurnPlan['mode'];
+export type StructuredIntent = TurnPlan['mode'] | 'clarify';
 
 export const STRUCTURED_INTENTS: readonly StructuredIntent[] = [
   'read',
@@ -37,6 +37,7 @@ export const STRUCTURED_INTENTS: readonly StructuredIntent[] = [
   'advice',
   'conversation',
   'unsupported',
+  'clarify',
 ] as const;
 
 /** Bounded, closed reason codes. Never free-form text in the error. */
@@ -58,7 +59,8 @@ export type StructuredInterpretationReason =
   | 'invalid-provenance'
   | 'invalid-entities'
   | 'invalid-ambiguities'
-  | 'invalid-clarification';
+  | 'invalid-clarification'
+  | 'invalid-missing-fields';
 
 export class StructuredInterpretationError extends Error {
   readonly code = 'agent.invalid_structured_interpretation' as const;
@@ -102,6 +104,7 @@ const ENTITY_PROVENANCE: ReadonlySet<string> = new Set([
   'utterance',
   'local-fixture',
   'corpus-context',
+  'displayed-option',
 ]);
 
 const CONTEXT_ORIGIN: ReadonlySet<string> = new Set([
@@ -118,7 +121,12 @@ const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   'entities',
   'ambiguities',
   'clarification',
+  'missingFields',
+  'requestedAction',
 ]);
+
+const MISSING_FIELDS = new Set(['amount', 'description', 'account', 'category', 'date', 'period', 'entity', 'accountKind', 'initialBalance']);
+const REQUESTED_ACTIONS = new Set([...ALLOWED_OPERATIONS, 'budgets.create']);
 
 const normalizeKey = (key: string): string => key.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -263,6 +271,7 @@ const checkOperation = (value: unknown, intent: StructuredIntent): string => {
   if (intent === 'mutation-proposal' && !isMutationOperation(operation)) {
     invalid('intent-operation-mismatch');
   }
+  if (intent === 'clarify' && operation !== 'none') invalid('intent-operation-mismatch');
   if (
     intent === 'confirmation' ||
     intent === 'cancel' ||
@@ -354,7 +363,7 @@ const checkProvenance = (value: unknown): Readonly<{
   }
   if (
     typeof record.corpusId !== 'string' ||
-    !/^(F1-B\d{3}|J\d{2}|LOCAL-[A-Z0-9-]+)$/.test(record.corpusId)
+    !/^(F1-B\d{3}|J\d{2}|F2A1-[A-Za-z0-9-]+|LOCAL-[A-Z0-9-]+)$/.test(record.corpusId)
   ) {
     invalid('invalid-provenance');
   }
@@ -429,7 +438,6 @@ const checkClarification = (
   ambiguities: readonly string[],
 ): string | null => {
   if (value === null) {
-    if (ambiguities.length > 0) invalid('invalid-clarification');
     return null;
   }
   if (typeof value !== 'string') invalid('invalid-clarification');
@@ -438,8 +446,14 @@ const checkClarification = (
   }
   // A clarification must be explaining a declared ambiguity. `null` with
   // ambiguities and text without ambiguities are both incoherent.
-  if (ambiguities.length === 0) invalid('invalid-clarification');
   return value;
+};
+
+const checkMissingFields = (value: unknown): readonly string[] => {
+  if (!Array.isArray(value) || value.length > STRUCTURED_LIMITS.maxAmbiguities) invalid('invalid-missing-fields');
+  const fields = value as unknown[];
+  if (fields.some((field) => typeof field !== 'string' || !MISSING_FIELDS.has(field))) invalid('invalid-missing-fields');
+  return Object.freeze([...new Set(fields as string[])]);
 };
 
 export type StructuredEntity = Readonly<{
@@ -461,6 +475,8 @@ export type StructuredInterpretation = Readonly<{
   contextProvenance: StructuredContextProvenance;
   entities: readonly StructuredEntity[];
   ambiguities: readonly string[];
+  missingFields: readonly string[];
+  requestedAction?: string;
   clarification: string | null;
 }>;
 
@@ -479,6 +495,9 @@ export const parseStructuredLLMOutput = (raw: unknown): StructuredInterpretation
   const entities = checkEntities(payload.entities);
   const ambiguities = checkAmbiguities(payload.ambiguities);
   const clarification = checkClarification(payload.clarification, ambiguities);
+  const missingFields = checkMissingFields(payload.missingFields);
+  const requestedAction = payload.requestedAction;
+  if (requestedAction !== undefined && (typeof requestedAction !== 'string' || !REQUESTED_ACTIONS.has(requestedAction))) invalid('invalid-operation');
   for (const key of Object.keys(payload)) if (!TOP_LEVEL_KEYS.has(key)) invalid('unknown-field');
   return Object.freeze({
     intent,
@@ -487,6 +506,8 @@ export const parseStructuredLLMOutput = (raw: unknown): StructuredInterpretation
     contextProvenance,
     entities,
     ambiguities,
+    missingFields,
+    ...(requestedAction === undefined ? {} : { requestedAction }),
     clarification,
   });
 };
@@ -500,6 +521,10 @@ export const toCandidate = (
   args: Readonly<Record<string, string | number | boolean | null>>;
   ambiguities: readonly string[];
   clarification: string | null;
+  missingFields: readonly string[];
+  entities: readonly StructuredEntity[];
+  contextProvenance: StructuredContextProvenance;
+  requestedAction?: string;
 }> =>
   Object.freeze({
     intent: parsed.intent,
@@ -507,4 +532,8 @@ export const toCandidate = (
     args: parsed.args,
     ambiguities: parsed.ambiguities,
     clarification: parsed.clarification,
+    missingFields: parsed.missingFields,
+    entities: parsed.entities,
+    contextProvenance: parsed.contextProvenance,
+    ...(parsed.requestedAction === undefined ? {} : { requestedAction: parsed.requestedAction }),
   });

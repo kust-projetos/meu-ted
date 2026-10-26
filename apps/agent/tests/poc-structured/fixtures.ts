@@ -18,7 +18,7 @@ export type CandidateFixture = {
   readonly llmJson: string;
 };
 
-const llm = (interpretation: unknown): string => JSON.stringify({ interpretation });
+const llm = (value: Record<string, unknown>): string => JSON.stringify({ interpretation: { missingFields: [], ...value } });
 
 export const CANDIDATE_FIXTURES: readonly CandidateFixture[] = [
   {

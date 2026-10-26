@@ -88,9 +88,11 @@ const fixtureJson = (corpusId: string): Record<string, unknown> => {
   return JSON.parse(fixture.llmJson) as Record<string, unknown>;
 };
 
-const candidate = (llmJson: string): F2ACandidate => toCandidate(parseStructuredLLMOutput(llmJson));
-
-const candidateFor = (corpusId: string): F2ACandidate => candidate(JSON.stringify(fixtureJson(corpusId)));
+const candidate = (llmJson: string): F2ACandidate => {
+  const payload = JSON.parse(llmJson) as { interpretation: Record<string, unknown> };
+  payload.interpretation.missingFields ??= [];
+  return toCandidate(parseStructuredLLMOutput(JSON.stringify(payload)));
+};
 
 const comparisonFor = (
   corpusId: string,
@@ -229,6 +231,27 @@ describe('F2-A A/B runner (actual parse, independent F1 oracle)', () => {
     expect(counts.get('INCONCLUSIVE')).toBe(6);
   });
 
+  it('scores supplied semantic oracles independently and leaves omitted dimensions unscored', () => {
+    const parsed = candidate(JSON.stringify({ interpretation: {
+      intent: 'clarify', operation: 'none', args: {}, missingFields: ['period'],
+      contextProvenance: { origin: 'local-fixture', corpusId: 'LOCAL-PERIOD' },
+      entities: [{ kind: 'period', value: '2020', provenance: 'utterance' }],
+      ambiguities: ['month'], clarification: 'Qual mês de 2020?',
+    } }));
+    const input = { corpusId: 'LOCAL-PERIOD', originalF1Classification: 'INCONCLUSIVE', candidate: parsed,
+      oracle: { allowedModes: ['clarify'], allowedOperations: [], expectedArgs: {}, clarificationRequired: true,
+        clarificationNeedles: ['mês'], expectedMissingFields: ['period'], expectedAmbiguities: ['month'],
+        expectedEntities: parsed.entities, expectedContextProvenance: parsed.contextProvenance } };
+    const good = compareF2A(input);
+    expect(good.verdict).toBe('PASS');
+    expect(good.missingFields).toBe('match');
+    expect(good.entities).toBe('match');
+    expect(good.capabilityAvailability).toBe('unknown');
+    const wrong = compareF2A({ ...input, candidate: { ...parsed, missingFields: ['amount'] } });
+    expect(wrong.verdict).toBe('FAIL');
+    expect(wrong.missingFields).toBe('mismatch');
+  });
+
   it('corrupted candidate fails for the RIGHT reason (args, null-vs-absent, needles, intent)', () => {
     const scenarios = loadScenarios();
     const baseline = loadBaseline();
@@ -281,9 +304,10 @@ describe('F2-A A/B runner (actual parse, independent F1 oracle)', () => {
     const clarifyCandidate = candidate(
       JSON.stringify({
         interpretation: {
-          intent: 'unsupported',
+          intent: 'clarify',
           operation: 'none',
           args: {},
+          missingFields: ['entity'],
           contextProvenance: { origin: 'f1-corpus-text', corpusId: 'F1-B006' },
           entities: [],
           ambiguities: ['target'],
@@ -291,18 +315,21 @@ describe('F2-A A/B runner (actual parse, independent F1 oracle)', () => {
         },
       }),
     );
-    // F1 mode `clarify` is not expressible as a TurnPlan mode.
-    for (const id of ['F1-B006', 'F1-B021', 'F1-B027']) {
+    // Explicit clarify is representable and wrong semantics fail.
+    for (const id of ['F1-B006', 'F1-B021']) {
       const item = comparisonFor(
         id,
         clarifyCandidate,
         scenarioById(scenarios, id),
         baseline.get(id) as string,
       );
-      expect(item.verdict, id).toBe('INCONCLUSIVE');
-      expect(item.reasons, id).toContain('f1-mode-not-representable:clarify');
-      expect(item.intent, id).toBe('not-comparable');
+      expect(item.verdict, id).toBe('FAIL');
+      expect(item.reasons).not.toContain('f1-mode-not-representable:clarify');
+      expect(item.intent, id).toBe('match');
     }
+    const unsupportedApproximation = comparisonFor('F1-B027', clarifyCandidate, scenarioById(scenarios, 'F1-B027'), baseline.get('F1-B027') as string);
+    expect(unsupportedApproximation.verdict).toBe('INCONCLUSIVE');
+    expect(unsupportedApproximation.reasons).toContain('args-vocabulary-unsupported:approximateAmountCents');
     // Authenticated undo-proposal is a capability this schema does not model.
     const undo = scenarioById(scenarios, 'F1-B007');
     const undoItem = comparisonFor(
