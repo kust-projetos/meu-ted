@@ -49,11 +49,44 @@ export async function listReservationIDs(directory) {
   })
   const reservations = []
   for (const name of names.filter((entry) => entry.endsWith('.reserved'))) {
+    if (name.includes('.authorized-retry-')) continue
     const record = JSON.parse(await readFile(path.join(directory, name), 'utf8'))
     if (typeof record.caseID !== 'string' || record.status !== 'reserved') throw new Error(`invalid reservation record: ${name}`)
     reservations.push(record.caseID)
   }
   return reservations
+}
+
+export function authorizedRetryFileName(directory, caseID, newRunID) {
+  return path.join(directory, `${caseKey(caseID)}.authorized-retry-${caseKey(newRunID)}.json`)
+}
+
+export async function listAuthorizedRetryReservations(directory, caseID) {
+  const prefix = `${caseKey(caseID)}.authorized-retry-`
+  const names = await readdir(directory).catch((error) => {
+    if (error.code === 'ENOENT') return []
+    throw error
+  })
+  const matches = []
+  for (const name of names.filter((entry) => entry.startsWith(prefix) && entry.endsWith('.json'))) {
+    const record = JSON.parse(await readFile(path.join(directory, name), 'utf8'))
+    if (record.caseID !== caseID || record.authorizedRetry !== true) throw new Error(`invalid authorized retry record: ${name}`)
+    matches.push(path.join(directory, name))
+  }
+  return matches.sort()
+}
+
+export async function createAuthorizedRetryReservation(directory, caseID, newRunID, metadata) {
+  await mkdir(directory, { recursive: true })
+  const file = authorizedRetryFileName(directory, caseID, newRunID)
+  const handle = await open(file, 'wx')
+  try {
+    await handle.writeFile(`${JSON.stringify({ ...metadata, caseID, status: 'reserved', authorizedRetry: true, reservedAt: new Date().toISOString() }, null, 2)}\n`)
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  return file
 }
 
 export async function finalizeStoppedRun(runDir, runID, caseIDs, caseResults, stop) {

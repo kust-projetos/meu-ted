@@ -1,8 +1,38 @@
 # Meu Ted — F2-B0: DeepSeek V4.1 Flash (não Free)
 
 **Data:** 2026-10-27
-**Estado:** `STOPPED_AFTER_GO_AUTH_401`
+**Estado mais recente:** `BLOCKED_BEFORE_INFERENCE_LOCAL_READINESS_503`
 **Escopo:** B0, 23 casos sintéticos, branch `test/ted-f2b0-no-retry-controlled`, base `1971fb911fdefbc26c978b4a02e5f5ea36406004`.
+
+## Execução autorizada mais recente — 2026-10-27
+
+### Tentativa após correção da reserva
+
+- **Run:** `2026-10-27T17-01-23-827Z-17092`; associado à tentativa anterior `2026-10-27T15-19-19-424Z-5620` de `F1-B005`.
+- **Comando:** `pnpm --filter pi-finance-agent exec tsx tests/poc-structured/f2b0-runtime/real-runner.ts --execute-real --smoke-only --confirm-model=opencode-go/deepseek-v4.1-flash --confirm-go-quota-available --confirm-go-extra-usage-disabled --retry-authorized-case=F1-B005 --retry-authorized-run=2026-10-27T15-19-19-424Z-5620`.
+- **Resultado:** BLOCKED antes da inferência: readiness do servidor OpenCode **local** falhou com HTTP 503 (`local-http`). Não é um status observado do provider Go. O processo terminou com exit 1; não foi repetido.
+- **Evidência:** manifesto criado; hooks com 0 bytes; sem `catalog-preflight.json`, resultado de caso ou reserva autorizada nova. Reserva histórica preservada, lock liberado. Zero prompts e zero requisições físicas de inferência nesta tentativa; sem resposta do modelo, parser, oráculo, tokens ou faturamento observados.
+- **Próximo passo:** diagnosticar o readiness local 503 sem executar nova inferência; a autenticação Go e o caminho `/models` continuam não comprovados pelo GET anterior (404).
+
+**ID:** `2026-10-27T16-31-59-128Z-1936`
+**Resultado:** **BLOCKED — provider/autenticação; nenhuma inferência iniciada.**
+
+**Código:** HEAD `51085d8609c5ab47360cefb7aff4b106214f8862`; estado sujo, com alterações preexistentes em `apps/agent/tests/poc-structured/f2b0-runtime/real-runner.ts` e `real-runner.stdin.test.mjs`. As alterações foram preservadas.
+
+**Execução anterior associada:** `2026-10-27T15-19-19-424Z-5620` (F1-B005, HTTP 401; evidência anterior preservada).
+
+**Tentativa autorizada após a confirmação do operador:** o runner recebeu o comando real com `--execute-real --smoke-only` e as três confirmações requeridas, mas parou antes de iniciar servidor/sessão. O novo `manifest.json` recebeu o ID acima; a checagem do plano encontrou `F1-B005.reserved`, pertencente à execução 401 anterior (`2026-10-27T15-19-19-424Z-5620`), e recusou replay. O arquivo de hooks ficou vazio (0 bytes), não há `catalog-preflight.json`, `smoke-evaluation.json` nem resultado de caso neste novo run. Nenhuma reserva antiga foi desbloqueada e nenhuma nova reserva foi criada.
+
+- **Gate de credencial:** nova verificação usando `node:util.parseEnv`, o mesmo parser do runner, confirmou `OPENCODE_GO` presente no `.env` do repositório; valores não foram impressos. O carregador do runner disponibilizou a credencial ao ambiente filho por `OPENCODE_GO_API_KEY` durante o preflight.
+- **Modelo/endpoint e configuração esperados:** código local fixa `opencode-go/deepseek-v4.1-flash` e `https://opencode.ai/inference/go/openai/v1/chat/completions`; a configuração isolada usa `{env:OPENCODE_GO_API_KEY}`. O preflight nativo exercitou essa configuração, sem criar sessão ou enviar prompt.
+- **Preflight nativo:** `pnpm --filter pi-finance-agent exec tsx tests/poc-structured/f2b0-runtime/real-runner.ts --preflight-only --confirm-go-quota-available --confirm-go-extra-usage-disabled` confirmou no catálogo local o provider/modelo Go e preço permitido; `inferenceRequests=0`. `usage.limits` retornou indisponível e o runner registrou a attestation do operador; quota não foi comprovada independentemente.
+- **Autenticação HTTP:** como não havia evidência disponível de `GET /models` 200 para Go, foi feita uma única checagem GET-only em `https://opencode.ai/inference/go/openai/v1/models`; resultado **HTTP 404**. Nenhum corpo de prompt foi enviado, nenhum retry ocorreu e o corpo da resposta não foi persistido. O 404 não comprova autenticação válida nem inválida; o gate exigido de HTTP 200 não foi atendido. Não foram tentadas outras rotas.
+- **Cobrança:** não houve inferência; tokens, `usage.cost`, billing source, list cost, allowance e consumo de saldo Console não se aplicam/não foram observados. Não se declara custo zero de inferência.
+- **Comando real:** invocado: `pnpm --filter pi-finance-agent exec tsx tests/poc-structured/f2b0-runtime/real-runner.ts --execute-real --smoke-only --confirm-model=opencode-go/deepseek-v4.1-flash --confirm-go-quota-available --confirm-go-extra-usage-disabled`. O runner bloqueou antes de qualquer sessão por reserva pendente de F1-B005. Nenhuma inferência alternativa foi feita.
+- **Contagem desta missão:** 1 requisição GET de checagem, 0 requisições físicas de inferência; 0 prompts; 0 retries; 0 fallbacks; 0 reservas novas ou resultados de caso. A reserva antiga permanece intacta. Os casos restantes continuam não autorizados.
+- **Interpretação F2-A.1 / oráculo F1:** não avaliados; não houve resposta do modelo.
+- **Validação local anterior à decisão:** harness mock `node apps/agent/tests/poc-structured/f2b0-runtime/run.mjs` PASS (9 cenários; run `2026-10-27T16-20-23-036Z-7948`); testes focados `pnpm --filter pi-finance-agent exec vitest run tests/poc-structured/f2b0-runtime --reporter=dot` PASS (38/38); typecheck `pnpm --filter pi-finance-agent typecheck` PASS. Reviewer independente não encontrou blocker de segurança no diff, sem atestar credencial ou quota.
+- **Impedimento concreto/próximo passo:** a reserva pendente para F1-B005 exige resolução explícita, não automática, conforme o controle existente. A tentativa não pode ser repetida nem retomada com o ID antigo como se o caso tivesse sido concluído. Preservar o checkpoint e decidir separadamente como autorizar uma nova reserva/execução; não avançar os outros 22 casos.
 
 ## Veredito
 

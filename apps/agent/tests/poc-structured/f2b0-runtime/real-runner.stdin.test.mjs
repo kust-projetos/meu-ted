@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
-import { captureCli, classifyStdinWriteError, isPromptConfirmed, minimalEnvironment } from './real-runner.ts'
+import { captureCli, classifyStdinWriteError, isPromptConfirmed, minimalEnvironment, goProviderSettings, writeConfig, loadGoApiKey } from './real-runner.ts'
 
 describe('real runner CLI stdin prompt capture', () => {
   it('sends exact UTF-8 prompt via stdin with no prompt argv and retains JSON NDJSON output', async () => {
@@ -94,5 +95,62 @@ describe('real runner CLI stdin prompt capture', () => {
     expect(env.OPENCODE_CONFIG_DIR).toBe(paths.config)
     expect(env.XDG_CONFIG_HOME).toBe(paths.config)
     expect(env.OPENCODE_API_KEY).toBeUndefined()
+  })
+
+  it('passes the Go credential only through the child environment and references it without persisting it in config', () => {
+    const prior = process.env.OPENCODE_GO_API_KEY
+    const mockCredential = 'mock-go-credential-never-persist'
+    process.env.OPENCODE_GO_API_KEY = mockCredential
+    try {
+      const { env } = minimalEnvironment(path.join(process.cwd(), 'temporary-f2b0-run', randomUUID()), 'test-nonce', 'test-server-password')
+      expect(env.OPENCODE_GO_API_KEY).toBe(mockCredential)
+      expect(goProviderSettings().apiKey).toBe('{env:OPENCODE_GO_API_KEY}')
+      expect(JSON.stringify(goProviderSettings())).not.toContain(mockCredential)
+    } finally {
+      if (prior === undefined) delete process.env.OPENCODE_GO_API_KEY
+      else process.env.OPENCODE_GO_API_KEY = prior
+    }
+  })
+
+  it('writes the Go env reference into the isolated effective config, never the credential value', async () => {
+    const configRoot = await mkdtemp(path.join(tmpdir(), 'f2b0-go-config-'))
+    const mockCredential = 'mock-go-credential-never-persist'
+    try {
+      const { env } = minimalEnvironment(configRoot, 'test-nonce', 'test-server-password')
+      const prior = process.env.OPENCODE_GO_API_KEY
+      process.env.OPENCODE_GO_API_KEY = mockCredential
+      try {
+        const paths = minimalEnvironment(configRoot, 'test-nonce', 'test-server-password').paths
+        await writeConfig(paths.config, path.join(configRoot, 'work'), false)
+      } finally {
+        if (prior === undefined) delete process.env.OPENCODE_GO_API_KEY
+        else process.env.OPENCODE_GO_API_KEY = prior
+      }
+      const configText = await readFile(path.join(env.OPENCODE_CONFIG_DIR, 'opencode.json'), 'utf8')
+      const config = JSON.parse(configText)
+      expect(config.providers['opencode-go'].settings.apiKey).toBe('{env:OPENCODE_GO_API_KEY}')
+      expect(configText).not.toContain(mockCredential)
+    } finally {
+      await rm(configRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('loads only the OPENCODE_GO entry from dotenv into memory', async () => {
+    const envRoot = await mkdtemp(path.join(tmpdir(), 'f2b0-go-env-'))
+    const envFile = path.join(envRoot, '.env')
+    const priorKey = process.env.OPENCODE_GO_API_KEY
+    const priorAlias = process.env.OPENCODE_GO
+    delete process.env.OPENCODE_GO_API_KEY
+    delete process.env.OPENCODE_GO
+    try {
+      await writeFile(envFile, 'UNRELATED_SECRET=must-not-be-selected\nOPENCODE_GO="mock-go-credential-in-memory-only"\n')
+      expect(await loadGoApiKey(envFile)).toBe('mock-go-credential-in-memory-only')
+    } finally {
+      if (priorKey === undefined) delete process.env.OPENCODE_GO_API_KEY
+      else process.env.OPENCODE_GO_API_KEY = priorKey
+      if (priorAlias === undefined) delete process.env.OPENCODE_GO
+      else process.env.OPENCODE_GO = priorAlias
+      await rm(envRoot, { recursive: true, force: true })
+    }
   })
 })

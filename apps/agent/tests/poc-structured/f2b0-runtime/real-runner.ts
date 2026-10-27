@@ -6,22 +6,25 @@ import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseEnv } from 'node:util';
 import { OpenCode } from '@opencode/client';
 import { evaluateF2B0Attempts, F2B0_CASE_IDS, getF2B0Cases } from '../f2b0-adapter.js';
-import { createCaseReservation, createExclusiveRunLock, finalizeStoppedRun, listReservationIDs } from './real-storage.mjs';
+import { createCaseReservation, createExclusiveRunLock, finalizeStoppedRun, listReservationIDs, createAuthorizedRetryReservation, listAuthorizedRetryReservations } from './real-storage.mjs';
 import {
   aggregateObservedMetric,
+  AUTHORIZED_RETRY_CASE_ID,
+  AUTHORIZED_RETRY_SOURCE_RUN_ID,
   classifyLocalServerFailure,
   classifyProviderFailure,
   classifyAssistantOutcome,
   buildSafeStoppedReport,
   extractCliOutput,
+  isAuthorizedFatalRetrySource,
   isTerminalAssistantFailure,
   isApprovedInfrastructureEndedCase,
   MAX_CASES,
-  limitRealAttempts,
   parseExecutionMode,
-  planAttempts,
+  resolveRealExecutionPlan,
   normalizeTokenUsage,
   summarizeRealRunMetrics,
   summarizeStoppedRun,
@@ -65,8 +68,9 @@ const usage = () => {
     `  --execute-real ${REAL_CONFIRMATION} ${GO_QUOTA_CONFIRMATION} ${GO_EXTRA_USAGE_CONFIRMATION}   execute serially (maximum 23; after smoke approval)`,
     '  --resume=<run-id>                      skip persisted cases; never replay completed IDs',
     '  --export-stopped-run=<run-id>          create one sanitized review artifact; no server/catalog/model call',
+    '  --retry-authorized-case=F1-B005 --retry-authorized-run=2026-10-27T15-19-19-424Z-5620   single authorized F1-B005 smoke retry after the fatal 401; requires --execute-real --smoke-only plus exact confirmations',
     'No flags means no model/catalog request. One global wx lock serializes all runs; stale locks/reservations require manual review and are never auto-cleared.',
-    'OpenCode reads its native auth store; this runner neither reads nor copies credential values. Only the native data directory is shared; config and database remain per-run.',
+    'OpenCode Go auth is supplied only through OPENCODE_GO_API_KEY environment substitution; the runner never stores the key. Native data is shared, config/database remain per-run.',
   ].join('\n'));
 };
 
@@ -87,6 +91,7 @@ export function minimalEnvironment(runDir: string, runNonce: string, serverPassw
       ...(process.env.USERPROFILE ? { USERPROFILE: process.env.USERPROFILE } : {}),
       ...(process.env.APPDATA ? { APPDATA: process.env.APPDATA } : {}),
       ...(process.env.LOCALAPPDATA ? { LOCALAPPDATA: process.env.LOCALAPPDATA } : {}),
+      ...(process.env.OPENCODE_GO_API_KEY ? { OPENCODE_GO_API_KEY: process.env.OPENCODE_GO_API_KEY } : {}),
       HOME: nativeHome,
       TEMP: temp,
       TMP: temp,
@@ -108,7 +113,28 @@ export function minimalEnvironment(runDir: string, runNonce: string, serverPassw
   };
 }
 
-async function writeConfig(configDir: string, workDir: string, withPlugin: boolean) {
+export function goProviderSettings() {
+  return {
+    apiKey: '{env:OPENCODE_GO_API_KEY}',
+    transport: 'http',
+    timeout: 90_000,
+    headerTimeout: 30_000,
+    chunkTimeout: 30_000,
+  };
+}
+
+export async function loadGoApiKey(envFile = path.resolve(ROOT, '../../../../../.env')) {
+  const inherited = process.env.OPENCODE_GO_API_KEY ?? process.env.OPENCODE_GO;
+  if (inherited?.trim()) return inherited.trim();
+  try {
+    return parseEnv(await readFile(envFile, 'utf8')).OPENCODE_GO?.trim() || null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new Error('could not read OpenCode Go credential source');
+  }
+}
+
+export async function writeConfig(configDir: string, workDir: string, withPlugin: boolean) {
   const config: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     model: `${REAL_MODEL.providerID}/${REAL_MODEL.modelID}`,
@@ -128,12 +154,7 @@ async function writeConfig(configDir: string, workDir: string, withPlugin: boole
     },
     providers: {
       [REAL_MODEL.providerID]: {
-        settings: {
-          transport: 'http',
-          timeout: 90_000,
-          headerTimeout: 30_000,
-          chunkTimeout: 30_000,
-        },
+        settings: goProviderSettings(),
       },
     },
   };
@@ -449,6 +470,9 @@ async function main(argv: string[]) {
     await exportStoppedRun(options.exportStoppedRunID);
     return;
   }
+  const goApiKey = await loadGoApiKey();
+  if (!goApiKey) throw new Error('OPENCODE_GO credential is required for this F2B0 mode');
+  process.env.OPENCODE_GO_API_KEY = goApiKey;
   const cases = options.selfTestGuard ? [] : getF2B0Cases();
   if (!options.selfTestGuard && (cases.length !== MAX_CASES || F2B0_CASE_IDS.length !== MAX_CASES)) throw new Error('F2B0 manifest changed: expected exactly 23 cases');
   const runID = options.resumeID ?? `${new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')}-${process.pid}`;
@@ -497,9 +521,21 @@ async function main(argv: string[]) {
         otherPluginCount: ready.otherPluginCount,
         promptRequests: 0,
         inferenceRequests: 0,
-        authMode: 'opencode-native-auth-store',
+        authMode: 'opencode-go-api-key-env',
       };
       await atomicCreate(path.join(runDir, 'guard-self-test.json'), result);
+      console.log(JSON.stringify(result, null, 2));
+    } finally { await stopServer(server.child, server.childClosed); }
+    return;
+  }
+  if (options.preflightOnly) {
+    // Auth/cost preflight is independent of persisted case reservations and never creates a session or prompt.
+    const server = await startServer(runDir, envState.env, workDir, serverPassword);
+    try {
+      const catalog = await preflightCatalog(server.client, workDir);
+      const goUsage = goUsageAudit(await readGoUsage(server.client), options.quotaConfirmation);
+      const result = { mode: 'catalog-preflight-only', catalog, goUsage, authMode: 'opencode-go-api-key-env', extraUsageStatus: options.extraUsageConfirmation ? 'operator-attested-disabled' : 'not-attested-in-this-invocation', inferenceRequests: 0 };
+      await atomicCreate(path.join(runDir, 'preflight.json'), result);
       console.log(JSON.stringify(result, null, 2));
     } finally { await stopServer(server.child, server.childClosed); }
     return;
@@ -515,13 +551,13 @@ async function main(argv: string[]) {
     model: REAL_MODEL.modelID,
     nativeURL: REAL_URL,
     caseIDs: cases.map((item) => item.id),
-    authMode: 'opencode-native-auth-store',
+    authMode: 'opencode-go-api-key-env',
     createdAt: new Date().toISOString(),
     prompts: cases.map((item) => ({ id: item.id, input: item.input, prompt: item.prompt })),
   };
   if (options.resumeID) {
     const existing = JSON.parse(await readFile(manifestFile, 'utf8'));
-    if (existing.model !== REAL_MODEL.modelID || existing.authMode !== manifest.authMode || JSON.stringify(existing.caseIDs) !== JSON.stringify(manifest.caseIDs) || JSON.stringify(existing.prompts) !== JSON.stringify(manifest.prompts)) throw new Error('resume manifest differs from this F2B0 model/case/native-auth state');
+    if (existing.model !== REAL_MODEL.modelID || existing.authMode !== manifest.authMode || JSON.stringify(existing.caseIDs) !== JSON.stringify(manifest.caseIDs) || JSON.stringify(existing.prompts) !== JSON.stringify(manifest.prompts)) throw new Error('resume manifest differs from this F2B0 model/case/Go-auth state');
     const smokeFile = path.join(runDir, 'smoke-evaluation.json');
     const smoke = JSON.parse(await readFile(smokeFile, 'utf8').catch(() => { throw new Error('resume requires a persisted one-case smoke evaluation') }));
     if (smoke.status !== 'SMOKE_PASS' || smoke.continuationAllowed !== true) throw new Error('resume blocked: smoke did not pass with a current Go quota readback');
@@ -541,28 +577,39 @@ async function main(argv: string[]) {
     }
   }
     if (existingIDs.some((id) => !reservedIDs.includes(id))) throw new Error('existing case result lacks its durable reservation');
-    const plan = planAttempts(cases.map((item) => item.id), existingIDs, { resume: Boolean(options.resumeID), reservedIDs });
-    const executionPlan = limitRealAttempts(plan.run, { smokeOnly: options.smokeOnly });
-    if (plan.unresolvedReservations.length > 0) throw new Error(`reserved case has no durable result; refusing replay: ${plan.unresolvedReservations.join(',')}`);
-  if (options.preflightOnly) {
-    // The explicit preflight mode only reads the provider/model catalog API; it creates no session and sends no prompt.
-    const server = await startServer(runDir, envState.env, workDir, serverPassword);
-    try {
-      const catalog = await preflightCatalog(server.client, workDir);
-      const goUsage = goUsageAudit(await readGoUsage(server.client), options.quotaConfirmation);
-      const result = { mode: 'catalog-preflight-only', catalog, goUsage, authMode: 'opencode-native-auth-store', extraUsageStatus: options.extraUsageConfirmation ? 'operator-attested-disabled' : 'not-attested-in-this-invocation', inferenceRequests: 0 };
-      await atomicCreate(path.join(runDir, 'preflight.json'), result);
-      console.log(JSON.stringify(result, null, 2));
-    } finally { await stopServer(server.child, server.childClosed); }
-    return;
-  }
-
+    const { plan, executionPlan, authorized } = resolveRealExecutionPlan({
+      caseIDs: cases.map((item) => item.id),
+      existingIDs,
+      reservedIDs,
+      options: { resumeID: options.resumeID, smokeOnly: options.smokeOnly, retryCaseID: options.retryCaseID, retryRunID: options.retryRunID },
+    });
+    let authorizedRetryReservationFile: string | null = null;
+    if (authorized) {
+      let reservationRecord: any = null;
+      try {
+        reservationRecord = JSON.parse(await readFile(path.join(reservationDir, `${safeID(AUTHORIZED_RETRY_CASE_ID)}.reserved`), 'utf8'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('authorized retry refused: historic reservation is missing');
+        throw error;
+      }
+      let sourceResult: any = null;
+      try {
+        sourceResult = JSON.parse(await readFile(path.join(OUTPUT_ROOT, AUTHORIZED_RETRY_SOURCE_RUN_ID, 'cases', `${safeID(AUTHORIZED_RETRY_CASE_ID)}.json`), 'utf8'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('authorized retry refused: associated fatal result is missing');
+        throw error;
+      }
+      const check = isAuthorizedFatalRetrySource({ caseID: options.retryCaseID, sourceRunID: options.retryRunID, reservationRecord, sourceResult });
+      if (!check.ok) throw new Error(`authorized retry refused: ${check.reason}`);
+      const priorRetries = await listAuthorizedRetryReservations(reservationDir, AUTHORIZED_RETRY_CASE_ID);
+      if (priorRetries.length > 0) throw new Error('authorized retry already consumed; refusing second attempt');
+    }
     const server = await startServer(runDir, envState.env, workDir, serverPassword);
     let completed = false;
     try {
     const catalog = await preflightCatalog(server.client, workDir);
     const goUsage = await requireGoUsage(server.client, options.quotaConfirmation && !options.resumeID);
-    const preflight = { catalog, goUsage, authMode: 'opencode-native-auth-store', extraUsageStatus: options.extraUsageConfirmation ? 'operator-attested-disabled' : 'not-attested-in-this-invocation', inferenceRequests: 0 };
+    const preflight = { catalog, goUsage, authMode: 'opencode-go-api-key-env', extraUsageStatus: options.extraUsageConfirmation ? 'operator-attested-disabled' : 'not-attested-in-this-invocation', inferenceRequests: 0 };
     const preflightFile = path.join(runDir, 'catalog-preflight.json');
     if (!options.resumeID) await atomicCreate(preflightFile, preflight);
     else {
@@ -576,7 +623,10 @@ async function main(argv: string[]) {
       const caseFile = path.join(caseDir, `${safeID(id)}.json`);
       const caseWorkDir = workDir;
       const goUsageBefore = await requireGoUsage(server.client, options.quotaConfirmation && !options.resumeID);
-      const reservationFile = await createCaseReservation(reservationDir, id, { runID, runNonce });
+      let reservationFile: string | null = null;
+      if (!(authorized && id === AUTHORIZED_RETRY_CASE_ID)) {
+        reservationFile = await createCaseReservation(reservationDir, id, { runID, runNonce });
+      }
       const hookStart = jsonLines(await readFile(evidenceFile, 'utf8')).length;
       const session = await server.client.session.create({
         title: `F2B0 ${id}`,
@@ -589,10 +639,17 @@ async function main(argv: string[]) {
       if (!readyEvents.some((event) => event.runNonce === runNonce && event.event === 'plugin-ready' && event.provider === REAL_MODEL.providerID && event.model === REAL_MODEL.modelID && event.mcpCount === 0 && event.skillCount === 0)) {
         throw new Error('plugin cost/skills/MCP readiness proof is incomplete; no prompt was sent');
       }
+      if (authorized && id === AUTHORIZED_RETRY_CASE_ID) {
+        const priorRetries = await listAuthorizedRetryReservations(reservationDir, AUTHORIZED_RETRY_CASE_ID);
+        if (priorRetries.length > 0) throw new Error('authorized retry already consumed; refusing second attempt');
+        authorizedRetryReservationFile = await createAuthorizedRetryReservation(reservationDir, AUTHORIZED_RETRY_CASE_ID, runID, { runID, runNonce, sourceRunID: AUTHORIZED_RETRY_SOURCE_RUN_ID });
+        reservationFile = authorizedRetryReservationFile;
+      }
+      if (!reservationFile) throw new Error('reservation missing before prompt');
       const stdout = await captureCli(CLI, [
         'run', '--server', server.baseURL, '--session', session.id,
         '--model', `${REAL_MODEL.providerID}/${REAL_MODEL.modelID}`, '--agent', 'build', '--format', 'json',
-      ], caseWorkDir, envState.env, [serverPassword], item.prompt);
+      ], caseWorkDir, envState.env, [serverPassword, process.env.OPENCODE_GO_API_KEY], item.prompt);
       let apiWaitFailure: string | null = null;
       let assistantMessages: any[] = [];
       let stdinPromptObserved = false;
@@ -807,7 +864,7 @@ async function main(argv: string[]) {
     console.log(JSON.stringify({ runID, complete: true, attempts: attempts.length, metrics: report.metrics }));
   } finally {
     await stopServer(server.child, server.childClosed);
-    if (!completed) console.error(JSON.stringify({ runID, authMode: 'opencode-native-auth-store', status: 'stopped-or-preflight-only' }));
+    if (!completed) console.error(JSON.stringify({ runID, authMode: 'opencode-go-api-key-env', status: 'stopped-or-preflight-only' }));
   }
   } finally {
     await runLock.release();
@@ -817,7 +874,7 @@ async function main(argv: string[]) {
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMain) {
   main(process.argv.slice(2)).catch((error) => {
-    console.error(`F2B0 runner stopped safely: ${redactPersistedOutput(error instanceof Error ? error.message : String(error))}`);
+    console.error(`F2B0 runner stopped safely: ${redactPersistedOutput(error instanceof Error ? error.message : String(error), process.env.OPENCODE_GO_API_KEY)}`);
     process.exitCode = 1;
   });
 }

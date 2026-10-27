@@ -9,6 +9,10 @@ export const GO_EXTRA_USAGE_CONFIRMATION = '--confirm-go-extra-usage-disabled'
 const APPROVED_INFRA_ENDINGS = new Map([
   ['2026-10-27T01-04-23-758Z-13588', new Set(['F1-B005'])],
 ])
+export const AUTHORIZED_RETRY_CASE_ID = 'F1-B005'
+export const AUTHORIZED_RETRY_SOURCE_RUN_ID = '2026-10-27T15-19-19-424Z-5620'
+const RETRY_CASE_FLAG = '--retry-authorized-case='
+const RETRY_RUN_FLAG = '--retry-authorized-run='
 const APPROVED_GO_CATALOG_TIERS = [
   { input: 0.15, output: 0.6, read: 0.003, write: 0 },
   { input: 0.3, output: 1.2, read: 0.006, write: 0 },
@@ -24,10 +28,21 @@ export function parseExecutionMode(argv) {
   const extraUsageConfirmation = argv.includes(GO_EXTRA_USAGE_CONFIRMATION)
   const resumeArg = argv.find((arg) => arg.startsWith('--resume='))
   const resumeID = resumeArg?.slice('--resume='.length)
+  const retryCaseArg = argv.find((arg) => arg.startsWith(RETRY_CASE_FLAG))
+  const retryRunArg = argv.find((arg) => arg.startsWith(RETRY_RUN_FLAG))
+  const retryCaseID = retryCaseArg?.slice(RETRY_CASE_FLAG.length)
+  const retryRunID = retryRunArg?.slice(RETRY_RUN_FLAG.length)
   const exportArg = argv.find((arg) => arg.startsWith('--export-stopped-run='))
   const exportStoppedRunID = exportArg?.slice('--export-stopped-run='.length)
-  if (argv.includes('--help') || (!execute && !preflightOnly && !selfTestGuard && !smokeOnly && !resumeID && !exportStoppedRunID)) return { help: true, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID }
-  if (exportStoppedRunID && (execute || preflightOnly || selfTestGuard || smokeOnly || resumeID || quotaConfirmation || extraUsageConfirmation || !/^[a-zA-Z0-9._-]{1,80}$/.test(exportStoppedRunID))) throw new Error('--export-stopped-run requires only a safe run-id and performs no server/catalog call')
+  if (argv.includes('--help') || (!execute && !preflightOnly && !selfTestGuard && !smokeOnly && !resumeID && !exportStoppedRunID && !retryCaseID && !retryRunID)) return { help: true, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID, retryCaseID, retryRunID }
+  if ((retryCaseID !== undefined || retryRunID !== undefined)) {
+    if (retryCaseID === undefined || retryRunID === undefined) throw new Error('authorized retry requires both case and run: --retry-authorized-case plus --retry-authorized-run')
+    if (retryCaseID !== AUTHORIZED_RETRY_CASE_ID || retryRunID !== AUTHORIZED_RETRY_SOURCE_RUN_ID) throw new Error(`authorized retry is limited to F1-B005 from ${AUTHORIZED_RETRY_SOURCE_RUN_ID}`)
+    if (!execute || !smokeOnly || !confirmation || !quotaConfirmation || !extraUsageConfirmation) throw new Error('authorized retry requires --execute-real --smoke-only plus exact confirmations')
+    if (resumeID || preflightOnly || selfTestGuard || exportStoppedRunID) throw new Error('authorized retry cannot be combined with preflight, self-test, resume, or export')
+    if (!/^[a-zA-Z0-9._-]{1,80}$/.test(retryRunID)) throw new Error('authorized retry run id is not a safe run-id')
+  }
+  if (exportStoppedRunID && (execute || preflightOnly || selfTestGuard || smokeOnly || resumeID || retryCaseID || retryRunID || quotaConfirmation || extraUsageConfirmation || !/^[a-zA-Z0-9._-]{1,80}$/.test(exportStoppedRunID))) throw new Error('--export-stopped-run requires only a safe run-id and performs no server/catalog call')
   if (execute && !confirmation) throw new Error(`real inference requires exact confirmation ${REAL_CONFIRMATION}`)
   if (execute && !quotaConfirmation) throw new Error(`real Go inference requires explicit quota confirmation ${GO_QUOTA_CONFIRMATION}`)
   if (execute && !extraUsageConfirmation) throw new Error(`real Go inference requires explicit Extra Usage confirmation ${GO_EXTRA_USAGE_CONFIRMATION}`)
@@ -36,7 +51,7 @@ export function parseExecutionMode(argv) {
   if (smokeOnly && (preflightOnly || selfTestGuard || resumeID)) throw new Error('--smoke-only cannot be combined with preflight, self-test, or resume')
   if ((preflightOnly || selfTestGuard) && (execute || resumeID || (preflightOnly && selfTestGuard))) throw new Error('preflight/self-test modes cannot be combined with real execution/resume or each other')
   if (resumeID && (!execute || !/^[a-zA-Z0-9._-]{1,80}$/.test(resumeID))) throw new Error('--resume requires --execute-real and a safe run-id')
-  return { help: false, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID }
+  return { help: false, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID, retryCaseID, retryRunID }
 }
 
 export function validateCatalogCost(cost) {
@@ -258,6 +273,60 @@ export function limitRealAttempts(caseIDs, { smokeOnly = false } = {}) {
   if (!smokeOnly) return { run: caseIDs.slice(), deferred: [] }
   if (caseIDs.length === 0) throw new Error('no pending smoke case')
   return { run: caseIDs.slice(0, 1), deferred: caseIDs.slice(1) }
+}
+
+export function isAuthorizedFatalRetrySource({ caseID, sourceRunID, reservationRecord, sourceResult } = {}) {
+  if (caseID !== AUTHORIZED_RETRY_CASE_ID || sourceRunID !== AUTHORIZED_RETRY_SOURCE_RUN_ID) return { ok: false, reason: 'not-authorized-pair' }
+  if (!reservationRecord) return { ok: false, reason: 'reservation-missing' }
+  if (reservationRecord.caseID !== AUTHORIZED_RETRY_CASE_ID || reservationRecord.status !== 'reserved' || reservationRecord.runID !== AUTHORIZED_RETRY_SOURCE_RUN_ID) return { ok: false, reason: 'reservation-mismatch' }
+  if (!sourceResult) return { ok: false, reason: 'result-missing' }
+  if (sourceResult.caseID !== AUTHORIZED_RETRY_CASE_ID) return { ok: false, reason: 'result-case-mismatch' }
+  if (sourceResult.fatal !== true) return { ok: false, reason: 'result-not-fatal' }
+  const request = sourceResult.request ?? {}
+  if (request.providerID !== REAL_MODEL.providerID || request.modelID !== REAL_MODEL.modelID || request.url !== REAL_URL) return { ok: false, reason: 'result-request-mismatch' }
+  if (request.requestCount !== 1 || sourceResult.attemptCount !== 1) return { ok: false, reason: 'result-request-count' }
+  if (typeof sourceResult.text !== 'string' || sourceResult.text !== '' || typeof sourceResult.apiText !== 'string' || sourceResult.apiText !== '') return { ok: false, reason: 'result-has-output' }
+  const evidence = Array.isArray(sourceResult.hookEvidence) ? sourceResult.hookEvidence : []
+  const requests = evidence.filter((event) => event.event === 'http-request-allowed')
+  if (requests.length !== 1) return { ok: false, reason: 'result-request-count' }
+  if (requests[0].authorizationPresent !== false) return { ok: false, reason: 'result-auth-present' }
+  if (requests[0].toolCount !== 0) return { ok: false, reason: 'result-tools-present' }
+  if (!evidence.some((event) => event.event === 'http-response' && event.status === 401)) return { ok: false, reason: 'result-not-401' }
+  const veto = evidence.find((event) => event.event === 'retry-decision')
+  if (!veto || veto.retry !== false) return { ok: false, reason: 'result-retry-not-vetoed' }
+  const outcomeError = sourceResult.metadata?.assistantOutcome?.error ?? {}
+  if (outcomeError.status !== 401) return { ok: false, reason: 'result-outcome-mismatch' }
+  return { ok: true }
+}
+
+export function planAuthorizedRetry({ caseIDs, unresolvedReservations, retryCaseID } = {}) {
+  if (retryCaseID !== AUTHORIZED_RETRY_CASE_ID) throw new Error('authorized retry is limited to F1-B005')
+  if (!Array.isArray(unresolvedReservations) || unresolvedReservations.length !== 1 || unresolvedReservations[0] !== AUTHORIZED_RETRY_CASE_ID) throw new Error('authorized retry requires exactly the F1-B005 unresolved reservation')
+  if (!Array.isArray(caseIDs) || !caseIDs.includes(AUTHORIZED_RETRY_CASE_ID)) throw new Error('authorized retry case is not in the manifest')
+  return {
+    run: [AUTHORIZED_RETRY_CASE_ID],
+    deferred: caseIDs.filter((id) => id !== AUTHORIZED_RETRY_CASE_ID),
+  }
+}
+
+export function resolveRealExecutionPlan({ caseIDs, existingIDs = [], reservedIDs = [], options = {} } = {}) {
+  const retryCaseID = options.retryCaseID
+  const retryRunID = options.retryRunID
+  const resumeID = options.resumeID
+  const smokeOnly = options.smokeOnly === true
+  if (retryCaseID !== undefined || retryRunID !== undefined) {
+    if (retryCaseID !== AUTHORIZED_RETRY_CASE_ID || retryRunID !== AUTHORIZED_RETRY_SOURCE_RUN_ID) throw new Error(`authorized retry is limited to F1-B005 from ${AUTHORIZED_RETRY_SOURCE_RUN_ID}`)
+    if (!smokeOnly) throw new Error('authorized retry requires --smoke-only')
+    if (resumeID) throw new Error('authorized retry cannot be combined with preflight, self-test, resume, or export')
+    const plan = planAttempts(caseIDs, existingIDs, { resume: true, reservedIDs })
+    if (Array.isArray(existingIDs) && existingIDs.includes(AUTHORIZED_RETRY_CASE_ID)) throw new Error('authorized retry already has a durable result in this run; refusing second attempt')
+    const executionPlan = planAuthorizedRetry({ caseIDs, unresolvedReservations: plan.unresolvedReservations, retryCaseID })
+    return { plan, executionPlan, authorized: true }
+  }
+  const plan = planAttempts(caseIDs, existingIDs, { resume: Boolean(resumeID), reservedIDs })
+  const executionPlan = limitRealAttempts(plan.run, { smokeOnly })
+  if (plan.unresolvedReservations.length > 0) throw new Error(`reserved case has no durable result; refusing replay: ${plan.unresolvedReservations.join(',')}`)
+  return { plan, executionPlan, authorized: false }
 }
 
 export function isApprovedInfrastructureEndedCase(runID, result) {
