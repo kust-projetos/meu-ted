@@ -1,0 +1,3 @@
+node_modules/
+/evidence/real/*
+!/evidence/real/published-b0-stop.json
