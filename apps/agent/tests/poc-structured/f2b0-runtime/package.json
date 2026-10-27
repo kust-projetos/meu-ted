@@ -2,7 +2,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@opencode/client": "2.1.4",
-    "@opencode/plugin": "2.1.4"
+    "@opencode/client": "2.2.0",
+    "@opencode/plugin": "2.2.0"
   }
 }

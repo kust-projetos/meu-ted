@@ -1,7 +1,7 @@
 import { appendFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { Plugin } from '@opencode/plugin'
-import { REAL_MODEL, REAL_URL, validateCatalogCost, validateNativeRequest } from '../real-guard.mjs'
+import { REAL_MODEL, REAL_URL, validateNativeRequest } from '../real-guard.mjs'
 
 const evidence = process.env.F2B0_REAL_EVIDENCE
 const runNonce = process.env.F2B0_REAL_NONCE
@@ -25,12 +25,6 @@ const fail = async (reason, fields = {}) => {
 export default Plugin.define({
   id: 'f2b0.real-run-guard',
   async setup(ctx) {
-    const models = await ctx.model.list()
-    const selected = collection(models).find((model) => model.providerID === REAL_MODEL.providerID && model.id === REAL_MODEL.modelID)
-    if (!selected) await fail('target-model-not-in-catalog')
-    const cost = validateCatalogCost(selected.cost)
-    if (!cost.ok) await fail(cost.reason, { provider: selected.providerID, model: selected.id })
-
     const configuredMcp = await ctx.mcp.list()
     if (collection(configuredMcp).length !== 0) await fail('mcp-configured')
     await ctx.skill.transform((editor) => { for (const item of editor.list()) editor.remove(item.id) })
@@ -117,7 +111,6 @@ export default Plugin.define({
       version: ctx.app.version,
       provider: REAL_MODEL.providerID,
       model: REAL_MODEL.modelID,
-      cost: { zero: true, tiers: cost.tiers },
       mcpCount: 0,
       skillCount: 0,
       otherPluginCount: 0,

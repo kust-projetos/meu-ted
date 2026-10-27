@@ -7,18 +7,22 @@ import {
   classifyLocalServerFailure,
   classifyAssistantOutcome,
   extractCliOutput,
-  approvedProviderCredential,
   aggregateObservedMetric,
   isTerminalAssistantFailure,
   nearestRankPercentile,
   normalizeTokenUsage,
+  limitRealAttempts,
   isApprovedInfrastructureEndedCase,
   summarizeRealRunMetrics,
   buildSafeStoppedReport,
   summarizeStoppedRun,
   planAttempts,
   parseExecutionMode,
+  REAL_MODEL,
+  REAL_URL,
   validateCatalogCost,
+  validateGoUsageLimits,
+  evaluateGoSmoke,
   validateNativeRequest,
   redactPersistedOutput,
 } from './real-guard.mjs'
@@ -27,28 +31,85 @@ import { evaluateF2B0Attempts, F2B0_CASE_IDS } from '../f2b0-adapter.js'
 import { F2A1_LOCAL_CANDIDATES, F2A1_LOCAL_JOURNEYS } from '../f2a1-candidates.js'
 
 const exactRequest = {
-  providerID: 'opencode',
-  modelID: 'deepseek-v4.1-flash-free',
+  providerID: 'opencode-go',
+  modelID: 'deepseek-v4.1-flash',
   kind: 'primary',
-  url: 'https://opencode.ai/inference/openai/v1/chat/completions',
+  url: 'https://opencode.ai/inference/go/openai/v1/chat/completions',
   method: 'POST',
   sessionRequestCount: 1,
   redirect: 'error',
-  body: { model: 'deepseek-v4.1-flash-free', messages: [{ role: 'user', content: 'synthetic' }], tools: [] },
+  body: { model: 'deepseek-v4.1-flash', messages: [{ role: 'user', content: 'synthetic' }], tools: [] },
 }
 
 describe('F2B0 real-run guard', () => {
-  it('requires catalog evidence for every cost tier and cache price to be explicitly zero', () => {
-    const free = [{ input: 0, output: 0, cache: { read: 0, write: 0 } }]
-    expect(validateCatalogCost(free)).toMatchObject({ ok: true, tiers: 1 })
+  it('pins the target to OpenCode Go and admits only its official peak/off-peak prices', () => {
+    expect(REAL_MODEL).toEqual({ providerID: 'opencode-go', modelID: 'deepseek-v4.1-flash' })
+    expect(REAL_URL).toBe('https://opencode.ai/inference/go/openai/v1/chat/completions')
+    const offPeak = { tier: 'off-peak', input: 0.15, output: 0.6, cache: { read: 0.003, write: 0 } }
+    const peak = { tier: 'peak', input: 0.3, output: 1.2, cache: { read: 0.006, write: 0 } }
+    expect(validateCatalogCost([offPeak])).toMatchObject({ ok: true, tiers: 1 })
+    expect(validateCatalogCost([offPeak, peak])).toMatchObject({ ok: true, tiers: 2 })
     expect(validateCatalogCost([])).toMatchObject({ ok: false, reason: 'cost-missing' })
     expect(validateCatalogCost(undefined)).toMatchObject({ ok: false, reason: 'cost-missing' })
-    expect(validateCatalogCost([{ input: 0, output: 0, cache: { read: 0 } }])).toMatchObject({ ok: false, reason: 'cost-unknown' })
-    expect(validateCatalogCost([{ input: 0.01, output: 0, cache: { read: 0, write: 0 } }])).toMatchObject({ ok: false, reason: 'cost-nonzero' })
+    expect(validateCatalogCost([{ ...offPeak, cache: { read: 0.003 } }])).toMatchObject({ ok: false, reason: 'cost-unknown' })
+    expect(validateCatalogCost([{ ...offPeak, output: 9 }])).toMatchObject({ ok: false, reason: 'cost-not-allowlisted' })
+    expect(validateCatalogCost([{ input: 0, output: 0, cache: { read: 0, write: 0 } }])).toMatchObject({ ok: false, reason: 'cost-not-allowlisted' })
+  })
+
+  it('requires current, complete, unlimited Go quota windows before a real request', () => {
+    const available = {
+      go: {
+        rolling: { percent: 12, limited: false, resetsAt: 10_000 },
+        weekly: { percent: 35, limited: false, resetsAt: 20_000 },
+        monthly: { percent: 48, limited: false, resetsAt: 30_000 },
+      },
+    }
+    expect(validateGoUsageLimits(available)).toEqual({
+      ok: true,
+      usage: {
+        rolling: { percent: 12, limited: false, resetsAt: 10_000 },
+        weekly: { percent: 35, limited: false, resetsAt: 20_000 },
+        monthly: { percent: 48, limited: false, resetsAt: 30_000 },
+      },
+    })
+    expect(validateGoUsageLimits(null)).toMatchObject({ ok: false, reason: 'go-usage-unavailable' })
+    expect(validateGoUsageLimits({ budgets: [] })).toMatchObject({ ok: false, reason: 'go-subscription-unavailable' })
+    expect(validateGoUsageLimits({ go: { ...available.go, rolling: { ...available.go.rolling, limited: true } } })).toMatchObject({ ok: false, reason: 'go-quota-limited', window: 'rolling' })
+    expect(validateGoUsageLimits({ go: { ...available.go, monthly: { ...available.go.monthly, percent: 100 } } })).toMatchObject({ ok: false, reason: 'go-quota-limited', window: 'monthly' })
+    expect(validateGoUsageLimits({ go: { ...available.go, weekly: { percent: 12, limited: false } } })).toMatchObject({ ok: false, reason: 'go-usage-unknown' })
+  })
+
+  it('passes a one-case smoke only with exact oracle/parser, one request, observed zero cost and attestations', () => {
+    const valid = {
+      jsonValid: true,
+      schemaValid: true,
+      semanticVerdict: 'PASS',
+      requestCount: 1,
+      noRetry: true,
+      tokensObserved: true,
+      costObserved: true,
+      costUSD: 0,
+      quotaAfterStatus: 'go-usage-unavailable',
+      quotaAttested: true,
+      extraUsageDisabledAttested: true,
+    }
+    expect(evaluateGoSmoke(valid)).toMatchObject({
+      casePassed: true,
+      continuationAllowed: false,
+      status: 'SMOKE_PASS_OPERATOR_ATTESTED_NO_CONTINUATION',
+    })
+    expect(evaluateGoSmoke({ ...valid, quotaAfterStatus: null })).toMatchObject({ casePassed: true, continuationAllowed: true, status: 'SMOKE_PASS' })
+    expect(evaluateGoSmoke({ ...valid, requestCount: 2 }).casePassed).toBe(false)
+    expect(evaluateGoSmoke({ ...valid, noRetry: false }).casePassed).toBe(false)
+    expect(evaluateGoSmoke({ ...valid, costObserved: false }).casePassed).toBe(false)
+    expect(evaluateGoSmoke({ ...valid, costUSD: 0.01 })).toMatchObject({ casePassed: false, status: 'SMOKE_FAILED_STOP' })
+    expect(evaluateGoSmoke({ ...valid, quotaAfterStatus: 'go-quota-limited' })).toMatchObject({ casePassed: true, continuationAllowed: false, status: 'SMOKE_PASS_QUOTA_STOP' })
+    expect(evaluateGoSmoke({ ...valid, quotaAttested: false })).toMatchObject({ casePassed: false, status: 'SMOKE_BLOCKED_UNVERIFIED_BUDGET' })
+    expect(evaluateGoSmoke({ ...valid, extraUsageDisabledAttested: false })).toMatchObject({ casePassed: false, status: 'SMOKE_BLOCKED_UNVERIFIED_BUDGET' })
   })
 
   it('accepts only the exact native primary request, one per session, with exact model/body and redirect denial', () => {
-    expect(validateNativeRequest(exactRequest)).toMatchObject({ ok: true, model: 'deepseek-v4.1-flash-free' })
+    expect(validateNativeRequest(exactRequest)).toMatchObject({ ok: true, model: 'deepseek-v4.1-flash' })
     for (const change of [
       { providerID: 'openai' },
       { modelID: 'other-free-or-paid' },
@@ -58,7 +119,7 @@ describe('F2B0 real-run guard', () => {
       { url: 'https://attacker.invalid/inference/openai/v1/chat/completions' },
       { sessionRequestCount: 2 },
       { redirect: 'follow' },
-      { body: { ...exactRequest.body, model: 'deepseek-v4.1-flash' } },
+      { body: { ...exactRequest.body, model: 'deepseek-v4.1-flash-free' } },
       { body: { ...exactRequest.body, tools: [{ name: 'write' }] } },
       { body: { ...exactRequest.body, tools: {} } },
       { body: { ...exactRequest.body, tool_choice: 'auto' } },
@@ -271,21 +332,31 @@ describe('F2B0 real-run guard', () => {
     expect(() => planAttempts(ids, ['unknown'], { resume: true })).toThrow('unknown existing result')
   })
 
+  it('limits the first Go smoke to exactly one pending case and defers the rest', () => {
+    const ids = Array.from({ length: 23 }, (_, index) => `F1-B${String(index + 1).padStart(3, '0')}`)
+    expect(limitRealAttempts(ids, { smokeOnly: true })).toEqual({ run: [ids[0]], deferred: ids.slice(1) })
+    expect(limitRealAttempts(ids, { smokeOnly: false })).toEqual({ run: ids, deferred: [] })
+    expect(() => limitRealAttempts([], { smokeOnly: true })).toThrow('no pending smoke case')
+  })
+
   it('does not arm inference by default and requires the exact model confirmation', () => {
     expect(parseExecutionMode([])).toMatchObject({ help: true, execute: false })
     expect(parseExecutionMode(['--preflight-only'])).toMatchObject({ preflightOnly: true, execute: false })
     expect(parseExecutionMode(['--self-test-guard'])).toMatchObject({ selfTestGuard: true, execute: false })
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash'])).toThrow('quota confirmation')
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--smoke-only'])).toThrow('Extra Usage confirmation')
+    expect(parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toMatchObject({ execute: true, confirmation: true, quotaConfirmation: true, extraUsageConfirmation: true, smokeOnly: true })
+    expect(() => parseExecutionMode(['--smoke-only'])).toThrow('requires --execute-real')
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only', '--resume=prior-run'])).toThrow('cannot be combined')
     expect(parseExecutionMode(['--export-stopped-run=run-id'])).toMatchObject({ exportStoppedRunID: 'run-id', execute: false })
     expect(() => parseExecutionMode(['--execute-real'])).toThrow('exact confirmation')
-    expect(parseExecutionMode(['--execute-real', '--confirm-model=opencode/deepseek-v4.1-flash-free'])).toMatchObject({ execute: true, confirmation: true })
-    expect(() => parseExecutionMode(['--preflight-only', '--execute-real', '--confirm-model=opencode/deepseek-v4.1-flash-free'])).toThrow('cannot be combined')
-    expect(() => parseExecutionMode(['--self-test-guard', '--execute-real', '--confirm-model=opencode/deepseek-v4.1-flash-free'])).toThrow('cannot be combined')
-    expect(() => parseExecutionMode(['--export-stopped-run=run-id', '--execute-real', '--confirm-model=opencode/deepseek-v4.1-flash-free'])).toThrow('requires only a safe run-id')
-  })
-
-  it('accepts only the explicit OPENCODE_API_KEY environment value and ignores other provider credentials', () => {
-    expect(approvedProviderCredential({ OPENCODE_API_KEY: 'synthetic', OPENAI_API_KEY: 'must-not-forward', DEEPSEEK_API_KEY: 'must-not-forward' })).toEqual({ available: true, value: 'synthetic' })
-    expect(approvedProviderCredential({ OPENAI_API_KEY: 'must-not-forward' })).toEqual({ available: false, value: undefined })
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode/deepseek-v4.1-flash-free'])).toThrow('exact confirmation')
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available'])).toThrow('Extra Usage confirmation')
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled'])).toThrow('first real F2B0 invocation must use --smoke-only')
+    expect(parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toMatchObject({ execute: true, confirmation: true, quotaConfirmation: true, extraUsageConfirmation: true })
+    expect(() => parseExecutionMode(['--preflight-only', '--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toThrow('cannot be combined')
+    expect(() => parseExecutionMode(['--self-test-guard', '--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toThrow('cannot be combined')
+    expect(() => parseExecutionMode(['--export-stopped-run=run-id', '--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled'])).toThrow('requires only a safe run-id')
   })
 
   it('redacts credential values while preserving token-usage metadata', () => {

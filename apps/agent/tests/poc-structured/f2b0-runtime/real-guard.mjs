@@ -1,49 +1,133 @@
-export const REAL_MODEL = Object.freeze({ providerID: 'opencode', modelID: 'deepseek-v4.1-flash-free' })
-export const REAL_URL = 'https://opencode.ai/inference/openai/v1/chat/completions'
+export const LEGACY_FREE_MODEL = Object.freeze({ providerID: 'opencode', modelID: 'deepseek-v4.1-flash-free' })
+export const LEGACY_FREE_URL = 'https://opencode.ai/inference/openai/v1/chat/completions'
+export const REAL_MODEL = Object.freeze({ providerID: 'opencode-go', modelID: 'deepseek-v4.1-flash' })
+export const REAL_URL = 'https://opencode.ai/inference/go/openai/v1/chat/completions'
 export const MAX_CASES = 23
-export const REAL_CONFIRMATION = '--confirm-model=opencode/deepseek-v4.1-flash-free'
+export const REAL_CONFIRMATION = '--confirm-model=opencode-go/deepseek-v4.1-flash'
+export const GO_QUOTA_CONFIRMATION = '--confirm-go-quota-available'
+export const GO_EXTRA_USAGE_CONFIRMATION = '--confirm-go-extra-usage-disabled'
 const APPROVED_INFRA_ENDINGS = new Map([
   ['2026-10-27T01-04-23-758Z-13588', new Set(['F1-B005'])],
 ])
-
-export function approvedProviderCredential(environment) {
-  const value = environment?.OPENCODE_API_KEY
-  return typeof value === 'string' && value.length > 0 ? { available: true, value } : { available: false, value: undefined }
-}
+const APPROVED_GO_CATALOG_TIERS = [
+  { input: 0.15, output: 0.6, read: 0.003, write: 0 },
+  { input: 0.3, output: 1.2, read: 0.006, write: 0 },
+]
 
 export function parseExecutionMode(argv) {
   const execute = argv.includes('--execute-real')
   const preflightOnly = argv.includes('--preflight-only')
   const selfTestGuard = argv.includes('--self-test-guard')
+  const smokeOnly = argv.includes('--smoke-only')
   const confirmation = argv.includes(REAL_CONFIRMATION)
+  const quotaConfirmation = argv.includes(GO_QUOTA_CONFIRMATION)
+  const extraUsageConfirmation = argv.includes(GO_EXTRA_USAGE_CONFIRMATION)
   const resumeArg = argv.find((arg) => arg.startsWith('--resume='))
   const resumeID = resumeArg?.slice('--resume='.length)
   const exportArg = argv.find((arg) => arg.startsWith('--export-stopped-run='))
   const exportStoppedRunID = exportArg?.slice('--export-stopped-run='.length)
-  if (argv.includes('--help') || (!execute && !preflightOnly && !selfTestGuard && !resumeID && !exportStoppedRunID)) return { help: true, execute, preflightOnly, selfTestGuard, confirmation, resumeID, exportStoppedRunID }
-  if (exportStoppedRunID && (execute || preflightOnly || selfTestGuard || resumeID || !/^[a-zA-Z0-9._-]{1,80}$/.test(exportStoppedRunID))) throw new Error('--export-stopped-run requires only a safe run-id and performs no server/catalog call')
+  if (argv.includes('--help') || (!execute && !preflightOnly && !selfTestGuard && !smokeOnly && !resumeID && !exportStoppedRunID)) return { help: true, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID }
+  if (exportStoppedRunID && (execute || preflightOnly || selfTestGuard || smokeOnly || resumeID || quotaConfirmation || extraUsageConfirmation || !/^[a-zA-Z0-9._-]{1,80}$/.test(exportStoppedRunID))) throw new Error('--export-stopped-run requires only a safe run-id and performs no server/catalog call')
   if (execute && !confirmation) throw new Error(`real inference requires exact confirmation ${REAL_CONFIRMATION}`)
+  if (execute && !quotaConfirmation) throw new Error(`real Go inference requires explicit quota confirmation ${GO_QUOTA_CONFIRMATION}`)
+  if (execute && !extraUsageConfirmation) throw new Error(`real Go inference requires explicit Extra Usage confirmation ${GO_EXTRA_USAGE_CONFIRMATION}`)
+  if (smokeOnly && !execute) throw new Error('--smoke-only requires --execute-real and exact model confirmation')
+  if (execute && !resumeID && !smokeOnly) throw new Error('the first real F2B0 invocation must use --smoke-only')
+  if (smokeOnly && (preflightOnly || selfTestGuard || resumeID)) throw new Error('--smoke-only cannot be combined with preflight, self-test, or resume')
   if ((preflightOnly || selfTestGuard) && (execute || resumeID || (preflightOnly && selfTestGuard))) throw new Error('preflight/self-test modes cannot be combined with real execution/resume or each other')
   if (resumeID && (!execute || !/^[a-zA-Z0-9._-]{1,80}$/.test(resumeID))) throw new Error('--resume requires --execute-real and a safe run-id')
-  return { help: false, execute, preflightOnly, selfTestGuard, confirmation, resumeID, exportStoppedRunID }
+  return { help: false, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID }
 }
 
 export function validateCatalogCost(cost) {
   if (!Array.isArray(cost) || cost.length === 0) return { ok: false, reason: 'cost-missing' }
-  const values = []
+  const validated = []
   for (const tier of cost) {
     for (const key of ['input', 'output']) {
       if (typeof tier?.[key] !== 'number' || !Number.isFinite(tier[key])) return { ok: false, reason: 'cost-unknown' }
-      values.push(tier[key])
     }
     for (const key of ['read', 'write']) {
       if (typeof tier?.cache?.[key] !== 'number' || !Number.isFinite(tier.cache[key])) return { ok: false, reason: 'cost-unknown' }
-      values.push(tier.cache[key])
     }
+    const matched = APPROVED_GO_CATALOG_TIERS.find((approved) => tier.input === approved.input
+      && tier.output === approved.output
+      && tier.cache.read === approved.read
+      && tier.cache.write === approved.write)
+    if (!matched || (tier.tier !== undefined && !['off-peak', 'peak'].includes(tier.tier))) return { ok: false, reason: 'cost-not-allowlisted' }
+    if (tier.tier === 'off-peak' && matched.input !== 0.15) return { ok: false, reason: 'cost-tier-mismatch' }
+    if (tier.tier === 'peak' && matched.input !== 0.3) return { ok: false, reason: 'cost-tier-mismatch' }
+    validated.push(matched)
   }
-  return values.every((value) => value === 0)
-    ? { ok: true, tiers: cost.length }
-    : { ok: false, reason: 'cost-nonzero' }
+  if (new Set(validated.map((tier) => tier.input)).size !== validated.length) return { ok: false, reason: 'cost-tier-duplicate' }
+  return { ok: true, tiers: cost.length }
+}
+
+export function validateFreeCatalogCost(cost) {
+  if (!Array.isArray(cost) || cost.length === 0) return { ok: false, reason: 'cost-missing' }
+  for (const tier of cost) {
+    for (const key of ['input', 'output']) {
+      if (typeof tier?.[key] !== 'number' || !Number.isFinite(tier[key])) return { ok: false, reason: 'cost-unknown' }
+    }
+    for (const key of ['read', 'write']) {
+      if (typeof tier?.cache?.[key] !== 'number' || !Number.isFinite(tier.cache[key])) return { ok: false, reason: 'cost-unknown' }
+    }
+    if (tier.input !== 0 || tier.output !== 0 || tier.cache.read !== 0 || tier.cache.write !== 0) return { ok: false, reason: 'cost-nonzero' }
+  }
+  return { ok: true, tiers: cost.length }
+}
+
+export function validateGoUsageLimits(info) {
+  if (!info || typeof info !== 'object') return { ok: false, reason: 'go-usage-unavailable' }
+  if (!info.go || typeof info.go !== 'object') return { ok: false, reason: 'go-subscription-unavailable' }
+  const usage = {}
+  for (const window of ['rolling', 'weekly', 'monthly']) {
+    const meter = info.go[window]
+    if (!meter || typeof meter !== 'object'
+      || typeof meter.percent !== 'number' || !Number.isFinite(meter.percent) || meter.percent < 0 || meter.percent > 100
+      || typeof meter.limited !== 'boolean'
+      || typeof meter.resetsAt !== 'number' || !Number.isFinite(meter.resetsAt)) {
+      return { ok: false, reason: 'go-usage-unknown' }
+    }
+    usage[window] = { percent: meter.percent, limited: meter.limited, resetsAt: meter.resetsAt }
+  }
+  const limitedWindow = Object.entries(usage).find(([, meter]) => meter.limited || meter.percent >= 100)?.[0]
+  if (limitedWindow) return { ok: false, reason: 'go-quota-limited', window: limitedWindow, usage }
+  return { ok: true, usage }
+}
+
+export function evaluateGoSmoke({
+  jsonValid,
+  schemaValid,
+  semanticVerdict,
+  requestCount,
+  noRetry,
+  tokensObserved,
+  costObserved,
+  costUSD,
+  quotaAfterStatus,
+  quotaAttested,
+  extraUsageDisabledAttested,
+}) {
+  if (!quotaAttested || !extraUsageDisabledAttested) {
+    return { casePassed: false, continuationAllowed: false, status: 'SMOKE_BLOCKED_UNVERIFIED_BUDGET' }
+  }
+  if (!jsonValid || !schemaValid || semanticVerdict === 'FAIL' || requestCount !== 1 || !noRetry || (costObserved && costUSD !== 0)) {
+    return { casePassed: false, continuationAllowed: false, status: 'SMOKE_FAILED_STOP' }
+  }
+  if (semanticVerdict !== 'PASS' || !tokensObserved || !costObserved) {
+    return { casePassed: false, continuationAllowed: false, status: 'SMOKE_INCONCLUSIVE_STOP' }
+  }
+  if (quotaAfterStatus === 'go-quota-limited') {
+    return { casePassed: true, continuationAllowed: false, status: 'SMOKE_PASS_QUOTA_STOP' }
+  }
+  if (quotaAfterStatus) {
+    return { casePassed: true, continuationAllowed: false, status: 'SMOKE_PASS_OPERATOR_ATTESTED_NO_CONTINUATION' }
+  }
+  return {
+    casePassed: true,
+    continuationAllowed: true,
+    status: 'SMOKE_PASS',
+  }
 }
 
 export function validateNativeRequest(request) {
@@ -169,10 +253,17 @@ export function planAttempts(caseIDs, existingIDs, { resume = false, reservedIDs
   }
 }
 
+export function limitRealAttempts(caseIDs, { smokeOnly = false } = {}) {
+  if (!Array.isArray(caseIDs)) throw new Error('case plan must be an array')
+  if (!smokeOnly) return { run: caseIDs.slice(), deferred: [] }
+  if (caseIDs.length === 0) throw new Error('no pending smoke case')
+  return { run: caseIDs.slice(0, 1), deferred: caseIDs.slice(1) }
+}
+
 export function isApprovedInfrastructureEndedCase(runID, result) {
   if (!APPROVED_INFRA_ENDINGS.get(runID)?.has(result?.caseID)) return false
   if (result.status !== 'infrastructure-ended-zero-attempt' || result.fatal !== false || result.attemptCount !== 0) return false
-  if (result.providerID !== REAL_MODEL.providerID || result.modelID !== REAL_MODEL.modelID) return false
+  if (result.providerID !== LEGACY_FREE_MODEL.providerID || result.modelID !== LEGACY_FREE_MODEL.modelID) return false
   return Array.isArray(result.reviewAudit) && result.reviewAudit.some((entry) => entry.action === 'approved-nonfatal-infrastructure-ended-zero-attempt' && entry.approvedBy === 'Reviewer')
 }
 
@@ -220,7 +311,7 @@ export function buildSafeStoppedReport({ runID, caseIDs, infraCase, providerCase
   if (!isApprovedInfrastructureEndedCase(runID, infraCase)) throw new Error('infrastructure-ended case is not in the reviewer allowlist')
   const providerID = providerCase?.providerID ?? providerCase?.request?.providerID
   const modelID = providerCase?.modelID ?? providerCase?.request?.modelID
-  if (providerCase?.caseID !== 'F1-B010' || providerCase.fatal !== true || providerID !== REAL_MODEL.providerID || modelID !== REAL_MODEL.modelID || providerCase.request?.url !== REAL_URL || providerCase.request?.requestCount !== 1) {
+  if (providerCase?.caseID !== 'F1-B010' || providerCase.fatal !== true || providerID !== LEGACY_FREE_MODEL.providerID || modelID !== LEGACY_FREE_MODEL.modelID || providerCase.request?.url !== LEGACY_FREE_URL || providerCase.request?.requestCount !== 1) {
     throw new Error('provider-failure case does not match the observed native one-request run')
   }
   const providerError = providerCase.metadata?.assistantOutcome?.error
@@ -234,7 +325,7 @@ export function buildSafeStoppedReport({ runID, caseIDs, infraCase, providerCase
   if (requestHooks.length !== 1 || requestHooks[0].toolCount !== 0 || !response429 || !veto) throw new Error('provider-failure hook evidence is incomplete')
 
   const catalogCost = catalogPreflight?.catalog?.cost
-  const costVerdict = validateCatalogCost(catalogCost)
+  const costVerdict = validateFreeCatalogCost(catalogCost)
   if (!costVerdict.ok || catalogPreflight?.catalog?.zeroCost !== true) throw new Error('stop report lacks a zero-cost catalog proof')
   if (guardSelfTest?.pluginReady !== true || guardSelfTest?.inferenceRequests !== 0 || guardSelfTest?.promptRequests !== 0) throw new Error('stop report lacks the no-inference native plugin self-test')
   if (mockProof?.cases !== 9 || mockProof?.allCapturedRequestsAuthless !== true) throw new Error('stop report lacks the approved mock proof/auth-header audit')
@@ -288,9 +379,9 @@ export function buildSafeStoppedReport({ runID, caseIDs, infraCase, providerCase
     schemaVersion: 'f2b0-safe-stop-v1',
     status: 'STOPPED_NO_FURTHER_INFERENCE',
     sourceRunID: runID,
-    provider: REAL_MODEL.providerID,
-    model: REAL_MODEL.modelID,
-    nativeURL: REAL_URL,
+    provider: LEGACY_FREE_MODEL.providerID,
+    model: LEGACY_FREE_MODEL.modelID,
+    nativeURL: LEGACY_FREE_URL,
     counts: {
       denominator: MAX_CASES,
       infrastructureInconclusive: 1,

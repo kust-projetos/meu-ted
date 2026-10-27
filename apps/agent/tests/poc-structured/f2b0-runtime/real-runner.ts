@@ -3,6 +3,7 @@ import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { OpenCode } from '@opencode/client';
@@ -18,22 +19,29 @@ import {
   isTerminalAssistantFailure,
   isApprovedInfrastructureEndedCase,
   MAX_CASES,
-  approvedProviderCredential,
+  limitRealAttempts,
   parseExecutionMode,
   planAttempts,
   normalizeTokenUsage,
   summarizeRealRunMetrics,
   summarizeStoppedRun,
   REAL_CONFIRMATION,
+  GO_QUOTA_CONFIRMATION,
+  GO_EXTRA_USAGE_CONFIRMATION,
   REAL_MODEL,
   REAL_URL,
   validateCatalogCost,
+  validateGoUsageLimits,
+  evaluateGoSmoke,
   redactPersistedOutput,
 } from './real-guard.mjs';
 
 const ROOT = path.resolve(import.meta.dirname);
 const OUTPUT_ROOT = path.join(ROOT, 'evidence', 'real');
-const CLI = process.env.OPENCODE_EXE ?? 'C:/Users/walis/AppData/Roaming/npm/node_modules/@opencode/cli/node_modules/@opencode/cli-windows-x64-baseline/bin/opencode.exe';
+const DEFAULT_CLI = process.platform === 'win32'
+  ? path.join(process.env.APPDATA ?? '', 'npm', 'node_modules', '@opencode', 'cli', 'node_modules', '@opencode', 'cli-windows-x64', 'bin', 'opencode.exe')
+  : 'opencode';
+const CLI = process.env.OPENCODE_EXE ?? DEFAULT_CLI;
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const RUN_TIMEOUT_MS = 120_000;
 
@@ -51,55 +59,56 @@ const atomicCreate = async (file: string, value: unknown) => {
 const usage = () => {
   console.log([
     'F2B0 native real-run guard (does not run unless explicitly armed)',
-    '  --preflight-only                       fetch catalog metadata and verify zero cost; no session prompt',
+    '  --preflight-only                       fetch catalog metadata and verify the approved Go price; no session prompt',
     '  --self-test-guard                      load native plugin and verify readiness; no session/prompt',
-    `  --execute-real ${REAL_CONFIRMATION}   execute serially (maximum 23)`,
+    `  --execute-real ${REAL_CONFIRMATION} ${GO_QUOTA_CONFIRMATION} ${GO_EXTRA_USAGE_CONFIRMATION} --smoke-only   execute one case, then stop for review`,
+    `  --execute-real ${REAL_CONFIRMATION} ${GO_QUOTA_CONFIRMATION} ${GO_EXTRA_USAGE_CONFIRMATION}   execute serially (maximum 23; after smoke approval)`,
     '  --resume=<run-id>                      skip persisted cases; never replay completed IDs',
     '  --export-stopped-run=<run-id>          create one sanitized review artifact; no server/catalog/model call',
     'No flags means no model/catalog request. One global wx lock serializes all runs; stale locks/reservations require manual review and are never auto-cleared.',
-    'This runner never reads auth files or global auth stores.',
+    'OpenCode reads its native auth store; this runner neither reads nor copies credential values. Only the native data directory is shared; config and database remain per-run.',
   ].join('\n'));
 };
 
-function minimalEnvironment(runDir: string, runNonce: string, serverPassword: string, apiKey?: string) {
-  const appData = path.join(runDir, 'private-appdata');
-  const localAppData = path.join(runDir, 'private-localappdata');
-  const home = path.join(runDir, 'private-home');
+export function minimalEnvironment(runDir: string, runNonce: string, serverPassword: string) {
   const temp = path.join(runDir, 'private-temp');
   const config = path.join(runDir, 'private-config');
   const data = path.join(runDir, 'private-data');
   const cache = path.join(runDir, 'private-cache');
   const state = path.join(runDir, 'private-state');
+  const nativeHome = process.env.USERPROFILE ?? homedir();
+  const nativeXdgData = process.env.XDG_DATA_HOME ?? path.join(nativeHome, '.local', 'share');
+  const nativeData = process.env.OPENCODE_DATA_DIR ?? path.join(nativeXdgData, 'opencode');
   return {
     env: {
       PATH: process.env.PATH ?? '',
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       ...(process.env.WINDIR ? { WINDIR: process.env.WINDIR } : {}),
-      USERPROFILE: home,
-      APPDATA: appData,
-      LOCALAPPDATA: localAppData,
-      HOME: home,
+      ...(process.env.USERPROFILE ? { USERPROFILE: process.env.USERPROFILE } : {}),
+      ...(process.env.APPDATA ? { APPDATA: process.env.APPDATA } : {}),
+      ...(process.env.LOCALAPPDATA ? { LOCALAPPDATA: process.env.LOCALAPPDATA } : {}),
+      HOME: nativeHome,
       TEMP: temp,
       TMP: temp,
       XDG_CONFIG_HOME: config,
-      XDG_DATA_HOME: data,
+      XDG_DATA_HOME: nativeXdgData,
       XDG_CACHE_HOME: cache,
       XDG_STATE_HOME: state,
       OPENCODE_CONFIG_DIR: config,
-      OPENCODE_DATA_DIR: data,
+      OPENCODE_DATA_DIR: nativeData,
+      OPENCODE_DB: path.join(data, 'opencode.db'),
       OPENCODE_CACHE_DIR: cache,
       OPENCODE_STATE_DIR: state,
       OPENCODE_DISABLE_PROJECT_CONFIG: '1',
       OPENCODE_SERVER_PASSWORD: serverPassword,
       F2B0_REAL_NONCE: runNonce,
       F2B0_REAL_EVIDENCE: path.join(runDir, 'plugin-hooks.ndjson'),
-      ...(apiKey ? { OPENCODE_API_KEY: apiKey } : {}),
     } as unknown as NodeJS.ProcessEnv,
-    paths: { appData, localAppData, home, temp, config, data, cache, state },
+    paths: { temp, config, data, cache, state },
   };
 }
 
-async function writeConfig(configDir: string, workDir: string, withPlugin: boolean, apiKeyAvailable: boolean) {
+async function writeConfig(configDir: string, workDir: string, withPlugin: boolean) {
   const config: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     model: `${REAL_MODEL.providerID}/${REAL_MODEL.modelID}`,
@@ -124,7 +133,6 @@ async function writeConfig(configDir: string, workDir: string, withPlugin: boole
           timeout: 90_000,
           headerTimeout: 30_000,
           chunkTimeout: 30_000,
-          ...(apiKeyAvailable ? { apiKey: '{env:OPENCODE_API_KEY}' } : {}),
         },
       },
     },
@@ -202,7 +210,7 @@ async function startServer(runDir: string, env: NodeJS.ProcessEnv, workDir: stri
         await new Promise((resolve) => setTimeout(resolve, 150));
       }
     }
-    if (!info) throw new Error(`local OpenCode server readiness timeout: ${redactPersistedOutput(stderr, [env.OPENCODE_API_KEY, serverPassword].filter((value): value is string => typeof value === 'string'))}`);
+    if (!info) throw new Error(`local OpenCode server readiness timeout: ${redactPersistedOutput(stderr, serverPassword)}`);
     return { child, childClosed, client, baseURL, serverVersion: (info as any).version ?? null };
   } catch (error) {
     if (child.exitCode === null) child.kill();
@@ -221,7 +229,7 @@ async function stopServer(child: ReturnType<typeof spawn>, childClosed: Promise<
 async function preflightCatalog(client: ReturnType<typeof OpenCode.make>, workDir: string) {
   const result = await client.model.list({ location: { directory: workDir } });
   const model = result.data.find((entry) => entry.providerID === REAL_MODEL.providerID && entry.id === REAL_MODEL.modelID);
-  if (!model) throw new Error('target free model absent from fetched OpenCode model catalog');
+  if (!model) throw new Error('target OpenCode Go model absent from fetched model catalog');
   const cost = validateCatalogCost(model.cost);
   if (!cost.ok) throw new Error(`catalog cost gate failed closed: ${cost.reason}`);
   return {
@@ -230,9 +238,35 @@ async function preflightCatalog(client: ReturnType<typeof OpenCode.make>, workDi
     modelID: model.id,
     displayName: model.name,
     cost: model.cost.map((tier) => ({ tier: tier.tier ?? null, input: tier.input, output: tier.output, cache: { read: tier.cache.read, write: tier.cache.write } })),
-    zeroCost: true,
+    catalogPriceAllowed: true,
+    billingMode: 'opencode-go-subscription',
     tiers: cost.tiers,
   };
+}
+
+async function readGoUsage(client: ReturnType<typeof OpenCode.make>) {
+  try {
+    const response = await client.usage.limits({ location: { directory: ROOT } });
+    return validateGoUsageLimits(response.data);
+  } catch {
+    return { ok: false as const, reason: 'go-usage-api-error' as const };
+  }
+}
+
+function goUsageAudit(result: Awaited<ReturnType<typeof readGoUsage>>, operatorConfirmed: boolean) {
+  if (result.ok) return { source: 'opencode-usage-api', usage: result.usage };
+  if (result.reason === 'go-quota-limited') return { source: 'opencode-usage-api', status: result.reason, usage: result.usage ?? null };
+  return { source: operatorConfirmed ? 'operator-attestation' : 'unverified', status: result.reason, usage: null };
+}
+
+async function requireGoUsage(client: ReturnType<typeof OpenCode.make>, operatorConfirmed: boolean) {
+  const result = await readGoUsage(client);
+  if (!result.ok && result.reason === 'go-quota-limited') {
+    const window = 'window' in result && result.window ? ` (${result.window})` : '';
+    throw new Error(`Go quota preflight failed closed: ${result.reason}${window}`);
+  }
+  if (!result.ok && !operatorConfirmed) throw new Error(`Go quota preflight requires ${GO_QUOTA_CONFIRMATION}: ${result.reason}`);
+  return goUsageAudit(result, operatorConfirmed);
 }
 
 async function waitForPluginReady(evidenceFile: string, child: ReturnType<typeof spawn>, runNonce: string, timeoutMs = 15_000) {
@@ -248,11 +282,14 @@ async function waitForPluginReady(evidenceFile: string, child: ReturnType<typeof
   throw new Error('real-run plugin readiness event missing; no session prompt was sent');
 }
 
-async function captureCli(exe: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, credentials: Array<string | undefined>) {
+export async function captureCli(exe: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, credentials: Array<string | undefined>, stdinPrompt?: string) {
   const startedAt = Date.now();
-  const child = spawn(exe, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(exe, args, { cwd, env, stdio: [stdinPrompt === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+  if (!child.stdout || !child.stderr) throw new Error('CLI output pipes were not created');
+  if (stdinPrompt !== undefined && !child.stdin) throw new Error('CLI stdin pipe was not created');
   let stdout = '';
   let stderr = '';
+  let stdinErrorCode: string | null = null;
   let timedOut = false;
   let oversized = false;
   child.stdout.on('data', (chunk) => {
@@ -261,7 +298,12 @@ async function captureCli(exe: string, args: string[], cwd: string, env: NodeJS.
   });
   child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-4000); });
   child.on('error', (error) => { stderr += `SPAWN_ERROR:${error.message}`; });
+  if (stdinPrompt !== undefined) child.stdin!.on('error', (error) => {
+    const code = (error as NodeJS.ErrnoException).code;
+    stdinErrorCode = typeof code === 'string' ? code : 'UNKNOWN';
+  });
   const childClosed: Promise<unknown[]> = once(child, 'close');
+  if (stdinPrompt !== undefined) child.stdin!.end(stdinPrompt);
   let timer: NodeJS.Timeout | undefined;
   const completed = childClosed.then(([code]) => ({ exitCode: typeof code === 'number' ? code : null }));
   const timed = new Promise<{ exitCode: number | null }>((resolve) => {
@@ -281,6 +323,7 @@ async function captureCli(exe: string, args: string[], cwd: string, env: NodeJS.
     exitCode,
     timedOut,
     oversized,
+    stdinErrorCode,
     durationMs: Date.now() - startedAt,
     rawStdout,
     text: redactPersistedOutput(parsed.text, secrets),
@@ -294,6 +337,21 @@ async function captureCli(exe: string, args: string[], cwd: string, env: NodeJS.
     })),
     stderr: redactPersistedOutput(stderr, secrets),
   };
+}
+
+export function classifyStdinWriteError(errorCode: string | null) {
+  return errorCode === null ? null : { stop: true as const, category: 'stdin-write-error' as const, errorCode };
+}
+
+export function isPromptConfirmed(messages: unknown, expectedPrompt: string) {
+  if (!Array.isArray(messages)) return false;
+  const userMessages = messages.filter((message: any) => message?.type === 'user');
+  if (userMessages.length !== 1 || !Array.isArray(userMessages[0]?.content)) return false;
+  const text = userMessages[0].content
+    .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part: any) => part.text)
+    .join('');
+  return text === expectedPrompt;
 }
 
 async function atomicCaseResult(file: string, value: unknown) {
@@ -393,22 +451,19 @@ async function main(argv: string[]) {
   }
   const cases = options.selfTestGuard ? [] : getF2B0Cases();
   if (!options.selfTestGuard && (cases.length !== MAX_CASES || F2B0_CASE_IDS.length !== MAX_CASES)) throw new Error('F2B0 manifest changed: expected exactly 23 cases');
-  const credential = approvedProviderCredential(process.env);
-  const apiKey = credential.value;
-  const providerCredentialAvailable = credential.available;
   const runID = options.resumeID ?? `${new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')}-${process.pid}`;
   const runNonce = randomUUID();
   const serverPassword = randomBytes(32).toString('base64url');
   const runDir = path.join(OUTPUT_ROOT, runID);
   await mkdir(OUTPUT_ROOT, { recursive: true });
-  const envState = minimalEnvironment(runDir, runNonce, serverPassword, apiKey);
+  const envState = minimalEnvironment(runDir, runNonce, serverPassword);
   const configDir = envState.paths.config;
   const workDir = path.join(runDir, 'work');
   await mkdir(runDir, { recursive: true });
   for (const directory of Object.values(envState.paths)) await mkdir(directory, { recursive: true });
   const runLock = await createExclusiveRunLock(path.join(OUTPUT_ROOT, '.f2b0-real-run.lock'), { runID, pid: process.pid });
   try {
-  await writeConfig(configDir, workDir, !options.preflightOnly, providerCredentialAvailable);
+  await writeConfig(configDir, workDir, !options.preflightOnly);
   const evidenceFile = path.join(runDir, 'plugin-hooks.ndjson');
   await writeFile(evidenceFile, '', { flag: 'wx' }).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== 'EEXIST' || !options.resumeID) throw error;
@@ -417,10 +472,11 @@ async function main(argv: string[]) {
     const server = await startServer(runDir, envState.env, workDir, serverPassword);
     try {
       const catalog = await preflightCatalog(server.client, workDir);
+      const goUsage = goUsageAudit(await readGoUsage(server.client), options.quotaConfirmation);
       const readyEvents = await waitForPluginReady(evidenceFile, server.child, runNonce);
       const currentEvents = readyEvents.filter((event) => event.runNonce === runNonce);
       const ready = currentEvents.find((event) => event.event === 'plugin-ready');
-      if (!ready || ready.model !== REAL_MODEL.modelID || ready.cost?.zero !== true || ready.mcpCount !== 0 || ready.skillCount !== 0 || ready.otherPluginCount !== 0) {
+      if (!ready || ready.provider !== REAL_MODEL.providerID || ready.model !== REAL_MODEL.modelID || catalog.catalogPriceAllowed !== true || ready.mcpCount !== 0 || ready.skillCount !== 0 || ready.otherPluginCount !== 0) {
         throw new Error('native guard self-test failed readiness invariant');
       }
       if (currentEvents.some((event) => ['http-request-allowed', 'retry-decision', 'http-response'].includes(event.event))) {
@@ -434,12 +490,14 @@ async function main(argv: string[]) {
         modelID: REAL_MODEL.modelID,
         nativeURL: REAL_URL,
         catalog,
+        goUsage,
+        extraUsageStatus: options.extraUsageConfirmation ? 'operator-attested-disabled' : 'not-attested-in-this-invocation',
         mcpCount: ready.mcpCount,
         skillCount: ready.skillCount,
         otherPluginCount: ready.otherPluginCount,
         promptRequests: 0,
         inferenceRequests: 0,
-        credentialAvailable: providerCredentialAvailable,
+        authMode: 'opencode-native-auth-store',
       };
       await atomicCreate(path.join(runDir, 'guard-self-test.json'), result);
       console.log(JSON.stringify(result, null, 2));
@@ -450,20 +508,23 @@ async function main(argv: string[]) {
   await mkdir(caseDir, { recursive: true });
   const reservationDir = path.join(OUTPUT_ROOT, 'reservations', safeID(`${REAL_MODEL.providerID}-${REAL_MODEL.modelID}`));
   await mkdir(reservationDir, { recursive: true });
-  const manifestFile = path.join(runDir, 'manifest.json');
+    const manifestFile = path.join(runDir, 'manifest.json');
   const manifest = {
     runID,
     provider: REAL_MODEL.providerID,
     model: REAL_MODEL.modelID,
     nativeURL: REAL_URL,
     caseIDs: cases.map((item) => item.id),
-    credentialAvailable: providerCredentialAvailable,
+    authMode: 'opencode-native-auth-store',
     createdAt: new Date().toISOString(),
     prompts: cases.map((item) => ({ id: item.id, input: item.input, prompt: item.prompt })),
   };
   if (options.resumeID) {
     const existing = JSON.parse(await readFile(manifestFile, 'utf8'));
-    if (existing.model !== REAL_MODEL.modelID || existing.credentialAvailable !== providerCredentialAvailable || JSON.stringify(existing.caseIDs) !== JSON.stringify(manifest.caseIDs) || JSON.stringify(existing.prompts) !== JSON.stringify(manifest.prompts)) throw new Error('resume manifest differs from this F2B0 model/case/credential-availability state');
+    if (existing.model !== REAL_MODEL.modelID || existing.authMode !== manifest.authMode || JSON.stringify(existing.caseIDs) !== JSON.stringify(manifest.caseIDs) || JSON.stringify(existing.prompts) !== JSON.stringify(manifest.prompts)) throw new Error('resume manifest differs from this F2B0 model/case/native-auth state');
+    const smokeFile = path.join(runDir, 'smoke-evaluation.json');
+    const smoke = JSON.parse(await readFile(smokeFile, 'utf8').catch(() => { throw new Error('resume requires a persisted one-case smoke evaluation') }));
+    if (smoke.status !== 'SMOKE_PASS' || smoke.continuationAllowed !== true) throw new Error('resume blocked: smoke did not pass with a current Go quota readback');
   } else await atomicCreate(manifestFile, manifest);
 
   const existingIDs: string[] = [];
@@ -479,38 +540,42 @@ async function main(argv: string[]) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
-  if (existingIDs.some((id) => !reservedIDs.includes(id))) throw new Error('existing case result lacks its durable reservation');
-  const plan = planAttempts(cases.map((item) => item.id), existingIDs, { resume: Boolean(options.resumeID), reservedIDs });
-  if (plan.unresolvedReservations.length > 0) throw new Error(`reserved case has no durable result; refusing replay: ${plan.unresolvedReservations.join(',')}`);
+    if (existingIDs.some((id) => !reservedIDs.includes(id))) throw new Error('existing case result lacks its durable reservation');
+    const plan = planAttempts(cases.map((item) => item.id), existingIDs, { resume: Boolean(options.resumeID), reservedIDs });
+    const executionPlan = limitRealAttempts(plan.run, { smokeOnly: options.smokeOnly });
+    if (plan.unresolvedReservations.length > 0) throw new Error(`reserved case has no durable result; refusing replay: ${plan.unresolvedReservations.join(',')}`);
   if (options.preflightOnly) {
     // The explicit preflight mode only reads the provider/model catalog API; it creates no session and sends no prompt.
     const server = await startServer(runDir, envState.env, workDir, serverPassword);
     try {
       const catalog = await preflightCatalog(server.client, workDir);
-      const result = { mode: 'catalog-preflight-only', catalog, credentialAvailable: providerCredentialAvailable, inferenceRequests: 0 };
+      const goUsage = goUsageAudit(await readGoUsage(server.client), options.quotaConfirmation);
+      const result = { mode: 'catalog-preflight-only', catalog, goUsage, authMode: 'opencode-native-auth-store', extraUsageStatus: options.extraUsageConfirmation ? 'operator-attested-disabled' : 'not-attested-in-this-invocation', inferenceRequests: 0 };
       await atomicCreate(path.join(runDir, 'preflight.json'), result);
       console.log(JSON.stringify(result, null, 2));
     } finally { await stopServer(server.child, server.childClosed); }
     return;
   }
 
-  const server = await startServer(runDir, envState.env, workDir, serverPassword);
-  let completed = false;
-  try {
+    const server = await startServer(runDir, envState.env, workDir, serverPassword);
+    let completed = false;
+    try {
     const catalog = await preflightCatalog(server.client, workDir);
-    const preflight = { catalog, credentialAvailable: providerCredentialAvailable, inferenceRequests: 0 };
+    const goUsage = await requireGoUsage(server.client, options.quotaConfirmation && !options.resumeID);
+    const preflight = { catalog, goUsage, authMode: 'opencode-native-auth-store', extraUsageStatus: options.extraUsageConfirmation ? 'operator-attested-disabled' : 'not-attested-in-this-invocation', inferenceRequests: 0 };
     const preflightFile = path.join(runDir, 'catalog-preflight.json');
     if (!options.resumeID) await atomicCreate(preflightFile, preflight);
     else {
       const old = JSON.parse(await readFile(preflightFile, 'utf8'));
-      if (old.catalog?.zeroCost !== true) throw new Error('stored resume preflight does not prove zero cost');
+      if (old.catalog?.catalogPriceAllowed !== true) throw new Error('stored resume preflight does not prove the approved Go catalog price');
     }
     if (!options.execute) throw new Error('no inference attempted: use --execute-real plus exact confirmation after separate approval');
 
-    for (const id of plan.run) {
+    for (const id of executionPlan.run) {
       const item = cases.find((candidate) => candidate.id === id)!;
       const caseFile = path.join(caseDir, `${safeID(id)}.json`);
       const caseWorkDir = workDir;
+      const goUsageBefore = await requireGoUsage(server.client, options.quotaConfirmation && !options.resumeID);
       const reservationFile = await createCaseReservation(reservationDir, id, { runID, runNonce });
       const hookStart = jsonLines(await readFile(evidenceFile, 'utf8')).length;
       const session = await server.client.session.create({
@@ -521,24 +586,26 @@ async function main(argv: string[]) {
         permissions: [{ action: '*', resource: '*', effect: 'deny' }],
       });
       const readyEvents = await waitForPluginReady(evidenceFile, server.child, runNonce);
-      if (!readyEvents.some((event) => event.runNonce === runNonce && event.event === 'plugin-ready' && event.model === REAL_MODEL.modelID && event.cost?.zero === true && event.mcpCount === 0 && event.skillCount === 0)) {
+      if (!readyEvents.some((event) => event.runNonce === runNonce && event.event === 'plugin-ready' && event.provider === REAL_MODEL.providerID && event.model === REAL_MODEL.modelID && event.mcpCount === 0 && event.skillCount === 0)) {
         throw new Error('plugin cost/skills/MCP readiness proof is incomplete; no prompt was sent');
       }
       const stdout = await captureCli(CLI, [
         'run', '--server', server.baseURL, '--session', session.id,
-        '--model', `${REAL_MODEL.providerID}/${REAL_MODEL.modelID}`, '--agent', 'build', '--format', 'json', item.prompt,
-      ], caseWorkDir, envState.env, [apiKey, serverPassword]);
+        '--model', `${REAL_MODEL.providerID}/${REAL_MODEL.modelID}`, '--agent', 'build', '--format', 'json',
+      ], caseWorkDir, envState.env, [serverPassword], item.prompt);
       let apiWaitFailure: string | null = null;
       let assistantMessages: any[] = [];
+      let stdinPromptObserved = false;
       if (stdout.timedOut) {
         await server.client.session.interrupt({ sessionID: session.id }, { signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
       }
       try {
         await server.client.session.wait({ sessionID: session.id }, { signal: AbortSignal.timeout(20_000) });
-        const messages = await server.client.message.list({ sessionID: session.id, type: 'assistant', limit: 20 }, { signal: AbortSignal.timeout(10_000) });
+        const messages = await server.client.message.list({ sessionID: session.id, limit: 20 }, { signal: AbortSignal.timeout(10_000) });
+        stdinPromptObserved = isPromptConfirmed(messages.data, item.prompt);
         assistantMessages = messages.data.filter((message: any) => message.type === 'assistant');
       } catch (error) {
-        apiWaitFailure = redactPersistedOutput(String(error instanceof Error ? error.message : error), apiKey).slice(0, 240);
+        apiWaitFailure = redactPersistedOutput(String(error instanceof Error ? error.message : error), serverPassword).slice(0, 240);
       }
       const apiText = assistantMessages.flatMap((message: any) => message.content.filter((part: any) => part.type === 'text').map((part: any) => part.text)).join('');
       const hookRows = jsonLines(await readFile(evidenceFile, 'utf8')).slice(hookStart).filter((event) => event.sessionKey === sessionKey(session.id));
@@ -551,9 +618,23 @@ async function main(argv: string[]) {
       const usageByCase = Object.fromEntries(['input', 'output', 'total', 'reasoning', 'cacheRead', 'cacheWrite'].map((field) => [field, aggregateObservedMetric(perMessageUsage.map((usage: any) => usage[field]))]));
       const apiCostByCase = aggregateObservedMetric(assistantMessages.map((message: any) => ({ value: message.cost, observed: typeof message.cost === 'number' && Number.isFinite(message.cost) })));
       const cliCostByCase = aggregateObservedMetric([{ value: stdout.cost, observed: typeof stdout.cost === 'number' && Number.isFinite(stdout.cost) }]);
+      let goUsageAfter: any = null;
+      let goUsageAfterStatus: string | null = null;
+      try {
+        const usageAfter = await readGoUsage(server.client);
+        goUsageAfter = goUsageAudit(usageAfter, options.quotaConfirmation);
+        if (!usageAfter.ok) goUsageAfterStatus = usageAfter.reason;
+      } catch {
+        goUsageAfterStatus = 'go-usage-read-error';
+      }
       const terminalFailure = stdout.terminalErrors[0] ?? (stdout.exitCode === 0 ? null : { type: 'cli-runtime-error', message: stdout.stderr.slice(-240) });
+      const stdinWriteFailure = classifyStdinWriteError(stdout.stdinErrorCode);
       const stop = guardFailure
         ? { stop: true, category: 'route-guard', reason: guardFailure.reason }
+        : stdinWriteFailure
+          ? stdinWriteFailure
+        : !stdinPromptObserved
+          ? { stop: true, category: 'stdin-prompt-not-confirmed' }
         : assistantOutcome.terminal
           ? { stop: true, category: assistantOutcome.category }
         : stdout.timedOut
@@ -572,8 +653,10 @@ async function main(argv: string[]) {
           ? classifyProviderFailure({ status: fatalResponse.status, message: terminalFailure?.message })
           : terminalFailure
             ? classifyProviderFailure(terminalFailure)
-            : (apiCostByCase.observed && apiCostByCase.value !== 0) || (cliCostByCase.observed && cliCostByCase.value !== 0)
-              ? { stop: true, category: 'unexpected-nonzero-usage-cost' }
+             : !apiCostByCase.observed && !cliCostByCase.observed
+               ? { stop: true, category: 'go-cost-unobserved' }
+             : (apiCostByCase.observed && apiCostByCase.value !== 0) || (cliCostByCase.observed && cliCostByCase.value !== 0)
+               ? { stop: true, category: 'unexpected-nonzero-usage-cost' }
               : requestRows.length !== 1
                 ? { stop: true, category: 'request-count-mismatch' }
                 : { stop: false, category: 'schema-check-or-success' };
@@ -594,6 +677,8 @@ async function main(argv: string[]) {
         metadata: {
           exitCode: stdout.exitCode,
           durationMs: stdout.durationMs,
+          stdinErrorCode: stdout.stdinErrorCode,
+          stdinPromptObserved,
           apiWaitFailure,
           eventTypes: stdout.eventTypes,
           assistantOutcome,
@@ -602,6 +687,9 @@ async function main(argv: string[]) {
           perMessageUsage,
           apiCostByCase,
           cliCostByCase,
+          goUsageBefore,
+          goUsageAfter,
+          goUsageAfterStatus,
           assistantMessages: assistantMessages.map((message: any) => ({ finish: message.finish ?? null, cost: message.cost ?? null, tokens: message.tokens ?? null, time: message.time ?? null, error: message.error ? { name: message.error.name ?? null, status: message.error.status ?? null } : null })),
           requestBodySha256: requestRows[0]?.bodySha256 ?? null,
           requestBodyModel: requestRows[0]?.bodyModel ?? null,
@@ -622,6 +710,76 @@ async function main(argv: string[]) {
         }
         await finalizeStoppedRun(runDir, runID, cases.map((candidate) => candidate.id), stoppedResults, { ...stop, stoppedAfter: id });
         throw new Error(`real run stopped after ${id}: ${stop.category}`);
+      }
+      if (options.smokeOnly) {
+        const smokeEvaluation = evaluateF2B0Attempts([{ id, raw: stdout.text }]);
+        const parserResult = smokeEvaluation.results[id];
+        const caseInput = item.input as { caseId?: unknown };
+        const corpusId = typeof caseInput?.caseId === 'string' ? caseInput.caseId : null;
+        const oracleResult = corpusId ? smokeEvaluation.evaluation.scenarios.find((row: any) => row.corpusId === corpusId) : undefined;
+        const semanticVerdict = oracleResult?.verdict ?? 'INCONCLUSIVE';
+        const tokenUsageObserved = (usageByCase.input.observed && usageByCase.output.observed)
+          || (stdout.usage.input.observed && stdout.usage.output.observed);
+        const observedCost = apiCostByCase.observed ? apiCostByCase : cliCostByCase;
+        const noRetry = requestRows.length === 1 && !hookRows.some((event) => event.event === 'retry-decision' && event.retry === true);
+        const smokeOutcome = evaluateGoSmoke({
+          jsonValid: parserResult?.jsonValid === true,
+          schemaValid: parserResult?.schemaValid === true,
+          semanticVerdict,
+          requestCount: requestRows.length,
+          noRetry,
+          tokensObserved: tokenUsageObserved,
+          costObserved: observedCost.observed,
+          costUSD: observedCost.value,
+          quotaAfterStatus: goUsageAfterStatus,
+          quotaAttested: options.quotaConfirmation,
+          extraUsageDisabledAttested: options.extraUsageConfirmation,
+        });
+        const casePassed = smokeOutcome.casePassed;
+        const smokeReport = {
+          schemaVersion: 'f2b0-go-single-smoke-v1',
+          status: smokeOutcome.status,
+          runID,
+          caseID: id,
+          providerID: REAL_MODEL.providerID,
+          modelID: REAL_MODEL.modelID,
+          endpoint: REAL_URL,
+          physicalRequests: requestRows.length,
+          retryObserved: hookRows.filter((event) => event.event === 'retry-decision').length,
+          noRetry,
+          stdinPromptObserved,
+          jsonValid: parserResult?.jsonValid ?? false,
+          schemaValid: parserResult?.schemaValid ?? false,
+          semanticVerdict,
+          oracleReasons: oracleResult?.reasons ?? [],
+          responseText: stdout.text,
+          tokens: { api: usageByCase, cli: stdout.usage },
+          costUSD: { api: apiCostByCase, cli: cliCostByCase },
+          costObserved: observedCost.observed,
+          goUsageBefore,
+          goUsageAfter,
+          goUsageAfterStatus,
+          extraUsageStatus: 'operator-attested-disabled',
+          remainingCaseIDs: executionPlan.deferred,
+          continuationAllowed: smokeOutcome.continuationAllowed,
+        };
+        await atomicCreate(path.join(runDir, 'smoke-evaluation.json'), smokeReport);
+        completed = casePassed;
+        console.log(JSON.stringify(smokeReport, null, 2));
+        if (!casePassed) throw new Error('first Go smoke failed parser/oracle or usage evidence; no further case sent');
+        return;
+      }
+      if (goUsageAfterStatus !== null) {
+        const stoppedResults = [];
+        for (const candidate of cases) {
+          try {
+            stoppedResults.push(JSON.parse(await readFile(path.join(caseDir, `${safeID(candidate.id)}.json`), 'utf8')));
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+        }
+        await finalizeStoppedRun(runDir, runID, cases.map((candidate) => candidate.id), stoppedResults, { stop: true, category: 'go-usage-after-case', reason: goUsageAfterStatus, stoppedAfter: id });
+        throw new Error(`real run stopped after ${id}: go usage readback ${goUsageAfterStatus}`);
       }
     }
 
@@ -649,7 +807,7 @@ async function main(argv: string[]) {
     console.log(JSON.stringify({ runID, complete: true, attempts: attempts.length, metrics: report.metrics }));
   } finally {
     await stopServer(server.child, server.childClosed);
-    if (!completed) console.error(JSON.stringify({ runID, credentialAvailable: providerCredentialAvailable, status: 'stopped-or-preflight-only' }));
+    if (!completed) console.error(JSON.stringify({ runID, authMode: 'opencode-native-auth-store', status: 'stopped-or-preflight-only' }));
   }
   } finally {
     await runLock.release();
@@ -659,7 +817,7 @@ async function main(argv: string[]) {
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMain) {
   main(process.argv.slice(2)).catch((error) => {
-    console.error(`F2B0 runner stopped safely: ${redactPersistedOutput(error instanceof Error ? error.message : String(error), process.env.OPENCODE_API_KEY)}`);
+    console.error(`F2B0 runner stopped safely: ${redactPersistedOutput(error instanceof Error ? error.message : String(error))}`);
     process.exitCode = 1;
   });
 }

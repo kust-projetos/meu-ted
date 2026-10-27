@@ -4,8 +4,8 @@ import { Plugin } from '@opencode/plugin'
 const evidence = process.env.F2B0_EVIDENCE
 const write = async (row) => appendFile(evidence, `${JSON.stringify(row)}\n`)
 const perSession = new Map()
-const allowedProvider = 'opencode'
-const allowedModel = 'deepseek-v4.1-flash-free'
+const allowedProvider = process.env.F2B0_PROVIDER
+const allowedModel = process.env.F2B0_MODEL
 const allowedPort = process.env.F2B0_MODE === 'refused' ? '43192' : '43191'
 const expectedOrigin = process.env.F2B0_EXPECTED_ORIGIN
 const expectedPath = process.env.F2B0_EXPECTED_PATH
