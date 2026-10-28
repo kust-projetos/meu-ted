@@ -8,7 +8,7 @@ import {
   hasUnsupportedCurrency,
   type SemanticInterpretation,
 } from '../mutations/semantic-interpretation.js';
-import { parseFinancialMutation, parseMoneyToCents, resolveRelativeDateFragment } from '../mutations/financial-parser.js';
+import { parseFinancialMutation, parseMoneyToCents, resolveRelativeDateFragment, explicitFinancialDate, hasIncompleteFinancialDate } from '../mutations/financial-parser.js';
 import {
   ACCOUNT_CREATE_TOOL,
   accountMissingFields,
@@ -5705,6 +5705,19 @@ export class ConversationOrchestrator {
       return this.continueAccountDraft(input, plan, startedAt, base, draft, client);
     }
     const store = this.dependencies.draftStore!;
+    if (draft.missingFields.includes('date')) {
+      const date = explicitFinancialDate(input.text);
+      const year = /\b(?:em|de)\s+(\d{4})\b/iu.exec(draft.fieldProvenance?.date?.raw ?? '')?.[1];
+      if (!date || hasNegation(input.text) || (year && !date.date.startsWith(`${year}-`))) return this.stopDraftDate(input, plan, startedAt, base, draft, 'Qual é o dia e mês da despesa?');
+      const updated = store.update(draft.draftId, {
+        resolvedArgs: { ...draft.resolvedArgs, date: date.date },
+        missingFields: draft.missingFields.filter((field) => field !== 'date'),
+        updatedAt: new Date(this.draftNowMs()).toISOString(),
+        lastIntentionId: input.intentionId,
+      }, { expectedRevision: draft.revision });
+      if (!updated) return this.stopDraftDate(input, plan, startedAt, base, store.get(draft.draftId) ?? draft, 'Não consegui atualizar a data com segurança. Informe a data novamente.');
+      return this.continueDraft(input, plan, startedAt, base, updated, client);
+    }
     // A07/AC15 — a value correction ("não, 500") against an ACTIVE draft
     // replaces the stored amount instead of asking the pending question again.
     // Applied through `update` + `revision` (never in place), with a
@@ -6214,6 +6227,19 @@ export class ConversationOrchestrator {
       });
     }
     const parsed = interpretation.parsed;
+    if (!parsed.date) {
+      const question = 'Qual é o dia e mês da despesa?';
+      const candidate = buildDraftRecord({
+        workspaceId: ctx.workspaceId, actorId: ctx.actorId, deviceId: ctx.deviceId,
+        intentionId: input.intentionId, tool: this.toolForKind(parsed.kind),
+        resolvedArgs: { kind: parsed.kind, amountCents: parsed.amountCents, description: parsed.description, date: '' },
+        missingFields: ['date', 'accountId', 'categoryId'], question,
+        ttlMs: this.dependencies.draftTtlMs ?? DEFAULT_DRAFT_TTL_MS,
+        nowMs: this.draftNowMs(), fieldProvenance: { ...this.draftProvenance(interpretation), date: { source: 'token', raw: input.text, value: '' } },
+      });
+      const { record } = store.getOrCreate(candidate);
+      return this.clarifyDraft(input, { ...plan, mode: 'unsupported', requestedOperations: [] }, startedAt, base, record, question);
+    }
     // R10 (AC20): the single resolution of this turn is a RECOVERY attempt —
     // charge it to the shared budget BEFORE reading accounts/categories, so a
     // refusal stops the turn safely instead of re-deriving the same answer.
@@ -6557,6 +6583,10 @@ export class ConversationOrchestrator {
     const store = this.dependencies.draftStore!;
     const ctx = this.draftContext(input);
     const now = this.draftNowMs();
+    if (isPureReadForDraft(input.text) && hasIncompleteFinancialDate(input.text)) {
+      const readPlan = freeze({ ...plan, mode: 'unsupported' as const, requestedOperations: freeze([]), missingFields: freeze([]) });
+      return this.completeTurn(input, readPlan, startedAt, base, { plan: readPlan, response: freeze({ text: 'Ainda não consigo resumir o ano inteiro. Informe o mês que deseja consultar.' }) });
+    }
     store.expireStale(ctx, now);
 
     // §7.7 resend: the same turn redelivered converges without new state.
