@@ -47,7 +47,24 @@ const negation = /\b(n[aã]o|nunca|jamais)\b/i;
  * `timeZoneSource: 'default'` instead of pretending it came from the user).
  */
 export const DEFAULT_FINANCIAL_TIME_ZONE = 'America/Sao_Paulo';
+const MONTHS: Readonly<Record<string, number>> = { janeiro: 1, fevereiro: 2, março: 3, marco: 3, abril: 4, maio: 5, junho: 6, julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12 };
+export const explicitFinancialDate = (text: string): { date: string; raw: string } | undefined => {
+  const match = /\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/u.exec(text) ?? /\b(\d{1,2})\s+de\s+(janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+de\s+(\d{4})\b/iu.exec(text);
+  if (!match) return undefined;
+  const day = Number(match[1]);
+  const month = Number(match[2]) || MONTHS[match[2]!.toLowerCase()] || 0;
+  const year = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return undefined;
+  return { date: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`, raw: match[0] };
+};
+export const hasIncompleteFinancialDate = (text: string): boolean =>
+  /\b(?:em|de)\s+\d{4}\b/iu.test(text) && !explicitFinancialDate(text) ||
+  /\b\d{1,2}\/\d{1,2}\/\d{4}\b/u.test(text) && !explicitFinancialDate(text);
 const dateFor = (text: string, now = new Date(), timeZone = DEFAULT_FINANCIAL_TIME_ZONE): string => {
+  const explicit = explicitFinancialDate(text);
+  if (explicit) return explicit.date;
+  if (hasIncompleteFinancialDate(text)) return '';
   const base = new Date(new Intl.DateTimeFormat('en-CA', { timeZone }).format(now) + 'T12:00:00Z');
   if (/anteontem/i.test(text)) base.setUTCDate(base.getUTCDate() - 2);
   else if (/ontem/i.test(text)) base.setUTCDate(base.getUTCDate() - 1);
@@ -100,7 +117,18 @@ export const parseFinancialMutation = (text: string, options: { now?: Date; time
   let amountCents: number;
   try { amountCents = cents(match[1]!); } catch { return { kind: 'none', reason: 'missing_amount' }; }
   const income = finiteExpenseVerb.test(text) ? false : finiteIncomeVerb.test(text) ? true : incomeNoun.test(text);
-  const remainder = text.slice((match.index ?? 0) + match[0].length)
+  const dateFragment = explicitFinancialDate(text)?.raw;
+  let descriptionTail = text.slice((match.index ?? 0) + match[0].length);
+  if (dateFragment) {
+    const dateIndex = descriptionTail.indexOf(dateFragment);
+    if (dateIndex >= 0) {
+      const before = descriptionTail.slice(0, dateIndex).replace(/\s+em\s*$/iu, '');
+      descriptionTail = before + descriptionTail.slice(dateIndex + dateFragment.length);
+    }
+  }
+  const remainder = descriptionTail
+    .replace(/\s*\b(?:em\s+)?\d{1,2}\/\d{1,2}\/\d{4}\b/iu, '')
+    .replace(/\s*\b(?:em|de)\s+\d{4}\b/iu, '')
     .replace(/^\s*(em|de|do|da|no|na|por)\s+/i, '').replace(/\s+(ontem|hoje|anteontem)$/i, '').trim();
   const description = remainder || (income ? 'receita' : 'despesa');
   return { kind: income ? 'income' : 'expense', amountCents, description, date: dateFor(text, options.now, options.timeZone), ...( /\b(categoria|categoria de)\s+([^,.;]+)/i.exec(text)?.[2] ? { categoryQuery: /\b(categoria|categoria de)\s+([^,.;]+)/i.exec(text)![2]!.trim() } : {}) };
