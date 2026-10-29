@@ -3,5 +3,14 @@ export function createCaseReservation(directory: string, caseID: string, metadat
 export function authorizedRetryFileName(directory: string, caseID: string, newRunID: string): string;
 export function listAuthorizedRetryReservations(directory: string, caseID: string): Promise<string[]>;
 export function createAuthorizedRetryReservation(directory: string, caseID: string, newRunID: string, metadata: Record<string, unknown>): Promise<string>;
+export function consumedSmokeFileName(directory: string, caseID: string, sourceRunID: string): string;
+export function listConsumedSmokeReservations(directory: string, caseID: string): Promise<string[]>;
+export function createConsumedSmokeReservation(directory: string, caseID: string, sourceRunID: string, metadata: Record<string, unknown>): Promise<string>;
 export function listReservationIDs(directory: string): Promise<string[]>;
+export function remaining22FileName(directory: string, caseID: string, sourceRunID: string): string;
+export function listRemaining22Reservations(directory: string, sourceRunID?: string): Promise<string[]>;
+export function createRemaining22Reservation(directory: string, caseID: string, sourceRunID: string, metadata: Record<string, unknown>): Promise<string>;
+export function remaining22CampaignFileName(directory: string, sourceRunID: string): string;
+export function listRemaining22CampaignClaims(directory: string, sourceRunID?: string): Promise<string[]>;
+export function createRemaining22CampaignClaim(directory: string, sourceRunID: string, metadata: Record<string, unknown>): Promise<string>;
 export function finalizeStoppedRun(runDir: string, runID: string, caseIDs: string[], caseResults: Array<Record<string, any>>, stop: Record<string, unknown>): Promise<Record<string, any>>;

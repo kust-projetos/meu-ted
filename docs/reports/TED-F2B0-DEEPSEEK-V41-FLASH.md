@@ -1,10 +1,10 @@
 # Meu Ted — F2-B0: DeepSeek V4.1 Flash (não Free)
 
 **Data:** 2026-10-27
-**Estado mais recente:** `BLOCKED_BEFORE_INFERENCE_LOCAL_READINESS_503`
+**Estado mais recente (2026-10-29):** campanha B0 avaliada, **FAIL semântico / B1 NO-GO**. A avaliação composta do smoke `2026-10-29T12-26-34-600Z-4324` e da campanha `2026-10-29T13-25-07-295Z-6180` abrange 23 casos: 2 PASS, 21 FAIL, 23 JSON válidos e 17 schemas válidos. A campanha realizou 22 requisições novas, sem retry observado; o smoke anterior não foi repetido. Quota e Extra Usage foram atestados pelo operador, não medidos automaticamente; custo zero reportado pela API não comprova faturamento zero. A conclusão financeira não foi observada. Evidência local: `apps/agent/tests/poc-structured/f2b0-runtime/evidence/real/2026-10-29T13-25-07-295Z-6180/evaluation.json`; tracking: `docs/reports/2026-10-21-sessao-testes-correcoes-ted.md`.
 **Escopo:** B0, 23 casos sintéticos, branch `test/ted-f2b0-no-retry-controlled`, base `1971fb911fdefbc26c978b4a02e5f5ea36406004`.
 
-## Execução autorizada mais recente — 2026-10-27
+## Histórico de execução — 2026-10-27
 
 ### Tentativa após correção da reserva
 
@@ -102,7 +102,7 @@ Fontes oficiais: [OpenCode Go](https://opencode.ai/v2/docs/console/go/), [OpenCo
 
 Comparação semântica com F1: **não aplicável**, pois não houve resposta do modelo novo. O relatório histórico [`TED-F2B0-DEEPSEEK-FLASH-FREE.md`](TED-F2B0-DEEPSEEK-FLASH-FREE.md) permanece inalterado: ele registra a execução anterior com o modelo Free, inclusive o 429 e a parada; não foi reclassificado nem usado como prova de comportamento do modelo pago. As evidências e achados de segurança do contêiner também ficam separados desta avaliação de elegibilidade/modelo.
 
-## Validação de código
+## Validação de código histórica — 2026-10-27
 
 - `node apps/agent/tests/poc-structured/f2b0-runtime/run.mjs`: PASS, nove cenários mock locais.
 - `pnpm --filter pi-finance-agent exec vitest run tests/poc-structured/f2b0-runtime --reporter=dot`: PASS, 35 testes após os gates smoke/quota.
@@ -113,7 +113,7 @@ Comparação semântica com F1: **não aplicável**, pois não houve resposta do
 - Lint amplo (`pnpm --filter pi-finance-agent lint`) expirou após 240 s. Biome focado nos dois arquivos expirou também após 240 s; lint permanece **inconclusivo**, não PASS.
 - Revisão independente focal do smoke/resume: **APPROVED** após a parada em ausência de readback pós-caso. Security review: **APPROVED**; riscos residuais são a attestation do operador porque `usage.limits` retorna null e o diretório nativo de auth compartilhado com o binário Go oficial.
 
-## Bloqueio e próximo passo
+## Bloqueio e próximo passo históricos — 2026-10-27
 
 O primeiro smoke foi tentado conforme a escolha do operador por Go e parou após uma requisição HTTP 401. A evidência é suficiente para o bloqueio externo: no request autorizado para `opencode-go/deepseek-v4.1-flash`, o hook observou `authorizationPresent=false`; o provider respondeu 401; a tentativa de retry foi vetada; não houve segunda requisição nem saída do modelo. A chave não foi copiada, exibida ou alterada para investigar.
 

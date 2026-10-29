@@ -11,8 +11,24 @@ const APPROVED_INFRA_ENDINGS = new Map([
 ])
 export const AUTHORIZED_RETRY_CASE_ID = 'F1-B005'
 export const AUTHORIZED_RETRY_SOURCE_RUN_ID = '2026-10-27T15-19-19-424Z-5620'
+export const AUTHORIZED_CONSUMED_SMOKE_CASE_ID = 'F1-B005'
+export const AUTHORIZED_CONSUMED_SMOKE_RUN_ID = '2026-10-29T10-55-14-534Z-21048'
+export const AUTHORIZED_CONSUMED_SMOKE_RESERVATION_PATH = `reservations/${REAL_MODEL.providerID}-${REAL_MODEL.modelID}/${AUTHORIZED_CONSUMED_SMOKE_CASE_ID}.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`
+export const AUTHORIZED_REMAINING22_SOURCE_RUN_ID = '2026-10-29T12-26-34-600Z-4324'
+export const REMAINING22_EXCLUDED_CASE_ID = 'F1-B005'
+export const REMAINING22_EXPECTED_COUNT = 22
+export const AUTHORIZED_REMAINING22_RESERVATION_PATH = `reservations/${REAL_MODEL.providerID}-${REAL_MODEL.modelID}/${REMAINING22_EXCLUDED_CASE_ID}.consumed-smoke-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`
+const normalizeReservationSeparators = (value) => String(value).replace(/\\/g, '/')
+const stableStringify = (value) => {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map((entry) => stableStringify(entry)).join(',')}]`
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`
+}
 const RETRY_CASE_FLAG = '--retry-authorized-case='
 const RETRY_RUN_FLAG = '--retry-authorized-run='
+const CONSUMED_SMOKE_CASE_FLAG = '--consumed-smoke-authorized-case='
+const CONSUMED_SMOKE_RUN_FLAG = '--consumed-smoke-authorized-run='
+const REMAINING22_RUN_FLAG = '--remaining22-authorized-run='
 const APPROVED_GO_CATALOG_TIERS = [
   { input: 0.15, output: 0.6, read: 0.003, write: 0 },
   { input: 0.3, output: 1.2, read: 0.006, write: 0 },
@@ -32,26 +48,53 @@ export function parseExecutionMode(argv) {
   const retryRunArg = argv.find((arg) => arg.startsWith(RETRY_RUN_FLAG))
   const retryCaseID = retryCaseArg?.slice(RETRY_CASE_FLAG.length)
   const retryRunID = retryRunArg?.slice(RETRY_RUN_FLAG.length)
+  const consumedSmokeCaseArg = argv.find((arg) => arg.startsWith(CONSUMED_SMOKE_CASE_FLAG))
+  const consumedSmokeRunArg = argv.find((arg) => arg.startsWith(CONSUMED_SMOKE_RUN_FLAG))
+  const consumedSmokeCaseID = consumedSmokeCaseArg?.slice(CONSUMED_SMOKE_CASE_FLAG.length)
+  const consumedSmokeRunID = consumedSmokeRunArg?.slice(CONSUMED_SMOKE_RUN_FLAG.length)
+  const remaining22Arg = argv.find((arg) => arg.startsWith(REMAINING22_RUN_FLAG))
+  const remaining22RunID = remaining22Arg?.slice(REMAINING22_RUN_FLAG.length)
   const exportArg = argv.find((arg) => arg.startsWith('--export-stopped-run='))
   const exportStoppedRunID = exportArg?.slice('--export-stopped-run='.length)
-  if (argv.includes('--help') || (!execute && !preflightOnly && !selfTestGuard && !smokeOnly && !resumeID && !exportStoppedRunID && !retryCaseID && !retryRunID)) return { help: true, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID, retryCaseID, retryRunID }
+  if (argv.includes('--help') || (!execute && !preflightOnly && !selfTestGuard && !smokeOnly && !resumeID && !exportStoppedRunID && !retryCaseID && !retryRunID && !consumedSmokeCaseID && !consumedSmokeRunID && remaining22RunID === undefined)) return { help: true, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID, retryCaseID, retryRunID, consumedSmokeCaseID, consumedSmokeRunID, remaining22RunID }
+  if (remaining22RunID !== undefined) {
+    if (remaining22RunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) throw new Error(`remaining22 campaign is limited to source ${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`)
+    if (!/^[a-zA-Z0-9._-]{1,80}$/.test(remaining22RunID)) throw new Error('remaining22 source run id is not a safe run-id')
+    if (!execute || !confirmation || !quotaConfirmation || !extraUsageConfirmation) throw new Error('remaining22 campaign requires --execute-real plus exact confirmations')
+    if (smokeOnly) throw new Error('remaining22 campaign cannot be combined with --smoke-only')
+    if (resumeID || preflightOnly || selfTestGuard || exportStoppedRunID) throw new Error('remaining22 campaign cannot be combined with preflight, self-test, resume, or export')
+    if (retryCaseID !== undefined || retryRunID !== undefined) throw new Error('remaining22 campaign is incompatible with authorized retry flags')
+    if (consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined) throw new Error('remaining22 campaign is incompatible with consumed smoke flags')
+  }
   if ((retryCaseID !== undefined || retryRunID !== undefined)) {
     if (retryCaseID === undefined || retryRunID === undefined) throw new Error('authorized retry requires both case and run: --retry-authorized-case plus --retry-authorized-run')
     if (retryCaseID !== AUTHORIZED_RETRY_CASE_ID || retryRunID !== AUTHORIZED_RETRY_SOURCE_RUN_ID) throw new Error(`authorized retry is limited to F1-B005 from ${AUTHORIZED_RETRY_SOURCE_RUN_ID}`)
     if (!execute || !smokeOnly || !confirmation || !quotaConfirmation || !extraUsageConfirmation) throw new Error('authorized retry requires --execute-real --smoke-only plus exact confirmations')
     if (resumeID || preflightOnly || selfTestGuard || exportStoppedRunID) throw new Error('authorized retry cannot be combined with preflight, self-test, resume, or export')
+    if (consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined) throw new Error('authorized retry is incompatible with consumed smoke authorization flags')
+    if (remaining22RunID !== undefined) throw new Error('authorized retry is incompatible with remaining22 campaign flags')
     if (!/^[a-zA-Z0-9._-]{1,80}$/.test(retryRunID)) throw new Error('authorized retry run id is not a safe run-id')
   }
-  if (exportStoppedRunID && (execute || preflightOnly || selfTestGuard || smokeOnly || resumeID || retryCaseID || retryRunID || quotaConfirmation || extraUsageConfirmation || !/^[a-zA-Z0-9._-]{1,80}$/.test(exportStoppedRunID))) throw new Error('--export-stopped-run requires only a safe run-id and performs no server/catalog call')
+  if ((consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined)) {
+    if (consumedSmokeCaseID === undefined || consumedSmokeRunID === undefined) throw new Error('consumed smoke requires both case and run: --consumed-smoke-authorized-case plus --consumed-smoke-authorized-run')
+    if (consumedSmokeCaseID !== AUTHORIZED_CONSUMED_SMOKE_CASE_ID || consumedSmokeRunID !== AUTHORIZED_CONSUMED_SMOKE_RUN_ID) throw new Error(`consumed smoke is limited to F1-B005 from ${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}`)
+    if (!execute || !smokeOnly || !confirmation || !quotaConfirmation || !extraUsageConfirmation) throw new Error('consumed smoke requires --execute-real --smoke-only plus exact confirmations')
+    if (resumeID || preflightOnly || selfTestGuard || exportStoppedRunID) throw new Error('consumed smoke cannot be combined with preflight, self-test, resume, or export')
+    if (retryCaseID !== undefined || retryRunID !== undefined) throw new Error('consumed smoke is incompatible with authorized retry flags')
+    if (remaining22RunID !== undefined) throw new Error('consumed smoke is incompatible with remaining22 campaign flags')
+    if (!/^[a-zA-Z0-9._-]{1,80}$/.test(consumedSmokeRunID)) throw new Error('consumed smoke run id is not a safe run-id')
+  }
+  if (exportStoppedRunID && (execute || preflightOnly || selfTestGuard || smokeOnly || resumeID || retryCaseID || retryRunID || consumedSmokeCaseID || consumedSmokeRunID || remaining22RunID !== undefined || quotaConfirmation || extraUsageConfirmation || !/^[a-zA-Z0-9._-]{1,80}$/.test(exportStoppedRunID))) throw new Error('--export-stopped-run requires only a safe run-id and performs no server/catalog call')
   if (execute && !confirmation) throw new Error(`real inference requires exact confirmation ${REAL_CONFIRMATION}`)
   if (execute && !quotaConfirmation) throw new Error(`real Go inference requires explicit quota confirmation ${GO_QUOTA_CONFIRMATION}`)
   if (execute && !extraUsageConfirmation) throw new Error(`real Go inference requires explicit Extra Usage confirmation ${GO_EXTRA_USAGE_CONFIRMATION}`)
   if (smokeOnly && !execute) throw new Error('--smoke-only requires --execute-real and exact model confirmation')
-  if (execute && !resumeID && !smokeOnly) throw new Error('the first real F2B0 invocation must use --smoke-only')
-  if (smokeOnly && (preflightOnly || selfTestGuard || resumeID)) throw new Error('--smoke-only cannot be combined with preflight, self-test, or resume')
-  if ((preflightOnly || selfTestGuard) && (execute || resumeID || (preflightOnly && selfTestGuard))) throw new Error('preflight/self-test modes cannot be combined with real execution/resume or each other')
+  if (execute && !resumeID && !smokeOnly && remaining22RunID === undefined) throw new Error('the first real F2B0 invocation must use --smoke-only')
+  if (smokeOnly && (preflightOnly || selfTestGuard || resumeID || remaining22RunID !== undefined)) throw new Error('--smoke-only cannot be combined with preflight, self-test, resume, or remaining22 campaign')
+  if ((preflightOnly || selfTestGuard) && (execute || resumeID || remaining22RunID !== undefined || (preflightOnly && selfTestGuard))) throw new Error('preflight/self-test modes cannot be combined with real execution/resume/remaining22 or each other')
   if (resumeID && (!execute || !/^[a-zA-Z0-9._-]{1,80}$/.test(resumeID))) throw new Error('--resume requires --execute-real and a safe run-id')
-  return { help: false, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID, retryCaseID, retryRunID }
+  if (resumeID && remaining22RunID !== undefined) throw new Error('remaining22 campaign cannot be combined with preflight, self-test, resume, or export')
+  return { help: false, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID, retryCaseID, retryRunID, consumedSmokeCaseID, consumedSmokeRunID, remaining22RunID }
 }
 
 export function validateCatalogCost(cost) {
@@ -309,11 +352,257 @@ export function planAuthorizedRetry({ caseIDs, unresolvedReservations, retryCase
   }
 }
 
+export function planConsumedSmoke({ caseIDs, unresolvedReservations, consumedSmokeCaseID } = {}) {
+  if (consumedSmokeCaseID !== AUTHORIZED_CONSUMED_SMOKE_CASE_ID) throw new Error('consumed smoke is limited to F1-B005')
+  if (!Array.isArray(unresolvedReservations) || unresolvedReservations.length !== 1 || unresolvedReservations[0] !== AUTHORIZED_CONSUMED_SMOKE_CASE_ID) throw new Error('consumed smoke requires exactly the F1-B005 unresolved reservation')
+  if (!Array.isArray(caseIDs) || !caseIDs.includes(AUTHORIZED_CONSUMED_SMOKE_CASE_ID)) throw new Error('consumed smoke case is not in the manifest')
+  return {
+    run: [AUTHORIZED_CONSUMED_SMOKE_CASE_ID],
+    deferred: caseIDs.filter((id) => id !== AUTHORIZED_CONSUMED_SMOKE_CASE_ID),
+  }
+}
+
+export function applyConsumedSmokeTerminalPolicy(smokeOutcome) {
+  return { ...smokeOutcome, continuationAllowed: false }
+}
+
+export function isAuthorizedConsumedSingleSmokeSource({ caseID, runID, reservationRecord, sourceResult } = {}) {
+  if (caseID !== AUTHORIZED_CONSUMED_SMOKE_CASE_ID || runID !== AUTHORIZED_CONSUMED_SMOKE_RUN_ID) return { ok: false, reason: 'not-authorized-consumed-pair' }
+  if (!reservationRecord) return { ok: false, reason: 'reservation-missing' }
+  if (reservationRecord.caseID !== AUTHORIZED_CONSUMED_SMOKE_CASE_ID) return { ok: false, reason: 'reservation-case-mismatch' }
+  if (reservationRecord.authorizedRetry !== true) return { ok: false, reason: 'reservation-not-authorized-retry' }
+  if (reservationRecord.runID !== AUTHORIZED_CONSUMED_SMOKE_RUN_ID) return { ok: false, reason: 'reservation-run-mismatch' }
+  if (reservationRecord.sourceRunID !== AUTHORIZED_RETRY_SOURCE_RUN_ID) return { ok: false, reason: 'reservation-source-mismatch' }
+  if (reservationRecord.status !== 'reserved') return { ok: false, reason: 'reservation-status-mismatch' }
+  if (!sourceResult) return { ok: false, reason: 'result-missing' }
+  if (sourceResult.caseID !== AUTHORIZED_CONSUMED_SMOKE_CASE_ID) return { ok: false, reason: 'result-case-mismatch' }
+  if (sourceResult.fatal !== true) return { ok: false, reason: 'result-not-fatal' }
+  if (typeof sourceResult.reservation !== 'string'
+    || normalizeReservationSeparators(sourceResult.reservation) !== AUTHORIZED_CONSUMED_SMOKE_RESERVATION_PATH) return { ok: false, reason: 'result-reservation-mismatch' }
+  if (sourceResult.attemptCount !== 1) return { ok: false, reason: 'result-attempt-count' }
+  const request = sourceResult.request ?? {}
+  if (request.providerID !== REAL_MODEL.providerID || request.modelID !== REAL_MODEL.modelID || request.url !== REAL_URL) return { ok: false, reason: 'result-request-mismatch' }
+  if (request.requestCount !== 1) return { ok: false, reason: 'result-request-count' }
+  if (typeof sourceResult.text !== 'string' || sourceResult.text.length === 0) return { ok: false, reason: 'result-empty-output' }
+  if (typeof sourceResult.apiText !== 'string' || sourceResult.apiText.length === 0) return { ok: false, reason: 'result-empty-apitext' }
+  if (sourceResult.apiTextMatchesStdout !== true) return { ok: false, reason: 'result-stdout-mismatch' }
+  const outcome = sourceResult.metadata?.assistantOutcome ?? {}
+  if (outcome.terminal !== false) return { ok: false, reason: 'result-outcome-not-nonterminal' }
+  const evidence = Array.isArray(sourceResult.hookEvidence) ? sourceResult.hookEvidence : []
+  const requests = evidence.filter((event) => event.event === 'http-request-allowed')
+  if (requests.length !== 1) return { ok: false, reason: 'result-request-count' }
+  const single = requests[0]
+  if (single.authorizationPresent !== true) return { ok: false, reason: 'result-auth-absent' }
+  if (single.toolCount !== 0) return { ok: false, reason: 'result-tools-present' }
+  if (single.kind !== 'primary') return { ok: false, reason: 'result-kind-mismatch' }
+  if ('provider' in single && single.provider !== REAL_MODEL.providerID) return { ok: false, reason: 'result-request-mismatch' }
+  if ('model' in single && single.model !== REAL_MODEL.modelID) return { ok: false, reason: 'result-request-mismatch' }
+  const responses = evidence.filter((event) => event.event === 'http-response')
+  if (responses.length !== 1) return { ok: false, reason: 'result-response-count' }
+  if (responses[0].status !== 200) return { ok: false, reason: 'result-not-200' }
+  if (evidence.some((event) => event.event === 'retry-decision' && event.retry === true)) return { ok: false, reason: 'result-retried' }
+  const stop = sourceResult.stop ?? {}
+  if (stop.category !== 'stdin-prompt-not-confirmed') return { ok: false, reason: 'result-stop-mismatch' }
+  if (sourceResult.metadata?.stdinPromptObserved !== false) return { ok: false, reason: 'result-stdin-unexpected' }
+  return { ok: true }
+}
+
+export function planRemaining22({ caseIDs, sourceRunID } = {}) {
+  if (sourceRunID !== undefined && sourceRunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) throw new Error(`remaining22 campaign is limited to source ${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`)
+  if (!Array.isArray(caseIDs) || caseIDs.length !== MAX_CASES) throw new Error('remaining22 campaign requires the complete 23-case manifest')
+  if (new Set(caseIDs).size !== MAX_CASES) throw new Error('remaining22 campaign manifest has duplicate case ID')
+  if (!caseIDs.includes(REMAINING22_EXCLUDED_CASE_ID)) throw new Error('remaining22 campaign manifest misses the excluded historic smoke case')
+  const run = caseIDs.filter((id) => id !== REMAINING22_EXCLUDED_CASE_ID)
+  if (run.length !== REMAINING22_EXPECTED_COUNT) throw new Error('remaining22 campaign run must contain exactly 22 cases')
+  if (run.includes(REMAINING22_EXCLUDED_CASE_ID)) throw new Error('remaining22 campaign must never re-execute the historic smoke case')
+  if (new Set(run).size !== REMAINING22_EXPECTED_COUNT) throw new Error('remaining22 campaign run has duplicate case ID')
+  return {
+    run,
+    deferred: [REMAINING22_EXCLUDED_CASE_ID],
+  }
+}
+
+export function isAuthorizedRemaining22Source({ sourceRunID, manifest, smokeEvaluation, caseResult, catalogPreflight, hookEvents, reservationRecord, canonical } = {}) {
+  if (sourceRunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) return { ok: false, reason: 'not-authorized-source-run' }
+  if (!canonical || !Array.isArray(canonical.caseIDs) || canonical.caseIDs.length !== MAX_CASES || !Array.isArray(canonical.prompts) || canonical.prompts.length !== MAX_CASES) return { ok: false, reason: 'canonical-missing' }
+  const canonicalCampaign = canonical.caseIDs.filter((id) => id !== REMAINING22_EXCLUDED_CASE_ID)
+  if (canonicalCampaign.length !== REMAINING22_EXPECTED_COUNT) return { ok: false, reason: 'canonical-campaign-mismatch' }
+  if (!manifest) return { ok: false, reason: 'manifest-missing' }
+  if (manifest.runID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) return { ok: false, reason: 'manifest-run-mismatch' }
+  if (manifest.provider !== REAL_MODEL.providerID || manifest.model !== REAL_MODEL.modelID) return { ok: false, reason: 'manifest-model-mismatch' }
+  if (manifest.nativeURL !== REAL_URL && manifest.nativeURL !== undefined) {
+    if (manifest.nativeURL !== REAL_URL) return { ok: false, reason: 'manifest-url-mismatch' }
+  }
+  if (!Array.isArray(manifest.caseIDs) || manifest.caseIDs.length !== MAX_CASES || new Set(manifest.caseIDs).size !== MAX_CASES) return { ok: false, reason: 'manifest-cases-mismatch' }
+  if (JSON.stringify(manifest.caseIDs) !== JSON.stringify(canonical.caseIDs)) return { ok: false, reason: 'manifest-canonical-order-mismatch' }
+  if (!manifest.caseIDs.includes(REMAINING22_EXCLUDED_CASE_ID)) return { ok: false, reason: 'manifest-misses-smoke-case' }
+  if (!Array.isArray(manifest.prompts) || manifest.prompts.length !== MAX_CASES) return { ok: false, reason: 'manifest-prompts-mismatch' }
+  for (let index = 0; index < canonical.prompts.length; index += 1) {
+    const expected = canonical.prompts[index]
+    const actual = manifest.prompts[index]
+    if (!actual || actual.id !== expected.id) return { ok: false, reason: 'manifest-canonical-prompt-order-mismatch' }
+    if (actual.prompt !== expected.prompt) return { ok: false, reason: 'manifest-canonical-prompt-mismatch' }
+    if (stableStringify(actual.input) !== stableStringify(expected.input)) return { ok: false, reason: 'manifest-canonical-input-mismatch' }
+  }
+  const smokePrompt = manifest.prompts.find((entry) => entry?.id === REMAINING22_EXCLUDED_CASE_ID)
+  if (!smokePrompt || typeof smokePrompt.prompt !== 'string' || !smokePrompt.prompt.includes('Manifest case ID: F1-B005')) return { ok: false, reason: 'manifest-prompt-mismatch' }
+  if (!smokePrompt.input || smokePrompt.input.caseId !== REMAINING22_EXCLUDED_CASE_ID) return { ok: false, reason: 'manifest-input-mismatch' }
+  if (!smokeEvaluation) return { ok: false, reason: 'smoke-evaluation-missing' }
+  if (smokeEvaluation.schemaVersion !== 'f2b0-go-single-smoke-v1') return { ok: false, reason: 'smoke-schema-mismatch' }
+  if (smokeEvaluation.status !== 'SMOKE_PASS_OPERATOR_ATTESTED_NO_CONTINUATION') return { ok: false, reason: 'smoke-status-mismatch' }
+  if (smokeEvaluation.runID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) return { ok: false, reason: 'smoke-run-mismatch' }
+  if (smokeEvaluation.caseID !== REMAINING22_EXCLUDED_CASE_ID) return { ok: false, reason: 'smoke-case-mismatch' }
+  if (smokeEvaluation.providerID !== REAL_MODEL.providerID || smokeEvaluation.modelID !== REAL_MODEL.modelID) return { ok: false, reason: 'smoke-model-mismatch' }
+  if (smokeEvaluation.endpoint !== REAL_URL) return { ok: false, reason: 'smoke-endpoint-mismatch' }
+  if (smokeEvaluation.physicalRequests !== 1 || smokeEvaluation.noRetry !== true) return { ok: false, reason: 'smoke-request-mismatch' }
+  if (smokeEvaluation.stdinPromptObserved !== true) return { ok: false, reason: 'smoke-stdin-mismatch' }
+  if (smokeEvaluation.jsonValid !== true || smokeEvaluation.schemaValid !== true) return { ok: false, reason: 'smoke-json-schema-mismatch' }
+  if (smokeEvaluation.semanticVerdict !== 'PASS') return { ok: false, reason: 'smoke-oracle-mismatch' }
+  if (smokeEvaluation.continuationAllowed !== false) return { ok: false, reason: 'smoke-continuation-mismatch' }
+  if (smokeEvaluation.extraUsageStatus !== 'operator-attested-disabled') return { ok: false, reason: 'smoke-extra-usage-mismatch' }
+  if (!smokeEvaluation.costObserved || smokeEvaluation.costUSD?.api?.value !== 0 || smokeEvaluation.costUSD?.api?.observed !== true) return { ok: false, reason: 'smoke-cost-mismatch' }
+  if (!Array.isArray(smokeEvaluation.remainingCaseIDs) || smokeEvaluation.remainingCaseIDs.length !== REMAINING22_EXPECTED_COUNT) return { ok: false, reason: 'smoke-remaining-mismatch' }
+  if (JSON.stringify(smokeEvaluation.remainingCaseIDs) !== JSON.stringify(canonicalCampaign)) return { ok: false, reason: 'smoke-remaining-order-mismatch' }
+  if (smokeEvaluation.remainingCaseIDs.includes(REMAINING22_EXCLUDED_CASE_ID)) return { ok: false, reason: 'smoke-remaining-includes-excluded' }
+  if (typeof smokeEvaluation.responseText !== 'string' || smokeEvaluation.responseText.length === 0) return { ok: false, reason: 'smoke-response-missing' }
+  const goBefore = smokeEvaluation.goUsageBefore ?? null
+  const goAfter = smokeEvaluation.goUsageAfter ?? null
+  for (const snapshot of [goBefore, goAfter]) {
+    if (!snapshot || snapshot.source !== 'operator-attestation' || snapshot.status !== 'go-usage-unavailable') return { ok: false, reason: 'smoke-quota-attestation-mismatch' }
+  }
+  if (!caseResult) return { ok: false, reason: 'result-missing' }
+  if (caseResult.caseID !== REMAINING22_EXCLUDED_CASE_ID) return { ok: false, reason: 'result-case-mismatch' }
+  if (caseResult.fatal !== false) return { ok: false, reason: 'result-not-completed' }
+  if (caseResult.attemptCount !== 1) return { ok: false, reason: 'result-attempt-count' }
+  const request = caseResult.request ?? {}
+  if (request.providerID !== REAL_MODEL.providerID || request.modelID !== REAL_MODEL.modelID || request.url !== REAL_URL) return { ok: false, reason: 'result-request-mismatch' }
+  if (request.requestCount !== 1) return { ok: false, reason: 'result-request-count' }
+  if (typeof caseResult.text !== 'string' || caseResult.text.length === 0) return { ok: false, reason: 'result-empty-output' }
+  if (typeof caseResult.apiText !== 'string' || caseResult.apiText.length === 0) return { ok: false, reason: 'result-empty-apitext' }
+  if (caseResult.apiText !== caseResult.text || caseResult.apiTextMatchesStdout !== true) return { ok: false, reason: 'result-stdout-mismatch' }
+  if (caseResult.text !== smokeEvaluation.responseText) return { ok: false, reason: 'result-smoke-text-mismatch' }
+  if (caseResult.assistantTextValid !== true) return { ok: false, reason: 'result-assistant-text-invalid' }
+  let parsed = null
+  try { parsed = JSON.parse(caseResult.text) } catch { return { ok: false, reason: 'result-json-invalid' } }
+  const interpretation = parsed?.interpretation
+  if (!interpretation || typeof interpretation !== 'object') return { ok: false, reason: 'result-schema-mismatch' }
+  if (interpretation.operation !== 'list_payables' || interpretation.intent !== 'read') return { ok: false, reason: 'result-oracle-mismatch' }
+  if (interpretation?.contextProvenance?.corpusId !== REMAINING22_EXCLUDED_CASE_ID) return { ok: false, reason: 'result-provenance-mismatch' }
+  const stop = caseResult.stop ?? {}
+  if (stop.stop !== false) return { ok: false, reason: 'result-stop-mismatch' }
+  if (caseResult.metadata?.stdinPromptObserved !== true) return { ok: false, reason: 'result-stdin-mismatch' }
+  if (caseResult.metadata?.assistantOutcome?.terminal !== false) return { ok: false, reason: 'result-outcome-mismatch' }
+  const apiCost = caseResult.metadata?.apiCostByCase
+  if (!apiCost || apiCost.observed !== true || apiCost.value !== 0) return { ok: false, reason: 'result-cost-mismatch' }
+  const evidence = Array.isArray(caseResult.hookEvidence) ? caseResult.hookEvidence : []
+  const requests = evidence.filter((event) => event.event === 'http-request-allowed')
+  if (requests.length !== 1) return { ok: false, reason: 'result-hook-request-count' }
+  const single = requests[0]
+  if (single.authorizationPresent !== true) return { ok: false, reason: 'result-auth-absent' }
+  if (single.toolCount !== 0) return { ok: false, reason: 'result-tools-present' }
+  if (single.kind !== 'primary') return { ok: false, reason: 'result-kind-mismatch' }
+  if (single.provider !== REAL_MODEL.providerID || single.model !== REAL_MODEL.modelID) return { ok: false, reason: 'result-hook-model-mismatch' }
+  if (single.method !== 'POST' || single.redirect !== 'error') return { ok: false, reason: 'result-hook-transport-mismatch' }
+  if (single.url !== REAL_URL) return { ok: false, reason: 'result-hook-url-mismatch' }
+  const responses = evidence.filter((event) => event.event === 'http-response')
+  if (responses.length !== 1 || responses[0].status !== 200) return { ok: false, reason: 'result-response-mismatch' }
+  if (evidence.some((event) => event.event === 'retry-decision' && event.retry === true)) return { ok: false, reason: 'result-retried' }
+  const smokeManifestEntry = manifest.prompts.find((entry) => entry?.id === REMAINING22_EXCLUDED_CASE_ID)
+  const canonicalSmokeEntry = canonical.prompts.find((entry) => entry?.id === REMAINING22_EXCLUDED_CASE_ID)
+  if (!smokeManifestEntry || !canonicalSmokeEntry) return { ok: false, reason: 'smoke-entry-missing' }
+  if (typeof caseResult.prompt !== 'string' || caseResult.prompt !== smokeManifestEntry.prompt) return { ok: false, reason: 'result-manifest-prompt-mismatch' }
+  if (stableStringify(caseResult.input) !== stableStringify(smokeManifestEntry.input)) return { ok: false, reason: 'result-manifest-input-mismatch' }
+  if (caseResult.prompt !== canonicalSmokeEntry.prompt) return { ok: false, reason: 'result-canonical-prompt-mismatch' }
+  if (stableStringify(caseResult.input) !== stableStringify(canonicalSmokeEntry.input)) return { ok: false, reason: 'result-canonical-input-mismatch' }
+  if (!reservationRecord) return { ok: false, reason: 'reservation-missing' }
+  if (reservationRecord.caseID !== REMAINING22_EXCLUDED_CASE_ID || reservationRecord.status !== 'reserved') return { ok: false, reason: 'reservation-mismatch' }
+  if (reservationRecord.runID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) return { ok: false, reason: 'reservation-run-mismatch' }
+  if (reservationRecord.consumedSmoke !== true) return { ok: false, reason: 'reservation-not-consumed-smoke' }
+  if (reservationRecord.sourceRunID !== AUTHORIZED_CONSUMED_SMOKE_RUN_ID) return { ok: false, reason: 'reservation-source-mismatch' }
+  if (typeof reservationRecord.runNonce !== 'string' || reservationRecord.runNonce.length < 8) return { ok: false, reason: 'reservation-nonce-mismatch' }
+  if (typeof caseResult.reservation !== 'string' || normalizeReservationSeparators(caseResult.reservation) !== AUTHORIZED_REMAINING22_RESERVATION_PATH) return { ok: false, reason: 'result-reservation-mismatch' }
+  if (!catalogPreflight) return { ok: false, reason: 'catalog-missing' }
+  if (catalogPreflight.catalog?.providerID !== REAL_MODEL.providerID || catalogPreflight.catalog?.modelID !== REAL_MODEL.modelID) return { ok: false, reason: 'catalog-model-mismatch' }
+  if (catalogPreflight.catalog?.catalogPriceAllowed !== true) return { ok: false, reason: 'catalog-price-mismatch' }
+  if (catalogPreflight.extraUsageStatus !== 'operator-attested-disabled') return { ok: false, reason: 'catalog-extra-usage-mismatch' }
+  if (!hookEvents) return { ok: false, reason: 'hook-missing' }
+  const hooks = Array.isArray(hookEvents) ? hookEvents : []
+  if (hooks.some((event) => event.event === 'guard-failed')) return { ok: false, reason: 'hook-guard-failed' }
+  const hookRequests = hooks.filter((event) => event.event === 'http-request-allowed')
+  const hookResponses = hooks.filter((event) => event.event === 'http-response')
+  if (hookRequests.length !== 1 || hookResponses.length !== 1) return { ok: false, reason: 'hook-request-count' }
+  if (hookResponses[0].status !== 200) return { ok: false, reason: 'hook-response-mismatch' }
+  if (hooks.some((event) => event.event === 'retry-decision' && event.retry === true)) return { ok: false, reason: 'hook-retried' }
+  const hookRequest = hookRequests[0]
+  if (hookRequest.provider !== REAL_MODEL.providerID || hookRequest.model !== REAL_MODEL.modelID) return { ok: false, reason: 'hook-model-mismatch' }
+  if (hookRequest.kind !== 'primary' || hookRequest.method !== 'POST' || hookRequest.redirect !== 'error') return { ok: false, reason: 'hook-transport-mismatch' }
+  if (hookRequest.url !== REAL_URL) return { ok: false, reason: 'hook-url-mismatch' }
+  if (hookRequest.authorizationPresent !== true || hookRequest.toolCount !== 0) return { ok: false, reason: 'hook-auth-tools-mismatch' }
+  const hookNonces = new Set(hooks.filter((event) => typeof event.runNonce === 'string').map((event) => event.runNonce))
+  if (hookNonces.size !== 1 || !hookNonces.has(reservationRecord.runNonce)) return { ok: false, reason: 'hook-nonce-mismatch' }
+  const evidenceNonces = new Set(evidence.filter((event) => typeof event.runNonce === 'string').map((event) => event.runNonce))
+  if (evidenceNonces.size !== 1 || !evidenceNonces.has(reservationRecord.runNonce)) return { ok: false, reason: 'hook-evidence-nonce-mismatch' }
+  const hookSessions = new Set([...hooks.filter((event) => typeof event.sessionKey === 'string').map((event) => event.sessionKey), ...evidence.filter((event) => typeof event.sessionKey === 'string').map((event) => event.sessionKey)])
+  if (hookSessions.size !== 1) return { ok: false, reason: 'hook-session-mismatch' }
+  const [[hookSession]] = [[...hookSessions]]
+  if (typeof hookSession !== 'string' || hookSession.length === 0) return { ok: false, reason: 'hook-session-mismatch' }
+  if (single.sessionKey !== hookSession || responses[0].sessionKey !== hookSession || hookRequest.sessionKey !== hookSession || hookResponses[0].sessionKey !== hookSession) return { ok: false, reason: 'hook-session-case-mismatch' }
+  if (typeof single.bodySha256 !== 'string' || single.bodySha256.length < 16) return { ok: false, reason: 'hook-body-sha-missing' }
+  if (typeof hookRequest.bodySha256 !== 'string' || hookRequest.bodySha256.length < 16) return { ok: false, reason: 'hook-body-sha-missing' }
+  if (single.bodySha256 !== hookRequest.bodySha256) return { ok: false, reason: 'hook-body-mismatch' }
+  if (single.bodyModel !== REAL_MODEL.modelID) return { ok: false, reason: 'hook-body-model-mismatch' }
+  if (hookRequest.bodyModel !== REAL_MODEL.modelID) return { ok: false, reason: 'hook-body-model-mismatch' }
+  if (typeof single.toolCount !== 'number' || typeof hookRequest.toolCount !== 'number') return { ok: false, reason: 'hook-toolcount-missing' }
+  if (typeof caseResult.metadata?.requestBodySha256 !== 'string' || caseResult.metadata.requestBodySha256.length < 16) return { ok: false, reason: 'hook-metadata-hash-missing' }
+  if (caseResult.metadata.requestBodySha256 !== hookRequest.bodySha256) return { ok: false, reason: 'hook-body-case-mismatch' }
+  if (caseResult.metadata?.requestBodyModel !== REAL_MODEL.modelID) return { ok: false, reason: 'hook-metadata-model-mismatch' }
+  if (caseResult.metadata.requestBodyModel !== hookRequest.bodyModel) return { ok: false, reason: 'hook-body-model-mismatch' }
+  if (typeof caseResult.metadata?.toolCount !== 'number') return { ok: false, reason: 'hook-metadata-count-missing' }
+  if (caseResult.metadata.toolCount !== hookRequest.toolCount) return { ok: false, reason: 'hook-toolcount-mismatch' }
+  if (typeof caseResult.text === 'string' && typeof smokeEvaluation.responseText === 'string' && caseResult.text !== smokeEvaluation.responseText) return { ok: false, reason: 'hook-response-text-mismatch' }
+  return { ok: true }
+}
+
+export function buildRemaining22Attestation({ runID, sourceRunID, caseIDs, completedCaseIDs, expectedCampaignCaseIDs, expectedCaseIDs, quotaSource = 'operator-attestation', extraUsageStatus = 'operator-attested-disabled' } = {}) {
+  if (sourceRunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) throw new Error(`remaining22 attestation is limited to source ${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`)
+  if (!Array.isArray(caseIDs) || caseIDs.length !== MAX_CASES) throw new Error('remaining22 attestation requires the complete 23-case manifest')
+  if (!Array.isArray(expectedCaseIDs) || JSON.stringify(caseIDs) !== JSON.stringify(expectedCaseIDs)) throw new Error('remaining22 attestation requires the complete canonical 23-case manifest in order')
+  if (!Array.isArray(expectedCampaignCaseIDs) || expectedCampaignCaseIDs.length !== REMAINING22_EXPECTED_COUNT) throw new Error('remaining22 attestation requires the 22 canonical campaign IDs in order')
+  if (!Array.isArray(completedCaseIDs) || completedCaseIDs.length !== REMAINING22_EXPECTED_COUNT) throw new Error('remaining22 attestation requires exactly 22 completed campaign cases')
+  if (JSON.stringify(completedCaseIDs) !== JSON.stringify(expectedCampaignCaseIDs)) throw new Error('remaining22 attestation requires exactly the 22 canonical campaign IDs in order')
+  if (completedCaseIDs.includes(REMAINING22_EXCLUDED_CASE_ID)) throw new Error('remaining22 attestation must never include the historic smoke case as a campaign result')
+  if (new Set(completedCaseIDs).size !== REMAINING22_EXPECTED_COUNT) throw new Error('remaining22 attestation has duplicate campaign case ID')
+  if (quotaSource !== 'operator-attestation') throw new Error('remaining22 attestation records operator attestation only; automatic quota readback is unavailable')
+  if (extraUsageStatus !== 'operator-attested-disabled') throw new Error('remaining22 attestation requires operator-attested Extra Usage disabled')
+  return Object.freeze({
+    schemaVersion: 'f2b0-remaining22-attestation-v1',
+    runID,
+    sourceRunID,
+    campaign: 'remaining22',
+    excludedHistoricCaseID: REMAINING22_EXCLUDED_CASE_ID,
+    campaignCaseCount: REMAINING22_EXPECTED_COUNT,
+    campaignCaseIDs: Object.freeze([...completedCaseIDs]),
+    quota: Object.freeze({ source: quotaSource, readback: 'unavailable', note: 'Quota availability was operator-attested before the campaign; no automatic Go usage readback was observed.' }),
+    extraUsage: Object.freeze({ status: extraUsageStatus, note: 'Extra Usage disabled was operator-attested; no automatic verification was performed.' }),
+    billingNote: 'No usage-cost or billing amount was independently confirmed; an API-reported cost of 0 is not evidence of a billed amount.',
+    serial: true,
+    b1Included: false,
+    retryIncluded: false,
+    fallbackIncluded: false,
+  })
+}
+
 export function resolveRealExecutionPlan({ caseIDs, existingIDs = [], reservedIDs = [], options = {} } = {}) {
   const retryCaseID = options.retryCaseID
   const retryRunID = options.retryRunID
+  const consumedSmokeCaseID = options.consumedSmokeCaseID
+  const consumedSmokeRunID = options.consumedSmokeRunID
+  const remaining22RunID = options.remaining22RunID
   const resumeID = options.resumeID
   const smokeOnly = options.smokeOnly === true
+  if (remaining22RunID !== undefined && ((retryCaseID !== undefined || retryRunID !== undefined) || (consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined))) throw new Error('remaining22 campaign is incompatible with authorized retry flags')
+  if (remaining22RunID !== undefined && ((consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined))) throw new Error('remaining22 campaign is incompatible with consumed smoke flags')
+  if ((retryCaseID !== undefined || retryRunID !== undefined) && (consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined)) throw new Error('consumed smoke authorization is incompatible with authorized retry flags')
   if (retryCaseID !== undefined || retryRunID !== undefined) {
     if (retryCaseID !== AUTHORIZED_RETRY_CASE_ID || retryRunID !== AUTHORIZED_RETRY_SOURCE_RUN_ID) throw new Error(`authorized retry is limited to F1-B005 from ${AUTHORIZED_RETRY_SOURCE_RUN_ID}`)
     if (!smokeOnly) throw new Error('authorized retry requires --smoke-only')
@@ -322,6 +611,26 @@ export function resolveRealExecutionPlan({ caseIDs, existingIDs = [], reservedID
     if (Array.isArray(existingIDs) && existingIDs.includes(AUTHORIZED_RETRY_CASE_ID)) throw new Error('authorized retry already has a durable result in this run; refusing second attempt')
     const executionPlan = planAuthorizedRetry({ caseIDs, unresolvedReservations: plan.unresolvedReservations, retryCaseID })
     return { plan, executionPlan, authorized: true }
+  }
+  if (consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined) {
+    if (consumedSmokeCaseID !== AUTHORIZED_CONSUMED_SMOKE_CASE_ID || consumedSmokeRunID !== AUTHORIZED_CONSUMED_SMOKE_RUN_ID) throw new Error(`consumed smoke is limited to F1-B005 from ${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}`)
+    if (!smokeOnly) throw new Error('consumed smoke requires --smoke-only')
+    if (resumeID) throw new Error('consumed smoke cannot be combined with preflight, self-test, resume, or export')
+    const plan = planAttempts(caseIDs, existingIDs, { resume: true, reservedIDs })
+    if (Array.isArray(existingIDs) && existingIDs.includes(AUTHORIZED_CONSUMED_SMOKE_CASE_ID)) throw new Error('consumed smoke already has a durable result in this run; refusing second attempt')
+    const executionPlan = planConsumedSmoke({ caseIDs, unresolvedReservations: plan.unresolvedReservations, consumedSmokeCaseID })
+    return { plan, executionPlan, authorized: true }
+  }
+  if (remaining22RunID !== undefined) {
+    if (remaining22RunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) throw new Error(`remaining22 campaign is limited to source ${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`)
+    if (smokeOnly) throw new Error('remaining22 campaign cannot be combined with --smoke-only')
+    if (resumeID) throw new Error('remaining22 campaign cannot be combined with preflight, self-test, resume, or export')
+    const plan = planAttempts(caseIDs, existingIDs, { resume: true, reservedIDs })
+    if (Array.isArray(existingIDs) && existingIDs.length > 0) throw new Error('remaining22 campaign requires an empty run directory; refusing reuse of existing results')
+    const nonHistoricUnresolved = plan.unresolvedReservations.filter((id) => id !== REMAINING22_EXCLUDED_CASE_ID)
+    if (nonHistoricUnresolved.length > 0) throw new Error(`remaining22 campaign refuses unresolved reservations for campaign cases: ${nonHistoricUnresolved.join(',')}`)
+    const executionPlan = planRemaining22({ caseIDs, sourceRunID: remaining22RunID })
+    return { plan, executionPlan, authorized: true, campaign: 'remaining22' }
   }
   const plan = planAttempts(caseIDs, existingIDs, { resume: Boolean(resumeID), reservedIDs })
   const executionPlan = limitRealAttempts(plan.run, { smokeOnly })

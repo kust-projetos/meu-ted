@@ -231,7 +231,13 @@ const selectReads = (plan: TurnPlan): readonly ReadKind[] => {
   // Breakdown por categoria é autossuficiente: nunca soma catálogo nem
   // extrato via fallback — uma leitura por turno, sem máscara de escopo.
   const hasBreakdown = selected.includes('analytics-breakdown');
-  if (fallback && !selected.includes(fallback) && selected.length < MAX_EVIDENCE_READS && !(hasSummary && fallback === 'transactions') && !hasBreakdown) selected.push(fallback);
+  // F1-B010/C010: fatura nua (`list_statements`, domain `payables` por falta
+  // de domain `statements` no contrato) NUNCA soma `/payables` via fallback
+  // de domínio — a segunda leitura é a leitura indevida de contas a pagar do
+  // FAIL de qualidade congelado. Vencimento explícito (`venc*`/`a pagar`/
+  // `boleto`) já planeja `list_payables`, então o fallback é no-op ali.
+  const hasStatements = selected.includes('statements');
+  if (fallback && !selected.includes(fallback) && selected.length < MAX_EVIDENCE_READS && !(hasSummary && fallback === 'transactions') && !hasBreakdown && !(hasStatements && fallback === 'payables')) selected.push(fallback);
   return selected;
 };
 

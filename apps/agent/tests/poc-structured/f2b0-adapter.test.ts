@@ -98,4 +98,180 @@ describe('F2B0 pure adapter', () => {
     expect(partial.evaluation.scenarios.find((row) => row.corpusId === 'F1-B010')?.verdict).toBe('INCONCLUSIVE');
     expect(() => evaluateF2B0Attempts([{ id: 'F1-B005', raw: '{}' }], { requireComplete: true })).toThrow('incomplete case batch');
   });
+
+  it('describes parser-exact shapes for origin/entities/requestedAction', () => {
+    expect(F2B0_PROMPT).toContain('"origin":"string');
+    expect(F2B0_PROMPT).toContain('"entities":{"type":"array"');
+    expect(F2B0_PROMPT).toContain('"requestedAction":{"type":"string","optional":true');
+    const base = {
+      interpretation: {
+        intent: 'conversation', operation: 'none', args: {},
+        contextProvenance: { origin: 'f1-corpus-text', corpusId: 'F2A1-B008-concept' },
+        entities: [{ kind: 'account', value: 'Aurora', provenance: 'utterance' }],
+        ambiguities: [], missingFields: [], clarification: null,
+        requestedAction: 'budgets.create',
+      },
+    };
+    expect(parseStructuredLLMOutput(base).requestedAction).toBe('budgets.create');
+    expect(() => parseStructuredLLMOutput({
+      interpretation: { ...base.interpretation, contextProvenance: { origin: ['f1-corpus-text'], corpusId: 'F2A1-B008-concept' } },
+    })).toThrow();
+    expect(() => parseStructuredLLMOutput({
+      interpretation: { ...base.interpretation, entities: { item: { kind: 'account', value: 'Aurora', provenance: 'utterance' } } },
+    })).toThrow();
+    expect(() => parseStructuredLLMOutput({
+      interpretation: { ...base.interpretation, requestedAction: { allowed: ['budgets.create'] } },
+    })).toThrow();
+  });
+
+  it('aligns intent/operation descriptor with parser string enums and pairing', () => {
+    expect(F2B0_PROMPT).toContain('"intent":{"type":"string"');
+    expect(F2B0_PROMPT).toContain('"operation":{"type":"string"');
+    const base = () => ({
+      interpretation: {
+        intent: 'read', operation: 'list_payables', args: {},
+        contextProvenance: { origin: 'f1-corpus-text', corpusId: 'F1-B005' },
+        entities: [], ambiguities: [], missingFields: [], clarification: null,
+      },
+    });
+    expect(parseStructuredLLMOutput(base()).operation).toBe('list_payables');
+    expect(() => parseStructuredLLMOutput({ interpretation: { ...base().interpretation, intent: ['read'] } })).toThrow();
+    expect(() => parseStructuredLLMOutput({ interpretation: { ...base().interpretation, intent: 'frobnicate' } })).toThrow();
+    expect(() => parseStructuredLLMOutput({ interpretation: { ...base().interpretation, operation: ['list_payables'] } })).toThrow();
+    expect(() => parseStructuredLLMOutput({ interpretation: { ...base().interpretation, operation: 'droptable' } })).toThrow();
+    expect(() => parseStructuredLLMOutput({ interpretation: { ...base().interpretation, intent: 'clarify', operation: 'list_payables' } })).toThrow();
+    expect(() => parseStructuredLLMOutput({ interpretation: { ...base().interpretation, intent: 'conversation', operation: 'list_payables' } })).toThrow();
+    expect(() => parseStructuredLLMOutput({ interpretation: { ...base().interpretation, intent: 'read', operation: 'none' } })).toThrow();
+    expect(() => parseStructuredLLMOutput({ interpretation: { ...base().interpretation, intent: 'mutation-proposal', operation: 'list_payables' } })).toThrow();
+  });
+
+  it('aligns args descriptor with parser object, allowlist, value shapes and formats', () => {
+    expect(F2B0_PROMPT).toContain('"args":{"type":"object","maxKeys":12');
+    const base = (args: unknown) => ({
+      interpretation: {
+        intent: 'mutation-proposal', operation: 'transactions.expense.create', args,
+        contextProvenance: { origin: 'f1-corpus-text', corpusId: 'F2A1-B008-concept' },
+        entities: [], ambiguities: [], missingFields: [], clarification: null,
+      },
+    });
+    expect(parseStructuredLLMOutput(base({ amountCents: 100, description: 'cafe', date: '2026-10-01' })).operation).toBe('transactions.expense.create');
+    expect(parseStructuredLLMOutput(base({ amountCents: 100, description: null, date: '2026-10-01' })).args).toMatchObject({ description: null });
+    expect(() => parseStructuredLLMOutput(base(['amountCents']))).toThrow();
+    expect(() => parseStructuredLLMOutput({
+      interpretation: { ...base({}).interpretation, intent: 'conversation', operation: 'none', args: { description: 'x' } },
+    })).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ nope: 'x' }))).toThrow();
+    expect(() => parseStructuredLLMOutput({
+      interpretation: { ...base({}).interpretation, intent: 'read', operation: 'list_payables', args: { description: 'x' } },
+    })).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ amountCents: -1, description: 'cafe', date: '2026-10-01' }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ amountCents: 1.5, description: 'cafe', date: '2026-10-01' }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ amountCents: 100, description: '', date: '2026-10-01' }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ amountCents: 100, description: 'x'.repeat(201), date: '2026-10-01' }))).toThrow();
+    expect(() => parseStructuredLLMOutput({
+      interpretation: { ...base({}).interpretation, intent: 'read', operation: 'list_payables', args: { yearMonth: '2026-13' } },
+    })).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ amountCents: 100, description: 'cafe', date: '2026-02-30' }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({
+      amountCents: 1, description: null, date: null, categoryQuery: null, accountId: null, categoryId: null,
+      accountName: null, accountKind: null, initialBalanceCents: null, categoryName: null, categoryKind: null,
+      parentCategoryId: null, expectedName: null,
+    }))).toThrow();
+  });
+
+  it('aligns contextProvenance descriptor with parser closed keys, id pattern and turnIndex', () => {
+    expect(F2B0_PROMPT).toContain('"closedKeys":["origin","corpusId","turnIndex"]');
+    expect(F2B0_PROMPT).toContain('LOCAL-');
+    expect(F2B0_PROMPT).toContain('non-negative integer');
+    const base = (contextProvenance: unknown) => ({
+      interpretation: {
+        intent: 'conversation', operation: 'none', args: {}, contextProvenance,
+        entities: [], ambiguities: [], missingFields: [], clarification: null,
+      },
+    });
+    expect(parseStructuredLLMOutput(base({ origin: 'f1-journey-turn', corpusId: 'J01', turnIndex: 1 })).contextProvenance).toMatchObject({ turnIndex: 1 });
+    expect(() => parseStructuredLLMOutput(base({ origin: 'f1-corpus-text', corpusId: 'F1-B005', extra: 1 }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ origin: 'f1-corpus-text', corpusId: 'NOPE' }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ origin: 'f1-corpus-text', corpusId: 'F1-B005', turnIndex: -1 }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ origin: 'f1-corpus-text', corpusId: 'F1-B005', turnIndex: 1.5 }))).toThrow();
+  });
+
+  it('aligns entities descriptor with parser array, closed item keys and limits', () => {
+    expect(F2B0_PROMPT).toContain('"closedItemKeys":["kind","value","provenance"]');
+    const base = (entities: unknown) => ({
+      interpretation: {
+        intent: 'conversation', operation: 'none', args: {},
+        contextProvenance: { origin: 'f1-corpus-text', corpusId: 'F2A1-B008-concept' },
+        entities, ambiguities: [], missingFields: [], clarification: null,
+      },
+    });
+    const item = { kind: 'account', value: 'Aurora', provenance: 'utterance' };
+    expect(parseStructuredLLMOutput(base([item])).entities).toHaveLength(1);
+    expect(() => parseStructuredLLMOutput(base(Array.from({ length: 9 }, () => item)))).toThrow();
+    expect(() => parseStructuredLLMOutput(base([{ ...item, kind: 'planet' }]))).toThrow();
+    expect(() => parseStructuredLLMOutput(base([{ ...item, value: '' }]))).toThrow();
+    expect(() => parseStructuredLLMOutput(base([{ ...item, value: 'x'.repeat(201) }]))).toThrow();
+    expect(() => parseStructuredLLMOutput(base([{ ...item, provenance: 'telepathy' }]))).toThrow();
+    expect(() => parseStructuredLLMOutput(base([{ ...item, extra: 1 }]))).toThrow();
+    expect(() => parseStructuredLLMOutput(base(['not-a-record']))).toThrow();
+  });
+
+  it('aligns ambiguities/missingFields/clarification descriptor with parser limits and no linkage', () => {
+    const base = (patch: Record<string, unknown>) => ({
+      interpretation: {
+        intent: 'conversation', operation: 'none', args: {},
+        contextProvenance: { origin: 'f1-corpus-text', corpusId: 'F2A1-B008-concept' },
+        entities: [], ambiguities: [], missingFields: [], clarification: null, ...patch,
+      },
+    });
+    expect(parseStructuredLLMOutput(base({ clarification: 'Which month?', ambiguities: [] })).clarification).toBe('Which month?');
+    expect(parseStructuredLLMOutput(base({ clarification: null, ambiguities: ['a', 'b'] })).ambiguities).toHaveLength(2);
+    expect(() => parseStructuredLLMOutput(base({ ambiguities: 'x' }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ ambiguities: Array.from({ length: 9 }, () => 'a') }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ ambiguities: [''] }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ ambiguities: ['x'.repeat(201)] }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ missingFields: 'amount' }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ missingFields: ['nope'] }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ missingFields: Array.from({ length: 9 }, () => 'amount') }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ clarification: 123 }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ clarification: '' }))).toThrow();
+    expect(() => parseStructuredLLMOutput(base({ clarification: 'y'.repeat(501) }))).toThrow();
+  });
+
+  it('does not cap corpusId at 200 chars and keeps turnIndex independent of origin', () => {
+    const longId = `F2A1-${'A'.repeat(300)}`;
+    expect(longId.length).toBeGreaterThan(200);
+    const base = (contextProvenance: unknown) => ({
+      interpretation: {
+        intent: 'conversation', operation: 'none', args: {}, contextProvenance,
+        entities: [], ambiguities: [], missingFields: [], clarification: null,
+      },
+    });
+    expect(parseStructuredLLMOutput(base({ origin: 'f1-corpus-text', corpusId: longId })).contextProvenance.corpusId).toBe(longId);
+    expect(parseStructuredLLMOutput(base({ origin: 'local-fixture', corpusId: 'LOCAL-ABC', turnIndex: 0 })).contextProvenance).toMatchObject({ turnIndex: 0 });
+    expect(parseStructuredLLMOutput(base({ origin: 'f1-journey-turn', corpusId: 'J01' })).contextProvenance).toMatchObject({ origin: 'f1-journey-turn' });
+    expect(F2B0_PROMPT).toContain('"turnIndex":"optional non-negative integer"');
+    expect(F2B0_PROMPT).not.toContain('omit unless journey');
+  });
+
+  it('bounds descriptor without a global string cap, preserving per-field bounds', () => {
+    expect(F2B0_PROMPT).not.toContain('strings <=');
+    expect(F2B0_PROMPT).toContain('ambiguity texts <=');
+    expect(F2B0_PROMPT).toContain('clarification <=');
+    expect(F2B0_PROMPT).toContain('at any depth are rejected');
+  });
+
+  it('aligns envelope/bounds/authority descriptor with parser rejections (sampled)', () => {    expect(F2B0_PROMPT).toContain('at any depth are rejected');
+    const payload = {
+      intent: 'conversation', operation: 'none', args: {},
+      contextProvenance: { origin: 'f1-corpus-text', corpusId: 'F2A1-B008-concept' },
+      entities: [], ambiguities: [], missingFields: [], clarification: null,
+    };
+    expect(() => parseStructuredLLMOutput({ interpretation: { ...payload, mystery: 1 } })).toThrow();
+    expect(() => parseStructuredLLMOutput({ interpretation: { ...payload, approval: true } })).toThrow();
+    expect(() => parseStructuredLLMOutput({
+      interpretation: { ...payload, entities: [{ kind: 'account', value: 'Aurora', provenance: 'utterance', approval: true }] },
+    })).toThrow();
+    expect(() => parseStructuredLLMOutput({ interpretation: { ...payload, clarification: 'z'.repeat(9000) } })).toThrow();
+  });
 });

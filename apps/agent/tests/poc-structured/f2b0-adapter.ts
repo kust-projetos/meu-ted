@@ -10,15 +10,15 @@ export const F2B0_CASE_IDS = Object.freeze([
 ]);
 
 const responseFields = Object.freeze({
-  intent: STRUCTURED_INTENTS,
-  operation: ALLOWED_OPERATIONS,
-  args: 'object; each value follows the ARG_SPECS descriptor below; keys must be allowed for operation',
-  contextProvenance: { origin: ['local-fixture', 'f1-corpus-text', 'f1-journey-turn'], corpusId: 'exact supplied Synthetic input ID', turnIndex: 'exact supplied turnIndex for journey turns; omit otherwise' },
-  entities: { item: { kind: ['account', 'category', 'amount', 'date', 'period', 'description', 'card', 'counterparty'], value: `non-empty string, max ${STRUCTURED_LIMITS.maxString}`, provenance: ['utterance', 'local-fixture', 'corpus-context', 'displayed-option'] }, maxItems: STRUCTURED_LIMITS.maxEntities },
+  intent: { type: 'string', allowed: [...STRUCTURED_INTENTS] },
+  operation: { type: 'string', allowed: [...ALLOWED_OPERATIONS], note: 'must pair with intent: read needs a read operation, mutation-proposal needs a mutation operation, clarify/confirmation/cancel/advice/conversation/unsupported need none' },
+  args: { type: 'object', maxKeys: STRUCTURED_LIMITS.maxArgs, note: `keys must be allowed for the operation; operation none requires empty args; values follow ARG_SPECS (string non-empty max ${STRUCTURED_LIMITS.maxString} chars, cents non-negative integer, signed-cents integer, boolean, account-kind, category-kind; null allowed); yearMonth YYYY-MM; date/startDate/endDate YYYY-MM-DD calendar date` },
+  contextProvenance: { type: 'object', closedKeys: ['origin', 'corpusId', 'turnIndex'], origin: 'string; one of [local-fixture, f1-corpus-text, f1-journey-turn]', corpusId: 'string; case ID matching ^(F1-B\\d{3}|J\\d{2}|F2A1-[A-Za-z0-9-]+|LOCAL-[A-Z0-9-]+)$', turnIndex: 'optional non-negative integer' },
+  entities: { type: 'array', maxItems: STRUCTURED_LIMITS.maxEntities, closedItemKeys: ['kind', 'value', 'provenance'], item: { kind: 'string; one of [account, category, amount, date, period, description, card, counterparty]', value: `non-empty string, max ${STRUCTURED_LIMITS.maxString}`, provenance: 'string; one of [utterance, local-fixture, corpus-context, displayed-option]' } },
   ambiguities: `string[], max ${STRUCTURED_LIMITS.maxAmbiguities}; each non-empty, max ${STRUCTURED_LIMITS.maxString}`,
   missingFields: { type: 'string[]', allowed: ['amount', 'description', 'account', 'category', 'date', 'period', 'entity', 'accountKind', 'initialBalance'], maxItems: STRUCTURED_LIMITS.maxAmbiguities },
   clarification: `null or non-empty string, max ${STRUCTURED_LIMITS.maxClarification}`,
-  requestedAction: { optional: true, allowed: [...ALLOWED_OPERATIONS, 'budgets.create'], meaning: 'semantic action only; never execution or authorization' },
+  requestedAction: { type: 'string', optional: true, allowed: [...ALLOWED_OPERATIONS, 'budgets.create'], meaning: 'semantic action only; never execution or authorization' },
 });
 
 const contractDescriptor = Object.freeze({
@@ -34,6 +34,7 @@ const contractDescriptor = Object.freeze({
     'clarify requires operation none; confirmation, cancel, advice, conversation, unsupported require operation none.',
     'missingFields are required values unavailable from supplied context; ambiguities are unresolved alternatives, not missing values.',
     'Known unsupported capabilities are not ambiguities. requestedAction describes intent only and never executes or authorizes an action.',
+    `Hard bounds: serialized payload <=${STRUCTURED_LIMITS.maxSerializedBytes} bytes, depth <=${STRUCTURED_LIMITS.maxDepth}; args <=${STRUCTURED_LIMITS.maxArgs} keys; entities <=${STRUCTURED_LIMITS.maxEntities} items; ambiguities and missingFields <=${STRUCTURED_LIMITS.maxAmbiguities} items each; arg string values, entity values and ambiguity texts <=${STRUCTURED_LIMITS.maxString} chars; clarification <=${STRUCTURED_LIMITS.maxClarification}. Unknown top-level keys and authority/credential keys at any depth are rejected.`,
   ],
 });
 

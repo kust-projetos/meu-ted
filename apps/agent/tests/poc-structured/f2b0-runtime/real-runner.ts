@@ -9,16 +9,26 @@ import { pathToFileURL } from 'node:url';
 import { parseEnv } from 'node:util';
 import { OpenCode } from '@opencode/client';
 import { evaluateF2B0Attempts, F2B0_CASE_IDS, getF2B0Cases } from '../f2b0-adapter.js';
-import { createCaseReservation, createExclusiveRunLock, finalizeStoppedRun, listReservationIDs, createAuthorizedRetryReservation, listAuthorizedRetryReservations } from './real-storage.mjs';
+import { createCaseReservation, createExclusiveRunLock, finalizeStoppedRun, listReservationIDs, createAuthorizedRetryReservation, listAuthorizedRetryReservations, createConsumedSmokeReservation, listConsumedSmokeReservations, createRemaining22Reservation, listRemaining22Reservations, createRemaining22CampaignClaim, listRemaining22CampaignClaims } from './real-storage.mjs';
 import {
   aggregateObservedMetric,
+  applyConsumedSmokeTerminalPolicy,
+  AUTHORIZED_CONSUMED_SMOKE_CASE_ID,
+  AUTHORIZED_CONSUMED_SMOKE_RUN_ID,
   AUTHORIZED_RETRY_CASE_ID,
   AUTHORIZED_RETRY_SOURCE_RUN_ID,
+  AUTHORIZED_REMAINING22_SOURCE_RUN_ID,
+  REMAINING22_EXCLUDED_CASE_ID,
+  REMAINING22_EXPECTED_COUNT,
+  buildRemaining22Attestation,
+  isAuthorizedRemaining22Source,
+  planRemaining22,
   classifyLocalServerFailure,
   classifyProviderFailure,
   classifyAssistantOutcome,
   buildSafeStoppedReport,
   extractCliOutput,
+  isAuthorizedConsumedSingleSmokeSource,
   isAuthorizedFatalRetrySource,
   isTerminalAssistantFailure,
   isApprovedInfrastructureEndedCase,
@@ -69,6 +79,8 @@ const usage = () => {
     '  --resume=<run-id>                      skip persisted cases; never replay completed IDs',
     '  --export-stopped-run=<run-id>          create one sanitized review artifact; no server/catalog/model call',
     '  --retry-authorized-case=F1-B005 --retry-authorized-run=2026-10-27T15-19-19-424Z-5620   single authorized F1-B005 smoke retry after the fatal 401; requires --execute-real --smoke-only plus exact confirmations',
+    '  --consumed-smoke-authorized-case=F1-B005 --consumed-smoke-authorized-run=2026-10-29T10-55-14-534Z-21048   single authorized F1-B005 smoke attempt sourced from the consumed HTTP200 run; requires --execute-real --smoke-only plus exact confirmations; never a retry source, never resumable, no continuation even on PASS',
+    '  --remaining22-authorized-run=2026-10-29T12-26-34-600Z-4324   authorized 22-case campaign (F2B0_CASE_IDS minus F1-B005), serial, no B1/retry/fallback; requires --execute-real plus exact confirmations; mutually exclusive with smoke-only/resume/retry/consumed/preflight/self-test/export',
     'No flags means no model/catalog request. One global wx lock serializes all runs; stale locks/reservations require manual review and are never auto-cleared.',
     'OpenCode Go auth is supplied only through OPENCODE_GO_API_KEY environment substitution; the runner never stores the key. Native data is shared, config/database remain per-run.',
   ].join('\n'));
@@ -364,15 +376,148 @@ export function classifyStdinWriteError(errorCode: string | null) {
   return errorCode === null ? null : { stop: true as const, category: 'stdin-write-error' as const, errorCode };
 }
 
+export function diagnoseReadback(messages: unknown, expectedPrompt: string) {
+  const sha256 = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex');
+  const sanitizedNull = {
+    messageCount: 0,
+    typeCounts: { user: 0, assistant: 0, other: 0, missing: 0 } as Record<string, number>,
+    userMessageCount: 0,
+    assistantMessageCount: 0,
+    structureValid: false,
+    structureReason: 'not-array' as string | null,
+    promptConfirmed: false,
+    userTextLength: null as number | null,
+    userTextSha256: null as string | null,
+    assistantTextLength: null as number | null,
+    assistantTextSha256: null as string | null,
+  };
+  if (!Array.isArray(messages)) return { ...sanitizedNull, structureReason: 'not-array' };
+  const typeCounts: Record<string, number> = { user: 0, assistant: 0, other: 0, missing: 0 };
+  for (const message of messages) {
+    const rawType = (message as any)?.type;
+    if (typeof rawType !== 'string') typeCounts.missing += 1;
+    else if (rawType === 'user') typeCounts.user += 1;
+    else if (rawType === 'assistant') typeCounts.assistant += 1;
+    else typeCounts.other += 1;
+  }
+  const base = {
+    messageCount: messages.length,
+    typeCounts,
+    userMessageCount: messages.filter((message: any) => message?.type === 'user').length,
+    assistantMessageCount: messages.filter((message: any) => message?.type === 'assistant').length,
+  };
+  if (messages.some((message: any) => typeof message?.type !== 'string')) {
+    return {
+      ...base,
+      structureValid: false,
+      structureReason: 'message-missing-type' as string | null,
+      promptConfirmed: false,
+      userTextLength: null,
+      userTextSha256: null,
+      assistantTextLength: null,
+      assistantTextSha256: null,
+    };
+  }
+  const joinContentText = (content: unknown): string | null => {
+    if (!Array.isArray(content)) return null;
+    return (content as Array<any>)
+      .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
+      .map((part: any) => part.text)
+      .join('');
+  };
+  const topLevelTextOf = (message: any): string | null =>
+    typeof message?.text === 'string' ? (message.text as string) : null;
+  const effectiveRoleText = (message: any): string => {
+    const fromContent = joinContentText((message as any)?.content);
+    const fromTop = topLevelTextOf(message);
+    if (fromContent !== null && fromTop !== null) return fromContent === fromTop ? fromContent : `${fromContent}${fromTop}`;
+    return fromContent ?? fromTop ?? '';
+  };
+  const collectText = (type: string) => messages
+    .filter((message: any) => message?.type === type)
+    .map((message: any) => effectiveRoleText(message))
+    .join('');
+  const userText = collectText('user');
+  const assistantText = collectText('assistant');
+  return {
+    ...base,
+    structureValid: true,
+    structureReason: null,
+    promptConfirmed: isPromptConfirmed(messages, expectedPrompt),
+    userTextLength: userText.length,
+    userTextSha256: sha256(userText),
+    assistantTextLength: assistantText.length,
+    assistantTextSha256: sha256(assistantText),
+  };
+}
+
 export function isPromptConfirmed(messages: unknown, expectedPrompt: string) {
   if (!Array.isArray(messages)) return false;
   const userMessages = messages.filter((message: any) => message?.type === 'user');
-  if (userMessages.length !== 1 || !Array.isArray(userMessages[0]?.content)) return false;
-  const text = userMessages[0].content
-    .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
-    .map((part: any) => part.text)
-    .join('');
-  return text === expectedPrompt;
+  if (userMessages.length !== 1) return false;
+  const candidate = userMessages[0] as any;
+  if (candidate !== null && typeof candidate === 'object') {
+    if ('content' in candidate && candidate.content !== undefined && !Array.isArray(candidate.content)) return false;
+    if ('text' in candidate && candidate.text !== undefined && typeof candidate.text !== 'string') return false;
+    if (Array.isArray(candidate.content) && (candidate.content as Array<any>).some((part: any) => part?.type === 'text' && typeof part?.text !== 'string')) return false;
+    const fromContent: string | null = Array.isArray(candidate.content)
+      ? (candidate.content as Array<any>)
+        .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
+        .map((part: any) => part.text)
+        .join('')
+      : null;
+    const fromTop: string | null = typeof candidate.text === 'string' ? candidate.text : null;
+    if (fromContent === null && fromTop === null) return false;
+    if (fromContent !== null && fromTop !== null && fromContent !== fromTop) return false;
+    const text = fromContent !== null && fromTop !== null ? fromContent : (fromContent ?? fromTop ?? '');
+    return text === expectedPrompt;
+  }
+  return false;
+}
+
+export type AssistantApiTextResult = { text: string; valid: boolean; reason: string };
+
+export function extractAssistantApiText(assistantMessages: unknown): AssistantApiTextResult {
+  if (!Array.isArray(assistantMessages)) return { text: '', valid: false, reason: 'not-array' };
+  if (assistantMessages.length === 0) return { text: '', valid: false, reason: 'empty' };
+  let invalidReason: string | null = null;
+  const parts: string[] = [];
+  for (const message of assistantMessages as Array<any>) {
+    if (message === null || typeof message !== 'object') { invalidReason ??= 'invalid-message'; continue; }
+    const hasContent = 'content' in message && (message as any).content !== undefined;
+    const hasTop = 'text' in message && (message as any).text !== undefined;
+    if (hasContent && !Array.isArray((message as any).content)) { invalidReason ??= 'invalid-content-shape'; continue; }
+    if (hasTop && typeof (message as any).text !== 'string') { invalidReason ??= 'invalid-text-shape'; continue; }
+    if (Array.isArray((message as any)?.content) && ((message as any).content as Array<any>).some((part: any) => part?.type === 'text' && typeof part?.text !== 'string')) { invalidReason ??= 'invalid-text-part'; }
+    const fromContent: string | null = Array.isArray((message as any)?.content)
+      ? ((message as any).content as Array<any>)
+        .filter((part: any) => part?.type === 'text' && typeof part?.text === 'string')
+        .map((part: any) => part.text)
+        .join('')
+      : null;
+    const fromTop: string | null = typeof (message as any)?.text === 'string' ? (message as any).text : null;
+    if (fromContent !== null && fromTop !== null) {
+      if (fromContent !== fromTop) { invalidReason ??= 'ambiguous-dual-representation'; parts.push(`${fromContent}${fromTop}`); }
+      else parts.push(fromContent);
+      continue;
+    }
+    if (fromContent === null && fromTop === null) { invalidReason ??= 'invalid-message'; continue; }
+    parts.push(fromContent ?? fromTop ?? '');
+  }
+  const text = parts.join('');
+  if (invalidReason !== null) return { text, valid: false, reason: invalidReason };
+  if (text.length === 0) return { text, valid: false, reason: 'no-text-content' };
+  return { text, valid: true, reason: 'ok' };
+}
+
+export function decideAssistantTextStop(extraction: unknown, stdoutText: unknown): { stop: true; category: string; reason?: string } | null {
+  const result = (extraction !== null && typeof extraction === 'object' ? extraction as AssistantApiTextResult : null);
+  if (!result || result.valid !== true || typeof result.text !== 'string') {
+    const reason = result && typeof (result as any).reason === 'string' ? (result as any).reason : 'invalid-extraction';
+    return { stop: true, category: 'assistant-text-invalid', reason };
+  }
+  if (typeof stdoutText !== 'string' || result.text !== stdoutText) return { stop: true, category: 'cli-api-output-mismatch' };
+  return null;
 }
 
 async function atomicCaseResult(file: string, value: unknown) {
@@ -577,14 +722,16 @@ async function main(argv: string[]) {
     }
   }
     if (existingIDs.some((id) => !reservedIDs.includes(id))) throw new Error('existing case result lacks its durable reservation');
-    const { plan, executionPlan, authorized } = resolveRealExecutionPlan({
+    const { plan, executionPlan, authorized, campaign } = resolveRealExecutionPlan({
       caseIDs: cases.map((item) => item.id),
       existingIDs,
       reservedIDs,
-      options: { resumeID: options.resumeID, smokeOnly: options.smokeOnly, retryCaseID: options.retryCaseID, retryRunID: options.retryRunID },
-    });
+      options: { resumeID: options.resumeID, smokeOnly: options.smokeOnly, retryCaseID: options.retryCaseID, retryRunID: options.retryRunID, consumedSmokeCaseID: options.consumedSmokeCaseID, consumedSmokeRunID: options.consumedSmokeRunID, remaining22RunID: (options as any).remaining22RunID },
+    }) as { plan: { run: string[]; skipped: string[]; unresolvedReservations: string[] }; executionPlan: { run: string[]; deferred: string[] }; authorized: boolean; campaign?: string };
+    const isRemaining22 = (options as any).remaining22RunID !== undefined;
     let authorizedRetryReservationFile: string | null = null;
-    if (authorized) {
+    let consumedSmokeReservationFile: string | null = null;
+    if (authorized && options.retryCaseID !== undefined) {
       let reservationRecord: any = null;
       try {
         reservationRecord = JSON.parse(await readFile(path.join(reservationDir, `${safeID(AUTHORIZED_RETRY_CASE_ID)}.reserved`), 'utf8'));
@@ -604,6 +751,55 @@ async function main(argv: string[]) {
       const priorRetries = await listAuthorizedRetryReservations(reservationDir, AUTHORIZED_RETRY_CASE_ID);
       if (priorRetries.length > 0) throw new Error('authorized retry already consumed; refusing second attempt');
     }
+    if (authorized && options.consumedSmokeCaseID !== undefined) {
+      let historicReservation: any = null;
+      try {
+        historicReservation = JSON.parse(await readFile(path.join(reservationDir, `${safeID(AUTHORIZED_RETRY_CASE_ID)}.reserved`), 'utf8'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('consumed smoke refused: historic 401 reservation is missing');
+        throw error;
+      }
+      let fatalSource: any = null;
+      try {
+        fatalSource = JSON.parse(await readFile(path.join(OUTPUT_ROOT, AUTHORIZED_RETRY_SOURCE_RUN_ID, 'cases', `${safeID(AUTHORIZED_RETRY_CASE_ID)}.json`), 'utf8'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('consumed smoke refused: associated fatal 401 result is missing');
+        throw error;
+      }
+      const fatalCheck = isAuthorizedFatalRetrySource({ caseID: AUTHORIZED_RETRY_CASE_ID, sourceRunID: AUTHORIZED_RETRY_SOURCE_RUN_ID, reservationRecord: historicReservation, sourceResult: fatalSource });
+      if (!fatalCheck.ok) throw new Error(`consumed smoke refused: historic chain broken (${fatalCheck.reason})`);
+      let consumedReservation: any = null;
+      try {
+        consumedReservation = JSON.parse(await readFile(path.join(reservationDir, `${safeID(AUTHORIZED_CONSUMED_SMOKE_CASE_ID)}.authorized-retry-${safeID(AUTHORIZED_CONSUMED_SMOKE_RUN_ID)}.json`), 'utf8'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('consumed smoke refused: consumed HTTP200 reservation is missing');
+        throw error;
+      }
+      let consumedResult: any = null;
+      try {
+        consumedResult = JSON.parse(await readFile(path.join(OUTPUT_ROOT, AUTHORIZED_CONSUMED_SMOKE_RUN_ID, 'cases', `${safeID(AUTHORIZED_CONSUMED_SMOKE_CASE_ID)}.json`), 'utf8'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('consumed smoke refused: consumed HTTP200 result is missing');
+        throw error;
+      }
+      const consumedCheck = isAuthorizedConsumedSingleSmokeSource({ caseID: options.consumedSmokeCaseID, runID: options.consumedSmokeRunID, reservationRecord: consumedReservation, sourceResult: consumedResult });
+      if (!consumedCheck.ok) throw new Error(`consumed smoke refused: ${consumedCheck.reason}`);
+      const priorConsumed = await listConsumedSmokeReservations(reservationDir, AUTHORIZED_CONSUMED_SMOKE_CASE_ID);
+      if (priorConsumed.length > 0) throw new Error('consumed smoke already consumed; refusing second attempt');
+    }
+    if (isRemaining22) {
+      // Static plan-shape asserts only (no I/O, no claim): fail fast before starting any server.
+      // Historic validation and the single durable campaign claim happen after all
+      // inference-free preflights plus plugin readiness, under the same lock,
+      // immediately before the first prompt/reservation (see below).
+      const sourceRunID = (options as any).remaining22RunID as string;
+      if (sourceRunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) throw new Error(`remaining22 campaign is limited to source ${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`);
+      if (campaign !== 'remaining22') throw new Error('remaining22 campaign plan mismatch');
+      if (executionPlan.run.length !== REMAINING22_EXPECTED_COUNT) throw new Error('remaining22 campaign must run exactly 22 cases');
+      if (executionPlan.run.includes(REMAINING22_EXCLUDED_CASE_ID)) throw new Error('remaining22 campaign must never re-execute the historic smoke case');
+      const canonicalCampaignOrdered = cases.map((item) => item.id).filter((id) => id !== REMAINING22_EXCLUDED_CASE_ID);
+      if (JSON.stringify(executionPlan.run) !== JSON.stringify(canonicalCampaignOrdered)) throw new Error('remaining22 campaign run must equal F2B0_CASE_IDS minus F1-B005 in canonical order');
+    }
     const server = await startServer(runDir, envState.env, workDir, serverPassword);
     let completed = false;
     try {
@@ -618,13 +814,70 @@ async function main(argv: string[]) {
     }
     if (!options.execute) throw new Error('no inference attempted: use --execute-real plus exact confirmation after separate approval');
 
+    if (isRemaining22) {
+      // Single durable campaign claim, created wx+sync AFTER all inference-free
+      // preflights plus plugin readiness, under the same global lock, and BEFORE
+      // the first prompt/reservation. Any preflight/readiness failure throws
+      // before this point, so nothing is consumed. History is re-validated here
+      // (immediately before the claim) so the check cannot go stale.
+      const sourceRunID = (options as any).remaining22RunID as string;
+      const readyEvents = await waitForPluginReady(evidenceFile, server.child, runNonce);
+      if (!readyEvents.some((event) => event.runNonce === runNonce && event.event === 'plugin-ready' && event.provider === REAL_MODEL.providerID && event.model === REAL_MODEL.modelID && event.mcpCount === 0 && event.skillCount === 0)) {
+        throw new Error('remaining22 campaign refused: plugin cost/skills/MCP readiness proof is incomplete; no prompt was sent');
+      }
+      const preClaimEvents = jsonLines(await readFile(evidenceFile, 'utf8'));
+      if (preClaimEvents.some((event) => event.event === 'http-request-allowed')) throw new Error('remaining22 campaign refused: model request observed before campaign claim');
+      if (preClaimEvents.some((event) => event.event === 'guard-failed')) throw new Error('remaining22 campaign refused: guard failed before campaign claim');
+      const sourceRunDir = path.join(OUTPUT_ROOT, AUTHORIZED_REMAINING22_SOURCE_RUN_ID);
+      let sourceManifest: any = null;
+      let sourceSmoke: any = null;
+      let sourceCase: any = null;
+      let sourceCatalog: any = null;
+      let sourceHooks: any[] = [];
+      let sourceReservation: any = null;
+      try {
+        sourceManifest = JSON.parse(await readFile(path.join(sourceRunDir, 'manifest.json'), 'utf8'));
+        sourceSmoke = JSON.parse(await readFile(path.join(sourceRunDir, 'smoke-evaluation.json'), 'utf8'));
+        sourceCase = JSON.parse(await readFile(path.join(sourceRunDir, 'cases', `${safeID(REMAINING22_EXCLUDED_CASE_ID)}.json`), 'utf8'));
+        sourceCatalog = JSON.parse(await readFile(path.join(sourceRunDir, 'catalog-preflight.json'), 'utf8'));
+        sourceHooks = jsonLines(await readFile(path.join(sourceRunDir, 'plugin-hooks.ndjson'), 'utf8'));
+        sourceReservation = JSON.parse(await readFile(path.join(reservationDir, `${safeID(REMAINING22_EXCLUDED_CASE_ID)}.consumed-smoke-${safeID(AUTHORIZED_CONSUMED_SMOKE_RUN_ID)}.json`), 'utf8'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('remaining22 campaign refused: historic source artifact is missing');
+        throw error;
+      }
+      const canonical = { caseIDs: cases.map((item) => item.id), prompts: cases.map((item) => ({ id: item.id, input: (item as any).input, prompt: (item as any).prompt })) };
+      const sourceCheck = isAuthorizedRemaining22Source({ sourceRunID, manifest: sourceManifest, smokeEvaluation: sourceSmoke, caseResult: sourceCase, catalogPreflight: sourceCatalog, hookEvents: sourceHooks, reservationRecord: sourceReservation, canonical });
+      if (!sourceCheck.ok) throw new Error(`remaining22 campaign refused: historic source integrity failed (${(sourceCheck as any).reason})`);
+      if (typeof sourceCase.text !== 'string' || sourceCase.text.length === 0) throw new Error('remaining22 campaign refused: historic case text is not a non-empty string');
+      if (typeof sourceSmoke.responseText !== 'string' || sourceSmoke.responseText.length === 0) throw new Error('remaining22 campaign refused: historic smoke response is not a non-empty string');
+      if (sourceCase.text !== sourceSmoke.responseText) throw new Error('remaining22 campaign refused: historic case text does not equal smoke response');
+      if (typeof sourceCase.reservation !== 'string' || sourceCase.reservation.length === 0) throw new Error('remaining22 campaign refused: historic case reservation path is missing');
+      const historicReeval = evaluateF2B0Attempts([{ id: REMAINING22_EXCLUDED_CASE_ID, raw: sourceCase.text }]);
+      const historicParsed = (historicReeval.results as Record<string, { jsonValid: boolean; schemaValid: boolean }>)[REMAINING22_EXCLUDED_CASE_ID];
+      if (!historicParsed || historicParsed.jsonValid !== true || historicParsed.schemaValid !== true) throw new Error('remaining22 campaign refused: historic response failed parser/schema re-evaluation');
+      const historicOracle = historicReeval.evaluation.scenarios.find((row: { corpusId: string }) => row.corpusId === REMAINING22_EXCLUDED_CASE_ID);
+      if (!historicOracle || (historicOracle as { verdict: string }).verdict !== 'PASS') throw new Error('remaining22 campaign refused: historic response failed oracle re-evaluation');
+      for (const historicFile of [path.join(reservationDir, `${safeID(AUTHORIZED_RETRY_CASE_ID)}.reserved`)]) {
+        try { await readFile(historicFile, 'utf8'); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('remaining22 campaign refused: historic reservation is missing');
+          throw error;
+        }
+      }
+      const priorCampaignClaims = await listRemaining22CampaignClaims(reservationDir, AUTHORIZED_REMAINING22_SOURCE_RUN_ID);
+      if (priorCampaignClaims.length > 0) throw new Error('remaining22 campaign already claimed; refusing second attempt (crash fail-closed, manual review required)');
+      const priorRemaining22 = await listRemaining22Reservations(reservationDir, AUTHORIZED_REMAINING22_SOURCE_RUN_ID);
+      if (priorRemaining22.length > 0) throw new Error('remaining22 campaign already claimed; refusing second attempt (crash fail-closed, manual review required)');
+      await createRemaining22CampaignClaim(reservationDir, AUTHORIZED_REMAINING22_SOURCE_RUN_ID, { runID, runNonce, sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID });
+    }
+
     for (const id of executionPlan.run) {
       const item = cases.find((candidate) => candidate.id === id)!;
       const caseFile = path.join(caseDir, `${safeID(id)}.json`);
       const caseWorkDir = workDir;
       const goUsageBefore = await requireGoUsage(server.client, options.quotaConfirmation && !options.resumeID);
       let reservationFile: string | null = null;
-      if (!(authorized && id === AUTHORIZED_RETRY_CASE_ID)) {
+      if (!isRemaining22 && !(authorized && (id === AUTHORIZED_RETRY_CASE_ID || id === AUTHORIZED_CONSUMED_SMOKE_CASE_ID))) {
         reservationFile = await createCaseReservation(reservationDir, id, { runID, runNonce });
       }
       const hookStart = jsonLines(await readFile(evidenceFile, 'utf8')).length;
@@ -639,11 +892,21 @@ async function main(argv: string[]) {
       if (!readyEvents.some((event) => event.runNonce === runNonce && event.event === 'plugin-ready' && event.provider === REAL_MODEL.providerID && event.model === REAL_MODEL.modelID && event.mcpCount === 0 && event.skillCount === 0)) {
         throw new Error('plugin cost/skills/MCP readiness proof is incomplete; no prompt was sent');
       }
-      if (authorized && id === AUTHORIZED_RETRY_CASE_ID) {
+      if (authorized && options.retryCaseID !== undefined && id === AUTHORIZED_RETRY_CASE_ID) {
         const priorRetries = await listAuthorizedRetryReservations(reservationDir, AUTHORIZED_RETRY_CASE_ID);
         if (priorRetries.length > 0) throw new Error('authorized retry already consumed; refusing second attempt');
         authorizedRetryReservationFile = await createAuthorizedRetryReservation(reservationDir, AUTHORIZED_RETRY_CASE_ID, runID, { runID, runNonce, sourceRunID: AUTHORIZED_RETRY_SOURCE_RUN_ID });
         reservationFile = authorizedRetryReservationFile;
+      }
+      if (authorized && options.consumedSmokeCaseID !== undefined && id === AUTHORIZED_CONSUMED_SMOKE_CASE_ID) {
+        const priorConsumed = await listConsumedSmokeReservations(reservationDir, AUTHORIZED_CONSUMED_SMOKE_CASE_ID);
+        if (priorConsumed.length > 0) throw new Error('consumed smoke already consumed; refusing second attempt');
+        consumedSmokeReservationFile = await createConsumedSmokeReservation(reservationDir, AUTHORIZED_CONSUMED_SMOKE_CASE_ID, AUTHORIZED_CONSUMED_SMOKE_RUN_ID, { runID, runNonce, sourceRunID: AUTHORIZED_CONSUMED_SMOKE_RUN_ID });
+        reservationFile = consumedSmokeReservationFile;
+      }
+      if (isRemaining22) {
+        if (id === REMAINING22_EXCLUDED_CASE_ID) throw new Error('remaining22 campaign must never re-execute the historic smoke case');
+        reservationFile = await createRemaining22Reservation(reservationDir, id, AUTHORIZED_REMAINING22_SOURCE_RUN_ID, { runID, runNonce, sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID });
       }
       if (!reservationFile) throw new Error('reservation missing before prompt');
       const stdout = await captureCli(CLI, [
@@ -653,6 +916,7 @@ async function main(argv: string[]) {
       let apiWaitFailure: string | null = null;
       let assistantMessages: any[] = [];
       let stdinPromptObserved = false;
+      let readback = diagnoseReadback(undefined, item.prompt);
       if (stdout.timedOut) {
         await server.client.session.interrupt({ sessionID: session.id }, { signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
       }
@@ -660,11 +924,14 @@ async function main(argv: string[]) {
         await server.client.session.wait({ sessionID: session.id }, { signal: AbortSignal.timeout(20_000) });
         const messages = await server.client.message.list({ sessionID: session.id, limit: 20 }, { signal: AbortSignal.timeout(10_000) });
         stdinPromptObserved = isPromptConfirmed(messages.data, item.prompt);
+        readback = diagnoseReadback(messages.data, item.prompt);
         assistantMessages = messages.data.filter((message: any) => message.type === 'assistant');
       } catch (error) {
         apiWaitFailure = redactPersistedOutput(String(error instanceof Error ? error.message : error), serverPassword).slice(0, 240);
       }
-      const apiText = assistantMessages.flatMap((message: any) => message.content.filter((part: any) => part.type === 'text').map((part: any) => part.text)).join('');
+      const assistantText = extractAssistantApiText(assistantMessages);
+      const apiText = assistantText.text;
+      const assistantTextStop = decideAssistantTextStop(assistantText, stdout.text);
       const hookRows = jsonLines(await readFile(evidenceFile, 'utf8')).slice(hookStart).filter((event) => event.sessionKey === sessionKey(session.id));
       const fatalResponse = hookRows.find((event) => event.event === 'http-response' && event.status >= 400);
       const requestRows = hookRows.filter((event) => event.event === 'http-request-allowed');
@@ -704,8 +971,8 @@ async function main(argv: string[]) {
                 ? { stop: true, category: 'cli-terminal-error' }
                 : outputModelMismatch
                   ? { stop: true, category: 'assistant-model-mismatch' }
-                  : apiText !== stdout.text
-                ? { stop: true, category: 'cli-api-output-mismatch' }
+                  : assistantTextStop
+                ? assistantTextStop
         : fatalResponse
           ? classifyProviderFailure({ status: fatalResponse.status, message: terminalFailure?.message })
           : terminalFailure
@@ -731,11 +998,14 @@ async function main(argv: string[]) {
         text: stdout.text,
         apiText,
         apiTextMatchesStdout: apiText === stdout.text,
+        assistantTextValid: assistantText.valid,
+        assistantTextReason: assistantText.reason,
         metadata: {
           exitCode: stdout.exitCode,
           durationMs: stdout.durationMs,
           stdinErrorCode: stdout.stdinErrorCode,
           stdinPromptObserved,
+          readback,
           apiWaitFailure,
           eventTypes: stdout.eventTypes,
           assistantOutcome,
@@ -793,6 +1063,8 @@ async function main(argv: string[]) {
           extraUsageDisabledAttested: options.extraUsageConfirmation,
         });
         const casePassed = smokeOutcome.casePassed;
+        const terminalOutcome = options.consumedSmokeCaseID !== undefined ? applyConsumedSmokeTerminalPolicy(smokeOutcome) : smokeOutcome;
+        const continuationAllowed = terminalOutcome.continuationAllowed;
         const smokeReport = {
           schemaVersion: 'f2b0-go-single-smoke-v1',
           status: smokeOutcome.status,
@@ -818,7 +1090,7 @@ async function main(argv: string[]) {
           goUsageAfterStatus,
           extraUsageStatus: 'operator-attested-disabled',
           remainingCaseIDs: executionPlan.deferred,
-          continuationAllowed: smokeOutcome.continuationAllowed,
+          continuationAllowed,
         };
         await atomicCreate(path.join(runDir, 'smoke-evaluation.json'), smokeReport);
         completed = casePassed;
@@ -827,17 +1099,38 @@ async function main(argv: string[]) {
         return;
       }
       if (goUsageAfterStatus !== null) {
-        const stoppedResults = [];
-        for (const candidate of cases) {
-          try {
-            stoppedResults.push(JSON.parse(await readFile(path.join(caseDir, `${safeID(candidate.id)}.json`), 'utf8')));
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        const isAttestedUnavailable = isRemaining22 && goUsageAfterStatus === 'go-usage-unavailable' && options.quotaConfirmation;
+        if (!isAttestedUnavailable) {
+          const stoppedResults = [];
+          for (const candidate of cases) {
+            try {
+              stoppedResults.push(JSON.parse(await readFile(path.join(caseDir, `${safeID(candidate.id)}.json`), 'utf8')));
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            }
           }
+          await finalizeStoppedRun(runDir, runID, cases.map((candidate) => candidate.id), stoppedResults, { stop: true, category: 'go-usage-after-case', reason: goUsageAfterStatus, stoppedAfter: id });
+          throw new Error(`real run stopped after ${id}: go usage readback ${goUsageAfterStatus}`);
         }
-        await finalizeStoppedRun(runDir, runID, cases.map((candidate) => candidate.id), stoppedResults, { stop: true, category: 'go-usage-after-case', reason: goUsageAfterStatus, stoppedAfter: id });
-        throw new Error(`real run stopped after ${id}: go usage readback ${goUsageAfterStatus}`);
       }
+    }
+
+    if (isRemaining22) {
+      const campaignResults = await Promise.all(executionPlan.run.map((caseID) => readFile(path.join(caseDir, `${safeID(caseID)}.json`), 'utf8').then((raw) => JSON.parse(raw))));
+      if (campaignResults.length !== REMAINING22_EXPECTED_COUNT) throw new Error('remaining22 campaign requires exactly 22 completed campaign results');
+      if (campaignResults.some((result) => result.fatal)) throw new Error('remaining22 campaign fatal result prevents composite evaluation');
+      const sourceHistoric = JSON.parse(await readFile(path.join(OUTPUT_ROOT, AUTHORIZED_REMAINING22_SOURCE_RUN_ID, 'cases', `${safeID(REMAINING22_EXCLUDED_CASE_ID)}.json`), 'utf8'));
+      const compositeAttempts = [{ id: sourceHistoric.caseID, raw: sourceHistoric.text }, ...campaignResults.map((result: any) => ({ id: result.caseID, raw: result.text }))];
+      const evaluation = evaluateF2B0Attempts(compositeAttempts, { requireComplete: true });
+      if (!evaluation.complete || evaluation.missingIds.length > 0) throw new Error('remaining22 composite evaluation is incomplete');
+      const attestation = buildRemaining22Attestation({ runID, sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID, caseIDs: cases.map((item) => item.id), completedCaseIDs: campaignResults.map((result: any) => result.caseID), expectedCaseIDs: cases.map((item) => item.id), expectedCampaignCaseIDs: executionPlan.run });
+      const runMetrics = summarizeRealRunMetrics(evaluation, [...campaignResults, { caseID: sourceHistoric.caseID, status: 'completed-for-evaluation', attemptCount: 1, metadata: sourceHistoric.metadata } as any], MAX_CASES);
+      const report = { runID, campaign: 'remaining22', sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID, providerID: REAL_MODEL.providerID, modelID: REAL_MODEL.modelID, attempts: compositeAttempts.length, denominator: MAX_CASES, complete: evaluation.complete, metrics: runMetrics, evaluation, attestation, provenance: { sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID, historicCaseID: REMAINING22_EXCLUDED_CASE_ID, historicReservationPreserved: true } };
+      await atomicCreate(path.join(runDir, 'evaluation.json'), report);
+      await atomicCreate(path.join(runDir, 'remaining22-attestation.json'), attestation);
+      completed = true;
+      console.log(JSON.stringify({ runID, campaign: 'remaining22', complete: true, attempts: compositeAttempts.length }, null, 2));
+      return;
     }
 
     const allResults = await Promise.all(cases.map((item) => readFile(path.join(caseDir, `${safeID(item.id)}.json`), 'utf8').then((raw) => JSON.parse(raw))));

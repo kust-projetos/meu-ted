@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.1.0",
-  "generatedAt": "2026-10-24T17:16:20.203Z",
+  "generatedAt": "2026-10-29T00:55:40.484Z",
   "baseline": "2b8a478fcc3d5df1ddbb52674795b57722a51799",
   "revisionBase": "98221f5a2c92de01d18d71fc6a7b05988c8139c3",
   "measurementRevision": "F1.1: additive actual REST runTurn evidence; original corpus and completion expectations unchanged; isolated routing remains diagnostic only.",
@@ -238,7 +238,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 30.256
+      "harnessElapsedMs": 16.014
     },
     {
       "scenarioId": "F1-B002",
@@ -449,7 +449,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 51.922
+      "harnessElapsedMs": 82.99
     },
     {
       "scenarioId": "F1-B003",
@@ -661,7 +661,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 38.765
+      "harnessElapsedMs": 35.634
     },
     {
       "scenarioId": "F1-B004",
@@ -896,7 +896,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 15.369
+      "harnessElapsedMs": 20.484
     },
     {
       "scenarioId": "F1-B005",
@@ -935,7 +935,7 @@
       "route": {
         "mode": "read",
         "operations": [
-          "list_accounts"
+          "list_payables"
         ],
         "operationsKinds": [
           "read"
@@ -950,7 +950,7 @@
             "plan": {
               "mode": "read",
               "operations": [
-                "list_accounts"
+                "list_payables"
               ]
             },
             "result": {
@@ -975,26 +975,25 @@
               "plan": {
                 "version": "2",
                 "mode": "read",
-                "domain": "accounts",
+                "domain": "payables",
                 "skillNames": [
-                  "saldo-extrato",
-                  "contas-cartoes"
+                  "compromissos"
                 ],
                 "requestedOperations": [
                   {
-                    "name": "list_accounts",
+                    "name": "list_payables",
                     "kind": "read"
                   }
                 ],
                 "requestedTools": [
-                  "list_accounts",
+                  "list_accounts_payable",
                   "get_balance",
+                  "list_accounts",
                   "list_recent_transactions",
                   "get_month_summary",
                   "list_categories",
                   "spending_insights",
-                  "recall",
-                  "create_account"
+                  "recall"
                 ],
                 "missingFields": [],
                 "ambiguity": null,
@@ -1008,7 +1007,7 @@
                 "authorizationMode": "none"
               },
               "response": {
-                "text": "Ainda não encontrei contas aqui. Quer que eu te guie no cadastro?"
+                "text": "Ainda não encontrei contas a pagar aqui. Quer que eu te guie no cadastro?"
               }
             }
           }
@@ -1016,22 +1015,22 @@
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
-        "responseOutput": "Ainda não encontrei contas aqui. Quer que eu te guie no cadastro?",
-        "clarificationText": "Ainda não encontrei contas aqui. Quer que eu te guie no cadastro?",
+        "responseOutput": "Ainda não encontrei contas a pagar aqui. Quer que eu te guie no cadastro?",
+        "clarificationText": "Ainda não encontrei contas a pagar aqui. Quer que eu te guie no cadastro?",
         "pendingStatus": null,
         "pendingOperation": null,
         "apiReads": [
-          "GET /accounts"
+          "GET /payables"
         ],
         "apiReadPaths": [
-          "GET /accounts"
+          "GET /payables"
         ],
         "apiRequests": [
-          "GET /accounts"
+          "GET /payables"
         ],
         "readQueries": [
           {
-            "path": "/accounts",
+            "path": "/payables",
             "query": {}
           }
         ],
@@ -1058,12 +1057,12 @@
       },
       "checks": {
         "route": {
-          "classification": "FAIL",
-          "reason": "allowed exact route plans=[{\"mode\":\"read\",\"operations\":[\"list_payables\"]}]; observed=read [\"list_accounts\"]"
+          "classification": "PASS",
+          "reason": "allowed exact route plans=[{\"mode\":\"read\",\"operations\":[\"list_payables\"]}]; observed=read [\"list_payables\"]"
         },
         "apiReads": {
-          "classification": "FAIL",
-          "reason": "expected exact requests=[\"GET /payables\"]; actual=[\"GET /accounts\"]"
+          "classification": "PASS",
+          "reason": "expected exact requests=[\"GET /payables\"]; actual=[\"GET /payables\"]"
         },
         "args": {
           "classification": "NOT_APPLICABLE",
@@ -1071,7 +1070,7 @@
         },
         "state": {
           "classification": "PASS",
-          "reason": "synthetic context loaded: accountRead=true, categoryRead=false, transcriptMessages=0, financialExecutions=0"
+          "reason": "synthetic context loaded: accountRead=false, categoryRead=false, transcriptMessages=0, financialExecutions=0"
         },
         "clarification": {
           "classification": "NOT_APPLICABLE",
@@ -1094,9 +1093,9 @@
           "reason": "unmocked fetch=0; unallowlisted API=[]"
         }
       },
-      "routeOracleMatch": false,
-      "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 12.012
+      "routeOracleMatch": true,
+      "evidenceClassification": "PASS",
+      "harnessElapsedMs": 21.637
     },
     {
       "scenarioId": "F1-B006",
@@ -1323,7 +1322,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 10.94
+      "harnessElapsedMs": 9.646
     },
     {
       "scenarioId": "F1-B007",
@@ -1511,7 +1510,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 5.841
+      "harnessElapsedMs": 7.013
     },
     {
       "scenarioId": "F1-B008",
@@ -1681,7 +1680,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 8.66
+      "harnessElapsedMs": 40.447
     },
     {
       "scenarioId": "F1-B009",
@@ -1906,7 +1905,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 19.966
+      "harnessElapsedMs": 29.801
     },
     {
       "scenarioId": "F1-B010",
@@ -2112,7 +2111,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 14.204
+      "harnessElapsedMs": 6.01
     },
     {
       "scenarioId": "F1-B011",
@@ -2311,7 +2310,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 7.463
+      "harnessElapsedMs": 6.413
     },
     {
       "scenarioId": "F1-B012",
@@ -2507,7 +2506,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 7.986
+      "harnessElapsedMs": 19.846
     },
     {
       "scenarioId": "F1-B013",
@@ -2832,7 +2831,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 12.72
+      "harnessElapsedMs": 23.398
     },
     {
       "scenarioId": "F1-B014",
@@ -3056,7 +3055,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 14.235
+      "harnessElapsedMs": 10.219
     },
     {
       "scenarioId": "F1-B015",
@@ -3224,7 +3223,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 13.66
+      "harnessElapsedMs": 7.164
     },
     {
       "scenarioId": "F1-B016",
@@ -3417,7 +3416,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 22.161
+      "harnessElapsedMs": 8.561
     },
     {
       "scenarioId": "F1-B017",
@@ -3625,7 +3624,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 12.175
+      "harnessElapsedMs": 10.574
     },
     {
       "scenarioId": "F1-B018",
@@ -3795,7 +3794,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 7.64
+      "harnessElapsedMs": 8.238
     },
     {
       "scenarioId": "F1-B019",
@@ -3994,7 +3993,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 8.897
+      "harnessElapsedMs": 7.288
     },
     {
       "scenarioId": "F1-B020",
@@ -4034,7 +4033,7 @@
       "route": {
         "mode": "read",
         "operations": [
-          "list_accounts"
+          "list_payables"
         ],
         "operationsKinds": [
           "read"
@@ -4049,7 +4048,7 @@
             "plan": {
               "mode": "read",
               "operations": [
-                "list_accounts"
+                "list_payables"
               ]
             },
             "result": {
@@ -4074,26 +4073,25 @@
               "plan": {
                 "version": "2",
                 "mode": "read",
-                "domain": "accounts",
+                "domain": "payables",
                 "skillNames": [
-                  "saldo-extrato",
-                  "contas-cartoes"
+                  "compromissos"
                 ],
                 "requestedOperations": [
                   {
-                    "name": "list_accounts",
+                    "name": "list_payables",
                     "kind": "read"
                   }
                 ],
                 "requestedTools": [
-                  "list_accounts",
+                  "list_accounts_payable",
                   "get_balance",
+                  "list_accounts",
                   "list_recent_transactions",
                   "get_month_summary",
                   "list_categories",
                   "spending_insights",
-                  "recall",
-                  "create_account"
+                  "recall"
                 ],
                 "missingFields": [],
                 "ambiguity": null,
@@ -4107,7 +4105,7 @@
                 "authorizationMode": "none"
               },
               "response": {
-                "text": "Ainda não encontrei contas aqui. Quer que eu te guie no cadastro?"
+                "text": "Ainda não encontrei contas a pagar aqui. Quer que eu te guie no cadastro?"
               }
             }
           }
@@ -4115,22 +4113,22 @@
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
-        "responseOutput": "Ainda não encontrei contas aqui. Quer que eu te guie no cadastro?",
-        "clarificationText": "Ainda não encontrei contas aqui. Quer que eu te guie no cadastro?",
+        "responseOutput": "Ainda não encontrei contas a pagar aqui. Quer que eu te guie no cadastro?",
+        "clarificationText": "Ainda não encontrei contas a pagar aqui. Quer que eu te guie no cadastro?",
         "pendingStatus": null,
         "pendingOperation": null,
         "apiReads": [
-          "GET /accounts"
+          "GET /payables"
         ],
         "apiReadPaths": [
-          "GET /accounts"
+          "GET /payables"
         ],
         "apiRequests": [
-          "GET /accounts"
+          "GET /payables"
         ],
         "readQueries": [
           {
-            "path": "/accounts",
+            "path": "/payables",
             "query": {}
           }
         ],
@@ -4158,11 +4156,11 @@
       "checks": {
         "route": {
           "classification": "FAIL",
-          "reason": "allowed exact route plans=[{\"mode\":\"unsupported\",\"operations\":[]}]; observed=read [\"list_accounts\"]"
+          "reason": "allowed exact route plans=[{\"mode\":\"unsupported\",\"operations\":[]}]; observed=read [\"list_payables\"]"
         },
         "apiReads": {
-          "classification": "FAIL",
-          "reason": "expected exact requests=[\"GET /payables\"]; actual=[\"GET /accounts\"]"
+          "classification": "PASS",
+          "reason": "expected exact requests=[\"GET /payables\"]; actual=[\"GET /payables\"]"
         },
         "args": {
           "classification": "NOT_APPLICABLE",
@@ -4170,11 +4168,11 @@
         },
         "state": {
           "classification": "PASS",
-          "reason": "synthetic context loaded: accountRead=true, categoryRead=false, transcriptMessages=0, financialExecutions=0"
+          "reason": "synthetic context loaded: accountRead=false, categoryRead=false, transcriptMessages=0, financialExecutions=0"
         },
         "clarification": {
-          "classification": "FAIL",
-          "reason": "required exact needles=[\"pagar\",\"conta\"]; observed=Ainda não encontrei contas aqui. Quer que eu te guie no cadastro?"
+          "classification": "PASS",
+          "reason": "required exact needles=[\"pagar\",\"conta\"]; observed=Ainda não encontrei contas a pagar aqui. Quer que eu te guie no cadastro?"
         },
         "proposal": {
           "classification": "PASS",
@@ -4194,8 +4192,8 @@
         }
       },
       "routeOracleMatch": false,
-      "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 6.278
+      "evidenceClassification": "PASS",
+      "harnessElapsedMs": 16.896
     },
     {
       "scenarioId": "F1-B021",
@@ -4371,7 +4369,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 29.153
+      "harnessElapsedMs": 12.23
     },
     {
       "scenarioId": "F1-B022",
@@ -4544,7 +4542,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 19.03
+      "harnessElapsedMs": 13.451
     },
     {
       "scenarioId": "F1-B023",
@@ -4744,7 +4742,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 26.453
+      "harnessElapsedMs": 8.382
     },
     {
       "scenarioId": "F1-B024",
@@ -4994,7 +4992,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 14.779
+      "harnessElapsedMs": 19.888
     },
     {
       "scenarioId": "F1-B025",
@@ -5208,7 +5206,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 23.369
+      "harnessElapsedMs": 18.67
     },
     {
       "scenarioId": "F1-B026",
@@ -5422,7 +5420,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 26.664
+      "harnessElapsedMs": 10.702
     },
     {
       "scenarioId": "F1-B027",
@@ -5597,7 +5595,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 6.469
+      "harnessElapsedMs": 3.895
     },
     {
       "scenarioId": "F1-B028",
@@ -5767,7 +5765,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 11.477
+      "harnessElapsedMs": 3.45
     },
     {
       "scenarioId": "F1-B029",
@@ -5979,7 +5977,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 10.334
+      "harnessElapsedMs": 10.473
     },
     {
       "scenarioId": "F1-B030",
@@ -6203,7 +6201,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 36.686
+      "harnessElapsedMs": 9.178
     },
     {
       "scenarioId": "F1-B031",
@@ -6390,7 +6388,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 7.978
+      "harnessElapsedMs": 6.631
     },
     {
       "scenarioId": "F1-B032",
@@ -6575,7 +6573,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.853
+      "harnessElapsedMs": 6.524
     },
     {
       "scenarioId": "F1-B033",
@@ -6781,7 +6779,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 7.321
+      "harnessElapsedMs": 6.622
     },
     {
       "scenarioId": "F1-B034",
@@ -6987,7 +6985,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 9.578
+      "harnessElapsedMs": 13.87
     },
     {
       "scenarioId": "F1-B035",
@@ -7198,7 +7196,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 40.928
+      "harnessElapsedMs": 10.383
     },
     {
       "scenarioId": "F1-B036",
@@ -7409,7 +7407,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 10.79
+      "harnessElapsedMs": 18.529
     },
     {
       "scenarioId": "F1-B037",
@@ -7593,7 +7591,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 6.458
+      "harnessElapsedMs": 6.999
     },
     {
       "scenarioId": "F1-B038",
@@ -7791,7 +7789,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 6.227
+      "harnessElapsedMs": 7.526
     },
     {
       "scenarioId": "F1-B039",
@@ -7986,7 +7984,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 23.384
+      "harnessElapsedMs": 15.599
     },
     {
       "scenarioId": "F1-B040",
@@ -8172,7 +8170,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 12.807
+      "harnessElapsedMs": 7.855
     },
     {
       "scenarioId": "F1-B041",
@@ -8393,7 +8391,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 22.322
+      "harnessElapsedMs": 14.504
     },
     {
       "scenarioId": "F1-B042",
@@ -8588,7 +8586,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 9.303
+      "harnessElapsedMs": 6.439
     },
     {
       "scenarioId": "F1-B043",
@@ -8756,7 +8754,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 6.919
+      "harnessElapsedMs": 4.45
     },
     {
       "scenarioId": "F1-B044",
@@ -8924,7 +8922,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.506
+      "harnessElapsedMs": 4.662
     },
     {
       "scenarioId": "F1-B045",
@@ -9092,7 +9090,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 3.239
+      "harnessElapsedMs": 6.444
     },
     {
       "scenarioId": "F1-B046",
@@ -9291,7 +9289,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 6.016
+      "harnessElapsedMs": 8.137
     },
     {
       "scenarioId": "F1-B047",
@@ -9490,7 +9488,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 7.059
+      "harnessElapsedMs": 6.148
     },
     {
       "scenarioId": "F1-B048",
@@ -9689,7 +9687,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 6.634
+      "harnessElapsedMs": 10.957
     },
     {
       "scenarioId": "F1-B049",
@@ -9888,7 +9886,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "INCONCLUSIVE",
-      "harnessElapsedMs": 19.932
+      "harnessElapsedMs": 5.825
     },
     {
       "scenarioId": "F1-B050",
@@ -10107,7 +10105,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 15.944
+      "harnessElapsedMs": 11.964
     },
     {
       "scenarioId": "F1-B051",
@@ -10327,7 +10325,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 7.861
+      "harnessElapsedMs": 6.923
     },
     {
       "scenarioId": "F1-B052",
@@ -10504,7 +10502,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 31.228
+      "harnessElapsedMs": 7.131
     },
     {
       "scenarioId": "F1-B053",
@@ -10725,7 +10723,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 8.486
+      "harnessElapsedMs": 6.205
     },
     {
       "scenarioId": "F1-B054",
@@ -10915,7 +10913,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 10.031
+      "harnessElapsedMs": 6.908
     },
     {
       "scenarioId": "F1-B055",
@@ -11137,7 +11135,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 13.642
+      "harnessElapsedMs": 12.065
     },
     {
       "scenarioId": "F1-B056",
@@ -11304,7 +11302,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 4.937
+      "harnessElapsedMs": 4.37
     },
     {
       "scenarioId": "F1-B057",
@@ -11511,7 +11509,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 8.589
+      "harnessElapsedMs": 8.676
     },
     {
       "scenarioId": "F1-B058",
@@ -11549,13 +11547,9 @@
         "expectedApiQueries": []
       },
       "route": {
-        "mode": "mutation-proposal",
-        "operations": [
-          "transactions.expense.create"
-        ],
-        "operationsKinds": [
-          "mutation"
-        ]
+        "mode": "unsupported",
+        "operations": [],
+        "operationsKinds": []
       },
       "rest": {
         "pipeline": [
@@ -11564,10 +11558,8 @@
               "text": "Gastei R$ 20 em 2020"
             },
             "plan": {
-              "mode": "mutation-proposal",
-              "operations": [
-                "transactions.expense.create"
-              ]
+              "mode": "unsupported",
+              "operations": []
             },
             "result": {
               "input": {
@@ -11590,24 +11582,19 @@
               },
               "plan": {
                 "version": "2",
-                "mode": "mutation-proposal",
+                "mode": "unsupported",
                 "domain": "transactions",
                 "skillNames": [
-                  "registros",
-                  "saldo-extrato"
+                  "conversation"
                 ],
-                "requestedOperations": [
-                  {
-                    "name": "transactions.expense.create",
-                    "kind": "mutation"
-                  }
-                ],
+                "requestedOperations": [],
+                "requestedTools": [],
                 "missingFields": [
-                  "accountId",
-                  "categoryId"
+                  "date"
                 ],
-                "ambiguity": null,
-                "confidence": 0.95
+                "ambiguity": "ambiguous:ambiguous_year_date",
+                "confidence": 0,
+                "correctionCount": 0
               },
               "policy": {
                 "capability": "financial.read",
@@ -11617,23 +11604,12 @@
               },
               "clarification": {
                 "missingFields": [
-                  "accountId",
-                  "categoryId"
+                  "date"
                 ],
-                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
-                "draft": {
-                  "draftId": "13c3797e09e883f9ef53a3a3afa45b02a2a7f6c587b921a2ccd1d43162f64e71",
-                  "tool": "transactions.expense.create",
-                  "missingFields": [
-                    "accountId",
-                    "categoryId"
-                  ],
-                  "question": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
-                  "expiresAt": "2026-10-24T12:15:00.000Z"
-                }
+                "text": "Não reconheci a data — você informou apenas o ano. Só entendo hoje, ontem ou anteontem: reenvie a operação inteira com uma dessas datas."
               },
               "response": {
-                "text": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?"
+                "text": "Não reconheci a data — você informou apenas o ano. Só entendo hoje, ontem ou anteontem: reenvie a operação inteira com uma dessas datas."
               }
             }
           }
@@ -11641,32 +11617,14 @@
         "httpStatus": 200,
         "status": "completed",
         "errorCode": null,
-        "responseOutput": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
-        "clarificationText": "Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?",
+        "responseOutput": "Não reconheci a data — você informou apenas o ano. Só entendo hoje, ontem ou anteontem: reenvie a operação inteira com uma dessas datas.",
+        "clarificationText": null,
         "pendingStatus": null,
         "pendingOperation": null,
-        "apiReads": [
-          "GET /accounts",
-          "GET /categories"
-        ],
-        "apiReadPaths": [
-          "GET /accounts",
-          "GET /categories"
-        ],
-        "apiRequests": [
-          "GET /accounts",
-          "GET /categories"
-        ],
-        "readQueries": [
-          {
-            "path": "/accounts",
-            "query": {}
-          },
-          {
-            "path": "/categories",
-            "query": {}
-          }
-        ],
+        "apiReads": [],
+        "apiReadPaths": [],
+        "apiRequests": [],
+        "readQueries": [],
         "v2Proposals": 0,
         "v2Decisions": 0,
         "v2ExecutionCalls": 0,
@@ -11691,11 +11649,11 @@
       "checks": {
         "route": {
           "classification": "FAIL",
-          "reason": "allowed exact route plans=[{\"mode\":\"clarify\",\"operations\":[]}]; observed=mutation-proposal [\"transactions.expense.create\"]"
+          "reason": "allowed exact route plans=[{\"mode\":\"clarify\",\"operations\":[]}]; observed=unsupported []"
         },
         "apiReads": {
-          "classification": "FAIL",
-          "reason": "expected exact requests=[]; actual=[\"GET /accounts\",\"GET /categories\"]"
+          "classification": "PASS",
+          "reason": "expected exact requests=[]; actual=[]"
         },
         "args": {
           "classification": "INCONCLUSIVE",
@@ -11703,11 +11661,11 @@
         },
         "state": {
           "classification": "PASS",
-          "reason": "synthetic context loaded: accountRead=true, categoryRead=true, transcriptMessages=0, financialExecutions=0"
+          "reason": "synthetic context loaded: accountRead=false, categoryRead=false, transcriptMessages=0, financialExecutions=0"
         },
         "clarification": {
           "classification": "FAIL",
-          "reason": "required exact needles=[\"ano\",\"data\"]; observed=Não encontrei nenhuma conta disponível. Crie uma conta antes de registrar.\n\nQual categoria devo usar?"
+          "reason": "required exact needles=[\"ano\",\"data\"]; observed=none"
         },
         "proposal": {
           "classification": "PASS",
@@ -11728,7 +11686,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "FAIL",
-      "harnessElapsedMs": 13.357
+      "harnessElapsedMs": 6.741
     },
     {
       "scenarioId": "F1-B059",
@@ -11837,7 +11795,7 @@
       },
       "routeOracleMatch": false,
       "evidenceClassification": "BLOCKED",
-      "harnessElapsedMs": 9.678
+      "harnessElapsedMs": 11.285
     },
     {
       "scenarioId": "F1-B060",
@@ -12052,7 +12010,7 @@
       },
       "routeOracleMatch": true,
       "evidenceClassification": "PASS",
-      "harnessElapsedMs": 8.992
+      "harnessElapsedMs": 10.036
     }
   ],
   "contractCases": [
@@ -12235,9 +12193,9 @@
   "aggregate": {
     "effectiveRestPlanExactMatch": {
       "status": "OBSERVED_WITH_LIMIT",
-      "numerator": 29,
+      "numerator": 30,
       "denominator": 59,
-      "value": 0.4915254237288136,
+      "value": 0.5084745762711864,
       "unavailable": [
         {
           "scenarioId": "F1-B059",
@@ -12282,9 +12240,9 @@
     ],
     "routeOperationExactMatch": {
       "status": "OBSERVED",
-      "numerator": 30,
+      "numerator": 31,
       "denominator": 60,
-      "value": 0.5,
+      "value": 0.5166666666666667,
       "note": "Route/mode/operation match only; not user-task completion."
     },
     "perDomainRouteExactMatch": {
@@ -12329,9 +12287,9 @@
         "value": 0
       },
       "payables": {
-        "numerator": 2,
+        "numerator": 3,
         "denominator": 4,
-        "value": 0.5
+        "value": 0.75
       },
       "statements": {
         "numerator": 3,
@@ -12412,16 +12370,16 @@
     },
     "apiReadsPerTask": {
       "status": "OBSERVED_WITH_LIMIT",
-      "numerator": 53,
+      "numerator": 51,
       "denominator": 60,
-      "value": 0.8833333333333333,
+      "value": 0.85,
       "note": "Counted tool API client requests under synthetic empty responses; not production API behavior."
     },
     "simpleInterpretationErrors": {
       "status": "OBSERVED",
-      "numerator": 30,
+      "numerator": 29,
       "denominator": 60,
-      "value": 0.5
+      "value": 0.48333333333333334
     },
     "falseSuccessWithoutReceipt": {
       "status": "INCONCLUSIVE",
@@ -12451,12 +12409,12 @@
       "v2Decisions": 1,
       "v2ExecutionCalls": 0,
       "unexpectedOutboundAttempts": 0,
-      "routeExactMatches": 30,
+      "routeExactMatches": 31,
       "routeEligibleDenominator": 60
     },
     "evidenceClassificationCounts": {
-      "PASS": 12,
-      "FAIL": 41,
+      "PASS": 14,
+      "FAIL": 39,
       "UNSUPPORTED": 0,
       "BLOCKED": 1,
       "INCONCLUSIVE": 6
@@ -12517,9 +12475,9 @@
       "scenarioId": "F1-B005",
       "invariant": "payable-read",
       "gate": "quality",
-      "classification": "FAIL",
+      "classification": "PASS",
       "evidence": [
-        "reads=[\"GET /accounts\"]"
+        "reads=[\"GET /payables\"]"
       ],
       "reason": "Payables question must use the payable reader, not the account list."
     },
@@ -12764,7 +12722,7 @@
       "gate": "critical",
       "classification": "PASS",
       "evidence": [
-        "routeDiagnostic=mutation-proposal:[\"transactions.expense.create\"]",
+        "routeDiagnostic=unsupported:[]",
         "proposal=0",
         "execute=0"
       ],
@@ -12772,8 +12730,8 @@
     }
   ],
   "contractAggregate": {
-    "PASS": 16,
-    "FAIL": 2,
+    "PASS": 17,
+    "FAIL": 1,
     "UNSUPPORTED": 0,
     "BLOCKED": 0,
     "INCONCLUSIVE": 7

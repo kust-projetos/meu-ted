@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
-import { captureCli, classifyStdinWriteError, isPromptConfirmed, minimalEnvironment, goProviderSettings, writeConfig, loadGoApiKey } from './real-runner.ts'
+import { createHash } from 'node:crypto'
+import { captureCli, classifyStdinWriteError, diagnoseReadback, isPromptConfirmed, extractAssistantApiText, decideAssistantTextStop, minimalEnvironment, goProviderSettings, writeConfig, loadGoApiKey } from './real-runner.ts'
 
 describe('real runner CLI stdin prompt capture', () => {
   it('sends exact UTF-8 prompt via stdin with no prompt argv and retains JSON NDJSON output', async () => {
@@ -152,5 +153,373 @@ describe('real runner CLI stdin prompt capture', () => {
       else process.env.OPENCODE_GO = priorAlias
       await rm(envRoot, { recursive: true, force: true })
     }
+  })
+
+  describe('sanitized message-list readback diagnostic (F2-B0, no content)', () => {
+    const sha256 = (value) => createHash('sha256').update(value, 'utf8').digest('hex')
+
+    it('never copies untrusted message types into diagnostics', () => {
+      const secret = 'sensitive-unexpected-message-type'
+      const result = diagnoseReadback([{ type: secret }, { type: '__proto__' }], 'prompt')
+      expect(result.typeCounts).toEqual({ user: 0, assistant: 0, other: 2, missing: 0 })
+      expect(result.promptConfirmed).toBe(false)
+      expect(JSON.stringify(result)).not.toContain(secret)
+      expect(JSON.stringify(result)).not.toContain('__proto__')
+    })
+
+    it('fails closed on invalid structure without leaking content', () => {
+      const prompt = 'prompt-exato-f2b0-somente-diagnostico'
+      for (const invalid of [null, undefined, 'not-an-array', {}, [{ content: [] }], [{ type: 42 }]]) {
+        const result = diagnoseReadback(invalid, prompt)
+        expect(result.structureValid).toBe(false)
+        expect(result.promptConfirmed).toBe(false)
+        expect(result.promptConfirmed).toBe(isPromptConfirmed(invalid, prompt))
+        expect(result.userTextLength).toBe(null)
+        expect(result.userTextSha256).toBe(null)
+        expect(result.assistantTextLength).toBe(null)
+        expect(result.assistantTextSha256).toBe(null)
+        expect(JSON.stringify(result)).not.toContain(prompt)
+      }
+    })
+
+    it('fails closed on multiple user messages while reporting sanitized counts', () => {
+      const first = 'primeira-parte-do-prompt-f2b0'
+      const second = 'segunda-parte-do-prompt-f2b0'
+      const assistantText = 'resposta-do-modelo-f2b0'
+      const messages = [
+        { type: 'user', content: [{ type: 'text', text: first }] },
+        { type: 'user', content: [{ type: 'text', text: second }] },
+        { type: 'assistant', content: [{ type: 'text', text: assistantText }] },
+      ]
+      const prompt = `${first}${second}`
+      const result = diagnoseReadback(messages, prompt)
+
+      expect(result.messageCount).toBe(3)
+      expect(result.userMessageCount).toBe(2)
+      expect(result.assistantMessageCount).toBe(1)
+      expect(result.typeCounts).toMatchObject({ user: 2, assistant: 1 })
+      expect(result.structureValid).toBe(true)
+      expect(result.promptConfirmed).toBe(false)
+      expect(result.promptConfirmed).toBe(isPromptConfirmed(messages, prompt))
+      expect(result.userTextLength).toBe(`${first}${second}`.length)
+      expect(result.userTextSha256).toBe(sha256(`${first}${second}`))
+      expect(result.assistantTextLength).toBe(assistantText.length)
+      expect(result.assistantTextSha256).toBe(sha256(assistantText))
+      const serialized = JSON.stringify(result)
+      expect(serialized).not.toContain(first)
+      expect(serialized).not.toContain(second)
+      expect(serialized).not.toContain(assistantText)
+      expect(serialized).not.toContain(prompt)
+    })
+
+    it('confirms the exact single prompt via hash/length only, preserving exact comparison', () => {
+      const prompt = 'prompt-f2b0-exato — café 🧾'
+      const messages = [{ type: 'user', content: [{ type: 'text', text: prompt }] }]
+      const result = diagnoseReadback(messages, prompt)
+
+      expect(result.structureValid).toBe(true)
+      expect(result.messageCount).toBe(1)
+      expect(result.userMessageCount).toBe(1)
+      expect(result.promptConfirmed).toBe(true)
+      expect(result.promptConfirmed).toBe(isPromptConfirmed(messages, prompt))
+      expect(result.userTextLength).toBe(prompt.length)
+      expect(result.userTextSha256).toBe(sha256(prompt))
+      expect(JSON.stringify(result)).not.toContain(prompt)
+
+      const nearMiss = diagnoseReadback(messages, `${prompt} `)
+      expect(nearMiss.promptConfirmed).toBe(false)
+      expect(nearMiss.promptConfirmed).toBe(isPromptConfirmed(messages, `${prompt} `))
+    })
+
+    it('hashes joined assistant text across multiple messages without content', () => {
+      const prompt = 'prompt-f2b0-leitura'
+      const messages = [
+        { type: 'user', content: [{ type: 'text', text: prompt }] },
+        { type: 'assistant', content: [{ type: 'text', text: 'parte-um-f2b0-' }] },
+        { type: 'assistant', content: [{ type: 'text', text: 'parte-dois-f2b0' }, { type: 'other', text: 'ignorado-f2b0' }] },
+      ]
+      const joinedAssistant = 'parte-um-f2b0-parte-dois-f2b0'
+      const result = diagnoseReadback(messages, prompt)
+
+      expect(result.promptConfirmed).toBe(true)
+      expect(result.assistantMessageCount).toBe(2)
+      expect(result.assistantTextLength).toBe(joinedAssistant.length)
+      expect(result.assistantTextSha256).toBe(sha256(joinedAssistant))
+      const serialized = JSON.stringify(result)
+      expect(serialized).not.toContain('parte-um-f2b0')
+      expect(serialized).not.toContain('parte-dois-f2b0')
+      expect(serialized).not.toContain(prompt)
+    })
+
+    describe('opencode 2.2.1 top-level user text (narrow)', () => {
+      it('accepts single user with top-level text string keeping exact equality', () => {
+        const prompt = 'prompt-f2b0-toptext — café 🧾'
+        const messages = [{ type: 'user', id: 'msg-1', time: 123, text: prompt, files: [], content: undefined }]
+        const cleaned = messages.map(({ content, ...rest }) => (content === undefined ? rest : { ...rest, content }))
+
+        expect(isPromptConfirmed(cleaned, prompt)).toBe(true)
+        const result = diagnoseReadback(cleaned, prompt)
+        expect(result.structureValid).toBe(true)
+        expect(result.promptConfirmed).toBe(true)
+        expect(result.promptConfirmed).toBe(isPromptConfirmed(cleaned, prompt))
+        expect(result.userMessageCount).toBe(1)
+        expect(result.userTextLength).toBe(prompt.length)
+        expect(result.userTextSha256).toBe(sha256(prompt))
+        expect(JSON.stringify(result)).not.toContain(prompt)
+
+        const nearMiss = diagnoseReadback(cleaned, `${prompt} `)
+        expect(nearMiss.promptConfirmed).toBe(false)
+        expect(nearMiss.promptConfirmed).toBe(isPromptConfirmed(cleaned, `${prompt} `))
+      })
+
+      it('preserves content[] confirmation when 2.2.1 envelope fields are present', () => {
+        const prompt = 'prompt-f2b0-envelope'
+        const messages = [{ type: 'user', id: 'msg-2', time: 456, files: [], content: [{ type: 'text', text: prompt }] }]
+
+        expect(isPromptConfirmed(messages, prompt)).toBe(true)
+        const result = diagnoseReadback(messages, prompt)
+        expect(result.structureValid).toBe(true)
+        expect(result.promptConfirmed).toBe(true)
+        expect(result.userTextLength).toBe(prompt.length)
+        expect(result.userTextSha256).toBe(sha256(prompt))
+        expect(JSON.stringify(result)).not.toContain(prompt)
+      })
+
+      it('accepts convergent dual representation (content[] equals top-level text)', () => {
+        const prompt = 'prompt-f2b0-convergente'
+        const messages = [{ type: 'user', id: 'msg-3', time: 789, files: [], text: prompt, content: [{ type: 'text', text: prompt }] }]
+
+        expect(isPromptConfirmed(messages, prompt)).toBe(true)
+        const result = diagnoseReadback(messages, prompt)
+        expect(result.promptConfirmed).toBe(true)
+        expect(result.promptConfirmed).toBe(isPromptConfirmed(messages, prompt))
+        expect(result.userTextLength).toBe(prompt.length)
+        expect(result.userTextSha256).toBe(sha256(prompt))
+        expect(JSON.stringify(result)).not.toContain(prompt)
+      })
+
+      it('rejects fail-closed when content[] and top-level text diverge', () => {
+        const prompt = 'prompt-f2b0-esperado'
+        const other = 'texto-divergente-f2b0'
+        const messages = [{ type: 'user', id: 'msg-4', time: 101, files: [], text: other, content: [{ type: 'text', text: prompt }] }]
+
+        expect(isPromptConfirmed(messages, prompt)).toBe(false)
+        expect(isPromptConfirmed(messages, other)).toBe(false)
+        const result = diagnoseReadback(messages, prompt)
+        expect(result.structureValid).toBe(true)
+        expect(result.promptConfirmed).toBe(false)
+        expect(result.promptConfirmed).toBe(isPromptConfirmed(messages, prompt))
+        const serialized = JSON.stringify(result)
+        expect(serialized).not.toContain(prompt)
+        expect(serialized).not.toContain(other)
+      })
+
+      it('never confirms invalid top-level text types', () => {
+        const prompt = 'prompt-f2b0-tipo'
+        for (const invalidText of [42, null, {}, [], true]) {
+          const messages = [{ type: 'user', id: 'msg-x', time: 1, files: [], text: invalidText }]
+          expect(isPromptConfirmed(messages, prompt)).toBe(false)
+          const result = diagnoseReadback(messages, prompt)
+          expect(result.promptConfirmed).toBe(false)
+          expect(result.promptConfirmed).toBe(isPromptConfirmed(messages, prompt))
+          expect(JSON.stringify(result)).not.toContain(prompt)
+        }
+      })
+
+      it('rejects multiple users even when one top-level text matches exactly', () => {
+        const prompt = 'prompt-f2b0-unico'
+        const messages = [
+          { type: 'user', id: 'a', time: 1, files: [], text: prompt },
+          { type: 'user', id: 'b', time: 2, files: [], text: 'outro-f2b0' },
+        ]
+        expect(isPromptConfirmed(messages, prompt)).toBe(false)
+        const result = diagnoseReadback(messages, prompt)
+        expect(result.userMessageCount).toBe(2)
+        expect(result.promptConfirmed).toBe(false)
+        expect(result.promptConfirmed).toBe(isPromptConfirmed(messages, prompt))
+        expect(JSON.stringify(result)).not.toContain(prompt)
+      })
+
+      it('rejects ambiguous split top-level text that only joins to the prompt', () => {
+        const first = 'primeira-f2b0-toptext'
+        const second = 'segunda-f2b0-toptext'
+        const messages = [
+          { type: 'user', id: 'a', time: 1, files: [], text: first },
+          { type: 'user', id: 'b', time: 2, files: [], text: second },
+        ]
+        const prompt = `${first}${second}`
+        expect(isPromptConfirmed(messages, prompt)).toBe(false)
+        const result = diagnoseReadback(messages, prompt)
+        expect(result.promptConfirmed).toBe(false)
+        expect(result.promptConfirmed).toBe(isPromptConfirmed(messages, prompt))
+        const serialized = JSON.stringify(result)
+        expect(serialized).not.toContain(first)
+        expect(serialized).not.toContain(second)
+        expect(serialized).not.toContain(prompt)
+      })
+    })
+  })
+
+  describe('extractAssistantApiText (assistant top-level text, no-throw + validity)', () => {
+    it('ignores non-textual parts but fails closed on malformed text parts', () => {
+      const okMessages = [
+        { type: 'assistant', content: [{ type: 'text', text: 'parte-um-' }, { type: 'other', text: 'ignorado' }, { type: 'tool', foo: 1 }] },
+      ]
+      expect(extractAssistantApiText(okMessages)).toMatchObject({ text: 'parte-um-', valid: true, reason: 'ok' })
+      for (const badContent of [
+        [{ type: 'text', text: 'parte-um-' }, { type: 'text', text: 42 }],
+        [{ type: 'text', text: 'parte-um-' }, { type: 'text' }],
+        [{ type: 'text', text: 42 }],
+      ]) {
+        let result
+        expect(() => { result = extractAssistantApiText([{ type: 'assistant', content: badContent }]) }).not.toThrow()
+        expect(result.valid).toBe(false)
+        expect(result.reason).toBe('invalid-text-part')
+      }
+    })
+
+    it('accepts top-level text when content is absent without throwing (reviewer RED)', () => {
+      const messages = [{ type: 'assistant', text: 'ola-top-level' }]
+      let result
+      expect(() => { result = extractAssistantApiText(messages) }).not.toThrow()
+      expect(result).toMatchObject({ text: 'ola-top-level', valid: true, reason: 'ok' })
+    })
+
+    it('accepts convergent dual representation without duplication', () => {
+      const text = 'convergente-f2b0'
+      const messages = [{ type: 'assistant', text, content: [{ type: 'text', text }] }]
+      expect(extractAssistantApiText(messages)).toMatchObject({ text, valid: true, reason: 'ok' })
+    })
+
+    it('marks divergent dual representation invalid while preserving evidence (no throw)', () => {
+      const fromContent = 'conteudo-f2b0-'
+      const fromTop = 'topo-f2b0'
+      const messages = [{ type: 'assistant', text: fromTop, content: [{ type: 'text', text: fromContent }] }]
+      let result
+      expect(() => { result = extractAssistantApiText(messages) }).not.toThrow()
+      expect(result.text).toBe(`${fromContent}${fromTop}`)
+      expect(result.valid).toBe(false)
+      expect(result.reason).toBe('ambiguous-dual-representation')
+    })
+
+    it('fails closed to invalid on bad shapes without throwing', () => {
+      for (const invalid of [null, undefined, 'not-an-array', {}, 42, [], [null], [42], ['x'], [{ type: 'assistant' }], [{ type: 'assistant', content: 'str', text: 42 }], [{ type: 'assistant', content: [{ type: 'text' }] }], [{ type: 'assistant', text: 42 }], [{ type: 'assistant', content: [{ type: 'text', text: 'A' }] , text: 42 }]]) {
+        let result
+        expect(() => { result = extractAssistantApiText(invalid) }).not.toThrow()
+        expect(result.valid).toBe(false)
+        expect(typeof result.text).toBe('string')
+        expect(typeof result.reason).toBe('string')
+      }
+      expect(extractAssistantApiText(null)).toMatchObject({ text: '', valid: false })
+      expect(extractAssistantApiText(undefined)).toMatchObject({ text: '', valid: false })
+      expect(extractAssistantApiText([])).toMatchObject({ text: '', valid: false, reason: 'empty' })
+      expect(extractAssistantApiText([{ type: 'assistant' }])).toMatchObject({ valid: false })
+    })
+
+    it('marks empty-text extraction invalid even when shapes are well-formed', () => {
+      expect(extractAssistantApiText([{ type: 'assistant', content: [] }]).valid).toBe(false)
+    })
+
+    it('stays consistent with diagnoseReadback assistant hashing for top-level text', () => {
+      const prompt = 'prompt-f2b0-leitura'
+      const assistantText = 'resposta-top-level-f2b0'
+      const messages = [
+        { type: 'user', content: [{ type: 'text', text: prompt }] },
+        { type: 'assistant', text: assistantText },
+      ]
+      const extraction = extractAssistantApiText(messages.filter((m) => m.type === 'assistant'))
+      expect(extraction.valid).toBe(true)
+      const result = diagnoseReadback(messages, prompt)
+      expect(result.assistantTextLength).toBe(extraction.text.length)
+      expect(result.assistantTextSha256).toBe(createHash('sha256').update(extraction.text, 'utf8').digest('hex'))
+    })
+  })
+
+  describe('decideAssistantTextStop (decision path: ambiguous/invalid never passes)', () => {
+    it('stops assistant-text-invalid on divergent A/B even when stdout equals concatenated AB (reviewer regression)', () => {
+      const extraction = extractAssistantApiText([{ type: 'assistant', content: [{ type: 'text', text: 'A' }], text: 'B' }])
+      expect(extraction.valid).toBe(false)
+      expect(extraction.text).toBe('AB')
+      const stop = decideAssistantTextStop(extraction, 'AB')
+      expect(stop).toMatchObject({ stop: true, category: 'assistant-text-invalid' })
+    })
+
+    it('stops assistant-text-invalid on empty/invalid extraction even when stdout is also empty (reviewer regression)', () => {
+      for (const invalid of [[], [{ type: 'assistant' }], null, undefined, 'x']) {
+        const extraction = extractAssistantApiText(invalid)
+        expect(extraction.valid).toBe(false)
+        const stop = decideAssistantTextStop(extraction, '')
+        expect(stop).toMatchObject({ stop: true, category: 'assistant-text-invalid' })
+      }
+    })
+
+    it('passes (null) only when valid extraction equals stdout text', () => {
+      const extraction = extractAssistantApiText([{ type: 'assistant', text: 'ok-f2b0' }])
+      expect(decideAssistantTextStop(extraction, 'ok-f2b0')).toBe(null)
+    })
+
+    it('stops cli-api-output-mismatch when valid extraction diverges from stdout', () => {
+      const extraction = extractAssistantApiText([{ type: 'assistant', text: 'A' }])
+      expect(decideAssistantTextStop(extraction, 'B')).toMatchObject({ stop: true, category: 'cli-api-output-mismatch' })
+    })
+
+    it('never throws on non-object extraction or non-string stdout', () => {
+      for (const bad of [null, undefined, 42, 'x', {}, { valid: true }]) {
+        let stop
+        expect(() => { stop = decideAssistantTextStop(bad, 'AB') }).not.toThrow()
+        expect(stop).toMatchObject({ stop: true, category: 'assistant-text-invalid' })
+      }
+      const valid = extractAssistantApiText([{ type: 'assistant', text: 'A' }])
+      expect(() => decideAssistantTextStop(valid, undefined)).not.toThrow()
+      expect(decideAssistantTextStop(valid, undefined)).toMatchObject({ stop: true, category: 'cli-api-output-mismatch' })
+    })
+
+    it('stops assistant-text-invalid when stdout equals the silently-accepted prefix (reviewer adversarial)', () => {
+      const extraction = extractAssistantApiText([{ type: 'assistant', content: [{ type: 'text', text: 'A' }, { type: 'text', text: 42 }] }])
+      expect(extraction.valid).toBe(false)
+      expect(extraction.reason).toBe('invalid-text-part')
+      expect(extraction.text).toBe('A')
+      expect(decideAssistantTextStop(extraction, 'A')).toMatchObject({ stop: true, category: 'assistant-text-invalid' })
+    })
+
+    it('passes non-textual parts mixed with valid text through the integrated decision', () => {
+      const extraction = extractAssistantApiText([{ type: 'assistant', content: [{ type: 'text', text: 'A' }, { type: 'other', text: 'ignorado' }, { type: 'tool', foo: 1 }] }])
+      expect(extraction).toMatchObject({ text: 'A', valid: true, reason: 'ok' })
+      expect(decideAssistantTextStop(extraction, 'A')).toBe(null)
+    })
+  })
+
+  describe('isPromptConfirmed with malformed text parts (reviewer adversarial)', () => {
+    it('rejects when a text part is malformed even if valid parts join to the prompt', () => {
+      const prompt = 'A'
+      const messages = [{ type: 'user', content: [{ type: 'text', text: 'A' }, { type: 'text', text: 42 }] }]
+      expect(isPromptConfirmed(messages, prompt)).toBe(false)
+      const result = diagnoseReadback(messages, prompt)
+      expect(result.promptConfirmed).toBe(false)
+      expect(result.promptConfirmed).toBe(isPromptConfirmed(messages, prompt))
+    })
+
+    it('rejects text parts with missing or non-string text', () => {
+      const prompt = 'A'
+      for (const badContent of [
+        [{ type: 'text', text: 'A' }, { type: 'text' }],
+        [{ type: 'text', text: 'A' }, { type: 'text', text: null }],
+        [{ type: 'text', text: 42 }],
+      ]) {
+        const messages = [{ type: 'user', content: badContent }]
+        expect(isPromptConfirmed(messages, prompt)).toBe(false)
+        expect(diagnoseReadback(messages, prompt).promptConfirmed).toBe(false)
+      }
+    })
+
+    it('allows non-textual parts alongside valid text', () => {
+      const prompt = 'prompt-f2b0-misto'
+      const messages = [{ type: 'user', content: [{ type: 'text', text: prompt }, { type: 'other', text: 'ignorado' }, { type: 'tool', foo: 1 }] }]
+      expect(isPromptConfirmed(messages, prompt)).toBe(true)
+      const result = diagnoseReadback(messages, prompt)
+      expect(result.promptConfirmed).toBe(true)
+      expect(result.promptConfirmed).toBe(isPromptConfirmed(messages, prompt))
+      expect(result.userTextLength).toBe(prompt.length)
+    })
   })
 })
