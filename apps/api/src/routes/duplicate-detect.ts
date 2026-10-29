@@ -9,7 +9,9 @@ import { isoDateSchema as isoDate } from "../shared/iso-date.js";
 
 export const detectSchema = z.object({
   kind: z.enum(["expense", "income", "transfer"]),
-  description: z.string().min(1),
+  // Domain limit 1..240 matches siblings (writes/types, cards, payables) and
+  // DB CHECK length(description) BETWEEN 1 AND 240 (V001) + OpenAPI contract.
+  description: z.string().min(1).max(240),
   amountCents: z.number().int().min(1),
   date: isoDate,
   accountId: z.string().uuid().optional(),

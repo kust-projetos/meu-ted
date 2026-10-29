@@ -45,7 +45,7 @@ export const modelIdSchema = z
   });
 
 export const toggleEnabledSchema = z
-  .object({ enabled: z.boolean({ invalid_type_error: 'enabled must be boolean' }) })
+  .object({ enabled: z.boolean({ error: (issue) => issue.input === undefined ? undefined : 'enabled must be boolean' }) })
   .strict();
 
 export const testConnectionSchema = z
@@ -87,7 +87,7 @@ export const syncCatalogSchema = z.object({
 });
 
 export const expectedVersionSchema = z
-  .number({ invalid_type_error: 'expectedVersion must be a number' })
+  .number({ error: (issue) => issue.input === undefined ? undefined : 'expectedVersion must be a number' })
   .int('expectedVersion must be an integer')
   .min(1, 'expectedVersion must be at least 1');
 

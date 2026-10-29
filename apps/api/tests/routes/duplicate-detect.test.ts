@@ -74,4 +74,28 @@ describe("POST /transactions/detect-duplicate", () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it("enforces description boundary: 240 accepted, 241 rejected", async () => {
+    const base = { kind: "expense", amountCents: 3500, date: "2026-10-02" };
+    const emptyPool = { query: vi.fn().mockResolvedValue({ rows: [] }) } as unknown as Pool;
+    const okApp = registerDirectRoute(emptyPool);
+    const okRes = await okApp.inject({
+      method: "POST",
+      url: "/transactions/detect-duplicate",
+      payload: { ...base, description: "a".repeat(240) },
+    });
+    expect(okRes.statusCode).toBe(200);
+    expect(okRes.json()).toEqual({ duplicate_detected: false });
+    await okApp.close();
+
+    const overApp = registerDirectRoute(emptyPool);
+    const overRes = await overApp.inject({
+      method: "POST",
+      url: "/transactions/detect-duplicate",
+      payload: { ...base, description: "a".repeat(241) },
+    });
+    expect(overRes.statusCode).toBe(400);
+    expect(overRes.json()).toMatchObject({ code: "validation.error" });
+    await overApp.close();
+  });
 });

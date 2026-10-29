@@ -25,7 +25,8 @@
             "required": false,
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           },
           {
@@ -57,7 +58,8 @@
             "required": false,
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           },
           {
@@ -89,7 +91,8 @@
             "required": false,
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           },
           {
@@ -157,7 +160,8 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           },
           {
@@ -423,7 +427,8 @@
                   },
                   "parentId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "icon": {
                     "type": "string",
@@ -502,6 +507,7 @@
             "description": "Primeiro dia do período (inclusivo), YYYY-MM-DD. Usado apenas com period=custom.",
             "schema": {
               "type": "string",
+              "format": "date",
               "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
             }
           },
@@ -512,6 +518,7 @@
             "description": "Último dia do período (INCLUSIVO), YYYY-MM-DD. Usado apenas com period=custom.",
             "schema": {
               "type": "string",
+              "format": "date",
               "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
             }
           },
@@ -522,7 +529,8 @@
             "description": "Restringe o cálculo a uma conta. householdId continua derivado do token.",
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           },
           {
@@ -857,6 +865,7 @@
             "description": "Primeiro dia do período (inclusivo), YYYY-MM-DD. Usado apenas com period=custom.",
             "schema": {
               "type": "string",
+              "format": "date",
               "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
             }
           },
@@ -867,6 +876,7 @@
             "description": "Último dia do período (INCLUSIVO), YYYY-MM-DD. Usado apenas com period=custom.",
             "schema": {
               "type": "string",
+              "format": "date",
               "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
             }
           },
@@ -877,7 +887,8 @@
             "description": "Restringe o cálculo a uma conta. householdId continua derivado do token.",
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           },
           {
@@ -1193,7 +1204,8 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           },
           {
@@ -1225,7 +1237,8 @@
             "context": false,
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           },
           {
@@ -1249,7 +1262,8 @@
             "context": false,
             "schema": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -1259,7 +1273,8 @@
             "context": false,
             "schema": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -1340,15 +1355,18 @@
                   },
                   "accountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "categoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "subcategoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "notes": {
                     "type": "string",
@@ -1403,7 +1421,8 @@
                 "properties": {
                   "accountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "description": {
                     "type": "string",
@@ -1450,7 +1469,8 @@
                   },
                   "categoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "templateName": {
                     "type": "string"
@@ -1722,15 +1742,18 @@
                   },
                   "accountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "categoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "subcategoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "notes": {
                     "type": "string",
@@ -1781,7 +1804,8 @@
             "required": false,
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           },
           {
@@ -1840,7 +1864,8 @@
                 "properties": {
                   "accountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "description": {
                     "type": "string",
@@ -1872,7 +1897,8 @@
                   },
                   "categoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   }
                 },
                 "required": [
@@ -1945,11 +1971,13 @@
                   },
                   "fromAccountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "toAccountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   }
                 },
                 "required": [
@@ -2164,15 +2192,18 @@
                   },
                   "accountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "categoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "subcategoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "notes": {
                     "type": "string",
@@ -2259,11 +2290,13 @@
                   },
                   "categoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "accountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "notes": {
                     "type": "string"
@@ -2468,7 +2501,8 @@
                 "properties": {
                   "categoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "name": {
                     "type": "string",
@@ -2778,7 +2812,8 @@
                 "properties": {
                   "accountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "name": {
                     "type": "string",
@@ -2888,7 +2923,10 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["updated", "updatedCount"],
+                  "required": [
+                    "updated",
+                    "updatedCount"
+                  ],
                   "properties": {
                     "updated": {
                       "type": "array",
@@ -2951,7 +2989,10 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["created", "createdCount"],
+                  "required": [
+                    "created",
+                    "createdCount"
+                  ],
                   "properties": {
                     "created": {
                       "type": "array",
@@ -3012,7 +3053,8 @@
                 "properties": {
                   "templateId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "templateName": {
                     "type": "string"
@@ -3323,7 +3365,8 @@
                 "properties": {
                   "accountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "description": {
                     "type": "string",
@@ -3342,11 +3385,13 @@
                   },
                   "categoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "subcategoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "notes": {
                     "type": "string",
@@ -3417,7 +3462,8 @@
                 "properties": {
                   "accountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "description": {
                     "type": "string",
@@ -3441,11 +3487,13 @@
                   },
                   "categoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "subcategoryId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "notes": {
                     "type": "string",
@@ -3521,7 +3569,8 @@
                   },
                   "fromAccountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   }
                 },
                 "required": [
@@ -3564,7 +3613,8 @@
             "required": false,
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           },
           {
@@ -3753,7 +3803,11 @@
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "enum": ["expense", "income", "transfer"]
+                    "enum": [
+                      "expense",
+                      "income",
+                      "transfer"
+                    ]
                   },
                   "description": {
                     "type": "string",
@@ -3762,7 +3816,8 @@
                   },
                   "amountCents": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 9007199254740991
                   },
                   "date": {
                     "type": "string",
@@ -3771,21 +3826,29 @@
                   },
                   "accountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "fromAccountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "toAccountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   },
                   "idempotencyKey": {
                     "type": "string"
                   }
                 },
-                "required": ["kind", "description", "amountCents", "date"]
+                "required": [
+                  "kind",
+                  "description",
+                  "amountCents",
+                  "date"
+                ]
               }
             }
           }
@@ -3797,7 +3860,9 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["duplicate_detected"],
+                  "required": [
+                    "duplicate_detected"
+                  ],
                   "properties": {
                     "duplicate_detected": {
                       "type": "boolean"
@@ -3805,12 +3870,30 @@
                     "match": {
                       "type": "object",
                       "properties": {
-                        "id": { "type": "string", "format": "uuid" },
-                        "description": { "type": "string" },
-                        "amount_cents": { "type": "string" },
-                        "date": { "type": "string", "format": "date-time" },
-                        "match_type": { "type": "string", "enum": ["idempotency_key", "semantic"] },
-                        "similarity": { "type": "number" }
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "amount_cents": {
+                          "type": "string"
+                        },
+                        "date": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "match_type": {
+                          "type": "string",
+                          "enum": [
+                            "idempotency_key",
+                            "semantic"
+                          ]
+                        },
+                        "similarity": {
+                          "type": "number"
+                        }
                       }
                     }
                   }
@@ -3861,7 +3944,12 @@
             "required": false,
             "schema": {
               "type": "string",
-              "enum": ["all", "comparison", "anomalies", "income-share"]
+              "enum": [
+                "all",
+                "comparison",
+                "anomalies",
+                "income-share"
+              ]
             }
           },
           {

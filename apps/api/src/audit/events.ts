@@ -109,7 +109,17 @@ type PrivacyScan = {
   keys: Set<string>;
 };
 
-const assertPrivacyValue = (value: unknown, path: string, scan: PrivacyScan): void => {
+/**
+ * Fail-closed bound on the privacy-scan recursion (Fase E): legit
+ * observability payloads are flat (depth <= 3), while a deeply nested
+ * payload would otherwise overflow the call stack with a RangeError —
+ * which is NOT an ObservabilityPrivacyError and escapes as a 500.
+ * Exceeding the bound throws ObservabilityPrivacyError, so the route
+ * still fails closed with 400 + `observability.privacy_violation`.
+ */
+const MAX_PRIVACY_SCAN_DEPTH = 100;
+
+const assertPrivacyValue = (value: unknown, path: string, scan: PrivacyScan, depth: number): void => {
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (JWT_PATTERN.test(trimmed)) {
@@ -134,14 +144,20 @@ const assertPrivacyValue = (value: unknown, path: string, scan: PrivacyScan): vo
     throw new ObservabilityPrivacyError(`non-JSON value of type '${typeof value}' is forbidden at '${path}'`);
   }
   if (Array.isArray(value)) {
+    if (depth >= MAX_PRIVACY_SCAN_DEPTH) {
+      throw new ObservabilityPrivacyError(`payload nesting exceeds ${MAX_PRIVACY_SCAN_DEPTH} levels at '${path}'`);
+    }
     if (scan.seen.has(value)) {
       throw new ObservabilityPrivacyError(`cyclic payload reference is forbidden at '${path}'`);
     }
     scan.seen.add(value);
-    value.forEach((entry, index) => assertPrivacyValue(entry, `${path}[${index}]`, scan));
+    value.forEach((entry, index) => assertPrivacyValue(entry, `${path}[${index}]`, scan, depth + 1));
     return;
   }
   if (typeof value === 'object') {
+    if (depth >= MAX_PRIVACY_SCAN_DEPTH) {
+      throw new ObservabilityPrivacyError(`payload nesting exceeds ${MAX_PRIVACY_SCAN_DEPTH} levels at '${path}'`);
+    }
     if (scan.seen.has(value)) {
       throw new ObservabilityPrivacyError(`cyclic payload reference is forbidden at '${path}'`);
     }
@@ -165,7 +181,7 @@ const assertPrivacyValue = (value: unknown, path: string, scan: PrivacyScan): vo
         );
       }
       scan.keys.add(normalizeKey(key));
-      assertPrivacyValue(entry, path === '$' ? `$.${key}` : `${path}.${key}`, scan);
+      assertPrivacyValue(entry, path === '$' ? `$.${key}` : `${path}.${key}`, scan, depth + 1);
     }
   }
 };
@@ -177,7 +193,7 @@ const assertPrivacyValue = (value: unknown, path: string, scan: PrivacyScan): vo
  */
 const assertPrivacy = (value: Record<string, unknown>, path: string): void => {
   const scan: PrivacyScan = { seen: new WeakSet(), keys: new Set() };
-  assertPrivacyValue(value, path, scan);
+  assertPrivacyValue(value, path, scan, 0);
   const hasAmount = [...FINANCIAL_AMOUNT_KEYS].some((key) => scan.keys.has(key));
   const hasDescription = [...FINANCIAL_DESCRIPTION_KEYS].some((key) => scan.keys.has(key));
   if (hasAmount && hasDescription) {
