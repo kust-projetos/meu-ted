@@ -89,66 +89,150 @@ const requiredOverrides: Record<string, Record<string, boolean>> = {
   analytics_category_breakdown: { period: true },
 };
 
-type Schema = z.ZodTypeAny;
-const unwrap = (schema: Schema): Schema => {
-  let current = schema;
-  while (current instanceof z.ZodOptional || current instanceof z.ZodDefault || current instanceof z.ZodNullable || current instanceof z.ZodEffects) {
-    const definition = current._def as any;
-    current = definition.innerType ?? definition.schema;
-  }
-  return current;
+type Schema = z.ZodType;
+const constraintKeys = ['type', 'format', 'enum', 'minLength', 'maxLength', 'pattern', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'minItems', 'maxItems', 'items'] as const;
+const normalizeIntegerBounds = (schema: Record<string, unknown>): Record<string, unknown> => {
+  if (schema.type !== 'integer') return schema;
+  const result = { ...schema };
+  const lower: number[] = [];
+  const upper: number[] = [];
+  if (typeof schema.minimum === 'number') lower.push(schema.exclusiveMinimum === true ? Math.floor(schema.minimum) + 1 : Math.ceil(schema.minimum));
+  if (typeof schema.maximum === 'number') upper.push(schema.exclusiveMaximum === true ? Math.ceil(schema.maximum) - 1 : Math.floor(schema.maximum));
+  if (typeof schema.exclusiveMinimum === 'number') lower.push(Math.floor(schema.exclusiveMinimum) + 1);
+  if (typeof schema.exclusiveMaximum === 'number') upper.push(Math.ceil(schema.exclusiveMaximum) - 1);
+  delete result.exclusiveMinimum;
+  delete result.exclusiveMaximum;
+  if (lower.length) result.minimum = Math.max(...lower);
+  if (upper.length) result.maximum = Math.min(...upper);
+  return result;
 };
-const isOptional = (schema: Schema): boolean => schema instanceof z.ZodOptional || schema instanceof z.ZodDefault;
-const schemaFields = (schema: Schema): Record<string, Schema> => {
-  const unwrapped = unwrap(schema);
-  if (unwrapped instanceof z.ZodObject) return unwrapped.shape;
-  return {};
-};
-const zodConstraints = (schema: Schema): Record<string, unknown> => {
-  const base = unwrap(schema);
-  if (base instanceof z.ZodString) {
-    const result: Record<string, unknown> = { type: 'string' };
-    if (base._def.checks.some((check: any) => check.kind === 'uuid')) result.format = 'uuid';
-    for (const check of base._def.checks) {
-      if (check.kind === 'min') result.minLength = check.value;
-      if (check.kind === 'max') result.maxLength = check.value;
-      if (check.kind === 'regex') result.pattern = check.regex.source;
-    }
-    return result;
+const compareConstraints = (actual: Record<string, unknown>, expected: Record<string, unknown>, label: string) => {
+  actual = normalizeIntegerBounds(actual);
+  expected = normalizeIntegerBounds(expected);
+  for (const key of constraintKeys) {
+    if (expected[key] !== undefined) expect(actual[key], `${label}.${key}`).toEqual(expected[key]);
+    else expect(actual[key], `${label}.${key}`).toBeUndefined();
   }
-  if (base instanceof z.ZodEnum) {
-    const result: Record<string, unknown> = { type: 'string', enum: base._def.values };
-    return result;
-  }
-  if (base instanceof z.ZodNumber) {
-    const result: Record<string, unknown> = { type: base._def.checks.some((check: any) => check.kind === 'int') ? 'integer' : 'number' };
-    for (const check of base._def.checks) {
-      if (check.kind === 'min') result.minimum = check.inclusive === false ? check.value + 1 : check.value;
-      if (check.kind === 'max') result.maximum = check.inclusive === false ? check.value - 1 : check.value;
-    }
-    return result;
-  }
-  if (base instanceof z.ZodBoolean) return { type: 'boolean' };
-  if (base instanceof z.ZodArray) return { type: 'array', items: zodConstraints(base._def.type) };
-  return {};
 };
 const openApiFields = (name: string, schema: Schema) => {
   const tool = tools.get(name);
   if (!tool) throw new Error(`missing generated contract ${name}`);
   const inBody = tool.parameters.filter((parameter) => parameter.in === 'body');
   const inQuery = tool.parameters.filter((parameter) => parameter.in === 'query' && parameter.name !== 'householdId');
-  const fields = Object.keys(schemaFields(schema));
+  const converted = z.toJSONSchema(schema, { target: 'openapi-3.0', io: 'input' });
+  if (converted.type !== 'object' || !converted.properties) throw new Error(`${name}: expected an object input schema`);
+  const fields = Object.keys(converted.properties);
   const actual = new Set(['audit_logs', 'list_accounts', 'list_categories', 'get_month_summary', 'list_recent_transactions', 'list_accounts_payable', 'list_statements', 'spending_insights', 'budget_trends', 'list_recurring_purchases', 'auto_create_from_templates', 'get_pending_operation', 'confirm_pending_operation', 'cancel_pending_operation', 'analytics_kpis', 'analytics_category_breakdown']).has(name) ? inQuery : inBody;
   expect(actual.map((parameter) => parameter.name).sort()).toEqual([...fields].sort());
-  for (const [field, fieldSchema] of Object.entries(schemaFields(schema))) {
+  for (const [field, fieldSchema] of Object.entries(converted.properties)) {
     const parameter = actual.find((candidate) => candidate.name === field)!;
-    const expectedRequired = requiredOverrides[name]?.[field] ?? !isOptional(fieldSchema);
+    const expectedRequired = requiredOverrides[name]?.[field] ?? (converted.required?.includes(field) ?? false);
     expect(parameter.required ?? false, `${name}.${field} required`).toBe(expectedRequired);
-    for (const [key, value] of Object.entries(zodConstraints(fieldSchema))) expect(parameter.schema[key], `${name}.${field}.${key}`).toEqual(value);
+    if (typeof fieldSchema !== 'object' || fieldSchema === null) throw new Error(`${name}.${field}: invalid converted schema`);
+    compareConstraints(parameter.schema, fieldSchema, `${name}.${field}`);
   }
 };
 
 describe('exhaustive authoritative schema coverage', () => {
+  it('enforces safe integer limits in the three affected fields', () => {
+    for (const field of ['minAmountCents', 'maxAmountCents'] as const) {
+      expect(transactionFiltersSchema.safeParse({ [field]: Number.MAX_SAFE_INTEGER }).success).toBe(true);
+      expect(transactionFiltersSchema.safeParse({ [field]: Number.MAX_SAFE_INTEGER + 1 }).success).toBe(false);
+    }
+    const amount = detectSchema.shape.amountCents;
+    expect(amount.safeParse(Number.MAX_SAFE_INTEGER).success).toBe(true);
+    expect(amount.safeParse(Number.MAX_SAFE_INTEGER + 1).success).toBe(false);
+  });
+  it('compares integer bounds by value without accepting wider bounds', () => {
+    expect(() => compareConstraints({ type: 'integer', minimum: 1, maximum: 9 }, { type: 'integer', minimum: 0, exclusiveMinimum: true, exclusiveMaximum: 10 }, 'integer')).not.toThrow();
+    expect(() => compareConstraints({ type: 'integer', minimum: 0, maximum: 9 }, { type: 'integer', minimum: 0, exclusiveMinimum: true, exclusiveMaximum: 10 }, 'integer')).toThrow();
+    expect(() => compareConstraints({ type: 'number', minimum: 1 }, { type: 'number', minimum: 0, exclusiveMinimum: true }, 'number')).toThrow();
+  });
+  it('reports all schema discrepancies together', () => {
+    const differences: string[] = [];
+    const queryTools = new Set(['audit_logs', 'list_accounts', 'list_categories', 'get_month_summary', 'list_recent_transactions', 'list_accounts_payable', 'list_statements', 'spending_insights', 'budget_trends', 'list_recurring_purchases', 'auto_create_from_templates', 'get_pending_operation', 'confirm_pending_operation', 'cancel_pending_operation', 'analytics_kpis', 'analytics_category_breakdown']);
+    const report = (name: string, field: string, key: string, expected: unknown, actual: unknown) => differences.push(`${name}.${field}.${key}: authoritative=${JSON.stringify(expected)} openapi=${JSON.stringify(actual)}`);
+    for (const [name, schema] of Object.entries(authoritativeSchemas)) {
+      try {
+        const converted = z.toJSONSchema(schema, { target: 'openapi-3.0', io: 'input' });
+        if (converted.type !== 'object' || !converted.properties) throw new Error('expected object properties');
+        const tool = tools.get(name);
+        if (!tool) throw new Error('missing tool');
+        const parameters = tool.parameters.filter((p) => p.in === (queryTools.has(name) ? 'query' : 'body') && p.name !== 'householdId');
+        for (const parameter of parameters) if (!(parameter.name in converted.properties)) report(name, parameter.name, 'field', 'absent', 'present');
+        for (const [field, definition] of Object.entries(converted.properties)) {
+          const parameter = parameters.find((p) => p.name === field);
+          if (!parameter) { report(name, field, 'field', 'present', 'absent'); continue; }
+          const required = requiredOverrides[name]?.[field] ?? (converted.required?.includes(field) ?? false);
+          if ((parameter.required ?? false) !== required) report(name, field, 'required', required, parameter.required ?? false);
+          if (!definition || typeof definition !== 'object') { report(name, field, 'schema', 'object', definition); continue; }
+          const expected = normalizeIntegerBounds(definition);
+          const actual = normalizeIntegerBounds(parameter.schema);
+          for (const key of constraintKeys) {
+            if (expected[key] !== undefined) { if (JSON.stringify(actual[key]) !== JSON.stringify(expected[key])) report(name, field, key, expected[key], actual[key]); }
+            else if (actual[key] !== undefined) report(name, field, key, undefined, actual[key]);
+          }
+        }
+      } catch (error) { report(name, '*', 'conversion', 'success', String(error)); }
+    }
+    expect(differences.join('\n')).toBe('');
+  });
+  it('detects a missing field and a required field made optional', () => {
+    const name = '__contract_fixture__';
+    const schema = z.object({ value: z.string() });
+    const parameter = { name: 'value', in: 'body', required: true, schema: { type: 'string' } };
+    try {
+      tools.set(name, { parameters: [parameter] });
+      expect(() => openApiFields(name, schema)).not.toThrow();
+      tools.set(name, { parameters: [] });
+      expect(() => openApiFields(name, schema)).toThrow();
+      tools.set(name, { parameters: [{ ...parameter, required: false }] });
+      expect(() => openApiFields(name, schema)).toThrow();
+    } finally {
+      tools.delete(name);
+    }
+  });
+  it('enforces UUID semantics consistently across pending-operation tools', () => {
+    const input = z.toJSONSchema(pendingIdentitySchema, { target: 'openapi-3.0', io: 'input' });
+    const field = input.properties?.pendingOperationId;
+    if (!field || typeof field !== 'object' || typeof field.pattern !== 'string') throw new Error('missing authoritative UUID pattern');
+    const examples = [
+      ['550e8400-e29b-41d4-a716-446655440000', true],
+      ['01890f5a-7b9c-7def-8123-456789abcdef', true],
+      ['not-a-uuid', false],
+      ['550e8400-e29b-41d4-0716-446655440000', false],
+    ] as const;
+    for (const [value, valid] of examples) {
+      expect(pendingIdentitySchema.safeParse({ pendingOperationId: value }).success, value).toBe(valid);
+      expect(new RegExp(field.pattern).test(value), value).toBe(valid);
+    }
+    for (const name of ['get_pending_operation', 'confirm_pending_operation', 'cancel_pending_operation']) {
+      const parameter = tools.get(name)?.parameters.find((item) => item.name === 'pendingOperationId');
+      expect(parameter?.schema.pattern, name).toBe(field.pattern);
+      expect(() => compareConstraints({ ...parameter?.schema, pattern: undefined }, field, name)).toThrow();
+      expect(() => compareConstraints({ ...parameter?.schema, pattern: '.*' }, field, name)).toThrow();
+    }
+  });
+  it('rejects missing or widened constraints in a controlled fixture', () => {
+    const expected = { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string', enum: ['a', 'b'], maxLength: 4 } };
+    const examples = [
+      { type: 'array', maxItems: 3, items: expected.items },
+      { type: 'array', minItems: 1, maxItems: 4, items: expected.items },
+      { type: 'string', minItems: 1, maxItems: 3, items: expected.items },
+      { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string', enum: ['a', 'b', 'c'], maxLength: 4 } },
+      { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string', enum: ['a', 'b'], maxLength: 5 } },
+    ];
+    for (const actual of examples) expect(() => compareConstraints(actual, expected, 'fixture')).toThrow();
+  });
+  it('rejects unexpected additional constraints in a controlled fixture', () => {
+    const cases: Array<{ expected: Record<string, unknown>; actual: Record<string, unknown> }> = [
+      { expected: { type: 'string' }, actual: { type: 'string', minLength: 1 } },
+      { expected: { type: 'string' }, actual: { type: 'string', pattern: 'a+' } },
+      { expected: { type: 'string' }, actual: { type: 'string', enum: ['a'] } },
+      { expected: { type: 'array', items: { type: 'string' } }, actual: { type: 'array', items: { type: 'string' }, minItems: 1 } },
+    ];
+    for (const { actual, expected } of cases) expect(() => compareConstraints(actual, expected, 'fixture-extra')).toThrow();
+  });
   it('covers every generated tool with an API schema or an explicit no-input route', () => {
     const noInput = new Set(['check_payable_reminders', 'list_goals', 'list_budgets', 'check_budgets', 'list_notifications', 'list_payable_templates', 'get_balance', 'deactivate_account', 'deactivate_category', 'delete_transaction', 'cancel_goal', 'get_statement_details', 'refresh_payable_status', 'undo_last_action']);
     expect(new Set([...Object.keys(authoritativeSchemas), ...noInput])).toEqual(new Set(tools.keys()));

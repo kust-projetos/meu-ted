@@ -29,7 +29,11 @@ export const isValidIsoDate = (value: string): boolean => {
 export const isoDateSchema = z
   .string()
   .regex(ISO_DATE_RE, 'YYYY-MM-DD')
-  .refine(isValidIsoDate, { message: 'data inválida (calendário real)' });
+  .refine(isValidIsoDate, { message: 'data inválida (calendário real)' })
+  // JSON-schema-only annotation: Zod 4 does not infer `format` from a regex,
+  // but the OpenAPI contract declares `format: date` alongside the same
+  // pattern. Runtime validation is unchanged (regex + calendar refine).
+  .meta({ format: 'date' });
 
 /** Strict ISO-8601 datetime (UTC offset required). */
 export const isoDateTimeSchema = z.string().datetime({ offset: true });

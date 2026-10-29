@@ -28,7 +28,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -61,7 +62,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -94,7 +96,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -169,7 +172,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -438,7 +442,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -527,6 +532,7 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
+          "format": "date",
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
         }
       },
@@ -537,6 +543,7 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
+          "format": "date",
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
         }
       },
@@ -547,7 +554,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -607,6 +615,7 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
+          "format": "date",
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
         }
       },
@@ -617,6 +626,7 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
+          "format": "date",
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
         }
       },
@@ -627,7 +637,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -752,7 +763,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -784,7 +796,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -808,7 +821,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       {
@@ -818,7 +832,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       {
@@ -907,7 +922,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -917,7 +933,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -927,7 +944,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -977,7 +995,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1078,7 +1097,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1334,7 +1354,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1344,7 +1365,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1354,7 +1376,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1396,7 +1419,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1450,7 +1474,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1518,7 +1543,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       }
     ]
@@ -1591,7 +1617,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1601,7 +1628,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       }
     ]
@@ -1804,7 +1832,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1814,7 +1843,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1824,7 +1854,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1941,7 +1972,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -1951,7 +1983,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -2141,7 +2174,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -2477,7 +2511,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -2671,7 +2706,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -2991,7 +3027,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -3034,7 +3071,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -3044,7 +3082,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -3116,7 +3155,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -3170,7 +3210,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -3180,7 +3221,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -3251,7 +3293,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       }
     ]
@@ -3282,7 +3325,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -3479,7 +3523,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 9007199254740991
         }
       },
       {
@@ -3500,7 +3545,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -3510,7 +3556,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -3520,7 +3567,8 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
       {
@@ -3661,22 +3709,22 @@ function extractRequestAuth(ctx?: unknown): { hasAuth: boolean; delegatedToken?:
 function createTool(spec: ToolSpec) {
   const properties = {
   "get_pending_operation": Type.Object({
-    "pendingOperationId": Type.Optional(Type.String({"format":"uuid"})),
+    "pendingOperationId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "chatId": Type.Optional(Type.String({"minLength":1,"maxLength":240})),
   }),
   "confirm_pending_operation": Type.Object({
-    "pendingOperationId": Type.Optional(Type.String({"format":"uuid"})),
+    "pendingOperationId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "chatId": Type.Optional(Type.String({"minLength":1,"maxLength":240})),
   }),
   "cancel_pending_operation": Type.Object({
-    "pendingOperationId": Type.Optional(Type.String({"format":"uuid"})),
+    "pendingOperationId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "chatId": Type.Optional(Type.String({"minLength":1,"maxLength":240})),
   }),
   "audit_logs": Type.Object({
     "householdId": Type.String({"format":"uuid"}),
     "limit": Type.Optional(Type.Integer({"minimum":1,"maximum":100,"default":20})),
     "entityType": Type.Optional(Type.String({"minLength":1})),
-    "entityId": Type.Optional(Type.String({"format":"uuid"})),
+    "entityId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "operation": Type.Optional(Type.String({"minLength":1})),
     "eventType": Type.Optional(Type.String({"minLength":1})),
     "actorType": Type.Optional(Type.Union([Type.Literal("device"), Type.Literal("user")])),
@@ -3702,7 +3750,7 @@ function createTool(spec: ToolSpec) {
     "idempotencyKey": Type.Optional(Type.String({})),
     "name": Type.String({"minLength":1,"maxLength":120}),
     "kind": Type.Union([Type.Literal("expense"), Type.Literal("income")]),
-    "parentId": Type.Optional(Type.String({"format":"uuid"})),
+    "parentId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "icon": Type.Optional(Type.String({"minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9]+$"})),
     "color": Type.Optional(Type.String({"pattern":"^#[0-9A-Fa-f]{6}$"})),
     "sortOrder": Type.Optional(Type.Integer({"minimum":0,"maximum":9999})),
@@ -3711,17 +3759,17 @@ function createTool(spec: ToolSpec) {
   "analytics_kpis": Type.Object({
     "householdId": Type.Optional(Type.String({"format":"uuid"})),
     "period": Type.Union([Type.Literal("last30days"), Type.Literal("lastMonth"), Type.Literal("thisYear"), Type.Literal("custom")]),
-    "from": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
-    "to": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
-    "accountId": Type.Optional(Type.String({"format":"uuid"})),
+    "from": Type.Optional(Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
+    "to": Type.Optional(Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
+    "accountId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "basis": Type.Optional(Type.Union([Type.Literal("liquidez"), Type.Literal("competencia")])),
   }),
   "analytics_category_breakdown": Type.Object({
     "householdId": Type.Optional(Type.String({"format":"uuid"})),
     "period": Type.Union([Type.Literal("last30days"), Type.Literal("lastMonth"), Type.Literal("thisYear"), Type.Literal("custom")]),
-    "from": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
-    "to": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
-    "accountId": Type.Optional(Type.String({"format":"uuid"})),
+    "from": Type.Optional(Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
+    "to": Type.Optional(Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
+    "accountId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "kind": Type.Optional(Type.Union([Type.Literal("expense"), Type.Literal("income")])),
     "basis": Type.Optional(Type.Union([Type.Literal("liquidez"), Type.Literal("competencia")])),
   }),
@@ -3733,13 +3781,13 @@ function createTool(spec: ToolSpec) {
     "householdId": Type.String({"format":"uuid"}),
     "limit": Type.Optional(Type.Integer({"minimum":1,"maximum":200,"default":50})),
     "offset": Type.Optional(Type.Integer({"minimum":0,"maximum":100000,"default":0})),
-    "accountId": Type.Optional(Type.String({"format":"uuid"})),
+    "accountId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "startDate": Type.Optional(Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
     "endDate": Type.Optional(Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
-    "categoryId": Type.Optional(Type.String({"format":"uuid"})),
+    "categoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "kind": Type.Optional(Type.Union([Type.Literal("expense"), Type.Literal("income"), Type.Literal("transfer")])),
-    "minAmountCents": Type.Optional(Type.Integer({"minimum":0})),
-    "maxAmountCents": Type.Optional(Type.Integer({"minimum":0})),
+    "minAmountCents": Type.Optional(Type.Integer({"minimum":0,"maximum":9007199254740991})),
+    "maxAmountCents": Type.Optional(Type.Integer({"minimum":0,"maximum":9007199254740991})),
     "query": Type.Optional(Type.String({"minLength":1,"maxLength":120})),
   }),
   "create_expense": Type.Object({
@@ -3748,15 +3796,15 @@ function createTool(spec: ToolSpec) {
     "description": Type.String({"minLength":1,"maxLength":240}),
     "amountCents": Type.Integer({"minimum":1,"maximum":1000000000000}),
     "date": Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}),
-    "accountId": Type.String({"format":"uuid"}),
-    "categoryId": Type.String({"format":"uuid"}),
-    "subcategoryId": Type.Optional(Type.String({"format":"uuid"})),
+    "accountId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
+    "categoryId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
+    "subcategoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "notes": Type.Optional(Type.String({"maxLength":2000})),
   }),
   "create_account_payable": Type.Object({
     "householdId": Type.Optional(Type.String({})),
     "idempotencyKey": Type.Optional(Type.String({})),
-    "accountId": Type.String({"format":"uuid"}),
+    "accountId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
     "description": Type.String({"minLength":1,"maxLength":240}),
     "amountCents": Type.Integer({"minimum":1,"maximum":1000000000000}),
     "dueDate": Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}),
@@ -3765,7 +3813,7 @@ function createTool(spec: ToolSpec) {
     "endDate": Type.Optional(Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
     "reminderDaysBefore": Type.Optional(Type.Integer({"minimum":0,"maximum":30})),
     "notes": Type.Optional(Type.String({})),
-    "categoryId": Type.Optional(Type.String({"format":"uuid"})),
+    "categoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "templateName": Type.Optional(Type.String({})),
   }),
   "list_accounts_payable": Type.Object({
@@ -3794,26 +3842,26 @@ function createTool(spec: ToolSpec) {
     "description": Type.String({"minLength":1,"maxLength":240}),
     "amountCents": Type.Integer({"minimum":1,"maximum":1000000000000}),
     "date": Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}),
-    "accountId": Type.String({"format":"uuid"}),
-    "categoryId": Type.String({"format":"uuid"}),
-    "subcategoryId": Type.Optional(Type.String({"format":"uuid"})),
+    "accountId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
+    "categoryId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
+    "subcategoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "notes": Type.Optional(Type.String({"maxLength":2000})),
   }),
   "list_recurring_purchases": Type.Object({
     "householdId": Type.String({"format":"uuid"}),
-    "accountId": Type.Optional(Type.String({"format":"uuid"})),
+    "accountId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "status": Type.Optional(Type.Union([Type.Literal("active"), Type.Literal("paused"), Type.Literal("cancelled")])),
   }),
   "create_recurring_purchase": Type.Object({
     "householdId": Type.String({}),
     "idempotencyKey": Type.Optional(Type.String({})),
-    "accountId": Type.String({"format":"uuid"}),
+    "accountId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
     "description": Type.String({"minLength":1,"maxLength":240}),
     "amountCents": Type.Integer({"minimum":1,"maximum":1000000000000}),
     "frequency": Type.Union([Type.Literal("monthly"), Type.Literal("quarterly"), Type.Literal("yearly")]),
     "startDate": Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}),
     "endDate": Type.Optional(Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
-    "categoryId": Type.Optional(Type.String({"format":"uuid"})),
+    "categoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
   }),
   "create_transfer": Type.Object({
     "householdId": Type.Optional(Type.String({})),
@@ -3821,8 +3869,8 @@ function createTool(spec: ToolSpec) {
     "description": Type.String({"minLength":1,"maxLength":240}),
     "amountCents": Type.Integer({"minimum":1,"maximum":1000000000000}),
     "date": Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}),
-    "fromAccountId": Type.String({"format":"uuid"}),
-    "toAccountId": Type.String({"format":"uuid"}),
+    "fromAccountId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
+    "toAccountId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
   }),
   "deactivate_account": Type.Object({
     "householdId": Type.Optional(Type.String({})),
@@ -3846,9 +3894,9 @@ function createTool(spec: ToolSpec) {
     "description": Type.Optional(Type.String({"minLength":1,"maxLength":240})),
     "date": Type.Optional(Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
     "amountCents": Type.Optional(Type.Integer({"minimum":1,"maximum":1000000000000})),
-    "accountId": Type.Optional(Type.String({"format":"uuid"})),
-    "categoryId": Type.Optional(Type.String({"format":"uuid"})),
-    "subcategoryId": Type.Optional(Type.String({"format":"uuid"})),
+    "accountId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
+    "categoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
+    "subcategoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "notes": Type.Optional(Type.String({"maxLength":2000})),
   }),
   "create_goal": Type.Object({
@@ -3860,8 +3908,8 @@ function createTool(spec: ToolSpec) {
     "startDate": Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}),
     "targetDate": Type.Optional(Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"})),
     "description": Type.Optional(Type.String({})),
-    "categoryId": Type.Optional(Type.String({"format":"uuid"})),
-    "accountId": Type.Optional(Type.String({"format":"uuid"})),
+    "categoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
+    "accountId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "notes": Type.Optional(Type.String({})),
   }),
   "list_goals": Type.Object({
@@ -3884,7 +3932,7 @@ function createTool(spec: ToolSpec) {
   "create_budget": Type.Object({
     "householdId": Type.Optional(Type.String({})),
     "idempotencyKey": Type.Optional(Type.String({})),
-    "categoryId": Type.String({"format":"uuid"}),
+    "categoryId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
     "name": Type.String({"minLength":1}),
     "amountCents": Type.Integer({"minimum":1,"maximum":1000000000000}),
     "period": Type.Union([Type.Literal("monthly"), Type.Literal("quarterly"), Type.Literal("yearly")]),
@@ -3921,7 +3969,7 @@ function createTool(spec: ToolSpec) {
   "create_payable_template": Type.Object({
     "householdId": Type.Optional(Type.String({})),
     "idempotencyKey": Type.Optional(Type.String({})),
-    "accountId": Type.String({"format":"uuid"}),
+    "accountId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
     "name": Type.String({"minLength":1}),
     "description": Type.String({"minLength":1,"maxLength":240}),
     "amountCents": Type.Integer({"minimum":1,"maximum":1000000000000}),
@@ -3943,7 +3991,7 @@ function createTool(spec: ToolSpec) {
   "create_payable_from_template": Type.Object({
     "householdId": Type.Optional(Type.String({})),
     "idempotencyKey": Type.Optional(Type.String({})),
-    "templateId": Type.Optional(Type.String({"format":"uuid"})),
+    "templateId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "templateName": Type.Optional(Type.String({})),
     "dueDate": Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}),
     "amountOverrideCents": Type.Optional(Type.Integer({"minimum":1,"maximum":1000000000000})),
@@ -3979,12 +4027,12 @@ function createTool(spec: ToolSpec) {
   "create_card_purchase": Type.Object({
     "householdId": Type.Optional(Type.String({})),
     "idempotencyKey": Type.Optional(Type.String({})),
-    "accountId": Type.String({"format":"uuid"}),
+    "accountId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
     "description": Type.String({"minLength":1,"maxLength":240}),
     "amountCents": Type.Integer({"minimum":1,"maximum":1000000000000}),
     "date": Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}),
-    "categoryId": Type.Optional(Type.String({"format":"uuid"})),
-    "subcategoryId": Type.Optional(Type.String({"format":"uuid"})),
+    "categoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
+    "subcategoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "notes": Type.Optional(Type.String({"maxLength":2000})),
     "installmentsTotal": Type.Optional(Type.Integer({"minimum":1,"maximum":48})),
     "installmentNumber": Type.Optional(Type.Integer({"minimum":1,"maximum":48})),
@@ -3992,13 +4040,13 @@ function createTool(spec: ToolSpec) {
   "create_card_installments": Type.Object({
     "householdId": Type.Optional(Type.String({})),
     "idempotencyKey": Type.Optional(Type.String({})),
-    "accountId": Type.String({"format":"uuid"}),
+    "accountId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
     "description": Type.String({"minLength":1,"maxLength":240}),
     "totalAmountCents": Type.Integer({"minimum":100,"maximum":1000000000000}),
     "purchaseDate": Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}),
     "installmentsTotal": Type.Integer({"minimum":1,"maximum":48}),
-    "categoryId": Type.Optional(Type.String({"format":"uuid"})),
-    "subcategoryId": Type.Optional(Type.String({"format":"uuid"})),
+    "categoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
+    "subcategoryId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "notes": Type.Optional(Type.String({"maxLength":2000})),
   }),
   "pay_statement": Type.Object({
@@ -4006,11 +4054,11 @@ function createTool(spec: ToolSpec) {
     "idempotencyKey": Type.Optional(Type.String({})),
     "statementId": Type.String({"format":"uuid"}),
     "amountCents": Type.Integer({"minimum":1,"maximum":1000000000000}),
-    "fromAccountId": Type.String({"format":"uuid"}),
+    "fromAccountId": Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"}),
   }),
   "list_statements": Type.Object({
     "householdId": Type.String({}),
-    "accountId": Type.Optional(Type.String({"format":"uuid"})),
+    "accountId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
     "status": Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed"), Type.Literal("paid"), Type.Literal("partial"), Type.Literal("overdue"), Type.Literal("cancelled")])),
     "limit": Type.Optional(Type.Integer({"minimum":1,"maximum":50})),
   }),
@@ -4033,11 +4081,11 @@ function createTool(spec: ToolSpec) {
     "idempotencyKey": Type.Optional(Type.String({})),
     "kind": Type.Union([Type.Literal("expense"), Type.Literal("income"), Type.Literal("transfer")]),
     "description": Type.String({"minLength":1,"maxLength":240}),
-    "amountCents": Type.Integer({"minimum":1}),
+    "amountCents": Type.Integer({"minimum":1,"maximum":9007199254740991}),
     "date": Type.String({"format":"date","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}),
-    "accountId": Type.Optional(Type.String({"format":"uuid"})),
-    "fromAccountId": Type.Optional(Type.String({"format":"uuid"})),
-    "toAccountId": Type.Optional(Type.String({"format":"uuid"})),
+    "accountId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
+    "fromAccountId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
+    "toAccountId": Type.Optional(Type.String({"format":"uuid","pattern":"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"})),
   }),
   "spending_insights": Type.Object({
     "householdId": Type.String({"format":"uuid"}),

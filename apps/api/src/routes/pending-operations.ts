@@ -210,7 +210,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
       let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
       try {
         const key = requireIdempotencyKey(req.headers as Record<string, unknown>);
-        const body = z.object({ tool: z.string().min(1), normalizedArgs: z.record(z.unknown()), expiresAt: z.string().datetime({ offset: true }).optional() }).strict().safeParse(req.body ?? {});
+        const body = z.object({ tool: z.string().min(1), normalizedArgs: z.record(z.string(), z.unknown()), expiresAt: z.string().datetime({ offset: true }).optional() }).strict().safeParse(req.body ?? {});
         if (!body.success) return reply.code(400).send({ code: 'validation.error', issues: body.error.issues });
         // SPEC §7.4: validate against the registry contract for the requested
         // tool BEFORE persisting (the store re-validates as defense-in-depth).
