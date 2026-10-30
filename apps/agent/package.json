@@ -6,7 +6,7 @@
     "dev": "wrangler dev",
     "test": "vitest run",
     "test:golden": "vitest run tests/golden",
-    "lint": "biome check --diagnostic-level=error --max-diagnostics=100 src tests",
+    "lint": "biome check src tests",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "eval:ted-v2": "node evals/run-ted-v2-regression-evals.mjs",
@@ -27,6 +27,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.4",
+    "@opencode/client": "2.2.0",
     "wrangler": "4.152.0",
     "vitest": "4.1.12"
   },
