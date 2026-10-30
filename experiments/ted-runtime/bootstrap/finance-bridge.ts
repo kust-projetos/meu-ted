@@ -99,10 +99,17 @@ async function main(): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  if (!req.route.startsWith('/accounts') && !req.route.startsWith('/dashboard/month-summary')) {
-    console.log(JSON.stringify({ fatal: `route not allowlisted: ${req.route}` }));
-    process.exitCode = 2;
-    return;
+  // Exact-pathname gate (mirrors isRouteAllowlisted in finance-transport.mjs):
+  // prefix matching would forward /accounts/123 or
+  // /dashboard/month-summary-extra to Fastify (spike02-fix-r2).
+  // Defense-in-depth behind the pre-spawn gate; query strings pass through.
+  {
+    const pathname = req.route.split('?')[0];
+    if (pathname !== '/accounts' && pathname !== '/dashboard/month-summary') {
+      console.log(JSON.stringify({ fatal: `route not allowlisted: ${req.route}` }));
+      process.exitCode = 2;
+      return;
+    }
   }
   // TEST-ONLY harness delay (exercises tool timeout; financial path untouched).
   if (typeof req.delayMs === 'number' && req.delayMs > 0) await sleep(req.delayMs);

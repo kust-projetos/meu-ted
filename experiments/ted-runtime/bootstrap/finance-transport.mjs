@@ -56,12 +56,27 @@ function extractJson(stdout) {
   throw new Error(`bridge returned no JSON payload: ${String(stdout).slice(0, 300)}`);
 }
 
+// Exact-pathname route allowlist (§5 contract). Only the path component is
+// gated here; the query string (if any) passes through to the REAL handler.
+// Exported for unit tests; the bridge mirrors the same predicate (TS) as
+// defense-in-depth behind this pre-spawn gate.
+const ALLOWED_PATHS = new Set(['/accounts', '/dashboard/month-summary']);
+
+export function isRouteAllowlisted(route) {
+  if (typeof route !== 'string') return false;
+  return ALLOWED_PATHS.has(route.split('?')[0]);
+}
+
 export async function callFinance({ route, method = 'GET', host, seed = 'standard', fault = null, workspaceId = null, tokenStore = null, access = null, delayMs = null, timeoutMs = 15000 }) {
   if (!host || typeof host.token !== 'string' || host.token.length === 0) {
     throw new ToolError('tool.invalid_args', 'host-bound token is required (never a tool arg)');
   }
-  // Route allowlist: only the two read-only finance routes (§5 contract).
-  if (typeof route !== 'string' || (!route.startsWith('/accounts') && !route.startsWith('/dashboard/month-summary'))) {
+  // Route allowlist: EXACT pathname only (§5 contract: /accounts and
+  // /dashboard/month-summary). Query strings pass through to the REAL handler
+  // (it owns domain validation, e.g. kind enum / yearMonth format). Prefix
+  // matching is FORBIDDEN: it would forward /accounts/123 or
+  // /dashboard/month-summary-extra to Fastify (spike02-fix-r2).
+  if (!isRouteAllowlisted(route)) {
     throw new ToolError('tool.invalid_args', `route not allowlisted: ${route}`);
   }
   const cli = resolveTsxCli();

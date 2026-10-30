@@ -231,6 +231,45 @@ describe('spike-02 steps 2-3: finance gateway + native plugin', () => {
     await A.removeSession(s.id);
   });
 
+  it('(15) route allowlist is exact-path: exotic paths rejected pre-transport, never forwarded', async () => {
+    const { callFinance, isRouteAllowlisted } = await import('../bootstrap/finance-transport.mjs');
+    // Unit: exact pathname gate (query strings pass through to the REAL handler).
+    assert.equal(isRouteAllowlisted('/accounts'), true);
+    assert.equal(isRouteAllowlisted('/accounts?kind=bank&includeInactive=true'), true);
+    assert.equal(isRouteAllowlisted('/dashboard/month-summary?yearMonth=2026-06'), true);
+    for (const hostile of ['/accounts/123', '/account', '/accounts-extra', '/dashboard/month-summary-extra', '/dashboard/month-summary/2026-06', '/', '', null, undefined, 42]) {
+      assert.equal(isRouteAllowlisted(hostile), false, `${String(hostile)} must not be allowlisted`);
+    }
+    // Behavioral: hostile route rejected with tool.invalid_args BEFORE any spawn.
+    for (const hostile of ['/accounts/123', '/dashboard/month-summary-extra']) {
+      const r = await capture(callFinance({ route: hostile, method: 'GET', host: HOST_A }));
+      assert.equal(r.ok, false);
+      assert.equal(r.error.code, 'tool.invalid_args');
+      assert.ok(String(r.error.message).includes('not allowlisted'));
+    }
+  });
+
+  it('(16) native prompt-loop execute fail-closes with explicit host_context_required (never hostless)', async () => {
+    delete process.env.TED_FINANCE_MARKER_FILE; // stub ctx: no marker side effects
+    const plugin = (await import('../bootstrap/plugins/ted-finance/index.mjs')).default;
+    assert.equal(plugin.id, 'ted-finance');
+    const added = [];
+    await plugin.setup({
+      tool: {
+        transform: async (cb) => { cb({ add: (t) => added.push(t) }); },
+        list: async () => [],
+      },
+    });
+    assert.equal(added.length, 2, 'both finance tools registered via native transform');
+    for (const tool of added) {
+      for (const args of (tool.name === 'get_month_summary' ? [{}, { yearMonth: '2026-06' }] : [{}])) {
+        const err = await tool.execute(args).then(() => null, (e) => e);
+        assert.ok(err, `${tool.name} execute must reject without a host-bound context`);
+        assert.equal(err.metadata && err.metadata.code, 'host_context_required', `${tool.name} fails closed with typed code`);
+      }
+    }
+  });
+
   it('(14) admin capability via restricted surface denied', async () => {
     const keys = Object.keys(A).sort();
     assert.deepEqual(keys, [
@@ -279,7 +318,14 @@ describe('spike-02 steps 2-3: finance gateway + native plugin', () => {
   it('G2-04 facade exposes no admin natives; G3-06 no new frameworks', async () => {
     const catalogs = await A.listCatalogs();
     assert.equal(catalogs.hasToolCatalog, false, 'no tool-catalog endpoint (documented 2.2.4 limit)');
-    assert.ok(catalogs.plugins.ids.includes('ted') === false || true, 'catalog shape stable');
+    // Real catalog-shape assertions: exact summary key set, and the plugin
+    // summary is internally consistent (non-empty; count covers the possibly
+    // truncated ids list — summarize() slices ids at 80).
+    assert.deepEqual(Object.keys(catalogs).sort(), [
+      'agents', 'commands', 'hasToolCatalog', 'mcp', 'models', 'plugins', 'providers', 'sessions', 'skills',
+    ]);
+    assert.ok(catalogs.plugins.ids.length > 0, 'plugin catalog non-empty');
+    assert.ok(catalogs.plugins.count >= catalogs.plugins.ids.length, 'plugin count covers listed ids');
     // Dependency surface unchanged: only the 4 pinned spike deps.
     const pkg = JSON.parse(fs.readFileSync(path.join(BOOT, 'package.json'), 'utf8'));
     assert.deepEqual(Object.keys(pkg.dependencies).sort(), [

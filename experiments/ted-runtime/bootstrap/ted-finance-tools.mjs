@@ -113,6 +113,16 @@ function routeFor(name, args) {
 // holds NO token state (no global mutable swapping, §6).
 export function createToolExecutors(transport) {
   const run = async (name, args, host, opts = {}) => {
+    // Explicit fail-closed: hostless execution is BLOCKED BY DESIGN (the
+    // native prompt-loop path carries no host-bound identity in this spike:
+    // no synthetic host, no LLM invocation). Refuse here with a TYPED code
+    // instead of falling through to an incidental transport rejection, so the
+    // registered plugin tools can never execute without a host-bound context
+    // (spike02-fix-r2). Checked BEFORE arg validation: no host => refuse,
+    // regardless of args.
+    if (!host || typeof host.token !== 'string' || host.token.length === 0) {
+      throw new ToolError('host_context_required', `${name}: host-bound context is required — hostless execution is blocked by design`);
+    }
     const safeArgs = validateToolArgs(name, args);
     const route = routeFor(name, safeArgs);
     let result;

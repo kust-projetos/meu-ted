@@ -46,10 +46,14 @@ export default Plugin.define({
     // Host-bound identity (§6): tool execute functions take the host context
     // as a parameter. The native prompt-loop path carries no deterministic
     // synthetic host in this spike, so a prompt-loop invocation arrives here
-    // WITHOUT a host and fail-closes in the transport (tool.invalid_args:
-    // host-bound token required). The deterministic harness calls the same
+    // WITHOUT a host and fail-closes EXPLICITLY with the typed code
+    // `host_context_required` (guard at the top of run() in
+    // ted-finance-tools.mjs — never an incidental transport rejection, and
+    // NEVER executed hostless). The deterministic harness calls the same
     // `run` functions directly WITH a host (ted-gateway.mjs). Prompt-loop
-    // LLM isolation therefore stays an untested limit (documented).
+    // LLM invocation therefore stays blocked-by-design and untested
+    // (no LLM in this spike; native registration proves catalog presence
+    // only — G2-01).
     await ctx.tool.transform((editor) => {
       for (const def of TOOL_DEFS) {
         const run = executors[def.name];

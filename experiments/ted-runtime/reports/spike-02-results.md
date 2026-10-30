@@ -7,21 +7,73 @@ reads-only against the repo's own synthetic test stack.
 
 ## Verdict
 
-- `tests/spike-02.test.mjs`: **18/18 PASS** (~35s, deterministic, no LLM).
+- `tests/spike-02.test.mjs`: **20/20 PASS** (~35s, deterministic, no LLM).
 - `tests/spike-01.test.mjs` regression: **7/7 PASS** (untouched files).
-- All 14 integration cases + gates G2-01..G2-04, G3-01..G3-06 GREEN.
+- All 14 integration cases + gates G2-01..G2-04, G3-01..G3-06 GREEN,
+  plus 2 review-remediation cases (15)–(16) GREEN (see §Remediation).
+
+## Remediation `spike02-fix-r2` (2026-10-30, review CHANGES_REQUIRED → addressed)
+
+Independent review raised 3 findings (1 MEDIUM, 1 LOW, 1 MEDIUM). All fixed
+with RED-first regression tests; full suites re-validated GREEN after the fix
+(spike-02 20/20, spike-01 7/7). No scope expansion: edits only under
+`experiments/ted-runtime/`, new commit on top of `f2b044e` (no amend).
+
+1. **MEDIUM — prefix allowlist.** `finance-transport.mjs` and
+   `finance-bridge.ts` used `startsWith`, so `/accounts/123` was FORWARDED to
+   Fastify (proven pre-fix: `callFinance({route:'/accounts/123'})` returned the
+   real handler's 400 instead of rejecting). FIX: exact-pathname gate
+   (`isRouteAllowlisted`, exported from the transport; query strings pass
+   through to the REAL handler which owns domain validation). Bridge mirrors
+   the same predicate as defense-in-depth behind the pre-spawn gate.
+   Regression test (15): unit cases (allowed `/accounts`,
+   `/accounts?kind=bank…`, `/dashboard/month-summary?yearMonth=…`; rejected
+   `/accounts/123`, `/account`, `/accounts-extra`,
+   `/dashboard/month-summary-extra`, `/…/2026-06`, `/`, non-strings) +
+   behavioral `callFinance` rejection (`tool.invalid_args`, `not allowlisted`).
+   RED pre-fix (`isRouteAllowlisted is not a function` + forwarded exotic
+   route), GREEN post-fix.
+2. **LOW — tautological assertion.** `spike-02.test.mjs` G2-04 contained
+   `… || true` (always pass). FIX: replaced with real assertions — exact
+   catalog-summary key set (`agents, commands, hasToolCatalog, mcp, models,
+   plugins, providers, sessions, skills`) + plugin summary internally
+   consistent (non-empty ids; `count >= ids.length`, since `summarize()`
+   truncates ids at 80 while count is total — 92 builtins here).
+3. **MEDIUM — hostless execute failed incidentally.** The natively registered
+   tools called `run(input, undefined, {})`, so a prompt-loop invocation died
+   with an incidental `tool.transport`/`tool.invalid_args` rejection. FIX:
+   explicit fail-closed guard at the top of `run()` in
+   `ted-finance-tools.mjs` — no host-bound token ⇒ typed
+   `host_context_required` error BEFORE arg validation, never executed
+   hostless (prompt-loop execution stays BLOCKED BY DESIGN: no LLM in this
+   spike). Regression test (16): drives the REAL plugin `setup()` with a stub
+   ctx (native `transform`/`editor.add` path), captures both registered
+   `execute` fns, asserts each rejects with
+   `metadata.code === 'host_context_required'`. RED pre-fix (actual
+   `tool.transport`), GREEN post-fix. The SAME `run` functions remain shared
+   between plugin and gateway facade, so the single-source-of-truth claim
+   still holds — the harness path (WITH host) is unaffected.
+
+**G2-01 scope statement (explicit):** native registration proves CATALOG
+PRESENCE ONLY — `ted-finance` reaches `state: "active"` with `list_accounts` +
+`get_month_summary` in the native post-transform catalog. It does NOT prove
+usable prompt-loop execution: invoking the registered tools through the agent
+prompt loop requires LLM inference (never exercised — no paid inference by
+scope decision), and any such invocation fail-closes by design with
+`host_context_required`. Prompt-loop execution remains untested AND blocked,
+not merely untested.
 
 ## What was built (all under `experiments/ted-runtime/`)
 
 | File | Role |
 |---|---|
-| `bootstrap/ted-finance-tools.mjs` | Shared tool defs (`list_accounts`, `get_month_summary`) + strict arg validation + executors. Single source imported by BOTH the native plugin and the gateway, so tool-integration tests exercise the SAME execute functions the plugin registers. |
-| `bootstrap/finance-transport.mjs` | One-shot tsx bridge spawner (spawn + explicit stdin write/end, per-call host token via stdin, route allowlist, timeout, secret scrub). |
+| `bootstrap/ted-finance-tools.mjs` | Shared tool defs (`list_accounts`, `get_month_summary`) + strict arg validation + executors. Single source imported by BOTH the native plugin and the gateway, so tool-integration tests exercise the SAME execute functions the plugin registers. `run()` fail-closes hostless execution with typed `host_context_required` (checked before arg validation); the transport additionally requires a host-bound token per call. |
+| `bootstrap/finance-transport.mjs` | One-shot tsx bridge spawner (spawn + explicit stdin write/end, per-call host token via stdin, EXACT-pathname route allowlist via exported `isRouteAllowlisted`, timeout, secret scrub). |
 | `bootstrap/finance-bridge.ts` | TS bridge executed via the repo's own tsx: imports the REAL `buildTestApp` + REAL fixtures (`apps/api/tests/…`). No financial logic reimplemented. |
 | `bootstrap/plugins/ted-finance/index.mjs` | Single TED plugin, native `Plugin.define({id, setup})` + `ctx.tool.transform(editor => editor.add(tool))`. |
 | `bootstrap/ted-gateway.mjs` | Restricted facade (sessions CRUD + read-only catalogs + 2 finance tools). Only module holding the full OpenCode instance. Frozen, no `call`/admin surface. |
 | `bootstrap/run-finance-check.mjs` | G2-01 proof runner (own process, identity `c`): native plugin registration → polls effective catalog → marker with native `tool.list()` contents. |
-| `tests/spike-02.test.mjs` | 14 integration cases + gates. |
+| `tests/spike-02.test.mjs` | 14 integration cases + gates + 2 remediation cases (15 exact-path allowlist, 16 hostless `host_context_required` fail-closed). |
 
 ## Native plugin interface (verified against installed 2.2.4 `.d.ts`)
 
@@ -114,7 +166,10 @@ reads-only against the repo's own synthetic test stack.
 ## Limits (untested, recorded)
 
 - Prompt-loop LLM invocation of the registered tools (requires paid
-  inference; by scope decision).
+  inference; by scope decision). Native registration (G2-01) proves CATALOG
+  PRESENCE ONLY, not usable prompt-loop execution: any hostless invocation
+  fail-closes by design with `host_context_required` (test 16 pins this), so
+  prompt-loop execution is BLOCKED, not merely untested.
 - Config-file plugin discovery path (environmentally blocked, see §3 above).
 - The 403 branch variant requiring Better-Auth session + workspace store
   (synthetic app covers the device-token 403 branch only).
@@ -124,6 +179,7 @@ reads-only against the repo's own synthetic test stack.
 ## Reproduce
 
 - `node --test tests/spike-02.test.mjs` (bootstrap cwd, `TED_HOME_ROOT`
-  set by the test itself) — 18/18.
+  set by the test itself) — 20/20 (14 integration + gates + remediation
+  cases 15–16).
 - `node --test tests/spike-01.test.mjs` — 7/7 regression.
 - `node run-finance-check.mjs c` — G2-01 standalone proof JSON.

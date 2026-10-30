@@ -1,5 +1,5 @@
 {
- "base_revision": "3489352",
+ "base_revision": "2d3e962",
  "branch": "experiment/ted-opencode-runtime",
  "commands": {
   "inventory": "node run-identity.mjs <a|b> inventory",
@@ -118,7 +118,7 @@
   "tools": "list_accounts -> GET /accounts; get_month_summary -> GET /dashboard/month-summary?yearMonth=YYYY-MM. Same execute fns in plugin and gateway; deterministic harness calls them directly (no direct invoke API in 2.2.4 SDK; prompt-loop LLM path untested by scope).",
   "identity": "host-bound frozen context per facade; token per-call via child stdin; A/B = synthetic dev-token-1/2 -> HOUSEHOLD_A/B equivalents via real test-app token store.",
   "execution": "one-shot tsx bridge (repo's own tsx) into real buildTestApp + real fixtures; spawn + explicit stdin (execFile input hangs in this env); no financial logic reimplemented.",
-  "results": "spike-02 18/18 PASS; spike-01 7/7 regression PASS.",
+  "results": "spike-02 20/20 PASS (incl. fix-r2 remediation cases 15-16); spike-01 7/7 regression PASS.",
   "known_limits": ["Prompt-loop LLM invocation untested (no paid inference, scope).", "Config-file local-plugin discovery blocked in embedded Windows env (SDK registration used instead — same native pipeline post-load).", "403 variant requiring Better-Auth session + workspace store not exercised.", "plugin.list eventually consistent (empty right after boot/reload); harness polls."]
  },
  "storage": {
