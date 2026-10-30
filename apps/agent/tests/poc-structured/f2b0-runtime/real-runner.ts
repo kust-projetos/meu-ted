@@ -144,6 +144,8 @@ export function minimalEnvironment(runDir: string, runNonce: string, serverPassw
   const cache = path.join(runDir, 'private-cache');
   const state = path.join(runDir, 'private-state');
   const nativeHome = process.env.USERPROFILE ?? homedir();
+  const nativeAppData = process.env.APPDATA ?? path.join(nativeHome, 'AppData', 'Roaming');
+  const nativeLocalAppData = process.env.LOCALAPPDATA ?? path.join(nativeHome, 'AppData', 'Local');
   const nativeXdgData = process.env.XDG_DATA_HOME ?? path.join(nativeHome, '.local', 'share');
   const nativeData = process.env.OPENCODE_DATA_DIR ?? path.join(nativeXdgData, 'opencode');
   return {
@@ -151,9 +153,9 @@ export function minimalEnvironment(runDir: string, runNonce: string, serverPassw
       PATH: process.env.PATH ?? '',
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       ...(process.env.WINDIR ? { WINDIR: process.env.WINDIR } : {}),
-      ...(process.env.USERPROFILE ? { USERPROFILE: process.env.USERPROFILE } : {}),
-      ...(process.env.APPDATA ? { APPDATA: process.env.APPDATA } : {}),
-      ...(process.env.LOCALAPPDATA ? { LOCALAPPDATA: process.env.LOCALAPPDATA } : {}),
+      USERPROFILE: nativeHome,
+      APPDATA: nativeAppData,
+      LOCALAPPDATA: nativeLocalAppData,
       ...(process.env.OPENCODE_GO_API_KEY ? { OPENCODE_GO_API_KEY: process.env.OPENCODE_GO_API_KEY } : {}),
       HOME: nativeHome,
       TEMP: temp,
