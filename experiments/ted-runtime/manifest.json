@@ -1,0 +1,156 @@
+{
+ "base_revision": "3489352",
+ "branch": "experiment/ted-opencode-runtime",
+ "commands": {
+  "inventory": "node run-identity.mjs <a|b> inventory",
+  "negative_tests": "node run-identity.mjs <a|b> negative-tests",
+  "reproduce": "node --test tests/spike-01.test.mjs",
+  "restart_probe": "node run-identity.mjs <a|b> restart-probe",
+  "start_identity": "node run-identity.mjs <a|b> <command> (TED_HOME_ROOT=experiments/ted-runtime)"
+ },
+ "effective_config": {
+  "agents": {
+   "ted": {
+    "description": "TED synthetic experiment agent (no tools)",
+    "mode": "primary",
+    "permissions": [
+     {
+      "action": "edit",
+      "effect": "deny",
+      "resource": "*"
+     },
+     {
+      "action": "shell",
+      "effect": "deny",
+      "resource": "*"
+     },
+     {
+      "action": "subagent",
+      "effect": "deny",
+      "resource": "*"
+     }
+    ]
+   }
+  },
+  "policies": [
+   {
+    "action": "provider.use",
+    "effect": "deny",
+    "resource": "*"
+   },
+   {
+    "action": "tool.use",
+    "effect": "deny",
+    "resource": "edit:*"
+   },
+   {
+    "action": "tool.use",
+    "effect": "deny",
+    "resource": "shell:*"
+   },
+   {
+    "action": "tool.use",
+    "effect": "deny",
+    "resource": "subagent:*"
+   },
+   {
+    "action": "tool.use",
+    "effect": "deny",
+    "resource": "write:*"
+   }
+  ]
+ },
+ "init_method": "OpenCode.create({ config: { directory: <identity-config>, project: false }, database: { path: <identity-db> } }) embedded, no HTTP listener; env isolation (OPENCODE_TEST_HOME/XDG_*) set in-process BEFORE SDK import; per-identity OS processes with separate cwd",
+ "known_limits": [
+  "No tool-catalog endpoint in 2.2.4 SDK (oc.tool undefined); tool names observable only via plugin ids + permission schema.",
+  "session.shell direct API bypasses policy system (proven ALLOWED with side effect); prompt-loop permission request/reply path requires LLM inference, never invoked here.",
+  "provider.list/model.list empty in isolated env (no credentials): session.prompt not exercisable without keys; provider.use deny-all is defense-in-depth.",
+  "config files must be BOM-free UTF-8; BOM causes silent document rejection (Config.parseInfo).",
+  "config.content inline option ignored in favor of config.directory file (observed); directory file is authoritative.",
+  "npm first-install timed out mid-way leaving partial node_modules (@opencode/sdk without dist/index.js, pi-coding-agent without package.json); repaired by targeted reinstall + dedupe."
+ ],
+ "name": "ted-runtime-spike-01",
+ "native_resources": {
+  "agents_listed": [
+   "build",
+   "compaction",
+   "explore",
+   "general",
+   "plan",
+   "summary",
+   "title",
+   "ted"
+  ],
+  "commands_listed": [
+   "goal",
+   "init",
+   "review"
+  ],
+  "events": "event.subscribe exists on SDK; not exercised (no async event source in deterministic tests)",
+  "mcp_servers": 0,
+  "models_listed": 0,
+  "plugins_builtin": 92,
+  "providers_listed": 0,
+  "sessions": "sqlite via database.path per identity; create/get/list/remove verified",
+  "skills_listed": [
+   "browser",
+   "opencode",
+   "report"
+  ]
+ },
+ "plugins": "92 builtin (opencode.*) active by default; zero external plugins configured; no plugin framework added by spike",
+ "reproducibility": {
+  "note": "npm install --save-exact pinned tarballs; first attempt timed out (7min+) leaving partial tree; repaired with targeted reinstall. Lockfile v3 omits resolved/integrity for cached @opencode/* entries; authoritative integrity taken from registry metadata (matches researcher pins verbatim)."
+ },
+ "runtime": {
+  "disk_measured": "see restart-probe (diskKB per identity home)",
+  "node": "v26.11.1",
+  "os": "win32",
+  "pnpm": "10.34.1",
+  "rss_measured": "see restart-probe (rssMB per boot)"
+ },
+ "scope": "Steps 0-1 only. No production, no push, no deploy, no paid inference, synthetic data only.",
+ "storage": {
+  "database": "<identity-home>/db/ted.db (sqlite, explicit database.path); default embedded DB is per-process (no cross-restart persistence) — verified by reopen test",
+  "sessions": "rows in identity sqlite; A/B separate files; cross-identity get returns NOTFOUND",
+  "state": "<identity-home>/{config,data,cache,state,tmp,workspace,db}"
+ },
+ "tools": "No dedicated tool-catalog endpoint; tools governed via tool.use policies + V2 agent permissions; admin natives (shell/prompt/edit/subagent) REMOVED from TED facade (never invoked except one contained bypass probe)",
+ "versions": {
+  "@earendil-works/pi-coding-agent": {
+   "integrity": "sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLBKSqUMw+4nCNtIyiQg==",
+   "license": "MIT",
+   "tarball": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.4.0.tgz",
+   "version": "1.4.0",
+   "shasum": "7f5dd2a4f7fa46ed252465ac4d341831896b1fc2"
+  },
+  "@opencode/cli": {
+   "integrity": "sha512-BfNl+Drqz52R3MgX/CB4C6JtKIj74aQkq3eSlWoXX6+0kNUWgLA1skpKxWHTW0TETt+G0s0JljUyX8tiPtEGcg==",
+   "license": "MIT",
+   "shasum": "d8b0a698262da23ae6d789b1e7501331111db417",
+   "tarball": "https://registry.npmjs.org/@opencode/cli/-/cli-2.2.4.tgz",
+   "version": "2.2.4"
+  },
+  "@opencode/client": {
+   "integrity": "sha512-JZvQPHnW9oIT3fzgSFP0R32WLiA05yTXVC1FsQR5bWP0YCRy2R5e4kbMsr/kNYdu69cu49/96XEm2NzzDnZFtA==",
+   "license": "MIT",
+   "shasum": "e873f47e6a07bd9f4520dbef0edd6bc928db9d66",
+   "tarball": "https://registry.npmjs.org/@opencode/client/-/client-2.2.4.tgz",
+   "version": "2.2.4"
+  },
+  "@opencode/plugin": {
+   "integrity": "sha512-nI/wUn2r+PT+uL8teVJjjG9vwiA9KgEk5AIkRISwc0kbRVjNDJFJyKZ5JOFVQsLamGYKE2YKHxy314y5zbwh6A==",
+   "license": "MIT",
+   "shasum": "7d373eea8aed7a87a25fa6cececd1d191252d05e",
+   "tarball": "https://registry.npmjs.org/@opencode/plugin/-/plugin-2.2.4.tgz",
+   "version": "2.2.4"
+  },
+  "@opencode/sdk": {
+   "integrity": "sha512-/+9vbz1oWUWK4HWBV6PIfmTYCZtWa9KJxVUeNNllWCrYrtciCrJ8DAeOucytUeOlSgXco36dG6nfC/6Z0sa+Bw==",
+   "license": "MIT",
+   "shasum": "5eeb22d003feea220001e86700f2442ffffd13f1",
+   "tarball": "https://registry.npmjs.org/@opencode/sdk/-/sdk-2.2.4.tgz",
+   "version": "2.2.4"
+  }
+ }
+}

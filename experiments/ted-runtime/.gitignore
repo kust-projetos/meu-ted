@@ -1,0 +1,7 @@
+# Runtime state — never commit (recreated by bootstrap/tests)
+.ted-home-a/
+.ted-home-b/
+node_modules/
+bootstrap/node_modules/
+*.log
+SHELL_BYPASS_MARKER.txt

@@ -1,0 +1,20 @@
+{
+  "name": "ted-runtime-spike-01",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Spike 01: TED OpenCode runtime experiment (Steps 0-1). Standalone, NOT part of pnpm workspace.",
+  "type": "module",
+  "scripts": {
+    "inventory": "node run-identity.mjs a inventory",
+    "restart-probe": "node run-identity.mjs a restart-probe",
+    "negative-tests": "node run-identity.mjs a negative-tests",
+    "test": "node --test ../tests/spike-01.test.mjs"
+  },
+  "dependencies": {
+    "@opencode/sdk": "2.2.4",
+    "@opencode/client": "2.2.4",
+    "@opencode/cli": "2.2.4",
+    "@opencode/plugin": "2.2.4",
+    "@earendil-works/pi-coding-agent": "1.4.0"
+  }
+}
