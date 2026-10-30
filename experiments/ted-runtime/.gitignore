@@ -1,6 +1,7 @@
 # Runtime state — never commit (recreated by bootstrap/tests)
 .ted-home-a/
 .ted-home-b/
+.ted-home-c/
 node_modules/
 bootstrap/node_modules/
 *.log

@@ -40,7 +40,31 @@ Catalog counts (2.2.4 native):
 | compaction (`session.compact`) | existe | nativo | NÃO exercido (exige LLM); sem framework de compaction criado |
 | persistence | sqlite `database.path` | por identidade | SIM (`db/ted.db` por identidade) |
 
+## Spike 02 addition (Steps 2-3, 2026-10-30) — additive, spike 01 rows above unchanged
+
+Source: `tests/spike-02.test.mjs` 18/18 PASS + `bootstrap/run-finance-check.mjs`
+(G2-01 standalone proof). Full detail: `reports/spike-02-results.md`.
+
+| Recurso | Disponível no produto 2.2.4 | Instalado neste spike | Permitido ao TED |
+|---|---|---|---|
+| plugin `ted-finance` (único, local) | sim (define/setup/transform) | sim (`bootstrap/plugins/ted-finance/`, registrado via interface nativa do SDK) | SIM — `state: active`, `server: true`; `setup()` executou `ctx.tool.transform` + `ctx.tool.list()` de prova |
+| tools `list_accounts`, `get_month_summary` | sim (ToolEditor.add via transform) | sim (no catálogo nativo pós-transform, ao lado dos 20 builtins) | SIM — mesma função `execute` usada pelo gateway determinístico (sem invoke direto no SDK; prompt-loop LLM não exercido) |
+| `ctx.tool.add` direto | NÃO existe no host ctx (`TypeError` provado) | n/a | NÃO usado — mecanismo nativo é `transform(editor => editor.add(...))` |
+| descoberta de plugin por arquivo (`<config>/plugin/`, `plugins: [dir]`) | sim (código existe) | BLOQUEADA neste env (state `failed` pré-setup até p/ probe zero-import; file-watch backend unsupported) | NÃO usada — registro via `oc.plugin()` (mesmo pipeline pós-load); limite documentado, não contornado |
+| tool-catalog endpoint | NÃO existe (`oc.tool === undefined`) | n/a | prova de registro via `ctx.tool.list()` nativo dentro do setup (marker) |
+| `GET /accounts`, `GET /dashboard/month-summary` reais | app real (pi-financeiro) | via bridge tsx one-shot p/ `buildTestApp` + fixtures reais, seed sintética | SIM (read-only; matemática financeira nunca reimplementada) |
+| gateway `ted-gateway.mjs` (7 chaves, frozen) | n/a (customização necessária) | único detentor da instância OpenCode | SIM — sem `call`/shell/prompt/edit/mcp; identidade host-bound imutável; tokens via stdin do filho, nunca em args/resultados |
+| `execFile(input)` p/ filho tsx | n/a | TRAVA neste env (sem EOF) | NÃO usado — `spawn` + stdin explícito (plumbing de harness, ~1.3s/chamada) |
+
+### Permissions / policies (inalterado do spike 01)
+
 ## Permissions (2.2.4 observado)
+
+Nenhuma policy nova: o `ted-finance` não recebe `tool.use` dedicado porque
+policies governam o prompt-loop (não exercido) e não a API direta (lição do
+spike 01). O enforcement da Steps 2-3 é a remoção de superfície (facade de 7
+chaves) + validação estrutural de args na tool + fail-closed dos handlers
+reais — tudo provado pelos 14 casos de integração.
 
 - V2 `permissions[]` (config + por agente): `{action, resource, effect: allow|deny|ask}`.
   Ação é string livre (`shell`, `edit`, `subagent`, ...). TED usa `deny` para

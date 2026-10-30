@@ -5,6 +5,8 @@
   "inventory": "node run-identity.mjs <a|b> inventory",
   "negative_tests": "node run-identity.mjs <a|b> negative-tests",
   "reproduce": "node --test tests/spike-01.test.mjs",
+  "reproduce_spike02": "node --test tests/spike-02.test.mjs (TED_HOME_ROOT set by the test; identity home c)",
+  "finance_check": "node run-finance-check.mjs c (G2-01 standalone native-plugin proof)",
   "restart_probe": "node run-identity.mjs <a|b> restart-probe",
   "start_identity": "node run-identity.mjs <a|b> <command> (TED_HOME_ROOT=experiments/ted-runtime)"
  },
@@ -109,7 +111,16 @@
   "pnpm": "10.34.1",
   "rss_measured": "see restart-probe (rssMB per boot)"
  },
- "scope": "Steps 0-1 only. No production, no push, no deploy, no paid inference, synthetic data only.",
+ "scope": "Steps 0-3. Spike 01: Steps 0-1 (isolated boot, sessions, policy). Spike 02: Steps 2-3 (facade boundary, native plugin, host-bound identity, 14-case integration suite) — see spike02 key. No production, no push, no deploy, no paid inference, synthetic data only.",
+ "spike02": {
+  "files": ["bootstrap/ted-finance-tools.mjs", "bootstrap/finance-transport.mjs", "bootstrap/finance-bridge.ts", "bootstrap/plugins/ted-finance/index.mjs", "bootstrap/ted-gateway.mjs", "bootstrap/run-finance-check.mjs", "tests/spike-02.test.mjs", "reports/spike-02-results.md"],
+  "plugin": "ted-finance (single): Plugin.define + ctx.tool.transform(editor.add) — direct ctx.tool.add does NOT exist on the host ctx (TypeError proven); list_accounts + get_month_summary registered; state active via SDK native interface; config-file discovery environmentally BLOCKED pre-setup (even zero-import probe). Details: reports/spike-02-results.md.",
+  "tools": "list_accounts -> GET /accounts; get_month_summary -> GET /dashboard/month-summary?yearMonth=YYYY-MM. Same execute fns in plugin and gateway; deterministic harness calls them directly (no direct invoke API in 2.2.4 SDK; prompt-loop LLM path untested by scope).",
+  "identity": "host-bound frozen context per facade; token per-call via child stdin; A/B = synthetic dev-token-1/2 -> HOUSEHOLD_A/B equivalents via real test-app token store.",
+  "execution": "one-shot tsx bridge (repo's own tsx) into real buildTestApp + real fixtures; spawn + explicit stdin (execFile input hangs in this env); no financial logic reimplemented.",
+  "results": "spike-02 18/18 PASS; spike-01 7/7 regression PASS.",
+  "known_limits": ["Prompt-loop LLM invocation untested (no paid inference, scope).", "Config-file local-plugin discovery blocked in embedded Windows env (SDK registration used instead — same native pipeline post-load).", "403 variant requiring Better-Auth session + workspace store not exercised.", "plugin.list eventually consistent (empty right after boot/reload); harness polls."]
+ },
  "storage": {
   "database": "<identity-home>/db/ted.db (sqlite, explicit database.path); default embedded DB is per-process (no cross-restart persistence) — verified by reopen test",
   "sessions": "rows in identity sqlite; A/B separate files; cross-identity get returns NOTFOUND",
