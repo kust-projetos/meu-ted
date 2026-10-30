@@ -567,8 +567,26 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     await passwordInput.first().fill(PASSWORD);
     await page.getByRole("button", { name: "Entrar" }).click();
     await expect(page.getByRole("button", { name: "Nova transação" })).toBeVisible({ timeout: 30000 });
-    await page.getByRole("button", { name: "Selecionar espaço" }).click();
-    await page.getByRole("option", { name: /Test Family/ }).click();
+    const workspaceSelector = page.getByRole("button", { name: "Selecionar espaço" });
+    await workspaceSelector.click();
+    const testFamilyOption = page.getByRole("option", { name: /Test Family/ });
+    try {
+      await testFamilyOption.click({ timeout: 60_000 });
+    } catch (error) {
+      const currentUrl = page.url();
+      const dropdownExpanded = await workspaceSelector.getAttribute("aria-expanded").catch(() => null);
+      const visibleOptions = await page.getByRole("option").all()
+        .then(async (options) => Promise.all(options.map(async (option) => {
+          if (!await option.isVisible().catch(() => false)) return null;
+          return (await option.innerText().catch(() => "")).trim();
+        })))
+        .then((options) => options.filter((name): name is string => Boolean(name)));
+      throw new Error(
+        `Seleção de workspace expirou; URL atual: ${currentUrl}; dropdown aberto (aria-expanded): ${dropdownExpanded}; ` +
+        `options visíveis: ${JSON.stringify(visibleOptions)}; opção Test Family ausente — ver membership do admin`,
+        { cause: error },
+      );
+    }
     await expect(page.getByRole("button", { name: "Selecionar espaço" })).toContainText("Test Family", { timeout: 15000 });
 
     // ── R5 pre-flight: isolamento do RUN_ID (fail-fast, read-only) ────
