@@ -125,6 +125,24 @@ describe('POST /accounts/:id/deactivate', () => {
     expect(res.json().status).toBe('inactive');
   });
 
+  it('returns 400 (idempotency.required) when Idempotency-Key is missing', async () => {
+    const { app } = buildTestApp();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/accounts',
+      headers: { 'x-device-token': TOKEN_A, 'content-type': 'application/json', 'idempotency-key': crypto.randomUUID() },
+      payload: { name: 'X', kind: 'bank', initialBalanceCents: 0 },
+    });
+    const id = created.json().id;
+    const res = await app.inject({
+      method: 'POST',
+      url: `/accounts/${id}/deactivate`,
+      headers: { 'x-device-token': TOKEN_A },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('validation.required');
+  });
+
   it('returns 409 when account has active transactions', async () => {
     const { app } = buildTestApp();
     const acc = await app.inject({

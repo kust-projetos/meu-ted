@@ -137,6 +137,23 @@ describe('PATCH /categories/:id', () => {
 });
 
 describe('POST /categories/:id/deactivate', () => {
+  it('returns 400 (idempotency.required) when Idempotency-Key is missing', async () => {
+    const { app } = buildTestApp();
+    const cat = await app.inject({
+      method: 'POST',
+      url: '/categories',
+      headers: { 'x-device-token': TOKEN_A, 'content-type': 'application/json', 'idempotency-key': crypto.randomUUID() },
+      payload: { name: 'Food', kind: 'expense' },
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/categories/${cat.json().id}/deactivate`,
+      headers: { 'x-device-token': TOKEN_A },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('validation.required');
+  });
+
   it('returns 409 when category has active transactions', async () => {
     const { app } = buildTestApp();
     const acc = await app.inject({
