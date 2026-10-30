@@ -109,10 +109,25 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
   };
 
   const openTed = async (page: Page) => {
+    const workspaceSelector = page.getByRole("button", { name: "Selecionar espaço" });
+    if (await workspaceSelector.getAttribute("aria-expanded") === "true") {
+      await workspaceSelector.press("Escape");
+      await expect(workspaceSelector).not.toHaveAttribute("aria-expanded", "true", { timeout: 10000 });
+    }
     const launcher = page.getByRole("button", { name: /abrir assistente ted/i }).last();
     await expect(launcher).toBeVisible({ timeout: 20000 });
     await launcher.click();
-    await page.waitForURL(/\/ted/);
+    try {
+      await page.waitForURL(/\/ted/, { timeout: 60_000 });
+    } catch (error) {
+      const currentUrl = page.url();
+      const launcherVisible = await launcher.isVisible().catch(() => false);
+      throw new Error(
+        `Navegação para TED expirou; URL atual: ${currentUrl}; launcher ainda visível: ${launcherVisible}; ` +
+        "clique sem efeito — ver dropdown/overlay",
+        { cause: error },
+      );
+    }
     const dialog = page.getByRole("region", { name: /chat com ted/i });
     await expect(dialog).toBeVisible({ timeout: 15000 });
     return dialog;
