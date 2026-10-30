@@ -6,7 +6,7 @@
     "dev": "wrangler dev",
     "test": "vitest run",
     "test:golden": "vitest run tests/golden",
-    "lint": "biome check src tests",
+    "lint": "biome check --max-diagnostics=1000 src tests",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "eval:ted-v2": "node evals/run-ted-v2-regression-evals.mjs",
