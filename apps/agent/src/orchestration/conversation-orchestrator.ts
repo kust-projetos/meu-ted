@@ -3130,55 +3130,6 @@ export class ConversationOrchestrator {
     });
   }
 
-  /** Restart-recovery re-emission for `proposing` account drafts (same key). */
-  private async executeProposeAccountSilent(
-    draft: MutationDraftRecord,
-    client: MutationApiClient,
-    input: TurnInput,
-  ): Promise<void> {
-    const store = this.dependencies.draftStore!;
-    const identity: MutationIdentity = {
-      workspaceId: draft.workspaceId,
-      actorId: draft.actorId,
-      deviceId: draft.deviceId ?? input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
-    };
-    const args = draft.resolvedArgs;
-    try {
-      const proposal = await client.propose({
-        tool: ACCOUNT_CREATE_TOOL,
-        normalizedArgs: {
-          name: args.accountName?.trim() ?? '',
-          kind: args.accountKind ?? '',
-          initialBalanceCents: args.initialBalanceCents ?? 0,
-        },
-        summary: args.accountName?.trim() || args.description,
-        identity,
-        idempotencyKey: draft.proposalIdempotencyKey,
-      });
-      store.update(draft.draftId, {
-        status: 'consumed',
-        proposalId: proposal.id,
-        proposeOutcome: proposal.existing ? 'existing' : 'created',
-        updatedAt: new Date(this.draftNowMs()).toISOString(),
-      });
-    } catch (error) {
-      if (isDefinitiveProposeError(error)) {
-        store.update(draft.draftId, {
-          status: 'discarded',
-          discardReason: 'propose_rejected',
-          proposeOutcome: 'rejected',
-          updatedAt: new Date(this.draftNowMs()).toISOString(),
-        });
-        return;
-      }
-      store.update(draft.draftId, {
-        proposeOutcome: 'unknown',
-        updatedAt: new Date(this.draftNowMs()).toISOString(),
-      });
-      throw error;
-    }
-  }
-
   /**
    * categories.create (fatia categories-create-v2-endtoend): authoritative
    * category catalog, fail-closed on unreadable payloads. Single call
