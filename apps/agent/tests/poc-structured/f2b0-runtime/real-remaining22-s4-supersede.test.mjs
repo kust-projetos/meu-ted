@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -20,7 +20,7 @@ import {
   createRemaining22SupersedeReservation,
   listRemaining22CampaignClaims,
 } from './real-storage.mjs'
-import { getF2B0Cases, F2B0_CASE_IDS } from '../f2b0-adapter.ts'
+import { getF2B0Cases } from '../f2b0-adapter.ts'
 import { loadStoppedIncompleteFlags } from './real-runner.ts'
 
 const S1 = '2026-10-29T12-26-34-600Z-4324'

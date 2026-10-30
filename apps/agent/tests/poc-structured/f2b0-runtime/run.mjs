@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { once } from 'node:events'
-import { REAL_MODEL, REAL_URL } from './real-guard.mjs'
+import { REAL_MODEL } from './real-guard.mjs'
 
 const root = path.resolve(import.meta.dirname)
 const exe = process.env.OPENCODE_EXE ?? 'C:/Users/walis/AppData/Roaming/npm/node_modules/@opencode/cli/node_modules/@opencode/cli-windows-x64/bin/opencode.exe'
@@ -41,7 +41,6 @@ async function runCase(mode, nativeEndpoint = null) {
     providers: { [REAL_MODEL.providerID]: { settings: { apiKey: 'local-mock-only-not-a-credential', timeout: 500, headerTimeout: 300, chunkTimeout: 300, transport: 'http' } } },
   }
   await writeFile(path.join(dir, 'config', 'opencode.json'), JSON.stringify(cfg))
-  const nativeURL = new URL(REAL_URL)
   const env = { ...envBase, USERPROFILE: path.join(dir, 'home'), APPDATA: path.join(dir, 'appdata'), LOCALAPPDATA: path.join(dir, 'localappdata'), TEMP: path.join(dir, 'tmp'), TMP: path.join(dir, 'tmp'), HOME: path.join(dir, 'home'), OPENCODE_CONFIG_DIR: path.join(dir, 'config'), OPENCODE_DATA_DIR: path.join(dir, 'data'), OPENCODE_CACHE_DIR: path.join(dir, 'cache'), OPENCODE_STATE_DIR: path.join(dir, 'state'), OPENCODE_DISABLE_PROJECT_CONFIG: '1', XDG_CONFIG_HOME: path.join(dir, 'config'), XDG_DATA_HOME: path.join(dir, 'data'), XDG_CACHE_HOME: path.join(dir, 'cache'), XDG_STATE_HOME: path.join(dir, 'state'), F2B0_EVIDENCE: evidence, F2B0_MOCK_LOG: mockLog, F2B0_CONN_LOG: connLog, F2B0_MODE: mode, F2B0_MODEL: allowedModel, F2B0_PROVIDER: REAL_MODEL.providerID, F2B0_PROBE_NATIVE_URL: mode === 'probe-native' ? '1' : '0', F2B0_EXPECTED_ORIGIN: nativeEndpoint?.origin ?? '', F2B0_EXPECTED_PATH: nativeEndpoint?.path ?? '' }
   const mock = spawn(process.execPath, [path.join(root, 'mock.mjs')], { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] })
   const mockExit = once(mock, 'exit')

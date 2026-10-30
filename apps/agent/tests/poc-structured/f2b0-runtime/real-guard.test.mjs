@@ -5,7 +5,6 @@ import path from 'node:path'
 import {
   classifyProviderFailure,
   classifyLocalServerFailure,
-  isReadinessPollRetriable,
   classifyAssistantOutcome,
   extractCliOutput,
   aggregateObservedMetric,

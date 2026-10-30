@@ -1,7 +1,7 @@
 import { appendFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { Plugin } from '@opencode/plugin'
-import { classifyAuthorizationHeader, createOfficialHeaderProof, headerShape, headersExactlyEqual, inspectNativeHeaders, MOCK_URL, nativeIdentityHeaderValidity, NATIVE_URL, MODEL, requestPayloadExactlyEqual, validateRequest } from '../request-contract.mjs'
+import { classifyAuthorizationHeader, createOfficialHeaderProof, headerShape, headersExactlyEqual, inspectNativeHeaders, MOCK_URL, nativeIdentityHeaderValidity, NATIVE_URL, requestPayloadExactlyEqual, validateRequest } from '../request-contract.mjs'
 
 const log = async (row) => appendFile(process.env.DIAG_HOOK_LOG, `${JSON.stringify(row)}\n`)
 const counts = new Map()

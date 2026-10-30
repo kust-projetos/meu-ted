@@ -7,7 +7,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { OpenCode } from '@opencode/client'
 import { fileURLToPath } from 'node:url'
-import { headersExactlyEqual, MOCK_URL, MODEL, NATIVE_URL } from './request-contract.mjs'
+import { MOCK_URL, MODEL, NATIVE_URL } from './request-contract.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const runtimeRoot = path.resolve(here, '..')

@@ -1,7 +1,7 @@
 import { appendFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { Plugin } from '@opencode/plugin'
-import { REAL_MODEL, REAL_URL, validateNativeRequest } from '../real-guard.mjs'
+import { REAL_MODEL, validateNativeRequest } from '../real-guard.mjs'
 
 const evidence = process.env.F2B0_REAL_EVIDENCE
 const runNonce = process.env.F2B0_REAL_NONCE
