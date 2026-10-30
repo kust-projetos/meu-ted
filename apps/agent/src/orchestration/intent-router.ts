@@ -1,5 +1,6 @@
 import type { PlannedOperation } from './conversation-orchestrator.js';
 import { hasMutationIntentSignal, interpretMutationUtterance } from '../mutations/semantic-interpretation.js';
+import { hasAccountCreationSignal } from '../mutations/account-creation.js';
 import { hasCategoryRenameSignal } from '../mutations/category-rename.js';
 import { hasCategoryDeactivateSignal } from '../mutations/category-deactivation.js';
 import { hasTransactionDescriptionSignal } from '../mutations/transaction-description.js';
@@ -74,6 +75,76 @@ const isYearAsAmountTrap = (normalized: string, amountCents: number): boolean =>
  */
 export const UNSUPPORTED_YEAR_TEXT =
   'Ainda não consigo resumir o ano inteiro — me diga o mês que você quer (por exemplo, "quanto gastei em janeiro de 2020?").';
+
+/**
+ * F1-B036 — subintervalo dentro do mês ("total ... do mês ... 10/10 a 15/10",
+ * "do dia 10 ao dia 15"). O resumo mensal prova o `yearMonth` cheio, nunca um
+ * subintervalo; sem capacidade de filtro por intervalo no contrato, responder
+ * o mês cheio alegaria período não aplicado e a listagem não filtrada
+ * sugeriria cobertura da janela. Limitação honesta: sem operação, sem tool,
+ * sem provider e sem leitura — espelho do plano do ano isolado acima.
+ */
+export const UNSUPPORTED_CUSTOM_RANGE_TEXT =
+  'Ainda não consigo somar um período específico dentro do mês — só o mês cheio. Me diga o mês que você quer (por exemplo, "quanto gastei em outubro de 2026?").';
+
+/**
+ * F1-B036 — total por categoria explícita ("total ... da categoria X"). Sem
+ * agregação por categoria no contrato: o mês cheio alegaria soma não pedida e
+ * o catálogo como resposta fingiria atendimento. Limitação honesta: sem
+ * operação, sem tool, sem provider e sem leitura.
+ */
+export const UNSUPPORTED_CATEGORY_TOTAL_TEXT =
+  'Ainda não consigo somar por categoria — só o total do mês cheio ou o extrato. Me diga qual dos dois você quer.';
+
+/**
+ * F1-B036 — total com faixa de VALOR ("total mensal entre 10 e 15 reais").
+ * Restrição de valor, nunca janela: sem filtro por valor no contrato, o mês
+ * cheio alegaria soma não filtrada. Copy própria — reutilizar a de período
+ * rotularia valor como data, e a de categoria rotularia valor como categoria.
+ * Limitação honesta: sem operação, sem tool, sem provider e sem leitura.
+ */
+export const UNSUPPORTED_VALUE_RANGE_TEXT =
+  'Ainda não consigo somar uma faixa de valores como essa — só o total do mês cheio ou o extrato. Me diga qual dos dois você quer.';
+
+/**
+ * F1-B036 — "entre/de N a M" sem moeda, sem mês e sem "dia" ("total mensal
+ * entre 10 e 15"): impossível saber se é dia ou valor — classificar como um
+ * dos dois seria invenção. Esclarecimento honesto (pergunta, não afirmação),
+ * sem operação, sem tool, sem provider e sem leitura. Marcados seguem nos
+ * limites específicos (moeda→valor, mês/dia→período).
+ */
+export const AMBIGUOUS_TOTAL_RANGE_TEXT =
+  'Não consegui entender se esse intervalo é de dias ou de valores. Pode esclarecer? Se for um período, me diga o mês (por exemplo, "quanto gastei em outubro de 2026?").';
+
+/**
+ * F1-B036 — mês nomeado sem ano ("total mensal de outubro"). Resolver o mês
+ * corrente em silêncio consulta o mês errado (com now em novembro, lê
+ * novembro); presumir o ano seria invenção. Pede o ano: sem operação, sem
+ * tool, sem provider e sem leitura. Com ano ("... de 2026") segue resumo.
+ */
+export const UNSUPPORTED_MONTH_YEAR_TEXT =
+  'Me diga de qual ano é esse mês (por exemplo, "total mensal de outubro de 2026").';
+
+/**
+ * F1-B036 — total com idiom payables ("total ... a pagar/vencidas/boleto").
+ * Pede o TOTAL das contas a pagar, mas o contrato só tem a LISTA (sem soma):
+ * responder o resumo geral mascararia o total pedido. Limitação honesta: sem
+ * operação, sem tool, sem provider e sem leitura. Sem "total" a leitura
+ * payables segue (B005/B020).
+ */
+export const UNSUPPORTED_PAYABLES_TOTAL_TEXT =
+  'Ainda não consigo somar suas contas a pagar — só listar. Quer ver a lista?';
+
+/**
+ * F1-B036 — total de fatura ("total da fatura ...", com ou sem "vencimento").
+ * O objeto é a fatura, não payables: "vencimento" sozinho não converte a
+ * pergunta. Soma de fatura também não tem contrato (só lista) — responder a
+ * lista fingiria atender o total. Limitação honesta própria: sem operação,
+ * sem tool, sem provider e sem leitura. Sem "total" a listagem de faturas
+ * segue (B010/S3).
+ */
+export const UNSUPPORTED_STATEMENT_TOTAL_TEXT =
+  'Ainda não consigo somar sua fatura — só listar. Quer ver a lista?';
 
 /**
  * Cartão imperativo ("crie cartão ...", "cadastrar cartão ..."):
@@ -251,6 +322,19 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   // The decision surface: never attachment-derived data.
   const decision = decisionText === undefined ? normalized : typoNormalize(fold(decisionText));
   if (!normalized) return fallbackPlan();
+  if (/\b(?:orcament\w*|budget\w*)\b/.test(decision)
+    && /\b(?:cancele|cancelar|cancela)\s+(?:o\s+)?rascunho\b/.test(decision)
+    && /(?:[;,]|\be\s+(?:cancele|cancelar|cancela)\b)/.test(decision)) {
+    return ambiguousCompoundRequestPlan();
+  }
+  if (/\bnao\s+(?:crie|criar|cria|cadastre|cadastrar|adicione|adicionar|defina|definir|monte|montar)\b/.test(decision)
+    && /\b(?:orcament\w*|budget\w*)\b/.test(decision)) {
+    return unsupportedBudgetCreatePlan();
+  }
+  if (/\bnao\s+sei\s+como\s+(?:criar|cadastrar|adicionar|definir|montar)\b/.test(decision)
+    && /\b(?:orcament\w*|budget\w*)\b/.test(decision)) {
+    return unsupportedBudgetCreatePlan();
+  }
   if (/^cancele o rascunho\b/.test(decision) && !/^cancele o rascunho\s*[.!?]*$/.test(decision)) {
     return ambiguousCancelDraftCompoundPlan();
   }
@@ -265,6 +349,13 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   // are reads and stay on the full text below.
   if (decisionFastPath.kind === 'confirm') return makePlan('confirmation', 'general', [], [], ['conversation']);
   if (decisionFastPath.kind === 'cancel') return makePlan('cancel', 'general', [], [], ['conversation']);
+  // Budget creation has no V2 writer. Do not turn a creation request into a read.
+  if (normalized.split(/\b(?:e|mas|ou)\b|[;,]/).some((clause) =>
+    /\b(crie|criar|cria|cadastre|cadastrar|adicione|adicionar|defina|definir|monte|montar)\b/.test(clause)
+      && /\b(orcament\w*|budget\w*)\b/.test(clause)
+      && !/\bnao\b/.test(clause))) {
+    return unsupportedBudgetCreatePlan();
+  }
   // S7 (POC Fase 2) + P2a: pergunta CONCEITUAL ("o que e X?", "como funciona
   // X?") sobre entidade financeira, sem verbo de acao nem consulta de dados,
   // e conversa geral — nunca leitura. O possessivo ("o que e MEU saldo?")
@@ -357,8 +448,54 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   // "extratos"). O radical `transac` só ocorre em palavras de listagem.
   const wantsMonthTotal = /\bquanto\s+gastei\b/.test(normalized)
     || (/\bgast/.test(normalized) && /\b(mes|mensal)\b/.test(normalized))
-    || /\b(total\s+mensal|resumo\s+do\s+mes)\b/.test(normalized);
+    || /\b(total\s+mensal|resumo\s+do\s+mes)\b/.test(normalized)
+    // F1-B036: "total das despesas do mes (atual)" — total + objeto + periodo.
+    // Guarda de categoria espelhando `isCategoryQualified` abaixo, estendida a
+    // `despesas?`: "total das despesas DE supermercado" e listagem filtrada,
+    // nunca resumo — so "despesas DO mes" (periodo) resume.
+    || (/\btotal\b/.test(normalized) && /\b(despesas?|gast\w*)\b/.test(normalized) && /\b(mes|mensal)\b/.test(normalized) && !/\b(despesas?|gast\w*)\s+(de|em|com|no|na|nos|nas|do|da|dos|das)\s+(?!mes\b|mensal\b|janeiro\b|fevereiro\b|marco\b|abril\b|maio\b|junho\b|julho\b|agosto\b|setembro\b|outubro\b|novembro\b|dezembro\b|reais?\b|centavos?\b)[a-z]+\b/.test(normalized));
   const isExplicitListing = /\b(extrato|transac|lancamento)/.test(normalized);
+  // F1-B036 custom-range: subintervalo dd/mm ("10/10 a 15/10") ou por extenso
+  // ("dia 10 ao dia 15", "entre os dias 10 e 15"). "dia 10" sozinho também é
+  // subintervalo (um dia específico), nunca o mês cheio. Janela relativa
+  // ("há 3 dias", "últimos 10 dias", "em 10 dias") com mês é o mesmo caso:
+  // sem filtro por intervalo no contrato, o mês cheio alegaria período não
+  // aplicado. Só dispara no que resumiria sem o intervalo (ver terminal
+  // abaixo) — "em 2020" (ano, 4 dígitos) nunca casa `\d{1,2}` com boundary.
+  // "entre 10 e 15 de outubro": dia-a-dia sem "dia"/dd/mm — exige o mês por
+  // extenso para não confundir faixa de VALOR ("entre 10 e 15 reais") com
+  // janela: valor nunca vira período. Idem "de 10 a 15 de outubro" (sem
+  // "entre" e sem mês por extenso após o intervalo seria faixa de valor —
+  // "de 10 a 15 reais" não dispara).
+  const hasEntreDayRange = new RegExp(
+    `\\bentre\\s+(?:os?\\s+)?(?:dias?\\s+)?\\d{1,2}\\s+e\\s+(?:os?\\s+)?(?:dias?\\s+)?\\d{1,2}\\s+de\\s+(?:${MONTH_NAME})\\b`,
+  ).test(normalized);
+  const hasDeDayRange = new RegExp(
+    `\\bde\\s+\\d{1,2}\\s+(?:a|ate)\\s+\\d{1,2}\\s+de\\s+(?:${MONTH_NAME})\\b`,
+  ).test(normalized);
+  // "entre/de N a M" sem moeda, sem mês e sem "dia": ambíguo entre dia e
+  // valor. Os lookaheads mantêm os marcados nos limites específicos
+  // (moeda→valor, `de <mês>`→período); o resto pede esclarecimento em vez de
+  // assumir o mês inteiro.
+  const hasBareRange = new RegExp(
+    `\\bentre\\s+\\d{1,2}\\s+e\\s+\\d{1,2}\\b(?!\\s*(?:reais?|centavos?|rs\\.?|r\\$))(?!\\s+de\\s+(?:${MONTH_NAME})\\b)`,
+  ).test(normalized)
+    || new RegExp(
+      `\\bde\\s+\\d{1,2}\\s+(?:a|ate)\\s+\\d{1,2}\\b(?!\\s*(?:reais?|centavos?|rs\\.?|r\\$))(?!\\s+de\\s+(?:${MONTH_NAME})\\b)`,
+    ).test(normalized);
+  // Faixa de VALOR com moeda explícita ("entre 10 e 15 reais", "de 10 a 15
+  // reais", "de 10 até 15 reais"): restrição de valor, nunca janela. Exige o
+  // marcador de moeda — sem ele ("entre 10 e 15") é ambíguo com dia e fica
+  // fora (residual documentado). Sem "total" não dispara (ver terminal).
+  const hasValueRange = /\bentre\s+(?:r\$\s*)?\d[\d.,]*\s+e\s+(?:r\$\s*)?\d[\d.,]*\s*(?:reais?|centavos?|rs\.?)\b/.test(normalized)
+    || /\bde\s+(?:r\$\s*)?\d[\d.,]*\s+(?:a|ate)\s+(?:r\$\s*)?\d[\d.,]*\s*(?:reais?|centavos?|rs\.?)\b/.test(normalized);
+  const hasCustomDateRange = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(normalized)
+    || /\bdias?\s+\d{1,2}\b/.test(normalized)
+    || /\bha\s+\d{1,2}\s+dias?\b/.test(normalized)
+    || /\bultimos?\s+\d{1,2}\s+dias?\b/.test(normalized)
+    || /\bem\s+\d{1,2}\s+dias?\b/.test(normalized)
+    || hasEntreDayRange
+    || hasDeDayRange;
   // Resumo por categoria ("resumo do mês por categoria", "gastos por
   // categoria"): usa o breakdown real de analytics, nunca o resumo simples.
   // Detectado por "por categoria(s)" — "liste minhas categorias" (sem "por")
@@ -390,6 +527,63 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   if (isBreakdown && isMixedBreakdownKind) {
     return ambiguousBreakdownKindPlan();
   }
+  // F1-B036 — total do mês com subintervalo explícito: limitação honesta,
+  // nunca o mês cheio nem listagem não filtrada. O disparo usa os mesmos
+  // guardas do `isMonthSummary` (ver abaixo, após `isCategoryQualified`) —
+  // resto byte-idêntico.
+  if (
+    !isBreakdown
+    && /\btotal\b/.test(normalized)
+    && /\b(despesas?|gast\w*)\b/.test(normalized)
+    && /\bcategorias?\b/.test(normalized)
+  ) {
+    return unsupportedCategoryTotalPlan();
+  }
+  // F1-B036 — total com faixa de VALOR ("total mensal entre 10 e 15 reais"):
+  // restrição de valor, nunca janela — copy própria (a de período rotularia
+  // valor como data). Exige "total": sem ele a listagem/clarificação segue
+  // (#256 e mutações preservados). Fora do breakdown como os demais.
+  if (!isBreakdown && /\btotal\b/.test(normalized) && hasValueRange) {
+    return unsupportedValueRangePlan();
+  }
+  // F1-B036 — total de fatura ("total da fatura ..."): o objeto é a fatura —
+  // "vencimento" sozinho não converte em payables, e soma de fatura também
+  // não tem contrato. Antes do payables abaixo e do implícito; sem "total" a
+  // listagem de faturas segue (B010/S3). Guarda P2b como no payables.
+  if (!isBreakdown && /\btotal\b/.test(normalized) && !isExplicitListing && /\bfaturas?\b/.test(normalized)
+    && /\b(contas?\s+a\s+pagar|boletos?)\b/.test(normalized)) {
+    return ambiguousCompoundRequestPlan();
+  }
+  if (!isBreakdown && /\btotal\b/.test(normalized) && !isExplicitListing && /\bfaturas?\b/.test(normalized)) {
+    return unsupportedStatementTotalPlan();
+  }
+  // F1-B036 — total explícito de payables ("a pagar", "venc*", "boleto"), com
+  // ou sem âncora mensal ("total mensal a pagar", "total das contas vencidas
+  // do mês", "total de boletos"): o contrato só tem a LISTA (sem soma), então
+  // resumo ou listagem fingiriam atender o total. Antes do implícito de
+  // categoria (o "a pagar" não é preposição do qualificador — e o payables é
+  // o substantivo dominante). Exige "total" + guarda P2b: sem "total" a
+  // leitura payables segue (B005/B020); "saldo total" bancário passa longe
+  // (sem idiom). (Sem o guarda de categoria qualificada aqui —
+  // `isCategoryQualified` só existe abaixo; com ambos os sinais o payables
+  // vence por precedência, ambos honestos.)
+  if (!isBreakdown && /\btotal\b/.test(normalized) && !isExplicitListing && /\b(venc\w*|a pagar|boleto\w*)\b/.test(normalized)) {
+    return unsupportedPayablesTotalPlan();
+  }
+  // F1-B036 — total com filtro IMPLÍCITO de categoria ("total das despesas DE
+  // supermercado", "total dos gastos NO mercado", "total mensal DE
+  // supermercado"): soma por categoria, capacidade inexistente no contrato.
+  // Exige "total" explícito — sem ele a listagem com filtro segue (#256-7 e
+  // #256-12 preservados: "gastos de supermercado", "quanto gastei no
+  // mercado"). O lookahead protege período/moeda como o de categoria ("...
+  // DO mês", "... mensal", "... de outubro", "... em reais" não disparam).
+  if (
+    !isBreakdown
+    && /\btotal\b/.test(normalized)
+    && /\b(despesas?|gast\w*|total\s+mensal)\b\s+(de|em|com|no|na|nos|nas|do|da|dos|das)\s+(?!mes\b|mensal\b|janeiro\b|fevereiro\b|marco\b|abril\b|maio\b|junho\b|julho\b|agosto\b|setembro\b|outubro\b|novembro\b|dezembro\b|reais?\b|centavos?\b)[a-z]+\b/.test(normalized)
+  ) {
+    return unsupportedCategoryTotalPlan();
+  }
   if (isBreakdown) { domain = 'categories'; operations.push(operation('analytics_category_breakdown')); }
   // FIX3 + S8 + P1: o lookahead protege o periodo ("mes/mensal" E nomes de
   // mes — "gastei NO mes passado" e "gastei EM janeiro" sao resumo/janela,
@@ -397,7 +591,30 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   // marcador de moeda ("gastei EM reais EM janeiro" é total em reais, nunca
   // filtro pela "categoria" reais).
   const isCategoryQualified = /\bgast\w*\s+(de|em|com|no|na|nos|nas|do|da|dos|das)\s+(?!mes\b|mensal\b|janeiro\b|fevereiro\b|marco\b|abril\b|maio\b|junho\b|julho\b|agosto\b|setembro\b|outubro\b|novembro\b|dezembro\b|reais?\b|centavos?\b)[a-z]+\b/.test(normalized);
-  const isMonthSummary = wantsMonthTotal && !isExplicitListing && !isCategoryQualified && !isBreakdown;
+  // F1-B036 — o que resumiria sem o subintervalo vira limitação honesta
+  // (`unsupported_custom_range`), nunca o mês cheio nem listagem não
+  // filtrada. Mesmos guardas do `isMonthSummary` + intervalo presente.
+  if (wantsMonthTotal && !isExplicitListing && !isCategoryQualified && !isBreakdown && hasCustomDateRange) {
+    return unsupportedCustomRangePlan();
+  }
+  // F1-B036 — mês nomeado sem ano ("total mensal de outubro", sem "de 2026"):
+  // nunca resolve o corrente em silêncio nem inventa o ano — pede o ano. Com
+  // ano segue resumo; "mês atual/passado" não têm nome de mês e passam direto.
+  const hasMonthWithoutYear = new RegExp(`\\b(?:${MONTH_NAME})\\b`).test(normalized)
+    && !/\b(?:19|20)\d{2}\b/.test(normalized);
+  // F1-B036 — "entre/de N a M" sem marcador em pedido de total: ambíguo entre
+  // dia e valor; assumir o mês inteiro ignoraria a restrição. Esclarecimento
+  // (pergunta honesta, nunca afirmação), sem leitura e sem valor. Exige
+  // "total" — sem ele a listagem segue (#256 preservado).
+  if (wantsMonthTotal && !isExplicitListing && !isCategoryQualified && !isBreakdown && hasBareRange) {
+    return ambiguousTotalRangePlan();
+  }
+  // F1-B036 — mês nomeado sem ano com os mesmos guardas: pede o ano em vez de
+  // resolver o corrente em silêncio. Intervalos marcados já retornaram acima.
+  if (wantsMonthTotal && !isExplicitListing && !isCategoryQualified && !isBreakdown && hasMonthWithoutYear) {
+    return unsupportedMonthYearPlan();
+  }
+  const isMonthSummary = wantsMonthTotal && !isExplicitListing && !isCategoryQualified && !isBreakdown && !hasCustomDateRange;
   if (isMonthSummary) { domain = 'transactions'; operations.push(operation('get_month_summary')); }
   // Cartão imperativo ("crie cartão ...", "cadastrar cartão ...",
   // "novo cartão ..."): criação de cartão não é suportada — nunca um
@@ -420,7 +637,24 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   // só qualificadores ("que", "já", "estão", ...); outra "conta" no gap
   // QUEBRA a absorção (pedido explicitamente misto preserva as duas
   // leituras).
-  const payablesOverride = /\b(venc\w*|a pagar|boleto\w*)\b/.test(normalized);
+  // F1-B005: "conta(s)" + verbo pagar na MESMA cláusula ("quais contas
+  // tenho que pagar", "pague a conta de luz") é idiom payables — o trigger
+  // global acima só cobre "a pagar"/"venc*"/"boleto" e deixava o "que pagar"
+  // / "pagar" + "conta" cair em `list_accounts` (baseline: B005/B020 liam
+  // /accounts em vez de /payables). Escopo por cláusula (mesmo split do
+  // strip): "pagar a fatura" sem "conta" e "quais contas eu tenho?" sem
+  // pagar seguem intocados; "paguei" nunca chega aqui (mutação acima).
+  // Reviewer (criação): imperativo explícito de criação de conta ("Crie uma
+  // conta para pagar o aluguel", `hasAccountCreationSignal`) NUNCA é idiom
+  // payables — o orquestrador já desvia esses turnos para o fluxo de criação
+  // (`runAccountCreationTurn`, esclarecimento sem executar); o roteador só
+  // não pode mascará-lo como leitura payables. O idiom estrangeiro ("crie
+  // conta a pagar", sinal falso por `governedNounIsForeign`) segue payables.
+  const contaPagarClause = normalized
+    .split(/\s+e\s+|\s+mas\s+|\s+ou\s+|\s+nem\s+|[,;]/)
+    .some((clause) => /\bcontas?\b/.test(clause) && /\b(pagar|pague\w*|pago\w*|pagamento\w*|quit\w*)\b/.test(clause))
+    && !hasAccountCreationSignal(text);
+  const payablesOverride = /\b(venc\w*|a pagar|boleto\w*)\b/.test(normalized) || contaPagarClause;
   const CONTA_IDIOM_GAP_BLOCK = new Set(['conta', 'contas']);
   const CONTA_IDIOM_QUALIFIERS: ReadonlySet<string> = new Set([
     'que', 'ja', 'estao', 'esta', 'eram', 'foram', 'sejam', 'sao',
@@ -433,14 +667,23 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
     if (words.some((word) => CONTA_IDIOM_GAP_BLOCK.has(word))) return false;
     return words.length <= 2 || words.every((word) => CONTA_IDIOM_QUALIFIERS.has(word));
   };
-  const stripClauseIdiom = (clause: string): string =>
-    clause
+  const stripClauseIdiom = (clause: string): string => {
+    const stripped = clause
       .replace(/\bcontas?\b((?:\s+\w+)*?)\s+(a\s+pagar|venc\w*|boleto\w*)\b/g, (match, gap: string) =>
         contaGapAbsorbed(gap ?? '') ? ' ' : match,
       )
       .replace(/(a\s+pagar|venc\w*|boleto\w*)((?:\s+\w+)*?)\s+contas?\b/g, (match, head: string, gap: string) =>
         contaGapAbsorbed(gap ?? '') ? `${head} ` : match,
       );
+    // F1-B005 fallback: mesma cláusula com "conta(s)" + pagar ("que pagar",
+    // "pagar", "pague a conta") absorve a menção bancária, como o gap acima
+    // faz para "a pagar"/"venc*"/"boleto". Só roda quando a cláusula tem os
+    // dois lados; cláusulas vizinhas já foram separadas no split.
+    if (/\bcontas?\b/.test(stripped) && /\b(pagar|pague\w*|pago\w*|pagamento\w*|quit\w*)\b/.test(stripped)) {
+      return stripped.replace(/\bcontas?\b/g, ' ');
+    }
+    return stripped;
+  };
   const withoutPayablesIdiom = normalized
     .split(/\s+e\s+|\s+mas\s+|\s+ou\s+|\s+nem\s+|[,;]/)
     .map(stripClauseIdiom)
@@ -460,8 +703,9 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   // "contas vencidas" overrides the generic accounts match above: overdue
   // bills are payables evidence, not account balances. S3: `venc\w*` cobre
   // as formas conjugadas ("vence", "vencimento") — "quando vence minha
-  // fatura?" soma payables ao statements da fatura nua.
-  if (/\b(venc\w*|a pagar|boleto\w*)\b/.test(normalized)) { domain = 'payables'; operations.push(operation('list_payables')); }
+  // fatura?" soma payables ao statements da fatura nua. F1-B005: o
+  // `contaPagarClause` ("conta(s)" + pagar na mesma cláusula) soma aqui.
+  if (/\b(venc\w*|a pagar|boleto\w*)\b/.test(normalized) || contaPagarClause) { domain = 'payables'; operations.push(operation('list_payables')); }
   // Categorias: listagem do catálogo real. O breakdown ("por categoria")
   // já planejou acima e nunca soma a listagem — uma leitura por turno.
   if (!isBreakdown && isCategoryListing) { domain = 'categories'; operations.push(operation('list_categories')); }
@@ -640,6 +884,163 @@ const unsupportedYearPlan = (): TurnPlanV2 => {
     requestedTools: [],
     missingFields: ['period'],
     ambiguity: 'unsupported_year',
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * F1-B036 — subintervalo dentro do mês: sem operação, sem tool,
+ * `missingFields` `['period']` e `ambiguity` `unsupported_custom_range`.
+ * Domínio `general` (fallback de evidência nulo: nenhuma leitura espúria) —
+ * o orquestrador responde a copy honesta sem provider e sem evidência.
+ */
+const unsupportedCustomRangePlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'general',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: ['period'],
+    ambiguity: 'unsupported_custom_range',
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * F1-B036 — total por categoria explícita: sem operação, sem tool,
+ * `missingFields` `['capability']` e `ambiguity` `unsupported_category_total`.
+ * O orquestrador responde a copy honesta sem provider e sem evidência
+ * (espelho do plano do intervalo customizado acima).
+ */
+const unsupportedCategoryTotalPlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'general',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: ['capability'],
+    ambiguity: 'unsupported_category_total',
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * F1-B036 — total com faixa de valor: sem operação, sem tool, `missingFields`
+ * `['capability']` e `ambiguity` `unsupported_value_range`. Domínio `general`
+ * (nenhuma leitura espúria) — o orquestrador responde a copy honesta sem
+ * provider e sem evidência.
+ */
+const unsupportedValueRangePlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'general',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: ['capability'],
+    ambiguity: 'unsupported_value_range',
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * F1-B036 — "entre/de N a M" sem marcador em pedido de total: sem operação,
+ * sem tool, `missingFields` `['intent']` e `ambiguity` `ambiguous_total_range`.
+ * Pergunta honesta (nunca afirma dia nem valor) — o orquestrador responde a
+ * copy sem provider e sem evidência.
+ */
+const ambiguousTotalRangePlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'general',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: ['intent'],
+    ambiguity: 'ambiguous_total_range',
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * F1-B036 — mês nomeado sem ano: sem operação, sem tool, `missingFields`
+ * `['period']` e `ambiguity` `unsupported_month_year`. Domínio `general`
+ * (nenhuma leitura espúria) — o orquestrador responde a copy honesta sem
+ * provider e sem evidência.
+ */
+const unsupportedMonthYearPlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'general',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: ['period'],
+    ambiguity: 'unsupported_month_year',
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+/**
+ * F1-B036 — total com idiom payables: sem operação, sem tool, `missingFields`
+ * `['capability']` e `ambiguity` `unsupported_payables_total`. Domínio
+ * `payables` (coerente com a leitura que existiria) — o orquestrador responde
+ * a copy honesta sem provider e sem evidência.
+ */
+const unsupportedBudgetCreatePlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2', mode: 'unsupported', domain: 'budgets', skillNames: ['conversation'],
+    requestedOperations: [], requestedTools: [], missingFields: ['capability'],
+    ambiguity: 'unsupported_budget_create', confidence: 0, correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+const unsupportedStatementTotalPlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'payables',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: ['capability'],
+    ambiguity: 'unsupported_statement_total',
+    confidence: 0,
+    correctionCount: 0,
+  } satisfies TurnPlanV2);
+  return result.success ? result.plan : fallbackPlan();
+};
+
+const unsupportedPayablesTotalPlan = (): TurnPlanV2 => {
+  const result = validateTurnPlan({
+    version: '2',
+    mode: 'unsupported',
+    domain: 'payables',
+    skillNames: ['conversation'],
+    requestedOperations: [],
+    requestedTools: [],
+    missingFields: ['capability'],
+    ambiguity: 'unsupported_payables_total',
     confidence: 0,
     correctionCount: 0,
   } satisfies TurnPlanV2);

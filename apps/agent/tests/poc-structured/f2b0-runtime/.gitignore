@@ -1,0 +1,18 @@
+node_modules/
+/evidence/*
+!/evidence/2026-10-26T23-56-15-510Z-7596-summary.json
+!/evidence/real/
+/evidence/real/*
+!/evidence/real/published-b0-stop.json
+# P2 no-retry-controlled hygiene: explicit private-artifact coverage
+# (defense in depth; all run-private paths already live under
+# /evidence/real/*, ignored at line 5). Lines below document each family.
+/evidence/real/reservations/
+/evidence/real/*/private-temp/
+/evidence/real/*/private-config/
+/evidence/real/*/private-data/
+/evidence/real/*/private-cache/
+/evidence/real/*/private-state/
+/evidence/real/*/work/
+/evidence/real/**/*.db
+/evidence/real/**/*.db-journal

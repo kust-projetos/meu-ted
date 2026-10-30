@@ -135,10 +135,15 @@ describe('S8 — consulta de período passado nunca propõe mutação', () => {
     expect(seen[0]).toMatchObject({ yearMonth: '2020-01' });
   });
 
-  it('9) regressão: mutação datada com valor explícito continua mutation-proposal', () => {
+  it('9) HIGH: mês+ano não resolvido clarifica data (nunca carimba hoje)', () => {
+    // O parser só resolve hoje/ontem/anteontem; "janeiro de 2020" virava
+    // hoje em silêncio. Mutação datada resolvível usa data relativa.
     const plan = routeIntent('Gastei R$ 50 em janeiro de 2020 no mercado');
-    expect(plan.mode).toBe('mutation-proposal');
-    expect(opNames('Gastei R$ 50 em janeiro de 2020 no mercado')).toContain('transactions.expense.create');
+    expect(plan.mode).not.toBe('mutation-proposal');
+    expect(isMutation('Gastei R$ 50 em janeiro de 2020 no mercado')).toBe(false);
+    const dated = routeIntent('Gastei R$ 50 ontem no mercado');
+    expect(dated.mode).toBe('mutation-proposal');
+    expect(opNames('Gastei R$ 50 ontem no mercado')).toContain('transactions.expense.create');
   });
 });
 

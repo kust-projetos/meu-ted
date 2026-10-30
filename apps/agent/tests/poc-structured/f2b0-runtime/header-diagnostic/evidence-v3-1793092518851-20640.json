@@ -1,0 +1,1267 @@
+{
+  "schemaVersion": "header-diagnostic-safe-v3",
+  "cliVersion": "2.1.4",
+  "model": "opencode/deepseek-v4.1-flash-free",
+  "nativeURL": "https://opencode.ai/inference/openai/v1/chat/completions",
+  "mockURL": "http://127.0.0.1:43193/v1/chat/completions",
+  "binarySourceProof": {
+    "cliVersion": "2.1.4",
+    "binaryBytes": 246919560,
+    "headerBlockOffset": 173540824,
+    "headerBlockSha256": "1994b135247d54ca2789d3f42bb02f331e213c1e2491f3b0310cb1caf2affbca",
+    "headerNamesFound": {
+      "x-opencode-session-id": true,
+      "x-opencode-parent-session-id": true,
+      "x-session-affinity": true,
+      "x-session-id": true,
+      "x-parent-session-id": true,
+      "user-agent": true,
+      "x-opencode-project": true,
+      "x-opencode-session": true,
+      "x-opencode-client": true
+    },
+    "sourceBindsSessionIdToSessionID": true,
+    "sourceBindsAffinityAliasesToSameValue": true,
+    "sourceUsesSessionKeyRegexOnlyForPromptCacheKey": true,
+    "sourceBuildsUserAgentAndClientFromRuntime": true,
+    "appIdentityFunctionOffset": 173350188,
+    "appIdentityFunctionSha256": "6add21c054870f4069ad9270264539966c3d2d375bd479dc6f39f56a669a0a5f",
+    "userAgentConstructorUsesChannelVersionName": true,
+    "affinityFunctionOffset": 173521125,
+    "affinityFunctionSha256": "5f4d4006ad9e9cccf455ee95a7bae071db91e1c2b4f2026e83bf3c954212b8c7",
+    "affinityPrecedenceParentThenForkThenSession": true,
+    "providerAuthMappingOffset": 173426849,
+    "providerAuthMappingSha256": "e4b44dc9edae84e14198567a587fdd5f59d8004ee72251866ed817c4981bd8ba",
+    "providerAuthMappingSupportsConfiguredKeyOrOAuth": true,
+    "authHeaderBuilderOffset": 173694560,
+    "authHeaderBuilderSha256": "0ddfcd2652edfb63da50d49fb2b6962a30274404d6e9b9f3a152e61f9f99a9c0",
+    "authHeaderBuilderUsesConfiguredAuthOrApiKeyBearer": true,
+    "publicApiKeyFallbackOffset": 174169369,
+    "publicApiKeyFallbackSha256": "5d81ed9977ed62d944d8b040437d3fb4a43c607aac8032b2c5472e3bdf68a850",
+    "providerUsesPublicPlaceholderWhenNoEnvConnectionOrConfiguredKey": true,
+    "authStorePathSourceOffset": 175376236,
+    "authStorePathSourceSha256": "554a1b93a54ab1d9f9a9d91514629dc42327558bad27c013c26dd8936f812947",
+    "authStorePathUsesXdgDataHomeOrHomeDotOpenCode": true,
+    "errorMappingBlockOffset": 173432938,
+    "errorMappingBlockSha256": "e9d7e59e25cfb941ff8976176488809caaa10e2eae30f4d11709b0ab9dcf58b5",
+    "freeUsageMapsQuotaExceededToProviderFreeLimit": true
+  },
+  "input": {
+    "caseID": "F1-B010",
+    "userText": "Mostre minhas faturas",
+    "promptSha256": "aaf50a22ad7fae1469b6f09a72a9cb4c916033d328d14b7d3ffe2be3e158da7b",
+    "promptBytes": 8361,
+    "sourceQuoteCount": 960,
+    "expectedArgQuotedExpansionBytes": 962,
+    "sourcePromptHas960QuoteExpansion": true,
+    "sourceFixtureCounts": {
+      "history": 0,
+      "accounts": 0,
+      "categories": 0,
+      "displayedOptions": 0
+    }
+  },
+  "comparisons": [
+    {
+      "mode": "standalone-argv",
+      "inputTransport": "argv",
+      "exitCode": 0,
+      "timedOut": false,
+      "elapsedMs": 1476,
+      "workDirLength": 101,
+      "mockRequestCount": 1,
+      "hookRequestCount": 1,
+      "hookEvents": [
+        "request-routed",
+        "response"
+      ],
+      "request": {
+        "event": "request-routed",
+        "provider": "opencode",
+        "model": "deepseek-v4.1-flash-free",
+        "kind": "primary",
+        "requestCount": 1,
+        "nativeURLMatched": true,
+        "localMockOnly": true,
+        "headerShapeBefore": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "headerShapeAfter": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "nativeHeaderRelations": {
+          "sessionIdHeaderMatchesHookEvent": true,
+          "affinityHeadersPresent": true,
+          "affinityHeadersEqual": true,
+          "affinityValueUsedForPromptCacheKey": false,
+          "parentSessionHeaderPresent": false,
+          "parentAffinityHeaderPresent": false
+        },
+        "nativeIdentity": {
+          "userAgentMatchesNativeConstructor": true,
+          "clientMatchesNativeConstructor": true
+        },
+        "nativeRequestUnchanged": true,
+        "routedRequestUnchanged": true,
+        "userInputSha256": "d5fc1b0b57d7cb9335237fbfbe6c273b3c145d141b0683e5b91e45399ad8d22c",
+        "userMessageCount": 1,
+        "expectedSyntheticUserTextPresent": true,
+        "promptWrapper": {
+          "sourcePromptBytes": 8361,
+          "promptVerbatimIncluded": false,
+          "promptIncludedAfterLineEndingNormalization": false,
+          "directSourcePromptMatchesPayload": false,
+          "sourcePromptPayloadHashMatches": false,
+          "escapedQuotedArgumentMatchesPayload": true,
+          "sourceQuoteCount": 960,
+          "payloadEscapedQuoteCount": 960,
+          "escapedQuoteExpansionBytes": 962,
+          "payloadBytesMinusCliArgumentBytes": 962,
+          "nonemptyPromptLinesMatched": 7,
+          "nonemptyPromptLineCount": 10,
+          "sourcePromptLineMatchMap": [
+            {
+              "lineIndex": 0,
+              "chars": 76,
+              "bytes": 76,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 1,
+              "chars": 77,
+              "bytes": 77,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 2,
+              "chars": 65,
+              "bytes": 65,
+              "payloadContainsExactLine": false
+            },
+            {
+              "lineIndex": 3,
+              "chars": 124,
+              "bytes": 124,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 4,
+              "chars": 108,
+              "bytes": 108,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 5,
+              "chars": 7561,
+              "bytes": 7561,
+              "payloadContainsExactLine": false
+            },
+            {
+              "lineIndex": 6,
+              "chars": 25,
+              "bytes": 25,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 7,
+              "chars": 38,
+              "bytes": 38,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 8,
+              "chars": 36,
+              "bytes": 36,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 9,
+              "chars": 242,
+              "bytes": 242,
+              "payloadContainsExactLine": false
+            }
+          ],
+          "prefixBytes": 0,
+          "suffixBytes": 0,
+          "wrapperOverheadBytes": null,
+          "wrapperOverheadSha256": null,
+          "hasCurrentDateMarker": false,
+          "hasWorkingDirectoryMarker": false,
+          "hasProjectContextMarker": false
+        },
+        "messageMetrics": {
+          "system": {
+            "chars": 1113,
+            "bytes": 1113,
+            "estimatedTokensCharsDiv4": 279,
+            "normalizedBytes": 929,
+            "normalizedSha256": "974086c7e2864c57208147551739cf5c384d42774fa0dc6091de727cbbd4e6fe",
+            "normalizedWithModeNamesBytes": 925,
+            "normalizedWithModeNamesSha256": "c5607c7972197b70aca0929939dd706769d18ce626c7a3e666506a233c32ce91",
+            "workDirOccurrences": 2,
+            "standaloneMarkerOccurrences": 3,
+            "serverCliMarkerOccurrences": 0
+          },
+          "user": {
+            "chars": 9323,
+            "bytes": 9323,
+            "estimatedTokensCharsDiv4": 2331
+          },
+          "estimation": "characters/4 heuristic; not token usage"
+        },
+        "authHeader": {
+          "present": true,
+          "class": "implicit-public-placeholder",
+          "matchesLocalServerPassword": false,
+          "matchesImplicitPublicPlaceholder": true
+        },
+        "bodyBytes": 12603,
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "toolCount": 0,
+        "unexpectedAgentInstructionPathPresent": false,
+        "unexpectedPromptMarkerPresent": false
+      },
+      "mock": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "accept",
+            "accept-encoding",
+            "b3",
+            "connection",
+            "content-length",
+            "content-type",
+            "host",
+            "traceparent",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "model": "deepseek-v4.1-flash-free",
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "userInputSha256": "d5fc1b0b57d7cb9335237fbfbe6c273b3c145d141b0683e5b91e45399ad8d22c",
+        "userMessageCount": 1,
+        "toolCount": 0,
+        "officialHeaderNamesMatch": true,
+        "officialHeaderValuesMatch": true,
+        "officialHeaderProofMatches": true,
+        "transportValid": true,
+        "authorizationClass": {
+          "present": true,
+          "class": "implicit-public-placeholder",
+          "matchesLocalServerPassword": false,
+          "matchesImplicitPublicPlaceholder": true
+        }
+      },
+      "nativeHeadersAtMock": true,
+      "officialHeaderNamesAtMock": true,
+      "officialHeaderValuesAtMock": true,
+      "officialHeaderPresenceAtHook": {
+        "x-opencode-session-id": true,
+        "x-opencode-parent-session-id": false,
+        "x-session-affinity": true,
+        "x-session-id": true,
+        "x-parent-session-id": false,
+        "user-agent": true,
+        "x-opencode-project": true,
+        "x-opencode-session": true,
+        "x-opencode-client": true
+      },
+      "identityHeadersValid": true,
+      "exactHeaderValuesPreserved": true,
+      "output": {
+        "bytes": 9,
+        "sha256": "bc97f50395bb222425cc311289390b7d0bb5985b753efddb244e31b635030ca1"
+      },
+      "stderrNonempty": false,
+      "environment": {
+        "apiKeyEnvironmentPresence": {
+          "OPENCODE_API_KEY": false,
+          "OPENCODE_GO_API_KEY": false,
+          "OPENAI_API_KEY": false
+        },
+        "childCredentialEnvironmentPresent": false,
+        "providerApiKeyConfigured": false,
+        "isolatedConfigPath": true,
+        "isolatedAuthStoreExists": false
+      }
+    },
+    {
+      "mode": "serve-sdk-cli-argv",
+      "inputTransport": "argv",
+      "exitCode": 0,
+      "timedOut": false,
+      "elapsedMs": 919,
+      "workDirLength": 104,
+      "mockRequestCount": 1,
+      "hookRequestCount": 1,
+      "hookEvents": [
+        "request-routed",
+        "response"
+      ],
+      "request": {
+        "event": "request-routed",
+        "provider": "opencode",
+        "model": "deepseek-v4.1-flash-free",
+        "kind": "primary",
+        "requestCount": 1,
+        "nativeURLMatched": true,
+        "localMockOnly": true,
+        "headerShapeBefore": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "headerShapeAfter": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "nativeHeaderRelations": {
+          "sessionIdHeaderMatchesHookEvent": true,
+          "affinityHeadersPresent": true,
+          "affinityHeadersEqual": true,
+          "affinityValueUsedForPromptCacheKey": false,
+          "parentSessionHeaderPresent": false,
+          "parentAffinityHeaderPresent": false
+        },
+        "nativeIdentity": {
+          "userAgentMatchesNativeConstructor": true,
+          "clientMatchesNativeConstructor": true
+        },
+        "nativeRequestUnchanged": true,
+        "routedRequestUnchanged": true,
+        "userInputSha256": "d5fc1b0b57d7cb9335237fbfbe6c273b3c145d141b0683e5b91e45399ad8d22c",
+        "userMessageCount": 1,
+        "expectedSyntheticUserTextPresent": true,
+        "promptWrapper": {
+          "sourcePromptBytes": 8361,
+          "promptVerbatimIncluded": false,
+          "promptIncludedAfterLineEndingNormalization": false,
+          "directSourcePromptMatchesPayload": false,
+          "sourcePromptPayloadHashMatches": false,
+          "escapedQuotedArgumentMatchesPayload": true,
+          "sourceQuoteCount": 960,
+          "payloadEscapedQuoteCount": 960,
+          "escapedQuoteExpansionBytes": 962,
+          "payloadBytesMinusCliArgumentBytes": 962,
+          "nonemptyPromptLinesMatched": 7,
+          "nonemptyPromptLineCount": 10,
+          "sourcePromptLineMatchMap": [
+            {
+              "lineIndex": 0,
+              "chars": 76,
+              "bytes": 76,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 1,
+              "chars": 77,
+              "bytes": 77,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 2,
+              "chars": 65,
+              "bytes": 65,
+              "payloadContainsExactLine": false
+            },
+            {
+              "lineIndex": 3,
+              "chars": 124,
+              "bytes": 124,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 4,
+              "chars": 108,
+              "bytes": 108,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 5,
+              "chars": 7561,
+              "bytes": 7561,
+              "payloadContainsExactLine": false
+            },
+            {
+              "lineIndex": 6,
+              "chars": 25,
+              "bytes": 25,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 7,
+              "chars": 38,
+              "bytes": 38,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 8,
+              "chars": 36,
+              "bytes": 36,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 9,
+              "chars": 242,
+              "bytes": 242,
+              "payloadContainsExactLine": false
+            }
+          ],
+          "prefixBytes": 0,
+          "suffixBytes": 0,
+          "wrapperOverheadBytes": null,
+          "wrapperOverheadSha256": null,
+          "hasCurrentDateMarker": false,
+          "hasWorkingDirectoryMarker": false,
+          "hasProjectContextMarker": false
+        },
+        "messageMetrics": {
+          "system": {
+            "chars": 1122,
+            "bytes": 1122,
+            "estimatedTokensCharsDiv4": 281,
+            "normalizedBytes": 932,
+            "normalizedSha256": "9c91975304fcf9311b0a026c8d91526bf1fdf8d1e9acdf5821471c192f60ed5b",
+            "normalizedWithModeNamesBytes": 925,
+            "normalizedWithModeNamesSha256": "c5607c7972197b70aca0929939dd706769d18ce626c7a3e666506a233c32ce91",
+            "workDirOccurrences": 2,
+            "standaloneMarkerOccurrences": 0,
+            "serverCliMarkerOccurrences": 3
+          },
+          "user": {
+            "chars": 9323,
+            "bytes": 9323,
+            "estimatedTokensCharsDiv4": 2331
+          },
+          "estimation": "characters/4 heuristic; not token usage"
+        },
+        "authHeader": {
+          "present": true,
+          "class": "implicit-public-placeholder",
+          "matchesLocalServerPassword": false,
+          "matchesImplicitPublicPlaceholder": true
+        },
+        "bodyBytes": 12612,
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "toolCount": 0,
+        "unexpectedAgentInstructionPathPresent": false,
+        "unexpectedPromptMarkerPresent": false
+      },
+      "mock": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "accept",
+            "accept-encoding",
+            "b3",
+            "connection",
+            "content-length",
+            "content-type",
+            "host",
+            "traceparent",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "model": "deepseek-v4.1-flash-free",
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "userInputSha256": "d5fc1b0b57d7cb9335237fbfbe6c273b3c145d141b0683e5b91e45399ad8d22c",
+        "userMessageCount": 1,
+        "toolCount": 0,
+        "officialHeaderNamesMatch": true,
+        "officialHeaderValuesMatch": true,
+        "officialHeaderProofMatches": true,
+        "transportValid": true,
+        "authorizationClass": {
+          "present": true,
+          "class": "implicit-public-placeholder",
+          "matchesLocalServerPassword": false,
+          "matchesImplicitPublicPlaceholder": true
+        }
+      },
+      "nativeHeadersAtMock": true,
+      "officialHeaderNamesAtMock": true,
+      "officialHeaderValuesAtMock": true,
+      "officialHeaderPresenceAtHook": {
+        "x-opencode-session-id": true,
+        "x-opencode-parent-session-id": false,
+        "x-session-affinity": true,
+        "x-session-id": true,
+        "x-parent-session-id": false,
+        "user-agent": true,
+        "x-opencode-project": true,
+        "x-opencode-session": true,
+        "x-opencode-client": true
+      },
+      "identityHeadersValid": true,
+      "exactHeaderValuesPreserved": true,
+      "output": {
+        "bytes": 9,
+        "sha256": "bc97f50395bb222425cc311289390b7d0bb5985b753efddb244e31b635030ca1"
+      },
+      "stderrNonempty": false,
+      "environment": {
+        "apiKeyEnvironmentPresence": {
+          "OPENCODE_API_KEY": false,
+          "OPENCODE_GO_API_KEY": false,
+          "OPENAI_API_KEY": false
+        },
+        "childCredentialEnvironmentPresent": false,
+        "providerApiKeyConfigured": false,
+        "isolatedConfigPath": true,
+        "isolatedAuthStoreExists": false
+      }
+    },
+    {
+      "mode": "standalone-stdin",
+      "inputTransport": "stdin",
+      "exitCode": 0,
+      "timedOut": false,
+      "elapsedMs": 1426,
+      "workDirLength": 102,
+      "mockRequestCount": 1,
+      "hookRequestCount": 1,
+      "hookEvents": [
+        "request-routed",
+        "response"
+      ],
+      "request": {
+        "event": "request-routed",
+        "provider": "opencode",
+        "model": "deepseek-v4.1-flash-free",
+        "kind": "primary",
+        "requestCount": 1,
+        "nativeURLMatched": true,
+        "localMockOnly": true,
+        "headerShapeBefore": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "headerShapeAfter": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "nativeHeaderRelations": {
+          "sessionIdHeaderMatchesHookEvent": true,
+          "affinityHeadersPresent": true,
+          "affinityHeadersEqual": true,
+          "affinityValueUsedForPromptCacheKey": false,
+          "parentSessionHeaderPresent": false,
+          "parentAffinityHeaderPresent": false
+        },
+        "nativeIdentity": {
+          "userAgentMatchesNativeConstructor": true,
+          "clientMatchesNativeConstructor": true
+        },
+        "nativeRequestUnchanged": true,
+        "routedRequestUnchanged": true,
+        "userInputSha256": "c6627dd531e47f376151ef744e553e4f46671c845820eea434f138487f7814cd",
+        "userMessageCount": 1,
+        "expectedSyntheticUserTextPresent": true,
+        "promptWrapper": {
+          "sourcePromptBytes": 8361,
+          "promptVerbatimIncluded": true,
+          "promptIncludedAfterLineEndingNormalization": true,
+          "directSourcePromptMatchesPayload": true,
+          "sourcePromptPayloadHashMatches": true,
+          "escapedQuotedArgumentMatchesPayload": false,
+          "sourceQuoteCount": 960,
+          "payloadEscapedQuoteCount": 0,
+          "escapedQuoteExpansionBytes": 0,
+          "payloadBytesMinusCliArgumentBytes": 0,
+          "nonemptyPromptLinesMatched": 10,
+          "nonemptyPromptLineCount": 10,
+          "sourcePromptLineMatchMap": [
+            {
+              "lineIndex": 0,
+              "chars": 76,
+              "bytes": 76,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 1,
+              "chars": 77,
+              "bytes": 77,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 2,
+              "chars": 65,
+              "bytes": 65,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 3,
+              "chars": 124,
+              "bytes": 124,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 4,
+              "chars": 108,
+              "bytes": 108,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 5,
+              "chars": 7561,
+              "bytes": 7561,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 6,
+              "chars": 25,
+              "bytes": 25,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 7,
+              "chars": 38,
+              "bytes": 38,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 8,
+              "chars": 36,
+              "bytes": 36,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 9,
+              "chars": 242,
+              "bytes": 242,
+              "payloadContainsExactLine": true
+            }
+          ],
+          "prefixBytes": 0,
+          "suffixBytes": 0,
+          "wrapperOverheadBytes": 0,
+          "wrapperOverheadSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "hasCurrentDateMarker": false,
+          "hasWorkingDirectoryMarker": false,
+          "hasProjectContextMarker": false
+        },
+        "messageMetrics": {
+          "system": {
+            "chars": 1116,
+            "bytes": 1116,
+            "estimatedTokensCharsDiv4": 279,
+            "normalizedBytes": 930,
+            "normalizedSha256": "af98a414eef2362c67f5628e1111c2132cd595a82bbf7b918f519607af33de61",
+            "normalizedWithModeNamesBytes": 926,
+            "normalizedWithModeNamesSha256": "b4d5b04204da9c87e9201db7c3e0f94f17cec5fcb545932d8b1c4c4a318c8a60",
+            "workDirOccurrences": 2,
+            "standaloneMarkerOccurrences": 3,
+            "serverCliMarkerOccurrences": 0
+          },
+          "user": {
+            "chars": 8361,
+            "bytes": 8361,
+            "estimatedTokensCharsDiv4": 2091
+          },
+          "estimation": "characters/4 heuristic; not token usage"
+        },
+        "authHeader": {
+          "present": true,
+          "class": "implicit-public-placeholder",
+          "matchesLocalServerPassword": false,
+          "matchesImplicitPublicPlaceholder": true
+        },
+        "bodyBytes": 10682,
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "toolCount": 0,
+        "unexpectedAgentInstructionPathPresent": false,
+        "unexpectedPromptMarkerPresent": false
+      },
+      "mock": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "accept",
+            "accept-encoding",
+            "b3",
+            "connection",
+            "content-length",
+            "content-type",
+            "host",
+            "traceparent",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "model": "deepseek-v4.1-flash-free",
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "userInputSha256": "c6627dd531e47f376151ef744e553e4f46671c845820eea434f138487f7814cd",
+        "userMessageCount": 1,
+        "toolCount": 0,
+        "officialHeaderNamesMatch": true,
+        "officialHeaderValuesMatch": true,
+        "officialHeaderProofMatches": true,
+        "transportValid": true,
+        "authorizationClass": {
+          "present": true,
+          "class": "implicit-public-placeholder",
+          "matchesLocalServerPassword": false,
+          "matchesImplicitPublicPlaceholder": true
+        }
+      },
+      "nativeHeadersAtMock": true,
+      "officialHeaderNamesAtMock": true,
+      "officialHeaderValuesAtMock": true,
+      "officialHeaderPresenceAtHook": {
+        "x-opencode-session-id": true,
+        "x-opencode-parent-session-id": false,
+        "x-session-affinity": true,
+        "x-session-id": true,
+        "x-parent-session-id": false,
+        "user-agent": true,
+        "x-opencode-project": true,
+        "x-opencode-session": true,
+        "x-opencode-client": true
+      },
+      "identityHeadersValid": true,
+      "exactHeaderValuesPreserved": true,
+      "output": {
+        "bytes": 9,
+        "sha256": "bc97f50395bb222425cc311289390b7d0bb5985b753efddb244e31b635030ca1"
+      },
+      "stderrNonempty": false,
+      "environment": {
+        "apiKeyEnvironmentPresence": {
+          "OPENCODE_API_KEY": false,
+          "OPENCODE_GO_API_KEY": false,
+          "OPENAI_API_KEY": false
+        },
+        "childCredentialEnvironmentPresent": false,
+        "providerApiKeyConfigured": false,
+        "isolatedConfigPath": true,
+        "isolatedAuthStoreExists": false
+      }
+    },
+    {
+      "mode": "serve-sdk-cli-stdin",
+      "inputTransport": "stdin",
+      "exitCode": 0,
+      "timedOut": false,
+      "elapsedMs": 902,
+      "workDirLength": 105,
+      "mockRequestCount": 1,
+      "hookRequestCount": 1,
+      "hookEvents": [
+        "request-routed",
+        "response"
+      ],
+      "request": {
+        "event": "request-routed",
+        "provider": "opencode",
+        "model": "deepseek-v4.1-flash-free",
+        "kind": "primary",
+        "requestCount": 1,
+        "nativeURLMatched": true,
+        "localMockOnly": true,
+        "headerShapeBefore": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "headerShapeAfter": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "nativeHeaderRelations": {
+          "sessionIdHeaderMatchesHookEvent": true,
+          "affinityHeadersPresent": true,
+          "affinityHeadersEqual": true,
+          "affinityValueUsedForPromptCacheKey": false,
+          "parentSessionHeaderPresent": false,
+          "parentAffinityHeaderPresent": false
+        },
+        "nativeIdentity": {
+          "userAgentMatchesNativeConstructor": true,
+          "clientMatchesNativeConstructor": true
+        },
+        "nativeRequestUnchanged": true,
+        "routedRequestUnchanged": true,
+        "userInputSha256": "c6627dd531e47f376151ef744e553e4f46671c845820eea434f138487f7814cd",
+        "userMessageCount": 1,
+        "expectedSyntheticUserTextPresent": true,
+        "promptWrapper": {
+          "sourcePromptBytes": 8361,
+          "promptVerbatimIncluded": true,
+          "promptIncludedAfterLineEndingNormalization": true,
+          "directSourcePromptMatchesPayload": true,
+          "sourcePromptPayloadHashMatches": true,
+          "escapedQuotedArgumentMatchesPayload": false,
+          "sourceQuoteCount": 960,
+          "payloadEscapedQuoteCount": 0,
+          "escapedQuoteExpansionBytes": 0,
+          "payloadBytesMinusCliArgumentBytes": 0,
+          "nonemptyPromptLinesMatched": 10,
+          "nonemptyPromptLineCount": 10,
+          "sourcePromptLineMatchMap": [
+            {
+              "lineIndex": 0,
+              "chars": 76,
+              "bytes": 76,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 1,
+              "chars": 77,
+              "bytes": 77,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 2,
+              "chars": 65,
+              "bytes": 65,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 3,
+              "chars": 124,
+              "bytes": 124,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 4,
+              "chars": 108,
+              "bytes": 108,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 5,
+              "chars": 7561,
+              "bytes": 7561,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 6,
+              "chars": 25,
+              "bytes": 25,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 7,
+              "chars": 38,
+              "bytes": 38,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 8,
+              "chars": 36,
+              "bytes": 36,
+              "payloadContainsExactLine": true
+            },
+            {
+              "lineIndex": 9,
+              "chars": 242,
+              "bytes": 242,
+              "payloadContainsExactLine": true
+            }
+          ],
+          "prefixBytes": 0,
+          "suffixBytes": 0,
+          "wrapperOverheadBytes": 0,
+          "wrapperOverheadSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "hasCurrentDateMarker": false,
+          "hasWorkingDirectoryMarker": false,
+          "hasProjectContextMarker": false
+        },
+        "messageMetrics": {
+          "system": {
+            "chars": 1125,
+            "bytes": 1125,
+            "estimatedTokensCharsDiv4": 282,
+            "normalizedBytes": 933,
+            "normalizedSha256": "026728a67d0b92e870f646d35af9330f2616390308f61d559cd95593ca12eac3",
+            "normalizedWithModeNamesBytes": 926,
+            "normalizedWithModeNamesSha256": "b4d5b04204da9c87e9201db7c3e0f94f17cec5fcb545932d8b1c4c4a318c8a60",
+            "workDirOccurrences": 2,
+            "standaloneMarkerOccurrences": 0,
+            "serverCliMarkerOccurrences": 3
+          },
+          "user": {
+            "chars": 8361,
+            "bytes": 8361,
+            "estimatedTokensCharsDiv4": 2091
+          },
+          "estimation": "characters/4 heuristic; not token usage"
+        },
+        "authHeader": {
+          "present": true,
+          "class": "implicit-public-placeholder",
+          "matchesLocalServerPassword": false,
+          "matchesImplicitPublicPlaceholder": true
+        },
+        "bodyBytes": 10691,
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "toolCount": 0,
+        "unexpectedAgentInstructionPathPresent": false,
+        "unexpectedPromptMarkerPresent": false
+      },
+      "mock": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "accept",
+            "accept-encoding",
+            "b3",
+            "connection",
+            "content-length",
+            "content-type",
+            "host",
+            "traceparent",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "model": "deepseek-v4.1-flash-free",
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "userInputSha256": "c6627dd531e47f376151ef744e553e4f46671c845820eea434f138487f7814cd",
+        "userMessageCount": 1,
+        "toolCount": 0,
+        "officialHeaderNamesMatch": true,
+        "officialHeaderValuesMatch": true,
+        "officialHeaderProofMatches": true,
+        "transportValid": true,
+        "authorizationClass": {
+          "present": true,
+          "class": "implicit-public-placeholder",
+          "matchesLocalServerPassword": false,
+          "matchesImplicitPublicPlaceholder": true
+        }
+      },
+      "nativeHeadersAtMock": true,
+      "officialHeaderNamesAtMock": true,
+      "officialHeaderValuesAtMock": true,
+      "officialHeaderPresenceAtHook": {
+        "x-opencode-session-id": true,
+        "x-opencode-parent-session-id": false,
+        "x-session-affinity": true,
+        "x-session-id": true,
+        "x-parent-session-id": false,
+        "user-agent": true,
+        "x-opencode-project": true,
+        "x-opencode-session": true,
+        "x-opencode-client": true
+      },
+      "identityHeadersValid": true,
+      "exactHeaderValuesPreserved": true,
+      "output": {
+        "bytes": 9,
+        "sha256": "bc97f50395bb222425cc311289390b7d0bb5985b753efddb244e31b635030ca1"
+      },
+      "stderrNonempty": false,
+      "environment": {
+        "apiKeyEnvironmentPresence": {
+          "OPENCODE_API_KEY": false,
+          "OPENCODE_GO_API_KEY": false,
+          "OPENAI_API_KEY": false
+        },
+        "childCredentialEnvironmentPresent": false,
+        "providerApiKeyConfigured": false,
+        "isolatedConfigPath": true,
+        "isolatedAuthStoreExists": false
+      }
+    }
+  ],
+  "argvPayloadHashesMatchAcrossPaths": true,
+  "stdinPayloadHashesMatchAcrossPaths": true,
+  "stdinSupportedInBothPaths": true,
+  "stdinSourcePromptByteIdentityInBothPaths": true,
+  "argvQuotedRepresentationMatchesInBothPaths": true,
+  "syntheticUserTextPresentInAllObservedPayloads": true,
+  "onlyLoopbackMockRequestsObserved": true,
+  "promptInclusion": [
+    {
+      "mode": "standalone-argv",
+      "transport": "argv",
+      "verbatim": false,
+      "directSourcePrompt": false,
+      "sourceHashMatch": false,
+      "escapedQuotedArgument": true,
+      "sourceQuoteCount": 960,
+      "escapedQuoteCount": 960,
+      "payloadBytesDelta": 962,
+      "noRequestObserved": false
+    },
+    {
+      "mode": "serve-sdk-cli-argv",
+      "transport": "argv",
+      "verbatim": false,
+      "directSourcePrompt": false,
+      "sourceHashMatch": false,
+      "escapedQuotedArgument": true,
+      "sourceQuoteCount": 960,
+      "escapedQuoteCount": 960,
+      "payloadBytesDelta": 962,
+      "noRequestObserved": false
+    },
+    {
+      "mode": "standalone-stdin",
+      "transport": "stdin",
+      "verbatim": true,
+      "directSourcePrompt": true,
+      "sourceHashMatch": true,
+      "escapedQuotedArgument": false,
+      "sourceQuoteCount": 960,
+      "escapedQuoteCount": 0,
+      "payloadBytesDelta": 0,
+      "noRequestObserved": false
+    },
+    {
+      "mode": "serve-sdk-cli-stdin",
+      "transport": "stdin",
+      "verbatim": true,
+      "directSourcePrompt": true,
+      "sourceHashMatch": true,
+      "escapedQuotedArgument": false,
+      "sourceQuoteCount": 960,
+      "escapedQuoteCount": 0,
+      "payloadBytesDelta": 0,
+      "noRequestObserved": false
+    }
+  ],
+  "systemContextComparison": {
+    "byteDelta": 9,
+    "workDirLengthDelta": 3,
+    "normalizedHashEqualAfterReplacingWorkDir": false,
+    "normalizedBytesEqualAfterReplacingWorkDir": false,
+    "normalizedHashEqualAfterReplacingWorkDirAndModeLabels": true,
+    "normalizedBytesEqualAfterReplacingWorkDirAndModeLabels": true,
+    "modeLabelOccurrences": [
+      {
+        "standalone": 3,
+        "serveSdkCli": 0
+      },
+      {
+        "standalone": 0,
+        "serveSdkCli": 3
+      }
+    ],
+    "explainedByWorkDirAndModeLabelSubstitution": true
+  },
+  "status": "PASS",
+  "authAndGlobalConfigScope": {
+    "currentProcessApiKeyEnvironmentPresence": {
+      "OPENCODE_API_KEY": false,
+      "OPENCODE_GO_API_KEY": false,
+      "OPENAI_API_KEY": false
+    },
+    "currentGlobalAuthStoreExists": false,
+    "currentGlobalAuthStoreIsFile": false,
+    "currentGlobalAuthStoreContentsRead": false,
+    "childApiKeyEnvironmentPresent": false,
+    "childProviderApiKeyConfigured": false,
+    "isolatedChildAuthStoreExists": false,
+    "globalConfigImported": false,
+    "authorizationHeaderPresent": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "authorizationHeaderClass": [
+      "implicit-public-placeholder",
+      "implicit-public-placeholder",
+      "implicit-public-placeholder",
+      "implicit-public-placeholder"
+    ],
+    "authorizationMatchesLocalServerPassword": [
+      false,
+      false,
+      false,
+      false
+    ],
+    "authorizationMatchesSourceProvenPublicPlaceholder": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "sourceAttributionForObservedAuthorization": "source-proven public-key fallback; the value was equality-checked in memory and never persisted"
+  },
+  "comparisonScope": "controlled CLI transport-path comparison with isolated homes/config; not equivalent to the active global configuration/auth context"
+}

@@ -1,0 +1,1543 @@
+{
+  "schemaVersion": "1.0.0",
+  "generatedAt": "2026-10-29T00:55:41.464Z",
+  "baseline": "98221f5a2c92de01d18d71fc6a7b05988c8139c3",
+  "environment": "local-synthetic",
+  "execution": {
+    "externalNetwork": false,
+    "realFinancialData": false,
+    "realWriter": false,
+    "syntheticInMemoryOnly": true,
+    "llmCalls": 0,
+    "providerIdentity": "opencode-zen/zen-free-model (allowlisted; local fetch interception)"
+  },
+  "totalJourneys": 10,
+  "totalTurns": 21,
+  "journeys": [
+    {
+      "id": "J01",
+      "rationale": "Missing amount clarifies, then bare value 2500 resumes partial draft to exact proposal.",
+      "expectedStages": [
+        "clarify",
+        "propose"
+      ],
+      "turns": [
+        {
+          "index": 0,
+          "text": "Gastei com carne na Conta principal categoria mercado",
+          "intentionId": "f1-j01-t1",
+          "isolatedRoute": {
+            "mode": "read",
+            "operations": [
+              "list_accounts",
+              "list_transactions",
+              "list_categories"
+            ]
+          },
+          "actualPlan": {
+            "mode": "read",
+            "operations": [
+              "list_accounts",
+              "list_transactions",
+              "list_categories"
+            ]
+          },
+          "actualPlanKinds": [
+            "read",
+            "read",
+            "read"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Não identifiquei o valor a registrar. Informe o valor e a descrição.",
+          "clarificationText": "Não identifiquei o valor a registrar. Informe o valor e a descrição.",
+          "pendingStatus": null,
+          "apiReads": [],
+          "apiRequests": [],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        },
+        {
+          "index": 0,
+          "text": "2500",
+          "intentionId": "f1-j01-t2",
+          "isolatedRoute": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlan": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlanKinds": [],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Qual categoria devo usar?\n• Mercado",
+          "clarificationText": "Qual categoria devo usar?\n• Mercado",
+          "pendingStatus": null,
+          "apiReads": [
+            "GET /accounts",
+            "GET /categories"
+          ],
+          "apiRequests": [
+            "GET /accounts",
+            "GET /categories"
+          ],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        }
+      ],
+      "completion": "FAIL",
+      "reasons": [
+        "no exact expense proposal (account+category+250000)"
+      ],
+      "evidenceKind": "synthetic REST turns over in-memory fakes; no provider/DB/production"
+    },
+    {
+      "id": "J02",
+      "rationale": "Category inference: seeded catalog read, then bare answer must resolve exact categoryId.",
+      "expectedStages": [
+        "clarify",
+        "propose"
+      ],
+      "turns": [
+        {
+          "index": 0,
+          "text": "Gastei 50 na Conta principal com carne",
+          "intentionId": "f1-j02-t1",
+          "isolatedRoute": {
+            "mode": "mutation-proposal",
+            "operations": [
+              "transactions.expense.create"
+            ]
+          },
+          "actualPlan": {
+            "mode": "mutation-proposal",
+            "operations": [
+              "transactions.expense.create"
+            ]
+          },
+          "actualPlanKinds": [
+            "mutation"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Qual categoria devo usar?\n• Mercado",
+          "clarificationText": "Qual categoria devo usar?\n• Mercado",
+          "pendingStatus": null,
+          "apiReads": [
+            "GET /accounts",
+            "GET /categories"
+          ],
+          "apiRequests": [
+            "GET /accounts",
+            "GET /categories"
+          ],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        },
+        {
+          "index": 0,
+          "text": "mercado",
+          "intentionId": "f1-j02-t2",
+          "isolatedRoute": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlan": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlanKinds": [],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Proposta: Conta principal com carne. Confirma?",
+          "clarificationText": "Proposta: Conta principal com carne. Confirma?",
+          "pendingStatus": "proposed",
+          "apiReads": [
+            "GET /accounts",
+            "GET /categories",
+            "GET /accounts",
+            "GET /categories"
+          ],
+          "apiRequests": [
+            "GET /accounts",
+            "GET /categories",
+            "GET /accounts",
+            "GET /categories",
+            "POST /pending-operations/v2/propose"
+          ],
+          "v2ProposalsDelta": 1,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [
+            {
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 5000,
+                "description": "Conta principal com carne",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "expiresAt": "2026-10-24T12:30:00.000Z"
+            }
+          ],
+          "proposalHttpDelta": 1,
+          "pendingSnapshot": [
+            {
+              "id": "synthetic-pending-j1",
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 5000,
+                "description": "Conta principal com carne",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "status": "proposed",
+              "attestation": null,
+              "receipt": null,
+              "intentionId": "journey-1"
+            }
+          ],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": "proposed",
+          "mutationOperationId": "synthetic-pending-j1",
+          "mutationReceipt": null,
+          "responseParseError": null
+        }
+      ],
+      "completion": "PASS",
+      "reasons": [
+        "exact categoryId resolved, not mere catalog read"
+      ],
+      "evidenceKind": "synthetic REST turns over in-memory fakes; no provider/DB/production"
+    },
+    {
+      "id": "J03",
+      "rationale": "Account draft continuity: name first, then kind bank + balance 100.",
+      "expectedStages": [
+        "clarify",
+        "propose"
+      ],
+      "turns": [
+        {
+          "index": 0,
+          "text": "Crie conta chamada Reserva",
+          "intentionId": "f1-j03-t1",
+          "isolatedRoute": {
+            "mode": "read",
+            "operations": [
+              "list_accounts"
+            ]
+          },
+          "actualPlan": {
+            "mode": "read",
+            "operations": [
+              "list_accounts"
+            ]
+          },
+          "actualPlanKinds": [
+            "read"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Para criar a conta, me diga o saldo inicial e o tipo (conta no banco ou dinheiro em espécie).",
+          "clarificationText": "Para criar a conta, me diga o saldo inicial e o tipo (conta no banco ou dinheiro em espécie).",
+          "pendingStatus": null,
+          "apiReads": [],
+          "apiRequests": [],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        },
+        {
+          "index": 0,
+          "text": "banco com saldo 100",
+          "intentionId": "f1-j03-t2",
+          "isolatedRoute": {
+            "mode": "read",
+            "operations": [
+              "get_balance"
+            ]
+          },
+          "actualPlan": {
+            "mode": "read",
+            "operations": [
+              "get_balance"
+            ]
+          },
+          "actualPlanKinds": [
+            "read"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Proposta: Reserva. Confirma?",
+          "clarificationText": "Proposta: Reserva. Confirma?",
+          "pendingStatus": "proposed",
+          "apiReads": [],
+          "apiRequests": [
+            "POST /pending-operations/v2/propose"
+          ],
+          "v2ProposalsDelta": 1,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [
+            {
+              "tool": "accounts.create",
+              "normalizedArgs": {
+                "name": "Reserva",
+                "kind": "bank",
+                "initialBalanceCents": 10000
+              },
+              "expiresAt": "2026-10-24T12:30:00.000Z"
+            }
+          ],
+          "proposalHttpDelta": 1,
+          "pendingSnapshot": [
+            {
+              "id": "synthetic-pending-j1",
+              "tool": "accounts.create",
+              "normalizedArgs": {
+                "name": "Reserva",
+                "kind": "bank",
+                "initialBalanceCents": 10000
+              },
+              "status": "proposed",
+              "attestation": null,
+              "receipt": null,
+              "intentionId": "journey-1"
+            }
+          ],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": "proposed",
+          "mutationOperationId": "synthetic-pending-j1",
+          "mutationReceipt": null,
+          "responseParseError": null
+        }
+      ],
+      "completion": "PASS",
+      "reasons": [
+        "account draft continuity with exact kind"
+      ],
+      "evidenceKind": "synthetic REST turns over in-memory fakes; no provider/DB/production"
+    },
+    {
+      "id": "J04",
+      "rationale": "Unique rename proposes with CAS binding, then explicit confirm reaches decision path.",
+      "expectedStages": [
+        "propose",
+        "confirm"
+      ],
+      "turns": [
+        {
+          "index": 0,
+          "text": "Renomeie conta Aurora para Reserva",
+          "intentionId": "f1-j04-t1",
+          "isolatedRoute": {
+            "mode": "read",
+            "operations": [
+              "list_accounts"
+            ]
+          },
+          "actualPlan": {
+            "mode": "read",
+            "operations": [
+              "list_accounts"
+            ]
+          },
+          "actualPlanKinds": [
+            "read"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Proposta: renomear a conta \"Aurora\" para \"Reserva\". Confirma?",
+          "clarificationText": "Proposta: renomear a conta \"Aurora\" para \"Reserva\". Confirma?",
+          "pendingStatus": "proposed",
+          "apiReads": [
+            "GET /accounts"
+          ],
+          "apiRequests": [
+            "GET /accounts",
+            "POST /pending-operations/v2/propose"
+          ],
+          "v2ProposalsDelta": 1,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [
+            {
+              "tool": "accounts.update",
+              "normalizedArgs": {
+                "accountId": "10000000-0000-4000-8000-000000000001",
+                "name": "Reserva",
+                "expectedName": "Aurora"
+              },
+              "expiresAt": "2026-10-24T12:30:00.000Z"
+            }
+          ],
+          "proposalHttpDelta": 1,
+          "pendingSnapshot": [
+            {
+              "id": "synthetic-pending-j1",
+              "tool": "accounts.update",
+              "normalizedArgs": {
+                "accountId": "10000000-0000-4000-8000-000000000001",
+                "name": "Reserva",
+                "expectedName": "Aurora"
+              },
+              "status": "proposed",
+              "attestation": null,
+              "receipt": null,
+              "intentionId": "journey-1"
+            }
+          ],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": "proposed",
+          "mutationOperationId": "synthetic-pending-j1",
+          "mutationReceipt": null,
+          "responseParseError": null
+        },
+        {
+          "index": 0,
+          "text": "sim confirmo",
+          "intentionId": "f1-j04-t2",
+          "isolatedRoute": {
+            "mode": "confirmation",
+            "operations": []
+          },
+          "actualPlan": {
+            "mode": "confirmation",
+            "operations": []
+          },
+          "actualPlanKinds": [],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "operação em processamento: o resultado não pôde ser confirmado. Verifique seus lançamentos antes de tentar de novo.",
+          "clarificationText": null,
+          "pendingStatus": null,
+          "apiReads": [
+            "GET /pending-operations/v2/active",
+            "GET /pending-operations/v2/active"
+          ],
+          "apiRequests": [
+            "POST /pending-operations/v2/confirmation-intentions/bind",
+            "GET /pending-operations/v2/active",
+            "POST /pending-operations/v2/synthetic-pending-j1/confirm",
+            "POST /pending-operations/v2/synthetic-pending-j1/execute",
+            "GET /pending-operations/v2/active"
+          ],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 1,
+          "executionsDelta": 1,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [
+            {
+              "id": "synthetic-pending-j1",
+              "tool": "accounts.update",
+              "normalizedArgs": {
+                "accountId": "10000000-0000-4000-8000-000000000001",
+                "name": "Reserva",
+                "expectedName": "Aurora"
+              },
+              "status": "succeeded",
+              "attestation": "synthetic-attestation-synthetic-pending-j1-0123456789",
+              "receipt": {
+                "operationId": "synthetic-pending-j1",
+                "entity": {
+                  "id": "synthetic-entity-synthetic-pending-j1"
+                },
+                "synthetic": true
+              },
+              "intentionId": "journey-1"
+            }
+          ],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        }
+      ],
+      "completion": "INCONCLUSIVE",
+      "reasons": [
+        "fake state succeeded, but the real REST result did not attest successful mutation; no completion inferred from fake state"
+      ],
+      "evidenceKind": "synthetic REST turns over in-memory fakes; no provider/DB/production"
+    },
+    {
+      "id": "J05",
+      "rationale": "Homonyms stay unresolved, then distinguishing selection must bind exactly one ID.",
+      "expectedStages": [
+        "clarify",
+        "propose"
+      ],
+      "turns": [
+        {
+          "index": 0,
+          "text": "Renomeie conta Aurora para Reserva",
+          "intentionId": "f1-j05-t1",
+          "isolatedRoute": {
+            "mode": "read",
+            "operations": [
+              "list_accounts"
+            ]
+          },
+          "actualPlan": {
+            "mode": "read",
+            "operations": [
+              "list_accounts"
+            ]
+          },
+          "actualPlanKinds": [
+            "read"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Encontrei mais de uma conta para sua mensagem. Qual conta devo renomear?\n• Aurora\n• Aurora",
+          "clarificationText": "Encontrei mais de uma conta para sua mensagem. Qual conta devo renomear?\n• Aurora\n• Aurora",
+          "pendingStatus": null,
+          "apiReads": [
+            "GET /accounts"
+          ],
+          "apiRequests": [
+            "GET /accounts"
+          ],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        },
+        {
+          "index": 0,
+          "text": "a primeira conta Aurora",
+          "intentionId": "f1-j05-t2",
+          "isolatedRoute": {
+            "mode": "read",
+            "operations": [
+              "list_accounts"
+            ]
+          },
+          "actualPlan": {
+            "mode": "read",
+            "operations": [
+              "list_accounts"
+            ]
+          },
+          "actualPlanKinds": [
+            "read"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Encontrei mais de uma conta para sua mensagem. Qual conta devo renomear?\n• Aurora\n• Aurora",
+          "clarificationText": "Encontrei mais de uma conta para sua mensagem. Qual conta devo renomear?\n• Aurora\n• Aurora",
+          "pendingStatus": null,
+          "apiReads": [
+            "GET /accounts"
+          ],
+          "apiRequests": [
+            "GET /accounts"
+          ],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        }
+      ],
+      "completion": "FAIL",
+      "reasons": [
+        "no selection bound exactly one homonym ID"
+      ],
+      "evidenceKind": "synthetic REST turns over in-memory fakes; no provider/DB/production"
+    },
+    {
+      "id": "J06",
+      "rationale": "Valid expense proposes, then cancel ends cancelled with zero effect.",
+      "expectedStages": [
+        "propose",
+        "cancel"
+      ],
+      "turns": [
+        {
+          "index": 0,
+          "text": "Gastei R$ 25,00 com carne na Conta principal categoria mercado",
+          "intentionId": "f1-j06-t1",
+          "isolatedRoute": {
+            "mode": "mutation-proposal",
+            "operations": [
+              "transactions.expense.create"
+            ]
+          },
+          "actualPlan": {
+            "mode": "mutation-proposal",
+            "operations": [
+              "transactions.expense.create"
+            ]
+          },
+          "actualPlanKinds": [
+            "mutation"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Proposta: com carne na Conta principal categoria mercado. Confirma?",
+          "clarificationText": "Proposta: com carne na Conta principal categoria mercado. Confirma?",
+          "pendingStatus": "proposed",
+          "apiReads": [
+            "GET /accounts",
+            "GET /categories",
+            "GET /accounts",
+            "GET /categories"
+          ],
+          "apiRequests": [
+            "GET /accounts",
+            "GET /categories",
+            "GET /accounts",
+            "GET /categories",
+            "POST /pending-operations/v2/propose"
+          ],
+          "v2ProposalsDelta": 1,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [
+            {
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 2500,
+                "description": "com carne na Conta principal categoria mercado",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "expiresAt": "2026-10-24T12:30:00.000Z"
+            }
+          ],
+          "proposalHttpDelta": 1,
+          "pendingSnapshot": [
+            {
+              "id": "synthetic-pending-j1",
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 2500,
+                "description": "com carne na Conta principal categoria mercado",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "status": "proposed",
+              "attestation": null,
+              "receipt": null,
+              "intentionId": "journey-1"
+            }
+          ],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": "proposed",
+          "mutationOperationId": "synthetic-pending-j1",
+          "mutationReceipt": null,
+          "responseParseError": null
+        },
+        {
+          "index": 0,
+          "text": "cancele",
+          "intentionId": "f1-j06-t2",
+          "isolatedRoute": {
+            "mode": "cancel",
+            "operations": []
+          },
+          "actualPlan": {
+            "mode": "cancel",
+            "operations": []
+          },
+          "actualPlanKinds": [],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Operação cancelada com segurança.",
+          "clarificationText": null,
+          "pendingStatus": null,
+          "apiReads": [
+            "GET /pending-operations/v2/active"
+          ],
+          "apiRequests": [
+            "GET /pending-operations/v2/active",
+            "POST /pending-operations/v2/synthetic-pending-j1/cancel"
+          ],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [
+            {
+              "id": "synthetic-pending-j1",
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 2500,
+                "description": "com carne na Conta principal categoria mercado",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "status": "cancelled",
+              "attestation": null,
+              "receipt": null,
+              "intentionId": "journey-1"
+            }
+          ],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        }
+      ],
+      "completion": "PASS",
+      "reasons": [
+        "V2 cancel ends cancelled, zero effect"
+      ],
+      "evidenceKind": "synthetic REST turns over in-memory fakes; no provider/DB/production"
+    },
+    {
+      "id": "J07",
+      "rationale": "Identical intention redelivery: first proposes, second adds no new pending.",
+      "expectedStages": [
+        "propose",
+        "redelivery"
+      ],
+      "turns": [
+        {
+          "index": 0,
+          "text": "Gastei R$ 25,00 com carne na Conta principal categoria mercado",
+          "intentionId": "f1-j07-same",
+          "isolatedRoute": {
+            "mode": "mutation-proposal",
+            "operations": [
+              "transactions.expense.create"
+            ]
+          },
+          "actualPlan": {
+            "mode": "mutation-proposal",
+            "operations": [
+              "transactions.expense.create"
+            ]
+          },
+          "actualPlanKinds": [
+            "mutation"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Proposta: com carne na Conta principal categoria mercado. Confirma?",
+          "clarificationText": "Proposta: com carne na Conta principal categoria mercado. Confirma?",
+          "pendingStatus": "proposed",
+          "apiReads": [
+            "GET /accounts",
+            "GET /categories",
+            "GET /accounts",
+            "GET /categories"
+          ],
+          "apiRequests": [
+            "GET /accounts",
+            "GET /categories",
+            "GET /accounts",
+            "GET /categories",
+            "POST /pending-operations/v2/propose"
+          ],
+          "v2ProposalsDelta": 1,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [
+            {
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 2500,
+                "description": "com carne na Conta principal categoria mercado",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "expiresAt": "2026-10-24T12:30:00.000Z"
+            }
+          ],
+          "proposalHttpDelta": 1,
+          "pendingSnapshot": [
+            {
+              "id": "synthetic-pending-j1",
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 2500,
+                "description": "com carne na Conta principal categoria mercado",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "status": "proposed",
+              "attestation": null,
+              "receipt": null,
+              "intentionId": "journey-1"
+            }
+          ],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": "proposed",
+          "mutationOperationId": "synthetic-pending-j1",
+          "mutationReceipt": null,
+          "responseParseError": null
+        },
+        {
+          "index": 0,
+          "text": "Gastei R$ 25,00 com carne na Conta principal categoria mercado",
+          "intentionId": "f1-j07-same",
+          "isolatedRoute": {
+            "mode": "mutation-proposal",
+            "operations": [
+              "transactions.expense.create"
+            ]
+          },
+          "actualPlan": {
+            "mode": "mutation-proposal",
+            "operations": [
+              "transactions.expense.create"
+            ]
+          },
+          "actualPlanKinds": [
+            "mutation"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Proposta: com carne na Conta principal categoria mercado. Confirma?",
+          "clarificationText": "Proposta: com carne na Conta principal categoria mercado. Confirma?",
+          "pendingStatus": "proposed",
+          "apiReads": [
+            "GET /accounts",
+            "GET /categories",
+            "GET /accounts",
+            "GET /categories"
+          ],
+          "apiRequests": [
+            "GET /accounts",
+            "GET /categories",
+            "GET /accounts",
+            "GET /categories",
+            "POST /pending-operations/v2/propose"
+          ],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [
+            {
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 2500,
+                "description": "com carne na Conta principal categoria mercado",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "expiresAt": "2026-10-24T12:30:00.000Z"
+            }
+          ],
+          "proposalHttpDelta": 1,
+          "pendingSnapshot": [
+            {
+              "id": "synthetic-pending-j1",
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 2500,
+                "description": "com carne na Conta principal categoria mercado",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "status": "proposed",
+              "attestation": null,
+              "receipt": null,
+              "intentionId": "journey-1"
+            }
+          ],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": "proposed",
+          "mutationOperationId": "synthetic-pending-j1",
+          "mutationReceipt": null,
+          "responseParseError": null
+        }
+      ],
+      "completion": "PASS",
+      "reasons": [
+        "fake-service dedupe (HTTP re-attempted, state deduped)"
+      ],
+      "evidenceKind": "synthetic REST turns over in-memory fakes; no provider/DB/production"
+    },
+    {
+      "id": "J08",
+      "rationale": "Own implicit undo, confirm attempt, then foreign-only undo stays honest (C017).",
+      "expectedStages": [
+        "undo",
+        "undo",
+        "undo"
+      ],
+      "turns": [
+        {
+          "index": 0,
+          "text": "Desfaça última ação",
+          "intentionId": "f1-j08-t1",
+          "isolatedRoute": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlan": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlanKinds": [],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Encontrei a última ação para desfazer. Confirme no botão para desfazer.",
+          "clarificationText": null,
+          "pendingStatus": null,
+          "apiReads": [
+            "GET /audit-logs?limit=50"
+          ],
+          "apiRequests": [
+            "GET /audit-logs?limit=50"
+          ],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        },
+        {
+          "index": 0,
+          "text": "pode desfazer",
+          "intentionId": "f1-j08-t2",
+          "isolatedRoute": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlan": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlanKinds": [],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Para desfazer, confirme no botão da proposta. A confirmação por texto não desfaz.",
+          "clarificationText": null,
+          "pendingStatus": null,
+          "apiReads": [],
+          "apiRequests": [],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        },
+        {
+          "index": 0,
+          "text": "Desfaça a operação 123",
+          "intentionId": "f1-j08-t3",
+          "isolatedRoute": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlan": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlanKinds": [],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Encontrei a última ação para desfazer. Confirme no botão para desfazer.",
+          "clarificationText": null,
+          "pendingStatus": null,
+          "apiReads": [
+            "GET /audit-logs?limit=50"
+          ],
+          "apiRequests": [
+            "GET /audit-logs?limit=50"
+          ],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        }
+      ],
+      "completion": "INCONCLUSIVE",
+      "reasons": [
+        "C017: free-text undo completion unobservable via REST without authenticated decision RPC; safety holds (no execution) but target election not proven"
+      ],
+      "evidenceKind": "synthetic REST turns over in-memory fakes; no provider/DB/production"
+    },
+    {
+      "id": "J09",
+      "rationale": "Context reuse requires exact previous-month window query, not merely GET.",
+      "expectedStages": [
+        "context-read",
+        "context-read"
+      ],
+      "turns": [
+        {
+          "index": 0,
+          "text": "Quanto gastei neste mês?",
+          "intentionId": "f1-j09-t1",
+          "isolatedRoute": {
+            "mode": "read",
+            "operations": [
+              "get_month_summary"
+            ]
+          },
+          "actualPlan": {
+            "mode": "read",
+            "operations": [
+              "get_month_summary"
+            ]
+          },
+          "actualPlanKinds": [
+            "read"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "[F1 bounded synthetic relay output; not a product/model evaluation]",
+          "clarificationText": null,
+          "pendingStatus": null,
+          "apiReads": [
+            "GET /dashboard/month-summary?yearMonth=2026-10"
+          ],
+          "apiRequests": [
+            "GET /dashboard/month-summary?yearMonth=2026-10"
+          ],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        },
+        {
+          "index": 0,
+          "text": "E no mês passado?",
+          "intentionId": "f1-j09-t2",
+          "isolatedRoute": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlan": {
+            "mode": "unsupported",
+            "operations": []
+          },
+          "actualPlanKinds": [],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "[F1 bounded synthetic relay output; not a product/model evaluation]",
+          "clarificationText": null,
+          "pendingStatus": null,
+          "apiReads": [],
+          "apiRequests": [],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        }
+      ],
+      "completion": "FAIL",
+      "reasons": [
+        "context turn without scoped read"
+      ],
+      "evidenceKind": "synthetic REST turns over in-memory fakes; no provider/DB/production"
+    },
+    {
+      "id": "J10",
+      "rationale": "Pending expense then confirm against fake executor: synthetic receipt is uncertain, never real proof.",
+      "expectedStages": [
+        "propose",
+        "confirm"
+      ],
+      "turns": [
+        {
+          "index": 0,
+          "text": "Gastei R$ 25,00 com carne na Conta principal categoria mercado",
+          "intentionId": "f1-j10-t1",
+          "isolatedRoute": {
+            "mode": "mutation-proposal",
+            "operations": [
+              "transactions.expense.create"
+            ]
+          },
+          "actualPlan": {
+            "mode": "mutation-proposal",
+            "operations": [
+              "transactions.expense.create"
+            ]
+          },
+          "actualPlanKinds": [
+            "mutation"
+          ],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "Proposta: com carne na Conta principal categoria mercado. Confirma?",
+          "clarificationText": "Proposta: com carne na Conta principal categoria mercado. Confirma?",
+          "pendingStatus": "proposed",
+          "apiReads": [
+            "GET /accounts",
+            "GET /categories",
+            "GET /accounts",
+            "GET /categories"
+          ],
+          "apiRequests": [
+            "GET /accounts",
+            "GET /categories",
+            "GET /accounts",
+            "GET /categories",
+            "POST /pending-operations/v2/propose"
+          ],
+          "v2ProposalsDelta": 1,
+          "v2DecisionsDelta": 0,
+          "executionsDelta": 0,
+          "proposalArgs": [
+            {
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 2500,
+                "description": "com carne na Conta principal categoria mercado",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "expiresAt": "2026-10-24T12:30:00.000Z"
+            }
+          ],
+          "proposalHttpDelta": 1,
+          "pendingSnapshot": [
+            {
+              "id": "synthetic-pending-j1",
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 2500,
+                "description": "com carne na Conta principal categoria mercado",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "status": "proposed",
+              "attestation": null,
+              "receipt": null,
+              "intentionId": "journey-1"
+            }
+          ],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": "proposed",
+          "mutationOperationId": "synthetic-pending-j1",
+          "mutationReceipt": null,
+          "responseParseError": null
+        },
+        {
+          "index": 0,
+          "text": "pode confirmar",
+          "intentionId": "f1-j10-t2",
+          "isolatedRoute": {
+            "mode": "confirmation",
+            "operations": []
+          },
+          "actualPlan": {
+            "mode": "confirmation",
+            "operations": []
+          },
+          "actualPlanKinds": [],
+          "runTurnCalls": 1,
+          "httpStatus": 200,
+          "status": "completed",
+          "errorCode": null,
+          "output": "operação em processamento: o resultado não pôde ser confirmado. Verifique seus lançamentos antes de tentar de novo.",
+          "clarificationText": null,
+          "pendingStatus": null,
+          "apiReads": [
+            "GET /pending-operations/v2/active",
+            "GET /pending-operations/v2/active",
+            "GET /pending-operations/v2/active"
+          ],
+          "apiRequests": [
+            "POST /pending-operations/v2/confirmation-intentions/bind",
+            "GET /pending-operations/v2/active",
+            "GET /pending-operations/v2/active",
+            "POST /pending-operations/v2/synthetic-pending-j1/confirm",
+            "POST /pending-operations/v2/synthetic-pending-j1/execute",
+            "GET /pending-operations/v2/active"
+          ],
+          "v2ProposalsDelta": 0,
+          "v2DecisionsDelta": 1,
+          "executionsDelta": 1,
+          "proposalArgs": [],
+          "proposalHttpDelta": 0,
+          "pendingSnapshot": [
+            {
+              "id": "synthetic-pending-j1",
+              "tool": "transactions.expense.create",
+              "normalizedArgs": {
+                "amountCents": 2500,
+                "description": "com carne na Conta principal categoria mercado",
+                "date": "2026-10-24",
+                "accountId": "10000000-0000-4000-8000-000000000003",
+                "categoryId": "20000000-0000-4000-8000-000000000003"
+              },
+              "status": "succeeded",
+              "attestation": "synthetic-attestation-synthetic-pending-j1-0123456789",
+              "receipt": {
+                "operationId": "synthetic-pending-j1",
+                "entity": {
+                  "id": "synthetic-entity-synthetic-pending-j1"
+                },
+                "synthetic": true
+              },
+              "intentionId": "journey-1"
+            }
+          ],
+          "conversationId": "f1-journey-conv-stable",
+          "unexpectedOutbound": [],
+          "rejectedOutbound": [],
+          "mutationStatus": null,
+          "mutationOperationId": null,
+          "mutationReceipt": null,
+          "responseParseError": null
+        }
+      ],
+      "completion": "INCONCLUSIVE",
+      "reasons": [
+        "bound receipt is synthetic fake-service output — uncertain, never real execution proof"
+      ],
+      "evidenceKind": "synthetic REST turns over in-memory fakes; no provider/DB/production"
+    }
+  ],
+  "directedStructural": [
+    {
+      "id": "C004",
+      "kind": "structural-over-fixture",
+      "result": "INCONCLUSIVE",
+      "note": "Unique rename CAS binding; INCONCLUSIVE when actual proposal not observed (never PASS by default)."
+    },
+    {
+      "id": "C007",
+      "kind": "structural-over-fixture",
+      "result": "INCONCLUSIVE",
+      "note": "REST no-op is not proof of ADR-028 target election; recorded in J08."
+    },
+    {
+      "id": "C012",
+      "kind": "structural-over-fixture",
+      "result": "FAIL",
+      "note": "Homonym divergence: PASS only with exact single-ID binding."
+    },
+    {
+      "id": "C013",
+      "kind": "structural",
+      "result": "PASS",
+      "note": "Redelivery: HTTP propose count vs new pendings distinguished (fake dedupe vs product no-retry)."
+    },
+    {
+      "id": "C011",
+      "kind": "structural",
+      "result": "INCONCLUSIVE",
+      "note": "No-write observed; receipt behavior not established without a real writer."
+    },
+    {
+      "id": "C017",
+      "kind": "explicit-limitation",
+      "result": "INCONCLUSIVE",
+      "note": "Free-text undo completion unobservable via REST without authenticated decision RPC; J08 safety holds (zero executions) but election not proven."
+    },
+    {
+      "id": "C024",
+      "kind": "structural",
+      "result": "INCONCLUSIVE",
+      "note": "Statement-payment no-write observed at REST boundary; receipt behavior not established."
+    }
+  ],
+  "metrics": {
+    "correctTaskCompletion": {
+      "numerator": 4,
+      "denominator": 7,
+      "value": 0.5714285714285714,
+      "totalJourneys": 10,
+      "excluded": [
+        {
+          "id": "J04",
+          "reasons": [
+            "fake state succeeded, but the real REST result did not attest successful mutation; no completion inferred from fake state"
+          ]
+        },
+        {
+          "id": "J08",
+          "reasons": [
+            "C017: free-text undo completion unobservable via REST without authenticated decision RPC; safety holds (no execution) but target election not proven"
+          ]
+        },
+        {
+          "id": "J10",
+          "reasons": [
+            "bound receipt is synthetic fake-service output — uncertain, never real execution proof"
+          ]
+        }
+      ],
+      "note": "Observable subset only; exclusions and all-journey result counts are explicit."
+    },
+    "turnsPerTask": {
+      "totalTurns": 21,
+      "totalJourneys": 10,
+      "value": 2.1
+    },
+    "completionTurns": {
+      "turns": 8,
+      "completedJourneys": 4,
+      "value": 2
+    },
+    "neededClarifications": {
+      "numerator": 4,
+      "denominator": 4,
+      "value": 1
+    },
+    "redundantClarifications": {
+      "numerator": 2,
+      "denominator": 21,
+      "value": 0.09523809523809523
+    },
+    "neededConfirmations": {
+      "numerator": 2,
+      "denominator": 2,
+      "value": 1,
+      "note": "cancel is NOT confirmation"
+    },
+    "redundantConfirmations": {
+      "numerator": 0,
+      "denominator": 21,
+      "value": 0,
+      "note": "Confirmation question outside an expected proposal stage, without a new proposal HTTP call; deterministic text heuristic, not UX adjudication."
+    },
+    "falseRefusals": {
+      "numerator": 0,
+      "denominator": 14,
+      "value": 0
+    },
+    "categoryInference": {
+      "numerator": 0,
+      "denominator": 1,
+      "note": "Category selected before the user supplies Mercado; assisted follow-up resolution is separate."
+    },
+    "categoryResolution": {
+      "numerator": 1,
+      "denominator": 1,
+      "value": 1,
+      "note": "Assisted follow-up resolves exact categoryId; not autonomous inference."
+    },
+    "entityResolution": {
+      "numerator": 1,
+      "denominator": 3,
+      "value": 0.3333333333333333,
+      "note": "Exact entity ID arg required."
+    },
+    "contextReuse": {
+      "numerator": 0,
+      "denominator": 1,
+      "value": 0,
+      "note": "Exact previous-month window query required; GET count alone never counts."
+    },
+    "apiReadsPerTask": {
+      "numerator": 36,
+      "denominator": 10,
+      "value": 3.6
+    },
+    "apiReadsPerTurn": {
+      "numerator": 36,
+      "denominator": 21,
+      "value": 1.7142857142857142
+    },
+    "apiDuplicateReads": {
+      "numerator": 19,
+      "denominator": 36,
+      "value": 0.5277777777777778,
+      "note": "Repeated identical GET including query within one journey; necessary refreshes may also repeat. Raw chronological calls retained; not proven avoidable calls."
+    },
+    "falseSuccessWithoutReceipt": {
+      "numerator": 0,
+      "denominator": 0,
+      "value": null,
+      "reason": "unavailable: no actual mutation success decisions observed (zero denominator, not zero rate)"
+    },
+    "validReceipts": {
+      "numerator": 0,
+      "denominator": 0,
+      "value": null,
+      "reason": "unavailable: real-writer receipts not observable with fake executor"
+    }
+  },
+  "safety": {
+    "note": "Safety (no financial write) is NOT completion and is reported separately.",
+    "journeysWithZeroExecutions": 8,
+    "totalJourneys": 10
+  },
+  "limitations": [
+    "Fixture + structural only: no real provider, DB, or production; fake API is in-memory.",
+    "Model-dependent narration is INCONCLUSIVE by construction (synthetic relay text).",
+    "C004 CAS: INCONCLUSIVE when actual binding not observed.",
+    "C007/C011/C024/C017 remain INCONCLUSIVE without authenticated ledger/writer/decision RPC.",
+    "C005/C010 stay FAIL per baseline and are not re-litigated here."
+  ],
+  "evidenceKind": "fixture+structural REST journeys over in-memory fakes; no real integration, provider, DB, or production",
+  "fakeExecuteNote": "Any execute in these journeys mutates only the in-memory fake ledger; synthetic receipts are not real financial proof."
+}

@@ -5,6 +5,7 @@ import {
   ambiguityClarificationText,
   hasApproximateAmount,
   hasNegation,
+  hasUnresolvedAbsoluteDate,
   hasUnsupportedCurrency,
   type SemanticInterpretation,
 } from '../mutations/semantic-interpretation.js';
@@ -122,8 +123,8 @@ import { emitSanitizedEvent } from '../observability/events.js';
 import type { EvidenceEnvelope } from '../evidence/evidence-envelope.js';
 import { createGroundedResponseWithRetry } from '../responses/grounded-response.js';
 import { stripToolCallMarkup } from '../responses/tool-call-sanitizer.js';
-import { renderCategories, renderCategoryBreakdown, renderEmpty, renderInconclusive, renderMonthSummary, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, resolveDomainSubject, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
-import { breakdownKindForText, hasCardCreateSignal, hasCategoryCreateSignal, UNSUPPORTED_CARD_CREATE_TEXT, UNSUPPORTED_CATEGORY_MUTATION_TEXT, AMBIGUOUS_BREAKDOWN_KIND_TEXT, AMBIGUOUS_COMPOUND_REQUEST_TEXT, CONCEPT_CATEGORIES_TEXT, UNSUPPORTED_YEAR_TEXT, routeIntent } from './intent-router.js';
+import { renderCategories, renderCategoryBreakdown, renderEmpty, renderFailure, renderInconclusive, renderMonthSummary, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, resolveDomainSubject, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
+import { breakdownKindForText, hasCardCreateSignal, hasCategoryCreateSignal, UNSUPPORTED_CARD_CREATE_TEXT, UNSUPPORTED_CATEGORY_MUTATION_TEXT, UNSUPPORTED_CUSTOM_RANGE_TEXT, UNSUPPORTED_CATEGORY_TOTAL_TEXT, UNSUPPORTED_VALUE_RANGE_TEXT, UNSUPPORTED_MONTH_YEAR_TEXT, UNSUPPORTED_PAYABLES_TOTAL_TEXT, UNSUPPORTED_STATEMENT_TOTAL_TEXT, AMBIGUOUS_TOTAL_RANGE_TEXT, AMBIGUOUS_BREAKDOWN_KIND_TEXT, AMBIGUOUS_COMPOUND_REQUEST_TEXT, CONCEPT_CATEGORIES_TEXT, UNSUPPORTED_YEAR_TEXT, routeIntent } from './intent-router.js';
 import { TurnBudget, type RecoveryPermit, type ResolutionRecoveryRequest } from './turn-budget.js';
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
 import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
@@ -341,6 +342,16 @@ const CATEGORY_IMPASSE_TEXT =
 const DENIED_DATE_TEXT = 'Não identifiquei a data com segurança. Informe a data do lançamento.';
 
 /**
+ * Draft follow-up guard (A): the turn named an absolute date the parser
+ * cannot resolve. The stored date is kept verbatim and NOTHING is proposed —
+ * proposing would silently drop a date the user explicitly wrote. The draft
+ * survives untouched (its pending fields still answerable), so the copy says
+ * which dates are understood instead of asking for a full resend.
+ */
+const UNRESOLVED_FOLLOWUP_DATE_TEXT =
+  'Não reconheci a data informada. Só entendo hoje, ontem ou anteontem — mantive seus dados como estavam; responda novamente com uma dessas datas.';
+
+/**
  * A07/RR (review fix 1) — the honest copy when the draft could not be written
  * even after the single deterministic retry. The intention survives; only this
  * turn's write is refused.
@@ -549,6 +560,20 @@ const categoryQueryFrom = (
   }
   const explicit = CATEGORY_PHRASE.exec(text)?.[1]?.trim();
   if (explicit) return explicit ? { query: explicit, fromFragment: false } : undefined;
+  // Draft follow-up guard (B): a bare relative date ("ontem", "de ontem")
+  // answers the DATE question, never the category one. Without this the same
+  // turn both corrected the draft date AND stored `categoryQuery: "ontem"`,
+  // which no catalog contains — the next clarification blamed a category the
+  // user never named. Explicit `categoria X` keeps flowing (the user framed
+  // it as a category); only the silent fragment/bare adoption is closed.
+  const foldedDateOnly = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.?!…]+$/u, '');
+  if (/^(?:e\s+)?(?:de\s+)?(hoje|ontem|anteontem)$/.test(foldedDateOnly)) return undefined;
   if (!options.allowBareFragment) return undefined;
   const fragment = CATEGORY_FRAGMENT.exec(text)?.[1]?.trim();
   if (fragment && fragment.length <= CATEGORY_FRAGMENT_MAX && !/\d/.test(fragment)) {
@@ -3105,55 +3130,6 @@ export class ConversationOrchestrator {
     });
   }
 
-  /** Restart-recovery re-emission for `proposing` account drafts (same key). */
-  private async executeProposeAccountSilent(
-    draft: MutationDraftRecord,
-    client: MutationApiClient,
-    input: TurnInput,
-  ): Promise<void> {
-    const store = this.dependencies.draftStore!;
-    const identity: MutationIdentity = {
-      workspaceId: draft.workspaceId,
-      actorId: draft.actorId,
-      deviceId: draft.deviceId ?? input.deviceId ?? (() => { throw new Error('mutation.device_required'); })(),
-    };
-    const args = draft.resolvedArgs;
-    try {
-      const proposal = await client.propose({
-        tool: ACCOUNT_CREATE_TOOL,
-        normalizedArgs: {
-          name: args.accountName?.trim() ?? '',
-          kind: args.accountKind ?? '',
-          initialBalanceCents: args.initialBalanceCents ?? 0,
-        },
-        summary: args.accountName?.trim() || args.description,
-        identity,
-        idempotencyKey: draft.proposalIdempotencyKey,
-      });
-      store.update(draft.draftId, {
-        status: 'consumed',
-        proposalId: proposal.id,
-        proposeOutcome: proposal.existing ? 'existing' : 'created',
-        updatedAt: new Date(this.draftNowMs()).toISOString(),
-      });
-    } catch (error) {
-      if (isDefinitiveProposeError(error)) {
-        store.update(draft.draftId, {
-          status: 'discarded',
-          discardReason: 'propose_rejected',
-          proposeOutcome: 'rejected',
-          updatedAt: new Date(this.draftNowMs()).toISOString(),
-        });
-        return;
-      }
-      store.update(draft.draftId, {
-        proposeOutcome: 'unknown',
-        updatedAt: new Date(this.draftNowMs()).toISOString(),
-      });
-      throw error;
-    }
-  }
-
   /**
    * categories.create (fatia categories-create-v2-endtoend): authoritative
    * category catalog, fail-closed on unreadable payloads. Single call
@@ -3350,10 +3326,11 @@ export class ConversationOrchestrator {
   ): Promise<TurnResult> {
     const store = this.dependencies.draftStore!;
     const text = input.text ?? '';
-    if (isCancelText(text)) {
-      return this.runCancelTurn(input, plan, client, startedAt, base, text);
+    const decisionText = input.decisionText ?? text;
+    if (isCancelText(decisionText)) {
+      return this.runCancelTurn(input, plan, client, startedAt, base, decisionText);
     }
-    if (isResetText(text)) {
+    if (isResetText(decisionText)) {
       store.update(draft.draftId, {
         status: 'replaced',
         updatedAt: new Date(this.draftNowMs()).toISOString(),
@@ -5880,6 +5857,19 @@ export class ConversationOrchestrator {
     if (dateFragment.ambiguous) {
       return this.stopDraftDate(input, plan, startedAt, base, currentDraft, dateFragment.clarification!);
     }
+    // Draft follow-up guard (A): an UNRESOLVED absolute date ("dia 15",
+    // "15/10", "semana passada") in a turn that would otherwise complete the
+    // draft must clarify fail-closed — never preserve the stale stored date
+    // and propose as if the user had written nothing. Like the ambiguous
+    // path above, nothing is written: the draft keeps its stored date and
+    // pending fields. The check is DELIBERATELY unconditional on the relative
+    // fragment: "ontem dia 15" names two dates and only one is understood, so
+    // letting the relative win would still silently drop "dia 15". A pure
+    // relative turn ("ontem", "categoria mercado ontem") has no absolute
+    // material and keeps correcting normally.
+    if (hasUnresolvedAbsoluteDate(input.text)) {
+      return this.stopDraftDate(input, plan, startedAt, base, currentDraft, UNRESOLVED_FOLLOWUP_DATE_TEXT);
+    }
     const turnDate = dateFragment.date;
     const merged = {
       kind: draft.resolvedArgs.kind,
@@ -7659,6 +7649,20 @@ export class ConversationOrchestrator {
     ) {
       return this.runDeactivateTurn(input, plan, client ?? null, startedAt, result, decisionText);
     }
+    // Reviewer F1-B005 (criação sem store): sem draftStore o fluxo de
+    // criação não pode persistir — fail-closed com limitação honesta de
+    // criação (`renderFailure`, sem leitura, sem mutação, sem provider),
+    // nunca a leitura que o plano carrega (antes lia accounts/payables e
+    // perdia o imperativo). Com store, a guarda abaixo abre o draft.
+    if (
+      !this.dependencies.draftStore &&
+      (plan.mode === 'unsupported' || plan.mode === 'conversation' || plan.mode === 'read') &&
+      hasAccountCreationSignal(input.text)
+    ) {
+      return this.completeTurn(input, plan, startedAt, result, {
+        response: freeze({ text: renderFailure('a criação da conta') }),
+      });
+    }
     // accounts.create (account-only path): an explicit creation intent
     // ("criar conta ...", short offer-acceptance "quero") arrives under a
     // non-mutation plan — the router maps it to a read — but it is a
@@ -8385,6 +8389,83 @@ export class ConversationOrchestrator {
         ...result,
         clarification: freeze({ missingFields: freeze(['kind']), text: AMBIGUOUS_BREAKDOWN_KIND_TEXT }),
         response: freeze({ text: AMBIGUOUS_BREAKDOWN_KIND_TEXT }),
+      });
+    }
+    // F1-B036 — subintervalo dentro do mês: limitação honesta determinística,
+    // sem provider e sem leitura (o plano não carrega operação nem tool).
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'unsupported_custom_range') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['period']), text: UNSUPPORTED_CUSTOM_RANGE_TEXT }),
+        response: freeze({ text: UNSUPPORTED_CUSTOM_RANGE_TEXT }),
+      });
+    }
+    // F1-B036 — total por categoria explícita: limitação honesta
+    // determinística, sem provider e sem leitura. Espelho do intervalo
+    // customizado acima.
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'unsupported_category_total') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['capability']), text: UNSUPPORTED_CATEGORY_TOTAL_TEXT }),
+        response: freeze({ text: UNSUPPORTED_CATEGORY_TOTAL_TEXT }),
+      });
+    }
+    // F1-B036 — total com faixa de valor: limitação honesta determinística,
+    // sem provider e sem leitura. Copy própria para nunca rotular valor como
+    // data (custom_range) nem como categoria (category_total).
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'unsupported_value_range') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['capability']), text: UNSUPPORTED_VALUE_RANGE_TEXT }),
+        response: freeze({ text: UNSUPPORTED_VALUE_RANGE_TEXT }),
+      });
+    }
+    // F1-B036 — "entre/de N a M" sem marcador em pedido de total: ambíguo
+    // entre dia e valor; o turno pergunta em vez de assumir. Sem provider e
+    // sem leitura, como os limites específicos acima.
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'ambiguous_total_range') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['intent']), text: AMBIGUOUS_TOTAL_RANGE_TEXT }),
+        response: freeze({ text: AMBIGUOUS_TOTAL_RANGE_TEXT }),
+      });
+    }
+    // F1-B036 — mês nomeado sem ano: pede o ano em vez de resolver o corrente
+    // em silêncio ou inventá-lo. Sem provider e sem leitura.
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'unsupported_month_year') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['period']), text: UNSUPPORTED_MONTH_YEAR_TEXT }),
+        response: freeze({ text: UNSUPPORTED_MONTH_YEAR_TEXT }),
+      });
+    }
+    // F1-B036 — total com idiom payables: o contrato só tem a lista (sem
+    // soma); responder o resumo geral mascararia o total. Sem provider e sem
+    // leitura.
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'unsupported_budget_create') {
+      const text = 'Não consigo criar um orçamento por aqui ainda.';
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({ ...result, clarification: freeze({ missingFields: freeze(['capability']), text }), response: freeze({ text }) });
+    }
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'unsupported_statement_total') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['capability']), text: UNSUPPORTED_STATEMENT_TOTAL_TEXT }),
+        response: freeze({ text: UNSUPPORTED_STATEMENT_TOTAL_TEXT }),
+      });
+    }
+    if (plan.mode === 'unsupported' && plan.ambiguity === 'unsupported_payables_total') {
+      this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+      return freeze({
+        ...result,
+        clarification: freeze({ missingFields: freeze(['capability']), text: UNSUPPORTED_PAYABLES_TOTAL_TEXT }),
+        response: freeze({ text: UNSUPPORTED_PAYABLES_TOTAL_TEXT }),
       });
     }
     // Composto conceito+leitura — pede para separar em vez de prometer

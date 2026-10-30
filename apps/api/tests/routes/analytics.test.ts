@@ -86,6 +86,31 @@ const seedAnalytics = async (app: ReturnType<typeof buildTestApp>['app']) => {
 };
 
 describe('GET /analytics/kpis', () => {
+  it('sums a complete custom calendar year without including adjacent dates', async () => {
+    const { app } = buildTestApp({}, CLOCK);
+    const post = (url: string, payload: unknown) => app.inject({
+      method: 'POST', url, headers: { ...H, 'idempotency-key': crypto.randomUUID() }, payload,
+    });
+    const account = await post('/accounts', { name: 'Anual', kind: 'bank', initialBalanceCents: 100_000 });
+    expect(account.statusCode).toBe(201);
+    const category = await post('/categories', { name: 'Anual', kind: 'expense' });
+    expect(category.statusCode).toBe(201);
+    for (const [date, amountCents] of [['2019-12-31', 100], ['2020-01-01', 200], ['2020-12-31', 300], ['2021-01-01', 400]] as const) {
+      const response = await post('/transactions/expense', {
+        description: 'Teste anual', amountCents, date, accountId: account.json().id, categoryId: category.json().id,
+      });
+      expect(response.statusCode).toBe(201);
+    }
+    const response = await app.inject({
+      method: 'GET', url: '/analytics/kpis?period=custom&from=2020-01-01&to=2020-12-31', headers: H,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      expenseCents: 500,
+      effectiveFilter: { period: 'custom', from: '2020-01-01', to: '2020-12-31' },
+      basis: 'liquidez',
+    });
+  });
   it('computes net liquid, invoices, savings rate and fixed share with isolation', async () => {
     const { app } = buildTestApp({}, CLOCK);
     await seedAnalytics(app);

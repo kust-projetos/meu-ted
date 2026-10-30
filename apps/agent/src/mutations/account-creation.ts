@@ -768,6 +768,20 @@ const replaceOutsideSpans = (text: string, re: RegExp, replacement: string, firs
 };
 
 /**
+ * Purpose clause (purpose-is-never-a-name, reviewer round 2): a "para"/"pra"
+ * phrase ANYWHERE in the turn ("... para pagar o aluguel", "... corrente
+ * para ...", "... com saldo 500 para ...") states what the account is FOR,
+ * never its name — with or without the "conta" noun anchor, with or without
+ * a name-like head. The turn therefore never yields a name here: unequivocal
+ * purpose and ambiguous "Cofre para Viagens" alike ask (`Qual o nome da
+ * conta?`) instead of persisting a purpose — or a truncation ("Cofre") —
+ * the user never stated. Explicitly named spans (quotes, `chamada`/`nome`)
+ * already won above; balance and kind keep reading the original text, so
+ * saldo/tipo still fill while the name stays missing and nothing proposes.
+ */
+const PURPOSE_CLAUSE_RE = new RegExp('\\b(para|pra)\\b', 'i');
+
+/**
  * The human name fragment. Explicitly named spans win outright (quoted or
  * `chamada/chamado/nome/de nome` — spelling preserved, no global stripping
  * over the explicit name). Otherwise: whatever survives after stripping the
@@ -788,6 +802,7 @@ export const extractAccountName = (text: string): string | undefined => {
   // or after the cue), then the cue cut, and only afterwards anything that
   // shifts offsets — never the reverse.
   let rest = ` ${text} `;
+  if (PURPOSE_CLAUSE_RE.test(text)) return undefined;
   const selection = selectBalanceToken(text);
   if (selection !== undefined) rest = removeValidatedToken(rest, selection);
   const cueIdx = findSaldoCue(text);
@@ -822,6 +837,10 @@ export const extractAccountName = (text: string): string | undefined => {
   // "r$" leaves a stray "r" after the `$` strip: drop lone filler letters.
   rest = rest.replace(new RegExp('(^|\\s)[rs](?=\\s|$)', 'gi'), ' ').replace(PUNCT_RE, ' ').trim();
   rest = trimEdgeFillers(rest);
+  // A lone function word ("uma" in "Crie uma conta para ...", once the
+  // purpose clause is blanked) is never a name — ask instead of persisting
+  // an article as the account name.
+  if (rest && EDGE_FILLER_SET.has(fold(rest))) return undefined;
   return rest ? rest : undefined;
 };
 

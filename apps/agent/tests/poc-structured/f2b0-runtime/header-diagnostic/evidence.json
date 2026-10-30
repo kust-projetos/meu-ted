@@ -1,0 +1,369 @@
+{
+  "schemaVersion": "header-diagnostic-safe-v1",
+  "cliVersion": "2.1.4",
+  "model": "opencode/deepseek-v4.1-flash-free",
+  "nativeURL": "https://opencode.ai/inference/openai/v1/chat/completions",
+  "mockURL": "http://127.0.0.1:43193/v1/chat/completions",
+  "binarySourceProof": {
+    "cliVersion": "2.1.4",
+    "binaryBytes": 246919560,
+    "headerBlockOffset": 173540824,
+    "headerBlockSha256": "1994b135247d54ca2789d3f42bb02f331e213c1e2491f3b0310cb1caf2affbca",
+    "headerNamesFound": {
+      "x-opencode-session-id": true,
+      "x-opencode-parent-session-id": true,
+      "x-session-affinity": true,
+      "x-session-id": true,
+      "x-parent-session-id": true,
+      "user-agent": true,
+      "x-opencode-project": true,
+      "x-opencode-session": true,
+      "x-opencode-client": true
+    },
+    "sourceBindsSessionIdToSessionID": true,
+    "sourceBindsAffinityAliasesToSameValue": true,
+    "sourceUsesDocumentedSessionKeyRegex": true,
+    "sourceBuildsUserAgentAndClientFromRuntime": true,
+    "errorMappingBlockOffset": 173432938,
+    "errorMappingBlockSha256": "e9d7e59e25cfb941ff8976176488809caaa10e2eae30f4d11709b0ab9dcf58b5",
+    "freeUsageMapsQuotaExceededToProviderFreeLimit": true
+  },
+  "input": {
+    "caseID": "F1-B010",
+    "userText": "Mostre minhas faturas",
+    "promptSha256": "aaf50a22ad7fae1469b6f09a72a9cb4c916033d328d14b7d3ffe2be3e158da7b",
+    "promptBytes": 8361,
+    "sourceFixtureCounts": {
+      "history": 0,
+      "accounts": 0,
+      "categories": 0,
+      "displayedOptions": 0
+    }
+  },
+  "comparisons": [
+    {
+      "mode": "standalone",
+      "exitCode": 0,
+      "timedOut": false,
+      "elapsedMs": 1669,
+      "mockRequestCount": 1,
+      "hookRequestCount": 1,
+      "hookEvents": [
+        "request-routed",
+        "response"
+      ],
+      "request": {
+        "event": "request-routed",
+        "provider": "opencode",
+        "model": "deepseek-v4.1-flash-free",
+        "kind": "primary",
+        "requestCount": 1,
+        "nativeURLMatched": true,
+        "localMockOnly": true,
+        "headerShapeBefore": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "headerShapeAfter": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "nativeHeaderRelations": {
+          "sessionIdHeaderMatchesHookEvent": true,
+          "affinityHeadersPresent": true,
+          "affinityHeadersEqual": true,
+          "affinityValueMatchesDocumentedSessionKeyFormat": false,
+          "parentSessionHeaderPresent": false,
+          "parentAffinityHeaderPresent": false
+        },
+        "exactHeaderValuesPreserved": true,
+        "userInputSha256": "d5fc1b0b57d7cb9335237fbfbe6c273b3c145d141b0683e5b91e45399ad8d22c",
+        "userMessageCount": 1,
+        "messageMetrics": {
+          "system": {
+            "chars": 1098,
+            "bytes": 1098,
+            "estimatedTokensCharsDiv4": 275
+          },
+          "user": {
+            "chars": 9323,
+            "bytes": 9323,
+            "estimatedTokensCharsDiv4": 2331
+          },
+          "estimation": "characters/4 heuristic; not token usage"
+        },
+        "bodyBytes": 12588,
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "toolCount": 0,
+        "unexpectedAgentInstructionPathPresent": false,
+        "unexpectedPromptMarkerPresent": false
+      },
+      "mock": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "accept",
+            "accept-encoding",
+            "b3",
+            "connection",
+            "content-length",
+            "content-type",
+            "host",
+            "traceparent",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "model": "deepseek-v4.1-flash-free",
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "userInputSha256": "d5fc1b0b57d7cb9335237fbfbe6c273b3c145d141b0683e5b91e45399ad8d22c",
+        "userMessageCount": 1,
+        "toolCount": 0
+      },
+      "nativeHeadersAtMock": true,
+      "officialHeaderNamesAtMock": true,
+      "officialHeaderPresenceAtHook": {
+        "x-opencode-session-id": true,
+        "x-opencode-parent-session-id": false,
+        "x-session-affinity": true,
+        "x-session-id": true,
+        "x-parent-session-id": false,
+        "user-agent": true,
+        "x-opencode-project": true,
+        "x-opencode-session": true,
+        "x-opencode-client": true
+      },
+      "exactHeaderValuesPreserved": true,
+      "output": {
+        "bytes": 9,
+        "sha256": "bc97f50395bb222425cc311289390b7d0bb5985b753efddb244e31b635030ca1"
+      },
+      "stderrNonempty": false,
+      "environment": {
+        "apiKeyEnvironmentPresence": {
+          "OPENCODE_API_KEY": false,
+          "OPENCODE_GO_API_KEY": false,
+          "OPENAI_API_KEY": false
+        },
+        "childCredentialEnvironmentPresent": false,
+        "providerApiKeyConfigured": false,
+        "isolatedConfigPath": true,
+        "globalAuthStoreInspected": false
+      }
+    },
+    {
+      "mode": "serve-sdk-cli",
+      "exitCode": 0,
+      "timedOut": false,
+      "elapsedMs": 1283,
+      "mockRequestCount": 1,
+      "hookRequestCount": 1,
+      "hookEvents": [
+        "request-routed",
+        "response"
+      ],
+      "request": {
+        "event": "request-routed",
+        "provider": "opencode",
+        "model": "deepseek-v4.1-flash-free",
+        "kind": "primary",
+        "requestCount": 1,
+        "nativeURLMatched": true,
+        "localMockOnly": true,
+        "headerShapeBefore": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "headerShapeAfter": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "content-length",
+            "content-type",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "nativeHeaderRelations": {
+          "sessionIdHeaderMatchesHookEvent": true,
+          "affinityHeadersPresent": true,
+          "affinityHeadersEqual": true,
+          "affinityValueMatchesDocumentedSessionKeyFormat": false,
+          "parentSessionHeaderPresent": false,
+          "parentAffinityHeaderPresent": false
+        },
+        "exactHeaderValuesPreserved": true,
+        "userInputSha256": "d5fc1b0b57d7cb9335237fbfbe6c273b3c145d141b0683e5b91e45399ad8d22c",
+        "userMessageCount": 1,
+        "messageMetrics": {
+          "system": {
+            "chars": 1107,
+            "bytes": 1107,
+            "estimatedTokensCharsDiv4": 277
+          },
+          "user": {
+            "chars": 9323,
+            "bytes": 9323,
+            "estimatedTokensCharsDiv4": 2331
+          },
+          "estimation": "characters/4 heuristic; not token usage"
+        },
+        "bodyBytes": 12597,
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "toolCount": 0,
+        "unexpectedAgentInstructionPathPresent": false,
+        "unexpectedPromptMarkerPresent": false
+      },
+      "mock": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "authorizationPresent": true,
+          "apiKeyPresent": false,
+          "sessionHeaderPresent": true,
+          "clientHeaderPresent": true,
+          "userAgentPresent": true,
+          "headerNames": [
+            "accept",
+            "accept-encoding",
+            "b3",
+            "connection",
+            "content-length",
+            "content-type",
+            "host",
+            "traceparent",
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id"
+          ]
+        },
+        "model": "deepseek-v4.1-flash-free",
+        "messageRoles": [
+          "system",
+          "user"
+        ],
+        "userInputSha256": "d5fc1b0b57d7cb9335237fbfbe6c273b3c145d141b0683e5b91e45399ad8d22c",
+        "userMessageCount": 1,
+        "toolCount": 0
+      },
+      "nativeHeadersAtMock": true,
+      "officialHeaderNamesAtMock": true,
+      "officialHeaderPresenceAtHook": {
+        "x-opencode-session-id": true,
+        "x-opencode-parent-session-id": false,
+        "x-session-affinity": true,
+        "x-session-id": true,
+        "x-parent-session-id": false,
+        "user-agent": true,
+        "x-opencode-project": true,
+        "x-opencode-session": true,
+        "x-opencode-client": true
+      },
+      "exactHeaderValuesPreserved": true,
+      "output": {
+        "bytes": 9,
+        "sha256": "bc97f50395bb222425cc311289390b7d0bb5985b753efddb244e31b635030ca1"
+      },
+      "stderrNonempty": false,
+      "environment": {
+        "apiKeyEnvironmentPresence": {
+          "OPENCODE_API_KEY": false,
+          "OPENCODE_GO_API_KEY": false,
+          "OPENAI_API_KEY": false
+        },
+        "childCredentialEnvironmentPresent": false,
+        "providerApiKeyConfigured": false,
+        "isolatedConfigPath": true,
+        "globalAuthStoreInspected": false
+      }
+    }
+  ],
+  "sameFinalUserInput": true,
+  "onlyLoopbackMockRequestsObserved": true,
+  "authAndGlobalConfigScope": {
+    "apiKeyEnvironmentPresence": {
+      "OPENCODE_API_KEY": false,
+      "OPENCODE_GO_API_KEY": false,
+      "OPENAI_API_KEY": false
+    },
+    "providerKeyConfigured": false,
+    "authFilesRead": false,
+    "authStoreExistenceInspected": false,
+    "globalConfigImported": false,
+    "note": "Both CLI paths use isolated homes/config as in the real runner. Global auth/config behavior is not reproduced; no auth-file contents or metadata were inspected."
+  }
+}
