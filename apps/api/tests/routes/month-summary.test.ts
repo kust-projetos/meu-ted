@@ -12,6 +12,15 @@ import {
 } from '../fixtures/seed.js';
 
 describe('GET /dashboard/month-summary', () => {
+  it('requires yearMonth instead of accepting period as its substitute', async () => {
+    const { app } = buildTestApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/dashboard/month-summary?period=2026-09',
+      headers: { 'x-device-token': TOKEN_A },
+    });
+    expect(response.statusCode).toBe(400);
+  });
   it('summarizes only the requested month and authenticated workspace', async () => {
     const { app } = buildTestApp({
       accounts: [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1],

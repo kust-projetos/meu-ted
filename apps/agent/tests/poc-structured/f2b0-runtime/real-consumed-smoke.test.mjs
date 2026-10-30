@@ -37,11 +37,11 @@ const consumedResult = {
   fatal: true,
   attemptCount: 1,
   // Exact historic path as persisted in evidence (Windows separators, single backslashes at runtime).
-  reservation: 'reservations\\opencode-go-deepseek-v4.1-flash\\F1-B005.authorized-retry-2026-10-29T10-55-14-534Z-21048.json',
+  reservation: 'reservations\\opencode-go-muse-spark-1.3-contributor\\F1-B005.authorized-retry-2026-10-29T10-55-14-534Z-21048.json',
   request: {
     providerID: 'opencode-go',
-    modelID: 'deepseek-v4.1-flash',
-    url: 'https://opencode.ai/inference/go/openai/v1/chat/completions',
+    modelID: 'muse-spark-1.3-contributor',
+    url: 'https://opencode.ai/inference/go/openai/v1/responses',
     requestCount: 1,
   },
   text: '{"interpretation":{"intent":"read","operation":"list_accounts_payable"}}',
@@ -58,7 +58,7 @@ const consumedResult = {
       requestCount: 1,
       kind: 'primary',
       provider: 'opencode-go',
-      model: 'deepseek-v4.1-flash',
+      model: 'muse-spark-1.3-contributor',
       toolCount: 0,
       authorizationPresent: true,
     },
@@ -135,7 +135,7 @@ describe('F1-B005 consumed single smoke 2026-10-29T10-55-14-534Z-21048 (closed e
         ...base,
         sourceResult: {
           ...consumedResult,
-          reservation: `reservations/opencode-go-deepseek-v4.1-flash/F1-B005.authorized-retry-other-run.json`,
+          reservation: `reservations/opencode-go-muse-spark-1.3-contributor/F1-B005.authorized-retry-other-run.json`,
         },
       }),
     ).toMatchObject({ ok: false, reason: 'result-reservation-mismatch' })
@@ -157,7 +157,7 @@ describe('F1-B005 consumed single smoke 2026-10-29T10-55-14-534Z-21048 (closed e
 
   it('pins the exact historic reservation path and accepts only Windows/POSIX separator equivalence', () => {
     expect(AUTHORIZED_CONSUMED_SMOKE_RESERVATION_PATH).toBe(
-      'reservations/opencode-go-deepseek-v4.1-flash/F1-B005.authorized-retry-2026-10-29T10-55-14-534Z-21048.json',
+      'reservations/opencode-go-muse-spark-1.3-contributor/F1-B005.authorized-retry-2026-10-29T10-55-14-534Z-21048.json',
     )
     const base = {
       caseID: 'F1-B005',
@@ -171,7 +171,7 @@ describe('F1-B005 consumed single smoke 2026-10-29T10-55-14-534Z-21048 (closed e
         sourceResult: {
           ...consumedResult,
           reservation:
-            'reservations\\opencode-go-deepseek-v4.1-flash\\F1-B005.authorized-retry-2026-10-29T10-55-14-534Z-21048.json',
+            'reservations\\opencode-go-muse-spark-1.3-contributor\\F1-B005.authorized-retry-2026-10-29T10-55-14-534Z-21048.json',
         },
       }),
     ).toEqual({ ok: true })
@@ -199,11 +199,11 @@ describe('F1-B005 consumed single smoke 2026-10-29T10-55-14-534Z-21048 (closed e
       `${exact}/`,
       `${exact} `,
       `reservations/other-model/F1-B005.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`,
-      `other/reservations/opencode-go-deepseek-v4.1-flash/F1-B005.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`,
-      `/reservations/opencode-go-deepseek-v4.1-flash/F1-B005.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`,
-      `RESERVATIONS/opencode-go-deepseek-v4.1-flash/F1-B005.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`,
-      `reservations/opencode-go-deepseek-v4.1-flash/../opencode-go-deepseek-v4.1-flash/F1-B005.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`,
-      `reservations/opencode-go-deepseek-v4.1-flash/F1-B005.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json `,
+      `other/reservations/opencode-go-muse-spark-1.3-contributor/F1-B005.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`,
+      `/reservations/opencode-go-muse-spark-1.3-contributor/F1-B005.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`,
+      `RESERVATIONS/opencode-go-muse-spark-1.3-contributor/F1-B005.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`,
+      `reservations/opencode-go-muse-spark-1.3-contributor/../opencode-go-muse-spark-1.3-contributor/F1-B005.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`,
+      `reservations/opencode-go-muse-spark-1.3-contributor/F1-B005.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json `,
       '',
     ]
     for (const reservation of forgeries) {
@@ -265,7 +265,7 @@ describe('F1-B005 consumed single smoke 2026-10-29T10-55-14-534Z-21048 (closed e
   it('never accepts the consumed run as a retry source flags even with exact smoke-only confirmations', () => {
     const argv = [
       '--execute-real',
-      '--confirm-model=opencode-go/deepseek-v4.1-flash',
+      '--confirm-model=opencode-go/muse-spark-1.3-contributor',
       '--confirm-go-quota-available',
       '--confirm-go-extra-usage-disabled',
       '--smoke-only',
@@ -287,7 +287,7 @@ describe('F1-B005 consumed single smoke 2026-10-29T10-55-14-534Z-21048 (closed e
     expect(() =>
       parseExecutionMode([
         '--execute-real',
-        '--confirm-model=opencode-go/deepseek-v4.1-flash',
+        '--confirm-model=opencode-go/muse-spark-1.3-contributor',
         '--confirm-go-quota-available',
         '--confirm-go-extra-usage-disabled',
         '--smoke-only',
@@ -374,7 +374,7 @@ describe('F1-B005 consumed single smoke 2026-10-29T10-55-14-534Z-21048 (closed e
   it('accepts the explicit consumed smoke flags only with smoke-only model and exact confirmations', () => {
     const exactConsumed = [
       '--execute-real',
-      '--confirm-model=opencode-go/deepseek-v4.1-flash',
+      '--confirm-model=opencode-go/muse-spark-1.3-contributor',
       '--confirm-go-quota-available',
       '--confirm-go-extra-usage-disabled',
       '--smoke-only',
@@ -394,7 +394,7 @@ describe('F1-B005 consumed single smoke 2026-10-29T10-55-14-534Z-21048 (closed e
     expect(() =>
       parseExecutionMode([
         '--execute-real',
-        '--confirm-model=opencode-go/deepseek-v4.1-flash',
+        '--confirm-model=opencode-go/muse-spark-1.3-contributor',
         '--confirm-go-quota-available',
         '--confirm-go-extra-usage-disabled',
         '--smoke-only',
@@ -420,7 +420,7 @@ describe('F1-B005 consumed single smoke 2026-10-29T10-55-14-534Z-21048 (closed e
   it('refuses consumed smoke combined with resume, preflight, export, or the old retry flags', () => {
     const base = [
       '--execute-real',
-      '--confirm-model=opencode-go/deepseek-v4.1-flash',
+      '--confirm-model=opencode-go/muse-spark-1.3-contributor',
       '--confirm-go-quota-available',
       '--confirm-go-extra-usage-disabled',
       '--smoke-only',
@@ -674,8 +674,8 @@ describe('F1-B005 consumed single smoke 2026-10-29T10-55-14-534Z-21048 (closed e
         attemptCount: 1,
         request: {
           providerID: 'opencode-go',
-          modelID: 'deepseek-v4.1-flash',
-          url: 'https://opencode.ai/inference/go/openai/v1/chat/completions',
+          modelID: 'muse-spark-1.3-contributor',
+          url: 'https://opencode.ai/inference/go/openai/v1/responses',
           requestCount: 1,
         },
         text: '',

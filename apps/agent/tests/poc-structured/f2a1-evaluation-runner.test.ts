@@ -400,11 +400,11 @@ describe('F2-A1 independent oracle runner', () => {
     expect(journey?.semanticVerdict).toBe('INCONCLUSIVE');
   });
 
-  it('retains explicit extension limitations for all eight declared pairs', () => {
+  it('retains explicit extension limitations for all thirteen declared pairs', () => {
     const result = runF2A1({});
     expect(result.scenarios).toHaveLength(13);
     expect(result.scenarios.every((row) => row.verdict === 'INCONCLUSIVE')).toBe(true);
-    expect(result.extensions).toHaveLength(8);
+    expect(result.extensions).toHaveLength(13);
     expect(
       result.extensions.every(
         (item) => item.originalExpectation && item.limitation && item.comparableCriterion && item.justification,

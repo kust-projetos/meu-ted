@@ -29,7 +29,7 @@ import { F2A1_LOCAL_CANDIDATES, F2A1_LOCAL_JOURNEYS } from '../f2a1-candidates.j
 
 const exactArgv = [
   '--execute-real',
-  '--confirm-model=opencode-go/deepseek-v4.1-flash',
+  '--confirm-model=opencode-go/muse-spark-1.3-contributor',
   '--confirm-go-quota-available',
   '--confirm-go-extra-usage-disabled',
   `--remaining22-authorized-run=${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`,
@@ -103,7 +103,7 @@ const buildValidSource = () => {
   ]
   const caseResult = {
     caseID: REMAINING22_EXCLUDED_CASE_ID,
-    reservation: 'reservations\\opencode-go-deepseek-v4.1-flash\\F1-B005.consumed-smoke-2026-10-29T10-55-14-534Z-21048.json',
+    reservation: 'reservations\\opencode-go-muse-spark-1.3-contributor\\F1-B005.consumed-smoke-2026-10-29T10-55-14-534Z-21048.json',
     fatal: false,
     attemptCount: 1,
     request: { providerID: REAL_MODEL.providerID, modelID: REAL_MODEL.modelID, url: REAL_URL, requestCount: 1 },
@@ -170,13 +170,13 @@ describe('F2B0 remaining22 campaign (22 cases, fixed smoke source)', () => {
     expect(() => parseExecutionMode([...exactArgv, '--retry-authorized-case=F1-B005', '--retry-authorized-run=2026-10-27T15-19-19-424Z-5620'])).toThrow('incompatible')
     expect(() => parseExecutionMode([...exactArgv, '--consumed-smoke-authorized-case=F1-B005', '--consumed-smoke-authorized-run=2026-10-29T10-55-14-534Z-21048'])).toThrow('incompatible')
     expect(() => parseExecutionMode(exactArgv.map((a) => a.startsWith('--remaining22-authorized-run=') ? '--remaining22-authorized-run=other-run' : a))).toThrow('limited to source')
-    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled'])).toThrow('first real F2B0 invocation must use --smoke-only')
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled'])).toThrow('first real F2B0 invocation must use --smoke-only')
   })
 
   it('keeps legacy retry/consumed/smoke modes mutually exclusive with remaining22', () => {
-    const retryArgv = ['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only', '--retry-authorized-case=F1-B005', '--retry-authorized-run=2026-10-27T15-19-19-424Z-5620', `--remaining22-authorized-run=${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`]
+    const retryArgv = ['--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only', '--retry-authorized-case=F1-B005', '--retry-authorized-run=2026-10-27T15-19-19-424Z-5620', `--remaining22-authorized-run=${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`]
     expect(() => parseExecutionMode(retryArgv)).toThrow(/remaining22 campaign (is incompatible|cannot be combined)/)
-    const consumedArgv = ['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only', '--consumed-smoke-authorized-case=F1-B005', '--consumed-smoke-authorized-run=2026-10-29T10-55-14-534Z-21048', `--remaining22-authorized-run=${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`]
+    const consumedArgv = ['--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only', '--consumed-smoke-authorized-case=F1-B005', '--consumed-smoke-authorized-run=2026-10-29T10-55-14-534Z-21048', `--remaining22-authorized-run=${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`]
     expect(() => parseExecutionMode(consumedArgv)).toThrow(/remaining22 campaign (is incompatible|cannot be combined)/)
   })
 
@@ -231,9 +231,9 @@ describe('F2B0 remaining22 campaign (22 cases, fixed smoke source)', () => {
   })
 
   it('pins the exact consumed-smoke reservation path and source chain per real evidence', () => {
-    expect(AUTHORIZED_REMAINING22_RESERVATION_PATH).toBe('reservations/opencode-go-deepseek-v4.1-flash/F1-B005.consumed-smoke-2026-10-29T10-55-14-534Z-21048.json')
+    expect(AUTHORIZED_REMAINING22_RESERVATION_PATH).toBe('reservations/opencode-go-muse-spark-1.3-contributor/F1-B005.consumed-smoke-2026-10-29T10-55-14-534Z-21048.json')
     const valid = buildValidSource()
-    expect(valid.caseResult.reservation).toBe('reservations\\opencode-go-deepseek-v4.1-flash\\F1-B005.consumed-smoke-2026-10-29T10-55-14-534Z-21048.json')
+    expect(valid.caseResult.reservation).toBe('reservations\\opencode-go-muse-spark-1.3-contributor\\F1-B005.consumed-smoke-2026-10-29T10-55-14-534Z-21048.json')
     expect(valid.reservationRecord).toMatchObject({ caseID: 'F1-B005', runID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID, sourceRunID: '2026-10-29T10-55-14-534Z-21048', consumedSmoke: true, status: 'reserved' })
   })
 
@@ -348,7 +348,7 @@ describe('F2B0 remaining22 campaign (22 cases, fixed smoke source)', () => {
       await expect(createRemaining22Reservation(directory, first, AUTHORIZED_REMAINING22_SOURCE_RUN_ID, { runID: 'campaign-run-2', runNonce: 'nonce-2', sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID })).rejects.toMatchObject({ code: 'EEXIST' })
       expect(await listRemaining22Reservations(directory, AUTHORIZED_REMAINING22_SOURCE_RUN_ID)).toHaveLength(1)
       await expect(createRemaining22Reservation(directory, 'F1-B005', AUTHORIZED_REMAINING22_SOURCE_RUN_ID, { runID: 'campaign-run-1', sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID })).rejects.toThrow('never reserve the historic smoke case')
-      await expect(createRemaining22Reservation(directory, first, 'other-run', { runID: 'campaign-run-1', sourceRunID: 'other-run' })).rejects.toThrow('limited to the fixed historic smoke source')
+      await expect(createRemaining22Reservation(directory, first, 'other-run', { runID: 'campaign-run-1', sourceRunID: 'other-run' })).rejects.toThrow('limited to source allowlist')
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -384,7 +384,7 @@ describe('F2B0 remaining22 campaign (22 cases, fixed smoke source)', () => {
         createRemaining22CampaignClaim(directory, AUTHORIZED_REMAINING22_SOURCE_RUN_ID, { runID: 'racer-b', runNonce: 'b', sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID }),
       ])
       expect(concurrent.filter((r) => r.status === 'fulfilled')).toHaveLength(0)
-      await expect(createRemaining22CampaignClaim(directory, 'other-run', { runID: 'x', sourceRunID: 'other-run' })).rejects.toThrow('limited to the fixed historic smoke source')
+      await expect(createRemaining22CampaignClaim(directory, 'other-run', { runID: 'x', sourceRunID: 'other-run' })).rejects.toThrow('limited to source allowlist')
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -401,10 +401,10 @@ describe('F2B0 remaining22 campaign (22 cases, fixed smoke source)', () => {
     expect(runnerSource).toContain('historic response failed oracle re-evaluation')
     expect(runnerSource).toContain('historic case text does not equal smoke response')
     expect(runnerSource).toContain('model request observed before campaign claim')
-    expect(runnerSource).toContain('listRemaining22CampaignClaims(reservationDir, AUTHORIZED_REMAINING22_SOURCE_RUN_ID)')
-    expect(runnerSource).toContain('createRemaining22CampaignClaim(reservationDir, AUTHORIZED_REMAINING22_SOURCE_RUN_ID')
-    expect(runnerSource).toContain('listRemaining22Reservations(reservationDir, AUTHORIZED_REMAINING22_SOURCE_RUN_ID)')
-    expect(runnerSource).toContain('createRemaining22Reservation(reservationDir, id, AUTHORIZED_REMAINING22_SOURCE_RUN_ID')
+    expect(runnerSource).toContain('listRemaining22CampaignClaims(reservationDir, sourceRunID)')
+    expect(runnerSource).toContain('createRemaining22CampaignClaim(reservationDir, sourceRunID')
+    expect(runnerSource).toContain('listRemaining22Reservations(reservationDir, sourceRunID)')
+    expect(runnerSource).toContain('createRemaining22Reservation(reservationDir, id, campaignSourceRunID')
     expect(runnerSource).toContain("campaign: 'remaining22'")
     expect(runnerSource).toContain('remaining22-attestation.json')
     expect(runnerSource).toContain('historicReservationPreserved')

@@ -121,7 +121,15 @@ const equalSets = (expected: readonly string[], actual: readonly string[]): bool
   actual.length === new Set(actual).size && expected.every((value) => actual.includes(value));
 
 const equalEntities = (expected: readonly StructuredEntity[], actual: readonly StructuredEntity[]): boolean => {
-  const key = (entity: StructuredEntity): string => JSON.stringify([entity.kind, entity.value, entity.provenance]);
+  // G2c (relaxação autorizada uso pessoal, operador 2026-10-29): equivalência
+  // semântica de description usa fold (NFD+lowercase); IDs/UUIDs e demais
+  // kinds continuam exatos. A API preserva casing original (prova em
+  // apps/api/tests/routes/transactions-write.test.ts).
+  const key = (entity: StructuredEntity): string => JSON.stringify([
+    entity.kind,
+    entity.kind === 'description' ? fold(entity.value) : entity.value,
+    entity.provenance,
+  ]);
   return equalSets(expected.map(key), actual.map(key));
 };
 
@@ -168,6 +176,12 @@ const compareArgs = (
     if (typeof want === 'object') {
       // Nested expectations have no POC flat-slot equivalent.
       return { verdict: notComparable(), mismatchedKeys: [], reasons: [`args-nested-expectation:${key}`] };
+    }
+    // G2c (relaxação autorizada uso pessoal, operador 2026-10-29): só o
+    // campo description compara por fold; IDs/UUIDs e demais slots exatos.
+    if (key === 'description' && typeof want === 'string' && typeof got === 'string') {
+      if (fold(want) !== fold(got)) mismatched.push(key);
+      continue;
     }
     if (got !== want) mismatched.push(key);
   }

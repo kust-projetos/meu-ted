@@ -10,8 +10,8 @@
  * - o oráculo F2A1 exige `entities: [{ kind:'period', provenance:'utterance' }]`;
  * - o binder (`checkContextBinding` em `evaluation-runner.ts`) aceita o ARG
  *   `yearMonth` quando há evidência declarada (valores/texto/histórico/data) e
- *   NÃO valida entidades `period` — `utterance` é `continue` (pula) e `period`
- *   com outra proveniência sequer tem checagem (só `account`/`category` têm).
+ *   valida que entidades `period` tenham evidência declarada, independente do
+ *   rótulo; a semântica exata da proveniência ainda não está definida.
  *
  * Garantias:
  * - Offline: só parser puro (`parseStructuredLLMOutput`) + runner puro
@@ -66,6 +66,24 @@ const b0StyleProvenanceMismatch = (
 });
 
 describe('F1-B036 + J09 supplied-yearMonth — caracterização offline (lacuna, sem regra universal)', () => {
+  it('rejects a normalized period that disagrees with yearMonth even if both are supplied', () => {
+    const journey = clone(F2A1_LOCAL_JOURNEYS.J09 as readonly unknown[]) as Array<{ interpretation: Record<string, unknown> }>;
+    journey[1]!.interpretation.entities = [{ kind: 'period', value: '2026-10', provenance: 'corpus-context' }];
+    const row = runF2A1({ journeys: { J09: journey } }).journeys.find(
+      (item) => item.comparison.corpusId === 'J09',
+    )?.turns[1];
+    expect(row?.contextBinding).toBe('mismatch');
+    expect(row?.contextReasons).toContain('context-period-yearmonth-mismatch');
+  });
+  it('rejects a period entity with no evidence even when yearMonth argument is evidenced', () => {
+    const candidate = clone(F2A1_LOCAL_CANDIDATES['F1-B036']) as { interpretation: Record<string, unknown> };
+    candidate.interpretation.entities = [{ kind: 'period', value: '1999-01', provenance: 'utterance' }];
+    const row = runF2A1({ scenarios: { 'F1-B036': candidate } }).scenarios.find(
+      (item) => item.corpusId === 'F1-B036',
+    );
+    expect(row?.contextBinding).toBe('mismatch');
+    expect(row?.contextReasons).toContain('context-unevidenced-period-entity:1999-01');
+  });
   it('valores yearMonth são derivados de suppliedValues, não texto literal', () => {
     const b036 = F2A1_INPUTS['F1-B036']!;
     const j09t1 = F2A1_INPUTS['J09:T1']!;
@@ -140,9 +158,8 @@ describe('F1-B036 + J09 supplied-yearMonth — caracterização offline (lacuna,
     }
   });
 
-  it('binder não valida entidade period com proveniência utterance (oráculo sim)', () => {
-    // Args corretos, entidade utterance com valor divergente: o binder ignora
-    // entidades utterance (`continue`) e não tem checagem para `period`.
+  it('binder rejeita entidade period sem evidência mesmo com proveniência utterance', () => {
+    // Args corretos não autorizam uma entidade de período inventada.
     const good = clone(
       F2A1_LOCAL_CANDIDATES['F1-B036'],
     ) as { interpretation: Record<string, unknown> };
@@ -158,8 +175,8 @@ describe('F1-B036 + J09 supplied-yearMonth — caracterização offline (lacuna,
     );
     expect(row?.entities).toBe('mismatch');
     expect(row?.verdict).toBe('FAIL');
-    // Binder continua match: nenhuma razão de entidade/arg é emitida.
-    expect(row?.contextBinding).toBe('match');
+    expect(row?.contextBinding).toBe('mismatch');
+    expect(row?.contextReasons).toContain('context-unevidenced-period-entity:1999-01');
     expect(row?.contextReasons).not.toContain('context-unevidenced-arg:yearMonth');
     expect(row?.contextReasons.filter((reason) => reason.startsWith('context-unknown'))).toEqual(
       [],

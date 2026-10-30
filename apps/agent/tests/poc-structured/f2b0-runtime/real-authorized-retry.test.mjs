@@ -17,7 +17,7 @@ import {
 
 const exactArgv = [
   '--execute-real',
-  '--confirm-model=opencode-go/deepseek-v4.1-flash',
+  '--confirm-model=opencode-go/muse-spark-1.3-contributor',
   '--confirm-go-quota-available',
   '--confirm-go-extra-usage-disabled',
   '--smoke-only',
@@ -39,8 +39,8 @@ const validResult = {
   attemptCount: 1,
   request: {
     providerID: 'opencode-go',
-    modelID: 'deepseek-v4.1-flash',
-    url: 'https://opencode.ai/inference/go/openai/v1/chat/completions',
+    modelID: 'muse-spark-1.3-contributor',
+    url: 'https://opencode.ai/inference/go/openai/v1/responses',
     requestCount: 1,
   },
   text: '',
@@ -77,7 +77,7 @@ describe('F1-B005 authorized fatal-401 retry', () => {
     expect(() => parseExecutionMode([...exactArgv, '--resume=prior-run'])).toThrow('cannot be combined')
     expect(() => parseExecutionMode(exactArgv.map((a) => a.startsWith('--retry-authorized-case=') ? '--retry-authorized-case=F1-B010' : a))).toThrow('limited to F1-B005')
     expect(() => parseExecutionMode(exactArgv.map((a) => a.startsWith('--retry-authorized-run=') ? '--retry-authorized-run=other-run' : a))).toThrow('limited to F1-B005')
-    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only', '--retry-authorized-case=F1-B005'])).toThrow('both case and run')
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only', '--retry-authorized-case=F1-B005'])).toThrow('both case and run')
   })
 
   it('validates the historic reservation and its associated fatal 401 result', () => {

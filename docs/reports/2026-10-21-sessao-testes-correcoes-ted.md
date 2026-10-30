@@ -4,6 +4,14 @@
 
 > Arquivo vivo desta sessão de testes/correções. Atualizar a cada passo: o que foi feito, evidência, próximo passo.
 
+> **29/10 — reconciliação offline F2:** 9/9 testes em `f2b0-b0-divergences-characterization.test.ts` e `f2a1-supplied-yearmonth-characterization.test.ts` passaram; evidências e limites por caso no [plano do núcleo](../plans/TED-AGENT-CORE-RECOVERY-PLAN.md). B0 continua FAIL, B1 NO-GO; decisão A/B e semântica de proveniência permanecem abertas. Sem inferência, alteração do oráculo ou produção.
+
+> **29/10 — binder F2:** teste RED reproduziu aceitação de entidade `period` sem evidência; correção restrita ao avaliador experimental exige evidência declarada, sem interpretar o rótulo de proveniência. Suíte `tests/poc-structured` 183/183 PASS; B0 histórico inalterado. Analytics aceita intervalo `custom` com `from`/`to`, mas a integração TED e a base financeira de uma leitura anual não foram demonstradas. Sem inferência ou produção.
+
+> **29/10 — contratos HTTP B017/J09:** teste local de analytics confirmou soma de ano calendário customizado e exclusão das datas adjacentes, com base `liquidez`; teste de month-summary confirmou 400 para `period` sem `yearMonth` (2/2 testes do arquivo). Sem adapter, decisão sobre base, integração TED ou inferência externa; detalhes no plano do núcleo.
+
+> **29/10 — itens F2 concluídos em caracterização local:** binder rejeita períodos `YYYY-MM` contraditórios com `yearMonth` mesmo quando ambos têm evidência (RED→GREEN; POC 184/184); API in-memory preserva caixa de descrição; B058/data/follow-up 140/140; três arquivos de rota API 34/34. Decisões e limites no plano do núcleo: B0 segue FAIL, B1 NO-GO, sem integração TED, inferência externa ou produção.
+
 ## Contexto inicial (2026-10-21 ~12:0x BRT)
 - Branch: `feat/ted-account-deactivate-v2` @ `f7c314e` (verificar com git no momento da atualização).
 - Foco recente (ai-memory 21/10): desativação de conta V2 — intenção não vira rascunho/proposta V2 e turno "sim" cai em resolução sem operação pendente; wiring entityReader só com needsMutation causava DEACTIVATE_READ_FAILURE_TEXT no REST.

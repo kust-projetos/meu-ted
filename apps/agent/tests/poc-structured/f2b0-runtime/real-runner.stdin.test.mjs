@@ -131,6 +131,8 @@ describe('real runner CLI stdin prompt capture', () => {
       const config = JSON.parse(configText)
       expect(config.providers['opencode-go'].settings.apiKey).toBe('{env:OPENCODE_GO_API_KEY}')
       expect(configText).not.toContain(mockCredential)
+      expect(config.model).toBe('opencode-go/muse-spark-1.3-contributor')
+      expect(config.agents.build.model).toBe('opencode-go/muse-spark-1.3-contributor')
     } finally {
       await rm(configRoot, { recursive: true, force: true })
     }

@@ -197,19 +197,23 @@ describe('B0 divergences — offline characterization (reproductions)', () => {
     expect(candidateArgs).toHaveProperty('period', '2026-09');
   });
 
-  it('F2A1-B013: B0 `Mercado` vs oracle `mercado` is an exact mismatch; binder stays match (no API claim, no oracle change)', () => {
+  it('F2A1-B013: G2c folds `Mercado` vs oracle `mercado` (args match); FAIL preserved via entities/provenance', () => {
     const parsed = parseStructuredLLMOutput(JSON.parse(JSON.stringify(b013Reproduction)));
     expect(parsed.args['description']).toBe('Mercado');
 
-    // Oracle is exact and unchanged: lowercase `mercado`.
+    // Oracle is unchanged: lowercase `mercado`. G2c (uso pessoal, operador
+    // 2026-10-29) compara description por fold; IDs seguem exatos e a API
+    // preserva casing original (prova em transactions-write.test.ts).
     expect(F2A1_SCENARIOS['F2A1-B013-catalog']?.expectedArgs).toMatchObject({ description: 'mercado' });
 
     const result = runF2A1({ scenarios: { 'F2A1-B013-catalog': b013Reproduction } });
     const row = result.scenarios.find((item) => item.corpusId === 'F2A1-B013-catalog');
-    // Exact comparison is case-sensitive: capital-M FAILs the oracle.
+    // Folded description matches; the B0 shape still FAILs on entities
+    // (amount `R$ 25,00` vs `2500`, extra local-fixture entities) e
+    // contextProvenance (local-fixture vs f1-corpus-text).
     expect(row?.verdict).toBe('FAIL');
-    expect(row?.args).toBe('mismatch');
-    expect(row?.argsMismatchedKeys).toContain('description');
+    expect(row?.args).toBe('match');
+    expect(row?.argsMismatchedKeys).not.toContain('description');
     expect(row?.entities).toBe('mismatch');
     // Binder evidence is folded (case/accents): the same value is still evidenced.
     expect(row?.contextBinding).toBe('match');

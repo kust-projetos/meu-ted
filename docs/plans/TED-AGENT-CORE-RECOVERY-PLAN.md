@@ -1,8 +1,71 @@
 # Plano incremental de recuperação do núcleo conversacional TED
 
-**Registro histórico da auditoria original:** 2026-10-24, checkout `313f999` em `fix/opennext-preview-props`; seu status, gates, reviews e evidências abaixo são históricos, não validação desta branch. **Status atual deste refinamento:** documentação em `docs/ted-core-recovery-refinement`, transportada pelo commit `9de7f20` sobre `origin/main` `b21faff`; refinamento `0d644c5` publicado em `origin`, revisão independente encerrada como APPROVED. Implementação, POC e jornada integrada não executadas; resultados de validação separados em §12.3.
+**Registro histórico da auditoria original:** 2026-10-24, checkout `313f999` em `fix/opennext-preview-props`; seu status, gates, reviews e evidências abaixo são históricos, não validação desta branch. **Estado na revisão documental original:** documentação em `docs/ted-core-recovery-refinement`, transportada pelo commit `9de7f20` sobre `origin/main` `b21faff`; refinamento `0d644c5` publicado em `origin`, revisão independente encerrada como APPROVED. Naquela revisão não foram executadas implementação, POC ou jornada integrada; resultados separados em §12.3. Para trabalho posterior, veja a reconciliação abaixo.
 
 **Refinamento:** documentação nesta branch `docs/ted-core-recovery-refinement`, HEAD `9de7f20`, transportada apenas com docs sobre `origin/main` `b21faff` (proveniência de origem reportada `ede7b10`). Os relatos/checks anteriores permanecem evidência histórica e não são reexecução deste refinamento.
+
+## Reconciliação documental — 29/10/2026
+
+Checkout inspecionado: `7ce96d03a6492a724cd8c6cb90bc1931a6a6a1ca`, branch `test/ted-f2b0-no-retry-controlled`. Esta seção resume evidências posteriores à auditoria, sem reexecutar testes, CI, modelos ou jornadas, e não altera os critérios nem a ordem de dependências da §7.
+
+| Fase | Estado e evidência | Pendência ou limite |
+| --- | --- | --- |
+| F0 — inventário | [Matriz funcional](../audits/TED-FUNCTIONAL-PARITY-MATRIX.md) e revisão documental histórica existem. | Aceite e status por operação precisam de reconciliação; a matriz não prova paridade integrada. |
+| F1 — baseline | [Resultado F1](../reports/TED-F1-BASELINE-RESULTS.md) encerra a baseline como **PARTIAL**, com evidências no snapshot `6300a0c`. | Resultados históricos e divergências não comprovam comportamento do checkout atual, modelo real ou ledger. Há correções locais posteriores registradas no [tracking](../reports/2026-10-21-sessao-testes-correcoes-ted.md), sem reclassificação automática da baseline. |
+| F2-A.1 — instrumento | [Preparação F2-A](../reports/TED-F2A-POC-PREPARATION.md) registra instrumento pronto no seu escopo e CI do merge sintético `301da30f`; scan de containers teve finding HIGH e gate agregado foi pulado naquele run. | Situação atual do finding e gates no checkout atual não verificada; READY do instrumento não aprova o produto ou B1. |
+| F2-B0 — POC real | [Diagnóstico de 29/10](../reports/2026-10-29-f2b0-diagnostico-problemas.md): 23 casos, 2 PASS / 21 FAIL, 17 schemas válidos; **gate semântico FAIL, B1 NO-GO**. | POC sintética não observa conclusão financeira; descritor corrigido após a campanha não foi validado em nova inferência. Quota/Extra Usage foram atestados, não medidos automaticamente; custo API zero não prova faturamento zero. |
+| F3–F5 — leitura, escrita e recuperação | Permanecem sujeitos aos gates e evidências integradas da §7; há provas locais delimitadas anteriores, inclusive canário description-only. | Não declarar fases concluídas por testes isolados; demonstrar caminhos, receipt, replay e efeitos no ambiente sintético autorizado. |
+| F6 — paridade | [Matriz funcional](../audits/TED-FUNCTIONAL-PARITY-MATRIX.md) fornece o backlog por operação. | Priorizar e aceitar cada operação; paridade TED × PWA e CRUD geral não foram demonstrados. |
+
+**Pendências imediatas:** decidir a semântica de proveniência de valores derivados e avaliar as divergências `period`/`yearMonth`, caixa e clarificações B017/B058 sem reescrever a evidência histórica; registrar decisão sobre a alternativa de interpretação e os gates da §7. Uma eventual nova campanha requer autorização explícita, controles de quota/egress e preservação das evidências/reservas. A [POC V1 de 20/10](../agent-recovery/04-poc-comparison.md) é outra avaliação e não fecha a F2 desta SPEC. Freeze de produção vigente conforme `AGENTS.md`; nenhuma autorização de merge com efeito em produção ou deploy é inferida.
+
+### Reconciliação offline F2 — 29/10
+
+No checkout `7ce96d03` com as alterações documentais desta reconciliação, as duas suítes de caracterização `f2b0-b0-divergences-characterization.test.ts` e `f2a1-supplied-yearmonth-characterization.test.ts` passaram **9/9**. São reproduções sintéticas offline, não reavaliação da campanha nem prova de comportamento financeiro.
+
+| Caso | Conclusão delimitada | Próxima decisão ou evidência |
+| --- | --- | --- |
+| B017 | O candidato não pediu esclarecimento e difere do oráculo que exige período; não prova que a API não suporte consulta anual. | Conferir se um reader autoritativo suporta o ano completo antes de fixar a experiência desejada. |
+| B058 | O candidato pediu data, mas usa `mutation-proposal` e diverge dos campos e entidades esperados; não faltou pergunta. | Preservar fail-closed para data incompleta e avaliar separadamente o contrato do intérprete e os demais campos. |
+| J09:T2 | O candidato fornece `period`; o contrato de resumo mensal exige `yearMonth`. O teste não executa HTTP. | Um eventual adaptador precisa provar mapeamento com testes de contrato; não presumir conversão automática. |
+| B013 | `Mercado` versus `mercado` falha na comparação exata, enquanto o binder encontra evidência. | A equivalência de caixa da descrição não foi demonstrada; não alterar o oráculo nem afirmar equivalência na API por inferência. |
+| B036 / J09 — proveniência | O mês normalizado vem de valores fornecidos/data de referência, mas o oráculo exige `utterance`; o binder não valida a entidade `period`. | Definir se o rótulo descreve a origem da intenção ou o valor normalizado e testar explicitamente o vínculo. Não transformar essa lacuna em PASS automático. |
+
+**Atualização posterior — binder experimental:** o teste RED reproduziu aceitação de `1999-01` sem evidência; o binder agora exige evidência declarada para cada entidade `period`, independentemente do rótulo, sem alterar o parser ou os resultados históricos. Suíte `tests/poc-structured`: **183/183 PASS**. Esta verificação limitada não resolve a semântica de `utterance` nem comprova o produto. Para B017, `apps/api/src/analytics/types.ts` e `compute.ts` aceitam `custom` com `from`/`to`, enquanto `thisYear` vai até hoje: isso mostra uma possibilidade de intervalo anual, não prova integração TED ou equivalência de base financeira.
+
+**Caracterização HTTP posterior — B017/J09:** em fixture isolada da API, `GET /analytics/kpis` com intervalo customizado `2020-01-01` a `2020-12-31` somou as duas despesas nos limites e excluiu as datas adjacentes, retornando filtro efetivo e base `liquidez`; o teste não prova o fluxo TED nem escolhe a base de produto. `GET /dashboard/month-summary?period=2026-09` retornou **400**: `period` sozinho não substitui `yearMonth`. Testes em `apps/api/tests/routes/analytics.test.ts` e `month-summary.test.ts`. Nenhuma conversão automática foi implementada; o FAIL histórico da POC permanece.
+
+**Fechamento da investigação local dos itens — 29/10:**
+
+- **B017:** existe leitura API de ano inteiro com intervalo customizado, testada em memória com limites inclusivos e `basis=liquidez`. O TED não foi conectado a esse reader nesta tarefa; a equivalência da base e a UX de ano completo seguem decisão e integração de produto, não um PASS automático de B017.
+- **B058:** manter a expectativa conservadora de clarificação sem proposta quando a data está incompleta. O candidato histórico efetivamente perguntou a data, mas retornou `mutation-proposal`, contrariando o contrato esperado; manter FAIL. Sete arquivos de testes existentes de data/continuação passaram **140/140** em execução local com mocks e stores de teste, não prova live nem cobertura de todas as expressões.
+- **J09:** manter FAIL para `period` como substituto de `yearMonth`; a API retorna 400. Conversão futura só com contrato e prova de integração próprios.
+- **B013:** a API local preservou as descrições `mercado` e `Mercado` como textos distintos em criação e listagem. Manter a comparação exata nesta POC; não inferir equivalência de domínio apenas da normalização do binder. O teste é in-memory, não PostgreSQL nem teste de usuário.
+- **Proveniência:** para esta POC, o rótulo `utterance` no oráculo histórico registra a origem da intenção expressa no turno, **não comprova que o valor normalizado apareça literalmente**. Valor derivado continua exigindo evidência declarada no contexto; o binder experimental agora também rejeita entidade `period` normalizada `YYYY-MM` divergente do argumento `yearMonth`, mesmo se ambos os valores constarem do contexto. O teste reproduziu RED antes da correção; suíte estruturada **184/184 PASS**. Isso não valida a semântica de cada origem nem prova causalidade temporal: a regra de proveniência para um intérprete de produção permanece dependente de contrato próprio e testes adversariais.
+
+Essas conclusões encerram apenas a caracterização local dos cinco itens; não alteram os oráculos ou o resultado B0 histórico, não aprovam B1/F2, não comprovam F3–F6 e não autorizam inferência ou produção.
+
+**Decisão A/B:** ainda não tomada. O B0 histórico permanece FAIL; a correção posterior do descritor não prova resultado de modelo e o comparador possui a lacuna acima. A POC não observa o ledger. Não há base para promover B1 ou declarar F2 aprovada; uma decisão futura pode rejeitar B, mas deve aplicar os critérios da SPEC sem confundir a POC V1 com esta. F3–F6 seguem condicionadas aos gates existentes. Nenhuma inferência externa foi executada nesta verificação.
+
+### Matriz de fechamento F2 — confronto com SPEC §7
+
+| Critério | Evidência disponível | Veredito |
+| --- | --- | --- |
+| A — 20–30 smoke/contratos, sem write ou falso sucesso | [F1 parcial](../reports/TED-F1-BASELINE-RESULTS.md) contém contratos e cenários sintéticos; parte dos critérios é inconclusiva. | **Parcial:** não afirmar zero violações no universo completo nem substituir o gate pelos testes do avaliador. |
+| B — 50–80 casos pareados, A versus candidato estruturado | [B0](../reports/2026-10-29-f2b0-diagnostico-problemas.md) avaliou 23 casos, 2 PASS/21 FAIL; 6 schemas inválidos sob descritor anterior ao ajuste. | **Não cumprido:** B0 é sinal negativo do candidato/configuração testados, não comparação pareada completa nem prova sobre o prompt corrigido. |
+| Segurança e schema / métricas por domínio | B0 fornece dimensões observáveis limitadas; conclusão financeira inobservável, sem ledger, e parte dos critérios de segurança não foi exercitada. | **Não comprovado:** não converter ausência de observação em zero violações. |
+| C — holdout 150–300 casos e ≥95% intenção+argumentos | Não executado; C só é condicional a B promissor. | **Não executado / NO-GO**, não uma falha medida de holdout. |
+| Ganho e UX contra A; p50/p95, custo faturado e tetos | F1 foi parcial; B0 não observou conclusão financeira e faturamento não foi confirmado independentemente. | **Não mensurável com a evidência disponível:** não alegar ganho, equivalência ou custo zero. |
+| D — read e escrita V2 integrados, confirmação, replay, recovery e receipt | POC B0 não executou nem observou ledger; canário anterior é limitado a descrição. | **Não executado neste gate:** exige ambiente sintético e autorização de custo/egress conforme SPEC. |
+| Qualidade e segurança no checkout entregue | Typecheck, docs e governança passaram em execução local; lint expirou; testes globais não executados e scan histórico de containers teve finding HIGH. | **Inconclusivo:** validar no estado final; finding histórico não prova vulnerabilidade atual. |
+
+**Decisão delimitada:** não promover a configuração B0 testada e manter B1/C/D NO-GO. A opção A permanece baseline existente, não uma vencedora demonstrada por comparação completa. A SPEC permite rejeitar B quando não demonstra benefício, mas as amostras e métricas exigidas para o gate B e a escolha A/B não estão demonstradas; portanto **F2 permanece BLOCKED, não fechada nem aprovada para F3**. Resolver com comparação autorizada e protocolo corrigido ou com alteração explícita e revisada dos critérios da SPEC; este registro não altera critérios por conveniência. Uma campanha com modelo requer autorização específica de custo/egress e confirmação atual dos controles; zero inferências novas nesta reconciliação.
+
+### Decisão técnica — encerramento da investigação B0, sem promoção
+
+Por decisão técnica nesta sessão, **não promover o candidato/configuração B0** e manter o caminho determinístico existente enquanto não houver evidência suficiente para uma alternativa. A amostra disponível é desfavorável, porém parcial e obtida com descritor anterior; não comprova inferioridade de todo modelo estruturado nem valida o prompt corrigido. Não executar nova campanha ou incorrer em custo/egress por inferência de autonomia técnica. Uma reavaliação futura exige protocolo, orçamento e autorização específicos.
+
+Esta decisão encerra a investigação do B0 na configuração observada, **não satisfaz os gates A/B/C/D nem altera a SPEC**. F2 como fase de promoção continua bloqueada e F3 não está liberada pelo plano atual. Faltam comparação e métricas prescritas ou revisão explícita dos critérios, além de lint, teste completo com preservação dos relatórios F1 e verificação do scan no estado entregue. Sem integração, merge ou deploy.
 
 ## 1. Registro histórico — contrato e baseline da auditoria 313f999
 

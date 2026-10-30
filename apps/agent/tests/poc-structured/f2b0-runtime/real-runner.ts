@@ -9,15 +9,21 @@ import { pathToFileURL } from 'node:url';
 import { parseEnv } from 'node:util';
 import { OpenCode } from '@opencode/client';
 import { evaluateF2B0Attempts, F2B0_CASE_IDS, getF2B0Cases } from '../f2b0-adapter.js';
-import { createCaseReservation, createExclusiveRunLock, finalizeStoppedRun, listReservationIDs, createAuthorizedRetryReservation, listAuthorizedRetryReservations, createConsumedSmokeReservation, listConsumedSmokeReservations, createRemaining22Reservation, listRemaining22Reservations, createRemaining22CampaignClaim, listRemaining22CampaignClaims } from './real-storage.mjs';
+import { createCaseReservation, createExclusiveRunLock, finalizeStoppedRun, listReservationIDs, createAuthorizedRetryReservation, listAuthorizedRetryReservations, createConsumedSmokeReservation, listConsumedSmokeReservations, createFreshSmokeReservation, listFreshSmokeReservations, createRemaining22Reservation, listRemaining22Reservations, createRemaining22CampaignClaim, listRemaining22CampaignClaims, createRemaining22SupersedeCampaignClaim, createRemaining22SupersedeReservation } from './real-storage.mjs';
 import {
   aggregateObservedMetric,
   applyConsumedSmokeTerminalPolicy,
   AUTHORIZED_CONSUMED_SMOKE_CASE_ID,
   AUTHORIZED_CONSUMED_SMOKE_RUN_ID,
+  AUTHORIZED_FRESH_SMOKE_CASE_ID,
+  AUTHORIZED_FRESH_SMOKE_SOURCE_MARKER,
   AUTHORIZED_RETRY_CASE_ID,
   AUTHORIZED_RETRY_SOURCE_RUN_ID,
   AUTHORIZED_REMAINING22_SOURCE_RUN_ID,
+  AUTHORIZED_REMAINING22_SOURCE_RUN_ID_2,
+  AUTHORIZED_REMAINING22_SOURCE_RUN_ID_3,
+  AUTHORIZED_REMAINING22_SOURCE_RUN_IDS,
+  isAuthorizedRemaining22SourceRunID,
   REMAINING22_EXCLUDED_CASE_ID,
   REMAINING22_EXPECTED_COUNT,
   buildRemaining22Attestation,
@@ -30,8 +36,15 @@ import {
   extractCliOutput,
   isAuthorizedConsumedSingleSmokeSource,
   isAuthorizedFatalRetrySource,
+  isAuthorizedFreshSmokeSource,
+  isBootstrapFreshChainAllowed,
+  isFreshSmokeEvaluationPass,
+  evaluateFreshSmokeRetry,
+  getMaxFreshSmokeAttempts,
+  MUSE_SPARK_SLUG,
   isTerminalAssistantFailure,
   isApprovedInfrastructureEndedCase,
+  isReadinessPollRetriable,
   MAX_CASES,
   parseExecutionMode,
   resolveRealExecutionPlan,
@@ -41,16 +54,28 @@ import {
   REAL_CONFIRMATION,
   GO_QUOTA_CONFIRMATION,
   GO_EXTRA_USAGE_CONFIRMATION,
+  AUTHORIZED_BOOTSTRAP_FRESH_CHAIN_CASE_ID,
+  BOOTSTRAP_FRESH_CHAIN_AUTHORIZATION,
   REAL_MODEL,
   REAL_URL,
   validateCatalogCost,
   validateGoUsageLimits,
   evaluateGoSmoke,
+  isStoppedIncompleteRun,
+  evaluateRemaining22Supersede,
   redactPersistedOutput,
 } from './real-guard.mjs';
 
 const ROOT = path.resolve(import.meta.dirname);
 const OUTPUT_ROOT = path.join(ROOT, 'evidence', 'real');
+// P2 hygiene (branch no-retry-controlled): every path under evidence/real/
+// (run dirs with private-temp/private-config/private-data/private-cache/
+// private-state/work/*.db*, reservations/, plugin-hooks.ndjson) is harness-
+// private and git-ignored (see .gitignore lines 5-15). Before ANY publication
+// or PR that carries evidence: sanitize — remove private-*, *.db*,
+// configs/keys, and any credential-bearing file. Shared results must contain
+// ONLY synthetic fixtures (F2A1_INPUTS via getF2B0Cases) + verdicts/metrics,
+// never raw prompts with secrets, tokens, or per-run private state.
 const DEFAULT_CLI = process.platform === 'win32'
   ? path.join(process.env.APPDATA ?? '', 'npm', 'node_modules', '@opencode', 'cli', 'node_modules', '@opencode', 'cli-windows-x64', 'bin', 'opencode.exe')
   : 'opencode';
@@ -69,6 +94,34 @@ const atomicCreate = async (file: string, value: unknown) => {
   finally { await handle.close(); }
 };
 
+// P1 security-reviewer (branch test/ted-f2b0-no-retry-controlled): supersede
+// artifact reads are fail-closed. ONLY ENOENT counts as "absent"; any other
+// read error (EACCES/EIO/...) propagates and refuses the authorization, so a
+// present-but-unreadable evaluation can never release a 2nd claim.
+export async function loadStoppedIncompleteFlags(
+  readArtifact: (file: string) => Promise<string>,
+  outputRoot: string,
+  priorRunID: string,
+): Promise<{ hasStoppedSummary: boolean; hasEvaluation: boolean }> {
+  let hasStoppedSummary = false;
+  try {
+    await readArtifact(path.join(outputRoot, priorRunID, 'stopped-summary.json'));
+    hasStoppedSummary = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    hasStoppedSummary = false;
+  }
+  let hasEvaluation = false;
+  try {
+    await readArtifact(path.join(outputRoot, priorRunID, 'evaluation.json'));
+    hasEvaluation = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    hasEvaluation = false;
+  }
+  return { hasStoppedSummary, hasEvaluation };
+};
+
 const usage = () => {
   console.log([
     'F2B0 native real-run guard (does not run unless explicitly armed)',
@@ -80,7 +133,9 @@ const usage = () => {
     '  --export-stopped-run=<run-id>          create one sanitized review artifact; no server/catalog/model call',
     '  --retry-authorized-case=F1-B005 --retry-authorized-run=2026-10-27T15-19-19-424Z-5620   single authorized F1-B005 smoke retry after the fatal 401; requires --execute-real --smoke-only plus exact confirmations',
     '  --consumed-smoke-authorized-case=F1-B005 --consumed-smoke-authorized-run=2026-10-29T10-55-14-534Z-21048   single authorized F1-B005 smoke attempt sourced from the consumed HTTP200 run; requires --execute-real --smoke-only plus exact confirmations; never a retry source, never resumable, no continuation even on PASS',
-    '  --remaining22-authorized-run=2026-10-29T12-26-34-600Z-4324   authorized 22-case campaign (F2B0_CASE_IDS minus F1-B005), serial, no B1/retry/fallback; requires --execute-real plus exact confirmations; mutually exclusive with smoke-only/resume/retry/consumed/preflight/self-test/export',
+    '  --fresh-smoke-authorized-case=F1-B005 --fresh-smoke-authorized-run=fresh   single authorized F1-B005 fresh controlled smoke (new source S2); requires --execute-real --smoke-only plus exact confirmations; never a retry source, never resumable, no continuation even on PASS',
+    '  --bootstrap-fresh-chain-F1-B005   one-time F1-B005 anchor for the muse-spark chain (creates only F1-B005.reserved in the model slug; refuses when the slug already has any reservation/claim); requires --execute-real --smoke-only plus exact confirmations; no server, no session, no prompt, no smoke evaluation',
+    '  --remaining22-authorized-run=2026-10-29T12-26-34-600Z-4324|2026-10-29T20-54-25-649Z-6500   authorized 22-case campaign (F2B0_CASE_IDS minus F1-B005), serial, no B1/retry/fallback; requires --execute-real plus exact confirmations; mutually exclusive with smoke-only/resume/retry/consumed/preflight/self-test/export; single-ACTIVE-claim per source plus one -r2 supersede only for a stopped-incomplete run',
     'No flags means no model/catalog request. One global wx lock serializes all runs; stale locks/reservations require manual review and are never auto-cleared.',
     'OpenCode Go auth is supplied only through OPENCODE_GO_API_KEY environment substitution; the runner never stores the key. Native data is shared, config/database remain per-run.',
   ].join('\n'));
@@ -235,8 +290,15 @@ async function startServer(runDir: string, env: NodeJS.ProcessEnv, workDir: stri
       try { info = await client.server.info(); break; }
       catch (error) {
         if (authRejectedStatus === 401 || authRejectedStatus === 403) throw new Error(`local OpenCode readiness failed closed (Basic Auth HTTP ${authRejectedStatus})`);
+        // Branch no-retry-controlled: this bounded wait polls server.info()
+        // ONLY (no session, no prompt, no model call), so it can never
+        // repeat inference. classifyLocalServerFailure() is fail-closed
+        // (retry:false) for the inference layer; isReadinessPollRetriable()
+        // gates ONLY this pre-prompt poll. Any local failure once a prompt
+        // path is reachable aborts with zero resends (see per-case flow:
+        // single captureCli per case, stop+finalize on first failure).
         const readiness = classifyLocalServerFailure(error);
-        if (readiness.fatal) {
+        if (!isReadinessPollRetriable(error)) {
           const status = 'status' in readiness ? ` HTTP ${readiness.status}` : '';
           throw new Error(`local OpenCode readiness failed closed (${readiness.category}${status})`);
         }
@@ -520,6 +582,48 @@ export function decideAssistantTextStop(extraction: unknown, stdoutText: unknown
   return null;
 }
 
+export function isFreshSmokeResumeBlocked(input?: {
+  resumeID?: string;
+  smoke?: { freshSmoke?: unknown; sourceMarker?: unknown } | null;
+  freshReservationFiles?: string[] | null;
+  freshReservationRunIDs?: string[] | null;
+}): boolean {
+  const resumeID = input?.resumeID;
+  if (typeof resumeID !== 'string' || resumeID.length === 0) return false;
+  const smoke = input?.smoke as { freshSmoke?: unknown; sourceMarker?: unknown } | null | undefined;
+  if (smoke && (smoke.freshSmoke === true || smoke.sourceMarker === AUTHORIZED_FRESH_SMOKE_SOURCE_MARKER)) return true;
+  const runIDs = input?.freshReservationRunIDs;
+  if (Array.isArray(runIDs) && runIDs.includes(resumeID)) return true;
+  const files = input?.freshReservationFiles;
+  if (Array.isArray(files) && files.some((file) => typeof file === 'string' && file.endsWith(`${safeID(resumeID)}.json`))) return true;
+  return false;
+}
+
+// Branch test/ted-f2b0-no-retry-controlled: controlled fresh-smoke retry.
+// Loads evidence/real/<runID>/smoke-evaluation.json for every prior fresh
+// reservation; a missing/unreadable evaluation refuses fail-closed (no
+// inference). A single PASS is preserved; only all-FAIL/INCONCLUSIVE priors
+// allow one new reservation with a distinct runID (old files preserved).
+async function loadFreshSmokeRetryEvaluations(priorFreshFiles: string[]): Promise<any[]> {
+  const evaluations: any[] = [];
+  for (const file of priorFreshFiles) {
+    let reservation: any = null;
+    try {
+      reservation = JSON.parse(await readFile(file, 'utf8'));
+    } catch {
+      throw new Error('fresh smoke refused: prior fresh reservation unreadable (fail-closed)');
+    }
+    const priorRunID = (reservation as any)?.runID;
+    if (typeof priorRunID !== 'string' || priorRunID.length === 0) throw new Error('fresh smoke refused: prior fresh reservation runID missing (fail-closed)');
+    try {
+      evaluations.push(JSON.parse(await readFile(path.join(OUTPUT_ROOT, priorRunID, 'smoke-evaluation.json'), 'utf8')));
+    } catch {
+      throw new Error(`fresh smoke refused: prior fresh smoke evaluation missing or unreadable for ${priorRunID} (fail-closed)`);
+    }
+  }
+  return evaluations;
+}
+
 async function atomicCaseResult(file: string, value: unknown) {
   const handle = await open(file, 'wx');
   try { await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`); await handle.sync(); }
@@ -615,6 +719,44 @@ async function main(argv: string[]) {
     await exportStoppedRun(options.exportStoppedRunID);
     return;
   }
+  if ((options as any).bootstrapFreshChain) {
+    // One-time chain anchor: creates ONLY F1-B005.reserved in the muse-spark
+    // slug so the existing fresh-smoke -> remaining22 chain can run. No
+    // credential is loaded, no server is started, no session/prompt/model
+    // call happens, and no smoke evaluation is created here.
+    await mkdir(OUTPUT_ROOT, { recursive: true });
+    const bootstrapLock = await createExclusiveRunLock(path.join(OUTPUT_ROOT, '.f2b0-real-run.lock'), { runID: 'bootstrap-fresh-chain', pid: process.pid });
+    try {
+      const reservationDir = path.join(OUTPUT_ROOT, 'reservations', safeID(`${REAL_MODEL.providerID}-${REAL_MODEL.modelID}`));
+      await mkdir(reservationDir, { recursive: true });
+      const slugState = {
+        caseID: AUTHORIZED_BOOTSTRAP_FRESH_CHAIN_CASE_ID,
+        reservationIDs: await listReservationIDs(reservationDir),
+        freshReservations: await listFreshSmokeReservations(reservationDir, AUTHORIZED_BOOTSTRAP_FRESH_CHAIN_CASE_ID),
+        consumedReservations: await listConsumedSmokeReservations(reservationDir, AUTHORIZED_BOOTSTRAP_FRESH_CHAIN_CASE_ID),
+        retryReservations: await listAuthorizedRetryReservations(reservationDir, AUTHORIZED_BOOTSTRAP_FRESH_CHAIN_CASE_ID),
+        remaining22Reservations: await listRemaining22Reservations(reservationDir),
+        campaignClaims: await listRemaining22CampaignClaims(reservationDir),
+      };
+      const allowed = isBootstrapFreshChainAllowed(slugState);
+      if (!allowed.ok) throw new Error(`bootstrap fresh chain refused: slug already has reservations/claims (${(allowed as any).reason}); single-use per slug`);
+      const runID = `${new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')}-${process.pid}`;
+      const runNonce = randomUUID();
+      const reservationFile = await createCaseReservation(reservationDir, AUTHORIZED_BOOTSTRAP_FRESH_CHAIN_CASE_ID, {
+        runID,
+        runNonce,
+        provider: REAL_MODEL.providerID,
+        model: REAL_MODEL.modelID,
+        nativeURL: REAL_URL,
+        authorization: BOOTSTRAP_FRESH_CHAIN_AUTHORIZATION,
+        bootstrapFreshChain: true,
+      });
+      console.log(JSON.stringify({ status: 'bootstrap-fresh-chain-anchored', caseID: AUTHORIZED_BOOTSTRAP_FRESH_CHAIN_CASE_ID, reservation: path.relative(OUTPUT_ROOT, reservationFile), runID, inferenceRequestsExecutedByBootstrap: 0, smokeEvaluationCreated: false }, null, 2));
+    } finally {
+      await bootstrapLock.release();
+    }
+    return;
+  }
   const goApiKey = await loadGoApiKey();
   if (!goApiKey) throw new Error('OPENCODE_GO credential is required for this F2B0 mode');
   process.env.OPENCODE_GO_API_KEY = goApiKey;
@@ -705,6 +847,13 @@ async function main(argv: string[]) {
     if (existing.model !== REAL_MODEL.modelID || existing.authMode !== manifest.authMode || JSON.stringify(existing.caseIDs) !== JSON.stringify(manifest.caseIDs) || JSON.stringify(existing.prompts) !== JSON.stringify(manifest.prompts)) throw new Error('resume manifest differs from this F2B0 model/case/Go-auth state');
     const smokeFile = path.join(runDir, 'smoke-evaluation.json');
     const smoke = JSON.parse(await readFile(smokeFile, 'utf8').catch(() => { throw new Error('resume requires a persisted one-case smoke evaluation') }));
+    const freshReservationFiles = await listFreshSmokeReservations(reservationDir, AUTHORIZED_FRESH_SMOKE_CASE_ID);
+    const freshReservationRunIDs: string[] = [];
+    for (const file of freshReservationFiles) {
+      const record = JSON.parse(await readFile(file, 'utf8'));
+      if (typeof record.runID === 'string') freshReservationRunIDs.push(record.runID);
+    }
+    if (isFreshSmokeResumeBlocked({ resumeID: options.resumeID, smoke, freshReservationFiles, freshReservationRunIDs })) throw new Error('resume blocked: fresh smoke run is terminal single-use; continuation is never allowed');
     if (smoke.status !== 'SMOKE_PASS' || smoke.continuationAllowed !== true) throw new Error('resume blocked: smoke did not pass with a current Go quota readback');
   } else await atomicCreate(manifestFile, manifest);
 
@@ -726,11 +875,13 @@ async function main(argv: string[]) {
       caseIDs: cases.map((item) => item.id),
       existingIDs,
       reservedIDs,
-      options: { resumeID: options.resumeID, smokeOnly: options.smokeOnly, retryCaseID: options.retryCaseID, retryRunID: options.retryRunID, consumedSmokeCaseID: options.consumedSmokeCaseID, consumedSmokeRunID: options.consumedSmokeRunID, remaining22RunID: (options as any).remaining22RunID },
+      options: { resumeID: options.resumeID, smokeOnly: options.smokeOnly, retryCaseID: options.retryCaseID, retryRunID: options.retryRunID, consumedSmokeCaseID: options.consumedSmokeCaseID, consumedSmokeRunID: options.consumedSmokeRunID, freshSmokeCaseID: (options as any).freshSmokeCaseID, freshSmokeRunID: (options as any).freshSmokeRunID, remaining22RunID: (options as any).remaining22RunID },
     }) as { plan: { run: string[]; skipped: string[]; unresolvedReservations: string[] }; executionPlan: { run: string[]; deferred: string[] }; authorized: boolean; campaign?: string };
     const isRemaining22 = (options as any).remaining22RunID !== undefined;
     let authorizedRetryReservationFile: string | null = null;
     let consumedSmokeReservationFile: string | null = null;
+    let freshSmokeReservationFile: string | null = null;
+    let remaining22SupersedeRunID: string | null = null;
     if (authorized && options.retryCaseID !== undefined) {
       let reservationRecord: any = null;
       try {
@@ -787,13 +938,31 @@ async function main(argv: string[]) {
       const priorConsumed = await listConsumedSmokeReservations(reservationDir, AUTHORIZED_CONSUMED_SMOKE_CASE_ID);
       if (priorConsumed.length > 0) throw new Error('consumed smoke already consumed; refusing second attempt');
     }
+    if (authorized && (options as any).freshSmokeCaseID !== undefined) {
+      let historicReservation: any = null;
+      try {
+        historicReservation = JSON.parse(await readFile(path.join(reservationDir, `${safeID(AUTHORIZED_FRESH_SMOKE_CASE_ID)}.reserved`), 'utf8'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('fresh smoke refused: historic F1-B005 reservation is missing');
+        throw error;
+      }
+      if (historicReservation.caseID !== AUTHORIZED_FRESH_SMOKE_CASE_ID || historicReservation.status !== 'reserved') throw new Error('fresh smoke refused: historic reservation mismatch');
+      const freshCheck = isAuthorizedFreshSmokeSource({ caseID: (options as any).freshSmokeCaseID, sourceMarker: (options as any).freshSmokeRunID });
+      if (!freshCheck.ok) throw new Error(`fresh smoke refused: ${freshCheck.reason}`);
+      const priorFresh = await listFreshSmokeReservations(reservationDir, AUTHORIZED_FRESH_SMOKE_CASE_ID);
+      if (priorFresh.length > 0) {
+        const priorEvaluations = await loadFreshSmokeRetryEvaluations(priorFresh);
+        const retryCheck = evaluateFreshSmokeRetry(priorEvaluations, MUSE_SPARK_SLUG);
+        if (!retryCheck.ok) throw new Error(`fresh smoke refused: ${retryCheck.reason}; single PASS preserved, all-FAIL/INCONCLUSIVE only, max ${getMaxFreshSmokeAttempts(MUSE_SPARK_SLUG)} attempts per slug`);
+      }
+    }
     if (isRemaining22) {
       // Static plan-shape asserts only (no I/O, no claim): fail fast before starting any server.
       // Historic validation and the single durable campaign claim happen after all
       // inference-free preflights plus plugin readiness, under the same lock,
       // immediately before the first prompt/reservation (see below).
       const sourceRunID = (options as any).remaining22RunID as string;
-      if (sourceRunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) throw new Error(`remaining22 campaign is limited to source ${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`);
+      if (!isAuthorizedRemaining22SourceRunID(sourceRunID)) throw new Error(`remaining22 campaign is limited to source allowlist [${AUTHORIZED_REMAINING22_SOURCE_RUN_IDS.join(',')}]`);
       if (campaign !== 'remaining22') throw new Error('remaining22 campaign plan mismatch');
       if (executionPlan.run.length !== REMAINING22_EXPECTED_COUNT) throw new Error('remaining22 campaign must run exactly 22 cases');
       if (executionPlan.run.includes(REMAINING22_EXCLUDED_CASE_ID)) throw new Error('remaining22 campaign must never re-execute the historic smoke case');
@@ -828,7 +997,7 @@ async function main(argv: string[]) {
       const preClaimEvents = jsonLines(await readFile(evidenceFile, 'utf8'));
       if (preClaimEvents.some((event) => event.event === 'http-request-allowed')) throw new Error('remaining22 campaign refused: model request observed before campaign claim');
       if (preClaimEvents.some((event) => event.event === 'guard-failed')) throw new Error('remaining22 campaign refused: guard failed before campaign claim');
-      const sourceRunDir = path.join(OUTPUT_ROOT, AUTHORIZED_REMAINING22_SOURCE_RUN_ID);
+      const sourceRunDir = path.join(OUTPUT_ROOT, sourceRunID);
       let sourceManifest: any = null;
       let sourceSmoke: any = null;
       let sourceCase: any = null;
@@ -841,7 +1010,10 @@ async function main(argv: string[]) {
         sourceCase = JSON.parse(await readFile(path.join(sourceRunDir, 'cases', `${safeID(REMAINING22_EXCLUDED_CASE_ID)}.json`), 'utf8'));
         sourceCatalog = JSON.parse(await readFile(path.join(sourceRunDir, 'catalog-preflight.json'), 'utf8'));
         sourceHooks = jsonLines(await readFile(path.join(sourceRunDir, 'plugin-hooks.ndjson'), 'utf8'));
-        sourceReservation = JSON.parse(await readFile(path.join(reservationDir, `${safeID(REMAINING22_EXCLUDED_CASE_ID)}.consumed-smoke-${safeID(AUTHORIZED_CONSUMED_SMOKE_RUN_ID)}.json`), 'utf8'));
+        const expectedReservationFile = (sourceRunID === AUTHORIZED_REMAINING22_SOURCE_RUN_ID_2 || sourceRunID === AUTHORIZED_REMAINING22_SOURCE_RUN_ID_3)
+          ? `${safeID(REMAINING22_EXCLUDED_CASE_ID)}.fresh-smoke-${safeID(sourceRunID)}.json`
+          : `${safeID(REMAINING22_EXCLUDED_CASE_ID)}.consumed-smoke-${safeID(AUTHORIZED_CONSUMED_SMOKE_RUN_ID)}.json`;
+        sourceReservation = JSON.parse(await readFile(path.join(reservationDir, expectedReservationFile), 'utf8'));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('remaining22 campaign refused: historic source artifact is missing');
         throw error;
@@ -864,11 +1036,37 @@ async function main(argv: string[]) {
           throw error;
         }
       }
-      const priorCampaignClaims = await listRemaining22CampaignClaims(reservationDir, AUTHORIZED_REMAINING22_SOURCE_RUN_ID);
-      if (priorCampaignClaims.length > 0) throw new Error('remaining22 campaign already claimed; refusing second attempt (crash fail-closed, manual review required)');
-      const priorRemaining22 = await listRemaining22Reservations(reservationDir, AUTHORIZED_REMAINING22_SOURCE_RUN_ID);
-      if (priorRemaining22.length > 0) throw new Error('remaining22 campaign already claimed; refusing second attempt (crash fail-closed, manual review required)');
-      await createRemaining22CampaignClaim(reservationDir, AUTHORIZED_REMAINING22_SOURCE_RUN_ID, { runID, runNonce, sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID });
+      const priorCampaignClaims = await listRemaining22CampaignClaims(reservationDir, sourceRunID);
+      const baseClaims = priorCampaignClaims.filter((file) => !file.endsWith('-r2.json'));
+      const supersedeClaims = priorCampaignClaims.filter((file) => file.endsWith('-r2.json'));
+      if (baseClaims.length === 0 && supersedeClaims.length === 0) {
+        const priorRemaining22 = await listRemaining22Reservations(reservationDir, sourceRunID);
+        if (priorRemaining22.length > 0) throw new Error('remaining22 campaign already claimed; refusing second attempt (crash fail-closed, manual review required)');
+        await createRemaining22CampaignClaim(reservationDir, sourceRunID, { runID, runNonce, sourceRunID });
+      } else if (baseClaims.length === 1 && supersedeClaims.length === 0) {
+        // F2-B4-via-S4: one controlled second claim, ONLY when the first
+        // claim references a stopped-incomplete run (stopped-summary.json
+        // present, evaluation.json absent). Full 22-case campaign; the new
+        // claim and its 22 reservations use the -r2 namespace and record
+        // supersedes:<stoppedRunID>. Complete campaigns never release a
+        // second claim; a third claim always refuses.
+        const priorClaim = JSON.parse(await readFile(baseClaims[0], 'utf8'));
+        const priorRunID = (priorClaim as any)?.runID;
+        if (typeof priorRunID !== 'string' || !/^[a-zA-Z0-9._-]{1,80}$/.test(priorRunID)) throw new Error('remaining22 supersede refused: prior claim runID missing or unsafe');
+        // P1 security-reviewer: fail-closed artifact reads — only ENOENT is
+        // "absent"; any other error propagates and refuses before any claim.
+        const { hasStoppedSummary, hasEvaluation } = await loadStoppedIncompleteFlags(
+          (file) => readFile(file, 'utf8'),
+          OUTPUT_ROOT,
+          priorRunID,
+        );
+        const gate = evaluateRemaining22Supersede({ sourceRunID, baseClaimCount: baseClaims.length, supersedeClaimCount: supersedeClaims.length, priorIsStoppedIncomplete: isStoppedIncompleteRun({ hasStoppedSummary, hasEvaluation }) });
+        if (!gate.ok) throw new Error(`remaining22 supersede refused: ${(gate as any).reason}; single-ACTIVE-claim preserved`);
+        await createRemaining22SupersedeCampaignClaim(reservationDir, sourceRunID, { runID, runNonce, sourceRunID, supersedes: priorRunID });
+        remaining22SupersedeRunID = priorRunID;
+      } else {
+        throw new Error('remaining22 campaign already claimed; refusing third attempt (single-ACTIVE-claim plus one supersede only, new decision required)');
+      }
     }
 
     for (const id of executionPlan.run) {
@@ -877,7 +1075,7 @@ async function main(argv: string[]) {
       const caseWorkDir = workDir;
       const goUsageBefore = await requireGoUsage(server.client, options.quotaConfirmation && !options.resumeID);
       let reservationFile: string | null = null;
-      if (!isRemaining22 && !(authorized && (id === AUTHORIZED_RETRY_CASE_ID || id === AUTHORIZED_CONSUMED_SMOKE_CASE_ID))) {
+      if (!isRemaining22 && !(authorized && (id === AUTHORIZED_RETRY_CASE_ID || id === AUTHORIZED_CONSUMED_SMOKE_CASE_ID || id === AUTHORIZED_FRESH_SMOKE_CASE_ID))) {
         reservationFile = await createCaseReservation(reservationDir, id, { runID, runNonce });
       }
       const hookStart = jsonLines(await readFile(evidenceFile, 'utf8')).length;
@@ -904,9 +1102,22 @@ async function main(argv: string[]) {
         consumedSmokeReservationFile = await createConsumedSmokeReservation(reservationDir, AUTHORIZED_CONSUMED_SMOKE_CASE_ID, AUTHORIZED_CONSUMED_SMOKE_RUN_ID, { runID, runNonce, sourceRunID: AUTHORIZED_CONSUMED_SMOKE_RUN_ID });
         reservationFile = consumedSmokeReservationFile;
       }
+      if (authorized && (options as any).freshSmokeCaseID !== undefined && id === AUTHORIZED_FRESH_SMOKE_CASE_ID) {
+        const priorFresh = await listFreshSmokeReservations(reservationDir, AUTHORIZED_FRESH_SMOKE_CASE_ID);
+        if (priorFresh.length > 0) {
+          const priorEvaluations = await loadFreshSmokeRetryEvaluations(priorFresh);
+          const retryCheck = evaluateFreshSmokeRetry(priorEvaluations, MUSE_SPARK_SLUG);
+          if (!retryCheck.ok) throw new Error(`fresh smoke refused: ${retryCheck.reason}; single PASS preserved, all-FAIL/INCONCLUSIVE only, max ${getMaxFreshSmokeAttempts(MUSE_SPARK_SLUG)} attempts per slug`);
+        }
+        freshSmokeReservationFile = await createFreshSmokeReservation(reservationDir, AUTHORIZED_FRESH_SMOKE_CASE_ID, runID, { runID, runNonce, sourceMarker: AUTHORIZED_FRESH_SMOKE_SOURCE_MARKER });
+        reservationFile = freshSmokeReservationFile;
+      }
       if (isRemaining22) {
         if (id === REMAINING22_EXCLUDED_CASE_ID) throw new Error('remaining22 campaign must never re-execute the historic smoke case');
-        reservationFile = await createRemaining22Reservation(reservationDir, id, AUTHORIZED_REMAINING22_SOURCE_RUN_ID, { runID, runNonce, sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID });
+        const campaignSourceRunID = (options as any).remaining22RunID as string;
+        reservationFile = remaining22SupersedeRunID !== null
+          ? await createRemaining22SupersedeReservation(reservationDir, id, campaignSourceRunID, { runID, runNonce, sourceRunID: campaignSourceRunID, supersedes: remaining22SupersedeRunID })
+          : await createRemaining22Reservation(reservationDir, id, campaignSourceRunID, { runID, runNonce, sourceRunID: campaignSourceRunID });
       }
       if (!reservationFile) throw new Error('reservation missing before prompt');
       const stdout = await captureCli(CLI, [
@@ -1063,7 +1274,7 @@ async function main(argv: string[]) {
           extraUsageDisabledAttested: options.extraUsageConfirmation,
         });
         const casePassed = smokeOutcome.casePassed;
-        const terminalOutcome = options.consumedSmokeCaseID !== undefined ? applyConsumedSmokeTerminalPolicy(smokeOutcome) : smokeOutcome;
+        const terminalOutcome = (options.consumedSmokeCaseID !== undefined || (options as any).freshSmokeCaseID !== undefined) ? applyConsumedSmokeTerminalPolicy(smokeOutcome) : smokeOutcome;
         const continuationAllowed = terminalOutcome.continuationAllowed;
         const smokeReport = {
           schemaVersion: 'f2b0-go-single-smoke-v1',
@@ -1090,6 +1301,7 @@ async function main(argv: string[]) {
           goUsageAfterStatus,
           extraUsageStatus: 'operator-attested-disabled',
           remainingCaseIDs: executionPlan.deferred,
+          ...((options as any).freshSmokeCaseID !== undefined ? { freshSmoke: true, sourceMarker: AUTHORIZED_FRESH_SMOKE_SOURCE_MARKER } : {}),
           continuationAllowed,
         };
         await atomicCreate(path.join(runDir, 'smoke-evaluation.json'), smokeReport);
@@ -1116,16 +1328,17 @@ async function main(argv: string[]) {
     }
 
     if (isRemaining22) {
+      const campaignSourceRunID = (options as any).remaining22RunID as string;
       const campaignResults = await Promise.all(executionPlan.run.map((caseID) => readFile(path.join(caseDir, `${safeID(caseID)}.json`), 'utf8').then((raw) => JSON.parse(raw))));
       if (campaignResults.length !== REMAINING22_EXPECTED_COUNT) throw new Error('remaining22 campaign requires exactly 22 completed campaign results');
       if (campaignResults.some((result) => result.fatal)) throw new Error('remaining22 campaign fatal result prevents composite evaluation');
-      const sourceHistoric = JSON.parse(await readFile(path.join(OUTPUT_ROOT, AUTHORIZED_REMAINING22_SOURCE_RUN_ID, 'cases', `${safeID(REMAINING22_EXCLUDED_CASE_ID)}.json`), 'utf8'));
+      const sourceHistoric = JSON.parse(await readFile(path.join(OUTPUT_ROOT, campaignSourceRunID, 'cases', `${safeID(REMAINING22_EXCLUDED_CASE_ID)}.json`), 'utf8'));
       const compositeAttempts = [{ id: sourceHistoric.caseID, raw: sourceHistoric.text }, ...campaignResults.map((result: any) => ({ id: result.caseID, raw: result.text }))];
       const evaluation = evaluateF2B0Attempts(compositeAttempts, { requireComplete: true });
       if (!evaluation.complete || evaluation.missingIds.length > 0) throw new Error('remaining22 composite evaluation is incomplete');
-      const attestation = buildRemaining22Attestation({ runID, sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID, caseIDs: cases.map((item) => item.id), completedCaseIDs: campaignResults.map((result: any) => result.caseID), expectedCaseIDs: cases.map((item) => item.id), expectedCampaignCaseIDs: executionPlan.run });
+      const attestation = buildRemaining22Attestation({ runID, sourceRunID: campaignSourceRunID, caseIDs: cases.map((item) => item.id), completedCaseIDs: campaignResults.map((result: any) => result.caseID), expectedCaseIDs: cases.map((item) => item.id), expectedCampaignCaseIDs: executionPlan.run });
       const runMetrics = summarizeRealRunMetrics(evaluation, [...campaignResults, { caseID: sourceHistoric.caseID, status: 'completed-for-evaluation', attemptCount: 1, metadata: sourceHistoric.metadata } as any], MAX_CASES);
-      const report = { runID, campaign: 'remaining22', sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID, providerID: REAL_MODEL.providerID, modelID: REAL_MODEL.modelID, attempts: compositeAttempts.length, denominator: MAX_CASES, complete: evaluation.complete, metrics: runMetrics, evaluation, attestation, provenance: { sourceRunID: AUTHORIZED_REMAINING22_SOURCE_RUN_ID, historicCaseID: REMAINING22_EXCLUDED_CASE_ID, historicReservationPreserved: true } };
+      const report = { runID, campaign: 'remaining22', sourceRunID: campaignSourceRunID, providerID: REAL_MODEL.providerID, modelID: REAL_MODEL.modelID, attempts: compositeAttempts.length, denominator: MAX_CASES, complete: evaluation.complete, metrics: runMetrics, evaluation, attestation, provenance: { sourceRunID: campaignSourceRunID, historicCaseID: REMAINING22_EXCLUDED_CASE_ID, historicReservationPreserved: true } };
       await atomicCreate(path.join(runDir, 'evaluation.json'), report);
       await atomicCreate(path.join(runDir, 'remaining22-attestation.json'), attestation);
       completed = true;

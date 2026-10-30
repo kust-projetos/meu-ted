@@ -5,6 +5,7 @@ import path from 'node:path'
 import {
   classifyProviderFailure,
   classifyLocalServerFailure,
+  isReadinessPollRetriable,
   classifyAssistantOutcome,
   extractCliOutput,
   aggregateObservedMetric,
@@ -32,27 +33,26 @@ import { F2A1_LOCAL_CANDIDATES, F2A1_LOCAL_JOURNEYS } from '../f2a1-candidates.j
 
 const exactRequest = {
   providerID: 'opencode-go',
-  modelID: 'deepseek-v4.1-flash',
+  modelID: 'muse-spark-1.3-contributor',
   kind: 'primary',
-  url: 'https://opencode.ai/inference/go/openai/v1/chat/completions',
+  url: 'https://opencode.ai/inference/go/openai/v1/responses',
   method: 'POST',
   sessionRequestCount: 1,
   redirect: 'error',
-  body: { model: 'deepseek-v4.1-flash', messages: [{ role: 'user', content: 'synthetic' }], tools: [] },
+  body: { model: 'muse-spark-1.3-contributor', input: 'synthetic', tools: [] },
 }
 
 describe('F2B0 real-run guard', () => {
   it('pins the target to OpenCode Go and admits only its official peak/off-peak prices', () => {
-    expect(REAL_MODEL).toEqual({ providerID: 'opencode-go', modelID: 'deepseek-v4.1-flash' })
-    expect(REAL_URL).toBe('https://opencode.ai/inference/go/openai/v1/chat/completions')
-    const offPeak = { tier: 'off-peak', input: 0.15, output: 0.6, cache: { read: 0.003, write: 0 } }
-    const peak = { tier: 'peak', input: 0.3, output: 1.2, cache: { read: 0.006, write: 0 } }
-    expect(validateCatalogCost([offPeak])).toMatchObject({ ok: true, tiers: 1 })
-    expect(validateCatalogCost([offPeak, peak])).toMatchObject({ ok: true, tiers: 2 })
+    expect(REAL_MODEL).toEqual({ providerID: 'opencode-go', modelID: 'muse-spark-1.3-contributor' })
+    expect(REAL_URL).toBe('https://opencode.ai/inference/go/openai/v1/responses')
+    const single = { input: 0.10, output: 0.20, cache: { read: 0.002, write: 0 } }
+    expect(validateCatalogCost([single])).toMatchObject({ ok: true, tiers: 1 })
+    expect(validateCatalogCost([{ ...single, tier: 'off-peak' }])).toMatchObject({ ok: true, tiers: 1 })
     expect(validateCatalogCost([])).toMatchObject({ ok: false, reason: 'cost-missing' })
     expect(validateCatalogCost(undefined)).toMatchObject({ ok: false, reason: 'cost-missing' })
-    expect(validateCatalogCost([{ ...offPeak, cache: { read: 0.003 } }])).toMatchObject({ ok: false, reason: 'cost-unknown' })
-    expect(validateCatalogCost([{ ...offPeak, output: 9 }])).toMatchObject({ ok: false, reason: 'cost-not-allowlisted' })
+    expect(validateCatalogCost([{ ...single, cache: { read: 0.002 } }])).toMatchObject({ ok: false, reason: 'cost-unknown' })
+    expect(validateCatalogCost([{ ...single, output: 9 }])).toMatchObject({ ok: false, reason: 'cost-not-allowlisted' })
     expect(validateCatalogCost([{ input: 0, output: 0, cache: { read: 0, write: 0 } }])).toMatchObject({ ok: false, reason: 'cost-not-allowlisted' })
   })
 
@@ -109,21 +109,42 @@ describe('F2B0 real-run guard', () => {
   })
 
   it('accepts only the exact native primary request, one per session, with exact model/body and redirect denial', () => {
-    expect(validateNativeRequest(exactRequest)).toMatchObject({ ok: true, model: 'deepseek-v4.1-flash' })
+    expect(validateNativeRequest(exactRequest)).toMatchObject({ ok: true, model: 'muse-spark-1.3-contributor' })
     for (const change of [
       { providerID: 'openai' },
       { modelID: 'other-free-or-paid' },
       { kind: 'title' },
-      { url: 'http://opencode.ai/inference/openai/v1/chat/completions' },
-      { url: 'https://opencode.ai/inference/openai/v1/chat/completions?redirect=1' },
-      { url: 'https://attacker.invalid/inference/openai/v1/chat/completions' },
+      { url: 'http://opencode.ai/inference/go/openai/v1/responses' },
+      { url: 'https://opencode.ai/inference/go/openai/v1/responses?redirect=1' },
+      { url: 'https://attacker.invalid/inference/go/openai/v1/responses' },
       { sessionRequestCount: 2 },
       { redirect: 'follow' },
-      { body: { ...exactRequest.body, model: 'deepseek-v4.1-flash-free' } },
+      { body: { ...exactRequest.body, model: 'muse-spark-1.3-contributor-free' } },
+      { body: { model: 'muse-spark-1.3-contributor', tools: [] } },
       { body: { ...exactRequest.body, tools: [{ name: 'write' }] } },
       { body: { ...exactRequest.body, tools: {} } },
       { body: { ...exactRequest.body, tool_choice: 'auto' } },
     ]) expect(validateNativeRequest({ ...exactRequest, ...change }).ok).toBe(false)
+  })
+
+  it('accepts only the native responses shape for muse-spark and refuses the legacy chat/completions shape', () => {
+    const responsesRequest = {
+      providerID: 'opencode-go',
+      modelID: 'muse-spark-1.3-contributor',
+      kind: 'primary',
+      url: 'https://opencode.ai/inference/go/openai/v1/responses',
+      method: 'POST',
+      sessionRequestCount: 1,
+      redirect: 'error',
+      body: { model: 'muse-spark-1.3-contributor', input: 'synthetic', tools: [] },
+    }
+    expect(validateNativeRequest(responsesRequest)).toMatchObject({ ok: true, model: 'muse-spark-1.3-contributor' })
+    // Legacy chat/completions URL with the new model is refused (url-mismatch).
+    expect(validateNativeRequest({ ...responsesRequest, url: 'https://opencode.ai/inference/go/openai/v1/chat/completions' }).ok).toBe(false)
+    // Messages-based body is refused even on the responses endpoint.
+    expect(validateNativeRequest({ ...responsesRequest, body: { model: 'muse-spark-1.3-contributor', messages: [{ role: 'user', content: 'synthetic' }], tools: [] } }).ok).toBe(false)
+    // Missing input is refused.
+    expect(validateNativeRequest({ ...responsesRequest, body: { model: 'muse-spark-1.3-contributor', tools: [] } }).ok).toBe(false)
   })
 
   it('stops on provider auth/payment/quota/transport failures but not schema-invalid model text', () => {
@@ -134,12 +155,21 @@ describe('F2B0 real-run guard', () => {
     expect(classifyProviderFailure({ kind: 'schema-invalid', reason: 'invalid-json' })).toMatchObject({ stop: false, category: 'schema-invalid' })
   })
 
-  it('fails immediately on loopback-server 401/403 but retries only connection-level readiness failures', () => {
+  it('fails closed on loopback-server 401/403 and on connection-level readiness failures (no-retry-controlled: no inference retry)', () => {
+    // Branch no-retry-controlled: local connection/readiness failures are
+    // fail-closed for the inference layer (retry:false, fatal:true). The only
+    // bounded wait is the pre-prompt server.info() poll in startServer, gated
+    // by isReadinessPollRetriable(), which never resends a prompt. This test
+    // replaces the former expectation that preserved retry:true.
     expect(classifyLocalServerFailure({ status: 401 })).toMatchObject({ retry: false, fatal: true, category: 'local-auth', status: 401 })
     expect(classifyLocalServerFailure({ response: { status: 403 } })).toMatchObject({ retry: false, fatal: true, category: 'local-auth', status: 403 })
-    expect(classifyLocalServerFailure({ code: 'ECONNREFUSED' })).toMatchObject({ retry: true, fatal: false, category: 'connection' })
-    expect(classifyLocalServerFailure({ cause: { code: 'ETIMEDOUT' } })).toMatchObject({ retry: true, fatal: false, category: 'connection' })
+    expect(classifyLocalServerFailure({ code: 'ECONNREFUSED' })).toMatchObject({ retry: false, fatal: true, category: 'connection' })
+    expect(classifyLocalServerFailure({ cause: { code: 'ETIMEDOUT' } })).toMatchObject({ retry: false, fatal: true, category: 'connection' })
+    for (const code of ['ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN']) {
+      expect(classifyLocalServerFailure({ code })).toMatchObject({ retry: false, fatal: true, category: 'connection' })
+    }
     expect(classifyLocalServerFailure({ status: 503 })).toMatchObject({ retry: false, fatal: true, category: 'local-http', status: 503 })
+    expect(classifyLocalServerFailure({ code: 'SOME_UNKNOWN' })).toMatchObject({ retry: false, fatal: true, category: 'local-client' })
   })
 
   it('extracts actual JSON-lines text and usage without synthesizing assistant output', () => {
@@ -343,20 +373,20 @@ describe('F2B0 real-run guard', () => {
     expect(parseExecutionMode([])).toMatchObject({ help: true, execute: false })
     expect(parseExecutionMode(['--preflight-only'])).toMatchObject({ preflightOnly: true, execute: false })
     expect(parseExecutionMode(['--self-test-guard'])).toMatchObject({ selfTestGuard: true, execute: false })
-    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash'])).toThrow('quota confirmation')
-    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--smoke-only'])).toThrow('Extra Usage confirmation')
-    expect(parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toMatchObject({ execute: true, confirmation: true, quotaConfirmation: true, extraUsageConfirmation: true, smokeOnly: true })
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor'])).toThrow('quota confirmation')
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--smoke-only'])).toThrow('Extra Usage confirmation')
+    expect(parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toMatchObject({ execute: true, confirmation: true, quotaConfirmation: true, extraUsageConfirmation: true, smokeOnly: true })
     expect(() => parseExecutionMode(['--smoke-only'])).toThrow('requires --execute-real')
-    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only', '--resume=prior-run'])).toThrow('cannot be combined')
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only', '--resume=prior-run'])).toThrow('cannot be combined')
     expect(parseExecutionMode(['--export-stopped-run=run-id'])).toMatchObject({ exportStoppedRunID: 'run-id', execute: false })
     expect(() => parseExecutionMode(['--execute-real'])).toThrow('exact confirmation')
     expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode/deepseek-v4.1-flash-free'])).toThrow('exact confirmation')
-    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available'])).toThrow('Extra Usage confirmation')
-    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled'])).toThrow('first real F2B0 invocation must use --smoke-only')
-    expect(parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toMatchObject({ execute: true, confirmation: true, quotaConfirmation: true, extraUsageConfirmation: true })
-    expect(() => parseExecutionMode(['--preflight-only', '--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toThrow('cannot be combined')
-    expect(() => parseExecutionMode(['--self-test-guard', '--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toThrow('cannot be combined')
-    expect(() => parseExecutionMode(['--export-stopped-run=run-id', '--execute-real', '--confirm-model=opencode-go/deepseek-v4.1-flash', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled'])).toThrow('requires only a safe run-id')
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available'])).toThrow('Extra Usage confirmation')
+    expect(() => parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled'])).toThrow('first real F2B0 invocation must use --smoke-only')
+    expect(parseExecutionMode(['--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toMatchObject({ execute: true, confirmation: true, quotaConfirmation: true, extraUsageConfirmation: true })
+    expect(() => parseExecutionMode(['--preflight-only', '--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toThrow('cannot be combined')
+    expect(() => parseExecutionMode(['--self-test-guard', '--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled', '--smoke-only'])).toThrow('cannot be combined')
+    expect(() => parseExecutionMode(['--export-stopped-run=run-id', '--execute-real', '--confirm-model=opencode-go/muse-spark-1.3-contributor', '--confirm-go-quota-available', '--confirm-go-extra-usage-disabled'])).toThrow('requires only a safe run-id')
   })
 
   it('redacts credential values while preserving token-usage metadata', () => {

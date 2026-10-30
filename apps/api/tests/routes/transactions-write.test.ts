@@ -50,6 +50,24 @@ describe('POST /transactions/expense', () => {
     expect(res.json().kind).toBe('expense');
   });
 
+  it('preserves the supplied description casing for distinct expenses', async () => {
+    for (const description of ['mercado', 'Mercado']) {
+      const response = await s.app.inject({
+        method: 'POST',
+        url: '/transactions/expense',
+        headers: { 'x-device-token': TOKEN_A, 'content-type': 'application/json', 'idempotency-key': crypto.randomUUID() },
+        payload: { description, amountCents: 1500, date: isoDate, accountId: s.accountId, categoryId: s.categoryId },
+      });
+      expect(response.statusCode).toBe(201);
+      expect(response.json().description).toBe(description);
+    }
+    const list = await s.app.inject({ method: 'GET', url: '/transactions', headers: { 'x-device-token': TOKEN_A } });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().items.map((item: { description: string }) => item.description)).toEqual(
+      expect.arrayContaining(['mercado', 'Mercado']),
+    );
+  });
+
   it('rejects amount <= 0', async () => {
     const res = await s.app.inject({
       method: 'POST',

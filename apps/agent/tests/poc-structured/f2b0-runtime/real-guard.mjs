@@ -1,9 +1,9 @@
 export const LEGACY_FREE_MODEL = Object.freeze({ providerID: 'opencode', modelID: 'deepseek-v4.1-flash-free' })
 export const LEGACY_FREE_URL = 'https://opencode.ai/inference/openai/v1/chat/completions'
-export const REAL_MODEL = Object.freeze({ providerID: 'opencode-go', modelID: 'deepseek-v4.1-flash' })
-export const REAL_URL = 'https://opencode.ai/inference/go/openai/v1/chat/completions'
+export const REAL_MODEL = Object.freeze({ providerID: 'opencode-go', modelID: 'muse-spark-1.3-contributor' })
+export const REAL_URL = 'https://opencode.ai/inference/go/openai/v1/responses'
 export const MAX_CASES = 23
-export const REAL_CONFIRMATION = '--confirm-model=opencode-go/deepseek-v4.1-flash'
+export const REAL_CONFIRMATION = '--confirm-model=opencode-go/muse-spark-1.3-contributor'
 export const GO_QUOTA_CONFIRMATION = '--confirm-go-quota-available'
 export const GO_EXTRA_USAGE_CONFIRMATION = '--confirm-go-extra-usage-disabled'
 const APPROVED_INFRA_ENDINGS = new Map([
@@ -13,10 +13,24 @@ export const AUTHORIZED_RETRY_CASE_ID = 'F1-B005'
 export const AUTHORIZED_RETRY_SOURCE_RUN_ID = '2026-10-27T15-19-19-424Z-5620'
 export const AUTHORIZED_CONSUMED_SMOKE_CASE_ID = 'F1-B005'
 export const AUTHORIZED_CONSUMED_SMOKE_RUN_ID = '2026-10-29T10-55-14-534Z-21048'
+export const AUTHORIZED_FRESH_SMOKE_CASE_ID = 'F1-B005'
+export const AUTHORIZED_FRESH_SMOKE_SOURCE_MARKER = 'fresh'
 export const AUTHORIZED_CONSUMED_SMOKE_RESERVATION_PATH = `reservations/${REAL_MODEL.providerID}-${REAL_MODEL.modelID}/${AUTHORIZED_CONSUMED_SMOKE_CASE_ID}.authorized-retry-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`
 export const AUTHORIZED_REMAINING22_SOURCE_RUN_ID = '2026-10-29T12-26-34-600Z-4324'
+export const AUTHORIZED_REMAINING22_SOURCE_RUN_ID_2 = '2026-10-29T20-54-25-649Z-6500'
+export const AUTHORIZED_REMAINING22_SOURCE_RUN_ID_3 = '2026-10-29T22-34-44-294Z-10836'
+export const AUTHORIZED_BOOTSTRAP_FRESH_CHAIN_CASE_ID = 'F1-B005'
+export const BOOTSTRAP_FRESH_CHAIN_FLAG = '--bootstrap-fresh-chain-F1-B005'
+export const BOOTSTRAP_FRESH_CHAIN_AUTHORIZATION = 'docs/decisions/2026-10-29-fechar-f2.md F2-muse-spark-excecao (POC sintetica, opt-in/regiao OK, teto SPEC S7)'
+export const AUTHORIZED_REMAINING22_SOURCE_RUN_IDS = Object.freeze([AUTHORIZED_REMAINING22_SOURCE_RUN_ID, AUTHORIZED_REMAINING22_SOURCE_RUN_ID_2, AUTHORIZED_REMAINING22_SOURCE_RUN_ID_3])
+export function isAuthorizedRemaining22SourceRunID(sourceRunID) {
+  return sourceRunID === AUTHORIZED_REMAINING22_SOURCE_RUN_ID || sourceRunID === AUTHORIZED_REMAINING22_SOURCE_RUN_ID_2 || sourceRunID === AUTHORIZED_REMAINING22_SOURCE_RUN_ID_3
+}
+export const AUTHORIZED_REMAINING22_S2_RESERVATION_PATH = `reservations/${REAL_MODEL.providerID}-${REAL_MODEL.modelID}/F1-B005.fresh-smoke-${AUTHORIZED_REMAINING22_SOURCE_RUN_ID_2}.json`
+export const AUTHORIZED_REMAINING22_S4_RESERVATION_PATH = `reservations/${REAL_MODEL.providerID}-${REAL_MODEL.modelID}/F1-B005.fresh-smoke-${AUTHORIZED_REMAINING22_SOURCE_RUN_ID_3}.json`
 export const REMAINING22_EXCLUDED_CASE_ID = 'F1-B005'
 export const REMAINING22_EXPECTED_COUNT = 22
+export const REMAINING22_SUPERSEDE_SUFFIX = '-r2'
 export const AUTHORIZED_REMAINING22_RESERVATION_PATH = `reservations/${REAL_MODEL.providerID}-${REAL_MODEL.modelID}/${REMAINING22_EXCLUDED_CASE_ID}.consumed-smoke-${AUTHORIZED_CONSUMED_SMOKE_RUN_ID}.json`
 const normalizeReservationSeparators = (value) => String(value).replace(/\\/g, '/')
 const stableStringify = (value) => {
@@ -28,10 +42,15 @@ const RETRY_CASE_FLAG = '--retry-authorized-case='
 const RETRY_RUN_FLAG = '--retry-authorized-run='
 const CONSUMED_SMOKE_CASE_FLAG = '--consumed-smoke-authorized-case='
 const CONSUMED_SMOKE_RUN_FLAG = '--consumed-smoke-authorized-run='
+const FRESH_SMOKE_CASE_FLAG = '--fresh-smoke-authorized-case='
+const FRESH_SMOKE_RUN_FLAG = '--fresh-smoke-authorized-run='
 const REMAINING22_RUN_FLAG = '--remaining22-authorized-run='
+// Single-price model (muse-spark POC swap): one allowlisted tier, no off-peak/peak
+// price split. The deepseek tiers were removed (clean swap: the harness has a
+// single active model). A tier label, when present, must still be a known Go
+// label but is not price-bearing.
 const APPROVED_GO_CATALOG_TIERS = [
-  { input: 0.15, output: 0.6, read: 0.003, write: 0 },
-  { input: 0.3, output: 1.2, read: 0.006, write: 0 },
+  { input: 0.10, output: 0.20, read: 0.002, write: 0 },
 ]
 
 export function parseExecutionMode(argv) {
@@ -54,17 +73,23 @@ export function parseExecutionMode(argv) {
   const consumedSmokeRunID = consumedSmokeRunArg?.slice(CONSUMED_SMOKE_RUN_FLAG.length)
   const remaining22Arg = argv.find((arg) => arg.startsWith(REMAINING22_RUN_FLAG))
   const remaining22RunID = remaining22Arg?.slice(REMAINING22_RUN_FLAG.length)
+  const freshSmokeCaseArg = argv.find((arg) => arg.startsWith(FRESH_SMOKE_CASE_FLAG))
+  const freshSmokeRunArg = argv.find((arg) => arg.startsWith(FRESH_SMOKE_RUN_FLAG))
+  const freshSmokeCaseID = freshSmokeCaseArg?.slice(FRESH_SMOKE_CASE_FLAG.length)
+  const freshSmokeRunID = freshSmokeRunArg?.slice(FRESH_SMOKE_RUN_FLAG.length)
   const exportArg = argv.find((arg) => arg.startsWith('--export-stopped-run='))
   const exportStoppedRunID = exportArg?.slice('--export-stopped-run='.length)
-  if (argv.includes('--help') || (!execute && !preflightOnly && !selfTestGuard && !smokeOnly && !resumeID && !exportStoppedRunID && !retryCaseID && !retryRunID && !consumedSmokeCaseID && !consumedSmokeRunID && remaining22RunID === undefined)) return { help: true, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID, retryCaseID, retryRunID, consumedSmokeCaseID, consumedSmokeRunID, remaining22RunID }
+  const bootstrapFreshChain = argv.includes(BOOTSTRAP_FRESH_CHAIN_FLAG)
+  if (argv.includes('--help') || (!execute && !preflightOnly && !selfTestGuard && !smokeOnly && !resumeID && !exportStoppedRunID && !retryCaseID && !retryRunID && !consumedSmokeCaseID && !consumedSmokeRunID && !freshSmokeCaseID && !freshSmokeRunID && remaining22RunID === undefined && !bootstrapFreshChain)) return { help: true, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID, retryCaseID, retryRunID, consumedSmokeCaseID, consumedSmokeRunID, freshSmokeCaseID, freshSmokeRunID, remaining22RunID, bootstrapFreshChain }
   if (remaining22RunID !== undefined) {
-    if (remaining22RunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) throw new Error(`remaining22 campaign is limited to source ${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`)
+    if (!isAuthorizedRemaining22SourceRunID(remaining22RunID)) throw new Error(`remaining22 campaign is limited to source allowlist [${AUTHORIZED_REMAINING22_SOURCE_RUN_IDS.join(',')}]`)
     if (!/^[a-zA-Z0-9._-]{1,80}$/.test(remaining22RunID)) throw new Error('remaining22 source run id is not a safe run-id')
     if (!execute || !confirmation || !quotaConfirmation || !extraUsageConfirmation) throw new Error('remaining22 campaign requires --execute-real plus exact confirmations')
     if (smokeOnly) throw new Error('remaining22 campaign cannot be combined with --smoke-only')
     if (resumeID || preflightOnly || selfTestGuard || exportStoppedRunID) throw new Error('remaining22 campaign cannot be combined with preflight, self-test, resume, or export')
     if (retryCaseID !== undefined || retryRunID !== undefined) throw new Error('remaining22 campaign is incompatible with authorized retry flags')
     if (consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined) throw new Error('remaining22 campaign is incompatible with consumed smoke flags')
+    if (freshSmokeCaseID !== undefined || freshSmokeRunID !== undefined) throw new Error('remaining22 campaign is incompatible with fresh smoke flags')
   }
   if ((retryCaseID !== undefined || retryRunID !== undefined)) {
     if (retryCaseID === undefined || retryRunID === undefined) throw new Error('authorized retry requires both case and run: --retry-authorized-case plus --retry-authorized-run')
@@ -72,6 +97,7 @@ export function parseExecutionMode(argv) {
     if (!execute || !smokeOnly || !confirmation || !quotaConfirmation || !extraUsageConfirmation) throw new Error('authorized retry requires --execute-real --smoke-only plus exact confirmations')
     if (resumeID || preflightOnly || selfTestGuard || exportStoppedRunID) throw new Error('authorized retry cannot be combined with preflight, self-test, resume, or export')
     if (consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined) throw new Error('authorized retry is incompatible with consumed smoke authorization flags')
+    if (freshSmokeCaseID !== undefined || freshSmokeRunID !== undefined) throw new Error('authorized retry is incompatible with fresh smoke authorization flags')
     if (remaining22RunID !== undefined) throw new Error('authorized retry is incompatible with remaining22 campaign flags')
     if (!/^[a-zA-Z0-9._-]{1,80}$/.test(retryRunID)) throw new Error('authorized retry run id is not a safe run-id')
   }
@@ -81,10 +107,29 @@ export function parseExecutionMode(argv) {
     if (!execute || !smokeOnly || !confirmation || !quotaConfirmation || !extraUsageConfirmation) throw new Error('consumed smoke requires --execute-real --smoke-only plus exact confirmations')
     if (resumeID || preflightOnly || selfTestGuard || exportStoppedRunID) throw new Error('consumed smoke cannot be combined with preflight, self-test, resume, or export')
     if (retryCaseID !== undefined || retryRunID !== undefined) throw new Error('consumed smoke is incompatible with authorized retry flags')
+    if (freshSmokeCaseID !== undefined || freshSmokeRunID !== undefined) throw new Error('consumed smoke is incompatible with fresh smoke authorization flags')
     if (remaining22RunID !== undefined) throw new Error('consumed smoke is incompatible with remaining22 campaign flags')
     if (!/^[a-zA-Z0-9._-]{1,80}$/.test(consumedSmokeRunID)) throw new Error('consumed smoke run id is not a safe run-id')
   }
-  if (exportStoppedRunID && (execute || preflightOnly || selfTestGuard || smokeOnly || resumeID || retryCaseID || retryRunID || consumedSmokeCaseID || consumedSmokeRunID || remaining22RunID !== undefined || quotaConfirmation || extraUsageConfirmation || !/^[a-zA-Z0-9._-]{1,80}$/.test(exportStoppedRunID))) throw new Error('--export-stopped-run requires only a safe run-id and performs no server/catalog call')
+  if ((freshSmokeCaseID !== undefined || freshSmokeRunID !== undefined)) {
+    if (freshSmokeCaseID === undefined || freshSmokeRunID === undefined) throw new Error('fresh smoke requires both case and run: --fresh-smoke-authorized-case plus --fresh-smoke-authorized-run')
+    if (freshSmokeCaseID !== AUTHORIZED_FRESH_SMOKE_CASE_ID || freshSmokeRunID !== AUTHORIZED_FRESH_SMOKE_SOURCE_MARKER) throw new Error(`fresh smoke is limited to F1-B005 from ${AUTHORIZED_FRESH_SMOKE_SOURCE_MARKER}`)
+    if (!execute || !smokeOnly || !confirmation || !quotaConfirmation || !extraUsageConfirmation) throw new Error('fresh smoke requires --execute-real --smoke-only plus exact confirmations')
+    if (resumeID || preflightOnly || selfTestGuard || exportStoppedRunID) throw new Error('fresh smoke cannot be combined with preflight, self-test, resume, or export')
+    if (retryCaseID !== undefined || retryRunID !== undefined) throw new Error('fresh smoke is incompatible with authorized retry flags')
+    if (consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined) throw new Error('fresh smoke is incompatible with consumed smoke authorization flags')
+    if (remaining22RunID !== undefined) throw new Error('fresh smoke is incompatible with remaining22 campaign flags')
+    if (!/^[a-zA-Z0-9._-]{1,80}$/.test(freshSmokeRunID)) throw new Error('fresh smoke run id is not a safe run-id')
+  }
+  if (exportStoppedRunID && (execute || preflightOnly || selfTestGuard || smokeOnly || resumeID || retryCaseID || retryRunID || consumedSmokeCaseID || consumedSmokeRunID || freshSmokeCaseID || freshSmokeRunID || remaining22RunID !== undefined || quotaConfirmation || extraUsageConfirmation || !/^[a-zA-Z0-9._-]{1,80}$/.test(exportStoppedRunID))) throw new Error('--export-stopped-run requires only a safe run-id and performs no server/catalog call')
+if (bootstrapFreshChain) {
+  if (!execute || !smokeOnly || !confirmation || !quotaConfirmation || !extraUsageConfirmation) throw new Error('bootstrap fresh chain requires --execute-real --smoke-only plus exact confirmations')
+  if (resumeID || preflightOnly || selfTestGuard || exportStoppedRunID) throw new Error('bootstrap fresh chain cannot be combined with preflight, self-test, resume, or export')
+  if (retryCaseID !== undefined || retryRunID !== undefined) throw new Error('bootstrap fresh chain is incompatible with authorized retry flags')
+  if (consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined) throw new Error('bootstrap fresh chain is incompatible with consumed smoke flags')
+  if (freshSmokeCaseID !== undefined || freshSmokeRunID !== undefined) throw new Error('bootstrap fresh chain is incompatible with fresh smoke flags')
+  if (remaining22RunID !== undefined) throw new Error('bootstrap fresh chain is incompatible with remaining22 campaign flags')
+}
   if (execute && !confirmation) throw new Error(`real inference requires exact confirmation ${REAL_CONFIRMATION}`)
   if (execute && !quotaConfirmation) throw new Error(`real Go inference requires explicit quota confirmation ${GO_QUOTA_CONFIRMATION}`)
   if (execute && !extraUsageConfirmation) throw new Error(`real Go inference requires explicit Extra Usage confirmation ${GO_EXTRA_USAGE_CONFIRMATION}`)
@@ -94,7 +139,8 @@ export function parseExecutionMode(argv) {
   if ((preflightOnly || selfTestGuard) && (execute || resumeID || remaining22RunID !== undefined || (preflightOnly && selfTestGuard))) throw new Error('preflight/self-test modes cannot be combined with real execution/resume/remaining22 or each other')
   if (resumeID && (!execute || !/^[a-zA-Z0-9._-]{1,80}$/.test(resumeID))) throw new Error('--resume requires --execute-real and a safe run-id')
   if (resumeID && remaining22RunID !== undefined) throw new Error('remaining22 campaign cannot be combined with preflight, self-test, resume, or export')
-  return { help: false, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID, retryCaseID, retryRunID, consumedSmokeCaseID, consumedSmokeRunID, remaining22RunID }
+  if ((freshSmokeCaseID !== undefined || freshSmokeRunID !== undefined) && (preflightOnly || selfTestGuard || resumeID || exportStoppedRunID || remaining22RunID !== undefined)) throw new Error('fresh smoke cannot be combined with preflight, self-test, resume, remaining22, or export')
+  return { help: false, execute, preflightOnly, selfTestGuard, smokeOnly, confirmation, quotaConfirmation, extraUsageConfirmation, resumeID, exportStoppedRunID, retryCaseID, retryRunID, consumedSmokeCaseID, consumedSmokeRunID, freshSmokeCaseID, freshSmokeRunID, remaining22RunID, bootstrapFreshChain }
 }
 
 export function validateCatalogCost(cost) {
@@ -112,8 +158,6 @@ export function validateCatalogCost(cost) {
       && tier.cache.read === approved.read
       && tier.cache.write === approved.write)
     if (!matched || (tier.tier !== undefined && !['off-peak', 'peak'].includes(tier.tier))) return { ok: false, reason: 'cost-not-allowlisted' }
-    if (tier.tier === 'off-peak' && matched.input !== 0.15) return { ok: false, reason: 'cost-tier-mismatch' }
-    if (tier.tier === 'peak' && matched.input !== 0.3) return { ok: false, reason: 'cost-tier-mismatch' }
     validated.push(matched)
   }
   if (new Set(validated.map((tier) => tier.input)).size !== validated.length) return { ok: false, reason: 'cost-tier-duplicate' }
@@ -200,6 +244,10 @@ export function validateNativeRequest(request) {
   if (url.href !== REAL_URL || url.username || url.password || url.search || url.hash) return { ok: false, reason: 'url-mismatch' }
   const body = request.body
   if (!body || body.model !== REAL_MODEL.modelID) return { ok: false, reason: 'body-model-mismatch' }
+  // Native responses shape: `input` carries the prompt; the legacy
+  // chat/completions `messages` array must never appear here.
+  if (!('input' in body)) return { ok: false, reason: 'body-input-missing' }
+  if ('messages' in body) return { ok: false, reason: 'body-messages-present' }
   if ('tools' in body && (!Array.isArray(body.tools) || body.tools.length !== 0)) return { ok: false, reason: 'tools-present' }
   if ('tool_choice' in body && body.tool_choice !== 'none') return { ok: false, reason: 'tool-choice-present' }
   return { ok: true, model: body.model }
@@ -223,9 +271,25 @@ export function classifyLocalServerFailure(error = {}) {
   }
   const codes = [error.code, error.cause?.code, error.cause?.cause?.code].filter((value) => typeof value === 'string')
   if (codes.some((code) => ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN'].includes(code))) {
-    return { retry: true, fatal: false, category: 'connection' }
+    // Branch no-retry-controlled: local connection/readiness failures are
+    // fail-closed for the inference layer (retry:false). A bounded
+    // server-readiness poll (server.info only, never a prompt resend) may
+    // still wait in startServer via isReadinessPollRetriable(); no prompt,
+    // session, or model call is ever repeated after a local failure.
+    return { retry: false, fatal: true, category: 'connection' }
   }
   return { retry: false, fatal: true, category: 'local-client' }
+}
+
+// Branch no-retry-controlled: readiness-only poll predicate. server.info()
+// carries no prompt, session, or model call, so a bounded wait here cannot
+// repeat inference. Any failure once a prompt path is reachable aborts via
+// classifyLocalServerFailure (retry:false, fatal:true) with zero resends.
+export function isReadinessPollRetriable(error = {}) {
+  const status = Number(error.status ?? error.statusCode ?? error.response?.status ?? error.cause?.status)
+  if (Number.isFinite(status) && status > 0) return false
+  const codes = [error.code, error.cause?.code, error.cause?.cause?.code].filter((value) => typeof value === 'string')
+  return codes.some((code) => ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN'].includes(code))
 }
 
 const observedNumber = (value) => typeof value === 'number' && Number.isFinite(value)
@@ -362,8 +426,85 @@ export function planConsumedSmoke({ caseIDs, unresolvedReservations, consumedSmo
   }
 }
 
+export function planFreshSmoke({ caseIDs, unresolvedReservations, freshSmokeCaseID } = {}) {
+  if (freshSmokeCaseID !== AUTHORIZED_FRESH_SMOKE_CASE_ID) throw new Error('fresh smoke is limited to F1-B005')
+  if (!Array.isArray(unresolvedReservations) || unresolvedReservations.length !== 1 || unresolvedReservations[0] !== AUTHORIZED_FRESH_SMOKE_CASE_ID) throw new Error('fresh smoke requires exactly the F1-B005 unresolved reservation')
+  if (!Array.isArray(caseIDs) || !caseIDs.includes(AUTHORIZED_FRESH_SMOKE_CASE_ID)) throw new Error('fresh smoke case is not in the manifest')
+  return {
+    run: [AUTHORIZED_FRESH_SMOKE_CASE_ID],
+    deferred: caseIDs.filter((id) => id !== AUTHORIZED_FRESH_SMOKE_CASE_ID),
+  }
+}
+
+export function isAuthorizedFreshSmokeSource({ caseID, sourceMarker } = {}) {
+  if (caseID !== AUTHORIZED_FRESH_SMOKE_CASE_ID || sourceMarker !== AUTHORIZED_FRESH_SMOKE_SOURCE_MARKER) return { ok: false, reason: 'not-authorized-fresh-pair' }
+  return { ok: true }
+}
+
+export function isBootstrapFreshChainAllowed({ caseID, reservationIDs = [], freshReservations = [], consumedReservations = [], retryReservations = [], remaining22Reservations = [], campaignClaims = [] } = {}) {
+  if (caseID !== AUTHORIZED_BOOTSTRAP_FRESH_CHAIN_CASE_ID) return { ok: false, reason: 'not-authorized-bootstrap-case' }
+  if (reservationIDs.length > 0) return { ok: false, reason: 'bootstrap-single-use: slug already has case reservations' }
+  if (freshReservations.length > 0) return { ok: false, reason: 'bootstrap-single-use: slug already has fresh smoke reservations' }
+  if (consumedReservations.length > 0) return { ok: false, reason: 'bootstrap-single-use: slug already has consumed smoke reservations' }
+  if (retryReservations.length > 0) return { ok: false, reason: 'bootstrap-single-use: slug already has authorized retry reservations' }
+  if (remaining22Reservations.length > 0) return { ok: false, reason: 'bootstrap-single-use: slug already has remaining22 reservations' }
+  if (campaignClaims.length > 0) return { ok: false, reason: 'bootstrap-single-use: slug already has remaining22 campaign claims' }
+  return { ok: true }
+}
+
 export function applyConsumedSmokeTerminalPolicy(smokeOutcome) {
   return { ...smokeOutcome, continuationAllowed: false }
+}
+
+// Branch test/ted-f2b0-no-retry-controlled: controlled fresh-smoke retry.
+// A new fresh smoke is allowed ONLY when every prior fresh attempt in this
+// slug is a terminal FAIL/INCONCLUSIVE (SMOKE_FAILED_STOP /
+// SMOKE_INCONCLUSIVE_STOP). A single PASS (casePassed===true or any
+// SMOKE_PASS* status) is preserved forever. A missing/unreadable prior
+// smoke-evaluation.json refuses fail-closed (no inference). Spend guard:
+// at most MAX_FRESH_SMOKE_ATTEMPTS fresh attempts per slug without a new
+// explicit decision; the 3rd attempt is refused even when priors are FAIL.
+// F2-completar-8 (docs/decisions/2026-10-29-fechar-f2.md): operator authorizes
+// a 3rd fresh smoke ONLY for the muse-spark slug
+// (opencode-go-muse-spark-1.3-contributor) to complete the 8 missing cases
+// of the stopped B3. Deepseek/legacy slug keeps the baseline ceiling of 2.
+// The 4th attempt is refused even with FAILs; a PASS always preserves.
+export const MAX_FRESH_SMOKE_ATTEMPTS = 2
+export const MAX_FRESH_SMOKE_ATTEMPTS_MUSE_SPARK = 3
+export const MUSE_SPARK_SLUG = 'opencode-go-muse-spark-1.3-contributor'
+export const LEGACY_DEEPSEEK_SLUG = 'opencode-deepseek-v4.1-flash-free'
+export function getMaxFreshSmokeAttempts(slug) {
+  return slug === MUSE_SPARK_SLUG ? MAX_FRESH_SMOKE_ATTEMPTS_MUSE_SPARK : MAX_FRESH_SMOKE_ATTEMPTS
+}
+export const FRESH_SMOKE_RETRY_FAIL_STATUSES = Object.freeze(['SMOKE_FAILED_STOP', 'SMOKE_INCONCLUSIVE_STOP'])
+
+export function isFreshSmokeEvaluationPass(evaluation) {
+  if (!evaluation || typeof evaluation !== 'object') return false
+  if (evaluation.casePassed === true) return true
+  const status = evaluation.status
+  return typeof status === 'string' && status.startsWith('SMOKE_PASS')
+}
+
+export function evaluateFreshSmokeRetry(priorEvaluations, slugOrOptions) {
+  const maxAttempts = typeof slugOrOptions === 'number'
+    ? slugOrOptions
+    : typeof slugOrOptions === 'string'
+      ? getMaxFreshSmokeAttempts(slugOrOptions)
+      : slugOrOptions && typeof slugOrOptions === 'object' && typeof slugOrOptions.maxAttempts === 'number'
+        ? slugOrOptions.maxAttempts
+        : slugOrOptions && typeof slugOrOptions === 'object' && typeof slugOrOptions.slug === 'string'
+          ? getMaxFreshSmokeAttempts(slugOrOptions.slug)
+          : MAX_FRESH_SMOKE_ATTEMPTS
+  if (!Array.isArray(priorEvaluations)) return { ok: false, reason: 'fresh-smoke-evaluations-invalid' }
+  if (priorEvaluations.length >= maxAttempts) return { ok: false, reason: 'fresh-smoke-attempt-limit' }
+  for (const evaluation of priorEvaluations) {
+    if (!evaluation || typeof evaluation !== 'object') return { ok: false, reason: 'fresh-smoke-evaluation-missing' }
+    if (isFreshSmokeEvaluationPass(evaluation)) return { ok: false, reason: 'fresh-smoke-pass-preserved' }
+  }
+  for (const evaluation of priorEvaluations) {
+    if (!FRESH_SMOKE_RETRY_FAIL_STATUSES.includes(evaluation.status)) return { ok: false, reason: 'fresh-smoke-status-not-retryable' }
+  }
+  return { ok: true }
 }
 
 export function isAuthorizedConsumedSingleSmokeSource({ caseID, runID, reservationRecord, sourceResult } = {}) {
@@ -408,7 +549,7 @@ export function isAuthorizedConsumedSingleSmokeSource({ caseID, runID, reservati
 }
 
 export function planRemaining22({ caseIDs, sourceRunID } = {}) {
-  if (sourceRunID !== undefined && sourceRunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) throw new Error(`remaining22 campaign is limited to source ${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`)
+  if (sourceRunID !== undefined && !isAuthorizedRemaining22SourceRunID(sourceRunID)) throw new Error(`remaining22 campaign is limited to source allowlist [${AUTHORIZED_REMAINING22_SOURCE_RUN_IDS.join(',')}]`)
   if (!Array.isArray(caseIDs) || caseIDs.length !== MAX_CASES) throw new Error('remaining22 campaign requires the complete 23-case manifest')
   if (new Set(caseIDs).size !== MAX_CASES) throw new Error('remaining22 campaign manifest has duplicate case ID')
   if (!caseIDs.includes(REMAINING22_EXCLUDED_CASE_ID)) throw new Error('remaining22 campaign manifest misses the excluded historic smoke case')
@@ -422,13 +563,32 @@ export function planRemaining22({ caseIDs, sourceRunID } = {}) {
   }
 }
 
+// F2-B4-via-S4 (docs/decisions/2026-10-29-fechar-f2.md): one controlled
+// second claim per source, ONLY when the first claim references a
+// stopped-incomplete run (stopped-summary.json present, evaluation.json
+// absent). Complete campaigns never release a second claim; a third claim
+// (even with two stops) always refuses and requires a new decision. Full
+// 22-case campaign only — no partial/resume path.
+export function isStoppedIncompleteRun({ hasStoppedSummary, hasEvaluation } = {}) {
+  return hasStoppedSummary === true && hasEvaluation === false
+}
+
+export function evaluateRemaining22Supersede({ sourceRunID, baseClaimCount = 0, supersedeClaimCount = 0, priorIsStoppedIncomplete = false } = {}) {
+  if (!isAuthorizedRemaining22SourceRunID(sourceRunID)) return { ok: false, reason: 'not-authorized-source-run' }
+  if (baseClaimCount === 0) return { ok: false, reason: 'no-prior-claim' }
+  if (baseClaimCount > 1) return { ok: false, reason: 'multiple-base-claims-unexpected' }
+  if (supersedeClaimCount > 0) return { ok: false, reason: 'supersede-already-consumed' }
+  if (priorIsStoppedIncomplete !== true) return { ok: false, reason: 'prior-campaign-complete' }
+  return { ok: true }
+}
+
 export function isAuthorizedRemaining22Source({ sourceRunID, manifest, smokeEvaluation, caseResult, catalogPreflight, hookEvents, reservationRecord, canonical } = {}) {
-  if (sourceRunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) return { ok: false, reason: 'not-authorized-source-run' }
+  if (!isAuthorizedRemaining22SourceRunID(sourceRunID)) return { ok: false, reason: 'not-authorized-source-run' }
   if (!canonical || !Array.isArray(canonical.caseIDs) || canonical.caseIDs.length !== MAX_CASES || !Array.isArray(canonical.prompts) || canonical.prompts.length !== MAX_CASES) return { ok: false, reason: 'canonical-missing' }
   const canonicalCampaign = canonical.caseIDs.filter((id) => id !== REMAINING22_EXCLUDED_CASE_ID)
   if (canonicalCampaign.length !== REMAINING22_EXPECTED_COUNT) return { ok: false, reason: 'canonical-campaign-mismatch' }
   if (!manifest) return { ok: false, reason: 'manifest-missing' }
-  if (manifest.runID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) return { ok: false, reason: 'manifest-run-mismatch' }
+  if (manifest.runID !== sourceRunID) return { ok: false, reason: 'manifest-run-mismatch' }
   if (manifest.provider !== REAL_MODEL.providerID || manifest.model !== REAL_MODEL.modelID) return { ok: false, reason: 'manifest-model-mismatch' }
   if (manifest.nativeURL !== REAL_URL && manifest.nativeURL !== undefined) {
     if (manifest.nativeURL !== REAL_URL) return { ok: false, reason: 'manifest-url-mismatch' }
@@ -450,7 +610,7 @@ export function isAuthorizedRemaining22Source({ sourceRunID, manifest, smokeEval
   if (!smokeEvaluation) return { ok: false, reason: 'smoke-evaluation-missing' }
   if (smokeEvaluation.schemaVersion !== 'f2b0-go-single-smoke-v1') return { ok: false, reason: 'smoke-schema-mismatch' }
   if (smokeEvaluation.status !== 'SMOKE_PASS_OPERATOR_ATTESTED_NO_CONTINUATION') return { ok: false, reason: 'smoke-status-mismatch' }
-  if (smokeEvaluation.runID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) return { ok: false, reason: 'smoke-run-mismatch' }
+  if (smokeEvaluation.runID !== sourceRunID) return { ok: false, reason: 'smoke-run-mismatch' }
   if (smokeEvaluation.caseID !== REMAINING22_EXCLUDED_CASE_ID) return { ok: false, reason: 'smoke-case-mismatch' }
   if (smokeEvaluation.providerID !== REAL_MODEL.providerID || smokeEvaluation.modelID !== REAL_MODEL.modelID) return { ok: false, reason: 'smoke-model-mismatch' }
   if (smokeEvaluation.endpoint !== REAL_URL) return { ok: false, reason: 'smoke-endpoint-mismatch' }
@@ -516,11 +676,17 @@ export function isAuthorizedRemaining22Source({ sourceRunID, manifest, smokeEval
   if (stableStringify(caseResult.input) !== stableStringify(canonicalSmokeEntry.input)) return { ok: false, reason: 'result-canonical-input-mismatch' }
   if (!reservationRecord) return { ok: false, reason: 'reservation-missing' }
   if (reservationRecord.caseID !== REMAINING22_EXCLUDED_CASE_ID || reservationRecord.status !== 'reserved') return { ok: false, reason: 'reservation-mismatch' }
-  if (reservationRecord.runID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) return { ok: false, reason: 'reservation-run-mismatch' }
-  if (reservationRecord.consumedSmoke !== true) return { ok: false, reason: 'reservation-not-consumed-smoke' }
-  if (reservationRecord.sourceRunID !== AUTHORIZED_CONSUMED_SMOKE_RUN_ID) return { ok: false, reason: 'reservation-source-mismatch' }
+  if (reservationRecord.runID !== sourceRunID) return { ok: false, reason: 'reservation-run-mismatch' }
+  if (sourceRunID === AUTHORIZED_REMAINING22_SOURCE_RUN_ID) {
+    if (reservationRecord.consumedSmoke !== true) return { ok: false, reason: 'reservation-not-consumed-smoke' }
+    if (reservationRecord.sourceRunID !== AUTHORIZED_CONSUMED_SMOKE_RUN_ID) return { ok: false, reason: 'reservation-source-mismatch' }
+  } else if (sourceRunID === AUTHORIZED_REMAINING22_SOURCE_RUN_ID_2 || sourceRunID === AUTHORIZED_REMAINING22_SOURCE_RUN_ID_3) {
+    if (reservationRecord.freshSmoke !== true) return { ok: false, reason: 'reservation-not-fresh-smoke' }
+    if (reservationRecord.sourceMarker !== AUTHORIZED_FRESH_SMOKE_SOURCE_MARKER) return { ok: false, reason: 'reservation-source-mismatch' }
+  } else return { ok: false, reason: 'not-authorized-source-run' }
   if (typeof reservationRecord.runNonce !== 'string' || reservationRecord.runNonce.length < 8) return { ok: false, reason: 'reservation-nonce-mismatch' }
-  if (typeof caseResult.reservation !== 'string' || normalizeReservationSeparators(caseResult.reservation) !== AUTHORIZED_REMAINING22_RESERVATION_PATH) return { ok: false, reason: 'result-reservation-mismatch' }
+  const expectedReservationPath = sourceRunID === AUTHORIZED_REMAINING22_SOURCE_RUN_ID_2 ? AUTHORIZED_REMAINING22_S2_RESERVATION_PATH : sourceRunID === AUTHORIZED_REMAINING22_SOURCE_RUN_ID_3 ? AUTHORIZED_REMAINING22_S4_RESERVATION_PATH : AUTHORIZED_REMAINING22_RESERVATION_PATH
+  if (typeof caseResult.reservation !== 'string' || normalizeReservationSeparators(caseResult.reservation) !== expectedReservationPath) return { ok: false, reason: 'result-reservation-mismatch' }
   if (!catalogPreflight) return { ok: false, reason: 'catalog-missing' }
   if (catalogPreflight.catalog?.providerID !== REAL_MODEL.providerID || catalogPreflight.catalog?.modelID !== REAL_MODEL.modelID) return { ok: false, reason: 'catalog-model-mismatch' }
   if (catalogPreflight.catalog?.catalogPriceAllowed !== true) return { ok: false, reason: 'catalog-price-mismatch' }
@@ -564,7 +730,7 @@ export function isAuthorizedRemaining22Source({ sourceRunID, manifest, smokeEval
 }
 
 export function buildRemaining22Attestation({ runID, sourceRunID, caseIDs, completedCaseIDs, expectedCampaignCaseIDs, expectedCaseIDs, quotaSource = 'operator-attestation', extraUsageStatus = 'operator-attested-disabled' } = {}) {
-  if (sourceRunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) throw new Error(`remaining22 attestation is limited to source ${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`)
+  if (!isAuthorizedRemaining22SourceRunID(sourceRunID)) throw new Error(`remaining22 attestation is limited to source allowlist [${AUTHORIZED_REMAINING22_SOURCE_RUN_IDS.join(',')}]`)
   if (!Array.isArray(caseIDs) || caseIDs.length !== MAX_CASES) throw new Error('remaining22 attestation requires the complete 23-case manifest')
   if (!Array.isArray(expectedCaseIDs) || JSON.stringify(caseIDs) !== JSON.stringify(expectedCaseIDs)) throw new Error('remaining22 attestation requires the complete canonical 23-case manifest in order')
   if (!Array.isArray(expectedCampaignCaseIDs) || expectedCampaignCaseIDs.length !== REMAINING22_EXPECTED_COUNT) throw new Error('remaining22 attestation requires the 22 canonical campaign IDs in order')
@@ -597,12 +763,17 @@ export function resolveRealExecutionPlan({ caseIDs, existingIDs = [], reservedID
   const retryRunID = options.retryRunID
   const consumedSmokeCaseID = options.consumedSmokeCaseID
   const consumedSmokeRunID = options.consumedSmokeRunID
+  const freshSmokeCaseID = options.freshSmokeCaseID
+  const freshSmokeRunID = options.freshSmokeRunID
   const remaining22RunID = options.remaining22RunID
   const resumeID = options.resumeID
   const smokeOnly = options.smokeOnly === true
   if (remaining22RunID !== undefined && ((retryCaseID !== undefined || retryRunID !== undefined) || (consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined))) throw new Error('remaining22 campaign is incompatible with authorized retry flags')
   if (remaining22RunID !== undefined && ((consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined))) throw new Error('remaining22 campaign is incompatible with consumed smoke flags')
+  if (remaining22RunID !== undefined && (freshSmokeCaseID !== undefined || freshSmokeRunID !== undefined)) throw new Error('remaining22 campaign is incompatible with fresh smoke flags')
   if ((retryCaseID !== undefined || retryRunID !== undefined) && (consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined)) throw new Error('consumed smoke authorization is incompatible with authorized retry flags')
+  if ((retryCaseID !== undefined || retryRunID !== undefined) && (freshSmokeCaseID !== undefined || freshSmokeRunID !== undefined)) throw new Error('fresh smoke authorization is incompatible with authorized retry flags')
+  if ((consumedSmokeCaseID !== undefined || consumedSmokeRunID !== undefined) && (freshSmokeCaseID !== undefined || freshSmokeRunID !== undefined)) throw new Error('fresh smoke authorization is incompatible with consumed smoke authorization flags')
   if (retryCaseID !== undefined || retryRunID !== undefined) {
     if (retryCaseID !== AUTHORIZED_RETRY_CASE_ID || retryRunID !== AUTHORIZED_RETRY_SOURCE_RUN_ID) throw new Error(`authorized retry is limited to F1-B005 from ${AUTHORIZED_RETRY_SOURCE_RUN_ID}`)
     if (!smokeOnly) throw new Error('authorized retry requires --smoke-only')
@@ -621,8 +792,19 @@ export function resolveRealExecutionPlan({ caseIDs, existingIDs = [], reservedID
     const executionPlan = planConsumedSmoke({ caseIDs, unresolvedReservations: plan.unresolvedReservations, consumedSmokeCaseID })
     return { plan, executionPlan, authorized: true }
   }
+  if (freshSmokeCaseID !== undefined || freshSmokeRunID !== undefined) {
+    if (freshSmokeCaseID !== AUTHORIZED_FRESH_SMOKE_CASE_ID || freshSmokeRunID !== AUTHORIZED_FRESH_SMOKE_SOURCE_MARKER) throw new Error(`fresh smoke is limited to F1-B005 from ${AUTHORIZED_FRESH_SMOKE_SOURCE_MARKER}`)
+    if (!smokeOnly) throw new Error('fresh smoke requires --smoke-only')
+    if (resumeID) throw new Error('fresh smoke cannot be combined with preflight, self-test, resume, or export')
+    const plan = planAttempts(caseIDs, existingIDs, { resume: true, reservedIDs })
+    if (Array.isArray(existingIDs) && existingIDs.includes(AUTHORIZED_FRESH_SMOKE_CASE_ID)) throw new Error('fresh smoke already has a durable result in this run; refusing second attempt')
+    const freshCheck = isAuthorizedFreshSmokeSource({ caseID: freshSmokeCaseID, sourceMarker: freshSmokeRunID })
+    if (!freshCheck.ok) throw new Error(`fresh smoke refused: ${freshCheck.reason}`)
+    const executionPlan = planFreshSmoke({ caseIDs, unresolvedReservations: plan.unresolvedReservations, freshSmokeCaseID })
+    return { plan, executionPlan, authorized: true }
+  }
   if (remaining22RunID !== undefined) {
-    if (remaining22RunID !== AUTHORIZED_REMAINING22_SOURCE_RUN_ID) throw new Error(`remaining22 campaign is limited to source ${AUTHORIZED_REMAINING22_SOURCE_RUN_ID}`)
+    if (!isAuthorizedRemaining22SourceRunID(remaining22RunID)) throw new Error(`remaining22 campaign is limited to source allowlist [${AUTHORIZED_REMAINING22_SOURCE_RUN_IDS.join(',')}]`)
     if (smokeOnly) throw new Error('remaining22 campaign cannot be combined with --smoke-only')
     if (resumeID) throw new Error('remaining22 campaign cannot be combined with preflight, self-test, resume, or export')
     const plan = planAttempts(caseIDs, existingIDs, { resume: true, reservedIDs })

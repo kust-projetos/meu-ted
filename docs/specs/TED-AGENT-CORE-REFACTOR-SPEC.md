@@ -4,6 +4,8 @@
 
 **Proveniência da revisão documental:** branch `docs/ted-core-recovery-refinement`, HEAD `9de7f20`, transportada somente com documentação sobre `origin/main` `b21faff` (origem reportada `ede7b10`). A baseline técnica citada abaixo é histórica; esta revisão não reexecutou produto nem valida produção.
 
+**Reconciliação de 29/10/2026:** a proposta e seus critérios permanecem distintos do histórico de recuperação V1. Desde a revisão documental original foram produzidas uma baseline F1 parcial e uma POC F2 com modelo real; a campanha B0 teve gate semântico **FAIL** e B1 permanece **NO-GO**. O descritor corrigido depois da campanha não foi validado em nova inferência. Estado, evidências, limites e próximos gates: [plano de recuperação](../plans/TED-AGENT-CORE-RECOVERY-PLAN.md). Esta nota não altera os critérios da SPEC nem autoriza release.
+
 ## 1. Objetivo, baseline e limites
 
 Reconciliar linguagem aberta com capacidades realmente executáveis do Meu Ted, reaproveitando a PWA, o Agent e a API autoritativa. A baseline é `313f9991a54740917edfd02f958c431650fb01b7`, branch `fix/opennext-preview-props`; identificação, runtime e CI constam do [plano](../plans/TED-AGENT-CORE-RECOVERY-PLAN.md).
