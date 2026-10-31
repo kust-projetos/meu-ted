@@ -67,7 +67,7 @@ export function isRouteAllowlisted(route) {
   return ALLOWED_PATHS.has(route.split('?')[0]);
 }
 
-export async function callFinance({ route, method = 'GET', host, seed = 'standard', fault = null, workspaceId = null, tokenStore = null, access = null, delayMs = null, timeoutMs = 15000 }) {
+export async function callFinance({ route, method = 'GET', host, seed = 'standard', fault = null, workspaceId = null, tokenStore = null, access = null, delayMs = null, timeoutMs = 15000, signal = null }) {
   if (!host || typeof host.token !== 'string' || host.token.length === 0) {
     throw new ToolError('tool.invalid_args', 'host-bound token is required (never a tool arg)');
   }
@@ -86,27 +86,50 @@ export async function callFinance({ route, method = 'GET', host, seed = 'standar
   // child hangs indefinitely (bridge never sees EOF), while the identical
   // payload via explicit stdin write+end completes in ~1.5s. Verified
   // 2026-10-30; kept deterministic (no shell, argv carries no secrets).
+  // Pre-spawn abort (fail-closed, no child spawned). The message carries the
+  // route only — never host secrets (fix-r2).
+  if (signal && signal.aborted) {
+    throw new ToolError('tool.cancelled', `finance call cancelled before execution (route ${route})`);
+  }
   return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let child;
+    let timer = null;
+    // Mid-flight abort (fix-r2): kill the bridge child and reject
+    // tool.cancelled. The listener is removed on every settle path so no
+    // handler leaks across calls. Message carries the route only.
+    const onAbort = () => {
+      try { if (child) child.kill(); } catch { /* already gone */ }
+      finish(new ToolError('tool.cancelled', `finance call cancelled (route ${route})`));
+    };
     const finish = (err, payload) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      try { if (signal && typeof signal.removeEventListener === 'function') signal.removeEventListener('abort', onAbort); } catch { /* settle never fails */ }
       if (err) reject(err);
       else resolve(payload);
     };
-    let child;
+    if (signal) {
+      if (signal.aborted) { onAbort(); return; }
+      if (typeof signal.addEventListener === 'function') signal.addEventListener('abort', onAbort, { once: true });
+    }
     try {
       child = spawn(process.execPath, [cli, BRIDGE], {
         cwd: API_DIR, // resolve fastify/zod/etc. from the API package, like its own tests
         windowsHide: true,
       });
     } catch (e) {
+      // Fix-r4 (LOW): the abort listener was registered BEFORE the spawn, so
+      // a synchronous spawn throw leaked it (and skipped finish). Remove it
+      // here on every pre-close error path; the throw below still rejects the
+      // promise (thrown inside the executor). Message carries no tokens.
+      try { if (signal && typeof signal.removeEventListener === 'function') signal.removeEventListener('abort', onAbort); } catch { /* settle never fails */ }
       throw new ToolError('tool.transport', `finance transport spawn failed (route ${route}): ${scrubSecrets((e && e.message) || String(e), host).slice(0, 200)}`);
     }
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       try { child.kill(); } catch { /* already gone */ }
       finish(new ToolError('tool.timeout', `finance call timed out after ${timeoutMs}ms (route ${route})`));
     }, timeoutMs);

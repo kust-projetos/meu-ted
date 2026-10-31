@@ -26,8 +26,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Plugin } from '@opencode/plugin';
 import { Error as ToolError } from '@opencode/plugin/promise/tool';
-import { TOOL_DEFS, createToolExecutors } from '../../ted-finance-tools.mjs';
+import { TOOL_DEFS, createToolExecutors, deriveIntentionId } from '../../ted-finance-tools.mjs';
 import { callFinance } from '../../finance-transport.mjs';
+import { resolveHost } from '../../session-bindings.mjs';
 
 const executors = createToolExecutors(callFinance);
 
@@ -40,35 +41,94 @@ function toNativeError(toolName, e) {
   return new ToolError({ message: `${toolName}: ${message}`, metadata });
 }
 
+// Execute-closure builder (exported for tests; setup() wires the REAL
+// executors below). The stable intention is derived HERE in the plugin via
+// deriveIntentionId({sessionID, messageID}); the executor only GUARDS that a
+// stable opts.intentionId is present. The native CallID (ctx.id) travels ONLY
+// as technical correlation (opts.callId). P1: tool-call opts forward ONLY the
+// allowlisted passthrough fields — host/route/method are owned by the
+// executor and can never be smuggled through opts.
+export function buildExecute(def, run) {
+  return async (input, ctx, opts = {}) => {
+    try {
+      if (!ctx || typeof ctx.sessionID !== 'string' || ctx.sessionID.length === 0) {
+        throw new ToolError({
+          message: `${def.name}: host-bound session context is required — hostless execution is blocked by design`,
+          metadata: { code: 'host_context_required' },
+        });
+      }
+      // Native context fields, kept explicit (agent/messageID are
+      // observed, not enforced — identity comes from the binding).
+      const { sessionID, agent, messageID, id, signal } = ctx;
+      void agent;
+      void messageID;
+      if (signal && signal.aborted) {
+        throw new ToolError({
+          message: `${def.name}: tool cancelled before execution`,
+          metadata: { code: 'tool.cancelled' },
+        });
+      }
+      const host = resolveHost(sessionID);
+      // Stable intention, never the CallID: retries mint a new ctx.id
+      // but re-derive the same intention for this session+message.
+      // A missing messageID fails closed via deriveIntentionId
+      // (tool.invalid_args, code preserved below) — no random
+      // fallback, no ctx.id fallback. CallID rides along ONLY as
+      // technical correlation for traces/timeouts.
+      const intentionId = deriveIntentionId({ sessionID, messageID });
+      let callId;
+      if (typeof id === 'string' && id.length > 0) {
+        callId = id;
+      } else {
+        callId = undefined;
+      }
+      const o = opts || {};
+      const body = await run(input, host, {
+        seed: o.seed,
+        fault: o.fault,
+        workspaceId: o.workspaceId,
+        tokenStore: o.tokenStore,
+        access: o.access,
+        delayMs: o.delayMs,
+        timeoutMs: o.timeoutMs,
+        signal: signal ?? o.signal,
+        intentionId,
+        callId,
+      });
+      return { output: body, content: [{ type: 'text', text: JSON.stringify(body) }] };
+    } catch (e) {
+      if (e && e.metadata && typeof e.metadata.code === 'string') throw e;
+      throw toNativeError(def.name, e);
+    }
+  };
+}
+
 export default Plugin.define({
   id: 'ted-finance',
   async setup(ctx) {
-    // Host-bound identity (§6): tool execute functions take the host context
-    // as a parameter. The native prompt-loop path carries no deterministic
-    // synthetic host in this spike, so a prompt-loop invocation arrives here
-    // WITHOUT a host and fail-closes EXPLICITLY with the typed code
-    // `host_context_required` (guard at the top of run() in
-    // ted-finance-tools.mjs — never an incidental transport rejection, and
-    // NEVER executed hostless). The deterministic harness calls the same
-    // `run` functions directly WITH a host (ted-gateway.mjs). Prompt-loop
-    // LLM invocation therefore stays blocked-by-design and untested
-    // (no LLM in this spike; native registration proves catalog presence
-    // only — G2-01).
+    // Host-bound identity (§6 + spike 03A): the native prompt-loop carries the
+    // session in Tool.Context ({sessionID, agent, messageID, id:CallID} +
+    // signal — 2.2.4 Tool.Context per plugin/dist/promise/tool.d.ts:9-15).
+    // execute() extracts ctx.sessionID/messageID/id/signal and resolves the
+    // host EXCLUSIVELY via session-bindings (bound at session creation by the
+    // host through ted-gateway.mjs). No ctx/sessionID => host_context_required;
+    // revoked/expired => typed host_binding_* (metadata.code preserved); an
+    // already-aborted signal => tool.cancelled BEFORE any transport call.
+    // The live signal is additionally forwarded to the transport (fix-r2) so
+    // a mid-flight abort kills the bridge child and rejects tool.cancelled.
+    // Model-chosen IDs are turns, never identity: only the host-bound
+    // sessionID key resolves, the financial intention is derived STABLY via
+    // deriveIntentionId({sessionID, messageID}) so retries (fresh CallIDs)
+    // share ONE intention (spike 03A-T3), and the native CallID (ctx.id)
+    // travels ONLY as technical correlation (opts.callId) — never as
+    // identity, never as intentionId.
     await ctx.tool.transform((editor) => {
       for (const def of TOOL_DEFS) {
-        const run = executors[def.name];
         editor.add({
           name: def.name,
           description: def.description,
           input: def.input,
-          execute: async (input) => {
-            try {
-              const body = await run(input, undefined, {});
-              return { output: body, content: [{ type: 'text', text: JSON.stringify(body) }] };
-            } catch (e) {
-              throw toNativeError(def.name, e);
-            }
-          },
+          execute: buildExecute(def, executors[def.name]),
         });
       }
     });

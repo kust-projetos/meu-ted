@@ -21,6 +21,42 @@ export class ToolError extends Error {
   }
 }
 
+// Stable financial intention derivation (spike 03A-T3).
+//
+// deriveIntentionId({sessionID, messageID|clientMessageId}) returns a
+// deterministic `int-<sha256-32hex>` over sessionID + NUL + messageID. The
+// SAME session+message derives the SAME intention across retries even though
+// every retry mints a new native CallID (ctx.id) — the CallID is a turn, the
+// intention is the financial identity. Extra fields (callID, turns) are
+// accepted-but-ignored: they NEVER perturb the derivation.
+//
+// Reads carry the derived intention as idempotency/correlation identity and
+// the CallID separately as technical correlation (opts.callId). WRITES (none
+// exist in this spike) must present a stable intentionId derived here PLUS a
+// valid host binding — enforced by the executor's intention guard below and
+// the session-bindings resolveHost gate, not by any new framework.
+import { createHash } from 'node:crypto';
+
+export function deriveIntentionId(input = {}) {
+  const { sessionID, messageID, clientMessageId, callID, ...rest } = input || {};
+  void callID;
+  void rest; // correlation/turn fields: accepted, never identity
+  const message = messageID !== undefined ? messageID : clientMessageId;
+  if (typeof sessionID !== 'string' || sessionID.length === 0) {
+    throw new ToolError('tool.invalid_args', 'deriveIntentionId: sessionID (string, non-empty) is required');
+  }
+  if (typeof message !== 'string' || message.length === 0) {
+    throw new ToolError('tool.invalid_args', 'deriveIntentionId: messageID (or clientMessageId) (string, non-empty) is required');
+  }
+  const digest = createHash('sha256')
+    .update(sessionID, 'utf8')
+    .update('\0', 'utf8')
+    .update(message, 'utf8')
+    .digest('hex')
+    .slice(0, 32);
+  return `int-${digest}`;
+}
+
 export const TOOL_DEFS = [
   {
     name: 'list_accounts',
@@ -123,13 +159,46 @@ export function createToolExecutors(transport) {
     if (!host || typeof host.token !== 'string' || host.token.length === 0) {
       throw new ToolError('host_context_required', `${name}: host-bound context is required — hostless execution is blocked by design`);
     }
+    // Intention contract (spike 03A-T3): every finance call carries a STABLE
+    // opts.intentionId (never in args — FORBIDDEN_KEYS rejects it there).
+    // Reads use it as idempotency/correlation identity; future WRITES (none
+    // exist) must present a stable intentionId derived via deriveIntentionId
+    // PLUS a valid host binding. The native CallID rides along ONLY as
+    // technical correlation (opts.callId) and is NEVER identity.
+    // Checked BEFORE transport: no stable intention => refuse, no spawn.
+    const intentionId = opts ? opts.intentionId : undefined;
+    if (typeof intentionId !== 'string' || intentionId.length === 0) {
+      throw new ToolError('tool.invalid_args', `${name}: stable intentionId is required in opts (derive via deriveIntentionId — a CallID is correlation only, never identity)`);
+    }
     const safeArgs = validateToolArgs(name, args);
     const route = routeFor(name, safeArgs);
     let result;
     try {
-      result = await transport({ route, method: 'GET', host, ...opts });
+      // P1: opts can NEVER override routing/identity. Only the allowlisted
+      // test-only passthrough fields are forwarded (intentionId/callId plus
+      // the transport's own options: seed/fault/workspaceId/tokenStore/
+      // access/delayMs/timeoutMs/signal); host/route/method are assigned
+      // LAST so a hostile opts.host/route/method is dead on arrival.
+      const o = opts || {};
+      result = await transport({
+        intentionId,
+        callId: o.callId,
+        seed: o.seed,
+        fault: o.fault,
+        workspaceId: o.workspaceId,
+        tokenStore: o.tokenStore,
+        access: o.access,
+        delayMs: o.delayMs,
+        timeoutMs: o.timeoutMs,
+        signal: o.signal,
+        route,
+        method: 'GET',
+        host,
+      });
     } catch (e) {
-      if (e && e.code === 'tool.timeout') throw e;
+      // tool.timeout and tool.cancelled are terminal caller-observable codes:
+      // rethrow unwrapped so cancellation survives as tool.cancelled (fix-r2).
+      if (e && (e.code === 'tool.timeout' || e.code === 'tool.cancelled')) throw e;
       throw new ToolError('tool.transport', `${name}: transport failed: ${(e && e.message) || e}`);
     }
     const { statusCode, body } = result;

@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { TOOL_DEFS, createToolExecutors, ToolError } from './ted-finance-tools.mjs';
 import { callFinance } from './finance-transport.mjs';
+import { bindSession, resolveHost, revokeSession, clearAll, getBinding, bindWithTTL, isSameHost } from './session-bindings.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const requireHere = createRequire(path.join(HERE, 'run-identity.mjs'));
@@ -56,6 +57,30 @@ function summarize(promise) {
 
 export { TOOL_DEFS, FACADE_KEYS };
 
+// Spike 03A-T1 ownership filter (pure, exported for tests). Returns ONLY
+// rows whose binding resolves to the calling facade's host. UNBOUND rows are
+// EXCLUDED by default — never leak another host's ids/titles/directories.
+// Shape-preserving for known shapes (array stays array, {data,cursor} keeps
+// its envelope). P2: an UNRECOGNIZED shape (neither an array nor
+// {data:[...]}) fail-closes to an empty envelope {data:[],cursor:null} —
+// never the unfiltered integral (fail-open would leak every row).
+export function filterSessionsForHost(result, bound) {
+  const rows = Array.isArray(result) ? result : (result && Array.isArray(result.data) ? result.data : null);
+  if (!rows) return { data: [], cursor: null };
+  const visible = rows.filter((row) => {
+    if (!row || typeof row.id !== 'string') return false;
+    let host;
+    try {
+      host = resolveHost(row.id);
+    } catch {
+      return false; // unbound/revoked/expired: hidden, never leaked
+    }
+    return isSameHost(host, bound);
+  });
+  if (Array.isArray(result)) return visible;
+  return { ...result, data: visible };
+}
+
 export async function createTedEnvironment({ identity = 'c' } = {}) {
   const { setupIsolation } = requireHere('./env.cjs');
   const { writeTedConfig } = requireHere('./ted-config.cjs');
@@ -75,10 +100,54 @@ export async function createTedEnvironment({ identity = 'c' } = {}) {
     const newIntention = () =>
       `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     const facade = {
-      createSession: (title) => oc.session.create({ title: title || 'ted-finance' }),
-      getSession: (sessionID) => oc.session.get({ sessionID }),
-      listSessions: () => oc.session.list(),
-      removeSession: (sessionID) => oc.session.remove({ sessionID }),
+      // Spike 03A: creating a session AUTO-BINDS it to this facade's frozen
+      // host (session-bindings.bindSession); removing a session REVOKES its
+      // binding. The facade itself keeps the exact 7-key allowlist below.
+      createSession: async (title) => {
+        const s = await oc.session.create({ title: title || 'ted-finance' });
+        bindSession(s.id, bound);
+        return s;
+      },
+      getSession: async (sessionID) => {
+        // Spike 03A-T1: a session bound to a DIFFERENT host is blocked BEFORE
+        // any row is returned (host_binding_mismatch, nothing returned,
+        // nothing revoked). Unbound IDs — or IDs bound to THIS same host
+        // (even revoked/expired) — fall through to the SDK: unknown IDs fail
+        // with the SDK NOTFOUND, and the owner can re-get a row after a
+        // restart BEFORE re-binding (test (i) pins this passthrough).
+        const existing = getBinding(sessionID);
+        if (existing && !isSameHost(existing.host, bound)) {
+          throw new ToolError('host_binding_mismatch', 'session is bound to a different host — get blocked (nothing returned)');
+        }
+        return oc.session.get({ sessionID });
+      },
+      listSessions: async () => {
+        // Spike 03A-T1: list ONLY rows whose binding resolves to THIS facade
+        // host (filterSessionsForHost above: unbound/revoked/expired hidden,
+        // unknown shape fail-closed to an empty envelope).
+        const result = await oc.session.list();
+        return filterSessionsForHost(result, bound);
+      },
+      removeSession: async (sessionID) => {
+        // Revoke ONLY after a successful remove: revoking in a `finally`
+        // would let facade A revoke another identity's binding even when the
+        // remove itself failed (NOTFOUND or transport error), enabling a
+        // cross-identity DoS on the process-global registry (fix-r1). On
+        // failure the binding stays intact for an explicit retry/revoke.
+        // Fix-r3: a session bound to a DIFFERENT host is blocked BEFORE any
+        // remove call (throw host_binding_mismatch, nothing removed, nothing
+        // revoked) — otherwise facade A could delete B's sqlite row AND
+        // revoke B's binding via the shared DB/registry in env 'c'. Unbound
+        // IDs, or IDs bound to THIS same host (even revoked/expired), proceed
+        // to the remove + post-success revoke path above.
+        const existing = getBinding(sessionID);
+        if (existing && !isSameHost(existing.host, bound)) {
+          throw new ToolError('host_binding_mismatch', 'session is bound to a different host — remove blocked (nothing removed, nothing revoked)');
+        }
+        const removed = await oc.session.remove({ sessionID });
+        try { revokeSession(sessionID); } catch { /* revoke is best-effort */ }
+        return removed;
+      },
       listCatalogs: async () => ({
         agents: await summarize(oc.agent.list()),
         commands: await summarize(oc.command.list()),
@@ -87,11 +156,19 @@ export async function createTedEnvironment({ identity = 'c' } = {}) {
         mcp: await summarize(oc.mcp.list()),
         providers: await summarize(oc.provider.list()),
         models: await summarize(oc.model.list()),
-        sessions: await summarize(oc.session.list()),
+        // Spike 03A-T1: the sessions summary uses the same ownership
+        // visibility as listSessions (count+ids only, but another host's ids
+        // are still metadata — same helper, no new code).
+        sessions: await summarize((async () => filterSessionsForHost(await oc.session.list(), bound))()),
         // 2.2.4 SDK exposes NO tool-catalog endpoint (oc.tool undefined);
         // finance tools are allowlisted here + registered natively, not enumerated.
         hasToolCatalog: oc.tool !== undefined,
       }),
+      // Direct facade calls are single-shot intentions: each call mints a fresh
+      // random intentionId (no session+message context to derive from, no
+      // CallID on this path — correlation n/a). The native plugin path uses
+      // deriveIntentionId (stable across retries); both satisfy the executor's
+      // stable-intention guard, and neither accepts identity from args.
       list_accounts: (args, opts) =>
         executors.list_accounts(args, bound, { ...(opts || {}), intentionId: newIntention() }),
       get_month_summary: (args, opts) =>
@@ -107,6 +184,10 @@ export async function createTedEnvironment({ identity = 'c' } = {}) {
   return {
     identity,
     facadeFor,
+    // Spike 03A: the session-binding registry, exposed on the ENV (never on
+    // the facade — the facade keeps its exact 7-key surface) so tests and the
+    // host can bind/resolve/revoke/clear explicitly.
+    bindings: { bindSession, resolveHost, revokeSession, clearAll, getBinding, bindWithTTL },
     async close() {
       await oc.close().catch(() => {});
     },
