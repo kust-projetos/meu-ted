@@ -33,7 +33,7 @@ A sequência autorizada de **trabalho local** é: consolidar evidências e códi
 
 - Preservar ADR-003, ADR-004, ADR-010 a 015, ADR-021, ADR-026, ADR-027 e ADR-028 e seus invariantes financeiros.
 - ADR-023 registra a migração técnica do Agents SDK anterior; esta ADR estabelece o **novo alvo conversacional**, sem apagar decisões históricas de segurança/implantação.
-- A investigação propôs uma ADR-030 na branch experimental `test/ted-f2b0-no-retry-controlled`; reconciliar sua numeração/status antes de eventual merge de documentação antiga. Não publicar duas decisões contraditórias.
+- ADR-030 permanece proposta de experimento, sem superseder ADR aceita. ADR-031 registra a direção aceita posterior, em escopo distinto; manter ambas identificadas (experimento versus decisão de direção) e não inferir autorização de produção.
 - Plano autorizado: [migração OpenCode-first](../plans/2026-10-31-ted-opencode-first/README.md).
 
 ## Rollback
