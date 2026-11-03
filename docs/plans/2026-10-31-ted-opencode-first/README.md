@@ -4,6 +4,10 @@
 **Estado:** documentação para iniciar implementação **local**; produção congelada.  
 **Base remota estudada:** `main` em `3489352f47415d5b74aadb67d59db8a40a5ab132`. Verificar se avançou antes de implementar.
 
+## Atualização de direção — 2026-11-03
+
+A execução local agora prioriza a experiência funcional nativa do OpenCode e a remoção de controles próprios redundantes. Ler **primeiro** [Adendo de simplificação native-first](NATIVE-FIRST-SIMPLIFICATION.md) e [Handoff da simplificação](AGENT-NATIVE-FIRST-HANDOFF.md). Estes documentos refinam a ordem local e **não** autorizam inferência paga, mutação financeira real ou produção.
+
 ## Leia nesta ordem
 
 1. [SPEC de produto e interfaces](SPEC.md) — boundaries, contratos, requisitos.

@@ -39,3 +39,12 @@ A sequência autorizada de **trabalho local** é: consolidar evidências e códi
 ## Rollback
 
 Até a autorização de canary, A0 permanece o único caminho produtivo. Qualquer alternância futura exige ownership persistido por conversa, drenagem da execução em voo e reconciliação de propostas/recibos na API. Rollback altera **roteamento de runtime**, nunca desfaz lançamentos ou restaura um ledger antigo.
+
+
+## Adendo operacional — 2026-11-03: native-first antes do hardening adicional
+
+O operador reafirmou que **a prioridade do trabalho local é a funcionalidade do OpenCode com o mínimo de código próprio**. A escolha do runtime nativo implica reutilizar catálogo de providers, configuração de modelo default, seleção por sessão/turno, prompt-loop e histórico; guards próprios redundantes não devem bloquear a primeira prova funcional. No perfil local sintético, a verificação proprietária de `modelID` pode ser removida/desligada quando comprovada duplicação da configuração nativa, sem criar outro mecanismo de aliases ou seleção.
+
+Este adendo **não** altera a autoridade financeira da API, os controles de Pending V2, a autenticação/ownership do gateway, a privacidade do SDK/servidor completo (incluindo o bypass direto de `session.shell` já demonstrado), nem concede autorização para chamadas pagas, dados reais ou produção. Revisão de fronteiras específicas e isolamento precedem qualquer staging/canary, mas não justificam recriar o harness no desenvolvimento local.
+
+A sequência e os critérios locais refinados estão em [NATIVE-FIRST-SIMPLIFICATION.md](../plans/2026-10-31-ted-opencode-first/NATIVE-FIRST-SIMPLIFICATION.md), com handoff em [AGENT-NATIVE-FIRST-HANDOFF.md](../plans/2026-10-31-ted-opencode-first/AGENT-NATIVE-FIRST-HANDOFF.md). Em caso de tensão de sequência de trabalho entre `PLAN.md` e este adendo, **o adendo prevalece somente para implementação local sintética**; os contratos financeiros e gates de produção anteriores continuam válidos.
