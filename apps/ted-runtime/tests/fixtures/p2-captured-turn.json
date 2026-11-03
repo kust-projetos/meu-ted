@@ -1,0 +1,49 @@
+{
+  "_comment": "Sanitized regression fixture derived from the synthetic P2 scenario. All opaque identifiers and local paths have been replaced with fixture-only values; no raw trace, SQLite database, screenshot, credential, or token is included. LIMITATIONS: the exact raw SDK exception behind the historical GET /rpc/history 502 and the native assistant text were not recoverable; the screenshot-derived answer remains approximate. A0 was NOT exercised live; the historical harness pointed its A0 upstream at B, which lacks A0 routes. Real A0 E2E was not run.",
+  "source": {
+    "report": "docs/reports/P2-LIVE-CLOSURE-RESULTS.md",
+    "traceDir": "<LOCAL_TEMP>/opencode/ted-p2-live-<redacted-run-id>/state/ (source location redacted)",
+    "traceFiles": [
+      "p2-session-prompt-trace.json",
+      "conversations.json",
+      "p2-model-usage.json",
+      "p2-finance-api-trace.json",
+      "p2-tool-calls.json",
+      "p2-provider-requests.json"
+    ],
+    "screenshot": "<LOCAL_TEMP>/opencode/ted-p2-live-<redacted-run-id>/pwa-after-approved-turn.png (not included)"
+  },
+  "capturedTurn": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "runtimeSessionId": "ses_fixture_p2_001",
+    "intentionId": "00000000-0000-4000-8000-000000000002",
+    "userMessageId": "msg_fixture_p2_user_001",
+    "turnId": "msg_fixture_p2_turn_001",
+    "messageCount": 1,
+    "approvedText": "TED, quais contas eu tenho e quanto gastei em junho de 2026?",
+    "agent": "ted",
+    "sessionPromptCalls": 1
+  },
+  "finance": {
+    "accounts": [
+      { "name": "Conta sintética principal", "kind": "bank" },
+      { "name": "Reserva sintética", "kind": "cash" }
+    ],
+    "monthSummary": {
+      "yearMonth": "2026-06",
+      "incomeCents": 0,
+      "expenseCents": 11750,
+      "balanceCents": -11750,
+      "transactionCount": 2
+    }
+  },
+  "screenshotAnswer": {
+    "_note": "Transcribed from the rendered PWA capture (approximation — exact native text unrecoverable, see limitations).",
+    "text": "Contas ativas (2): Conta sintética principal (banco, saldo R$ 2.500,00); Reserva sintética (dinheiro/caixa, saldo R$ 500,00). Junho de 2026: gastos R$ 117,50 (2 transações), receitas R$ 0,00, resultado do mês −R$ 117,50. Quer que eu detalhe as duas transações de junho ou compare com outro mês?"
+  },
+  "liveFailure": {
+    "postChat": { "method": "POST", "route": "/rpc/chat", "status": 200 },
+    "getHistory": { "method": "GET", "route": "/rpc/history", "status": 502, "code": "prompt.failed" },
+    "pwaAlert": "Não foi possível carregar o histórico. Tente novamente."
+  }
+}

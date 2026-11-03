@@ -244,4 +244,40 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
     expect(screen.getByText("Meu saldo?")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /aprovar|confirmar/i })).toBeNull();
   });
+
+  it("P2-R-FIX — POST sucesso + refresh de histórico com falha: resposta aparece, envio segue sent, sem retry de envio", async () => {
+    // Caracteriza o live P2 (POST 200 + GET history falho): o turno
+    // concluído permanece autoritativo; só o refresh sinaliza staleness.
+    const user = userEvent.setup();
+    vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([]);
+    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
+
+    render(<TedChat />);
+    await waitFor(() => expect(agentClient.fetchAgentHistory).toHaveBeenCalled());
+
+    vi.mocked(agentClient.sendAgentMessage).mockResolvedValueOnce({
+      turnId: "t-p2-refresh",
+      status: "completed",
+      output: "Contas ativas (2): gastos R$ 117,50 em junho de 2026.",
+    });
+    // O refresh pós-envio falha (o 502 history do live virou 503
+    // history.unavailable no gateway): o turno concluído permanece.
+    vi.mocked(agentClient.fetchAgentHistory).mockRejectedValueOnce(new Error("history down"));
+
+    await user.type(screen.getByPlaceholderText("Pergunte sobre gastos, metas ou pagamentos…"), "quais contas eu tenho?");
+    await user.click(screen.getByRole("button", { name: /enviar mensagem/i }));
+
+    await waitFor(() => expect(agentClient.sendAgentMessage).toHaveBeenCalledTimes(1));
+    // A mensagem do usuário permanece visível como enviada…
+    expect(await screen.findByText("quais contas eu tenho?")).toBeInTheDocument();
+    // …e a resposta autoritativa do turno aparece.
+    expect(screen.getByText(/gastos R\$ 117,50/)).toBeInTheDocument();
+    // O refresh falho sinaliza staleness sem invalidar o envio…
+    expect(screen.getByRole("alert")).toHaveTextContent("Não foi possível carregar o histórico.");
+    // …sem retry/falha de ENVIO e sem segundo POST.
+    expect(screen.queryByRole("button", { name: /tentar novamente/i })).toBeNull();
+    expect(screen.queryByText(/falha no envio/i)).toBeNull();
+    expect(screen.queryByText(/Não foi possível enviar a mensagem/i)).toBeNull();
+    expect(agentClient.sendAgentMessage).toHaveBeenCalledTimes(1);
+  });
 });

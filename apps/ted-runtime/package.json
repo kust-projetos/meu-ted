@@ -1,0 +1,20 @@
+{
+  "name": "pi-finance-ted-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dedicated OpenCode runtime for Meu TED (P1 read-only slice: bootstrap, facade, sessions, host-bound, two real read tools, local lifecycle). No public listener by default; no paid provider execution in P1/P2.",
+  "type": "module",
+  "dependencies": {
+    "@opencode/plugin": "2.2.4",
+    "@opencode/sdk": "2.2.4"
+  },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "test": "node --test tests/",
+    "typecheck": "node --check src/tool-defs.mjs && node --check src/session-bindings.mjs && node --check src/transport.mjs && node --check src/facade.mjs && node --check src/bootstrap.mjs && node --check src/plugin.mjs && node --check src/gateway.mjs && node --check src/conversations.mjs && node --check src/prompt.mjs && node --check src/server.mjs && node --check src/main.mjs",
+    "lint": "node --check src/tool-defs.mjs && node --check src/session-bindings.mjs && node --check src/transport.mjs && node --check src/facade.mjs && node --check src/bootstrap.mjs && node --check src/plugin.mjs && node --check src/gateway.mjs && node --check src/conversations.mjs && node --check src/prompt.mjs && node --check src/server.mjs && node --check src/main.mjs"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

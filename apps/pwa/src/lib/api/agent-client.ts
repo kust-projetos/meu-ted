@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 import { TED_APPROVAL_TOOLS } from "@pi-finance/llm-contracts/types";
-import { fetchAgentConnectionToken, clearAgentConnectionTokenCache, trackAgentConnection } from "./agent-auth";
+import { fetchAgentConnectionToken, clearAgentConnectionTokenCache, trackAgentConnection, getActiveDeviceToken } from "./agent-auth";
+import { clearTedRuntimeViews, getTedRuntimeView, noteTedRuntimeView } from "./ted-runtime-view";
 import { getOfflinePrincipalId } from "@/lib/auth/offline-identity";
 
 export const attachmentSchema = z.object({
@@ -1066,10 +1067,50 @@ async function parseJson<T>(response: Response): Promise<T> {
   return await response.json() as T;
 }
 
-async function agentAuthHeaders(workspaceId: string, forceFresh = false): Promise<Record<string, string>> {
+async function agentAuthHeaders(workspaceId: string, forceFresh = false, url?: string): Promise<Record<string, string>> {
   // C-01: connection tokens are single-use — every call mints fresh.
   const token = await fetchAgentConnectionToken(workspaceId, forceFresh);
-  return { "x-agent-connection-token": token };
+  const headers: Record<string, string> = { "x-agent-connection-token": token };
+  // P2 seam: AFTER the mint completes (which also finishes the device
+  // self-heal — `ensureDeviceToken` persists before the mint resolves), read
+  // the active device token for same-origin proxy requests ONLY, and never
+  // for a server-confirmed A0 conversation (no new credentials upstream on
+  // A0 — the proxy allowlist strips this header there anyway). A relative
+  // URL targets the same-origin `/api/agent` proxy; an absolute (direct/dev
+  // `NEXT_PUBLIC_...`) URL must never receive it. Unknown views still send it:
+  // the first B contact needs it before any P2 response confirms the runtime.
+  if (typeof url === "string" && url.startsWith("/")) {
+    try {
+      if (getTedRuntimeView(workspaceId) !== "agent") {
+        const device = getActiveDeviceToken();
+        if (device) headers["x-device-token"] = device;
+      }
+    } catch {
+      // Unreadable store/view: omit the header (gateway fails closed server-side).
+    }
+  }
+  return headers;
+}
+
+/**
+ * P2 — captures the server-confirmed runtime from one proxied response into
+ * the workspace view. Runs on ok AND error responses (a B rejection still
+ * proves the conversation is B-routed); responses without the header (legacy
+ * A0 path) leave the view untouched.
+ *
+ * Authority rule (same seam as the device token): ONLY a relative
+ * same-origin `/api/agent` URL can confirm a runtime — the proxy is the
+ * authority. A foreign direct/dev host must never confirm one: its
+ * (non-secret) header could falsely present an A0 stream as
+ * server-cancelable. Callers pass the exact request URL they fetched.
+ */
+function captureTedRuntime(workspaceId: string, url: string, response: Response): void {
+  if (typeof url !== "string" || !url.startsWith("/")) return;
+  try {
+    noteTedRuntimeView(workspaceId, response.headers?.get("x-ted-runtime"));
+  } catch {
+    // View bookkeeping never breaks the turn.
+  }
 }
 
 const peekErrorCode = async (response: Response): Promise<string | undefined> => {
@@ -1088,7 +1129,7 @@ const peekErrorCode = async (response: Response): Promise<string | undefined> =>
  */
 async function fetchWithAgentAuth(workspaceId: string, url: string, init: RequestInit): Promise<Response> {
   const attempt = async (): Promise<Response> => {
-    const authHeaders = await agentAuthHeaders(workspaceId, true);
+    const authHeaders = await agentAuthHeaders(workspaceId, true, url);
     // H-13: the flight is tracked so logout/401/workspace-switch aborts it.
     // The caller's own signal (if any) is linked, never replaced.
     const callerSignal = init.signal instanceof AbortSignal ? init.signal : null;
@@ -1188,7 +1229,7 @@ export async function uploadAttachment(
 export async function sendAgentMessage(
   workspaceId: string,
   content: string,
-  opts?: { attachments?: Array<OutgoingAttachment>; messageId?: string },
+  opts?: { attachments?: Array<OutgoingAttachment>; messageId?: string; signal?: AbortSignal },
 ): Promise<AgentTurn> {
   const baseUrl = agentBaseUrl();
   // SPEC §7.7: the send identity is fixed ONCE here; retries pass the same
@@ -1200,9 +1241,10 @@ export async function sendAgentMessage(
     createdAt: new Date().toISOString(),
     ...(opts?.attachments ? { attachments: opts.attachments } : {}),
   });
+  const requestUrl = `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/chat`;
   const response = await fetchWithAgentAuth(
     workspaceId,
-    `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/chat`,
+    requestUrl,
     {
       method: "POST",
       credentials: "include",
@@ -1211,8 +1253,11 @@ export async function sendAgentMessage(
         "X-Workspace-Id": workspaceId,
       },
       body: JSON.stringify({ text: content, attachments: opts?.attachments, intentionId: messageId }),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
     },
   );
+  // P2 — the turn response confirms the conversation runtime (ok or error).
+  captureTedRuntime(workspaceId, requestUrl, response);
   if (!response.ok) {
     let errorMsg = "Operação do agente falhou.";
     let errorCode: string | undefined;
@@ -1553,9 +1598,10 @@ export async function renewAgentSession(
   opts?: { visibility?: 'workspace' | 'private' },
 ): Promise<AgentSessionRenewal> {
   const baseUrl = agentBaseUrl();
+  const requestUrl = `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/session/new`;
   const response = await fetchWithAgentAuth(
     workspaceId,
-    `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/session/new`,
+    requestUrl,
     {
       method: "POST",
       credentials: "include",
@@ -1578,6 +1624,11 @@ export async function renewAgentSession(
   } catch {
     throw new Error("Não foi possível iniciar uma nova sessão.");
   }
+  // P2 — a renewal starts a fresh conversation lifecycle: drop the previous
+  // runtime belief, then capture what THIS renewal confirms (B/A0-P2 header,
+  // or unknown on the legacy path). No body/DTO/session id crosses.
+  clearTedRuntimeViews(workspaceId);
+  captureTedRuntime(workspaceId, requestUrl, response);
   clearPendingChatSend(workspaceId);
   return renewal;
 }
@@ -1592,9 +1643,10 @@ export async function renewAgentSession(
 
 export async function fetchAgentHistory(workspaceId: string): Promise<AgentMessage[]> {
   const baseUrl = agentBaseUrl();
+  const requestUrl = `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/history`;
   const response = await fetchWithAgentAuth(
     workspaceId,
-    `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/history`,
+    requestUrl,
     {
       credentials: "include",
       headers: {
@@ -1602,6 +1654,9 @@ export async function fetchAgentHistory(workspaceId: string): Promise<AgentMessa
       },
     },
   );
+  // P2 — history reveals the runtime even when it errors (first B history
+  // load with no cookie yet answers 400 through the B branch).
+  captureTedRuntime(workspaceId, requestUrl, response);
   if (!response.ok) {
     let errorMsg = "Não foi possível carregar o histórico do agente.";
     let errorCode: string | undefined;
