@@ -277,7 +277,7 @@ describe('relay usage attempts (RED)', () => {
 
   it('primary failure + fallback dispatch reserves two independent attempts', async () => {
     const { agent, store } = createChatAgent(SNAP_FALLBACK);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({});
     const calls = stubEgress((call) =>
       call.provider === 'opencode-zen'
         ? new Response(JSON.stringify({ code: 'agent.rate_limited', message: 'slow', providerAttempted: true }), {
@@ -286,7 +286,7 @@ describe('relay usage attempts (RED)', () => {
         : okRelay({ usage: { inputTokens: 90, outputTokens: 20 } }),
     );
 
-    const res = await agent.fetch(chatRequest('Quanto gastei este mês?', 'intent-two-legs'));
+    const res = await agent.fetch(chatRequest('Olá, como você está?', 'intent-two-legs'));
     expect(res.status).toBe(200);
     expect(calls).toHaveLength(2);
     expect(calls[0]!.provider).toBe('opencode-zen');
@@ -300,7 +300,22 @@ describe('relay usage attempts (RED)', () => {
 
   it('grounding correction reentry reserves a separate attempt', async () => {
     const { agent, store } = createChatAgent(SNAP_FALLBACK);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
+    // list_payables with a real payable: `mapEntityList('payables',...)`
+    // yields `ok`, and the payables domain has no deterministic renderer, so
+    // the turn falls through to the relay (a month-summary prompt would
+    // render deterministically before the relay). The R$ 999,99 first-leg
+    // claim is unsupported by this evidence, so correction still runs.
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({
+      items: [
+        {
+          id: '00000000-0000-4000-8000-0000000000b1',
+          description: 'Conta de luz',
+          amountCents: 12500,
+          dueDate: '2026-11-10',
+        },
+      ],
+      total: 1,
+    });
     const calls = stubEgress((_call, index) =>
       index === 1
         ? new Response(
@@ -310,7 +325,7 @@ describe('relay usage attempts (RED)', () => {
         : okRelay(),
     );
 
-    const res = await agent.fetch(chatRequest('Quanto gastei este mês?', 'intent-correction'));
+    const res = await agent.fetch(chatRequest('Quais contas tenho que pagar?', 'intent-correction'));
     expect(res.status).toBe(200);
     expect(calls).toHaveLength(2);
     const rows = [...store.__state.attempts.values()];
@@ -441,7 +456,19 @@ describe('relay usage attempts (RED)', () => {
     }) as typeof store.exec;
     const failing = { ...store, exec: failingExec };
     attachRelayUsageStorage(agent, failing);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
+    // Same payables fall-through as the reentry test above: a real payable
+    // keeps the turn on the relay path so the correction reservation runs.
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({
+      items: [
+        {
+          id: '00000000-0000-4000-8000-0000000000b1',
+          description: 'Conta de luz',
+          amountCents: 12500,
+          dueDate: '2026-11-10',
+        },
+      ],
+      total: 1,
+    });
     const calls = stubEgress((_call, index) =>
       index === 1
         ? new Response(
@@ -451,7 +478,7 @@ describe('relay usage attempts (RED)', () => {
         : okRelay(),
     );
 
-    const res = await agent.fetch(chatRequest('Quanto gastei este mês?', 'intent-correction-reserve-fail'));
+    const res = await agent.fetch(chatRequest('Quais contas tenho que pagar?', 'intent-correction-reserve-fail'));
     expect(res.status).toBe(503);
     const body = (await res.json()) as { code?: string; message?: string };
     expect(body.code).toBe('agent.persistence_unavailable');

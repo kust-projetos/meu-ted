@@ -159,13 +159,14 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
 
   it("(2) POST /rpc/chat with trusted headers and forged body actorId persists user message with header actor metadata, followed by relay assistant message", async () => {
     const { agent, persisted } = createTestAgent();
-    // T3.1 (SPEC §14): "Quanto gastei este mês?" is a finance-seeking read,
-    // so it requires evidence. Empty evidence keeps the grounded path: the
-    // relay text carries no financial claim and passes validation unchanged.
-    vi.spyOn(apiClient, "requestPiApiJson").mockResolvedValue({ items: [], total: 0 });
+    // Conversational prompt: reaches the relay without finance evidence (a
+    // month-summary prompt would render deterministically before it). Empty
+    // evidence keeps the detour-free path: the relay text carries no
+    // financial claim and passes validation unchanged.
+    vi.spyOn(apiClient, "requestPiApiJson").mockResolvedValue({});
     // Claim-free relay text (no amounts/dates/names): grounded validation
     // passes it through verbatim, preserving this test's attribution focus.
-    const RELAY_TEXT = "Aqui está o resumo das suas movimentações.";
+    const RELAY_TEXT = "Olá! Estou bem, como posso ajudar?";
     // Fresh Response per call: a Response body can only be consumed once,
     // and each turn performs 2+ fetches (H-03 authority re-verify + relay).
     // H-14: the authority URL serves a valid snapshot (fail-closed when
@@ -195,7 +196,7 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
           "x-agent-workspace": trustedWorkspace,
         },
         body: JSON.stringify({
-          text: "Quanto gastei este mês?",
+          text: "Olá, como você está?",
           intentionId: "intent-forged-actor-1",
           actorId: "attacker-spoofed-999",
           metadata: { actorId: "attacker-spoofed-999" },
@@ -215,7 +216,7 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
     const userMessage = persisted[0]!;
     expect(userMessage.role).toBe("user");
     const userText = userMessage.parts?.[0]?.text;
-    expect(userText).toBe("Quanto gastei este mês?");
+    expect(userText).toBe("Olá, como você está?");
     const resolvedUserActor = userMessage.metadata?.actorId;
     expect(resolvedUserActor).toBe(trustedActor);
     expect(resolvedUserActor).not.toBe("attacker-spoofed-999");
