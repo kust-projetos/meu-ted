@@ -1,22 +1,54 @@
 # PWA Audit Risk Acceptance
 
-> Reviewed 2026-10-23 · Expires 2026-12-31 · Owner: project-maintainer
+> Reviewed 2026-11-03 · Expires 2026-12-31 · Owner: project-maintainer
 >
 > Current findings are accepted under strict exact-field matching.
 > The audit blocks immediately when a finding changes or this acceptance expires.
+>
+> 2026-11-03 review (CI run 41630116732, `Scoped audit` job 125897226478):
+> The run reported 31 blocked records: new advisories for `glob` and
+> `minimatch`, the already-accepted Zod runtime advisory with a changed graph
+> shape, and downstream records whose graph/range shape changed. Every current
+> record has one precise `pwa-2026-11-03-*` entry; no unrelated record is
+> accepted; strict exact matching remains intact. Prior decisions below are
+> preserved unchanged.
+>
+> 2026-11-03 follow-up (CI run 41639892340, `Scoped audit` job 125930435456):
+> The run revealed two additional alternate exact `effects` shapes for the
+> already-accepted dev-only minimatch/ESLint chain — `eslint-plugin-import`
+> with effects `[]` (first-run entry covers `['eslint-config-next']`) and
+> `eslint-plugin-react` with effects `['eslint-config-next']` (first-run entry
+> covers `[]`). Each has a separate exact `pwa-2026-11-03-*-effects-*` entry;
+> no new advisory or risk family, and strict exact matching is unchanged.
 
-## Runtime (1)
+## Runtime (2 shapes, 1 risk)
 
 | Package | Severity | Scope | Reason |
 |---|---|---|---|
-| `zod` | high | PWA runtime | GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404) requires an attacker-controlled large array parsed by an **unconstrained** array schema. Every PWA array schema validates trusted API/Agent responses; the only external input path (`/api/csp-report`) caps bodies at 8192 bytes and validates bounded scalar fields, not arrays. `zod` 3.x has no patched release (the fix is `4.6.6`, a major migration); migrate to zod 4 before the review. |
+| `zod` | high | PWA runtime | GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404) requires an attacker-controlled large array parsed by an **unconstrained** array schema. Every PWA array schema validates trusted API/Agent responses; the only external input path (`/api/csp-report`) caps bodies at 8192 bytes and validates bounded scalar fields, not arrays. `zod` 3.x has no patched release (the fix begins at `4.6.6`, a major migration; target `4.6.7`); migrate to zod 4 before the review. 2026-11-03: npm re-reported the direct record with a changed effects graph (`pwa-2026-11-03-zod`, scope `runtime`) — same accepted risk, new audit shape. |
 
-## Build-Time (8)
+## Build-Time (2026-11-03 drift: LHCI / OpenNext / Serwist / Glob / Minimatch / Rimraf / Chrome)
+
+| Package | Severity | Scope | Reason |
+|---|---|---|---|
+| `@lhci/cli`, `@lhci/utils`, `chrome-launcher`, `rimraf` | high/moderate | Lighthouse CI only | Exact graph/range shape drift of the already-accepted Lighthouse chain (now via the `chrome-launcher`/`rimraf`/`glob` path). Build-time toolchain, never shipped to Cloudflare production; npm proposes only the breaking `@lhci/cli` 0.3.3 major downgrade. |
+| `@node-minify/core`, `@opennextjs/aws`, `@opennextjs/cloudflare`, `glob` | moderate | OpenNext build only | **New** advisory GHSA-3g3m-2fjr-6pw4 (Glob AbortSignal cancellation bypass, moderate) in the OpenNext build chain, plus shape drift of the already-accepted records. Build toolchain only; npm proposes only the breaking `@opennextjs/cloudflare` 0.3.0 major downgrade. |
+| `@serwist/build`, `@serwist/next`, `@serwist/webpack-plugin`, `minimatch` | high/moderate | Serwist build only | **New** advisory GHSA-g3hv-75wg-m249 (minimatch globparts DoS, moderate) plus shape drift of the already-accepted Serwist records (via now includes `glob` alongside `zod`). Serwist compiles the service worker during `pwa:build`; never runs in Cloudflare production. The PWA's direct zod migration alone does not remediate nested Serwist copies; a compatible upstream release or separately tested override is still required. |
+
+## Dev-Only (2026-11-03 drift: ESLint / TypeScript-ESLint / Stryker)
+
+| Package | Severity | Scope | Reason |
+|---|---|---|---|
+| `eslint`, `@eslint-community/eslint-utils`, `@eslint/config-array`, `@eslint/eslintrc`, `@next/eslint-plugin-next`, `eslint-config-next`, `eslint-plugin-import`, `eslint-plugin-jsx-a11y`, `eslint-plugin-react` | moderate | Dev lint only | Exact graph/range shape drift of the already-accepted ESLint chain (via the new `minimatch` advisory). Dev dependencies, never bundled into the PWA runtime; npm proposes only breaking majors (`eslint` 4.0.0, `eslint-config-next` 12.0.4). |
+| `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`, `@typescript-eslint/type-utils`, `@typescript-eslint/typescript-estree`, `@typescript-eslint/utils`, `typescript-eslint` | moderate | Dev lint only | Same drift, TypeScript-ESLint side of the chain (via `minimatch`/`eslint`). Dev-only, same non-remediation. |
+| `@stryker-mutator/core`, `@stryker-mutator/typescript-checker`, `@stryker-mutator/vitest-runner` | moderate | Dev mutation-testing only | Same drift via `minimatch`; no fix available. Dev-only, never shipped. |
+
+## Previously accepted Build-Time entries (8)
 
 | Package | Severity | Scope | Reason |
 |---|---|---|---|
 | `@lhci/cli`, `@lhci/utils`, `lighthouse`, `puppeteer-core`, `chromium-bidi` | high | Lighthouse CI only | One exact-match dependency chain rooted in Lighthouse. The 2026-10-23 advisory drift re-shaped the records (`via` now includes `zod`, `proxy-agent`, and `chromium-bidi`); npm's proposed resolution still downgrades `@lhci/cli`. Build-time toolchain, never shipped to Cloudflare production. |
-| `@serwist/build`, `@serwist/next`, `@serwist/webpack-plugin` | high | Serwist build only | Affected solely through their nested `zod` copies while compiling the service worker during `pwa:build`; never runs in Cloudflare production. Resolved when the PWA migrates to zod 4. |
+| `@serwist/build`, `@serwist/next`, `@serwist/webpack-plugin` | high | Serwist build only | Affected through their nested `zod` copies while compiling the service worker during `pwa:build`; never runs in Cloudflare production. A direct PWA zod migration alone does not update these nested copies; resolution requires a compatible upstream release or a separately tested override. |
 
 ## Controls And Review
 

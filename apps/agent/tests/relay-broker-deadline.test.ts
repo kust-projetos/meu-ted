@@ -487,13 +487,13 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
     // serialized /rpc/chat would queue the second turn behind the hung
     // first relay fetch and hit the test-local guard below.
     const { agent } = createChatAgent('5000');
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({});
     const hungGate = deferred<Response>();
     // Deterministic barrier: resolved when the first relay fetch actually
     // starts (HUNG-TURN prompt reaches agent.fetch), not via sleep().
     const firstFetchStarted = deferred<void>();
     let firstSettled = false;
-    const okRelayBody = () => JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.', providerAttempted: true });
+    const okRelayBody = () => JSON.stringify({ text: 'Olá! Estou bem, como posso ajudar?', providerAttempted: true });
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (info, init) => {
       const url = String(info);
       if (url.includes('/internal/agent/llm-config')) {
@@ -511,7 +511,7 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
         status: 200,
       });
     });
-    const first = agent.fetch(chatRequest('Quanto gastei este mês? HUNG-TURN', 'intent-hung-1'));
+    const first = agent.fetch(chatRequest('Olá, como você está? HUNG-TURN', 'intent-hung-1'));
     void first.then(
       () => {
         firstSettled = true;
@@ -534,7 +534,7 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
       }, 5_000);
       try {
         const second = await Promise.race([
-          agent.fetch(chatRequest('Quanto gastei este mês?', 'intent-free-2')),
+          agent.fetch(chatRequest('Olá, como você está?', 'intent-free-2')),
           secondGuard.promise,
         ]);
         expect(second.status).toBe(200);
@@ -562,7 +562,7 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
 
   it('first hung relay times out with typed 504 and no assistant persistence, then second turn succeeds while provider promise stays pending', async () => {
     const { agent, persisted } = createChatAgent();
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({});
     // Never-resolved provider promise: the first leg stays hung forever.
     const hungGate = deferred<Response>();
     let hungSettled = false;
@@ -581,13 +581,13 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
       if (body.prompt?.includes('HUNG-TIMEOUT-TURN')) {
         return hungGate.promise;
       }
-      return new Response(JSON.stringify({ text: 'Aqui está o resumo das suas movimentações.', providerAttempted: true }), {
+      return new Response(JSON.stringify({ text: 'Olá! Estou bem, como posso ajudar?', providerAttempted: true }), {
         status: 200,
       });
     });
     try {
       // First turn hangs until its short injected per-leg budget expires.
-      const firstRes = await agent.fetch(chatRequest('Quanto gastei este mês? HUNG-TIMEOUT-TURN', 'intent-hung-timeout-1'));
+      const firstRes = await agent.fetch(chatRequest('Olá, como você está? HUNG-TIMEOUT-TURN', 'intent-hung-timeout-1'));
       expect(firstRes.status).toBe(504);
       const firstBody = (await firstRes.json()) as { code?: string };
       expect(firstBody.code).toBe('agent.provider_timeout');
@@ -599,7 +599,7 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
       // Second unrelated turn succeeds while the first provider promise
       // remains pending. Supplements (does not replace) the pre-timeout
       // concurrency test above; no broader DO serialization claim.
-      const second = await agent.fetch(chatRequest('Quanto gastei este mês?', 'intent-free-after-timeout-2'));
+      const second = await agent.fetch(chatRequest('Olá, como você está?', 'intent-free-after-timeout-2'));
       expect(second.status).toBe(200);
       const secondBody = (await second.json()) as { status?: string };
       expect(secondBody.status).toBe('completed');

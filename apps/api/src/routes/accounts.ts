@@ -130,15 +130,19 @@ try {
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
-    const rawKey = req.headers['idempotency-key'] ?? req.headers['Idempotency-Key'];
-    const key = rawKey !== undefined ? requireIdempotencyKey(req.headers) : undefined;
+    // P3 (2026-10-30): deactivate is a financial mutation and must require an
+    // Idempotency-Key unconditionally, like transactions/categories. Missing
+    // key fails closed (400 idempotency.required) instead of executing without
+    // idempotency. The approval path reuses the caller-provided key (no random
+    // fallback) so the pending record stays bound to the original intent.
+    const key = requireIdempotencyKey(req.headers);
     if (opts.approvalPolicy && opts.pendingStore) {
       const pending = await createPendingApproval(opts.approvalPolicy, opts.pendingStore, {
         householdId: ctx.householdId,
         requesterId: ctx.deviceId,
         operation: 'account.deactivate',
         payload: { id: params.data.id },
-        idempotencyKey: key ?? crypto.randomUUID(),
+        idempotencyKey: key,
         destructive: true,
       });
       if (pending) return reply.code(pending.status).send(pending.body);

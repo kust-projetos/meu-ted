@@ -1362,6 +1362,7 @@ export class ConversationOrchestrator {
         workspaceId: ctx.workspaceId,
         actorId: ctx.actorId,
         deviceId: ctx.deviceId,
+        ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
         intentionId: input.intentionId,
         tool: kind === 'income' ? 'transactions.income.create' : 'transactions.expense.create',
         resolvedArgs: {
@@ -6241,6 +6242,7 @@ export class ConversationOrchestrator {
         workspaceId: ctx.workspaceId,
         actorId: ctx.actorId,
         deviceId: ctx.deviceId,
+        ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
         intentionId: input.intentionId,
         tool,
         resolvedArgs: {
