@@ -12,6 +12,14 @@
 > record has one precise `pwa-2026-11-03-*` entry; no unrelated record is
 > accepted; strict exact matching remains intact. Prior decisions below are
 > preserved unchanged.
+>
+> 2026-11-03 follow-up (CI run 41639892340, `Scoped audit` job 125930435456):
+> The run revealed two additional alternate exact `effects` shapes for the
+> already-accepted dev-only minimatch/ESLint chain — `eslint-plugin-import`
+> with effects `[]` (first-run entry covers `['eslint-config-next']`) and
+> `eslint-plugin-react` with effects `['eslint-config-next']` (first-run entry
+> covers `[]`). Each has a separate exact `pwa-2026-11-03-*-effects-*` entry;
+> no new advisory or risk family, and strict exact matching is unchanged.
 
 ## Runtime (2 shapes, 1 risk)
 

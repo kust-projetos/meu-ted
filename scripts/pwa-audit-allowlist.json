@@ -1479,5 +1479,35 @@
       "chromium-bidi"
     ],
     "range": "<4.6.6"
+  },
+  {
+    "id": "pwa-2026-11-03-eslint-plugin-import-effects-empty",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Follow-up 2026-11-03 (CI run 41639892340): npm re-reported the already-accepted dev minimatch/ESLint chain record eslint-plugin-import with the alternate exact effects shape [] (first-run entry pwa-2026-11-03-eslint-plugin-import covers effects [eslint-config-next]). Dev-only, never bundled into the PWA runtime and never shipped to Cloudflare production; npm's only proposed resolution is the breaking eslint-config-next 12.0.4 major downgrade. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "eslint-plugin-import",
+    "severity": "moderate",
+    "via": [
+      "minimatch"
+    ],
+    "effects": [],
+    "range": ">=1.15.0"
+  },
+  {
+    "id": "pwa-2026-11-03-eslint-plugin-react-effects-config-next",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Follow-up 2026-11-03 (CI run 41639892340): npm re-reported the already-accepted dev minimatch/ESLint chain record eslint-plugin-react with the alternate exact effects shape [eslint-config-next] (first-run entry pwa-2026-11-03-eslint-plugin-react covers effects []). Dev-only, never bundled into the PWA runtime and never shipped to Cloudflare production; npm's only proposed resolution is the breaking eslint-config-next 12.0.4 major downgrade. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "eslint-plugin-react",
+    "severity": "moderate",
+    "via": [
+      "minimatch"
+    ],
+    "effects": [
+      "eslint-config-next"
+    ],
+    "range": ">=7.23.0"
   }
 ]
