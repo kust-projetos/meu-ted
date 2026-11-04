@@ -82,6 +82,12 @@
 > `eslint-config-next@15.5.29` major downgrade, which is not applied. Strict
 > exact matching is unchanged; the full scoped audit must be rerun and green
 > is not claimed until that rerun passes.
+>
+> 2026-11-04 verification (PWA CI run 41909897170, `quality (22,10)`, SHA
+> `11a9169`): the full quality job passed, including `Scoped audit`, with the
+> exact 15 dated entries current for that npm graph. E2E also passed. This is a
+> time-bounded risk acceptance, not remediation; entries still expire
+> 2026-12-31 and must be re-reviewed before then.
 
 ## Runtime (2 shapes, 1 risk)
 
