@@ -1761,5 +1761,37 @@
       "eslint-config-next"
     ],
     "range": "*"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-type-utils-effects-empty",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41906016268, Scoped audit job 126840755840, HEAD 8a2e6e9): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/type-utils with an effects-only alternate exact graph shape (effects [] instead of [@typescript-eslint/eslint-plugin]; via [@typescript-eslint/typescript-estree, @typescript-eslint/utils] and range >=6.16.0 unchanged). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; this acceptance does not remediate the advisory and no compatible non-breaking remediation is applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/type-utils",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/typescript-estree",
+      "@typescript-eslint/utils"
+    ],
+    "effects": [],
+    "range": ">=6.16.0"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-utils-effects-eslint-plugin",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41906016268, Scoped audit job 126840755840, HEAD 8a2e6e9): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/utils with an effects-only alternate exact graph shape (effects [@typescript-eslint/eslint-plugin, typescript-eslint] instead of [typescript-eslint]; via [@typescript-eslint/typescript-estree] and range >=6.16.0 unchanged). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; this acceptance does not remediate the advisory and npm proposes only the breaking eslint-config-next 15.5.29 major downgrade, which is not applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/utils",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/typescript-estree"
+    ],
+    "effects": [
+      "@typescript-eslint/eslint-plugin",
+      "typescript-eslint"
+    ],
+    "range": ">=6.16.0"
   }
 ]

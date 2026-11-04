@@ -402,6 +402,70 @@ test("2026-11-04 drift (41900996857): accepts only the ten exact CI records, rej
   }
 });
 
+// ---- 2026-11-04 drift (run 41906016268, job 126840755840): 2 effects-only shapes ----
+
+test("2026-11-04 drift (41906016268): accepts only the two exact effects-only records, rejects mutations", () => {
+  const exact = {
+    "@typescript-eslint/type-utils": {
+      name: "@typescript-eslint/type-utils",
+      severity: "moderate",
+      isDirect: false,
+      via: ["@typescript-eslint/typescript-estree", "@typescript-eslint/utils"],
+      effects: [],
+      range: ">=6.16.0",
+      nodes: ["node_modules/@typescript-eslint/type-utils"],
+      fixAvailable: true,
+    },
+    "@typescript-eslint/utils": {
+      name: "@typescript-eslint/utils",
+      severity: "moderate",
+      isDirect: false,
+      via: ["@typescript-eslint/typescript-estree"],
+      effects: ["@typescript-eslint/eslint-plugin", "typescript-eslint"],
+      range: ">=6.16.0",
+      nodes: ["node_modules/@typescript-eslint/utils"],
+      fixAvailable: { name: "eslint-config-next", version: "15.5.29", isSemVerMajor: true },
+    },
+  };
+  const twoAudit = (vulns) => ({
+    vulnerabilities: vulns,
+    metadata: { vulnerabilities: { total: Object.keys(vulns).length } },
+  });
+  const NEW_IDS = new Set([
+    "pwa-2026-11-04-typescript-eslint-type-utils-effects-empty",
+    "pwa-2026-11-04-typescript-eslint-utils-effects-eslint-plugin",
+  ]);
+
+  // Pre-change allowlist (without the two new shapes) must BLOCK exactly 2.
+  const withoutNew = allowlist.filter((e) => !NEW_IDS.has(e.id));
+  assert.equal(withoutNew.length, allowlist.length - 2);
+  const pre = evaluateAudit({ audit: twoAudit({ ...exact }), allowlist: withoutNew, today: TODAY });
+  assert.equal(pre.status, "BLOCKED");
+  assert.equal(pre.blocked.length, 2);
+
+  // Post-change allowlist ACCEPTS both exactly.
+  const ok = evaluateAudit({ audit: twoAudit({ ...exact }), allowlist, today: TODAY });
+  assert.equal(ok.status, "ACCEPTED");
+  assert.equal(ok.blocked.length, 0);
+
+  // Exactness: mutate one canonical field at a time; each must BLOCK.
+  for (const key of Object.keys(exact)) {
+    const base = exact[key];
+    const mutants = [
+      { ...base, severity: "high" },
+      { ...base, via: ["changed-dependency"] },
+      { ...base, effects: ["other-pkg"] },
+      { ...base, range: ">=99.0.0" },
+    ];
+    for (const vuln of mutants) {
+      const trial = { ...exact, [key]: vuln };
+      const result = evaluateAudit({ audit: twoAudit(trial), allowlist, today: TODAY });
+      assert.equal(result.status, "BLOCKED", `expected BLOCKED for mutated ${key}`);
+      assert.ok(result.blocked.some((b) => b.name === key), `expected ${key} in blocked`);
+    }
+  }
+});
+
 // ---- pass: no vulnerabilities ----
 test("pass: no vulnerabilities", () => {
   const emptyAudit = { vulnerabilities: {}, metadata: { vulnerabilities: { total: 0 } } };

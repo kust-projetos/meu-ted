@@ -62,6 +62,26 @@
 > or pattern acceptance was added and strict exact matching is unchanged. No
 > breaking major upgrade/downgrade is applied by this acceptance. The full scoped
 > audit must be rerun; green is not claimed until that rerun passes.
+>
+> 2026-11-04 follow-up (PWA CI run 41906016268, Scoped audit job 126840755840,
+> HEAD 8a2e6e9):
+> The run accepted the ten exact shapes above and blocked exactly two
+> effects-only alternate shapes from the same dev-only TypeScript-ESLint /
+> minimatch family (GHSA-g3hv-75wg-m249): `@typescript-eslint/type-utils`
+> with effects `[]` (existing entry
+> `pwa-2026-11-04-typescript-eslint-type-utils-6160` covers effects
+> `['@typescript-eslint/eslint-plugin']`) and `@typescript-eslint/utils`
+> with effects `['@typescript-eslint/eslint-plugin','typescript-eslint']`
+> (existing entry `pwa-2026-11-04-typescript-eslint-utils-6160` covers
+> effects `['typescript-eslint']`); `via` and `range` are unchanged in both.
+> Each has one separate exact entry
+> (`pwa-2026-11-04-typescript-eslint-type-utils-effects-empty` and
+> `pwa-2026-11-04-typescript-eslint-utils-effects-eslint-plugin`, both
+> `dev-only`, both expire 2026-12-31). This approval does not remediate the
+> advisories and applies no downgrade; npm proposes only the breaking
+> `eslint-config-next@15.5.29` major downgrade, which is not applied. Strict
+> exact matching is unchanged; the full scoped audit must be rerun and green
+> is not claimed until that rerun passes.
 
 ## Runtime (2 shapes, 1 risk)
 
