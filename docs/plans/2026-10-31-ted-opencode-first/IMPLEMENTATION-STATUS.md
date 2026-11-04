@@ -1,6 +1,6 @@
 # Estado de implementação — TED OpenCode-first
 
-**Atualizado:** 2026-11-03  
+**Atualizado:** 2026-11-04  
 **Estado geral:** `PARTIAL`  
 **Worktree:** `D:/projetos/pi-ted-opencode-product`  
 **Branch:** `feat/ted-opencode-product`  
@@ -20,7 +20,7 @@ Este relatório descreve o checkout dirty efetivamente testado, não apenas o HE
 
 | Fase | Estado | Evidência e limite atual |
 |---|---|---|
-| Recuperação/P0/P1 — runtime local | `PARTIAL` | Runtime OpenCode 2.2.4, gateway loopback, isolamento, bindings, catálogo default read-only e testes locais. A validação registrada mais recente executou `node --test apps/ted-runtime/tests/` com 161/161. Catálogo do prompt-loop com a leitura P3 opt-in ainda não foi provado com modelo; o prompt real permanece bloqueado para nova tentativa sem autorização. |
+| Recuperação/P0/P1 — runtime local | `PARTIAL` | Runtime OpenCode 2.2.4, gateway loopback, isolamento, bindings, catálogo default read-only e testes locais. A validação registrada mais recente executou `node --test apps/ted-runtime/tests/` com 161/161. Catálogo do prompt-loop com a leitura P3 opt-in ainda não foi provado com modelo; o prompt real permanece bloqueado para nova tentativa sem autorização. Em 2026-11-04, o catálogo efetivo (`list_accounts` oferecido) e a negação nativa por `ctx.permission.assert` foram provados no SDK 2.2.4 real com provider scriptado (ver retificação final). |
 | 1 — P2 leitura pela PWA | `PARTIAL` (`READ_SLICE_PASS` NOT ACHIEVED; causa física de `provider.transport` NOT VERIFIED) | A campanha anterior de 2026-11-01 provou uma resposta sintética e as duas tools de leitura, mas o refresh de histórico falhou. Em `r8v7` (2026-11-03), uma única mensagem foi admitida e terminou em `provider.transport`, sem resposta financeira; o ajuste em `prompt.mjs` preserva o erro tipado, mas não corrige a causa física entre SDK e proxy. Custo/faturamento também não foi verificado. Sem retry, segundo prompt ou nova inferência. |
 | 2 — P3 primeira escrita pela PWA | `PARTIAL` | Preparada somente a leitura opcional `list_categories`, necessária para resolver categoria. O catálogo P2 segue com duas ferramentas por padrão; a terceira é opt-in local e forçada OFF em produção. `propose_expense`, POST Pending V2, confirmação e execução continuam ausentes. A proposta via OpenCode está **BLOCKED** pela fronteira de emissão de token A4 descrita abaixo; `WRITE_SLICE_PASS` não foi atingido. |
 | 3 — expansão do catálogo financeiro | `NOT_STARTED` | Nenhuma capacidade além da leitura opcional de categorias foi iniciada. |
@@ -254,3 +254,87 @@ Este adendo atualiza o estado após a leitura da documentação publicada em `or
 - `TRANSPORT_ROOT_CAUSE_CONFIRMED=NO`; `TRANSPORT_FIX_PASS=NOT_ACHIEVED`; `TRANSPORT_STILL_UNKNOWN=YES`. O fix de `prompt.mjs` continua preservado e só corrige a classificação do erro terminal.
 - Produto local já usa provider/configuração nativos do OpenCode e não possui esse reverse proxy. O proxy `proxy.mjs` é específico do runner de campanha e acrescenta restrições de egress/rota/nonce/caps/contagem; foi mantido para preservar essa fronteira. `SIMPLIFICATION_DONE=NO PRODUCT REDUNDANCY FOUND; zero removals in this task`.
 - Evidência detalhada, status de autorização e menor prova live necessária: `docs/reports/P2-FINAL-E2E-CLOSURE-RESULTS.md` e `docs/reports/P2-NATIVE-FIRST-SIMPLIFICATION-RESULTS.md`. Sem novo turno live, rede externa, alteração de produto, dados financeiros, produção ou deploy.
+
+## Retificação — validação final de permissões nativas no prompt-loop (2026-11-04, PR #290)
+
+**Escopo:** base `16a124c`; commits desta rodada `5bae30f` (teste negativo nativo) e `0fe62b1` (tipagem PWA que quebrava o CI). Sem inferência paga, dado financeiro real, merge, deploy ou alteração de produção.
+
+### Negação nativa de tool oferecida ao modelo
+
+| Ponto exigido | Evidência | Estado |
+|---|---|---|
+| `list_accounts` no catálogo efetivo oferecido ao modelo | `tools[].function.name` da primeira requisição ao stub contém `list_accounts` | PASS |
+| Modelo solicita a tool | Script do stub em loopback, sem provider externo | PASS |
+| `ctx.permission.assert` chamado com `ted.finance.read` e `['list_accounts']` | Spy delegante registra cada chamada e devolve a decisão nativa real | PASS |
+| Negação | Regra nativa de sessão `ted.finance.read` / `list_accounts` / `deny` | PASS |
+| Zero chamadas ao transporte financeiro | `transportCalls === 0` | PASS |
+| Sem efeito colateral | Negação ocorre antes de `resolveHost`, executor e HTTP | PASS |
+| Erro sem vazamento | Envelope de erro com mensagem fixa; sem identidade, token, regra ou `BlockedError` | PASS |
+
+Mecanismo verificado no SDK 2.2.4 instalado:
+
+- A disponibilidade no catálogo (`Tool.snapshot` → `whollyDisabled`) filtra **somente por ação**. Uma regra por recurso não remove a tool do catálogo.
+- O `assert` avalia **ação + recurso** (`evaluate3`, `findLast`) sobre `merge(regras do agente, regras da sessão)`. Regras de sessão vêm por último.
+- A negação dura (`denied`) ocorre **antes** do hook `permission.evaluate`. Por isso o hook não observa negações, e o teste usa um spy que delega ao `assert` real.
+- `session.permissions` é lido por registro de sessão (`store.get(sessionID)`). Em produção, `server.mjs` cria sessões só com `title` e `agent`. A única ocorrência de `permissions` em `apps/ted-runtime/src` é a configuração fixa do agente (`bootstrap.mjs`).
+
+### Mutações (teste restaurado após cada uma; `plugin.mjs` igual ao HEAD ao final)
+
+| Mutação | Resultado do teste |
+|---|---|
+| 1. Pular `ctx.permission.assert` | FALHA na asserção de chamada `ted.finance.read/list_accounts` (`calls=[]`), no caso positivo e no negativo |
+| 2. Remover `options.permission` (regressão do `16a124c`) | FALHA: `list_accounts` ausente do catálogo; o modelo recebe `No tool named "list_accounts" is currently available` |
+| 3. Engolir a negação do `assert` | FALHA em `finance transport untouched` (transporte chamado) |
+
+### Shell e write
+
+As negações de `shell` e `write` continuam como estavam e **não** são prova do `assert`. O agente `ted` as remove do catálogo (`{action:'*',resource:'*',effect:'deny'}`), e o erro é `No tool named ... currently available`. É negação de disponibilidade, não de execução.
+
+### Revisão independente
+
+- Revisor (subagent, somente leitura, sem ferramenta de shell): `CHANGES_REQUIRED` com **somente P2 de verificação**. Não rodou o teste nem comparou o diff da PWA. Nenhum P0/P1 de código.
+- Fechamento pelo autor: teste reexecutado no HEAD; diff da PWA comparado chamada a chamada (quando a chamada resolve, o `.catch` antigo e o `rejectionOf` novo falham da mesma forma); isolamento de sessão confirmado no código do SDK.
+- Superfície: nenhum caminho de cliente altera `permissions` (ver acima).
+
+### CI do PR e correção
+
+- Head `16a124c`: PWA `lint + typecheck + test` e `e2e` falharam por `TS2339` em `TedOpencodeP2.contract.test.ts`, arquivo introduzido pelo próprio PR (commit `d501f5e`). Corrigido em `0fe62b1` com `rejectionOf()`; asserções inalteradas.
+- O CI remoto do novo head é a referência final e está registrado na descrição do PR.
+
+### Gates desta rodada (local)
+
+| Gate | Resultado |
+|---|---|
+| `node --test --test-reporter=tap tests/` (ted-runtime) | PASS: 196/196, 0 falhas, 0 pulados, 37 suítes |
+| `tests/prompt-loop-permission.test.mjs` | PASS: 5/5 |
+| `pnpm --dir apps/pwa lint` | PASS (exit 0) |
+| `pnpm --filter @pi-finance/llm-contracts build` | PASS |
+| `pnpm --dir apps/pwa exec vitest run` | PASS: 321 arquivos, 2903/2903 |
+| `pnpm --dir apps/pwa typecheck` (`tsconfig.typecheck.json`) | PASS (exit 0) |
+| `vitest run` do contrato P2 da PWA | PASS: 27/27 |
+| `next build`, etapa TypeScript e páginas estáticas | PASS (`Finished TypeScript`; páginas 6/6) |
+| Testes `pwa-audit-policy/output/workspace` | PASS |
+| `pnpm lint` na raiz | PASS (exit 0, 122 s); ver Biome abaixo |
+| `pnpm --filter pi-finance-ted-runtime typecheck` / `lint` | PASS |
+| `docs:lint`, `action-pins:check`, `workflows-yaml:check`, `test:skip-gate`, `capabilities:check`, `write-policy:check`, `governance:check`, `boundary:check`, `public-safety --strict`, `plans:check` | PASS (exit 0) |
+| Hooks de pré-commit dos dois commits | PASS (mesmos gates acima) |
+
+### Limitações, NOT RUN e BLOCKED
+
+- **Cloudflare build (OpenNext): NOT RUN local, BLOCKED no Windows.** `next build` concluiu, mas o empacotamento do OpenNext falha ao carregar o binário nativo `sharp-win32-x64` (o próprio OpenNext avisa que não é totalmente compatível com Windows). A referência é o job `PWA — Cloudflare build` no Linux.
+- **Auditoria escopada `scripts/pwa-audit.mjs`: NOT RUN local.** Falha em `npm install --package-lock-only` com `EALLOWREMOTE` (npm 12.2.0 local, Node 26; o CI usa Node 22). O `apps/pwa/package.json` não mudou neste PR e os locks não contêm entradas `tarball:`, então não é efeito do PR. A política do npm não foi afrouxada.
+- **CORS contra produção: SKIP local por design** (`PWA_PROD_URL` ausente; o script sai com 0). O CI injeta a variável.
+- **E2E Playwright (`e2e (22, 10)`): NOT RUN local.** Depende do mesmo build e de navegadores. A falha anterior era o `TS2339` já corrigido.
+- **API e Agent: sem alteração neste PR**; os jobs do head `16a124c` passaram no CI. Não foram reexecutados localmente nesta rodada.
+- **Biome: issue #291.** A primeira execução da raiz ficou sem saída por mais de 30 min; a segunda concluiu em 122 s com exit 0. Causa não identificada. Os avisos (API 148, agent 231) são `warning`.
+
+### Critérios do P2 (`READ_SLICE_PASS`)
+
+- **`READ_SLICE_PASS`: NOT ACHIEVED.** Exige PWA → proxy → gateway → OpenCode com **modelo real autorizado** → tools → API → DTO → PWA, com erros, cancelamento, visibilidade e recuperação/reload integrados. Esta rodada usou provider scriptado e não autorizou inferência; logo não há prova integrada.
+- **Recuperação/reload integrados: NOT VERIFIED nesta rodada.** Os testes focados de reload e histórico passam por componentes (`TedChat.reload`, `route.p2-real-history`). Não há conversa gerada por modelo recuperada ponta a ponta no browser.
+- **Catálogo efetivo com modelo real: NOT PROVEN.** Provado o catálogo efetivo no prompt-loop real do SDK com provider scriptado (`list_accounts` oferecido).
+- **Negação nativa com modelo real: NOT PROVEN.** Provada com provider scriptado (acima).
+
+**Estado P2 após esta rodada: `PARTIAL`.** Sem inferência paga, dado financeiro real, merge, deploy ou alteração de produção.
+
+**Próxima ação:** para `READ_SLICE_PASS`, autorização explícita de provider, modelo e teto. Sem isso, não repetir inferência.

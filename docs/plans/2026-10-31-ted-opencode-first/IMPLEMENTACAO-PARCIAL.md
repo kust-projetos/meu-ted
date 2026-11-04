@@ -27,7 +27,7 @@
 
 ## Bloqueios e limites
 
-- **Catálogo efetivo ao vivo — BLOCKED:** no SDK 2.2.4, observar `ctx.tool.list()` após o transform exige carregar o setup do plugin; o teste atual não chama `session.prompt` para evitar qualquer tentativa de inferência. Testes unitários cobrem o seam pós-transform, schemas e deny policy, mas não provam o catálogo efetivo do prompt-loop real.
+- **Catálogo efetivo ao vivo — BLOCKED com modelo real; provado com provider scriptado em 2026-11-04 (ver `IMPLEMENTATION-STATUS.md`):** no SDK 2.2.4, observar `ctx.tool.list()` após o transform exige carregar o setup do plugin; o teste atual não chama `session.prompt` para evitar qualquer tentativa de inferência. Testes unitários cobrem o seam pós-transform, schemas e deny policy, mas não provam o catálogo efetivo do prompt-loop real.
 - **`READ_SLICE_PASS` — BLOCKED:** os testes provam API e ferramentas com oráculos sintéticos, identidade/visibilidade no gateway, proxy e cancelamento por contrato; não executam `PWA → proxy → gateway → session.prompt/modelo → tools → API → DTO → UI` com um turno de modelo real. Nenhuma inferência ou orçamento foi autorizado nesta execução.
 - Sem chamadas a provider, dados financeiros reais, banco/Postgres, Docker/`ted-local`, migration, restart, escrita financeira, deploy, merge, PR, commit ou P3.
 - O worktree permanece dirty. Resultados se referem ao checkout local atual, não ao HEAD isolado ou a uma release.
