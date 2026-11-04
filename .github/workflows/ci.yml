@@ -141,6 +141,21 @@ jobs:
       - run: pnpm --filter pwa --fail-if-no-match lint
       - run: pnpm boundary:check
       - run: pnpm --filter pwa --fail-if-no-match build
+      # The TED P2 real-history probe runs the OpenCode SDK 2.2.4, which needs
+      # Node >= 24 (explicit resource management). Fetch a PINNED Node 24 with a
+      # verified SHA256 and expose it via TED_PROBE_NODE; PATH stays on Node 22.
+      - name: Fetch pinned Node 24 for the TED runtime probe
+        run: |
+          set -euo pipefail
+          VERSION=v24.22.2
+          DIR="$RUNNER_TEMP/node-probe"
+          mkdir -p "$DIR"
+          curl -fsSL -o "$DIR/node-$VERSION-linux-x64.tar.xz" "https://nodejs.org/dist/$VERSION/node-$VERSION-linux-x64.tar.xz"
+          curl -fsSL -o "$DIR/SHASUMS256.txt" "https://nodejs.org/dist/$VERSION/SHASUMS256.txt"
+          (cd "$DIR" && grep -F "  node-$VERSION-linux-x64.tar.xz" SHASUMS256.txt | sha256sum -c -)
+          tar -xJf "$DIR/node-$VERSION-linux-x64.tar.xz" -C "$DIR" --strip-components=1
+          echo "TED_PROBE_NODE=$DIR/bin/node" >> "$GITHUB_ENV"
+          "$DIR/bin/node" -v
       - run: pnpm --filter pwa --fail-if-no-match test
 
   # ─── PWA Cloudflare build ─────────────────────────────────────────────

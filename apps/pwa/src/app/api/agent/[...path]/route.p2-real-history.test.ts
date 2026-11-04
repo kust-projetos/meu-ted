@@ -93,6 +93,14 @@ const HISTORY_UNAVAILABLE_FIXED =
 
 const CHILD_TIMEOUT_MS = 180000;
 
+// The OpenCode SDK 2.2.4 uses explicit resource management (`await using`),
+// which Node 22 cannot parse: the probe then fails at import with
+// sdk-unavailable. Probe children therefore run under TED_PROBE_NODE (CI sets a
+// pinned Node 24); without it they use the current Node.
+function probeNode(): string {
+  return process.env.TED_PROBE_NODE || process.execPath;
+}
+
 function approvedTmpRoot(prefix: string): string {
   const base =
     process.platform === "win32"
@@ -119,7 +127,7 @@ function lastJsonLine(stdout: string): JsonRecord | null {
 
 function runProbeOnce(args: string[], timeoutMs = CHILD_TIMEOUT_MS): Promise<{ code: unknown; stdout: string; stderr: string; json: JsonRecord | null }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [PROBE, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(probeNode(), [PROBE, ...args], { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -165,7 +173,7 @@ class ServeProc {
   }
 
   static async start(args: string[], timeoutMs = CHILD_TIMEOUT_MS): Promise<ServeProc> {
-    const child = spawn(process.execPath, [PROBE, ...args], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(probeNode(), [PROBE, ...args], { stdio: ["pipe", "pipe", "pipe"] });
     const proc = new ServeProc(child);
     const deadline = Date.now() + timeoutMs;
     for (;;) {
@@ -229,7 +237,8 @@ describe("P2 PWA real-history: proxy/client sobre a conversa reaberta pelo SDK r
 
     // 1. Seed child: transcript sintético via import oficial + metadados.
     const seedRun = await runProbeOnce(["seed", root]);
-    expect(seedRun.code).toBe(0);
+    // Surface the probe's own sanitized verdict (step/detail) when seeding fails.
+    expect(seedRun.code, `seed probe failed: ${JSON.stringify(seedRun.json ?? seedRun.stderr.slice(-400))}`).toBe(0);
     expect(seedRun.json?.["ok"]).toBe(true);
     const seeded = seedRun.json as JsonRecord & {
       sessionId: string; conversationId: string; userMessageId: string;
