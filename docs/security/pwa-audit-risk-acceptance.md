@@ -46,6 +46,22 @@
 > breaking major downgrade that is not applied and does not alter dependencies.
 > Strict exact matching is unchanged; the full audit is not claimed green until
 > rerun.
+>
+> 2026-11-04 follow-up (PWA CI run 41900996857, Scoped audit job 126823057023,
+> HEAD 0c9cbce):
+> The run reported ten exact graph shapes from the same already-accepted
+> families: seven dev-only records (@stryker-mutator/core,
+> @stryker-mutator/typescript-checker, @typescript-eslint/eslint-plugin,
+> @typescript-eslint/parser, @typescript-eslint/type-utils,
+> @typescript-eslint/utils, eslint-config-next) plus the build-time aggregate
+> glob row and the narrower minimatch row and the dev-only typescript-eslint
+> row. npm transitive graph/advisory metadata reshaped (narrower via/effects/range
+> windows, alternate aggregate via); this is a shape change, not a claim that any
+> advisory was fixed or remediated. Each shape has one separate exact
+> pwa-2026-11-04-* entry (scopes as recorded, all expire 2026-12-31); no generic
+> or pattern acceptance was added and strict exact matching is unchanged. No
+> breaking major upgrade/downgrade is applied by this acceptance. The full scoped
+> audit must be rerun; green is not claimed until that rerun passes.
 
 ## Runtime (2 shapes, 1 risk)
 
