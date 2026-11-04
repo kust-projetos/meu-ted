@@ -338,3 +338,13 @@ As negações de `shell` e `write` continuam como estavam e **não** são prova 
 **Estado P2 após esta rodada: `PARTIAL`.** Sem inferência paga, dado financeiro real, merge, deploy ou alteração de produção.
 
 **Próxima ação:** para `READ_SLICE_PASS`, autorização explícita de provider, modelo e teto. Sem isso, não repetir inferência.
+
+### Retificação de CI — Node do probe real-history (2026-11-04)
+
+- **CI do head `0b13a3d`** (runs `41817658789` e `41817658928`): PASS em API, Agent, Codex Broker, Postgres, Docker, Documentation, Governance, Security, Public safety, Write policy, Capability inventory, `PWA — Cloudflare build + headers + JS budget` e `e2e (22, 10)`. FAIL em `PWA — lint + typecheck + test` e `quality (22, 10)`, ambos pelo mesmo teste.
+- **Causa raiz verificada:** `route.p2-real-history.test.ts:232` (`seedRun.code === 0`) falha porque o probe não consegue importar o SDK 2.2.4 sob Node 22. O erro é `SyntaxError: Unexpected identifier '_'` em `@opencode/util/dist/flock.js:262` (`await using _ = …`, explicit resource management). Reprodução no WSL Linux: Node 22.22.1 sai com código 1 (`sdk-unavailable`); Node 24.22.2 importa o SDK, faz o seed com código 0 e grava 120 mensagens.
+- **Versão mínima com evidência:** Node 24 para o SDK 2.2.4 usado pelo runtime. O `engines` de `apps/ted-runtime` (`>=22.12.0`) estava incorreto e passou a `>=24`.
+- **Correção (commit `413312a`):** processos filhos do probe executam sob `TED_PROBE_NODE`, com padrão `process.execPath`. O CI baixa Node 24.22.2 fixado, verifica SHA256 contra o `SHASUMS256.txt` oficial e exporta `TED_PROBE_NODE`. O `PATH` continua no Node 22 e os nomes dos checks obrigatórios (`quality (22, 10)`) não mudam. A asserção do seed agora mostra o veredito sanitizado do probe.
+- **Verificação local:** o bloco `run` do passo foi simulado em bash Linux (checksum OK, `TED_PROBE_NODE` exportado, `PATH` inalterado). A rota real-history passou 1/1 com o Node padrão e 1/1 com `TED_PROBE_NODE` apontando para Node 24 Windows verificado por SHA256. Passaram: typecheck e lint da PWA, typecheck e lint do `ted-runtime`, `docs:lint`, `workflows-yaml`, `action-pins` e gates de pré-commit.
+- **Lacuna registrada:** `apps/ted-runtime` não tem job de CI próprio. Os 196 testes do runtime não rodam em nenhum workflow; o probe só roda indiretamente pela PWA. Recomendado: job dedicado em Node 24, em follow-up.
+- **Estado do CI do novo head:** registrado na descrição do PR após a execução.
