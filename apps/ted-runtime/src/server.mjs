@@ -50,6 +50,11 @@ import {
 } from './conversations.mjs';
 import { GatewayError } from './gateway.mjs';
 import { HISTORY_UNAVAILABLE_MESSAGE, PromptError } from './prompt.mjs';
+import {
+  classifyTerminalCause,
+  createDiagnosticContext,
+  defaultDiagnosticSink,
+} from './diagnostics.mjs';
 
 export const GATEWAY_BODY_LIMIT_BYTES = 64 * 1024;
 export const GATEWAY_REQUEST_TIMEOUT_MS = 30000;
@@ -224,6 +229,9 @@ function normalizeHistoryError(e) {
 //     throwing at startup; any B native use without the wrapper below fails
 //     closed at request time, never silently via the unsafe rebind)
 //   isSecureOrigin({ origin, forwardedProto }) -> boolean
+//   diagnosticsSink(event) -> void (optional): injectable Etapa C-WIRE
+//     observation sink. Defaults to one structured JSON line per event on
+//     stdout. Sink failures never alter results or errors.
 export function createGatewayServer({
   resolveIdentity,
   store,
@@ -233,6 +241,7 @@ export function createGatewayServer({
   withAuthenticatedSession = null,
   isSecureOrigin = () => false,
   requestTimeoutMs = GATEWAY_REQUEST_TIMEOUT_MS,
+  diagnosticsSink = defaultDiagnosticSink,
 } = {}) {
   if (typeof resolveIdentity !== 'function') throw new Error('gateway server: resolveIdentity is required');
   if (!store || typeof store.get !== 'function') throw new Error('gateway server: conversation store is required');
@@ -272,13 +281,13 @@ export function createGatewayServer({
   // falls back to matching the settled turnId inside projected history.
   // Returns null when nothing correlatable is observable (caller fails
   // closed 409 instead of issuing a second prompt).
-  async function replayCompletedIntention(record, existing) {
+  async function replayCompletedIntention(record, existing, diagnosticCorrelationId) {
     const runtimeSessionId = record && record.runtimeSessionId;
     if (!runtimeSessionId) return null;
     if (existing && typeof existing.userMessageId === 'string' && promptHost && typeof promptHost.readRawMessages === 'function') {
       try {
         const { assistantTextAfterAdmitted } = await import('./prompt.mjs');
-        const rows = await promptHost.readRawMessages({ sessionID: runtimeSessionId });
+        const rows = await promptHost.readRawMessages({ sessionID: runtimeSessionId, diagnosticCorrelationId });
         const found = assistantTextAfterAdmitted(rows, existing.userMessageId);
         if (found && typeof found.text === 'string' && found.text.trim().length > 0) {
           return { turnId: found.turnId ?? existing.turnId, output: found.text };
@@ -286,7 +295,7 @@ export function createGatewayServer({
       } catch { /* fall through to turnId match */ }
     }
     if (existing && typeof existing.turnId === 'string' && promptHost && typeof promptHost.readHistory === 'function') {
-      const items = await promptHost.readHistory({ sessionID: runtimeSessionId, ownerActor: record.ownerActor });
+      const items = await promptHost.readHistory({ sessionID: runtimeSessionId, ownerActor: record.ownerActor, diagnosticCorrelationId });
       const hit = Array.isArray(items) ? items.find((it) => it && it.id === existing.turnId) : null;
       if (hit && typeof hit.content === 'string' && hit.content.length > 0) {
         return { turnId: hit.id, output: hit.content };
@@ -409,6 +418,16 @@ export function createGatewayServer({
     // so the persisted intention registry (ids/status only) is consulted
     // FIRST inside the lock — a completed intention replays from native
     // history (or fails closed 409) WITHOUT a second native prompt.
+    // Etapa C-WIRE turn diagnostics: one fresh opaque correlation per
+    // admitted chat request, reused across this turn's gateway/SDK events
+    // (admit here, SDK prompt/history inside the lock, finish below). The
+    // correlation is runtime-generated — never derived from turn
+    // identifiers and never returned in the public DTO. Duplicate/
+    // in-progress/completed-replay outcomes classify as not_proven: the
+    // guard decision itself carries no physical transport evidence.
+    const turnDiag = createDiagnosticContext({ sink: diagnosticsSink });
+    const turnCorrelationId = turnDiag.correlationId;
+    turnDiag.emit({ phase: 'gateway_admit', outcome: 'success', cause: 'none' });
     const outcome = await store.withTurnLock(record.conversationId, async () => {
       const hasIntentions = store && typeof store.getIntention === 'function'
         && typeof store.claimIntention === 'function'
@@ -456,7 +475,7 @@ export function createGatewayServer({
           let replayed = null;
           try {
             replayed = await requireSafeWrapper()(runtimeForReplay, host, async () => {
-              return await replayCompletedIntention(record, existing).catch(() => null);
+              return await replayCompletedIntention(record, existing, turnCorrelationId).catch(() => null);
             });
           } catch (wrapperErr) {
             // Idle/quarantine failures propagate (fail closed) — never masked
@@ -486,7 +505,7 @@ export function createGatewayServer({
                   try {
                     const { assistantTextAfterAdmitted, isProviderTransportTerminal } = await import('./prompt.mjs');
                     if (!promptHost || typeof promptHost.readRawMessages !== 'function') return null;
-                    const rows = await promptHost.readRawMessages({ sessionID: runtimeForRecovery });
+                    const rows = await promptHost.readRawMessages({ sessionID: runtimeForRecovery, diagnosticCorrelationId: turnCorrelationId });
                     if (!Array.isArray(rows)) return null;
                     const at = rows.findIndex((m) => m && typeof m === 'object' && m.id === existing.userMessageId);
                     if (at !== -1) {
@@ -590,6 +609,7 @@ export function createGatewayServer({
             text: body.text,
             intentionId: body.intentionId,
             signal,
+            diagnosticCorrelationId: turnCorrelationId,
           });
         });
       } catch (e) {
@@ -635,6 +655,16 @@ export function createGatewayServer({
       record = store.noteTurn(record.conversationId);
       return started;
     }).catch((e) => ({ __error: e }));
+
+    // Turn finish observation: success carries `none`; failures classify
+    // from observable evidence only (duplicate/in_progress/completed-replay
+    // guards → not_proven — the guard carries no transport evidence).
+    if (outcome && outcome.__error) {
+      const dc = classifyTerminalCause(outcome.__error);
+      turnDiag.emit({ phase: dc.phase, outcome: 'failure', cause: dc.cause, httpStatus: dc.httpStatus });
+    } else {
+      turnDiag.emit({ phase: 'terminal_result', outcome: 'success', cause: 'none' });
+    }
 
     if (outcome && outcome.__error) {
       const e = outcome.__error;
@@ -693,6 +723,10 @@ export function createGatewayServer({
     // rebinding on this conversation. Lock order is always
     // conversation-outer → session-inner (the wrapper below). A foreign
     // actor never reaches native history (metadata check above failed closed).
+    // History observation carries its own fresh opaque correlation (one
+    // per history request). The pin-none bootstrap path above performs no
+    // native use, so it emits nothing.
+    const hdiag = createDiagnosticContext({ sink: diagnosticsSink });
     try {
       const host = verifiedHostFor(identity, deviceToken);
       // Identity correlation + per-author attribution from the persisted
@@ -710,6 +744,7 @@ export function createGatewayServer({
         }
       }
       const runtimeSessionId = record.runtimeSessionId;
+      hdiag.emit({ phase: 'gateway_admit', outcome: 'success', cause: 'none' });
       const items = await store.withTurnLock(record.conversationId, async () => {
         return await requireSafeWrapper()(runtimeSessionId, host, async () => {
           return await promptHost.readHistory({
@@ -717,12 +752,16 @@ export function createGatewayServer({
             ownerActor: record.ownerActor,
             userMeta,
             viewerActor: identity.actorId,
+            diagnosticCorrelationId: hdiag.correlationId,
           });
         });
       });
+      hdiag.emit({ phase: 'terminal_result', outcome: 'success', cause: 'none' });
       return { status: 200, payload: { items } };
     } catch (e) {
       const normalized = normalizeHistoryError(e);
+      const hdc = classifyTerminalCause(normalized);
+      hdiag.emit({ phase: hdc.phase, outcome: 'failure', cause: hdc.cause, httpStatus: hdc.httpStatus });
       return { status: toStatus(normalized.code), payload: errorPayload(normalized) };
     }
   }

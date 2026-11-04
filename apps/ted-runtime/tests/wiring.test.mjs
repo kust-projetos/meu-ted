@@ -58,6 +58,7 @@ describe('wiring plugin -> transport -> HTTP (contrato real)', () => {
         assert.equal(input.action, 'ted.finance.read');
         assert.deepEqual(input.resources, ['list_accounts']);
       } },
+      session: { hook: async () => ({ dispose: async () => {} }) },
       tool: { transform: async (fn) => { fn({ add: (t) => added.push(t) }); } },
     });
     const listAccounts = added.find((t) => t.name === 'list_accounts');
@@ -111,6 +112,7 @@ describe('wiring plugin -> transport -> HTTP (contrato real)', () => {
         assert.equal(input.action, 'ted.finance.read');
         assert.deepEqual(input.resources, ['list_accounts']);
       } },
+      session: { hook: async () => ({ dispose: async () => {} }) },
       tool: { transform: async (fn) => { fn({ add: (t) => added.push(t) }); } },
     });
     assert.deepEqual(added.map((t) => t.name).sort(), [...PRODUCT_TOOL_NAMES].sort());
@@ -138,6 +140,7 @@ describe('wiring plugin -> transport -> HTTP (contrato real)', () => {
     const added = [];
     await pluginDef.setup({
       permission: { assert: async () => {} },
+      session: { hook: async () => ({ dispose: async () => {} }) },
       tool: {
         list: async () => [{ name: 'list_accounts' }, { name: 'get_month_summary' }],
         transform: async (fn) => { fn({ add: (t) => added.push(t) }); },
@@ -155,6 +158,7 @@ describe('wiring plugin -> transport -> HTTP (contrato real)', () => {
     });
     await pluginDef2.setup({
       permission: { assert: async () => {} },
+      session: { hook: async () => ({ dispose: async () => {} }) },
       tool: { transform: async (fn) => { fn({ add: () => {} }); } },
     });
     assert.equal(reported2.length, 1);

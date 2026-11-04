@@ -40,6 +40,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { defaultDiagnosticSink } from './diagnostics.mjs';
 
 const DEFAULT_HOME = path.join(os.homedir(), '.ted-runtime');
 const DEFAULT_IDENTITY = 'local';
@@ -50,7 +51,12 @@ const DEFAULT_TIMEOUT_MS = 90000;
 // Test seam: every collaborator injectable; defaults are the real modules.
 // `env` overrides process.env per key (explicit arg wins, then process.env,
 // then documented loopback defaults) so tests never depend on ambient env.
-export async function startTedRuntime({ env = {}, deps = {} } = {}) {
+// `diagnosticsSink` (optional, test seam): Etapa C-WIRE observation sink
+// shared by the gateway boundary events and the prompt host's SDK
+// observation events. Defaults to one structured JSON line per event on
+// stdout (the real path emits by default). Sink failures never alter
+// results or errors.
+export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } = {}) {
   const readEnv = (key, fallback) => {
     const fromArg = env[key];
     if (typeof fromArg === 'string' && fromArg.length > 0) return fromArg;
@@ -113,7 +119,8 @@ export async function startTedRuntime({ env = {}, deps = {} } = {}) {
     // Conversation metadata lives under the SDK-isolated state dir (server
     // side only; opaque ids + ids/status metadata, never transcripts).
     const store = createConversationStore({ persistDir: tedEnv.dirs.state });
-    const promptHost = tedEnv.serverOps.createPromptHost();
+    const diagSink = typeof diagnosticsSink === 'function' ? diagnosticsSink : defaultDiagnosticSink;
+    const promptHost = tedEnv.serverOps.createPromptHost({ diagnosticsSink: diagSink });
 
     gateway = createGatewayServer({
       resolveIdentity: ({ cookie, deviceToken, workspaceId, signal }) =>
@@ -124,6 +131,7 @@ export async function startTedRuntime({ env = {}, deps = {} } = {}) {
       withAuthenticatedSession: (sessionID, host, fn, opts) =>
         tedEnv.serverOps.withAuthenticatedSession(sessionID, host, fn, opts),
       requestTimeoutMs,
+      diagnosticsSink: diagSink,
     });
 
     // Host is ALWAYS loopback — never from env, never production.

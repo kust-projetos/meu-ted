@@ -267,6 +267,38 @@ pin `opencode.*` roteado para B mesmo com flag OFF posterior;
 Pin `agent` ou B inválido/estrangeiro no gateway falha fechado, sem
 fallback para A0; limpeza de cookie usa o mesmo Path do escopo.
 
+## Cobertura em CI (job dedicado `ted-runtime`)
+
+O workflow `CI` (`.github/workflows/ci.yml`) possui um job dedicado
+`ted-runtime` (Ubuntu, Node exatamente `24.22.2`, pnpm 10, install
+congelado) que executa, sem `continue-on-error`/skip/fallback:
+
+```yaml
+pnpm --filter pi-finance-ted-runtime --fail-if-no-match lint
+pnpm --filter pi-finance-ted-runtime --fail-if-no-match typecheck
+pnpm --filter pi-finance-ted-runtime --fail-if-no-match test
+```
+
+O comando `test` do pacote (`node --test tests/`) descobre e executa os testes
+do diretório `tests/` — sem filtro por nome. Na base deste adendo (`929bfe2`),
+isso corresponde a **196 testes em 37 suítes**, incluindo a prova de permissão
+do prompt-loop nativo (`tests/prompt-loop-permission.test.mjs`, com provider
+roteirizado em loopback, sem inferência paga). Os testes novos do adendo entram
+no mesmo comando automaticamente.
+
+A configuração do plugin TED registra o hook nativo `session.retry` do SDK
+2.2.4 e veta retries propostos para `agent: ted`; se o hook não estiver
+disponível, o setup falha fechado antes de registrar ferramentas. Isso impede
+tentativas físicas adicionais em falhas retryable do provider para o runtime
+TED (teste roteirizado: HTTP 500, exatamente um POST por `session.prompt`). A
+política não altera sessões de outros agentes e não prova a causa física de um
+`provider.transport` real.
+
+Status de gate: este job é um candidato a futuro check obrigatório
+SOMENTE após revisão humana explícita. Nesta etapa o job agregador
+`Gate — all checks` permanece inalterado e nenhuma branch protection foi
+alterada.
+
 Instalação e validação (2026-10-31, somente o observado): instalações seletivas
 congeladas do runtime, PWA, `llm-contracts`, API, Agent e broker concluíram; SDK/plugin/client
 estão fixados em 2.2.4. `node --test apps/ted-runtime/tests/`: 134/134 PASS,

@@ -213,6 +213,7 @@ describe('PR290-07: permission assert is captured at plugin setup (execute ToolC
     const added = [];
     await pluginDef.setup({
       permission: { assert: async (input) => { seenAssert.push({ ...input }); } },
+      session: { hook: async () => ({ dispose: async () => {} }) },
       tool: { transform: async (fn) => { fn({ add: (t) => added.push(t) }); } },
     });
     const tool = added.find((t) => t.name === 'list_accounts');
@@ -321,6 +322,7 @@ describe('PR290 deny-by-default: real SDK 2.2.4 no-inference/no-prompt policy pr
     // Context); the allow double below stands in for the native setup API.
     await registered[0].setup({
       permission: { assert: async () => {} },
+      session: { hook: async () => ({ dispose: async () => {} }) },
       tool: { transform: async (fn) => { fn({ add: (t) => added.push(t) }); } },
     });
     assert.deepEqual(added.map((t) => t.name).sort(), ['get_month_summary', 'list_accounts']);

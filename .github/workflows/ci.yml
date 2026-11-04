@@ -120,6 +120,30 @@ jobs:
       - run: pnpm --filter pi-finance-codex-broker --fail-if-no-match test
       - run: pnpm --filter pi-finance-codex-broker --fail-if-no-match build
 
+  # ─── TED runtime ────────────────────────────────────────────────────
+  # Dedicated coverage for the OpenCode-first runtime slice (ADR-031 P1).
+  # Runs on Node 24 (the PWA TED probe already pins v24.22.2; the runtime
+  # engines field requires >=24). Candidate future required check only
+  # after explicit human review — the `gate` job is intentionally left
+  # unchanged in this step, so no branch protection change is implied.
+  ted-runtime:
+    name: TED Runtime — lint + typecheck + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: '10'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.2'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter pi-finance-ted-runtime --fail-if-no-match lint
+      - run: pnpm --filter pi-finance-ted-runtime --fail-if-no-match typecheck
+      - run: pnpm --filter pi-finance-ted-runtime --fail-if-no-match test
+
   # ─── PWA ──────────────────────────────────────────────────────────────
   pwa:
     name: PWA — lint + typecheck + test

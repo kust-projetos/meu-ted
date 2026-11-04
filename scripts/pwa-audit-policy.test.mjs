@@ -131,6 +131,41 @@ test("resolved: allowlist entry no longer in current audit", () => {
   assert.ok(result.resolved.length > 0);
 });
 
+// ---- rimraf 2026-11-04 drift: exact CI record (run 41824366393) ----
+
+test("rimraf 2026-11-04: accepts only the exact CI record, rejects mutations", () => {
+  const exact = {
+    name: "rimraf",
+    severity: "moderate",
+    isDirect: false,
+    via: ["glob"],
+    effects: ["chrome-launcher"],
+    range: "2.3.0 - 3.0.2 || 4.2.0 - 6.1.3",
+    nodes: ["node_modules/rimraf"],
+    fixAvailable: { name: "@lhci/cli", version: "0.3.3", isSemVerMajor: true },
+  };
+  const singleAudit = (vuln) => ({
+    vulnerabilities: { rimraf: vuln },
+    metadata: { vulnerabilities: { total: 1 } },
+  });
+
+  const ok = evaluateAudit({ audit: singleAudit(exact), allowlist, today: TODAY });
+  assert.equal(ok.status, "ACCEPTED");
+  assert.equal(ok.blocked.length, 0);
+
+  const mutations = [
+    { ...exact, severity: "high" },
+    { ...exact, via: ["minimatch"] },
+    { ...exact, effects: [] },
+    { ...exact, range: "2.3.0 - 3.0.2" },
+  ];
+  for (const vuln of mutations) {
+    const result = evaluateAudit({ audit: singleAudit(vuln), allowlist, today: TODAY });
+    assert.equal(result.status, "BLOCKED");
+    assert.ok(result.blocked.length > 0);
+  }
+});
+
 // ---- pass: no vulnerabilities ----
 
 test("pass: no vulnerabilities", () => {

@@ -1509,5 +1509,21 @@
       "eslint-config-next"
     ],
     "range": ">=7.23.0"
+  },
+  {
+    "id": "pwa-2026-11-04-rimraf",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (CI run 41824366393, Scoped audit): npm re-reported the already-accepted Lighthouse CI build-toolchain rimraf record with a bounded range shape (\"2.3.0 - 3.0.2 || 4.2.0 - 6.1.3\" instead of \"2.3.0 - 3.0.2 || >=4.2.0\"; via [glob], effects [chrome-launcher] unchanged). Chain is Lighthouse -> chrome-launcher -> rimraf -> glob, build-time toolchain only, never shipped to Cloudflare production; npm's only observed resolution is the breaking @lhci/cli 0.3.3 major downgrade. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "rimraf",
+    "severity": "moderate",
+    "via": [
+      "glob"
+    ],
+    "effects": [
+      "chrome-launcher"
+    ],
+    "range": "2.3.0 - 3.0.2 || 4.2.0 - 6.1.3"
   }
 ]

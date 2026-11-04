@@ -45,6 +45,32 @@ export class PromptError extends Error {
   }
 }
 
+// Turn diagnostics (Etapa C-WIRE): observation-only boundary events for the
+// real SDK path. The sink is OFF unless explicitly provided (unit doubles
+// stay silent); the gateway entrypoint provides it. Events share the
+// per-turn opaque correlation threaded via `diagnosticCorrelationId` (a
+// valid UUID is reused, anything else mints fresh — never derived from
+// turn identifiers). Emission never changes behavior: sink failures are
+// swallowed, the original error is rethrown unchanged, and no second
+// native prompt is ever issued.
+import {
+  classifyTerminalCause as classifyDiagCause,
+  createDiagnosticContext,
+} from './diagnostics.mjs';
+
+function diagContextFor(sink, diagnosticCorrelationId) {
+  if (typeof sink !== 'function') return null;
+  return createDiagnosticContext({ sink, correlationId: diagnosticCorrelationId });
+}
+
+function noteDiagFailure(diag, e) {
+  if (!diag) return;
+  try {
+    const c = classifyDiagCause(e);
+    diag.emit({ phase: c.phase, outcome: 'failure', cause: c.cause, httpStatus: c.httpStatus });
+  } catch { /* diagnostics never alter the turn */ }
+}
+
 // Native history paging bounds (pinned 2.2.4 `message.list` contract:
 // `{ sessionID, limit, order?, cursor?, type? }` → `{ data, cursor }` where
 // `cursor` is `{ previous, next }` with opaque cursors. The server encodes
@@ -215,7 +241,11 @@ export function isProviderTransportTerminal(m) {
 // session.interrupt / message.list). Seen-intention registry is
 // process-local: a repeated intentionId fails closed — the adapter never
 // issues a second native prompt for one PWA intention.
-export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250 } = {}) {
+// diagnosticsSink (optional): when a function, the turn emits bounded
+// observation-only events (admit + terminal) sharing the per-turn opaque
+// correlation (`diagnosticCorrelationId` per call). Undefined keeps the
+// host silent.
+export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250, diagnosticsSink } = {}) {
   if (!oc || typeof oc !== 'object') {
     throw new PromptError('prompt.invalid_args', 'prompt host requires an OpenCode host (oc)');
   }
@@ -379,7 +409,7 @@ export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250 }
     // Either way the same PWA intention never issues a second native
     // prompt (seen-set + persisted intention registry).
     // Returns { turnId, output, userMessageId }. Throws typed PromptError, never ''.
-    async chat({ sessionID, text, intentionId, signal } = {}) {
+    async chat({ sessionID, text, intentionId, signal, diagnosticCorrelationId } = {}) {
       if (typeof sessionID !== 'string' || sessionID.length === 0) {
         throw new PromptError('prompt.invalid_args', 'sessionID is required');
       }
@@ -396,6 +426,10 @@ export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250 }
       if (signal && signal.aborted) {
         throw new PromptError('prompt.cancelled', 'turn cancelled before prompt');
       }
+      // Per-turn diagnostic context (null when the sink is off). The
+      // correlation is the threaded opaque UUID when valid, else fresh —
+      // never derived from session/intention/message IDs.
+      const diag = diagContextFor(diagnosticsSink, diagnosticCorrelationId);
 
       pending.add(intentionId);
       let interrupted = false;
@@ -452,6 +486,9 @@ export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250 }
         if (!admittedId) {
           throw new PromptError('prompt.failed', 'prompt admit returned no native message id — failing closed');
         }
+        // SDK admission observed: the native side accepted the turn (the
+        // returned receipt is the admitted user message, not the output).
+        if (diag) diag.emit({ phase: 'sdk_prompt', outcome: 'success', cause: 'none' });
 
         // Collect the assistant answer for THIS turn by polling a BOUNDED
         // recent window (desc, at most POLL_MAX_PAGES pages per round —
@@ -461,6 +498,7 @@ export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250 }
         // assistant text is a typed failure — never empty success.
         let output = '';
         let turnId = null;
+        let deadlineHit = false;
         const start = Date.now();
         for (;;) {
           if (signal && signal.aborted) {
@@ -477,7 +515,15 @@ export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250 }
             throw new PromptError('provider.unavailable', 'no message history surface on this host — output cannot be observed, failing closed');
           }
           if (found.terminalError === 'provider.transport') {
-            throw failAfterAdmit('provider.transport', 'provider transport failed — failing closed (no fabricated output)');
+            // Stream-interruption evidence lives ONLY here: the poll loop
+            // observed assistant text before the terminal `finish:'error'`
+            // marker. Surfaced as `details.outputBegan` (boolean only — no
+            // text) so the classifier can distinguish interruption from an
+            // opaque transport failure without reading message content.
+            const began = found.text.trim().length > 0;
+            const terminal = failAfterAdmit('provider.transport', 'provider transport failed — failing closed (no fabricated output)');
+            if (began) terminal.details = { ...terminal.details, outputBegan: true };
+            throw terminal;
           }
           if (found.text.trim().length > 0) {
             output = found.text;
@@ -487,18 +533,38 @@ export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250 }
           if (Date.now() - start > Math.min(5000, timeoutMs)) {
             // One patient re-read grace, then keep polling to deadline.
           }
-          if (Date.now() >= deadline) break;
+          if (Date.now() >= deadline) {
+            deadlineHit = true;
+            break;
+          }
           await new Promise((r) => setTimeout(r, Math.min(pollIntervalMs, Math.max(0, deadline - Date.now()))));
         }
         if (!output || output.trim().length === 0) {
           if (interrupted || (signal && signal.aborted)) {
             throw failAfterAdmit('prompt.cancelled', 'turn cancelled while waiting for output');
           }
-          throw failAfterAdmit('prompt.no_output', 'prompt admitted but no assistant output observable — failing closed (no fabricated output)');
+          // Local deadline evidence (finding 1): the wait hit the runtime
+          // `timeoutMs` bound with no output. Boolean-only internal marker
+          // for diagnostics (runtime timeout vs physical cause); the public
+          // code/message are unchanged and details never cross HTTP (the
+          // gateway DTO carries only code/message).
+          const noOutput = failAfterAdmit('prompt.no_output', 'prompt admitted but no assistant output observable — failing closed (no fabricated output)');
+          if (deadlineHit) noOutput.details = { ...noOutput.details, deadlineExceeded: true };
+          throw noOutput;
         }
         seen.add(intentionId);
+        if (diag) diag.emit({ phase: 'terminal_result', outcome: 'success', cause: 'none' });
         return { turnId, output, userMessageId: admittedId };
       } catch (e) {
+        // Post-validation failures emit ONE terminal observation event.
+        // Pre-admit validation errors (`prompt.invalid_args`, thrown before
+        // any SDK contact) stay silent — no turn boundary was crossed.
+        // Post-validation failures emit ONE terminal observation event.
+        // Pre-admit validation errors (`prompt.invalid_args`, thrown before
+        // any SDK contact) stay silent — no turn boundary was crossed.
+        if (diag && (!(e instanceof PromptError) || e.code !== 'prompt.invalid_args')) {
+          noteDiagFailure(diag, e);
+        }
         if (e instanceof PromptError) {
           // Admitted or admit-uncertain failures keep the mark: retry with the
           // same id fails closed rather than risk a double turn. Only
@@ -522,33 +588,52 @@ export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250 }
       }
     },
 
-    async readHistory({ sessionID, ownerActor, limit = MESSAGE_MAX_TOTAL, userMeta, viewerActor } = {}) {
+    async readHistory({ sessionID, ownerActor, limit = MESSAGE_MAX_TOTAL, userMeta, viewerActor, diagnosticCorrelationId } = {}) {
       if (typeof sessionID !== 'string' || sessionID.length === 0) {
         throw new PromptError('prompt.invalid_args', 'sessionID is required');
       }
-      const rows = await readAllMessages(sessionID, {
-        rowLimit: typeof limit === 'number' && limit > 0 ? Math.floor(limit) : MESSAGE_MAX_TOTAL,
-      }).catch((e) => { throw classifyHistoryFailure(e); });
-      if (rows === null) {
-        throw new PromptError('history.unavailable', HISTORY_UNAVAILABLE_MESSAGE);
+      const hdiag = diagContextFor(diagnosticsSink, diagnosticCorrelationId);
+      try {
+        const rows = await readAllMessages(sessionID, {
+          rowLimit: typeof limit === 'number' && limit > 0 ? Math.floor(limit) : MESSAGE_MAX_TOTAL,
+        }).catch((e) => { throw classifyHistoryFailure(e); });
+        if (rows === null) {
+          throw new PromptError('history.unavailable', HISTORY_UNAVAILABLE_MESSAGE);
+        }
+        const items = projectHistoryItems(rows, { ownerActor, userMeta, viewerActor });
+        if (hdiag) hdiag.emit({ phase: 'history_poll', outcome: 'success', cause: 'none' });
+        return items;
+      } catch (e) {
+        if (hdiag && (!(e instanceof PromptError) || e.code !== 'prompt.invalid_args')) {
+          noteDiagFailure(hdiag, e);
+        }
+        throw e;
       }
-      return projectHistoryItems(rows, { ownerActor, userMeta, viewerActor });
     },
 
     // Raw native rows (EXACT 2.2.4 SessionMessageInfo union) for server-side
     // replay correlation (completed-intention rebuild without a new prompt).
     // Post-bind only — the gateway rebinds before calling.
-    async readRawMessages({ sessionID, limit = MESSAGE_MAX_TOTAL } = {}) {
+    async readRawMessages({ sessionID, limit = MESSAGE_MAX_TOTAL, diagnosticCorrelationId } = {}) {
       if (typeof sessionID !== 'string' || sessionID.length === 0) {
         throw new PromptError('prompt.invalid_args', 'sessionID is required');
       }
-      const rows = await readAllMessages(sessionID, {
-        rowLimit: typeof limit === 'number' && limit > 0 ? Math.floor(limit) : MESSAGE_MAX_TOTAL,
-      }).catch((e) => { throw classifyHistoryFailure(e); });
-      if (rows === null) {
-        throw new PromptError('history.unavailable', HISTORY_UNAVAILABLE_MESSAGE);
+      const hdiag = diagContextFor(diagnosticsSink, diagnosticCorrelationId);
+      try {
+        const rows = await readAllMessages(sessionID, {
+          rowLimit: typeof limit === 'number' && limit > 0 ? Math.floor(limit) : MESSAGE_MAX_TOTAL,
+        }).catch((e) => { throw classifyHistoryFailure(e); });
+        if (rows === null) {
+          throw new PromptError('history.unavailable', HISTORY_UNAVAILABLE_MESSAGE);
+        }
+        if (hdiag) hdiag.emit({ phase: 'history_poll', outcome: 'success', cause: 'none' });
+        return rows;
+      } catch (e) {
+        if (hdiag && (!(e instanceof PromptError) || e.code !== 'prompt.invalid_args')) {
+          noteDiagFailure(hdiag, e);
+        }
+        throw e;
       }
-      return rows;
     },
 
     // Test seam: is this intention already consumed?

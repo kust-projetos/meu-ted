@@ -79,7 +79,10 @@ describe('p3 category read: product catalog gating', () => {
   });
 
   it('plugin setup registers exactly 2 tools by default, 3 with the local opt-in', async () => {
-    const allowSetup = { permission: { assert: async () => {} } };
+    const allowSetup = {
+      permission: { assert: async () => {} },
+      session: { hook: async () => ({ dispose: async () => {} }) },
+    };
     const addedDefault = [];
     const defaultDef = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), { env: OFF_ENV });
     await defaultDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedDefault.push(t) }); } } });
@@ -92,7 +95,7 @@ describe('p3 category read: product catalog gating', () => {
 
     const addedProd = [];
     const prodDef = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), { env: PROD_ENV });
-    await prodDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedProd.push(t) }); } } });
+    await prodDef.setup({ ...allowSetup, session: { hook: async () => ({ dispose: async () => {} }) }, tool: { transform: async (fn) => { fn({ add: (t) => addedProd.push(t) }); } } });
     assert.deepEqual(addedProd.map((t) => t.name).sort(), ['get_month_summary', 'list_accounts']);
   });
 });

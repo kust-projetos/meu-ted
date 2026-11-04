@@ -20,6 +20,14 @@
 > `eslint-plugin-react` with effects `['eslint-config-next']` (first-run entry
 > covers `[]`). Each has a separate exact `pwa-2026-11-03-*-effects-*` entry;
 > no new advisory or risk family, and strict exact matching is unchanged.
+>
+> 2026-11-04 follow-up (CI run 41824366393, `Scoped audit`):
+> The run re-reported the already-accepted Lighthouse CI `rimraf` record with
+> a bounded range shape (`2.3.0 - 3.0.2 || 4.2.0 - 6.1.3`, via `[glob]`,
+> effects `[chrome-launcher]`). One exact `pwa-2026-11-04-rimraf` entry covers
+> only that shape (scope `build-time`, chain Lighthouse → `chrome-launcher` →
+> `rimraf` → `glob`); strict exact matching is unchanged and no audit
+> criterion was relaxed.
 
 ## Runtime (2 shapes, 1 risk)
 
@@ -61,6 +69,36 @@
   without an exception.
 - Re-evaluate the remaining exact build-time exceptions if their dependency
   chains publish compatible remediations.
+- The 2026-11-04 `rimraf` drift keeps the same posture: investigating a
+  compatible remediation (upstream fix or separately validated override)
+  remains future work. The only npm-observed option — the breaking
+  `@lhci/cli` 0.3.3 major downgrade — is unverified for this toolchain and
+  was not applied; no automatic downgrade is authorized by this acceptance.
+
+### Future `rimraf` remediation experiment (not applied)
+
+The current upstream `@lhci/cli` 0.16.0 still declares
+`chrome-launcher: ^0.13.4`; `chrome-launcher` 0.13.4 depends on
+`rimraf: ^3.0.2`. The upstream `chrome-launcher` 0.14.0 release removed
+`rimraf` (and `mkdirp`); 0.15.2 remains CommonJS, while the 1.x line is
+ESM-only. A narrowly scoped override of the LHCI `chrome-launcher` branch to
+0.15.2 is therefore a candidate to remove this path without downgrading
+`@lhci/cli`, but compatibility is **not proven** and the override is not
+installed in this patch.
+
+Before replacing this risk acceptance, a separate branch must verify the
+resolved PWA graph (`pnpm why chrome-launcher rimraf glob`), run
+the Lighthouse collection/build path on Linux/Node 22/npm 10 and the existing
+supported local platforms with report output kept local (no public upload),
+check browser launch and cleanup/teardown for hangs or `EPERM`, and rerun the
+exact scoped audit with no new allowlist shape. If any check fails or the
+vulnerable `rimraf` node remains, keep this expiring build-time acceptance and
+do not apply the breaking `@lhci/cli` 0.3.3 downgrade.
+
+Sources: [@lhci/cli 0.16.0 manifest](https://registry.npmjs.org/@lhci/cli/0.16.0),
+[chrome-launcher 0.13.4 manifest](https://registry.npmjs.org/chrome-launcher/0.13.4),
+[chrome-launcher 0.15.2 manifest](https://registry.npmjs.org/chrome-launcher/0.15.2),
+[upstream chrome-launcher changelog](https://github.com/GoogleChrome/chrome-launcher/blob/main/changelog.md).
 
 ## Resolved in the current patch
 

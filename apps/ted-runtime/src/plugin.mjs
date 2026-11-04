@@ -177,6 +177,23 @@ export function defineTedFinancePlugin(transportFactory, { onEffectiveTools = nu
   return {
     id: 'ted-finance',
     async setup(ctx) {
+      // No-automatic-retry veto (user explicit rule, PR290-RETRY-HOOK):
+      // supported boundary ONLY — native 2.2.4 `session.hook('retry')`
+      // (SessionRetry.decision: {retry:false}|{retry:true,delay:number}).
+      // Runs after classification before scheduling and can veto; there is
+      // no config field and no fixture/header workaround. TED sessions get
+      // `decision = { retry:false }`; non-ted sessions are untouched.
+      // Missing hook or registration failure fails setup closed BEFORE any
+      // tool registers (never a silent retry-allowed boot).
+      const sessionDomain = ctx && ctx.session ? ctx.session : null;
+      if (!sessionDomain || typeof sessionDomain.hook !== 'function') {
+        throw new Error('defineTedFinancePlugin.setup: ctx.session.hook (native 2.2.4 session retry hook) is required — failing closed, no tools registered');
+      }
+      await sessionDomain.hook('retry', (event) => {
+        if (event && event.agent === 'ted') {
+          event.decision = { retry: false };
+        }
+      });
       // Native permission capture (Plugin 2.2.4: `permission.assert` lives
       // on the SETUP context, not on the tool execution context). Bound
       // once here and closed over by every registered execute below; a

@@ -253,3 +253,22 @@ As sondas usaram diretórios temporários novos; o diretório, SQLite, runner e 
 | `SIMPLIFICATION_DONE` | **NO CODE REMOVED** — o produto já usa provider/config nativos; o proxy existe só no runner de campanha para limites de egress, nonce, rota e orçamento. Nenhuma camada redundante de produto foi comprovada. |
 
 **Próxima prova live mínima:** somente após nova autorização explícita de provider/modelo/limite, uma única conversa PWA read-only em home local isolada; instrumentar uma cópia temporária do runner para emitir `HOOK_RECEIVED`, `PROXY_RECEIVED`, `PROXY_REJECTED` (status/reason), `FORWARD_ATTEMPTED` e `TRANSPORT_FAILED` (name/code/cause.code), sem body, Authorization ou segredos. O registro deve incluir método, host/porta/path, presença de Authorization, byte length/caps e contador antes/depois. Preservar r8v7; sem retry/fallback. Até esse gate, não executar outro turno live nem afirmar `READ_SLICE_PASS`.
+
+## Adendo de evidências ao PR #290 — 2026-11-04
+
+**Escopo:** somente dados sintéticos, SDK OpenCode 2.2.4 e provider roteirizado
+em loopback. Sem inferência externa/paga, produção, deploy, merge ou escrita
+financeira. O PR permanece Draft. `READ_SLICE_PASS` continua **NOT ACHIEVED**.
+
+| Etapa | Evidência local | Resultado / limite |
+|---|---|---|
+| A — auditoria PWA | Run `41824366393`, job `Scoped audit`: `rimraf` moderate, via `[glob]`, effects `[chrome-launcher]`, range `2.3.0 - 3.0.2 || 4.2.0 - 6.1.3`; teste aceita só o recorde canônico e rejeita mutations de severity/via/effects/range. | Exceção exata `build-time`, expira `2026-12-31`; política geral intacta. A auditoria equivalente Linux/Node22/npm10 é atestada pelo check `Scoped audit` do PWA CI no HEAD atual do PR; a execução Windows/WSL local não foi atestada. Remediação candidata `chrome-launcher@0.15.2` não aplicada nem compatibilidade provada (detalhes em `docs/security/pwa-audit-risk-acceptance.md`). |
+| B — CI TED runtime | Job dedicado usa Node `24.22.2`, pnpm 10, lock congelado e os três comandos fail-closed. Gate agregador/branch protection não foi ampliado. | YAML e comandos foram verificados localmente; a execução e o resultado do job são os checks `TED Runtime` do CI no HEAD atual do PR. O job permanece candidato a required check futuro, sem mudança antecipada na proteção da branch. |
+| C — `provider.transport` | Instrumentação correlacionada com UUID opaco, schema de eventos allowlisted, sink em stderr, timeout local explícito, falha do SDK 2.2.4 classificada como opaca quando a causa física não está visível. `session.retry` do plugin TED veta retry antes do agendamento. Provider roteirizado HTTP 500: antes do hook foram observados 5 POSTs dentro de 1 prompt; com o hook, exatamente 1 POST. | Runtime: lint/typecheck PASS; suite **224/224**, 0 skipped; re-review de código APPROVED. `TRANSPORT_ROOT_CAUSE` do r8v7 externo continua **NOT PROVEN**. DNS/TLS/SSE/status real do provider não são observáveis pela evidência disponível do SDK 2.2.4. |
+| D — leitura integrada roteirizada | Proxy PWA POST/GET/client → gateway real → SDK 2.2.4 → stub local → `get_month_summary` read-only → Fastify em memória → DTO/output PWA. DTO de junho validado contra oracle sintético; isolamento entre atores/workspaces, erro+replay de mesma intenção, contagem exata de provider, remount e journal financeiro GET-only. | PWA focused Vitest **2/2** (P2D + histórico anterior), typecheck/ESLint PASS. Provider configurado somente no stub loopback com chave dummy; destinos `fetch` não-loopback são bloqueados antes de I/O e o remote do stub é assertado como loopback. **Não** há sandbox de egress em nível de processo: sockets crus `node:http`/`net`/`tls` não são interceptados por este harness. O texto final é derivado do DTO observado, não de modelo. Remount/refresh de rota **não** é navegação real do browser; page reload permanece **NOT PROVEN**. |
+| E — integração | Checks locais de policy (13/13), YAML (9 workflows), docs:lint, governance, action-pins, public-safety e boundary passaram. | O status de CI/PWA CI é o check run do HEAD atual de PR #290 e deve ser lido diretamente no PR; este relatório não antecipa resultado remoto. Sem merge, deploy ou alteração de branch protection. |
+
+**Critério mantido:** a prova roteirizada valida integração e falhas locais, mas
+não substitui um modelo externo. A execução autorizada anterior r8v7 permanece
+preservada; não houve nova chamada de provider, billing não foi consultado e
+nenhum custo efetivo é afirmado.
