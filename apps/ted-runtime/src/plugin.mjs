@@ -199,6 +199,13 @@ export function defineTedFinancePlugin(transportFactory, { onEffectiveTools = nu
             description: def.description,
             input: def.input,
             output: def.output,
+            // Availability is decided by the native catalog from
+            // `options.permission ?? name` (@opencode/core 2.2.4 Tool.snapshot).
+            // Without this, the availability action is the tool NAME, which
+            // matches only the agent's `{*,*,deny}` and hides every finance
+            // tool from the loop. The finance action makes the exact-resource
+            // allow visible to the catalog; execute still asserts per tool.
+            options: { permission: TED_FINANCE_PERMISSION_ACTION },
             execute: buildExecute(def, executors[def.name], capturedAssert),
           });
         }
