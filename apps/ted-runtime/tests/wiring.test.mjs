@@ -51,11 +51,24 @@ describe('wiring plugin -> transport -> HTTP (contrato real)', () => {
     clearAll();
     bindSession('ses_X1', { ...host });
     const added = [];
-    await registered[0].setup({ tool: { transform: async (fn) => { fn({ add: (t) => added.push(t) }); } } });
+    // PR290-07: permission.assert is captured at plugin setup (Plugin 2.2.4
+    // setup Context); the execute ctx below carries no permission.
+    await registered[0].setup({
+      permission: { assert: async (input) => {
+        assert.equal(input.action, 'ted.finance.read');
+        assert.deepEqual(input.resources, ['list_accounts']);
+      } },
+      tool: { transform: async (fn) => { fn({ add: (t) => added.push(t) }); } },
+    });
     const listAccounts = added.find((t) => t.name === 'list_accounts');
+    // PR290: native permission gate allows (exact product action/resource),
+    // so the smuggle reaches the arg/host guards it must violate.
+    const allowCtx = (extra) => ({
+      ...extra,
+    });
     // Tentativa de trocar o escopo via args (workspaceId/household/token).
     for (const smuggled of [{ workspaceId: 'H_EVIL' }, { household: 'H_EVIL' }, { token: 'tok-evil' }]) {
-      const err = await listAccounts.execute(smuggled, { sessionID: 'ses_X1', messageID: 'm9', id: 'call-9' }).catch((e) => e);
+      const err = await listAccounts.execute(smuggled, allowCtx({ sessionID: 'ses_X1', messageID: 'm9', id: 'call-9' })).catch((e) => e);
       assert.match(String(err.message || err), /forbidden key|host-bound/, `smuggle ${JSON.stringify(smuggled)} recusado`);
     }
   });
@@ -93,10 +106,22 @@ describe('wiring plugin -> transport -> HTTP (contrato real)', () => {
     clearAll();
     bindSession('ses_W1', { ...host });
     const added = [];
-    await registered[0].setup({ tool: { transform: async (fn) => { fn({ add: (t) => added.push(t) }); } } });
+    await registered[0].setup({
+      permission: { assert: async (input) => {
+        assert.equal(input.action, 'ted.finance.read');
+        assert.deepEqual(input.resources, ['list_accounts']);
+      } },
+      tool: { transform: async (fn) => { fn({ add: (t) => added.push(t) }); } },
+    });
     assert.deepEqual(added.map((t) => t.name).sort(), [...PRODUCT_TOOL_NAMES].sort());
     const listAccounts = added.find((t) => t.name === 'list_accounts');
-    const out = await listAccounts.execute({}, { sessionID: 'ses_W1', messageID: 'm1', id: 'call-1' });
+    // PR290-07: execute asserts the setup-captured native permission first —
+    // the allow double was bound at setup with the exact product
+    // action/resource; the execute ctx carries no permission. Transport
+    // runs after allow.
+    const out = await listAccounts.execute({}, {
+      sessionID: 'ses_W1', messageID: 'm1', id: 'call-1',
+    });
     assert.deepEqual(out.output, { items: [], total: 0 });
     assert.equal(seen.length, 1);
     assert.equal(seen[0].route, '/accounts');
@@ -112,6 +137,7 @@ describe('wiring plugin -> transport -> HTTP (contrato real)', () => {
     });
     const added = [];
     await pluginDef.setup({
+      permission: { assert: async () => {} },
       tool: {
         list: async () => [{ name: 'list_accounts' }, { name: 'get_month_summary' }],
         transform: async (fn) => { fn({ add: (t) => added.push(t) }); },
@@ -127,7 +153,10 @@ describe('wiring plugin -> transport -> HTTP (contrato real)', () => {
     const pluginDef2 = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), {
       onEffectiveTools: (names, error) => reported2.push({ names, error }),
     });
-    await pluginDef2.setup({ tool: { transform: async (fn) => { fn({ add: () => {} }); } } });
+    await pluginDef2.setup({
+      permission: { assert: async () => {} },
+      tool: { transform: async (fn) => { fn({ add: () => {} }); } },
+    });
     assert.equal(reported2.length, 1);
     assert.equal(reported2[0].names, null);
     assert.ok(reported2[0].error instanceof Error);

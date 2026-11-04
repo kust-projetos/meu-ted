@@ -30,8 +30,9 @@
 //   TED_REQUEST_TIMEOUT_MS per-request timeout ms (default: 90000)
 //   TED_RUNTIME_PROFILE  runtime profile: `test` (default, deny-all, no
 //                        model, SCRUB_VARS scrubbed) or `live`
-//                        (explicit; native catalog model
-//                        opencode-go/deepseek-v4.1-flash + specific
+//                        (explicit; native model selected from repo-owned
+//                        template src/live-model.json — current native default
+//                        opencode-go/deepseek-v4.1-flash — + specific
 //                        provider.use opencode-go allow appended;
 //                        preserves ONLY OPENCODE_GO_API_KEY,
 //                        never logged/read here)

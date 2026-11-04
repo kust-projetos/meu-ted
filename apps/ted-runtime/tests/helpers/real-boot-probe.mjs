@@ -41,7 +41,7 @@ const fail = (step, detail) => { throw new ProbeFail(step, detail); };
 let outcome = null;
 try {
   const { setupIsolation, writeTedConfig, wirePlugin, isSessionActiveMap } = await import('../../src/bootstrap.mjs');
-  const { createFacade } = await import('../../src/facade.mjs');
+  const { createFacade } = await import('./facade.mjs');
   const { createToolExecutors } = await import('../../src/tool-defs.mjs');
   const { defineTedFinancePlugin } = await import('../../src/plugin.mjs');
   const { bindSession } = await import('../../src/session-bindings.mjs');
@@ -201,7 +201,7 @@ try {
       for (const denied of ['shell', 'subagent']) {
         if (!policy.includes(denied)) fail('deny-policy', `deny-all sem ${denied}`);
       }
-      const { FACADE_KEYS } = await import('../../src/facade.mjs');
+      const { FACADE_KEYS } = await import('./facade.mjs');
       if (JSON.stringify([...FACADE_KEYS].sort()) !== JSON.stringify(['createSession', 'getSession', 'get_month_summary', 'listSessions', 'list_accounts', 'removeSession'])) {
         fail('facade-drift', `facade keys: ${FACADE_KEYS.join(',')}`);
       }

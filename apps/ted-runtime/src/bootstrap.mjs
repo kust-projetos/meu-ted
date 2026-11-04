@@ -2,10 +2,11 @@
 //
 // Isolated OpenCode boot for ONE host identity: identity-scoped home dirs,
 // BOM-free policy config (provider deny-all + tool deny shell/edit/write/
-// subagent, agent `ted` least-privilege), explicit sqlite database.path so
+// subagent, agent `ted` deny-by-default with exact finance allowlist),
+// explicit sqlite database.path so
 // sessions persist across restarts of the same home, and NO network listener
-// (embedded SDK only — the instance never leaves this process; the facade is
-// the only handle the host keeps).
+// (embedded SDK only — the instance never leaves this process; the native
+// plugin is the only product tool path the host keeps).
 //
 // Provider posture: the default `test` profile loads no configured provider
 // credentials — the isolated env scrubs the credential variables enumerated
@@ -41,18 +42,20 @@ const SCRUB_VARS = [
 //   override; variables listed in SCRUB_VARS are scrubbed. Every helper below
 //   defaults to `test` when no explicit value is passed, so ambient env
 //   can never leak a live profile into tests.
-// - `live`: explicit opt-in forwarded by main.mjs; selects ONLY the
-//   native catalog model `opencode-go/deepseek-v4.1-flash` (no aliases, no custom
-//   catalog) and appends a specific `provider.use opencode-go allow` AFTER the
-//   deny-all (only the opencode-go provider configured in the isolated
-//   catalog or account may be selected — never a wildcard allow),
-//   retaining every tool deny. Preserves ONLY OPENCODE_GO_API_KEY from the
-//   inherited environment (never captured/logged here); every other variable
-//   in SCRUB_VARS stays scrubbed. No DB sharing/copying, no token extraction.
+// - `live`: explicit opt-in forwarded by main.mjs; native `model` selector
+//   from the repo-owned template `src/live-model.json` (currently
+//   `opencode-go/deepseek-v4.1-flash` — data, never a JS literal, changes
+//   without code edits) + a specific `provider.use opencode-go allow`
+//   AFTER the deny-all (only the opencode-go provider configured in the
+//   isolated catalog or account may be selected — never a wildcard allow),
+//   retaining every tool deny. A legitimate native model-only config
+//   override applies without code changes. Preserves ONLY OPENCODE_GO_API_KEY
+//   from the inherited environment (never captured/logged here); every other
+//   variable in SCRUB_VARS stays scrubbed. No DB sharing/copying, no token
+//   extraction.
 // Unknown profiles fail closed. One host profile per OS process (see
 // DEDICATED-PROCESS RULE below): reconfiguring between profiles is refused.
 const RUNTIME_PROFILES = ['test', 'live'];
-const LIVE_MODEL = 'opencode-go/deepseek-v4.1-flash';
 const PRESERVE_VARS_BY_PROFILE = { live: ['OPENCODE_GO_API_KEY'] };
 
 export function resolveRuntimeProfile(explicit) {
@@ -290,23 +293,50 @@ export function tedConfig(profileOrOpts) {
       ted: {
         mode: 'primary',
         description: 'TED product agent (read-only finance tools; no shell/edit/subagent)',
+        // PR290 deny-by-default (native explicit allowlist, corrected against
+        // official V2 + local 2.2.4 declarations): the agent base default is
+        // `{action:'*',resource:'*',effect:'allow'}` (Agent.Info `default()`
+        // in @opencode/schema 2.2.4 agent.js), so a new native action could
+        // match that base wildcard allow. Unmatched checks using `ask` does
+        // NOT save us. The first entry therefore denies everything; the only
+        // allows are the namespaced custom action `ted.finance.read` with
+        // EXACT resources for the current product read tools (V2 supports
+        // plugin-defined permission action names). No wildcards on finance
+        // resources, no broad allow. `policies.tool.use` hard denies below
+        // stay as the immutable host/admin backstop.
         permissions: [
-          { action: 'shell', resource: '*', effect: 'deny' },
-          { action: 'edit', resource: '*', effect: 'deny' },
-          { action: 'subagent', resource: '*', effect: 'deny' },
+          { action: '*', resource: '*', effect: 'deny' },
+          { action: 'ted.finance.read', resource: 'list_accounts', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'get_month_summary', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'list_categories', effect: 'allow' },
         ],
       },
     },
     policies: [
       { action: 'provider.use', resource: '*', effect: 'deny' },
+      // PR290 correction (official V2 + local 2.2.4): the removed claim that
+      // "unmatched NEW SDK tools follow the native default `ask`" was false
+      // as a safety argument, because the agent base default includes
+      // `{action:'*',resource:'*',effect:'allow'}`. New tools are denied by
+      // the TED agent wildcard deny above + the exact finance allowlist;
+      // these `tool.use` entries are the immutable host/admin backstop
+      // (exact hard denies, not default policy). Every SDK/catalog bump
+      // still requires reviewing the observed `ctx.tool.list()` (see wiring
+      // catalog seam + real-sdk catalog probe) before pinning new denies.
+      // `write:*` vs `edit:*`/`patch:*` equivalence stays UNPROVEN locally,
+      // so every pinned deny stays. Do not collapse or widen without local
+      // SDK proof + catalog-gate test.
       { action: 'tool.use', resource: 'shell:*', effect: 'deny' },
       { action: 'tool.use', resource: 'edit:*', effect: 'deny' },
       { action: 'tool.use', resource: 'write:*', effect: 'deny' },
       { action: 'tool.use', resource: 'subagent:*', effect: 'deny' },
       // Pinned denies for the remaining native tools observed live in the
       // effective catalog (real-sdk catalog phase, 2.2.4): read-only finance
-      // tools are the ONLY runnable surface. A future SDK adding tools
-      // re-opens this list (fail closed — explicit decision, never silent).
+      // tools are the ONLY runnable surface. A future SDK adding tools does
+      // NOT widen execution: unmatched actions hit the TED agent wildcard
+      // deny above (deny-by-default + exact finance allowlist); still, every
+      // SDK bump requires reviewing the observed `ctx.tool.list()` and
+      // pinning new denies as needed.
       { action: 'tool.use', resource: 'glob:*', effect: 'deny' },
       { action: 'tool.use', resource: 'grep:*', effect: 'deny' },
       { action: 'tool.use', resource: 'read:*', effect: 'deny' },
@@ -325,15 +355,18 @@ export function tedConfig(profileOrOpts) {
       { action: 'tool.use', resource: 'worktree_remove:*', effect: 'deny' },
     ],
   };
-  // Live-only delta: native catalog model selector + specific provider
-  // allow APPENDED after the deny-all (findLast wins — only the opencode-go
-  // provider available/configured in the isolated catalog or account may be
-  // selected; never a wildcard allow), retaining every tool deny. No custom
-  // providers block, no aliases — the model resolves from the SDK catalog.
+  // Live-only delta: native `model` selector from the repo-owned template
+  // `src/live-model.json` (never a JS literal, never user-config inheritance)
+  // + specific provider allow APPENDED after the deny-all (findLast wins —
+  // only the opencode-go provider available/configured in the isolated
+  // catalog or account may be selected; never a wildcard allow), retaining
+  // every tool deny. The template value changes without production-code
+  // edits; a legitimate user model-only override applies without code
+  // changes (see isModelOverrideCompatible + writeTedConfig preserve).
   if (profile === 'live') {
     return {
       ...base,
-      model: LIVE_MODEL,
+      model: loadLiveModelSelector(),
       policies: [
         ...base.policies,
         { action: 'provider.use', resource: 'opencode-go', effect: 'allow' },
@@ -343,10 +376,76 @@ export function tedConfig(profileOrOpts) {
   return base;
 }
 
+// Repo-owned native default for the live profile (outside JS logic): reads
+// `src/live-model.json` (`{ "model": "provider/model" }`) at call time so
+// the current default changes without production-code edits. Validates the
+// shape strictly; missing/malformed template fails closed (never silent
+// no-model). Test profile never calls this (stays model-free/isolated).
+export function loadLiveModelSelector() {
+  const tmplUrl = new URL('./live-model.json', import.meta.url);
+  let raw;
+  try {
+    raw = fs.readFileSync(tmplUrl, 'utf8');
+  } catch (e) {
+    throw new Error(`live model template unreadable at src/live-model.json — refusing live boot without a pinned native default: ${String((e && e.code) || e).slice(0, 80)}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('live model template is not valid JSON — refusing live boot without a pinned native default');
+  }
+  const model = parsed && typeof parsed === 'object' ? parsed.model : null;
+  if (typeof model !== 'string' || model.trim().length === 0 || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(model.trim())) {
+    throw new Error('live model template must hold a non-empty "provider/model" string — refusing live boot without a pinned native default');
+  }
+  return model.trim();
+}
+
+// Returns true when an on-disk opencode.json is compatible with ours
+// except for a legitimate native `model` selector override (non-empty string
+// `provider/model`, e.g. a user-pinned native default). Policies, agents,
+// default_agent and $schema must deep-match ours — the override never widens
+// tools/providers, never touches denies, and never overwrites credentials.
+// The `model` VALUE may differ (template default vs user override); any
+// other top-level divergence (providers block included) stays a refusal.
+// A compatible file is PRESERVED (returned untouched, never rewritten).
+function isModelOverrideCompatible(currentText, wantedText) {
+  let current;
+  let wanted;
+  try {
+    current = JSON.parse(currentText);
+    wanted = JSON.parse(wantedText);
+  } catch {
+    return false;
+  }
+  if (!current || typeof current !== 'object' || Array.isArray(current)) return false;
+  if (typeof current.model !== 'string' || current.model.trim().length === 0) return false;
+  if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(current.model.trim())) return false;
+  if (typeof wanted.model !== 'string' || wanted.model.trim().length === 0) return false;
+  for (const key of ['$schema', 'default_agent', 'agents', 'policies']) {
+    if (JSON.stringify(current[key] ?? null) !== JSON.stringify(wanted[key] ?? null)) return false;
+  }
+  const currentKeys = Object.keys(current).sort();
+  const wantedKeys = Object.keys(wanted).sort();
+  // No extra top-level keys beyond ours (providers block included stays a
+  // refusal — user work preserved, boot fails closed instead of silently
+  // adopting an unknown catalog). The `model` value itself may differ;
+  // byte-identical is handled before this function, so reaching here with
+  // the same model but different whitespace still preserves (never rewrites).
+  const extra = currentKeys.filter((k) => !wantedKeys.includes(k));
+  if (extra.length !== 0) return false;
+  const missing = wantedKeys.filter((k) => !currentKeys.includes(k));
+  if (missing.length !== 0) return false;
+  return true;
+}
+
 // No BOM on purpose: BOM-prefixed files are rejected by Config.parseInfo.
-// NEVER overwrites: an existing opencode.json is returned untouched only
-// when byte-identical to ours (idempotent resume); a divergent file is
-// the user's work and refused; a symlink is refused without following.
+// NEVER overwrites: an existing opencode.json is returned untouched when
+// byte-identical to ours (idempotent resume) or when it is our config plus
+// a legitimate native `model` selector override (preserved, never rewritten);
+// any other divergent file is the user's work and refused; a symlink is
+// refused without following.
 // The configDir itself is checked for redirection before any write.
 export function writeTedConfig(configDir, profileOrOpts) {
   // NB: defaults to 'test' — never reads ambient TED_RUNTIME_PROFILE, so
@@ -368,6 +467,7 @@ export function writeTedConfig(configDir, profileOrOpts) {
     }
     const current = fs.readFileSync(file, 'utf8');
     if (current === wanted) return file; // byte-identical: our own config, resume
+    if (isModelOverrideCompatible(current, wanted)) return file; // legitimate native model override: preserve, never rewrite
     throw new Error('writeTedConfig: opencode.json already exists with different content — refusing to overwrite user work');
   }
   fs.writeFileSync(file, wanted, { encoding: 'utf8' });
@@ -420,7 +520,7 @@ export function isSessionActiveMap(value) {
 }
 
 // Full boot. Dynamic SDK import keeps the pure modules (tool-defs,
-// session-bindings, transport, facade, plugin) importable without the
+// session-bindings, transport, plugin) importable without the
 // dependency installed; only this function requires @opencode/sdk 2.2.4
 // (declared exact in package.json; no inference is invoked by the boot).
 // transportFactory: () => transport function for createToolExecutors.
@@ -452,9 +552,7 @@ export async function createTedEnvironment({ root, identity = 'a', transportFact
   // database.path; chdir would move another service in a shared process.
   const sdkMod = deps.sdkModule ?? await import('@opencode/sdk');
   const { OpenCode } = sdkMod;
-  const [{ createFacade }, { createToolExecutors }, { defineTedFinancePlugin }] = await Promise.all([
-    import('./facade.mjs'),
-    import('./tool-defs.mjs'),
+  const [{ defineTedFinancePlugin }] = await Promise.all([
     import('./plugin.mjs'),
   ]);
   const oc = await OpenCode.create({
@@ -508,14 +606,11 @@ export async function createTedEnvironment({ root, identity = 'a', transportFact
         throw new Error('createTedEnvironment: oc.session.active returned an unexpected shape — refusing boot (cannot prove quiescence)');
       }
     }
-    const executors = createToolExecutors(transport);
-    function facadeFor(host) {
-      return createFacade({ oc, host, executors });
-    }
     // Contained registry: revoke/clear ONLY. bind/resolve stay out of the
-    // env — binding is a gateway (P2) authority; in P1 the ONLY binder is
-    // the facade itself (createSession auto-bind). Test harnesses import
-    // session-bindings directly (documented harness path, never networked).
+    // env — binding is a gateway (P2) authority. The test-only facade
+    // helper (tests/helpers/facade.mjs) is NOT exposed here: the product
+    // tool path is the native plugin above. Legacy tests import the helper
+    // directly from tests/helpers/facade.mjs (never networked).
     const { bindSession, revokeSession, clearAll, quarantineSession, isQuarantined, rotateSessionBinding, getBinding, isSameHost } = await import('./session-bindings.mjs');
     const { createPromptHost } = await import('./prompt.mjs');
     // Per-native-session queue: serializes ALL native uses of one sessionID
@@ -717,7 +812,6 @@ export async function createTedEnvironment({ root, identity = 'a', transportFact
       identity,
       profile: resolvedProfile,
       dirs: iso.dirs,
-      facadeFor,
       bindings: { revokeSession, clearAll },
       serverOps,
       async close() {

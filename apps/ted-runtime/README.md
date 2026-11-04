@@ -10,8 +10,10 @@ identidade/transport/runtime-ops reais; rotas respondem tipado sem API, boot
 + close limpos) + núcleo parcial: doubles + stub HTTP em processo
 (ver `node --test` abaixo), defs/executores das 2 reads P2 por padrão e
 `list_categories` GET-only sob opt-in local P3, com validação de
-shape 2xx (SPEC §5), bindings host-bound, façade 6 chaves fail-closed
-(sem fallback sem-binding do spike, sem `listCatalogs`), transporte fetch
+shape 2xx (SPEC §5), bindings host-bound, plugin nativo de finanças como
+único caminho de tools do produto (sem superfície façade em produção; o
+helper com filtro owner-only vive só em `tests/helpers/facade.mjs` para
+testes legados de contrato), transporte fetch
 com allowlist + `x-device-token`/`x-workspace-id` do host +
 `redirect: manual` + origin-loopback, registro nativo via `wirePlugin`,
 bootstrap com close-garantido + hardening (traversal/marker/symlink),
@@ -32,8 +34,14 @@ por desenho (setup do plugin 2.2.4 só roda no prompt — 20s idle pós-wire
 `session.prompt`, uma tentativa de inferência não autorizada; zero prompts
 emitidos, nada fabricado). Cobertura do gating segue em teste de unidade
 (seam `onEffectiveTools`) + denies pinados.
-Sem inferência em nenhuma fase (provider.use negado, sem modelo, zero
-chamadas `session.prompt` fora do prompt loop por request do usuário).
+Sem inferência no boot em nenhuma fase (perfil `test` sem modelo e isolado,
+`provider.use` deny-all, zero chamadas `session.prompt` fora do prompt loop
+por request do usuário; fallback de provider e chamadas pagas seguem
+desabilitados por política). O perfil `live` (opt-in explícito) seleciona o
+modelo via `model` nativo do OpenCode a partir do template
+`src/live-model.json` (default atual `opencode-go/deepseek-v4.1-flash`); um
+override legítimo só-`model` num `opencode.json` isolado é preservado
+(nunca reescrito).
 
 **NÃO entrega (declarado honestamente):** prompt-loop com modelo real (sem
 inferência autorizada em P1/P2), catálogo efetivo ao vivo do prompt-loop ou o
@@ -54,7 +62,7 @@ Origem somente-leitura: `D:/projetos/pi-ted-runtime-spike/experiments/ted-runtim
 |---|---|
 | `bootstrap/ted-finance-tools.mjs` (defs + executores, intenção, guards) | ADAPTADO → `src/tool-defs.mjs`, 2 reads P2 por padrão + `list_categories` P3 opcional |
 | `bootstrap/session-bindings.mjs` (Map host-bound) | ADAPTADO → `src/session-bindings.mjs`, comportamento preservado |
-| `bootstrap/ted-gateway.mjs` (façade) | ADAPTADO → `src/facade.mjs`, SEM fallback get/remove sem binding (fail-closed P1) e SEM `listCatalogs` (vazava IDs globais, P2) |
+| `bootstrap/ted-gateway.mjs` (façade do spike) | NÃO adaptado como superfície de produto — sem `src/facade.mjs`; helper com filtro owner-only mantido só em `tests/helpers/facade.mjs` para testes legados de contrato (fail-closed, sem `listCatalogs`) |
 | `bootstrap/ted-config.cjs` + `env.cjs` (isolamento) | ADAPTADO → `src/bootstrap.mjs`, SEM `process.chdir`, COM guarda um-host-por-processo |
 | `bootstrap/plugins/ted-finance/index.mjs` (registro nativo) | ADAPTADO → `src/plugin.mjs`, registra 2 reads P2 por padrão; 3 tools somente com opt-in local P3 |
 | `bootstrap/finance-transport.mjs` (filho tsx p/ test-app) | NÃO importado — substituído por `src/transport.mjs` (fetch contra baseUrl do chamador) |
@@ -142,9 +150,16 @@ Paridade: linhas de ownership durável/reauth/ADR-027 seguem NOT_PROVEN.
   + rotação controlada `rotateSessionBinding` (só sob a fila do wrapper, após idle) +
   quarentena `quarantineSession`/`isQuarantined` (fail-closed `host_binding_quarantined`).
 - `src/transport.mjs` — `HttpFinanceTransport` (GETs allowlist, device token por chamada, timeout/abort, `redirect: manual`, erros sem segredo).
-- `src/facade.mjs` — façade congelada de 6 chaves + filtro owner-only fail-closed.
-- `src/bootstrap.mjs` — isolamento + config deny-all (incl. denies `tool.use`
-  pinados para todo nativo observado) + `wirePlugin` + `createTedEnvironment`
+- `src/live-model.json` — default nativo do seletor `model` do perfil `live`
+  (`opencode-go/deepseek-v4.1-flash`; dado versionado, nunca literal JS;
+  perfil `test` nunca lê este arquivo e segue sem modelo/isolado).
+- `tests/helpers/facade.mjs` — helper SOMENTE-teste (6 chaves + filtro
+  owner-only fail-closed, sem `listCatalogs`); sem superfície façade em
+  produção — o caminho de tools do produto é o plugin nativo.
+- `src/bootstrap.mjs` — isolamento + config deny-by-default (agente `ted` nega
+  `*` primeiro e permite SÓ `ted.finance.read` com recursos exatos das reads do
+  produto; denies `tool.use` pinados para todo nativo observado como backstop
+  host/admin) + `wirePlugin` + `createTedEnvironment`
   (import dinâmico de `@opencode/sdk`; declarado em `dependencies` como `2.2.4`
   exato) com `serverOps` só-servidor (`bindAuthenticatedSession` get+bind legado,
   `withAuthenticatedSession` serializado com idle+quarentena — caminho exigido pelo
@@ -154,7 +169,11 @@ Paridade: linhas de ownership durável/reauth/ADR-027 seguem NOT_PROVEN.
   + toda sonda `session.active` com AbortSignal e limite pelo prazo restante.
 - `src/plugin.mjs` — registro nativo 2.2.4 exatamente das 2 reads P2 por padrão
   (opt-in local `TED_OPENCODE_P3_READS_ENABLED=1` com `NODE_ENV !== 'production'`
-  expõe `list_categories`; produção força off) + `getEffectiveToolNames`
+  expõe `list_categories`; produção força off) + gate nativo de permissão em
+  todo execute (`ctx.permission.assert` com `ted.finance.read`/`[toolName]` e o
+  contexto real da invocação ANTES de host/executor/HTTP; sem a API/contexto
+  falha fechado — mecanismo nativo, não um novo sistema de auth) +
+  `getEffectiveToolNames`
   (catálogo efetivo SÓ via `ctx.tool.list()` dentro do plugin; a superfície HTTP não tem tool group;
   o seam `onEffectiveTools` captura o catálogo FINAL pós-transform — built-ins + 2 reads).
 - `src/gateway.mjs` — identidade server-side: mint `POST /auth/agent-token`

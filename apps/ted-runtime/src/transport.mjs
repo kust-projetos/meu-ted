@@ -171,7 +171,7 @@ export class HttpFinanceTransport {
         }
         throw new ToolError('tool.timeout', `finance call timed out after ${limit}ms (route ${route})`);
       }
-      throw new ToolError('tool.transport', `finance transport failed (route ${route}): ${scrubSecrets((e && e.message) || String(e), host).slice(0, 300)}`);
+      throw new ToolError('tool.transport', `finance transport failed (route ${route})`);
     } finally {
       clearTimeout(timer);
       try { if (signal && typeof signal.removeEventListener === 'function') signal.removeEventListener('abort', onAbort); } catch { /* settle never fails */ }

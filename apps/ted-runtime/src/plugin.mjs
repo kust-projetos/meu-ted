@@ -8,8 +8,8 @@
 // Direct ctx.tool.add does NOT exist on the host context. Tool execution
 // runs ONLY via the agent prompt loop (session.prompt → LLM inference),
 // which P1/P2 NEVER invoke (no paid provider execution): the SAME execute
-// functions below are exercised deterministically through the facade with a
-// host-bound context.
+// functions below are exercised deterministically through the test-only
+// helper (tests/helpers/facade.mjs) with a host-bound context.
 //
 // SCOPE (reviewer note on TOOL_DEFS): the spike's TOOL_DEFS array also
 // contains propose_expense. This product registers EXACTLY list_accounts +
@@ -24,6 +24,22 @@ import { TOOL_DEFS, createToolExecutors, deriveIntentionId } from './tool-defs.m
 import { resolveHost } from './session-bindings.mjs';
 
 export const PRODUCT_TOOL_NAMES = ['list_accounts', 'get_month_summary'];
+
+// Native permission gate (PR290 deny-by-default correction): the TED agent's
+// base default would otherwise be `{action:'*',resource:'*',effect:'allow'}`
+// (Agent.Info `default()` in @opencode/schema 2.2.4 agent.js), so a new native
+// action could match that base wildcard allow. The agent allowlist in
+// bootstrap.mjs therefore denies `*` first and allows ONLY this namespaced
+// custom action with EXACT finance resources below (V2 supports
+// plugin-defined permission action names; a policy `allow` never grants —
+// plugin tools only enforce checks they explicitly assert via
+// `ctx.permission.assert`, Plugin 2.2.4 `permission.d.ts`).
+export const TED_FINANCE_PERMISSION_ACTION = 'ted.finance.read';
+export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
+  'list_accounts',
+  'get_month_summary',
+  'list_categories',
+]);
 
 // P3 prerequisite (read-only category lookup for a FUTURE expense proposal):
 // exposed ONLY as a local opt-in — TED_OPENCODE_P3_READS_ENABLED=1 with
@@ -56,18 +72,46 @@ export function productToolDefs(env = process.env) {
   return defs;
 }
 
-// Pure execute-closure builder (host-resolved, intention-stable). Exported
-// for tests; setup() wires the real executors below.
-export function buildExecute(def, run) {
+// Pure execute-closure builder (host-resolved, intention-stable, native
+// permission-gated). Exported for tests; setup() wires the real executors
+// below. The native `ctx.permission.assert` is captured ONCE during plugin
+// setup (Plugin 2.2.4: `permission` belongs to the setup Context; the tool
+// execution ToolContext carries sessionID/messageID/id/agent/signal but NO
+// permission property — see promise/plugin.d.ts vs promise/tool.d.ts) and
+// passed here as `assertPermission`. The execute closure NEVER reads
+// ctx.permission: it calls the setup-captured assert FIRST — with the real
+// tool invocation context (sessionID, messageID, id, agent as available),
+// action `ted.finance.read` and resource `[def.name]` — BEFORE host resolve
+// / finance executor / HTTP. Missing setup-captured assert fails closed; a
+// deny fails closed with a generic message (no raw denial detail leaks)
+// without reaching the executor. This is the native permission mechanism
+// (Plugin 2.2.4 `permission.d.ts` AssertInput), not a new auth system.
+export function buildExecute(def, run, assertPermission) {
   return async (input, ctx, opts = {}) => {
     const { ToolError } = await import('./tool-defs.mjs');
     try {
       if (!ctx || typeof ctx.sessionID !== 'string' || ctx.sessionID.length === 0) {
         throw new ToolError('host_context_required', `${def.name}: host-bound session context is required — hostless execution is blocked by design`);
       }
-      const { sessionID, messageID, id, signal } = ctx;
+      const { sessionID, messageID, id, agent, signal } = ctx;
       if (signal && signal.aborted) {
         throw new ToolError('tool.cancelled', `${def.name}: tool cancelled before execution`);
+      }
+      // Native permission gate (setup-captured; must precede host resolve /
+      // executor / HTTP). The execution context is never consulted for it.
+      if (typeof assertPermission !== 'function') {
+        throw new ToolError('tool.forbidden', `${def.name}: native permission assertion unavailable — failing closed (no silent allow)`);
+      }
+      const assertInput = { sessionID, action: TED_FINANCE_PERMISSION_ACTION, resources: [def.name] };
+      if (typeof agent === 'string' && agent.length > 0) assertInput.agent = agent;
+      if (typeof messageID === 'string' && messageID.length > 0 && typeof id === 'string' && id.length > 0) {
+        assertInput.source = { type: 'tool', messageID, id };
+      }
+      try {
+        await assertPermission(assertInput);
+      } catch (e) {
+        if (e && (e instanceof ToolError || e.code === 'tool.cancelled')) throw e;
+        throw new ToolError('tool.forbidden', `${def.name}: native permission denied — failing closed (no silent allow)`);
       }
       const host = resolveHost(sessionID);
       // Stable intention per session+message (retries share ONE intention);
@@ -89,7 +133,9 @@ export function buildExecute(def, run) {
       if (e && e.code === 'tool.cancelled') throw e;
       const { ToolError: TE } = await import('./tool-defs.mjs');
       if (e instanceof TE) throw e;
-      throw new TE('tool.transport', `${def.name}: ${(e && e.message) || e}`);
+      // Generic fallback: fixed safe message — arbitrary executor/dependency
+      // exception text never propagates to the tool/model context.
+      throw new TE('tool.transport', `${def.name}: tool execution failed`);
     }
   };
 }
@@ -131,6 +177,17 @@ export function defineTedFinancePlugin(transportFactory, { onEffectiveTools = nu
   return {
     id: 'ted-finance',
     async setup(ctx) {
+      // Native permission capture (Plugin 2.2.4: `permission.assert` lives
+      // on the SETUP context, not on the tool execution context). Bound
+      // once here and closed over by every registered execute below; a
+      // missing setup permission API fails closed with NO tools registered.
+      const setupPermission = ctx && ctx.permission ? ctx.permission : null;
+      const capturedAssert = setupPermission && typeof setupPermission.assert === 'function'
+        ? setupPermission.assert.bind(setupPermission)
+        : null;
+      if (!capturedAssert) {
+        throw new Error('defineTedFinancePlugin.setup: ctx.permission.assert is required (Plugin 2.2.4 setup Context) — failing closed, no tools registered');
+      }
       // Effective catalog = native built-ins + our product finance tools. The
       // capture runs AFTER transform (pinned V2 semantics: ctx.tool.list()
       // reads current registrations after every transform), so the observed
@@ -142,7 +199,7 @@ export function defineTedFinancePlugin(transportFactory, { onEffectiveTools = nu
             description: def.description,
             input: def.input,
             output: def.output,
-            execute: buildExecute(def, executors[def.name]),
+            execute: buildExecute(def, executors[def.name], capturedAssert),
           });
         }
       });

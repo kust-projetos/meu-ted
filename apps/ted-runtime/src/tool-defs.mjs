@@ -20,7 +20,6 @@ export class ToolError extends Error {
     this.code = code;
     this.details = details;
     if (details && typeof details.statusCode === 'number') this.statusCode = details.statusCode;
-    if (details && details.body !== undefined) this.body = details.body;
   }
 }
 
@@ -240,8 +239,12 @@ export function createToolExecutors(transport) {
         host,
       });
     } catch (e) {
+      // Typed fail-closed codes (transport timeout/cancelled/allowlist) pass
+      // through untouched; generic dependency failures get a fixed message —
+      // raw exception text never reaches the tool/model context.
+      if (e instanceof ToolError) throw e;
       if (e && (e.code === 'tool.timeout' || e.code === 'tool.cancelled')) throw e;
-      throw new ToolError('tool.transport', `${name}: transport failed: ${(e && e.message) || e}`);
+      throw new ToolError('tool.transport', `${name}: transport failed`);
     }
     const { statusCode, body: responseBody } = result;
     if (statusCode >= 200 && statusCode < 300) return assertShape(name, safeArgs, responseBody);
@@ -253,9 +256,10 @@ export function createToolExecutors(transport) {
               : statusCode === 422 ? 'tool.invalid'
                 : statusCode === 500 ? 'tool.upstream_500'
                   : 'tool.upstream_error';
-    // Fail-closed: upstream errors throw with the real status/body.
-    // Totals are NEVER fabricated (no zero-fill on error).
-    throw new ToolError(code, `${name}: upstream ${statusCode}`, { statusCode, body: responseBody });
+    // Fail-closed: upstream errors throw with the real status/code only.
+    // Totals are NEVER fabricated (no zero-fill on error); the upstream
+    // response body is never attached (no raw dependency text in details).
+    throw new ToolError(code, `${name}: upstream ${statusCode}`, { statusCode });
   };
   return {
     list_accounts: (args, host, opts) => run('list_accounts', args, host, opts),

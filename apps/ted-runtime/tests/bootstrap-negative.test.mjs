@@ -8,8 +8,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { approvedTmpRoot } from './helpers/tmp-root.mjs';
 
-import { setupIsolation, tedConfig, writeTedConfig } from '../src/bootstrap.mjs';
-import { createFacade, FACADE_KEYS } from '../src/facade.mjs';
+import { setupIsolation, tedConfig, writeTedConfig, loadLiveModelSelector } from '../src/bootstrap.mjs';
+import { createFacade, FACADE_KEYS } from './helpers/facade.mjs';
 import { productToolDefs, buildExecute } from '../src/plugin.mjs';
 import { ToolError } from '../src/tool-defs.mjs';
 
@@ -35,7 +35,10 @@ describe('ted-runtime bootstrap isolation', () => {
     const file = writeTedConfig(dir);
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.ok(parsed.policies.some((p) => p.action === 'provider.use' && p.effect === 'deny'));
-    assert.ok(parsed.agents.ted.permissions.some((p) => p.action === 'shell' && p.effect === 'deny'));
+    // No redundant agent-level denies: authority is policies.tool.use.
+    const perms = (parsed.agents && parsed.agents.ted && parsed.agents.ted.permissions) || [];
+    assert.ok(!perms.some((p) => p && (p.action === 'shell' || p.action === 'edit' || p.action === 'subagent')), 'no redundant agent-level shell/edit/subagent denies');
+    assert.ok(parsed.policies.some((p) => p.action === 'tool.use' && p.resource === 'shell:*' && p.effect === 'deny'), 'tool.use shell:* hard deny intact');
   });
 
   it('live scrubs saved-account ambient keys but preserves only OPENCODE_GO_API_KEY (isolated subprocess)', () => {
@@ -128,7 +131,10 @@ describe('ted-runtime negative proofs (reviewer P1/P2)', () => {
     clearAll();
     const run = async () => { throw new Error('must not reach transport'); };
     const exec = buildExecute({ name: 'list_accounts' }, run);
+    // PR290: the native permission gate runs before host resolve, so a
+    // permission-less hostless call fails closed at the permission gate
+    // (still fail-closed, never the executor).
     const err = await exec({}, { sessionID: 'ses_unknown_xyz' }, {}).catch((e) => e);
-    assert.match(String(err.message || err), /host-bound session context is required/);
+    assert.match(String(err.message || err), /permission assertion unavailable|host-bound session context is required/);
   });
 });

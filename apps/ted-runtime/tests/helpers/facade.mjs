@@ -1,4 +1,8 @@
-// TED restricted facade — P1 product.
+// TED restricted facade — TEST-ONLY helper (never product).
+//
+// The product tool path is the native plugin (src/plugin.mjs); this helper
+// is a test-only convenience for identity/close guarantees. Import from here
+// in tests, never from the runtime bootstrap surface.
 //
 // The exported facade exposes a RESTRICTED allowlist and nothing else:
 //   sessions: createSession/getSession/listSessions/removeSession
@@ -41,8 +45,8 @@
 //   facade or on the env's bindings object. No error message carries host
 //   field values (generic codes only).
 
-import { bindSession, resolveHost, revokeSession, isSameHost } from './session-bindings.mjs';
-import { TOOL_DEFS } from './tool-defs.mjs';
+import { bindSession, resolveHost, revokeSession, isSameHost } from '../../src/session-bindings.mjs';
+import { TOOL_DEFS } from '../../src/tool-defs.mjs';
 
 export const FACADE_KEYS = [
   'createSession',
@@ -114,7 +118,7 @@ export function createFacade({ oc, host, executors }) {
       // after a process restart too (bindings are process-local, so every
       // row requires an explicit host-side re-bind + re-authentication
       // before any metadata is returned). sessionID alone proves nothing.
-      const { ToolError } = await import('./tool-defs.mjs');
+      const { ToolError } = await import('../../src/tool-defs.mjs');
       const current = resolveHost(sessionID);
       if (!isSameHost(current, bound)) {
         throw new ToolError('host_binding_mismatch', 'session is bound to a different host — get blocked (nothing returned)');
@@ -131,7 +135,7 @@ export function createFacade({ oc, host, executors }) {
       // delete another identity's sqlite row (the spike's unbound
       // fall-through is NOT ported). Revocation happens only after a
       // successful remove, so a failed remove never destroys the binding.
-      const { ToolError } = await import('./tool-defs.mjs');
+      const { ToolError } = await import('../../src/tool-defs.mjs');
       const current = resolveHost(sessionID);
       if (!isSameHost(current, bound)) {
         throw new ToolError('host_binding_mismatch', 'session is bound to a different host — remove blocked (nothing removed, nothing revoked)');

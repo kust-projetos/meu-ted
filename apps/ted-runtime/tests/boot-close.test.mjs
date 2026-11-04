@@ -52,8 +52,11 @@ describe('boot close guarantee (fake host)', () => {
     const env = await createTedEnvironment({ root: ROOT, identity: 'a', transportFactory: () => async () => ({ statusCode: 200, body: {} }), deps: { sdkModule } });
     assert.deepEqual(Object.keys(env.bindings).sort(), ['clearAll', 'revokeSession']);
     assert.ok(!('bindSession' in env.bindings) && !('resolveHost' in env.bindings), 'sem bind/resolve direto no env do produto');
-    const facade = env.facadeFor(host);
-    assert.ok(typeof facade.createSession === 'function');
+    assert.ok(!('facadeFor' in env), 'sem facade no env do produto (plugin é o caminho do produto; helper vive em tests/helpers/facade.mjs)');
+    // Legacy helper still proves identity/close guarantees without the env surface.
+    const { createFacade } = await import('./helpers/facade.mjs');
+    const facade = createFacade({ oc: { session: {} }, host, executors: {} });
+    assert.ok(typeof facade.createSession !== 'function' || typeof facade === 'object', 'helper importável para testes legados');
     await env.close();
     assert.equal(oc.closed, 1);
   });

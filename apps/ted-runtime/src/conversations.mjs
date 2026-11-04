@@ -401,19 +401,27 @@ export function createConversationStore({ persistDir } = {}) {
       return entry ? { ...entry } : null;
     },
 
-    claimIntention(conversationId, intentionId) {
+    claimIntention(conversationId, intentionId, actorId) {
       requireLoaded();
       const record = records.get(conversationId);
       if (!record) throw new ConversationError('conversation.not_found', 'conversation not found');
       if (typeof intentionId !== 'string' || intentionId.length === 0 || intentionId.length > 256) {
         throw new ConversationError('conversation.invalid_args', 'intentionId (string, non-empty) is required');
       }
+      if (actorId !== undefined && (typeof actorId !== 'string' || actorId.length === 0)) {
+        throw new ConversationError('conversation.invalid_args', 'intention actorId (non-empty string) is required when provided');
+      }
       if (record.intentions === undefined) record.intentions = {};
       if (record.intentions[intentionId]) {
         throw new ConversationError('conversation.intention_duplicate', 'intention already claimed — retry reuses native history, never a second prompt');
       }
       const stamped = nowIso();
-      record.intentions[intentionId] = { status: 'pending', createdAt: stamped, updatedAt: stamped };
+      record.intentions[intentionId] = {
+        status: 'pending',
+        ...(typeof actorId === 'string' && actorId.length > 0 ? { actorId } : {}),
+        createdAt: stamped,
+        updatedAt: stamped,
+      };
       record.updatedAt = stamped;
       persist();
       return { ...record.intentions[intentionId] };

@@ -433,6 +433,18 @@ export function createGatewayServer({
           }
         }
         const existing = store.getIntention(record.conversationId, body.intentionId);
+        // Actor-scoped intention idempotency: the intention author is fixed
+        // at the atomic initial claim. A different actor reusing the same
+        // intentionId on this shared conversation — or an entry without an
+        // author (pre-author claims) — fails closed HERE, before the
+        // completed/pending status branch and before any runtime session
+        // attach, history read, rebind, or prompt. Generic code/message:
+        // no author ids, no body/output, no turn metadata, no status oracle.
+        if (existing && (typeof existing.actorId !== 'string' || existing.actorId.length === 0 || existing.actorId !== identity.actorId)) {
+          const dup = new GatewayError('prompt.duplicate', 'intention already claimed — retry reuses native history, never a second prompt');
+          dup.code = 'prompt.duplicate';
+          throw dup;
+        }
         if (existing && existing.status === 'completed') {
           let runtimeForReplay = record.runtimeSessionId;
           if (!runtimeForReplay) {
@@ -458,17 +470,88 @@ export function createGatewayServer({
         }
         if (existing && existing.status === 'pending') {
           // Admitted-but-incomplete (native prompt accepted, no answer yet):
-          // typed in-progress — the client retries with the SAME id and the
-          // gateway replays once the answer lands, never resubmits.
-          const code = existing.userMessageId ? 'prompt.in_progress' : 'prompt.duplicate';
-          const dup = new GatewayError(code, code === 'prompt.in_progress'
-            ? 'intention admitted but answer not yet observable — retry with the same id, no second prompt issued'
-            : 'intention already in progress — duplicate fails closed (no second prompt issued)');
-          dup.code = code;
+          // the SAME intentionId retry first re-reads NATIVE history for the
+          // admitted turn before answering in_progress — a late assistant
+          // completes here (settled completed, exactly one prompt ever), a
+          // terminal provider marker surfaces provider.transport, and only a
+          // still-missing answer stays in_progress. This path NEVER calls
+          // promptHost.chat: no second native prompt is issued on any branch.
+          if (typeof existing.userMessageId === 'string' && existing.userMessageId.length > 0) {
+            const runtimeForRecovery = record.runtimeSessionId;
+            if (runtimeForRecovery) {
+              const host = verifiedHostFor(identity, deviceToken);
+              let recovered = null;
+              try {
+                recovered = await requireSafeWrapper()(runtimeForRecovery, host, async () => {
+                  try {
+                    const { assistantTextAfterAdmitted, isProviderTransportTerminal } = await import('./prompt.mjs');
+                    if (!promptHost || typeof promptHost.readRawMessages !== 'function') return null;
+                    const rows = await promptHost.readRawMessages({ sessionID: runtimeForRecovery });
+                    if (!Array.isArray(rows)) return null;
+                    const at = rows.findIndex((m) => m && typeof m === 'object' && m.id === existing.userMessageId);
+                    if (at !== -1) {
+                      for (const m of rows.slice(at + 1)) {
+                        if (!m || typeof m !== 'object') continue;
+                        if (m.type === 'user') break; // next turn boundary
+                        if (m.type === 'assistant' && isProviderTransportTerminal(m)) {
+                          return { __terminal: true };
+                        }
+                      }
+                    }
+                    const found = assistantTextAfterAdmitted(rows, existing.userMessageId);
+                    if (found && typeof found.text === 'string' && found.text.trim().length > 0) {
+                      return { turnId: found.turnId ?? existing.turnId ?? existing.userMessageId, output: found.text };
+                    }
+                    return null;
+                  } catch {
+                    // History-read failure means "no assistant provable yet" —
+                    // retain pending below (never a 503 here, never a prompt).
+                    return null;
+                  }
+                });
+              } catch (wrapperErr) {
+                // Idle/quarantine failures propagate (fail closed) — never
+                // masked as in_progress; only a null recovery stays pending.
+                throw wrapperErr;
+              }
+              if (recovered && recovered.__terminal) {
+                const { PromptError } = await import('./prompt.mjs');
+                throw new PromptError('provider.transport', 'provider transport failed — failing closed (no fabricated output)');
+              }
+              if (recovered && typeof recovered.output === 'string' && recovered.output.length > 0) {
+                if (hasIntentions) {
+                  // Recovery settle is NOT best-effort: never return success
+                  // unless `status:completed` persistence succeeds. On failure
+                  // throw a safe error (gateway normalizes to 502) while the
+                  // intention stays pending — the SAME id retry re-reads
+                  // native history and settles, never a second prompt.
+                  try {
+                    store.settleIntention(record.conversationId, body.intentionId, {
+                      status: 'completed',
+                      actorId: identity.actorId,
+                      ...(typeof recovered.turnId === 'string' ? { turnId: recovered.turnId } : {}),
+                      userMessageId: existing.userMessageId,
+                    });
+                  } catch {
+                    const safe = new GatewayError('gateway.upstream_error', 'recovery settle failed — retry with the same id, no second prompt issued');
+                    safe.code = 'gateway.upstream_error';
+                    throw safe;
+                  }
+                }
+                record = store.noteTurn(record.conversationId);
+                return { turnId: recovered.turnId, output: recovered.output };
+              }
+            }
+            const wait = new GatewayError('prompt.in_progress', 'intention admitted but answer not yet observable — retry with the same id, no second prompt issued');
+            wait.code = 'prompt.in_progress';
+            throw wait;
+          }
+          const dup = new GatewayError('prompt.duplicate', 'intention already in progress — duplicate fails closed (no second prompt issued)');
+          dup.code = 'prompt.duplicate';
           throw dup;
         }
         try {
-          store.claimIntention(record.conversationId, body.intentionId);
+          store.claimIntention(record.conversationId, body.intentionId, identity.actorId);
           // Pin the first writer for lost-cookie retries (B-pin first chats
           // reach here; pin-none retries recorded synchronously at create).
           // Idempotent first-wins: a concurrent retry resolves to the same
@@ -530,7 +613,24 @@ export function createGatewayServer({
             ...(started && typeof started.turnId === 'string' ? { turnId: started.turnId } : {}),
             ...(started && typeof started.userMessageId === 'string' ? { userMessageId: started.userMessageId } : {}),
           });
-        } catch { /* settle is best-effort metadata; the turn already completed */ }
+        } catch {
+          // Normal-path settle is NOT best-effort: never report success
+          // unless `status:completed` persistence succeeds. Preserve the
+          // admitted ids as pending metadata so the SAME intentionId retry
+          // re-reads native history (pending-with-userMessageId recovery)
+          // instead of falling into permanent prompt.duplicate. The store
+          // error text never leaves this block (safe typed error only).
+          try {
+            store.settleIntention(record.conversationId, body.intentionId, {
+              status: 'pending',
+              actorId: identity.actorId,
+              ...(started && typeof started.userMessageId === 'string' ? { userMessageId: started.userMessageId } : {}),
+            });
+          } catch { /* fallback is best-effort; the safe error below still propagates */ }
+          const safe = new GatewayError('gateway.upstream_error', 'completed settle failed — retry with the same id, no second prompt issued');
+          safe.code = 'gateway.upstream_error';
+          throw safe;
+        }
       }
       record = store.noteTurn(record.conversationId);
       return started;

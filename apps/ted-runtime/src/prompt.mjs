@@ -54,6 +54,12 @@ export class PromptError extends Error {
 // rows total. Past that the read fails closed with `prompt.history_overflow`
 // — history is NEVER silently truncated (a cut transcript would fabricate
 // a false turn or hide the admitted message).
+//
+// P2-TODO (bounded history, no behavior change): if transcripts ever need to
+// grow past MESSAGE_MAX_TOTAL, page the NATIVE SDK cursor incrementally
+// (opaque `cursor` chaining, same fail-closed overflow) and render the PWA
+// list incrementally (append-only newest-first) instead of raising this
+// bound. No unlimited read is authorized here.
 export const MESSAGE_PAGE_LIMIT = 50;
 export const MESSAGE_MAX_PAGES = 10;
 export const MESSAGE_MAX_TOTAL = 500;
@@ -184,6 +190,27 @@ export function assistantTextAfterAdmitted(rows, admittedId) {
   return { text: out, turnId };
 }
 
+// Terminal provider-transport marker persisted by the SDK as an assistant
+// row with `finish: 'error'` and `error.type: 'provider.transport'` (2.2.4
+// native history; content is empty, cost/tokens null). Pure predicate so
+// both the live poll, the gateway pending-retry recovery, and any future
+// replay path agree on the shape. ONLY this exact shape surfaces
+// `provider.transport` — assistant rows without text and without
+// `finish:'error'` keep the existing `prompt.no_output` path, and raw native
+// detail (message/body/request/secret) never leaves this module: the caller
+// throws a FIXED safe message.
+export function isProviderTransportTerminal(m) {
+  return (
+    !!m &&
+    typeof m === 'object' &&
+    m.type === 'assistant' &&
+    m.finish === 'error' &&
+    !!m.error &&
+    typeof m.error === 'object' &&
+    m.error.type === 'provider.transport'
+  );
+}
+
 // oc: live OpenCode SDK host (or double with session.prompt /
 // session.interrupt / message.list). Seen-intention registry is
 // process-local: a repeated intentionId fails closed — the adapter never
@@ -272,27 +299,7 @@ export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250 }
     return out.slice(0, rowLimit);
   }
 
-  // Terminal provider-transport marker persisted by the SDK as an assistant
-// row with `finish: 'error'` and `error.type: 'provider.transport'` (2.2.4
-// native history; content is empty, cost/tokens null). Pure predicate so
-// both the live poll and any future replay path agree on the shape. ONLY
-// this exact shape surfaces `provider.transport` — assistant rows without
-// text and without `finish:'error'` keep the existing `prompt.no_output`
-// path, and raw native detail (message/body/request/secret) never leaves
-// this module: the caller throws a FIXED safe message.
-function isProviderTransportTerminal(m) {
-  return (
-    !!m &&
-    typeof m === 'object' &&
-    m.type === 'assistant' &&
-    m.finish === 'error' &&
-    !!m.error &&
-    typeof m.error === 'object' &&
-    m.error.type === 'provider.transport'
-  );
-}
-
-// Current-turn poll over a BOUNDED recent window: walks newest-first
+  // Current-turn poll over a BOUNDED recent window: walks newest-first
   // (order 'desc') and stops at the page containing the admitted id, so a
   // long transcript is never re-fetched whole every 250ms. Returns the
   // admitted turn's text (stopping at the next user message — the turn
@@ -593,5 +600,8 @@ export function classifyPromptFailure(e) {
   if (e && (e.name === 'AbortError' || e.code === 20)) {
     return new PromptError('prompt.cancelled', 'prompt wait aborted (local cancellation; server run interrupted where supported)');
   }
-  return new PromptError('prompt.failed', `prompt failed: ${msg.slice(0, 200)}`);
+  // Untyped SDK failures carry raw native text (messages, bodies, secrets) —
+  // NEVER surface it: fixed safe message only (typed provider codes above
+  // keep their own fixed messages; provider.transport is detected elsewhere).
+  return new PromptError('prompt.failed', 'prompt failed — failing closed (no fabricated output)');
 }

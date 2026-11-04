@@ -6,7 +6,7 @@ import {
   FACADE_KEYS,
   filterSessionsForHost,
   createFacade,
-} from '../src/facade.mjs';
+} from './helpers/facade.mjs';
 import { bindSession, clearAll } from '../src/session-bindings.mjs';
 
 const hostA = Object.freeze({ label: 'a', token: 't-a', household: 'H_A', actorId: 'actor-a', deviceId: 'dev-a' });

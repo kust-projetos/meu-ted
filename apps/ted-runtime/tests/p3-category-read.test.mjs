@@ -79,19 +79,20 @@ describe('p3 category read: product catalog gating', () => {
   });
 
   it('plugin setup registers exactly 2 tools by default, 3 with the local opt-in', async () => {
+    const allowSetup = { permission: { assert: async () => {} } };
     const addedDefault = [];
     const defaultDef = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), { env: OFF_ENV });
-    await defaultDef.setup({ tool: { transform: async (fn) => { fn({ add: (t) => addedDefault.push(t) }); } } });
+    await defaultDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedDefault.push(t) }); } } });
     assert.deepEqual(addedDefault.map((t) => t.name).sort(), ['get_month_summary', 'list_accounts']);
 
     const addedOptIn = [];
     const optInDef = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), { env: OPT_IN_ENV });
-    await optInDef.setup({ tool: { transform: async (fn) => { fn({ add: (t) => addedOptIn.push(t) }); } } });
+    await optInDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedOptIn.push(t) }); } } });
     assert.deepEqual(addedOptIn.map((t) => t.name).sort(), ['get_month_summary', 'list_accounts', 'list_categories']);
 
     const addedProd = [];
     const prodDef = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), { env: PROD_ENV });
-    await prodDef.setup({ tool: { transform: async (fn) => { fn({ add: (t) => addedProd.push(t) }); } } });
+    await prodDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedProd.push(t) }); } } });
     assert.deepEqual(addedProd.map((t) => t.name).sort(), ['get_month_summary', 'list_accounts']);
   });
 });

@@ -259,8 +259,14 @@ describe('native model selection (real SDK 2.2.4, zero inference)', () => {
     }
   });
 
-  it('product profiles: test default has no model; live appends specific opencode-go provider allow after deny-all', () => {
+  it('product profiles: test model-free; live selects template default; live appends specific opencode-go provider allow after deny-all', () => {
     // Puro (sem setupIsolation: o processo já está isolado pelo teste acima).
+    // P1 model config: test carries NO `model` (isolated); live selects the
+    // native default from the repo-owned template `src/live-model.json`
+    // (currently `opencode-go/deepseek-v4.1-flash` — data, never a JS
+    // literal). A legitimate native override applies without code changes
+    // (see model-selection-merge.test.mjs + live-model-default.test.mjs);
+    // writeTedConfig preserves it.
     const base = tedConfig();
     assert.ok(!('model' in base), 'perfil test (default) não seleciona modelo');
     assert.ok(!('providers' in base), 'perfil test não injeta catálogo customizado');
@@ -271,7 +277,7 @@ describe('native model selection (real SDK 2.2.4, zero inference)', () => {
       'test permanece deny-all de provider.use (sem allow)',
     );
     const live = tedConfig('live');
-    assert.equal(live.model, 'opencode-go/deepseek-v4.1-flash', 'live usa SOMENTE o modelo nativo do catálogo');
+    assert.equal(live.model, 'opencode-go/deepseek-v4.1-flash', 'live seleciona o default nativo via template src/live-model.json (não literal JS, não herança de config do usuário)');
     assert.ok(!('providers' in live), 'live não injeta catálogo customizado (resolve do SDK)');
     assert.deepEqual(
       (live.policies || []).filter((p) => p && p.action === 'tool.use'),
