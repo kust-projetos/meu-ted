@@ -279,8 +279,9 @@ pnpm --filter pi-finance-ted-runtime --fail-if-no-match typecheck
 pnpm --filter pi-finance-ted-runtime --fail-if-no-match test
 ```
 
-O comando `test` do pacote (`node --test tests/`) descobre e executa os testes
-do diretório `tests/` — sem filtro por nome. Na base deste adendo (`929bfe2`),
+O comando `test` do pacote (`node --test`, sem argumento de diretório)
+descobre e executa os testes do diretório `tests/` — sem filtro por nome.
+Na base deste adendo (`929bfe2`),
 isso corresponde a **196 testes em 37 suítes**, incluindo a prova de permissão
 do prompt-loop nativo (`tests/prompt-loop-permission.test.mjs`, com provider
 roteirizado em loopback, sem inferência paga). Os testes novos do adendo entram

@@ -106,7 +106,7 @@ vi.mock("@/lib/api/agent-auth", () => ({
 
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { EXPECTED_AGENT_ORIGIN } from "@/proxy-utils";
-import { GET, POST } from "./route";
+import { GET, POST } from "../../src/app/api/agent/[...path]/route";
 import { fetchAgentHistory } from "@/lib/api/agent-client";
 import { clearTedRuntimeViews, getTedRuntimeView } from "@/lib/api/ted-runtime-view";
 import { render, screen } from "@/lib/test-utils";
@@ -126,8 +126,8 @@ const { memoryAdapter } = (await import(pathToFileURL(memoryAdapterPath).href)) 
   memoryAdapter: (options: Record<string, unknown[]>) => unknown;
 };
 type AuthConfig = Parameters<typeof createBetterAuth>[0];
-import { createBetterAuth } from "../../../../../../api/src/auth/better-auth.js";
-import { buildTestApp } from "../../../../../../api/tests/test-app.js";
+import { createBetterAuth } from "../../../api/src/auth/better-auth.js";
+import { buildTestApp } from "../../../api/tests/test-app.js";
 import {
   ACCOUNT_A1,
   ACCOUNT_A2,
@@ -139,10 +139,12 @@ import {
   HOUSEHOLD_A,
   HOUSEHOLD_B,
   TRANSACTIONS,
-} from "../../../../../../api/tests/fixtures/seed.js";
+} from "../../../api/tests/fixtures/seed.js";
 
 const PWA_ROOT = PWA_ROOT_EARLY;
-const HERE = path.resolve(PWA_ROOT, "src/app/api/agent/[...path]");
+// Relocated out of `src/app` (Next build scope) into `e2e/support` (PWA
+// tsconfig excludes `e2e`): same loopback probe, resolved from the new home.
+const HERE = path.resolve(PWA_ROOT, "e2e/support");
 const PROBE = path.resolve(HERE, "p2d-synthetic-read-probe.mjs");
 const TED_RUNTIME_DIR = path.resolve(PWA_ROOT, "../ted-runtime");
 

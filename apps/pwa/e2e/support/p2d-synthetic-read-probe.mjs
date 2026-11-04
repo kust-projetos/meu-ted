@@ -1,5 +1,5 @@
 // P2D synthetic-read probe — runs ONLY as a dedicated subprocess (spawned by
-// route.p2d-synthetic-read.test.ts, one process). Never imported by the suite
+// e2e/support/route.p2d-synthetic-read.test.tsx, one process). Never imported by the suite
 // process: env mutation (setupIsolation scrub) and the OpenCode boot stay
 // inside this child, so the parent session's cwd/env are untouched.
 //
