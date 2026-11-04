@@ -166,8 +166,64 @@ test("rimraf 2026-11-04: accepts only the exact CI record, rejects mutations", (
   }
 });
 
-// ---- pass: no vulnerabilities ----
+// ---- typescript-eslint 2026-11-04 drift: exact CI records (run 41876660420) ----
 
+test("typescript-eslint 2026-11-04: accepts only the two exact CI records, rejects mutations", () => {
+  const pluginExact = {
+    name: "@typescript-eslint/eslint-plugin",
+    severity: "moderate",
+    isDirect: false,
+    via: ["@typescript-eslint/parser", "@typescript-eslint/type-utils", "@typescript-eslint/utils", "eslint"],
+    effects: ["typescript-eslint"],
+    range: "*",
+    nodes: ["node_modules/@typescript-eslint/eslint-plugin"],
+    fixAvailable: { name: "eslint-config-next", version: "12.0.4", isSemVerMajor: true },
+  };
+  const parserExact = {
+    name: "@typescript-eslint/parser",
+    severity: "moderate",
+    isDirect: false,
+    via: ["@typescript-eslint/typescript-estree", "@typescript-eslint/type-utils", "@typescript-eslint/utils", "eslint"],
+    effects: ["@typescript-eslint/eslint-plugin"],
+    range: "*",
+    nodes: ["node_modules/@typescript-eslint/parser"],
+    fixAvailable: { name: "eslint-config-next", version: "12.0.4", isSemVerMajor: true },
+  };
+  const twoAudit = (pluginVuln, parserVuln) => ({
+    vulnerabilities: { "@typescript-eslint/eslint-plugin": pluginVuln, "@typescript-eslint/parser": parserVuln },
+    metadata: { vulnerabilities: { total: 2 } },
+  });
+
+  const ok = evaluateAudit({ audit: twoAudit(pluginExact, parserExact), allowlist, today: TODAY });
+  assert.equal(ok.status, "ACCEPTED");
+  assert.equal(ok.blocked.length, 0);
+
+  const pluginMutations = [
+    { ...pluginExact, severity: "high" },
+    { ...pluginExact, via: ["@typescript-eslint/parser", "@typescript-eslint/type-utils", "eslint"] },
+    { ...pluginExact, effects: ["other-pkg"] },
+    { ...pluginExact, range: ">=1.0.0" },
+  ];
+  for (const vuln of pluginMutations) {
+    const result = evaluateAudit({ audit: twoAudit(vuln, parserExact), allowlist, today: TODAY });
+    assert.equal(result.status, "BLOCKED");
+    assert.ok(result.blocked.length > 0);
+  }
+
+  const parserMutations = [
+    { ...parserExact, severity: "high" },
+    { ...parserExact, via: ["@typescript-eslint/typescript-estree"] },
+    { ...parserExact, effects: ["other-pkg"] },
+    { ...parserExact, range: ">=1.0.0" },
+  ];
+  for (const vuln of parserMutations) {
+    const result = evaluateAudit({ audit: twoAudit(pluginExact, vuln), allowlist, today: TODAY });
+    assert.equal(result.status, "BLOCKED");
+    assert.ok(result.blocked.length > 0);
+  }
+});
+
+// ---- pass: no vulnerabilities ----
 test("pass: no vulnerabilities", () => {
   const emptyAudit = { vulnerabilities: {}, metadata: { vulnerabilities: { total: 0 } } };
   const result = evaluateAudit({ audit: emptyAudit, allowlist: [], today: TODAY });

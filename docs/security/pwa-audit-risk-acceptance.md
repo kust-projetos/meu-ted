@@ -28,6 +28,24 @@
 > only that shape (scope `build-time`, chain Lighthouse → `chrome-launcher` →
 > `rimraf` → `glob`); strict exact matching is unchanged and no audit
 > criterion was relaxed.
+>
+> 2026-11-04 follow-up (CI run 41876660420, `Scoped audit` job 126737770091,
+> PR #290 SHA `eb1010a`):
+> The run re-reported the already-accepted dev-only TypeScript-ESLint/minimatch
+> chain (`pwa-2026-11-03-minimatch`, GHSA-g3hv-75wg-m249) with two alternate
+> exact graph shapes — `@typescript-eslint/eslint-plugin` with effects
+> `['typescript-eslint']` (first-run entry covers `[]`) and
+> `@typescript-eslint/parser` with via
+> `['@typescript-eslint/typescript-estree','@typescript-eslint/type-utils','@typescript-eslint/utils','eslint']`
+> and effects `['@typescript-eslint/eslint-plugin']` (first-run entry covers
+> via `['@typescript-eslint/typescript-estree','eslint']` with effects
+> `['@typescript-eslint/eslint-plugin','typescript-eslint']`). Each has a
+> separate exact `pwa-2026-11-04-typescript-eslint-*-shape` entry (scope
+> `dev-only`, expires 2026-12-31); no new advisory or risk family. Both rows
+> report `fixAvailable: eslint-config-next@12.0.4 isSemVerMajor:true` — a
+> breaking major downgrade that is not applied and does not alter dependencies.
+> Strict exact matching is unchanged; the full audit is not claimed green until
+> rerun.
 
 ## Runtime (2 shapes, 1 risk)
 
@@ -48,7 +66,7 @@
 | Package | Severity | Scope | Reason |
 |---|---|---|---|
 | `eslint`, `@eslint-community/eslint-utils`, `@eslint/config-array`, `@eslint/eslintrc`, `@next/eslint-plugin-next`, `eslint-config-next`, `eslint-plugin-import`, `eslint-plugin-jsx-a11y`, `eslint-plugin-react` | moderate | Dev lint only | Exact graph/range shape drift of the already-accepted ESLint chain (via the new `minimatch` advisory). Dev dependencies, never bundled into the PWA runtime; npm proposes only breaking majors (`eslint` 4.0.0, `eslint-config-next` 12.0.4). |
-| `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`, `@typescript-eslint/type-utils`, `@typescript-eslint/typescript-estree`, `@typescript-eslint/utils`, `typescript-eslint` | moderate | Dev lint only | Same drift, TypeScript-ESLint side of the chain (via `minimatch`/`eslint`). Dev-only, same non-remediation. |
+| `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`, `@typescript-eslint/type-utils`, `@typescript-eslint/typescript-estree`, `@typescript-eslint/utils`, `typescript-eslint` | moderate | Dev lint only | Same drift, TypeScript-ESLint side of the chain (via `minimatch`/`eslint`). Dev-only, same non-remediation. 2026-11-04: two alternate exact shapes accepted (`pwa-2026-11-04-typescript-eslint-eslint-plugin-shape`, `pwa-2026-11-04-typescript-eslint-parser-shape`); `eslint-config-next@12.0.4` fix is a breaking major downgrade, not applied. |
 | `@stryker-mutator/core`, `@stryker-mutator/typescript-checker`, `@stryker-mutator/vitest-runner` | moderate | Dev mutation-testing only | Same drift via `minimatch`; no fix available. Dev-only, never shipped. |
 
 ## Previously accepted Build-Time entries (8)

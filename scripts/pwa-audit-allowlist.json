@@ -1525,5 +1525,43 @@
       "chrome-launcher"
     ],
     "range": "2.3.0 - 3.0.2 || 4.2.0 - 6.1.3"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-eslint-plugin-shape",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (CI run 41876660420, Scoped audit job 126737770091): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/eslint-plugin with an alternate exact graph shape (effects [typescript-eslint] instead of []; via [@typescript-eslint/parser, @typescript-eslint/type-utils, @typescript-eslint/utils, eslint] and range * unchanged). Same accepted dev-only ESLint/TypeScript-ESLint/Stryker chain risk via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; npm proposes only the breaking eslint-config-next 12.0.4 major downgrade, which is not applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/eslint-plugin",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/parser",
+      "@typescript-eslint/type-utils",
+      "@typescript-eslint/utils",
+      "eslint"
+    ],
+    "effects": [
+      "typescript-eslint"
+    ],
+    "range": "*"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-parser-shape",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (CI run 41876660420, Scoped audit job 126737770091): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/parser with an alternate exact graph shape (via [@typescript-eslint/typescript-estree, @typescript-eslint/type-utils, @typescript-eslint/utils, eslint] and effects [@typescript-eslint/eslint-plugin] instead of via [@typescript-eslint/typescript-estree, eslint] with effects [@typescript-eslint/eslint-plugin, typescript-eslint]; range * unchanged). Same accepted dev-only ESLint/TypeScript-ESLint/Stryker chain risk via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; npm proposes only the breaking eslint-config-next 12.0.4 major downgrade, which is not applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/parser",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/typescript-estree",
+      "@typescript-eslint/type-utils",
+      "@typescript-eslint/utils",
+      "eslint"
+    ],
+    "effects": [
+      "@typescript-eslint/eslint-plugin"
+    ],
+    "range": "*"
   }
 ]
