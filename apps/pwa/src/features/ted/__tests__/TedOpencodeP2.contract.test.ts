@@ -84,6 +84,18 @@ function bodyJson(call: CapturedCall): Record<string, unknown> {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Typed rejection capture. Resolves with the thrown error; FAILS if the call
+// resolves, so a success can never be mistaken for the expected rejection.
+type CapturedError = Error & { status?: number; code?: string };
+async function rejectionOf(promise: Promise<unknown>): Promise<CapturedError> {
+  try {
+    await promise;
+  } catch (e) {
+    return e as CapturedError;
+  }
+  throw new Error("expected the call to reject, but it resolved");
+}
+
 // Never on the browser wire: secrets, runtime handles, native session, or attestation.
 const FORBIDDEN_WIRE_KEYS = [
   "runtime",
@@ -164,14 +176,14 @@ describe("P2 contrato — sendAgentMessage preserva o fio A0", () => {
 
   it("401 sem code do servidor vira auth.session_required com status (fail-closed, sem mascarar)", async () => {
     mockFetchOnce({ message: "sessão exigida" }, 401);
-    const err = await sendAgentMessage("ws-1", "oi", { messageId: "m-401" }).catch((e) => e as Error & { status?: number; code?: string });
+    const err = await rejectionOf(sendAgentMessage("ws-1", "oi", { messageId: "m-401" }));
     expect(err.status).toBe(401);
     expect(err.code).toBe("auth.session_required");
   });
 
   it("403 sem code do servidor vira auth.workspace_forbidden com status (mapeamento client-side, sem mascarar)", async () => {
     mockFetchOnce({ message: "proibido" }, 403);
-    const err = await sendAgentMessage("ws-1", "oi", { messageId: "m-403" }).catch((e) => e as Error & { status?: number; code?: string });
+    const err = await rejectionOf(sendAgentMessage("ws-1", "oi", { messageId: "m-403" }));
     expect(err.status).toBe(403);
     expect(err.code).toBe("auth.workspace_forbidden");
   });
@@ -180,7 +192,7 @@ describe("P2 contrato — sendAgentMessage preserva o fio A0", () => {
     // token_replayed triggers exactly 1 single-use retry: two responses queued.
     mockFetchOnce({ code: "agent.token_replayed", message: "replay" }, 401);
     mockFetchOnce({ code: "agent.token_replayed", message: "replay" }, 401);
-    const err = await sendAgentMessage("ws-1", "oi", { messageId: "m-code" }).catch((e) => e as Error & { code?: string });
+    const err = await rejectionOf(sendAgentMessage("ws-1", "oi", { messageId: "m-code" }));
     expect(err.code).toBe("agent.token_replayed");
     expect(calls.length).toBe(2);
   });
@@ -210,9 +222,7 @@ describe("P2 contrato — sendAgentMessage preserva o fio A0", () => {
       output: "pronto",
       pendingOperation: { id: "op-bad", operation: "transactions.expense.create", status: "succeeded" },
     });
-    const err = await sendAgentMessage("ws-1", "crie gasto", { messageId: "m-bad" }).catch(
-      (e) => e as Error & { code?: string },
-    );
+    const err = await rejectionOf(sendAgentMessage("ws-1", "crie gasto", { messageId: "m-bad" }));
     expect(err.code).toBe("agent.execution_outcome_unknown");
   });
 
@@ -268,7 +278,7 @@ describe("P2 contrato — decisão leva só {decision, requestId} (nunca atesta�
 
   it("decisão succeeded sem receipt não é sucesso acionável", async () => {
     mockFetchOnce({ operationId: "op-10", status: "succeeded" });
-    const err = await decidePendingOperation("ws-1", "op-10", "confirm").catch((e) => e as Error & { code?: string });
+    const err = await rejectionOf(decidePendingOperation("ws-1", "op-10", "confirm"));
     expect(err.code).toBe("agent.execution_outcome_unknown");
   });
 });
