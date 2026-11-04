@@ -110,6 +110,44 @@ async function closedLoopbackPort() {
   return port;
 }
 
+// Test-only observation seam. Wraps the setup-captured native permission
+// assert so every call is RECORDED, then DELEGATES to the real
+// `ctx.permission.assert`. This makes no allow/deny decision: the outcome is
+// always the native one. Needed because a native `deny` short-circuits before
+// the permission `evaluate` hook fires, so the hook cannot observe it.
+function withAssertSpy(def, calls) {
+  return {
+    ...def,
+    async setup(ctx) {
+      const perm = ctx && ctx.permission;
+      if (!perm || typeof perm.assert !== 'function') return def.setup(ctx);
+      const spied = {
+        ...ctx,
+        permission: {
+          ...perm,
+          assert: (input) => {
+            calls.push({
+              action: input.action,
+              resources: [...(input.resources || [])],
+              sessionID: input.sessionID,
+              agent: input.agent,
+            });
+            return perm.assert(input);
+          },
+        },
+      };
+      return def.setup(spied);
+    },
+  };
+}
+
+// Tool names the native loop offered to the model in one chat request
+// (OpenAI-compatible `tools[].function.name`). Empty when absent.
+function offeredToolNames(req) {
+  const tools = req && req.body && Array.isArray(req.body.tools) ? req.body.tools : [];
+  return tools.map((t) => t && t.function && t.function.name).filter((n) => typeof n === 'string');
+}
+
 describe('PR290 prompt-loop permission enforcement (real SDK 2.2.4, stubbed model)', () => {
   let iso;
   let oc = null;
@@ -125,6 +163,7 @@ describe('PR290 prompt-loop permission enforcement (real SDK 2.2.4, stubbed mode
   const fetchBlocked = [];
   let effectiveTools = null;
   let effectiveToolsError = null;
+  const assertCalls = []; // every native permission.assert call (spy, delegated)
 
   before(async () => {
     const root = approvedTmpRoot('ted-prompt-loop');
@@ -219,9 +258,9 @@ describe('PR290 prompt-loop permission enforcement (real SDK 2.2.4, stubbed mode
       transportCalls++;
       return inner.call(args);
     };
-    await wirePlugin(oc, defineTedFinancePlugin(() => countingTransport, {
+    await wirePlugin(oc, withAssertSpy(defineTedFinancePlugin(() => countingTransport, {
       onEffectiveTools: (names, err) => { effectiveTools = names; effectiveToolsError = err; },
-    }));
+    }), assertCalls));
   });
 
   after(async () => {
@@ -269,6 +308,9 @@ describe('PR290 prompt-loop permission enforcement (real SDK 2.2.4, stubbed mode
     assert.equal(transportCalls, 1, `exactly one finance transport attempt: permission ALLOWED execution (a deny would short-circuit before transport); toolContent=${JSON.stringify(content).slice(0, 300)}; ${diag}`);
     assert.match(content, /transport/i, `tool result is a transport failure, proving execution ran (got ${JSON.stringify(content).slice(0, 300)})`);
     assert.ok(!/forbidden/i.test(content), `tool result is NOT a permission denial (got ${JSON.stringify(content).slice(0, 300)})`);
+    const offered = offeredToolNames(newReqs[0]);
+    assert.ok(offered.includes('list_accounts'), `list_accounts is offered in the effective catalog (got ${JSON.stringify(offered)})`);
+    assert.ok(assertCalls.some((c) => c.action === 'ted.finance.read' && c.resources.includes('list_accounts')), `native permission.assert called with ted.finance.read/list_accounts (calls=${JSON.stringify(assertCalls).slice(0, 300)})`);
     for (const r of newReqs) {
       assert.equal(r.remote, '127.0.0.1', 'every stub request arrived via loopback only');
     }
@@ -344,6 +386,56 @@ describe('PR290 prompt-loop permission enforcement (real SDK 2.2.4, stubbed mode
     try { parsed = JSON.parse(content); } catch { parsed = null; }
     assert.ok(parsed && parsed.error && parsed.error.type === 'tool.execution', `tool result is a native error envelope, not success (got ${JSON.stringify(content).slice(0, 200)})`);
     assert.match(String(parsed.error.message || ''), /No tool named "write" is currently available/, `unknown/denied action never reaches the transport (got ${JSON.stringify(parsed.error.message).slice(0, 200)})`);
+  });
+
+  it('DENIED (native assert, catalog-visible): list_accounts is offered, the assert denies the exact resource, zero transport', { timeout: 120000 }, async () => {
+    const callId = 'call_ploop_assert_deny_1';
+    script = { callId, name: 'list_accounts', args: {}, finalText: 'FINAL-ASSERT-DENIED-OK' };
+    transportCalls = 0;
+    const assertMark = assertCalls.length;
+    const mark = chatRequests.length;
+    // Session-level native rule on the EXACT resource. Catalog availability
+    // (Tool.snapshot -> whollyDisabled) only drops an action whose last matching
+    // rule is resource '*' + deny, so list_accounts stays offered to the model.
+    // The execute-time assert (evaluate3 over agent + session rules, session
+    // last => findLast) then denies that resource natively.
+    const created = await oc.session.create({
+      title: 'ploop-assert-deny',
+      agent: 'ted',
+      permissions: [{ action: 'ted.finance.read', resource: 'list_accounts', effect: 'deny' }],
+    });
+    bindSession(created.id, { ...HOST });
+    const promptHost = createPromptHost({ oc, timeoutMs: 90000, pollIntervalMs: 250 });
+    const res = await promptHost.chat({ sessionID: created.id, text: 'test turn: list my accounts (denied)', intentionId: 'ploop-assert-deny-04' });
+    assert.equal(res.output, 'FINAL-ASSERT-DENIED-OK', 'loop completes with the stub final text after the native denial');
+    const newReqs = chatRequests.slice(mark);
+    assert.ok(newReqs.length >= 2, `denial was fed back to the model as a second turn (got ${newReqs.length} stub requests)`);
+
+    // 1. Catalog: the effective tool list offered to the model contains list_accounts.
+    const offered = offeredToolNames(newReqs[0]);
+    assert.ok(offered.includes('list_accounts'), `list_accounts is offered in the effective catalog (got ${JSON.stringify(offered)})`);
+
+    // 2. The native assert was invoked with action ted.finance.read and resource list_accounts.
+    const calls = assertCalls.slice(assertMark);
+    const matched = calls.filter((c) => c.action === 'ted.finance.read' && c.resources.includes('list_accounts'));
+    assert.ok(matched.length >= 1, `native permission.assert called with ted.finance.read/list_accounts (calls=${JSON.stringify(calls).slice(0, 300)})`);
+
+    // 3. Zero finance transport: the deny happens before resolve/executor/HTTP.
+    assert.equal(transportCalls, 0, 'finance transport untouched: native deny precedes any HTTP call');
+
+    // 4. The model gets a native tool error (not success), and the tool was
+    //    refused by permission, not reported as unavailable.
+    const toolTurn = newReqs.find((r) => toolMessagesOf(r).length > 0);
+    assert.ok(toolTurn, 'stub received the denial tool-result turn');
+    const toolMsg = toolMessagesOf(toolTurn)[0];
+    assert.equal(toolMsg.tool_call_id, callId, 'tool result correlates to the scripted call id');
+    const content = String(toolMsg.content ?? '');
+    let parsed = null;
+    try { parsed = JSON.parse(content); } catch { parsed = null; }
+    assert.ok(parsed && parsed.error, `tool result is a native error envelope, not success (got ${JSON.stringify(content).slice(0, 200)})`);
+    assert.ok(!/No tool named "list_accounts"/.test(String(parsed.error.message || '')), 'refusal is NOT catalog unavailability: the tool was offered and the assert refused it');
+    assert.ok(!/transport|tool\.transport|upstream|\b200\b|\b40\d\b/i.test(content), `denial carries no finance/transport detail (got ${JSON.stringify(content).slice(0, 300)})`);
+    assert.ok(!/H_PLOOP|test-token-not-a-secret|dev-ploop|actor-ploop|ted\.finance\.read|BlockedError|rules|sessionID/i.test(content), `denial leaks no identity, token, rule or internal name (got ${JSON.stringify(content).slice(0, 300)})`);
   });
 
   it('loopback-only: every stub hit arrived via 127.0.0.1 and no external fetch succeeded', { timeout: 60000 }, async () => {
