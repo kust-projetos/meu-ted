@@ -6,8 +6,8 @@
 // PWA proxy, NOT the gateway end-to-end (no PWA/gateway/production).
 // Path A: fake closed baseURL + test-only `http.request` hook (fail-closed,
 // rewrite + ordinal header); turn via product `createPromptHost.chat`.
-// Path B: native stub baseURL, NO hook, NO `createPromptHost` — one native
-// prompt, `experimental.session.wait`, native history read. Same message/
+// Path B: native stub baseURL, NO hook — same product `createPromptHost.chat`
+// turn as Path A. Same message/
 // data, same 3 POSTs/2 reads/output/session in both; A-first always (aux
 // GETs only in A, guard-blocked; B zero). Diagnostics are scalars/enums/
 // ordinals/tuples only — never URL/body/prompt/token/header/output values.
@@ -23,8 +23,17 @@ import path from 'node:path';
 import { setupIsolation, tedConfig, wirePlugin } from '../src/bootstrap.mjs';
 import { defineTedFinancePlugin } from '../src/plugin.mjs';
 import { bindSession } from '../src/session-bindings.mjs';
-import { createPromptHost } from '../src/prompt.mjs';
+import { createPromptHost as createPromptHostProduct } from '../src/prompt.mjs';
 import { approvedTmpRoot } from './helpers/tmp-root.mjs';
+
+// Regression spy: both A/B must turn via product `createPromptHost.chat`
+// (transport differs only). Records every chat intentionId.
+const promptHostChatCalls = [];
+function createTrackedPromptHost(args) {
+  const host = createPromptHostProduct(args);
+  const origChat = host.chat.bind(host);
+  return { ...host, chat: async (chatArgs) => { promptHostChatCalls.push({ intentionId: chatArgs?.intentionId ?? null }); return origChat(chatArgs); } };
+}
 
 const FIXTURE_PROVIDER = 'tedab';
 const FIXTURE_MODEL = 'test-ab';
@@ -119,24 +128,6 @@ function defineHookRewritePlugin(counters, fakeBase, stubBase) {
 // Explicit boundary counts plus sanitized per-request `stages`/`fetchStages`.
 function zeroCounters() {
   return { hookReceived: 0, hookCompleted: 0, listenerReceived: 0, proxyRejected: 0, proxyForwarded: 0, providerReceived: 0, responseCompleted: 0, hookSeq: 0, postSeq: 0, statusCounts: {}, stages: [], fetchSeq: 0, fetchStages: [] };
-}
-
-// Assistant text strictly after the admitted id, stopping at the next user
-// message. Missing id yields '' (caller waits; never fabricates output).
-function assistantTextAfter(rows, admittedId) {
-  if (!Array.isArray(rows) || typeof admittedId !== 'string' || admittedId.length === 0) return '';
-  const idx = rows.findIndex((m) => m && typeof m === 'object' && m.id === admittedId);
-  if (idx === -1) return '';
-  let out = '';
-  for (const m of rows.slice(idx + 1)) {
-    if (!m || typeof m !== 'object') continue;
-    if (m.type === 'user') break;
-    if (m.type !== 'assistant') continue;
-    for (const p of (Array.isArray(m.content) ? m.content : [])) {
-      if (p && typeof p === 'object' && p.type === 'text' && typeof p.text === 'string') out += p.text;
-    }
-  }
-  return out;
 }
 
 // Bounded idle wait: true when settled, false on slice timeout.
@@ -300,26 +291,17 @@ describe('TED-P290 offline A/B: hook-routed vs native-direct provider transport'
       const sessionID = created.id;
       bindSession(sessionID, { label: 'tedab', token: 'test-token-not-a-real-secret', household: 'H_TEDAB', actorId: 'actor-tedab', deviceId: 'dev-tedab' });
 
-      // One turn, no retry/fallback. A: prompt host + hook. B: native only.
+      // One turn, no retry/fallback. A/B share product `createPromptHost.chat`;
+      // A adds the hook rewrite, B runs native direct (no hook).
       let output;
       if (mode === 'A') {
-        const res = await createPromptHost({ oc, timeoutMs: 90000, pollIntervalMs: 250 })
+        const res = await createTrackedPromptHost({ oc, timeoutMs: 90000, pollIntervalMs: 250 })
           .chat({ sessionID, text: USER_MESSAGE, intentionId: 'ted-ab-01-a' });
         output = res.output;
       } else {
-        const admitted = await oc.session.prompt({ sessionID, text: USER_MESSAGE });
-        const admittedId = admitted && typeof admitted.id === 'string' ? admitted.id : '';
-        assert.ok(admittedId.length > 0, 'native prompt admitted');
-        const deadline = Date.now() + 90000;
-        let text = '';
-        for (;;) {
-          await waitIdle(oc, sessionID); // settle slice; re-read below
-          const page = await oc.message.list({ sessionID, limit: 50, order: 'asc' });
-          text = assistantTextAfter(Array.isArray(page) ? page : (page && page.data) || [], admittedId);
-          if (text.trim().length > 0) break;
-          if (Date.now() >= deadline) break;
-        }
-        output = text;
+        const res = await createTrackedPromptHost({ oc, timeoutMs: 90000, pollIntervalMs: 250 })
+          .chat({ sessionID, text: USER_MESSAGE, intentionId: 'ted-ab-01-b' });
+        output = res.output;
       }
 
       const got = await oc.session.get({ sessionID });
@@ -395,6 +377,11 @@ describe('TED-P290 offline A/B: hook-routed vs native-direct provider transport'
 
     assert.equal(a.output, b.output, 'identical output');
     assert.deepEqual(b.transportLog, a.transportLog, 'identical finance routing');
+    assert.deepEqual(
+      promptHostChatCalls.map((c) => c.intentionId).sort(),
+      ['ted-ab-01-a', 'ted-ab-01-b'].sort(),
+      'both paths invoke product createPromptHost.chat (transport only differs)',
+    );
 
     const diag = JSON.stringify({ a: a.counters, b: b.counters, blocked: fetchBlocked });
     assert.ok(!diag.includes(USER_MESSAGE), 'no prompt in diagnostics');
