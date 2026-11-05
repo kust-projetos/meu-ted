@@ -6,16 +6,19 @@
 //   (`createGatewayServer`, child process) ─▶ real OpenCode SDK 2.2.4 prompt
 //   loop (`session.prompt` in a Node24 child) ─▶ LOCAL scripted
 //   OpenAI-compatible stub (loopback, dummy apiKey, zero paid/external
-//   inference) ─▶ actual read-only finance tool (`get_month_summary`) ─▶ real
-//   `HttpFinanceTransport` ─▶ actual Fastify `buildTestApp` handlers with
-//   synthetic in-memory data (June-2026 ledger) ─▶ runtime DTO ─▶ PWA
-//   proxy/client.
+//   inference) ─▶ actual read-only finance tools (`list_accounts` +
+//   `get_month_summary`, exactly one call each in ONE admitted conversation)
+//   ─▶ real `HttpFinanceTransport` ─▶ actual Fastify `buildTestApp` handlers
+//   with synthetic in-memory data (Itaú/Nubank accounts + June-2026 ledger)
+//   ─▶ runtime DTOs ─▶ PWA proxy/client.
 //
 // What is asserted:
-//   1. Successful synthetic read with the strict expected DTO/output
-//      (output === scripted final text; finance read hit
-//      `/dashboard/month-summary` with `yearMonth=2026-06` and returned the
-//      June oracle for household A).
+//   1. Successful synthetic read with the strict expected DTO-derived output
+//      (output derived ONLY from the two observed tool-result DTOs;
+//      finance reads hit `/accounts` (Itaú/Nubank oracle) and
+//      `/dashboard/month-summary` with `yearMonth=2026-06` (June oracle for
+//      household A)). Exactly ONE `session.prompt`, exactly one call each
+//      to `/accounts` and `/dashboard/month-summary?yearMonth=2026-06`.
 //   2. Route/client history reload returns stable same IDs/output with zero
 //      new `session.prompt` and zero new transport calls.
 //   3. Two synthetic actors/workspaces are isolated (cross-scope denied,
@@ -33,8 +36,10 @@
 //   (mint is not Better-Auth real); `getCloudflareContext` rejected.
 // - The model is a scripted stub (canned SSE tool_call + final text): this is
 //   NOT an external-model proof and `READ_SLICE_PASS` remains NOT ACHIEVED.
-// - Route/client-level reload is NOT browser-rendered Playwright page reload;
-//   browser page reload remains NOT_PROVEN.
+// - Route/client-level reload here is NOT browser-rendered Playwright page
+//   reload; the real-browser reload + orderly-restart persistence proof lives
+//   in the sibling `e2e/p2d/p2d-synthetic-conversation.spec.ts` (`p2d-synthetic`
+//   project, P2D_BROWSER=1).
 // - Egress posture (narrow, honest): the configured provider endpoint is the
 //   local loopback stub only (dummy apiKey); unexpected non-loopback fetch
 //   calls are intercepted and blocked pre-socket; stub request remotes are
@@ -148,29 +153,39 @@ const HERE = path.resolve(PWA_ROOT, "e2e/support");
 const PROBE = path.resolve(HERE, "p2d-synthetic-read-probe.mjs");
 const TED_RUNTIME_DIR = path.resolve(PWA_ROOT, "../ted-runtime");
 
-// Strict expected finance oracle (same as the API read-slice test).
+// Strict expected finance oracles (same as the API read-slice test).
 const ORACLE_A = {
   incomeCents: 1_200_000,
   expenseCents: 288_050,
   balanceCents: 911_950,
   transactionCount: 4,
 };
+// Account oracle for household A (seed order: Itaú then Nubank). Both sides
+// sort names with default code-unit order before joining, so the derived
+// text is byte-identical regardless of API row order.
+const EXPECTED_ACCOUNT_NAMES = ["Itaú", "Nubank"];
+const EXPECTED_ACCOUNT_TOTAL = 2;
 
 // Scripted stub final text is NOT hardcoded: it is derived by the probe from
-// the ACTUAL `get_month_summary` tool-result DTO observed in the SDK's
-// follow-up provider request (income/expense/balance/count validated against
+// the ACTUAL `list_accounts` + `get_month_summary` tool-result DTOs observed
+// in the SDK's follow-up provider requests (accounts validated against
+// EXPECTED_ACCOUNT_NAMES/TOTAL, summary validated field-by-field against
 // ORACLE_A). The test recomputes the same derivation INDEPENDENTLY here, so
-// equality proves DTO → provider-context → PWA output instead of a canned
+// equality proves DTOs → provider-context → PWA output instead of a canned
 // string. Byte-identical formatters on both sides by construction.
 function formatCentsBRL(cents: number): string {
   const [whole, decimals] = (cents / 100).toFixed(2).split(".");
   return `R$ ${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${decimals}`;
 }
+function formatAccountsPart(names: string[], total: number): string {
+  return `contas ${[...names].sort().join(", ")} (${total} contas)`;
+}
 const EXPECTED_FINAL_TEXT =
-  `SINTESE SINTETICA P2D junho 2026 — gastos ${formatCentsBRL(ORACLE_A.expenseCents)}` +
+  `SINTESE SINTETICA P2D junho 2026 — ${formatAccountsPart(EXPECTED_ACCOUNT_NAMES, EXPECTED_ACCOUNT_TOTAL)}` +
+  ` — gastos ${formatCentsBRL(ORACLE_A.expenseCents)}` +
   ` em ${ORACLE_A.transactionCount} transacoes (receitas ${formatCentsBRL(ORACLE_A.incomeCents)}` +
   `, saldo ${formatCentsBRL(ORACLE_A.balanceCents)}) — sem inferencia externa, sem rede`;
-const CHAT_TEXT = "qual foi meu gasto em junho?";
+const CHAT_TEXT = "Quais contas eu tenho e quanto gastei em junho de 2026?";
 const COMPONENT_TEXT = "componente: quanto gastei em junho?";
 const INTENTION_1 = "p2d-intention-read-01";
 const INTENTION_2 = "p2d-intention-fail-02";
@@ -392,8 +407,11 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           apiBaseUrl: apiBase,
           tedRuntimeDir: TED_RUNTIME_DIR,
           stub: {
-            toolName: "get_month_summary",
-            toolArgs: { yearMonth: "2026-06" },
+            toolSequence: [
+              { name: "list_accounts", args: {} },
+              { name: "get_month_summary", args: { yearMonth: "2026-06" } },
+            ],
+            expectedAccounts: { names: ["Itaú", "Nubank"], total: 2 },
             expectedOracle: { yearMonth: "2026-06", ...ORACLE_A },
           },
         }),
@@ -520,26 +538,45 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
 
         let stats = await serve.cmd("stats");
         expect(stats["promptCalls"]).toBe(1);
-        expect(stats["transportCalls"]).toBe(1);
-        // Zero stub/DTO mismatches: every final text was derived from a
-        // validated tool-result DTO, never a canned string.
+        expect(stats["transportCalls"]).toBe(2);
+        // Zero stub/DTO mismatches: every final text was derived from the
+        // two validated tool-result DTOs, never a canned string.
         expect(stats["stubMismatches"]).toEqual([]);
         expect(Number(stats["messageLists"])).toBeGreaterThan(0);
-        // Exactly 2 local provider requests for the success turn: the
-        // tool-call turn + the tool-result/final-answer turn. No hidden
-        // SDK/provider retry is possible without moving this counter.
-        expect(stats["stubTurns"]).toBe(2);
-        expect(stats["stubUrlCounts"]).toEqual({ "/v1/chat/completions": 2 });
+        // Exactly 3 local provider requests for the success turn: the
+        // list_accounts tool-call turn + the get_month_summary tool-call
+        // turn + the tool-results/final-answer turn. No hidden SDK/provider
+        // retry is possible without moving this counter.
+        expect(stats["stubTurns"]).toBe(3);
+        expect(stats["stubUrlCounts"]).toEqual({ "/v1/chat/completions": 3 });
         const offered = stats["offeredTools"];
         expect(Array.isArray(offered) && (offered as string[]).includes("get_month_summary")).toBe(true);
+        expect(Array.isArray(offered) && (offered as string[]).includes("list_accounts")).toBe(true);
         const reads = stats["financeReads"] as Array<{
           route?: string; method?: string; statusCode?: number; body?: Record<string, unknown>;
         }>;
-        expect(reads.length).toBe(1);
-        expect(reads[0].route).toContain("/dashboard/month-summary");
-        expect(reads[0].route).toContain("2026-06");
-        expect(reads[0].statusCode).toBe(200);
-        expect(reads[0].body).toMatchObject({ yearMonth: "2026-06", ...ORACLE_A });
+        // Exactly one call each to /accounts and /dashboard/month-summary
+        // inside ONE admitted conversation (no duplicate tool execution).
+        expect(reads.length).toBe(2);
+        const accountsReads = reads.filter((r) => String(r.route ?? "").split("?")[0] === "/accounts");
+        const summaryReads = reads.filter((r) => String(r.route ?? "").startsWith("/dashboard/month-summary"));
+        expect(accountsReads.length).toBe(1);
+        expect(summaryReads.length).toBe(1);
+        expect(accountsReads[0].method).toBe("GET");
+        expect(accountsReads[0].statusCode).toBe(200);
+        const accountsBody = accountsReads[0].body as { items?: Array<{ name?: unknown }>; total?: unknown };
+        expect(Array.isArray(accountsBody.items)).toBe(true);
+        expect(accountsBody.total).toBe(EXPECTED_ACCOUNT_TOTAL);
+        expect((accountsBody.items ?? []).length).toBe(EXPECTED_ACCOUNT_TOTAL);
+        const observedNames = ((accountsBody.items ?? []).map((a) => String(a?.name ?? ""))).sort();
+        expect(observedNames).toEqual([...EXPECTED_ACCOUNT_NAMES].sort());
+        expect(summaryReads[0].route).toContain("2026-06");
+        expect(summaryReads[0].statusCode).toBe(200);
+        expect(summaryReads[0].body).toMatchObject({ yearMonth: "2026-06", ...ORACLE_A });
+        // The derived answer carries BOTH proofs: account names and June summary.
+        expect(chatBody.output).toContain("Itaú");
+        expect(chatBody.output).toContain("Nubank");
+        expect(chatBody.output).toContain(formatCentsBRL(ORACLE_A.expenseCents));
         for (const hit of ((stats["stubRemotes"] as string[] | undefined) ?? [])) {
           expect(hit).toBe("127.0.0.1");
         }
@@ -592,7 +629,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         }
         stats = await serve.cmd("stats");
         expect(stats["promptCalls"]).toBe(1);
-        expect(stats["transportCalls"]).toBe(1);
+        expect(stats["transportCalls"]).toBe(2);
 
         // 7. Isolation: actor B on workspace A is denied (never 200, never
         // fabricated output), and no prompt runs for the denied scope.
@@ -608,7 +645,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         expect(crossBody.items).toBeUndefined();
         stats = await serve.cmd("stats");
         expect(stats["promptCalls"]).toBe(1);
-        expect(stats["transportCalls"]).toBe(1);
+        expect(stats["transportCalls"]).toBe(2);
 
         // 8. Injected provider fault + SAME intention repeat: replayed genuine
         // output, no second prompt, no new transport, no false success — and
@@ -628,7 +665,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         expect(replayBody.output).toBe(EXPECTED_FINAL_TEXT);
         stats = await serve.cmd("stats");
         expect(stats["promptCalls"]).toBe(1);
-        expect(stats["transportCalls"]).toBe(1);
+        expect(stats["transportCalls"]).toBe(2);
         expect(stats["stubTurns"]).toBe(preReplay["stubTurns"]);
 
         // 9. NEW intention under the fault: typed fail-closed error, no output
@@ -682,10 +719,11 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         expect(((await recoverRes.json()) as { output?: string }).output).toBe(EXPECTED_FINAL_TEXT);
         stats = await serve.cmd("stats");
         expect(stats["promptCalls"]).toBe(3);
-        expect(stats["transportCalls"]).toBe(2);
-        // Recovery re-exercises the full loop: tool-call turn + final-answer
-        // turn, exactly 2 more local provider requests (1 fault POST + 2).
-        expect(stats["stubTurns"]).toBe(Number(preFault["stubTurns"]) + 3);
+        expect(stats["transportCalls"]).toBe(4);
+        // Recovery re-exercises the full loop: list_accounts tool-call turn
+        // + get_month_summary tool-call turn + final-answer turn, exactly 4
+        // more local provider requests over pre-fault (1 fault POST + 3).
+        expect(stats["stubTurns"]).toBe(Number(preFault["stubTurns"]) + 4);
         const postRecoveryTurns = Number(stats["stubTurns"]);
 
         // 10b. Component remount (NOT browser navigation): the REAL TedChat
@@ -713,16 +751,21 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             await screen.findByText(EXPECTED_FINAL_TEXT, undefined, { timeout: 180000 });
             stats = await serve.cmd("stats");
             expect(stats["promptCalls"]).toBe(4);
-            expect(stats["transportCalls"]).toBe(3);
+            expect(stats["transportCalls"]).toBe(6);
             expect(stats["stubMismatches"]).toEqual([]);
-            // The component send is one full loop: tool-call + final-answer.
-            expect(stats["stubTurns"]).toBe(postRecoveryTurns + 2);
+            // The component send is one full loop: two tool-call turns +
+            // final-answer turn.
+            expect(stats["stubTurns"]).toBe(postRecoveryTurns + 3);
             const readsAfterSend = stats["financeReads"] as Array<{
               route?: string; method?: string; statusCode?: number; body?: Record<string, unknown>;
             }>;
-            expect(readsAfterSend.length).toBe(3);
-            expect(readsAfterSend[2].route).toContain("/dashboard/month-summary");
-            expect(readsAfterSend[2].body).toMatchObject({ yearMonth: "2026-06", ...ORACLE_A });
+            expect(readsAfterSend.length).toBe(6);
+            const sentAccounts = readsAfterSend.filter((r) => String(r.route ?? "").split("?")[0] === "/accounts");
+            const sentSummaries = readsAfterSend.filter((r) => String(r.route ?? "").startsWith("/dashboard/month-summary"));
+            expect(sentAccounts.length).toBe(3);
+            expect(sentSummaries.length).toBe(3);
+            expect(sentSummaries[2].route).toContain("/dashboard/month-summary");
+            expect(sentSummaries[2].body).toMatchObject({ yearMonth: "2026-06", ...ORACLE_A });
 
             view.unmount();
             const beforeRemount = await serve.cmd("stats");
@@ -751,7 +794,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
 
         const closed = await closeServe();
         expect(closed?.["promptCalls"]).toBe(4);
-        expect(closed?.["stubTurns"]).toBe(postRecoveryTurns + 2);
+        expect(closed?.["stubTurns"]).toBe(postRecoveryTurns + 3);
         expect(closed?.["stubMismatches"]).toEqual([]);
       } catch (e) {
         await closeServe();

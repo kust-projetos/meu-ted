@@ -274,3 +274,88 @@ financeira. O PR permanece Draft. `READ_SLICE_PASS` continua **NOT ACHIEVED**.
 não substitui um modelo externo. A execução autorizada anterior r8v7 permanece
 preservada; não houve nova chamada de provider, billing não foi consultado e
 nenhum custo efetivo é afirmado.
+
+## Execução focada adicional — 2026-11-04
+
+**Base do PR:** `0bf8eaf6252bd5bf8839ed4136d203f22f89a55e`. Execução no worktree
+`D:/projetos/pi-ted-opencode-product`, sem alterar o checkout principal. Nenhum
+reset, clean, checkout, eval F1 ou regeneração dos relatórios F1 foi executado.
+
+| Verificação | Resultado | Escopo e limite |
+|---|---|---|
+| P2D roteirizado | `pnpm exec vitest run e2e/support/route.p2d-synthetic-read.test.tsx --pool=forks --maxWorkers=1` — **1/1 PASS**, 50,57 s | SDK OpenCode `2.2.4`, Node `26.11.1` (sem `TED_PROBE_NODE`), provider roteirizado local e API Fastify sintética. Confirma uma leitura `get_month_summary`, resposta pelo fluxo PWA em teste de componente, replay da mesma intenção sem novo prompt/transporte, identidade sintética cruzada negada e journal financeiro somente GET. Não consulta `list_accounts` na mesma mensagem. Vitest/Testing Library não é navegação em browser real. |
+| Histórico/runtime | `node --test tests/p2-real-history.test.mjs tests/p2-history-refresh.test.mjs tests/prompt.test.mjs` — **35/35 PASS**, 13,89 s | Recuperação entre processos do SDK de transcript sintético importado, sem prompt; sem transporte financeiro. Não é a conversa P2D bem-sucedida após restart. |
+| CI | CI run `41911960282` e PWA CI run `41911960309` — **SUCCESS** | Ambos no mesmo SHA completo `0bf8eaf6252bd5bf8839ed4136d203f22f89a55e`; não foi necessário disparar novo CI, pois não houve mudança de código. |
+
+**Critérios ainda não atingidos:** não houve chamada conjunta a `list_accounts` +
+`get_month_summary`; resposta não foi validada em browser real; não houve reload
+real da página nem restart do runtime seguido da recuperação dessa mesma conversa
+bem-sucedida. O teste de restart disponível usa transcript estático importado.
+Nenhum defeito novo foi reproduzido; a falha live anterior `provider.transport` /
+`prompt.no_output` continua sem causa física comprovada. **`READ_SLICE_PASS = NOT
+ACHIEVED`**. Sem inferência externa/paga, produção, deploy ou escrita financeira.
+
+### Preservação dos relatórios F1
+
+Hashes SHA-256 atuais, iguais antes/depois da execução (igualdade de conteúdo
+confirmada também pelos hashes Git registrados antes e depois dos testes):
+
+- Checkout principal, com alterações F1 já existentes: `ted-f1-baseline.json` =
+  `03bc5d55a8cd569b3bc8ff4ea0e856e38926d0c8f3c8fc5fd4733d412b684d9a`;
+  `ted-f1-journeys.json` =
+  `929405e3fc44937cfeb7836c9b4ae92952f36559bf11356945609d413ea88fe9`.
+- Worktree do PR: `ted-f1-baseline.json` =
+  `e11aad87991f85670b88f14b94c926a10a894b89480077de06a6e503554f1205`;
+  `ted-f1-journeys.json` =
+  `cb2919dc16ee3ea844e7a6d1f8c80fd182b54f993efd9c9efe1fbb6e281c8367`.
+
+O estado F1 dirty do checkout principal e o item não rastreado preexistente
+`--no-save/` no worktree do PR foram preservados. Os hashes Git de cada arquivo
+permaneceram idênticos antes/depois; nenhum gerador F1 foi invocado.
+
+**Preparação para um único teste com modelo externo (não executado):** exigir
+autorização nova para provider/modelo exatos e teto monetário efetivamente
+imposto/verificável pelo provider; credencial somente em home isolada; uma
+mensagem, sem retries/fallback; manter API sintética read-only e comprovar que
+somente as duas tools existentes são usadas. A falta de prova de browser/reload
+e restart integrado permanece bloqueadora para fechar este critério; não se deve
+contornar isso com transporte ou orquestração paralelos.
+
+## Evidência sintética E2E em browser real (Playwright) — 2026-11-05
+
+**Classificação: `E2E_SYNTHETIC_PASS`.** Prova obtida em teste real de
+navegador Playwright (`@playwright/test`), sem nova execução nesta atualização
+de docs: somente registro da evidência já existente. O histórico anterior
+permanece intacto; esta seção supersede **exclusivamente** as afirmações
+anteriores `NOT_PROVEN` sobre browser/reload/restart para o critério
+sintético E2E (reload em browser real e restart com recuperação da mesma
+conversa). Nada aqui afirma prova com modelo externo.
+
+- **Spec:** `apps/pwa/e2e/p2d/p2d-synthetic-conversation.spec.ts` — interações
+  reais de browser (`page.goto`, login pela UI, chat pela UI via TedChat
+  real, `page.reload`), asserts de contagens/rotas, fechamento ordenado do
+  subprocesso e início de um processo OS distinto, reabertura do histórico e
+  checagem de mesma conversa/sessão/mensagens/conteúdo; o anexo de evidência
+  só é gravado após todos os asserts.
+- **Recibo:** `apps/pwa/test-results/p2d-synthetic-conversation/evidence.json`
+  (mesma conversa, 1 prompt admitido).
+- **Run:** `apps/pwa/test-results/.last-run.json` (`status=passed`,
+  `failedTests=[]`).
+- **Anexo Playwright (ignorado local, não commitado):**
+  `apps/pwa/test-results/p2d-p2d-synthetic-conversa-940e9-en-keeps-IDs-with-no-replay-p2d-synthetic/attachments/p2d-evidence-04603784c8fa14e649ff765b1e38af322c8c4a29.json`
+  — SHA-256 `66ba487a957184a333e0c0522b95b474ce5c4d64b1d59bc38c6732d5e9e9ff22`;
+  mtime `2026-11-05T00:23:05.568Z`.
+- **Métricas observadas (mesma conversa):** prompts agregados `1`;
+  `list_accounts=1`; `get_month_summary=1`; escritas financeiras `0`;
+  conteúdo estável após `page.reload` e após restart (`true`/`true`); zero
+  novos prompts/transportes após reload e após restart; fechamento ordenado
+  (`closeForced=false`); PIDs pré/pós distintos (valores omitidos); provider
+  `local-scripted-only`.
+- **Escopo da execução:** provider local roteirizado em loopback; nenhuma
+  inferência externa/paga foi executada ou inferida. O cenário fez somente
+  leituras contra a API sintética: zero escrita financeira; sem deploy ou
+  cleanup.
+- **Limite explícito: `READ_SLICE_PASS = NOT ACHIEVED`** até prova autorizada
+  com modelo real. O anexo local ignorado não é commitado; revisores do PR
+  podem verificar as afirmações acima contra o recibo, o `.last-run.json`, o
+  anexo pelo SHA e o spec.

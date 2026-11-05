@@ -7,7 +7,11 @@
 //   node p2d-synthetic-read-probe.mjs serve
 // with P2D_CONFIG_JSON env:
 //   { root, identity, apiBaseUrl, tedRuntimeDir,
-//     stub: { toolName, toolArgs, expectedOracle } }
+//     stub: { toolSequence: [{name,args}...], expectedAccounts, expectedOracle } }
+//   (two-tool sequence: list_accounts + get_month_summary in ONE admitted
+//   conversation; legacy single-tool { toolName, toolArgs, expectedOracle }
+//   still accepted) — the stub derives its final text from the observed
+//   tool-result DTOs (each validated independently).
 //   -> { ok, phase:'serve-ready', base, ... } (real path — manual SDK boot +
 //      real conversation store + real loopback gateway + real
 //      createPromptHost + real resolveGatewayIdentity against the parent's
@@ -107,11 +111,20 @@ function finalTextEvents(text, model) {
 }
 
 // DTO → provider-context derivation (test-only, deterministic, local).
-// The stub parses the ACTUAL finance tool result from the SDK's follow-up
-// request, validates every oracle field, and generates the final output
-// FROM those observed values — never a hardcoded string. A mismatch fails
-// the turn closed (HTTP 500) and is recorded in stubMismatches; request
-// bodies are never logged, only key shapes on mismatch.
+// The stub parses the ACTUAL finance tool results from the SDK's follow-up
+// requests, validates every oracle field of EACH DTO independently, and
+// generates the final output FROM those observed values — never a hardcoded
+// string. A mismatch fails the turn closed (HTTP 500) and is recorded in
+// stubMismatches; request bodies are never logged, only key shapes on
+// mismatch.
+//
+// Two modes (config-driven):
+// - legacy single-tool: stub { toolName, toolArgs, expectedOracle } —
+//   summary-only derivation (preserved for backward compatibility);
+// - two-tool sequence: stub { toolSequence: [{name,args}...],
+//   expectedAccounts, expectedOracle } — list_accounts + get_month_summary
+//   in ONE admitted conversation; the final text is derived from BOTH
+//   observed DTOs (account names + June summary).
 function formatCentsBRL(cents) {
   const parts = (Number(cents) / 100).toFixed(2).split(".");
   return `R$ ${parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${parts[1]}`;
@@ -121,6 +134,101 @@ const PT_MONTHS = {
   "05": "maio", "06": "junho", "07": "julho", "08": "agosto",
   "09": "setembro", "10": "outubro", "11": "novembro", "12": "dezembro",
 };
+function extractToolDtos(messages) {
+  let lastUserIdx = -1;
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i] && messages[i].role === "user") lastUserIdx = i;
+  }
+  const tools = [];
+  for (let i = lastUserIdx + 1; i < messages.length; i++) {
+    if (messages[i] && messages[i].role === "tool") tools.push(messages[i]);
+  }
+  return tools.map((t) => {
+    const raw = t.content;
+    let parsed = raw;
+    if (typeof raw === "string") {
+      try { parsed = JSON.parse(raw); }
+      catch { return { error: "tool content is not JSON", keys: [] }; }
+    }
+    const candidates = [parsed];
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const k of ["output", "result", "body", "data"]) {
+        if (parsed[k] && typeof parsed[k] === "object") candidates.push(parsed[k]);
+      }
+    }
+    return { candidates };
+  });
+}
+
+function classifyDto(candidates) {
+  for (const c of candidates) {
+    if (
+      c && typeof c === "object" && !Array.isArray(c) &&
+      Array.isArray(c.items) &&
+      Number.isSafeInteger(c.total)
+    ) {
+      return { kind: "accounts", dto: c };
+    }
+  }
+  for (const c of candidates) {
+    if (
+      c && typeof c === "object" && !Array.isArray(c) &&
+      typeof c.yearMonth === "string" &&
+      Number.isFinite(Number(c.incomeCents)) &&
+      Number.isFinite(Number(c.expenseCents)) &&
+      Number.isFinite(Number(c.balanceCents)) &&
+      Number.isFinite(Number(c.transactionCount))
+    ) {
+      return { kind: "summary", dto: c };
+    }
+  }
+  const first = candidates[0];
+  return {
+    kind: "unknown",
+    mismatch: "tool DTO shape diverged",
+    keys: first && typeof first === "object" && !Array.isArray(first) ? Object.keys(first).slice(0, 20) : [],
+  };
+}
+
+function validateAccountsDto(dto, expected) {
+  if (!Array.isArray(dto.items)) return { mismatch: "accounts items must be an array" };
+  if (!Number.isSafeInteger(dto.total) || dto.total < 0) {
+    return { mismatch: "accounts total must be a non-negative safe integer" };
+  }
+  if (dto.items.length !== Number(expected.total)) {
+    return { mismatch: `accounts total diverged (got ${dto.items.length}, want ${expected.total})` };
+  }
+  const observed = dto.items.map((a) => (a && typeof a.name === "string" ? a.name : "")).sort();
+  const wanted = [...expected.names].sort();
+  if (observed.length !== wanted.length || observed.some((n, i) => n !== wanted[i])) {
+    return { mismatch: `accounts names diverged (got [${observed.join("|")}])` };
+  }
+  return { dto };
+}
+
+function validateSummaryDto(dto, expected) {
+  for (const k of ["yearMonth", "incomeCents", "expenseCents", "balanceCents", "transactionCount"]) {
+    if (String(dto[k]) !== String(expected[k])) {
+      return { mismatch: `oracle field ${k} diverged` };
+    }
+  }
+  return { dto };
+}
+
+function deriveCombinedText(accountsDto, summaryDto) {
+  const names = accountsDto.items.map((a) => a.name).sort();
+  const ym = String(summaryDto.yearMonth);
+  const monthName = PT_MONTHS[ym.slice(5, 7)] || ym.slice(5, 7);
+  return {
+    text:
+      `SINTESE SINTETICA P2D ${monthName} ${ym.slice(0, 4)} — contas ${names.join(", ")}` +
+      ` (${Number(accountsDto.total)} contas)` +
+      ` — gastos ${formatCentsBRL(summaryDto.expenseCents)}` +
+      ` em ${Number(summaryDto.transactionCount)} transacoes (receitas ${formatCentsBRL(summaryDto.incomeCents)}` +
+      `, saldo ${formatCentsBRL(summaryDto.balanceCents)}) — sem inferencia externa, sem rede`,
+  };
+}
+
 function extractDto(messages) {
   let lastUserIdx = -1;
   for (let i = 0; i < messages.length; i++) {
@@ -180,8 +288,27 @@ try {
   if (!root || typeof root !== "string") fail("args", "root is required");
   if (!apiBaseUrl || typeof apiBaseUrl !== "string") fail("args", "apiBaseUrl is required");
   if (!tedRuntimeDir || typeof tedRuntimeDir !== "string") fail("args", "tedRuntimeDir is required");
-  if (!stub || typeof stub.toolName !== "string") {
-    fail("args", "stub { toolName, toolArgs, expectedOracle } is required");
+  // Two stub modes (test-only): legacy single-tool
+  // { toolName, toolArgs, expectedOracle } or two-tool sequence
+  // { toolSequence: [{name,args}...], expectedAccounts, expectedOracle }.
+  const MODE = Array.isArray(stub.toolSequence) && stub.toolSequence.length > 0 ? "sequence" : "legacy";
+  let SEQUENCE = null;
+  let EXPECTED_ACCOUNTS = null;
+  if (MODE === "sequence") {
+    for (const step of stub.toolSequence) {
+      if (!step || typeof step.name !== "string" || step.name.length === 0) {
+        fail("args", "stub.toolSequence entries require { name, args }");
+      }
+    }
+    SEQUENCE = stub.toolSequence.map((s) => ({ name: s.name, args: s.args || {} }));
+    EXPECTED_ACCOUNTS = stub.expectedAccounts || null;
+    if (!EXPECTED_ACCOUNTS || !Array.isArray(EXPECTED_ACCOUNTS.names) || !Number.isSafeInteger(EXPECTED_ACCOUNTS.total)) {
+      fail("args", "stub.expectedAccounts { names[], total } is required in sequence mode");
+    }
+  } else {
+    if (!stub || typeof stub.toolName !== "string") {
+      fail("args", "stub { toolName, toolArgs, expectedOracle } is required");
+    }
   }
   const EXPECTED_ORACLE = stub.expectedOracle || null;
   if (!EXPECTED_ORACLE || typeof EXPECTED_ORACLE.yearMonth !== "string") {
@@ -226,6 +353,7 @@ try {
   };
 
   const { pathToFileURL } = await import("node:url");
+  const { createHash } = await import("node:crypto");
   const mod = (rel) => import(pathToFileURL(`${tedRuntimeDir}/${rel}`).href);
   const { setupIsolation, tedConfig } = await mod("src/bootstrap.mjs");
   const { wirePlugin } = await mod("src/bootstrap.mjs");
@@ -238,6 +366,10 @@ try {
     await mod("src/session-bindings.mjs");
   const { createPromptHost } = await mod("src/prompt.mjs");
 
+  // P2D browser stack may pin the gateway to a fixed loopback port so the
+  // Next process can proxy to it without a rendezvous file (default:
+  // ephemeral, as in the route-level proof).
+  const GATEWAY_PORT = Number(process.env.P2D_GATEWAY_PORT || 0);
   const FIXTURE_PROVIDER = "p2dloop";
   const FIXTURE_MODEL = "test-alpha";
   const FIXTURE_PACKAGE = "@opencode/ai/providers/openai-compatible";
@@ -269,21 +401,60 @@ try {
           return;
         }
         const messages = body && Array.isArray(body.messages) ? body.messages : [];
-        // The request carries full history: `extractDto` finds the tool
-        // result after the LAST user message (null = no tool result yet).
-        const extracted = extractDto(messages);
+        // The request carries full history. Legacy mode: `extractDto`
+        // finds the tool result after the LAST user message (null = no tool
+        // result yet). Sequence mode: every tool result after the LAST user
+        // message is classified (accounts vs summary) and validated
+        // INDEPENDENTLY; the next missing tool is offered, and the final
+        // text is derived from BOTH observed DTOs only when both validate.
         let payload = null;
-        if (extracted === null) {
-          payload = toolCallEvents({ callId: `call_p2d_${++callSeq}`, name: stub.toolName, args: stub.toolArgs || {}, model: FIXTURE_MODEL });
-        } else if (extracted.dto) {
-          const derived = deriveFinalText(extracted.dto, EXPECTED_ORACLE);
-          if (derived.text) {
-            payload = finalTextEvents(derived.text, FIXTURE_MODEL);
-          } else {
-            stubMismatches.push(derived.mismatch);
+        if (MODE === "sequence") {
+          const parsed = extractToolDtos(messages);
+          let accountsDto = null;
+          let summaryDto = null;
+          for (const p of parsed) {
+            if (p.error) {
+              stubMismatches.push(p.error);
+              continue;
+            }
+            const cls = classifyDto(p.candidates);
+            if (cls.kind === "accounts") {
+              const v = validateAccountsDto(cls.dto, EXPECTED_ACCOUNTS);
+              if (v.dto) accountsDto = v.dto;
+              else stubMismatches.push(v.mismatch);
+            } else if (cls.kind === "summary") {
+              const v = validateSummaryDto(cls.dto, EXPECTED_ORACLE);
+              if (v.dto) summaryDto = v.dto;
+              else stubMismatches.push(v.mismatch);
+            } else {
+              stubMismatches.push(cls.mismatch + (cls.keys && cls.keys.length > 0 ? ` keys=[${cls.keys.join(",")}]` : ""));
+            }
+          }
+          if (stubMismatches.length === 0) {
+            if (accountsDto && summaryDto) {
+              const derived = deriveCombinedText(accountsDto, summaryDto);
+              payload = finalTextEvents(derived.text, FIXTURE_MODEL);
+            } else {
+              const next = !accountsDto
+                ? SEQUENCE.find((s) => s.name === "list_accounts") || SEQUENCE[0]
+                : SEQUENCE.find((s) => s.name === "get_month_summary") || SEQUENCE[SEQUENCE.length - 1];
+              payload = toolCallEvents({ callId: `call_p2d_${++callSeq}`, name: next.name, args: next.args || {}, model: FIXTURE_MODEL });
+            }
           }
         } else {
-          stubMismatches.push(extracted.mismatch + (extracted.keys && extracted.keys.length > 0 ? ` keys=[${extracted.keys.join(",")}]` : ""));
+          const extracted = extractDto(messages);
+          if (extracted === null) {
+            payload = toolCallEvents({ callId: `call_p2d_${++callSeq}`, name: stub.toolName, args: stub.toolArgs || {}, model: FIXTURE_MODEL });
+          } else if (extracted.dto) {
+            const derived = deriveFinalText(extracted.dto, EXPECTED_ORACLE);
+            if (derived.text) {
+              payload = finalTextEvents(derived.text, FIXTURE_MODEL);
+            } else {
+              stubMismatches.push(derived.mismatch);
+            }
+          } else {
+            stubMismatches.push(extracted.mismatch + (extracted.keys && extracted.keys.length > 0 ? ` keys=[${extracted.keys.join(",")}]` : ""));
+          }
         }
         if (payload === null) {
           res.writeHead(500, { "content-type": "application/json" });
@@ -443,6 +614,87 @@ try {
   };
 
   const store = createConversationStore({ persistDir: tedEnv.dirs.state });
+  // Test-only conversation index (opaque IDs only): records every
+  // conversationId the gateway creates/attaches with its native
+  // runtimeSessionId, so the `snapshot-list`/`snapshot` commands can report
+  // stability evidence without ever exposing tokens, cookies or text.
+  const seenConversations = new Map();
+  const noteConversation = (conversationId, runtimeSessionId) => {
+    if (typeof conversationId !== "string" || conversationId.length === 0) return;
+    const prev = seenConversations.get(conversationId) || {};
+    seenConversations.set(conversationId, {
+      runtimeSessionId: typeof runtimeSessionId === "string" && runtimeSessionId.length > 0
+        ? runtimeSessionId
+        : (prev.runtimeSessionId ?? null),
+    });
+  };
+  try {
+    const origCreate = store.create.bind(store);
+    store.create = (args) => {
+      const rec = origCreate(args);
+      try { noteConversation(rec && rec.conversationId, rec && rec.runtimeSessionId); } catch { /* index never breaks */ }
+      return rec;
+    };
+  } catch { /* index never breaks */ }
+  try {
+    const origAttach = store.attachRuntime.bind(store);
+    store.attachRuntime = (conversationId, runtimeSessionId, runtimeOwner) => {
+      const rec = origAttach(conversationId, runtimeSessionId, runtimeOwner);
+      try { noteConversation(conversationId, runtimeSessionId); } catch { /* index never breaks */ }
+      return rec;
+    };
+  } catch { /* index never breaks */ }
+  // Rehydrate the index from the persisted store (same root across OS
+  // restarts): conversations created/attached by a PREVIOUS probe process
+  // are visible to snapshot commands. IDs only, read from the store file
+  // the product itself persists — never a transcript import.
+  try {
+    const raw = fs.readFileSync(path.join(tedEnv.dirs.state, "conversations.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    const items = Array.isArray(parsed) ? parsed : parsed.items;
+    if (Array.isArray(items)) {
+      for (const r of items) {
+        if (r && typeof r.conversationId === "string") {
+          noteConversation(r.conversationId, typeof r.runtimeSessionId === "string" ? r.runtimeSessionId : null);
+        }
+      }
+    }
+  } catch { /* fresh root: index starts empty */ }
+  const hashText = (s) => createHash("sha256").update(String(s), "utf8").digest("hex");
+  async function buildSnapshot(conversationId) {
+    const tracked = seenConversations.get(conversationId) || null;
+    const runtimeSessionId = tracked && tracked.runtimeSessionId ? tracked.runtimeSessionId : null;
+    if (!runtimeSessionId) {
+      return { phase: "serve-snapshot", conversationId, error: "unknown conversation (no attached native session observed)" };
+    }
+    const page = await oc.message.list({ sessionID: runtimeSessionId, limit: 50, order: "asc" });
+    const rows = Array.isArray(page) ? page : page?.data;
+    if (!Array.isArray(rows)) {
+      return { phase: "serve-snapshot", conversationId, runtimeSessionId, error: "native history unreadable" };
+    }
+    const userMessages = [];
+    const assistantMessages = [];
+    for (const m of rows) {
+      if (!m || typeof m !== "object" || typeof m.id !== "string") continue;
+      if (m.type === "user" && typeof m.text === "string") {
+        userMessages.push({ id: m.id, hash: hashText(m.text) });
+      } else if (m.type === "assistant" && Array.isArray(m.content)) {
+        const text = m.content.filter((p) => p && p.type === "text" && typeof p.text === "string").map((p) => p.text).join("");
+        if (text.length > 0) assistantMessages.push({ id: m.id, hash: hashText(text) });
+      }
+    }
+    return {
+      phase: "serve-snapshot",
+      conversationId,
+      runtimeSessionId,
+      userMessages,
+      assistantMessages,
+      promptCalls,
+      transportCalls,
+      stubTurns: chatRequests.length,
+      financeReads: financeReads.map((r) => ({ route: r.route, method: r.method, statusCode: r.statusCode })),
+    };
+  }
   const realHost = createPromptHost({ oc, timeoutMs: 90000, pollIntervalMs: 250, diagnosticsSink: () => {} });
   const promptHost = {
     chat: (args) => realHost.chat(args),
@@ -459,7 +711,7 @@ try {
     withAuthenticatedSession,
     diagnosticsSink: () => {},
   });
-  const info = await gateway.listen({ port: 0, host: "127.0.0.1" });
+  const info = await gateway.listen({ port: GATEWAY_PORT, host: "127.0.0.1" });
   if (info.host !== "127.0.0.1") fail("listen", `gateway must stay loopback, got ${info.host}`);
   emit({
     ok: true, phase: "serve-ready",
@@ -504,6 +756,15 @@ try {
           } else if (line === "recover-provider" || line === "recover" || line === "ok" || line === "heal") {
             ctl.failProvider = false;
             emit({ phase: "serve-ctl", failProvider: false });
+          } else if (line === "snapshot-list") {
+            emit({ phase: "serve-snapshot-list", conversations: [...seenConversations.keys()] });
+          } else if (line.startsWith("snapshot ")) {
+            const wanted = line.slice("snapshot ".length).trim().slice(0, 80);
+            try {
+              emit(await buildSnapshot(wanted));
+            } catch (e) {
+              emit({ phase: "serve-snapshot", conversationId: wanted, error: String((e && e.message) || e).slice(0, 200) });
+            }
           } else if (line === "close" || line === "exit" || line === "quit") {
             process.stdin.off("data", onData);
             resolve();
@@ -520,8 +781,24 @@ try {
   });
 
   const counters = { promptCalls, transportCalls, messageLists, stubTurns: chatRequests.length, stubMismatches };
+  // Staged shutdown telemetry (test-only, stdout lines): proves which stage
+  // completes if orderly shutdown ever stalls.
+  emit({ phase: "serve-closing", stage: "gateway" });
   try { await gateway.close(); } catch { /* best effort */ }
-  try { await new Promise((r) => stubServer.close(r)); } catch { /* best effort */ }
+  emit({ phase: "serve-closing", stage: "stub" });
+  try {
+    // Same orderly pattern as the gateway: destroy idle/keep-alive sockets
+    // first (the SDK provider client holds keep-alive connections to the
+    // stub), then close. Plain close() would wait for idle sockets and hang
+    // shutdown; this only drops transport sockets, never proof state.
+    const stubAny = stubServer;
+    try {
+      if (stubAny && typeof stubAny.closeAllConnections === "function") stubAny.closeAllConnections();
+      else if (stubAny && typeof stubAny.closeIdleConnections === "function") stubAny.closeIdleConnections();
+    } catch { /* best effort */ }
+    await new Promise((r) => stubServer.close(r));
+  } catch { /* best effort */ }
+  emit({ phase: "serve-closing", stage: "sdk" });
   try { await tedEnv.close(); } catch { /* best effort */ }
   emit({ phase: "serve-closed", ...counters });
 } catch (e) {
