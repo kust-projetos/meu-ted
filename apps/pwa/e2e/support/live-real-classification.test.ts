@@ -23,16 +23,16 @@ describe("live-real request classification", () => {
       classifyLiveRealRequest({ url: "https://opencode.ai/inference/go/v1/chat/completions", method: "POST", blocked: true }),
     ).toBe("functional");
     expect(
-      classifyLiveRealRequest({ reason: "api", blocked: true } as any),
+      classifyLiveRealRequest({ reason: "api", blocked: true }),
     ).toBe("functional");
     expect(
-      classifyLiveRealRequest({ reason: "inference", blocked: true } as any),
+      classifyLiveRealRequest({ reason: "inference", blocked: true }),
     ).toBe("functional");
   });
 
   it("classifies analytics/telemetry/csp destinations as auxiliary via guard reason", () => {
     expect(
-      classifyLiveRealRequest({ reason: "destination", blocked: true } as any),
+      classifyLiveRealRequest({ reason: "destination", blocked: true }),
     ).toBe("auxiliary");
   });
 
@@ -78,9 +78,9 @@ describe("live-real request classification", () => {
   });
 
   it("isFunctionalBlockage returns true only for functional blocked requests", () => {
-    expect(isFunctionalBlockage({ reason: "api_method_path", blocked: true } as any)).toBe(true);
-    expect(isFunctionalBlockage({ reason: "destination", blocked: true } as any)).toBe(false);
-    expect(isFunctionalBlockage({ reason: "api_method_path", blocked: false } as any)).toBe(false);
+    expect(isFunctionalBlockage({ reason: "api_method_path", blocked: true })).toBe(true);
+    expect(isFunctionalBlockage({ reason: "destination", blocked: true })).toBe(false);
+    expect(isFunctionalBlockage({ reason: "api_method_path", blocked: false })).toBe(false);
     expect(isFunctionalBlockage({ blocked: true })).toBe(false);
   });
 
