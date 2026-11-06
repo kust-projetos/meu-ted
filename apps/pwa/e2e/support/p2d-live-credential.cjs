@@ -39,11 +39,13 @@
 //   HTTP proofs, boot receipt booleans).
 "use strict";
 
+/* eslint-disable @typescript-eslint/no-require-imports -- strict CJS is required by Playwright's config loader. */
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { parseEnv } = require("node:util");
 const { pathToFileURL } = require("node:url");
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 const LIVE_CREDENTIAL_ALIAS = "OPENCODE_GO";
 const LIVE_CREDENTIAL_TARGET = "OPENCODE_GO_API_KEY";
