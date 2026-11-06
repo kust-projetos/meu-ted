@@ -411,6 +411,7 @@ política da API não foi alterada.
 | `pnpm typecheck` | **PASS** | 6 workspaces. |
 | `check-agent-v2-invariants` (A4/A9) | **PASS** | 542 arquivos; nenhuma capability de escrita fora do executor; broker é o único emissor de propose. |
 | `pnpm write-policy:check` | **PASS** | 183 writes / 183 policy rows. |
+| CI remoto (PR #293, `e6989c2`) | **PASS** | `Gate — all checks` + `TED Runtime — lint + typecheck + test` + API/Agent/PWA/Postgres/Security/Docs; PWA CI `quality (22, 10)` + `e2e (22, 10)` |
 
 ### Estado e limites
 

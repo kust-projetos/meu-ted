@@ -104,6 +104,7 @@ após a proposta persistir; antes disso, zero lançamentos.
 | `pnpm typecheck` | **PASS** (6 workspaces) |
 | `check-agent-v2-invariants` (A4/A9) | **PASS** (542 arquivos) |
 | `pnpm write-policy:check` | **PASS** (183/183) |
+| **CI remoto (PR #293, SHA `e6989c2`)** | **CI verde** (inclui `Gate — all checks`, `TED Runtime — lint + typecheck + test`, API, Agent, PWA, Postgres, Security, Docs) e **PWA CI verde** (`quality (22, 10)`, `e2e (22, 10)`) |
 
 Inferência paga/real: **não executada**. Nenhum dado financeiro real, Postgres,
 deploy ou merge.
@@ -122,12 +123,13 @@ deploy ou merge.
    congelada.
 4. **`list_categories` acompanha o opt-in de escrita** para permitir resolução de
    categoria; produção força ambos off.
-- **CI remoto do PR P3:** ver checks do
-  [PR #293](https://github.com/kust-projetos/meu-ted/pull/293). O PR é empilhado
-  sobre o #290 (`9d86771` é o commit próprio da fatia); a base é `main` porque os
-  workflows `ci.yml`/`pwa-ci.yml` só disparam em PRs para `main`/`master`. Quando
-  o #290 for mergeado, o diff do #293 colapsa para a fatia P3. Nenhum commit foi
-  adicionado ao #290.
+- **CI remoto (PR #293, SHA `e6989c2`):** **CI verde** — `Gate — all checks`,
+  `TED Runtime — lint + typecheck + test`, API, Agent, PWA, Postgres, Security,
+  Docs e Write policy PASS; **PWA CI verde** — `quality (22, 10)` e
+  `e2e (22, 10)` PASS. O PR é empilhado sobre o #290 (`9d86771` + `e6989c2` são
+  os commits próprios); a base é `main` porque `ci.yml`/`pwa-ci.yml` só disparam
+  em PRs para `main`/`master`. Quando o #290 for mergeado, o diff do #293 colapsa
+  para a fatia P3. Nenhum commit foi adicionado ao #290.
 
 ## 6. Estado Git
 
