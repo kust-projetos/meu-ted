@@ -15,7 +15,10 @@ import { resolveE2ePorts, resolveP2dPorts } from "./support/ports";
 const require = createRequire(__filename);
 const { assertNoBlockingNextEnvFiles, buildPlaywrightEnv } = require("./support/p2d-live-credential.cjs") as {
   assertNoBlockingNextEnvFiles: (pwaDir: string) => true;
-  buildPlaywrightEnv: (baseEnv?: Record<string, string | undefined>) => Record<string, string>;
+  buildPlaywrightEnv: (
+    baseEnv?: Record<string, string | undefined>,
+    opts?: { livePrep?: boolean; offlineChat?: boolean; liveReal?: boolean },
+  ) => Record<string, string>;
 };
 
 // P2D synthetic-conversation browser stack (test-only, loopback only):
@@ -23,27 +26,50 @@ const { assertNoBlockingNextEnvFiles, buildPlaywrightEnv } = require("./support/
 // with P2D_BROWSER=1 (or the prep-only P2D_LIVE_PREP=1 opt-in, which implies
 // it); the historical topology above is untouched.
 const P2D = process.env.P2D_BROWSER === "1";
-// Prep-only opt-in (set by pnpm test:p2d-live-prep alongside P2D_BROWSER):
-// selects the live-prep spec and implies the p2d-synthetic project so the
-// -g selection always has a target. Default path (unset) is untouched.
+// P2D live-mode opt-ins (each implies P2D_BROWSER and the p2d-synthetic
+// project so the -g selection always has a target):
+// - P2D_LIVE_PREP=1  prep-only boot (no prompt, no provider);
+// - P2D_OFFLINE_CHAT=1  full offline chat through the loopback provider;
+// - P2D_LIVE_REAL=1  future real-provider run (credential only in the
+//   isolated runtime child; never in this config/PWA/Next env).
+// Default path (all unset) is untouched. At most one mode may be selected.
 const LIVE_PREP = process.env.P2D_LIVE_PREP === "1";
-const P2D_ACTIVE = P2D || LIVE_PREP;
+const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
+const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
+if ([LIVE_PREP, OFFLINE_CHAT, LIVE_REAL].filter(Boolean).length > 1) {
+  throw new Error("select at most one P2D live mode (P2D_LIVE_PREP|P2D_OFFLINE_CHAT|P2D_LIVE_REAL)");
+}
+const P2D_LIVE_MODE = LIVE_PREP || OFFLINE_CHAT || LIVE_REAL;
+const P2D_ACTIVE = P2D || P2D_LIVE_MODE;
+const P2D_SPEC = LIVE_PREP
+  ? "**/p2d/p2d-live-prep.spec.ts"
+  : OFFLINE_CHAT
+    ? "**/p2d/p2d-live-offline.spec.ts"
+    : LIVE_REAL
+      ? "**/p2d/p2d-live-real.spec.ts"
+      : "**/p2d/*.spec.ts";
 // Fail-closed, unconditionally: Playwright starts and cleans up its own
 // servers per run and never attaches to a pre-existing (possibly alien)
 // process. There is no ownership flag and no reuse pathway.
 const PWA_ROOT = path.resolve(__dirname, "..");
 const PWA_APP_DIR = PWA_ROOT;
 
-// LIVE_PREP authority (fail-closed, BEFORE any port is resolved or any
-// webServer is constructed): with P2D_LIVE_PREP=1 this config runs the
+// P2D live-mode authority (fail-closed, BEFORE any port is resolved or any
+// webServer is constructed): with any live-mode flag this config runs the
 // Next-env preflight (contents never read) and replaces process.env with
 // the allowlisted Playwright env (same builder the launcher uses), so even
 // a direct CLI entrypoint can never start servers with a raw env — no raw
-// E2E_*/P2D_* value can reach an error message or a listener. Untouched
-// when unset: the default path keeps resolving the ambient env.
-if (LIVE_PREP) {
+// E2E_*/P2D_* value can reach an error message or a listener. The real
+// credential alias/target are stripped in every mode; the runtime child
+// loads the credential itself in live-real. Untouched when unset: the
+// default path keeps resolving the ambient env.
+if (P2D_LIVE_MODE) {
   assertNoBlockingNextEnvFiles(PWA_ROOT);
-  const clean = buildPlaywrightEnv(process.env);
+  const clean = buildPlaywrightEnv(process.env, {
+    livePrep: LIVE_PREP,
+    offlineChat: OFFLINE_CHAT,
+    liveReal: LIVE_REAL,
+  });
   for (const key of Object.keys(process.env)) delete process.env[key];
   Object.assign(process.env, clean);
 }
@@ -87,10 +113,10 @@ export default defineConfig({
   },
 
   projects: [
-    // Prep-only opt-in exposes ONLY the p2d-synthetic project below: a
+    // Any live-mode opt-in exposes ONLY the p2d-synthetic project below: a
     // direct CLI can never select functional-mobile/desktop, pwa-runtime
-    // or push-runtime with LIVE_PREP=1. Untouched when unset.
-    ...(!LIVE_PREP
+    // or push-runtime with a live flag. Untouched when unset.
+    ...(!P2D_LIVE_MODE
       ? [
           {
             name: "functional-mobile",
@@ -152,18 +178,18 @@ export default defineConfig({
             // P2D synthetic conversation (test-only, loopback only): real Next/PWA
             // browser → same-origin proxy → real loopback gateway → real SDK →
             // scripted local stub → real finance tools → real Fastify handlers.
-            // Registered with P2D_BROWSER=1 (or the prep-only P2D_LIVE_PREP=1
-            // opt-in, which implies it), with the stack webServers below;
-            // without opt-in the project does not exist. On the live-prep
-            // opt-in the selection is forced to the live-prep spec only, on
-            // ANY entrypoint (direct CLI included) — no other P2D spec runs.
+            // Registered with P2D_BROWSER=1 (or a live-mode opt-in, which
+            // implies it), with the stack webServers below; without opt-in
+            // the project does not exist. On a live-mode opt-in the selection
+            // is forced to that mode's spec only, on ANY entrypoint (direct
+            // CLI included) — no other P2D spec runs.
             name: "p2d-synthetic",
             use: {
               viewport: { width: 390, height: 844 },
               serviceWorkers: "block",
               baseURL: P2D_NEXT_BASE,
             },
-            testMatch: LIVE_PREP ? "**/p2d/p2d-live-prep.spec.ts" : "**/p2d/*.spec.ts",
+            testMatch: P2D_SPEC,
             fullyParallel: false,
             timeout: 600000,
           },
@@ -172,12 +198,12 @@ export default defineConfig({
   ],
 
   webServer: PRODUCTION_SMOKE ? undefined : [
-    // Prep-only opt-in (P2D_LIVE_PREP=1, via pnpm test:p2d-live-prep): skip
-    // the historical topology (fixture API, standalone Next, SW harness) so
-    // ONLY the P2D webServers below run — no extra servers, no
-    // .next/standalone copy. Untouched when P2D_LIVE_PREP is unset,
+    // Any live-mode opt-in (P2D_LIVE_PREP / P2D_OFFLINE_CHAT /
+    // P2D_LIVE_REAL): skip the historical topology (fixture API, standalone
+    // Next, SW harness) so ONLY the P2D webServers below run — no extra
+    // servers, no .next/standalone copy. Untouched when no live flag is set,
     // including P2D_BROWSER=1.
-    ...(!LIVE_PREP
+    ...(!P2D_LIVE_MODE
       ? [
           {
             command: `pnpm exec tsx e2e/fixture-api/server.ts --port ${FIXTURE_PORT}`,
@@ -219,12 +245,13 @@ export default defineConfig({
           },
         ]
       : []),
-    // P2D synthetic-conversation stack (P2D_BROWSER=1, or the prep-only
-    // P2D_LIVE_PREP=1 opt-in which implies it): the coordinator
-    // owns the Fastify API + gateway probe + control server lifecycle, and a
-    // separate Next dev process serves the REAL PWA against that stack
-    // (NEXT_PUBLIC base forced empty so the browser uses the same-origin
-    // proxy; no fixture, no production).
+    // P2D synthetic-conversation stack (P2D_BROWSER=1, or any live-mode
+    // opt-in which implies it): the coordinator owns the Fastify API +
+    // gateway probe + control server lifecycle, and a separate Next dev
+    // process serves the REAL PWA against that stack (NEXT_PUBLIC base
+    // forced empty so the browser uses the same-origin proxy; no fixture,
+    // no production). The scrubbed env carries only the selected mode flag;
+    // the real credential is never present here.
     ...(P2D_ACTIVE
       ? [
           {
@@ -239,6 +266,8 @@ export default defineConfig({
               P2D_GATEWAY_PORT: String(p2dPorts.gatewayPort),
               P2D_CTL_PORT: String(p2dPorts.ctlPort),
               P2D_NEXT_PORT: String(p2dPorts.nextPort),
+              ...(OFFLINE_CHAT ? { P2D_OFFLINE_CHAT: "1" } : {}),
+              ...(LIVE_REAL ? { P2D_LIVE_REAL: "1" } : {}),
             },
           },
           {

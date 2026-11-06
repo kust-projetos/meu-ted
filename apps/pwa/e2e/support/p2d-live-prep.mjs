@@ -34,19 +34,40 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PWA_ROOT = path.resolve(HERE, "..", "..");
 
 const PLAYWRIGHT_PROJECT = "p2d-synthetic";
-const LIVE_PREP_GREP = "p2d-live-prep";
+
+// One selection per opt-in. `live-prep` is the historical default (bare
+// invocation); `--offline` runs the full offline chat with the loopback
+// provider; `--live-real` is the future real-provider command (credential
+// loaded ONLY inside the isolated runtime child, never here).
+const MODES = {
+  "live-prep": { flag: "P2D_LIVE_PREP", grep: "p2d-live-prep" },
+  offline: { flag: "P2D_OFFLINE_CHAT", grep: "p2d-live-offline" },
+  "live-real": { flag: "P2D_LIVE_REAL", grep: "p2d-live-real" },
+};
+const MODE_FLAGS = ["P2D_LIVE_PREP", "P2D_OFFLINE_CHAT", "P2D_LIVE_REAL"];
 
 /**
  * Pure CLI parsing (exercised in an isolated subprocess, never imported
  * into a test runner): `--help` is inert (usage only, no credential
  * read, no network, no spawn, no Playwright load); bare invocation loads
  * Playwright in-process (the single opt-in); anything else fails closed.
+ * `--offline` and `--live-real` are mutually exclusive.
  */
 export function parsePrepArgs(argv = []) {
   const args = Array.isArray(argv) ? argv : [];
   if (args.includes("--help") || args.includes("-h")) return { mode: "help" };
-  if (args.length === 0) return { mode: "run" };
-  return { mode: "error", message: `p2d-live-prep: unknown args ${JSON.stringify(args).slice(0, 120)} (fail-closed)` };
+  const offline = args.includes("--offline");
+  const liveReal = args.includes("--live-real");
+  if (offline && liveReal) {
+    return { mode: "error", message: "p2d-live-prep: --offline and --live-real are mutually exclusive (fail-closed)" };
+  }
+  const unknown = args.filter((a) => a !== "--offline" && a !== "--live-real");
+  if (unknown.length > 0) {
+    return { mode: "error", message: `p2d-live-prep: unknown args ${JSON.stringify(unknown).slice(0, 120)} (fail-closed)` };
+  }
+  if (offline) return { mode: "run", flavor: "offline" };
+  if (liveReal) return { mode: "run", flavor: "live-real" };
+  return { mode: "run" };
 }
 
 function usage() {
@@ -54,14 +75,36 @@ function usage() {
     "p2d-live-prep: prep-only live TED verification (opt-in, never CI).",
     "",
     "Usage: node apps/pwa/e2e/support/p2d-live-prep.mjs [--help]",
+    "       node apps/pwa/e2e/support/p2d-live-prep.mjs --offline",
+    "       node apps/pwa/e2e/support/p2d-live-prep.mjs --live-real",
     "",
-    "Loads the existing Playwright P2D lifecycle in-process (project",
-    `"${PLAYWRIGHT_PROJECT}", webServer-owned stack + PWA) running only`,
-    `the "${LIVE_PREP_GREP}" spec (skipped unless P2D_LIVE_PREP=1).`,
+    "Bare invocation loads the existing Playwright P2D lifecycle in-process",
+    `(project "${PLAYWRIGHT_PROJECT}", webServer-owned stack + PWA) running`,
+    'only the "p2d-live-prep" spec (skipped unless P2D_LIVE_PREP=1).',
+    "",
+    "--offline  runs the full offline chat (real browser → PWA proxy →",
+    "           real gateway/SDK → loopback OpenAI-compatible provider",
+    "           with a dummy key → finance tools → synthetic API). The",
+    "           runtime profile stays live and the provider/model come",
+    "           from apps/ted-runtime/src/live-model.json.",
+    "--live-real is the future real-provider run. It reads the alias",
+    "           OPENCODE_GO from the two allowlisted local .env files and",
+    "           supplies it as OPENCODE_GO_API_KEY ONLY to the isolated",
+    "           runtime child; setupIsolation scrubs the inherited env and",
+    "           preserves that alias. The P2D live-real probe then maps the",
+    "           alias to the native OPENCODE_API_KEY that OpenCode 2.2.4",
+    "           resolves for `opencode-go` (alias removed); the prep path and",
+    "           the product bootstrap never map it. PWA/Next/Playwright never",
+    "           see it. Not executed by CI and not run by default.",
+    "",
+    "WARNING: do NOT run --live-real until the operator explicitly confirms",
+    "the scope of the authorization, the current quota and Extra Usage. This",
+    "command performs real provider inference; it is not verified here.",
+    "",
     "This launcher spawns nothing and supervises no tree:",
     "Playwright is the root process and cleans up its own webServers.",
     "The Playwright config enforces the Next-env preflight, the env",
-    "scrub and the live-prep-only selection on every entrypoint.",
+    "scrub and the mode-only selection on every entrypoint.",
   ].join("\n");
 }
 
@@ -75,7 +118,8 @@ function usage() {
  * and its webServer lifecycle, including on Windows. Preflight and env scrub
  * are the config's job (it runs them before any webServer is constructed).
  */
-function loadPlaywrightCli() {
+function loadPlaywrightCli(flavor = "live-prep") {
+  const selection = MODES[flavor] ?? MODES["live-prep"];
   const requireFromPwa = createRequire(path.join(PWA_ROOT, "package.json"));
   let cliPath;
   try {
@@ -93,7 +137,7 @@ function loadPlaywrightCli() {
     "--project",
     PLAYWRIGHT_PROJECT,
     "-g",
-    LIVE_PREP_GREP,
+    selection.grep,
   ];
   createRequire(import.meta.url)(cliPath);
 }
@@ -108,10 +152,15 @@ async function main() {
   // Opt-in flags only. The Playwright config is the authority for the
   // Next-env preflight and the env scrub: it enforces both before any
   // webServer is constructed, on every entrypoint (including a direct
-  // CLI call that bypasses this launcher).
+  // CLI call that bypasses this launcher). Exactly one mode is selected;
+  // the other flags are cleared so ambient values can never select two.
+  const flavor = parsed.flavor ?? "live-prep";
+  for (const key of MODE_FLAGS) delete process.env[key];
   process.env.P2D_BROWSER = "1";
-  process.env.P2D_LIVE_PREP = "1";
-  loadPlaywrightCli();
+  if (flavor === "offline") process.env.P2D_OFFLINE_CHAT = "1";
+  else if (flavor === "live-real") process.env.P2D_LIVE_REAL = "1";
+  else process.env.P2D_LIVE_PREP = "1";
+  loadPlaywrightCli(flavor);
   return { ok: true };
 }
 

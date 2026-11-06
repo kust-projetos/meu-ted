@@ -132,10 +132,14 @@ describe("p2d-live-credential contract (Playwright owns services)", () => {
       OPENCODE_GO: "should-never-propagate-alias",
       DATABASE_URL: "postgres://localhost/x",
       SOME_UNRELATED_SECRET: "unrelated-test-secret",
+      PLAYWRIGHT_BROWSERS_PATH: "D:\\pw-browsers",
     };
     const out = pickSpawnBase({ ...dirty, Path: "C:\\win", SystemRoot: "C:\\Windows", TEMP: "t", HOME: "/h" });
     assert.equal(out.PATH, "/usr/bin");
     assert.equal(out.SystemRoot, "C:\\Windows");
+    // Path (not a secret) required by the official `pnpm test:p2d-offline`
+    // command on machines whose browsers live outside the default location.
+    assert.equal(out.PLAYWRIGHT_BROWSERS_PATH, "D:\\pw-browsers");
     for (const k of [
       "NODE_OPTIONS", "HTTP_PROXY", "OPENCODE_GO_API_KEY", "OPENCODE_GO",
       "DATABASE_URL", "SOME_UNRELATED_SECRET", "OPENAI_API_KEY",
@@ -195,11 +199,15 @@ describe("p2d-live-credential contract (Playwright owns services)", () => {
       SOME_UNRELATED_SECRET: "unrelated-test-secret",
       P2D_BROWSER: "0",
       P2D_LIVE_PREP: "0",
+      PLAYWRIGHT_BROWSERS_PATH: "D:\\pw-browsers",
     };
     const out = buildPlaywrightEnv({ ...dirty, P2D_API_PORT: "4110", P2D_NEXT_PORT: "nope" });
     assert.equal(out.PATH, "/usr/bin");
     assert.equal(out.SystemRoot, "C:\\Windows");
     assert.equal(out.TEMP, "t");
+    // The official offline command must work with the ambient browser path
+    // (a path, not a secret) instead of requiring a LOCALAPPDATA workaround.
+    assert.equal(out.PLAYWRIGHT_BROWSERS_PATH, "D:\\pw-browsers");
     for (const k of [
       "NODE_OPTIONS", "HTTP_PROXY", "HTTPS_PROXY", "OPENAI_API_KEY",
       "OPENCODE_GO_API_KEY", "OPENCODE_GO", "GH_TOKEN",
@@ -524,7 +532,7 @@ describe("p2d-live-prep guarda estático: Playwright é o dono dos serviços (RE
     assert.ok(code.includes("process.env.P2D_LIVE_PREP"), "prep deve selecionar o opt-in via flag");
     // O loader Playwright é helper privado: import nunca deve oferecer API
     // que inicie Playwright (só main(), via CLI, o chama após setar flags).
-    assert.ok(code.includes("function loadPlaywrightCli()"), "loader existe como helper privado");
+    assert.ok(code.includes("function loadPlaywrightCli("), "loader existe como helper privado");
     assert.ok(!code.includes("export function loadPlaywrightCli"), "loader não pode ser exportado");
     assert.ok(!code.includes("export { loadPlaywrightCli"), "loader não pode ser re-exportado");
     for (const moved of ["assertNoBlockingNextEnvFiles", "buildPlaywrightEnv", "scrubProcessEnv"]) {
@@ -552,18 +560,21 @@ describe("p2d-live-prep guarda estático: Playwright é o dono dos serviços (RE
       .replace(/^[^\S\r\n]*\/\/[^\r\n]*/gm, "");
     // Chamadas no top-level da config: executam no import, antes da
     // construção dos webServers (que também é top-level, abaixo).
-    for (const required of ["assertNoBlockingNextEnvFiles(", "buildPlaywrightEnv(process.env)"]) {
-      assert.ok(code.includes(required), `config deve aplicar ${required.trim()} no caminho LIVE_PREP`);
+    for (const required of ["assertNoBlockingNextEnvFiles(", "buildPlaywrightEnv(process.env,"]) {
+      assert.ok(code.includes(required), `config deve aplicar ${required.trim()} no caminho live`);
     }
     const preflightAt = code.indexOf("assertNoBlockingNextEnvFiles(");
-    const scrubAt = code.indexOf("buildPlaywrightEnv(process.env)");
+    const scrubAt = code.indexOf("buildPlaywrightEnv(process.env,");
     const webServersAt = code.indexOf("webServer:");
     assert.ok(preflightAt !== -1 && scrubAt !== -1 && webServersAt !== -1, "config deve ter preflight+scrub+webServers");
     assert.ok(Math.max(preflightAt, scrubAt) < webServersAt, "preflight+scrub ocorrem ANTES dos webServers");
-    // Seleção forçada: só a spec live-prep roda no opt-in, em qualquer entrypoint.
-    assert.match(code, /testMatch: LIVE_PREP \? "\*\*\/p2d\/p2d-live-prep\.spec\.ts" : "\*\*\/p2d\/\*\.spec\.ts"/);
+    // Seleção forçada por modo: a spec do modo selecionado é a única que roda.
+    assert.ok(code.includes('"**/p2d/p2d-live-prep.spec.ts"'), "config deve selecionar a spec live-prep");
+    assert.ok(code.includes('"**/p2d/p2d-live-offline.spec.ts"'), "config deve selecionar a spec offline");
+    assert.ok(code.includes('"**/p2d/p2d-live-real.spec.ts"'), "config deve selecionar a spec live-real");
+    assert.match(code, /testMatch: P2D_SPEC/);
     // Projetos: só p2d-synthetic no opt-in (direct CLI não seleciona os demais).
-    assert.match(code, /\.\.\.\(!LIVE_PREP\s*\?\s*\[/);
+    assert.match(code, /\.\.\.\(!P2D_LIVE_MODE\s*\?\s*\[/);
   });
 });
 

@@ -150,6 +150,15 @@ pushd "$PWA" >/dev/null
 pnpm exec tsx --test e2e/support/matrix.test.ts e2e/support/repeat-each.test.ts || RESULT=1
 popd >/dev/null
 
+# ── Run P2D node:test contracts (credential mapping + live modes) ──────────
+# Same runner/gate as above (no separate P2D runner): these contracts cover
+# the alias→native credential mapping, the offline/live-real fetch guards and
+# the E2E evidence shape. They never start a service or read the real .env.
+echo "[run-ci] P2D contracts..."
+pushd "$PWA" >/dev/null
+node --test e2e/support/p2d-live-credential.test.mjs e2e/support/p2d-live-modes.test.mjs || RESULT=1
+popd >/dev/null
+
 # ── Report ──────────────────────────────────────────────────────────────────
 if [ "$RESULT" -eq 0 ]; then
   echo "[run-ci] ALL PASS"

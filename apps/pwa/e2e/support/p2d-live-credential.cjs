@@ -23,14 +23,20 @@
 //   paths carry key names and coarse location labels (`raiz`,
 //   `pi-financeiro`) only — never values, never absolute paths.
 // - Runtime envs are built from a minimal allowlist (no `process.env` spread):
-//   only Windows Node-spawn essentials (PATH/Path case-insensitive,
-//   SystemRoot, ComSpec, TEMP, TMP, USERPROFILE, APPDATA, LOCALAPPDATA, HOME)
-//   plus explicit per-process values. NODE_OPTIONS, proxies, every provider
-//   key, DATABASE_URL and unrelated secrets are dropped.
-// - The secret maps ONLY to OPENCODE_GO_API_KEY in the live runtime env,
-//   applied temporarily to the dedicated Playwright worker process BEFORE
-//   its SDK import/boot (and restored right after). The secret never reaches
-//   PWA or stack envs. The alias key is NEVER forwarded anywhere.
+//   only Node-spawn essentials (PATH/Path case-insensitive, SystemRoot,
+//   ComSpec, TEMP, TMP, USERPROFILE, APPDATA, LOCALAPPDATA, HOME) plus
+//   PLAYWRIGHT_BROWSERS_PATH (a path, never a secret) and explicit
+//   per-process values. NODE_OPTIONS, proxies, every provider key,
+//   DATABASE_URL and unrelated secrets are dropped.
+// - The secret is supplied ONLY as the explicit alias OPENCODE_GO_API_KEY to
+//   the live runtime env, applied temporarily to the dedicated process BEFORE
+//   its SDK import/boot (and restored right after). setupIsolation scrubs the
+//   inherited env FIRST and preserves ONLY that alias (an ambient
+//   OPENCODE_API_KEY is never preserved). The alias→native translation
+//   (`applyLiveRealCredentialAlias`: OPENCODE_API_KEY, the key OpenCode 2.2.4
+//   resolves for `opencode-go`) belongs EXCLUSIVELY to the P2D live-real probe
+//   child — never to the prep path or the product bootstrap. The secret never
+//   reaches PWA or stack envs.
 // - Prep-only by construction: the boot never opens a live listener
 //   (`listenerExposed:false`, no `/rpc/chat` with the real credential), never
 //   sends a message, never calls session.prompt, never attempts provider
@@ -49,7 +55,21 @@ const { pathToFileURL } = require("node:url");
 
 const LIVE_CREDENTIAL_ALIAS = "OPENCODE_GO";
 const LIVE_CREDENTIAL_TARGET = "OPENCODE_GO_API_KEY";
+// Native key OpenCode 2.2.4 resolves for the `opencode-go` provider. Only the
+// P2D live-real probe child translates the alias into this key.
+const LIVE_CREDENTIAL_NATIVE = "OPENCODE_API_KEY";
 const LIVE_MODEL_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+// Offline-chat mode (P2D_OFFLINE_CHAT=1 / --offline): the exact provider from
+// the repo-owned live model selector, pointed at a LOOPBACK OpenAI-compatible
+// stub with a dummy key. The provider id stays `opencode-go` on purpose (the
+// SDK/provider/model are the real ones); the HTTP endpoint is what proves no
+// external inference. The dummy key is the only credential shape this mode
+// accepts, so a real credential can never be smuggled into the offline path.
+const OFFLINE_PROVIDER = "opencode-go";
+const OFFLINE_PROVIDER_PACKAGE = "@opencode/ai/providers/openai-compatible";
+const OFFLINE_DUMMY_KEY = "test-offline-dummy-not-a-secret";
+const RUNTIME_MODES = ["offline", "live-real"];
 
 /**
  * Env file names the Next dev server loads in NODE_ENV=development
@@ -61,7 +81,13 @@ const NEXT_ENV_BLOCKED_NAMES = [".env", ".env.local", ".env.development", ".env.
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
-/** Minimal Windows Node-spawn base (exact set; key match is case-insensitive). */
+/**
+ * Minimal Node-spawn base (exact set; key match is case-insensitive).
+ * `PLAYWRIGHT_BROWSERS_PATH` is a PATH (not a secret): Playwright resolves
+ * its browser binaries from it, and dropping it broke the official
+ * `pnpm test:p2d-offline` command on machines whose browsers live outside the
+ * default location.
+ */
 const SPAWN_BASE_KEYS = new Set([
   "PATH",
   "SYSTEMROOT",
@@ -72,7 +98,30 @@ const SPAWN_BASE_KEYS = new Set([
   "APPDATA",
   "LOCALAPPDATA",
   "HOME",
+  "PLAYWRIGHT_BROWSERS_PATH",
 ]);
+
+/**
+ * Loopback http(s) URL with an optional PATH (e.g. `/v1`) — used for provider
+ * baseURLs. Credentials, query strings and fragments are refused; external
+ * hosts are refused. `isLoopbackOrigin` stays the stricter bare-origin check
+ * for API bases.
+ */
+function isLoopbackHttpUrl(value) {
+  if (typeof value !== "string" || value.length === 0) return false;
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  if (parsed.username !== "" || parsed.password !== "") return false;
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!LOOPBACK_HOSTS.has(hostname)) return false;
+  if (parsed.search !== "" || parsed.hash !== "") return false;
+  return true;
+}
 
 /** Bare loopback http(s) origin only (no path/search/hash/credentials). */
 function isLoopbackOrigin(value) {
@@ -362,11 +411,14 @@ function assertNoFinancialWrites(journalBody) {
 }
 
 /**
- * Env for the live TED runtime boot ONLY: allowlisted base + the credential
- * mapped to OPENCODE_GO_API_KEY (never the alias key) + explicit TED_* pins.
- * It is applied temporarily to the dedicated Playwright worker process for
- * the SDK boot and restored in full afterwards — never to PWA/stack envs,
- * which carry no secrets by config.
+ * Env for the live TED runtime boot ONLY: allowlisted base + the explicit
+ * OPENCODE_GO_API_KEY alias input (the live profile preserves ONLY that alias
+ * and scrubs every other credential var, including an ambient
+ * OPENCODE_API_KEY) + explicit TED_* pins. It is applied temporarily to the
+ * dedicated Playwright worker process for the SDK boot and restored in full
+ * afterwards — never to PWA/stack envs, which carry no secrets by config.
+ * The alias→native translation belongs to the P2D live-real probe child
+ * (`applyLiveRealCredentialAlias`), never to the product bootstrap.
  */
 function buildLiveRuntimeEnv({ baseEnv = {}, credentialValue, tedHome, tedIdentity, apiBaseUrl, profile = "live" } = {}) {
   if (typeof credentialValue !== "string" || credentialValue.length === 0) {
@@ -393,6 +445,191 @@ function buildLiveRuntimeEnv({ baseEnv = {}, credentialValue, tedHome, tedIdenti
   return out;
 }
 
+/**
+ * Offline-chat runtime env: the same minimal allowlist as the live boot, but
+ * the only credential shape accepted is the dummy key. Profile stays `live`
+ * so the SDK/model/provider are the real ones; the provider baseURL is the
+ * loopback stub (composed separately by `buildOfflineProviderConfig`).
+ */
+function buildOfflineRuntimeEnv({ baseEnv = {}, tedHome, tedIdentity, apiBaseUrl, profile = "live" } = {}) {
+  if (profile !== "live") {
+    throw new Error("p2d-live-prep: offline runtime env requires profile live (fail-closed)");
+  }
+  if (!isLoopbackOrigin(apiBaseUrl)) {
+    throw new Error("p2d-live-prep: offline apiBaseUrl must be a bare loopback origin (fail-closed)");
+  }
+  if (typeof tedHome !== "string" || tedHome.length === 0 || !path.isAbsolute(tedHome)) {
+    throw new Error("p2d-live-prep: offline tedHome must be an absolute isolated home (fail-closed)");
+  }
+  if (typeof tedIdentity !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(tedIdentity)) {
+    throw new Error("p2d-live-prep: offline tedIdentity must be a single safe path segment (fail-closed)");
+  }
+  const out = stripCredentialKeys(pickSpawnBase(baseEnv));
+  out[LIVE_CREDENTIAL_TARGET] = OFFLINE_DUMMY_KEY;
+  out.TED_RUNTIME_PROFILE = profile;
+  out.TED_RUNTIME_HOME = tedHome;
+  out.TED_RUNTIME_IDENTITY = tedIdentity;
+  out.TED_API_BASE_URL = apiBaseUrl;
+  out.TED_P2D_MODE = "offline";
+  return out;
+}
+
+/**
+ * Test-only provider composition for the offline mode. Keeps the exact
+ * `provider/model` from `live-model.json`, adds the `provider.use` allow after
+ * the product deny-all, and points ONLY that provider at the loopback stub.
+ * Fails closed on an external baseURL, a non-dummy key or a foreign provider.
+ * Returns a new object; the product base config is never mutated.
+ */
+function buildOfflineProviderConfig(baseConfig, { model, baseURL, apiKey, name } = {}) {
+  if (!baseConfig || typeof baseConfig !== "object" || Array.isArray(baseConfig)) {
+    throw new Error("p2d-live-prep: offline base config must be an object (fail-closed)");
+  }
+  if (typeof model !== "string" || !LIVE_MODEL_RE.test(model.trim())) {
+    throw new Error("p2d-live-prep: offline model must be provider/model (fail-closed)");
+  }
+  const [provider, modelID] = model.trim().split("/");
+  if (provider !== OFFLINE_PROVIDER) {
+    throw new Error(`p2d-live-prep: offline provider must be ${OFFLINE_PROVIDER} (fail-closed)`);
+  }
+  if (!isLoopbackHttpUrl(baseURL)) {
+    throw new Error("p2d-live-prep: offline provider baseURL must be loopback (fail-closed)");
+  }
+  if (apiKey !== OFFLINE_DUMMY_KEY) {
+    throw new Error("p2d-live-prep: offline provider requires the dummy key only (fail-closed)");
+  }
+  const policies = Array.isArray(baseConfig.policies) ? [...baseConfig.policies] : [];
+  if (
+    !policies.some(
+      (p) => p && p.action === "provider.use" && p.resource === provider && p.effect === "allow",
+    )
+  ) {
+    policies.push({ action: "provider.use", resource: provider, effect: "allow" });
+  }
+  return {
+    ...baseConfig,
+    model: `${provider}/${modelID}`,
+    policies,
+    providers: {
+      ...(baseConfig.providers && typeof baseConfig.providers === "object" && !Array.isArray(baseConfig.providers)
+        ? baseConfig.providers
+        : {}),
+      [provider]: {
+        name:
+          typeof name === "string" && name.length > 0
+            ? name
+            : "TED P2D offline loopback provider (dummy apiKey)",
+        package: OFFLINE_PROVIDER_PACKAGE,
+        settings: { baseURL, apiKey },
+        models: {
+          [modelID]: {
+            name: `Offline ${modelID}`,
+            modelID,
+            capabilities: { input: ["text"], output: ["text"] },
+            limit: { context: 32000, output: 4000 },
+          },
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Credential selection for a runtime mode:
+ * - `offline`  → always the dummy key (no file read, no real credential);
+ * - `live-real` → the allowlisted local alias only (`loadLiveCredential`).
+ * Returns `{ value, source }`; callers must keep `value` inside the isolated
+ * runtime process and never log/write it.
+ */
+function loadRuntimeCredentialForMode({ mode, rootDir, envFileName = ".env", siblingEnvFile } = {}) {
+  if (mode === "offline") return { value: OFFLINE_DUMMY_KEY, source: "dummy" };
+  if (mode === "live-real") {
+    if (typeof rootDir !== "string" || rootDir.length === 0) {
+      throw new Error("p2d-live-prep: rootDir is required for live-real credentials (fail-closed)");
+    }
+    const cred = loadLiveCredential({ rootDir, envFileName, siblingEnvFile });
+    return { value: cred.value, source: "allowlist" };
+  }
+  throw new Error("p2d-live-prep: unknown runtime mode (fail-closed)");
+}
+
+/**
+ * P2D live-real ONLY (never the prep path, never the product bootstrap):
+ * native OpenCode 2.2.4 resolves the `opencode-go` provider from
+ * OPENCODE_API_KEY, so the alias preserved by the live profile is translated
+ * into the native key and then removed — the isolated child keeps ONLY the
+ * native key. Pure env transform: the caller passes the target env (the value
+ * is never read from `process.env` here, never logged). Returns the OBSERVED
+ * presence boolean (false when no alias value exists; an unaliased native key
+ * never survives).
+ */
+function applyLiveRealCredentialAlias(env) {
+  if (!env || typeof env !== "object" || Array.isArray(env)) {
+    throw new Error("p2d-live-prep: env object is required for the live-real alias (fail-closed)");
+  }
+  const aliasValue = env[LIVE_CREDENTIAL_TARGET];
+  delete env[LIVE_CREDENTIAL_TARGET];
+  if (typeof aliasValue === "string" && aliasValue.length > 0) {
+    env[LIVE_CREDENTIAL_NATIVE] = aliasValue;
+  } else {
+    // No alias value → no native key at all (an ambient native key never
+    // survives; presence is observed from the native key, never assumed).
+    delete env[LIVE_CREDENTIAL_NATIVE];
+  }
+  return Boolean(env[LIVE_CREDENTIAL_NATIVE]);
+}
+
+const OFFLINE_RECEIPT_KEYS = new Set([
+  "ok",
+  "phase",
+  "mode",
+  "profile",
+  "provider",
+  "model",
+  "agent",
+  "providerLoopback",
+  "credentialSource",
+  "fetchGuard",
+]);
+
+/** Strict offline-chat receipt: no credential field can ever be added. */
+function validateOfflineChatReceipt(receipt, { expectedModel } = {}) {
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+    throw new Error("p2d-live-prep: offline receipt must be an object (fail-closed)");
+  }
+  for (const key of Object.keys(receipt)) {
+    if (!OFFLINE_RECEIPT_KEYS.has(key)) {
+      throw new Error(`p2d-live-prep: offline receipt carries unexpected key '${key}' (fail-closed)`);
+    }
+  }
+  if (receipt.ok !== true) throw new Error("p2d-live-prep: offline receipt ok must be true (fail-closed)");
+  if (receipt.phase !== "offline-chat-ready") {
+    throw new Error("p2d-live-prep: offline receipt phase must be offline-chat-ready (fail-closed)");
+  }
+  if (receipt.mode !== "offline") throw new Error("p2d-live-prep: offline mode must be offline (fail-closed)");
+  if (receipt.profile !== "live") throw new Error("p2d-live-prep: offline profile must be live (fail-closed)");
+  if (receipt.provider !== OFFLINE_PROVIDER) {
+    throw new Error(`p2d-live-prep: offline provider must be ${OFFLINE_PROVIDER} (fail-closed)`);
+  }
+  if (typeof receipt.model !== "string" || !LIVE_MODEL_RE.test(receipt.model)) {
+    throw new Error("p2d-live-prep: offline model must be provider/model (fail-closed)");
+  }
+  if (typeof expectedModel === "string" && expectedModel.length > 0 && receipt.model !== expectedModel) {
+    throw new Error("p2d-live-prep: offline model diverged from live-model.json (fail-closed)");
+  }
+  if (receipt.agent !== "ted") throw new Error("p2d-live-prep: offline agent must be ted (fail-closed)");
+  if (receipt.providerLoopback !== true) {
+    throw new Error("p2d-live-prep: offline provider must be loopback (fail-closed)");
+  }
+  if (receipt.credentialSource !== "dummy") {
+    throw new Error("p2d-live-prep: offline credential source must be dummy (fail-closed)");
+  }
+  if (receipt.fetchGuard !== "loopback-only") {
+    throw new Error("p2d-live-prep: offline fetch guard must be loopback-only (fail-closed)");
+  }
+  return true;
+}
+
 /** P2D loopback ports forwarded to the launcher process (validated, else omitted). */
 const PLAYWRIGHT_PORT_KEYS = ["P2D_API_PORT", "P2D_GATEWAY_PORT", "P2D_CTL_PORT", "P2D_NEXT_PORT"];
 
@@ -402,11 +639,21 @@ const PLAYWRIGHT_PORT_KEYS = ["P2D_API_PORT", "P2D_GATEWAY_PORT", "P2D_CTL_PORT"
  * proxies, provider keys, DATABASE_URL and unrelated secrets are dropped)
  * plus ONLY the flags the P2D run needs. This reinstates the `pickSpawnBase`
  * secrecy the raw `{...process.env}` spread had reopened.
+ *
+ * Exactly one mode is selected: the default (no opts) preserves the existing
+ * `P2D_LIVE_PREP=1` prep-only path; `offlineChat` / `liveReal` select the new
+ * opt-ins. The credential keys are stripped in every case.
  */
-function buildPlaywrightEnv(baseEnv = {}) {
+function buildPlaywrightEnv(baseEnv = {}, { livePrep = true, offlineChat = false, liveReal = false } = {}) {
+  const selected = [livePrep, offlineChat, liveReal].filter(Boolean).length;
+  if (selected > 1) {
+    throw new Error("p2d-live-prep: select at most one mode (live-prep|offline|live-real) — fail-closed");
+  }
   const out = stripCredentialKeys(pickSpawnBase(baseEnv));
   out.P2D_BROWSER = "1";
-  out.P2D_LIVE_PREP = "1";
+  if (livePrep) out.P2D_LIVE_PREP = "1";
+  if (offlineChat) out.P2D_OFFLINE_CHAT = "1";
+  if (liveReal) out.P2D_LIVE_REAL = "1";
   for (const key of PLAYWRIGHT_PORT_KEYS) {
     const raw = baseEnv?.[key];
     if (typeof raw === "string" && raw !== "") {
@@ -505,28 +752,39 @@ function sanitizePrepError(err, secretValue) {
 module.exports = {
   LIVE_BOOT_FAILURE_MESSAGE,
   LIVE_CREDENTIAL_ALIAS,
+  LIVE_CREDENTIAL_NATIVE,
   LIVE_CREDENTIAL_TARGET,
   LIVE_MODEL_RE,
   NEXT_ENV_BLOCKED_NAMES,
+  OFFLINE_DUMMY_KEY,
+  OFFLINE_PROVIDER,
+  OFFLINE_PROVIDER_PACKAGE,
+  RUNTIME_MODES,
+  applyLiveRealCredentialAlias,
   assertIsolatedHome,
   assertNoBlockingNextEnvFiles,
   assertNoFinancialWrites,
   buildLiveRuntimeEnv,
+  buildOfflineProviderConfig,
+  buildOfflineRuntimeEnv,
   buildPlaywrightEnv,
   defaultSiblingEnvFile,
   expectApiHealthBody,
   expectGatewayNotFound,
   findBlockingNextEnvFiles,
   isCliEntry,
+  isLoopbackHttpUrl,
   isLoopbackOrigin,
   loadLiveCredential,
   loadLiveModelSelector,
+  loadRuntimeCredentialForMode,
   pickSpawnBase,
   resolveConfiguredLiveModel,
   resolveLiveEnvCandidates,
   sanitizePrepError,
   stripCredentialKeys,
   validateLivePrepReceipt,
+  validateOfflineChatReceipt,
   withLiveBootBoundary,
   withScrubbedEnv,
 };

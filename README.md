@@ -83,9 +83,10 @@ Verificação explícita e opt-in do boot do runtime TED com modelo nativo
 vivo, separada do E2E sintético (`P2D_BROWSER=1`) e do CI (nenhum job de CI
 invoca este comando). O que o comando faz:
 
-- Reutiliza `apps/pwa/e2e/support/p2d-browser-stack.mts` **sem alterá-lo**
-  como dono da API Fastify sintética/in-memory + gateway P2D sintético
-  (scripted local stub, loopback). Exige os marcadores de readiness do
+- Reutiliza `apps/pwa/e2e/support/p2d-browser-stack.mts` como dono da API
+  Fastify sintética/in-memory + gateway P2D sintético (scripted local stub,
+  loopback); no prep o stack roda no modo sintético padrão, sem instrumentação
+  nova de plugin. Exige os marcadores de readiness do
   processo recém-criado mais processo vivo — não aceita um processo
   preexistente só pela porta.
 - Preflight fail-closed por nomes de arquivo: recusa `apps/pwa/.env`,
@@ -105,11 +106,18 @@ invoca este comando). O que o comando faz:
   nenhuma inferência e nenhuma rota `/rpc/chat` live (o seam do
   `startTedRuntime` substitui o gateway por stub prep-only).
 - A credencial vem de local conhecido (primeiro `.env` da raiz, depois
-  apenas `../pi-financeiro/.env`, lido com `node:util.parseEnv`) e é mapeada
-  **somente** para `OPENCODE_GO_API_KEY` no env do processo filho, antes do
-  boot do SDK. PWA, API e stack sintético recebem env mínimo por allowlist
-  (sem `NODE_OPTIONS`, proxies, provider keys ou `DATABASE_URL`; PWA ainda
-  fixa `NEXT_TELEMETRY_DISABLED=1`) — nenhum log imprime valores (só
+  apenas `../pi-financeiro/.env`, lido com `node:util.parseEnv`) e é fornecida
+  **somente** como alias `OPENCODE_GO_API_KEY` ao processo filho, antes do
+  boot do SDK. `setupIsolation` limpa o env herdado primeiro e preserva
+  **apenas** esse alias (nenhum `OPENCODE_API_KEY` vindo do ambiente
+  sobrevive); o prep **não** traduz o alias para chave nativa e não exige esse
+  mapeamento. A tradução alias→`OPENCODE_API_KEY` (a chave que o OpenCode
+  2.2.4 resolve para o provider `opencode-go`) pertence **exclusivamente** ao
+  caminho `pnpm test:p2d-live-real` (probe do runtime), nunca ao prep nem ao
+  bootstrap de produto. PWA, API e stack sintético recebem env mínimo por
+  allowlist (sem `NODE_OPTIONS`, proxies, provider keys ou `DATABASE_URL`;
+  `PLAYWRIGHT_BROWSERS_PATH` é preservado por ser caminho, não segredo; PWA
+  ainda fixa `NEXT_TELEMETRY_DISABLED=1`) — nenhum log imprime valores (só
   presença booleana, estágio e exit code/signal).
 - Sobe o PWA real (Next dev, via Node direto, sem shim de shell) contra a
   API sintética + **gateway P2D sintético**; o upstream legado A0 é pinado
@@ -130,6 +138,62 @@ invoca este comando). O que o comando faz:
   o probe interno, depois árvores (`taskkill /T` só em PID criado pelo
   runner e ainda vivo); o sumário `live-prep-verified` só sai após cada
   saída comprovada por evento (`assertAllExited`).
+
+### Chat offline opt-in do TED (provider loopback, sem inferência externa)
+
+```bash
+pnpm test:p2d-offline
+```
+
+Fluxo completo com browser real: PWA real → proxy same-origin → gateway
+loopback real → SDK OpenCode 2.2.4 (`session.prompt`) → provider
+OpenAI-compatible **local em 127.0.0.1** com chave dummy em
+`providers.opencode-go.settings.apiKey` → tools financeiras reais → API
+sintética. O perfil é `live` e provider/modelo vêm de
+`apps/ted-runtime/src/live-model.json`, mas o endpoint HTTP é o stub de
+loopback: **nenhuma inferência externa**. Sem credencial real e sem chave de
+provider no env do filho; `READ_SLICE_PASS` permanece NOT ACHIEVED (provider
+scripted).
+
+### Chat live-real opt-in (provider real — NÃO executar sem confirmação)
+
+```bash
+pnpm test:p2d-live-real
+```
+
+> **Não execute este comando até o operador confirmar explicitamente o escopo
+> da autorização, a quota corrente e o Extra Usage.** Ele faz inferência real
+> no provider; nenhum desses três itens é verificado aqui.
+
+Mesmo fluxo, com provider/modelo nativos. A credencial é lida apenas no filho
+isolado (alias `OPENCODE_GO` dos dois `.env` locais allowlisted), entregue como
+`OPENCODE_GO_API_KEY` e traduzida pelo próprio probe para o `OPENCODE_API_KEY`
+nativo depois do `setupIsolation` (alias removido) — prep e bootstrap de
+produto não fazem esse mapeamento. Egress restrito por guard de `fetch` sem
+proxy/servidor novo: GET do catálogo oficial
+`https://models.opencode.ai/experimental/v2.0/api.json` (só `User-Agent` e
+`If-None-Match` opcional, filtro observado `?type=chat,decision,image`, sem
+`Authorization`/`cookie`/chave) e `https://opencode.ai/inference/go/…` em
+HTTPS/443, apenas POST `/chat/completions` cujo body JSON declare exatamente o
+`model` pinado de `live-model.json` (ausência de body, JSON inválido ou model
+divergente falham **antes** do socket, com contador/reason fixos — um fallback
+de provider nunca recebe a credencial); redirecionamentos forçados
+para `manual` e não seguidos (`redirected`/3xx falham fechado) e qualquer
+destino desconhecido é bloqueado antes do socket. Só categorias/contagens/
+status são observados — nunca URL, body, header ou credencial (a única exceção
+é o identificador não-secreto `model`, validado antes do socket).
+
+O mesmo guard cobre o tráfego de loopback que o processo do probe já faz para
+a API Fastify sintética (`resolveGatewayIdentity` + `HttpFinanceTransport`).
+Não é liberação genérica de localhost: só o origin exato
+`http://127.0.0.1:<P2D_API_PORT>` e só os pares de contrato existentes —
+`POST /auth/agent-token` (body exatamente `{}`), `GET /auth/devices/me`,
+`GET /accounts` (sem query) e `GET /dashboard/month-summary`
+(`yearMonth=YYYY-MM`) — com allowlist de headers por rota. `localhost`, `::1`,
+outra porta, outro path/método/query/header, qualquer `Authorization`/
+`x-api-key` e qualquer escrita são bloqueados; contadores separados
+(`apiAllowed`/`apiBlocked`/`apiStatuses`) registram só categoria/contagem/
+status.
 
 ## Qualidade e gates
 

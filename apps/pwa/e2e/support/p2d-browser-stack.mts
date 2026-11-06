@@ -43,6 +43,32 @@ if (!fs.existsSync(API_TEST_APP)) {
 const TED_RUNTIME_DIR = path.resolve(PWA_ROOT, "../ted-runtime");
 const PROBE = path.resolve(HERE, "p2d-synthetic-read-probe.mjs");
 
+// Live-mode opt-ins (set by the Playwright config from the launcher flags):
+// - P2D_OFFLINE_CHAT=1  full offline chat with a loopback provider + dummy key;
+// - P2D_LIVE_REAL=1  future real-provider run.
+// This coordinator NEVER receives the real credential: in live-real the probe
+// child loads the allowlisted local alias itself, so the secret cannot leak
+// into this process, the PWA or Next.
+const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
+const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
+if (OFFLINE_CHAT && LIVE_REAL) {
+  throw new Error("[p2d-stack] P2D_OFFLINE_CHAT and P2D_LIVE_REAL are mutually exclusive");
+}
+const MODE = OFFLINE_CHAT ? "offline" : LIVE_REAL ? "live-real" : "synthetic";
+const LIVE_MODEL_FILE = path.resolve(TED_RUNTIME_DIR, "src", "live-model.json");
+
+function readLiveModel(): string {
+  const raw = fs.readFileSync(LIVE_MODEL_FILE, "utf8");
+  const parsed = JSON.parse(raw) as { model?: unknown };
+  const model = parsed && typeof parsed === "object" ? parsed.model : null;
+  if (typeof model !== "string" || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(model)) {
+    throw new Error("[p2d-stack] live-model.json must hold a provider/model selector");
+  }
+  return model;
+}
+
+const LIVE_MODEL = MODE === "synthetic" ? null : readLiveModel();
+
 const apiRequire = createRequire(API_TEST_APP);
 const memoryAdapterPath: string = apiRequire.resolve("better-auth/adapters/memory");
 const { memoryAdapter } = (await import(pathToFileURL(memoryAdapterPath).href)) as unknown as {
@@ -185,6 +211,38 @@ type ProbeHandle = {
 };
 let probe: ProbeHandle | null = null;
 
+function buildProbeConfig(): Record<string, unknown> {
+  const base = {
+    root: ROOT,
+    identity: MODE === "offline" ? "p2d-offline" : MODE === "live-real" ? "p2d-live-real" : "p2d-browser",
+    apiBaseUrl: `http://127.0.0.1:${API_PORT}`,
+    tedRuntimeDir: TED_RUNTIME_DIR,
+  };
+  const stub = {
+    toolSequence: [
+      { name: "list_accounts", args: {} },
+      { name: "get_month_summary", args: { yearMonth: "2026-06" } },
+    ],
+    expectedAccounts: { names: ["Itaú", "Nubank"], total: 2 },
+    expectedOracle: { yearMonth: "2026-06", ...ORACLE_A },
+  };
+  if (MODE === "synthetic") return { ...base, stub };
+  const model = LIVE_MODEL as string;
+  return {
+    ...base,
+    mode: MODE,
+    profile: "live",
+    provider: model.split("/")[0],
+    model,
+    // offline: dummy key + loopback stub; live-real: the probe child reads the
+    // allowlisted local alias itself (never sent through this coordinator).
+    credentialSource: MODE === "offline" ? "dummy" : "allowlist",
+    // The scripted tool sequence only exists in the offline mode; the real
+    // model decides its own tools.
+    ...(MODE === "offline" ? { stub } : {}),
+  };
+}
+
 async function startProbe(): Promise<{ base: string; pid: number | undefined }> {
   if (probe && !probe.exited) throw new Error("probe already running");
   const child = spawn(process.execPath, [PROBE, "serve"], {
@@ -193,20 +251,7 @@ async function startProbe(): Promise<{ base: string; pid: number | undefined }> 
     env: {
       ...process.env,
       P2D_GATEWAY_PORT: String(GATEWAY_PORT),
-      P2D_CONFIG_JSON: JSON.stringify({
-        root: ROOT,
-        identity: "p2d-browser",
-        apiBaseUrl: `http://127.0.0.1:${API_PORT}`,
-        tedRuntimeDir: TED_RUNTIME_DIR,
-        stub: {
-          toolSequence: [
-            { name: "list_accounts", args: {} },
-            { name: "get_month_summary", args: { yearMonth: "2026-06" } },
-          ],
-          expectedAccounts: { names: ["Itaú", "Nubank"], total: 2 },
-          expectedOracle: { yearMonth: "2026-06", ...ORACLE_A },
-        },
-      }),
+      P2D_CONFIG_JSON: JSON.stringify(buildProbeConfig()),
     },
   });
   const handle: ProbeHandle = { child, lines: [], stderrTail: "", exited: false, exitCode: null, pid: child.pid };
@@ -243,7 +288,12 @@ async function startProbe(): Promise<{ base: string; pid: number | undefined }> 
       })
       .find((j) => j && j["phase"] === "serve-ready");
     if (ready) return { base: String(ready["base"]), pid: handle.pid };
-        if (handle.exited) throw new Error(`probe exited before ready (exit=${handle.exitCode}): ${handle.stderrTail}`);
+        if (handle.exited) {
+          // live-real: never surface the child's stderr (SDK internals may
+          // embed the credential). Offline/synthetic keep the diagnostic.
+          const tail = MODE === "live-real" ? "" : `: ${handle.stderrTail}`;
+          throw new Error(`probe exited before ready (exit=${handle.exitCode})${tail}`);
+        }
     if (Date.now() > deadline) {
       try {
         child.kill("SIGKILL");
@@ -329,14 +379,17 @@ async function closeProbe(): Promise<{ exitCode: unknown; pid: number | undefine
     while (!handle.exited && Date.now() < deadline2) await new Promise((r) => setTimeout(r, 100));
   }
   probe = null;
-  const debug = {
+  const debug: Record<string, unknown> = {
     exitCode: handle.exitCode,
     pid: handle.pid,
     forced,
-    lastLines: handle.lines.slice(-15),
-    stderrTail: handle.stderrTail,
   };
-  return debug;
+  // live-real: omit raw child output (SDK internals may embed the credential).
+  if (MODE !== "live-real") {
+    debug.lastLines = handle.lines.slice(-15);
+    debug.stderrTail = handle.stderrTail;
+  }
+  return debug as { exitCode: unknown; pid: number | undefined; forced: boolean };
 }
 
 await startProbe();
@@ -369,8 +422,14 @@ const ctl = http.createServer((req, res) => {
         json(res, 200, {
           running: !!probe && !probe.exited,
           exitCode: probe?.exitCode ?? null,
-          lastLines: (probe?.lines ?? []).slice(-15),
-          stderrTail: probe?.stderrTail ?? "",
+          // live-real: no raw child output (SDK internals may embed the
+          // credential); debug-only endpoint, never evidence.
+          ...(MODE === "live-real"
+            ? {}
+            : {
+                lastLines: (probe?.lines ?? []).slice(-15),
+                stderrTail: probe?.stderrTail ?? "",
+              }),
         });
         return;
       }
@@ -407,7 +466,14 @@ const ctl = http.createServer((req, res) => {
       }
       json(res, 404, { error: "not found" });
     } catch (e) {
-      json(res, 500, { error: String((e as Error)?.message || e).slice(0, 300) });
+      // live-real: fixed text only — native/SDK errors may embed the
+      // credential in any form. Offline/synthetic keep the diagnostic.
+      json(res, 500, {
+        error:
+          MODE === "live-real"
+            ? "p2d control error (details redacted)"
+            : String((e as Error)?.message || e).slice(0, 300),
+      });
     }
   })();
 });

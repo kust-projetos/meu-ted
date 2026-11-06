@@ -36,17 +36,45 @@
 // (dummy apiKey). The gateway identity path is fully real (Better-Auth
 // session + device + agent-token against the in-memory API).
 //
-// LIMITS (declared, not hidden): the provider is scripted, so success here is
-// NOT an external-model proof and `READ_SLICE_PASS` remains NOT ACHIEVED.
-// Egress posture is narrow and honest: the configured provider endpoint is
-// the local loopback stub only (dummy apiKey); unexpected non-loopback
-// `fetch` calls are intercepted and blocked pre-socket and counted by fixed
-// category (no URL/host text stored, returned, or logged). This is NOT a
-// general OS-level egress sandbox — raw `node:http`/`net`/`tls` sockets are
-// not intercepted — and no external/paid inference was configured or called.
-// Temp dirs come from the parent (approved folder); nothing is deleted. NO
-// process.exit before finally: success returns NATURALLY after the awaited
-// close(), so orderly shutdown + sqlite persistence are proven, not skipped.
+// LIMITS (declared, not hidden): in offline/synthetic the provider is
+// scripted, so success there is NOT an external-model proof and
+// `READ_SLICE_PASS` remains NOT ACHIEVED. Egress posture is narrow and
+// honest: offline/synthetic only reach the local loopback stub (dummy apiKey)
+// and any other non-loopback `fetch` is blocked pre-socket by fixed category.
+// live-real uses the same `fetch` seam as an allowlist-only guard
+// ("live-real-allowlist"): catalog GET on models.opencode.ai (no
+// Authorization) and `https://opencode.ai/inference/go/...`, forced manual
+// redirects failing closed, everything else blocked pre-socket. Only
+// categories/counts/statuses are recorded (no URL/body/header values). None
+// of this is a general OS-level egress sandbox — raw `node:http`/`net`/`tls`
+// sockets are not intercepted. Temp dirs come from the parent (approved
+// folder); nothing is deleted. NO process.exit before finally: success
+// returns NATURALLY after the awaited close(), so orderly shutdown + sqlite
+// persistence are proven, not skipped.
+//
+// Credential boundary (live-real ONLY): native OpenCode 2.2.4 resolves the
+// `opencode-go` provider from OPENCODE_API_KEY, so THIS child translates the
+// preserved OPENCODE_GO_API_KEY alias into the native key after
+// `setupIsolation` and before the SDK import (alias removed, only the native
+// key survives). The prep path and the product bootstrap are untouched: they
+// preserve the alias only and never translate it.
+
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+
+import { LIVE_REAL_FETCH_GUARD, createLiveRealFetchGuard } from "./p2d-fetch-guard.mjs";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(HERE, "..", "..", "..", "..");
+const requireFromHere = createRequire(import.meta.url);
+const {
+  OFFLINE_DUMMY_KEY,
+  applyLiveRealCredentialAlias,
+  buildOfflineProviderConfig,
+  loadLiveModelSelector,
+  loadRuntimeCredentialForMode,
+} = requireFromHere("./p2d-live-credential.cjs");
 
 const RAW_CONFIG = process.env.P2D_CONFIG_JSON;
 if (!RAW_CONFIG) {
@@ -55,6 +83,21 @@ if (!RAW_CONFIG) {
 }
 const CONFIG = JSON.parse(RAW_CONFIG);
 const { root, identity, apiBaseUrl, tedRuntimeDir, stub } = CONFIG;
+
+// Runtime modes (test-only):
+// - synthetic (default, unchanged): product test profile + fixture provider;
+// - offline: product `live` profile + exact provider/model from live-model.json,
+//   pointed at the loopback stub with a dummy key;
+// - live-real: product `live` profile + native provider/model; the credential
+//   is loaded by THIS child from the allowlisted local .env, supplied as the
+//   preserved alias and translated to the native OPENCODE_API_KEY after
+//   isolation (never written to config/log/evidence).
+let MODE = typeof CONFIG.mode === "string" ? CONFIG.mode : "synthetic";
+const PROFILE = MODE === "synthetic" ? "test" : CONFIG.profile;
+const PROVIDER = MODE === "synthetic" ? "p2dloop" : CONFIG.provider;
+const MODEL = MODE === "synthetic" ? "test-alpha" : CONFIG.model;
+const CREDENTIAL_SOURCE = MODE === "synthetic" ? "none" : CONFIG.credentialSource;
+const LIVE_MODE = MODE === "offline" || MODE === "live-real";
 
 class ProbeFail extends Error {
   constructor(step, detail) {
@@ -288,31 +331,56 @@ try {
   if (!root || typeof root !== "string") fail("args", "root is required");
   if (!apiBaseUrl || typeof apiBaseUrl !== "string") fail("args", "apiBaseUrl is required");
   if (!tedRuntimeDir || typeof tedRuntimeDir !== "string") fail("args", "tedRuntimeDir is required");
+  if (MODE !== "synthetic" && MODE !== "offline" && MODE !== "live-real") {
+    fail("args", "mode must be synthetic|offline|live-real");
+  }
+  if (LIVE_MODE) {
+    if (PROFILE !== "live") fail("args", "live modes require profile live");
+    if (PROVIDER !== "opencode-go") fail("args", "live modes require provider opencode-go");
+    if (typeof MODEL !== "string" || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(MODEL)) {
+      fail("args", "model must be provider/model");
+    }
+    if (MODE === "offline" && CREDENTIAL_SOURCE !== "dummy") {
+      fail("args", "offline mode requires credentialSource dummy");
+    }
+    if (MODE === "live-real" && CREDENTIAL_SOURCE !== "allowlist") {
+      fail("args", "live-real mode requires credentialSource allowlist");
+    }
+  }
   // Two stub modes (test-only): legacy single-tool
   // { toolName, toolArgs, expectedOracle } or two-tool sequence
   // { toolSequence: [{name,args}...], expectedAccounts, expectedOracle }.
-  const MODE = Array.isArray(stub.toolSequence) && stub.toolSequence.length > 0 ? "sequence" : "legacy";
+  // live-real has NO stub: the real model chooses its own tools.
+  let STUB_MODE = null;
   let SEQUENCE = null;
   let EXPECTED_ACCOUNTS = null;
-  if (MODE === "sequence") {
-    for (const step of stub.toolSequence) {
-      if (!step || typeof step.name !== "string" || step.name.length === 0) {
-        fail("args", "stub.toolSequence entries require { name, args }");
+  let EXPECTED_ORACLE = null;
+  if (MODE !== "live-real") {
+    if (!stub || typeof stub !== "object" || Array.isArray(stub)) {
+      fail("args", "stub is required for synthetic/offline modes");
+    }
+    STUB_MODE = Array.isArray(stub.toolSequence) && stub.toolSequence.length > 0 ? "sequence" : "legacy";
+    if (MODE === "offline" && STUB_MODE !== "sequence") {
+      fail("args", "offline mode requires stub.toolSequence");
+    }
+    if (STUB_MODE === "sequence") {
+      for (const step of stub.toolSequence) {
+        if (!step || typeof step.name !== "string" || step.name.length === 0) {
+          fail("args", "stub.toolSequence entries require { name, args }");
+        }
       }
-    }
-    SEQUENCE = stub.toolSequence.map((s) => ({ name: s.name, args: s.args || {} }));
-    EXPECTED_ACCOUNTS = stub.expectedAccounts || null;
-    if (!EXPECTED_ACCOUNTS || !Array.isArray(EXPECTED_ACCOUNTS.names) || !Number.isSafeInteger(EXPECTED_ACCOUNTS.total)) {
-      fail("args", "stub.expectedAccounts { names[], total } is required in sequence mode");
-    }
-  } else {
-    if (!stub || typeof stub.toolName !== "string") {
+      SEQUENCE = stub.toolSequence.map((s) => ({ name: s.name, args: s.args || {} }));
+      EXPECTED_ACCOUNTS = stub.expectedAccounts || null;
+      if (!EXPECTED_ACCOUNTS || !Array.isArray(EXPECTED_ACCOUNTS.names) || !Number.isSafeInteger(EXPECTED_ACCOUNTS.total)) {
+        fail("args", "stub.expectedAccounts { names[], total } is required in sequence mode");
+      }
+    } else if (typeof stub.toolName !== "string") {
       fail("args", "stub { toolName, toolArgs, expectedOracle } is required");
     }
-  }
-  const EXPECTED_ORACLE = stub.expectedOracle || null;
-  if (!EXPECTED_ORACLE || typeof EXPECTED_ORACLE.yearMonth !== "string") {
-    fail("args", "stub.expectedOracle { yearMonth, incomeCents, expenseCents, balanceCents, transactionCount } is required");
+    EXPECTED_ORACLE = stub.expectedOracle || null;
+    if (!EXPECTED_ORACLE || typeof EXPECTED_ORACLE.yearMonth !== "string") {
+      fail("args", "stub.expectedOracle { yearMonth, incomeCents, expenseCents, balanceCents, transactionCount } is required");
+    }
   }
   if (new URL(apiBaseUrl).hostname !== "127.0.0.1") fail("args", "apiBaseUrl must be loopback");
 
@@ -332,30 +400,90 @@ try {
   // counters only (`sdk_catalog` = known SDK housekeeping,
   // `unexpected_non_loopback` = anything else) — no URL/host text is
   // stored, returned, or logged.
-  const BLOCKED_CATALOG_RE = /^GET https:\/\/models\.opencode\.ai\//;
+  // Known SDK housekeeping (blocked pre-socket, zero egress): the model
+  // catalog and the console config probe. Anything else non-loopback is an
+  // unexpected destination and fails the offline proof's expectations.
+  const BLOCKED_CATALOG_RE =
+    /^GET https:\/\/(?:models\.opencode\.ai\/|opencode\.ai\/console\/api\/v2\/config(?:\?|$))/;
   const realFetch = globalThis.fetch;
   let fetchAllowedLoopback = 0;
   let fetchBlockedCatalog = 0;
   let fetchBlockedUnexpected = 0;
-  globalThis.fetch = async (url, init) => {
-    let s = "";
-    try { s = String(url && url.url ? url.url : url); } catch { s = String(url); }
-    let hostname = "";
-    try { hostname = new URL(s).hostname; } catch { hostname = ""; }
-    if (hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1") {
-      fetchAllowedLoopback++;
-      return realFetch(url, init);
+  // Offline/synthetic: loopback-only guard. live-real: the SAME fetch seam
+  // becomes an allowlist-only guard ("live-real-allowlist") for the two
+  // official destinations — catalog GET (no Authorization) and
+  // `https://opencode.ai/inference/go/...` — with forced manual redirects
+  // that fail closed. It blocks every other destination before any socket is
+  // opened and records only categories/counts/statuses (never URL/body/
+  // header values). This is still NOT an OS-level sandbox (raw
+  // node:http/net/tls sockets are out of scope); it is the only egress
+  // surface the SDK provider uses.
+  let liveRealGuard = null;
+  if (MODE === "live-real") {
+    // Model pin: the expected inference model id is resolved from the
+    // repo-owned live-model.json (the same file the stack/PWA read), and
+    // CONFIG.model must be exactly that selector — a divergent config fails
+    // closed before the guard (and the credential) exists.
+    const pinnedModel = loadLiveModelSelector();
+    if (pinnedModel !== MODEL) {
+      fail("fetch-guard", "live-real model diverged from live-model.json");
     }
-    const method = String((init && init.method) || "GET").toUpperCase();
-    if (BLOCKED_CATALOG_RE.test(`${method} ${s}`)) fetchBlockedCatalog++;
-    else fetchBlockedUnexpected++;
-    throw new Error("guard: non-loopback fetch blocked in the P2D proof (zero external inference)");
-  };
+    const expectedModelID = pinnedModel.split("/")[1];
+    // `apiOrigin` is the EXACT synthetic API origin from CONFIG — the guard
+    // admits only that literal loopback origin for the four contract pairs
+    // the runtime already sends (`resolveGatewayIdentity` + the finance
+    // transport). No generic localhost/::1/other-port release, no write.
+    const guard = createLiveRealFetchGuard({
+      fetchImpl: realFetch,
+      apiOrigin: apiBaseUrl,
+      expectedModelID,
+    });
+    globalThis.fetch = guard.fetch;
+    // The guard MUST be installed BEFORE the SDK import below: the SDK/
+    // provider resolves `globalThis.fetch` lazily at request time, so a late
+    // install would let the first inference POST (and the credential) through
+    // unguarded. Verified structurally here, not assumed.
+    if (globalThis.fetch !== guard.fetch) {
+      fail("fetch-guard", "live-real fetch guard is not installed before the SDK import");
+    }
+    liveRealGuard = guard.stats;
+  } else {
+    globalThis.fetch = async (url, init) => {
+      let s = "";
+      try { s = String(url && url.url ? url.url : url); } catch { s = String(url); }
+      let hostname = "";
+      try { hostname = new URL(s).hostname; } catch { hostname = ""; }
+      if (hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1") {
+        fetchAllowedLoopback++;
+        return realFetch(url, init);
+      }
+      const method = String((init && init.method) || "GET").toUpperCase();
+      if (BLOCKED_CATALOG_RE.test(`${method} ${s}`)) fetchBlockedCatalog++;
+      else fetchBlockedUnexpected++;
+      throw new Error("guard: non-loopback fetch blocked in the P2D proof (zero external inference)");
+    };
+  }
+
+  // Credential handling (live-real ONLY): this child loads the allowlisted
+  // alias value and supplies it to the runtime as OPENCODE_GO_API_KEY — the
+  // ONE variable the `live` profile preserves. setupIsolation scrubs the
+  // inherited env FIRST (an ambient OPENCODE_API_KEY never survives); the
+  // native-key translation happens AFTER isolation, below, on this path only.
+  // Offline needs no env credential at all: the loopback provider carries the
+  // dummy apiKey in the composed config. The value is never written to
+  // config/log/evidence.
+  if (MODE === "live-real") {
+    const credential = loadRuntimeCredentialForMode({ mode: MODE, rootDir: REPO_ROOT });
+    delete process.env.OPENCODE_GO_API_KEY;
+    delete process.env.OPENCODE_GO;
+    delete process.env.OPENCODE_API_KEY;
+    process.env.OPENCODE_GO_API_KEY = credential.value;
+  }
 
   const { pathToFileURL } = await import("node:url");
   const { createHash } = await import("node:crypto");
   const mod = (rel) => import(pathToFileURL(`${tedRuntimeDir}/${rel}`).href);
-  const { setupIsolation, tedConfig } = await mod("src/bootstrap.mjs");
+  const { setupIsolation, tedConfig, writeTedConfig } = await mod("src/bootstrap.mjs");
   const { wirePlugin } = await mod("src/bootstrap.mjs");
   const { defineTedFinancePlugin } = await mod("src/plugin.mjs");
   const { HttpFinanceTransport } = await mod("src/transport.mjs");
@@ -370,21 +498,40 @@ try {
   // Next process can proxy to it without a rendezvous file (default:
   // ephemeral, as in the route-level proof).
   const GATEWAY_PORT = Number(process.env.P2D_GATEWAY_PORT || 0);
-  const FIXTURE_PROVIDER = "p2dloop";
-  const FIXTURE_MODEL = "test-alpha";
+  const FIXTURE_PROVIDER = MODE === "synthetic" ? "p2dloop" : PROVIDER;
+  const FIXTURE_MODEL = MODE === "synthetic" ? "test-alpha" : String(MODEL).split("/")[1];
   const FIXTURE_PACKAGE = "@opencode/ai/providers/openai-compatible";
 
   // Isolation FIRST — the SDK import below must observe the isolated roots.
-  const iso = setupIsolation(root, identity || "p2d");
+  // Profile live is explicit for both live modes; synthetic keeps the default
+  // test profile exactly as before. The live profile scrubs the inherited env
+  // and preserves ONLY the alias OPENCODE_GO_API_KEY (an ambient
+  // OPENCODE_API_KEY never survives).
+  const iso = setupIsolation(root, identity || "p2d", LIVE_MODE ? "live" : undefined);
+  // Native credential translation — P2D live-real ONLY, after isolation and
+  // before the SDK import: native OpenCode 2.2.4 resolves `opencode-go` from
+  // OPENCODE_API_KEY, so the preserved alias is copied to the native key and
+  // then removed, leaving only the native key in this child's env. The product
+  // bootstrap is untouched (the prep path keeps the alias only). Offline has
+  // no env credential: its dummy apiKey lives in the composed provider config,
+  // observed below. `credentialPresent` is OBSERVED in both modes, never
+  // hardcoded.
+  let credentialPresent = false;
+  if (MODE === "live-real") {
+    credentialPresent = applyLiveRealCredentialAlias(process.env);
+  }
 
   // Local scripted provider stub (loopback only, dummy apiKey). Serves the
   // canned tool_call until the tool-result turn arrives, then final text.
   // `failProvider` flips completions to HTTP 500 (typed provider failure).
   const chatRequests = [];
+  const chatModels = [];
   const stubRemotes = [];
   const stubMismatches = [];
   let callSeq = 0;
+  let stubUrl = null;
   const http = await import("node:http");
+  if (MODE !== "live-real") {
   stubServer = http.createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => { raw += c; });
@@ -395,6 +542,18 @@ try {
         let body = null;
         try { body = JSON.parse(raw); } catch { body = { _parseError: raw.slice(0, 200) }; }
         chatRequests.push({ url: req.url, remote, body });
+        // Provider selection proof (offline): every loopback POST must carry
+        // the exact modelID from live-model.json. The request model is
+        // metadata (never the prompt/URL/credential); a mismatch fails the
+        // turn closed instead of silently accepting a different model.
+        const observedModel = body && typeof body.model === "string" ? body.model : null;
+        chatModels.push(observedModel);
+        if (MODE === "offline" && observedModel !== FIXTURE_MODEL) {
+          stubMismatches.push("provider body.model diverged from live-model.json");
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "synthetic model mismatch (test-only)", type: "server_error" } }));
+          return;
+        }
         if (ctl.failProvider) {
           res.writeHead(500, { "content-type": "application/json" });
           res.end(JSON.stringify({ error: { message: "synthetic provider failure (test-only)", type: "server_error" } }));
@@ -408,7 +567,7 @@ try {
         // INDEPENDENTLY; the next missing tool is offered, and the final
         // text is derived from BOTH observed DTOs only when both validate.
         let payload = null;
-        if (MODE === "sequence") {
+        if (STUB_MODE === "sequence") {
           const parsed = extractToolDtos(messages);
           let accountsDto = null;
           let summaryDto = null;
@@ -474,39 +633,58 @@ try {
     stubServer.listen(0, "127.0.0.1", resolve);
   });
   const stubPort = stubServer.address().port;
-  const stubUrl = `http://127.0.0.1:${stubPort}/v1`;
+  stubUrl = `http://127.0.0.1:${stubPort}/v1`;
+  }
 
   // Test-only opencode.json: product base + scripted fixture provider +
   // test-only provider.use allow AFTER the deny-all (same pattern as the
   // prompt-loop proof; tedConfig() product code is NOT modified).
-  const base = tedConfig();
-  const cfg = {
-    ...base,
-    model: `${FIXTURE_PROVIDER}/${FIXTURE_MODEL}`,
-    policies: [
-      ...(base.policies || []),
-      { action: "provider.use", resource: FIXTURE_PROVIDER, effect: "allow" },
-    ],
-    providers: {
-      [FIXTURE_PROVIDER]: {
-        name: "P2D loopback fixture (scripted stub, dummy apiKey)",
-        package: FIXTURE_PACKAGE,
-        settings: { baseURL: stubUrl, apiKey: "test-fixture-not-a-secret" },
-        models: {
-          [FIXTURE_MODEL]: {
-            name: `Test ${FIXTURE_MODEL}`,
-            modelID: FIXTURE_MODEL,
-            capabilities: { input: ["text"], output: ["text"] },
-            limit: { context: 8000, output: 2000 },
-          },
-        },
-      },
-    },
-  };
+  // - synthetic: test profile + fixture provider (unchanged);
+  // - offline: live profile + exact opencode-go provider/model pointed at the
+  //   loopback stub with the dummy key;
+  // - live-real: the product live config exactly (credential stays in env).
   const fs = await import("node:fs");
-  const path = await import("node:path");
-  fs.mkdirSync(iso.dirs.config, { recursive: true });
-  fs.writeFileSync(path.join(iso.dirs.config, "opencode.json"), JSON.stringify(cfg, null, 2) + "\n", "utf8");
+  if (MODE === "live-real") {
+    writeTedConfig(iso.dirs.config, "live");
+  } else {
+    const base = MODE === "offline" ? tedConfig("live") : tedConfig();
+    const cfg = MODE === "offline"
+      ? buildOfflineProviderConfig(base, {
+          model: MODEL,
+          baseURL: stubUrl,
+          apiKey: OFFLINE_DUMMY_KEY,
+        })
+      : {
+          ...base,
+          model: `${FIXTURE_PROVIDER}/${FIXTURE_MODEL}`,
+          policies: [
+            ...(base.policies || []),
+            { action: "provider.use", resource: FIXTURE_PROVIDER, effect: "allow" },
+          ],
+          providers: {
+            [FIXTURE_PROVIDER]: {
+              name: "P2D loopback fixture (scripted stub, dummy apiKey)",
+              package: FIXTURE_PACKAGE,
+              settings: { baseURL: stubUrl, apiKey: "test-fixture-not-a-secret" },
+              models: {
+                [FIXTURE_MODEL]: {
+                  name: `Test ${FIXTURE_MODEL}`,
+                  modelID: FIXTURE_MODEL,
+                  capabilities: { input: ["text"], output: ["text"] },
+                  limit: { context: 8000, output: 2000 },
+                },
+              },
+            },
+          },
+        };
+    fs.mkdirSync(iso.dirs.config, { recursive: true });
+    fs.writeFileSync(path.join(iso.dirs.config, "opencode.json"), JSON.stringify(cfg, null, 2) + "\n", "utf8");
+    if (MODE === "offline") {
+      // Observed from the composed config, never hardcoded: the dummy apiKey in
+      // `providers.opencode-go.settings` is the ONLY offline credential shape.
+      credentialPresent = Boolean(cfg.providers?.[PROVIDER]?.settings?.apiKey);
+    }
+  }
 
   // Manual boot (same pattern as the prompt-loop proof): the product
   // createTedEnvironment refuses a foreign provider config by design
@@ -554,6 +732,35 @@ try {
   }
   tedEnv = { oc, dirs: iso.dirs, async close() { await oc.close().catch(() => {}); } };
 
+  // SDK-observed model selection (fail-closed): `oc.model.default()` is the
+  // native resolution the provider request will use. It must match the exact
+  // provider/model from live-model.json; the offline catalog must also contain
+  // ONLY the loopback provider (the product deny-all + explicit allow).
+  let sdkProviderID = null;
+  let sdkModelID = null;
+  if (LIVE_MODE) {
+    if (!oc.model || typeof oc.model.default !== "function") {
+      fail("sdk-model", "oc.model.default (function) is required — refusing boot");
+    }
+    const rawDefault = await oc.model.default();
+    const resolved = rawDefault && rawDefault.data !== undefined ? rawDefault.data : rawDefault;
+    sdkProviderID = resolved && typeof resolved.providerID === "string" ? resolved.providerID : null;
+    sdkModelID = resolved && typeof resolved.modelID === "string" ? resolved.modelID : null;
+    if (sdkProviderID !== PROVIDER || sdkModelID !== String(MODEL).split("/")[1]) {
+      fail("sdk-model", "SDK-observed default model diverged from live-model.json");
+    }
+    if (MODE === "offline") {
+      if (!oc.provider || typeof oc.provider.list !== "function") {
+        fail("sdk-model", "oc.provider.list (function) is required — refusing offline boot");
+      }
+      const rawProviders = await oc.provider.list();
+      const providers = Array.isArray(rawProviders) ? rawProviders : rawProviders && rawProviders.data;
+      if (!Array.isArray(providers) || providers.length !== 1 || providers[0]?.id !== PROVIDER) {
+        fail("sdk-model", "offline provider catalog must contain exactly the loopback provider");
+      }
+    }
+  }
+
   // Real finance transport against the parent's loopback API, wrapped only
   // to count calls and record read DTOs (fail-closed typed errors pass
   // through untouched).
@@ -565,11 +772,70 @@ try {
   const countingTransport = async (args) => {
     transportCalls++;
     const res = await realTransport.call(args);
-    financeReads.push({ route: args && args.route, method: args && args.method, statusCode: res.statusCode, body: res.body });
+    // live-real stats keep only route/method/status (no DTO body); the
+    // offline/synthetic proofs still expose the body for the scripted oracle.
+    financeReads.push(
+      MODE === "live-real"
+        ? { route: args && args.route, method: args && args.method, statusCode: res.statusCode }
+        : { route: args && args.route, method: args && args.method, statusCode: res.statusCode, body: res.body },
+    );
     return res;
   };
 
-  await wirePlugin(oc, defineTedFinancePlugin(() => countingTransport));
+  // Test-only observation of the native retry hook — LIVE modes ONLY: the
+  // PRODUCT plugin registers `ctx.session.hook('retry', …)` during setup
+  // (retry veto). We only observe availability/registration/invocations — no
+  // behavior change. The default synthetic P2D setup/plugin is left completely
+  // untouched (no wrapper, no instrumentation).
+  let retryHookAvailable = false;
+  let retryHookRegistered = false;
+  let retryHookInvocations = 0;
+  let retryVetoes = 0;
+  // live-real ONLY: observe the FINAL effective catalog from the product
+  // plugin's existing `onEffectiveTools` seam and keep only the product
+  // finance tools (never the native built-ins). Synthetic gets no extra
+  // option at all — its plugin setup is byte-behavior identical.
+  let financeToolNames = null;
+  const pluginOptions = {};
+  if (MODE === "live-real") {
+    const PRODUCT_FINANCE_TOOLS = new Set(["list_accounts", "get_month_summary", "list_categories"]);
+    pluginOptions.onEffectiveTools = (names, error) => {
+      if (error || !Array.isArray(names)) {
+        financeToolNames = null;
+        return;
+      }
+      financeToolNames = names.filter((n) => typeof n === "string" && PRODUCT_FINANCE_TOOLS.has(n)).sort();
+    };
+  }
+  const pluginDef = defineTedFinancePlugin(() => countingTransport, pluginOptions);
+  if (LIVE_MODE) {
+    const origSetup = pluginDef.setup.bind(pluginDef);
+    pluginDef.setup = async (ctx) => {
+      retryHookAvailable = !!(ctx && ctx.session && typeof ctx.session.hook === "function");
+      if (retryHookAvailable) {
+        try {
+          const originalHook = ctx.session.hook;
+          const wrappedSession = Object.create(ctx.session);
+          wrappedSession.hook = (name, fn) => {
+            if (name !== "retry") return originalHook.call(ctx.session, name, fn);
+            retryHookRegistered = true;
+            const wrapped = (event) => {
+              retryHookInvocations++;
+              const out = fn(event);
+              if (event && event.decision && event.decision.retry === false) retryVetoes++;
+              return out;
+            };
+            return originalHook.call(ctx.session, name, wrapped);
+          };
+          ctx.session = wrappedSession;
+        } catch {
+          retryHookRegistered = false;
+        }
+      }
+      return origSetup(ctx);
+    };
+  }
+  await wirePlugin(oc, pluginDef);
 
   // Test-only session wrapper (declared simplification): per-session
   // serialized bind → run → revoke using the REAL session-bindings. This is
@@ -608,8 +874,12 @@ try {
     return run;
   };
 
+  let lastSession = null;
+  let lastSessionId = null;
   const createNativeSession = async () => {
     const s = await oc.session.create({ title: "ted-finance", agent: "ted" });
+    lastSession = s;
+    lastSessionId = s && typeof s.id === "string" ? s.id : null;
     return s.id;
   };
 
@@ -713,11 +983,33 @@ try {
   });
   const info = await gateway.listen({ port: GATEWAY_PORT, host: "127.0.0.1" });
   if (info.host !== "127.0.0.1") fail("listen", `gateway must stay loopback, got ${info.host}`);
-  emit({
+  const ready = {
     ok: true, phase: "serve-ready",
     base: `http://${info.host}:${info.port}`,
-    stubUrl,
-  });
+  };
+  if (MODE === "synthetic") {
+    // Byte-identical to the historical ready line.
+    ready.stubUrl = stubUrl;
+  } else {
+    Object.assign(ready, {
+      mode: MODE,
+      profile: PROFILE,
+      provider: PROVIDER,
+      model: MODEL,
+      agent: "ted",
+      providerLoopback: MODE === "offline",
+      credentialSource: CREDENTIAL_SOURCE,
+      // Observed, never hardcoded: live-real observes the native
+      // OPENCODE_API_KEY; offline observes the dummy apiKey in the composed
+      // provider config.
+      credentialPresent,
+      fetchGuard: MODE === "offline" ? "loopback-only" : LIVE_REAL_FETCH_GUARD,
+      sdkProviderID,
+      sdkModelID,
+      ...(MODE === "live-real" ? { liveFetchGuard: liveRealGuard, financeToolNames } : {}),
+    });
+  }
+  emit(ready);
 
   const offeredToolNames = () => {
     for (const r of chatRequests) {
@@ -739,7 +1031,7 @@ try {
         if (!line) continue;
         try {
           if (line === "stats") {
-            emit({
+            const stats = {
               phase: "serve-stats", promptCalls, transportCalls, messageLists,
               stubTurns: chatRequests.length, offeredTools: offeredToolNames(), stubRemotes,
               stubMismatches, fetchBlockedCatalog, fetchBlockedUnexpected, fetchAllowedLoopback,
@@ -749,7 +1041,30 @@ try {
                 return acc;
               }, {}),
               financeReads,
-            });
+            };
+            if (MODE !== "synthetic") {
+              Object.assign(stats, {
+                mode: MODE,
+                profile: PROFILE,
+                provider: PROVIDER,
+                model: MODEL,
+                agent: lastSession && typeof lastSession.agent === "string" ? lastSession.agent : null,
+                sessionId: lastSessionId,
+                providerLoopback: MODE === "offline",
+                credentialSource: CREDENTIAL_SOURCE,
+                credentialPresent,
+                fetchGuard: MODE === "offline" ? "loopback-only" : LIVE_REAL_FETCH_GUARD,
+                sdkProviderID,
+                sdkModelID,
+                ...(MODE === "offline" ? { stubModels: chatModels } : {}),
+                ...(MODE === "live-real" ? { liveFetchGuard: liveRealGuard, financeToolNames } : {}),
+                retryHookAvailable,
+                retryHookRegistered,
+                retryHookInvocations,
+                retryVetoes,
+              });
+            }
+            emit(stats);
           } else if (line === "fail-provider") {
             ctl.failProvider = true;
             emit({ phase: "serve-ctl", failProvider: true });
@@ -763,7 +1078,16 @@ try {
             try {
               emit(await buildSnapshot(wanted));
             } catch (e) {
-              emit({ phase: "serve-snapshot", conversationId: wanted, error: String((e && e.message) || e).slice(0, 200) });
+              // live-real: fixed text only (native errors may embed the
+              // credential in any form); offline/synthetic keep diagnostics.
+              emit({
+                phase: "serve-snapshot",
+                conversationId: wanted,
+                error:
+                  MODE === "live-real"
+                    ? "native snapshot unavailable (details redacted)"
+                    : String((e && e.message) || e).slice(0, 200),
+              });
             }
           } else if (line === "close" || line === "exit" || line === "quit") {
             process.stdin.off("data", onData);
@@ -802,7 +1126,12 @@ try {
   try { await tedEnv.close(); } catch { /* best effort */ }
   emit({ phase: "serve-closed", ...counters });
 } catch (e) {
-  if (e instanceof ProbeFail) {
+  // live-real: never surface the original error/cause/stack — SDK internals
+  // may embed the credential in any form. Offline/synthetic keep the
+  // existing diagnostics (dummy key only, never a real credential).
+  if (MODE === "live-real") {
+    console.error("[p2d-probe] live-real fatal (details redacted)");
+  } else if (e instanceof ProbeFail) {
     console.error(`[p2d-probe] ${e.step}: ${e.detail}`);
   } else {
     console.error(`[p2d-probe] fatal: ${String((e && e.stack) || e).slice(0, 2000)}`);
