@@ -73,6 +73,64 @@ pnpm validate:final
 `pnpm validate:final` gera evidências locais em `docs/reports/`. Não executa
 deploy, migration de produção nem altera segredos.
 
+### Preparação live opt-in do TED (prep-only, sem inferência)
+
+```bash
+pnpm test:p2d-live-prep
+```
+
+Verificação explícita e opt-in do boot do runtime TED com modelo nativo
+vivo, separada do E2E sintético (`P2D_BROWSER=1`) e do CI (nenhum job de CI
+invoca este comando). O que o comando faz:
+
+- Reutiliza `apps/pwa/e2e/support/p2d-browser-stack.mts` **sem alterá-lo**
+  como dono da API Fastify sintética/in-memory + gateway P2D sintético
+  (scripted local stub, loopback). Exige os marcadores de readiness do
+  processo recém-criado mais processo vivo — não aceita um processo
+  preexistente só pela porta.
+- Preflight fail-closed por nomes de arquivo: recusa `apps/pwa/.env`,
+  `.env.local`, `.env.development` e `.env.development.local` (o que o Next
+  dev carregaria depois do env allowlist); `.env.example` é permitido.
+  Conteúdos nunca são lidos.
+- Prova respostas HTTP diretas: `GET /health` da API sintética (DTO
+  esperado), GET seguro no gateway sintético (404 Fastify `gateway.not_found`
+  esperado — resposta sem prompt), ctl `/health` + journal (zero escritas
+  financeiras na largada **e** relido após o PWA servir, cobrindo toda a
+  janela observada) e `GET / 200` do PWA.
+- Sobe o runtime TED real em processo filho dedicado com
+  `TED_RUNTIME_PROFILE=live` e modelo nativo **configurado/selecionado**:
+  `tedConfig('live')` do bootstrap (importado sem o SDK) comparado por
+  igualdade estrita a `apps/ted-runtime/src/live-model.json` antes do boot —
+  sem chamar API externa. Não é verificação de provider: nenhum prompt,
+  nenhuma inferência e nenhuma rota `/rpc/chat` live (o seam do
+  `startTedRuntime` substitui o gateway por stub prep-only).
+- A credencial vem de local conhecido (primeiro `.env` da raiz, depois
+  apenas `../pi-financeiro/.env`, lido com `node:util.parseEnv`) e é mapeada
+  **somente** para `OPENCODE_GO_API_KEY` no env do processo filho, antes do
+  boot do SDK. PWA, API e stack sintético recebem env mínimo por allowlist
+  (sem `NODE_OPTIONS`, proxies, provider keys ou `DATABASE_URL`; PWA ainda
+  fixa `NEXT_TELEMETRY_DISABLED=1`) — nenhum log imprime valores (só
+  presença booleana, estágio e exit code/signal).
+- Sobe o PWA real (Next dev, via Node direto, sem shim de shell) contra a
+  API sintética + **gateway P2D sintético**; o upstream legado A0 é pinado
+  em loopback fechada e as bases `NEXT_PUBLIC_*` de agente/API ficam vazias,
+  sem fallback para produção. Home temporário isolado — nunca o
+  home/config/auth compartilhado do OpenCode.
+- Modo de preparação apenas, por construção (sem listener live, sem chamada
+  a `session.prompt` no caminho de código): verifica API, gateway, PWA,
+  perfil live, presença da credencial dentro do próprio filho antes do boot
+  do SDK, modelo configurado e origens financeiras loopback. **Não envia
+  mensagem, não chama `session.prompt`, não tenta provider/inferência e não
+  mede contagem de prompts — a evidência é o journal observado + recibo.**
+- Fail-closed e sanitizado: `.env`/alias ausente nos dois locais, arquivos
+  `.env*` bloqueados, origem não loopback, perfil/modelo divergente ou
+  receipt fora do allowlist abortam sem efeito colateral (erros redigem o
+  valor quando carregado). Não salva nem deleta snapshots e não toca em
+  `.last-run.json`. Encerramento ordenado: `/p2d/close-probe` primeiro para
+  o probe interno, depois árvores (`taskkill /T` só em PID criado pelo
+  runner e ainda vivo); o sumário `live-prep-verified` só sai após cada
+  saída comprovada por evento (`assertAllExited`).
+
 ## Qualidade e gates
 
 - **Hook de pré-commit (husky):** roda 8 gates rápidos (fs/git, sem build) em

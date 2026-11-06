@@ -26,6 +26,7 @@
     "test:unit": "pnpm --filter meu-ted-api test && pnpm --filter pwa test",
     "test:integration": "pnpm --filter meu-ted-api test:integration",
     "test:e2e": "pnpm --filter pwa test",
+    "test:p2d-live-prep": "node apps/pwa/e2e/support/p2d-live-prep.mjs",
     "build:all": "pnpm --filter meu-ted-api build && pnpm --filter pi-finance-agent build && pnpm --filter pi-finance-codex-broker build && pnpm --filter pwa build",
     "security:secrets": "node scripts/security-secrets.mjs",
     "public-safety": "node scripts/check-public-safety.mjs",
