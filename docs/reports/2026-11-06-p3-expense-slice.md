@@ -122,8 +122,12 @@ deploy ou merge.
    congelada.
 4. **`list_categories` acompanha o opt-in de escrita** para permitir resolução de
    categoria; produção força ambos off.
-5. **CI remoto do PR P3 ainda não executado** no momento deste relatório; os
-   gates locais e suítes completas estão acima.
+- **CI remoto do PR P3:** ver checks do
+  [PR #293](https://github.com/kust-projetos/meu-ted/pull/293). O PR é empilhado
+  sobre o #290 (`9d86771` é o commit próprio da fatia); a base é `main` porque os
+  workflows `ci.yml`/`pwa-ci.yml` só disparam em PRs para `main`/`master`. Quando
+  o #290 for mergeado, o diff do #293 colapsa para a fatia P3. Nenhum commit foi
+  adicionado ao #290.
 
 ## 6. Estado Git
 
@@ -134,3 +138,5 @@ deploy ou merge.
   `%TEMP%\opencode\p3-preserve-20261106\`). `--no-save/` (node_modules) intacto e
   fora do commit.
 - Branch P3 separada; commit e PR sem merge.
+- PR: https://github.com/kust-projetos/meu-ted/pull/293 (base `main`, empilhado
+  sobre o #290; commit próprio `9d86771`).
