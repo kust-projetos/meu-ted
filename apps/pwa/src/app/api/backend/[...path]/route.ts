@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   isBrowserOriginAllowed,
   isCrossSiteWithoutOrigin,
+  isLocalOrigin,
   readBoundedBody,
   resolveBackendOrigin,
   resolveForwardOrigin,
@@ -27,7 +28,7 @@ function upstreamUrl(apiOrigin: string, path: string[], search: string): string 
   return `${apiOrigin}/${encodedPath}${search}`;
 }
 
-function forwardHeaders(request: Request): Headers {
+function forwardHeaders(request: Request, apiOrigin: string): Headers {
   const headers = new Headers();
   for (const name of [
     "accept", "content-type", "cookie", "authorization",
@@ -36,6 +37,11 @@ function forwardHeaders(request: Request): Headers {
   ]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
+  }
+  // Keep the fixture marker on loopback only; production upstreams never see it.
+  const testId = request.headers.get("x-e2e-test-id");
+  if (testId && isLocalOrigin(apiOrigin)) {
+    headers.set("x-e2e-test-id", testId);
   }
   // V4 T2.7 G3: the spoof to the production host (upstream Better-Auth
   // trustedOrigins escape hatch for local testing via the same-origin
@@ -110,7 +116,7 @@ async function proxy(request: Request, context: RouteContext): Promise<NextRespo
   try {
     upstream = await fetch(upstreamUrl(apiOrigin, path, new URL(request.url).search), {
       method: request.method,
-      headers: forwardHeaders(request),
+      headers: forwardHeaders(request, apiOrigin),
       ...(body ? { body } : {}),
       redirect: "manual",
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
