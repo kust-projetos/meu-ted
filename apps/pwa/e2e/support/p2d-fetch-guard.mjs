@@ -385,6 +385,9 @@ export function createLiveRealFetchGuard({ fetchImpl, apiOrigin, expectedModelID
     apiBlocked: 0,
     blocked: 0,
     redirectsBlocked: 0,
+    // Aggregated counts of real block reasons (fixed short codes only — no
+    // URL, header or credential value is ever stored here).
+    blockedReasons: {},
     catalogStatuses: [],
     inferenceStatuses: [],
     apiStatuses: [],
@@ -396,6 +399,7 @@ export function createLiveRealFetchGuard({ fetchImpl, apiOrigin, expectedModelID
     if (classified.action === "deny") {
       stats.blocked += 1;
       if (classified.reason.startsWith("api_")) stats.apiBlocked += 1;
+      stats.blockedReasons[classified.reason] = (stats.blockedReasons[classified.reason] ?? 0) + 1;
       throw new Error(`guard: live-real fetch blocked (${classified.reason})`);
     }
     // Pre-socket model pin: the body is parsed and compared with the resolved
@@ -409,6 +413,7 @@ export function createLiveRealFetchGuard({ fetchImpl, apiOrigin, expectedModelID
       if (!modelCheck.ok) {
         stats.inferenceFailures += 1;
         stats.blocked += 1;
+        stats.blockedReasons[modelCheck.reason] = (stats.blockedReasons[modelCheck.reason] ?? 0) + 1;
         throw new Error(`guard: live-real fetch blocked (${modelCheck.reason})`);
       }
       inferenceModel = modelCheck.model;
@@ -426,6 +431,7 @@ export function createLiveRealFetchGuard({ fetchImpl, apiOrigin, expectedModelID
       (response && response.redirected === true)
     ) {
       stats.redirectsBlocked += 1;
+      stats.blockedReasons.redirect = (stats.blockedReasons.redirect ?? 0) + 1;
       throw new Error("guard: live-real redirect blocked (fail-closed)");
     }
     const category =

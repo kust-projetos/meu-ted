@@ -23,15 +23,25 @@ export interface LiveRealRequest {
   apiOrigin?: string;
 }
 
+// Reason codes that carry explicit evidence of an auxiliary (telemetry/analytics/CSP)
+// destination. A bare "destination" is the guard's generic catch-all for a host
+// that is not on the allowlist: it is NOT assumed to be telemetry — it stays
+// "unidentified" until there is concrete evidence (a more specific reason code)
+// that the destination is auxiliary.
+const AUXILIARY_REASON_CODES = new Set(["telemetry", "analytics", "csp", "auxiliary"]);
+
 /**
  * Map a guard reason code to a category.
- * - "destination" (host not on the allowlist: analytics/telemetry/CSP) → auxiliary.
+ * - explicit auxiliary reason codes (telemetry/analytics/csp/auxiliary) → auxiliary.
+ * - "destination" (generic non-allowlist host, no evidence) → unidentified.
  * - any other deny reason (transport/config/infra) → functional.
  * - missing/empty/unknown → unidentified (never assumed auxiliary).
  */
 export function classifyGuardReason(reason: string | null | undefined): LiveRealRequestCategory {
   if (typeof reason !== "string" || reason.trim() === "") return "unidentified";
-  if (reason === "destination") return "auxiliary";
+  const normalized = reason.trim().toLowerCase();
+  if (AUXILIARY_REASON_CODES.has(normalized)) return "auxiliary";
+  if (normalized === "destination") return "unidentified";
   return "functional";
 }
 

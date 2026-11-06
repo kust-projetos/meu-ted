@@ -8,8 +8,11 @@ import {
 } from "./live-real-classification";
 
 describe("live-real request classification", () => {
-  it("classifies guard reason codes: destination is auxiliary, others functional", () => {
-    expect(classifyGuardReason("destination")).toBe("auxiliary");
+  it("classifies guard reason codes: destination is unidentified, auxiliary needs evidence, others functional", () => {
+    expect(classifyGuardReason("destination")).toBe("unidentified");
+    expect(classifyGuardReason("telemetry")).toBe("auxiliary");
+    expect(classifyGuardReason("analytics")).toBe("auxiliary");
+    expect(classifyGuardReason("csp")).toBe("auxiliary");
     expect(classifyGuardReason("api_method_path")).toBe("functional");
     expect(classifyGuardReason("inference_model")).toBe("functional");
     expect(classifyGuardReason("not_https")).toBe("functional");
@@ -30,10 +33,14 @@ describe("live-real request classification", () => {
     ).toBe("functional");
   });
 
-  it("classifies analytics/telemetry/csp destinations as auxiliary via guard reason", () => {
+  it("classifies an auxiliary destination only with explicit evidence (telemetry reason)", () => {
+    expect(
+      classifyLiveRealRequest({ reason: "telemetry", blocked: true }),
+    ).toBe("auxiliary");
+    // A bare "destination" is NOT assumed telemetry.
     expect(
       classifyLiveRealRequest({ reason: "destination", blocked: true }),
-    ).toBe("auxiliary");
+    ).toBe("unidentified");
   });
 
   it("classifies blockages without a reason as unidentified (not auxiliary)", () => {
@@ -51,9 +58,9 @@ describe("live-real request classification", () => {
     expect(genericBlocked).toBeGreaterThan(0);
   });
 
-  it("GREEN: auxiliary blockage is recorded without invalidating the result", () => {
+  it("GREEN: auxiliary blockage with evidence is recorded without invalidating the result", () => {
     const requests = [
-      { reason: "destination", blocked: true },
+      { reason: "telemetry", blocked: true },
       { reason: "api", blocked: false },
     ];
     const result = validateLiveRealEgress(requests);
@@ -85,13 +92,12 @@ describe("live-real request classification", () => {
   });
 
   it("uses guard classify from url when reason absent", () => {
-    // analytics host → destination → auxiliary
+    // non-allowlist host → destination → unidentified (not assumed auxiliary)
     expect(
       classifyLiveRealRequest({ url: "https://analytics.example.com/collect", blocked: true }),
-    ).toBe("auxiliary");
-    // unknown host → destination → auxiliary
+    ).toBe("unidentified");
     expect(
       classifyLiveRealRequest({ url: "https://evil.example.com/x", blocked: true }),
-    ).toBe("auxiliary");
+    ).toBe("unidentified");
   });
 });

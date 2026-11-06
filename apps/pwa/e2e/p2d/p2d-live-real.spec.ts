@@ -28,6 +28,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 import { resolveP2dPorts } from "../support/ports";
+import { validateLiveRealEgress } from "../support/live-real-classification";
 
 const require = createRequire(__filename);
 const { loadLiveModelSelector } = require("../support/p2d-live-credential.mjs") as {
@@ -87,6 +88,7 @@ type Stats = {
     inferenceStatuses?: number[];
     apiStatuses?: number[];
     inferenceModels?: string[];
+    blockedReasons?: Record<string, number>;
   } | null;
   financeToolNames?: string[] | null;
 };
@@ -273,6 +275,19 @@ test.describe("p2d-live-real (real provider, opt-in only)", () => {
     expect((guard.apiStatuses ?? []).length).toBeGreaterThanOrEqual(4);
     expect((guard.apiStatuses ?? []).every((s) => s === 200)).toBe(true);
 
+    // Effective egress validation: derive per-reason blocked requests from the
+    // guard's aggregated `blockedReasons` (real reasons, no URLs/headers/creds)
+    // and validate them with validateLiveRealEgress. Functional blockages fail;
+    // unidentified (unknown destination) are recorded but do not pass silently.
+    const blockedRequests = Object.entries(guard.blockedReasons ?? {}).flatMap(
+      ([reason, count]) =>
+        Array.from({ length: Number(count) || 0 }, () => ({ reason, blocked: true })),
+    );
+    const egress = validateLiveRealEgress(blockedRequests);
+    expect(egress.functionalBlocked).toBe(0);
+    // unidentifiedBlocked is observed (historical pending origin of the ten
+    // blocked requests) and recorded in evidence; it does not silently pass.
+
     // Effective catalog captured inside the product plugin: exactly the two
     // finance tools (list_categories stays opt-in/off).
     expect(stats.financeToolNames).toEqual(["get_month_summary", "list_accounts"]);
@@ -354,6 +369,10 @@ test.describe("p2d-live-real (real provider, opt-in only)", () => {
       fetchGuardInferenceModels: guard.inferenceModels ?? [],
       fetchGuardApiAllowed: guard.apiAllowed ?? 0,
       fetchGuardApiBlocked: guard.apiBlocked ?? 0,
+      fetchGuardBlockedReasons: guard.blockedReasons ?? {},
+      fetchGuardEgressFunctionalBlocked: egress.functionalBlocked,
+      fetchGuardEgressAuxiliaryBlocked: egress.auxiliaryBlocked,
+      fetchGuardEgressUnidentifiedBlocked: egress.unidentifiedBlocked,
       financeToolNames: stats.financeToolNames ?? [],
       credentialSource: stats.credentialSource,
       closeForced: false,
