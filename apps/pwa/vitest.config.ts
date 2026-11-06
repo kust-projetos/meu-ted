@@ -45,6 +45,7 @@ export default defineConfig({
       "e2e/support/run-ci-failure.test.ts",
       "e2e/support/run-ci-outputs.test.ts",
       "e2e/support/live-closure-guards.test.ts",
+      "e2e/support/live-real-classification.test.ts",
       "e2e/support/route.p2d-synthetic-read.test.tsx",
     ],
     coverage: {
