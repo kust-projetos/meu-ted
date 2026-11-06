@@ -7,6 +7,7 @@ import {
   fetchActivePendingOperations,
   fetchActiveUndoProposals,
   sendAgentMessage,
+  proposePendingExpense,
   renewAgentSession,
   composeChatSend,
   loadPendingChatSend,
@@ -1072,12 +1073,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       }
       const returnedPendingOperation = turn.pendingOperation;
       const returnedUndoProposal = turn.undoProposal;
+      const returnedProposal = turn.proposal;
       // P1 output vazio: um 200 sem texto de resposta E sem decisão estruturada
-      // (pendingOperation/undoProposal) não é sucesso — é falha retentável.
+      // (pendingOperation/undoProposal/proposal) não é sucesso — é falha retentável.
       // Marca o balão como failed com retry e preserva âncora/draft (sem
       // reload de histórico, sem limpar nada), em vez do falso sucesso
       // (sent + âncora limpa).
-      if (!turn.output?.trim() && !returnedPendingOperation && !returnedUndoProposal) {
+      if (!turn.output?.trim() && !returnedPendingOperation && !returnedUndoProposal && !returnedProposal) {
         if (isStaleScope(sendWorkspaceId)) return;
         setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
         setError(MESSAGE_SEND_ERROR);
@@ -1106,6 +1108,28 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // on, EVERY write below is chat state and belongs to the new scope only.
       if (isStaleScope(sendWorkspaceId)) return;
       setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "sent" as const } : m)));
+      // P3 — the runtime's proposal INTENT becomes a real Pending V2 operation
+      // ONLY through the authenticated Agent broker (A4): the browser never
+      // mints a capability and the LLM never confirms. The card itself is then
+      // rehydrated from the authoritative active list by loadHistory below.
+      if (returnedProposal) {
+        try {
+          await proposePendingExpense(
+            sendWorkspaceId,
+            returnedProposal,
+            controller ? { signal: controller.signal } : undefined,
+          );
+        } catch {
+          if (isStaleScope(sendWorkspaceId)) return;
+          // No card is invented. The message stays retryable with the SAME
+          // messageId, so a lost broker response can never duplicate the
+          // proposal (the backend idempotency key is derived from it).
+          setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
+          setError("Não foi possível preparar a proposta de despesa. Tente novamente.");
+          setStatus("error");
+          return;
+        }
+      }
       const copiesBefore = answerBefore(turn.output);
       const freshHistory = await loadHistory();
       // …and it may have changed again while the refresh was in flight.

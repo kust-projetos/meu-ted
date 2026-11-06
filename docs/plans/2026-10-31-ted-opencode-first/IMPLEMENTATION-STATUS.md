@@ -352,3 +352,79 @@ As negações de `shell` e `write` continuam como estavam e **não** são prova 
 - **Decisão pendente do owner (não tomada nesta rodada):** aceitar o advisório exige entrada de allowlist com justificativa e expiração, ou override/upgrade. A política do repositório não permite override sem aprovação. Entrada proposta, não adicionada: `id` `pwa-2026-11-04-rimraf`, `scope` `build-time`, `severity` `moderate`, `name` `rimraf`, `via` `["glob"]`, `effects` `["chrome-launcher"]`, `range` `2.3.0 - 3.0.2 || 4.2.0 - 6.1.3`, `expiresOn` `2026-12-31`. A correção sugerida pelo npm é o downgrade major `@lhci/cli` 0.3.3, quebrante.
 - **Não executado no CI deste head:** as etapas da `quality` após `Scoped audit` (CORS passivo e Playwright offline shell E2E), porque o job para na auditoria. Estado: NOT VERIFIED neste head.
 - **Lacuna de CI pendente:** `apps/ted-runtime` segue sem job próprio, como registrado acima. Não foi adicionado nesta rodada, para não ampliar a mudança de CI além do necessário.
+
+## P3 — fatia de despesa por conversa (2026-11-06)
+
+**Autorização do operador:** opção B do relatório de bloqueio A4 — o runtime OpenCode
+emite apenas uma INTENÇÃO; a PWA autenticada chama um broker estreito no Agent
+existente, o único componente que emite `financial.approval.propose`. Nenhum
+segredo de delegação entra no gateway, nenhuma permissão nasce de LLM e a
+política da API não foi alterada.
+
+### Fluxo entregue
+
+1. `POST /rpc/chat` (runtime) → prompt loop nativo → `propose_expense` valida
+   `{amountCents, description, date, accountId, categoryId}` (identidade sempre
+   host-bound) e registra o intent `{tool, intentionId, normalizedArgs, summary}`
+   no registry process-local. Zero HTTP financeiro, zero escrita.
+2. O gateway anexa `proposal` ao DTO do turno bem-sucedido, exatamente uma vez
+   (`take` destrutivo; `clear` no início de cada turno).
+3. `TedChat` envia o intent a `POST /rpc/pending-operations/propose` no Agent,
+   com a sessão/device autenticados. Falha do broker marca a mensagem como
+   retentável e NÃO inventa card.
+4. O broker do Agent emite SOMENTE `financial.approval.propose` (device-bound,
+   `requestId` = intentionId) e chama `createMutationProposal` com
+   `deriveIdempotencyKey(workspace, intentionId, tool)`. Não existe
+   confirm/execute/cancel/authorize nesse caminho.
+5. A API valida o contrato canônico, persiste Pending V2 e mantém a autoridade.
+6. `TedChat.loadHistory` reidrata o card da lista ativa autoritativa; a
+   confirmação/rejeição continua no caminho existente
+   (`/rpc/pending-operations/:id/decision`), com o token de decisão emitido pelo
+   Agent. Recibo canônico e refresh financeiro inalterados.
+
+### Arquivos
+
+- Runtime: `src/proposal-intents.mjs` (novo), `src/tool-defs.mjs`,
+  `src/plugin.mjs`, `src/bootstrap.mjs`, `src/server.mjs`, `README.md`.
+- Agent: `src/mutations/pending-proposal-broker.ts` (novo),
+  `src/finance-chat-agent.ts`, `src/worker.ts`.
+- PWA: `src/lib/api/agent-client.ts`, `src/features/ted/TedChat.tsx`.
+- Testes: `apps/ted-runtime/tests/p3-propose-expense.test.mjs`,
+  `p3-proposal-handoff.test.mjs`, `p3-propose-loop.test.mjs`;
+  `apps/agent/tests/pending-propose-rpc.test.ts`,
+  `worker-pending-propose.test.ts`;
+  `apps/pwa/src/lib/api/__tests__/agent-client.proposal.test.ts`,
+  `apps/pwa/src/features/ted/__tests__/TedChat.propose.test.tsx`;
+  `apps/api/tests/integration/p3-expense-slice.test.ts`,
+  `p3-expense-broker-flow.test.ts`.
+
+### Evidências desta rodada
+
+| Verificação | Resultado | Limite |
+|---|---|---|
+| `node --test tests/` (ted-runtime) | **242/242 PASS** | Inclui o prompt loop REAL 2.2.4 com provider scriptado local (`p3-propose-loop`). Zero inferência paga/externa. |
+| Agent focado (`pending-propose-rpc`, `pending-operations-active-rpc`, `pending-operation-v2-contract`, `finance-chat-agent-rest-contract`) | **30/30 PASS** | Broker: token decodificado com `['financial.approval.propose']`, device, requestId; replay estável; sem confirm/execute. |
+| Agent completo | **3959 PASS / 1 skip** | Suíte integral executada nesta rodada. |
+| API completa | **2903 PASS / 425 skips** | Skips são provas Postgres sem `DATABASE_URL_TEST`. |
+| PWA completa | **2926 PASS** | Inclui cliente do intent, card após reload e falha sem card falso. |
+| `p3-expense-slice` + `p3-expense-broker-flow` | **6/6 + 4/4 PASS** | Zero antes da confirmação, exatamente 1 depois, reject zero, replay sem duplicata, reload recupera, workspace estranho 403. |
+| `pnpm typecheck` | **PASS** | 6 workspaces. |
+| `check-agent-v2-invariants` (A4/A9) | **PASS** | 542 arquivos; nenhuma capability de escrita fora do executor; broker é o único emissor de propose. |
+| `pnpm write-policy:check` | **PASS** | 183 writes / 183 policy rows. |
+
+### Estado e limites
+
+- **`P3_EXPENSE_SLICE_PASS`** no escopo local/determinístico: mensagem → intent →
+  broker → Pending V2 → card → confirmação → 1 lançamento → recibo, com rejeição
+  zero e sem duplicidade.
+- **Não executado:** browser E2E completo com A0 local, inferência real
+  (DeepSeek), Postgres real, deploy, merge. O provider do teste é scriptado
+  (`testloop` local); `READ_SLICE_PASS` continua **NOT ACHIEVED**.
+- **Resíduo conhecido:** se o turno concluir e a chamada do broker se perder, o
+  retry reusa a MESMA intenção (idempotente), mas o turno recuperado não
+  reemite o intent — o usuário precisa de uma nova mensagem. Não há duplicação
+  financeira nesse caminho.
+- **A0 modificado:** a rota aditiva `/rpc/pending-operations/propose` foi
+  autorizada pelo operador nesta sessão; escopo limitado a despesa. O A0 continua
+  o dono do pipeline conversacional (o broker não interpreta texto nem propõe
+  draft).

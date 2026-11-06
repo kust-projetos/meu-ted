@@ -308,6 +308,33 @@ export type AgentTurnPendingOperation =
       receipt?: never;
     }>);
 
+/**
+ * P3 — exact proposal intent contract accepted from the OpenCode runtime.
+ * Anything outside this shape is dropped (never forwarded to the broker).
+ */
+const expenseProposalIntentSchema = z
+  .object({
+    tool: z.literal("transactions.expense.create"),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: z
+      .object({
+        amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        description: z.string().trim().min(1).max(240),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        accountId: z.string().uuid(),
+        categoryId: z.string().uuid(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export type ExpenseProposalIntent = z.infer<typeof expenseProposalIntentSchema>;
+
+export function sanitizeProposalIntent(value: unknown): ExpenseProposalIntent | undefined {
+  const parsed = expenseProposalIntentSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
 export type AgentTurn = {
   turnId: string;
   status: string;
@@ -315,6 +342,14 @@ export type AgentTurn = {
   output?: string;
   memorized?: string[];
   pendingOperation?: AgentTurnPendingOperation;
+  /**
+   * P3 — proposal INTENT from the OpenCode runtime. It authorizes NOTHING: the
+   * PWA sends it to the authenticated Agent broker, which mints the propose
+   * capability (A4) and asks the API to persist the pending operation. The
+   * card is rehydrated from the authoritative active list, never from this
+   * payload. Strictly sanitized at the boundary.
+   */
+  proposal?: ExpenseProposalIntent;
   /**
    * debt-undo-confirmation-protocol: separate undo proposal (requestId for
    * the authenticated decision RPC). Display-only; the fixed target stays
@@ -1276,9 +1311,10 @@ export async function sendAgentMessage(
     else if (response.status === 403) err.code = "auth.workspace_forbidden";
     throw err;
   }
-  const data = await response.json() as { turnId?: string; intentionId?: string; status?: string; output?: string; memorized?: string[]; pendingOperation?: unknown; undoProposal?: unknown };
+  const data = await response.json() as { turnId?: string; intentionId?: string; status?: string; output?: string; memorized?: string[]; pendingOperation?: unknown; undoProposal?: unknown; proposal?: unknown };
   const pendingOperation = sanitizePendingOperation(data.pendingOperation);
   const undoProposal = sanitizeUndoProposal(data.undoProposal as AgentTurn["undoProposal"]);
+  const proposal = sanitizeProposalIntent(data.proposal);
   // The turn landed: the in-flight record is no longer needed. On failure
   // (including an unlinked succeeded receipt) it stays, so retry reuses the
   // same idempotent messageId.
@@ -1286,7 +1322,7 @@ export async function sendAgentMessage(
   // (pendingOperation/undoProposal) NÃO é sucesso — é falha retentável, então
   // a âncora/storage SOBREVIVE para o retry reusar a MESMA identidade §7.7
   // mesmo após reload/remount. Só sucesso real limpa.
-  const hasRealResult = Boolean(data.output?.trim() || pendingOperation || undoProposal);
+  const hasRealResult = Boolean(data.output?.trim() || pendingOperation || undoProposal || proposal);
   if (hasRealResult) {
     clearPendingChatSend(workspaceId);
   }
@@ -1297,7 +1333,49 @@ export async function sendAgentMessage(
     ...(Array.isArray(data.memorized) ? { memorized: data.memorized.filter((m): m is string => typeof m === "string") } : {}),
     ...(pendingOperation ? { pendingOperation } : {}),
     ...(undoProposal ? { undoProposal } : {}),
+    ...(proposal ? { proposal } : {}),
   };
+}
+
+/**
+ * P3 — sends the OpenCode runtime's proposal INTENT to the authenticated
+ * Agent broker. The Agent mints the propose-only delegated capability (A4)
+ * and the API persists the Pending V2 operation. This call can NEVER confirm
+ * or execute: the user still decides on the card.
+ *
+ * The stable `intentionId` is the backend idempotency seed, so a retry of the
+ * same turn replays the SAME proposal (existing:true) instead of duplicating.
+ */
+export async function proposePendingExpense(
+  workspaceId: string,
+  intent: ExpenseProposalIntent,
+  opts?: { signal?: AbortSignal },
+): Promise<{ id: string; existing: boolean }> {
+  const safe = sanitizeProposalIntent(intent);
+  if (!safe) {
+    const err = new Error("A proposta recebida é inválida.") as Error & { code?: string };
+    err.code = "agent.invalid_proposal";
+    throw err;
+  }
+  const baseUrl = agentBaseUrl();
+  const response = await fetchWithAgentAuth(
+    workspaceId,
+    `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/pending-operations/propose`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json", "X-Workspace-Id": workspaceId },
+      body: JSON.stringify(safe),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
+    },
+  );
+  const data = (await parseJson<unknown>(response)) as { id?: unknown; existing?: unknown } | null;
+  if (!data || typeof data.id !== "string" || data.id.length === 0) {
+    const err = new Error("Não foi possível preparar a proposta.") as Error & { code?: string };
+    err.code = "agent.proposal_failed";
+    throw err;
+  }
+  return { id: data.id, existing: data.existing === true };
 }
 
 /**

@@ -8,8 +8,10 @@ Fatia P1 da migração OpenCode-first (ADR-031, `docs/plans/2026-10-31-ted-openc
 (`node apps/ted-runtime/src/main.mjs` — SDK 2.2.4 REAL, gateway loopback,
 identidade/transport/runtime-ops reais; rotas respondem tipado sem API, boot
 + close limpos) + núcleo parcial: doubles + stub HTTP em processo
-(ver `node --test` abaixo), defs/executores das 2 reads P2 por padrão e
-`list_categories` GET-only sob opt-in local P3, com validação de
+(ver `node --test` abaixo), defs/executores das 2 reads P2 por padrão,
+`list_categories` GET-only sob opt-in local P3 e `propose_expense` (P3,
+opt-in local) que registra apenas uma INTENÇÃO de proposta — nunca chama a
+API financeira, nunca confirma e nunca executa —, com validação de
 shape 2xx (SPEC §5), bindings host-bound, plugin nativo de finanças como
 único caminho de tools do produto (sem superfície façade em produção; o
 helper com filtro owner-only vive só em `tests/helpers/facade.mjs` para
@@ -50,9 +52,12 @@ gate `READ_SLICE_PASS` PWA→modelo→tools→API→UI. Os testes
 `ted-runtime-gateway-auth.test.ts` (2/2) exercitam handlers reais em Fastify
 loopback com Better-Auth/token/ledger sintéticos e o transporte/tool executor;
 não chamam `session.prompt`, não renderizam uma resposta de modelo na PWA e não
-acessam produção/Postgres. Também não há qualquer caminho de escrita; a proposta
-P3 permanece bloqueada pela emissão A4 de token delegado, sem relaxar o contrato
-da API. Nada aqui equivale a funcionamento em produção.
+acessam produção/Postgres. A fatia P3 de escrita foi entregue como INTENÇÃO de
+proposta: `propose_expense` registra o intent e o gateway o entrega à PWA
+autenticada; a PWA chama o broker estreito do Agent, o ÚNICO componente que
+emite `financial.approval.propose` (A4). O runtime não possui segredo de
+delegação, não cria capability e não confirma/executa. Nada aqui equivale a
+funcionamento em produção.
 
 ## Aproveitamento do spike (revisão, nunca cópia cega)
 
@@ -60,13 +65,13 @@ Origem somente-leitura: `D:/projetos/pi-ted-runtime-spike/experiments/ted-runtim
 
 | Artefato do spike | Destino no produto |
 |---|---|
-| `bootstrap/ted-finance-tools.mjs` (defs + executores, intenção, guards) | ADAPTADO → `src/tool-defs.mjs`, 2 reads P2 por padrão + `list_categories` P3 opcional |
+| `bootstrap/ted-finance-tools.mjs` (defs + executores, intenção, guards) | ADAPTADO → `src/tool-defs.mjs`, 2 reads P2 por padrão + `list_categories` e `propose_expense` P3 opcionais (intent-only) |
 | `bootstrap/session-bindings.mjs` (Map host-bound) | ADAPTADO → `src/session-bindings.mjs`, comportamento preservado |
 | `bootstrap/ted-gateway.mjs` (façade do spike) | NÃO adaptado como superfície de produto — sem `src/facade.mjs`; helper com filtro owner-only mantido só em `tests/helpers/facade.mjs` para testes legados de contrato (fail-closed, sem `listCatalogs`) |
 | `bootstrap/ted-config.cjs` + `env.cjs` (isolamento) | ADAPTADO → `src/bootstrap.mjs`, SEM `process.chdir`, COM guarda um-host-por-processo |
-| `bootstrap/plugins/ted-finance/index.mjs` (registro nativo) | ADAPTADO → `src/plugin.mjs`, registra 2 reads P2 por padrão; 3 tools somente com opt-in local P3 |
+| `bootstrap/plugins/ted-finance/index.mjs` (registro nativo) | ADAPTADO → `src/plugin.mjs`, registra 2 reads P2 por padrão; reads + intent somente com opt-in local P3 |
 | `bootstrap/finance-transport.mjs` (filho tsx p/ test-app) | NÃO importado — substituído por `src/transport.mjs` (fetch contra baseUrl do chamador) |
-| `finance-bridge*.ts`, `finance-transport-pg.mjs`, seeds, traces, runners, `propose_expense` (+ confirmation runners) | Bridges/harnesses sintéticos/PG e runners NÃO importados; proposta/confirm/execute ainda não existem no produto. `list_categories` ADAPTADO → `src/tool-defs.mjs` como leitura GET-only opcional P3 (opt-in local, nunca escrita) |
+| `finance-bridge*.ts`, `finance-transport-pg.mjs`, seeds, traces, runners, `propose_expense` (+ confirmation runners) | Bridges/harnesses sintéticos/PG e runners NÃO importados. `list_categories` ADAPTADO como leitura GET-only opcional P3. `propose_expense` RECONSTRUÍDO como intent-only (sem bridge/PG, sem HTTP, sem confirm/execute); a persistência Pending V2 acontece só no broker do Agent (A4). |
 
 ## Contrato de autenticação do transporte (verificado, não inventado)
 
@@ -144,8 +149,12 @@ Paridade: linhas de ownership durável/reauth/ADR-027 seguem NOT_PROVEN.
 ## Estrutura
 
 - `src/tool-defs.mjs` — 2 P2 tools (schemas in+out) + `list_categories` opcional P3
-  (defs/args/rota GET `/categories` exata/shape `{items, total}`/executor GET-only;
-  exposição só via opt-in local em `plugin.mjs`), `deriveIntentionId`, guards, executores GET-only.
+  (defs/args/rota GET `/categories` exata/shape `{items, total}`/executor GET-only)
+  + `propose_expense` P3 (intent-only: sem HTTP, sem escrita, sem confirm/execute;
+  registra `{tool, intentionId, normalizedArgs, summary}` no registry process-local).
+- `src/proposal-intents.mjs` — registry process-local do intent (uma proposta por
+  sessão nativa; `take` destrutivo, `clear` no início de cada turno). Não é registro
+  financeiro e não sobrevive a restart.
 - `src/session-bindings.mjs` — registro host process-local (só memória; token nunca em disco/log/erro)
   + rotação controlada `rotateSessionBinding` (só sob a fila do wrapper, após idle) +
   quarentena `quarantineSession`/`isQuarantined` (fail-closed `host_binding_quarantined`).
@@ -169,13 +178,14 @@ Paridade: linhas de ownership durável/reauth/ADR-027 seguem NOT_PROVEN.
   + toda sonda `session.active` com AbortSignal e limite pelo prazo restante.
 - `src/plugin.mjs` — registro nativo 2.2.4 exatamente das 2 reads P2 por padrão
   (opt-in local `TED_OPENCODE_P3_READS_ENABLED=1` com `NODE_ENV !== 'production'`
-  expõe `list_categories`; produção força off) + gate nativo de permissão em
+  expõe `list_categories`; `TED_OPENCODE_P3_WRITES_ENABLED=1` expõe também
+  `propose_expense`; produção força ambos off) + gate nativo de permissão em
   todo execute (`ctx.permission.assert` com `ted.finance.read`/`[toolName]` e o
   contexto real da invocação ANTES de host/executor/HTTP; sem a API/contexto
   falha fechado — mecanismo nativo, não um novo sistema de auth) +
   `getEffectiveToolNames`
   (catálogo efetivo SÓ via `ctx.tool.list()` dentro do plugin; a superfície HTTP não tem tool group;
-  o seam `onEffectiveTools` captura o catálogo FINAL pós-transform — built-ins + 2 reads).
+  o seam `onEffectiveTools` captura o catálogo FINAL pós-transform — built-ins + reads + intent).
 - `src/gateway.mjs` — identidade server-side: mint `POST /auth/agent-token`
   (cookie + `x-workspace-id` + `x-device-token`) + `GET /auth/devices/me`;
   workspace canônico da autoridade, acordo device×workspace, erros sem segredo.

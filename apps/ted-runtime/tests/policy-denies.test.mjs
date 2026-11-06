@@ -43,7 +43,10 @@ const EXPECTED_TOOL_USE_DENIES = [
 ];
 
 // Exact product finance resources the native allowlist may name (no wildcards).
-const EXPECTED_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_categories'];
+// Includes the local-only P3 proposal intent; tedConfig() default carries only
+// the reads (P3 writes are an explicit local opt-in).
+const EXPECTED_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense'];
+const DEFAULT_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_categories'];
 
 function agentPerms(profile) {
   const cfg = tedConfig(profile);
@@ -71,8 +74,8 @@ describe('PR290 deny-by-default: agents.ted explicit native allowlist', () => {
       const allows = perms.slice(1);
       assert.deepEqual(
         allows.map((p) => p.resource).sort(),
-        [...EXPECTED_FINANCE_RESOURCES].sort(),
-        `${profile}: allowlist must name exactly the product finance tools`,
+        [...DEFAULT_FINANCE_RESOURCES].sort(),
+        `${profile}: default allowlist must name exactly the product finance reads`,
       );
       for (const p of allows) {
         assert.equal(p.action, 'ted.finance.read', `${profile}: finance allow must use the namespaced action`);
@@ -85,6 +88,19 @@ describe('PR290 deny-by-default: agents.ted explicit native allowlist', () => {
           assert.equal(p.action, 'ted.finance.read', `${profile}: no broad allow allowed`);
         }
       }
+    }
+  });
+
+  it('the local P3 writes opt-in adds exactly the proposal permission', () => {
+    for (const profile of ['test', 'live']) {
+      const cfg = tedConfig(profile, { p3Writes: true });
+      const perms = (cfg.agents && cfg.agents.ted && cfg.agents.ted.permissions) || [];
+      assert.deepEqual(perms[0], { action: '*', resource: '*', effect: 'deny' });
+      const allows = perms.slice(1);
+      assert.deepEqual(allows.map((p) => p.resource).sort(), [...EXPECTED_FINANCE_RESOURCES].sort());
+      for (const p of allows) assert.equal(p.action, 'ted.finance.read');
+      const propose = allows.find((p) => p.resource === 'propose_expense');
+      assert.deepEqual(propose, { action: 'ted.finance.read', resource: 'propose_expense', effect: 'allow' });
     }
   });
 
@@ -297,8 +313,8 @@ describe('PR290 deny-by-default: real SDK 2.2.4 no-inference/no-prompt policy pr
       assert.deepEqual(perms[0], { action: '*', resource: '*', effect: 'deny' }, `${profile}: on-disk wildcard deny first`);
       assert.deepEqual(
         perms.slice(1).map((p) => p.resource).sort(),
-        [...EXPECTED_FINANCE_RESOURCES].sort(),
-        `${profile}: on-disk finance allowlist exact`,
+        [...DEFAULT_FINANCE_RESOURCES].sort(),
+        `${profile}: on-disk default finance allowlist exact`,
       );
     }
 
