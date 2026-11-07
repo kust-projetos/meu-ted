@@ -140,6 +140,8 @@ export const ARG_SPECS: Readonly<Record<string, ArgSpec>> = Object.freeze({
   date: spec('string', true),
   categoryQuery: spec('string', true),
   accountId: spec('string', true),
+  fromAccountId: spec('string', true),
+  toAccountId: spec('string', true),
   categoryId: spec('string', true),
   accountName: spec('string', true),
   accountKind: spec('account-kind', true),
@@ -206,6 +208,14 @@ export const OPERATION_ARG_KEYS: Readonly<Record<string, ReadonlySet<string>>> =
     'accountName',
     'categoryName',
     'categoryQuery',
+  ),
+  'transactions.transfer.create': argKeys(
+    'amountCents',
+    'description',
+    'date',
+    'fromAccountId',
+    'toAccountId',
+    'accountName',
   ),
   'transactions.update': argKeys(
     'transactionId',

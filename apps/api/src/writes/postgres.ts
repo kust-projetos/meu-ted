@@ -1443,12 +1443,27 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
       });
     },
 
-    async createTransfer(householdId, input) {
+    async createTransfer(householdId, input, options) {
       if (input.amountCents <= 0) throw domainErrors.invalid('amountCents', 'deve ser maior que zero');
       if (input.fromAccountId === input.toAccountId) {
         throw domainErrors.invalid('toAccountId', 'deve ser diferente da conta de origem');
       }
-      return withTransaction(pool, async (client) => createTransferInTx(client, householdId, input));
+      if (options?.idempotencyKey === undefined) {
+        return withTransaction(pool, async (client) => createTransferInTx(client, householdId, input));
+      }
+      // V2 execution: key → transfer in the SAME tx as the single atomic
+      // effect (one `transfer` row + both balance legs). A retry after a
+      // partial failure replays the recorded transfer instead of moving money
+      // twice. The audit row (undo-eligible) commits in that same tx and is
+      // never inserted on replay.
+      return runKeyedMutation({
+        pool,
+        householdId,
+        idempotencyKey: options.idempotencyKey,
+        payload: input,
+        mutate: (client) => createTransferInTx(client, householdId, input),
+        ...(options.audit ? { audit: { ...options.audit, schema: 'canonical' as const } } : {}),
+      });
     },
 
     async updateTransaction(householdId, id, patch) {

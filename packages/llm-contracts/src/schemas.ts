@@ -392,6 +392,8 @@ export const pendingOperationPresentationSchema = z
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD')
       .optional(),
     account: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
+    fromAccount: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
+    toAccount: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
     category: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
     categoryParent: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
     accountName: z.string().trim().min(1).max(120).optional(),

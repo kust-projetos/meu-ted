@@ -160,6 +160,11 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
       const categoryParentId = record.tool === 'categories.create' && typeof storedArgs.parentId === 'string' ? storedArgs.parentId : undefined;
       const accountLabel = accountId !== undefined ? accountLabels.get(accountId) : undefined;
        const categoryLabel = categoryId !== undefined ? categoryLabels.get(categoryId) : categoryParentId !== undefined ? categoryLabels.get(categoryParentId) : undefined;
+       // Internal transfer: BOTH account labels are execution-context proof.
+       const transferFromId = record.tool === 'transactions.transfer.create' && typeof storedArgs.fromAccountId === 'string' ? storedArgs.fromAccountId : undefined;
+       const transferToId = record.tool === 'transactions.transfer.create' && typeof storedArgs.toAccountId === 'string' ? storedArgs.toAccountId : undefined;
+       const transferFromLabel = transferFromId !== undefined ? accountLabels.get(transferFromId) : undefined;
+       const transferToLabel = transferToId !== undefined ? accountLabels.get(transferToId) : undefined;
        if (record.tool === 'transactions.update') {
          const transactionId = typeof storedArgs.transactionId === 'string' ? storedArgs.transactionId : '';
          const expectedDescription = typeof storedArgs.expectedDescription === 'string' ? storedArgs.expectedDescription : '';
@@ -186,6 +191,12 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
       if (categoryParentId !== undefined && categoryLabel === undefined) {
         labelWarnings.push('Dados da categoria indisponíveis no momento');
       }
+      if (transferFromId !== undefined && transferFromLabel === undefined) {
+        labelWarnings.push('Dados da conta de origem indisponíveis no momento');
+      }
+      if (transferToId !== undefined && transferToLabel === undefined) {
+        labelWarnings.push('Dados da conta de destino indisponíveis no momento');
+      }
       const presentation = buildPendingOperationPresentation({
         id: record.id,
         status: record.status,
@@ -193,6 +204,8 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
         normalizedArgs: record.normalizedArgs,
         expiresAt: record.expiresAt,
         ...(accountLabel !== undefined ? { accountLabel } : {}),
+        ...(transferFromLabel !== undefined ? { fromAccountLabel: transferFromLabel } : {}),
+        ...(transferToLabel !== undefined ? { toAccountLabel: transferToLabel } : {}),
          ...(categoryLabel !== undefined ? { categoryLabel } : {}),
          ...(transactionTarget ? { transactionTarget } : {}),
          ...(record.tool === 'categories.deactivate' && categoryTarget?.kind ? { categoryKind: categoryTarget.kind } : {}),
@@ -446,6 +459,55 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
           if (target.kind !== 'expense' && target.kind !== 'income') return reply.code(422).send({ code:'approval.invalid_args', message:'A descrição de transferências não pode ser alterada por este fluxo.' });
           if (target.description === args.description) return reply.code(422).send({ code:'approval.invalid_args', message:'A nova descrição precisa ser diferente da atual.' });
         }
+        // Internal transfer: replay-first (same key + same hash returns the
+        // existing operation before any mutable read), then a fail-fast gate
+        // against the CURRENT workspace read model. Both accounts must exist
+        // in THIS workspace and differ; the credit-card restriction stays in
+        // the atomic writer (the read model never lists cards, so a card id
+        // is uniformly not-transferable here). Unknown/foreign ids map to the
+        // same 404 — no existence oracle across workspaces.
+        if (body.data.tool === 'transactions.transfer.create') {
+          const draftHash = await computePendingOperationV2Hash({
+            tool: body.data.tool,
+            normalizedArgs: checked.data as PendingOperationV2['normalizedArgs'],
+            workspaceId: ctx.householdId,
+            actorId: ctx.actorId,
+            deviceId: ctx.deviceId,
+          });
+          const replay = await v2Store.findByIdempotencyKey(ctx.householdId, key);
+          if (replay) {
+            if (replay.proposalHash !== draftHash) {
+              return reply.code(409).send({ code: 'idempotency.conflict', message: 'Chave de idempotência já utilizada com proposta diferente.' });
+            }
+            const existingRecord = await v2Store.get(replay.id, identity(ctx));
+            return reply.code(200).send({ ...existingRecord, existing: true });
+          }
+          const replayAfterMutableError = async () => {
+            const winner = await v2Store.findByIdempotencyKey(ctx.householdId, key);
+            if (!winner) return null;
+            if (winner.proposalHash !== draftHash) {
+              return { status: 409 as const, body: { code: 'idempotency.conflict', message: 'Chave de idempotência já utilizada com proposta diferente.' } };
+            }
+            const winnerRecord = await v2Store.get(winner.id, identity(ctx));
+            return { status: 200 as const, body: { ...winnerRecord, existing: true } };
+          };
+          const transferArgs = checked.data as { fromAccountId: string; toAccountId: string };
+          if (transferArgs.fromAccountId === transferArgs.toAccountId) {
+            const late = await replayAfterMutableError();
+            if (late) return reply.code(late.status).send(late.body);
+            return reply.code(422).send({ code: 'validation.invalid', message: 'A conta de origem deve ser diferente da conta de destino.' });
+          }
+          if (opts.readModel) {
+            const accounts = await opts.readModel.listAccounts(ctx.householdId);
+            const from = accounts.find((account) => account.id === transferArgs.fromAccountId);
+            const to = accounts.find((account) => account.id === transferArgs.toAccountId);
+            if (!from || !to) {
+              const late = await replayAfterMutableError();
+              if (late) return reply.code(late.status).send(late.body);
+              return reply.code(404).send({ code: 'not_found', message: 'Conta não encontrada.' });
+            }
+          }
+        }
         if (body.data.tool === 'categories.deactivate') {
           const draftHash = await computePendingOperationV2Hash({
             tool: body.data.tool,
@@ -568,6 +630,10 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
           const categoryParentId = record.tool === 'categories.create' && typeof args.parentId === 'string' ? args.parentId : undefined;
           const accountLabel = accountId !== undefined ? accountLabels.get(accountId) : undefined;
           const categoryLabel = categoryId !== undefined ? categoryLabels.get(categoryId) : categoryParentId !== undefined ? categoryLabels.get(categoryParentId) : undefined;
+          const transferFromId = record.tool === 'transactions.transfer.create' && typeof args.fromAccountId === 'string' ? args.fromAccountId : undefined;
+          const transferToId = record.tool === 'transactions.transfer.create' && typeof args.toAccountId === 'string' ? args.toAccountId : undefined;
+          const transferFromLabel = transferFromId !== undefined ? accountLabels.get(transferFromId) : undefined;
+          const transferToLabel = transferToId !== undefined ? accountLabels.get(transferToId) : undefined;
           // V3-FIX-CARD-FAILCLOSED: label ids carried by the stored args but
           // missing from the read-model maps degrade honestly — the card
           // fails closed on these warnings instead of offering Confirm.
@@ -581,6 +647,12 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
           if (categoryParentId !== undefined && categoryLabel === undefined) {
             labelWarnings.push('Dados da categoria indisponíveis no momento');
           }
+          if (transferFromId !== undefined && transferFromLabel === undefined) {
+            labelWarnings.push('Dados da conta de origem indisponíveis no momento');
+          }
+          if (transferToId !== undefined && transferToLabel === undefined) {
+            labelWarnings.push('Dados da conta de destino indisponíveis no momento');
+          }
           const presentation = buildPendingOperationPresentation({
             id: record.id,
             status: record.status,
@@ -588,6 +660,8 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
             normalizedArgs: record.normalizedArgs,
             expiresAt: record.expiresAt,
             ...(accountLabel !== undefined ? { accountLabel } : {}),
+            ...(transferFromLabel !== undefined ? { fromAccountLabel: transferFromLabel } : {}),
+            ...(transferToLabel !== undefined ? { toAccountLabel: transferToLabel } : {}),
             ...(categoryLabel !== undefined ? { categoryLabel } : {}),
             ...(transactionContextMatches && transactionAccountName ? { transactionTarget:{id:transaction.id,amountCents:transaction.amountCents,date:transaction.date,accountId:transaction.accountId,accountName:transactionAccountName} } : {}),
             ...(record.tool === 'categories.deactivate' && categoryTarget?.kind ? { categoryKind: categoryTarget.kind } : {}),

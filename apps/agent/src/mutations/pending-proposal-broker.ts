@@ -7,9 +7,10 @@
  * the authoritative Pending V2 propose endpoint with a stable idempotency key.
  *
  * Scope guardrails:
- * - Exactly TWO tools: `transactions.expense.create` (P3.1) and
- *   `transactions.income.create` (P3.2). Both share ONE code path; the API's
- *   Pending V2 tool registry remains the authority for each contract.
+ * - Exactly THREE tools: `transactions.expense.create` (P3.1),
+ *   `transactions.income.create` (P3.2) and `transactions.transfer.create`
+ *   (P3.3). All share ONE code path; the API's Pending V2 tool registry
+ *   remains the authority for each contract.
  * - No confirm/execute/cancel/authorize/retry capability is ever minted here.
  * - Identity comes from the gateway-verified headers; the browser intent only
  *   carries the transaction payload and the stable intention id.
@@ -24,6 +25,7 @@ import { createMutationProposal } from './mutation-proposal.js';
 
 export const PROPOSE_EXPENSE_TOOL = 'transactions.expense.create';
 export const PROPOSE_INCOME_TOOL = 'transactions.income.create';
+export const PROPOSE_TRANSFER_TOOL = 'transactions.transfer.create';
 
 const isoDate = z
   .string()
@@ -60,14 +62,42 @@ export const incomeProposalIntentSchema = z
   .object({ tool: z.literal(PROPOSE_INCOME_TOOL), ...intentBase })
   .strict();
 
-/** Discriminated union: the broker route accepts exactly these two tools. */
+/**
+ * Internal-transfer contract — mirrors the API's createTransferInputSchema.
+ * No category: an internal transfer is neither income nor expense. Origin and
+ * destination are different accounts of the SAME workspace (the API revalidates).
+ */
+export const transferProposalArgsSchema = z
+  .object({
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    description: z.string().trim().min(1).max(240),
+    date: isoDate,
+    fromAccountId: z.string().uuid(),
+    toAccountId: z.string().uuid(),
+  })
+  .strict()
+  .refine((value) => value.fromAccountId !== value.toAccountId, {
+    message: 'fromAccountId and toAccountId must differ',
+  });
+
+export const transferProposalIntentSchema = z
+  .object({
+    tool: z.literal(PROPOSE_TRANSFER_TOOL),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: transferProposalArgsSchema,
+  })
+  .strict();
+
+/** Discriminated union: the broker route accepts exactly these three tools. */
 export const proposalIntentSchema = z.discriminatedUnion('tool', [
   expenseProposalIntentSchema,
   incomeProposalIntentSchema,
+  transferProposalIntentSchema,
 ]);
 
 export type ExpenseProposalIntent = z.infer<typeof expenseProposalIntentSchema>;
 export type IncomeProposalIntent = z.infer<typeof incomeProposalIntentSchema>;
+export type TransferProposalIntent = z.infer<typeof transferProposalIntentSchema>;
 export type TransactionProposalIntent = z.infer<typeof proposalIntentSchema>;
 export type ProposalBrokerIdentity = {
   actorId: string;
@@ -83,8 +113,12 @@ function formatBRL(amountCents: number): string {
 }
 
 function proposalSummary(intent: TransactionProposalIntent): string {
+  const amount = formatBRL(intent.normalizedArgs.amountCents);
+  if (intent.tool === PROPOSE_TRANSFER_TOOL) {
+    return `Transferência de ${amount} em "${intent.normalizedArgs.description}"`;
+  }
   const noun = intent.tool === PROPOSE_INCOME_TOOL ? 'Receita' : 'Despesa';
-  return `${noun} de ${formatBRL(intent.normalizedArgs.amountCents)} em "${intent.normalizedArgs.description}"`;
+  return `${noun} de ${amount} em "${intent.normalizedArgs.description}"`;
 }
 
 /**

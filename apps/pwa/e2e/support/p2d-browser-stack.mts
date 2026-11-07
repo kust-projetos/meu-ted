@@ -57,9 +57,10 @@ const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
 // inference and no production data.
 const EXPENSE = process.env.P2D_EXPENSE === "1";
 const INCOME = process.env.P2D_INCOME === "1";
-const PROPOSAL = EXPENSE || INCOME;
-if (EXPENSE && INCOME) {
-  throw new Error("[p2d-stack] P2D_EXPENSE and P2D_INCOME are mutually exclusive");
+const TRANSFER = process.env.P2D_TRANSFER === "1";
+const PROPOSAL = EXPENSE || INCOME || TRANSFER;
+if ([EXPENSE, INCOME, TRANSFER].filter(Boolean).length > 1) {
+  throw new Error("[p2d-stack] P2D_EXPENSE, P2D_INCOME and P2D_TRANSFER are mutually exclusive");
 }
 if (OFFLINE_CHAT && LIVE_REAL) {
   throw new Error("[p2d-stack] P2D_OFFLINE_CHAT and P2D_LIVE_REAL are mutually exclusive");
@@ -242,6 +243,22 @@ function buildProbeConfig(): Record<string, unknown> {
     tedRuntimeDir: TED_RUNTIME_DIR,
   };
   if (PROPOSAL) {
+    if (TRANSFER) {
+      return {
+        ...base,
+        stub: {
+          mode: "transfer",
+          toolName: "propose_transfer",
+          toolArgs: {
+            amountCents: 30000,
+            description: "Transferência Itaú → Nubank",
+            date: "2026-11-07",
+            fromAccountId: ACCOUNT_A1.id,
+            toAccountId: ACCOUNT_A2.id,
+          },
+        },
+      };
+    }
     if (INCOME) {
       return {
         ...base,
@@ -642,7 +659,7 @@ const ctl = http.createServer((req, res) => {
       }
       if (req.method === "GET" && u.pathname === "/p2d/journal") {
         const financial = journal.filter((j) =>
-          ["/accounts", "/dashboard", "/categories", "/transactions", "/cards", "/payables", "/budgets", "/goals", "/subscriptions"].some(
+          ["/accounts", "/dashboard", "/categories", "/transactions", "/transfers", "/cards", "/payables", "/budgets", "/goals", "/subscriptions"].some(
             (p) => j.url === p || j.url.startsWith(`${p}/`),
           ),
         );
@@ -668,6 +685,7 @@ const ctl = http.createServer((req, res) => {
             date: t.date,
             accountId: t.accountId,
             categoryId: t.categoryId,
+            transferToAccountId: t.transferToAccountId,
           }));
         const accounts = (built.state.accounts ?? [])
           .filter((a) => a.householdId === HOUSEHOLD_A)
