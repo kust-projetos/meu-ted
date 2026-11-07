@@ -36,18 +36,23 @@ const P2D = process.env.P2D_BROWSER === "1";
 const LIVE_PREP = process.env.P2D_LIVE_PREP === "1";
 const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
 const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
+// P3 expense slice: loopback Agent + Pending V2 + scripted propose_expense.
+// It reuses the synthetic stack and never carries a real credential.
+const EXPENSE = process.env.P2D_EXPENSE === "1";
 if ([LIVE_PREP, OFFLINE_CHAT, LIVE_REAL].filter(Boolean).length > 1) {
   throw new Error("select at most one P2D live mode (P2D_LIVE_PREP|P2D_OFFLINE_CHAT|P2D_LIVE_REAL)");
 }
 const P2D_LIVE_MODE = LIVE_PREP || OFFLINE_CHAT || LIVE_REAL;
-const P2D_ACTIVE = P2D || P2D_LIVE_MODE;
+const P2D_ACTIVE = P2D || P2D_LIVE_MODE || EXPENSE;
 const P2D_SPEC = LIVE_PREP
   ? "**/p2d/p2d-live-prep.spec.ts"
   : OFFLINE_CHAT
     ? "**/p2d/p2d-live-offline.spec.ts"
     : LIVE_REAL
       ? "**/p2d/p2d-live-real.spec.ts"
-      : "**/p2d/*.spec.ts";
+      : EXPENSE
+        ? "**/p2d/p3-expense.spec.ts"
+        : "**/p2d/*.spec.ts";
 // Fail-closed, unconditionally: Playwright starts and cleans up its own
 // servers per run and never attaches to a pre-existing (possibly alien)
 // process. There is no ownership flag and no reuse pathway.
@@ -266,8 +271,10 @@ export default defineConfig({
               P2D_GATEWAY_PORT: String(p2dPorts.gatewayPort),
               P2D_CTL_PORT: String(p2dPorts.ctlPort),
               P2D_NEXT_PORT: String(p2dPorts.nextPort),
+              P2D_AGENT_PORT: String(p2dPorts.agentPort),
               ...(OFFLINE_CHAT ? { P2D_OFFLINE_CHAT: "1" } : {}),
               ...(LIVE_REAL ? { P2D_LIVE_REAL: "1" } : {}),
+              ...(EXPENSE ? { P2D_EXPENSE: "1" } : {}),
             },
           },
           {
@@ -283,6 +290,9 @@ export default defineConfig({
               PWA_BACKEND_PROXY_ORIGIN: P2D_API_BASE,
               TED_OPENCODE_RUNTIME_ENABLED: "1",
               TED_OPENCODE_GATEWAY_ORIGIN: P2D_GATEWAY_BASE,
+              ...(EXPENSE
+                ? { PWA_AGENT_PROXY_ORIGIN: `http://127.0.0.1:${p2dPorts.agentPort}` }
+                : {}),
               ALLOW_LOCAL_ORIGIN: "1",
               NEXT_PUBLIC_PI_FINANCE_API_BASE_URL: "",
               NEXT_PUBLIC_LEGACY_BEARER_COMPAT: "off",
