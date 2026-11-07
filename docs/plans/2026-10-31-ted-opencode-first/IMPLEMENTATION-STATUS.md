@@ -411,20 +411,37 @@ política da API não foi alterada.
 | `pnpm typecheck` | **PASS** | 6 workspaces. |
 | `check-agent-v2-invariants` (A4/A9) | **PASS** | 542 arquivos; nenhuma capability de escrita fora do executor; broker é o único emissor de propose. |
 | `pnpm write-policy:check` | **PASS** | 183 writes / 183 policy rows. |
-| CI remoto (PR #293, `e6989c2`) | **PASS** | `Gate — all checks` + `TED Runtime — lint + typecheck + test` + API/Agent/PWA/Postgres/Security/Docs; PWA CI `quality (22, 10)` + `e2e (22, 10)` |
+| CI remoto (PR #293, `e6989c2`) | **PASS** | `Gate - all checks` + `TED Runtime - lint + typecheck + test` + API/Agent/PWA/Postgres/Security/Docs; PWA CI `quality (22, 10)` + `e2e (22, 10)` |
+
+### P3.1 — recuperação + E2E de navegador (2026-11-06)
+
+| Verificação | Resultado | Limite |
+|---|---|---|
+| PWA focada (`agent-client.proposal`, `TedChat.propose`) | **17/17 PASS** | Inclui recuperação do intent no reload, `existing: true` e falha sem card falso. |
+| API focada (`p3-expense-slice`, `p3-expense-broker-flow`) | **10/10 PASS** | Zero antes da confirmação, 1 depois, reject zero, replay sem duplicata. |
+| `pnpm --filter pwa typecheck` | **PASS** | — |
+| `pnpm --filter meu-ted-api typecheck` | **PASS** | — |
+| PWA lint | **PASS** (0 errors; warnings preexistentes) | — |
+| E2E P3 (`P2D_EXPENSE=1`, Agent real + Pending V2 + provider scriptado) | **1 passed (1.3m)** | `brokerAttempts=3`, `promptCalls=2`, `stubTurns=4`, propose/confirm/execute/cancel = 2/1/1/1, `syntheticExpenseRows=1`, `duplicateLaunch=false`. |
+| Extrato `/registros` no harness P2D | **NOT RENDERED** | Bootstrap de app-state do harness; a transação é provada pela leitura autenticada do browser + ledger + recibo. |
+| `workerd` SQLITE_BUSY | **TRANSIENT** | Observado no boot de uma execução; Worker `ready`, run passou. Risco do harness local. |
+
 
 ### Estado e limites
 
 - **`P3_EXPENSE_SLICE_PASS`** no escopo local/determinístico: mensagem → intent →
   broker → Pending V2 → card → confirmação → 1 lançamento → recibo, com rejeição
   zero e sem duplicidade.
-- **Não executado:** browser E2E completo com A0 local, inferência real
-  (DeepSeek), Postgres real, deploy, merge. O provider do teste é scriptado
-  (`testloop` local); `READ_SLICE_PASS` continua **NOT ACHIEVED**.
-- **Resíduo conhecido:** se o turno concluir e a chamada do broker se perder, o
-  retry reusa a MESMA intenção (idempotente), mas o turno recuperado não
-  reemite o intent — o usuário precisa de uma nova mensagem. Não há duplicação
-  financeira nesse caminho.
+- **Browser E2E P3 executado em 2026-11-06 (P3.1):** mensagem → OpenCode →
+  broker (falha única simulada) → reload com recuperação do mesmo intent →
+  card → Confirmar → Pending V2 → 1 transação + recibo; segunda proposta →
+  Cancelar → zero extras. Provider local scriptado; sem inferência real,
+  Postgres real, deploy ou merge. `READ_SLICE_PASS` continua **NOT ACHIEVED**.
+- **Resíduo P3 original resolvido:** o intent agora sobrevive na MESMA âncora de
+  retry (`ted.pending-send.*`) e é reenviado ao broker no reload sob o mesmo
+  `intentionId`; o broker deduplica pela chave derivada. Também foi corrigido o
+  descasamento `summary` (runtime) × schema estrito do PWA, que descartava o
+  intent inteiro. Não há storage/supervisor novo.
 - **A0 modificado:** a rota aditiva `/rpc/pending-operations/propose` foi
   autorizada pelo operador nesta sessão; escopo limitado a despesa. O A0 continua
   o dono do pipeline conversacional (o broker não interpreta texto nem propõe

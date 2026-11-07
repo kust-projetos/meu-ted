@@ -142,3 +142,86 @@ deploy ou merge.
 - Branch P3 separada; commit e PR sem merge.
 - PR: https://github.com/kust-projetos/meu-ted/pull/293 (base `main`, empilhado
   sobre o #290; commit próprio `9d86771`).
+
+## 7. P3.1 — recuperação do broker + E2E de navegador (2026-11-06)
+
+### 7.1 Correção de recuperação
+
+O cenário residual da P3 ficou fechado sem storage novo:
+
+1. O intent é persistido na **MESMA âncora de retry existente**
+   (`ted.pending-send.<actor>.<workspace>`), ao lado de `messageId`, texto e
+   refs de anexo. Não há supervisor nem tabela/armazenamento paralelo.
+2. `sendAgentMessage` mantém a âncora quando o turno traz `proposal`; o
+   `TedChat` só a consome depois que o broker responde. Uma falha do broker
+   preserva a âncora.
+3. No mount/reload, `loadHistory` relê a âncora e reenvia o intent ao broker
+   **antes** de buscar a active list. O `intentionId` original é preservado; o
+   broker deriva a mesma chave de idempotência e responde `existing: true` se a
+   primeira chamada já persistiu. Nenhum segundo lançamento é criado.
+4. O retry manual de uma falha do broker chama o broker diretamente — não
+   reenvia o turno de chat, que replayaria a intenção concluída sem o intent.
+5. Correção de contrato encontrada pelo E2E: o runtime registra `summary` no
+   intent, mas o schema estrito do PWA o rejeitava por inteiro e a proposta
+   nunca chegava ao broker. A fronteira agora aceita o `summary` exibicional e o
+   remove do payload encaminhado (o contrato do broker continua exatamente
+   `tool` + `intentionId` + `normalizedArgs`).
+6. `apps/api/tests/test-app.ts` aceita um `PendingOperationV2Store` injetado e
+   liga o executor V2 real + read model; sem injeção, o comportamento dos testes
+   existentes não muda.
+
+### 7.2 E2E completo
+
+Stack local do E2E (`P2D_EXPENSE=1`):
+
+```
+Chromium → Next/PWA real → proxy /api/agent
+  → gateway TED loopback real → SDK OpenCode 2.2.4 → provider local scriptado
+  → propose_expense (intent only)
+  → Agent Worker REAL (wrangler dev --local, Durable Objects/SQLite)
+  → Pending V2 real na API sintética → card autoritativo
+  → Confirmar/Cancelar → executor V2 real → transação + recibo
+```
+
+Cenário único executado:
+
+- mensagem → intent → primeira chamada do broker **abortada** no browser;
+- reload: recuperação do MESMO intent, sem novo prompt e sem card falso;
+- card R$ 50,00 → Confirmar → `confirm` + `execute` → **1** transação e recibo
+  canônico;
+- segunda proposta → Cancelar → **zero** transações adicionais.
+
+Evidência (`apps/pwa/test-results/p3-expense/evidence.json`):
+
+| Métrica | Resultado |
+|---|---|
+| `brokerAttempts` | 3 (1 falha + 1 recuperação + 1 segunda proposta) |
+| `promptCalls` / `stubTurns` | 2 / 4 |
+| `reloadNewPrompts` | 0 |
+| `proposeRequests` / `confirmRequests` / `executeRequests` / `cancelRequests` | 2 / 1 / 1 / 1 |
+| `syntheticExpenseRows` | 1 |
+| `duplicateLaunch` | `false` |
+| `recoveredAfterReload` | `true` |
+
+Comando (em `apps/pwa`):
+
+```bash
+P2D_EXPENSE=1 pnpm exec playwright test --config e2e/playwright.config.ts --project p2d-synthetic
+```
+
+Resultado local: **1 passed (1.3m)**. Sem inferência paga/externa, sem deploy,
+sem merge e sem escrita em dados reais.
+
+### 7.3 Limitações e riscos residuais
+
+- O provider é scriptado; isto prova o fluxo do produto, não a qualidade de um
+  modelo externo.
+- O extrato (`/registros`) do harness P2D permanece no bootstrap de app-state e
+  não renderiza a lista; a prova da transação é feita pela leitura autenticada
+  do browser na mesma origem (`/api/backend/transactions`), além do ledger do
+  executor e do recibo.
+- `workerd` emitiu um `SQLITE_BUSY` transitório no boot do Agent em uma execução;
+  o Worker permaneceu `ready` e o run passou. É um risco do harness local, não
+  do fluxo P3.
+- Sem alteração de provider, autorização, policy da API, deploy ou produção.
+
