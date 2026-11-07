@@ -5,9 +5,9 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+    types: [opened, synchronize, reopened, labeled]
 
-# V4.1 Phase 9 (Task 9.11): least privilege by default; jobs that need more
-# (deploy artifact download) declare it per-job.
+# Least privilege by default; jobs that publish artifacts declare more.
 permissions:
   contents: read
 
@@ -16,95 +16,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ─── API ──────────────────────────────────────────────────────────────
-  api:
-    name: API — lint + typecheck + test
+  # ─── Changed-area detection ───────────────────────────────────────────
+  # Keeps PR CI small: heavy/financial/docs/policy jobs only run when the
+  # matching area changed. The classification lives in
+  # scripts/check-changed-areas.mjs (unit-tested) so local and CI agree.
+  changes:
+    name: Detect changed areas
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 3
+    outputs:
+      api: ${{ steps.areas.outputs.api }}
+      agent: ${{ steps.areas.outputs.agent }}
+      docs: ${{ steps.areas.outputs.docs }}
+      governance: ${{ steps.areas.outputs.governance }}
+      workflows: ${{ steps.areas.outputs.workflows }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: '10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - name: Build shared contracts (workspace exports resolve dist)
-        run: pnpm --filter @pi-finance/llm-contracts build
-      - name: Contracts - typecheck + test
-        run: pnpm --filter @pi-finance/llm-contracts typecheck && pnpm --filter @pi-finance/llm-contracts test
-      - name: "Contracts - lint (T13 GOV-06: shared contracts covered in CI)"
-        run: pnpm --filter @pi-finance/llm-contracts --fail-if-no-match lint
-      - run: pnpm --filter meu-ted-api --fail-if-no-match lint
-      - run: pnpm --filter meu-ted-api --fail-if-no-match typecheck
-      - run: pnpm --filter meu-ted-api --fail-if-no-match test
-      - run: pnpm --filter meu-ted-api --fail-if-no-match build
-
-  # ─── Agent ────────────────────────────────────────────────────────────
-  agent:
-    name: Agent — typecheck + test + deterministic eval + architecture
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: '10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - name: Build shared contracts (workspace exports resolve dist)
-        run: pnpm --filter @pi-finance/llm-contracts build
-      - run: pnpm --filter pi-finance-agent --fail-if-no-match lint
-      - run: pnpm --filter pi-finance-agent --fail-if-no-match typecheck
-      - run: pnpm --filter pi-finance-agent --fail-if-no-match test
-      - run: pnpm --filter pi-finance-agent --fail-if-no-match eval:ted-v2
-      - run: pnpm architecture:check
-      - run: pnpm --filter pi-finance-agent --fail-if-no-match build
-      # V4.1 Phase 9 (Task 9.6): SHA-pinned deploy provenance. The Agent has
-      # no compiled output (tsc --noEmit; wrangler bundles deterministically
-      # at deploy), so CI publishes a manifest proving THIS exact source tree
-      # passed CI; agent-deploy.yml refuses to deploy without it.
-      # V4.1 closure (SPEC REL-03): manifest carries source SHA, workflow,
-      # run id, lockfile hash and wrangler version. agent-deploy.yml
-      # verifies every field fail-closed before deploying.
-      - name: Write agent deploy manifest (SHA-pinned provenance)
+          fetch-depth: 0
+      - name: Classify changed files
+        id: areas
         env:
-          GIT_SHA: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
-          mkdir -p /tmp/agent-manifest
-          LOCKFILE_HASH="$(sha256sum pnpm-lock.yaml | cut -d' ' -f1)"
-          WRANGLER_VERSION="$(pnpm --filter pi-finance-agent --fail-if-no-match exec wrangler --version)"
-          GIT_SHA="$GIT_SHA" RUN_ID="$RUN_ID" LOCKFILE_HASH="$LOCKFILE_HASH" WRANGLER_VERSION="$WRANGLER_VERSION" node -e "
-          const fs = require('fs');
-          const manifest = {
-            sha: process.env.GIT_SHA,
-            workflow: 'CI',
-            runId: process.env.RUN_ID,
-            lockfileHash: process.env.LOCKFILE_HASH,
-            wranglerVersion: (process.env.WRANGLER_VERSION || '').trim(),
-          };
-          if (!manifest.lockfileHash || !manifest.wranglerVersion) { console.error('refusing to write incomplete manifest'); process.exit(1); }
-          fs.writeFileSync('/tmp/agent-manifest/manifest.json', JSON.stringify(manifest, null, 2) + '\n');
-          "
-          cat /tmp/agent-manifest/manifest.json
-      - name: Upload agent deploy manifest
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: agent-deploy-manifest-${{ github.sha }}
-          path: /tmp/agent-manifest/manifest.json
-          retention-days: 14
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE="$PR_BASE"
+          else
+            BASE="$PUSH_BEFORE"
+          fi
+          if ! printf '%s' "$BASE" | grep -Eq '^[0-9a-fA-F]{40}$' || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE="$(git rev-parse HEAD~1)"
+          fi
+          node scripts/check-changed-areas.mjs --json --github-output --base "$BASE"
 
-  # ─── Codex Broker ─────────────────────────────────────────────────────
-  broker:
-    name: Codex Broker — typecheck + test + build
+  # ─── Quality ──────────────────────────────────────────────────────────
+  quality:
+    name: Quality — lint + typecheck + build
+    needs: [changes]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    env:
+      CODE_CHANGED: ${{ needs.changes.outputs.api == 'true' || needs.changes.outputs.agent == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -114,20 +69,51 @@ jobs:
         with:
           node-version: '22'
           cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter pi-finance-codex-broker --fail-if-no-match lint
-      - run: pnpm --filter pi-finance-codex-broker --fail-if-no-match typecheck
-      - run: pnpm --filter pi-finance-codex-broker --fail-if-no-match test
-      - run: pnpm --filter pi-finance-codex-broker --fail-if-no-match build
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared contracts (workspace exports resolve dist)
+        if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter @pi-finance/llm-contracts build
+
+      # Lint/typecheck/build run for backend workspaces only; the PWA is
+      # covered by PWA CI (`quality (22, 10)`), so nothing runs twice.
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter @pi-finance/llm-contracts --fail-if-no-match lint
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter @pi-finance/llm-contracts --fail-if-no-match typecheck
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter meu-ted-api --fail-if-no-match lint
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter meu-ted-api --fail-if-no-match typecheck
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter pi-finance-agent --fail-if-no-match lint
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter pi-finance-agent --fail-if-no-match typecheck
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter pi-finance-codex-broker --fail-if-no-match lint
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter pi-finance-codex-broker --fail-if-no-match typecheck
+
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter meu-ted-api --fail-if-no-match build
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter pi-finance-agent --fail-if-no-match build
+      - if: env.CODE_CHANGED == 'true'
+        run: pnpm --filter pi-finance-codex-broker --fail-if-no-match build
+
+      # Public-safety is fast (fs/git walk) and protects the public repo
+      # from secrets/prohibited metadata; it stays on every PR.
+      - run: pnpm public-safety --strict
 
   # ─── TED runtime ────────────────────────────────────────────────────
   # Dedicated coverage for the OpenCode-first runtime slice (ADR-031 P1).
-  # Runs on Node 24 (the PWA TED probe already pins v24.22.2; the runtime
-  # engines field requires >=24). Candidate future required check only
-  # after explicit human review — the `gate` job is intentionally left
-  # unchanged in this step, so no branch protection change is implied.
+  # Runs on Node 24: the runtime engines field requires >=24 (the SDK uses
+  # explicit resource management). Area-gated with the other agent jobs.
   ted-runtime:
     name: TED Runtime — lint + typecheck + test
+    needs: [changes]
+    if: needs.changes.outputs.agent == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -144,9 +130,13 @@ jobs:
       - run: pnpm --filter pi-finance-ted-runtime --fail-if-no-match typecheck
       - run: pnpm --filter pi-finance-ted-runtime --fail-if-no-match test
 
-  # ─── PWA ──────────────────────────────────────────────────────────────
-  pwa:
-    name: PWA — lint + typecheck + test
+  # ─── Functional ───────────────────────────────────────────────────────
+  # Agent/broker/contract suites run only when that area changed. API
+  # behaviour (including financial writes, approvals and idempotency) is
+  # covered by postgres-financial below, which is the authoritative API run.
+  functional:
+    name: Functional — tests + smoke
+    needs: [changes]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -161,84 +151,36 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build shared contracts (workspace exports resolve dist)
         run: pnpm --filter @pi-finance/llm-contracts build
-      - run: pnpm --filter pwa --fail-if-no-match typecheck
-      - run: pnpm --filter pwa --fail-if-no-match lint
-      - run: pnpm boundary:check
-      - run: pnpm --filter pwa --fail-if-no-match build
-      # The TED P2 real-history probe runs the OpenCode SDK 2.2.4, which needs
-      # Node >= 24 (explicit resource management). Fetch a PINNED Node 24 with a
-      # verified SHA256 and expose it via TED_PROBE_NODE; PATH stays on Node 22.
-      - name: Fetch pinned Node 24 for the TED runtime probe
-        run: |
-          set -euo pipefail
-          VERSION=v24.22.2
-          DIR="$RUNNER_TEMP/node-probe"
-          mkdir -p "$DIR"
-          curl -fsSL -o "$DIR/node-$VERSION-linux-x64.tar.xz" "https://nodejs.org/dist/$VERSION/node-$VERSION-linux-x64.tar.xz"
-          curl -fsSL -o "$DIR/SHASUMS256.txt" "https://nodejs.org/dist/$VERSION/SHASUMS256.txt"
-          (cd "$DIR" && grep -F "  node-$VERSION-linux-x64.tar.xz" SHASUMS256.txt | sha256sum -c -)
-          tar -xJf "$DIR/node-$VERSION-linux-x64.tar.xz" -C "$DIR" --strip-components=1
-          echo "TED_PROBE_NODE=$DIR/bin/node" >> "$GITHUB_ENV"
-          "$DIR/bin/node" -v
-      - run: pnpm --filter pwa --fail-if-no-match test
 
-  # ─── PWA Cloudflare build ─────────────────────────────────────────────
-  # Same-SHA Cloudflare build coverage for the main gate (mirrors the
-  # build-relevant steps of PWA CI quality). Full E2E stays in PWA CI and
-  # is enforced at deploy time by the CI + PWA CI deploy gate.
-  pwa-cloudflare:
-    name: PWA — Cloudflare build + headers + JS budget
+
+      # Always-on cheap smoke of the new gates themselves.
+      - run: pnpm test:skip-gate
+      - run: pnpm test:scripts
+
+      - name: Contracts tests
+        if: needs.changes.outputs.api == 'true' || needs.changes.outputs.agent == 'true'
+        run: pnpm --filter @pi-finance/llm-contracts --fail-if-no-match test
+
+      - name: Agent tests + deterministic eval
+        if: needs.changes.outputs.agent == 'true'
+        run: |
+          pnpm --filter pi-finance-agent --fail-if-no-match test
+          pnpm --filter pi-finance-agent --fail-if-no-match eval:ted-v2
+
+      - name: Codex Broker tests
+        if: needs.changes.outputs.agent == 'true'
+        run: pnpm --filter pi-finance-codex-broker --fail-if-no-match test
+
+  # ─── Financial integrity (Postgres) ───────────────────────────────────
+  # Runs when the API, contracts or financial SQL changed. This is the
+  # authoritative API suite: unit + approvals + idempotency + integration,
+  # financial concurrency and migration validation against real Postgres.
+  postgres-financial:
+    name: Financial integrity — Postgres
+    needs: [changes]
+    if: needs.changes.outputs.api == 'true' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-financial'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: '10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - name: Build shared contracts (workspace exports resolve dist)
-        run: pnpm --filter @pi-finance/llm-contracts build
-      # V4.1 Phase 9 (Task 9.9): bake release identity into the bundle so the
-      # deployed PWA carries the exact commit it was built from.
-      - run: pnpm --dir apps/pwa build:cloudflare
-        env:
-          NEXT_PUBLIC_BUILD_SHA: ${{ github.sha }}
-          NEXT_PUBLIC_BUILD_ID: ${{ github.run_id }}
-          NEXT_PUBLIC_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
-          # V1-textual: sem flags multimodais no build publicado — defaults fail-closed; PDF segue OFF.
-      - run: pnpm --dir apps/pwa exec vitest run src/headers.test.ts
-      - name: Check initial JS gzip <=200KB
-        run: |
-          cd apps/pwa
-          node -e "
-          const z=require('zlib'),fs=require('fs');
-          const d='.open-next/assets/_next/static/chunks';
-          const files=fs.readdirSync(d).filter(f=>f.endsWith('.js'));
-          const init=files.filter(f=>['framework','main-','polyfills'].some(p=>f.startsWith(p)))
-            .reduce((s,f)=>{try{return s+z.gzipSync(fs.readFileSync(d+'/'+f)).length}catch{return s}},0);
-          console.log('initial JS gzip: '+(init/1024).toFixed(1)+'KB');
-          if(init>200*1024){console.log('FAIL: >200KB');process.exit(1)}
-          "
-      # V4.1 Phase 9 (Task 9.6): build once, store the tested artifact.
-      # pwa-deploy.yml downloads THIS tarball and deploys it without rebuilding.
-      - name: Pack tested Cloudflare build (SHA-pinned artifact)
-        run: tar -czf /tmp/pwa-build-ci.tgz -C apps/pwa .open-next wrangler.jsonc
-      - name: Upload PWA Cloudflare build artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: pwa-cloudflare-build-ci-${{ github.sha }}
-          path: /tmp/pwa-build-ci.tgz
-          retention-days: 14
-
-  # ─── Postgres integration ────────────────────────────────────────────
-  postgres:
-    name: Postgres — integration tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
     services:
       postgres:
         image: postgres:16-alpine
@@ -278,36 +220,25 @@ jobs:
         run: |
           test "$(PGPASSWORD=test psql -h localhost -U test -d pi_financeiro_test -Atc "SELECT count(*) FROM _test_marker WHERE marker_value = '00000000-0000-4000-8000-000000000001'")" = "1"
           test "$(PGPASSWORD=test psql -h localhost -U test -d pi_financeiro_test_legacy -Atc "SELECT count(*) FROM _test_marker WHERE marker_value = '00000000-0000-4000-8000-000000000001'")" = "1"
-      - run: pnpm --filter meu-ted-api test:integration
-        env:
-          DATABASE_URL_TEST: postgres://test:test@localhost:5432/pi_financeiro_test
-          DB_TEST_MARKER: 00000000-0000-4000-8000-000000000001
       - name: Build shared contracts (workspace exports resolve dist)
         run: pnpm --filter @pi-finance/llm-contracts build
       - name: Apply API migrations to test database
         run: pnpm --filter meu-ted-api db:migrate
         env:
           DATABASE_URL: postgres://test:test@localhost:5432/pi_financeiro_test
-      - name: API full suite with Postgres (gated approvals suites enabled)
-        run: pnpm --filter meu-ted-api test
+      - name: API full suite with Postgres
+        run: pnpm --filter meu-ted-api --fail-if-no-match test
         env:
           DATABASE_URL_TEST: postgres://test:test@localhost:5432/pi_financeiro_test
           DB_TEST_MARKER: 00000000-0000-4000-8000-000000000001
           VALIDATION_DATABASE_PROFILE: ci
-      # V4.1 Phase 9 (Tasks 9.1–9.3, 9.5): full integration, financial
-      # concurrency, and XLT suites run against this same Postgres.
       - name: API integration suite (all)
-        run: pnpm --filter meu-ted-api test:integration:all
+        run: pnpm --filter meu-ted-api --fail-if-no-match test:integration:all
         env:
           DATABASE_URL_TEST: postgres://test:test@localhost:5432/pi_financeiro_test
           DB_TEST_MARKER: 00000000-0000-4000-8000-000000000001
       - name: API financial concurrency suite
-        run: pnpm --filter meu-ted-api test:concurrency
-        env:
-          DATABASE_URL_TEST: postgres://test:test@localhost:5432/pi_financeiro_test
-          DB_TEST_MARKER: 00000000-0000-4000-8000-000000000001
-      - name: API XLT suite
-        run: pnpm --filter meu-ted-api test:xlt
+        run: pnpm --filter meu-ted-api --fail-if-no-match test:concurrency
         env:
           DATABASE_URL_TEST: postgres://test:test@localhost:5432/pi_financeiro_test
           DB_TEST_MARKER: 00000000-0000-4000-8000-000000000001
@@ -316,11 +247,61 @@ jobs:
         env:
           DATABASE_URL: postgres://test:test@localhost:5432/pi_financeiro_test
 
-  # ─── Docker image builds ─────────────────────────────────────────────
-  docker:
-    name: Docker — API + Codex Broker images
+  # ─── Documentation + governance (conditional) ────────────────────────
+  docs-policies:
+    name: Docs + governance
+    needs: [changes]
+    if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.governance == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: '10'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm docs:lint
+      - run: pnpm plans:check
+      - name: Resolve governance base (fail-closed)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE="$PR_BASE"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            BASE="$PUSH_BEFORE"
+          else
+            echo "governance: unsupported event $EVENT_NAME (fail-closed)" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$BASE" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+            echo "governance: base is missing or not a 40-hex SHA (fail-closed)" >&2
+            exit 1
+          fi
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "governance: base is the zero SHA (fail-closed)" >&2
+            exit 1
+          fi
+          echo "GITHUB_BASE_SHA=$BASE" >> "$GITHUB_ENV"
+      - run: pnpm governance:check -- --base "$GITHUB_BASE_SHA"
+      - run: node --test scripts/lint-docs.test.mjs scripts/check-active-plan-status.test.mjs scripts/canonical-docs-contract.test.mjs scripts/documentation-facts-contract.test.mjs scripts/check-decision-governance.test.mjs
+
+  # ─── Agent policy (conditional) ──────────────────────────────────────
+  agent-policy:
+    name: Agent policies
+    needs: [changes]
+    if: needs.changes.outputs.agent == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -329,26 +310,81 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      # V4.1 Phase 9 (Task 9.9): bake API release identity into the image.
-      - name: Build API image
-        run: |
-          docker build -f apps/api/Dockerfile -t pi-finance-api:ci \
-            --build-arg BUILD_SHA=${{ github.sha }} \
-            --build-arg BUILD_ID=${{ github.run_id }} \
-            --build-arg BUILD_TIME=${{ github.event.head_commit.timestamp }} .
-      - name: Build Codex Broker image
-        run: docker build -f apps/codex-broker/Dockerfile -t pi-finance-codex-broker:ci .
-      - name: Smoke API and Codex Broker containers
-        run: pnpm container:smoke
-      - name: Container smoke contract (bounded-fetch regression)
-        run: node --test scripts/container-smoke.test.mjs
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm architecture:check
+      - run: pnpm capabilities:check
+      - run: pnpm write-policy:check
+      - run: node --test scripts/check-agent-v2-invariants.test.mjs scripts/check-tool-capability-inventory.test.mjs scripts/check-write-policy.test.mjs
 
-  # ─── API image provenance (V4.1 closure SPEC REL-02) ──────────────────
-  # Main pushes only: publishes the API image to GHCR tagged by git SHA
-  # and records the immutable digest as a job output + JSON artifact.
-  # No VPS deploy automation here — the runbook documents manual
-  # digest-based deploy. Least privilege: packages:write on this job only.
+  # ─── Workflow policy (conditional) ───────────────────────────────────
+  workflows-gates:
+    name: Workflow pins + YAML
+    needs: [changes]
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: '10'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm action-pins:check
+      - run: pnpm workflows-yaml:check
+      - run: node --test scripts/check-action-pins.test.mjs scripts/check-workflows-yaml.test.mjs
+
+  # ─── Agent deploy manifest (main only) ───────────────────────────────
+  # agent-deploy.yml downloads this artifact; the SHA, run id, lockfile hash
+  # and Wrangler version prove the deployed source passed CI.
+  agent-manifest:
+    name: Agent — deploy manifest (main only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: '10'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Write agent deploy manifest (SHA-pinned provenance)
+        env:
+          GIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          mkdir -p /tmp/agent-manifest
+          LOCKFILE_HASH="$(sha256sum pnpm-lock.yaml | cut -d' ' -f1)"
+          WRANGLER_VERSION="$(pnpm --filter pi-finance-agent --fail-if-no-match exec wrangler --version)"
+          GIT_SHA="$GIT_SHA" RUN_ID="$RUN_ID" LOCKFILE_HASH="$LOCKFILE_HASH" WRANGLER_VERSION="$WRANGLER_VERSION" node -e "
+          const fs = require('fs');
+          const manifest = {
+            sha: process.env.GIT_SHA,
+            workflow: 'CI',
+            runId: process.env.RUN_ID,
+            lockfileHash: process.env.LOCKFILE_HASH,
+            wranglerVersion: (process.env.WRANGLER_VERSION || '').trim(),
+          };
+          if (!manifest.lockfileHash || !manifest.wranglerVersion) { console.error('refusing to write incomplete manifest'); process.exit(1); }
+          fs.writeFileSync('/tmp/agent-manifest/manifest.json', JSON.stringify(manifest, null, 2) + '\n');
+          "
+          cat /tmp/agent-manifest/manifest.json
+      - name: Upload agent deploy manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-deploy-manifest-${{ github.sha }}
+          path: /tmp/agent-manifest/manifest.json
+          retention-days: 14
+
+  # ─── API image provenance (main only) ────────────────────────────────
   api-image:
     name: API — image digest to GHCR (main only)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -368,7 +404,6 @@ jobs:
           GHCR_USER: ${{ github.actor }}
         run: |
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-      # Same Dockerfile + release-identity build-args as the `docker` job.
       - name: Build API image
         env:
           BUILD_SHA: ${{ github.sha }}
@@ -417,15 +452,11 @@ jobs:
           path: /tmp/api-provenance/api-image-provenance.json
           retention-days: 14
 
-  # ─── Consolidated release manifest (V4.1 closure SPEC REL-04) ────────
-  # Main pushes only, simple version: assembles one release-manifest
-  # JSON from the per-app provenance artifacts of this same run.
-  # Same-run artifact access uses the job runtime token; no extra
-  # permissions beyond the workflow default.
+  # ─── Consolidated release manifest (main only) ───────────────────────
   release-manifest:
     name: Release — consolidated manifest (main only)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [api-image, agent, pwa-cloudflare]
+    needs: [api-image, agent-manifest]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -458,7 +489,7 @@ jobs:
             builtAt: process.env.BUILD_TIME,
             components: {
               api: { image: api.image, tag: api.tag, digest: api.digest },
-              pwa: { artifact: 'pwa-cloudflare-build-ci-' + process.env.GIT_SHA },
+              pwa: { artifact: 'pwa-cloudflare-build-pwaci-' + process.env.GIT_SHA },
               agent: { sha: agent.sha, lockfileHash: agent.lockfileHash, wranglerVersion: agent.wranglerVersion, runId: agent.runId },
             },
           };
@@ -472,158 +503,40 @@ jobs:
           path: /tmp/release/release-manifest-*.json
           retention-days: 14
 
-  # ─── Capability inventory gate ────────────────────────────────────────
-  capabilities:
-    name: Capability inventory — 72 registered tools classified
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: '10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm capabilities:check
-      - run: node --test scripts/check-tool-capability-inventory.test.mjs
-
-  # ─── Write/mutator policy gate ───────────────────────────────────────
-  write-policy:
-    name: Write policy — every mutator has a policy row
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: '10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm write-policy:check
-      - run: node --test scripts/check-write-policy.test.mjs
-
-  # ─── Governance gate ─────────────────────────────────────────────────
-  governance:
-    name: Governance — ADR decision gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: '10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - name: Resolve governance base (fail-closed)
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            BASE="$PR_BASE"
-          elif [ "$EVENT_NAME" = "push" ]; then
-            BASE="$PUSH_BEFORE"
-          else
-            echo "governance: unsupported event $EVENT_NAME (fail-closed)" >&2
-            exit 1
-          fi
-          if ! printf '%s' "$BASE" | grep -Eq '^[0-9a-fA-F]{40}$'; then
-            echo "governance: base is missing or not a 40-hex SHA (fail-closed)" >&2
-            exit 1
-          fi
-          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
-            echo "governance: base is the zero SHA (fail-closed)" >&2
-            exit 1
-          fi
-          echo "GITHUB_BASE_SHA=$BASE" >> "$GITHUB_ENV"
-      - run: pnpm governance:check -- --base "$GITHUB_BASE_SHA"
-      - run: node --test scripts/check-decision-governance.test.mjs
-
-  # ─── Security gates ───────────────────────────────────────────────────
-  security:
-    name: Security — secrets + dependencies + containers
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: '10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm security:secrets
-      - run: pnpm security:deps
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build API image for scan
-        run: docker build -f apps/api/Dockerfile -t pi-finance-api:ci .
-      - name: Build Codex Broker image for scan
-        run: docker build -f apps/codex-broker/Dockerfile -t pi-finance-codex-broker:ci .
-      - run: pnpm security:containers
-
-  # ─── Documentation gate ──────────────────────────────────────────────
-  docs:
-    name: Documentation — lint + facts + plans
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: '10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm docs:lint
-      - run: pnpm plans:check
-      - run: node --test scripts/lint-docs.test.mjs scripts/check-active-plan-status.test.mjs scripts/canonical-docs-contract.test.mjs scripts/documentation-facts-contract.test.mjs
-      # V4.1 Phase 9 (Tasks 9.4, 9.11): no DB needed.
-      - run: pnpm test:skip-gate
-      - run: pnpm action-pins:check
-      - run: pnpm workflows-yaml:check
-      - run: node --test scripts/check-workflows-yaml.test.mjs
-
-  # ─── Public-safety gate (V4.1 closure SPEC §13 / CI-02) ───────────────
-  # Authoritative required check: --strict fails on warnings, and the
-  # aggregator `gate` job depends on this job. Default (warning-tolerant)
-  # mode is no longer sufficient for a green CI.
-  public-safety:
-    name: Public safety — secrets + prohibited metadata (strict)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: '10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-      - run: pnpm public-safety --strict
-
-  # ─── Global gate ──────────────────────────────────────────────────────
+  # ─── Required gate ───────────────────────────────────────────────────
+  # Branch protection requires this exact name. Conditional jobs count as
+  # passing when skipped; failures still fail the gate.
   gate:
     name: Gate — all checks
-    needs: [api, agent, broker, pwa, pwa-cloudflare, postgres, docker, capabilities, write-policy, governance, security, docs, public-safety]
+    if: always()
+    needs: [changes, quality, functional, ted-runtime, postgres-financial, docs-policies, agent-policy, workflows-gates]
     runs-on: ubuntu-latest
     steps:
-      - run: echo "All CI checks passed."
+      - name: Verify required and area jobs
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          QUALITY: ${{ needs.quality.result }}
+          FUNCTIONAL: ${{ needs.functional.result }}
+          TED_RUNTIME: ${{ needs.ted-runtime.result }}
+          POSTGRES: ${{ needs.postgres-financial.result }}
+          DOCS: ${{ needs.docs-policies.result }}
+          AGENT: ${{ needs.agent-policy.result }}
+          WORKFLOWS: ${{ needs.workflows-gates.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for name in CHANGES QUALITY FUNCTIONAL; do
+            value="${!name}"
+            if [ "$value" != "success" ]; then
+              echo "FAIL: $name=$value"
+              failed=1
+            fi
+          done
+          for name in POSTGRES DOCS AGENT WORKFLOWS TED_RUNTIME; do
+            value="${!name}"
+            case "$value" in
+              success|skipped) ;;
+              *) echo "FAIL: $name=$value"; failed=1 ;;
+            esac
+          done
+          exit "$failed"

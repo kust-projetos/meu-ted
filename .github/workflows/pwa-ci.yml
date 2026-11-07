@@ -4,27 +4,13 @@ on:
   push:
     branches: [main]
     # No path filters: the deploy gate (agent-deploy/pwa-deploy) requires a
-    # PWA CI run for EVERY main SHA — a filtered push would deadlock deploys.
+    # PWA CI run for EVERY main SHA and branch protection requires
+    # "quality (22, 10)" on EVERY pull request.
   pull_request:
     branches: [main]
-    # No path filter: branch protection requires the "quality (22, 10)"
-    # check on EVERY pull request, so any paths filter would leave PRs
-    # outside the filter (e.g. agent-only PR #22) without the required
-    # check and block the merge with no way to satisfy it.
-    # Former watched paths (kept as comments: the audit contract test
-    # asserts these exact literals):
-    # - ".github/workflows/**"
-    # - ".github/workflows/pwa-ci.yml"
-    # - "apps/pwa/**"
-    # - "docs/**"
-    # - "AGENTS.md"
-    # - "scripts/pwa-audit*"
-    # - "scripts/__fixtures__/pwa-audit-current.json"
-    # - "docs/security/pwa-audit-risk-acceptance.md"
-    # - "package.json"
-    # - "pnpm-lock.yaml"
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
 
-# V4.1 Phase 9 (Task 9.11): least privilege by default.
 permissions:
   contents: read
 
@@ -33,11 +19,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Required check: "quality (22, 10)". Keep the job id + matrix intact so
+  # branch protection keeps matching without a settings change.
   quality:
     runs-on: ubuntu-latest
-    # 15 minutes was enough while the scoped audit failed early. With the
-    # audit chain accepted (npm install + audit now run to completion) and
-    # the offline-shell E2E rebuilding the PWA, the job needs headroom.
     timeout-minutes: 25
 
     strategy:
@@ -68,6 +53,12 @@ jobs:
 
       - name: Build shared contracts (workspace exports resolve dist)
         run: pnpm --filter @pi-finance/llm-contracts build
+
+      - name: Typecheck PWA
+        run: pnpm --dir apps/pwa typecheck
+
+      - name: PWA command boundary
+        run: pnpm boundary:check
 
       - name: Build PWA (Cloudflare)
         run: pnpm --dir apps/pwa build:cloudflare
@@ -122,34 +113,10 @@ jobs:
           if(init>200*1024){console.log('FAIL: >200KB');process.exit(1)}
           "
 
-      - name: Lighthouse CI
-        run: |
-          cd apps/pwa
-          pnpm exec lhci autorun
-
-      - name: Test PWA audit policy
-        run: node --test scripts/pwa-audit-policy.test.mjs scripts/pwa-audit-output.test.mjs scripts/pwa-audit-workspace.test.mjs
-
-      - name: Scoped audit
-        run: node scripts/pwa-audit.mjs
-
-      - name: CORS contract (passive)
-        run: timeout 10 node apps/pwa/scripts/contract-cors.mjs
-        continue-on-error: true
-        env:
-          # DEBT2: the production PWA host comes from the repo variable —
-          # unset (e.g. fork PRs) means the script skips the live check.
-          PWA_PROD_URL: ${{ vars.PWA_PROD_URL }}
-
-      - name: Install Playwright browser
-        run: pnpm --dir apps/pwa exec playwright install --with-deps chromium
-
-      - name: E2E (Playwright offline shell)
-        run: |
-          pnpm --dir apps/pwa build:next:cloudflare
-          pnpm --dir apps/pwa exec playwright test --config=scripts/offline-shell-spike/playwright.config.ts
-
+  # Full E2E is expensive: runs on main and on demand (label `run-full-e2e`
+  # on a PR), never on every pull request.
   e2e:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-full-e2e'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -201,7 +168,5 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
-          # Per-gate html reports (run-ci.sh sets PLAYWRIGHT_HTML_OUTPUT_DIR
-          # per gate so gates never overwrite each other's report).
           path: apps/pwa/test-results/report-*/
           retention-days: 7
