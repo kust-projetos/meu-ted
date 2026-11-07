@@ -502,6 +502,7 @@ capability nova, nenhuma policy alterada, nenhum segundo broker.
 | Gates rápidos (`docs`, `governance`, `capabilities`, `write-policy`, `boundary`, `action-pins`, `skip`, `public-safety`) | **PASS** |
 | E2E receita (`P2D_INCOME=1`) | **1 passed (2.9m)** — 1 income, saldo +250000, propose/confirm/execute/cancel = 2/1/1/1, `recoveredAfterReload=true` |
 | E2E despesa P3.1 (regressão) | **1 passed (1.0m)** |
+| CI remoto (PR #294, `f030a2d`) | **PASS** — `Gate — all checks`, API, Agent, PWA, Postgres, Security, Docs, Capabilities, Write policy; PWA CI `quality (22, 10)` + `e2e (22, 10)`. Flake conhecido `t07c` falhou 2× e passou na reexecução. |
 
 **Veredito:** `P3_INCOME_SLICE_PASS` no escopo local/determinístico. Sem
 provider pago, Postgres real, deploy ou merge. O card terminal é transitório

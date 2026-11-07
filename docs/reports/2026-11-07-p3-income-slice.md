@@ -150,6 +150,15 @@ P2D_INCOME=1 pnpm exec playwright test --config e2e/playwright.config.ts --proje
 P2D_EXPENSE=1 pnpm exec playwright test --config e2e/playwright.config.ts --project p2d-synthetic
 ```
 
+### CI remoto
+
+- PR **#294** (`feat/p3-income-slice`), commit `f030a2d`.
+- CI run `42339405874`: **`Gate — all checks` PASS**, API/Agent/PWA/Postgres/Security/Docs/Capabilities/Write policy PASS.
+- PWA CI run `42339405867`: **`quality (22, 10)` PASS** e **`e2e (22, 10)` PASS**.
+- O job `PWA — lint + typecheck + test` falhou duas vezes no flake conhecido
+  `t07c` (`unreachable` vs `unauthenticated`, sem relação com a P3.2) e passou
+  na reexecução; os demais jobs passaram na primeira execução.
+
 ## 6. Limitações e riscos residuais
 
 - O provider é scriptado; isto prova o fluxo do produto, não a qualidade de um
