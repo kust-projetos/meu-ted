@@ -24,11 +24,11 @@ import {
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
 import { createInMemoryStores } from '../../src/writes/in-memory.js';
 
-const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate'] as const;
+const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'cards.purchase.create'] as const;
 
 // Manual-only tools: never auto-executed (absent from
 // AUTOEXECUTION_ELIGIBLE_TOOLS, contract pin autoExecutionEligible=false).
-const MANUAL_ONLY_TOOLS = ['transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate'] as const;
+const MANUAL_ONLY_TOOLS = ['transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'cards.purchase.create'] as const;
 
 describe('T0.1: Approval Tool Contract registry', () => {
   it('registers exactly the six V2 mutable tools', () => {

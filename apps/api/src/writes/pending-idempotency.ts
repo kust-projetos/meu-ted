@@ -63,6 +63,20 @@ const isTransactionSnapshot = (value: unknown, householdId: string): value is Tr
     (row['notes'] === undefined || typeof row['notes'] === 'string');
 };
 
+const parseCardPurchaseResponse = (response: unknown, householdId: string): { transactions: Transaction[] } => {
+  let envelope: unknown = response;
+  if (typeof response === 'string') {
+    try { envelope = JSON.parse(response); } catch { throw domainErrors.idempotencyConflict(); }
+  }
+  if (!envelope || typeof envelope !== 'object' || !('transactions' in envelope)) throw domainErrors.idempotencyConflict();
+  const txs = (envelope as { transactions?: unknown }).transactions;
+  if (!Array.isArray(txs) || txs.length === 0) throw domainErrors.idempotencyConflict();
+  for (const t of txs) {
+    if (!isTransactionSnapshot(t, householdId)) throw domainErrors.idempotencyConflict();
+  }
+  return { transactions: txs as Transaction[] };
+};
+
 const parseResponse = (response: unknown, householdId: string): { transaction: Transaction } => {
   let envelope: unknown = response;
   if (typeof response === 'string') {
@@ -415,3 +429,4 @@ const isCategorySnapshot = (value: unknown, householdId: string): value is Categ
   }
   return true;
 };
+

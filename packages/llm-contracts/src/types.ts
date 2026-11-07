@@ -386,6 +386,7 @@ export const TED_APPROVAL_TOOLS = [
   'categories.create',
   'categories.update',
   'categories.deactivate',
+  'cards.purchase.create',
 ] as const;
 export type TedApprovalTool = (typeof TED_APPROVAL_TOOLS)[number];
 
@@ -605,6 +606,19 @@ export const isActionablePendingOperationPresentation = (
   if (presentation.tool === 'categories.deactivate') {
     return isPresentationLabel(presentation.category);
   }
+  if (presentation.tool === 'cards.purchase.create') {
+    // P3.4 card purchase (1x): the card (a credit-card account) + amount +
+    // description + date are the executable tuple the user re-authorizes.
+    // The category is OPTIONAL - an unclassified purchase is still
+    // actionable, so it never gates Confirm.
+    return (
+      isNonEmptyString(presentation.description) &&
+      typeof presentation.amountCents === 'number' &&
+      Number.isFinite(presentation.amountCents) &&
+      isNonEmptyString(presentation.date) &&
+      isPresentationLabel(presentation.account)
+    );
+  }
   if (!isNonEmptyString(presentation.description)) return false;
   if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents)) return false;
   if (!isNonEmptyString(presentation.date)) return false;
@@ -650,6 +664,7 @@ export type MutationEffectsEntry =
 export const MUTATION_EFFECTS_REGISTRY: Record<MutationKind, MutationEffectsEntry> = {
   'transactions.expense.create': { mutationKind: 'transactions.expense.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transactions.income.create': { mutationKind: 'transactions.income.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
+  'cards.purchase.create': { mutationKind: 'cards.purchase.create', affectedTargets: ['transactions', 'accounts', 'statement', 'dashboard-summary', 'quick-insights'] },
   'accounts.create': { mutationKind: 'accounts.create', affectedTargets: ['accounts', 'dashboard-summary'] },
   'accounts.deactivate': { mutationKind: 'accounts.deactivate', affectedTargets: ['accounts', 'dashboard-summary'] },
   'accounts.update': { mutationKind: 'accounts.update', affectedTargets: ['accounts', 'dashboard-summary'] },

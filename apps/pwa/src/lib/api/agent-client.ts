@@ -258,6 +258,7 @@ function approvalEntityType(tool: string): "transaction" | "account" | "category
     case "transactions.expense.create":
     case "transactions.income.create":
     case "transactions.update":
+    case "cards.purchase.create":
       return "transaction";
     case "accounts.create":
     case "accounts.update":
@@ -317,6 +318,10 @@ export type AgentTurnPendingOperation =
  *
  * P3.2 adds `transactions.income.create` to the SAME closed contract; the API
  * already accepts it, so no capability or authority is added here.
+ *
+ * P3.4 adds `cards.purchase.create`: a 1x credit-card purchase. Its category
+ * is optional (a card purchase may be classified later), so it carries its
+ * own normalized-args schema; the closed tool set is otherwise identical.
  */
 const proposalArgsSchema = z
   .object({
@@ -328,30 +333,58 @@ const proposalArgsSchema = z
   })
   .strict();
 
+const cardPurchaseProposalArgsSchema = z
+  .object({
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    description: z.string().trim().min(1).max(240),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    accountId: z.string().uuid(),
+    categoryId: z.string().uuid().optional(),
+  })
+  .strict();
+
 const proposalIntentBase = {
   intentionId: z.string().trim().min(1).max(128),
   // Display-only metadata; never used to authorize or execute.
   summary: z.string().trim().min(1).max(240).optional(),
-  normalizedArgs: proposalArgsSchema,
 } as const;
 
 const expenseProposalIntentSchema = z
-  .object({ tool: z.literal("transactions.expense.create"), ...proposalIntentBase })
+  .object({
+    tool: z.literal("transactions.expense.create"),
+    ...proposalIntentBase,
+    normalizedArgs: proposalArgsSchema,
+  })
   .strict();
 
 const incomeProposalIntentSchema = z
-  .object({ tool: z.literal("transactions.income.create"), ...proposalIntentBase })
+  .object({
+    tool: z.literal("transactions.income.create"),
+    ...proposalIntentBase,
+    normalizedArgs: proposalArgsSchema,
+  })
+  .strict();
+
+const cardPurchaseProposalIntentSchema = z
+  .object({
+    tool: z.literal("cards.purchase.create"),
+    ...proposalIntentBase,
+    normalizedArgs: cardPurchaseProposalArgsSchema,
+  })
   .strict();
 
 const proposalIntentSchema = z.discriminatedUnion("tool", [
   expenseProposalIntentSchema,
   incomeProposalIntentSchema,
+  cardPurchaseProposalIntentSchema,
 ]);
 
 export type ProposalArgs = z.infer<typeof proposalArgsSchema>;
+export type CardPurchaseProposalArgs = z.infer<typeof cardPurchaseProposalArgsSchema>;
 export type ProposalIntent =
   | { tool: "transactions.expense.create"; intentionId: string; normalizedArgs: ProposalArgs }
-  | { tool: "transactions.income.create"; intentionId: string; normalizedArgs: ProposalArgs };
+  | { tool: "transactions.income.create"; intentionId: string; normalizedArgs: ProposalArgs }
+  | { tool: "cards.purchase.create"; intentionId: string; normalizedArgs: CardPurchaseProposalArgs };
 export type ExpenseProposalIntent = Extract<ProposalIntent, { tool: "transactions.expense.create" }>;
 export type IncomeProposalIntent = Extract<ProposalIntent, { tool: "transactions.income.create" }>;
 

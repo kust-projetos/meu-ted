@@ -1,4 +1,4 @@
-// P3 end-to-end (deterministic, local provider): the exact user message runs
+﻿// P3 end-to-end (deterministic, local provider): the exact user message runs
 // the REAL SDK 2.2.4 prompt loop against a scripted OpenAI-compatible stub on
 // 127.0.0.1, the model calls `propose_expense`, and the tool records ONE
 // proposal intent — with ZERO finance transport calls and ZERO writes.
@@ -175,7 +175,7 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
     const allowIdx = providerPolicies.findIndex((p) => p.resource === FIXTURE_PROVIDER && p.effect === 'allow');
     const denyIdx = providerPolicies.findIndex((p) => p.resource === '*' && p.effect === 'deny');
     assert.ok(allowIdx !== -1 && allowIdx > denyIdx, 'test-only provider allow comes after deny-all');
-    for (const resource of ['propose_expense', 'propose_income']) {
+    for (const resource of ['propose_card_purchase', 'propose_expense', 'propose_income']) {
       assert.ok(
         (cfg.agents.ted.permissions || []).some((p) => p.resource === resource && p.effect === 'allow'),
         `the P3 config allows exactly the ${resource} permission`,

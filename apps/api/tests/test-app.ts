@@ -304,7 +304,7 @@ export const buildTestApp = (
     ...(pendingV2Store
       ? {
           pendingV2Store,
-          pendingV2Executor: createPendingOperationV2Executor(writes),
+          pendingV2Executor: createPendingOperationV2Executor(writes, cardStore),
           pendingV2ReadModel: store,
         }
       : {}),

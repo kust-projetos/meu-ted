@@ -24,6 +24,7 @@ import { createMutationProposal } from './mutation-proposal.js';
 
 export const PROPOSE_EXPENSE_TOOL = 'transactions.expense.create';
 export const PROPOSE_INCOME_TOOL = 'transactions.income.create';
+export const PROPOSE_CARD_PURCHASE_TOOL = 'cards.purchase.create';
 
 const isoDate = z
   .string()
@@ -47,6 +48,16 @@ export const transactionProposalArgsSchema = z
   })
   .strict();
 
+export const cardPurchaseProposalArgsSchema = z
+  .object({
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    description: z.string().trim().min(1).max(240),
+    date: isoDate,
+    accountId: z.string().uuid(),
+    categoryId: z.string().uuid().optional(),
+  })
+  .strict();
+
 const intentBase = {
   intentionId: z.string().trim().min(1).max(128),
   normalizedArgs: transactionProposalArgsSchema,
@@ -60,10 +71,20 @@ export const incomeProposalIntentSchema = z
   .object({ tool: z.literal(PROPOSE_INCOME_TOOL), ...intentBase })
   .strict();
 
-/** Discriminated union: the broker route accepts exactly these two tools. */
+const cardIntentBase = {
+  intentionId: z.string().trim().min(1).max(128),
+  normalizedArgs: cardPurchaseProposalArgsSchema,
+} as const;
+
+export const cardPurchaseProposalIntentSchema = z
+  .object({ tool: z.literal(PROPOSE_CARD_PURCHASE_TOOL), ...cardIntentBase })
+  .strict();
+
+/** Discriminated union: the broker route accepts these tools. */
 export const proposalIntentSchema = z.discriminatedUnion('tool', [
   expenseProposalIntentSchema,
   incomeProposalIntentSchema,
+  cardPurchaseProposalIntentSchema,
 ]);
 
 export type ExpenseProposalIntent = z.infer<typeof expenseProposalIntentSchema>;
@@ -82,8 +103,8 @@ function formatBRL(amountCents: number): string {
   return `R$ ${(amountCents / 100).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
 }
 
-function proposalSummary(intent: TransactionProposalIntent): string {
-  const noun = intent.tool === PROPOSE_INCOME_TOOL ? 'Receita' : 'Despesa';
+function proposalSummary(intent: TransactionProposalIntent | z.infer<typeof cardPurchaseProposalIntentSchema>): string {
+  const noun = intent.tool === PROPOSE_INCOME_TOOL ? 'Receita' : intent.tool === PROPOSE_CARD_PURCHASE_TOOL ? 'Compra no cartão' : 'Despesa';
   return `${noun} de ${formatBRL(intent.normalizedArgs.amountCents)} em "${intent.normalizedArgs.description}"`;
 }
 

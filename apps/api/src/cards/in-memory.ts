@@ -266,7 +266,7 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
       return { ...s, purchases: txsByPeriod };
     },
 
-    async createCardPurchase(householdId, input) {
+    async createCardPurchase(householdId, input, _options?) {
       const card = findAccount(input.accountId, householdId);
       if (input.categoryId) {
         resolveCardCategory(householdId, input.categoryId);

@@ -144,6 +144,26 @@ export const TOOL_DEFS = [
     },
     output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
   },
+  {
+    // P3.4 card purchase slice — same intent-only contract, card purchase tool.
+    // Card identified via list_accounts (credit_card); categoryId optional.
+    name: 'propose_card_purchase',
+    description:
+      'TED (P3 opt-in): propose a 1x credit-card purchase for the authenticated user to approve. Records a pending proposal only — never creates the purchase.',
+    input: {
+      type: 'object',
+      properties: {
+        amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
+        description: { type: 'string', minLength: 1, maxLength: 240 },
+        date: { type: 'string', description: 'Purchase date YYYY-MM-DD (defaults to today UTC)' },
+        accountId: { type: 'string', description: 'Credit-card account uuid resolved from list_accounts (credit_card)' },
+        categoryId: { type: 'string', description: 'Expense category uuid resolved from list_categories (optional)' },
+      },
+      required: ['amountCents', 'description', 'accountId'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
 ];
 
 export const TOOL_NAMES = TOOL_DEFS.map((d) => d.name);
@@ -153,6 +173,7 @@ export const TOOL_NAMES = TOOL_DEFS.map((d) => d.name);
 export const PROPOSAL_TOOL_SPECS = Object.freeze({
   propose_expense: Object.freeze({ tool: 'transactions.expense.create', noun: 'Despesa' }),
   propose_income: Object.freeze({ tool: 'transactions.income.create', noun: 'Receita' }),
+  propose_card_purchase: Object.freeze({ tool: 'cards.purchase.create', noun: 'Compra no cartão' }),
 });
 
 // Canonical uuid shape (any version) — the API revalidates against its real
@@ -174,7 +195,7 @@ const FORBIDDEN_KEYS = new Set([
 function knownKeys(name) {
   if (name === 'list_accounts') return ['kind', 'includeInactive'];
   if (name === 'list_categories') return ['kind'];
-  if (name === 'propose_expense' || name === 'propose_income') return ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
+  if (name === 'propose_expense' || name === 'propose_income' || name === 'propose_card_purchase') return ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
   return ['yearMonth'];
 }
 
@@ -205,7 +226,7 @@ export function validateToolArgs(name, args) {
     if (args.kind !== undefined && typeof args.kind !== 'string') {
       throw new ToolError('tool.invalid_args', 'list_categories: kind must be a string');
     }
-  } else if (name === 'propose_expense' || name === 'propose_income') {
+  } else if (name === 'propose_expense' || name === 'propose_income' || name === 'propose_card_purchase') {
     // Structural validation only (types/format). The API remains the authority
     // for the transaction contract (expense and income share the same shape and
     // are validated by their own schemas); these checks stop the model from
@@ -228,7 +249,10 @@ export function validateToolArgs(name, args) {
     if (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId)) {
       throw new ToolError('tool.invalid_args', `${name}: accountId must be a uuid`);
     }
-    if (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId)) {
+    if (args.categoryId !== undefined && (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId))) {
+      throw new ToolError('tool.invalid_args', `${name}: categoryId must be a uuid`);
+    }
+    if (name !== 'propose_card_purchase' && (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId))) {
       throw new ToolError('tool.invalid_args', `${name}: categoryId must be a uuid`);
     }
   } else {
@@ -402,5 +426,6 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
     list_categories: (args, host, opts) => run('list_categories', args, host, opts),
     propose_expense: (args, host, opts) => propose('propose_expense', args, host, opts),
     propose_income: (args, host, opts) => propose('propose_income', args, host, opts),
+    propose_card_purchase: (args, host, opts) => propose('propose_card_purchase', args, host, opts),
   };
 }

@@ -317,6 +317,7 @@ export function tedConfig(profileOrOpts, { p3Writes = false } = {}) {
             ? [
                 { action: 'ted.finance.read', resource: 'propose_expense', effect: 'allow' },
                 { action: 'ted.finance.read', resource: 'propose_income', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'propose_card_purchase', effect: 'allow' },
               ]
             : []),
         ],

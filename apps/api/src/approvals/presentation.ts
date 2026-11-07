@@ -21,7 +21,9 @@ import {
 } from '@pi-finance/llm-contracts';
 
 export const derivePresentationTitle = (tool: string): string =>
-  tool === 'transactions.update'
+  tool === 'cards.purchase.create'
+    ? 'Confirmar compra no cartão'
+    : tool === 'transactions.update'
     ? 'Alterar descrição do lançamento'
     : tool === 'accounts.deactivate'
     ? 'Desativar conta'
@@ -264,6 +266,44 @@ export const buildPendingOperationPresentation = (input: {
       warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
     };
     if (input.categoryLabel === expectedName) candidate.category = { id: categoryId, label: input.categoryLabel };
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    if (!parsed.success) return null;
+    return parsed.data as PendingOperationPresentation;
+  }
+  if (input.tool === 'cards.purchase.create') {
+    // P3.4 card purchase (1x): the card is the credit-card account
+    // (`accountId`) and the category is OPTIONAL - an unclassified purchase
+    // is still confirmable, so only the card label gates Confirm. The
+    // actionable predicate below mirrors exactly that tuple.
+    const { amountCents, description, date, accountId, categoryId } = args;
+    if (
+      typeof amountCents !== 'number' ||
+      typeof description !== 'string' ||
+      !description ||
+      typeof date !== 'string' ||
+      !date ||
+      typeof accountId !== 'string' ||
+      !accountId
+    ) {
+      return null;
+    }
+    const candidate: Record<string, unknown> = {
+      id: input.id,
+      status: input.status,
+      tool: input.tool,
+      title: derivePresentationTitle(input.tool),
+      amountCents,
+      description,
+      date,
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
+    if (typeof input.accountLabel === 'string' && input.accountLabel) {
+      candidate.account = { id: accountId, label: input.accountLabel };
+    }
+    if (typeof categoryId === 'string' && categoryId && typeof input.categoryLabel === 'string' && input.categoryLabel) {
+      candidate.category = { id: categoryId, label: input.categoryLabel };
+    }
     const parsed = pendingOperationPresentationSchema.safeParse(candidate);
     if (!parsed.success) return null;
     return parsed.data as PendingOperationPresentation;

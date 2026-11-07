@@ -1,4 +1,4 @@
-// P3 write slice RED: propose_expense as a PROPOSAL INTENT only.
+﻿// P3 write slice RED: propose_expense as a PROPOSAL INTENT only.
 //
 // Contract under test:
 // - Default product catalog stays exactly the two P2 reads; the P3 writes
@@ -67,7 +67,7 @@ describe('p3 propose_expense: catalog gating', () => {
   it('local writes opt-in adds the proposal tools and list_categories with both schemas', () => {
     assert.equal(isP3WritesEnabled(WRITE_ENV), true);
     const names = productToolDefs(WRITE_ENV).map((d) => d.name).sort();
-    assert.deepEqual(names, ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense', 'propose_income']);
+    assert.deepEqual(names, ['get_month_summary', 'list_accounts', 'list_categories', 'propose_card_purchase', 'propose_expense', 'propose_income']);
     const propose = productToolDefs(WRITE_ENV).find((d) => d.name === 'propose_expense');
     assert.equal(propose.input.type, 'object');
     assert.ok(propose.output && propose.output.type === 'object');
@@ -198,7 +198,7 @@ describe('p3 propose_expense: plugin registration', () => {
     await writesDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedWrites.push(t) }); } } });
     assert.deepEqual(
       addedWrites.map((t) => t.name).sort(),
-      ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense', 'propose_income'],
+      ['get_month_summary', 'list_accounts', 'list_categories', 'propose_card_purchase', 'propose_expense', 'propose_income'],
     );
 
     const addedProd = [];

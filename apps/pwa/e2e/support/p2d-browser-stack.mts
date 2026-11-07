@@ -57,9 +57,10 @@ const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
 // inference and no production data.
 const EXPENSE = process.env.P2D_EXPENSE === "1";
 const INCOME = process.env.P2D_INCOME === "1";
-const PROPOSAL = EXPENSE || INCOME;
-if (EXPENSE && INCOME) {
-  throw new Error("[p2d-stack] P2D_EXPENSE and P2D_INCOME are mutually exclusive");
+const CARD = process.env.P2D_CARD === "1";
+const PROPOSAL = EXPENSE || INCOME || CARD;
+if ([EXPENSE, INCOME, CARD].filter(Boolean).length > 1) {
+  throw new Error("[p2d-stack] select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD)");
 }
 if (OFFLINE_CHAT && LIVE_REAL) {
   throw new Error("[p2d-stack] P2D_OFFLINE_CHAT and P2D_LIVE_REAL are mutually exclusive");
@@ -92,6 +93,7 @@ const {
   ACCOUNT_A1,
   ACCOUNT_A2,
   ACCOUNT_B1,
+  CARD_A1,
   CATEGORY_FOOD_A,
   CATEGORY_FOOD_B,
   CATEGORY_RENT_A,
@@ -204,7 +206,9 @@ const auth = createBetterAuth({
 const pendingV2Store = PROPOSAL ? createInMemoryPendingOperationV2Store() : null;
 const built = buildTestApp(
   {
-    accounts: [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1],
+    // P3.4 only: the card slice needs a real credit-card account in the
+    // synthetic ledger. Every other mode keeps the exact read-slice oracle.
+    accounts: CARD ? [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1, CARD_A1] : [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1],
     categories: [CATEGORY_FOOD_A, CATEGORY_RENT_A, CATEGORY_SALARY_A, CATEGORY_FOOD_B],
     transactions: TRANSACTIONS,
   },
@@ -242,6 +246,21 @@ function buildProbeConfig(): Record<string, unknown> {
     tedRuntimeDir: TED_RUNTIME_DIR,
   };
   if (PROPOSAL) {
+    if (CARD) {
+      return {
+        ...base,
+        stub: {
+          mode: "card",
+          toolName: "propose_card_purchase",
+          toolArgs: {
+            amountCents: 15000,
+            description: "supermercado",
+            date: "2026-11-07",
+            accountId: CARD_A1.id,
+          },
+        },
+      };
+    }
     if (INCOME) {
       return {
         ...base,

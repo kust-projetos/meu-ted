@@ -586,4 +586,61 @@ describe("TedApprovalCard mandatory presentation (production functional correcti
     expect(screen.queryByRole("button", { name: /Tentar novamente/i })).not.toBeInTheDocument();
     expect(agentClient.decidePendingOperation).not.toHaveBeenCalled();
   });
+
+  it("renders a P3.4 card purchase as card, value, description, 1x and Confirm/Reject", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({
+      operationId: "op-card",
+      status: "succeeded",
+      receipt: {
+        mutationId: "mut-card",
+        mutationKind: "cards.purchase.create",
+        status: "succeeded",
+        affectedTargets: ["transactions", "accounts", "statement", "dashboard-summary", "quick-insights"],
+        operationId: "op-card",
+        entity: { type: "transaction", id: "tx-card" },
+      },
+    });
+
+    render(
+      <TedApprovalCard
+        operation={{
+          id: "op-card",
+          status: "proposed",
+          operation: "cards.purchase.create",
+          presentation: {
+            id: "op-card",
+            status: "proposed",
+            tool: "cards.purchase.create",
+            title: "Confirmar compra no cartão",
+            amountCents: 15000,
+            description: "supermercado",
+            date: "2026-11-07",
+            account: { id: "card-1", label: "Nubank Card" },
+            expiresAt: "2026-11-07T12:00:00.000Z",
+            warnings: [],
+          },
+        }}
+        workspaceId="workspace-1"
+      />,
+    );
+
+    expect(screen.getByText("supermercado")).toBeInTheDocument();
+    expect(screen.getByText("Nubank Card")).toBeInTheDocument();
+    expect(screen.getByText("R$ 150,00")).toBeInTheDocument();
+    expect(screen.getByText("Cartão")).toBeInTheDocument();
+    expect(screen.getByText("Parcela")).toBeInTheDocument();
+    expect(screen.getByText("1x")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Confirmar R\$ 150,00/ }));
+
+    await waitFor(() =>
+      expect(agentClient.decidePendingOperation).toHaveBeenCalledWith(
+        "workspace-1",
+        "op-card",
+        "confirm",
+        { tool: "cards.purchase.create" },
+      ),
+    );
+  });
 });

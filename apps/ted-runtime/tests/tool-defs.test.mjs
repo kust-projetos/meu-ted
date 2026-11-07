@@ -1,4 +1,4 @@
-// P1 RED: read-only tool contract — list_accounts + get_month_summary (P2
+﻿// P1 RED: read-only tool contract — list_accounts + get_month_summary (P2
 // default) plus the optional P3 list_categories and the P3 proposal INTENTS
 // (propose_expense + propose_income). No confirm/execute/PG bridge in this slice.
 import { describe, it } from 'node:test';
@@ -32,8 +32,8 @@ function stubTransport(cases) {
 
 describe('ted-runtime tool catalogue (read-only + proposal intent)', () => {
   it('knows the P2 reads, the optional P3 category read and the proposal intent (no confirm/execute)', () => {
-    assert.deepEqual([...TOOL_NAMES].sort(), ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense', 'propose_income']);
-    assert.equal(TOOL_DEFS.length, 5);
+    assert.deepEqual([...TOOL_NAMES].sort(), ['get_month_summary', 'list_accounts', 'list_categories', 'propose_card_purchase', 'propose_expense', 'propose_income']);
+    assert.equal(TOOL_DEFS.length, 6);
     for (const def of TOOL_DEFS) {
       assert.ok(def.input && typeof def.input === 'object', `${def.name} needs input schema`);
       assert.ok(def.output && typeof def.output === 'object', `${def.name} needs output schema (native 2.2.4 requirement)`);
