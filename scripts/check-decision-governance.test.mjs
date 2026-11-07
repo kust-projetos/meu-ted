@@ -256,8 +256,8 @@ test('git fixture: ADR-027 header change with spec and roadmap is accepted', asy
 
 test('ci.yml governance job resolves the base per event and fails closed', () => {
   const workflow = fs.readFileSync('.github/workflows/ci.yml', 'utf8');
-  const start = workflow.indexOf('\n  governance:');
-  assert.notEqual(start, -1, 'governance job missing');
+  const start = workflow.indexOf('\n  docs-policies:');
+  assert.notEqual(start, -1, 'docs-policies job missing');
   const region = workflow.slice(start);
   assert.ok(
     region.includes('github.event.pull_request.base.sha'),

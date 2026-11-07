@@ -433,12 +433,12 @@ function attestRegion(source) {
 }
 
 for (const file of ["pwa-deploy.yml", "agent-deploy.yml"]) {
-  test(`${file}: workflow_run triggers preserved (no removal, no reorder, no dispatch)`, () => {
+  test(`${file}: manual-only deployment on main`, () => {
     const source = readWorkflow(file);
-    assert.ok(source.includes('workflows: ["CI", "PWA CI"]'), "both CI sources must stay wired");
-    assert.ok(source.includes("types: [completed]"), "completed trigger must stay");
-    assert.ok(source.includes("branches: [main]"), "main branch filter must stay");
-    assert.ok(!source.includes("workflow_dispatch"), "no manual dispatch bypass");
+    assert.ok(source.includes("  workflow_dispatch:"), "manual dispatch required");
+    assert.ok(!source.includes("  workflow_run:"), "automatic workflow_run trigger forbidden");
+    assert.ok(source.includes("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"), "manual main-only gate required");
+    assert.ok(source.includes("HEAD_SHA: ${{ github.sha }}"), "manual SHA must be used");
   });
 
   test(`${file}: permissions not expanded (deploy read-only, attest none)`, () => {
@@ -449,12 +449,12 @@ for (const file of ["pwa-deploy.yml", "agent-deploy.yml"]) {
     assert.ok(attestRegion(readWorkflow(file)).includes("contents: none"), "attest stays contents: none");
   });
 
-  test(`${file}: fork/event/freshness gates preserved`, () => {
+  test(`${file}: manual gate requires green CI and freshness`, () => {
     const source = readWorkflow(file);
-    assert.ok(source.includes("head_repository"), "same-repository origin check must stay");
-    assert.ok(source.includes("event == 'push'"), "push-event gate must stay");
+    assert.ok(source.includes("github.ref == 'refs/heads/main'"), "main-only deployment");
+    assert.ok(source.includes("for (const name of ['CI', 'PWA CI'])"), "both CI runs required");
     assert.ok(source.includes("Reject stale deployment"), "freshness gate must stay");
-    assert.ok(source.includes("Deploy blocked: stale SHA"), "stale SHA must fail closed");
+    assert.ok(source.includes("Deploy blocked: stale SHA"), "stale SHA blocks deployment");
   });
 
   test(`${file}: no automatic dedupe-skip bypasses deploy`, () => {

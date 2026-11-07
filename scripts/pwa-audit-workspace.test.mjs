@@ -88,11 +88,13 @@ test("audit document requires a vulnerabilities object", () => {
   }
 });
 
-test("PWA CI watches its audit contract and workflow", () => {
-  const workflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "pwa-ci.yml"), "utf-8");
-  assert.match(workflow, /scripts\/__fixtures__\/pwa-audit-current\.json/);
-  assert.match(workflow, /docs\/security\/pwa-audit-risk-acceptance\.md/);
-  assert.match(workflow, /\.github\/workflows\/pwa-ci\.yml/);
+test("scheduled Audits workflow owns the scoped PWA audit", () => {
+  const workflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "audits.yml"), "utf-8");
+  assert.match(workflow, /schedule:/);
+  assert.match(workflow, /scripts\/pwa-audit\.mjs/);
+  assert.match(workflow, /pwa-audit-policy\.test\.mjs/);
+  const pwaCi = fs.readFileSync(path.join(ROOT, ".github", "workflows", "pwa-ci.yml"), "utf-8");
+  assert.doesNotMatch(pwaCi, /scripts\/pwa-audit\.mjs/);
 });
 
 test("missing workspace package fails closed", () => {
