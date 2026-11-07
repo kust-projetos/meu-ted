@@ -22,6 +22,7 @@
 
 import { TOOL_DEFS, createToolExecutors, deriveIntentionId } from './tool-defs.mjs';
 import { resolveHost } from './session-bindings.mjs';
+import { proposalIntentRegistry } from './proposal-intents.mjs';
 
 export const PRODUCT_TOOL_NAMES = ['list_accounts', 'get_month_summary'];
 
@@ -39,6 +40,7 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
   'list_accounts',
   'get_month_summary',
   'list_categories',
+  'propose_expense',
 ]);
 
 // P3 prerequisite (read-only category lookup for a FUTURE expense proposal):
@@ -48,18 +50,38 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
 // The default product catalog is exactly PRODUCT_TOOL_NAMES (P2 behavior).
 export const P3_READ_TOOL_NAMES = ['list_categories'];
 
+// P3 write slice: `propose_expense` records a proposal intent only. Exposed
+// ONLY as a local opt-in — TED_OPENCODE_P3_WRITES_ENABLED=1 with
+// NODE_ENV !== 'production'. It also enables the category read needed to
+// resolve the expense category. Production forces both off (fail closed).
+export const P3_WRITE_TOOL_NAMES = ['propose_expense'];
+
 export function isP3ReadsEnabled(env = process.env) {
   try {
     if (!env || typeof env !== 'object') return false;
-    if (env.TED_OPENCODE_P3_READS_ENABLED !== '1') return false;
-    return env.NODE_ENV !== 'production';
+    if (env.NODE_ENV === 'production') return false;
+    return env.TED_OPENCODE_P3_READS_ENABLED === '1' || env.TED_OPENCODE_P3_WRITES_ENABLED === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function isP3WritesEnabled(env = process.env) {
+  try {
+    if (!env || typeof env !== 'object') return false;
+    if (env.NODE_ENV === 'production') return false;
+    return env.TED_OPENCODE_P3_WRITES_ENABLED === '1';
   } catch {
     return false;
   }
 }
 
 export function productToolDefs(env = process.env) {
-  const names = isP3ReadsEnabled(env) ? [...PRODUCT_TOOL_NAMES, ...P3_READ_TOOL_NAMES] : [...PRODUCT_TOOL_NAMES];
+  const names = [
+    ...PRODUCT_TOOL_NAMES,
+    ...(isP3ReadsEnabled(env) ? P3_READ_TOOL_NAMES : []),
+    ...(isP3WritesEnabled(env) ? P3_WRITE_TOOL_NAMES : []),
+  ];
   const defs = TOOL_DEFS.filter((d) => names.includes(d.name));
   if (defs.length !== names.length) {
     throw new Error(`product tool catalogue drift: expected ${names.join(',')}`);
@@ -119,6 +141,7 @@ export function buildExecute(def, run, assertPermission) {
       const intentionId = deriveIntentionId({ sessionID, messageID });
       const o = opts || {};
       const body = await run(input, host, {
+        sessionID,
         seed: o.seed,
         fault: o.fault,
         workspaceId: o.workspaceId,
@@ -169,11 +192,11 @@ export async function getEffectiveToolNames(pluginCtx) {
 // process.env) — lets tests prove default-off/opt-in/production-off without
 // mutating process state.
 // Returns the plugin definition object for Plugin.define(id, setup).
-export function defineTedFinancePlugin(transportFactory, { onEffectiveTools = null, env = process.env } = {}) {
+export function defineTedFinancePlugin(transportFactory, { onEffectiveTools = null, env = process.env, proposalIntents = proposalIntentRegistry } = {}) {
   if (typeof transportFactory !== 'function') {
     throw new Error('defineTedFinancePlugin: transportFactory (() => transport) is required');
   }
-  const executors = createToolExecutors(transportFactory());
+  const executors = createToolExecutors(transportFactory(), { proposalIntents });
   return {
     id: 'ted-finance',
     async setup(ctx) {

@@ -7,6 +7,7 @@ import {
   fetchActivePendingOperations,
   fetchActiveUndoProposals,
   sendAgentMessage,
+  proposePendingExpense,
   renewAgentSession,
   composeChatSend,
   loadPendingChatSend,
@@ -20,6 +21,7 @@ import {
   type ActivePendingOperation,
   type ActiveUndoProposal,
   type AgentMessage,
+  type ExpenseProposalIntent,
   type PendingChatSend,
 } from "@/lib/api/agent-client";
 import { TedMessage, type TedDeliveryState } from "./TedMessage";
@@ -39,6 +41,15 @@ import { Sparkles, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, T
 const HISTORY_LOAD_ERROR = "Não foi possível carregar o histórico. Tente novamente.";
 const ACTIVE_LOAD_ERROR = "Não foi possível carregar as aprovações agora.";
 const MESSAGE_SEND_ERROR = "Não foi possível enviar a mensagem. Tente novamente.";
+/**
+ * P3 recovery: the turn succeeded but the broker call was lost. The original
+ * intent stays in the existing retry anchor; a reload re-sends it under the
+ * same `intentionId` (the broker's idempotency seed). This copy tells the user
+ * the recovery did not land yet without inventing a card.
+ */
+const PROPOSAL_RECOVERY_ERROR =
+  "Não foi possível recuperar a proposta de despesa. Recarregue a página para tentar novamente.";
+const PROPOSAL_BROKER_ERROR = "Não foi possível preparar a proposta de despesa. Tente novamente.";
 /**
  * FIX-AGENT-QUOTA-MESSAGE: the Agent relays the usage-gate denial verbatim as
  * 429 `agent.quota_exceeded` (the daily token budget, reset on the 24h window)
@@ -388,6 +399,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const anchorSnapshotsRef = useRef<
     Map<string, Pick<PendingChatSend, "content" | "createdAt" | "attachments" | "messageId">>
   >(new Map());
+  /**
+   * P3 recovery: one broker attempt per persisted intent per mount. A failed
+   * attempt keeps the anchor (the next reload retries under the SAME
+   * intentionId); a successful one clears it. The ref prevents a history
+   * refresh loop from hammering the broker.
+   */
+  const proposalRecoveryRef = useRef<string | null>(null);
   const discardDrafts = useCallback(() => {
     for (const draft of draftsRef.current.values()) {
       revokeAttachmentUrls(draft.attachments ?? []);
@@ -522,7 +540,11 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     const anchored = loadPendingChatSend(scopeId);
     // Decisão pura de storage, fora do updater: âncora superada é obsoleta.
     const anchoredSuperseded = anchored ? isAnchorSupersededByHistory(anchored, history) : false;
-    if (anchored && anchoredSuperseded) {
+    // P3: a proposal anchor is a recovery record, not a failed send. Never
+    // discard it merely because history already carries the user message —
+    // the broker has not necessarily accepted the intent yet. It is cleared
+    // only after the broker responds.
+    if (anchored && anchoredSuperseded && !anchored.proposal) {
       clearPendingChatSend(scopeId);
     }
     // R2 FIX 3: reconciliação em TODA carga de histórico — snapshots
@@ -637,6 +659,27 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     }
     setHistoryLoaded(true);
     if (!preserveError) setError(null);
+    // P3 recovery — the turn succeeded but its broker call was lost. The
+    // persisted intent is replayed to the authenticated Agent broker BEFORE
+    // the active list is read, so the authoritative card is part of this same
+    // refresh. The idempotency seed is the intent's own intentionId: if the
+    // first call actually landed, the broker returns `existing: true` and no
+    // second operation exists.
+    let proposalRecoveryFailed = false;
+    if (anchored?.proposal && proposalRecoveryRef.current !== anchored.messageId) {
+      proposalRecoveryRef.current = anchored.messageId;
+      try {
+        await proposePendingExpense(scopeId, anchored.proposal);
+        if (isStaleScope(scopeId)) return [];
+        clearPendingChatSend(scopeId);
+        setMessages((prev) =>
+          prev.map((m) => (m.id === anchored.messageId ? { ...m, delivery: "sent" as const } : m)),
+        );
+      } catch {
+        if (isStaleScope(scopeId)) return [];
+        proposalRecoveryFailed = true;
+      }
+    }
     // FIX-P1: live cards come EXCLUSIVELY from the authoritative active
     // list (server-derived canonical presentation) — history NEVER mints a
     // card, even when a legacy turn still carries a pendingOperation.
@@ -671,6 +714,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // Last-known undo cards stay (untouched); staleness is already
       // signaled by the history/active error paths above when they fail.
     }
+    if (proposalRecoveryFailed) setError(PROPOSAL_RECOVERY_ERROR);
     return history;
   }, [activeWorkspace, applyActiveUndoProposals, isStaleScope]);
 
@@ -782,6 +826,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       setError(null);
       setTedRuntime("unknown");
       setStatus("ready");
+      proposalRecoveryRef.current = null;
     }
     activeWorkspaceIdRef.current = newId;
     prevWorkspaceIdRef.current = newId;
@@ -1072,12 +1117,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       }
       const returnedPendingOperation = turn.pendingOperation;
       const returnedUndoProposal = turn.undoProposal;
+      const returnedProposal = turn.proposal;
       // P1 output vazio: um 200 sem texto de resposta E sem decisão estruturada
-      // (pendingOperation/undoProposal) não é sucesso — é falha retentável.
+      // (pendingOperation/undoProposal/proposal) não é sucesso — é falha retentável.
       // Marca o balão como failed com retry e preserva âncora/draft (sem
       // reload de histórico, sem limpar nada), em vez do falso sucesso
       // (sent + âncora limpa).
-      if (!turn.output?.trim() && !returnedPendingOperation && !returnedUndoProposal) {
+      if (!turn.output?.trim() && !returnedPendingOperation && !returnedUndoProposal && !returnedProposal) {
         if (isStaleScope(sendWorkspaceId)) return;
         setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
         setError(MESSAGE_SEND_ERROR);
@@ -1106,6 +1152,33 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // on, EVERY write below is chat state and belongs to the new scope only.
       if (isStaleScope(sendWorkspaceId)) return;
       setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "sent" as const } : m)));
+      // P3 — the runtime's proposal INTENT becomes a real Pending V2 operation
+      // ONLY through the authenticated Agent broker (A4): the browser never
+      // mints a capability and the LLM never confirms. The card itself is then
+      // rehydrated from the authoritative active list by loadHistory below.
+      if (returnedProposal) {
+        try {
+          await proposePendingExpense(
+            sendWorkspaceId,
+            returnedProposal,
+            controller ? { signal: controller.signal } : undefined,
+          );
+          // P3: the broker accepted the intent (new or existing operation).
+          // Only now is the recovery anchor consumed — a lost broker response
+          // keeps it for the next reload.
+          clearPendingChatSend(sendWorkspaceId);
+        } catch {
+          if (isStaleScope(sendWorkspaceId)) return;
+          // No card is invented. The message stays retryable with the SAME
+          // messageId, so a lost broker response can never duplicate the
+          // proposal (the backend idempotency key is derived from it). The
+          // anchor keeps the intent for a broker-only retry or a reload.
+          setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
+          setError(PROPOSAL_BROKER_ERROR);
+          setStatus("error");
+          return;
+        }
+      }
       const copiesBefore = answerBefore(turn.output);
       const freshHistory = await loadHistory();
       // …and it may have changed again while the refresh was in flight.
@@ -1268,6 +1341,38 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // the message to `failed` keeping the draft; success consumes it.
   // R3 FIX 1: sem o draft fiel (com anexos), o retry é RECUSADO — reenviar
   // sem os anexos mudaria o payload sob a mesma identidade (`intentionId`).
+  /**
+   * P3: a failed BROKER call is retried as a broker call. Re-sending the chat
+   * turn would replay the gateway's completed intention (it returns the
+   * recovered output but never the consumed intent), so the proposal would be
+   * lost. The persisted intent carries the same `intentionId`; the broker's
+   * idempotency key makes the retry converge to the existing operation.
+   */
+  const retryProposalBroker = async (
+    messageId: string,
+    proposal: ExpenseProposalIntent,
+    scopeId: string,
+  ): Promise<void> => {
+    setLoading(true);
+    setError(null);
+    setStatus("streaming");
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "sending" as const } : m)));
+    try {
+      await proposePendingExpense(scopeId, proposal);
+      if (isStaleScope(scopeId)) return;
+      clearPendingChatSend(scopeId);
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "sent" as const } : m)));
+      await loadHistory();
+    } catch {
+      if (isStaleScope(scopeId)) return;
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "failed" as const } : m)));
+      setError(PROPOSAL_BROKER_ERROR);
+      setStatus("error");
+    } finally {
+      if (!isStaleScope(scopeId)) setLoading(false);
+    }
+  };
+
   const handleRetry = (messageId: string) => {
     if (!activeWorkspace || loading) return;
     const failed = messages.find((m) => m.id === messageId && m.delivery === "failed");
@@ -1275,6 +1380,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     // (`retryable: false`) não tem retry — defesa em profundidade (o botão
     // nem é oferecido).
     if (!failed || failed.retryable === false) return;
+    const scopeId = activeWorkspace.id;
+    // P3: the persisted intent owns this retry; the chat turn is not re-sent.
+    const anchored = loadPendingChatSend(scopeId);
+    if (anchored?.messageId === messageId && anchored.proposal) {
+      void retryProposalBroker(messageId, anchored.proposal, scopeId);
+      return;
+    }
     const stored = draftsRef.current.get(messageId);
     const snapshot = anchorSnapshotsRef.current.get(messageId);
     const send = resolveRetrySend({

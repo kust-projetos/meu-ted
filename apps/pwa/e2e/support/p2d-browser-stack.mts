@@ -51,6 +51,10 @@ const PROBE = path.resolve(HERE, "p2d-synthetic-read-probe.mjs");
 // into this process, the PWA or Next.
 const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
 const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
+// P3 expense slice (test-only): real Agent Worker + Pending V2 on the
+// synthetic API + the scripted provider emitting propose_expense. It reuses
+// the same loopback stack; no external inference and no production data.
+const EXPENSE = process.env.P2D_EXPENSE === "1";
 if (OFFLINE_CHAT && LIVE_REAL) {
   throw new Error("[p2d-stack] P2D_OFFLINE_CHAT and P2D_LIVE_REAL are mutually exclusive");
 }
@@ -77,6 +81,7 @@ const { memoryAdapter } = (await import(pathToFileURL(memoryAdapterPath).href)) 
 type AuthConfig = Parameters<typeof createBetterAuth>[0];
 const { createBetterAuth } = await import("../../../api/src/auth/better-auth.js");
 const { buildTestApp } = await import("../../../api/tests/test-app.js");
+const { createInMemoryPendingOperationV2Store } = await import("../../../api/src/approvals/pending-v2.js");
 const {
   ACCOUNT_A1,
   ACCOUNT_A2,
@@ -106,7 +111,15 @@ function numEnv(name: string, fallback: number): number {
 const API_PORT = numEnv("P2D_API_PORT", 4110);
 const GATEWAY_PORT = numEnv("P2D_GATEWAY_PORT", 3221);
 const CTL_PORT = numEnv("P2D_CTL_PORT", 3200);
+const AGENT_PORT = numEnv("P2D_AGENT_PORT", 3222);
 const SECRET = "test-secret-that-is-at-least-32-characters";
+// Dev-only HMAC pairs for the local Agent/API (same values the repo's
+// docker/local stack uses; never production).
+const DELEGATION_SECRET = "dev-agent-delegation-secret-32-chars!";
+const CONNECTION_SECRET = "dev-agent-connection-secret-at-least-32-chars!";
+const SERVICE_TOKEN = "dev-agent-auth-service-token-32-chars!";
+process.env.AGENT_CONNECTION_TOKEN_SECRET = CONNECTION_SECRET;
+process.env.AGENT_AUTH_SERVICE_TOKEN = SERVICE_TOKEN;
 
 function approvedTmpRoot(prefix: string): string {
   const base =
@@ -121,6 +134,7 @@ function approvedTmpRoot(prefix: string): string {
   }
 }
 const ROOT = approvedTmpRoot("ted-pwa-p2dbrowser");
+const AGENT_PERSIST = approvedTmpRoot("ted-agent-p3");
 console.log(`[p2d-stack] root=${ROOT}`);
 
 // Fixed single-workspace store (test-only): the synthetic user always sees
@@ -181,6 +195,7 @@ const auth = createBetterAuth({
   // 403 auth.invalid_origin. Test-only stack, loopback only.
   trustedOrigins: [NEXT_ORIGIN, "https://pwa.example"],
 });
+const pendingV2Store = EXPENSE ? createInMemoryPendingOperationV2Store() : null;
 const built = buildTestApp(
   {
     accounts: [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1],
@@ -191,6 +206,8 @@ const built = buildTestApp(
   workspaceAccess,
   fixedWorkspaceStore,
   false,
+  DELEGATION_SECRET,
+  ...(pendingV2Store ? [pendingV2Store] : []),
 );
 const journal: Array<{ method: string; url: string }> = [];
 built.app.addHook("onRequest", async (req) => {
@@ -218,6 +235,22 @@ function buildProbeConfig(): Record<string, unknown> {
     apiBaseUrl: `http://127.0.0.1:${API_PORT}`,
     tedRuntimeDir: TED_RUNTIME_DIR,
   };
+  if (EXPENSE) {
+    return {
+      ...base,
+      stub: {
+        mode: "expense",
+        toolName: "propose_expense",
+        toolArgs: {
+          amountCents: 5000,
+          description: "mercado",
+          date: "2026-11-06",
+          accountId: ACCOUNT_A2.id,
+          categoryId: CATEGORY_FOOD_A.id,
+        },
+      },
+    };
+  }
   const stub = {
     toolSequence: [
       { name: "list_accounts", args: {} },
@@ -252,6 +285,7 @@ async function startProbe(): Promise<{ base: string; pid: number | undefined }> 
       ...process.env,
       P2D_GATEWAY_PORT: String(GATEWAY_PORT),
       P2D_CONFIG_JSON: JSON.stringify(buildProbeConfig()),
+      ...(EXPENSE ? { TED_OPENCODE_P3_WRITES_ENABLED: "1", NODE_ENV: "test" } : {}),
     },
   });
   const handle: ProbeHandle = { child, lines: [], stderrTail: "", exited: false, exitCode: null, pid: child.pid };
@@ -392,8 +426,141 @@ async function closeProbe(): Promise<{ exitCode: unknown; pid: number | undefine
   return debug as { exitCode: unknown; pid: number | undefined; forced: boolean };
 }
 
+// P3 expense E2E: the REAL Agent Worker (Durable Objects included) runs as a
+// dedicated local child via `wrangler dev --local`. It talks to the synthetic
+// API above; the browser reaches it through the PWA same-origin proxy. No
+// deploy, no Cloudflare account, no external inference.
+type AgentHandle = {
+  child: ChildProcess;
+  lines: string[];
+  stderrTail: string;
+  exited: boolean;
+  exitCode: unknown;
+  pid: number | undefined;
+};
+let agent: AgentHandle | null = null;
+
+async function startAgent(): Promise<void> {
+  if (!EXPENSE) return;
+  if (agent && !agent.exited) throw new Error("agent already running");
+  const agentDir = path.resolve(PWA_ROOT, "../agent");
+  const env = {
+    ...process.env,
+    API_ORIGIN: `http://127.0.0.1:${API_PORT}`,
+    AGENT_CONFIG_TOKEN: "dev-agent-config-token-32-chars-minimum!",
+    AGENT_RUNTIME_ADMIN_TOKEN: "dev-agent-runtime-admin-token-32-chars!",
+    AGENT_CONNECTION_TOKEN_SECRET: CONNECTION_SECRET,
+    AGENT_AUTH_SERVICE_TOKEN: SERVICE_TOKEN,
+    AGENT_DELEGATION_SECRET: DELEGATION_SECRET,
+    PWA_ORIGIN: NEXT_ORIGIN,
+    ALLOW_LOCAL_ORIGIN: "1",
+    NODE_ENV: "development",
+    TED_ATTACHMENTS_ENABLED: "0",
+    WRANGLER_SEND_METRICS: "false",
+  } as Record<string, string | undefined>;
+  const args = [
+    "exec",
+    "wrangler",
+    "dev",
+    "src/worker.local-entry.ts",
+    "--local",
+    "--port",
+    String(AGENT_PORT),
+    "--ip",
+    "127.0.0.1",
+    "--persist-to",
+    AGENT_PERSIST,
+    // `wrangler dev` does NOT expose the parent process env as Worker vars.
+    // Inject them explicitly (test-only local values; never production).
+    ...Object.entries({
+      API_ORIGIN: `http://127.0.0.1:${API_PORT}`,
+      AGENT_CONFIG_TOKEN: "dev-agent-config-token-32-chars-minimum!",
+      AGENT_RUNTIME_ADMIN_TOKEN: "dev-agent-runtime-admin-token-32-chars!",
+      AGENT_CONNECTION_TOKEN_SECRET: CONNECTION_SECRET,
+      AGENT_AUTH_SERVICE_TOKEN: SERVICE_TOKEN,
+      AGENT_DELEGATION_SECRET: DELEGATION_SECRET,
+      PWA_ORIGIN: NEXT_ORIGIN,
+      ALLOW_LOCAL_ORIGIN: "1",
+      TED_ATTACHMENTS_ENABLED: "0",
+    }).flatMap(([key, value]) => ["--var", `${key}:${value}`]),
+  ];
+  const child =
+    process.platform === "win32"
+      ? spawn("cmd.exe", ["/d", "/s", "/c", `pnpm ${args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}`], {
+          cwd: agentDir,
+          env,
+          stdio: ["ignore", "pipe", "pipe"],
+        })
+      : spawn("pnpm", args, { cwd: agentDir, env, stdio: ["ignore", "pipe", "pipe"] });
+  const handle: AgentHandle = { child, lines: [], stderrTail: "", exited: false, exitCode: null, pid: child.pid };
+  child.stdout?.on("data", (d) => {
+    for (const line of String(d).split("\n")) {
+      if (line.trim()) handle.lines.push(line);
+    }
+  });
+  child.stderr?.on("data", (d) => {
+    handle.stderrTail = `${handle.stderrTail}${String(d)}`.slice(-3000);
+  });
+  child.on("close", (code, signal) => {
+    handle.exited = true;
+    handle.exitCode = signal ? `signal:${signal}` : code;
+  });
+  child.on("error", () => {
+    handle.exited = true;
+    handle.exitCode = "spawn-error";
+  });
+  agent = handle;
+  const deadline = Date.now() + 180000;
+  for (;;) {
+    if (handle.exited) {
+      throw new Error(`agent exited before ready (exit=${handle.exitCode}): ${handle.stderrTail.slice(-1200)}`);
+    }
+    try {
+      const res = await fetch(`http://127.0.0.1:${AGENT_PORT}/health/agent`);
+      if (res.ok) return;
+    } catch {
+      /* not ready yet */
+    }
+    if (Date.now() > deadline) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* noop */
+      }
+      throw new Error(`agent without ready in 180s: ${handle.stderrTail.slice(-1200)}`);
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+async function stopAgent(): Promise<void> {
+  if (!agent) return;
+  const handle = agent;
+  try {
+    if (process.platform === "win32" && handle.pid) {
+      spawn("taskkill", ["/pid", String(handle.pid), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      handle.child.kill("SIGTERM");
+    }
+  } catch {
+    /* best effort */
+  }
+  const deadline = Date.now() + 15000;
+  while (!handle.exited && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+  if (!handle.exited) {
+    try {
+      handle.child.kill("SIGKILL");
+    } catch {
+      /* noop */
+    }
+  }
+  agent = null;
+}
+
 await startProbe();
 console.log(`[p2d-stack] gateway=http://127.0.0.1:${GATEWAY_PORT} pid=${probe?.pid}`);
+await startAgent();
+if (EXPENSE) console.log(`[p2d-stack] agent=http://127.0.0.1:${AGENT_PORT} pid=${agent?.pid}`);
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
@@ -405,7 +572,7 @@ const ctl = http.createServer((req, res) => {
     try {
       const u = new URL(req.url || "/", "http://127.0.0.1");
       if (req.method === "GET" && u.pathname === "/health") {
-        json(res, 200, { ok: true, probeRunning: !!probe && !probe.exited });
+        json(res, 200, { ok: true, probeRunning: !!probe && !probe.exited, agentRunning: !!agent && !agent.exited });
         return;
       }
       if (req.method === "GET" && u.pathname === "/p2d/stats") {
@@ -433,6 +600,15 @@ const ctl = http.createServer((req, res) => {
         });
         return;
       }
+      if (req.method === "GET" && u.pathname === "/p2d/agent-log") {
+        json(res, 200, {
+          running: !!agent && !agent.exited,
+          exitCode: agent?.exitCode ?? null,
+          lastLines: (agent?.lines ?? []).slice(-80),
+          stderrTail: agent?.stderrTail ?? "",
+        });
+        return;
+      }
       if (req.method === "GET" && u.pathname === "/p2d/snapshot") {
         const id = (u.searchParams.get("id") || "").slice(0, 80);
         if (!id) {
@@ -452,6 +628,24 @@ const ctl = http.createServer((req, res) => {
           requests: journal,
           financialWrites: financial.filter((j) => j.method !== "GET"),
         });
+        return;
+      }
+      if (req.method === "GET" && u.pathname === "/p2d/expense-state") {
+        // Authoritative in-memory ledger AFTER the real V2 executor ran. This
+        // is the proof that confirmation created exactly one transaction and
+        // rejection created none (no fixture/stub rows are added here).
+        const transactions = (built.state.transactions ?? [])
+          .filter((t) => t.householdId === HOUSEHOLD_A)
+          .map((t) => ({
+            id: t.id,
+            kind: t.kind,
+            amountCents: t.amountCents,
+            description: t.description,
+            date: t.date,
+            accountId: t.accountId,
+            categoryId: t.categoryId,
+          }));
+        json(res, 200, { transactions, total: transactions.length });
         return;
       }
       if (req.method === "POST" && u.pathname === "/p2d/close-probe") {
@@ -484,6 +678,11 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`[p2d-stack] ${signal}: orderly shutdown`);
   try {
     await closeProbe();
+  } catch {
+    /* best effort */
+  }
+  try {
+    await stopAgent();
   } catch {
     /* best effort */
   }

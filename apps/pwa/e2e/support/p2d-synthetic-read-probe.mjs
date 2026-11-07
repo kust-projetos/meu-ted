@@ -350,6 +350,8 @@ try {
   // Two stub modes (test-only): legacy single-tool
   // { toolName, toolArgs, expectedOracle } or two-tool sequence
   // { toolSequence: [{name,args}...], expectedAccounts, expectedOracle }.
+  // P3 expense mode: { mode: "expense", toolName: "propose_expense", toolArgs }
+  // emits the proposal tool call once, then a final text after the tool result.
   // live-real has NO stub: the real model chooses its own tools.
   let STUB_MODE = null;
   let SEQUENCE = null;
@@ -359,27 +361,40 @@ try {
     if (!stub || typeof stub !== "object" || Array.isArray(stub)) {
       fail("args", "stub is required for synthetic/offline modes");
     }
-    STUB_MODE = Array.isArray(stub.toolSequence) && stub.toolSequence.length > 0 ? "sequence" : "legacy";
-    if (MODE === "offline" && STUB_MODE !== "sequence") {
-      fail("args", "offline mode requires stub.toolSequence");
-    }
-    if (STUB_MODE === "sequence") {
-      for (const step of stub.toolSequence) {
-        if (!step || typeof step.name !== "string" || step.name.length === 0) {
-          fail("args", "stub.toolSequence entries require { name, args }");
+    STUB_MODE = stub.mode === "expense"
+      ? "expense"
+      : Array.isArray(stub.toolSequence) && stub.toolSequence.length > 0
+        ? "sequence"
+        : "legacy";
+    if (STUB_MODE === "expense") {
+      if (stub.toolName !== "propose_expense") {
+        fail("args", "expense stub requires toolName propose_expense");
+      }
+      if (!stub.toolArgs || typeof stub.toolArgs !== "object" || Array.isArray(stub.toolArgs)) {
+        fail("args", "expense stub requires toolArgs");
+      }
+    } else {
+      if (MODE === "offline" && STUB_MODE !== "sequence") {
+        fail("args", "offline mode requires stub.toolSequence");
+      }
+      if (STUB_MODE === "sequence") {
+        for (const step of stub.toolSequence) {
+          if (!step || typeof step.name !== "string" || step.name.length === 0) {
+            fail("args", "stub.toolSequence entries require { name, args }");
+          }
         }
+        SEQUENCE = stub.toolSequence.map((s) => ({ name: s.name, args: s.args || {} }));
+        EXPECTED_ACCOUNTS = stub.expectedAccounts || null;
+        if (!EXPECTED_ACCOUNTS || !Array.isArray(EXPECTED_ACCOUNTS.names) || !Number.isSafeInteger(EXPECTED_ACCOUNTS.total)) {
+          fail("args", "stub.expectedAccounts { names[], total } is required in sequence mode");
+        }
+      } else if (typeof stub.toolName !== "string") {
+        fail("args", "stub { toolName, toolArgs, expectedOracle } is required");
       }
-      SEQUENCE = stub.toolSequence.map((s) => ({ name: s.name, args: s.args || {} }));
-      EXPECTED_ACCOUNTS = stub.expectedAccounts || null;
-      if (!EXPECTED_ACCOUNTS || !Array.isArray(EXPECTED_ACCOUNTS.names) || !Number.isSafeInteger(EXPECTED_ACCOUNTS.total)) {
-        fail("args", "stub.expectedAccounts { names[], total } is required in sequence mode");
+      EXPECTED_ORACLE = stub.expectedOracle || null;
+      if (!EXPECTED_ORACLE || typeof EXPECTED_ORACLE.yearMonth !== "string") {
+        fail("args", "stub.expectedOracle { yearMonth, incomeCents, expenseCents, balanceCents, transactionCount } is required");
       }
-    } else if (typeof stub.toolName !== "string") {
-      fail("args", "stub { toolName, toolArgs, expectedOracle } is required");
-    }
-    EXPECTED_ORACLE = stub.expectedOracle || null;
-    if (!EXPECTED_ORACLE || typeof EXPECTED_ORACLE.yearMonth !== "string") {
-      fail("args", "stub.expectedOracle { yearMonth, incomeCents, expenseCents, balanceCents, transactionCount } is required");
     }
   }
   if (new URL(apiBaseUrl).hostname !== "127.0.0.1") fail("args", "apiBaseUrl must be loopback");
@@ -567,7 +582,22 @@ try {
         // INDEPENDENTLY; the next missing tool is offered, and the final
         // text is derived from BOTH observed DTOs only when both validate.
         let payload = null;
-        if (STUB_MODE === "sequence") {
+        if (STUB_MODE === "expense") {
+          // One proposal tool call per user turn; after the SDK returns the
+          // tool result, finish with a deterministic text. The intent itself
+          // is attached by the gateway, never derived from this text.
+          const toolResults = extractToolDtos(messages);
+          if (toolResults.length === 0) {
+            payload = toolCallEvents({
+              callId: `call_p2d_${++callSeq}`,
+              name: stub.toolName,
+              args: stub.toolArgs || {},
+              model: FIXTURE_MODEL,
+            });
+          } else {
+            payload = finalTextEvents("Proposta de despesa preparada.", FIXTURE_MODEL);
+          }
+        } else if (STUB_MODE === "sequence") {
           const parsed = extractToolDtos(messages);
           let accountsDto = null;
           let summaryDto = null;
@@ -644,10 +674,11 @@ try {
   //   loopback stub with the dummy key;
   // - live-real: the product live config exactly (credential stays in env).
   const fs = await import("node:fs");
+  const p3Writes = process.env.TED_OPENCODE_P3_WRITES_ENABLED === "1";
   if (MODE === "live-real") {
-    writeTedConfig(iso.dirs.config, "live");
+    writeTedConfig(iso.dirs.config, "live", { p3Writes });
   } else {
-    const base = MODE === "offline" ? tedConfig("live") : tedConfig();
+    const base = MODE === "offline" ? tedConfig("live", { p3Writes }) : tedConfig(undefined, { p3Writes });
     const cfg = MODE === "offline"
       ? buildOfflineProviderConfig(base, {
           model: MODEL,

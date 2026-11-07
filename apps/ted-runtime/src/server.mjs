@@ -55,6 +55,7 @@ import {
   createDiagnosticContext,
   defaultDiagnosticSink,
 } from './diagnostics.mjs';
+import { proposalIntentRegistry } from './proposal-intents.mjs';
 
 export const GATEWAY_BODY_LIMIT_BYTES = 64 * 1024;
 export const GATEWAY_REQUEST_TIMEOUT_MS = 30000;
@@ -242,6 +243,7 @@ export function createGatewayServer({
   isSecureOrigin = () => false,
   requestTimeoutMs = GATEWAY_REQUEST_TIMEOUT_MS,
   diagnosticsSink = defaultDiagnosticSink,
+  proposalIntents = proposalIntentRegistry,
 } = {}) {
   if (typeof resolveIdentity !== 'function') throw new Error('gateway server: resolveIdentity is required');
   if (!store || typeof store.get !== 'function') throw new Error('gateway server: conversation store is required');
@@ -601,6 +603,9 @@ export function createGatewayServer({
         record = store.attachRuntime(record.conversationId, runtimeSessionId, identity.actorId);
       }
       const host = verifiedHostFor(identity, deviceToken);
+      // A proposal intent belongs to exactly ONE turn: clear any residue
+      // before the prompt (a failed turn never leaks into the next one).
+      proposalIntents.clear(runtimeSessionId);
       let started;
       try {
         started = await requireSafeWrapper()(runtimeSessionId, host, async () => {
@@ -653,7 +658,11 @@ export function createGatewayServer({
         }
       }
       record = store.noteTurn(record.conversationId);
-      return started;
+      // Hand the intent off exactly once, on a settled successful turn. The
+      // PWA POSTs it to the Agent broker; the gateway never mints, never
+      // confirms, never executes.
+      const proposalIntent = proposalIntents.take(runtimeSessionId);
+      return proposalIntent ? { ...started, proposal: proposalIntent } : started;
     }).catch((e) => ({ __error: e }));
 
     // Turn finish observation: success carries `none`; failures classify
@@ -676,7 +685,13 @@ export function createGatewayServer({
     }
     return {
       status: 200,
-      payload: { turnId: outcome.turnId, intentionId: body.intentionId, status: 'completed', output: outcome.output },
+      payload: {
+        turnId: outcome.turnId,
+        intentionId: body.intentionId,
+        status: 'completed',
+        output: outcome.output,
+        ...(outcome.proposal ? { proposal: outcome.proposal } : {}),
+      },
       setCookie: pin.pin === 'b' ? null : record.conversationId,
       previousSessionId,
     };

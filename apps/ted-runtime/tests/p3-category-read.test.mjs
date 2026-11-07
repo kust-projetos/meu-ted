@@ -169,11 +169,12 @@ describe('p3 category read: transport allowlist and proposal refusal', () => {
     await assert.rejects(() => t.call({ route: '/pending-operations/v2/propose', method: 'POST', host }), /not allowlisted/);
   });
 
-  it('keeps proposal/confirm/execute unavailable (no P3 write surface)', async () => {
-    assert.throws(() => validateToolArgs('propose_expense', {}), /unknown tool/);
+  it('keeps confirm/execute unavailable: propose_expense is intent-only', async () => {
+    assert.ok(!('confirm_expense' in createToolExecutors(stubTransport({}))) && !('execute_expense' in createToolExecutors(stubTransport({}))), 'no confirm/execute executors');
+    for (const name of ['confirm_expense', 'execute_expense', 'approve_expense']) {
+      assert.throws(() => validateToolArgs(name, {}), /unknown tool/);
+    }
     const executors = createToolExecutors(stubTransport({}));
-    assert.ok(!('propose_expense' in executors), 'no propose executor');
-    assert.ok(!('confirm_expense' in executors || 'execute_expense' in executors), 'no confirm/execute executors');
     await assert.rejects(() => executors.list_categories({}, null, { intentionId: 'int-x' }), /host-bound context is required/);
     await assert.rejects(() => executors.list_categories({}, host, {}), /stable intentionId is required/);
   });

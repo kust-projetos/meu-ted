@@ -281,7 +281,7 @@ export function setupIsolation(root, identity, profileOrOpts) {
   return result;
 }
 
-export function tedConfig(profileOrOpts) {
+export function tedConfig(profileOrOpts, { p3Writes = false } = {}) {
   const profile = profileOrOpts === undefined ? 'test' : resolveProfileArg(profileOrOpts);
   const base = {
     $schema: 'https://opencode.ai/config.json',
@@ -309,6 +309,10 @@ export function tedConfig(profileOrOpts) {
           { action: 'ted.finance.read', resource: 'list_accounts', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'get_month_summary', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'list_categories', effect: 'allow' },
+          // P3 local write slice: the permission is only meaningful when the
+          // plugin registers propose_expense (TED_OPENCODE_P3_WRITES_ENABLED=1,
+          // never production). Default config stays exactly the P2 reads.
+          ...(p3Writes ? [{ action: 'ted.finance.read', resource: 'propose_expense', effect: 'allow' }] : []),
         ],
       },
     },
@@ -447,14 +451,17 @@ function isModelOverrideCompatible(currentText, wantedText) {
 // any other divergent file is the user's work and refused; a symlink is
 // refused without following.
 // The configDir itself is checked for redirection before any write.
-export function writeTedConfig(configDir, profileOrOpts) {
+export function writeTedConfig(configDir, profileOrOpts, { p3Writes = false } = {}) {
   // NB: defaults to 'test' — never reads ambient TED_RUNTIME_PROFILE, so
   // tests cannot inherit live accidentally. Live is forwarded explicitly.
   const profile = profileOrOpts === undefined ? 'test' : resolveProfileArg(profileOrOpts);
   assertNoRedirectedComponents([configDir]);
   fs.mkdirSync(configDir, { recursive: true });
   const file = path.join(configDir, 'opencode.json');
-  const wanted = JSON.stringify(tedConfig(profile), null, 2) + '\n';
+  const wanted = JSON.stringify(tedConfig(profile, { p3Writes }), null, 2) + '\n';
+  // The sibling flag state is OUR config too: switching the P3 local slice on
+  // (or off) on an existing isolated home must not be mistaken for user work.
+  const sibling = JSON.stringify(tedConfig(profile, { p3Writes: !p3Writes }), null, 2) + '\n';
   let st;
   try {
     st = fs.lstatSync(file);
@@ -467,6 +474,7 @@ export function writeTedConfig(configDir, profileOrOpts) {
     }
     const current = fs.readFileSync(file, 'utf8');
     if (current === wanted) return file; // byte-identical: our own config, resume
+    if (current === sibling) { fs.writeFileSync(file, wanted, { encoding: 'utf8' }); return file; }
     if (isModelOverrideCompatible(current, wanted)) return file; // legitimate native model override: preserve, never rewrite
     throw new Error('writeTedConfig: opencode.json already exists with different content — refusing to overwrite user work');
   }
@@ -547,7 +555,11 @@ export async function createTedEnvironment({ root, identity = 'a', transportFact
   // are handled by native OpenCode itself.
   const resolvedProfile = profile === undefined ? 'test' : resolveRuntimeProfile(profile);
   const iso = setupIsolation(root, identity, resolvedProfile);
-  writeTedConfig(iso.dirs.config, resolvedProfile);
+  // P3 write slice is a LOCAL opt-in (never production); the config must carry
+  // the exact propose_expense permission only when the plugin will register it.
+  const { isP3WritesEnabled } = await import('./plugin.mjs');
+  const p3Writes = isP3WritesEnabled(process.env);
+  writeTedConfig(iso.dirs.config, resolvedProfile, { p3Writes });
   // No process.chdir: SDK boots with explicit config.directory +
   // database.path; chdir would move another service in a shared process.
   const sdkMod = deps.sdkModule ?? await import('@opencode/sdk');
