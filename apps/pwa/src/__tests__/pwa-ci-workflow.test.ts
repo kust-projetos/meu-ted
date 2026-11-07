@@ -5,12 +5,14 @@ import { describe, expect, it } from "vitest";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const workflow = fs.readFileSync(path.join(root, ".github/workflows/pwa-ci.yml"), "utf8");
+const audits = fs.readFileSync(path.join(root, ".github/workflows/audits.yml"), "utf8");
 
-describe("PWA CI audit trigger", () => {
-  it("watches the scoped audit scripts it executes", () => {
-    expect(workflow).toContain('"scripts/pwa-audit*"');
-    expect(workflow).toContain("node --test scripts/pwa-audit-policy.test.mjs");
-    expect(workflow).not.toContain('"scripts/check-pwa-audit.mjs"');
+describe("scheduled audits workflow", () => {
+  it("owns the scoped audit that left the PR path", () => {
+    expect(audits).toContain("schedule:");
+    expect(audits).toContain("node --test scripts/pwa-audit-policy.test.mjs");
+    expect(audits).toContain("node scripts/pwa-audit.mjs");
+    expect(workflow).not.toContain("node scripts/pwa-audit.mjs");
   });
 });
 

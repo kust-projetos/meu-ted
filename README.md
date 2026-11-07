@@ -61,13 +61,13 @@ pnpm test
 ## Comandos principais
 
 ```bash
-pnpm docs:lint
+pnpm install        # também ativa o hook de pré-commit (husky)
+pnpm commit:check   # verificação leve do diff staged (roda no pre-commit)
+pnpm check:area     # gates específicos da área alterada
 pnpm typecheck
 pnpm test
 pnpm lint
-pnpm governance:check
-pnpm architecture:check
-pnpm validate:final
+pnpm validate:final # suíte completa (release/preparação)
 ```
 
 `pnpm validate:final` gera evidências locais em `docs/reports/`. Não executa
@@ -197,22 +197,26 @@ status.
 
 ## Qualidade e gates
 
-- **Hook de pré-commit (husky):** roda 8 gates rápidos (fs/git, sem build) em
-  ~15s: `docs:lint`, `action-pins:check`, `test:skip-gate`, `capabilities:check`,
-  `write-policy:check`, `governance:check`, `boundary:check` e `public-safety --strict`.
+- **Hook de pré-commit (husky):** roda apenas `pnpm commit:check` (~1s):
+  conflitos, sintaxe de JSON/YAML, nomes de segredo e arquivos > 2 MB.
   Bypass de emergência: `git commit --no-verify` (justificar no PR).
-- **CI obrigatório (required checks):** `Gate — all checks` (`.github/workflows/ci.yml`)
-  e `quality (22, 10)` (`.github/workflows/pwa-ci.yml`). Gates pesados —
-  `typecheck`, `test`, `security:*`, E2E — são **CI-autoritativos**:
-  não rodam no hook por custo. Nota de cobertura de lint: o CI roda `lint`
-  de API, `@pi-finance/llm-contracts`, Agent, Broker e PWA (jobs `api`,
-  `agent`, `broker`, `pwa`); `pnpm lint` local cobre os mesmos cinco
-  (gate obrigatório de conclusão — regra 5 do AGENTS.md).
+- **Gates por área:** `pnpm check:area` roda `docs:lint`, `governance:check`,
+  `capabilities:check`, `write-policy:check`, `boundary:check`,
+  `action-pins:check` e `test:skip-gate` somente quando a área correspondente
+  mudou. O mesmo mapa roda no CI.
+- **CI obrigatório (required checks):** `Gate — all checks`
+  (`.github/workflows/ci.yml`) e `quality (22, 10)`
+  (`.github/workflows/pwa-ci.yml`). O CI não duplica PWA entre os dois
+  workflows: backend/agent ficam no `CI`, PWA no `PWA CI`.
+- **Fora do caminho do PR:** E2E completo (main ou label `run-full-e2e`),
+  Lighthouse, auditoria de dependências, scan de containers e suíte completa
+  (`validate:final`) rodam em main, sob demanda ou no workflow `Audits`.
 - **gitleaks:** executa apenas no CI (`.gitleaks.toml` cobre `.github/workflows/`);
   localmente o script sai sem escanear no Windows por design — não confie no
   scan local de segredos.
-- **Regras de engenharia** (TDD RED→GREEN, isolamento por `workspace_id`,
-  idempotência obrigatória, saldos por tipo de conta): ver [AGENTS.md](AGENTS.md).
+- **Regras de engenharia** (isolamento por `workspace_id`, idempotência
+  obrigatória, confirmação financeira, saldos por tipo de conta): ver
+  [AGENTS.md](AGENTS.md).
 
 ## Estrutura do monorepo
 
