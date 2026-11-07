@@ -379,6 +379,7 @@ export type RefreshTarget = (typeof REFRESH_TARGETS)[number];
 export const TED_APPROVAL_TOOLS = [
   'transactions.expense.create',
   'transactions.income.create',
+  'transactions.transfer.create',
   'transactions.update',
   'accounts.create',
   'accounts.deactivate',
@@ -464,6 +465,14 @@ export interface PendingOperationPresentation {
   description?: string;
   date?: string;
   account?: PendingOperationPresentationLabel;
+  /**
+   * Internal-transfer display fields (tool `transactions.transfer.create`
+   * only): source and destination labels, both server-resolved from the
+   * authoritative read model. Transfer cards never carry a category — an
+   * internal transfer is neither income nor expense.
+   */
+  fromAccount?: PendingOperationPresentationLabel;
+  toAccount?: PendingOperationPresentationLabel;
   category?: PendingOperationPresentationLabel;
   /** Parent of an existing category target, when server-resolved from the catalog. */
   categoryParent?: PendingOperationPresentationLabel;
@@ -605,6 +614,16 @@ export const isActionablePendingOperationPresentation = (
   if (presentation.tool === 'categories.deactivate') {
     return isPresentationLabel(presentation.category);
   }
+  if (presentation.tool === 'transactions.transfer.create') {
+    // Internal transfer card: amount, date, description and BOTH
+    // server-resolved account labels gate Confirm. No category is involved.
+    if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents)) return false;
+    if (!isNonEmptyString(presentation.date)) return false;
+    if (!isNonEmptyString(presentation.description)) return false;
+    if (!isPresentationLabel(presentation.fromAccount)) return false;
+    if (!isPresentationLabel(presentation.toAccount)) return false;
+    return true;
+  }
   if (!isNonEmptyString(presentation.description)) return false;
   if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents)) return false;
   if (!isNonEmptyString(presentation.date)) return false;
@@ -650,6 +669,10 @@ export type MutationEffectsEntry =
 export const MUTATION_EFFECTS_REGISTRY: Record<MutationKind, MutationEffectsEntry> = {
   'transactions.expense.create': { mutationKind: 'transactions.expense.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transactions.income.create': { mutationKind: 'transactions.income.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
+  // Internal transfer: balances and the ledger move; budgets/quick-insights
+  // (income/expense derived) are intentionally NOT refreshed — a transfer is
+  // not revenue nor expense.
+  'transactions.transfer.create': { mutationKind: 'transactions.transfer.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary'] },
   'accounts.create': { mutationKind: 'accounts.create', affectedTargets: ['accounts', 'dashboard-summary'] },
   'accounts.deactivate': { mutationKind: 'accounts.deactivate', affectedTargets: ['accounts', 'dashboard-summary'] },
   'accounts.update': { mutationKind: 'accounts.update', affectedTargets: ['accounts', 'dashboard-summary'] },

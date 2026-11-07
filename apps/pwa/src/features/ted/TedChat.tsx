@@ -50,6 +50,7 @@ const MESSAGE_SEND_ERROR = "Não foi possível enviar a mensagem. Tente novament
 const PROPOSAL_NOUN: Readonly<Record<ProposalIntent["tool"], string>> = {
   "transactions.expense.create": "despesa",
   "transactions.income.create": "receita",
+  "transactions.transfer.create": "transferência",
 };
 const proposalRecoveryError = (proposal?: ProposalIntent): string =>
   `Não foi possível recuperar a proposta de ${proposal ? PROPOSAL_NOUN[proposal.tool] : "operação"}. Recarregue a página para tentar novamente.`;

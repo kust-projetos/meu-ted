@@ -62,7 +62,7 @@ describe('p3 propose_income: catalog gating', () => {
     assert.deepEqual(productToolDefs(PROD_ENV).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
   });
 
-  it('local writes opt-in adds BOTH proposal tools and list_categories with both schemas', () => {
+  it('local writes opt-in adds ALL proposal tools and list_categories with both schemas', () => {
     assert.equal(isP3WritesEnabled(WRITE_ENV), true);
     const names = productToolDefs(WRITE_ENV).map((d) => d.name).sort();
     assert.deepEqual(names, [
@@ -71,6 +71,7 @@ describe('p3 propose_income: catalog gating', () => {
       'list_categories',
       'propose_expense',
       'propose_income',
+      'propose_transfer',
     ]);
     const propose = productToolDefs(WRITE_ENV).find((d) => d.name === 'propose_income');
     assert.equal(propose.input.type, 'object');
@@ -203,7 +204,7 @@ describe('p3 propose_income: plugin registration', () => {
     await writesDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedWrites.push(t) }); } } });
     assert.deepEqual(
       addedWrites.map((t) => t.name).sort(),
-      ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense', 'propose_income'],
+      ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense', 'propose_income', 'propose_transfer'],
     );
   });
 

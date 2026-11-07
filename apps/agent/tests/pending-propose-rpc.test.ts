@@ -80,6 +80,19 @@ const validIncomeBody = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const validTransferBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'transactions.transfer.create',
+  intentionId: 'int-transfer-abc123',
+  normalizedArgs: {
+    amountCents: 30000,
+    description: 'Transferência Itaú → Nubank',
+    date: '2026-11-07',
+    fromAccountId: ACCOUNT,
+    toAccountId: '33333333-3333-4333-8333-333333333334',
+  },
+  ...overrides,
+});
+
 const proposeRequest = (body: unknown, headers = identityHeaders()) =>
   new Request('https://agent.test.local/rpc/pending-operations/propose', {
     method: 'POST',
@@ -176,15 +189,42 @@ describe('P3 — POST /rpc/pending-operations/propose (Agent A4 broker)', () => 
     expect(sent.normalizedArgs).toEqual(validIncomeBody().normalizedArgs);
   });
 
-  it('refuses any tool other than the two proposal tools with zero transport', async () => {
+  it('accepts transactions.transfer.create on the same propose-only A4 path', async () => {
+    const { fn, calls } = captureFetch(() => Response.json({ id: 'op-transfer-1', existing: false }, { status: 201 }));
+    globalThis.fetch = fn;
+    const { agent } = createTestAgent();
+
+    const res = await agent.fetch(proposeRequest(validTransferBody()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: 'op-transfer-1', existing: false });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${API_ORIGIN}/pending-operations/v2/propose`);
+    const headers = new Headers(calls[0]!.init?.headers);
+    const auth = headers.get('authorization')!;
+    const claims = await decodeDelegatedTurnToken(auth.slice('Bearer '.length), DELEGATION_SECRET);
+    expect(claims.capabilities).toEqual(['financial.approval.propose']);
+    expect(claims.request).toBe('int-transfer-abc123');
+    const sent = JSON.parse(String(calls[0]!.init?.body));
+    expect(sent.tool).toBe('transactions.transfer.create');
+    expect(sent.normalizedArgs).toEqual(validTransferBody().normalizedArgs);
+    expect('categoryId' in sent.normalizedArgs).toBe(false);
+  });
+
+  it('refuses any tool outside the closed proposal contract with zero transport', async () => {
     const { fn, calls } = captureFetch(() => Response.json({ id: 'never' }));
     globalThis.fetch = fn;
     const { agent } = createTestAgent();
 
-    for (const tool of ['transactions.update', 'accounts.deactivate', 'transactions.transfer.create', 'evil']) {
+    for (const tool of ['transactions.update', 'accounts.deactivate', 'transactions.unknown.create', 'evil']) {
       const res = await agent.fetch(proposeRequest(validBody({ tool })));
       expect(res.status).toBe(400);
     }
+    // A transfer-shaped payload sent under a different tool is refused too.
+    const wrongTool = await agent.fetch(
+      proposeRequest({ ...validTransferBody(), tool: 'transactions.expense.create' }),
+    );
+    expect(wrongTool.status).toBe(400);
     expect(calls).toHaveLength(0);
   });
 

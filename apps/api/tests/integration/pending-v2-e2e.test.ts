@@ -81,7 +81,7 @@ const identityFor = (householdId: string): PendingIdentity => ({
 const proposeOp = async (
   store: PendingOperationV2Store,
   identity: PendingIdentity,
-  tool: 'transactions.expense.create' | 'transactions.income.create',
+  tool: 'transactions.expense.create' | 'transactions.income.create' | 'transactions.transfer.create',
   normalizedArgs: Record<string, PendingOperationV2JsonValue>,
   idempotencyKey?: string,
 ) => {
@@ -111,6 +111,31 @@ const transactionCount = async (db: Pool, householdId: string): Promise<number> 
     householdId,
   ]);
   return Number(res.rows[0]!['n']);
+};
+
+const transferCount = async (db: Pool, householdId: string): Promise<number> => {
+  const res = await db.query(
+    `SELECT COUNT(*)::int AS n FROM transactions WHERE household_id = $1 AND kind = 'transfer' AND deleted_at IS NULL`,
+    [householdId],
+  );
+  return Number(res.rows[0]!['n']);
+};
+
+const balanceOf = async (db: Pool, accountId: string): Promise<number> => {
+  const res = await db.query(`SELECT balance_cents::int AS n FROM accounts WHERE id = $1`, [accountId]);
+  return Number(res.rows[0]!['n']);
+};
+
+/** Derived DRE legs: internal transfers must not change either. */
+const dreTotals = async (db: Pool, householdId: string): Promise<{ income: number; expense: number }> => {
+  const res = await db.query(
+    `SELECT
+       COALESCE(SUM(amount_cents) FILTER (WHERE kind = 'income'), 0)::int AS income,
+       COALESCE(SUM(amount_cents) FILTER (WHERE kind = 'expense'), 0)::int AS expense
+     FROM transactions WHERE household_id = $1 AND deleted_at IS NULL`,
+    [householdId],
+  );
+  return { income: Number(res.rows[0]!['income']), expense: Number(res.rows[0]!['expense']) };
 };
 
 const waitFor = async (
@@ -419,4 +444,176 @@ describe('pending-v2 end-to-end (real executor + real Postgres WriteStore)', () 
     const recoveredExecution = recovered.execution as { operationId: string };
     expect(firstExecution.operationId).toBe(recoveredExecution.operationId);
   }, 30_000);
+
+  itIfDatabase('transfer happy path: ONE atomic transfer row, both balances, DRE untouched', async () => {
+    const db = pool!;
+    const householdId = await seedHousehold(db);
+    const id = identityFor(householdId);
+    const from = await writes!.createAccount(householdId, {
+      name: 'E2E Transfer From',
+      kind: 'bank',
+      initialBalanceCents: 100_000,
+    });
+    const to = await writes!.createAccount(householdId, {
+      name: 'E2E Transfer To',
+      kind: 'bank',
+      initialBalanceCents: 50_000,
+    });
+    const args = {
+      description: 'E2E internal transfer',
+      amountCents: 30_000,
+      date: '2026-11-07',
+      fromAccountId: from.id,
+      toAccountId: to.id,
+    };
+
+    const proposed = await proposeOp(store!, id, 'transactions.transfer.create', args);
+    expect(await transferCount(db, householdId)).toBe(0);
+    const confirmed = await store!.confirm(proposed.id, id);
+    const done = await store!.execute(confirmed.attestation!, id, realExecutor!);
+    expect(done.status).toBe('succeeded');
+    const execution = done.execution as {
+      status: string;
+      operationId: string;
+      receipt: { mutationId: string; mutationKind: string; affectedTargets: string[] };
+    };
+    expect(execution.receipt.mutationKind).toBe('transactions.transfer.create');
+    expect(execution.receipt.affectedTargets).toEqual(['transactions', 'accounts', 'dashboard-summary']);
+    expect(done.mutationId).toBe(execution.receipt.mutationId);
+
+    // Exactly ONE `transfer` row (never two expense/income legs).
+    expect(await transactionCount(db, householdId)).toBe(1);
+    expect(await transferCount(db, householdId)).toBe(1);
+    const row = await db.query(
+      `SELECT id, kind, description, amount_cents::int AS amount_cents, date::text AS date,
+              account_id, transfer_to_account_id, category_id
+         FROM transactions WHERE household_id = $1 AND deleted_at IS NULL`,
+      [householdId],
+    );
+    expect(row.rows[0]).toMatchObject({
+      kind: 'transfer',
+      description: 'E2E internal transfer',
+      amount_cents: 30_000,
+      date: '2026-11-07',
+      account_id: from.id,
+      transfer_to_account_id: to.id,
+      category_id: null,
+    });
+    expect(execution.operationId).toBe(row.rows[0]!['id']);
+
+    // Both balance legs moved by the exact amount (no clamp, no duplication).
+    expect(await balanceOf(db, from.id)).toBe(70_000);
+    expect(await balanceOf(db, to.id)).toBe(80_000);
+
+    // DRE: no revenue and no expense was created by the transfer.
+    expect(await dreTotals(db, householdId)).toEqual({ income: 0, expense: 0 });
+  }, 30_000);
+
+  itIfDatabase('transfer rejection writes zero rows; repeated execution cannot duplicate', async () => {
+    const db = pool!;
+    const householdId = await seedHousehold(db);
+    const id = identityFor(householdId);
+    const from = await writes!.createAccount(householdId, {
+      name: 'E2E Transfer Cancel From',
+      kind: 'bank',
+      initialBalanceCents: 100_000,
+    });
+    const to = await writes!.createAccount(householdId, {
+      name: 'E2E Transfer Cancel To',
+      kind: 'bank',
+      initialBalanceCents: 50_000,
+    });
+    const args = {
+      description: 'E2E transfer cancel',
+      amountCents: 5_000,
+      date: '2026-11-07',
+      fromAccountId: from.id,
+      toAccountId: to.id,
+    };
+
+    const rejected = await proposeOp(store!, id, 'transactions.transfer.create', args);
+    const rejectedConfirmed = await store!.confirm(rejected.id, id);
+    await store!.cancel(rejected.id, id);
+    expect(await transactionCount(db, householdId)).toBe(0);
+    expect(await balanceOf(db, from.id)).toBe(100_000);
+    expect(await balanceOf(db, to.id)).toBe(50_000);
+    await expect(
+      store!.execute(rejectedConfirmed.attestation!, id, realExecutor!),
+    ).rejects.toMatchObject({ code: 'approval.attestation_replayed' });
+
+    // Same key + same payload replays the SAME pending operation.
+    const key = randomUUID();
+    const first = await proposeOp(store!, id, 'transactions.transfer.create', { ...args, description: 'E2E transfer replay' }, key);
+    const second = await proposeOp(store!, id, 'transactions.transfer.create', { ...args, description: 'E2E transfer replay' }, key);
+    expect(second.id).toBe(first.id);
+    const confirmed = await store!.confirm(second.id, id);
+    await store!.execute(confirmed.attestation!, id, realExecutor!);
+    expect(await transferCount(db, householdId)).toBe(1);
+    expect(await balanceOf(db, from.id)).toBe(95_000);
+    expect(await balanceOf(db, to.id)).toBe(55_000);
+  }, 120_000);
+
+  itIfDatabase('transfer fails closed for same account, foreign account and credit card with NO partial movement', async () => {
+    const db = pool!;
+    const householdId = await seedHousehold(db);
+    const otherHouseholdId = await seedHousehold(db);
+    const id = identityFor(householdId);
+    const from = await writes!.createAccount(householdId, {
+      name: 'E2E Transfer Guard From',
+      kind: 'bank',
+      initialBalanceCents: 100_000,
+    });
+    const foreign = await writes!.createAccount(otherHouseholdId, {
+      name: 'E2E Foreign Destination',
+      kind: 'bank',
+      initialBalanceCents: 10_000,
+    });
+    const card = await db.query<{ id: string }>(
+      `INSERT INTO accounts (household_id, name, kind, balance_cents, initial_balance_cents, status)
+       VALUES ($1, 'E2E Card', 'credit_card', 0, 0, 'active') RETURNING id`,
+      [householdId],
+    );
+    const cardId = card.rows[0]!.id;
+    const base = {
+      description: 'E2E guarded transfer',
+      amountCents: 12_345,
+      date: '2026-11-07',
+      fromAccountId: from.id,
+    };
+
+    // Same account.
+    await expect(
+      writes!.createTransfer(householdId, { ...base, toAccountId: from.id }),
+    ).rejects.toMatchObject({ code: 'validation.invalid' });
+    // Foreign-workspace destination.
+    await expect(
+      writes!.createTransfer(householdId, { ...base, toAccountId: foreign.id }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    // Credit card on either side keeps the existing restriction.
+    await expect(
+      writes!.createTransfer(householdId, { ...base, toAccountId: cardId }),
+    ).rejects.toMatchObject({ statusCode: 422 });
+    await expect(
+      writes!.createTransfer(householdId, { ...base, fromAccountId: cardId, toAccountId: from.id }),
+    ).rejects.toMatchObject({ statusCode: 422 });
+
+    // No partial movement and no row from any failed attempt.
+    expect(await transactionCount(db, householdId)).toBe(0);
+    expect(await balanceOf(db, from.id)).toBe(100_000);
+    expect(await balanceOf(db, foreign.id)).toBe(10_000);
+    expect(await balanceOf(db, cardId)).toBe(0);
+
+    // A direct executor attempt with a foreign destination is deterministic
+    // (pre-write DomainError) — never `executing`/uncertain.
+    const proposed = await proposeOp(store!, id, 'transactions.transfer.create', {
+      ...base,
+      toAccountId: foreign.id,
+    });
+    const confirmed = await store!.confirm(proposed.id, id);
+    await expect(store!.execute(confirmed.attestation!, id, realExecutor!)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    expect(await transactionCount(db, householdId)).toBe(0);
+    expect(await balanceOf(db, from.id)).toBe(100_000);
+  }, 120_000);
 });
