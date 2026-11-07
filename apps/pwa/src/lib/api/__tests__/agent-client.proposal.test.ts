@@ -11,6 +11,8 @@ import {
   sanitizeProposalIntent,
   sendAgentMessage,
   composeChatSend,
+  loadPendingChatSend,
+  savePendingChatSend,
   type ExpenseProposalIntent,
 } from "../agent-client";
 import * as agentAuth from "../agent-auth";
@@ -51,6 +53,13 @@ describe("sanitizeProposalIntent", () => {
     expect(
       sanitizeProposalIntent({ ...intent(), normalizedArgs: { ...intent().normalizedArgs, amountCents: 0 } }),
     ).toBeUndefined();
+  });
+
+  it("accepts the runtime's display summary and forwards only the authoritative fields", () => {
+    // The gateway records `summary` for display (tool-defs.mjs). It is NOT
+    // authority: the broker contract is exactly tool/intentionId/normalizedArgs.
+    const runtimeIntent = { ...intent(), summary: 'Despesa de R$ 50,00 em "mercado"' };
+    expect(sanitizeProposalIntent(runtimeIntent)).toEqual(intent());
   });
 });
 
@@ -102,7 +111,7 @@ describe("proposePendingExpense", () => {
 });
 
 describe("sendAgentMessage — proposal field", () => {
-  it("returns a valid proposal intent and clears the retry anchor", async () => {
+  it("returns a valid proposal intent and keeps the retry anchor for broker recovery", async () => {
     vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("tok");
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       Response.json({ turnId: "t-1", status: "completed", output: "Vou preparar.", proposal: intent() }),
@@ -110,6 +119,21 @@ describe("sendAgentMessage — proposal field", () => {
     const send = composeChatSend("Registre uma despesa de R$ 50 no mercado, na conta Nubank.");
     const turn = await sendAgentMessage("ws-1", send.content, { messageId: send.messageId });
     expect(turn.proposal).toEqual(intent());
+    // The intent is not authority, but it MUST survive the turn so a reload
+    // can hand it to the broker again under the SAME intentionId.
+    const anchor = loadPendingChatSend("ws-1", null);
+    expect(anchor?.messageId).toBe(send.messageId);
+    expect(anchor?.proposal).toEqual(intent());
+  });
+
+  it("clears the retry anchor on a successful turn without a proposal", async () => {
+    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("tok");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ turnId: "t-1", status: "completed", output: "ok" }),
+    );
+    const send = composeChatSend("oi");
+    await sendAgentMessage("ws-1", send.content, { messageId: send.messageId });
+    expect(loadPendingChatSend("ws-1", null)).toBeNull();
   });
 
   it("drops an invalid proposal instead of forwarding it", async () => {
@@ -122,7 +146,32 @@ describe("sendAgentMessage — proposal field", () => {
         proposal: { ...intent(), tool: "transactions.transfer.create" },
       }),
     );
-    const turn = await sendAgentMessage("ws-1", "oi", { messageId: "m-1" });
+    const send = composeChatSend("oi");
+    const turn = await sendAgentMessage("ws-1", send.content, { messageId: send.messageId });
     expect(turn.proposal).toBeUndefined();
+    expect(loadPendingChatSend("ws-1", null)).toBeNull();
+  });
+});
+
+describe("pending chat anchor — proposal recovery payload", () => {
+  it("round-trips the sanitized intent with the stable message identity", () => {
+    const send = composeChatSend("Registre uma despesa de R$ 50 no mercado.", { messageId: "m-recover" });
+    savePendingChatSend("ws-1", { ...send, proposal: intent() }, null);
+    const anchor = loadPendingChatSend("ws-1", null);
+    expect(anchor).toMatchObject({
+      messageId: "m-recover",
+      content: send.content,
+      proposal: intent(),
+    });
+  });
+
+  it("never rehydrates a malformed proposal", () => {
+    const send = composeChatSend("oi", { messageId: "m-bad" });
+    savePendingChatSend(
+      "ws-1",
+      { ...send, proposal: { ...intent(), normalizedArgs: { ...intent().normalizedArgs, amountCents: 0 } } },
+      null,
+    );
+    expect(loadPendingChatSend("ws-1", null)?.proposal).toBeUndefined();
   });
 });

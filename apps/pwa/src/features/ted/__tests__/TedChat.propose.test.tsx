@@ -84,6 +84,7 @@ const activeCard = {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  sessionStorage.clear();
 });
 
 const send = async (text: string) => {
@@ -92,6 +93,122 @@ const send = async (text: string) => {
   await user.type(screen.getByLabelText("Mensagem para o assistente"), text);
   await user.click(screen.getByRole("button", { name: "Enviar mensagem" }));
 };
+
+const USER_TEXT = "Registre uma despesa de R$ 50 no mercado, na conta Nubank.";
+
+const historyWithIntent = (messageId: string) => [
+  {
+    id: "hist-user-1",
+    actorId: "actor-1",
+    role: "user",
+    content: USER_TEXT,
+    createdAt: "2026-11-06T10:00:00.000Z",
+    isOwn: true,
+    intentionId: messageId,
+  },
+  {
+    id: "hist-asst-1",
+    actorId: "ted",
+    role: "assistant",
+    content: "Vou preparar a proposta de R$ 50,00 no mercado.",
+    createdAt: "2026-11-06T10:00:01.000Z",
+    isOwn: false,
+    intentionId: messageId,
+  },
+];
+
+const seedFailedProposalAnchor = () => {
+  agentClient.savePendingChatSend(
+    "ws-1",
+    {
+      messageId: "m-recover",
+      content: USER_TEXT,
+      createdAt: "2026-11-06T10:00:00.000Z",
+      proposal: intent,
+    },
+    null,
+  );
+};
+
+describe("TedChat — P3 proposal recovery after a lost broker call", () => {
+  it("re-sends the persisted intent on reload and renders the authoritative card", async () => {
+    seedFailedProposalAnchor();
+    vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue(historyWithIntent("m-recover"));
+    let proposed = false;
+    const propose = vi.spyOn(agentClient, "proposePendingExpense").mockImplementation(async () => {
+      proposed = true;
+      return { id: "op-1", existing: false };
+    });
+    vi.spyOn(agentClient, "fetchActivePendingOperations").mockImplementation(async () =>
+      proposed ? [activeCard] : [],
+    );
+    const sendMessage = vi.spyOn(agentClient, "sendAgentMessage");
+
+    const view = render(<TedChat />);
+
+    const confirm = await screen.findByRole("button", { name: /Confirmar R\$ 50,00/ });
+    expect(confirm).toBeTruthy();
+    expect(propose).toHaveBeenCalledTimes(1);
+    expect(propose).toHaveBeenCalledWith("ws-1", intent);
+    // Recovery never re-sends the chat turn; the original intentionId is kept.
+    expect(sendMessage).not.toHaveBeenCalled();
+    await waitFor(() => expect(agentClient.loadPendingChatSend("ws-1", null)).toBeNull());
+
+    // A second reload has nothing left to recover and never duplicates.
+    view.unmount();
+    render(<TedChat />);
+    await screen.findByRole("button", { name: /Confirmar R\$ 50,00/ });
+    await waitFor(() => expect(propose).toHaveBeenCalledTimes(1));
+  });
+
+  it("recovers the EXISTING operation when the first broker call actually landed", async () => {
+    seedFailedProposalAnchor();
+    vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue(historyWithIntent("m-recover"));
+    const propose = vi.spyOn(agentClient, "proposePendingExpense").mockResolvedValue({
+      id: "op-1",
+      existing: true,
+    });
+    vi.spyOn(agentClient, "fetchActivePendingOperations").mockResolvedValue([activeCard]);
+
+    render(<TedChat />);
+
+    await screen.findByRole("button", { name: /Confirmar R\$ 50,00/ });
+    expect(propose).toHaveBeenCalledTimes(1);
+    expect(propose).toHaveBeenCalledWith("ws-1", intent);
+    expect(screen.getAllByRole("button", { name: /Confirmar R\$ 50,00/ })).toHaveLength(1);
+    await waitFor(() => expect(agentClient.loadPendingChatSend("ws-1", null)).toBeNull());
+  });
+
+  it("keeps the anchor after a failed recovery, then succeeds on the next reload", async () => {
+    seedFailedProposalAnchor();
+    vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue(historyWithIntent("m-recover"));
+    let attempt = 0;
+    const propose = vi.spyOn(agentClient, "proposePendingExpense").mockImplementation(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw Object.assign(new Error("broker offline"), { code: "agent.proposal_failed" });
+      }
+      return { id: "op-1", existing: false };
+    });
+    vi.spyOn(agentClient, "fetchActivePendingOperations").mockImplementation(async () =>
+      attempt >= 2 ? [activeCard] : [],
+    );
+
+    const first = render(<TedChat />);
+    await screen.findByText(/Não foi possível recuperar a proposta de despesa/);
+    expect(agentClient.loadPendingChatSend("ws-1", null)?.proposal).toEqual(intent);
+    expect(screen.queryByRole("button", { name: /Confirmar R\$/ })).toBeNull();
+
+    first.unmount();
+    render(<TedChat />);
+    await screen.findByRole("button", { name: /Confirmar R\$ 50,00/ });
+    expect(propose).toHaveBeenCalledTimes(2);
+    // Both attempts carry the SAME idempotency identity.
+    expect(propose.mock.calls[0]?.[1]?.intentionId).toBe(intent.intentionId);
+    expect(propose.mock.calls[1]?.[1]?.intentionId).toBe(intent.intentionId);
+    await waitFor(() => expect(agentClient.loadPendingChatSend("ws-1", null)).toBeNull());
+  });
+});
 
 describe("TedChat — P3 proposal intent", () => {
   it("brokers the intent once, then renders the authoritative card", async () => {

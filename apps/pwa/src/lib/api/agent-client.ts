@@ -310,12 +310,17 @@ export type AgentTurnPendingOperation =
 
 /**
  * P3 — exact proposal intent contract accepted from the OpenCode runtime.
- * Anything outside this shape is dropped (never forwarded to the broker).
+ * The runtime records a display-only `summary` alongside the authoritative
+ * fields; it is accepted at the boundary and DROPPED from the forwarded value
+ * (the Agent broker contract is exactly tool/intentionId/normalizedArgs).
+ * Anything else outside this shape is dropped (never forwarded to the broker).
  */
 const expenseProposalIntentSchema = z
   .object({
     tool: z.literal("transactions.expense.create"),
     intentionId: z.string().trim().min(1).max(128),
+    // Display-only metadata; never used to authorize or execute.
+    summary: z.string().trim().min(1).max(240).optional(),
     normalizedArgs: z
       .object({
         amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
@@ -326,7 +331,8 @@ const expenseProposalIntentSchema = z
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .transform(({ tool, intentionId, normalizedArgs }) => ({ tool, intentionId, normalizedArgs }));
 
 export type ExpenseProposalIntent = z.infer<typeof expenseProposalIntentSchema>;
 
@@ -633,6 +639,15 @@ export type PendingChatSend = Readonly<{
   createdAt: string;
   attachments?: ReadonlyArray<OutgoingAttachment>;
   /**
+   * P3 recovery: the runtime's expense proposal intent that still needs to be
+   * handed to the Agent broker. It survives a failed/lost broker call in this
+   * SAME retry anchor (never a second store) so a reload can re-send the
+   * original intent under the same `intentionId`. The broker derives the
+   * idempotency key from it, so replaying this payload can only return the
+   * existing operation — never a second launch.
+   */
+  proposal?: ExpenseProposalIntent;
+  /**
    * R2 FIX 1 (HIGH): `true` quando a âncora veio do formato legado (JSON sem
    * `anchorVersion`/`attachments`). O envio original podia ter anexos que se
    * perderam no formato antigo, então o retry é PROIBIDO — reenviar sem os
@@ -758,6 +773,9 @@ export function savePendingChatSend(workspaceId: string, send: PendingChatSend, 
       name: a.name,
       ...(typeof a.ref === "string" && a.ref ? { ref: a.ref } : {}),
     }));
+    // P3: only the strict expense intent is durable; a malformed value is
+    // dropped here (never persisted, never forwarded).
+    const proposal = send.proposal ? sanitizeProposalIntent(send.proposal) : undefined;
     sessionStorage.setItem(
       pendingSendKey(workspaceId, actorId),
       JSON.stringify({
@@ -766,6 +784,7 @@ export function savePendingChatSend(workspaceId: string, send: PendingChatSend, 
         content: send.content,
         createdAt: send.createdAt,
         attachments,
+        ...(proposal ? { proposal } : {}),
         ...(overLimit ? { overLimit: true } : {}),
       }),
     );
@@ -790,6 +809,7 @@ export function loadPendingChatSend(workspaceId: string, actorId?: string | null
       createdAt?: unknown;
       anchorVersion?: unknown;
       attachments?: unknown;
+      proposal?: unknown;
       overLimit?: unknown;
     };
     if (typeof parsed.messageId !== "string" || !parsed.messageId || typeof parsed.content !== "string") return null;
@@ -798,27 +818,31 @@ export function loadPendingChatSend(workspaceId: string, actorId?: string | null
       content: parsed.content,
       createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date(0).toISOString(),
     };
+    // P3: the intent is revalidated on every load. An invalid value is
+    // dropped (no broker call), never partially rehydrated.
+    const proposal = sanitizeProposalIntent(parsed.proposal);
+    const withProposal = proposal ? { proposal } : {};
     // Formato legado (gravado antes do FIX 1): sem versão nem anexos — o
     // envio original podia ter anexos, então volta marcado como legado (sem
     // retry; ver `legacyAnchor`). Âncoras sem timestamp caem no epoch, o que
     // preserva a regra conservadora anterior (igualdade textual suprime).
     if (parsed.anchorVersion !== CHAT_SEND_ANCHOR_VERSION || !Array.isArray(parsed.attachments)) {
-      return { ...base, legacyAnchor: true };
+      return { ...base, ...withProposal, legacyAnchor: true };
     }
     // R3 FIX 3: âncora acima do limite — nunca retryable. Defesa em
     // profundidade dupla: a flag gravada pelo save novo OU a contagem real
     // (âncora artesanal/antiga com 11 itens vira non-retryable aqui).
     if (parsed.overLimit === true || parsed.attachments.length > CHAT_SEND_ATTACHMENT_LIMIT) {
-      return { ...base, overLimit: true };
+      return { ...base, ...withProposal, overLimit: true };
     }
     const attachments: OutgoingAttachment[] = [];
     for (const item of parsed.attachments) {
       const clean = sanitizeAnchorAttachment(item);
       // Anexo corrompido = payload não mais fiel → trata como legado (sem retry).
-      if (!clean) return { ...base, legacyAnchor: true };
+      if (!clean) return { ...base, ...withProposal, legacyAnchor: true };
       attachments.push(clean);
     }
-    return { ...base, attachments };
+    return { ...base, ...withProposal, attachments };
   } catch {
     return null;
   }
@@ -1270,10 +1294,13 @@ export async function sendAgentMessage(
   // SPEC §7.7: the send identity is fixed ONCE here; retries pass the same
   // messageId back and the pending record keeps it across reloads.
   const messageId = opts?.messageId && opts.messageId.trim() ? opts.messageId.trim() : createChatMessageId();
+  // P3: the same timestamp survives the post-turn rewrite below, so a proposal
+  // anchor keeps the original send ordering for the retry reconciler.
+  const anchorCreatedAt = new Date().toISOString();
   savePendingChatSend(workspaceId, {
     messageId,
     content,
-    createdAt: new Date().toISOString(),
+    createdAt: anchorCreatedAt,
     ...(opts?.attachments ? { attachments: opts.attachments } : {}),
   });
   const requestUrl = `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/chat`;
@@ -1322,9 +1349,23 @@ export async function sendAgentMessage(
   // (pendingOperation/undoProposal) NÃO é sucesso — é falha retentável, então
   // a âncora/storage SOBREVIVE para o retry reusar a MESMA identidade §7.7
   // mesmo após reload/remount. Só sucesso real limpa.
+  // P3: a turn carrying a proposal intent is NOT finished until the broker
+  // accepted it. The anchor keeps the intent here; TedChat clears it only
+  // after the broker responds. A reload (or a lost broker response) can then
+  // replay the EXACT same intentionId through the existing idempotent path.
   const hasRealResult = Boolean(data.output?.trim() || pendingOperation || undoProposal || proposal);
   if (hasRealResult) {
-    clearPendingChatSend(workspaceId);
+    if (proposal) {
+      savePendingChatSend(workspaceId, {
+        messageId,
+        content,
+        createdAt: anchorCreatedAt,
+        ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+        proposal,
+      });
+    } else {
+      clearPendingChatSend(workspaceId);
+    }
   }
   return {
     turnId: data.turnId ?? data.intentionId ?? `turn-${Date.now()}`,
