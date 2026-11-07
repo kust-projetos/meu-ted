@@ -446,3 +446,64 @@ política da API não foi alterada.
   autorizada pelo operador nesta sessão; escopo limitado a despesa. O A0 continua
   o dono do pipeline conversacional (o broker não interpreta texto nem propõe
   draft).
+
+## P3.2 — fatia de receita por conversa (2026-11-07)
+
+**Decisão:** reutilizar integralmente o fluxo P3.1; a única mudança de domínio é
+o tool `transactions.income.create`, já aceito pela API (tool registry,
+`createIncomeInputSchema`, executor, apresentação e recibos existentes). Nenhuma
+capability nova, nenhuma policy alterada, nenhum segundo broker.
+
+### Fluxo entregue
+
+1. `propose_income` valida `{amountCents, description, date, accountId,
+   categoryId}` (identidade host-bound) e registra a INTENÇÃO no mesmo registry
+   process-local de `propose_expense`. Zero HTTP financeiro, zero escrita.
+2. O gateway anexa `proposal` ao turno; a PWA envia o intent ao mesmo
+   `POST /rpc/pending-operations/propose`.
+3. `proposeTransactionFromIntent` é o broker único: schema discriminado
+   (`transactions.expense.create` | `transactions.income.create`), mesmo mint
+   `financial.approval.propose`, mesma chave de idempotência
+   `deriveIdempotencyKey(workspace, intentionId, tool)` e mesmo
+   `createMutationProposal`.
+4. A API persiste Pending V2; o card reidratado mostra título “Confirmar
+   receita”, valor, descrição, conta e categoria. Confirmação/rejeição,
+   recuperação no reload e reconciliação financeira são os caminhos existentes.
+
+### Arquivos
+
+- Runtime: `src/tool-defs.mjs`, `src/plugin.mjs`, `src/bootstrap.mjs`,
+  `README.md`.
+- Agent: `src/mutations/pending-proposal-broker.ts`,
+  `src/finance-chat-agent.ts`.
+- PWA: `src/lib/api/agent-client.ts`, `src/features/ted/TedChat.tsx`.
+- Testes: `apps/ted-runtime/tests/p3-propose-income.test.mjs`,
+  `p3-propose-loop.test.mjs`, `p3-propose-expense.test.mjs`,
+  `tool-defs.test.mjs`, `policy-denies.test.mjs`;
+  `apps/agent/tests/pending-propose-rpc.test.ts`;
+  `apps/pwa/src/lib/api/__tests__/agent-client.proposal.test.ts`,
+  `apps/pwa/src/features/ted/__tests__/TedChat.propose.test.tsx`;
+  `apps/api/tests/integration/p3-income-broker-flow.test.ts`;
+  `apps/pwa/e2e/p2d/p3-income.spec.ts`.
+- Harness: `apps/pwa/e2e/playwright.config.ts`,
+  `apps/pwa/e2e/support/p2d-browser-stack.mts`,
+  `apps/pwa/e2e/support/p2d-synthetic-read-probe.mjs`.
+
+### Evidências desta rodada
+
+| Verificação | Resultado |
+|---|---|
+| `ted-runtime` completo | **254/254 PASS** (prompt loop real de despesa e receita) |
+| Agent completo | **3960 PASS / 1 skip** |
+| API unit | **2867 PASS / 172 skips** |
+| API integração focada (income + expense) | **15/15 PASS** |
+| PWA completa | **2928 PASS / 9 skips** |
+| `pnpm typecheck` / `pnpm lint` | **PASS** (6 workspaces; lint 0 errors) |
+| Gates rápidos (`docs`, `governance`, `capabilities`, `write-policy`, `boundary`, `action-pins`, `skip`, `public-safety`) | **PASS** |
+| E2E receita (`P2D_INCOME=1`) | **1 passed (2.9m)** — 1 income, saldo +250000, propose/confirm/execute/cancel = 2/1/1/1, `recoveredAfterReload=true` |
+| E2E despesa P3.1 (regressão) | **1 passed (1.0m)** |
+
+**Veredito:** `P3_INCOME_SLICE_PASS` no escopo local/determinístico. Sem
+provider pago, Postgres real, deploy ou merge. O card terminal é transitório
+(comportamento herdado do P3.1); o recibo é provado pela resposta de decisão e
+pela reconciliação de saldo/extrato.

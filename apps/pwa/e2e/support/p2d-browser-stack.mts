@@ -51,10 +51,16 @@ const PROBE = path.resolve(HERE, "p2d-synthetic-read-probe.mjs");
 // into this process, the PWA or Next.
 const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
 const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
-// P3 expense slice (test-only): real Agent Worker + Pending V2 on the
-// synthetic API + the scripted provider emitting propose_expense. It reuses
-// the same loopback stack; no external inference and no production data.
+// P3 proposal slices (test-only): real Agent Worker + Pending V2 on the
+// synthetic API + the scripted provider emitting propose_expense (P3.1) or
+// propose_income (P3.2). It reuses the same loopback stack; no external
+// inference and no production data.
 const EXPENSE = process.env.P2D_EXPENSE === "1";
+const INCOME = process.env.P2D_INCOME === "1";
+const PROPOSAL = EXPENSE || INCOME;
+if (EXPENSE && INCOME) {
+  throw new Error("[p2d-stack] P2D_EXPENSE and P2D_INCOME are mutually exclusive");
+}
 if (OFFLINE_CHAT && LIVE_REAL) {
   throw new Error("[p2d-stack] P2D_OFFLINE_CHAT and P2D_LIVE_REAL are mutually exclusive");
 }
@@ -195,7 +201,7 @@ const auth = createBetterAuth({
   // 403 auth.invalid_origin. Test-only stack, loopback only.
   trustedOrigins: [NEXT_ORIGIN, "https://pwa.example"],
 });
-const pendingV2Store = EXPENSE ? createInMemoryPendingOperationV2Store() : null;
+const pendingV2Store = PROPOSAL ? createInMemoryPendingOperationV2Store() : null;
 const built = buildTestApp(
   {
     accounts: [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1],
@@ -235,7 +241,23 @@ function buildProbeConfig(): Record<string, unknown> {
     apiBaseUrl: `http://127.0.0.1:${API_PORT}`,
     tedRuntimeDir: TED_RUNTIME_DIR,
   };
-  if (EXPENSE) {
+  if (PROPOSAL) {
+    if (INCOME) {
+      return {
+        ...base,
+        stub: {
+          mode: "income",
+          toolName: "propose_income",
+          toolArgs: {
+            amountCents: 250000,
+            description: "salário",
+            date: "2026-11-07",
+            accountId: ACCOUNT_A2.id,
+            categoryId: CATEGORY_SALARY_A.id,
+          },
+        },
+      };
+    }
     return {
       ...base,
       stub: {
@@ -285,7 +307,7 @@ async function startProbe(): Promise<{ base: string; pid: number | undefined }> 
       ...process.env,
       P2D_GATEWAY_PORT: String(GATEWAY_PORT),
       P2D_CONFIG_JSON: JSON.stringify(buildProbeConfig()),
-      ...(EXPENSE ? { TED_OPENCODE_P3_WRITES_ENABLED: "1", NODE_ENV: "test" } : {}),
+      ...(PROPOSAL ? { TED_OPENCODE_P3_WRITES_ENABLED: "1", NODE_ENV: "test" } : {}),
     },
   });
   const handle: ProbeHandle = { child, lines: [], stderrTail: "", exited: false, exitCode: null, pid: child.pid };
@@ -426,7 +448,7 @@ async function closeProbe(): Promise<{ exitCode: unknown; pid: number | undefine
   return debug as { exitCode: unknown; pid: number | undefined; forced: boolean };
 }
 
-// P3 expense E2E: the REAL Agent Worker (Durable Objects included) runs as a
+// P3 proposal E2E: the REAL Agent Worker (Durable Objects included) runs as a
 // dedicated local child via `wrangler dev --local`. It talks to the synthetic
 // API above; the browser reaches it through the PWA same-origin proxy. No
 // deploy, no Cloudflare account, no external inference.
@@ -441,7 +463,7 @@ type AgentHandle = {
 let agent: AgentHandle | null = null;
 
 async function startAgent(): Promise<void> {
-  if (!EXPENSE) return;
+  if (!PROPOSAL) return;
   if (agent && !agent.exited) throw new Error("agent already running");
   const agentDir = path.resolve(PWA_ROOT, "../agent");
   const env = {
@@ -560,7 +582,7 @@ async function stopAgent(): Promise<void> {
 await startProbe();
 console.log(`[p2d-stack] gateway=http://127.0.0.1:${GATEWAY_PORT} pid=${probe?.pid}`);
 await startAgent();
-if (EXPENSE) console.log(`[p2d-stack] agent=http://127.0.0.1:${AGENT_PORT} pid=${agent?.pid}`);
+if (PROPOSAL) console.log(`[p2d-stack] agent=http://127.0.0.1:${AGENT_PORT} pid=${agent?.pid}`);
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
@@ -633,7 +655,9 @@ const ctl = http.createServer((req, res) => {
       if (req.method === "GET" && u.pathname === "/p2d/expense-state") {
         // Authoritative in-memory ledger AFTER the real V2 executor ran. This
         // is the proof that confirmation created exactly one transaction and
-        // rejection created none (no fixture/stub rows are added here).
+        // rejection created none (no fixture/stub rows are added here). P3.2
+        // also exposes the account balances so the income E2E can prove the
+        // credit without reading a fixture.
         const transactions = (built.state.transactions ?? [])
           .filter((t) => t.householdId === HOUSEHOLD_A)
           .map((t) => ({
@@ -645,7 +669,10 @@ const ctl = http.createServer((req, res) => {
             accountId: t.accountId,
             categoryId: t.categoryId,
           }));
-        json(res, 200, { transactions, total: transactions.length });
+        const accounts = (built.state.accounts ?? [])
+          .filter((a) => a.householdId === HOUSEHOLD_A)
+          .map((a) => ({ id: a.id, name: a.name, kind: a.kind, balanceCents: a.balanceCents }));
+        json(res, 200, { transactions, total: transactions.length, accounts });
         return;
       }
       if (req.method === "POST" && u.pathname === "/p2d/close-probe") {

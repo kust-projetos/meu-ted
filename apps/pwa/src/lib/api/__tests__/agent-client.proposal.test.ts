@@ -7,13 +7,13 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  proposePendingExpense,
+  proposePendingOperation,
   sanitizeProposalIntent,
   sendAgentMessage,
   composeChatSend,
   loadPendingChatSend,
   savePendingChatSend,
-  type ExpenseProposalIntent,
+  type ProposalIntent,
 } from "../agent-client";
 import * as agentAuth from "../agent-auth";
 
@@ -22,13 +22,26 @@ vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test"
 const ACCOUNT = "11111111-1111-4111-8111-111111111111";
 const CATEGORY = "22222222-2222-4222-8222-222222222222";
 
-const intent = (overrides: Record<string, unknown> = {}): ExpenseProposalIntent => ({
+const intent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
   tool: "transactions.expense.create",
   intentionId: "int-abc",
   normalizedArgs: {
     amountCents: 5000,
     description: "mercado",
     date: "2026-11-06",
+    accountId: ACCOUNT,
+    categoryId: CATEGORY,
+  },
+  ...overrides,
+});
+
+const incomeIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "transactions.income.create",
+  intentionId: "int-income-abc",
+  normalizedArgs: {
+    amountCents: 250000,
+    description: "salário",
+    date: "2026-11-07",
     accountId: ACCOUNT,
     categoryId: CATEGORY,
   },
@@ -43,8 +56,9 @@ afterEach(() => {
 });
 
 describe("sanitizeProposalIntent", () => {
-  it("accepts only the exact expense intent", () => {
+  it("accepts only the exact expense/income intents", () => {
     expect(sanitizeProposalIntent(intent())).toEqual(intent());
+    expect(sanitizeProposalIntent(incomeIntent())).toEqual(incomeIntent());
     expect(sanitizeProposalIntent({ ...intent(), tool: "transactions.transfer.create" })).toBeUndefined();
     expect(sanitizeProposalIntent({ ...intent(), extra: 1 })).toBeUndefined();
     expect(
@@ -60,10 +74,12 @@ describe("sanitizeProposalIntent", () => {
     // authority: the broker contract is exactly tool/intentionId/normalizedArgs.
     const runtimeIntent = { ...intent(), summary: 'Despesa de R$ 50,00 em "mercado"' };
     expect(sanitizeProposalIntent(runtimeIntent)).toEqual(intent());
+    const runtimeIncome = { ...incomeIntent(), summary: 'Receita de R$ 2.500,00 em "salário"' };
+    expect(sanitizeProposalIntent(runtimeIncome)).toEqual(incomeIntent());
   });
 });
 
-describe("proposePendingExpense", () => {
+describe("proposePendingOperation", () => {
   it("POSTs the intent to the Agent broker with the connection token", async () => {
     vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("signed-token-123");
     let capturedUrl = "";
@@ -74,7 +90,7 @@ describe("proposePendingExpense", () => {
       return Response.json({ id: "op-1", existing: false }, { status: 200 });
     });
 
-    const result = await proposePendingExpense("workspace-123", intent());
+    const result = await proposePendingOperation("workspace-123", intent());
 
     expect(result).toEqual({ id: "op-1", existing: false });
     expect(capturedUrl).toBe(
@@ -86,9 +102,23 @@ describe("proposePendingExpense", () => {
     expect(JSON.parse(String(capturedInit?.body))).toEqual(intent());
   });
 
+  it("POSTs an income intent to the same broker route", async () => {
+    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("signed-token-123");
+    let capturedInit: RequestInit | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      capturedInit = init;
+      return Response.json({ id: "op-income-1", existing: false }, { status: 200 });
+    });
+
+    const result = await proposePendingOperation("workspace-123", incomeIntent());
+
+    expect(result).toEqual({ id: "op-income-1", existing: false });
+    expect(JSON.parse(String(capturedInit?.body))).toEqual(incomeIntent());
+  });
+
   it("never sends an invalid intent", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const err = await proposePendingExpense("ws-1", intent({ tool: "evil" as never })).catch((e) => e);
+    const err = await proposePendingOperation("ws-1", intent({ tool: "evil" as never })).catch((e) => e);
     expect(err.code).toBe("agent.invalid_proposal");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -98,14 +128,14 @@ describe("proposePendingExpense", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       Response.json({ code: "agent.approval_context_required" }, { status: 401 }),
     );
-    const err = await proposePendingExpense("ws-1", intent()).catch((e) => e);
+    const err = await proposePendingOperation("ws-1", intent()).catch((e) => e);
     expect(err.code).toBe("agent.approval_context_required");
   });
 
   it("rejects a response without an operation id (never invents a card)", async () => {
     vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("tok");
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ existing: false }));
-    const err = await proposePendingExpense("ws-1", intent()).catch((e) => e);
+    const err = await proposePendingOperation("ws-1", intent()).catch((e) => e);
     expect(err.code).toBe("agent.proposal_failed");
   });
 });
@@ -163,6 +193,12 @@ describe("pending chat anchor — proposal recovery payload", () => {
       content: send.content,
       proposal: intent(),
     });
+  });
+
+  it("round-trips an income intent too", () => {
+    const send = composeChatSend("Registre uma receita de R$ 2.500 de salário.", { messageId: "m-income" });
+    savePendingChatSend("ws-1", { ...send, proposal: incomeIntent() }, null);
+    expect(loadPendingChatSend("ws-1", null)?.proposal).toEqual(incomeIntent());
   });
 
   it("never rehydrates a malformed proposal", () => {

@@ -44,7 +44,7 @@ vi.mock("@/lib/state/app-state-context", async (importOriginal) => {
 const ACCOUNT = "11111111-1111-4111-8111-111111111111";
 const CATEGORY = "22222222-2222-4222-8222-222222222222";
 
-const intent: agentClient.ExpenseProposalIntent = {
+const intent: agentClient.ProposalIntent = {
   tool: "transactions.expense.create",
   intentionId: "int-abc",
   normalizedArgs: {
@@ -135,7 +135,7 @@ describe("TedChat — P3 proposal recovery after a lost broker call", () => {
     seedFailedProposalAnchor();
     vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue(historyWithIntent("m-recover"));
     let proposed = false;
-    const propose = vi.spyOn(agentClient, "proposePendingExpense").mockImplementation(async () => {
+    const propose = vi.spyOn(agentClient, "proposePendingOperation").mockImplementation(async () => {
       proposed = true;
       return { id: "op-1", existing: false };
     });
@@ -164,7 +164,7 @@ describe("TedChat — P3 proposal recovery after a lost broker call", () => {
   it("recovers the EXISTING operation when the first broker call actually landed", async () => {
     seedFailedProposalAnchor();
     vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue(historyWithIntent("m-recover"));
-    const propose = vi.spyOn(agentClient, "proposePendingExpense").mockResolvedValue({
+    const propose = vi.spyOn(agentClient, "proposePendingOperation").mockResolvedValue({
       id: "op-1",
       existing: true,
     });
@@ -183,7 +183,7 @@ describe("TedChat — P3 proposal recovery after a lost broker call", () => {
     seedFailedProposalAnchor();
     vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue(historyWithIntent("m-recover"));
     let attempt = 0;
-    const propose = vi.spyOn(agentClient, "proposePendingExpense").mockImplementation(async () => {
+    const propose = vi.spyOn(agentClient, "proposePendingOperation").mockImplementation(async () => {
       attempt += 1;
       if (attempt === 1) {
         throw Object.assign(new Error("broker offline"), { code: "agent.proposal_failed" });
@@ -214,7 +214,7 @@ describe("TedChat — P3 proposal intent", () => {
   it("brokers the intent once, then renders the authoritative card", async () => {
     vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
     let proposed = false;
-    const propose = vi.spyOn(agentClient, "proposePendingExpense").mockImplementation(async () => {
+    const propose = vi.spyOn(agentClient, "proposePendingOperation").mockImplementation(async () => {
       proposed = true;
       return { id: "op-1", existing: false };
     });
@@ -239,7 +239,7 @@ describe("TedChat — P3 proposal intent", () => {
   it("never invents a card when the broker refuses; the message stays retryable", async () => {
     vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
     vi.spyOn(agentClient, "fetchActivePendingOperations").mockResolvedValue([]);
-    vi.spyOn(agentClient, "proposePendingExpense").mockRejectedValue(
+    vi.spyOn(agentClient, "proposePendingOperation").mockRejectedValue(
       Object.assign(new Error("broker failed"), { code: "agent.proposal_failed" }),
     );
     vi.spyOn(agentClient, "sendAgentMessage").mockResolvedValue({
@@ -256,7 +256,7 @@ describe("TedChat — P3 proposal intent", () => {
   });
 
   it("rehydrates a pending proposal after reload without re-sending anything", async () => {
-    const propose = vi.spyOn(agentClient, "proposePendingExpense");
+    const propose = vi.spyOn(agentClient, "proposePendingOperation");
     vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
     vi.spyOn(agentClient, "fetchActivePendingOperations").mockResolvedValue([activeCard]);
     const sendMessage = vi.spyOn(agentClient, "sendAgentMessage");
@@ -267,5 +267,111 @@ describe("TedChat — P3 proposal intent", () => {
     expect(confirm).toBeTruthy();
     await waitFor(() => expect(propose).not.toHaveBeenCalled());
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+const incomeIntent: agentClient.ProposalIntent = {
+  tool: "transactions.income.create",
+  intentionId: "int-income-abc",
+  normalizedArgs: {
+    amountCents: 250000,
+    description: "salário",
+    date: "2026-11-07",
+    accountId: ACCOUNT,
+    categoryId: CATEGORY,
+  },
+};
+
+const activeIncomeCard = {
+  id: "op-income-1",
+  status: "proposed",
+  tool: "transactions.income.create",
+  createdAt: "2026-11-07T10:00:00.000Z",
+  expiresAt: "2026-11-07T15:00:00.000Z",
+  amountCents: 250000,
+  description: "salário",
+  date: "2026-11-07",
+  accountId: ACCOUNT,
+  categoryId: CATEGORY,
+  presentation: {
+    id: "op-income-1",
+    status: "proposed",
+    tool: "transactions.income.create",
+    title: "Confirmar receita",
+    amountCents: 250000,
+    description: "salário",
+    date: "2026-11-07",
+    account: { id: ACCOUNT, label: "Nubank" },
+    category: { id: CATEGORY, label: "Salário" },
+    expiresAt: "2026-11-07T15:00:00.000Z",
+    warnings: [],
+  },
+} as unknown as agentClient.ActivePendingOperation;
+
+describe("TedChat — P3.2 income proposal", () => {
+  const INCOME_TEXT = "Registre uma receita de R$ 2.500 de salário na conta Nubank.";
+
+  it("brokers the income intent once and renders the authoritative receita card", async () => {
+    vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
+    let proposed = false;
+    const propose = vi.spyOn(agentClient, "proposePendingOperation").mockImplementation(async () => {
+      proposed = true;
+      return { id: "op-income-1", existing: false };
+    });
+    vi.spyOn(agentClient, "fetchActivePendingOperations").mockImplementation(async () =>
+      proposed ? [activeIncomeCard] : [],
+    );
+    vi.spyOn(agentClient, "sendAgentMessage").mockResolvedValue({
+      turnId: "turn-income-1",
+      status: "completed",
+      output: "Vou preparar a proposta de receita de R$ 2.500,00.",
+      proposal: incomeIntent,
+    });
+
+    await send(INCOME_TEXT);
+
+    const confirm = await screen.findByRole("button", { name: /Confirmar R\$ 2\.500,00/ });
+    expect(confirm).toBeTruthy();
+    expect(screen.getByText(/Confirmar receita/)).toBeTruthy();
+    expect(screen.getByText("Salário")).toBeTruthy();
+    expect(screen.getByText("Nubank")).toBeTruthy();
+    expect(propose).toHaveBeenCalledTimes(1);
+    expect(propose).toHaveBeenCalledWith("ws-1", incomeIntent, undefined);
+    // The intent is not authority: no financial write happens here.
+    expect(screen.queryByText(/registrada/i)).toBeNull();
+  });
+
+  it("keeps the income intent recoverable when the broker fails", async () => {
+    vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
+    vi.spyOn(agentClient, "fetchActivePendingOperations").mockResolvedValue([]);
+    vi.spyOn(agentClient, "proposePendingOperation").mockRejectedValue(
+      Object.assign(new Error("broker failed"), { code: "agent.proposal_failed" }),
+    );
+    // Faithful mock of the real sendAgentMessage: a turn carrying a proposal
+    // persists the retry anchor BEFORE the broker call.
+    vi.spyOn(agentClient, "sendAgentMessage").mockImplementation(async (_workspaceId, content, opts) => {
+      agentClient.savePendingChatSend(
+        "ws-1",
+        {
+          messageId: opts?.messageId ?? "m-income-fail",
+          content,
+          createdAt: new Date().toISOString(),
+          proposal: incomeIntent,
+        },
+        null,
+      );
+      return {
+        turnId: "turn-income-2",
+        status: "completed",
+        output: "Vou preparar a proposta de receita.",
+        proposal: incomeIntent,
+      };
+    });
+
+    await send(INCOME_TEXT);
+
+    await screen.findByText(/Não foi possível preparar a proposta de receita/);
+    expect(screen.queryByRole("button", { name: /Confirmar R\$/ })).toBeNull();
+    expect(agentClient.loadPendingChatSend("ws-1", null)?.proposal).toEqual(incomeIntent);
   });
 });

@@ -314,31 +314,54 @@ export type AgentTurnPendingOperation =
  * fields; it is accepted at the boundary and DROPPED from the forwarded value
  * (the Agent broker contract is exactly tool/intentionId/normalizedArgs).
  * Anything else outside this shape is dropped (never forwarded to the broker).
+ *
+ * P3.2 adds `transactions.income.create` to the SAME closed contract; the API
+ * already accepts it, so no capability or authority is added here.
  */
-const expenseProposalIntentSchema = z
+const proposalArgsSchema = z
   .object({
-    tool: z.literal("transactions.expense.create"),
-    intentionId: z.string().trim().min(1).max(128),
-    // Display-only metadata; never used to authorize or execute.
-    summary: z.string().trim().min(1).max(240).optional(),
-    normalizedArgs: z
-      .object({
-        amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-        description: z.string().trim().min(1).max(240),
-        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        accountId: z.string().uuid(),
-        categoryId: z.string().uuid(),
-      })
-      .strict(),
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    description: z.string().trim().min(1).max(240),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    accountId: z.string().uuid(),
+    categoryId: z.string().uuid(),
   })
-  .strict()
-  .transform(({ tool, intentionId, normalizedArgs }) => ({ tool, intentionId, normalizedArgs }));
+  .strict();
 
-export type ExpenseProposalIntent = z.infer<typeof expenseProposalIntentSchema>;
+const proposalIntentBase = {
+  intentionId: z.string().trim().min(1).max(128),
+  // Display-only metadata; never used to authorize or execute.
+  summary: z.string().trim().min(1).max(240).optional(),
+  normalizedArgs: proposalArgsSchema,
+} as const;
 
-export function sanitizeProposalIntent(value: unknown): ExpenseProposalIntent | undefined {
-  const parsed = expenseProposalIntentSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+const expenseProposalIntentSchema = z
+  .object({ tool: z.literal("transactions.expense.create"), ...proposalIntentBase })
+  .strict();
+
+const incomeProposalIntentSchema = z
+  .object({ tool: z.literal("transactions.income.create"), ...proposalIntentBase })
+  .strict();
+
+const proposalIntentSchema = z.discriminatedUnion("tool", [
+  expenseProposalIntentSchema,
+  incomeProposalIntentSchema,
+]);
+
+export type ProposalArgs = z.infer<typeof proposalArgsSchema>;
+export type ProposalIntent =
+  | { tool: "transactions.expense.create"; intentionId: string; normalizedArgs: ProposalArgs }
+  | { tool: "transactions.income.create"; intentionId: string; normalizedArgs: ProposalArgs };
+export type ExpenseProposalIntent = Extract<ProposalIntent, { tool: "transactions.expense.create" }>;
+export type IncomeProposalIntent = Extract<ProposalIntent, { tool: "transactions.income.create" }>;
+
+export function sanitizeProposalIntent(value: unknown): ProposalIntent | undefined {
+  const parsed = proposalIntentSchema.safeParse(value);
+  if (!parsed.success) return undefined;
+  // Strip the display-only `summary`; the forwarded broker contract is exactly
+  // tool + intentionId + normalizedArgs.
+  const { tool, intentionId, normalizedArgs } = parsed.data;
+  return { tool, intentionId, normalizedArgs } as ProposalIntent;
 }
 
 export type AgentTurn = {
@@ -355,7 +378,7 @@ export type AgentTurn = {
    * card is rehydrated from the authoritative active list, never from this
    * payload. Strictly sanitized at the boundary.
    */
-  proposal?: ExpenseProposalIntent;
+  proposal?: ProposalIntent;
   /**
    * debt-undo-confirmation-protocol: separate undo proposal (requestId for
    * the authenticated decision RPC). Display-only; the fixed target stays
@@ -646,7 +669,7 @@ export type PendingChatSend = Readonly<{
    * idempotency key from it, so replaying this payload can only return the
    * existing operation — never a second launch.
    */
-  proposal?: ExpenseProposalIntent;
+  proposal?: ProposalIntent;
   /**
    * R2 FIX 1 (HIGH): `true` quando a âncora veio do formato legado (JSON sem
    * `anchorVersion`/`attachments`). O envio original podia ter anexos que se
@@ -1379,17 +1402,17 @@ export async function sendAgentMessage(
 }
 
 /**
- * P3 — sends the OpenCode runtime's proposal INTENT to the authenticated
- * Agent broker. The Agent mints the propose-only delegated capability (A4)
- * and the API persists the Pending V2 operation. This call can NEVER confirm
- * or execute: the user still decides on the card.
+ * P3 — sends the OpenCode runtime's proposal INTENT (expense or income) to the
+ * authenticated Agent broker. The Agent mints the propose-only delegated
+ * capability (A4) and the API persists the Pending V2 operation. This call can
+ * NEVER confirm or execute: the user still decides on the card.
  *
  * The stable `intentionId` is the backend idempotency seed, so a retry of the
  * same turn replays the SAME proposal (existing:true) instead of duplicating.
  */
-export async function proposePendingExpense(
+export async function proposePendingOperation(
   workspaceId: string,
-  intent: ExpenseProposalIntent,
+  intent: ProposalIntent,
   opts?: { signal?: AbortSignal },
 ): Promise<{ id: string; existing: boolean }> {
   const safe = sanitizeProposalIntent(intent);
@@ -1418,6 +1441,9 @@ export async function proposePendingExpense(
   }
   return { id: data.id, existing: data.existing === true };
 }
+
+/** @deprecated P3.1 name — use `proposePendingOperation` (same broker route). */
+export const proposePendingExpense = proposePendingOperation;
 
 /**
  * Sends a user decision to the authenticated Agent. The Agent, not the

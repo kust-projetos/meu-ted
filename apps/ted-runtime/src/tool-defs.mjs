@@ -11,7 +11,9 @@
 // Explicitly NOT present: confirm/execute/approve tools, PG/synthetic
 // bridges, seeds, traces, runners (see README + inventory notes). The P3
 // write slice adds `propose_expense`, which records a PROPOSAL INTENT only —
-// it never calls the API and the LLM can never confirm or execute.
+// it never calls the API and the LLM can never confirm or execute. P3.2 adds
+// `propose_income` on the SAME intent-only contract (the API already accepts
+// `transactions.income.create`); the shared executor below keeps one code path.
 
 import { createHash } from 'node:crypto';
 
@@ -121,9 +123,37 @@ export const TOOL_DEFS = [
     },
     output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
   },
+  {
+    // P3.2 income slice — same contract as propose_expense, different tool.
+    // The API already accepts `transactions.income.create` through the existing
+    // Pending V2 tool registry; this tool only records the intent.
+    name: 'propose_income',
+    description:
+      'TED (P3 opt-in): propose an income for the authenticated user to approve. Records a pending proposal only — never creates the transaction.',
+    input: {
+      type: 'object',
+      properties: {
+        amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
+        description: { type: 'string', minLength: 1, maxLength: 240 },
+        date: { type: 'string', description: 'Income date YYYY-MM-DD (defaults to today UTC)' },
+        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
+        categoryId: { type: 'string', description: 'Income category uuid resolved from list_categories' },
+      },
+      required: ['amountCents', 'description', 'accountId', 'categoryId'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
 ];
 
 export const TOOL_NAMES = TOOL_DEFS.map((d) => d.name);
+
+// Single source for the intent-only proposal tools: the runtime tool name maps
+// to the exact tool the API's Pending V2 registry accepts.
+export const PROPOSAL_TOOL_SPECS = Object.freeze({
+  propose_expense: Object.freeze({ tool: 'transactions.expense.create', noun: 'Despesa' }),
+  propose_income: Object.freeze({ tool: 'transactions.income.create', noun: 'Receita' }),
+});
 
 // Canonical uuid shape (any version) — the API revalidates against its real
 // schema; this only stops the model from recording an obviously unusable id.
@@ -144,7 +174,7 @@ const FORBIDDEN_KEYS = new Set([
 function knownKeys(name) {
   if (name === 'list_accounts') return ['kind', 'includeInactive'];
   if (name === 'list_categories') return ['kind'];
-  if (name === 'propose_expense') return ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
+  if (name === 'propose_expense' || name === 'propose_income') return ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
   return ['yearMonth'];
 }
 
@@ -175,30 +205,31 @@ export function validateToolArgs(name, args) {
     if (args.kind !== undefined && typeof args.kind !== 'string') {
       throw new ToolError('tool.invalid_args', 'list_categories: kind must be a string');
     }
-  } else if (name === 'propose_expense') {
+  } else if (name === 'propose_expense' || name === 'propose_income') {
     // Structural validation only (types/format). The API remains the authority
-    // for the expense contract; these checks stop the model from recording an
-    // unusable intent (the API would reject it anyway).
+    // for the transaction contract (expense and income share the same shape and
+    // are validated by their own schemas); these checks stop the model from
+    // recording an unusable intent (the API would reject it anyway).
     if (!Number.isSafeInteger(args.amountCents) || args.amountCents <= 0) {
-      throw new ToolError('tool.invalid_args', 'propose_expense: amountCents must be a positive safe integer');
+      throw new ToolError('tool.invalid_args', `${name}: amountCents must be a positive safe integer`);
     }
     if (typeof args.description !== 'string' || args.description.trim().length === 0 || args.description.trim().length > 240) {
-      throw new ToolError('tool.invalid_args', 'propose_expense: description must be a non-empty string (max 240)');
+      throw new ToolError('tool.invalid_args', `${name}: description must be a non-empty string (max 240)`);
     }
     if (args.date !== undefined) {
       if (typeof args.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
-        throw new ToolError('tool.invalid_args', 'propose_expense: date must be YYYY-MM-DD');
+        throw new ToolError('tool.invalid_args', `${name}: date must be YYYY-MM-DD`);
       }
       const parsed = new Date(`${args.date}T00:00:00Z`);
       if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== args.date) {
-        throw new ToolError('tool.invalid_args', 'propose_expense: date must be YYYY-MM-DD');
+        throw new ToolError('tool.invalid_args', `${name}: date must be YYYY-MM-DD`);
       }
     }
     if (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId)) {
-      throw new ToolError('tool.invalid_args', 'propose_expense: accountId must be a uuid');
+      throw new ToolError('tool.invalid_args', `${name}: accountId must be a uuid`);
     }
     if (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId)) {
-      throw new ToolError('tool.invalid_args', 'propose_expense: categoryId must be a uuid');
+      throw new ToolError('tool.invalid_args', `${name}: categoryId must be a uuid`);
     }
   } else {
     if (args.kind !== undefined && typeof args.kind !== 'string') {
@@ -284,7 +315,7 @@ function requireIntention(name, opts) {
 
 function formatBRL(amountCents) {
   const value = amountCents / 100;
-  return `R$ ${value.toFixed(2).replace('.', ',')}`;
+  return `R$ ${value.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
 }
 
 export function createToolExecutors(transport, { proposalIntents } = {}) {
@@ -332,40 +363,44 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
     // response body is never attached (no raw dependency text in details).
     throw new ToolError(code, `${name}: upstream ${statusCode}`, { statusCode });
   };
+  // Proposal INTENT only (expense and income share this ONE code path). No
+  // transport, no API, no write: the authenticated PWA hands the intent to the
+  // Agent broker, the sole A4 issuer. Fails closed without the registry so a
+  // wiring mistake cannot silently record (or worse, drop) a proposal.
+  const propose = async (name, args, host, opts = {}) => {
+    const spec = PROPOSAL_TOOL_SPECS[name];
+    if (!spec) throw new ToolError('tool.unknown', `unknown proposal tool ${name}`);
+    requireHostContext(name, host);
+    const intentionId = requireIntention(name, opts);
+    if (!proposalIntents || typeof proposalIntents.record !== 'function') {
+      throw new ToolError('tool.unavailable', `${name}: proposal intent registry unavailable — failing closed`);
+    }
+    if (typeof opts.sessionID !== 'string' || opts.sessionID.length === 0) {
+      throw new ToolError('host_context_required', `${name}: host-bound session context is required — hostless execution is blocked by design`);
+    }
+    const safe = validateToolArgs(name, args);
+    const date = safe.date ?? new Date().toISOString().slice(0, 10);
+    const normalizedArgs = {
+      amountCents: safe.amountCents,
+      description: safe.description.trim(),
+      date,
+      accountId: safe.accountId,
+      categoryId: safe.categoryId,
+    };
+    const summary = `${spec.noun} de ${formatBRL(normalizedArgs.amountCents)} em "${normalizedArgs.description}"`;
+    proposalIntents.record(opts.sessionID, {
+      tool: spec.tool,
+      intentionId,
+      summary,
+      normalizedArgs,
+    });
+    return { status: 'proposed', summary };
+  };
   return {
     list_accounts: (args, host, opts) => run('list_accounts', args, host, opts),
     get_month_summary: (args, host, opts) => run('get_month_summary', args, host, opts),
     list_categories: (args, host, opts) => run('list_categories', args, host, opts),
-    // Proposal INTENT only. No transport, no API, no write: the authenticated
-    // PWA hands the intent to the Agent broker, the sole A4 issuer. Fails
-    // closed without the registry so a wiring mistake cannot silently record
-    // (or worse, drop) a proposal.
-    propose_expense: async (args, host, opts = {}) => {
-      requireHostContext('propose_expense', host);
-      const intentionId = requireIntention('propose_expense', opts);
-      if (!proposalIntents || typeof proposalIntents.record !== 'function') {
-        throw new ToolError('tool.unavailable', 'propose_expense: proposal intent registry unavailable — failing closed');
-      }
-      if (typeof opts.sessionID !== 'string' || opts.sessionID.length === 0) {
-        throw new ToolError('host_context_required', 'propose_expense: host-bound session context is required — hostless execution is blocked by design');
-      }
-      const safe = validateToolArgs('propose_expense', args);
-      const date = safe.date ?? new Date().toISOString().slice(0, 10);
-      const normalizedArgs = {
-        amountCents: safe.amountCents,
-        description: safe.description.trim(),
-        date,
-        accountId: safe.accountId,
-        categoryId: safe.categoryId,
-      };
-      const summary = `Despesa de ${formatBRL(normalizedArgs.amountCents)} em "${normalizedArgs.description}"`;
-      proposalIntents.record(opts.sessionID, {
-        tool: 'transactions.expense.create',
-        intentionId,
-        summary,
-        normalizedArgs,
-      });
-      return { status: 'proposed', summary };
-    },
+    propose_expense: (args, host, opts) => propose('propose_expense', args, host, opts),
+    propose_income: (args, host, opts) => propose('propose_income', args, host, opts),
   };
 }

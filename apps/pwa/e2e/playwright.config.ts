@@ -36,23 +36,31 @@ const P2D = process.env.P2D_BROWSER === "1";
 const LIVE_PREP = process.env.P2D_LIVE_PREP === "1";
 const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
 const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
-// P3 expense slice: loopback Agent + Pending V2 + scripted propose_expense.
-// It reuses the synthetic stack and never carries a real credential.
+// P3 proposal slices: loopback Agent + Pending V2 + scripted propose_expense
+// (P3.1) or propose_income (P3.2). They reuse the synthetic stack and never
+// carry a real credential.
 const EXPENSE = process.env.P2D_EXPENSE === "1";
+const INCOME = process.env.P2D_INCOME === "1";
+if (EXPENSE && INCOME) {
+  throw new Error("select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME)");
+}
 if ([LIVE_PREP, OFFLINE_CHAT, LIVE_REAL].filter(Boolean).length > 1) {
   throw new Error("select at most one P2D live mode (P2D_LIVE_PREP|P2D_OFFLINE_CHAT|P2D_LIVE_REAL)");
 }
 const P2D_LIVE_MODE = LIVE_PREP || OFFLINE_CHAT || LIVE_REAL;
-const P2D_ACTIVE = P2D || P2D_LIVE_MODE || EXPENSE;
+const PROPOSAL = EXPENSE || INCOME;
+const P2D_ACTIVE = P2D || P2D_LIVE_MODE || PROPOSAL;
 const P2D_SPEC = LIVE_PREP
   ? "**/p2d/p2d-live-prep.spec.ts"
   : OFFLINE_CHAT
     ? "**/p2d/p2d-live-offline.spec.ts"
     : LIVE_REAL
       ? "**/p2d/p2d-live-real.spec.ts"
-      : EXPENSE
-        ? "**/p2d/p3-expense.spec.ts"
-        : "**/p2d/*.spec.ts";
+      : INCOME
+        ? "**/p2d/p3-income.spec.ts"
+        : EXPENSE
+          ? "**/p2d/p3-expense.spec.ts"
+          : "**/p2d/*.spec.ts";
 // Fail-closed, unconditionally: Playwright starts and cleans up its own
 // servers per run and never attaches to a pre-existing (possibly alien)
 // process. There is no ownership flag and no reuse pathway.
@@ -203,12 +211,12 @@ export default defineConfig({
   ],
 
   webServer: PRODUCTION_SMOKE ? undefined : [
-    // Any live-mode opt-in (P2D_LIVE_PREP / P2D_OFFLINE_CHAT /
-    // P2D_LIVE_REAL): skip the historical topology (fixture API, standalone
-    // Next, SW harness) so ONLY the P2D webServers below run — no extra
-    // servers, no .next/standalone copy. Untouched when no live flag is set,
-    // including P2D_BROWSER=1.
-    ...(!P2D_LIVE_MODE
+    // Any live-mode opt-in (P2D_LIVE_PREP / P2D_OFFLINE_CHAT / P2D_LIVE_REAL)
+    // and the P3 proposal slices skip the historical topology (fixture API,
+    // standalone Next, SW harness) so ONLY the P2D webServers below run — no
+    // extra servers, no prebuilt .next/standalone dependency. Untouched when
+    // no flag is set, including P2D_BROWSER=1 alone.
+    ...(!P2D_LIVE_MODE && !PROPOSAL
       ? [
           {
             command: `pnpm exec tsx e2e/fixture-api/server.ts --port ${FIXTURE_PORT}`,
@@ -275,6 +283,7 @@ export default defineConfig({
               ...(OFFLINE_CHAT ? { P2D_OFFLINE_CHAT: "1" } : {}),
               ...(LIVE_REAL ? { P2D_LIVE_REAL: "1" } : {}),
               ...(EXPENSE ? { P2D_EXPENSE: "1" } : {}),
+              ...(INCOME ? { P2D_INCOME: "1" } : {}),
             },
           },
           {
@@ -290,7 +299,7 @@ export default defineConfig({
               PWA_BACKEND_PROXY_ORIGIN: P2D_API_BASE,
               TED_OPENCODE_RUNTIME_ENABLED: "1",
               TED_OPENCODE_GATEWAY_ORIGIN: P2D_GATEWAY_BASE,
-              ...(EXPENSE
+              ...(PROPOSAL
                 ? { PWA_AGENT_PROXY_ORIGIN: `http://127.0.0.1:${p2dPorts.agentPort}` }
                 : {}),
               ALLOW_LOCAL_ORIGIN: "1",

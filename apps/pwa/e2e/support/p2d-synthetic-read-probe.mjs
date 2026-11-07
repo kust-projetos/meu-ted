@@ -350,8 +350,8 @@ try {
   // Two stub modes (test-only): legacy single-tool
   // { toolName, toolArgs, expectedOracle } or two-tool sequence
   // { toolSequence: [{name,args}...], expectedAccounts, expectedOracle }.
-  // P3 expense mode: { mode: "expense", toolName: "propose_expense", toolArgs }
-  // emits the proposal tool call once, then a final text after the tool result.
+  // P3 proposal mode: { mode: "expense"|"income", toolName, toolArgs } emits
+  // the proposal tool call once, then a final text after the tool result.
   // live-real has NO stub: the real model chooses its own tools.
   let STUB_MODE = null;
   let SEQUENCE = null;
@@ -361,17 +361,17 @@ try {
     if (!stub || typeof stub !== "object" || Array.isArray(stub)) {
       fail("args", "stub is required for synthetic/offline modes");
     }
-    STUB_MODE = stub.mode === "expense"
-      ? "expense"
+    STUB_MODE = stub.mode === "expense" || stub.mode === "income"
+      ? "proposal"
       : Array.isArray(stub.toolSequence) && stub.toolSequence.length > 0
         ? "sequence"
         : "legacy";
-    if (STUB_MODE === "expense") {
-      if (stub.toolName !== "propose_expense") {
-        fail("args", "expense stub requires toolName propose_expense");
+    if (STUB_MODE === "proposal") {
+      if (stub.toolName !== "propose_expense" && stub.toolName !== "propose_income") {
+        fail("args", "proposal stub requires toolName propose_expense|propose_income");
       }
       if (!stub.toolArgs || typeof stub.toolArgs !== "object" || Array.isArray(stub.toolArgs)) {
-        fail("args", "expense stub requires toolArgs");
+        fail("args", "proposal stub requires toolArgs");
       }
     } else {
       if (MODE === "offline" && STUB_MODE !== "sequence") {
@@ -582,7 +582,7 @@ try {
         // INDEPENDENTLY; the next missing tool is offered, and the final
         // text is derived from BOTH observed DTOs only when both validate.
         let payload = null;
-        if (STUB_MODE === "expense") {
+        if (STUB_MODE === "proposal") {
           // One proposal tool call per user turn; after the SDK returns the
           // tool result, finish with a deterministic text. The intent itself
           // is attached by the gateway, never derived from this text.
@@ -595,7 +595,10 @@ try {
               model: FIXTURE_MODEL,
             });
           } else {
-            payload = finalTextEvents("Proposta de despesa preparada.", FIXTURE_MODEL);
+            payload = finalTextEvents(
+              stub.toolName === "propose_income" ? "Proposta de receita preparada." : "Proposta de despesa preparada.",
+              FIXTURE_MODEL,
+            );
           }
         } else if (STUB_MODE === "sequence") {
           const parsed = extractToolDtos(messages);

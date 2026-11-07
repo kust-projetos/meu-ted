@@ -309,10 +309,16 @@ export function tedConfig(profileOrOpts, { p3Writes = false } = {}) {
           { action: 'ted.finance.read', resource: 'list_accounts', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'get_month_summary', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'list_categories', effect: 'allow' },
-          // P3 local write slice: the permission is only meaningful when the
-          // plugin registers propose_expense (TED_OPENCODE_P3_WRITES_ENABLED=1,
-          // never production). Default config stays exactly the P2 reads.
-          ...(p3Writes ? [{ action: 'ted.finance.read', resource: 'propose_expense', effect: 'allow' }] : []),
+          // P3 local write slice: these permissions are only meaningful when
+          // the plugin registers the proposal tools
+          // (TED_OPENCODE_P3_WRITES_ENABLED=1, never production). Default
+          // config stays exactly the P2 reads.
+          ...(p3Writes
+            ? [
+                { action: 'ted.finance.read', resource: 'propose_expense', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'propose_income', effect: 'allow' },
+              ]
+            : []),
         ],
       },
     },
