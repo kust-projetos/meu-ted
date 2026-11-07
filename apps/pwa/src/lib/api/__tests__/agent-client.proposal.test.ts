@@ -237,11 +237,20 @@ describe("pending chat anchor — proposal recovery payload", () => {
 
   it("never rehydrates a malformed proposal", () => {
     const send = composeChatSend("oi", { messageId: "m-bad" });
-    savePendingChatSend(
-      "ws-1",
-      { ...send, proposal: { ...intent(), normalizedArgs: { ...intent().normalizedArgs, amountCents: 0 } } },
-      null,
-    );
+    // Explicit single variant: spreading the ProposalIntent union here makes
+    // TypeScript distribute `normalizedArgs` across both shapes.
+    const malformed: ProposalIntent = {
+      tool: "transactions.expense.create",
+      intentionId: "int-bad",
+      normalizedArgs: {
+        amountCents: 0,
+        description: "mercado",
+        date: "2026-11-06",
+        accountId: ACCOUNT,
+        categoryId: CATEGORY,
+      },
+    };
+    savePendingChatSend("ws-1", { ...send, proposal: malformed }, null);
     expect(loadPendingChatSend("ws-1", null)?.proposal).toBeUndefined();
   });
 });
