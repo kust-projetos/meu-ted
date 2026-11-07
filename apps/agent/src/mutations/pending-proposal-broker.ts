@@ -7,10 +7,12 @@
  * the authoritative Pending V2 propose endpoint with a stable idempotency key.
  *
  * Scope guardrails:
- * - ONE tool: `transactions.expense.create`.
+ * - Exactly TWO tools: `transactions.expense.create` (P3.1) and
+ *   `transactions.income.create` (P3.2). Both share ONE code path; the API's
+ *   Pending V2 tool registry remains the authority for each contract.
  * - No confirm/execute/cancel/authorize/retry capability is ever minted here.
  * - Identity comes from the gateway-verified headers; the browser intent only
- *   carries the expense payload and the stable intention id.
+ *   carries the transaction payload and the stable intention id.
  * - A0's canonical ConversationOrchestrator keeps owning A0 chat turns; this
  *   broker does not interpret text, propose from a draft, or touch a turn.
  */
@@ -21,6 +23,7 @@ import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
 import { createMutationProposal } from './mutation-proposal.js';
 
 export const PROPOSE_EXPENSE_TOOL = 'transactions.expense.create';
+export const PROPOSE_INCOME_TOOL = 'transactions.income.create';
 
 const isoDate = z
   .string()
@@ -30,8 +33,11 @@ const isoDate = z
     return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
   }, 'date must be a real YYYY-MM-DD');
 
-/** Strict expense contract — mirrors the API's createExpenseInputSchema for the slice. */
-export const expenseProposalArgsSchema = z
+/**
+ * Strict transaction contract — mirrors the API's createExpenseInputSchema and
+ * createIncomeInputSchema (the slice uses only their shared fields).
+ */
+export const transactionProposalArgsSchema = z
   .object({
     amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     description: z.string().trim().min(1).max(240),
@@ -41,15 +47,28 @@ export const expenseProposalArgsSchema = z
   })
   .strict();
 
+const intentBase = {
+  intentionId: z.string().trim().min(1).max(128),
+  normalizedArgs: transactionProposalArgsSchema,
+} as const;
+
 export const expenseProposalIntentSchema = z
-  .object({
-    tool: z.literal(PROPOSE_EXPENSE_TOOL),
-    intentionId: z.string().trim().min(1).max(128),
-    normalizedArgs: expenseProposalArgsSchema,
-  })
+  .object({ tool: z.literal(PROPOSE_EXPENSE_TOOL), ...intentBase })
   .strict();
 
+export const incomeProposalIntentSchema = z
+  .object({ tool: z.literal(PROPOSE_INCOME_TOOL), ...intentBase })
+  .strict();
+
+/** Discriminated union: the broker route accepts exactly these two tools. */
+export const proposalIntentSchema = z.discriminatedUnion('tool', [
+  expenseProposalIntentSchema,
+  incomeProposalIntentSchema,
+]);
+
 export type ExpenseProposalIntent = z.infer<typeof expenseProposalIntentSchema>;
+export type IncomeProposalIntent = z.infer<typeof incomeProposalIntentSchema>;
+export type TransactionProposalIntent = z.infer<typeof proposalIntentSchema>;
 export type ProposalBrokerIdentity = {
   actorId: string;
   workspaceId: string;
@@ -60,7 +79,12 @@ export type ProposalBrokerIdentity = {
 export type ProposalBrokerResult = { id: string; existing: boolean };
 
 function formatBRL(amountCents: number): string {
-  return `R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}`;
+  return `R$ ${(amountCents / 100).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
+}
+
+function proposalSummary(intent: TransactionProposalIntent): string {
+  const noun = intent.tool === PROPOSE_INCOME_TOOL ? 'Receita' : 'Despesa';
+  return `${noun} de ${formatBRL(intent.normalizedArgs.amountCents)} em "${intent.normalizedArgs.description}"`;
 }
 
 /**
@@ -68,8 +92,8 @@ function formatBRL(amountCents: number): string {
  * authoritative API. Throws the API's typed error (statusCode/code) on refusal;
  * the caller maps it without leaking dependency text.
  */
-export async function proposeExpenseFromIntent(input: {
-  intent: ExpenseProposalIntent;
+export async function proposeTransactionFromIntent(input: {
+  intent: TransactionProposalIntent;
   identity: ProposalBrokerIdentity;
   secret: string;
   apiOrigin?: string;
@@ -91,11 +115,10 @@ export async function proposeExpenseFromIntent(input: {
     secret,
   );
   const request = input.request ?? requestPiApiJson;
-  const summary = `Despesa de ${formatBRL(intent.normalizedArgs.amountCents)} em "${intent.normalizedArgs.description}"`;
   const proposal = await createMutationProposal({
     tool: intent.tool,
     normalizedArgs: intent.normalizedArgs,
-    summary,
+    summary: proposalSummary(intent),
     identity: {
       workspaceId: identity.workspaceId,
       actorId: identity.actorId,
@@ -110,4 +133,18 @@ export async function proposeExpenseFromIntent(input: {
       })) as typeof requestPiApiJson,
   });
   return { id: proposal.id, existing: proposal.existing };
+}
+
+/**
+ * Backward-compatible expense entrypoint (P3.1 callers/tests). The generic
+ * broker above is the single implementation; this only narrows the type.
+ */
+export function proposeExpenseFromIntent(input: {
+  intent: ExpenseProposalIntent;
+  identity: ProposalBrokerIdentity;
+  secret: string;
+  apiOrigin?: string;
+  request?: typeof requestPiApiJson;
+}): Promise<ProposalBrokerResult> {
+  return proposeTransactionFromIntent(input);
 }

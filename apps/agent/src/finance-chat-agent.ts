@@ -253,8 +253,8 @@ import { MutationApiClient, type ActiveOperationRecord } from "./mutations/mutat
 import type { MutationExpectedContext } from "./mutations/mutation-executor.js";
 import { requiresExpectedEntity, resolveExpectedContext } from "./mutations/expected-context.js";
 import {
-  expenseProposalIntentSchema,
-  proposeExpenseFromIntent,
+  proposalIntentSchema,
+  proposeTransactionFromIntent,
   type ProposalBrokerIdentity,
 } from "./mutations/pending-proposal-broker.js";
 import { PendingOperationCoordinator, isRetryText } from "./orchestration/pending-operation-coordinator.js";
@@ -3211,7 +3211,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     } catch {
       return Response.json({ code: "agent.invalid_payload" }, { status: 400 });
     }
-    const parsed = expenseProposalIntentSchema.safeParse(raw);
+    // P3.1 expense + P3.2 income share the same propose-only contract; the
+    // discriminated union is the closed allowlist (everything else → 400).
+    const parsed = proposalIntentSchema.safeParse(raw);
     if (!parsed.success) {
       return Response.json({ code: "agent.invalid_payload" }, { status: 400 });
     }
@@ -3222,7 +3224,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       role: request.headers.get("x-agent-role") === "owner" ? "owner" : "member",
     };
     try {
-      const result = await proposeExpenseFromIntent({
+      const result = await proposeTransactionFromIntent({
         intent: parsed.data,
         identity,
         secret,

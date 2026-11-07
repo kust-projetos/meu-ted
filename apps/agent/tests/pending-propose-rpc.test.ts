@@ -67,6 +67,19 @@ const validBody = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const validIncomeBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'transactions.income.create',
+  intentionId: 'int-income-abc123',
+  normalizedArgs: {
+    amountCents: 250000,
+    description: 'salário',
+    date: '2026-11-07',
+    accountId: ACCOUNT,
+    categoryId: CATEGORY,
+  },
+  ...overrides,
+});
+
 const proposeRequest = (body: unknown, headers = identityHeaders()) =>
   new Request('https://agent.test.local/rpc/pending-operations/propose', {
     method: 'POST',
@@ -142,12 +155,33 @@ describe('P3 — POST /rpc/pending-operations/propose (Agent A4 broker)', () => 
     expect(seen[0]).toBe(seen[1]);
   });
 
-  it('refuses any tool other than transactions.expense.create with zero transport', async () => {
+  it('accepts transactions.income.create with the same propose-only A4 path', async () => {
+    const { fn, calls } = captureFetch(() => Response.json({ id: 'op-income-1', existing: false }, { status: 201 }));
+    globalThis.fetch = fn;
+    const { agent } = createTestAgent();
+
+    const res = await agent.fetch(proposeRequest(validIncomeBody()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: 'op-income-1', existing: false });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${API_ORIGIN}/pending-operations/v2/propose`);
+    const headers = new Headers(calls[0]!.init?.headers);
+    const auth = headers.get('authorization')!;
+    const claims = await decodeDelegatedTurnToken(auth.slice('Bearer '.length), DELEGATION_SECRET);
+    expect(claims.capabilities).toEqual(['financial.approval.propose']);
+    expect(claims.request).toBe('int-income-abc123');
+    const sent = JSON.parse(String(calls[0]!.init?.body));
+    expect(sent.tool).toBe('transactions.income.create');
+    expect(sent.normalizedArgs).toEqual(validIncomeBody().normalizedArgs);
+  });
+
+  it('refuses any tool other than the two proposal tools with zero transport', async () => {
     const { fn, calls } = captureFetch(() => Response.json({ id: 'never' }));
     globalThis.fetch = fn;
     const { agent } = createTestAgent();
 
-    for (const tool of ['transactions.income.create', 'transactions.update', 'accounts.deactivate', 'transactions.transfer.create', 'evil']) {
+    for (const tool of ['transactions.update', 'accounts.deactivate', 'transactions.transfer.create', 'evil']) {
       const res = await agent.fetch(proposeRequest(validBody({ tool })));
       expect(res.status).toBe(400);
     }
@@ -169,7 +203,7 @@ describe('P3 — POST /rpc/pending-operations/propose (Agent A4 broker)', () => 
     expect(calls).toHaveLength(0);
   });
 
-  it('validates the expense contract strictly (amount/description/date/uuids)', async () => {
+  it('validates the transaction contract strictly for expense AND income (amount/description/date/uuids)', async () => {
     const { fn, calls } = captureFetch(() => Response.json({ id: 'never' }));
     globalThis.fetch = fn;
     const { agent } = createTestAgent();
@@ -182,15 +216,17 @@ describe('P3 — POST /rpc/pending-operations/propose (Agent A4 broker)', () => 
       { accountId: 'nope' },
       { categoryId: 'nope' },
     ];
-    for (const patch of invalid) {
-      const body = validBody();
-      const res = await agent.fetch(
-        proposeRequest({ ...body, normalizedArgs: { ...(body.normalizedArgs as object), ...patch } }),
-      );
-      expect(res.status).toBe(400);
+    for (const makeBody of [validBody, validIncomeBody]) {
+      for (const patch of invalid) {
+        const body = makeBody();
+        const res = await agent.fetch(
+          proposeRequest({ ...body, normalizedArgs: { ...(body.normalizedArgs as object), ...patch } }),
+        );
+        expect(res.status).toBe(400);
+      }
+      const missing = await agent.fetch(proposeRequest(makeBody({ intentionId: '' })));
+      expect(missing.status).toBe(400);
     }
-    const missing = await agent.fetch(proposeRequest(validBody({ intentionId: '' })));
-    expect(missing.status).toBe(400);
     expect(calls).toHaveLength(0);
   });
 

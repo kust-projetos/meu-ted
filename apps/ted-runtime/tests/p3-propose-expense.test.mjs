@@ -64,10 +64,10 @@ describe('p3 propose_expense: catalog gating', () => {
     assert.deepEqual(productToolDefs(PROD_ENV).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
   });
 
-  it('local writes opt-in adds propose_expense and list_categories with both schemas', () => {
+  it('local writes opt-in adds the proposal tools and list_categories with both schemas', () => {
     assert.equal(isP3WritesEnabled(WRITE_ENV), true);
     const names = productToolDefs(WRITE_ENV).map((d) => d.name).sort();
-    assert.deepEqual(names, ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense']);
+    assert.deepEqual(names, ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense', 'propose_income']);
     const propose = productToolDefs(WRITE_ENV).find((d) => d.name === 'propose_expense');
     assert.equal(propose.input.type, 'object');
     assert.ok(propose.output && propose.output.type === 'object');
@@ -183,7 +183,7 @@ describe('p3 propose_expense: intent only, never HTTP/write', () => {
 });
 
 describe('p3 propose_expense: plugin registration', () => {
-  it('registers 2 tools by default and 4 with the local writes opt-in', async () => {
+  it('registers 2 tools by default and 5 with the local writes opt-in', async () => {
     const allowSetup = {
       permission: { assert: async () => {} },
       session: { hook: async () => ({ dispose: async () => {} }) },
@@ -198,7 +198,7 @@ describe('p3 propose_expense: plugin registration', () => {
     await writesDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedWrites.push(t) }); } } });
     assert.deepEqual(
       addedWrites.map((t) => t.name).sort(),
-      ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense'],
+      ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense', 'propose_income'],
     );
 
     const addedProd = [];

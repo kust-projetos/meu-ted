@@ -9,9 +9,9 @@ Fatia P1 da migração OpenCode-first (ADR-031, `docs/plans/2026-10-31-ted-openc
 identidade/transport/runtime-ops reais; rotas respondem tipado sem API, boot
 + close limpos) + núcleo parcial: doubles + stub HTTP em processo
 (ver `node --test` abaixo), defs/executores das 2 reads P2 por padrão,
-`list_categories` GET-only sob opt-in local P3 e `propose_expense` (P3,
-opt-in local) que registra apenas uma INTENÇÃO de proposta — nunca chama a
-API financeira, nunca confirma e nunca executa —, com validação de
+`list_categories` GET-only sob opt-in local P3 e `propose_expense`/`propose_income`
+(P3, opt-in local) que registram apenas uma INTENÇÃO de proposta — nunca chamam
+a API financeira, nunca confirmam e nunca executam —, com validação de
 shape 2xx (SPEC §5), bindings host-bound, plugin nativo de finanças como
 único caminho de tools do produto (sem superfície façade em produção; o
 helper com filtro owner-only vive só em `tests/helpers/facade.mjs` para
@@ -53,8 +53,8 @@ gate `READ_SLICE_PASS` PWA→modelo→tools→API→UI. Os testes
 loopback com Better-Auth/token/ledger sintéticos e o transporte/tool executor;
 não chamam `session.prompt`, não renderizam uma resposta de modelo na PWA e não
 acessam produção/Postgres. A fatia P3 de escrita foi entregue como INTENÇÃO de
-proposta: `propose_expense` registra o intent e o gateway o entrega à PWA
-autenticada; a PWA chama o broker estreito do Agent, o ÚNICO componente que
+proposta: `propose_expense` e `propose_income` registram o intent e o gateway o
+entrega à PWA autenticada; a PWA chama o broker estreito do Agent, o ÚNICO componente que
 emite `financial.approval.propose` (A4). O runtime não possui segredo de
 delegação, não cria capability e não confirma/executa. Nada aqui equivale a
 funcionamento em produção.
@@ -65,13 +65,13 @@ Origem somente-leitura: `D:/projetos/pi-ted-runtime-spike/experiments/ted-runtim
 
 | Artefato do spike | Destino no produto |
 |---|---|
-| `bootstrap/ted-finance-tools.mjs` (defs + executores, intenção, guards) | ADAPTADO → `src/tool-defs.mjs`, 2 reads P2 por padrão + `list_categories` e `propose_expense` P3 opcionais (intent-only) |
+| `bootstrap/ted-finance-tools.mjs` (defs + executores, intenção, guards) | ADAPTADO → `src/tool-defs.mjs`, 2 reads P2 por padrão + `list_categories` e `propose_expense`/`propose_income` P3 opcionais (intent-only) |
 | `bootstrap/session-bindings.mjs` (Map host-bound) | ADAPTADO → `src/session-bindings.mjs`, comportamento preservado |
 | `bootstrap/ted-gateway.mjs` (façade do spike) | NÃO adaptado como superfície de produto — sem `src/facade.mjs`; helper com filtro owner-only mantido só em `tests/helpers/facade.mjs` para testes legados de contrato (fail-closed, sem `listCatalogs`) |
 | `bootstrap/ted-config.cjs` + `env.cjs` (isolamento) | ADAPTADO → `src/bootstrap.mjs`, SEM `process.chdir`, COM guarda um-host-por-processo |
 | `bootstrap/plugins/ted-finance/index.mjs` (registro nativo) | ADAPTADO → `src/plugin.mjs`, registra 2 reads P2 por padrão; reads + intent somente com opt-in local P3 |
 | `bootstrap/finance-transport.mjs` (filho tsx p/ test-app) | NÃO importado — substituído por `src/transport.mjs` (fetch contra baseUrl do chamador) |
-| `finance-bridge*.ts`, `finance-transport-pg.mjs`, seeds, traces, runners, `propose_expense` (+ confirmation runners) | Bridges/harnesses sintéticos/PG e runners NÃO importados. `list_categories` ADAPTADO como leitura GET-only opcional P3. `propose_expense` RECONSTRUÍDO como intent-only (sem bridge/PG, sem HTTP, sem confirm/execute); a persistência Pending V2 acontece só no broker do Agent (A4). |
+| `finance-bridge*.ts`, `finance-transport-pg.mjs`, seeds, traces, runners, `propose_expense` (+ confirmation runners) | Bridges/harnesses sintéticos/PG e runners NÃO importados. `list_categories` ADAPTADO como leitura GET-only opcional P3. `propose_expense`/`propose_income` RECONSTRUÍDOS como intent-only (sem bridge/PG, sem HTTP, sem confirm/execute); a persistência Pending V2 acontece só no broker do Agent (A4). |
 
 ## Contrato de autenticação do transporte (verificado, não inventado)
 
@@ -149,6 +149,7 @@ Paridade: linhas de ownership durável/reauth/ADR-027 seguem NOT_PROVEN.
 ## Estrutura
 
 - `src/tool-defs.mjs` — 2 P2 tools (schemas in+out) + `list_categories` opcional P3
+  + `propose_income` P3.2 (mesmo executor intent-only de `propose_expense`)
   (defs/args/rota GET `/categories` exata/shape `{items, total}`/executor GET-only)
   + `propose_expense` P3 (intent-only: sem HTTP, sem escrita, sem confirm/execute;
   registra `{tool, intentionId, normalizedArgs, summary}` no registry process-local).
@@ -179,7 +180,7 @@ Paridade: linhas de ownership durável/reauth/ADR-027 seguem NOT_PROVEN.
 - `src/plugin.mjs` — registro nativo 2.2.4 exatamente das 2 reads P2 por padrão
   (opt-in local `TED_OPENCODE_P3_READS_ENABLED=1` com `NODE_ENV !== 'production'`
   expõe `list_categories`; `TED_OPENCODE_P3_WRITES_ENABLED=1` expõe também
-  `propose_expense`; produção força ambos off) + gate nativo de permissão em
+  `propose_expense` e `propose_income`; produção força ambos off) + gate nativo de permissão em
   todo execute (`ctx.permission.assert` com `ted.finance.read`/`[toolName]` e o
   contexto real da invocação ANTES de host/executor/HTTP; sem a API/contexto
   falha fechado — mecanismo nativo, não um novo sistema de auth) +

@@ -7,7 +7,7 @@ import {
   fetchActivePendingOperations,
   fetchActiveUndoProposals,
   sendAgentMessage,
-  proposePendingExpense,
+  proposePendingOperation,
   renewAgentSession,
   composeChatSend,
   loadPendingChatSend,
@@ -21,7 +21,7 @@ import {
   type ActivePendingOperation,
   type ActiveUndoProposal,
   type AgentMessage,
-  type ExpenseProposalIntent,
+  type ProposalIntent,
   type PendingChatSend,
 } from "@/lib/api/agent-client";
 import { TedMessage, type TedDeliveryState } from "./TedMessage";
@@ -47,9 +47,14 @@ const MESSAGE_SEND_ERROR = "Não foi possível enviar a mensagem. Tente novament
  * same `intentionId` (the broker's idempotency seed). This copy tells the user
  * the recovery did not land yet without inventing a card.
  */
-const PROPOSAL_RECOVERY_ERROR =
-  "Não foi possível recuperar a proposta de despesa. Recarregue a página para tentar novamente.";
-const PROPOSAL_BROKER_ERROR = "Não foi possível preparar a proposta de despesa. Tente novamente.";
+const PROPOSAL_NOUN: Readonly<Record<ProposalIntent["tool"], string>> = {
+  "transactions.expense.create": "despesa",
+  "transactions.income.create": "receita",
+};
+const proposalRecoveryError = (proposal?: ProposalIntent): string =>
+  `Não foi possível recuperar a proposta de ${proposal ? PROPOSAL_NOUN[proposal.tool] : "operação"}. Recarregue a página para tentar novamente.`;
+const proposalBrokerError = (proposal?: ProposalIntent): string =>
+  `Não foi possível preparar a proposta de ${proposal ? PROPOSAL_NOUN[proposal.tool] : "operação"}. Tente novamente.`;
 /**
  * FIX-AGENT-QUOTA-MESSAGE: the Agent relays the usage-gate denial verbatim as
  * 429 `agent.quota_exceeded` (the daily token budget, reset on the 24h window)
@@ -669,7 +674,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     if (anchored?.proposal && proposalRecoveryRef.current !== anchored.messageId) {
       proposalRecoveryRef.current = anchored.messageId;
       try {
-        await proposePendingExpense(scopeId, anchored.proposal);
+        await proposePendingOperation(scopeId, anchored.proposal);
         if (isStaleScope(scopeId)) return [];
         clearPendingChatSend(scopeId);
         setMessages((prev) =>
@@ -714,7 +719,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // Last-known undo cards stay (untouched); staleness is already
       // signaled by the history/active error paths above when they fail.
     }
-    if (proposalRecoveryFailed) setError(PROPOSAL_RECOVERY_ERROR);
+    if (proposalRecoveryFailed) setError(proposalRecoveryError(anchored?.proposal));
     return history;
   }, [activeWorkspace, applyActiveUndoProposals, isStaleScope]);
 
@@ -1158,7 +1163,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // rehydrated from the authoritative active list by loadHistory below.
       if (returnedProposal) {
         try {
-          await proposePendingExpense(
+          await proposePendingOperation(
             sendWorkspaceId,
             returnedProposal,
             controller ? { signal: controller.signal } : undefined,
@@ -1174,7 +1179,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
           // proposal (the backend idempotency key is derived from it). The
           // anchor keeps the intent for a broker-only retry or a reload.
           setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
-          setError(PROPOSAL_BROKER_ERROR);
+          setError(proposalBrokerError(returnedProposal));
           setStatus("error");
           return;
         }
@@ -1350,7 +1355,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
    */
   const retryProposalBroker = async (
     messageId: string,
-    proposal: ExpenseProposalIntent,
+    proposal: ProposalIntent,
     scopeId: string,
   ): Promise<void> => {
     setLoading(true);
@@ -1358,7 +1363,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     setStatus("streaming");
     setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "sending" as const } : m)));
     try {
-      await proposePendingExpense(scopeId, proposal);
+      await proposePendingOperation(scopeId, proposal);
       if (isStaleScope(scopeId)) return;
       clearPendingChatSend(scopeId);
       setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "sent" as const } : m)));
@@ -1366,7 +1371,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     } catch {
       if (isStaleScope(scopeId)) return;
       setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "failed" as const } : m)));
-      setError(PROPOSAL_BROKER_ERROR);
+      setError(proposalBrokerError(proposal));
       setStatus("error");
     } finally {
       if (!isStaleScope(scopeId)) setLoading(false);

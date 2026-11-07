@@ -39,6 +39,14 @@ const EXPECTED_ARGS = {
   accountId: ACCOUNT,
   categoryId: CATEGORY,
 };
+const INCOME_MESSAGE = 'Registre uma receita de R$ 2.500 de salário na conta Nubank.';
+const INCOME_ARGS = {
+  amountCents: 250000,
+  description: 'salário',
+  date: '2026-11-07',
+  accountId: ACCOUNT,
+  categoryId: CATEGORY,
+};
 
 function fixtureModel(id) {
   return {
@@ -167,10 +175,12 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
     const allowIdx = providerPolicies.findIndex((p) => p.resource === FIXTURE_PROVIDER && p.effect === 'allow');
     const denyIdx = providerPolicies.findIndex((p) => p.resource === '*' && p.effect === 'deny');
     assert.ok(allowIdx !== -1 && allowIdx > denyIdx, 'test-only provider allow comes after deny-all');
-    assert.ok(
-      (cfg.agents.ted.permissions || []).some((p) => p.resource === 'propose_expense' && p.effect === 'allow'),
-      'the P3 config allows exactly the proposal permission',
-    );
+    for (const resource of ['propose_expense', 'propose_income']) {
+      assert.ok(
+        (cfg.agents.ted.permissions || []).some((p) => p.resource === resource && p.effect === 'allow'),
+        `the P3 config allows exactly the ${resource} permission`,
+      );
+    }
 
     assertNoRedirectedComponents([iso.dirs.config]);
     fs.mkdirSync(iso.dirs.config, { recursive: true });
@@ -234,6 +244,49 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
     assert.deepEqual(intent.normalizedArgs, EXPECTED_ARGS);
     assert.match(intent.intentionId, /^int-[0-9a-f]{32}$/);
     assert.match(intent.summary, /R\$\s?50,00/);
+    assert.equal(registry.take(created.id), null, 'one handoff per turn');
+
+    for (const r of newReqs) assert.equal(r.remote, '127.0.0.1', 'all stub requests are loopback');
+  });
+
+  it('the income message reaches propose_income and records one income intent (zero writes)', { timeout: 120000 }, async () => {
+    script = { callId: 'call_p3_income_1', name: 'propose_income', args: INCOME_ARGS, finalText: 'FINAL-INCOME-PROPOSED-OK' };
+    transportCalls = 0;
+    registry.clearAll();
+    const mark = chatRequests.length;
+
+    const created = await oc.session.create({ title: 'p3-propose-income', agent: 'ted' });
+    assert.ok(created && typeof created.id === 'string' && created.id.length > 0, 'native session created');
+    bindSession(created.id, { ...HOST });
+    const promptHost = createPromptHost({ oc, timeoutMs: 90000, pollIntervalMs: 250 });
+    const res = await promptHost.chat({ sessionID: created.id, text: INCOME_MESSAGE, intentionId: 'p3-propose-income-m1' });
+
+    assert.equal(res.output, 'FINAL-INCOME-PROPOSED-OK');
+    assert.equal(transportCalls, 0, 'propose_income performs no finance HTTP');
+
+    const newReqs = chatRequests.slice(mark);
+    assert.ok(newReqs.length >= 2, `stub saw tool-call and tool-result turns (got ${newReqs.length})`);
+    const firstMessages = (newReqs[0].body && newReqs[0].body.messages) || [];
+    assert.ok(
+      firstMessages.some((m) => m && m.role === 'user' && String(m.content).includes(INCOME_MESSAGE)),
+      'the exact income message reached the model loop',
+    );
+    const offered = offeredToolNames(newReqs[0]);
+    for (const name of ['propose_income', 'propose_expense', 'list_categories', 'list_accounts']) {
+      assert.ok(offered.includes(name), `${name} is offered to the model (got ${JSON.stringify(offered)})`);
+    }
+    const toolTurn = newReqs.find((r) => ((r.body && r.body.messages) || []).some((m) => m && m.role === 'tool'));
+    assert.ok(toolTurn, 'the tool result was fed back to the model');
+    const toolMsg = (toolTurn.body.messages || []).find((m) => m && m.role === 'tool');
+    assert.match(String(toolMsg.content ?? ''), /proposed/, 'tool result reports a proposal, never execution');
+    assert.ok(!/succeeded/i.test(String(toolMsg.content ?? '')), 'never claims execution');
+
+    const intent = registry.take(created.id);
+    assert.ok(intent, 'exactly one proposal intent was recorded for the session');
+    assert.equal(intent.tool, 'transactions.income.create');
+    assert.deepEqual(intent.normalizedArgs, INCOME_ARGS);
+    assert.match(intent.intentionId, /^int-[0-9a-f]{32}$/);
+    assert.match(intent.summary, /Receita de R\$\s?2\.500,00/);
     assert.equal(registry.take(created.id), null, 'one handoff per turn');
 
     for (const r of newReqs) assert.equal(r.remote, '127.0.0.1', 'all stub requests are loopback');

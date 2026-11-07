@@ -45,7 +45,7 @@ const EXPECTED_TOOL_USE_DENIES = [
 // Exact product finance resources the native allowlist may name (no wildcards).
 // Includes the local-only P3 proposal intent; tedConfig() default carries only
 // the reads (P3 writes are an explicit local opt-in).
-const EXPECTED_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense'];
+const EXPECTED_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense', 'propose_income'];
 const DEFAULT_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_categories'];
 
 function agentPerms(profile) {
@@ -91,7 +91,7 @@ describe('PR290 deny-by-default: agents.ted explicit native allowlist', () => {
     }
   });
 
-  it('the local P3 writes opt-in adds exactly the proposal permission', () => {
+  it('the local P3 writes opt-in adds exactly the proposal permissions', () => {
     for (const profile of ['test', 'live']) {
       const cfg = tedConfig(profile, { p3Writes: true });
       const perms = (cfg.agents && cfg.agents.ted && cfg.agents.ted.permissions) || [];
@@ -99,8 +99,13 @@ describe('PR290 deny-by-default: agents.ted explicit native allowlist', () => {
       const allows = perms.slice(1);
       assert.deepEqual(allows.map((p) => p.resource).sort(), [...EXPECTED_FINANCE_RESOURCES].sort());
       for (const p of allows) assert.equal(p.action, 'ted.finance.read');
-      const propose = allows.find((p) => p.resource === 'propose_expense');
-      assert.deepEqual(propose, { action: 'ted.finance.read', resource: 'propose_expense', effect: 'allow' });
+      for (const resource of ['propose_expense', 'propose_income']) {
+        assert.deepEqual(allows.find((p) => p.resource === resource), {
+          action: 'ted.finance.read',
+          resource,
+          effect: 'allow',
+        });
+      }
     }
   });
 
