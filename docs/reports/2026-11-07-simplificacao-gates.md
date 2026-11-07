@@ -88,8 +88,35 @@ Comandos locais executados neste worktree (Node do ambiente, `yaml` do store):
 - `node --test scripts/canonical-docs-contract.test.mjs scripts/documentation-facts-contract.test.mjs scripts/check-engines-contract.test.mjs`
   — 27 pass / 1 skip (wrangler não instalado localmente).
 
-Resultado do CI do PR e do smoke funcional: preencher após a execução do PR
-(seção "Resultado do PR" no corpo do PR e atualização deste relatório).
+Resultado do CI do PR e do smoke funcional:
+
+### Resultado do PR #295
+
+- **CI** run `42371605653` — `success` em 5m10s de parede:
+  - `Detect changed areas` 7s; `Quality` 17s; `Functional` 31s;
+    `Docs + governance` 22s; `Workflow pins + YAML` 27s;
+    `Financial integrity — Postgres` 4m53s; `Gate` 4s.
+  - `Agent policies` e jobs main-only (`agent-manifest`, `api-image`,
+    `release-manifest`) ficaram `skipped`, como esperado.
+- **PWA CI** run `42371605845` — `quality (22, 10)` `success` em 6m34s;
+  `e2e` `skipped` (sem o label `run-full-e2e`).
+- **Suíte financeira** (label `run-financial`): API unit + approvals +
+  integração + concorrência contra Postgres real. A suíte de concorrência fechou
+  `18 files / 123 tests passed`, incluindo:
+  - confirmação/rejeição: `tests/approvals/pending-v2-contract.test.ts`,
+    `pending-v2-idempotency.test.ts`, `executor.test.ts`,
+    `pending-adversarial.test.ts`;
+  - duplicação financeira impedida:
+    `tests/routes/transactions-idempotency-uow.test.ts`,
+    `tests/integration/postgres-idempotency-containment.test.ts`,
+    `tests/writes/postgres-idempotency-lease.test.ts`,
+    `tests/routes/idempotency-route-identity.test.ts`.
+- Nenhum arquivo de `apps/api` ou `apps/agent` foi alterado; os workflows de
+  deploy não foram tocados; `validate-deploy-workflows` passou 54/54.
+- Observação operacional: adicionar labels **depois** de criar o PR. Passar
+  `--label` na criação dispara `opened` + `labeled`; o run mais novo cancela o
+  primeiro pela concorrência por ref, o que aparece como um run cancelado.
+
 
 ## Pendências reais
 
