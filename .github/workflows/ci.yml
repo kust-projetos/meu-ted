@@ -5,6 +5,7 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+    types: [opened, synchronize, reopened, labeled]
 
 # Least privilege by default; jobs that publish artifacts declare more.
 permissions:

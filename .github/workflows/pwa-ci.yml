@@ -8,6 +8,7 @@ on:
     # "quality (22, 10)" on EVERY pull request.
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 permissions:
