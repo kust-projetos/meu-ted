@@ -56,6 +56,10 @@ Qualquer falha acima **aborta sem criar tag nem release**.
 - Sem trigger em `push`/`tag`: o workflow só roda por despacho manual.
 - Não altera branch protection (`Gate — all checks` + `quality (22, 10)`
   continuam obrigatórios).
+- PRs comuns rodam apenas os dois required checks. E2E completo
+  (`run-full-e2e`), Lighthouse, auditoria de dependências e scan de containers
+  ficam em main/sob demanda/no workflow `Audits`; a preparação de release deve
+  rodar `pnpm validate:final`.
 - A tag aponta para `sha` (baseline viva/main); o corpo da tag e da
   Release registra `api_sha`, manifesto, runs de deploy e evidência E2E.
 - Rollback de API continua pelo mecanismo do wrapper (rollback tags
