@@ -47,7 +47,10 @@
     "test:skip-gate": "node scripts/check-test-skips.mjs",
     "action-pins:check": "node scripts/check-action-pins.mjs",
     "workflows-yaml:check": "node scripts/check-workflows-yaml.mjs",
-    "validate:final": "node scripts/run-final-validation.mjs"
+    "validate:final": "node scripts/run-final-validation.mjs",
+    "commit:check": "node scripts/check-commit-diff.mjs",
+    "check:area": "node scripts/check-changed-areas.mjs",
+    "test:scripts": "node --test scripts/check-commit-diff.test.mjs scripts/check-changed-areas.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
