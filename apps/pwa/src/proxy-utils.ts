@@ -95,6 +95,8 @@ type EnvLike = {
   PWA_ORIGIN?: string;
   PWA_AGENT_PROXY_ORIGIN?: string;
   AGENT_ORIGIN?: string;
+  TED_OPENCODE_RUNTIME_ENABLED?: string;
+  TED_OPENCODE_GATEWAY_ORIGIN?: string;
 };
 
 export type AgentProxyEnv = EnvLike;
@@ -563,4 +565,171 @@ export function buildCspValue(nonce: string, allowUnsafeEval = false): string {
     "base-uri 'self'",
     "report-uri /api/csp-report",
   ].join("; ");
+}
+
+/**
+ * P2 — OpenCode runtime pin (server-only selection, shared helpers).
+ *
+ * Cookie contract (owned by `apps/ted-runtime/src/conversations.mjs`, mirrored
+ * here without importing runtime files — the proxy never trusts the browser
+ * value, it only classifies it):
+ * - name `ted-runtime-conversation`, HttpOnly, SameSite=Lax, scoped Path
+ *   `/api/agent/agents/finance-chat-agent/<encoded-workspace>/rpc`, bounded
+ *   Max-Age 30d, `Secure` only for HTTPS origins.
+ * - exact sentinel `agent` = A0; `opencode.<opaque-uuid>` = B (the cookie
+ *   NEVER carries the native runtimeSessionId).
+ */
+export const TED_RUNTIME_CONVERSATION_COOKIE = "ted-runtime-conversation";
+export const TED_RUNTIME_A0_SENTINEL = "agent";
+export const TED_RUNTIME_B_PREFIX = "opencode.";
+export const TED_RUNTIME_COOKIE_MAX_AGE = 2592000;
+
+const TED_OPAQUE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export type TedRuntimePin =
+  | { pin: "a0" }
+  | { pin: "b"; conversationId: string }
+  | { pin: "none" }
+  | { pin: "invalid" };
+
+/**
+ * Classifies the runtime pin from a raw Cookie header. Returns the pin only —
+ * the `invalid` case carries no value (boolean marker) so callers cannot log
+ * it by mistake. Pure, no env.
+ */
+export function parseTedRuntimePin(cookieHeader: string | null | undefined): TedRuntimePin {
+  if (typeof cookieHeader !== "string" || cookieHeader.length === 0) return { pin: "none" };
+  const parts = cookieHeader.split(";");
+  let value: string | null = null;
+  for (const part of parts) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() !== TED_RUNTIME_CONVERSATION_COOKIE) continue;
+    value = part.slice(eq + 1).trim();
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      value = value.slice(1, -1);
+    }
+  }
+  if (value === null || value === "") return { pin: "none" };
+  if (value === TED_RUNTIME_A0_SENTINEL) return { pin: "a0" };
+  if (value.startsWith(TED_RUNTIME_B_PREFIX)) {
+    const id = value.slice(TED_RUNTIME_B_PREFIX.length);
+    if (TED_OPAQUE_ID_RE.test(id)) return { pin: "b", conversationId: id };
+  }
+  return { pin: "invalid" };
+}
+
+/** Scoped cookie Path for one workspace (mirrors the gateway contract). */
+export function scopedTedRuntimeCookiePath(workspaceId: string): string {
+  return `/api/agent/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc`;
+}
+
+/**
+ * Serializes the A0 pin (`agent`) scoped to one workspace. `secure` only when
+ * the request origin is HTTPS (the route decides from the request URL).
+ */
+export function serializeTedRuntimeA0Pin(workspaceId: string, opts?: { secure?: boolean }): string {
+  const segments = [
+    `${TED_RUNTIME_CONVERSATION_COOKIE}=${TED_RUNTIME_A0_SENTINEL}`,
+    `Path=${scopedTedRuntimeCookiePath(workspaceId)}`,
+    `Max-Age=${TED_RUNTIME_COOKIE_MAX_AGE}`,
+    "HttpOnly",
+    "SameSite=Lax",
+  ];
+  if (opts?.secure) segments.push("Secure");
+  return segments.join("; ");
+}
+
+/**
+ * Server-only flag: OFF unless exactly `1`, and never in production — a
+ * leaked/accidental flag in production must not change routing (no B, no
+ * local pins). Reads the passed env only — the client bundle must never read
+ * this (no `NEXT_PUBLIC_` alias exists).
+ */
+export function isTedOpencodeRuntimeEnabled(env?: EnvLike): boolean {
+  if (env?.NODE_ENV === "production") return false;
+  return env?.TED_OPENCODE_RUNTIME_ENABLED === "1";
+}
+
+/**
+ * Strict well-formed HTTP loopback upstream check for the B gateway (pure, no
+ * env). Same shape as the agent loopback check: `http://localhost[:port]` or
+ * `http://127.0.0.1[:port]`, no userinfo/path/query/hash.
+ */
+function parseTedGatewayLoopback(value: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:") return null;
+  if (parsed.username !== "" || parsed.password !== "") return null;
+  if (parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") return null;
+  if (parsed.pathname !== "" && parsed.pathname !== "/") return null;
+  if (parsed.search !== "" || parsed.hash !== "") return null;
+  return parsed.origin;
+}
+
+/**
+ * Resolves the local B gateway origin. Loopback ONLY, and only when
+ * NODE_ENV is exactly `development`/`test` AND `ALLOW_LOCAL_ORIGIN` is exactly
+ * `1` — production (or undefined NODE_ENV, missing flag, malformed value)
+ * resolves to null and the caller fails closed. Never throws.
+ */
+export function resolveTedGatewayOrigin(env?: EnvLike): string | null {
+  const raw = env?.TED_OPENCODE_GATEWAY_ORIGIN?.trim();
+  if (!raw) return null;
+  if (env?.NODE_ENV !== "development" && env?.NODE_ENV !== "test") return null;
+  if (env?.ALLOW_LOCAL_ORIGIN !== "1") return null;
+  return parseTedGatewayLoopback(raw);
+}
+
+/**
+ * True only for the three P2 conversational RPCs routed to B:
+ * `.../rpc/chat`, `.../rpc/history`, `.../rpc/session/new` under
+ * `agents/finance-chat-agent/<workspace>/rpc`. Pending/undo/attachment and any
+ * other path stay on the current Agent path. Pure, no env.
+ */
+export function isTedP2RpcPath(path: readonly string[]): boolean {
+  if (path.length < 5) return false;
+  if (path[0] !== "agents" || path[1] !== "finance-chat-agent") return false;
+  if (typeof path[2] !== "string" || path[2].length === 0) return false;
+  if (path[3] !== "rpc") return false;
+  const tail = path.slice(4);
+  if (tail.length === 1 && (tail[0] === "chat" || tail[0] === "history")) return true;
+  if (tail.length === 2 && tail[0] === "session" && tail[1] === "new") return true;
+  return false;
+}
+
+/** Workspace id from a P2-shaped path (`agents/finance-chat-agent/<ws>/rpc/...`). */
+export function tedWorkspaceIdFromPath(path: readonly string[]): string | null {
+  if (path.length < 5) return null;
+  if (path[0] !== "agents" || path[1] !== "finance-chat-agent") return null;
+  const ws = path[2];
+  return typeof ws === "string" && ws.length > 0 ? ws : null;
+}
+
+export type TedRuntimeTarget = "A0" | "B";
+
+/**
+ * Selects the runtime for one proxied request. Rules (in order):
+ * 1. Non-P2 paths always stay on A0 (pending/undo/attachment never send a
+ *    conversational turn to B).
+ * 2. An `agent` (A0) pin stays on A0 even when the flag turns ON.
+ * 3. An `opencode.*` (B) pin stays on B even when the flag later turns OFF.
+ * 4. A foreign/invalid B-shaped value is treated as B so the gateway fails
+ *    closed (typed error + scoped clear) instead of silently falling back.
+ * 5. No pin: B only when the flag is ON (explicit `session/new` included),
+ *    otherwise A0. Pure, no env access — the caller passes `flagOn`.
+ */
+export function selectTedRuntimeTarget(
+  pin: TedRuntimePin,
+  opts: { isP2: boolean; flagOn: boolean },
+): TedRuntimeTarget {
+  if (!opts.isP2) return "A0";
+  if (pin.pin === "a0") return "A0";
+  if (pin.pin === "b") return "B";
+  if (pin.pin === "invalid") return "B";
+  return opts.flagOn ? "B" : "A0";
 }

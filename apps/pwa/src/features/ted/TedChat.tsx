@@ -33,7 +33,8 @@ import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 import { isActionablePendingOperationPresentation } from "@pi-finance/llm-contracts/types";
 import type { PendingOperationDecision, UndoDecision } from "@/lib/api/agent-client";
 import { notifyPendingOperationsChanged } from "@/lib/state/use-pending-operations";
-import { Sparkles, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, Trash2, RefreshCw, Lock } from "lucide-react";
+import { getTedRuntimeView, clearTedRuntimeViews, type TedRuntimeView } from "@/lib/api/ted-runtime-view";
+import { Sparkles, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, Trash2, RefreshCw, Lock, X } from "lucide-react";
 
 const HISTORY_LOAD_ERROR = "Não foi possível carregar o histórico. Tente novamente.";
 const ACTIVE_LOAD_ERROR = "Não foi possível carregar as aprovações agora.";
@@ -227,6 +228,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // deduped by requestId; expired summaries are dropped.
   const [undoProposals, setUndoProposals] = useState<TedUndoProposal[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  // P2 — server-confirmed runtime for the live conversation (from the
+  // proxied `x-ted-runtime` header). The cancel affordance renders ONLY when
+  // B is confirmed; A0/unknown keeps the existing disabled submit (no false
+  // cancel — A0 has no turn-cancel path upstream). Local per mount, reset on
+  // scope teardown; the module view stays keyed by workspace.
+  const [tedRuntime, setTedRuntime] = useState<TedRuntimeView>("unknown");
+  const canCancelTurn = tedRuntime === "opencode";
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -460,6 +468,10 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     if (!activeWorkspace) return [];
     // A02/R02 (AC07 HIGH): this refresh belongs to the scope that started it.
     const scopeId = activeWorkspace.id;
+    // P2: re-ground the runtime belief on every history batch — a B pin
+    // cleared gateway-side must not keep offering cancel on the A0 that
+    // follows. The fetch below re-captures when the header is present.
+    clearTedRuntimeViews(scopeId);
     let history: AgentMessage[];
     try {
       setStatus("connecting");
@@ -471,8 +483,16 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // signals staleness — never invents a card, never wipes history.
       setError(HISTORY_LOAD_ERROR);
       setStatus("error");
+      // P2: even a failed batch may have revealed the runtime (a B 400 with
+      // no cookie yet still carries the runtime header, captured above).
+      setTedRuntime(getTedRuntimeView(scopeId));
       return [];
     }
+    // P2: sync the server-confirmed runtime from whatever the history batch
+    // (or its error) revealed — including a B 400 with no cookie yet, whose
+    // response still carries the runtime header. No header (legacy A0) keeps
+    // the reset value below: unknown.
+    if (!isStaleScope(scopeId)) setTedRuntime(getTedRuntimeView(scopeId));
     // The scope may have changed while the batch was in flight: this batch
     // belongs to the previous conversation and must never reach the new one.
     if (isStaleScope(scopeId)) return [];
@@ -760,6 +780,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       setUndoProposals([]);
       setHistoryLoaded(false);
       setError(null);
+      setTedRuntime("unknown");
       setStatus("ready");
     }
     activeWorkspaceIdRef.current = newId;
@@ -999,6 +1020,19 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // retries. Success marks the optimistic bubble as sent and lets the
   // authoritative history own the log; failure keeps the bubble visible as
   // failed (never silently discarded) with the draft intact for retry.
+  //
+  // P2 — cancellable turn, B-confirmed only (see `tedRuntime` above). The
+  // active send owns ONE AbortController (ref, never state — transient by
+  // `rerender-use-ref-transient-values`). Cancel aborts the in-flight
+  // `sendAgentMessage` only; `loading` stays true until the abort settles in
+  // `finally`, no second send is enabled meanwhile, and the abort lands in
+  // the existing failed+retry UX (same anchor/messageId, same draft — no new
+  // delivery enum, no card cancellation). A0/unknown sends carry no abort
+  // wiring at all: no effective cancel is ever invoked off-B.
+  const activeSendControllerRef = useRef<AbortController | null>(null);
+  const handleCancelSend = useCallback(() => {
+    activeSendControllerRef.current?.abort();
+  }, []);
   const executeSend = async (send: PendingChatSend): Promise<void> => {
     if (!activeWorkspace) return;
     // A02/R02 (AC07): the turn is bound to the scope that issued it.
@@ -1012,6 +1046,11 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     setLoading(true);
     setError(null);
     setStatus("streaming");
+    // P2: abort wiring exists only for a server-confirmed B turn. A0/unknown
+    // sends pass no signal — fetchWithAgentAuth still tracks the flight for
+    // session teardown, but nothing can cancel it as a turn.
+    const controller = canCancelTurn ? new AbortController() : null;
+    activeSendControllerRef.current = controller;
     try {
       const turn = await sendAgentMessage(
         sendWorkspaceId,
@@ -1021,6 +1060,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
           // SPEC §7.7: retries pass the SAME messageId back — a lost HTTP
           // response can never produce a second proposal.
           messageId: send.messageId,
+          ...(controller ? { signal: controller.signal } : {}),
         },
       );
       // A02/R02 (AC07): a result that lands after a workspace switch or a
@@ -1145,12 +1185,18 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // in the chat now on screen. The failed draft of the OLD scope was
       // already dropped by the workspace-change teardown.
       if (isStaleScope(sendWorkspaceId)) return;
+      // P2 cancel/timeout: same failed+retry UX — the abort keeps the anchor,
+      // messageId and draft intact for retry (no new delivery enum).
       setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
       setError(sendErrorMessage(err));
       setStatus("error");
       // No history reload on failure: it would wipe the failed bubble.
       // The draft (messageId, content, live URLs) stays for retry.
     } finally {
+      if (activeSendControllerRef.current === controller) activeSendControllerRef.current = null;
+      // P2: re-read the server-confirmed runtime after the turn settles (the
+      // turn response carries the header too). Stale scopes write nothing.
+      if (!isStaleScope(sendWorkspaceId)) setTedRuntime(getTedRuntimeView(sendWorkspaceId));
       setLoading(false);
     }
   };
@@ -1258,6 +1304,9 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       await renewAgentSession(scopeId);
       // O escopo pode ter mudado durante o POST: nada da sessão antiga entra na nova.
       if (isStaleScope(scopeId)) return;
+      // P2: a renewal defines a fresh conversation lifecycle (the client
+      // reset the view on success) — sync the local gate from it.
+      setTedRuntime(getTedRuntimeView(scopeId));
       setMessages([]);
       setInput("");
       // Nova sessão limpa SÓ a exibição local: o lote do /rpc/history logo
@@ -1656,14 +1705,26 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
               rows={1}
               className="max-h-28 min-h-[24px] flex-1 resize-none bg-transparent py-1 text-[14px] leading-5 text-text-primary placeholder:text-text-muted focus:outline-none"
             />
-            <button
-              type="submit"
-              disabled={loading || uploadingAttachments || (!input.trim() && attachments.length === 0)}
-              aria-label="Enviar mensagem"
-              className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-primary text-white shadow-fab transition-all hover:bg-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none cursor-pointer"
-            >
-              <Send size={15} />
-            </button>
+            {loading && canCancelTurn ? (
+              <button
+                type="button"
+                onClick={handleCancelSend}
+                aria-label="Cancelar envio"
+                title="Cancelar envio"
+                className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-primary text-white shadow-fab transition-all hover:bg-primary-hover active:scale-95 cursor-pointer"
+              >
+                <X size={15} />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={loading || uploadingAttachments || (!input.trim() && attachments.length === 0)}
+                aria-label="Enviar mensagem"
+                className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-primary text-white shadow-fab transition-all hover:bg-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none cursor-pointer"
+              >
+                <Send size={15} />
+              </button>
+            )}
           </div>
           {/* §19.5/§24: keyboard hints assume a physical keyboard — they do
               not occupy space on touch devices (hover:none + pointer:coarse). */}

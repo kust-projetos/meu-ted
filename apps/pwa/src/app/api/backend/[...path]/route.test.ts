@@ -261,4 +261,50 @@ describe("backend proxy origin (T4)", () => {
     const [url] = fetchMock.mock.calls[0] as [string];
     expect(url).toBe(`${PRODUCTION_ORIGIN}/v1/a%20b%2Fc`);
   });
+
+  it("forwards x-e2e-test-id to loopback upstream", async () => {
+    vi.stubEnv("PWA_BACKEND_PROXY_ORIGIN", "http://127.0.0.1:4010");
+    const fetchMock = mockUpstream();
+    const { POST: postRoute } = await loadRoute();
+
+    const res = await postRoute(
+      new Request("http://127.0.0.1:3001/api/backend/auth/sign-in/email", {
+        method: "POST",
+        headers: {
+          origin: "http://127.0.0.1:3001",
+          "content-type": "application/json",
+          "x-e2e-test-id": "e2e-123",
+        },
+        body: JSON.stringify({ email: "test@example.com", password: "secret" }),
+      }),
+      context(["auth", "sign-in", "email"]),
+    );
+
+    expect(res.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Headers).get("x-e2e-test-id")).toBe("e2e-123");
+  });
+
+  it("never forwards x-e2e-test-id to production upstream", async () => {
+    vi.stubEnv("PWA_BACKEND_PROXY_ORIGIN", "");
+    const fetchMock = mockUpstream();
+    const { POST: postRoute } = await loadRoute();
+
+    const res = await postRoute(
+      new Request("https://pwa.example/api/backend/auth/sign-in/email", {
+        method: "POST",
+        headers: {
+          origin: "https://pwa.example",
+          "content-type": "application/json",
+          "x-e2e-test-id": "e2e-123",
+        },
+        body: JSON.stringify({ email: "user@example.com", password: "secret" }),
+      }),
+      context(["auth", "sign-in", "email"]),
+    );
+
+    expect(res.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Headers).get("x-e2e-test-id")).toBeNull();
+  });
 });

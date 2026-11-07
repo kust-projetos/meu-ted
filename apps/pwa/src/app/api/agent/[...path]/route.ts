@@ -4,6 +4,13 @@ import {
   isBrowserOriginAllowed,
   resolveAgentOrigin,
   resolveForwardOrigin,
+  parseTedRuntimePin,
+  selectTedRuntimeTarget,
+  isTedP2RpcPath,
+  tedWorkspaceIdFromPath,
+  isTedOpencodeRuntimeEnabled,
+  resolveTedGatewayOrigin,
+  serializeTedRuntimeA0Pin,
   type AgentProxyEnv,
 } from "@/proxy-utils";
 
@@ -25,6 +32,8 @@ async function readProxyEnv(): Promise<ProxyEnv> {
       PWA_ORIGIN: cloudEnv.PWA_ORIGIN ?? process.env.PWA_ORIGIN,
       PWA_AGENT_PROXY_ORIGIN: cloudEnv.PWA_AGENT_PROXY_ORIGIN ?? process.env.PWA_AGENT_PROXY_ORIGIN,
       AGENT_ORIGIN: cloudEnv.AGENT_ORIGIN ?? process.env.AGENT_ORIGIN,
+      TED_OPENCODE_RUNTIME_ENABLED: cloudEnv.TED_OPENCODE_RUNTIME_ENABLED ?? process.env.TED_OPENCODE_RUNTIME_ENABLED,
+      TED_OPENCODE_GATEWAY_ORIGIN: cloudEnv.TED_OPENCODE_GATEWAY_ORIGIN ?? process.env.TED_OPENCODE_GATEWAY_ORIGIN,
     };
   } catch {
     return process.env as ProxyEnv;
@@ -96,6 +105,55 @@ function forwardHeaders(request: Request, env: ProxyEnv): Headers {
     headers.set("origin", forwarded);
   }
   return headers;
+}
+
+/**
+ * P2 — B-gateway credential allowlist. Forwards ONLY the trusted session
+ * cookie, the workspace scope, and the scoped device token. Never the
+ * single-use connection token, Authorization, or client identity claims.
+ * Origin passes through unchanged so the gateway can decide the `Secure`
+ * cookie attribute from the real origin (no spoofing on this path).
+ */
+function forwardBHeaders(request: Request): Headers {
+  const headers = new Headers();
+  const cookie = request.headers.get("cookie");
+  if (cookie) headers.set("cookie", cookie);
+  const workspaceId = request.headers.get("x-workspace-id");
+  if (workspaceId) headers.set("x-workspace-id", workspaceId);
+  const deviceToken = request.headers.get("x-device-token");
+  if (deviceToken) headers.set("x-device-token", deviceToken);
+  const origin = request.headers.get("origin");
+  if (origin) headers.set("origin", origin);
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  if (forwardedProto) headers.set("x-forwarded-proto", forwardedProto);
+  return headers;
+}
+
+/**
+ * P2 — upstream signal bound to the caller: the gateway fetch aborts when the
+ * browser disconnects/cancels AND on the route timeout. Falls back to the
+ * timeout alone when `AbortSignal.any` is unavailable.
+ */
+function upstreamSignal(request: Request): AbortSignal {
+  const timeout = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+  const caller = request.signal;
+  if (!caller) return timeout;
+  try {
+    const anyFn = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any;
+    if (typeof anyFn === "function") return anyFn.call(AbortSignal, [caller, timeout]);
+  } catch {
+    /* fall through to the timeout alone */
+  }
+  return timeout;
+}
+
+/** P2 — `Secure` only for HTTPS origins (the B cookie and the A0 pin share this). */
+function isHttpsRequest(request: Request): boolean {
+  try {
+    return new URL(request.url).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function upstreamErrorResponse(status: number, code: string, message: string): NextResponse {
@@ -188,8 +246,17 @@ function isTimeoutError(cause: unknown): boolean {
   );
 }
 
-async function proxy(request: Request, context: RouteContext): Promise<NextResponse> {
-  const env = await readProxyEnv();
+/**
+ * P2 — frozen legacy A0 path (byte/contract-equivalent).
+ *
+ * Follow-up nuance: when `TED_OPENCODE_GATEWAY_ORIGIN` is absent (or invalid,
+ * or production) AND there is no existing `opencode.*` pin, the proxy uses
+ * this path EXACTLY as before P2 — no A0 pin cookie, no forwarded-header
+ * changes, `AbortSignal.timeout` only. The P2 runtime selection below runs
+ * solely when the local gateway origin is configured (development/test) or
+ * when a B pin exists (which then fails closed without a gateway).
+ */
+async function proxyLegacyA0(request: Request, context: RouteContext, env: ProxyEnv): Promise<NextResponse> {
   let agentOrigin: string;
   try {
     agentOrigin = resolveAgentOrigin(env);
@@ -243,6 +310,157 @@ async function proxy(request: Request, context: RouteContext): Promise<NextRespo
   for (const cookie of upstream.headers.getSetCookie?.() ?? []) headers.append("set-cookie", cookie);
   headers.set("cache-control", "no-store");
   headers.set("cdn-cache-control", "no-store");
+
+  return new NextResponse(upstream.body, { status: upstream.status, headers });
+}
+
+async function proxy(request: Request, context: RouteContext): Promise<NextResponse> {
+  const env = await readProxyEnv();
+  if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !hasValidBrowserOrigin(request, env)) {
+    return upstreamErrorResponse(403, "csrf.origin_mismatch", "Origem da requisição não autorizada.");
+  }
+  const { path } = await context.params;
+  // P2 — server-only runtime selection. Non-P2 paths (pending/undo/attachment)
+  // always stay on A0; an `agent` pin stays on A0 with the flag ON; an
+  // `opencode.*` pin stays on B with the flag OFF; no pin goes B only when
+  // the flag is ON (explicit `session/new` included).
+  const isP2 = isTedP2RpcPath(path);
+  const pin = parseTedRuntimePin(request.headers.get("cookie"));
+  const flagOn = isTedOpencodeRuntimeEnabled(env);
+  const workspaceId = tedWorkspaceIdFromPath(path);
+  const target = selectTedRuntimeTarget(pin, { isP2, flagOn });
+
+  // Follow-up nuance: gateway absent/invalid AND no B pin AND an A0 target
+  // → frozen legacy A0 path (no pin cookie, headers untouched). Production
+  // always lands here for pin-less/A0 traffic (the loopback gateway never
+  // resolves in production AND the flag is forced OFF there), so production
+  // never receives local pin cookies. A B pin with a missing/invalid/
+  // unreachable gateway — or a pinless B selection (flag ON) with no
+  // gateway — falls through to the B branch below, which fails closed
+  // (503/502, never an A0 fallback).
+  const gatewayOrigin = resolveTedGatewayOrigin(env);
+  const hasBPin = pin.pin === "b" || pin.pin === "invalid";
+  if (!gatewayOrigin && !hasBPin && target === "A0") {
+    return proxyLegacyA0(request, context, env);
+  }
+
+  // A19: the ceiling is PER ROUTE. The A13 binary upload carries real bytes
+  // (10/15 MB per the agent contract), so it gets the attachment budget;
+  // every other route keeps the small chat budget. The Worker applies the same
+  // split on its side — both hops must agree or a valid upload is rejected.
+  const maxBodyBytes = isAttachmentUploadPath(path) ? MAX_ATTACHMENT_BODY_BYTES : MAX_BODY_BYTES;
+  // The ceiling is enforced WHILE the body is read, not after buffering it: a
+  // missing or lying Content-Length used to let the whole body land in memory
+  // before the 413.
+  const bounded = await readBoundedBody(request, maxBodyBytes);
+  if ("response" in bounded) return bounded.response;
+  const body = bounded.body;
+
+  if (target === "B") {
+    // B-pinned (stays on B even with the flag OFF) or flag-ON P2 without a
+    // pin: the local gateway is the ONLY valid upstream. Missing/invalid
+    // gateway fails closed (503) — never a silent fallback to A0. Production
+    // never enables the loopback gateway. An unreachable gateway fails closed
+    // through the fetch catch below (502/504, no A0 fallback).
+    if (!gatewayOrigin) {
+      console.error("agent-proxy.opencode_runtime_unavailable");
+      return upstreamErrorResponse(503, "opencode_runtime_unavailable", "O assistente local não está disponível no momento. Tente novamente mais tarde.");
+    }
+    let upstream: Response;
+    try {
+      upstream = await fetch(upstreamUrl(gatewayOrigin, path, new URL(request.url).search), {
+        method: request.method,
+        headers: forwardBHeaders(request),
+        ...(body ? { body } : {}),
+        redirect: "manual",
+        signal: upstreamSignal(request),
+      });
+    } catch (cause) {
+      if (request.signal?.aborted) {
+        return upstreamErrorResponse(499, "request_cancelled", "A requisição foi cancelada.");
+      }
+      if (isTimeoutError(cause)) {
+        return upstreamErrorResponse(
+          504,
+          "upstream_timeout",
+          "O assistente não respondeu dentro do tempo limite. Tente novamente.",
+        );
+      }
+      return upstreamErrorResponse(
+        502,
+        "upstream_unavailable",
+        "O assistente está indisponível no momento. Tente novamente mais tarde.",
+      );
+    }
+
+    const headers = new Headers();
+    upstream.headers.forEach((value, name) => {
+      if (name !== "set-cookie" && !HOP_BY_HOP_HEADERS.has(name.toLowerCase())) headers.append(name, value);
+    });
+    for (const cookie of upstream.headers.getSetCookie?.() ?? []) headers.append("set-cookie", cookie);
+    headers.set("cache-control", "no-store");
+    headers.set("cdn-cache-control", "no-store");
+    // P2 — server-confirmed runtime for this conversation (non-secret). Set
+    // on every upstream-received P2 response, including gateway errors, so
+    // the first B history load reveals the runtime even when it errors.
+    headers.set("x-ted-runtime", "opencode");
+
+    return new NextResponse(upstream.body, { status: upstream.status, headers });
+  }
+
+  let agentOrigin: string;
+  try {
+    agentOrigin = resolveAgentOrigin(env);
+  } catch (err) {
+    console.error(`agent-proxy.misconfigured: ${(err as Error).message}`);
+    return upstreamErrorResponse(500, "upstream_misconfigured", "O assistente não está configurado. Tente novamente mais tarde.");
+  }
+  let upstream: Response;
+  try {
+    upstream = await fetch(upstreamUrl(agentOrigin, path, new URL(request.url).search), {
+      method: request.method,
+      headers: forwardHeaders(request, env),
+      ...(body ? { body } : {}),
+      redirect: "manual",
+      signal: upstreamSignal(request),
+    });
+  } catch (cause) {
+    if (request.signal?.aborted) {
+      return upstreamErrorResponse(499, "request_cancelled", "A requisição foi cancelada.");
+    }
+    if (isTimeoutError(cause)) {
+      return upstreamErrorResponse(
+        504,
+        "upstream_timeout",
+        "O assistente não respondeu dentro do tempo limite. Tente novamente.",
+      );
+    }
+    return upstreamErrorResponse(
+      502,
+      "upstream_unavailable",
+      "O assistente está indisponível no momento. Tente novamente mais tarde.",
+    );
+  }
+
+  const headers = new Headers();
+  upstream.headers.forEach((value, name) => {
+    if (name !== "set-cookie" && !HOP_BY_HOP_HEADERS.has(name.toLowerCase())) headers.append(name, value);
+  });
+  for (const cookie of upstream.headers.getSetCookie?.() ?? []) headers.append("set-cookie", cookie);
+  headers.set("cache-control", "no-store");
+  headers.set("cdn-cache-control", "no-store");
+  // P2 — first A0 contact pins the conversation to A0 (scoped, HttpOnly;
+  // `Secure` only for HTTPS). This branch only runs when the local gateway
+  // origin is configured (development/test), so production never sets local
+  // pin cookies. No runtimeSessionId ever crosses in body/headers.
+  if (pin.pin === "none" && !flagOn && workspaceId) {
+    headers.append("set-cookie", serializeTedRuntimeA0Pin(workspaceId, { secure: isHttpsRequest(request) }));
+  }
+  // P2 — server-confirmed runtime, P2 responses only (the frozen legacy path
+  // stays header-identical). Non-P2 operations never carry the seam.
+  if (isP2) {
+    headers.set("x-ted-runtime", "agent");
+  }
 
   return new NextResponse(upstream.body, { status: upstream.status, headers });
 }

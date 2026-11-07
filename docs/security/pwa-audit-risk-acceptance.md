@@ -20,6 +20,74 @@
 > `eslint-plugin-react` with effects `['eslint-config-next']` (first-run entry
 > covers `[]`). Each has a separate exact `pwa-2026-11-03-*-effects-*` entry;
 > no new advisory or risk family, and strict exact matching is unchanged.
+>
+> 2026-11-04 follow-up (CI run 41824366393, `Scoped audit`):
+> The run re-reported the already-accepted Lighthouse CI `rimraf` record with
+> a bounded range shape (`2.3.0 - 3.0.2 || 4.2.0 - 6.1.3`, via `[glob]`,
+> effects `[chrome-launcher]`). One exact `pwa-2026-11-04-rimraf` entry covers
+> only that shape (scope `build-time`, chain Lighthouse → `chrome-launcher` →
+> `rimraf` → `glob`); strict exact matching is unchanged and no audit
+> criterion was relaxed.
+>
+> 2026-11-04 follow-up (CI run 41876660420, `Scoped audit` job 126737770091,
+> PR #290 SHA `eb1010a`):
+> The run re-reported the already-accepted dev-only TypeScript-ESLint/minimatch
+> chain (`pwa-2026-11-03-minimatch`, GHSA-g3hv-75wg-m249) with two alternate
+> exact graph shapes — `@typescript-eslint/eslint-plugin` with effects
+> `['typescript-eslint']` (first-run entry covers `[]`) and
+> `@typescript-eslint/parser` with via
+> `['@typescript-eslint/typescript-estree','@typescript-eslint/type-utils','@typescript-eslint/utils','eslint']`
+> and effects `['@typescript-eslint/eslint-plugin']` (first-run entry covers
+> via `['@typescript-eslint/typescript-estree','eslint']` with effects
+> `['@typescript-eslint/eslint-plugin','typescript-eslint']`). Each has a
+> separate exact `pwa-2026-11-04-typescript-eslint-*-shape` entry (scope
+> `dev-only`, expires 2026-12-31); no new advisory or risk family. Both rows
+> report `fixAvailable: eslint-config-next@12.0.4 isSemVerMajor:true` — a
+> breaking major downgrade that is not applied and does not alter dependencies.
+> Strict exact matching is unchanged; the full audit is not claimed green until
+> rerun.
+>
+> 2026-11-04 follow-up (PWA CI run 41900996857, Scoped audit job 126823057023,
+> HEAD 0c9cbce):
+> The run reported ten exact graph shapes from the same already-accepted
+> families: seven dev-only records (@stryker-mutator/core,
+> @stryker-mutator/typescript-checker, @typescript-eslint/eslint-plugin,
+> @typescript-eslint/parser, @typescript-eslint/type-utils,
+> @typescript-eslint/utils, eslint-config-next) plus the build-time aggregate
+> glob row and the narrower minimatch row and the dev-only typescript-eslint
+> row. npm transitive graph/advisory metadata reshaped (narrower via/effects/range
+> windows, alternate aggregate via); this is a shape change, not a claim that any
+> advisory was fixed or remediated. Each shape has one separate exact
+> pwa-2026-11-04-* entry (scopes as recorded, all expire 2026-12-31); no generic
+> or pattern acceptance was added and strict exact matching is unchanged. No
+> breaking major upgrade/downgrade is applied by this acceptance. The full scoped
+> audit must be rerun; green is not claimed until that rerun passes.
+>
+> 2026-11-04 follow-up (PWA CI run 41906016268, Scoped audit job 126840755840,
+> HEAD 8a2e6e9):
+> The run accepted the ten exact shapes above and blocked exactly two
+> effects-only alternate shapes from the same dev-only TypeScript-ESLint /
+> minimatch family (GHSA-g3hv-75wg-m249): `@typescript-eslint/type-utils`
+> with effects `[]` (existing entry
+> `pwa-2026-11-04-typescript-eslint-type-utils-6160` covers effects
+> `['@typescript-eslint/eslint-plugin']`) and `@typescript-eslint/utils`
+> with effects `['@typescript-eslint/eslint-plugin','typescript-eslint']`
+> (existing entry `pwa-2026-11-04-typescript-eslint-utils-6160` covers
+> effects `['typescript-eslint']`); `via` and `range` are unchanged in both.
+> Each has one separate exact entry
+> (`pwa-2026-11-04-typescript-eslint-type-utils-effects-empty` and
+> `pwa-2026-11-04-typescript-eslint-utils-effects-eslint-plugin`, both
+> `dev-only`, both expire 2026-12-31). This approval does not remediate the
+> advisories and applies no downgrade; npm proposes only the breaking
+> `eslint-config-next@15.5.29` major downgrade, which is not applied. Strict
+> exact matching is unchanged; the full scoped audit must be rerun and green
+> is not claimed until that rerun passes.
+>
+> 2026-11-04 verification (PWA CI run 41909897170, `quality (22,10)`, SHA
+> `11a9169`): the full quality job passed, including `Scoped audit`, with the
+> exact 15 dated entries current for that npm graph. E2E also passed. This is a
+> time-bounded risk acceptance, not remediation; entries still expire
+> 2026-12-31 and must be re-reviewed before then.
 
 ## Runtime (2 shapes, 1 risk)
 
@@ -40,7 +108,7 @@
 | Package | Severity | Scope | Reason |
 |---|---|---|---|
 | `eslint`, `@eslint-community/eslint-utils`, `@eslint/config-array`, `@eslint/eslintrc`, `@next/eslint-plugin-next`, `eslint-config-next`, `eslint-plugin-import`, `eslint-plugin-jsx-a11y`, `eslint-plugin-react` | moderate | Dev lint only | Exact graph/range shape drift of the already-accepted ESLint chain (via the new `minimatch` advisory). Dev dependencies, never bundled into the PWA runtime; npm proposes only breaking majors (`eslint` 4.0.0, `eslint-config-next` 12.0.4). |
-| `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`, `@typescript-eslint/type-utils`, `@typescript-eslint/typescript-estree`, `@typescript-eslint/utils`, `typescript-eslint` | moderate | Dev lint only | Same drift, TypeScript-ESLint side of the chain (via `minimatch`/`eslint`). Dev-only, same non-remediation. |
+| `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`, `@typescript-eslint/type-utils`, `@typescript-eslint/typescript-estree`, `@typescript-eslint/utils`, `typescript-eslint` | moderate | Dev lint only | Same drift, TypeScript-ESLint side of the chain (via `minimatch`/`eslint`). Dev-only, same non-remediation. 2026-11-04: two alternate exact shapes accepted (`pwa-2026-11-04-typescript-eslint-eslint-plugin-shape`, `pwa-2026-11-04-typescript-eslint-parser-shape`); `eslint-config-next@12.0.4` fix is a breaking major downgrade, not applied. |
 | `@stryker-mutator/core`, `@stryker-mutator/typescript-checker`, `@stryker-mutator/vitest-runner` | moderate | Dev mutation-testing only | Same drift via `minimatch`; no fix available. Dev-only, never shipped. |
 
 ## Previously accepted Build-Time entries (8)
@@ -61,6 +129,36 @@
   without an exception.
 - Re-evaluate the remaining exact build-time exceptions if their dependency
   chains publish compatible remediations.
+- The 2026-11-04 `rimraf` drift keeps the same posture: investigating a
+  compatible remediation (upstream fix or separately validated override)
+  remains future work. The only npm-observed option — the breaking
+  `@lhci/cli` 0.3.3 major downgrade — is unverified for this toolchain and
+  was not applied; no automatic downgrade is authorized by this acceptance.
+
+### Future `rimraf` remediation experiment (not applied)
+
+The current upstream `@lhci/cli` 0.16.0 still declares
+`chrome-launcher: ^0.13.4`; `chrome-launcher` 0.13.4 depends on
+`rimraf: ^3.0.2`. The upstream `chrome-launcher` 0.14.0 release removed
+`rimraf` (and `mkdirp`); 0.15.2 remains CommonJS, while the 1.x line is
+ESM-only. A narrowly scoped override of the LHCI `chrome-launcher` branch to
+0.15.2 is therefore a candidate to remove this path without downgrading
+`@lhci/cli`, but compatibility is **not proven** and the override is not
+installed in this patch.
+
+Before replacing this risk acceptance, a separate branch must verify the
+resolved PWA graph (`pnpm why chrome-launcher rimraf glob`), run
+the Lighthouse collection/build path on Linux/Node 22/npm 10 and the existing
+supported local platforms with report output kept local (no public upload),
+check browser launch and cleanup/teardown for hangs or `EPERM`, and rerun the
+exact scoped audit with no new allowlist shape. If any check fails or the
+vulnerable `rimraf` node remains, keep this expiring build-time acceptance and
+do not apply the breaking `@lhci/cli` 0.3.3 downgrade.
+
+Sources: [@lhci/cli 0.16.0 manifest](https://registry.npmjs.org/@lhci/cli/0.16.0),
+[chrome-launcher 0.13.4 manifest](https://registry.npmjs.org/chrome-launcher/0.13.4),
+[chrome-launcher 0.15.2 manifest](https://registry.npmjs.org/chrome-launcher/0.15.2),
+[upstream chrome-launcher changelog](https://github.com/GoogleChrome/chrome-launcher/blob/main/changelog.md).
 
 ## Resolved in the current patch
 

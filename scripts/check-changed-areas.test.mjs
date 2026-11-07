@@ -21,6 +21,12 @@ test("agent diff runs architecture, capability and write-policy gates", () => {
   ]);
 });
 
+test("ted-runtime diff runs the agent gates", () => {
+  const areas = classifyFiles(["apps/ted-runtime/src/live-model.json"]);
+  assert.equal(areas.agent, true);
+  assert.equal(selectCommands(areas).includes("pnpm capabilities:check"), true);
+});
+
 test("workflow diff runs pin and YAML gates", () => {
   const areas = classifyFiles([".github/workflows/ci.yml"]);
   assert.equal(areas.workflows, true);

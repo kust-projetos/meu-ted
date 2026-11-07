@@ -1509,5 +1509,289 @@
       "eslint-config-next"
     ],
     "range": ">=7.23.0"
+  },
+  {
+    "id": "pwa-2026-11-04-rimraf",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (CI run 41824366393, Scoped audit): npm re-reported the already-accepted Lighthouse CI build-toolchain rimraf record with a bounded range shape (\"2.3.0 - 3.0.2 || 4.2.0 - 6.1.3\" instead of \"2.3.0 - 3.0.2 || >=4.2.0\"; via [glob], effects [chrome-launcher] unchanged). Chain is Lighthouse -> chrome-launcher -> rimraf -> glob, build-time toolchain only, never shipped to Cloudflare production; npm's only observed resolution is the breaking @lhci/cli 0.3.3 major downgrade. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "rimraf",
+    "severity": "moderate",
+    "via": [
+      "glob"
+    ],
+    "effects": [
+      "chrome-launcher"
+    ],
+    "range": "2.3.0 - 3.0.2 || 4.2.0 - 6.1.3"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-eslint-plugin-shape",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (CI run 41876660420, Scoped audit job 126737770091): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/eslint-plugin with an alternate exact graph shape (effects [typescript-eslint] instead of []; via [@typescript-eslint/parser, @typescript-eslint/type-utils, @typescript-eslint/utils, eslint] and range * unchanged). Same accepted dev-only ESLint/TypeScript-ESLint/Stryker chain risk via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; npm proposes only the breaking eslint-config-next 12.0.4 major downgrade, which is not applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/eslint-plugin",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/parser",
+      "@typescript-eslint/type-utils",
+      "@typescript-eslint/utils",
+      "eslint"
+    ],
+    "effects": [
+      "typescript-eslint"
+    ],
+    "range": "*"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-parser-shape",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (CI run 41876660420, Scoped audit job 126737770091): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/parser with an alternate exact graph shape (via [@typescript-eslint/typescript-estree, @typescript-eslint/type-utils, @typescript-eslint/utils, eslint] and effects [@typescript-eslint/eslint-plugin] instead of via [@typescript-eslint/typescript-estree, eslint] with effects [@typescript-eslint/eslint-plugin, typescript-eslint]; range * unchanged). Same accepted dev-only ESLint/TypeScript-ESLint/Stryker chain risk via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; npm proposes only the breaking eslint-config-next 12.0.4 major downgrade, which is not applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/parser",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/typescript-estree",
+      "@typescript-eslint/type-utils",
+      "@typescript-eslint/utils",
+      "eslint"
+    ],
+    "effects": [
+      "@typescript-eslint/eslint-plugin"
+    ],
+    "range": "*"
+  },
+  {
+    "id": "pwa-2026-11-04-stryker-mutator-core-642",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41900996857, Scoped audit job 126823057023): npm re-reported the already-accepted dev-only Stryker/minimatch chain record @stryker-mutator/core with exact graph shape (via [minimatch], effects [@stryker-mutator/typescript-checker, @stryker-mutator/vitest-runner], range >=6.4.2). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; npm proposes only the breaking @stryker-mutator/typescript-checker 7.0.0 major upgrade, which is not auto-applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@stryker-mutator/core",
+    "severity": "moderate",
+    "via": [
+      "minimatch"
+    ],
+    "effects": [
+      "@stryker-mutator/typescript-checker",
+      "@stryker-mutator/vitest-runner"
+    ],
+    "range": ">=6.4.2"
+  },
+  {
+    "id": "pwa-2026-11-04-stryker-mutator-typescript-checker-701",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41900996857, Scoped audit job 126823057023): npm re-reported the already-accepted dev-only Stryker/minimatch chain record @stryker-mutator/typescript-checker with exact graph shape (via [@stryker-mutator/core], effects [], range >=7.0.1). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; npm proposes only the breaking @stryker-mutator/typescript-checker 7.0.0 major upgrade, which is not auto-applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@stryker-mutator/typescript-checker",
+    "severity": "moderate",
+    "via": [
+      "@stryker-mutator/core"
+    ],
+    "effects": [],
+    "range": ">=7.0.1"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-eslint-plugin-6160",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41900996857, Scoped audit job 126823057023): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/eslint-plugin with exact graph shape (via [@typescript-eslint/parser, @typescript-eslint/type-utils, @typescript-eslint/utils], effects [], range >=6.16.0). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; no compatible non-breaking remediation is applied and no auto-major downgrade is authorized. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/eslint-plugin",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/parser",
+      "@typescript-eslint/type-utils",
+      "@typescript-eslint/utils"
+    ],
+    "effects": [],
+    "range": ">=6.16.0"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-parser-6160",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41900996857, Scoped audit job 126823057023): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/parser with exact graph shape (via [@typescript-eslint/typescript-estree], effects [@typescript-eslint/eslint-plugin, typescript-eslint], range >=6.16.0). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; npm proposes only the breaking eslint-config-next 15.5.29 major upgrade, which is not auto-applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/parser",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/typescript-estree"
+    ],
+    "effects": [
+      "@typescript-eslint/eslint-plugin",
+      "typescript-eslint"
+    ],
+    "range": ">=6.16.0"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-type-utils-6160",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41900996857, Scoped audit job 126823057023): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/type-utils with exact graph shape (via [@typescript-eslint/typescript-estree, @typescript-eslint/utils], effects [@typescript-eslint/eslint-plugin], range >=6.16.0). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; no compatible non-breaking remediation is applied and no auto-major upgrade is authorized. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/type-utils",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/typescript-estree",
+      "@typescript-eslint/utils"
+    ],
+    "effects": [
+      "@typescript-eslint/eslint-plugin"
+    ],
+    "range": ">=6.16.0"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-utils-6160",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41900996857, Scoped audit job 126823057023): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/utils with exact graph shape (via [@typescript-eslint/typescript-estree], effects [typescript-eslint], range >=6.16.0). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; npm proposes only the breaking eslint-config-next 15.5.29 major upgrade, which is not auto-applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/utils",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/typescript-estree"
+    ],
+    "effects": [
+      "typescript-eslint"
+    ],
+    "range": ">=6.16.0"
+  },
+  {
+    "id": "pwa-2026-11-04-eslint-config-next-1560-canary",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41900996857, Scoped audit job 126823057023): npm re-reported the already-accepted dev-only ESLint chain record eslint-config-next with exact graph shape (via [typescript-eslint], effects [], range >=15.6.0-canary.0). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; npm proposes only the breaking eslint-config-next 15.5.29 major upgrade, which is not auto-applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "eslint-config-next",
+    "severity": "moderate",
+    "via": [
+      "typescript-eslint"
+    ],
+    "effects": [],
+    "range": ">=15.6.0-canary.0"
+  },
+  {
+    "id": "pwa-2026-11-04-glob-900-1401",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41900996857, Scoped audit job 126823057023): npm re-reported the already-accepted build-time glob record with exact aggregate graph shape (via [GHSA-3g3m-2fjr-6pw4 glob advisory object (source 1244013, range >=9.0.0 <=14.0.1), minimatch (GHSA-g3hv-75wg-m249 chain)], effects [@node-minify/core, @opennextjs/cloudflare, @serwist/build, @serwist/next], range 9.0.0 - 14.0.1). Same existing build-time risk family as pwa-2026-11-03-glob and pwa-2026-11-03-minimatch; effects/range are narrower than the prior accepted glob row, not a fix or remediation. Build toolchain only, never shipped to Cloudflare production; npm proposes only the breaking @serwist/next 8.4.4 major upgrade, which is not auto-applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "glob",
+    "severity": "moderate",
+    "via": [
+      {
+        "source": 1244013,
+        "name": "glob",
+        "dependency": "glob",
+        "title": "Glob: AbortSignal cancellation bypass allows post-timeout filesystem traversal",
+        "url": "https://github.com/advisories/GHSA-3g3m-2fjr-6pw4",
+        "severity": "moderate",
+        "cwe": [
+          "CWE-400"
+        ],
+        "cvss": {
+          "score": 0,
+          "vectorString": null
+        },
+        "range": ">=9.0.0 <=14.0.1"
+      },
+      "minimatch"
+    ],
+    "effects": [
+      "@node-minify/core",
+      "@opennextjs/cloudflare",
+      "@serwist/build",
+      "@serwist/next"
+    ],
+    "range": "9.0.0 - 14.0.1"
+  },
+  {
+    "id": "pwa-2026-11-04-minimatch-700-1100",
+    "scope": "build-time",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41900996857, Scoped audit job 126823057023): npm re-reported the already-accepted build-time minimatch record with exact graph shape (via [minimatch advisory object GHSA-g3hv-75wg-m249 (source 1244623, range >=7.0.0 <11.0.1)], effects [@stryker-mutator/core, @typescript-eslint/typescript-estree, glob], range 7.0.0 - 11.0.0). Same existing build-time risk family as pwa-2026-11-03-minimatch (same GHSA-g3hv-75wg-m249); effects/range are narrower than the prior accepted minimatch row, not a fix or remediation. Build/dev toolchain only, never shipped to Cloudflare production; npm proposes only the breaking @stryker-mutator/typescript-checker 7.0.0 major upgrade, which is not auto-applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "minimatch",
+    "severity": "moderate",
+    "via": [
+      {
+        "source": 1244623,
+        "name": "minimatch",
+        "dependency": "minimatch",
+        "title": "minimatch has potential denial of service via globparts amplification",
+        "url": "https://github.com/advisories/GHSA-g3hv-75wg-m249",
+        "severity": "moderate",
+        "cwe": [
+          "CWE-405"
+        ],
+        "cvss": {
+          "score": 0,
+          "vectorString": null
+        },
+        "range": ">=7.0.0 <11.0.1"
+      }
+    ],
+    "effects": [
+      "@stryker-mutator/core",
+      "@typescript-eslint/typescript-estree",
+      "glob"
+    ],
+    "range": "7.0.0 - 11.0.0"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-star",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41900996857, Scoped audit job 126823057023): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record typescript-eslint with exact graph shape (via [@typescript-eslint/eslint-plugin, @typescript-eslint/parser, @typescript-eslint/typescript-estree, @typescript-eslint/utils], effects [eslint-config-next], range *). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; npm proposes only the breaking eslint-config-next 15.5.29 major upgrade, which is not auto-applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "typescript-eslint",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/eslint-plugin",
+      "@typescript-eslint/parser",
+      "@typescript-eslint/typescript-estree",
+      "@typescript-eslint/utils"
+    ],
+    "effects": [
+      "eslint-config-next"
+    ],
+    "range": "*"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-type-utils-effects-empty",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41906016268, Scoped audit job 126840755840, HEAD 8a2e6e9): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/type-utils with an effects-only alternate exact graph shape (effects [] instead of [@typescript-eslint/eslint-plugin]; via [@typescript-eslint/typescript-estree, @typescript-eslint/utils] and range >=6.16.0 unchanged). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; this acceptance does not remediate the advisory and no compatible non-breaking remediation is applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/type-utils",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/typescript-estree",
+      "@typescript-eslint/utils"
+    ],
+    "effects": [],
+    "range": ">=6.16.0"
+  },
+  {
+    "id": "pwa-2026-11-04-typescript-eslint-utils-effects-eslint-plugin",
+    "scope": "dev-only",
+    "owner": "project-maintainer",
+    "justification": "Advisory drift 2026-11-04 (PWA CI run 41906016268, Scoped audit job 126840755840, HEAD 8a2e6e9): npm re-reported the already-accepted dev-only TypeScript-ESLint/minimatch chain record @typescript-eslint/utils with an effects-only alternate exact graph shape (effects [@typescript-eslint/eslint-plugin, typescript-eslint] instead of [typescript-eslint]; via [@typescript-eslint/typescript-estree] and range >=6.16.0 unchanged). Same existing dev-only risk family via GHSA-g3hv-75wg-m249 (pwa-2026-11-03-minimatch); never bundled into the PWA runtime and never shipped to Cloudflare production; this acceptance does not remediate the advisory and npm proposes only the breaking eslint-config-next 15.5.29 major downgrade, which is not applied. Re-review 2026-12-31.",
+    "expiresOn": "2026-12-31",
+    "name": "@typescript-eslint/utils",
+    "severity": "moderate",
+    "via": [
+      "@typescript-eslint/typescript-estree"
+    ],
+    "effects": [
+      "@typescript-eslint/eslint-plugin",
+      "typescript-eslint"
+    ],
+    "range": ">=6.16.0"
   }
 ]
