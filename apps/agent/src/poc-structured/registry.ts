@@ -36,6 +36,7 @@ export const READ_OPERATION_NAMES = Object.freeze([
   'spending_insights',
   'list_cards',
   'list_statements',
+  'list_card_statements',
   'get_statement_details',
   'list_payables',
   'list_accounts_payable',
@@ -156,6 +157,8 @@ export const ARG_SPECS: Readonly<Record<string, ArgSpec>> = Object.freeze({
   expectedName: spec('string', true),
   transactionId: spec('string', true),
   expectedDescription: spec('string', true),
+  // P3.6: statement payment targets an invoice id (resolved by the reader).
+  statementId: spec('string', true),
   // P3.5: optional parcel count (1–48). The total stays in amountCents.
   installmentsTotal: spec('installment-count', true),
   targetReference: spec('string', false),
@@ -233,6 +236,9 @@ export const OPERATION_ARG_KEYS: Readonly<Record<string, ReadonlySet<string>>> =
     'toAccountId',
     'accountName',
   ),
+  // P3.6: statement payment carries the invoice, the payer and the exact
+  // amount paid now — no description/date sentinels.
+  'cards.statement.pay': argKeys('statementId', 'fromAccountId', 'amountCents'),
   'transactions.update': argKeys(
     'transactionId',
     'expectedDescription',

@@ -68,11 +68,18 @@ export type CardStore = {
     categoryId?: string;
   }): Promise<RecurringPurchase>;
 
-  /** Pay (total or partial) a credit card statement. */
+  /**
+   * Pay (total or partial) a credit card statement.
+   *
+   * With `options.idempotencyKey` the debit, the statement update, the card
+   * debt delta and the recorded key commit in ONE transaction: a retry /
+   * reconcile with the same key + same payload replays the original
+   * statement instead of paying twice; a divergent payload conflicts.
+   */
   payStatement(householdId: string, statementId: string, input: {
     amountCents: number;
     fromAccountId: string;
-  }): Promise<Statement>;
+  }, options?: { idempotencyKey?: string }): Promise<Statement>;
 
   /** Create a credit card account. */
   createCard(householdId: string, input: {

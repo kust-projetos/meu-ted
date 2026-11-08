@@ -30,6 +30,7 @@ export const APPROVAL_TOOL_IDS = [
   'transactions.expense.create',
   'transactions.income.create',
   'cards.purchase.create',
+  'cards.statement.pay',
   'transactions.transfer.create',
   'transactions.update',
   'accounts.create',
@@ -290,6 +291,66 @@ const executeCardPurchaseCreate: ApprovalToolExecutor = async ({
   return {
     status: 'succeeded' as const,
     operationId,
+    receipt,
+  };
+};
+
+/**
+ * P3.6 statement payment. The execution tuple is EXACT: the invoice id, the
+ * payer account id and the amount in cents. There is no `amountCents:
+ * "total"` sentinel — a total payment is proposed with the authoritative
+ * remaining amount resolved by the reader, never by the executor.
+ */
+export const payStatementArgsSchema = z
+  .object({
+    statementId: z.string().uuid(),
+    fromAccountId: z.string().uuid(),
+    amountCents: z.number().int().positive(),
+  })
+  .strict();
+
+export type PayStatementArgs = z.infer<typeof payStatementArgsSchema>;
+
+const executeCardStatementPay: ApprovalToolExecutor = async ({
+  cardStore,
+  workspaceId,
+  args,
+  idempotencyKey,
+}) => {
+  const parsed = payStatementArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_statement_payment_arguments');
+  const store = cardStore;
+  if (!store) throw new Error('validation.card_store_unavailable');
+  let statement: { id: string };
+  try {
+    // P3.6: the persisted Pending V2 key rides into the store. Debit,
+    // statement update, card debt delta and the key commit atomically; a
+    // reconcile re-run after a lost post-commit response replays the SAME
+    // statement instead of paying twice.
+    statement = await store.payStatement(
+      workspaceId,
+      parsed.data.statementId,
+      { amountCents: parsed.data.amountCents, fromAccountId: parsed.data.fromAccountId },
+      { idempotencyKey },
+    );
+  } catch (err) {
+    // DomainError is pre-commit validation (already paid, overpay, credit-card
+    // payer, unknown account/statement) with proven rollback — deterministic.
+    // Anything else may be post-write and stays uncertain for lease recovery.
+    const { DomainError } = await import('../writes/errors.js');
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  if (!statement || typeof statement.id !== 'string') throw createApprovalExecutionUncertainError();
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('cards.statement.pay', statement.id, { type: 'statement', id: statement.id });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId: statement.id,
     receipt,
   };
 };
@@ -682,6 +743,15 @@ const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
     authorizationPolicy: 'risk_based',
     autoExecutionEligible: false,
     executor: executeCardPurchaseCreate,
+  },
+  'cards.statement.pay': {
+    tool: 'cards.statement.pay',
+    inputSchema: payStatementArgsSchema,
+    approvalRequired: true,
+    authorizationPolicy: 'risk_based',
+    // Money movement is always human-confirmed; never auto-executed.
+    autoExecutionEligible: false,
+    executor: executeCardStatementPay,
   },
   'transactions.expense.create': {
     tool: 'transactions.expense.create',

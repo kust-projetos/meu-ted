@@ -175,7 +175,7 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
     const allowIdx = providerPolicies.findIndex((p) => p.resource === FIXTURE_PROVIDER && p.effect === 'allow');
     const denyIdx = providerPolicies.findIndex((p) => p.resource === '*' && p.effect === 'deny');
     assert.ok(allowIdx !== -1 && allowIdx > denyIdx, 'test-only provider allow comes after deny-all');
-    for (const resource of ['propose_card_purchase', 'propose_expense', 'propose_income', 'propose_transfer']) {
+    for (const resource of ['propose_card_purchase', 'propose_expense', 'propose_income', 'propose_transfer', 'propose_statement_payment']) {
       assert.ok(
         (cfg.agents.ted.permissions || []).some((p) => p.resource === resource && p.effect === 'allow'),
         `the P3 config allows exactly the ${resource} permission`,

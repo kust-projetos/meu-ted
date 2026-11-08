@@ -40,6 +40,8 @@ export type TestApp = {
   app: FastifyInstance;
   store: ReadModelStore;
   state: InMemoryState;
+  /** In-memory CardStore (P3.4/P3.6 test stacks seed statements directly). */
+  cardStore: ReturnType<typeof createInMemoryCardStore>;
 };
 
 const createTestTokenStore = (): DeviceTokenStore => {
@@ -320,7 +322,7 @@ export const buildTestApp = (
     ...(clock ? { clock } : {}),
   });
 
-  return { app, store, state };
+  return { app, store, state, cardStore };
 };
 
 export const TOKEN_A = "dev-token-1";

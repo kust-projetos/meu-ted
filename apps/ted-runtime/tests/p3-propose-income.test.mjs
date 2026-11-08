@@ -68,10 +68,12 @@ describe('p3 propose_income: catalog gating', () => {
     assert.deepEqual(names, [
       'get_month_summary',
       'list_accounts',
+      'list_card_statements',
       'list_categories',
       'propose_card_purchase',
       'propose_expense',
       'propose_income',
+      'propose_statement_payment',
       'propose_transfer',
     ]);
     const propose = productToolDefs(WRITE_ENV).find((d) => d.name === 'propose_income');
@@ -205,7 +207,7 @@ describe('p3 propose_income: plugin registration', () => {
     await writesDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedWrites.push(t) }); } } });
     assert.deepEqual(
       addedWrites.map((t) => t.name).sort(),
-      ['get_month_summary', 'list_accounts', 'list_categories', 'propose_card_purchase', 'propose_expense', 'propose_income', 'propose_transfer'],
+      ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'propose_card_purchase', 'propose_expense', 'propose_income', 'propose_statement_payment', 'propose_transfer'],
     );
   });
 

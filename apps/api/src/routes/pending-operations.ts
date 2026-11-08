@@ -53,7 +53,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
    * The display label for a `cards.purchase.create` card therefore resolves
    * from this store; absent it, the card stays fail-closed (no Confirm).
    */
-  cardStore?: Pick<import('../cards/store.js').CardStore, 'listCreditCardAccounts'>;
+  cardStore?: Pick<import('../cards/store.js').CardStore, 'listCreditCardAccounts' | 'getStatementDetail'>;
   approvalPolicy?: ApprovalPolicy;
 }): void => {
   // PR-1 (retire-pending-v1): the registration is unconditionally V2-only.
@@ -166,6 +166,10 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         return false;
       }
       const accountLabels = new Map(accounts.map((account) => [account.id, account.name]));
+      // P3.6: the payer must be a bank/cash account. The generic read model
+      // excludes credit cards, so this map is the authoritative payer label
+      // source — a card can never render as an actionable payer.
+      const payerAccountLabels = new Map(accounts.map((account) => [account.id, account.name]));
       const cardCycles = new Map<string, { closingDay: number; dueDay: number }>();
       // P3.4: a card purchase targets a credit-card account. The generic read
       // model excludes cards (they are served by the CardStore), so merge the
@@ -173,7 +177,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
       // the card fail-closed (the label stays absent → 409). P3.5 also keeps
       // the card's billing cycle so the first invoice of an installment
       // purchase is named by the server, not the PWA.
-      if (record.tool === 'cards.purchase.create' && opts.cardStore) {
+      if ((record.tool === 'cards.purchase.create' || record.tool === 'cards.statement.pay') && opts.cardStore) {
         try {
           const cards = await opts.cardStore.listCreditCardAccounts(ctx.householdId);
           for (const card of cards) {
@@ -188,6 +192,32 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
       }
       const categoryLabels = new Map(categories.map((category) => [category.id, category.name]));
       const storedArgs = (record.normalizedArgs ?? {}) as Record<string, unknown>;
+      // P3.6: statement payment presentation is derived from the
+      // authoritative statement (amounts/due date/status) plus the CARD and
+      // PAYER labels. Any missing piece keeps the card non-actionable.
+      let statementContext: Parameters<typeof buildPendingOperationPresentation>[0]['statementContext'];
+      if (record.tool === 'cards.statement.pay' && opts.cardStore) {
+        const statementId = typeof storedArgs.statementId === 'string' ? storedArgs.statementId : undefined;
+        if (statementId) {
+          try {
+            const detail = await opts.cardStore.getStatementDetail(ctx.householdId, statementId);
+            if (detail) {
+              statementContext = {
+                id: detail.id,
+                accountId: detail.accountId,
+                cycleYearMonth: detail.cycleYearMonth,
+                totalCents: detail.totalCents,
+                paidCents: detail.paidCents,
+                remainingCents: detail.totalCents - detail.paidCents,
+                dueDate: detail.dueDate,
+                status: detail.status,
+              };
+            }
+          } catch {
+            /* honest omission: no statement context → not actionable */
+          }
+        }
+      }
       const accountId = typeof storedArgs.accountId === 'string' ? storedArgs.accountId : undefined;
        const categoryId = typeof storedArgs.categoryId === 'string' ? storedArgs.categoryId : undefined;
        const categoryTarget = categoryId !== undefined ? categories.find((category) => category.id === categoryId) : undefined;
@@ -202,6 +232,11 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
        const transferToId = record.tool === 'transactions.transfer.create' && typeof storedArgs.toAccountId === 'string' ? storedArgs.toAccountId : undefined;
        const transferFromLabel = transferFromId !== undefined ? accountLabels.get(transferFromId) : undefined;
        const transferToLabel = transferToId !== undefined ? accountLabels.get(transferToId) : undefined;
+       // P3.6: the payer account is the `fromAccount` label; the CARD label
+       // comes from the statement's account (not from args).
+       const statementFromId = record.tool === 'cards.statement.pay' && typeof storedArgs.fromAccountId === 'string' ? storedArgs.fromAccountId : undefined;
+       const statementFromLabel = statementFromId !== undefined ? payerAccountLabels.get(statementFromId) : undefined;
+       const statementCardLabel = statementContext ? accountLabels.get(statementContext.accountId) : undefined;
        if (record.tool === 'transactions.update') {
          const transactionId = typeof storedArgs.transactionId === 'string' ? storedArgs.transactionId : '';
          const expectedDescription = typeof storedArgs.expectedDescription === 'string' ? storedArgs.expectedDescription : '';
@@ -234,6 +269,11 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
       if (transferToId !== undefined && transferToLabel === undefined) {
         labelWarnings.push('Dados da conta de destino indisponíveis no momento');
       }
+      if (record.tool === 'cards.statement.pay') {
+        if (statementContext === undefined) labelWarnings.push('Dados da fatura indisponíveis no momento');
+        if (statementCardLabel === undefined) labelWarnings.push('Dados do cartão indisponíveis no momento');
+        if (statementFromLabel === undefined) labelWarnings.push('Dados da conta pagadora indisponíveis no momento');
+      }
       const presentation = buildPendingOperationPresentation({
         id: record.id,
         status: record.status,
@@ -250,6 +290,11 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         ...(record.tool === 'cards.purchase.create' && accountId !== undefined && cardCycles.get(accountId)
           ? { cardCycle: cardCycles.get(accountId)! }
           : {}),
+        ...(statementContext !== undefined ? { statementContext } : {}),
+        // For the statement card, `accountLabel` is the CARD label and
+        // `fromAccountLabel` the payer label.
+        ...(record.tool === 'cards.statement.pay' && statementCardLabel !== undefined ? { accountLabel: statementCardLabel } : {}),
+        ...(record.tool === 'cards.statement.pay' && statementFromLabel !== undefined ? { fromAccountLabel: statementFromLabel } : {}),
         ...(labelWarnings.length > 0 ? { warnings: labelWarnings } : {}),
       });
       if (!presentation || !isActionablePendingOperationPresentation(presentation)) {
@@ -548,6 +593,74 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
             }
           }
         }
+        // P3.6 statement payment: replay-first, then a fail-fast gate against
+        // the CURRENT authoritative reads. The payer must be a bank/cash
+        // account of THIS workspace (the read model excludes cards) and the
+        // amount must not exceed the remaining balance. The executor re-checks
+        // both under the statement row lock — this gate only avoids persisting
+        // an obviously unexecutable proposal.
+        if (body.data.tool === 'cards.statement.pay') {
+          const draftHash = await computePendingOperationV2Hash({
+            tool: body.data.tool,
+            normalizedArgs: checked.data as PendingOperationV2['normalizedArgs'],
+            workspaceId: ctx.householdId,
+            actorId: ctx.actorId,
+            deviceId: ctx.deviceId,
+          });
+          const replay = await v2Store.findByIdempotencyKey(ctx.householdId, key);
+          if (replay) {
+            if (replay.proposalHash !== draftHash) {
+              return reply.code(409).send({ code: 'idempotency.conflict', message: 'Chave de idempotência já utilizada com proposta diferente.' });
+            }
+            const existingRecord = await v2Store.get(replay.id, identity(ctx));
+            return reply.code(200).send({ ...existingRecord, existing: true });
+          }
+          const replayAfterMutableError = async () => {
+            const winner = await v2Store.findByIdempotencyKey(ctx.householdId, key);
+            if (!winner) return null;
+            if (winner.proposalHash !== draftHash) {
+              return { status: 409 as const, body: { code: 'idempotency.conflict', message: 'Chave de idempotência já utilizada com proposta diferente.' } };
+            }
+            const winnerRecord = await v2Store.get(winner.id, identity(ctx));
+            return { status: 200 as const, body: { ...winnerRecord, existing: true } };
+          };
+          const payArgs = checked.data as { statementId: string; fromAccountId: string; amountCents: number };
+          if (opts.readModel) {
+            const accounts = await opts.readModel.listAccounts(ctx.householdId);
+            const payer = accounts.find((account) => account.id === payArgs.fromAccountId);
+            if (!payer) {
+              const late = await replayAfterMutableError();
+              if (late) return reply.code(late.status).send(late.body);
+              return reply.code(404).send({ code: 'not_found', message: 'Conta pagadora não encontrada.' });
+            }
+          }
+          if (opts.cardStore) {
+            let detail: import('../types/domain.js').StatementDetail | null;
+            try {
+              detail = await opts.cardStore.getStatementDetail(ctx.householdId, payArgs.statementId);
+            } catch {
+              const late = await replayAfterMutableError();
+              if (late) return reply.code(late.status).send(late.body);
+              return reply.code(503).send({ code: 'approval.presentation_unavailable', message: 'Dados da fatura indisponíveis no momento.' });
+            }
+            if (!detail) {
+              const late = await replayAfterMutableError();
+              if (late) return reply.code(late.status).send(late.body);
+              return reply.code(404).send({ code: 'not_found', message: 'Fatura não encontrada.' });
+            }
+            const remaining = detail.totalCents - detail.paidCents;
+            if (remaining <= 0) {
+              const late = await replayAfterMutableError();
+              if (late) return reply.code(late.status).send(late.body);
+              return reply.code(409).send({ code: 'card.statement_already_paid', message: 'A fatura já está paga.' });
+            }
+            if (payArgs.amountCents > remaining) {
+              const late = await replayAfterMutableError();
+              if (late) return reply.code(late.status).send(late.body);
+              return reply.code(422).send({ code: 'approval.invalid_args', message: 'O valor excede o restante da fatura.', details: [] });
+            }
+          }
+        }
         if (body.data.tool === 'categories.deactivate') {
           const draftHash = await computePendingOperationV2Hash({
             tool: body.data.tool,
@@ -633,6 +746,8 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         // authoritative read model. A lookup failure empties the maps —
         // the listing itself never fails for a display-only enrichment.
         const accountLabels = new Map<string, string>();
+        // P3.6: bank/cash-only payer labels (the read model excludes cards).
+        const payerAccountLabels = new Map<string, string>();
         const cardCycles = new Map<string, { closingDay: number; dueDay: number }>();
         const categoryLabels = new Map<string, string>();
         const categoryRows = new Map<string, { id: string; name: string; kind?: string; parentId?: string | null }>();
@@ -643,7 +758,10 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
               opts.readModel.listAccounts(ctx.householdId),
               opts.readModel.listCategories(ctx.householdId),
              ]);
-             for (const account of accounts) accountLabels.set(account.id, account.name);
+             for (const account of accounts) {
+               accountLabels.set(account.id, account.name);
+               payerAccountLabels.set(account.id, account.name);
+             }
              for (const category of categories) {
                categoryLabels.set(category.id, category.name);
                categoryRows.set(category.id, category);
@@ -658,10 +776,11 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
             } catch { /* no target context: description card remains degraded/non-actionable */ }
           }
         }
-        // P3.4: card purchases target a credit-card account, which the
+        // P3.4/P3.6: card operations target a credit-card account, which the
         // generic read model excludes. Merge the workspace's card labels so
         // the rehydrated card can show the CARD and stay actionable.
-        if (records.some((record) => record.tool === 'cards.purchase.create') && opts.cardStore) {
+        const statementRows = new Map<string, import('../types/domain.js').StatementDetail>();
+        if (records.some((record) => record.tool === 'cards.purchase.create' || record.tool === 'cards.statement.pay') && opts.cardStore) {
           try {
             const cards = await opts.cardStore.listCreditCardAccounts(ctx.householdId);
             for (const card of cards) {
@@ -672,6 +791,21 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
             }
           } catch {
             /* honest omission: no card label → degraded card */
+          }
+          // P3.6: load the authoritative statements referenced by pending
+          // payments, one per record. A lookup failure leaves the card
+          // degraded/non-actionable (no invented amounts).
+          for (const record of records) {
+            if (record.tool !== 'cards.statement.pay') continue;
+            const args = (record.normalizedArgs ?? {}) as Record<string, unknown>;
+            const statementId = typeof args.statementId === 'string' ? args.statementId : undefined;
+            if (!statementId) continue;
+            try {
+              const detail = await opts.cardStore.getStatementDetail(ctx.householdId, statementId);
+              if (detail) statementRows.set(detail.id, detail);
+            } catch {
+              /* honest omission */
+            }
           }
         }
         const items = records.map((record) => {
@@ -691,6 +825,23 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
           const transferToId = record.tool === 'transactions.transfer.create' && typeof args.toAccountId === 'string' ? args.toAccountId : undefined;
           const transferFromLabel = transferFromId !== undefined ? accountLabels.get(transferFromId) : undefined;
           const transferToLabel = transferToId !== undefined ? accountLabels.get(transferToId) : undefined;
+          const statementId = record.tool === 'cards.statement.pay' && typeof args.statementId === 'string' ? args.statementId : undefined;
+          const statement = statementId ? statementRows.get(statementId) : undefined;
+          const statementContext = statement
+            ? {
+                id: statement.id,
+                accountId: statement.accountId,
+                cycleYearMonth: statement.cycleYearMonth,
+                totalCents: statement.totalCents,
+                paidCents: statement.paidCents,
+                remainingCents: statement.totalCents - statement.paidCents,
+                dueDate: statement.dueDate,
+                status: statement.status,
+              }
+            : undefined;
+          const statementFromId = record.tool === 'cards.statement.pay' && typeof args.fromAccountId === 'string' ? args.fromAccountId : undefined;
+          const statementFromLabel = statementFromId !== undefined ? payerAccountLabels.get(statementFromId) : undefined;
+          const statementCardLabel = statement ? accountLabels.get(statement.accountId) : undefined;
           // V3-FIX-CARD-FAILCLOSED: label ids carried by the stored args but
           // missing from the read-model maps degrade honestly — the card
           // fails closed on these warnings instead of offering Confirm.
@@ -710,6 +861,11 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
           if (transferToId !== undefined && transferToLabel === undefined) {
             labelWarnings.push('Dados da conta de destino indisponíveis no momento');
           }
+          if (record.tool === 'cards.statement.pay') {
+            if (statementContext === undefined) labelWarnings.push('Dados da fatura indisponíveis no momento');
+            if (statementCardLabel === undefined) labelWarnings.push('Dados do cartão indisponíveis no momento');
+            if (statementFromLabel === undefined) labelWarnings.push('Dados da conta pagadora indisponíveis no momento');
+          }
           const presentation = buildPendingOperationPresentation({
             id: record.id,
             status: record.status,
@@ -726,6 +882,9 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
             ...(record.tool === 'cards.purchase.create' && accountId !== undefined && cardCycles.get(accountId)
               ? { cardCycle: cardCycles.get(accountId)! }
               : {}),
+            ...(statementContext !== undefined ? { statementContext } : {}),
+            ...(record.tool === 'cards.statement.pay' && statementCardLabel !== undefined ? { accountLabel: statementCardLabel } : {}),
+            ...(record.tool === 'cards.statement.pay' && statementFromLabel !== undefined ? { fromAccountLabel: statementFromLabel } : {}),
             ...(labelWarnings.length > 0 ? { warnings: labelWarnings } : {}),
           });
           return {
@@ -739,6 +898,8 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
             ...(typeof args.date === 'string' ? { date: args.date } : {}),
             ...(typeof args.accountId === 'string' ? { accountId: args.accountId } : {}),
             ...(typeof args.categoryId === 'string' ? { categoryId: args.categoryId } : {}),
+            ...(typeof args.statementId === 'string' ? { statementId: args.statementId } : {}),
+            ...(typeof args.fromAccountId === 'string' ? { fromAccountId: args.fromAccountId } : {}),
             ...(record.status === 'failed' && record.tool === 'categories.deactivate' && record.failureCode === 'in_use' ? { failureCode: 'in_use' } : {}),
             ...(presentation ? { presentation } : {}),
           };
@@ -846,7 +1007,8 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         const parsed = mutationReceiptSchema.safeParse(rawReceipt);
         const entity = parsed.success ? parsed.data.entity : undefined;
         const expectedEntityType = record.tool.startsWith('categories.') ? 'category'
-          : record.tool.startsWith('accounts.') ? 'account' : 'transaction';
+          : record.tool.startsWith('accounts.') ? 'account'
+            : record.tool === 'cards.statement.pay' ? 'statement' : 'transaction';
         let canonical: ReturnType<typeof buildTedReceipt> | undefined;
         if (parsed.success && entity && parsed.data.operationId === record.id && getApprovalToolContract(record.tool)) {
           try { canonical = buildTedReceipt(record.tool as ApprovalToolId, record.id, { type: expectedEntityType, id: entity.id }); } catch { /* malformed stored success remains unverified */ }
@@ -858,7 +1020,9 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
           ? args.categoryId
           : record.tool === 'accounts.deactivate' || record.tool === 'accounts.update'
             ? args.accountId
-            : undefined;
+            : record.tool === 'cards.statement.pay'
+              ? args.statementId
+              : undefined;
         const canonicalMatch = parsed.success && canonical && entity &&
           parsed.data.status === 'succeeded' &&
           typeof record.mutationId === 'string' && parsed.data.mutationId === record.mutationId &&

@@ -993,8 +993,18 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
       return withTransaction(pool, (client) => createRecurringPurchaseInTx(client, householdId, input));
     },
 
-    async payStatement(householdId, statementId, input) {
-      return withTransaction(pool, (client) => payStatementInTx(client, householdId, statementId, input));
+    async payStatement(householdId, statementId, input, options?) {
+      if (options?.idempotencyKey === undefined) {
+        return withTransaction(pool, (client) => payStatementInTx(client, householdId, statementId, input));
+      }
+      const { runKeyedCardStatementPayment } = await import('./card-purchase-idempotency.js');
+      return runKeyedCardStatementPayment({
+        pool,
+        householdId,
+        idempotencyKey: options.idempotencyKey,
+        payload: { statementId, ...input },
+        mutate: (client) => payStatementInTx(client, householdId, statementId, input),
+      });
     },
 
     async createCard(householdId, input) {

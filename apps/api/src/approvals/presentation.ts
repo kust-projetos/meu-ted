@@ -23,7 +23,9 @@ import { getClosingDate, getDueDate } from '../cards/billing.js';
 import { splitInstallmentAmounts } from '../cards/installments.js';
 
 export const derivePresentationTitle = (tool: string): string =>
-  tool === 'cards.purchase.create'
+  tool === 'cards.statement.pay'
+    ? 'Pagamento de fatura'
+    : tool === 'cards.purchase.create'
     ? 'Confirmar compra no cartão'
     : tool === 'transactions.transfer.create'
       ? 'Transferência'
@@ -53,6 +55,19 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const formatAmountBRL = (amountCents: number): string =>
   `R$ ${(amountCents / 100).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
 
+const MONTHS_PT = [
+  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
+] as const;
+
+const formatStatementPeriod = (cycleYearMonth: string): string => {
+  const match = /^(\d{4})-(\d{2})$/.exec(cycleYearMonth);
+  if (!match) return cycleYearMonth;
+  const month = Number(match[2]);
+  if (!Number.isInteger(month) || month < 1 || month > 12) return cycleYearMonth;
+  return `${MONTHS_PT[month - 1]}/${match[1]}`;
+};
+
 export const buildPendingOperationPresentation = (input: {
   id: string;
   status: string;
@@ -72,6 +87,21 @@ export const buildPendingOperationPresentation = (input: {
    * the PWA never computes it.
    */
   cardCycle?: { closingDay: number; dueDay: number };
+  /**
+   * Authoritative statement snapshot for `cards.statement.pay`. Resolved
+   * server-side from the CardStore; the PWA never recomputes the remaining
+   * balance. Absent/divergent ⇒ the card fails closed.
+   */
+  statementContext?: {
+    id: string;
+    accountId: string;
+    cycleYearMonth: string;
+    totalCents: number;
+    paidCents: number;
+    remainingCents: number;
+    dueDate: string;
+    status: string;
+  };
   warnings?: string[];
 }): PendingOperationPresentation | null => {
   const args = isRecord(input.normalizedArgs) ? input.normalizedArgs : null;
@@ -322,6 +352,47 @@ export const buildPendingOperationPresentation = (input: {
       warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
     };
     if (input.categoryLabel === expectedName) candidate.category = { id: categoryId, label: input.categoryLabel };
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    if (!parsed.success) return null;
+    return parsed.data as PendingOperationPresentation;
+  }
+  if (input.tool === 'cards.statement.pay') {
+    // P3.6 statement payment: the invoice + the CARD + the PAYER account are
+    // the context. The amount paid NOW is explicit (never a "total" sentinel)
+    // and must not exceed the authoritative remaining balance at presentation
+    // time; a stale card renders non-actionable instead of confirming into an
+    // overpay (the executor re-checks under the statement row lock).
+    const { statementId, fromAccountId, amountCents } = args as {
+      statementId?: unknown;
+      fromAccountId?: unknown;
+      amountCents?: unknown;
+    };
+    if (typeof statementId !== 'string' || !statementId) return null;
+    if (typeof fromAccountId !== 'string' || !fromAccountId) return null;
+    if (typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents <= 0) return null;
+    const statement = input.statementContext;
+    if (!statement || statement.id !== statementId) return null;
+    if (statement.remainingCents <= 0 || amountCents > statement.remainingCents) return null;
+    if (statement.paidCents + statement.remainingCents !== statement.totalCents) return null;
+    if (typeof input.accountLabel !== 'string' || !input.accountLabel) return null;
+    if (typeof input.fromAccountLabel !== 'string' || !input.fromAccountLabel) return null;
+    const candidate: Record<string, unknown> = {
+      id: input.id,
+      status: input.status,
+      tool: input.tool,
+      title: `Pagamento de fatura — ${formatAmountBRL(amountCents)}`,
+      amountCents,
+      statement: { id: statementId, label: formatStatementPeriod(statement.cycleYearMonth) },
+      statementTotalCents: statement.totalCents,
+      statementPaidCents: statement.paidCents,
+      statementRemainingCents: statement.remainingCents,
+      statementDueDate: statement.dueDate,
+      statementStatus: statement.status,
+      account: { id: statement.accountId, label: input.accountLabel },
+      fromAccount: { id: fromAccountId, label: input.fromAccountLabel },
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
     const parsed = pendingOperationPresentationSchema.safeParse(candidate);
     if (!parsed.success) return null;
     return parsed.data as PendingOperationPresentation;

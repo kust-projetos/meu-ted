@@ -362,7 +362,7 @@ try {
       fail("args", "stub is required for synthetic/offline modes");
     }
     STUB_MODE =
-      stub.mode === "expense" || stub.mode === "income" || stub.mode === "card" || stub.mode === "transfer"
+      stub.mode === "expense" || stub.mode === "income" || stub.mode === "card" || stub.mode === "transfer" || stub.mode === "statement"
       ? "proposal"
       : Array.isArray(stub.toolSequence) && stub.toolSequence.length > 0
         ? "sequence"
@@ -372,11 +372,12 @@ try {
         stub.toolName !== "propose_expense" &&
         stub.toolName !== "propose_income" &&
         stub.toolName !== "propose_card_purchase" &&
-        stub.toolName !== "propose_transfer"
+        stub.toolName !== "propose_transfer" &&
+        stub.toolName !== "propose_statement_payment"
       ) {
         fail(
           "args",
-          "proposal stub requires toolName propose_expense|propose_income|propose_card_purchase|propose_transfer",
+          "proposal stub requires toolName propose_expense|propose_income|propose_card_purchase|propose_transfer|propose_statement_payment",
         );
       }
       if (!stub.toolArgs || typeof stub.toolArgs !== "object" || Array.isArray(stub.toolArgs)) {
@@ -611,7 +612,9 @@ try {
                   ? "Proposta de compra no cartão preparada."
                 : stub.toolName === "propose_transfer"
                   ? "Proposta de transferência preparada."
-                  : "Proposta de despesa preparada.",
+                  : stub.toolName === "propose_statement_payment"
+                    ? "Proposta de pagamento de fatura preparada."
+                    : "Proposta de despesa preparada.",
               FIXTURE_MODEL,
             );
           }

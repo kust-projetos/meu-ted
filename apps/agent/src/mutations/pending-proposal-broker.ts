@@ -27,6 +27,7 @@ export const PROPOSE_EXPENSE_TOOL = 'transactions.expense.create';
 export const PROPOSE_INCOME_TOOL = 'transactions.income.create';
 export const PROPOSE_CARD_PURCHASE_TOOL = 'cards.purchase.create';
 export const PROPOSE_TRANSFER_TOOL = 'transactions.transfer.create';
+export const PROPOSE_STATEMENT_PAYMENT_TOOL = 'cards.statement.pay';
 
 const isoDate = z
   .string()
@@ -115,18 +116,42 @@ export const transferProposalIntentSchema = z
   })
   .strict();
 
+/**
+ * P3.6 statement payment — EXACT execution tuple. The invoice id and payer
+ * account id are resolved by the reader; `amountCents` is the amount paid
+ * NOW (a total payment carries the authoritative remaining balance). There
+ * is no "total" sentinel and no description/date to invent.
+ */
+export const statementPaymentProposalArgsSchema = z
+  .object({
+    statementId: z.string().uuid(),
+    fromAccountId: z.string().uuid(),
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+
+export const statementPaymentProposalIntentSchema = z
+  .object({
+    tool: z.literal(PROPOSE_STATEMENT_PAYMENT_TOOL),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: statementPaymentProposalArgsSchema,
+  })
+  .strict();
+
 /** Discriminated union: the broker route accepts these proposal tools. */
 export const proposalIntentSchema = z.discriminatedUnion('tool', [
   expenseProposalIntentSchema,
   incomeProposalIntentSchema,
   cardPurchaseProposalIntentSchema,
   transferProposalIntentSchema,
+  statementPaymentProposalIntentSchema,
 ]);
 
 export type ExpenseProposalIntent = z.infer<typeof expenseProposalIntentSchema>;
 export type IncomeProposalIntent = z.infer<typeof incomeProposalIntentSchema>;
 export type CardPurchaseProposalIntent = z.infer<typeof cardPurchaseProposalIntentSchema>;
 export type TransferProposalIntent = z.infer<typeof transferProposalIntentSchema>;
+export type StatementPaymentProposalIntent = z.infer<typeof statementPaymentProposalIntentSchema>;
 export type TransactionProposalIntent = z.infer<typeof proposalIntentSchema>;
 export type ProposalBrokerIdentity = {
   actorId: string;
@@ -143,6 +168,9 @@ function formatBRL(amountCents: number): string {
 
 function proposalSummary(intent: TransactionProposalIntent): string {
   const amount = formatBRL(intent.normalizedArgs.amountCents);
+  if (intent.tool === PROPOSE_STATEMENT_PAYMENT_TOOL) {
+    return `Pagamento de fatura de ${amount}`;
+  }
   if (intent.tool === PROPOSE_TRANSFER_TOOL) {
     return `Transferência de ${amount} em "${intent.normalizedArgs.description}"`;
   }

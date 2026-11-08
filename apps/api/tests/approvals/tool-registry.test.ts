@@ -25,11 +25,11 @@ import {
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
 import { createInMemoryStores } from '../../src/writes/in-memory.js';
 
-const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'transactions.transfer.create', 'cards.purchase.create', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate'] as const;
+const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'transactions.transfer.create', 'cards.purchase.create', 'cards.statement.pay', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate'] as const;
 
 // Manual-only tools: never auto-executed (absent from
 // AUTOEXECUTION_ELIGIBLE_TOOLS, contract pin autoExecutionEligible=false).
-const MANUAL_ONLY_TOOLS = ['transactions.transfer.create', 'cards.purchase.create', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate'] as const;
+const MANUAL_ONLY_TOOLS = ['transactions.transfer.create', 'cards.purchase.create', 'cards.statement.pay', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate'] as const;
 
 describe('T0.1: Approval Tool Contract registry', () => {
   it('registers exactly the V2 mutable tools in the closed registry', () => {
@@ -80,6 +80,21 @@ describe('T0.1: Approval Tool Contract registry', () => {
       writes,workspaceId:'ws',args:{transactionId:'00000000-0000-4000-8000-000000000001',description:'Novo',expectedDescription:'Atual'},idempotencyKey:'server-bound-key',actorId:'',
     })).rejects.toThrow('validation.invalid_actor');
     expect(writer).not.toHaveBeenCalled();
+  });
+
+  it('cards.statement.pay accepts exactly statement/payer/amount and is manual-only', () => {
+    const contract = requireApprovalToolContract('cards.statement.pay');
+    const valid = {
+      statementId: '00000000-0000-4000-8000-000000000001',
+      fromAccountId: '00000000-0000-4000-8000-000000000002',
+      amountCents: 85000,
+    };
+    expect(contract.inputSchema.safeParse(valid).success).toBe(true);
+    expect(contract.inputSchema.safeParse({ ...valid, unexpected: true }).success).toBe(false);
+    expect(contract.inputSchema.safeParse({ ...valid, amountCents: 0 }).success).toBe(false);
+    expect(contract.inputSchema.safeParse({ ...valid, amountCents: 'total' }).success).toBe(false);
+    expect(contract.inputSchema.safeParse({ statementId: valid.statementId, amountCents: 1 }).success).toBe(false);
+    expect(contract.autoExecutionEligible).toBe(false);
   });
 
   it('reuses the canonical zod schemas from writes/types.ts (no duplicated copies)', () => {

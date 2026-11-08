@@ -153,6 +153,8 @@ const OPERATION_TO_READ: Record<string, ReadKind> = {
   spending_insights: 'month-summary',
   list_cards: 'cards',
   list_statements: 'statements',
+  // P3.6 runtime read alias — same authoritative GET /cards/statements.
+  list_card_statements: 'statements',
   get_statement_details: 'statements',
   list_payables: 'payables',
   list_accounts_payable: 'payables',

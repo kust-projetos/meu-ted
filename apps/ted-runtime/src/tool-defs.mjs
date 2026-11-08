@@ -101,6 +101,25 @@ export const TOOL_DEFS = [
     output: { type: 'object', description: 'Real GET /categories body ({items, total}).' },
   },
   {
+    // P3.6 statement-payment prerequisite (opt-in only — see plugin.mjs
+    // isP3ReadsEnabled): the real GET /cards/statements route with an optional
+    // card filter. Read-only; the model resolves the card via list_accounts
+    // and the invoice id here — never invented.
+    name: 'list_card_statements',
+    description: 'TED read-only (P3 opt-in): credit-card statements via GET /cards/statements, optionally filtered by card.',
+    input: {
+      type: 'object',
+      properties: {
+        accountId: { type: 'string', description: 'Credit-card account uuid resolved from list_accounts (optional)' },
+        status: { type: 'string', enum: ['open', 'closed', 'paid', 'partial', 'overdue', 'cancelled'] },
+        limit: { type: 'integer', minimum: 1, maximum: 50 },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Real GET /cards/statements body ({items, total}).' },
+  },
+  {
     // P3 write slice (local opt-in only — see plugin.mjs isP3WritesEnabled).
     // This tool does NOT write and does NOT call the API: it records ONE
     // proposal intent (tool + normalizedArgs + stable intention) that the
@@ -189,6 +208,26 @@ export const TOOL_DEFS = [
     },
     output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
   },
+  {
+    // P3.6 statement payment — same intent-only contract. The invoice id and
+    // the payer account id come from the real reads; amountCents is the exact
+    // amount paid NOW (total = the authoritative remaining balance, resolved
+    // by the reader — never a "total" sentinel).
+    name: 'propose_statement_payment',
+    description:
+      'TED (P3 opt-in): propose a total or partial credit-card statement payment for the authenticated user to approve. Records a pending proposal only — never pays the invoice.',
+    input: {
+      type: 'object',
+      properties: {
+        statementId: { type: 'string', description: 'Statement uuid resolved from list_card_statements' },
+        fromAccountId: { type: 'string', description: 'Payer account uuid resolved from list_accounts (bank/cash, never credit_card)' },
+        amountCents: { type: 'integer', minimum: 1, description: 'Exact amount paid now in cents (BRL). For a total payment use the statement remaining balance.' },
+      },
+      required: ['statementId', 'fromAccountId', 'amountCents'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
 ];
 
 export const TOOL_NAMES = TOOL_DEFS.map((d) => d.name);
@@ -200,6 +239,7 @@ export const PROPOSAL_TOOL_SPECS = Object.freeze({
   propose_income: Object.freeze({ tool: 'transactions.income.create', noun: 'Receita' }),
   propose_card_purchase: Object.freeze({ tool: 'cards.purchase.create', noun: 'Compra no cartão' }),
   propose_transfer: Object.freeze({ tool: 'transactions.transfer.create', noun: 'Transferência' }),
+  propose_statement_payment: Object.freeze({ tool: 'cards.statement.pay', noun: 'Pagamento de fatura' }),
 });
 
 // Canonical uuid shape (any version) — the API revalidates against its real
@@ -221,6 +261,8 @@ const FORBIDDEN_KEYS = new Set([
 function knownKeys(name) {
   if (name === 'list_accounts') return ['kind', 'includeInactive'];
   if (name === 'list_categories') return ['kind'];
+  if (name === 'list_card_statements') return ['accountId', 'status', 'limit'];
+  if (name === 'propose_statement_payment') return ['statementId', 'fromAccountId', 'amountCents'];
   if (name === 'propose_transfer') return ['amountCents', 'description', 'date', 'fromAccountId', 'toAccountId'];
   if (name === 'propose_card_purchase') return ['amountCents', 'description', 'date', 'accountId', 'categoryId', 'installmentsTotal'];
   if (name === 'propose_expense' || name === 'propose_income') return ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
@@ -253,6 +295,26 @@ export function validateToolArgs(name, args) {
     // API handler — values pass through so a 400 comes from the real route.
     if (args.kind !== undefined && typeof args.kind !== 'string') {
       throw new ToolError('tool.invalid_args', 'list_categories: kind must be a string');
+    }
+  } else if (name === 'list_card_statements') {
+    if (args.accountId !== undefined && (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId))) {
+      throw new ToolError('tool.invalid_args', 'list_card_statements: accountId must be a uuid');
+    }
+    if (args.status !== undefined && typeof args.status !== 'string') {
+      throw new ToolError('tool.invalid_args', 'list_card_statements: status must be a string');
+    }
+    if (args.limit !== undefined && (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 50)) {
+      throw new ToolError('tool.invalid_args', 'list_card_statements: limit must be an integer between 1 and 50');
+    }
+  } else if (name === 'propose_statement_payment') {
+    if (typeof args.statementId !== 'string' || !UUID_RE.test(args.statementId)) {
+      throw new ToolError('tool.invalid_args', 'propose_statement_payment: statementId must be a uuid');
+    }
+    if (typeof args.fromAccountId !== 'string' || !UUID_RE.test(args.fromAccountId)) {
+      throw new ToolError('tool.invalid_args', 'propose_statement_payment: fromAccountId must be a uuid');
+    }
+    if (!Number.isSafeInteger(args.amountCents) || args.amountCents <= 0) {
+      throw new ToolError('tool.invalid_args', 'propose_statement_payment: amountCents must be a positive safe integer');
     }
   } else if (
     name === 'propose_expense' ||
@@ -350,6 +412,16 @@ function routeFor(name, args) {
     const qs = q.toString();
     return qs ? `/categories?${qs}` : '/categories';
   }
+  if (name === 'list_card_statements') {
+    // Exact existing API route (cards.ts GET /cards/statements) with the
+    // optional card/status/limit filters. No invented query.
+    const q = new URLSearchParams();
+    if (args.accountId) q.set('accountId', args.accountId);
+    if (args.status) q.set('status', args.status);
+    if (args.limit !== undefined) q.set('limit', String(args.limit));
+    const qs = q.toString();
+    return qs ? `/cards/statements?${qs}` : '/cards/statements';
+  }
   return `/dashboard/month-summary?yearMonth=${encodeURIComponent(args.yearMonth)}`;
 }
 
@@ -375,6 +447,25 @@ function assertShape(name, args, body) {
   if (name === 'list_accounts' || name === 'list_categories') {
     if (!Array.isArray(body.items)) fail('items must be an array');
     if (!isSafeInt(body.total) || body.total < 0) fail('total must be a non-negative safe integer');
+    return body;
+  }
+  if (name === 'list_card_statements') {
+    if (!Array.isArray(body.items)) fail('items must be an array');
+    if (!isSafeInt(body.total) || body.total < 0) fail('total must be a non-negative safe integer');
+    // The model must never receive a statement without the authoritative
+    // tuple it needs to propose (id/card/competence/total/paid/remaining/
+    // due/status). Shape drift fails closed instead of inventing values.
+    for (const item of body.items) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) fail('statement item must be an object');
+      if (typeof item.id !== 'string' || item.id.length === 0) fail('statement id must be a non-empty string');
+      if (typeof item.accountId !== 'string' || item.accountId.length === 0) fail('statement accountId must be a non-empty string');
+      if (typeof item.cycleYearMonth !== 'string' || !/^\d{4}-\d{2}$/.test(item.cycleYearMonth)) fail('statement cycleYearMonth must be YYYY-MM');
+      if (!isSafeInt(item.totalCents) || item.totalCents < 0) fail('statement totalCents must be a non-negative safe integer');
+      if (!isSafeInt(item.paidCents) || item.paidCents < 0) fail('statement paidCents must be a non-negative safe integer');
+      if (item.paidCents > item.totalCents) fail('statement paidCents cannot exceed totalCents');
+      if (typeof item.dueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(item.dueDate)) fail('statement dueDate must be YYYY-MM-DD');
+      if (typeof item.status !== 'string' || item.status.length === 0) fail('statement status must be a non-empty string');
+    }
     return body;
   }
   if (typeof body.yearMonth !== 'string' || body.yearMonth !== args.yearMonth) {
@@ -471,6 +562,24 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
       throw new ToolError('host_context_required', `${name}: host-bound session context is required — hostless execution is blocked by design`);
     }
     const safe = validateToolArgs(name, args);
+    if (name === 'propose_statement_payment') {
+      // Exact payment tuple: invoice + payer + amount paid NOW. No date or
+      // description is invented; the API revalidates the statement, the
+      // remaining balance and the payer account.
+      const normalizedArgs = {
+        statementId: safe.statementId,
+        fromAccountId: safe.fromAccountId,
+        amountCents: safe.amountCents,
+      };
+      const summary = `${spec.noun} de ${formatBRL(normalizedArgs.amountCents)}`;
+      proposalIntents.record(opts.sessionID, {
+        tool: spec.tool,
+        intentionId,
+        summary,
+        normalizedArgs,
+      });
+      return { status: 'proposed', summary };
+    }
     const date = safe.date ?? new Date().toISOString().slice(0, 10);
     const baseArgs = {
       amountCents: safe.amountCents,
@@ -500,9 +609,11 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
     list_accounts: (args, host, opts) => run('list_accounts', args, host, opts),
     get_month_summary: (args, host, opts) => run('get_month_summary', args, host, opts),
     list_categories: (args, host, opts) => run('list_categories', args, host, opts),
+    list_card_statements: (args, host, opts) => run('list_card_statements', args, host, opts),
     propose_expense: (args, host, opts) => propose('propose_expense', args, host, opts),
     propose_income: (args, host, opts) => propose('propose_income', args, host, opts),
     propose_card_purchase: (args, host, opts) => propose('propose_card_purchase', args, host, opts),
     propose_transfer: (args, host, opts) => propose('propose_transfer', args, host, opts),
+    propose_statement_payment: (args, host, opts) => propose('propose_statement_payment', args, host, opts),
   };
 }

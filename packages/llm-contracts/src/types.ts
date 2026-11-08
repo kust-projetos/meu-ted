@@ -388,6 +388,7 @@ export const TED_APPROVAL_TOOLS = [
   'categories.update',
   'categories.deactivate',
   'cards.purchase.create',
+  'cards.statement.pay',
 ] as const;
 export type TedApprovalTool = (typeof TED_APPROVAL_TOOLS)[number];
 
@@ -488,6 +489,20 @@ export interface PendingOperationPresentation {
   category?: PendingOperationPresentationLabel;
   /** Parent of an existing category target, when server-resolved from the catalog. */
   categoryParent?: PendingOperationPresentationLabel;
+  /**
+   * Statement-payment display fields (tool `cards.statement.pay` only).
+   * `statement` names the invoice being paid; `account` carries the CARD
+   * label and `fromAccount` the payer account label, both server-resolved.
+   * The amount fields come from the authoritative statement at presentation
+   * time — the PWA only renders them and never recomputes the remaining
+   * balance. `amountCents` is the amount paid NOW.
+   */
+  statement?: PendingOperationPresentationLabel;
+  statementTotalCents?: number;
+  statementPaidCents?: number;
+  statementRemainingCents?: number;
+  statementDueDate?: string;
+  statementStatus?: string;
   /**
    * Account-creation display fields (tool `accounts.create` only): the card
    * shows the account name/kind/initial balance instead of the
@@ -654,6 +669,26 @@ export const isActionablePendingOperationPresentation = (
     if (amounts.some((amount) => !Number.isInteger(amount) || amount < 0)) return false;
     return amounts.reduce((sum, amount) => sum + amount, 0) === presentation.amountCents;
   }
+  if (presentation.tool === 'cards.statement.pay') {
+    // Statement payment: the invoice (id + label), the CARD label and the
+    // PAYER account label are the executable context. The server-computed
+    // amounts must be coherent (paid + remaining = total) and the amount paid
+    // now must not exceed what remains — a stale card never offers Confirm.
+    if (!isPresentationLabel(presentation.statement)) return false;
+    if (!isPresentationLabel(presentation.account)) return false;
+    if (!isPresentationLabel(presentation.fromAccount)) return false;
+    if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents) || presentation.amountCents <= 0) return false;
+    const total = presentation.statementTotalCents;
+    const paid = presentation.statementPaidCents;
+    const remaining = presentation.statementRemainingCents;
+    if (typeof total !== 'number' || !Number.isInteger(total) || total < 0) return false;
+    if (typeof paid !== 'number' || !Number.isInteger(paid) || paid < 0) return false;
+    if (typeof remaining !== 'number' || !Number.isInteger(remaining) || remaining <= 0) return false;
+    if (paid + remaining !== total) return false;
+    if (presentation.amountCents > remaining) return false;
+    if (!isNonEmptyString(presentation.statementDueDate)) return false;
+    return true;
+  }
   if (presentation.tool === 'transactions.transfer.create') {
     // Internal transfer card: amount, date, description and BOTH
     // server-resolved account labels gate Confirm. No category is involved.
@@ -710,6 +745,10 @@ export const MUTATION_EFFECTS_REGISTRY: Record<MutationKind, MutationEffectsEntr
   'transactions.expense.create': { mutationKind: 'transactions.expense.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transactions.income.create': { mutationKind: 'transactions.income.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'cards.purchase.create': { mutationKind: 'cards.purchase.create', affectedTargets: ['transactions', 'accounts', 'statement', 'dashboard-summary', 'quick-insights'] },
+  // Statement payment moves the payer balance, reduces the card debt, updates
+  // the invoice and writes the liquidity expense row (the competence basis
+  // excludes it by statement_payment_id — the original purchases stay).
+  'cards.statement.pay': { mutationKind: 'cards.statement.pay', affectedTargets: ['transactions', 'accounts', 'statement', 'dashboard-summary', 'quick-insights'] },
   // Internal transfer: balances and the ledger move; budgets/quick-insights
   // (income/expense derived) are intentionally NOT refreshed — a transfer is
   // not revenue nor expense.
