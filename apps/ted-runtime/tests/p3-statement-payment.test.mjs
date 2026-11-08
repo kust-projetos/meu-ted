@@ -77,7 +77,7 @@ describe('p3.6 statement payment: catalog gating', () => {
 
   it('the reads opt-in exposes list_card_statements; the writes opt-in exposes both', () => {
     const reads = productToolDefs(READ_ENV).map((d) => d.name).sort();
-    assert.deepEqual(reads, ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories']);
+    assert.deepEqual(reads, ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards']);
     const writes = productToolDefs(WRITE_ENV).map((d) => d.name).sort();
     assert.ok(writes.includes('list_card_statements'));
     assert.ok(writes.includes('propose_statement_payment'));

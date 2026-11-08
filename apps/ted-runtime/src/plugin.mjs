@@ -38,6 +38,7 @@ export const PRODUCT_TOOL_NAMES = ['list_accounts', 'get_month_summary'];
 export const TED_FINANCE_PERMISSION_ACTION = 'ted.finance.read';
 export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
   'list_accounts',
+  'list_credit_cards',
   'get_month_summary',
   'list_categories',
   'propose_expense',
@@ -48,12 +49,11 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
   'propose_statement_payment',
 ]);
 
-// P3 prerequisite (read-only category lookup for a FUTURE expense proposal):
-// exposed ONLY as a local opt-in — TED_OPENCODE_P3_READS_ENABLED=1 with
-// NODE_ENV !== 'production'. Production forces it off (fail closed): a
-// production NODE_ENV never exposes the extra read, even with the flag set.
+// P3 prerequisite reads (opt-in only — TED_OPENCODE_P3_READS_ENABLED=1 with
+// NODE_ENV !== 'production'). Production forces it off (fail closed): a
+// production NODE_ENV never exposes the extra reads, even with the flag set.
 // The default product catalog is exactly PRODUCT_TOOL_NAMES (P2 behavior).
-export const P3_READ_TOOL_NAMES = ['list_categories', 'list_card_statements'];
+export const P3_READ_TOOL_NAMES = ['list_categories', 'list_card_statements', 'list_credit_cards'];
 
 // P3 write slice: `propose_expense`, `propose_income`, `propose_card_purchase`
 // and `propose_transfer` record a proposal intent only (P3.1–P3.4 share the

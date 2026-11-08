@@ -310,6 +310,7 @@ export function tedConfig(profileOrOpts, { p3Writes = false } = {}) {
           { action: 'ted.finance.read', resource: 'get_month_summary', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'list_categories', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'list_card_statements', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'list_credit_cards', effect: 'allow' },
           // P3 local write slice: these permissions are only meaningful when
           // the plugin registers the proposal tools
           // (TED_OPENCODE_P3_WRITES_ENABLED=1, never production). Default
