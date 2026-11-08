@@ -196,6 +196,52 @@ describe('p3 propose_card_purchase: intent only, never HTTP/write', () => {
   });
 });
 
+describe('p3.5 propose_card_purchase: installmentsTotal', () => {
+  it('accepts 1..48 and records the declared split in normalizedArgs', async () => {
+    assert.equal(validateToolArgs('propose_card_purchase', validArgs({ installmentsTotal: 1 })).installmentsTotal, 1);
+    assert.equal(validateToolArgs('propose_card_purchase', validArgs({ installmentsTotal: 48 })).installmentsTotal, 48);
+
+    const registry = createProposalIntentRegistry();
+    const executors = createToolExecutors(async () => { throw new Error('no'); }, { proposalIntents: registry });
+    await executors.propose_card_purchase(validArgs({ installmentsTotal: 6 }), host, {
+      sessionID: 'session-card-installments',
+      intentionId: 'int-card-installments',
+    });
+    const intent = registry.take('session-card-installments');
+    assert.equal(intent.tool, 'cards.purchase.create');
+    assert.equal(intent.normalizedArgs.installmentsTotal, 6);
+    assert.equal(intent.normalizedArgs.amountCents, 15000, 'amountCents stays the TOTAL');
+  });
+
+  it('omits installmentsTotal from a 1x intent (P3.4 payload stays byte-identical)', async () => {
+    const registry = createProposalIntentRegistry();
+    const executors = createToolExecutors(async () => { throw new Error('no'); }, { proposalIntents: registry });
+    await executors.propose_card_purchase(validArgs(), host, {
+      sessionID: 'session-card-no-installments',
+      intentionId: 'int-card-no-installments',
+    });
+    const intent = registry.take('session-card-no-installments');
+    assert.equal('installmentsTotal' in intent.normalizedArgs, false);
+  });
+
+  it('rejects a declared split outside 1..48 or non-integer (never silently 1x)', () => {
+    for (const installmentsTotal of [0, -1, 49, 1.5, '6', null]) {
+      assert.throws(
+        () => validateToolArgs('propose_card_purchase', validArgs({ installmentsTotal })),
+        /installmentsTotal must be an integer between 1 and 48/,
+        `installmentsTotal ${String(installmentsTotal)}`,
+      );
+    }
+  });
+
+  it('rejects a total that cannot cover at least 1 cent per parcel', () => {
+    assert.throws(
+      () => validateToolArgs('propose_card_purchase', validArgs({ amountCents: 2, installmentsTotal: 3 })),
+      /amountCents must cover at least 1 cent per installment/,
+    );
+  });
+});
+
 describe('p3 propose_card_purchase: plugin registration', () => {
   const allowSetup = {
     permission: { assert: async () => {} },

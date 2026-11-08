@@ -114,6 +114,12 @@ const pendingOperationPresentationSchema = z
     tool: z.string(),
     title: z.string(),
     amountCents: z.number().optional(),
+    // P3.5 installment preview: every value is SERVER-computed (the PWA only
+    // renders it), and amountCents stays the TOTAL of the purchase.
+    installmentsTotal: z.number().int().min(1).max(48).optional(),
+    installmentAmountsCents: z.array(z.number().int().min(0)).min(1).max(48).optional(),
+    firstStatementClosingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    firstStatementDueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     description: z.string().optional(),
     expectedDescription: z.string().min(1).max(240).optional(),
     transactionTargetId: z.string().min(1).max(128).optional(),
@@ -342,13 +348,20 @@ const proposalArgsSchema = z
 
 const cardPurchaseProposalArgsSchema = z
   .object({
+    /** TOTAL of the purchase — never a per-parcel amount. */
     amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     description: z.string().trim().min(1).max(240),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     accountId: z.string().uuid(),
     categoryId: z.string().uuid().optional(),
+    /** P3.5: optional parcel count (1–48). The API owns the split. */
+    installmentsTotal: z.number().int().min(1).max(48).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) => value.installmentsTotal === undefined || value.installmentsTotal <= value.amountCents,
+    { message: "amountCents must cover at least 1 cent per installment", path: ["installmentsTotal"] },
+  );
 
 const transferProposalArgsSchema = z
   .object({

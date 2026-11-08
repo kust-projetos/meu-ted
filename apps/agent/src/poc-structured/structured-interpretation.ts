@@ -322,6 +322,12 @@ const checkArgValue = (key: string, value: unknown): string | number | boolean |
       }
       return value;
     }
+    case 'installment-count': {
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 48) {
+        invalid('args-value-shape');
+      }
+      return value;
+    }
   }
 };
 

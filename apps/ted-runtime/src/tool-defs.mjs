@@ -151,15 +151,16 @@ export const TOOL_DEFS = [
     // Card identified via list_accounts (credit_card); categoryId optional.
     name: 'propose_card_purchase',
     description:
-      'TED (P3 opt-in): propose a 1x credit-card purchase for the authenticated user to approve. Records a pending proposal only — never creates the purchase.',
+      'TED (P3 opt-in): propose a credit-card purchase for the authenticated user to approve, either single (1x) or in installments. Records a pending proposal only — never creates the purchase.',
     input: {
       type: 'object',
       properties: {
-        amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
+        amountCents: { type: 'integer', minimum: 1, description: 'TOTAL purchase amount in cents (BRL), never a per-parcel amount' },
         description: { type: 'string', minLength: 1, maxLength: 240 },
         date: { type: 'string', description: 'Purchase date YYYY-MM-DD (defaults to today UTC)' },
         accountId: { type: 'string', description: 'Credit-card account uuid resolved from list_accounts (credit_card)' },
         categoryId: { type: 'string', description: 'Expense category uuid resolved from list_categories (optional)' },
+        installmentsTotal: { type: 'integer', minimum: 1, maximum: 48, description: 'Number of installments (1–48). Omit or 1 for a single purchase; amountCents stays the TOTAL.' },
       },
       required: ['amountCents', 'description', 'accountId'],
       additionalProperties: false,
@@ -221,7 +222,8 @@ function knownKeys(name) {
   if (name === 'list_accounts') return ['kind', 'includeInactive'];
   if (name === 'list_categories') return ['kind'];
   if (name === 'propose_transfer') return ['amountCents', 'description', 'date', 'fromAccountId', 'toAccountId'];
-  if (name === 'propose_expense' || name === 'propose_income' || name === 'propose_card_purchase') return ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
+  if (name === 'propose_card_purchase') return ['amountCents', 'description', 'date', 'accountId', 'categoryId', 'installmentsTotal'];
+  if (name === 'propose_expense' || name === 'propose_income') return ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
   return ['yearMonth'];
 }
 
@@ -294,6 +296,24 @@ export function validateToolArgs(name, args) {
       }
       if (args.categoryId !== undefined && (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId))) {
         throw new ToolError('tool.invalid_args', `${name}: categoryId must be a uuid`);
+      }
+      // P3.5: a declared split is 1–48. An invalid value fails closed here;
+      // it is never coerced into a single purchase.
+      if (
+        args.installmentsTotal !== undefined &&
+        (!Number.isInteger(args.installmentsTotal) || args.installmentsTotal < 1 || args.installmentsTotal > 48)
+      ) {
+        throw new ToolError('tool.invalid_args', `${name}: installmentsTotal must be an integer between 1 and 48`);
+      }
+      if (
+        typeof args.installmentsTotal === 'number' &&
+        args.installmentsTotal > 1 &&
+        args.amountCents < args.installmentsTotal
+      ) {
+        throw new ToolError(
+          'tool.invalid_args',
+          `${name}: amountCents must cover at least 1 cent per installment`,
+        );
       }
     } else {
       if (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId)) {
@@ -459,7 +479,14 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
     };
     const normalizedArgs = name === 'propose_transfer'
       ? { ...baseArgs, fromAccountId: safe.fromAccountId, toAccountId: safe.toAccountId }
-      : { ...baseArgs, accountId: safe.accountId, categoryId: safe.categoryId };
+      : {
+        ...baseArgs,
+        accountId: safe.accountId,
+        categoryId: safe.categoryId,
+        // P3.5: only travel when the model declared a split, so the 1x
+        // proposal payload stays byte-identical to P3.4.
+        ...(safe.installmentsTotal !== undefined ? { installmentsTotal: safe.installmentsTotal } : {}),
+      };
     const summary = `${spec.noun} de ${formatBRL(normalizedArgs.amountCents)} em "${normalizedArgs.description}"`;
     proposalIntents.record(opts.sessionID, {
       tool: spec.tool,

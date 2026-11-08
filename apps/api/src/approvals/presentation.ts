@@ -19,6 +19,8 @@ import {
   pendingOperationPresentationSchema,
   type PendingOperationPresentation,
 } from '@pi-finance/llm-contracts';
+import { getClosingDate, getDueDate } from '../cards/billing.js';
+import { splitInstallmentAmounts } from '../cards/installments.js';
 
 export const derivePresentationTitle = (tool: string): string =>
   tool === 'cards.purchase.create'
@@ -64,6 +66,12 @@ export const buildPendingOperationPresentation = (input: {
   categoryKind?: string;
   categoryParentLabel?: { id: string; name: string };
   transactionTarget?: { id:string; amountCents:number; date:string; accountId:string; accountName:string };
+  /**
+   * Card billing cycle, resolved server-side from the authoritative card
+   * account. Used only to name the first invoice of an installment purchase;
+   * the PWA never computes it.
+   */
+  cardCycle?: { closingDay: number; dueDay: number };
   warnings?: string[];
 }): PendingOperationPresentation | null => {
   const args = isRecord(input.normalizedArgs) ? input.normalizedArgs : null;
@@ -323,7 +331,7 @@ export const buildPendingOperationPresentation = (input: {
     // (`accountId`) and the category is OPTIONAL - an unclassified purchase
     // is still confirmable, so only the card label gates Confirm. The
     // actionable predicate below mirrors exactly that tuple.
-    const { amountCents, description, date, accountId, categoryId } = args;
+    const { amountCents, description, date, accountId, categoryId, installmentsTotal } = args;
     if (
       typeof amountCents !== 'number' ||
       typeof description !== 'string' ||
@@ -335,17 +343,46 @@ export const buildPendingOperationPresentation = (input: {
     ) {
       return null;
     }
+    // P3.5: an explicitly declared split must be a real parcel count. A
+    // malformed value is NOT silently treated as 1x — the card fails closed.
+    if (installmentsTotal !== undefined) {
+      if (
+        typeof installmentsTotal !== 'number' ||
+        !Number.isInteger(installmentsTotal) ||
+        installmentsTotal < 1 ||
+        installmentsTotal > 48
+      ) {
+        return null;
+      }
+    }
+    const installmentsCount = typeof installmentsTotal === 'number' ? installmentsTotal : 1;
+    const isInstallmentPurchase = installmentsCount > 1;
     const candidate: Record<string, unknown> = {
       id: input.id,
       status: input.status,
       tool: input.tool,
-      title: derivePresentationTitle(input.tool),
+      title: isInstallmentPurchase ? 'Confirmar compra parcelada' : derivePresentationTitle(input.tool),
       amountCents,
       description,
       date,
       expiresAt: input.expiresAt,
       warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
     };
+    if (isInstallmentPurchase) {
+      // Same financial rule the executor uses — the preview is never a second
+      // rounding implementation.
+      const amounts = splitInstallmentAmounts(amountCents, installmentsCount);
+      // A declared split must produce real parcels (>= 1 cent each); otherwise
+      // the card fails closed instead of previewing zero-cent rows.
+      if (amounts.some((amount) => amount <= 0)) return null;
+      candidate.installmentsTotal = installmentsCount;
+      candidate.installmentAmountsCents = amounts;
+      if (input.cardCycle) {
+        const closing = getClosingDate(date, input.cardCycle.closingDay);
+        candidate.firstStatementClosingDate = closing;
+        candidate.firstStatementDueDate = getDueDate(closing, input.cardCycle.dueDay);
+      }
+    }
     if (typeof input.accountLabel === 'string' && input.accountLabel) {
       candidate.account = { id: accountId, label: input.accountLabel };
     }

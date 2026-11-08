@@ -52,13 +52,20 @@ export const transactionProposalArgsSchema = z
 
 export const cardPurchaseProposalArgsSchema = z
   .object({
+    /** TOTAL of the purchase — never a per-parcel amount. */
     amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     description: z.string().trim().min(1).max(240),
     date: isoDate,
     accountId: z.string().uuid(),
     categoryId: z.string().uuid().optional(),
+    /** P3.5: optional parcel count (1–48). The API owns the split. */
+    installmentsTotal: z.number().int().min(1).max(48).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) => value.installmentsTotal === undefined || value.installmentsTotal <= value.amountCents,
+    { message: 'amountCents must cover at least 1 cent per installment', path: ['installmentsTotal'] },
+  );
 
 const intentBase = {
   intentionId: z.string().trim().min(1).max(128),
@@ -145,6 +152,11 @@ function proposalSummary(intent: TransactionProposalIntent): string {
       : intent.tool === PROPOSE_CARD_PURCHASE_TOOL
         ? 'Compra no cartão'
         : 'Despesa';
+  const installmentsTotal =
+    intent.tool === PROPOSE_CARD_PURCHASE_TOOL ? intent.normalizedArgs.installmentsTotal : undefined;
+  if (installmentsTotal !== undefined && installmentsTotal > 1) {
+    return `${noun} de ${amount} em ${installmentsTotal}x em "${intent.normalizedArgs.description}"`;
+  }
   return `${noun} de ${amount} em "${intent.normalizedArgs.description}"`;
 }
 

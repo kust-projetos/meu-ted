@@ -207,14 +207,27 @@ const executeIncomeCreate: ApprovalToolExecutor = async ({
 export const createCardPurchaseArgsSchema = z
   .object({
     accountId: z.string().uuid(),
+    /** TOTAL of the purchase — never a per-parcel amount. */
     amountCents: z.number().int().positive(),
     description: z.string().trim().min(1).max(240),
     date: isoDateSchema,
     categoryId: z.string().uuid().optional(),
     subcategoryId: z.string().uuid().optional(),
     notes: z.string().trim().max(500).optional(),
+    /**
+     * P3.5: optional parcel count (1–48). Absent or 1 keeps the exact P3.4
+     * single-purchase path. 2–48 goes through `createCardInstallments` and
+     * NEVER falls back to a silent 1x when the declared split cannot run.
+     */
+    installmentsTotal: z.number().int().min(1).max(48).optional(),
   })
-  .strict();
+  .strict()
+  // Every parcel must carry at least one cent: a total below the declared
+  // count would create zero-cent rows (and break replay snapshots).
+  .refine(
+    (value) => value.installmentsTotal === undefined || value.installmentsTotal <= value.amountCents,
+    { message: 'amountCents must cover at least 1 cent per installment', path: ['installmentsTotal'] },
+  );
 
 export type CreateCardPurchaseArgs = z.infer<typeof createCardPurchaseArgsSchema>;
 
@@ -231,17 +244,35 @@ const executeCardPurchaseCreate: ApprovalToolExecutor = async ({
   if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
   const store = cardStore;
   if (!store) throw new Error('validation.card_store_unavailable');
+  const metadata = {
+    ...(parsed.data.categoryId ? { categoryId: parsed.data.categoryId } : {}),
+    ...(parsed.data.subcategoryId ? { subcategoryId: parsed.data.subcategoryId } : {}),
+    ...(parsed.data.notes ? { notes: parsed.data.notes } : {}),
+  };
+  const keyOption = idempotencyKey !== undefined ? { idempotencyKey } : undefined;
+  const installmentsTotal = parsed.data.installmentsTotal;
   let transactions: { id: string }[];
   try {
-    transactions = await store.createCardPurchase(workspaceId, {
-      accountId: parsed.data.accountId,
-      amountCents: parsed.data.amountCents,
-      description: parsed.data.description,
-      date: parsed.data.date,
-      ...(parsed.data.categoryId ? { categoryId: parsed.data.categoryId } : {}),
-      ...(parsed.data.subcategoryId ? { subcategoryId: parsed.data.subcategoryId } : {}),
-      ...(parsed.data.notes ? { notes: parsed.data.notes } : {}),
-    }, idempotencyKey !== undefined ? { idempotencyKey } : undefined);
+    // P3.5: 2–48 parcels take the existing installment store path (one
+    // transaction for the whole set). A declared split never degrades into a
+    // silent single purchase: if this branch throws, the operation fails
+    // closed instead of writing 1x.
+    transactions = installmentsTotal !== undefined && installmentsTotal > 1
+      ? await store.createCardInstallments(workspaceId, {
+        accountId: parsed.data.accountId,
+        description: parsed.data.description,
+        totalAmountCents: parsed.data.amountCents,
+        purchaseDate: parsed.data.date,
+        installmentsTotal,
+        ...metadata,
+      }, keyOption)
+      : await store.createCardPurchase(workspaceId, {
+        accountId: parsed.data.accountId,
+        amountCents: parsed.data.amountCents,
+        description: parsed.data.description,
+        date: parsed.data.date,
+        ...metadata,
+      }, keyOption);
   } catch (err) {
     const { DomainError } = await import('../writes/errors.js');
     if (err instanceof DomainError) throw err;

@@ -166,14 +166,22 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         return false;
       }
       const accountLabels = new Map(accounts.map((account) => [account.id, account.name]));
+      const cardCycles = new Map<string, { closingDay: number; dueDay: number }>();
       // P3.4: a card purchase targets a credit-card account. The generic read
       // model excludes cards (they are served by the CardStore), so merge the
       // workspace's card labels before gating Confirm. A lookup failure keeps
-      // the card fail-closed (the label stays absent → 409).
+      // the card fail-closed (the label stays absent → 409). P3.5 also keeps
+      // the card's billing cycle so the first invoice of an installment
+      // purchase is named by the server, not the PWA.
       if (record.tool === 'cards.purchase.create' && opts.cardStore) {
         try {
           const cards = await opts.cardStore.listCreditCardAccounts(ctx.householdId);
-          for (const card of cards) accountLabels.set(card.id, card.name);
+          for (const card of cards) {
+            accountLabels.set(card.id, card.name);
+            if (typeof card.closingDay === 'number' && typeof card.dueDay === 'number') {
+              cardCycles.set(card.id, { closingDay: card.closingDay, dueDay: card.dueDay });
+            }
+          }
         } catch {
           /* honest omission: no card label → not actionable */
         }
@@ -239,6 +247,9 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
          ...(transactionTarget ? { transactionTarget } : {}),
          ...(record.tool === 'categories.deactivate' && categoryTarget?.kind ? { categoryKind: categoryTarget.kind } : {}),
          ...(record.tool === 'categories.deactivate' && categoryParent ? { categoryParentLabel: { id: categoryParent.id, name: categoryParent.name } } : {}),
+        ...(record.tool === 'cards.purchase.create' && accountId !== undefined && cardCycles.get(accountId)
+          ? { cardCycle: cardCycles.get(accountId)! }
+          : {}),
         ...(labelWarnings.length > 0 ? { warnings: labelWarnings } : {}),
       });
       if (!presentation || !isActionablePendingOperationPresentation(presentation)) {
@@ -622,6 +633,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         // authoritative read model. A lookup failure empties the maps —
         // the listing itself never fails for a display-only enrichment.
         const accountLabels = new Map<string, string>();
+        const cardCycles = new Map<string, { closingDay: number; dueDay: number }>();
         const categoryLabels = new Map<string, string>();
         const categoryRows = new Map<string, { id: string; name: string; kind?: string; parentId?: string | null }>();
         const transactionRows = new Map<string, import('../types/domain.js').Transaction>();
@@ -652,7 +664,12 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         if (records.some((record) => record.tool === 'cards.purchase.create') && opts.cardStore) {
           try {
             const cards = await opts.cardStore.listCreditCardAccounts(ctx.householdId);
-            for (const card of cards) accountLabels.set(card.id, card.name);
+            for (const card of cards) {
+              accountLabels.set(card.id, card.name);
+              if (typeof card.closingDay === 'number' && typeof card.dueDay === 'number') {
+                cardCycles.set(card.id, { closingDay: card.closingDay, dueDay: card.dueDay });
+              }
+            }
           } catch {
             /* honest omission: no card label → degraded card */
           }
@@ -706,6 +723,9 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
             ...(transactionContextMatches && transactionAccountName ? { transactionTarget:{id:transaction.id,amountCents:transaction.amountCents,date:transaction.date,accountId:transaction.accountId,accountName:transactionAccountName} } : {}),
             ...(record.tool === 'categories.deactivate' && categoryTarget?.kind ? { categoryKind: categoryTarget.kind } : {}),
             ...(record.tool === 'categories.deactivate' && categoryParent ? { categoryParentLabel: { id: categoryParent.id, name: categoryParent.name } } : {}),
+            ...(record.tool === 'cards.purchase.create' && accountId !== undefined && cardCycles.get(accountId)
+              ? { cardCycle: cardCycles.get(accountId)! }
+              : {}),
             ...(labelWarnings.length > 0 ? { warnings: labelWarnings } : {}),
           });
           return {

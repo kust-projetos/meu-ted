@@ -463,6 +463,17 @@ export interface PendingOperationPresentation {
   tool: string;
   title: string;
   amountCents?: number;
+  /**
+   * Credit-card purchase installment display fields (tool
+   * `cards.purchase.create` only). The API computes them with the SAME
+   * financial rule the executor uses (`splitInstallmentAmounts` +
+   * `installmentDates` over the card cycle); the PWA only renders them.
+   * `amountCents` is always the TOTAL of the purchase, never a parcel.
+   */
+  installmentsTotal?: number;
+  installmentAmountsCents?: number[];
+  firstStatementClosingDate?: string;
+  firstStatementDueDate?: string;
   description?: string;
   date?: string;
   account?: PendingOperationPresentationLabel;
@@ -620,13 +631,28 @@ export const isActionablePendingOperationPresentation = (
     // description + date are the executable tuple the user re-authorizes.
     // The category is OPTIONAL - an unclassified purchase is still
     // actionable, so it never gates Confirm.
-    return (
-      isNonEmptyString(presentation.description) &&
-      typeof presentation.amountCents === 'number' &&
-      Number.isFinite(presentation.amountCents) &&
-      isNonEmptyString(presentation.date) &&
-      isPresentationLabel(presentation.account)
-    );
+    if (
+      !isNonEmptyString(presentation.description) ||
+      typeof presentation.amountCents !== 'number' ||
+      !Number.isFinite(presentation.amountCents) ||
+      !isNonEmptyString(presentation.date) ||
+      !isPresentationLabel(presentation.account)
+    ) {
+      return false;
+    }
+    // P3.5 installments: a declared parcel count must be complete and
+    // self-consistent before the user may confirm it. The amounts are the
+    // server's exact split, so their sum must equal the TOTAL amount and the
+    // count must match — a preview that disagrees with what will execute is
+    // not actionable.
+    if (presentation.installmentsTotal === undefined) return true;
+    const total = presentation.installmentsTotal;
+    if (!Number.isInteger(total) || total < 1 || total > 48) return false;
+    if (total === 1) return true;
+    const amounts = presentation.installmentAmountsCents;
+    if (!Array.isArray(amounts) || amounts.length !== total) return false;
+    if (amounts.some((amount) => !Number.isInteger(amount) || amount < 0)) return false;
+    return amounts.reduce((sum, amount) => sum + amount, 0) === presentation.amountCents;
   }
   if (presentation.tool === 'transactions.transfer.create') {
     // Internal transfer card: amount, date, description and BOTH

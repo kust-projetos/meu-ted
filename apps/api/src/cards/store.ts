@@ -39,7 +39,13 @@ export type CardStore = {
     installmentsTotal?: number;
   }, options?: { idempotencyKey?: string }): Promise<import('../types/domain.js').Transaction[]>;
 
-  /** Register all installments of a purchase at once. */
+  /**
+   * Register all installments of a purchase at once (single transaction).
+   * `totalAmountCents` is always the TOTAL of the purchase; the store owns the
+   * exact split. With `options.idempotencyKey` the whole set is claimed under
+   * one key (P3.5): a retry/reconcile replays the same transactions, a
+   * different payload under the same key conflicts and writes nothing.
+   */
   createCardInstallments(householdId: string, input: {
     accountId: string;
     description: string;
@@ -49,7 +55,7 @@ export type CardStore = {
     categoryId?: string;
     subcategoryId?: string;
     notes?: string;
-  }): Promise<import('../types/domain.js').Transaction[]>;
+  }, options?: { idempotencyKey?: string }): Promise<import('../types/domain.js').Transaction[]>;
 
   /** Create a recurring purchase on a credit card. */
   createRecurringPurchase(householdId: string, input: {
