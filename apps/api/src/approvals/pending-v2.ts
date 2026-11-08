@@ -152,7 +152,7 @@ const withTedReceipt = (
   let canonical: { mutationId: string };
   try {
     canonical = buildTedReceipt(
-      tool as 'transactions.expense.create' | 'transactions.income.create' | 'transactions.update' | 'accounts.create' | 'accounts.deactivate' | 'accounts.update' | 'categories.create' | 'categories.update' | 'categories.deactivate',
+      tool as 'transactions.expense.create' | 'transactions.income.create' | 'transactions.transfer.create' | 'transactions.update' | 'accounts.create' | 'accounts.deactivate' | 'accounts.update' | 'categories.create' | 'categories.update' | 'categories.deactivate',
       pendingId,
       { type: entityType, id: entityId },
     );

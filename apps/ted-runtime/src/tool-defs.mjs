@@ -14,6 +14,8 @@
 // it never calls the API and the LLM can never confirm or execute. P3.2 adds
 // `propose_income` on the SAME intent-only contract (the API already accepts
 // `transactions.income.create`); the shared executor below keeps one code path.
+// P3.3 adds `propose_transfer` (internal transfer, from/to accounts, no
+// category) on that same intent-only contract.
 
 import { createHash } from 'node:crypto';
 
@@ -164,6 +166,28 @@ export const TOOL_DEFS = [
     },
     output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
   },
+  {
+    // P3.3 internal transfer — same intent-only contract. NO category: a
+    // transfer between the user's own accounts is neither income nor expense.
+    // Both ids are resolved from list_accounts; the API revalidates workspace
+    // scope, same-account and the credit-card restriction at propose/execute.
+    name: 'propose_transfer',
+    description:
+      'TED (P3 opt-in): propose an internal transfer between two of the user\'s accounts. Records a pending proposal only — never moves money.',
+    input: {
+      type: 'object',
+      properties: {
+        amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
+        description: { type: 'string', minLength: 1, maxLength: 240 },
+        date: { type: 'string', description: 'Transfer date YYYY-MM-DD (defaults to today UTC)' },
+        fromAccountId: { type: 'string', description: 'Source account uuid resolved from list_accounts' },
+        toAccountId: { type: 'string', description: 'Destination account uuid resolved from list_accounts' },
+      },
+      required: ['amountCents', 'description', 'fromAccountId', 'toAccountId'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
 ];
 
 export const TOOL_NAMES = TOOL_DEFS.map((d) => d.name);
@@ -174,6 +198,7 @@ export const PROPOSAL_TOOL_SPECS = Object.freeze({
   propose_expense: Object.freeze({ tool: 'transactions.expense.create', noun: 'Despesa' }),
   propose_income: Object.freeze({ tool: 'transactions.income.create', noun: 'Receita' }),
   propose_card_purchase: Object.freeze({ tool: 'cards.purchase.create', noun: 'Compra no cartão' }),
+  propose_transfer: Object.freeze({ tool: 'transactions.transfer.create', noun: 'Transferência' }),
 });
 
 // Canonical uuid shape (any version) — the API revalidates against its real
@@ -195,6 +220,7 @@ const FORBIDDEN_KEYS = new Set([
 function knownKeys(name) {
   if (name === 'list_accounts') return ['kind', 'includeInactive'];
   if (name === 'list_categories') return ['kind'];
+  if (name === 'propose_transfer') return ['amountCents', 'description', 'date', 'fromAccountId', 'toAccountId'];
   if (name === 'propose_expense' || name === 'propose_income' || name === 'propose_card_purchase') return ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
   return ['yearMonth'];
 }
@@ -226,11 +252,17 @@ export function validateToolArgs(name, args) {
     if (args.kind !== undefined && typeof args.kind !== 'string') {
       throw new ToolError('tool.invalid_args', 'list_categories: kind must be a string');
     }
-  } else if (name === 'propose_expense' || name === 'propose_income' || name === 'propose_card_purchase') {
+  } else if (
+    name === 'propose_expense' ||
+    name === 'propose_income' ||
+    name === 'propose_card_purchase' ||
+    name === 'propose_transfer'
+  ) {
     // Structural validation only (types/format). The API remains the authority
-    // for the transaction contract (expense and income share the same shape and
-    // are validated by their own schemas); these checks stop the model from
-    // recording an unusable intent (the API would reject it anyway).
+    // for the transaction contract (expense/income share the same shape;
+    // transfer uses from/to accounts and has NO category); these checks stop
+    // the model from recording an unusable intent (the API would reject it
+    // anyway).
     if (!Number.isSafeInteger(args.amountCents) || args.amountCents <= 0) {
       throw new ToolError('tool.invalid_args', `${name}: amountCents must be a positive safe integer`);
     }
@@ -246,14 +278,30 @@ export function validateToolArgs(name, args) {
         throw new ToolError('tool.invalid_args', `${name}: date must be YYYY-MM-DD`);
       }
     }
-    if (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId)) {
-      throw new ToolError('tool.invalid_args', `${name}: accountId must be a uuid`);
-    }
-    if (args.categoryId !== undefined && (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId))) {
-      throw new ToolError('tool.invalid_args', `${name}: categoryId must be a uuid`);
-    }
-    if (name !== 'propose_card_purchase' && (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId))) {
-      throw new ToolError('tool.invalid_args', `${name}: categoryId must be a uuid`);
+    if (name === 'propose_transfer') {
+      if (typeof args.fromAccountId !== 'string' || !UUID_RE.test(args.fromAccountId)) {
+        throw new ToolError('tool.invalid_args', `${name}: fromAccountId must be a uuid`);
+      }
+      if (typeof args.toAccountId !== 'string' || !UUID_RE.test(args.toAccountId)) {
+        throw new ToolError('tool.invalid_args', `${name}: toAccountId must be a uuid`);
+      }
+      if (args.fromAccountId === args.toAccountId) {
+        throw new ToolError('tool.invalid_args', `${name}: fromAccountId and toAccountId must differ`);
+      }
+    } else if (name === 'propose_card_purchase') {
+      if (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId)) {
+        throw new ToolError('tool.invalid_args', `${name}: accountId must be a uuid`);
+      }
+      if (args.categoryId !== undefined && (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId))) {
+        throw new ToolError('tool.invalid_args', `${name}: categoryId must be a uuid`);
+      }
+    } else {
+      if (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId)) {
+        throw new ToolError('tool.invalid_args', `${name}: accountId must be a uuid`);
+      }
+      if (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId)) {
+        throw new ToolError('tool.invalid_args', `${name}: categoryId must be a uuid`);
+      }
     }
   } else {
     if (args.kind !== undefined && typeof args.kind !== 'string') {
@@ -404,13 +452,14 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
     }
     const safe = validateToolArgs(name, args);
     const date = safe.date ?? new Date().toISOString().slice(0, 10);
-    const normalizedArgs = {
+    const baseArgs = {
       amountCents: safe.amountCents,
       description: safe.description.trim(),
       date,
-      accountId: safe.accountId,
-      categoryId: safe.categoryId,
     };
+    const normalizedArgs = name === 'propose_transfer'
+      ? { ...baseArgs, fromAccountId: safe.fromAccountId, toAccountId: safe.toAccountId }
+      : { ...baseArgs, accountId: safe.accountId, categoryId: safe.categoryId };
     const summary = `${spec.noun} de ${formatBRL(normalizedArgs.amountCents)} em "${normalizedArgs.description}"`;
     proposalIntents.record(opts.sessionID, {
       tool: spec.tool,
@@ -427,5 +476,6 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
     propose_expense: (args, host, opts) => propose('propose_expense', args, host, opts),
     propose_income: (args, host, opts) => propose('propose_income', args, host, opts),
     propose_card_purchase: (args, host, opts) => propose('propose_card_purchase', args, host, opts),
+    propose_transfer: (args, host, opts) => propose('propose_transfer', args, host, opts),
   };
 }

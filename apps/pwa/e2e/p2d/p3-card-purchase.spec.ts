@@ -78,7 +78,7 @@ async function openTed(page: import("@playwright/test").Page) {
   await expect(launcher).toBeVisible({ timeout: 120000 });
   await launcher.click();
   await page.waitForURL(/\/ted/);
-  const input = page.getByPlaceholder("Pergunte sobre gastos, metas ou pagamentos.");
+  const input = page.getByPlaceholder("Pergunte sobre gastos, metas ou pagamentos…");
   // First hit to /ted cold-compiles the route on the local Next dev server;
   // on a busy CI-class machine that can take several minutes. The timeout is
   // a compile budget, not a product assertion.
@@ -88,7 +88,7 @@ async function openTed(page: import("@playwright/test").Page) {
 }
 
 async function sendTed(page: import("@playwright/test").Page, text: string) {
-  const input = page.getByPlaceholder("Pergunte sobre gastos, metas ou pagamentos.");
+  const input = page.getByPlaceholder("Pergunte sobre gastos, metas ou pagamentos…");
   await expect(input).toBeVisible({ timeout: 300000 });
   await input.fill(text);
   const sendButton = page.getByRole("button", { name: /enviar mensagem/i });
@@ -162,14 +162,23 @@ test.describe("p3.4 card purchase slice (real browser, real Agent, Pending V2)",
     expect(afterProposal.stubTurns).toBe(2); // tool_call + final text
     expect(afterProposal.stubMismatches).toEqual([]);
 
-    // 4. The card shows the CARD, the VALUE, the DESCRIPTION and 1x.
-    await expect(page.getByText("Confirmar compra no cartão")).toBeVisible({ timeout: 60000 });
-    await expect(page.getByText("supermercado")).toBeVisible({ timeout: 60000 });
-    await expect(page.getByText("Nubank Card")).toBeVisible({ timeout: 60000 });
-    await expect(page.getByText("R$ 150,00")).toBeVisible({ timeout: 60000 });
-    await expect(page.getByText("Cartão")).toBeVisible({ timeout: 60000 });
-    await expect(page.getByText("Parcela")).toBeVisible({ timeout: 60000 });
-    await expect(page.getByText("1x")).toBeVisible({ timeout: 60000 });
+    // 4. The card shows the CARD, the VALUE, the DESCRIPTION and 1x. Scope to
+    // the approval card: the user's own message also contains "supermercado"
+    // and "cartão Nubank".
+    // The wrapper testid flips between `ted-approval-item` and
+    // `ted-approval-focused` while the newest proposal is focused; the stable
+    // anchor is the `ted-op-<id>` wrapper itself.
+    const approvalCard = page
+      .locator('div[id^="ted-op-"]')
+      .filter({ hasText: "Confirmar compra no cartão" })
+      .first();
+    await expect(approvalCard.getByText("Confirmar compra no cartão")).toBeVisible({ timeout: 60000 });
+    await expect(approvalCard.getByText("supermercado", { exact: true })).toBeVisible({ timeout: 60000 });
+    await expect(approvalCard.getByText("Nubank Card", { exact: true })).toBeVisible({ timeout: 60000 });
+    await expect(approvalCard.getByText("R$ 150,00", { exact: true })).toBeVisible({ timeout: 60000 });
+    await expect(approvalCard.getByText("Cartão", { exact: true })).toBeVisible({ timeout: 60000 });
+    await expect(approvalCard.getByText("Parcela", { exact: true })).toBeVisible({ timeout: 60000 });
+    await expect(approvalCard.getByText("1x", { exact: true })).toBeVisible({ timeout: 60000 });
 
     // 5. Confirm → real Agent decision → API confirm+execute → ONE purchase
     // and the canonical receipt.
@@ -218,14 +227,21 @@ test.describe("p3.4 card purchase slice (real browser, real Agent, Pending V2)",
         headers: { "X-Workspace-Id": workspaceId },
       });
       return { status: response.status, body: (await response.json().catch(() => null)) as
-        | { purchases?: Array<{ id?: string }> }
+        | { purchases?: Array<{ id?: string; description?: string; amountCents?: number }> }
         | null };
     }, { statementId: statement!.id!, workspaceId: WORKSPACE_ID });
     expect(detail.status).toBe(200);
-    expect(detail.body?.purchases?.some((p) => p.id === launched.id)).toBe(true);
+    // The statement projection exposes the card-purchase row (its own id);
+    // the receipt entity id proves the same purchase at the ledger level.
+    expect(
+      detail.body?.purchases?.some(
+        (p: { id?: string; description?: string; amountCents?: number }) =>
+          p.description === "supermercado" && p.amountCents === 15000,
+      ),
+    ).toBe(true);
 
     // 7. Rejection: a second proposal is cancelled. Zero extra purchases.
-    await expect(page.getByPlaceholder("Pergunte sobre gastos, metas ou pagamentos.")).toBeVisible({
+    await expect(page.getByPlaceholder("Pergunte sobre gastos, metas ou pagamentos…")).toBeVisible({
       timeout: 60000,
     });
     await sendTed(page, USER_TEXT);
@@ -255,7 +271,7 @@ test.describe("p3.4 card purchase slice (real browser, real Agent, Pending V2)",
     await expect(thirdConfirm).toBeVisible({ timeout: 300000 });
     const promptsBeforeReload = (await ctlStats()).promptCalls;
     await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByPlaceholder("Pergunte sobre gastos, metas ou pagamentos.")).toBeVisible({
+    await expect(page.getByPlaceholder("Pergunte sobre gastos, metas ou pagamentos…")).toBeVisible({
       timeout: 300000,
     });
     const recoveredConfirm = page.getByRole("button", { name: CONFIRM_LABEL });

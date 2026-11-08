@@ -188,7 +188,7 @@ describe('authoritative pending operation V2', () => {
       .rejects.toMatchObject({ code: 'approval.invalid_args' });
     await expect(store.propose(await proposal({ idempotencyKey: 'idem-legacy', normalizedArgs: { description: 'x', amountCents: 1, date: '2026-09-14', accountId: randomUUID(), categoryQuery: 'food' } })))
       .rejects.toMatchObject({ code: 'approval.invalid_args' });
-    await expect(store.propose(await proposal({ idempotencyKey: 'idem-unknown', tool: 'transactions.transfer.create' })))
+    await expect(store.propose(await proposal({ idempotencyKey: 'idem-unknown', tool: 'transactions.unknown.create' })))
       .rejects.toMatchObject({ code: 'tool.not_allowed' });
     expect(store.audit.length).toBe(before);
   });

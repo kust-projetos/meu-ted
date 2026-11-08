@@ -20,18 +20,19 @@ import {
   createAccountInputSchema,
   createExpenseInputSchema,
   createIncomeInputSchema,
+  createTransferInputSchema,
 } from '../../src/writes/types.js';
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
 import { createInMemoryStores } from '../../src/writes/in-memory.js';
 
-const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'cards.purchase.create'] as const;
+const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'transactions.transfer.create', 'cards.purchase.create', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate'] as const;
 
 // Manual-only tools: never auto-executed (absent from
 // AUTOEXECUTION_ELIGIBLE_TOOLS, contract pin autoExecutionEligible=false).
-const MANUAL_ONLY_TOOLS = ['transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'cards.purchase.create'] as const;
+const MANUAL_ONLY_TOOLS = ['transactions.transfer.create', 'cards.purchase.create', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate'] as const;
 
 describe('T0.1: Approval Tool Contract registry', () => {
-  it('registers exactly the six V2 mutable tools', () => {
+  it('registers exactly the V2 mutable tools in the closed registry', () => {
     expect([...APPROVAL_TOOL_IDS].sort()).toEqual([...EXPECTED_TOOLS].sort());
     for (const tool of EXPECTED_TOOLS) {
       expect(getApprovalToolContract(tool)).toBeDefined();
@@ -107,13 +108,13 @@ describe('T0.1: Approval Tool Contract registry', () => {
   });
 
   it('unknown/unregistered mutable tool lookup resolves to undefined', () => {
-    expect(getApprovalToolContract('transactions.transfer.create')).toBeUndefined();
+    expect(getApprovalToolContract('transactions.unknown.create')).toBeUndefined();
     expect(getApprovalToolContract('whatever.else')).toBeUndefined();
   });
 
   it('unknown/unregistered mutable tool is rejected with code tool.not_allowed', () => {
     try {
-      requireApprovalToolContract('transactions.transfer.create');
+      requireApprovalToolContract('transactions.unknown.create');
       expect.unreachable('should have thrown tool.not_allowed');
     } catch (error) {
       expect((error as Error).message).toBe('tool.not_allowed');
@@ -122,7 +123,7 @@ describe('T0.1: Approval Tool Contract registry', () => {
   });
 
   it('validateApprovalToolArgs rejects unknown tools with tool.not_allowed', () => {
-    const result = validateApprovalToolArgs('transactions.transfer.create', {});
+    const result = validateApprovalToolArgs('transactions.unknown.create', {});
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.code).toBe('tool.not_allowed');
@@ -174,11 +175,11 @@ describe('T0.1: Approval Tool Contract registry', () => {
       bindings: { workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-1' },
     };
     await expect(
-      executor({ ...base, tool: 'transactions.transfer.create' }),
+      executor({ ...base, tool: 'transactions.unknown.create' }),
     ).rejects.toMatchObject({ message: 'tool.not_allowed' });
   });
 
-  it('the V2 executor still executes both registered tools end to end', async () => {
+  it('the V2 executor still executes the registered transaction tools end to end', async () => {
     const { state, writes } = createInMemoryStores();
     const acc = await writes.createAccount('ws-1', { name: 'A', kind: 'bank', initialBalanceCents: 10_000 });
     const catExp = await writes.createCategory('ws-1', { name: 'Food', kind: 'expense' });
@@ -243,5 +244,63 @@ describe('T0.1: Approval Tool Contract registry', () => {
     expect(result.operationId).toBe('00000000-0000-4000-8000-000000000001');
     expect(result.receipt).toMatchObject({ mutationKind: 'categories.deactivate', operationId: result.operationId, entity: { type: 'category', id: result.operationId } });
     expect(state.categories[0]?.status).toBe('inactive');
+  });
+
+  it('transactions.transfer.create is manual-only, reuses the canonical schema and executes ONE atomic transfer', async () => {
+    const contract = requireApprovalToolContract('transactions.transfer.create');
+    expect(contract.inputSchema).toBe(createTransferInputSchema);
+    expect(contract.autoExecutionEligible).toBe(false);
+
+    const { state, writes } = createInMemoryStores();
+    const from = await writes.createAccount('ws-1', { name: 'Itaú', kind: 'bank', initialBalanceCents: 100_000 });
+    const to = await writes.createAccount('ws-1', { name: 'Nubank', kind: 'bank', initialBalanceCents: 50_000 });
+    const executor = createPendingOperationV2Executor(writes);
+    const base = {
+      version: 2 as const,
+      workspaceId: 'ws-1',
+      actorId: 'actor-1',
+      deviceId: 'device-1',
+      proposalHash: 'h',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      bindings: { workspaceId: 'ws-1', actorId: 'actor-1', deviceId: 'device-1' },
+    };
+    const args = {
+      description: 'Transferência Itaú → Nubank',
+      amountCents: 30_000,
+      date: '2026-11-07',
+      fromAccountId: from.id,
+      toAccountId: to.id,
+    };
+    const first = (await executor({
+      ...base,
+      tool: 'transactions.transfer.create',
+      normalizedArgs: args,
+      idempotencyKey: 'k-transfer',
+    })) as { status: string; operationId: string; receipt: { mutationKind: string; operationId: string; entity: { type: string; id: string } } };
+    expect(first.status).toBe('succeeded');
+    expect(first.receipt).toMatchObject({
+      mutationKind: 'transactions.transfer.create',
+      operationId: first.operationId,
+      entity: { type: 'transaction', id: first.operationId },
+    });
+    // ONE transfer row, never an expense+income pair, and both legs moved.
+    expect(state.transactions).toHaveLength(1);
+    expect(state.transactions[0]).toMatchObject({ kind: 'transfer', transferToAccountId: to.id });
+    expect(state.accounts.find((a) => a.id === from.id)?.balanceCents).toBe(70_000);
+    expect(state.accounts.find((a) => a.id === to.id)?.balanceCents).toBe(80_000);
+
+    // A replay with the same key + payload returns the SAME transfer and never
+    // moves money again.
+    const replay = (await executor({
+      ...base,
+      tool: 'transactions.transfer.create',
+      normalizedArgs: args,
+      idempotencyKey: 'k-transfer',
+    })) as { operationId: string };
+    expect(replay.operationId).toBe(first.operationId);
+    expect(state.transactions).toHaveLength(1);
+    expect(state.accounts.find((a) => a.id === from.id)?.balanceCents).toBe(70_000);
+    expect(state.accounts.find((a) => a.id === to.id)?.balanceCents).toBe(80_000);
   });
 });

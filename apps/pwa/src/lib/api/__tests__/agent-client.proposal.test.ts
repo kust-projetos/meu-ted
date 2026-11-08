@@ -48,6 +48,19 @@ const incomeIntent = (overrides: Record<string, unknown> = {}): ProposalIntent =
   ...overrides,
 });
 
+const transferIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "transactions.transfer.create",
+  intentionId: "int-transfer-abc",
+  normalizedArgs: {
+    amountCents: 30000,
+    description: "Transferência Itaú → Nubank",
+    date: "2026-11-07",
+    fromAccountId: ACCOUNT,
+    toAccountId: "11111111-1111-4111-8111-111111111112",
+  },
+  ...overrides,
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -56,10 +69,17 @@ afterEach(() => {
 });
 
 describe("sanitizeProposalIntent", () => {
-  it("accepts only the exact expense/income intents", () => {
+  it("accepts only the exact expense/income/transfer intents", () => {
     expect(sanitizeProposalIntent(intent())).toEqual(intent());
     expect(sanitizeProposalIntent(incomeIntent())).toEqual(incomeIntent());
-    expect(sanitizeProposalIntent({ ...intent(), tool: "transactions.transfer.create" })).toBeUndefined();
+    expect(sanitizeProposalIntent(transferIntent())).toEqual(transferIntent());
+    expect(sanitizeProposalIntent({ ...intent(), tool: "evil" })).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({ ...transferIntent(), normalizedArgs: { ...transferIntent().normalizedArgs, categoryId: CATEGORY } }),
+    ).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({ ...transferIntent(), normalizedArgs: { ...transferIntent().normalizedArgs, toAccountId: ACCOUNT } }),
+    ).toBeUndefined();
     expect(sanitizeProposalIntent({ ...intent(), extra: 1 })).toBeUndefined();
     expect(
       sanitizeProposalIntent({ ...intent(), normalizedArgs: { ...intent().normalizedArgs, workspaceId: "ws" } }),
@@ -114,6 +134,20 @@ describe("proposePendingOperation", () => {
 
     expect(result).toEqual({ id: "op-income-1", existing: false });
     expect(JSON.parse(String(capturedInit?.body))).toEqual(incomeIntent());
+  });
+
+  it("POSTs a transfer intent to the same broker route", async () => {
+    vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("signed-token-123");
+    let capturedInit: RequestInit | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      capturedInit = init;
+      return Response.json({ id: "op-transfer-1", existing: false }, { status: 200 });
+    });
+
+    const result = await proposePendingOperation("workspace-123", transferIntent());
+
+    expect(result).toEqual({ id: "op-transfer-1", existing: false });
+    expect(JSON.parse(String(capturedInit?.body))).toEqual(transferIntent());
   });
 
   it("never sends an invalid intent", async () => {
@@ -173,7 +207,7 @@ describe("sendAgentMessage — proposal field", () => {
         turnId: "t-1",
         status: "completed",
         output: "ok",
-        proposal: { ...intent(), tool: "transactions.transfer.create" },
+        proposal: { ...intent(), tool: "transactions.unknown.create" },
       }),
     );
     const send = composeChatSend("oi");
@@ -203,11 +237,20 @@ describe("pending chat anchor — proposal recovery payload", () => {
 
   it("never rehydrates a malformed proposal", () => {
     const send = composeChatSend("oi", { messageId: "m-bad" });
-    savePendingChatSend(
-      "ws-1",
-      { ...send, proposal: { ...intent(), normalizedArgs: { ...intent().normalizedArgs, amountCents: 0 } } },
-      null,
-    );
+    // Explicit single variant: spreading the ProposalIntent union here makes
+    // TypeScript distribute `normalizedArgs` across both shapes.
+    const malformed: ProposalIntent = {
+      tool: "transactions.expense.create",
+      intentionId: "int-bad",
+      normalizedArgs: {
+        amountCents: 0,
+        description: "mercado",
+        date: "2026-11-06",
+        accountId: ACCOUNT,
+        categoryId: CATEGORY,
+      },
+    };
+    savePendingChatSend("ws-1", { ...send, proposal: malformed }, null);
     expect(loadPendingChatSend("ws-1", null)?.proposal).toBeUndefined();
   });
 });

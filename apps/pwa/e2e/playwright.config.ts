@@ -37,19 +37,22 @@ const LIVE_PREP = process.env.P2D_LIVE_PREP === "1";
 const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
 const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
 // P3 proposal slices: loopback Agent + Pending V2 + scripted propose_expense
-// (P3.1) or propose_income (P3.2). They reuse the synthetic stack and never
-// carry a real credential.
+// (P3.1), propose_income (P3.2) or propose_transfer (P3.3). They reuse the
+// synthetic stack and never carry a real credential.
 const EXPENSE = process.env.P2D_EXPENSE === "1";
 const INCOME = process.env.P2D_INCOME === "1";
 const CARD = process.env.P2D_CARD === "1";
-if ([EXPENSE, INCOME, CARD].filter(Boolean).length > 1) {
-  throw new Error("select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD)");
+const TRANSFER = process.env.P2D_TRANSFER === "1";
+if ([EXPENSE, INCOME, CARD, TRANSFER].filter(Boolean).length > 1) {
+  throw new Error(
+    "select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD|P2D_TRANSFER)",
+  );
 }
 if ([LIVE_PREP, OFFLINE_CHAT, LIVE_REAL].filter(Boolean).length > 1) {
   throw new Error("select at most one P2D live mode (P2D_LIVE_PREP|P2D_OFFLINE_CHAT|P2D_LIVE_REAL)");
 }
 const P2D_LIVE_MODE = LIVE_PREP || OFFLINE_CHAT || LIVE_REAL;
-const PROPOSAL = EXPENSE || INCOME || CARD;
+const PROPOSAL = EXPENSE || INCOME || CARD || TRANSFER;
 const P2D_ACTIVE = P2D || P2D_LIVE_MODE || PROPOSAL;
 const P2D_SPEC = LIVE_PREP
   ? "**/p2d/p2d-live-prep.spec.ts"
@@ -59,6 +62,8 @@ const P2D_SPEC = LIVE_PREP
       ? "**/p2d/p2d-live-real.spec.ts"
       : CARD
         ? "**/p2d/p3-card-purchase.spec.ts"
+      : TRANSFER
+        ? "**/p2d/p3-transfer.spec.ts"
         : INCOME
           ? "**/p2d/p3-income.spec.ts"
           : EXPENSE
@@ -288,6 +293,7 @@ export default defineConfig({
               ...(EXPENSE ? { P2D_EXPENSE: "1" } : {}),
               ...(INCOME ? { P2D_INCOME: "1" } : {}),
               ...(CARD ? { P2D_CARD: "1" } : {}),
+              ...(TRANSFER ? { P2D_TRANSFER: "1" } : {}),
             },
           },
           {

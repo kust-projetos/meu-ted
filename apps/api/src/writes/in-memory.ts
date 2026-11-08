@@ -731,37 +731,43 @@ export const createInMemoryWriteStore = (state: InMemoryState): WriteStore => {
       return createIncomeUnkeyed(householdId, input);
     },
 
-    async createTransfer(householdId, input) {
+    async createTransfer(householdId, input, options) {
       if (input.fromAccountId === input.toAccountId) {
         throw domainErrors.invalid('toAccountId', 'deve ser diferente da conta de origem');
       }
-      const from = findAccount(input.fromAccountId, householdId);
-      assertNotDeleted(from);
-      const to = findAccount(input.toAccountId, householdId);
-      assertNotDeleted(to);
-      // H-01: transfers cannot touch credit cards (pay the invoice instead).
-      if (from.kind === 'credit_card' || to.kind === 'credit_card') {
-        throw new DomainError('validation.invalid', 'transferência não pode usar cartão de crédito.', 422);
-      }
-      if (input.amountCents <= 0) throw domainErrors.invalid('amountCents', 'deve ser maior que zero');
-      // Negative-balance rule (user-approved): bank/cash sources may cross
-      // below zero — the guard below is a no-op for them and stays as the
-      // zero floor for credit cards (already 422-rejected above).
-      assertDebitAllowed(from.kind, from.balanceCents, input.amountCents);
-      const tx: Transaction = {
-        id: randomUUID(),
-        householdId,
-        kind: 'transfer',
-        description: input.description,
-        amountCents: input.amountCents,
-        date: input.date,
-        accountId: input.fromAccountId,
-        transferToAccountId: input.toAccountId,
+      const createTransferUnkeyed = async (): Promise<Transaction> => {
+        const from = findAccount(input.fromAccountId, householdId);
+        assertNotDeleted(from);
+        const to = findAccount(input.toAccountId, householdId);
+        assertNotDeleted(to);
+        // H-01: transfers cannot touch credit cards (pay the invoice instead).
+        if (from.kind === 'credit_card' || to.kind === 'credit_card') {
+          throw new DomainError('validation.invalid', 'transferência não pode usar cartão de crédito.', 422);
+        }
+        if (input.amountCents <= 0) throw domainErrors.invalid('amountCents', 'deve ser maior que zero');
+        // Negative-balance rule (user-approved): bank/cash sources may cross
+        // below zero — the guard below is a no-op for them and stays as the
+        // zero floor for credit cards (already 422-rejected above).
+        assertDebitAllowed(from.kind, from.balanceCents, input.amountCents);
+        const tx: Transaction = {
+          id: randomUUID(),
+          householdId,
+          kind: 'transfer',
+          description: input.description,
+          amountCents: input.amountCents,
+          date: input.date,
+          accountId: input.fromAccountId,
+          transferToAccountId: input.toAccountId,
+        };
+        state.transactions.push(tx);
+        from.balanceCents -= input.amountCents;
+        to.balanceCents += input.amountCents;
+        return tx;
       };
-      state.transactions.push(tx);
-      from.balanceCents -= input.amountCents;
-      to.balanceCents += input.amountCents;
-      return tx;
+      if (options?.idempotencyKey !== undefined) {
+        return runKeyed(householdId, options.idempotencyKey, input, createTransferUnkeyed);
+      }
+      return createTransferUnkeyed();
     },
 
     async updateTransaction(householdId, id, patch) {

@@ -23,6 +23,8 @@ import {
 export const derivePresentationTitle = (tool: string): string =>
   tool === 'cards.purchase.create'
     ? 'Confirmar compra no cartão'
+    : tool === 'transactions.transfer.create'
+      ? 'Transferência'
     : tool === 'transactions.update'
     ? 'Alterar descrição do lançamento'
     : tool === 'accounts.deactivate'
@@ -46,6 +48,9 @@ export const derivePresentationTitle = (tool: string): string =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
 
+const formatAmountBRL = (amountCents: number): string =>
+  `R$ ${(amountCents / 100).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
+
 export const buildPendingOperationPresentation = (input: {
   id: string;
   status: string;
@@ -53,6 +58,8 @@ export const buildPendingOperationPresentation = (input: {
   normalizedArgs: unknown;
   expiresAt: string;
   accountLabel?: string;
+  fromAccountLabel?: string;
+  toAccountLabel?: string;
   categoryLabel?: string;
   categoryKind?: string;
   categoryParentLabel?: { id: string; name: string };
@@ -61,6 +68,47 @@ export const buildPendingOperationPresentation = (input: {
 }): PendingOperationPresentation | null => {
   const args = isRecord(input.normalizedArgs) ? input.normalizedArgs : null;
   if (!args) return null;
+  if (input.tool === 'transactions.transfer.create') {
+    // Internal transfer card: amount + description + date + BOTH server-
+    // resolved account labels. No category exists by definition (an internal
+    // transfer is neither income nor expense). A missing label means one of
+    // the accounts is gone/changed in this workspace; the card renders
+    // degraded and the shared predicate fails closed — Confirm is never
+    // offered for an unverifiable transfer.
+    const { amountCents, description, date, fromAccountId, toAccountId } = args as {
+      amountCents?: unknown;
+      description?: unknown;
+      date?: unknown;
+      fromAccountId?: unknown;
+      toAccountId?: unknown;
+    };
+    if (typeof amountCents !== 'number' || !Number.isFinite(amountCents) || amountCents <= 0) return null;
+    if (typeof description !== 'string' || !description) return null;
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    if (typeof fromAccountId !== 'string' || !fromAccountId) return null;
+    if (typeof toAccountId !== 'string' || !toAccountId) return null;
+    if (fromAccountId === toAccountId) return null;
+    const candidate: Record<string, unknown> = {
+      id: input.id,
+      status: input.status,
+      tool: input.tool,
+      title: `Transferência de ${formatAmountBRL(amountCents)}`,
+      amountCents,
+      description,
+      date,
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
+    if (typeof input.fromAccountLabel === 'string' && input.fromAccountLabel) {
+      candidate.fromAccount = { id: fromAccountId, label: input.fromAccountLabel };
+    }
+    if (typeof input.toAccountLabel === 'string' && input.toAccountLabel) {
+      candidate.toAccount = { id: toAccountId, label: input.toAccountLabel };
+    }
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    if (!parsed.success) return null;
+    return parsed.data as PendingOperationPresentation;
+  }
   if (input.tool === 'accounts.deactivate') {
     const { accountId, accountName, accountKind, balanceCents } = args as {
       accountId?: unknown;

@@ -122,6 +122,10 @@ const pendingOperationPresentationSchema = z
     transactionAccount: pendingOperationPresentationLabelSchema.optional(),
     date: z.string().optional(),
     account: pendingOperationPresentationLabelSchema.optional(),
+    // P3.3 internal transfer: origin/destination labels resolved server-side.
+    // No category exists for a transfer (neither income nor expense).
+    fromAccount: pendingOperationPresentationLabelSchema.optional(),
+    toAccount: pendingOperationPresentationLabelSchema.optional(),
     category: pendingOperationPresentationLabelSchema.optional(),
     categoryParent: pendingOperationPresentationLabelSchema.optional(),
     // accounts.create display tuple (contrato packages/llm-contracts):
@@ -257,6 +261,7 @@ function approvalEntityType(tool: string): "transaction" | "account" | "category
   switch (tool) {
     case "transactions.expense.create":
     case "transactions.income.create":
+    case "transactions.transfer.create":
     case "transactions.update":
     case "cards.purchase.create":
       return "transaction";
@@ -319,6 +324,8 @@ export type AgentTurnPendingOperation =
  * P3.2 adds `transactions.income.create` to the SAME closed contract; the API
  * already accepts it, so no capability or authority is added here.
  *
+ * P3.3 adds `transactions.transfer.create` (internal transfer, no category).
+ * The card is still rehydrated from the authoritative active list.
  * P3.4 adds `cards.purchase.create`: a 1x credit-card purchase. Its category
  * is optional (a card purchase may be classified later), so it carries its
  * own normalized-args schema; the closed tool set is otherwise identical.
@@ -342,6 +349,19 @@ const cardPurchaseProposalArgsSchema = z
     categoryId: z.string().uuid().optional(),
   })
   .strict();
+
+const transferProposalArgsSchema = z
+  .object({
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    description: z.string().trim().min(1).max(240),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    fromAccountId: z.string().uuid(),
+    toAccountId: z.string().uuid(),
+  })
+  .strict()
+  .refine((value) => value.fromAccountId !== value.toAccountId, {
+    message: "fromAccountId and toAccountId must differ",
+  });
 
 const proposalIntentBase = {
   intentionId: z.string().trim().min(1).max(128),
@@ -373,20 +393,33 @@ const cardPurchaseProposalIntentSchema = z
   })
   .strict();
 
+const transferProposalIntentSchema = z
+  .object({
+    tool: z.literal("transactions.transfer.create"),
+    intentionId: z.string().trim().min(1).max(128),
+    summary: z.string().trim().min(1).max(240).optional(),
+    normalizedArgs: transferProposalArgsSchema,
+  })
+  .strict();
+
 const proposalIntentSchema = z.discriminatedUnion("tool", [
   expenseProposalIntentSchema,
   incomeProposalIntentSchema,
   cardPurchaseProposalIntentSchema,
+  transferProposalIntentSchema,
 ]);
 
 export type ProposalArgs = z.infer<typeof proposalArgsSchema>;
 export type CardPurchaseProposalArgs = z.infer<typeof cardPurchaseProposalArgsSchema>;
+export type TransferProposalArgs = z.infer<typeof transferProposalArgsSchema>;
 export type ProposalIntent =
   | { tool: "transactions.expense.create"; intentionId: string; normalizedArgs: ProposalArgs }
   | { tool: "transactions.income.create"; intentionId: string; normalizedArgs: ProposalArgs }
-  | { tool: "cards.purchase.create"; intentionId: string; normalizedArgs: CardPurchaseProposalArgs };
+  | { tool: "cards.purchase.create"; intentionId: string; normalizedArgs: CardPurchaseProposalArgs }
+  | { tool: "transactions.transfer.create"; intentionId: string; normalizedArgs: TransferProposalArgs };
 export type ExpenseProposalIntent = Extract<ProposalIntent, { tool: "transactions.expense.create" }>;
 export type IncomeProposalIntent = Extract<ProposalIntent, { tool: "transactions.income.create" }>;
+export type TransferProposalIntent = Extract<ProposalIntent, { tool: "transactions.transfer.create" }>;
 
 export function sanitizeProposalIntent(value: unknown): ProposalIntent | undefined {
   const parsed = proposalIntentSchema.safeParse(value);

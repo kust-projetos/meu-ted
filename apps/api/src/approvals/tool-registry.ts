@@ -13,7 +13,12 @@
  */
 import { z } from 'zod';
 import type { MutationReceipt } from '@pi-finance/llm-contracts';
-import { createAccountInputSchema, createExpenseInputSchema, createIncomeInputSchema } from '../writes/types.js';
+import {
+  createAccountInputSchema,
+  createExpenseInputSchema,
+  createIncomeInputSchema,
+  createTransferInputSchema,
+} from '../writes/types.js';
 import { isoDateSchema } from '../shared/iso-date.js';
 import { DomainError } from '../writes/errors.js';
 import type { WriteStore } from '../writes/store.js';
@@ -25,6 +30,7 @@ export const APPROVAL_TOOL_IDS = [
   'transactions.expense.create',
   'transactions.income.create',
   'cards.purchase.create',
+  'transactions.transfer.create',
   'transactions.update',
   'accounts.create',
   'accounts.deactivate',
@@ -247,6 +253,47 @@ const executeCardPurchaseCreate: ApprovalToolExecutor = async ({
   let receipt: MutationReceipt;
   try {
     receipt = buildTedReceipt('cards.purchase.create', operationId, { type: 'transaction', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId,
+    receipt,
+  };
+};
+
+const executeTransferCreate: ApprovalToolExecutor = async ({
+  writes,
+  workspaceId,
+  args,
+  idempotencyKey,
+  actorId,
+}) => {
+  const parsed = createTransferInputSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_transfer_arguments');
+  // Fail-closed actor binding (same contract as the sibling transaction paths).
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  // ONE atomic transfer: the writer creates a single `transfer` row and moves
+  // both balance legs inside the same transaction (never two independent
+  // expense/income writes). T12c carve-out mirrors expense/income:
+  // DomainError is pre-commit validation (same account, unknown/inactive
+  // account, credit card, workspace lifecycle) and rethrows deterministic;
+  // any other throw may be post-write and stays uncertain for lease recovery.
+  let transaction: { id: string };
+  try {
+    transaction = await writes.createTransfer(workspaceId, parsed.data, {
+      idempotencyKey,
+      audit: { operation: 'transactions.transfer.create', actorId },
+    });
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  const operationId = transaction.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('transactions.transfer.create', operationId, { type: 'transaction', id: operationId });
   } catch {
     throw createApprovalExecutionUncertainError();
   }
@@ -620,6 +667,14 @@ const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
     authorizationPolicy: 'risk_based',
     autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('transactions.income.create'),
     executor: executeIncomeCreate,
+  },
+  'transactions.transfer.create': {
+    tool: 'transactions.transfer.create',
+    inputSchema: createTransferInputSchema,
+    approvalRequired: true, // Manual-only: internal transfers are never auto-executed.
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('transactions.transfer.create'),
+    executor: executeTransferCreate,
   },
   'transactions.update': {
     tool: 'transactions.update',

@@ -35,6 +35,7 @@ interface TedApprovalCardProps {
 
 const deriveFallbackTitle = (operation: TedPendingOperation): string => {
   if (operation.operation.includes("transactions.update")) return "Alterar descrição do lançamento";
+  if (operation.operation.includes("transactions.transfer.create")) return "Transferência";
   if (operation.operation.includes("categories.create")) return "Criar categoria";
   if (operation.operation.includes("categories.update")) return "Renomear categoria";
   if (operation.operation.includes("categories.deactivate")) return "Desativar categoria";
@@ -72,6 +73,7 @@ const describeCategoryKind = (kind: string): string => {
  * catálogo/conta. Uma renomeação não registra valor: ela renomeia.
  */
 const describePendingOperationEffect = (tool: string): string => {
+  if (tool === "transactions.transfer.create") return "O valor será transferido entre as suas contas; receitas e despesas não serão alteradas.";
   if (tool === "transactions.update") return "A descrição do lançamento será alterada; valor, data e conta não serão modificados.";
   if (tool === "categories.create") return "A categoria será criada nos seus dados.";
   if (tool === "categories.update") return "A categoria será renomeada nos seus dados.";
@@ -460,6 +462,18 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
                 <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
               </div>
             )}
+            {presentation.tool === "transactions.transfer.create" && presentation.fromAccount && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Origem</dt>
+                <dd className="font-semibold">{presentation.fromAccount.label}</dd>
+              </div>
+            )}
+            {presentation.tool === "transactions.transfer.create" && presentation.toAccount && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Destino</dt>
+                <dd className="font-semibold">{presentation.toAccount.label}</dd>
+              </div>
+            )}
             {presentation.accountName && !presentation.account && (
               <div className="flex justify-between gap-2">
                 <dt className="text-text-muted">Conta</dt>
@@ -683,6 +697,18 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
               <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
             </div>
           )}
+          {presentation.tool === "transactions.transfer.create" && presentation.fromAccount && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Origem</dt>
+              <dd className="font-semibold">{presentation.fromAccount.label}</dd>
+            </div>
+          )}
+          {presentation.tool === "transactions.transfer.create" && presentation.toAccount && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Destino</dt>
+              <dd className="font-semibold">{presentation.toAccount.label}</dd>
+            </div>
+          )}
           {presentation.tool === "accounts.update" && presentation.account && (
             <div className="flex justify-between gap-2">
               <dt className="text-text-muted">De (atual)</dt>
@@ -758,7 +784,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
             onClick={handleReject}
             className="rounded-[10px] border border-border-subtle bg-surface-1 px-3.5 py-2 font-bold text-text-secondary transition-all hover:bg-surface-2 active:scale-95 disabled:opacity-50"
           >
-            Cancelar
+            {presentation.tool === "transactions.transfer.create" ? "Rejeitar" : "Cancelar"}
           </button>
         </div>
       </div>

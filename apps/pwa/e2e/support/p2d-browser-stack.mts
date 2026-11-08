@@ -58,9 +58,12 @@ const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
 const EXPENSE = process.env.P2D_EXPENSE === "1";
 const INCOME = process.env.P2D_INCOME === "1";
 const CARD = process.env.P2D_CARD === "1";
-const PROPOSAL = EXPENSE || INCOME || CARD;
-if ([EXPENSE, INCOME, CARD].filter(Boolean).length > 1) {
-  throw new Error("[p2d-stack] select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD)");
+const TRANSFER = process.env.P2D_TRANSFER === "1";
+const PROPOSAL = EXPENSE || INCOME || CARD || TRANSFER;
+if ([EXPENSE, INCOME, CARD, TRANSFER].filter(Boolean).length > 1) {
+  throw new Error(
+    "[p2d-stack] select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD|P2D_TRANSFER)",
+  );
 }
 if (OFFLINE_CHAT && LIVE_REAL) {
   throw new Error("[p2d-stack] P2D_OFFLINE_CHAT and P2D_LIVE_REAL are mutually exclusive");
@@ -257,6 +260,22 @@ function buildProbeConfig(): Record<string, unknown> {
             description: "supermercado",
             date: "2026-11-07",
             accountId: CARD_A1.id,
+          },
+        },
+      };
+    }
+    if (TRANSFER) {
+      return {
+        ...base,
+        stub: {
+          mode: "transfer",
+          toolName: "propose_transfer",
+          toolArgs: {
+            amountCents: 30000,
+            description: "Transferência Itaú → Nubank",
+            date: "2026-11-07",
+            fromAccountId: ACCOUNT_A1.id,
+            toAccountId: ACCOUNT_A2.id,
           },
         },
       };
@@ -661,7 +680,7 @@ const ctl = http.createServer((req, res) => {
       }
       if (req.method === "GET" && u.pathname === "/p2d/journal") {
         const financial = journal.filter((j) =>
-          ["/accounts", "/dashboard", "/categories", "/transactions", "/cards", "/payables", "/budgets", "/goals", "/subscriptions"].some(
+          ["/accounts", "/dashboard", "/categories", "/transactions", "/transfers", "/cards", "/payables", "/budgets", "/goals", "/subscriptions"].some(
             (p) => j.url === p || j.url.startsWith(`${p}/`),
           ),
         );
@@ -687,6 +706,7 @@ const ctl = http.createServer((req, res) => {
             date: t.date,
             accountId: t.accountId,
             categoryId: t.categoryId,
+            transferToAccountId: t.transferToAccountId,
           }));
         const accounts = (built.state.accounts ?? [])
           .filter((a) => a.householdId === HOUSEHOLD_A)
