@@ -61,7 +61,11 @@ const CARD = process.env.P2D_CARD === "1";
 const CARD_INSTALLMENTS = process.env.P2D_CARD_INSTALLMENTS === "1";
 const TRANSFER = process.env.P2D_TRANSFER === "1";
 const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
-const PROPOSAL = EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+const P3_PILOT = process.env.P2D_P3_PILOT === "1";
+const PROPOSAL = P3_PILOT || EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+if (P3_PILOT && (EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY || OFFLINE_CHAT)) {
+  throw new Error("[p2d-stack] P2D_P3_PILOT is exclusive with P3 slices and P2D_OFFLINE_CHAT");
+}
 if ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].filter(Boolean).length > 1) {
   throw new Error(
     "[p2d-stack] select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD|P2D_CARD_INSTALLMENTS|P2D_TRANSFER|P2D_STATEMENT_PAY)",
@@ -213,7 +217,7 @@ const built = buildTestApp(
   {
     // P3.4/P3.5 only: the card slices need a real credit-card account in the
     // synthetic ledger. Every other mode keeps the exact read-slice oracle.
-    accounts: CARD || CARD_INSTALLMENTS || STATEMENT_PAY
+    accounts: P3_PILOT || CARD || CARD_INSTALLMENTS || STATEMENT_PAY
       ? [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1, CARD_A1]
       : [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1],
     categories: [CATEGORY_FOOD_A, CATEGORY_RENT_A, CATEGORY_SALARY_A, CATEGORY_FOOD_B],
@@ -272,8 +276,33 @@ function buildProbeConfig(): Record<string, unknown> {
     identity: MODE === "offline" ? "p2d-offline" : MODE === "live-real" ? "p2d-live-real" : "p2d-browser",
     apiBaseUrl: `http://127.0.0.1:${API_PORT}`,
     tedRuntimeDir: TED_RUNTIME_DIR,
+    ctlBaseUrl: `http://127.0.0.1:${CTL_PORT}`,
   };
   if (PROPOSAL) {
+    if (P3_PILOT && LIVE_REAL) {
+      const liveModel = LIVE_MODEL as string;
+      return {
+        ...base,
+        mode: MODE,
+        profile: "live",
+        provider: liveModel.split("/")[0],
+        model: liveModel,
+        credentialSource: "allowlist",
+      };
+    }
+    if (P3_PILOT && !LIVE_REAL) return {
+      ...base,
+      stub: { mode: "pilot", toolSequence: [
+        { match: "Gastei R$ 65", name: "propose_expense", args: { amountCents: 6500, description: "almoço", date: "2026-11-07", accountId: ACCOUNT_A1.id, categoryId: CATEGORY_FOOD_A.id } },
+        { match: "Recebi R$ 800", name: "propose_income", args: { amountCents: 80000, description: "receita", date: "2026-11-07", accountId: ACCOUNT_A1.id, categoryId: CATEGORY_SALARY_A.id } },
+        { match: "Transfira R$ 150", name: "propose_transfer", args: { amountCents: 15000, description: "Transferência Itaú para Neon", date: "2026-11-07", fromAccountId: ACCOUNT_A1.id, toAccountId: ACCOUNT_A2.id } },
+        { match: "Comprei R$ 120", name: "propose_card_purchase", args: { amountCents: 12000, description: "compra à vista", date: "2026-11-07", accountId: CARD_A1.id } },
+        { match: "Comprei R$ 600", name: "propose_card_purchase", args: { amountCents: 60000, description: "compra parcelada", date: "2026-11-07", accountId: CARD_A1.id, installmentsTotal: 3 } },
+        { match: "Pague R$ 300", name: "propose_statement_payment", args: { statementId: "resolve-november", fromAccountId: ACCOUNT_A1.id, amountCents: 30000 } },
+        { match: "Agora quite", name: "propose_statement_payment", args: { statementId: "resolve-november", fromAccountId: ACCOUNT_A1.id, amountCents: 2000 } },
+        { match: "despesa extra", name: "propose_expense", args: { amountCents: 100000, description: "piloto extra", date: "2026-11-07", accountId: ACCOUNT_A1.id, categoryId: CATEGORY_FOOD_A.id } },
+      ] },
+    };
     if (STATEMENT_PAY) {
       if (!seededStatement) throw new Error("[p2d-stack] statement seed missing");
       return {

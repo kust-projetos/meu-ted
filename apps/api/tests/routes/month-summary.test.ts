@@ -12,6 +12,27 @@ import {
 } from '../fixtures/seed.js';
 
 describe('GET /dashboard/month-summary', () => {
+  it('opts into competencia by excluding statement payments and rejects unknown bases', async () => {
+    const transactions = TRANSACTIONS.map((transaction, index) => index === 1
+      ? { ...transaction, statementPaymentId: 'statement-1' } as typeof transaction
+      : transaction);
+    const { app } = buildTestApp({
+      accounts: [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1],
+      categories: [CATEGORY_FOOD_A, CATEGORY_RENT_A, CATEGORY_SALARY_A, CATEGORY_FOOD_B],
+      transactions,
+    });
+    const headers = { 'x-device-token': TOKEN_A };
+    const defaultResponse = await app.inject({ method: 'GET', url: '/dashboard/month-summary?yearMonth=2026-06', headers });
+    expect(defaultResponse.json()).toEqual({ yearMonth: '2026-06', incomeCents: 1_200_000, expenseCents: 288_050, balanceCents: 911_950, transactionCount: 4 });
+
+    const competencyResponse = await app.inject({ method: 'GET', url: '/dashboard/month-summary?yearMonth=2026-06&basis=competencia', headers });
+    expect(competencyResponse.json()).toEqual({ yearMonth: '2026-06', incomeCents: 1_200_000, expenseCents: 48_050, balanceCents: 1_151_950, transactionCount: 3 });
+
+    const invalidBasis = await app.inject({ method: 'GET', url: '/dashboard/month-summary?yearMonth=2026-06&basis=invalid', headers });
+    expect(invalidBasis.statusCode).toBe(400);
+    expect(invalidBasis.json().code).toBe('validation.error');
+  });
+
   it('requires yearMonth instead of accepting period as its substitute', async () => {
     const { app } = buildTestApp();
     const response = await app.inject({

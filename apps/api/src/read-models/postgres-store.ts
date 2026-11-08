@@ -68,6 +68,10 @@ const mapTransaction = (r: Row): Transaction => {
   if (notes !== null && notes !== undefined) {
     base.notes = notes as string;
   }
+  const statementPaymentId = r['statement_payment_id'];
+  if (statementPaymentId !== null && statementPaymentId !== undefined) {
+    (base as Transaction & { statementPaymentId?: string }).statementPaymentId = statementPaymentId as string;
+  }
   return base;
 };
 
@@ -179,7 +183,7 @@ export const createPostgresReadModelStore = (opts: { pool: Pool }): ReadModelSto
 
       const rows = await query<Row>(
         `SELECT id, household_id, kind, description, amount_cents, date,
-                account_id, category_id, subcategory_id, transfer_to_account_id, notes
+                account_id, category_id, subcategory_id, transfer_to_account_id, notes, statement_payment_id
            FROM transactions
           WHERE ${whereSql}
           ORDER BY date DESC, id DESC
@@ -196,7 +200,7 @@ export const createPostgresReadModelStore = (opts: { pool: Pool }): ReadModelSto
     async listAllTransactions(householdId) {
       const rows = await query<Row>(
         `SELECT id, household_id, kind, description, amount_cents, date,
-                account_id, category_id, subcategory_id, transfer_to_account_id, notes
+                account_id, category_id, subcategory_id, transfer_to_account_id, notes, statement_payment_id
            FROM transactions
           WHERE household_id = $1
             AND deleted_at IS NULL`,
