@@ -386,6 +386,15 @@ export const pendingOperationPresentationSchema = z
       .regex(/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_]*)+$/),
     title: z.string().trim().min(1).max(120),
     amountCents: z.number().int().min(0).optional(),
+    /**
+     * Installment display fields (tool `cards.purchase.create` only). All are
+     * SERVER-COMPUTED: the PWA renders them verbatim and never derives a
+     * parcel amount with its own rounding rule.
+     */
+    installmentsTotal: z.number().int().min(1).max(48).optional(),
+    installmentAmountsCents: z.array(z.number().int().min(0)).min(1).max(48).optional(),
+    firstStatementClosingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    firstStatementDueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     description: z.string().trim().min(1).max(500).optional(),
     date: z
       .string()

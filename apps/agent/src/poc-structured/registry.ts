@@ -120,7 +120,8 @@ export type ArgValueKind =
   | 'signed-cents'
   | 'boolean'
   | 'account-kind'
-  | 'category-kind';
+  | 'category-kind'
+  | 'installment-count';
 
 export type ArgSpec = Readonly<{
   kind: ArgValueKind;
@@ -155,6 +156,8 @@ export const ARG_SPECS: Readonly<Record<string, ArgSpec>> = Object.freeze({
   expectedName: spec('string', true),
   transactionId: spec('string', true),
   expectedDescription: spec('string', true),
+  // P3.5: optional parcel count (1–48). The total stays in amountCents.
+  installmentsTotal: spec('installment-count', true),
   targetReference: spec('string', false),
   target: spec('string', false),
   priorAmountCents: spec('cents', false),
@@ -209,13 +212,15 @@ export const OPERATION_ARG_KEYS: Readonly<Record<string, ReadonlySet<string>>> =
     'categoryName',
     'categoryQuery',
   ),
-  // P3.4: 1x card purchase. The card is the accountId; category is optional.
+  // P3.4/P3.5: card purchase. The card is the accountId; category is
+  // optional and installmentsTotal declares an optional split (1–48).
   'cards.purchase.create': argKeys(
     'amountCents',
     'description',
     'date',
     'accountId',
     'categoryId',
+    'installmentsTotal',
     'accountName',
     'categoryName',
     'categoryQuery',

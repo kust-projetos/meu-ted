@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pendingOperationPresentationSchema } from '@pi-finance/llm-contracts';
+import { isActionablePendingOperationPresentation, pendingOperationPresentationSchema } from '@pi-finance/llm-contracts';
 import { buildPendingOperationPresentation } from '../../src/approvals/presentation.js';
 
 const base = {
@@ -88,6 +88,118 @@ describe('buildPendingOperationPresentation (SPEC §16)', () => {
     expect(presentation!.account).toEqual({ id: 'card-1', label: 'Nubank Card' });
     expect(presentation!.category).toBeUndefined();
     expect(pendingOperationPresentationSchema.safeParse(presentation).success).toBe(true);
+  });
+
+  it('projects a P3.5 installment purchase with server-computed parcels and first invoice', () => {
+    const presentation = buildPendingOperationPresentation({
+      ...base,
+      tool: 'cards.purchase.create',
+      normalizedArgs: {
+        description: 'celular',
+        amountCents: 120000,
+        date: '2026-11-07',
+        accountId: 'card-1',
+        installmentsTotal: 6,
+      },
+      accountLabel: 'Nubank',
+      cardCycle: { closingDay: 15, dueDay: 25 },
+    });
+    expect(presentation).not.toBeNull();
+    expect(presentation!.title).toBe('Confirmar compra parcelada');
+    expect(presentation!.amountCents).toBe(120000);
+    expect(presentation!.installmentsTotal).toBe(6);
+    expect(presentation!.installmentAmountsCents).toEqual([20000, 20000, 20000, 20000, 20000, 20000]);
+    expect(presentation!.firstStatementClosingDate).toBe('2026-11-15');
+    expect(presentation!.firstStatementDueDate).toBe('2026-11-25');
+    expect(pendingOperationPresentationSchema.safeParse(presentation).success).toBe(true);
+    expect(isActionablePendingOperationPresentation(presentation!)).toBe(true);
+  });
+
+  it('uses the exact cent split in the preview (R$ 10,00 in 3x)', () => {
+    const presentation = buildPendingOperationPresentation({
+      ...base,
+      tool: 'cards.purchase.create',
+      normalizedArgs: {
+        description: 'cafe',
+        amountCents: 1000,
+        date: '2026-11-07',
+        accountId: 'card-1',
+        installmentsTotal: 3,
+      },
+      accountLabel: 'Nubank',
+      cardCycle: { closingDay: 15, dueDay: 25 },
+    });
+    expect(presentation!.installmentAmountsCents).toEqual([333, 333, 334]);
+  });
+
+  it('treats installmentsTotal 1 as the unchanged 1x presentation', () => {
+    const presentation = buildPendingOperationPresentation({
+      ...base,
+      tool: 'cards.purchase.create',
+      normalizedArgs: {
+        description: 'supermercado',
+        amountCents: 15000,
+        date: '2026-11-07',
+        accountId: 'card-1',
+        installmentsTotal: 1,
+      },
+      accountLabel: 'Nubank Card',
+    });
+    expect(presentation!.title).toBe('Confirmar compra no cartão');
+    expect(presentation!.installmentsTotal).toBeUndefined();
+    expect(presentation!.installmentAmountsCents).toBeUndefined();
+  });
+
+  it('fails closed on a malformed declared split instead of degrading to 1x', () => {
+    for (const installmentsTotal of [0, 49, 1.5]) {
+      const presentation = buildPendingOperationPresentation({
+        ...base,
+        tool: 'cards.purchase.create',
+        normalizedArgs: {
+          description: 'celular',
+          amountCents: 120000,
+          date: '2026-11-07',
+          accountId: 'card-1',
+          installmentsTotal,
+        },
+        accountLabel: 'Nubank',
+      });
+      expect(presentation).toBeNull();
+    }
+  });
+
+  it('fails closed when the total cannot cover 1 cent per parcel', () => {
+    const presentation = buildPendingOperationPresentation({
+      ...base,
+      tool: 'cards.purchase.create',
+      normalizedArgs: {
+        description: 'doce',
+        amountCents: 2,
+        date: '2026-11-07',
+        accountId: 'card-1',
+        installmentsTotal: 3,
+      },
+      accountLabel: 'Nubank',
+    });
+    expect(presentation).toBeNull();
+  });
+
+  it('rejects a preview whose parcel amounts do not sum to the total', () => {
+    const presentation = {
+      id: 'op-1',
+      status: 'proposed',
+      tool: 'cards.purchase.create',
+      title: 'Confirmar compra parcelada',
+      amountCents: 120000,
+      installmentsTotal: 6,
+      installmentAmountsCents: [20000, 20000, 20000, 20000, 20000, 19999],
+      description: 'celular',
+      date: '2026-11-07',
+      account: { id: 'card-1', label: 'Nubank' },
+      expiresAt: '2026-11-07T12:00:00.000Z',
+      warnings: [],
+    } as const;
+    expect(isActionablePendingOperationPresentation(presentation)).toBe(false);
   });
 
   it('keeps the optional card category when the read model resolves it', () => {

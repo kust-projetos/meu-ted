@@ -557,13 +557,33 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
       // P3.4 card purchase (1x): the canonical card shows the CARD, the
       // value, the description and the single installment the user is
       // authorizing. Category is optional and never gates Confirm.
+      //
+      // P3.5 installments: the preview renders ONLY the server-computed
+      // parcel amounts (`installmentAmountsCents`) — the PWA never applies
+      // its own rounding rule. `amountCents` is the TOTAL of the purchase.
+      const totalInstallments =
+        typeof presentation.installmentsTotal === "number" ? presentation.installmentsTotal : 1;
+      const isInstallmentPurchase = totalInstallments > 1;
+      const installmentAmounts = presentation.installmentAmountsCents ?? [];
+      const installmentLabel = (() => {
+        if (!isInstallmentPurchase || installmentAmounts.length !== totalInstallments) return "1x";
+        const first = installmentAmounts[0]!;
+        const last = installmentAmounts[installmentAmounts.length - 1]!;
+        return first === last
+          ? `${totalInstallments}x de ${formatCentsToBRL(first)}`
+          : `${totalInstallments}x de ${formatCentsToBRL(first)} (última de ${formatCentsToBRL(last)})`;
+      })();
       const confirmLabel =
         typeof presentation.amountCents === "number"
           ? `Confirmar ${formatCentsToBRL(presentation.amountCents)}`
           : "Confirmar";
       return (
         <div className="my-2 rounded-[16px] border border-warning/30 bg-warning-tint p-3.5 text-xs shadow-xs">
-          <div className="font-bold text-warning">⚠️ {title}</div>
+          <div className="font-bold text-warning">
+            {isInstallmentPurchase && typeof presentation.amountCents === "number"
+              ? `⚠️ Compra parcelada — ${formatCentsToBRL(presentation.amountCents)}`
+              : `⚠️ ${title}`}
+          </div>
           <dl className="mt-2 space-y-1 text-text-primary">
             {presentation.description && (
               <div className="flex justify-between gap-2">
@@ -577,16 +597,29 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
                 <dd className="font-semibold">{presentation.account.label}</dd>
               </div>
             )}
+            {isInstallmentPurchase ? (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Parcelamento</dt>
+                <dd className="font-semibold">{installmentLabel}</dd>
+              </div>
+            ) : (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Parcela</dt>
+                <dd className="font-semibold">1x</dd>
+              </div>
+            )}
             {typeof presentation.amountCents === "number" && (
               <div className="flex justify-between gap-2">
-                <dt className="text-text-muted">Valor</dt>
+                <dt className="text-text-muted">Valor total</dt>
                 <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
               </div>
             )}
-            <div className="flex justify-between gap-2">
-              <dt className="text-text-muted">Parcela</dt>
-              <dd className="font-semibold">1x</dd>
-            </div>
+            {isInstallmentPurchase && presentation.firstStatementDueDate && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Primeira fatura</dt>
+                <dd className="font-semibold">{formatDateToBR(presentation.firstStatementDueDate)}</dd>
+              </div>
+            )}
             {presentation.category && (
               <div className="flex justify-between gap-2">
                 <dt className="text-text-muted">Categoria</dt>
@@ -608,7 +641,10 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
             </ul>
           )}
           <div className="mt-0.5 text-text-muted">
-            A compra será registrada no cartão e vinculada à fatura correspondente. {describePendingOperationStatus("proposed")}.
+            {isInstallmentPurchase
+              ? "As parcelas serão registradas no cartão e vinculadas às faturas correspondentes."
+              : "A compra será registrada no cartão e vinculada à fatura correspondente."}{" "}
+            {describePendingOperationStatus("proposed")}.
           </div>
 
           {error && <div className="mt-1 font-semibold text-danger">{error}</div>}

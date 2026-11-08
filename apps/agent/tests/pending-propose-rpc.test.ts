@@ -93,6 +93,19 @@ const validTransferBody = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const validCardBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'cards.purchase.create',
+  intentionId: 'int-card-abc123',
+  normalizedArgs: {
+    amountCents: 120000,
+    description: 'celular',
+    date: '2026-11-07',
+    accountId: ACCOUNT,
+    installmentsTotal: 6,
+  },
+  ...overrides,
+});
+
 const proposeRequest = (body: unknown, headers = identityHeaders()) =>
   new Request('https://agent.test.local/rpc/pending-operations/propose', {
     method: 'POST',
@@ -209,6 +222,40 @@ describe('P3 — POST /rpc/pending-operations/propose (Agent A4 broker)', () => 
     expect(sent.tool).toBe('transactions.transfer.create');
     expect(sent.normalizedArgs).toEqual(validTransferBody().normalizedArgs);
     expect('categoryId' in sent.normalizedArgs).toBe(false);
+  });
+
+  it('accepts cards.purchase.create with installmentsTotal on the same propose-only A4 path', async () => {
+    const { fn, calls } = captureFetch(() => Response.json({ id: 'op-card-1', existing: false }, { status: 201 }));
+    globalThis.fetch = fn;
+    const { agent } = createTestAgent();
+
+    const res = await agent.fetch(proposeRequest(validCardBody()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: 'op-card-1', existing: false });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${API_ORIGIN}/pending-operations/v2/propose`);
+    const sent = JSON.parse(String(calls[0]!.init?.body)) as {
+      tool: string;
+      normalizedArgs: Record<string, unknown>;
+    };
+    expect(sent.tool).toBe('cards.purchase.create');
+    expect(sent.normalizedArgs).toEqual(validCardBody().normalizedArgs);
+    expect(sent.normalizedArgs.installmentsTotal).toBe(6);
+    expect(sent.normalizedArgs.amountCents).toBe(120000);
+  });
+
+  it('refuses an invalid installmentsTotal before any transport', async () => {
+    for (const installmentsTotal of [0, 49, 1.5]) {
+      const { fn, calls } = captureFetch(() => Response.json({ id: 'never' }));
+      globalThis.fetch = fn;
+      const { agent } = createTestAgent();
+      const res = await agent.fetch(
+        proposeRequest(validCardBody({ normalizedArgs: { ...validCardBody().normalizedArgs, installmentsTotal } })),
+      );
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    }
   });
 
   it('refuses any tool outside the closed proposal contract with zero transport', async () => {

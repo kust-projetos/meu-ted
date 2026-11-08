@@ -643,4 +643,73 @@ describe("TedApprovalCard mandatory presentation (production functional correcti
       ),
     );
   });
+
+  it("renders a P3.5 installment purchase with the server-computed parcels and first invoice", async () => {
+    render(
+      <TedApprovalCard
+        operation={{
+          id: "op-card-6x",
+          status: "proposed",
+          operation: "cards.purchase.create",
+          presentation: {
+            id: "op-card-6x",
+            status: "proposed",
+            tool: "cards.purchase.create",
+            title: "Confirmar compra parcelada",
+            amountCents: 120000,
+            installmentsTotal: 6,
+            installmentAmountsCents: [20000, 20000, 20000, 20000, 20000, 20000],
+            firstStatementClosingDate: "2026-11-15",
+            firstStatementDueDate: "2026-11-25",
+            description: "celular",
+            date: "2026-11-07",
+            account: { id: "card-1", label: "Nubank" },
+            expiresAt: "2026-11-07T12:00:00.000Z",
+            warnings: [],
+          },
+        }}
+        workspaceId="workspace-1"
+      />,
+    );
+
+    expect(screen.getByText("⚠️ Compra parcelada — R$ 1.200,00")).toBeInTheDocument();
+    expect(screen.getByText("celular")).toBeInTheDocument();
+    expect(screen.getByText("Nubank")).toBeInTheDocument();
+    expect(screen.getByText("Parcelamento")).toBeInTheDocument();
+    expect(screen.getByText("6x de R$ 200,00")).toBeInTheDocument();
+    expect(screen.getByText("Primeira fatura")).toBeInTheDocument();
+    expect(screen.getByText("25/11/2026")).toBeInTheDocument();
+    expect(screen.getByText("R$ 1.200,00")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Confirmar R\$ 1\.200,00/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeInTheDocument();
+  });
+
+  it("renders the exact cent split without recomputing it (R$ 10,00 in 3x)", async () => {
+    render(
+      <TedApprovalCard
+        operation={{
+          id: "op-card-cents",
+          status: "proposed",
+          operation: "cards.purchase.create",
+          presentation: {
+            id: "op-card-cents",
+            status: "proposed",
+            tool: "cards.purchase.create",
+            title: "Confirmar compra parcelada",
+            amountCents: 1000,
+            installmentsTotal: 3,
+            installmentAmountsCents: [333, 333, 334],
+            description: "cafe",
+            date: "2026-11-07",
+            account: { id: "card-1", label: "Nubank" },
+            expiresAt: "2026-11-07T12:00:00.000Z",
+            warnings: [],
+          },
+        }}
+        workspaceId="workspace-1"
+      />,
+    );
+
+    expect(screen.getByText("3x de R$ 3,33 (última de R$ 3,34)")).toBeInTheDocument();
+  });
 });

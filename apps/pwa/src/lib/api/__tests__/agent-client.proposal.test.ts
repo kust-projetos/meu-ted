@@ -61,6 +61,19 @@ const transferIntent = (overrides: Record<string, unknown> = {}): ProposalIntent
   ...overrides,
 });
 
+const cardIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "cards.purchase.create",
+  intentionId: "int-card-abc",
+  normalizedArgs: {
+    amountCents: 120000,
+    description: "celular",
+    date: "2026-11-07",
+    accountId: ACCOUNT,
+    installmentsTotal: 6,
+  },
+  ...overrides,
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -86,6 +99,30 @@ describe("sanitizeProposalIntent", () => {
     ).toBeUndefined();
     expect(
       sanitizeProposalIntent({ ...intent(), normalizedArgs: { ...intent().normalizedArgs, amountCents: 0 } }),
+    ).toBeUndefined();
+  });
+
+  it("accepts a card purchase with installmentsTotal and rejects an invalid split", () => {
+    expect(sanitizeProposalIntent(cardIntent())).toEqual(cardIntent());
+    expect(
+      sanitizeProposalIntent({
+        ...cardIntent(),
+        normalizedArgs: { ...cardIntent().normalizedArgs, installmentsTotal: 1 },
+      }),
+    ).toBeTruthy();
+    for (const installmentsTotal of [0, 49, 1.5, "6"]) {
+      expect(
+        sanitizeProposalIntent({
+          ...cardIntent(),
+          normalizedArgs: { ...cardIntent().normalizedArgs, installmentsTotal },
+        }),
+      ).toBeUndefined();
+    }
+    expect(
+      sanitizeProposalIntent({
+        ...cardIntent(),
+        normalizedArgs: { ...cardIntent().normalizedArgs, amountCents: 2, installmentsTotal: 3 },
+      }),
     ).toBeUndefined();
   });
 
