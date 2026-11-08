@@ -39,10 +39,14 @@ const PLAYWRIGHT_PROJECT = "p2d-synthetic";
 // invocation); `--offline` runs the full offline chat with the loopback
 // provider; `--live-real` is the future real-provider command (credential
 // loaded ONLY inside the isolated runtime child, never here).
+// `--live-real --p38-smoke` runs the focused P3.8 card-discovery smoke
+// (real provider, P3 writes enabled, no full pilot).
 const MODES = {
   "live-prep": { flag: "P2D_LIVE_PREP", grep: "p2d-live-prep" },
   offline: { flag: "P2D_OFFLINE_CHAT", grep: "p2d-live-offline" },
   "live-real": { flag: "P2D_LIVE_REAL", grep: "p2d-live-real" },
+  "p3-pilot": { flag: "P2D_LIVE_REAL", grep: "real model chooses an expense proposal" },
+  "p38-smoke": { flag: "P2D_LIVE_REAL", grep: "p3\\.8 card discovery smoke" },
 };
 const MODE_FLAGS = ["P2D_LIVE_PREP", "P2D_OFFLINE_CHAT", "P2D_LIVE_REAL"];
 
@@ -58,14 +62,27 @@ export function parsePrepArgs(argv = []) {
   if (args.includes("--help") || args.includes("-h")) return { mode: "help" };
   const offline = args.includes("--offline");
   const liveReal = args.includes("--live-real");
+  const p3Pilot = args.includes("--p3-pilot");
+  const p38Smoke = args.includes("--p38-smoke") || args.includes("--p38-card-smoke");
   if (offline && liveReal) {
     return { mode: "error", message: "p2d-live-prep: --offline and --live-real are mutually exclusive (fail-closed)" };
   }
-  const unknown = args.filter((a) => a !== "--offline" && a !== "--live-real");
+  if ((p38Smoke || p3Pilot) && !liveReal) {
+    return { mode: "error", message: "p2d-live-prep: --p38-smoke/--p3-pilot requires --live-real (fail-closed)" };
+  }
+  if ((p38Smoke || p3Pilot) && offline) {
+    return { mode: "error", message: "p2d-live-prep: modifiers are incompatible with --offline (fail-closed)" };
+  }
+  if (p38Smoke && p3Pilot) {
+    return { mode: "error", message: "p2d-live-prep: --p38-smoke and --p3-pilot are mutually exclusive (fail-closed)" };
+  }
+  const unknown = args.filter((a) => !["--offline", "--live-real", "--p38-smoke", "--p38-card-smoke", "--p3-pilot"].includes(a));
   if (unknown.length > 0) {
     return { mode: "error", message: `p2d-live-prep: unknown args ${JSON.stringify(unknown).slice(0, 120)} (fail-closed)` };
   }
   if (offline) return { mode: "run", flavor: "offline" };
+  if (liveReal && p3Pilot) return { mode: "run", flavor: "p3-pilot", p3Pilot: true };
+  if (liveReal && p38Smoke) return { mode: "run", flavor: "p38-smoke", p38Smoke: true };
   if (liveReal) return { mode: "run", flavor: "live-real" };
   return { mode: "run" };
 }
@@ -77,6 +94,7 @@ function usage() {
     "Usage: node apps/pwa/e2e/support/p2d-live-prep.mjs [--help]",
     "       node apps/pwa/e2e/support/p2d-live-prep.mjs --offline",
     "       node apps/pwa/e2e/support/p2d-live-prep.mjs --live-real",
+    "       node apps/pwa/e2e/support/p2d-live-prep.mjs --live-real --p38-smoke",
     "",
     "Bare invocation loads the existing Playwright P2D lifecycle in-process",
     `(project "${PLAYWRIGHT_PROJECT}", webServer-owned stack + PWA) running`,
@@ -156,10 +174,14 @@ async function main() {
   // the other flags are cleared so ambient values can never select two.
   const flavor = parsed.flavor ?? "live-prep";
   for (const key of MODE_FLAGS) delete process.env[key];
+  delete process.env.P2D_P38_CARD_SMOKE;
+  delete process.env.P2D_P3_PILOT;
   process.env.P2D_BROWSER = "1";
   if (flavor === "offline") process.env.P2D_OFFLINE_CHAT = "1";
-  else if (flavor === "live-real") process.env.P2D_LIVE_REAL = "1";
+  else if (flavor === "live-real" || flavor === "p38-smoke" || flavor === "p3-pilot") process.env.P2D_LIVE_REAL = "1";
   else process.env.P2D_LIVE_PREP = "1";
+  if (flavor === "p38-smoke") process.env.P2D_P38_CARD_SMOKE = "1";
+  if (flavor === "p3-pilot") process.env.P2D_P3_PILOT = "1";
   loadPlaywrightCli(flavor);
   return { ok: true };
 }

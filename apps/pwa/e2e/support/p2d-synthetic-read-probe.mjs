@@ -883,7 +883,18 @@ try {
   let financeToolNames = null;
   const pluginOptions = {};
   if (MODE === "live-real") {
-    const PRODUCT_FINANCE_TOOLS = new Set(["list_accounts", "get_month_summary", "list_categories"]);
+    const PRODUCT_FINANCE_TOOLS = new Set([
+      "list_accounts",
+      "get_month_summary",
+      "list_categories",
+      "list_card_statements",
+      "list_credit_cards",
+      "propose_expense",
+      "propose_income",
+      "propose_transfer",
+      "propose_card_purchase",
+      "propose_statement_payment",
+    ]);
     pluginOptions.onEffectiveTools = (names, error) => {
       if (error || !Array.isArray(names)) {
         financeToolNames = null;
