@@ -718,6 +718,13 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
       classifyLiveRealRequest(`${API_ORIGIN}/cards/statements?accountId=11111111-1111-4111-8111-111111111114`, { method: "GET", headers: { "x-device-token": "device-opaque", "x-workspace-id": "household-a", accept: "application/json" } }, { apiOrigin: API_ORIGIN }).action,
       "allow-api",
     );
+    // Real-model natural calls: /accounts with kind/includeInactive filters (runtime-emitted shapes only).
+    for (const suffix of ["", "?kind=bank", "?kind=cash", "?kind=credit_card", "?includeInactive=true", "?kind=bank&includeInactive=false"]) {
+      assert.equal(
+        classifyLiveRealRequest(`${API_ORIGIN}/accounts${suffix}`, { method: "GET", headers: { "x-device-token": "device-opaque", "x-workspace-id": "household-a", accept: "application/json" } }, { apiOrigin: API_ORIGIN }).action,
+        "allow-api",
+      );
+    }
   });
 
   it("denies every other loopback origin, method, path, query, header and body", () => {

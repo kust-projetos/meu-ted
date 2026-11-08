@@ -76,6 +76,7 @@ const CATALOG_ALLOWED_HEADERS = Object.freeze(["user-agent", "if-none-match"]);
 // stays outside the header allowlist.
 const CATALOG_TYPE_TOKENS = new Set(["chat", "decision", "image"]);
 const MONTH_QUERY_RE = /^\?yearMonth=(\d{4})-(0[1-9]|1[0-2])$/;
+const ACCOUNTS_QUERY_RE = /^(?:\?kind=(bank|cash|credit_card)(?:&includeInactive=(true|false))?|\?includeInactive=(true|false))$/;
 const CATEGORY_QUERY_RE = /^\?kind=(expense|income)$/;
 const STATEMENTS_QUERY_RE = /^\?accountId=[A-Za-z0-9_-]{1,80}$/;
 // Header NAMES that look like credentials. Applied only after the per-route
@@ -217,7 +218,9 @@ function classifyApi(input, init, parsed, method) {
   if (!allowedHeaders) return { action: "deny", reason: "api_method_path" };
   const queryOk = parsed.pathname === "/dashboard/month-summary"
     ? MONTH_QUERY_RE.test(parsed.search)
-    : parsed.pathname === "/categories"
+    : parsed.pathname === "/accounts"
+      ? parsed.search === "" || ACCOUNTS_QUERY_RE.test(parsed.search)
+      : parsed.pathname === "/categories"
       ? parsed.search === "" || CATEGORY_QUERY_RE.test(parsed.search)
     : parsed.pathname === "/cards/statements"
       ? STATEMENTS_QUERY_RE.test(parsed.search)

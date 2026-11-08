@@ -6,7 +6,7 @@ Base: `main@5d35084` (PR #300 / P3.6). Branch do piloto: `pilot/p3-integrated`. 
 
 **P3_INTEGRATED_FLOW_PASS: SIM (Etapa A, provider scriptado, browser real).**
 
-**P3_REAL_MODEL_PASS: NÃO — validação com modelo real NÃO EXECUTADA** (Etapa B preparada, boot live-real falha neste sandbox; sem inferência real não há veredito cognitivo).
+**P3_REAL_MODEL_PASS: SIM (escopo estreito, Etapa B executada)** — modelo real `opencode-go/deepseek-v4.1-flash`: escolha correta de ferramenta (`propose_expense` via intent, zero escrita antes de aprovar) e manutenção de contexto ("qual conta" → Itaú) nos cenários do spec pequeno. Não é prova dos seis fluxos com modelo real.
 
 ## Escopo entregue
 
@@ -66,11 +66,15 @@ Cenário Nov (almoço 6500 + compras Nov 32000 + pagamentos Nov 32000):
 - `node --test p2d-live-modes.test.mjs` → guard ok; 2 falhas são preflight `.env.local` (ambiente, não regressão).
 - Evidence JSON: `apps/pwa/test-results/p3-integrated/evidence.json` (saldo A1/A2, dívida cartão, fatura Nov, parcelas, month-summary, journal, mismatches).
 
-## Etapa B (não executada)
+## Etapa B (executada, escopo estreito)
 
-- Preparada: combo `P2D_LIVE_REAL=1 + P2D_P3_PILOT=1`, guard mínimo de leituras, spec pequena (`p3-integrated-real.spec.ts`: 1 despesa + contexto, asserts estruturais). Modelo: `opencode-go/deepseek-v4.1-flash` (`live-model.json`).
-- Execução tentada: boot live-real falha (`probe without ready` / webServer timeout), reproduzido também na spec de leitura isolada `p2d-live-real` — bloqueio de infraestrutura do sandbox, não do piloto. Nenhuma inferência real foi concluída; **P3_REAL_MODEL_PASS não declarado**.
-- Próximo passo: em ambiente com boot live-real íntegro, rodar `P2D_LIVE_REAL=1 P2D_P3_PILOT=1` e verificar escolha de ferramenta + contexto nos cenários do spec real.
+- Preparada e executada: combo `P2D_LIVE_REAL=1 + P2D_P3_PILOT=1`, guard mínimo de leituras, spec pequena (`p3-integrated-real.spec.ts`: 1 despesa + contexto, asserts estruturais). Modelo: `opencode-go/deepseek-v4.1-flash` (`live-model.json`).
+- Boot live-real resolvido (infra, sem tocar nos fluxos):
+  - Causa 1 (timeout): probe real (catálogo + SDK) + wrangler sequenciais estouravam a janela de 240s do `webServer` Playwright → `timeout: 600000` só no entry do stack.
+  - Causa 2 (stall): fetch-guard negava `GET /accounts?kind=...` (modelo real chama `list_accounts` com `kind=bank&includeInactive=false`) → loop de retry sem proposta. Guard liberalizado só para os formatos que o runtime emite (`kind` bank/cash/credit_card, `includeInactive` isolado ou combinado); teste do guard atualizado.
+- Execução: `P2D_LIVE_REAL=1 P2D_P3_PILOT=1 playwright -g ... p3-integrated-real` → **1 passed (1.5m)**. Evidence `test-results/p3-integrated-real/evidence.json`: `promptCalls 2`, reads `GET /accounts?kind=bank&includeInactive=false` + `GET /categories?kind=expense` (200), `proposals 1`, `financialWrites 0`.
+- Bônus comportamental: com prompt "almoço", o modelo recusou categoria errada e pediu confirmação (honesto); com "mercado" (categoria existente), propôs corretamente.
+- Transporte do runtime não tem `/cards/statements` no allowlist (só contas/categorias/month-summary) — fora do escopo: a spec real não chama faturas; Etapa B maior dependeria dessa inclusão.
 
 ## Entrega
 

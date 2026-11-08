@@ -294,7 +294,10 @@ export default defineConfig({
             port: p2dPorts.ctlPort,
             cwd: PWA_ROOT,
             reuseExistingServer: false,
-            timeout: 240000,
+            // Live-real cold boot is probe (catalog + SDK) + wrangler agent,
+            // sequentially, before ctl listens — 240s is not enough. Synthetic
+            // boots are unchanged (fast stub); this only raises the ceiling.
+            timeout: 600000,
             env: {
               ...process.env,
               P2D_API_PORT: String(p2dPorts.apiPort),

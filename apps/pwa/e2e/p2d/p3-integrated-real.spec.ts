@@ -45,7 +45,7 @@ test("real model chooses an expense proposal and retains conversational context"
   const journalBefore = await ctl<{ requests: unknown[]; financialWrites: unknown[] }>("/p2d/journal");
   const input = await openTed(page);
 
-  await input.fill("Registre uma despesa de R$ 65,00 com almoço na conta Itaú em 07/11/2026.");
+  await input.fill("Registre uma despesa de R$ 65,00 no mercado na conta Itaú em 07/11/2026.");
   await page.getByRole("button", { name: /enviar mensagem/i }).click();
   await expect(page.getByRole("button", { name: /Confirmar R\$ 65,00/ })).toBeVisible({ timeout: 300000 });
   expect(await ctl("/p2d/journal")).toMatchObject({ financialWrites: [] });
