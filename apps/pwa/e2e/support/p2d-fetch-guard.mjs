@@ -78,7 +78,41 @@ const CATALOG_TYPE_TOKENS = new Set(["chat", "decision", "image"]);
 const MONTH_QUERY_RE = /^\?yearMonth=(\d{4})-(0[1-9]|1[0-2])$/;
 const ACCOUNTS_QUERY_RE = /^(?:\?kind=(bank|cash|credit_card)(?:&includeInactive=(true|false))?|\?includeInactive=(true|false))$/;
 const CATEGORY_QUERY_RE = /^\?kind=(expense|income)$/;
-const STATEMENTS_QUERY_RE = /^\?accountId=[A-Za-z0-9_-]{1,80}$/;
+// GET /cards/statements query contract (apps/api/src/routes/cards.ts:86-90
+// querySchema + tool-defs.mjs routeFor): all optional, any valid subset, any
+// order. accountId is a uuid; status is the enum; limit is a canonical 1-50
+// integer (tool-defs emits String(integer), never a coerced/leading-zero form).
+const STATEMENTS_ACCOUNT_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const STATEMENTS_STATUS = new Set(["open", "closed", "paid", "partial", "overdue", "cancelled"]);
+const STATEMENTS_LIMIT_RE = /^([1-9]|[1-4][0-9]|50)$/;
+function statementsQueryAllowed(search) {
+  if (search === "") return true;
+  if (!search.startsWith("?")) return false;
+  const body = search.slice(1);
+  if (body === "") return false;
+  const parts = body.split("&");
+  if (parts.length > 3) return false;
+  const seen = new Set();
+  for (const part of parts) {
+    const eq = part.indexOf("=");
+    if (eq <= 0) return false;
+    const key = part.slice(0, eq);
+    const value = part.slice(eq + 1);
+    if (value.length === 0 || value.includes("=")) return false;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    if (key === "accountId") {
+      if (!STATEMENTS_ACCOUNT_ID_RE.test(value)) return false;
+    } else if (key === "status") {
+      if (!STATEMENTS_STATUS.has(value)) return false;
+    } else if (key === "limit") {
+      if (!STATEMENTS_LIMIT_RE.test(value)) return false;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
 // Header NAMES that look like credentials. Applied only after the per-route
 // allowlist, so `x-device-token`/`cookie` stay allowed exactly where the
 // existing contract sends them.
@@ -223,7 +257,7 @@ function classifyApi(input, init, parsed, method) {
       : parsed.pathname === "/categories"
       ? parsed.search === "" || CATEGORY_QUERY_RE.test(parsed.search)
     : parsed.pathname === "/cards/statements"
-      ? STATEMENTS_QUERY_RE.test(parsed.search)
+      ? statementsQueryAllowed(parsed.search)
       : parsed.search === "";
   if (!queryOk) return { action: "deny", reason: "api_query" };
   for (const name of requestHeaders(input, init)) {

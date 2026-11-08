@@ -718,6 +718,27 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
       classifyLiveRealRequest(`${API_ORIGIN}/cards/statements?accountId=11111111-1111-4111-8111-111111111114`, { method: "GET", headers: { "x-device-token": "device-opaque", "x-workspace-id": "household-a", accept: "application/json" } }, { apiOrigin: API_ORIGIN }).action,
       "allow-api",
     );
+    // list_card_statements legitimate queries: no filter, accountId, status,
+    // limit or any valid combination (API contract in cards.ts:86-90).
+    const stmtHeaders = { "x-device-token": "device-opaque", "x-workspace-id": "household-a", accept: "application/json" };
+    for (const suffix of [
+      "",
+      "?accountId=11111111-1111-4111-8111-111111111114",
+      "?status=open",
+      "?status=partial",
+      "?limit=1",
+      "?limit=50",
+      "?accountId=11111111-1111-4111-8111-111111111114&status=open",
+      "?status=open&limit=5",
+      "?accountId=11111111-1111-4111-8111-111111111114&status=open&limit=5",
+      "?limit=5&status=open&accountId=11111111-1111-4111-8111-111111111114",
+    ]) {
+      assert.equal(
+        classifyLiveRealRequest(`${API_ORIGIN}/cards/statements${suffix}`, { method: "GET", headers: stmtHeaders }, { apiOrigin: API_ORIGIN }).action,
+        "allow-api",
+        `/cards/statements${suffix}`,
+      );
+    }
     // Real-model natural calls: /accounts with kind/includeInactive filters (runtime-emitted shapes only).
     for (const suffix of ["", "?kind=bank", "?kind=cash", "?kind=credit_card", "?includeInactive=true", "?kind=bank&includeInactive=false"]) {
       assert.equal(
@@ -756,6 +777,23 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
         { method: "GET", headers: baseHeaders },
         "api_query",
       ],
+      // Statements: only the contract subsets with uuid/enum/canonical 1-50.
+      [`${API_ORIGIN}/cards/statements`, { method: "POST", headers: baseHeaders, body: "{}" }, "api_method_path"],
+      [`${API_ORIGIN}/cards/statements`, { method: "PATCH", headers: baseHeaders, body: "{}" }, "api_method_path"],
+      [`${API_ORIGIN}/cards/statements`, { method: "DELETE", headers: baseHeaders }, "api_method_path"],
+      [`${API_ORIGIN}/cards/statements/123`, { method: "GET", headers: baseHeaders }, "api_method_path"],
+      [`${API_ORIGIN}/cards/statements?accountId=not-a-uuid`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/statements?accountId=11111111-1111-4111-8111-111111111114&foo=bar`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/statements?status=invalid`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/statements?status=OPEN`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/statements?limit=0`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/statements?limit=51`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/statements?limit=05`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/statements?limit=abc`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/statements?limit=5&limit=6`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/statements?accountId=11111111-1111-4111-8111-111111111114&accountId=11111111-1111-4111-8111-111111111114`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/statements?limit=`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/statements?foo=bar`, { method: "GET", headers: baseHeaders }, "api_query"],
       // Credential headers never reach the synthetic API.
       [
         `${API_ORIGIN}/accounts`,
@@ -839,9 +877,11 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
         ? { token, workspace: "household-a", role: "member" }
         : url.endsWith("/auth/devices/me")
           ? { deviceId: "device-1", householdId: "household-a" }
-          : url.includes("/accounts")
+          : url.includes("/cards/statements")
             ? { items: [], total: 0 }
-            : { yearMonth: "2026-06", incomeCents: 0, expenseCents: 0, balanceCents: 0, transactionCount: 0 };
+            : url.includes("/accounts")
+              ? { items: [], total: 0 }
+              : { yearMonth: "2026-06", incomeCents: 0, expenseCents: 0, balanceCents: 0, transactionCount: 0 };
       return { status: 200, redirected: false, json: async () => body };
     };
     const guard = createLiveRealFetchGuard({
@@ -868,13 +908,14 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
     const host = { token: "device-opaque", household: "household-a" };
     await transport.call({ route: "/accounts", method: "GET", host });
     await transport.call({ route: "/dashboard/month-summary?yearMonth=2026-06", method: "GET", host });
+    await transport.call({ route: "/cards/statements?accountId=11111111-1111-4111-8111-111111111114", method: "GET", host });
 
-    // Exactly the four contract pairs the runtime already sends; nothing
-    // blocked, every response a 200.
-    assert.equal(guard.stats.apiAllowed, 4);
+    // Exactly the contract pairs the runtime already sends (identity x2 +
+    // accounts + summary + statements); nothing blocked, every response a 200.
+    assert.equal(guard.stats.apiAllowed, 5);
     assert.equal(guard.stats.apiBlocked, 0);
     assert.equal(guard.stats.blocked, 0);
-    assert.deepEqual(guard.stats.apiStatuses, [200, 200, 200, 200]);
+    assert.deepEqual(guard.stats.apiStatuses, [200, 200, 200, 200, 200]);
   });
 
   it("fails closed on a missing/invalid apiOrigin (never a generic localhost release)", () => {

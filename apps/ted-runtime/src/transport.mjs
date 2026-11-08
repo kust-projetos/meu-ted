@@ -30,20 +30,22 @@
 //   location. No production access: baseUrl is caller-provided (local/stub
 //   in P1); nothing here defaults to any production origin.
 //
-// Allowlist (P1 read slice + P3 opt-in category read): exact pathnames
-// GET /accounts, GET /dashboard/month-summary and GET /categories. Query
-// strings pass through to the real API (it owns domain validation). Prefix
-// matching is forbidden. No POST, no propose/confirm/execute routes.
+// Allowlist (P1 read slice + P3 opt-in category/statement reads): exact
+// pathnames GET /accounts, GET /dashboard/month-summary, GET /categories
+// and GET /cards/statements. Query strings pass through to the real API
+// (it owns domain validation). Prefix matching is forbidden. No POST, no
+// propose/confirm/execute routes.
 
 import { ToolError } from './tool-defs.mjs';
 
 export { ToolError };
 
-const ALLOWED_PATHS = new Set(['/accounts', '/dashboard/month-summary', '/categories']);
+const ALLOWED_PATHS = new Set(['/accounts', '/dashboard/month-summary', '/categories', '/cards/statements']);
 const ALLOWED_METHODS = new Map([
   ['/accounts', new Set(['GET'])],
   ['/dashboard/month-summary', new Set(['GET'])],
   ['/categories', new Set(['GET'])],
+  ['/cards/statements', new Set(['GET'])],
 ]);
 
 export function isRouteAllowlisted(route) {

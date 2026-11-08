@@ -25,6 +25,7 @@ import {
   isP3WritesEnabled,
 } from '../src/plugin.mjs';
 import { createProposalIntentRegistry } from '../src/proposal-intents.mjs';
+import { HttpFinanceTransport, isRouteAllowlisted } from '../src/transport.mjs';
 
 const host = Object.freeze({
   label: 'a',
@@ -212,5 +213,39 @@ describe('p3.6 statement payment: intent only, never HTTP/write', () => {
       () => withRegistry.propose_statement_payment(validPayArgs(), host, { intentionId: 'i' }),
       /host-bound session context is required/,
     );
+  });
+});
+
+describe('p3.6 statement payment: transport allowlist (GET only, same identity)', () => {
+  it('allowlists GET /cards/statements with the contract queries, blocks writes and sub-paths', async () => {
+    assert.equal(isRouteAllowlisted('/cards/statements'), true);
+    assert.equal(isRouteAllowlisted(`/cards/statements?accountId=${CARD}`), true);
+    assert.equal(isRouteAllowlisted('/cards/statements?status=open'), true);
+    assert.equal(isRouteAllowlisted('/cards/statements?limit=5'), true);
+    assert.equal(isRouteAllowlisted(`/cards/statements?accountId=${CARD}&status=open&limit=5`), true);
+    assert.equal(isRouteAllowlisted('/cards/statements/123'), false);
+    assert.equal(isRouteAllowlisted('/cards/statements/123/pay'), false);
+    const t = new HttpFinanceTransport({
+      baseUrl: 'http://127.0.0.1:9',
+      fetchImpl: async () => { throw new Error('must not be called'); },
+    });
+    await assert.rejects(() => t.call({ route: '/cards/statements', method: 'POST', host }), /method not allowlisted/);
+    await assert.rejects(() => t.call({ route: '/cards/statements', method: 'PATCH', host }), /method not allowlisted/);
+    await assert.rejects(() => t.call({ route: '/cards/statements', method: 'DELETE', host }), /method not allowlisted/);
+    await assert.rejects(() => t.call({ route: '/cards/statements/123/pay', method: 'POST', host }), /not allowlisted/);
+  });
+
+  it('sends host-derived headers and never Authorization', async () => {
+    const seen = [];
+    const fetchImpl = async (url, init) => {
+      seen.push({ url, init });
+      return { status: 200, json: async () => ({ items: [], total: 0 }) };
+    };
+    const t = new HttpFinanceTransport({ baseUrl: 'http://127.0.0.1:9', fetchImpl });
+    await t.call({ route: `/cards/statements?accountId=${CARD}`, method: 'GET', host });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].init.headers['x-device-token'], 'secret-token-a');
+    assert.equal(seen[0].init.headers['x-workspace-id'], 'H_A');
+    assert.ok(!('authorization' in seen[0].init.headers), 'never Authorization');
   });
 });
