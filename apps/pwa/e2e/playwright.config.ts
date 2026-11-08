@@ -41,15 +41,18 @@ const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
 // synthetic stack and never carry a real credential.
 const EXPENSE = process.env.P2D_EXPENSE === "1";
 const INCOME = process.env.P2D_INCOME === "1";
+const CARD = process.env.P2D_CARD === "1";
 const TRANSFER = process.env.P2D_TRANSFER === "1";
-if ([EXPENSE, INCOME, TRANSFER].filter(Boolean).length > 1) {
-  throw new Error("select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_TRANSFER)");
+if ([EXPENSE, INCOME, CARD, TRANSFER].filter(Boolean).length > 1) {
+  throw new Error(
+    "select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD|P2D_TRANSFER)",
+  );
 }
 if ([LIVE_PREP, OFFLINE_CHAT, LIVE_REAL].filter(Boolean).length > 1) {
   throw new Error("select at most one P2D live mode (P2D_LIVE_PREP|P2D_OFFLINE_CHAT|P2D_LIVE_REAL)");
 }
 const P2D_LIVE_MODE = LIVE_PREP || OFFLINE_CHAT || LIVE_REAL;
-const PROPOSAL = EXPENSE || INCOME || TRANSFER;
+const PROPOSAL = EXPENSE || INCOME || CARD || TRANSFER;
 const P2D_ACTIVE = P2D || P2D_LIVE_MODE || PROPOSAL;
 const P2D_SPEC = LIVE_PREP
   ? "**/p2d/p2d-live-prep.spec.ts"
@@ -57,6 +60,8 @@ const P2D_SPEC = LIVE_PREP
     ? "**/p2d/p2d-live-offline.spec.ts"
     : LIVE_REAL
       ? "**/p2d/p2d-live-real.spec.ts"
+      : CARD
+        ? "**/p2d/p3-card-purchase.spec.ts"
       : TRANSFER
         ? "**/p2d/p3-transfer.spec.ts"
         : INCOME
@@ -287,6 +292,7 @@ export default defineConfig({
               ...(LIVE_REAL ? { P2D_LIVE_REAL: "1" } : {}),
               ...(EXPENSE ? { P2D_EXPENSE: "1" } : {}),
               ...(INCOME ? { P2D_INCOME: "1" } : {}),
+              ...(CARD ? { P2D_CARD: "1" } : {}),
               ...(TRANSFER ? { P2D_TRANSFER: "1" } : {}),
             },
           },

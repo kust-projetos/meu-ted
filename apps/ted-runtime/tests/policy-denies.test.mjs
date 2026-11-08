@@ -1,4 +1,4 @@
-// PR290-POLICY-DENY-BY-DEFAULT-06 — TDD RED: native deny-by-default policy audit
+﻿// PR290-POLICY-DENY-BY-DEFAULT-06 — TDD RED: native deny-by-default policy audit
 // correction (official OpenCode V2, local SDK 2.2.4 declarations).
 //
 // Corrected understanding (was: "new tools default ask"):
@@ -45,7 +45,7 @@ const EXPECTED_TOOL_USE_DENIES = [
 // Exact product finance resources the native allowlist may name (no wildcards).
 // Includes the local-only P3 proposal intent; tedConfig() default carries only
 // the reads (P3 writes are an explicit local opt-in).
-const EXPECTED_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_categories', 'propose_expense', 'propose_income', 'propose_transfer'];
+const EXPECTED_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_categories', 'propose_card_purchase', 'propose_expense', 'propose_income', 'propose_transfer'];
 const DEFAULT_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_categories'];
 
 function agentPerms(profile) {
@@ -99,7 +99,7 @@ describe('PR290 deny-by-default: agents.ted explicit native allowlist', () => {
       const allows = perms.slice(1);
       assert.deepEqual(allows.map((p) => p.resource).sort(), [...EXPECTED_FINANCE_RESOURCES].sort());
       for (const p of allows) assert.equal(p.action, 'ted.finance.read');
-      for (const resource of ['propose_expense', 'propose_income', 'propose_transfer']) {
+      for (const resource of ['propose_card_purchase', 'propose_expense', 'propose_income', 'propose_transfer']) {
         assert.deepEqual(allows.find((p) => p.resource === resource), {
           action: 'ted.finance.read',
           resource,

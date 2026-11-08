@@ -25,6 +25,7 @@ import { createMutationProposal } from './mutation-proposal.js';
 
 export const PROPOSE_EXPENSE_TOOL = 'transactions.expense.create';
 export const PROPOSE_INCOME_TOOL = 'transactions.income.create';
+export const PROPOSE_CARD_PURCHASE_TOOL = 'cards.purchase.create';
 export const PROPOSE_TRANSFER_TOOL = 'transactions.transfer.create';
 
 const isoDate = z
@@ -49,6 +50,16 @@ export const transactionProposalArgsSchema = z
   })
   .strict();
 
+export const cardPurchaseProposalArgsSchema = z
+  .object({
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    description: z.string().trim().min(1).max(240),
+    date: isoDate,
+    accountId: z.string().uuid(),
+    categoryId: z.string().uuid().optional(),
+  })
+  .strict();
+
 const intentBase = {
   intentionId: z.string().trim().min(1).max(128),
   normalizedArgs: transactionProposalArgsSchema,
@@ -60,6 +71,15 @@ export const expenseProposalIntentSchema = z
 
 export const incomeProposalIntentSchema = z
   .object({ tool: z.literal(PROPOSE_INCOME_TOOL), ...intentBase })
+  .strict();
+
+const cardIntentBase = {
+  intentionId: z.string().trim().min(1).max(128),
+  normalizedArgs: cardPurchaseProposalArgsSchema,
+} as const;
+
+export const cardPurchaseProposalIntentSchema = z
+  .object({ tool: z.literal(PROPOSE_CARD_PURCHASE_TOOL), ...cardIntentBase })
   .strict();
 
 /**
@@ -88,15 +108,17 @@ export const transferProposalIntentSchema = z
   })
   .strict();
 
-/** Discriminated union: the broker route accepts exactly these three tools. */
+/** Discriminated union: the broker route accepts these proposal tools. */
 export const proposalIntentSchema = z.discriminatedUnion('tool', [
   expenseProposalIntentSchema,
   incomeProposalIntentSchema,
+  cardPurchaseProposalIntentSchema,
   transferProposalIntentSchema,
 ]);
 
 export type ExpenseProposalIntent = z.infer<typeof expenseProposalIntentSchema>;
 export type IncomeProposalIntent = z.infer<typeof incomeProposalIntentSchema>;
+export type CardPurchaseProposalIntent = z.infer<typeof cardPurchaseProposalIntentSchema>;
 export type TransferProposalIntent = z.infer<typeof transferProposalIntentSchema>;
 export type TransactionProposalIntent = z.infer<typeof proposalIntentSchema>;
 export type ProposalBrokerIdentity = {
@@ -117,7 +139,12 @@ function proposalSummary(intent: TransactionProposalIntent): string {
   if (intent.tool === PROPOSE_TRANSFER_TOOL) {
     return `Transferência de ${amount} em "${intent.normalizedArgs.description}"`;
   }
-  const noun = intent.tool === PROPOSE_INCOME_TOOL ? 'Receita' : 'Despesa';
+  const noun =
+    intent.tool === PROPOSE_INCOME_TOOL
+      ? 'Receita'
+      : intent.tool === PROPOSE_CARD_PURCHASE_TOOL
+        ? 'Compra no cartão'
+        : 'Despesa';
   return `${noun} de ${amount} em "${intent.normalizedArgs.description}"`;
 }
 

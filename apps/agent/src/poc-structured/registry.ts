@@ -209,6 +209,17 @@ export const OPERATION_ARG_KEYS: Readonly<Record<string, ReadonlySet<string>>> =
     'categoryName',
     'categoryQuery',
   ),
+  // P3.4: 1x card purchase. The card is the accountId; category is optional.
+  'cards.purchase.create': argKeys(
+    'amountCents',
+    'description',
+    'date',
+    'accountId',
+    'categoryId',
+    'accountName',
+    'categoryName',
+    'categoryQuery',
+  ),
   'transactions.transfer.create': argKeys(
     'amountCents',
     'description',

@@ -361,14 +361,23 @@ try {
     if (!stub || typeof stub !== "object" || Array.isArray(stub)) {
       fail("args", "stub is required for synthetic/offline modes");
     }
-    STUB_MODE = stub.mode === "expense" || stub.mode === "income" || stub.mode === "transfer"
+    STUB_MODE =
+      stub.mode === "expense" || stub.mode === "income" || stub.mode === "card" || stub.mode === "transfer"
       ? "proposal"
       : Array.isArray(stub.toolSequence) && stub.toolSequence.length > 0
         ? "sequence"
         : "legacy";
     if (STUB_MODE === "proposal") {
-      if (stub.toolName !== "propose_expense" && stub.toolName !== "propose_income" && stub.toolName !== "propose_transfer") {
-        fail("args", "proposal stub requires toolName propose_expense|propose_income|propose_transfer");
+      if (
+        stub.toolName !== "propose_expense" &&
+        stub.toolName !== "propose_income" &&
+        stub.toolName !== "propose_card_purchase" &&
+        stub.toolName !== "propose_transfer"
+      ) {
+        fail(
+          "args",
+          "proposal stub requires toolName propose_expense|propose_income|propose_card_purchase|propose_transfer",
+        );
       }
       if (!stub.toolArgs || typeof stub.toolArgs !== "object" || Array.isArray(stub.toolArgs)) {
         fail("args", "proposal stub requires toolArgs");
@@ -598,6 +607,8 @@ try {
             payload = finalTextEvents(
               stub.toolName === "propose_income"
                 ? "Proposta de receita preparada."
+                : stub.toolName === "propose_card_purchase"
+                  ? "Proposta de compra no cartão preparada."
                 : stub.toolName === "propose_transfer"
                   ? "Proposta de transferência preparada."
                   : "Proposta de despesa preparada.",

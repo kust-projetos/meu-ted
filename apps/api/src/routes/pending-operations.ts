@@ -38,7 +38,24 @@ export const V2_APPROVAL_CAPABILITIES = {
   authorize: 'financial.approval.autoexecute',
 } as const;
 
-export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { store?: PendingOperationStore; resolveToken: AuthResolver; executor?: PendingOperationExecutor; undoService?: UndoService; v2Store?: PendingOperationV2Store; v2Executor?: PendingExecutor; v2Only?: boolean; readModel?: Pick<ReadModelStore, 'listAccounts' | 'listCategories'> & Partial<Pick<ReadModelStore, 'listAllTransactions'>>; approvalPolicy?: ApprovalPolicy }): void => {
+export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
+  store?: PendingOperationStore;
+  resolveToken: AuthResolver;
+  executor?: PendingOperationExecutor;
+  undoService?: UndoService;
+  v2Store?: PendingOperationV2Store;
+  v2Executor?: PendingExecutor;
+  v2Only?: boolean;
+  readModel?: Pick<ReadModelStore, 'listAccounts' | 'listCategories'> & Partial<Pick<ReadModelStore, 'listAllTransactions'>>;
+  /**
+   * P3.4: card purchases target a credit-card account, which the generic
+   * read model deliberately excludes (cards are served by the CardStore).
+   * The display label for a `cards.purchase.create` card therefore resolves
+   * from this store; absent it, the card stays fail-closed (no Confirm).
+   */
+  cardStore?: Pick<import('../cards/store.js').CardStore, 'listCreditCardAccounts'>;
+  approvalPolicy?: ApprovalPolicy;
+}): void => {
   // PR-1 (retire-pending-v1): the registration is unconditionally V2-only.
   // `store`, `executor` and `v2Only` are deprecated no-ops retained so
   // existing call sites keep compiling; the V1 routes are gone, so these
@@ -149,6 +166,18 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
         return false;
       }
       const accountLabels = new Map(accounts.map((account) => [account.id, account.name]));
+      // P3.4: a card purchase targets a credit-card account. The generic read
+      // model excludes cards (they are served by the CardStore), so merge the
+      // workspace's card labels before gating Confirm. A lookup failure keeps
+      // the card fail-closed (the label stays absent → 409).
+      if (record.tool === 'cards.purchase.create' && opts.cardStore) {
+        try {
+          const cards = await opts.cardStore.listCreditCardAccounts(ctx.householdId);
+          for (const card of cards) accountLabels.set(card.id, card.name);
+        } catch {
+          /* honest omission: no card label → not actionable */
+        }
+      }
       const categoryLabels = new Map(categories.map((category) => [category.id, category.name]));
       const storedArgs = (record.normalizedArgs ?? {}) as Record<string, unknown>;
       const accountId = typeof storedArgs.accountId === 'string' ? storedArgs.accountId : undefined;
@@ -615,6 +644,17 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: { sto
               const transactions=await opts.readModel.listAllTransactions(ctx.householdId);
               for (const transaction of transactions) transactionRows.set(transaction.id,transaction);
             } catch { /* no target context: description card remains degraded/non-actionable */ }
+          }
+        }
+        // P3.4: card purchases target a credit-card account, which the
+        // generic read model excludes. Merge the workspace's card labels so
+        // the rehydrated card can show the CARD and stay actionable.
+        if (records.some((record) => record.tool === 'cards.purchase.create') && opts.cardStore) {
+          try {
+            const cards = await opts.cardStore.listCreditCardAccounts(ctx.householdId);
+            for (const card of cards) accountLabels.set(card.id, card.name);
+          } catch {
+            /* honest omission: no card label → degraded card */
           }
         }
         const items = records.map((record) => {

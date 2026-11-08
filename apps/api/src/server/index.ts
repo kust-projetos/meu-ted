@@ -256,7 +256,7 @@ const start = async (): Promise<void> => {
         // FIX-P1 labels: authoritative account/category display labels for
         // the active presentation resolve from this workspace-scoped store.
         pendingV2Store: createPostgresPendingOperationV2Store(pool),
-        pendingV2Executor: createPendingOperationV2Executor(writes),
+        pendingV2Executor: createPendingOperationV2Executor(writes, cardStore),
         pendingV2ReadModel: store,
         ...(vapid?.publicKey ? { vapidPublicKey: vapid.publicKey } : {}),
        ...(pushDelivery ? { pushDelivery } : {}),
@@ -365,7 +365,7 @@ const start = async (): Promise<void> => {
         // FIX-P1 labels: authoritative account/category display labels for
         // the active presentation resolve from this workspace-scoped store.
         pendingV2Store: createPostgresPendingOperationV2Store(pool),
-        pendingV2Executor: createPendingOperationV2Executor(writes),
+        pendingV2Executor: createPendingOperationV2Executor(writes, cardStore),
         pendingV2ReadModel: store,
         ...(vapid?.publicKey ? { vapidPublicKey: vapid.publicKey } : {}),
         ...(pushDelivery ? { pushDelivery } : {}),

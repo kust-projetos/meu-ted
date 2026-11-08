@@ -66,4 +66,44 @@ describe('buildPendingOperationPresentation (SPEC §16)', () => {
     }
     expect(JSON.stringify(presentation)).not.toContain('attestation');
   });
+
+  it('projects a P3.4 card purchase (card + value + description + date, category optional)', () => {
+    const cardArgs = {
+      description: 'supermercado',
+      amountCents: 15000,
+      date: '2026-11-07',
+      accountId: 'card-1',
+    };
+    const presentation = buildPendingOperationPresentation({
+      ...base,
+      tool: 'cards.purchase.create',
+      normalizedArgs: cardArgs,
+      accountLabel: 'Nubank Card',
+    });
+    expect(presentation).not.toBeNull();
+    expect(presentation!.title).toBe('Confirmar compra no cartão');
+    expect(presentation!.amountCents).toBe(15000);
+    expect(presentation!.description).toBe('supermercado');
+    expect(presentation!.date).toBe('2026-11-07');
+    expect(presentation!.account).toEqual({ id: 'card-1', label: 'Nubank Card' });
+    expect(presentation!.category).toBeUndefined();
+    expect(pendingOperationPresentationSchema.safeParse(presentation).success).toBe(true);
+  });
+
+  it('keeps the optional card category when the read model resolves it', () => {
+    const presentation = buildPendingOperationPresentation({
+      ...base,
+      tool: 'cards.purchase.create',
+      normalizedArgs: {
+        description: 'supermercado',
+        amountCents: 15000,
+        date: '2026-11-07',
+        accountId: 'card-1',
+        categoryId: 'cat-food',
+      },
+      accountLabel: 'Nubank Card',
+      categoryLabel: 'Mercado',
+    });
+    expect(presentation!.category).toEqual({ id: 'cat-food', label: 'Mercado' });
+  });
 });

@@ -13,15 +13,23 @@
  */
 import { z } from 'zod';
 import type { MutationReceipt } from '@pi-finance/llm-contracts';
-import { createAccountInputSchema, createExpenseInputSchema, createIncomeInputSchema, createTransferInputSchema } from '../writes/types.js';
+import {
+  createAccountInputSchema,
+  createExpenseInputSchema,
+  createIncomeInputSchema,
+  createTransferInputSchema,
+} from '../writes/types.js';
+import { isoDateSchema } from '../shared/iso-date.js';
 import { DomainError } from '../writes/errors.js';
 import type { WriteStore } from '../writes/store.js';
+import type { CardStore } from '../cards/store.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
 import { AUTOEXECUTION_ELIGIBLE_TOOLS } from './policy.js';
 
 export const APPROVAL_TOOL_IDS = [
   'transactions.expense.create',
   'transactions.income.create',
+  'cards.purchase.create',
   'transactions.transfer.create',
   'transactions.update',
   'accounts.create',
@@ -36,6 +44,7 @@ export type ApprovalToolId = (typeof APPROVAL_TOOL_IDS)[number];
 
 export type ApprovalToolExecutionContext = {
   writes: WriteStore;
+  cardStore?: CardStore;
   workspaceId: string;
   args: unknown;
   idempotencyKey: string;
@@ -185,6 +194,65 @@ const executeIncomeCreate: ApprovalToolExecutor = async ({
   let receipt: MutationReceipt;
   try {
     receipt = buildTedReceipt('transactions.income.create', operationId, { type: 'transaction', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId,
+    receipt,
+  };
+};
+
+export const createCardPurchaseArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    amountCents: z.number().int().positive(),
+    description: z.string().trim().min(1).max(240),
+    date: isoDateSchema,
+    categoryId: z.string().uuid().optional(),
+    subcategoryId: z.string().uuid().optional(),
+    notes: z.string().trim().max(500).optional(),
+  })
+  .strict();
+
+export type CreateCardPurchaseArgs = z.infer<typeof createCardPurchaseArgsSchema>;
+
+const executeCardPurchaseCreate: ApprovalToolExecutor = async ({
+  writes: _writes,
+  cardStore,
+  workspaceId,
+  args,
+  idempotencyKey,
+  actorId,
+}) => {
+  const parsed = createCardPurchaseArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_card_purchase_arguments');
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  const store = cardStore;
+  if (!store) throw new Error('validation.card_store_unavailable');
+  let transactions: { id: string }[];
+  try {
+    transactions = await store.createCardPurchase(workspaceId, {
+      accountId: parsed.data.accountId,
+      amountCents: parsed.data.amountCents,
+      description: parsed.data.description,
+      date: parsed.data.date,
+      ...(parsed.data.categoryId ? { categoryId: parsed.data.categoryId } : {}),
+      ...(parsed.data.subcategoryId ? { subcategoryId: parsed.data.subcategoryId } : {}),
+      ...(parsed.data.notes ? { notes: parsed.data.notes } : {}),
+    }, idempotencyKey !== undefined ? { idempotencyKey } : undefined);
+  } catch (err) {
+    const { DomainError } = await import('../writes/errors.js');
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  const first = Array.isArray(transactions) ? transactions[0] : (transactions as { id: string });
+  if (!first || typeof first.id !== 'string') throw createApprovalExecutionUncertainError();
+  const operationId = first.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('cards.purchase.create', operationId, { type: 'transaction', id: operationId });
   } catch {
     throw createApprovalExecutionUncertainError();
   }
@@ -576,6 +644,14 @@ const executeAccountUpdate: ApprovalToolExecutor = async ({
 };
 
 const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
+  'cards.purchase.create': {
+    tool: 'cards.purchase.create',
+    inputSchema: createCardPurchaseArgsSchema,
+    approvalRequired: true,
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: false,
+    executor: executeCardPurchaseCreate,
+  },
   'transactions.expense.create': {
     tool: 'transactions.expense.create',
     inputSchema: createExpenseInputSchema,

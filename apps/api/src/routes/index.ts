@@ -225,10 +225,11 @@ function isPiAgentBearer(authorization: unknown): boolean {
  * executor so the keyed write commits its undo-eligible audit row with the
  * correct actor. No actor identity is ever read from normalizedArgs.
  */
-export const createPendingOperationV2Executor = (writes: WriteStore): PendingExecutor => async (operation) => {
+export const createPendingOperationV2Executor = (writes: WriteStore, cardStore?: import('../cards/store.js').CardStore): PendingExecutor => async (operation) => {
   const contract = requireApprovalToolContract(operation.tool);
   return contract.executor({
     writes,
+    ...(cardStore !== undefined ? { cardStore } : {}),
     workspaceId: operation.workspaceId,
     args: operation.normalizedArgs,
     idempotencyKey: operation.idempotencyKey,
@@ -655,6 +656,9 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
     ...(deps.pendingV2Store ? { v2Store: deps.pendingV2Store } : {}),
     ...(deps.pendingV2Executor ? { v2Executor: deps.pendingV2Executor } : {}),
     ...(deps.pendingV2ReadModel ? { readModel: deps.pendingV2ReadModel } : {}),
+    // P3.4: card-purchase presentation resolves the credit-card label from
+    // the CardStore (the generic read model excludes cards by design).
+    ...(deps.cardStore ? { cardStore: deps.cardStore } : {}),
   });
   registerAdoptionRoutes(app, {
     store: deps.adoptionStore ?? createInMemoryAdoptionStore(),

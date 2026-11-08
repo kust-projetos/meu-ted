@@ -37,7 +37,7 @@ export type CardStore = {
     notes?: string;
     installmentNumber?: number;
     installmentsTotal?: number;
-  }): Promise<import('../types/domain.js').Transaction[]>;
+  }, options?: { idempotencyKey?: string }): Promise<import('../types/domain.js').Transaction[]>;
 
   /** Register all installments of a purchase at once. */
   createCardInstallments(householdId: string, input: {

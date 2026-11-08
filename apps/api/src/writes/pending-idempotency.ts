@@ -415,3 +415,4 @@ const isCategorySnapshot = (value: unknown, householdId: string): value is Categ
   }
   return true;
 };
+
