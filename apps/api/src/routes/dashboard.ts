@@ -7,6 +7,7 @@ import type { AuthResolver } from './auth.js';
 
 export const monthSummaryQuerySchema = z.object({
   yearMonth: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  basis: z.enum(['liquidez', 'competencia']).optional(),
 });
 const monthSummaryQuery = monthSummaryQuerySchema;
 
@@ -34,8 +35,11 @@ export const registerDashboardRoutes = (
     const month = Number(parsed.data.yearMonth.slice(5, 7));
     const start = `${parsed.data.yearMonth}-01`;
     const nextMonth = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
-    const transactions = (await opts.store.listAllTransactions(ctx.householdId))
+    const monthTransactions = (await opts.store.listAllTransactions(ctx.householdId))
       .filter((transaction) => transaction.date >= start && transaction.date < nextMonth);
+    const transactions = parsed.data.basis === 'competencia'
+      ? monthTransactions.filter((transaction) => transaction.kind !== 'expense' || (transaction as typeof transaction & { statementPaymentId?: string }).statementPaymentId === undefined)
+      : monthTransactions;
     const incomeCents = transactions
       .filter((transaction) => transaction.kind === 'income')
       .reduce((total, transaction) => total + transaction.amountCents, 0);

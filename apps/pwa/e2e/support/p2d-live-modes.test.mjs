@@ -709,6 +709,15 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
       classifyLiveRealRequest(`${API_ORIGIN}/accounts`, { method: "GET" }, { apiOrigin: `${API_ORIGIN}/` }).action,
       "allow-api",
     );
+    // P3 pilot live-real reads: categories + statements GETs allowlisted (reads only, no writes).
+    assert.equal(
+      classifyLiveRealRequest(`${API_ORIGIN}/categories?kind=expense`, { method: "GET", headers: { "x-device-token": "device-opaque", "x-workspace-id": "household-a", accept: "application/json" } }, { apiOrigin: API_ORIGIN }).action,
+      "allow-api",
+    );
+    assert.equal(
+      classifyLiveRealRequest(`${API_ORIGIN}/cards/statements?accountId=11111111-1111-4111-8111-111111111114`, { method: "GET", headers: { "x-device-token": "device-opaque", "x-workspace-id": "household-a", accept: "application/json" } }, { apiOrigin: API_ORIGIN }).action,
+      "allow-api",
+    );
   });
 
   it("denies every other loopback origin, method, path, query, header and body", () => {
@@ -726,7 +735,6 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
       [`http://127.0.0.1/accounts`, { method: "GET", headers: baseHeaders }, "api_origin_mismatch"],
       // Writes and non-contract routes.
       [`${API_ORIGIN}/accounts`, { method: "POST", headers: baseHeaders, body: "{}" }, "api_method_path"],
-      [`${API_ORIGIN}/categories`, { method: "GET", headers: baseHeaders }, "api_method_path"],
       [`${API_ORIGIN}/accounts/123`, { method: "GET", headers: baseHeaders }, "api_method_path"],
       [`${API_ORIGIN}/auth/agent-token`, { method: "GET", headers: baseHeaders }, "api_method_path"],
       [`${API_ORIGIN}/dashboard/month-summary`, { method: "POST", headers: baseHeaders, body: "{}" }, "api_method_path"],

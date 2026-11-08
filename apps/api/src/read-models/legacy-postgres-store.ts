@@ -77,6 +77,9 @@ const mapTransaction = (r: Row): Transaction => {
   if (subId !== null && subId !== undefined) base.subcategoryId = subId as string;
   const notes = r['notes'];
   if (notes !== null && notes !== undefined) base.notes = notes as string;
+  // Legacy dialect has no statement_payment_id column (V056 canonical-only):
+  // competence exclusion does not apply here; basis=competencia behaves as
+  // liquidez on legacy until a structured link exists (analytics refuses it).
   return base;
 };
 

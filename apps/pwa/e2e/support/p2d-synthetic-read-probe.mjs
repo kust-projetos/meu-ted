@@ -82,7 +82,7 @@ if (!RAW_CONFIG) {
   process.exit(1);
 }
 const CONFIG = JSON.parse(RAW_CONFIG);
-const { root, identity, apiBaseUrl, tedRuntimeDir, stub } = CONFIG;
+const { root, identity, apiBaseUrl, ctlBaseUrl, tedRuntimeDir, stub } = CONFIG;
 
 // Runtime modes (test-only):
 // - synthetic (default, unchanged): product test profile + fixture provider;
@@ -361,7 +361,9 @@ try {
     if (!stub || typeof stub !== "object" || Array.isArray(stub)) {
       fail("args", "stub is required for synthetic/offline modes");
     }
-    STUB_MODE =
+    STUB_MODE = stub.mode === "pilot"
+      ? "pilot"
+      :
       stub.mode === "expense" || stub.mode === "income" || stub.mode === "card" || stub.mode === "transfer" || stub.mode === "statement"
       ? "proposal"
       : Array.isArray(stub.toolSequence) && stub.toolSequence.length > 0
@@ -383,6 +385,10 @@ try {
       if (!stub.toolArgs || typeof stub.toolArgs !== "object" || Array.isArray(stub.toolArgs)) {
         fail("args", "proposal stub requires toolArgs");
       }
+    } else if (STUB_MODE === "pilot") {
+      if (!Array.isArray(stub.toolSequence) || stub.toolSequence.some((s) => !s || typeof s.match !== "string" || typeof s.name !== "string" || !s.args)) fail("args", "pilot toolSequence is invalid");
+      if (typeof ctlBaseUrl !== "string" || new URL(ctlBaseUrl).hostname !== "127.0.0.1") fail("args", "pilot ctlBaseUrl must be loopback");
+      SEQUENCE = stub.toolSequence.map((s) => ({ ...s }));
     } else {
       if (MODE === "offline" && STUB_MODE !== "sequence") {
         fail("args", "offline mode requires stub.toolSequence");
@@ -455,9 +461,8 @@ try {
     }
     const expectedModelID = pinnedModel.split("/")[1];
     // `apiOrigin` is the EXACT synthetic API origin from CONFIG — the guard
-    // admits only that literal loopback origin for the four contract pairs
-    // the runtime already sends (`resolveGatewayIdentity` + the finance
-    // transport). No generic localhost/::1/other-port release, no write.
+    // admits only that literal loopback origin for the allowlisted contract
+    // pairs (reads only; no write).
     const guard = createLiveRealFetchGuard({
       fetchImpl: realFetch,
       apiOrigin: apiBaseUrl,
@@ -554,13 +559,14 @@ try {
   const stubRemotes = [];
   const stubMismatches = [];
   let callSeq = 0;
+  let pilotIndex = 0;
   let stubUrl = null;
   const http = await import("node:http");
   if (MODE !== "live-real") {
   stubServer = http.createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => { raw += c; });
-    req.on("end", () => {
+    req.on("end", async () => {
       const remote = req.socket && req.socket.remoteAddress;
       if (req.method === "POST") {
         stubRemotes.push(remote);
@@ -617,6 +623,33 @@ try {
                     : "Proposta de despesa preparada.",
               FIXTURE_MODEL,
             );
+          }
+        } else if (STUB_MODE === "pilot") {
+          const lastUser = [...messages].reverse().find((m) => m && m.role === "user");
+          const userText = typeof lastUser?.content === "string" ? lastUser.content : "";
+          const stepIndex = SEQUENCE.findIndex((s) => userText.includes(s.match));
+          const toolResults = extractToolDtos(messages);
+          if (stepIndex < 0) {
+            payload = finalTextEvents(userText.includes("Quanto falta") ? "Não falta valor desta fatura; ela está quitada." : userText.includes("Qual conta") ? "Você usou a conta Itaú." : "Qual fatura e período você quer pagar? Informe o cartão e o período (por exemplo, novembro ou dezembro).", FIXTURE_MODEL);
+          } else {
+            const step = SEQUENCE[stepIndex];
+            if (stepIndex > pilotIndex) stubMismatches.push("pilot intent order diverged");
+            if (toolResults.length === 0) {
+              if (stepIndex !== pilotIndex) stubMismatches.push("pilot intent repeated or skipped");
+              else {
+                const args = { ...step.args };
+                if (args.statementId === "resolve-november") {
+                  const response = await realFetch(`${ctlBaseUrl}/p2d/statement-state`);
+                  if (!response.ok) throw new Error("pilot could not resolve authoritative statement state");
+                  const state = await response.json();
+                  const statement = state.statements?.find((s) => s.cycleYearMonth === "2026-11" && Number(s.totalCents) - Number(s.paidCents) >= Number(args.amountCents));
+                  if (!statement) throw new Error("pilot November statement with sufficient remaining balance is unavailable");
+                  args.statementId = statement.id;
+                }
+                pilotIndex++;
+                payload = toolCallEvents({ callId: `call_p2d_${++callSeq}`, name: step.name, args, model: FIXTURE_MODEL });
+              }
+            } else payload = finalTextEvents("Proposta preparada para confirmação.", FIXTURE_MODEL);
           }
         } else if (STUB_MODE === "sequence") {
           const parsed = extractToolDtos(messages);

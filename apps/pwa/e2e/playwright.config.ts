@@ -46,6 +46,10 @@ const CARD = process.env.P2D_CARD === "1";
 const CARD_INSTALLMENTS = process.env.P2D_CARD_INSTALLMENTS === "1";
 const TRANSFER = process.env.P2D_TRANSFER === "1";
 const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
+const P3_PILOT = process.env.P2D_P3_PILOT === "1";
+if (P3_PILOT && ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY, LIVE_PREP, OFFLINE_CHAT].some(Boolean))) {
+  throw new Error("P2D_P3_PILOT is mutually exclusive with P3 slices, LIVE_PREP and OFFLINE_CHAT");
+}
 if ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].filter(Boolean).length > 1) {
   throw new Error(
     "select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD|P2D_CARD_INSTALLMENTS|P2D_TRANSFER|P2D_STATEMENT_PAY)",
@@ -55,14 +59,16 @@ if ([LIVE_PREP, OFFLINE_CHAT, LIVE_REAL].filter(Boolean).length > 1) {
   throw new Error("select at most one P2D live mode (P2D_LIVE_PREP|P2D_OFFLINE_CHAT|P2D_LIVE_REAL)");
 }
 const P2D_LIVE_MODE = LIVE_PREP || OFFLINE_CHAT || LIVE_REAL;
-const PROPOSAL = EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+const PROPOSAL = P3_PILOT || EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
 const P2D_ACTIVE = P2D || P2D_LIVE_MODE || PROPOSAL;
 const P2D_SPEC = LIVE_PREP
   ? "**/p2d/p2d-live-prep.spec.ts"
   : OFFLINE_CHAT
     ? "**/p2d/p2d-live-offline.spec.ts"
-    : LIVE_REAL
-      ? "**/p2d/p2d-live-real.spec.ts"
+      : LIVE_REAL
+        ? P3_PILOT ? "**/p2d/p3-integrated-real.spec.ts" : "**/p2d/p2d-live-real.spec.ts"
+      : P3_PILOT
+        ? "**/p2d/p3-integrated.spec.ts"
       : STATEMENT_PAY
         ? "**/p2d/p3-statement-payment.spec.ts"
       : CARD_INSTALLMENTS
@@ -98,6 +104,7 @@ if (P2D_LIVE_MODE) {
     offlineChat: OFFLINE_CHAT,
     liveReal: LIVE_REAL,
   });
+  if (LIVE_REAL && P3_PILOT) clean.P2D_P3_PILOT = "1";
   for (const key of Object.keys(process.env)) delete process.env[key];
   Object.assign(process.env, clean);
 }
@@ -303,6 +310,7 @@ export default defineConfig({
               ...(CARD_INSTALLMENTS ? { P2D_CARD_INSTALLMENTS: "1" } : {}),
               ...(TRANSFER ? { P2D_TRANSFER: "1" } : {}),
               ...(STATEMENT_PAY ? { P2D_STATEMENT_PAY: "1" } : {}),
+              ...(P3_PILOT ? { P2D_P3_PILOT: "1" } : {}),
             },
           },
           {

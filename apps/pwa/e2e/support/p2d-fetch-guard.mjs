@@ -50,12 +50,14 @@ export const LIVE_REAL_FETCH_GUARD = "live-real-allowlist";
 
 // Contract pairs the runtime already sends to the synthetic API (verified in
 // apps/ted-runtime/src/gateway.mjs and src/transport.mjs). Nothing else is
-// reachable — no write, no categories, no extra route.
+// reachable — no write, only the explicitly listed P3 read routes.
 export const LIVE_REAL_API_ROUTES = Object.freeze([
   "POST /auth/agent-token",
   "GET /auth/devices/me",
   "GET /accounts",
   "GET /dashboard/month-summary",
+  "GET /categories",
+  "GET /cards/statements",
 ]);
 
 const API_ROUTE_HEADERS = new Map([
@@ -63,6 +65,8 @@ const API_ROUTE_HEADERS = new Map([
   ["GET /auth/devices/me", Object.freeze(["x-device-token", "accept"])],
   ["GET /accounts", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
   ["GET /dashboard/month-summary", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
+  ["GET /categories", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
+  ["GET /cards/statements", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
 ]);
 
 const CATALOG_ALLOWED_HEADERS = Object.freeze(["user-agent", "if-none-match"]);
@@ -72,6 +76,8 @@ const CATALOG_ALLOWED_HEADERS = Object.freeze(["user-agent", "if-none-match"]);
 // stays outside the header allowlist.
 const CATALOG_TYPE_TOKENS = new Set(["chat", "decision", "image"]);
 const MONTH_QUERY_RE = /^\?yearMonth=(\d{4})-(0[1-9]|1[0-2])$/;
+const CATEGORY_QUERY_RE = /^\?kind=(expense|income)$/;
+const STATEMENTS_QUERY_RE = /^\?accountId=[A-Za-z0-9_-]{1,80}$/;
 // Header NAMES that look like credentials. Applied only after the per-route
 // allowlist, so `x-device-token`/`cookie` stay allowed exactly where the
 // existing contract sends them.
@@ -209,8 +215,13 @@ function classifyApi(input, init, parsed, method) {
   const route = `${method} ${parsed.pathname}`;
   const allowedHeaders = API_ROUTE_HEADERS.get(route);
   if (!allowedHeaders) return { action: "deny", reason: "api_method_path" };
-  const queryOk =
-    parsed.pathname === "/dashboard/month-summary" ? MONTH_QUERY_RE.test(parsed.search) : parsed.search === "";
+  const queryOk = parsed.pathname === "/dashboard/month-summary"
+    ? MONTH_QUERY_RE.test(parsed.search)
+    : parsed.pathname === "/categories"
+      ? parsed.search === "" || CATEGORY_QUERY_RE.test(parsed.search)
+    : parsed.pathname === "/cards/statements"
+      ? STATEMENTS_QUERY_RE.test(parsed.search)
+      : parsed.search === "";
   if (!queryOk) return { action: "deny", reason: "api_query" };
   for (const name of requestHeaders(input, init)) {
     if (allowedHeaders.includes(name)) continue;
