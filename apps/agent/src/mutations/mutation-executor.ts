@@ -212,6 +212,45 @@ const receiptFromCategoryExecution = (
   return receipt as MutationReceipt;
 };
 
+/**
+ * cards.statement.pay receipt: `{ mutationKind: 'cards.statement.pay',
+ * operationId: <pendingId>, entity: { type: 'statement', id: <statementId> } }`.
+ * Same strictness as the sibling parsers: origin linkage, persisted-statement
+ * linkage, mutationId agreement, and the authoritative expected context
+ * (tool + pre-existing statement id) is REQUIRED — a statement payment is a
+ * sensitive target and never binds kind-only.
+ */
+const receiptFromStatementExecution = (
+  execution: unknown,
+  pendingOperationId: string,
+  statementId: string,
+  expected?: MutationExpectedContext,
+): MutationReceipt | undefined => {
+  if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return undefined;
+  const receipt = (execution as { receipt?: unknown }).receipt;
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return undefined;
+  const data = receipt as Record<string, unknown>;
+  if (data.mutationKind !== 'cards.statement.pay') return undefined;
+  if (data.status !== 'succeeded') return undefined;
+  if (typeof data.mutationId !== 'string' || data.mutationId.trim().length === 0) return undefined;
+  if (data.operationId !== pendingOperationId) return undefined;
+  const entity = data.entity as { type?: unknown; id?: unknown } | undefined;
+  if (!entity || typeof entity !== 'object') return undefined;
+  if (entity.type !== 'statement') return undefined;
+  if (entity.id !== statementId) return undefined;
+  if (expected === undefined || data.mutationKind !== expected.tool) return undefined;
+  if (expected.entityId === undefined || entity.id !== expected.entityId) return undefined;
+  const executionMutationId = (execution as { mutationId?: unknown }).mutationId;
+  if (
+    typeof executionMutationId === 'string' &&
+    executionMutationId.trim().length > 0 &&
+    data.mutationId !== executionMutationId
+  ) {
+    return undefined;
+  }
+  return receipt as MutationReceipt;
+};
+
 export class MutationExecutor {
   private readonly consumed = new Set<string>();
   private readonly events: (eventType: string, fields: Record<string, unknown>) => void;
@@ -280,7 +319,8 @@ export class MutationExecutor {
     const transactionId = (execRecord.operationId as string).trim();
     const receipt = receiptFromExecution(execution, pendingId, transactionId, expected)
       ?? receiptFromAccountExecution(execution, pendingId, transactionId, expected)
-      ?? receiptFromCategoryExecution(execution, pendingId, transactionId, expected);
+      ?? receiptFromCategoryExecution(execution, pendingId, transactionId, expected)
+      ?? receiptFromStatementExecution(execution, pendingId, transactionId, expected);
     if (!receipt) failClosed();
     this.emit('mutation.executed', { status: 'succeeded' });
     return { status: 'succeeded', operationId: input.operationId, receipt };

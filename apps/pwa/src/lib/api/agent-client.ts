@@ -134,6 +134,14 @@ const pendingOperationPresentationSchema = z
     toAccount: pendingOperationPresentationLabelSchema.optional(),
     category: pendingOperationPresentationLabelSchema.optional(),
     categoryParent: pendingOperationPresentationLabelSchema.optional(),
+    // P3.6 statement payment: invoice label + authoritative amounts/due date.
+    // The PWA only renders them; it never recomputes the remaining balance.
+    statement: pendingOperationPresentationLabelSchema.optional(),
+    statementTotalCents: z.number().int().min(0).optional(),
+    statementPaidCents: z.number().int().min(0).optional(),
+    statementRemainingCents: z.number().int().min(0).optional(),
+    statementDueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    statementStatus: z.string().min(1).max(32).optional(),
     // accounts.create display tuple (contrato packages/llm-contracts):
     // nome + tipo + saldo inicial em vez da tupla transacional. Ausente em
     // payloads legados — o card degrada para a forma enxuta.
@@ -243,7 +251,7 @@ function sanitizeTerminalOutcome(value: unknown, proposalOperationId: unknown, p
     const entityType = approvalEntityType(proposalTool);
     if (!entityType) return undefined;
     if (receipt.entity.type !== entityType) return undefined;
-    const targetRequired = proposalTool === 'transactions.update' || proposalTool === 'accounts.update' || proposalTool === 'accounts.deactivate' || proposalTool === 'categories.update' || proposalTool === 'categories.deactivate';
+    const targetRequired = proposalTool === 'transactions.update' || proposalTool === 'accounts.update' || proposalTool === 'accounts.deactivate' || proposalTool === 'categories.update' || proposalTool === 'categories.deactivate' || proposalTool === 'cards.statement.pay';
     if (targetRequired && !expectedContext.entityId) return undefined;
     if (expectedContext.entityId !== undefined && expectedContext.entityId !== receipt.entity.id) return undefined;
     return parsed.data as TerminalOutcome;
@@ -261,9 +269,10 @@ const APPROVAL_TOOLS = TED_APPROVAL_TOOLS as readonly string[];
 
 const isAccountApprovalTool = (tool: string): boolean => tool.startsWith("accounts.");
 const isCategoryApprovalTool = (tool: string): boolean => tool.startsWith("categories.");
+const isStatementApprovalTool = (tool: string): boolean => tool === "cards.statement.pay";
 
 /** Closed approval-tool mapping; unknown tools never inherit a fallback entity type. */
-function approvalEntityType(tool: string): "transaction" | "account" | "category" | undefined {
+function approvalEntityType(tool: string): "transaction" | "account" | "category" | "statement" | undefined {
   switch (tool) {
     case "transactions.expense.create":
     case "transactions.income.create":
@@ -279,6 +288,8 @@ function approvalEntityType(tool: string): "transaction" | "account" | "category
     case "categories.update":
     case "categories.deactivate":
       return "category";
+    case "cards.statement.pay":
+      return "statement";
     default:
       return undefined;
   }
@@ -376,6 +387,14 @@ const transferProposalArgsSchema = z
     message: "fromAccountId and toAccountId must differ",
   });
 
+const statementPaymentProposalArgsSchema = z
+  .object({
+    statementId: z.string().uuid(),
+    fromAccountId: z.string().uuid(),
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+
 const proposalIntentBase = {
   intentionId: z.string().trim().min(1).max(128),
   // Display-only metadata; never used to authorize or execute.
@@ -415,21 +434,32 @@ const transferProposalIntentSchema = z
   })
   .strict();
 
+const statementPaymentProposalIntentSchema = z
+  .object({
+    tool: z.literal("cards.statement.pay"),
+    ...proposalIntentBase,
+    normalizedArgs: statementPaymentProposalArgsSchema,
+  })
+  .strict();
+
 const proposalIntentSchema = z.discriminatedUnion("tool", [
   expenseProposalIntentSchema,
   incomeProposalIntentSchema,
   cardPurchaseProposalIntentSchema,
   transferProposalIntentSchema,
+  statementPaymentProposalIntentSchema,
 ]);
 
 export type ProposalArgs = z.infer<typeof proposalArgsSchema>;
 export type CardPurchaseProposalArgs = z.infer<typeof cardPurchaseProposalArgsSchema>;
 export type TransferProposalArgs = z.infer<typeof transferProposalArgsSchema>;
+export type StatementPaymentProposalArgs = z.infer<typeof statementPaymentProposalArgsSchema>;
 export type ProposalIntent =
   | { tool: "transactions.expense.create"; intentionId: string; normalizedArgs: ProposalArgs }
   | { tool: "transactions.income.create"; intentionId: string; normalizedArgs: ProposalArgs }
   | { tool: "cards.purchase.create"; intentionId: string; normalizedArgs: CardPurchaseProposalArgs }
-  | { tool: "transactions.transfer.create"; intentionId: string; normalizedArgs: TransferProposalArgs };
+  | { tool: "transactions.transfer.create"; intentionId: string; normalizedArgs: TransferProposalArgs }
+  | { tool: "cards.statement.pay"; intentionId: string; normalizedArgs: StatementPaymentProposalArgs };
 export type ExpenseProposalIntent = Extract<ProposalIntent, { tool: "transactions.expense.create" }>;
 export type IncomeProposalIntent = Extract<ProposalIntent, { tool: "transactions.income.create" }>;
 export type TransferProposalIntent = Extract<ProposalIntent, { tool: "transactions.transfer.create" }>;
@@ -547,6 +577,10 @@ function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"]
       raw.presentation && typeof raw.presentation === "object"
         ? (raw.presentation as { account?: { id?: unknown } }).account?.id
         : undefined;
+    const presentationStatementId =
+      raw.presentation && typeof raw.presentation === "object"
+        ? (raw.presentation as { statement?: { id?: unknown } }).statement?.id
+        : undefined;
     const echoExpected = sanitizeExpectedContext((raw as { expected?: unknown }).expected);
     // HIGH3 (round 4): card-known context (presentation) precedes gateway
     // echo — and a conflict between them is denied, never resolved by
@@ -592,6 +626,9 @@ function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"]
             contextEntityId = transactionTargetId.trim();
           }
         }
+        if (isStatementApprovalTool(presentationTool) && typeof presentationStatementId === "string" && presentationStatementId.trim()) {
+          contextEntityId = presentationStatementId.trim();
+        }
       } else if (
         typeof presentationAccountId === "string" &&
         presentationAccountId.trim()
@@ -634,10 +671,12 @@ function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"]
       const expectsAccount =
         kind === "accounts.create" || kind === "accounts.update" || kind === "accounts.deactivate";
       const expectsCategory = kind === "categories.create" || kind === "categories.update" || kind === "categories.deactivate";
+      const expectsStatement = isStatementApprovalTool(kind);
       if (
         (expectsAccount && candidateReceipt?.entity?.type !== "account") ||
         (expectsCategory && candidateReceipt?.entity?.type !== "category") ||
-        (!expectsAccount && !expectsCategory && candidateReceipt?.entity?.type !== "transaction")
+        (expectsStatement && candidateReceipt?.entity?.type !== "statement") ||
+        (!expectsAccount && !expectsCategory && !expectsStatement && candidateReceipt?.entity?.type !== "transaction")
       ) {
         throw executionOutcomeUnknown();
       }
@@ -650,14 +689,14 @@ function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"]
       // Sensitive tools always bind a pre-existing target: a bare {tool}
       // context (no entity id from any context) never proves one.
       if (
-        (kind === "transactions.update" || kind === "accounts.update" || kind === "accounts.deactivate" || kind === "categories.update" || kind === "categories.deactivate") &&
+        (kind === "transactions.update" || kind === "accounts.update" || kind === "accounts.deactivate" || kind === "categories.update" || kind === "categories.deactivate" || isStatementApprovalTool(kind)) &&
         contextEntityId === undefined
       ) {
         throw executionOutcomeUnknown();
       }
     } else {
-      // No context: sensitive account targets are never accepted blind.
-      if (kind === "transactions.update" || kind === "accounts.update" || kind === "accounts.deactivate" || kind === "categories.update" || kind === "categories.deactivate") {
+      // No context: sensitive account/statement targets are never accepted blind.
+      if (kind === "transactions.update" || kind === "accounts.update" || kind === "accounts.deactivate" || kind === "categories.update" || kind === "categories.deactivate" || isStatementApprovalTool(kind)) {
         throw executionOutcomeUnknown();
       }
       // accounts-card-pwa-round2: a entidade vinculada respeita o kind — conta
@@ -670,7 +709,9 @@ function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"]
           ? candidateReceipt?.entity?.type === "account"
           : kind === "categories.create"
             ? candidateReceipt?.entity?.type === "category"
-            : candidateReceipt?.entity?.type === "transaction";
+            : isStatementApprovalTool(kind)
+              ? candidateReceipt?.entity?.type === "statement"
+              : candidateReceipt?.entity?.type === "transaction";
       if (!entityMatchesKind) throw executionOutcomeUnknown();
     }
     // The turn operation itself is authoritative when it names an approval
@@ -1632,10 +1673,12 @@ export async function decidePendingOperation(
         (expected === undefined &&
         (kind === "transactions.update" || kind === "accounts.update" ||
           kind === "accounts.deactivate" ||
-          kind === "categories.update" || kind === "categories.deactivate")) ||
+          kind === "categories.update" || kind === "categories.deactivate" ||
+          kind === "cards.statement.pay")) ||
       ((kind === "transactions.update" || kind === "accounts.update" ||
         kind === "accounts.deactivate" ||
-        kind === "categories.update" || kind === "categories.deactivate") &&
+        kind === "categories.update" || kind === "categories.deactivate" ||
+        kind === "cards.statement.pay") &&
         (typeof expected?.entityId !== "string" || !expected.entityId.trim())) ||
       (expected?.tool !== undefined && kind !== expected.tool) ||
       (expected?.entityId !== undefined &&
@@ -1924,6 +1967,9 @@ export type ActivePendingOperation = Readonly<{
   date?: string;
   accountId?: string;
   categoryId?: string;
+  /** P3.6 statement payment: invoice + payer ids carried by the relay. */
+  statementId?: string;
+  fromAccountId?: string;
   failureCode?: 'in_use';
   presentation?: PendingOperationPresentation;
 }>;
@@ -1940,6 +1986,8 @@ const activePendingOperationSchema = z
     date: z.string().optional(),
     accountId: z.string().optional(),
     categoryId: z.string().optional(),
+    statementId: z.string().optional(),
+    fromAccountId: z.string().optional(),
     failureCode: z.literal('in_use').optional(),
     presentation: pendingOperationPresentationSchema.optional(),
   })

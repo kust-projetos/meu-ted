@@ -44,6 +44,8 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
   'propose_income',
   'propose_card_purchase',
   'propose_transfer',
+  'list_card_statements',
+  'propose_statement_payment',
 ]);
 
 // P3 prerequisite (read-only category lookup for a FUTURE expense proposal):
@@ -51,7 +53,7 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
 // NODE_ENV !== 'production'. Production forces it off (fail closed): a
 // production NODE_ENV never exposes the extra read, even with the flag set.
 // The default product catalog is exactly PRODUCT_TOOL_NAMES (P2 behavior).
-export const P3_READ_TOOL_NAMES = ['list_categories'];
+export const P3_READ_TOOL_NAMES = ['list_categories', 'list_card_statements'];
 
 // P3 write slice: `propose_expense`, `propose_income`, `propose_card_purchase`
 // and `propose_transfer` record a proposal intent only (P3.1–P3.4 share the
@@ -59,7 +61,7 @@ export const P3_READ_TOOL_NAMES = ['list_categories'];
 // TED_OPENCODE_P3_WRITES_ENABLED=1 with NODE_ENV !== 'production'. It also
 // enables the category read needed to resolve a transaction category.
 // Production forces all of them off (fail closed).
-export const P3_WRITE_TOOL_NAMES = ['propose_expense', 'propose_income', 'propose_card_purchase', 'propose_transfer'];
+export const P3_WRITE_TOOL_NAMES = ['propose_expense', 'propose_income', 'propose_card_purchase', 'propose_transfer', 'propose_statement_payment'];
 
 export function isP3ReadsEnabled(env = process.env) {
   try {

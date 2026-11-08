@@ -30,6 +30,8 @@ const SENSITIVE_CATEGORY_TOOLS: ReadonlySet<string> = new Set([
   'categories.deactivate',
 ]);
 const SENSITIVE_TRANSACTION_TOOLS: ReadonlySet<string> = new Set(['transactions.update']);
+/** P3.6: the statement payment binds the pre-existing invoice id. */
+const SENSITIVE_STATEMENT_TOOLS: ReadonlySet<string> = new Set(['cards.statement.pay']);
 
 /**
  * Tools whose receipt binds a PRE-EXISTING entity id. Without a resolvable
@@ -37,15 +39,29 @@ const SENSITIVE_TRANSACTION_TOOLS: ReadonlySet<string> = new Set(['transactions.
  * transport (never confirm/execute blind).
  */
 export const requiresExpectedEntity = (tool: string): boolean =>
-  SENSITIVE_ACCOUNT_TOOLS.has(tool) || SENSITIVE_CATEGORY_TOOLS.has(tool) || SENSITIVE_TRANSACTION_TOOLS.has(tool);
+  SENSITIVE_ACCOUNT_TOOLS.has(tool) || SENSITIVE_CATEGORY_TOOLS.has(tool) || SENSITIVE_TRANSACTION_TOOLS.has(tool) || SENSITIVE_STATEMENT_TOOLS.has(tool);
 
 export const resolveExpectedContext = (
-  record: Pick<ActiveOperationRecord, 'tool' | 'accountId' | 'categoryId'> & {
-    presentation?: { account?: { id?: unknown; label?: unknown } | null; category?: { id?: unknown; label?: unknown } | null; transactionTargetId?: unknown } | null;
+  record: Pick<ActiveOperationRecord, 'tool' | 'accountId' | 'categoryId' | 'statementId'> & {
+    presentation?: { account?: { id?: unknown; label?: unknown } | null; category?: { id?: unknown; label?: unknown } | null; statement?: { id?: unknown; label?: unknown } | null; transactionTargetId?: unknown } | null;
   } | null | undefined,
 ): MutationExpectedContext | undefined => {
   const tool = typeof record?.tool === 'string' ? record.tool.trim() : '';
   if (!tool) return undefined;
+  if (SENSITIVE_STATEMENT_TOOLS.has(tool)) {
+    const fromPresentation =
+      record?.presentation && typeof record.presentation === 'object'
+        ? record.presentation.statement
+        : undefined;
+    const presentationId =
+      fromPresentation && typeof fromPresentation === 'object' && typeof fromPresentation.id === 'string'
+        ? fromPresentation.id.trim()
+        : '';
+    const storedId = typeof record?.statementId === 'string' ? record.statementId.trim() : '';
+    const entityId = presentationId || storedId;
+    if (!entityId) return undefined;
+    return { tool, entityId };
+  }
   if (SENSITIVE_CATEGORY_TOOLS.has(tool)) {
     const fromPresentation =
       record?.presentation && typeof record.presentation === 'object'

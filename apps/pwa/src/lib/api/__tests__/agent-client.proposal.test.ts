@@ -74,6 +74,17 @@ const cardIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => 
   ...overrides,
 });
 
+const statementIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "cards.statement.pay",
+  intentionId: "int-statement-abc",
+  normalizedArgs: {
+    statementId: "44444444-4444-4444-8444-444444444444",
+    fromAccountId: ACCOUNT,
+    amountCents: 85000,
+  },
+  ...overrides,
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -122,6 +133,34 @@ describe("sanitizeProposalIntent", () => {
       sanitizeProposalIntent({
         ...cardIntent(),
         normalizedArgs: { ...cardIntent().normalizedArgs, amountCents: 2, installmentsTotal: 3 },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("accepts a statement payment with the exact tuple and rejects undefined amounts/unknown args", () => {
+    expect(sanitizeProposalIntent(statementIntent())).toEqual(statementIntent());
+    expect(
+      sanitizeProposalIntent({
+        ...statementIntent(),
+        normalizedArgs: { ...statementIntent().normalizedArgs, amountCents: "total" },
+      }),
+    ).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({
+        ...statementIntent(),
+        normalizedArgs: { ...statementIntent().normalizedArgs, description: "fatura" },
+      }),
+    ).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({
+        ...statementIntent(),
+        normalizedArgs: { ...statementIntent().normalizedArgs, statementId: undefined },
+      }),
+    ).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({
+        ...statementIntent(),
+        normalizedArgs: { ...statementIntent().normalizedArgs, amountCents: 0 },
       }),
     ).toBeUndefined();
   });

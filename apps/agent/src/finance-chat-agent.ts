@@ -151,7 +151,7 @@ const bindPendingOutcomeToHistoryLink = (
   if (outcome.status === 'proposed' || outcome.status === 'confirmed' || outcome.status === 'executing') return undefined;
   const expected = 'expectedContext' in outcome ? outcome.expectedContext : undefined;
   if (expected && (expected.tool !== link.expectedContext.tool || expected.entityId !== link.expectedContext.entityId)) return undefined;
-  const targetRequired = outcome.tool === 'accounts.update' || outcome.tool === 'accounts.deactivate' || outcome.tool === 'categories.update' || outcome.tool === 'categories.deactivate' || outcome.tool === 'transactions.update';
+  const targetRequired = outcome.tool === 'accounts.update' || outcome.tool === 'accounts.deactivate' || outcome.tool === 'categories.update' || outcome.tool === 'categories.deactivate' || outcome.tool === 'transactions.update' || outcome.tool === 'cards.statement.pay';
   if (targetRequired && !link.expectedContext.entityId) return undefined;
   if (outcome.status === 'succeeded') {
     if (outcome.expectedContext.tool !== link.expectedContext.tool || outcome.expectedContext.entityId !== link.expectedContext.entityId) return undefined;

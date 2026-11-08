@@ -27,6 +27,9 @@ export type ActiveOperationRecord = Readonly<{
   date?: string;
   accountId?: string;
   categoryId?: string;
+  /** P3.6 statement payment: the invoice/payer ids (also in the presentation). */
+  statementId?: string;
+  fromAccountId?: string;
   failureCode?: 'in_use';
   presentation?: PendingOperationPresentation;
 }>;

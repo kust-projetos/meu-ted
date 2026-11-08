@@ -218,4 +218,63 @@ describe('buildPendingOperationPresentation (SPEC §16)', () => {
     });
     expect(presentation!.category).toEqual({ id: 'cat-food', label: 'Mercado' });
   });
+
+  it('projects a P3.6 statement payment with card, invoice, authoritative amounts and payer', () => {
+    const statementContext = {
+      id: 'stmt-1',
+      accountId: 'card-1',
+      cycleYearMonth: '2026-11',
+      totalCents: 120000,
+      paidCents: 35000,
+      remainingCents: 85000,
+      dueDate: '2026-11-25',
+      status: 'partial',
+    };
+    const presentation = buildPendingOperationPresentation({
+      ...base,
+      tool: 'cards.statement.pay',
+      normalizedArgs: { statementId: 'stmt-1', fromAccountId: 'acc-itau', amountCents: 85000 },
+      accountLabel: 'Nubank',
+      fromAccountLabel: 'Itaú',
+      statementContext,
+    });
+    expect(presentation).not.toBeNull();
+    expect(presentation!.title).toBe('Pagamento de fatura — R$ 850,00');
+    expect(presentation!.amountCents).toBe(85000);
+    expect(presentation!.account).toEqual({ id: 'card-1', label: 'Nubank' });
+    expect(presentation!.fromAccount).toEqual({ id: 'acc-itau', label: 'Itaú' });
+    expect(presentation!.statement).toEqual({ id: 'stmt-1', label: 'Novembro/2026' });
+    expect(presentation!.statementTotalCents).toBe(120000);
+    expect(presentation!.statementPaidCents).toBe(35000);
+    expect(presentation!.statementRemainingCents).toBe(85000);
+    expect(presentation!.statementDueDate).toBe('2026-11-25');
+    expect(presentation!.statementStatus).toBe('partial');
+    expect(pendingOperationPresentationSchema.safeParse(presentation).success).toBe(true);
+    expect(isActionablePendingOperationPresentation(presentation!)).toBe(true);
+  });
+
+  it('fails a statement payment closed when the context is missing, stale or overpaid', () => {
+    const statementContext = {
+      id: 'stmt-1',
+      accountId: 'card-1',
+      cycleYearMonth: '2026-11',
+      totalCents: 120000,
+      paidCents: 35000,
+      remainingCents: 85000,
+      dueDate: '2026-11-25',
+      status: 'partial',
+    };
+    const input = {
+      ...base,
+      tool: 'cards.statement.pay',
+      normalizedArgs: { statementId: 'stmt-1', fromAccountId: 'acc-itau', amountCents: 85000 },
+      accountLabel: 'Nubank',
+      fromAccountLabel: 'Itaú',
+    } as const;
+    expect(buildPendingOperationPresentation(input)).toBeNull();
+    expect(buildPendingOperationPresentation({ ...input, statementContext: { ...statementContext, id: 'other' } })).toBeNull();
+    expect(buildPendingOperationPresentation({ ...input, statementContext: { ...statementContext, remainingCents: 0, paidCents: 120000 } })).toBeNull();
+    expect(buildPendingOperationPresentation({ ...input, statementContext, normalizedArgs: { ...input.normalizedArgs, amountCents: 90000 } })).toBeNull();
+    expect(buildPendingOperationPresentation({ ...input, statementContext, fromAccountLabel: '' })).toBeNull();
+  });
 });

@@ -48,6 +48,51 @@ describe('MutationExecutor strict execute validation (RED)', () => {
     expect(result).toEqual({ status: 'succeeded', operationId: pendingId, receipt: faithfulReceipt });
   });
 
+  it('accepts the statement-payment receipt bound to the pre-existing invoice', async () => {
+    const statementId = 'stmt-strict-1';
+    const statementReceipt = {
+      mutationId: 'mut-stmt-1',
+      mutationKind: 'cards.statement.pay',
+      status: 'succeeded',
+      affectedTargets: ['transactions', 'accounts', 'statement', 'dashboard-summary', 'quick-insights'],
+      operationId: pendingId,
+      entity: { type: 'statement', id: statementId },
+    };
+    const request = vi.fn().mockResolvedValueOnce({
+      id: pendingId,
+      status: 'succeeded',
+      execution: { status: 'succeeded', operationId: statementId, receipt: statementReceipt },
+    });
+    const executor = new MutationExecutor({ request });
+    const result = await executor.execute({
+      ...input,
+      expected: { tool: 'cards.statement.pay', entityId: statementId },
+    });
+    expect(result).toEqual({ status: 'succeeded', operationId: pendingId, receipt: statementReceipt });
+  });
+
+  it('fails closed when the statement receipt targets a different invoice', async () => {
+    const statementId = 'stmt-strict-1';
+    const statementReceipt = {
+      mutationId: 'mut-stmt-1',
+      mutationKind: 'cards.statement.pay',
+      status: 'succeeded',
+      affectedTargets: ['transactions', 'accounts', 'statement', 'dashboard-summary', 'quick-insights'],
+      operationId: pendingId,
+      entity: { type: 'statement', id: 'stmt-other' },
+    };
+    const request = vi.fn().mockResolvedValueOnce({
+      id: pendingId,
+      status: 'succeeded',
+      execution: { status: 'succeeded', operationId: statementId, receipt: statementReceipt },
+    });
+    const executor = new MutationExecutor({ request });
+    await expect(executor.execute({
+      ...input,
+      expected: { tool: 'cards.statement.pay', entityId: statementId },
+    })).rejects.toThrow('approval.incomplete_result');
+  });
+
   it('fails closed on partial {id,status} without execution/receipt', async () => {
     const request = vi.fn().mockResolvedValueOnce({ id: pendingId, status: 'succeeded' });
     const executor = new MutationExecutor({ request });

@@ -712,4 +712,69 @@ describe("TedApprovalCard mandatory presentation (production functional correcti
 
     expect(screen.getByText("3x de R$ 3,33 (última de R$ 3,34)")).toBeInTheDocument();
   });
+
+  it("renders a P3.6 statement payment with card, invoice, amounts, payer and statement receipt binding", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({
+      operationId: "op-statement",
+      status: "succeeded",
+      receipt: {
+        mutationId: "mut-statement",
+        mutationKind: "cards.statement.pay",
+        status: "succeeded",
+        affectedTargets: ["transactions", "accounts", "statement", "dashboard-summary", "quick-insights"],
+        operationId: "op-statement",
+        entity: { type: "statement", id: "stmt-1" },
+      },
+    });
+
+    render(
+      <TedApprovalCard
+        operation={{
+          id: "op-statement",
+          status: "proposed",
+          operation: "cards.statement.pay",
+          presentation: {
+            id: "op-statement",
+            status: "proposed",
+            tool: "cards.statement.pay",
+            title: "Pagamento de fatura — R$ 850,00",
+            amountCents: 85000,
+            account: { id: "card-1", label: "Nubank" },
+            fromAccount: { id: "acc-itau", label: "Itaú" },
+            statement: { id: "stmt-1", label: "Novembro/2026" },
+            statementTotalCents: 120000,
+            statementPaidCents: 35000,
+            statementRemainingCents: 85000,
+            statementDueDate: "2026-11-25",
+            statementStatus: "partial",
+            expiresAt: "2026-11-07T12:00:00.000Z",
+            warnings: [],
+          },
+        }}
+        workspaceId="workspace-1"
+      />,
+    );
+
+    expect(screen.getByText(/Pagamento de fatura — R\$ 850,00/)).toBeInTheDocument();
+    expect(screen.getByText("Nubank")).toBeInTheDocument();
+    expect(screen.getByText("Novembro/2026")).toBeInTheDocument();
+    expect(screen.getByText("R$ 1.200,00")).toBeInTheDocument();
+    expect(screen.getByText("R$ 350,00")).toBeInTheDocument();
+    expect(screen.getByText("R$ 850,00")).toBeInTheDocument();
+    expect(screen.getByText("Itaú")).toBeInTheDocument();
+    expect(screen.getByText("25/11/2026")).toBeInTheDocument();
+    expect(screen.getByText("Conta pagadora")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Confirmar R\$ 850,00/ }));
+
+    await waitFor(() =>
+      expect(agentClient.decidePendingOperation).toHaveBeenCalledWith(
+        "workspace-1",
+        "op-statement",
+        "confirm",
+        { tool: "cards.statement.pay", entityId: "stmt-1" },
+      ),
+    );
+  });
 });

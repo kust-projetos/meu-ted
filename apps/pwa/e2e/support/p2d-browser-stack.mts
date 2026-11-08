@@ -60,10 +60,11 @@ const INCOME = process.env.P2D_INCOME === "1";
 const CARD = process.env.P2D_CARD === "1";
 const CARD_INSTALLMENTS = process.env.P2D_CARD_INSTALLMENTS === "1";
 const TRANSFER = process.env.P2D_TRANSFER === "1";
-const PROPOSAL = EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER;
-if ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER].filter(Boolean).length > 1) {
+const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
+const PROPOSAL = EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+if ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].filter(Boolean).length > 1) {
   throw new Error(
-    "[p2d-stack] select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD|P2D_CARD_INSTALLMENTS|P2D_TRANSFER)",
+    "[p2d-stack] select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD|P2D_CARD_INSTALLMENTS|P2D_TRANSFER|P2D_STATEMENT_PAY)",
   );
 }
 if (OFFLINE_CHAT && LIVE_REAL) {
@@ -212,7 +213,7 @@ const built = buildTestApp(
   {
     // P3.4/P3.5 only: the card slices need a real credit-card account in the
     // synthetic ledger. Every other mode keeps the exact read-slice oracle.
-    accounts: CARD || CARD_INSTALLMENTS
+    accounts: CARD || CARD_INSTALLMENTS || STATEMENT_PAY
       ? [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1, CARD_A1]
       : [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1],
     categories: [CATEGORY_FOOD_A, CATEGORY_RENT_A, CATEGORY_SALARY_A, CATEGORY_FOOD_B],
@@ -225,6 +226,27 @@ const built = buildTestApp(
   DELEGATION_SECRET,
   ...(pendingV2Store ? [pendingV2Store] : []),
 );
+// P3.6: seed the invoice BEFORE the probe starts. The stack's own card store
+// is authoritative; the E2E never invents a statement id or amount. A prior
+// partial payment (R$ 350,00 of R$ 1.200,00) makes the card match the product
+// example: total 1.200, already paid 350, pay 850 now.
+let seededStatement: Awaited<ReturnType<typeof built.cardStore.listStatements>>[number] | null = null;
+if (STATEMENT_PAY) {
+  await built.cardStore.createCardPurchase(HOUSEHOLD_A, {
+    accountId: CARD_A1.id,
+    description: "compra fatura",
+    amountCents: 120_000,
+    date: "2026-11-07",
+  });
+  const initial = (await built.cardStore.listStatements(HOUSEHOLD_A, CARD_A1.id))[0]!;
+  await built.cardStore.payStatement(HOUSEHOLD_A, initial.id, {
+    amountCents: 35_000,
+    fromAccountId: ACCOUNT_A1.id,
+  });
+  seededStatement = (await built.cardStore.listStatements(HOUSEHOLD_A, CARD_A1.id))[0]!;
+  console.log(`[p2d-stack] statement=${seededStatement.id} paid=${seededStatement.paidCents} total=${seededStatement.totalCents}`);
+}
+
 const journal: Array<{ method: string; url: string }> = [];
 built.app.addHook("onRequest", async (req) => {
   journal.push({ method: String(req.method), url: String(req.url).split("?")[0] });
@@ -252,6 +274,21 @@ function buildProbeConfig(): Record<string, unknown> {
     tedRuntimeDir: TED_RUNTIME_DIR,
   };
   if (PROPOSAL) {
+    if (STATEMENT_PAY) {
+      if (!seededStatement) throw new Error("[p2d-stack] statement seed missing");
+      return {
+        ...base,
+        stub: {
+          mode: "statement",
+          toolName: "propose_statement_payment",
+          toolArgs: {
+            statementId: seededStatement.id,
+            fromAccountId: ACCOUNT_A1.id,
+            amountCents: 85_000,
+          },
+        },
+      };
+    }
     if (CARD_INSTALLMENTS) {
       return {
         ...base,
@@ -726,11 +763,28 @@ const ctl = http.createServer((req, res) => {
             accountId: t.accountId,
             categoryId: t.categoryId,
             transferToAccountId: t.transferToAccountId,
+            statementPaymentId: (t as { statementPaymentId?: string }).statementPaymentId,
           }));
         const accounts = (built.state.accounts ?? [])
           .filter((a) => a.householdId === HOUSEHOLD_A)
           .map((a) => ({ id: a.id, name: a.name, kind: a.kind, balanceCents: a.balanceCents }));
         json(res, 200, { transactions, total: transactions.length, accounts });
+        return;
+      }
+      if (req.method === "GET" && u.pathname === "/p2d/statement-state") {
+        const statements = (await built.cardStore.listStatements(HOUSEHOLD_A, CARD_A1.id)).map((s) => ({
+          id: s.id,
+          accountId: s.accountId,
+          cycleYearMonth: s.cycleYearMonth,
+          dueDate: s.dueDate,
+          totalCents: s.totalCents,
+          paidCents: s.paidCents,
+          status: s.status,
+        }));
+        const cardBalanceCents = (built.state.accounts ?? [])
+          .filter((a) => a.householdId === HOUSEHOLD_A && a.id === CARD_A1.id)
+          .map((a) => a.balanceCents)[0];
+        json(res, 200, { statements, cardBalanceCents });
         return;
       }
       if (req.method === "POST" && u.pathname === "/p2d/close-probe") {

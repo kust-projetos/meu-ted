@@ -7,6 +7,7 @@ import {
   pendingOperationV2Schema,
   verifyPendingOperationV2Hash,
   type PendingOperationV2,
+  type TedApprovalTool,
 } from '@pi-finance/llm-contracts';
 import { validateApprovalToolArgs, getApprovalToolContract, APPROVAL_EXECUTION_UNCERTAIN_CODE, isApprovalExecutionUncertain } from './tool-registry.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
@@ -146,13 +147,20 @@ const withTedReceipt = (
   // persisted operation's registry contract, never from executor output.
   if (!getApprovalToolContract(tool)) failClosed();
   // Entity type follows the tool: account tools resolve to an
-  // account entity, category tools to a category entity, every other
-  // registered tool to a transaction entity.
-  const entityType = tool === 'accounts.create' || tool === 'accounts.deactivate' || tool === 'accounts.update' ? 'account' : tool === 'categories.create' || tool === 'categories.update' || tool === 'categories.deactivate' ? 'category' : 'transaction';
+  // account entity, category tools to a category entity, the statement
+  // payment to the statement entity, every other registered tool to a
+  // transaction entity.
+  const entityType = tool === 'accounts.create' || tool === 'accounts.deactivate' || tool === 'accounts.update'
+    ? 'account'
+    : tool === 'categories.create' || tool === 'categories.update' || tool === 'categories.deactivate'
+      ? 'category'
+      : tool === 'cards.statement.pay'
+        ? 'statement'
+        : 'transaction';
   let canonical: { mutationId: string };
   try {
     canonical = buildTedReceipt(
-      tool as 'transactions.expense.create' | 'transactions.income.create' | 'transactions.transfer.create' | 'transactions.update' | 'accounts.create' | 'accounts.deactivate' | 'accounts.update' | 'categories.create' | 'categories.update' | 'categories.deactivate',
+      tool as TedApprovalTool,
       pendingId,
       { type: entityType, id: entityId },
     );

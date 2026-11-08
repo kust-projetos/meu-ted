@@ -34,6 +34,7 @@ interface TedApprovalCardProps {
 }
 
 const deriveFallbackTitle = (operation: TedPendingOperation): string => {
+  if (operation.operation.includes("cards.statement.pay")) return "Pagamento de fatura";
   if (operation.operation.includes("transactions.update")) return "Alterar descrição do lançamento";
   if (operation.operation.includes("transactions.transfer.create")) return "Transferência";
   if (operation.operation.includes("categories.create")) return "Criar categoria";
@@ -73,6 +74,7 @@ const describeCategoryKind = (kind: string): string => {
  * catálogo/conta. Uma renomeação não registra valor: ela renomeia.
  */
 const describePendingOperationEffect = (tool: string): string => {
+  if (tool === "cards.statement.pay") return "O valor será debitado da conta pagadora e aplicado à fatura do cartão.";
   if (tool === "transactions.transfer.create") return "O valor será transferido entre as suas contas; receitas e despesas não serão alteradas.";
   if (tool === "transactions.update") return "A descrição do lançamento será alterada; valor, data e conta não serão modificados.";
   if (tool === "categories.create") return "A categoria será criada nos seus dados.";
@@ -199,6 +201,9 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
               : {}),
             ...(presentation.tool === "transactions.update" && presentation.transactionTargetId
               ? { entityId: presentation.transactionTargetId }
+              : {}),
+            ...(presentation.tool === "cards.statement.pay" && presentation.statement
+              ? { entityId: presentation.statement.id }
               : {}),
           }
         : undefined;
@@ -548,6 +553,96 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
               className="rounded-[10px] border border-border-subtle bg-surface-1 px-3.5 py-2 font-bold text-text-secondary transition-all hover:bg-surface-2 active:scale-95 disabled:opacity-50"
             >
               Cancelar
+            </button>
+          </div>
+        </div>
+      );
+    }
+    if (presentation.tool === "cards.statement.pay") {
+      // P3.6 statement payment: the invoice, the card and the payer account
+      // are the context; the amount paid NOW is explicit. All amounts come
+      // from the server presentation — the PWA never recomputes the
+      // remaining balance.
+      const confirmLabel =
+        typeof presentation.amountCents === "number"
+          ? `Confirmar ${formatCentsToBRL(presentation.amountCents)}`
+          : "Confirmar";
+      return (
+        <div className="my-2 rounded-[16px] border border-warning/30 bg-warning-tint p-3.5 text-xs shadow-xs">
+          <div className="font-bold text-warning">⚠️ {title}</div>
+          <dl className="mt-2 space-y-1 text-text-primary">
+            {presentation.account && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Cartão</dt>
+                <dd className="font-semibold">{presentation.account.label}</dd>
+              </div>
+            )}
+            {presentation.statement && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Fatura</dt>
+                <dd className="font-semibold">{presentation.statement.label}</dd>
+              </div>
+            )}
+            {typeof presentation.statementTotalCents === "number" && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Valor da fatura</dt>
+                <dd className="font-bold">{formatCentsToBRL(presentation.statementTotalCents)}</dd>
+              </div>
+            )}
+            {typeof presentation.statementPaidCents === "number" && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Já pago</dt>
+                <dd className="font-semibold">{formatCentsToBRL(presentation.statementPaidCents)}</dd>
+              </div>
+            )}
+            {typeof presentation.amountCents === "number" && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Pagamento agora</dt>
+                <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
+              </div>
+            )}
+            {presentation.fromAccount && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Conta pagadora</dt>
+                <dd className="font-semibold">{presentation.fromAccount.label}</dd>
+              </div>
+            )}
+            {presentation.statementDueDate && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Vencimento</dt>
+                <dd className="font-semibold">{formatDateToBR(presentation.statementDueDate)}</dd>
+              </div>
+            )}
+          </dl>
+          {presentation.warnings.length > 0 && (
+            <ul className="mt-2 space-y-0.5 text-warning">
+              {presentation.warnings.map((warning) => (
+                <li key={warning}>⚠️ {warning}</li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-0.5 text-text-muted">
+            {describePendingOperationEffect(presentation.tool)} {describePendingOperationStatus("proposed")}.
+          </div>
+
+          {error && <div className="mt-1 font-semibold text-danger">{error}</div>}
+
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              disabled={loading}
+              onClick={handleApprove}
+              className="rounded-[10px] bg-primary px-3.5 py-2 font-bold text-white shadow-xs transition-all hover:bg-primary-hover active:scale-95 disabled:opacity-50"
+            >
+              {loading ? "Processando…" : confirmLabel}
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={handleReject}
+              className="rounded-[10px] border border-border-subtle bg-surface-1 px-3.5 py-2 font-bold text-text-secondary transition-all hover:bg-surface-2 active:scale-95 disabled:opacity-50"
+            >
+              Rejeitar
             </button>
           </div>
         </div>

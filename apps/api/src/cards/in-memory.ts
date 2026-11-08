@@ -373,7 +373,7 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
       return r;
     },
 
-    async payStatement(householdId, statementId, input) {
+    async payStatement(householdId, statementId, input, _options?) {
       const s = statements.find(x => x.id === statementId && x.householdId === householdId);
       if (!s) throw domainErrors.notFound('Fatura');
 

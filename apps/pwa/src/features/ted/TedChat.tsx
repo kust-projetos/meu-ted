@@ -51,6 +51,7 @@ const PROPOSAL_NOUN: Readonly<Record<ProposalIntent["tool"], string>> = {
   "transactions.expense.create": "despesa",
   "transactions.income.create": "receita",
   "cards.purchase.create": "compra no cartão",
+  "cards.statement.pay": "pagamento de fatura",
   "transactions.transfer.create": "transferência",
 };
 const proposalRecoveryError = (proposal?: ProposalIntent): string =>
