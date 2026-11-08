@@ -144,6 +144,8 @@ describe('p3 category read: transport allowlist and proposal refusal', () => {
     assert.equal(isRouteAllowlisted('/categories'), true);
     assert.equal(isRouteAllowlisted('/categories?kind=expense'), true);
     assert.equal(isRouteAllowlisted('/categories?kind=income'), true);
+    assert.equal(isRouteAllowlisted('/cards/statements'), true);
+    assert.equal(isRouteAllowlisted('/cards/statements?accountId=11111111-1111-4111-8111-111111111114'), true);
     assert.equal(isRouteAllowlisted('/categories/123'), false);
     assert.equal(isRouteAllowlisted('/pending-operations/v2/propose'), false);
   });

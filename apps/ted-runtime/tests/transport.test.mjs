@@ -63,6 +63,10 @@ describe('ted-runtime http transport', () => {
     assert.equal(isRouteAllowlisted('/accounts'), true);
     assert.equal(isRouteAllowlisted('/accounts?kind=bank'), true);
     assert.equal(isRouteAllowlisted('/dashboard/month-summary?yearMonth=2026-06'), true);
+    assert.equal(isRouteAllowlisted('/cards/statements'), true);
+    assert.equal(isRouteAllowlisted('/cards/statements?accountId=11111111-1111-4111-8111-111111111114'), true);
+    assert.equal(isRouteAllowlisted('/cards/statements?status=open&limit=5'), true);
+    assert.equal(isRouteAllowlisted('/cards/statements/123'), false);
     assert.equal(isRouteAllowlisted('/accounts/123'), false);
     assert.equal(isRouteAllowlisted('/pending-operations/v2/propose'), false);
     assert.equal(isRouteAllowlisted('/dashboard/month-summary-extra'), false);
@@ -82,6 +86,9 @@ describe('ted-runtime http transport', () => {
     const t = new HttpFinanceTransport({ baseUrl });
     await assert.rejects(() => t.call({ route: '/pending-operations/v2/propose', method: 'POST', host }), /not allowlisted/);
     await assert.rejects(() => t.call({ route: '/accounts', method: 'POST', host }), /method not allowlisted/);
+    await assert.rejects(() => t.call({ route: '/cards/statements', method: 'POST', host }), /method not allowlisted/);
+    await assert.rejects(() => t.call({ route: '/cards/statements', method: 'PATCH', host }), /method not allowlisted/);
+    await assert.rejects(() => t.call({ route: '/cards/statements', method: 'DELETE', host }), /method not allowlisted/);
   });
 
   it('expira timeout real sobre rota permitida lenta (sem máscara de gate)', async () => {
