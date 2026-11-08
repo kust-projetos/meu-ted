@@ -3,6 +3,8 @@
 **Data:** 2026-11-08  
 **Base:** `main@9485294` (P3.4/P3.5 mergeados)  
 **Branch:** `feat/p3-statement-payment`  
+**SHA:** `7242026`  
+**PR:** https://github.com/kust-projetos/meu-ted/pull/300  
 **Critério:** `P3_STATEMENT_PAYMENT_PASS`
 
 ## Objetivo
@@ -126,9 +128,17 @@ conversacional (OpenCode SDK → broker A4 → Pending V2 → PWA).
   `test:skip-gate`, `capabilities:check`, `write-policy:check`,
   `governance:check`, `boundary:check`, `public-safety --strict` — **PASS**.
 - `pnpm lint` completo: não concluído localmente (Biome excedeu o timeout no
-  Windows). O typecheck e os testes focados passaram; o lint autoritativo
-  roda no CI (Gate/quality).
-- CI (Gate — all checks / quality (22, 10)): a validar no PR.
+  Windows). O lint autoritativo do CI passou no job **Quality — lint +
+  typecheck + build**.
+- CI do PR #300 — **PASS**:
+  - `Gate — all checks` — PASS;
+  - `quality (22, 10)` — PASS;
+  - `Financial integrity — Postgres` — PASS;
+  - `Quality — lint + typecheck + build` — PASS;
+  - `TED Runtime — lint + typecheck + test` — PASS;
+  - `Functional — tests + smoke` — PASS;
+  - `Docs + governance` — PASS;
+  - `Agent policies` — PASS.
 
 ## Limites (fora de escopo, conforme pedido)
 
