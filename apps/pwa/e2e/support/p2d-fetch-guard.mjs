@@ -50,11 +50,12 @@ export const LIVE_REAL_FETCH_GUARD = "live-real-allowlist";
 
 // Contract pairs the runtime already sends to the synthetic API (verified in
 // apps/ted-runtime/src/gateway.mjs and src/transport.mjs). Nothing else is
-// reachable — no write, only the explicitly listed P3 read routes.
+// reachable — no write, only the explicitly listed read routes.
 export const LIVE_REAL_API_ROUTES = Object.freeze([
   "POST /auth/agent-token",
   "GET /auth/devices/me",
   "GET /accounts",
+  "GET /cards/accounts",
   "GET /dashboard/month-summary",
   "GET /categories",
   "GET /cards/statements",
@@ -64,6 +65,7 @@ const API_ROUTE_HEADERS = new Map([
   ["POST /auth/agent-token", Object.freeze(["cookie", "x-workspace-id", "x-device-token", "content-type", "accept"])],
   ["GET /auth/devices/me", Object.freeze(["x-device-token", "accept"])],
   ["GET /accounts", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
+  ["GET /cards/accounts", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
   ["GET /dashboard/month-summary", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
   ["GET /categories", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
   ["GET /cards/statements", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],

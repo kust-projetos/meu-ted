@@ -62,7 +62,14 @@ const CARD_INSTALLMENTS = process.env.P2D_CARD_INSTALLMENTS === "1";
 const TRANSFER = process.env.P2D_TRANSFER === "1";
 const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
 const P3_PILOT = process.env.P2D_P3_PILOT === "1";
-const PROPOSAL = P3_PILOT || EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+const P38_CARD_SMOKE = process.env.P2D_P38_CARD_SMOKE === "1";
+const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+if (P38_CARD_SMOKE && !LIVE_REAL) {
+  throw new Error("[p2d-stack] P2D_P38_CARD_SMOKE requires P2D_LIVE_REAL (fail-closed)");
+}
+if (P38_CARD_SMOKE && (P3_PILOT || EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY || OFFLINE_CHAT)) {
+  throw new Error("[p2d-stack] P2D_P38_CARD_SMOKE is exclusive with P3_PILOT, P3 slices and P2D_OFFLINE_CHAT");
+}
 if (P3_PILOT && (EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY || OFFLINE_CHAT)) {
   throw new Error("[p2d-stack] P2D_P3_PILOT is exclusive with P3 slices and P2D_OFFLINE_CHAT");
 }
@@ -217,7 +224,7 @@ const built = buildTestApp(
   {
     // P3.4/P3.5 only: the card slices need a real credit-card account in the
     // synthetic ledger. Every other mode keeps the exact read-slice oracle.
-    accounts: P3_PILOT || CARD || CARD_INSTALLMENTS || STATEMENT_PAY
+    accounts: P3_PILOT || P38_CARD_SMOKE || CARD || CARD_INSTALLMENTS || STATEMENT_PAY
       ? [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1, CARD_A1]
       : [ACCOUNT_A1, ACCOUNT_A2, ACCOUNT_B1],
     categories: [CATEGORY_FOOD_A, CATEGORY_RENT_A, CATEGORY_SALARY_A, CATEGORY_FOOD_B],
@@ -273,13 +280,20 @@ let probe: ProbeHandle | null = null;
 function buildProbeConfig(): Record<string, unknown> {
   const base = {
     root: ROOT,
-    identity: MODE === "offline" ? "p2d-offline" : MODE === "live-real" ? "p2d-live-real" : "p2d-browser",
+    identity:
+      MODE === "offline"
+        ? "p2d-offline"
+        : P38_CARD_SMOKE
+          ? "p2d-p38-card-smoke"
+          : MODE === "live-real"
+            ? "p2d-live-real"
+            : "p2d-browser",
     apiBaseUrl: `http://127.0.0.1:${API_PORT}`,
     tedRuntimeDir: TED_RUNTIME_DIR,
     ctlBaseUrl: `http://127.0.0.1:${CTL_PORT}`,
   };
   if (PROPOSAL) {
-    if (P3_PILOT && LIVE_REAL) {
+    if ((P3_PILOT || P38_CARD_SMOKE) && LIVE_REAL) {
       const liveModel = LIVE_MODEL as string;
       return {
         ...base,

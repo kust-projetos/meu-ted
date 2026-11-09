@@ -62,10 +62,12 @@ describe('ted-runtime http transport', () => {
   it('allowlists only the exact read paths (exact pathname; P3 /categories covered in p3-category-read.test.mjs)', () => {
     assert.equal(isRouteAllowlisted('/accounts'), true);
     assert.equal(isRouteAllowlisted('/accounts?kind=bank'), true);
+    assert.equal(isRouteAllowlisted('/cards/accounts'), true);
     assert.equal(isRouteAllowlisted('/dashboard/month-summary?yearMonth=2026-06'), true);
     assert.equal(isRouteAllowlisted('/cards/statements'), true);
     assert.equal(isRouteAllowlisted('/cards/statements?accountId=11111111-1111-4111-8111-111111111114'), true);
     assert.equal(isRouteAllowlisted('/cards/statements?status=open&limit=5'), true);
+    assert.equal(isRouteAllowlisted('/cards/accounts/123'), false);
     assert.equal(isRouteAllowlisted('/cards/statements/123'), false);
     assert.equal(isRouteAllowlisted('/accounts/123'), false);
     assert.equal(isRouteAllowlisted('/pending-operations/v2/propose'), false);
@@ -86,6 +88,9 @@ describe('ted-runtime http transport', () => {
     const t = new HttpFinanceTransport({ baseUrl });
     await assert.rejects(() => t.call({ route: '/pending-operations/v2/propose', method: 'POST', host }), /not allowlisted/);
     await assert.rejects(() => t.call({ route: '/accounts', method: 'POST', host }), /method not allowlisted/);
+    await assert.rejects(() => t.call({ route: '/cards/accounts', method: 'POST', host }), /method not allowlisted/);
+    await assert.rejects(() => t.call({ route: '/cards/accounts', method: 'PATCH', host }), /method not allowlisted/);
+    await assert.rejects(() => t.call({ route: '/cards/accounts', method: 'DELETE', host }), /method not allowlisted/);
     await assert.rejects(() => t.call({ route: '/cards/statements', method: 'POST', host }), /method not allowlisted/);
     await assert.rejects(() => t.call({ route: '/cards/statements', method: 'PATCH', host }), /method not allowlisted/);
     await assert.rejects(() => t.call({ route: '/cards/statements', method: 'DELETE', host }), /method not allowlisted/);

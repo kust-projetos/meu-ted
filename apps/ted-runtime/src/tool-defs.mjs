@@ -70,6 +70,21 @@ export const TOOL_DEFS = [
     output: { type: 'object', description: 'Real GET /accounts body ({items, total}).' },
   },
   {
+    // P3.8 (opt-in only — see plugin.mjs isP3ReadsEnabled): credit-card
+    // accounts via the exact existing route GET /cards/accounts (CardStore),
+    // which returns ONLY credit cards. /accounts deliberately excludes cards;
+    // this tool is the correct discovery path for card ids.
+    name: 'list_credit_cards',
+    description: 'TED read-only (P3 opt-in): list credit-card accounts via GET /cards/accounts (identity-scoped server-side).',
+    input: {
+      type: 'object',
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Real GET /cards/accounts body ({items, total}).' },
+  },
+  {
     name: 'get_month_summary',
     description: 'TED read-only: month totals via GET /dashboard/month-summary?yearMonth=YYYY-MM.',
     input: {
@@ -103,14 +118,14 @@ export const TOOL_DEFS = [
   {
     // P3.6 statement-payment prerequisite (opt-in only — see plugin.mjs
     // isP3ReadsEnabled): the real GET /cards/statements route with an optional
-    // card filter. Read-only; the model resolves the card via list_accounts
+    // card filter. Read-only; the model resolves the card via list_credit_cards
     // and the invoice id here — never invented.
     name: 'list_card_statements',
     description: 'TED read-only (P3 opt-in): credit-card statements via GET /cards/statements, optionally filtered by card.',
     input: {
       type: 'object',
       properties: {
-        accountId: { type: 'string', description: 'Credit-card account uuid resolved from list_accounts (optional)' },
+        accountId: { type: 'string', description: 'Credit-card account uuid resolved from list_credit_cards (optional)' },
         status: { type: 'string', enum: ['open', 'closed', 'paid', 'partial', 'overdue', 'cancelled'] },
         limit: { type: 'integer', minimum: 1, maximum: 50 },
       },
@@ -167,7 +182,7 @@ export const TOOL_DEFS = [
   },
   {
     // P3.4 card purchase slice — same intent-only contract, card purchase tool.
-    // Card identified via list_accounts (credit_card); categoryId optional.
+    // Card identified via list_credit_cards; categoryId optional.
     name: 'propose_card_purchase',
     description:
       'TED (P3 opt-in): propose a credit-card purchase for the authenticated user to approve, either single (1x) or in installments. Records a pending proposal only — never creates the purchase.',
@@ -177,7 +192,7 @@ export const TOOL_DEFS = [
         amountCents: { type: 'integer', minimum: 1, description: 'TOTAL purchase amount in cents (BRL), never a per-parcel amount' },
         description: { type: 'string', minLength: 1, maxLength: 240 },
         date: { type: 'string', description: 'Purchase date YYYY-MM-DD (defaults to today UTC)' },
-        accountId: { type: 'string', description: 'Credit-card account uuid resolved from list_accounts (credit_card)' },
+        accountId: { type: 'string', description: 'Credit-card account uuid resolved from list_credit_cards' },
         categoryId: { type: 'string', description: 'Expense category uuid resolved from list_categories (optional)' },
         installmentsTotal: { type: 'integer', minimum: 1, maximum: 48, description: 'Number of installments (1–48). Omit or 1 for a single purchase; amountCents stays the TOTAL.' },
       },
@@ -260,6 +275,7 @@ const FORBIDDEN_KEYS = new Set([
 
 function knownKeys(name) {
   if (name === 'list_accounts') return ['kind', 'includeInactive'];
+  if (name === 'list_credit_cards') return [];
   if (name === 'list_categories') return ['kind'];
   if (name === 'list_card_statements') return ['accountId', 'status', 'limit'];
   if (name === 'propose_statement_payment') return ['statementId', 'fromAccountId', 'amountCents'];
@@ -385,7 +401,9 @@ export function validateToolArgs(name, args) {
         throw new ToolError('tool.invalid_args', `${name}: categoryId must be a uuid`);
       }
     }
-  } else {
+  } else if (name === 'list_credit_cards') {
+    // No arguments. Structural enforcement is via knownKeys/additionalProperties.
+  } else if (name === 'list_accounts') {
     if (args.kind !== undefined && typeof args.kind !== 'string') {
       throw new ToolError('tool.invalid_args', 'list_accounts: kind must be a string');
     }
@@ -403,6 +421,11 @@ function routeFor(name, args) {
     if (args.includeInactive) q.set('includeInactive', args.includeInactive);
     const qs = q.toString();
     return qs ? `/accounts?${qs}` : '/accounts';
+  }
+  if (name === 'list_credit_cards') {
+    // Exact existing route (cards.ts GET /cards/accounts): CardStore returns
+    // credit-card accounts only. No query parameters.
+    return '/cards/accounts';
   }
   if (name === 'list_categories') {
     // Exact existing API route (categories.ts:59-68): GET /categories with an
@@ -444,7 +467,7 @@ function assertShape(name, args, body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     fail(`expected object, got ${Array.isArray(body) ? 'array' : body === null ? 'null' : typeof body}`);
   }
-  if (name === 'list_accounts' || name === 'list_categories') {
+  if (name === 'list_accounts' || name === 'list_credit_cards' || name === 'list_categories') {
     if (!Array.isArray(body.items)) fail('items must be an array');
     if (!isSafeInt(body.total) || body.total < 0) fail('total must be a non-negative safe integer');
     return body;
@@ -607,6 +630,7 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
   };
   return {
     list_accounts: (args, host, opts) => run('list_accounts', args, host, opts),
+    list_credit_cards: (args, host, opts) => run('list_credit_cards', args, host, opts),
     get_month_summary: (args, host, opts) => run('get_month_summary', args, host, opts),
     list_categories: (args, host, opts) => run('list_categories', args, host, opts),
     list_card_statements: (args, host, opts) => run('list_card_statements', args, host, opts),

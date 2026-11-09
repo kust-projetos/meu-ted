@@ -29,6 +29,8 @@
     "test:p2d-live-prep": "node apps/pwa/e2e/support/p2d-live-prep.mjs",
     "test:p2d-offline": "node apps/pwa/e2e/support/p2d-live-prep.mjs --offline",
     "test:p2d-live-real": "node apps/pwa/e2e/support/p2d-live-prep.mjs --live-real",
+    "test:p2d-p3-pilot-real": "node apps/pwa/e2e/support/p2d-live-prep.mjs --live-real --p3-pilot",
+    "test:p2d-p38-card-smoke": "node apps/pwa/e2e/support/p2d-live-prep.mjs --live-real --p38-smoke",
     "build:all": "pnpm --filter meu-ted-api build && pnpm --filter pi-finance-agent build && pnpm --filter pi-finance-codex-broker build && pnpm --filter pwa build",
     "security:secrets": "node scripts/security-secrets.mjs",
     "public-safety": "node scripts/check-public-safety.mjs",

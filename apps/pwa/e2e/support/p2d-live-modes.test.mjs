@@ -694,6 +694,17 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
       { action: "allow-api", reason: "api" },
     );
     assert.deepEqual(
+      at(`${API_ORIGIN}/cards/accounts`, {
+        method: "GET",
+        headers: {
+          "x-device-token": "device-opaque",
+          "x-workspace-id": "household-a",
+          accept: "application/json",
+        },
+      }),
+      { action: "allow-api", reason: "api" },
+    );
+    assert.deepEqual(
       at(`${API_ORIGIN}/dashboard/month-summary?yearMonth=2026-06`, {
         method: "GET",
         headers: {
@@ -709,7 +720,11 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
       classifyLiveRealRequest(`${API_ORIGIN}/accounts`, { method: "GET" }, { apiOrigin: `${API_ORIGIN}/` }).action,
       "allow-api",
     );
-    // P3 pilot live-real reads: categories + statements GETs allowlisted (reads only, no writes).
+    // P3 pilot live-real reads: card discovery, categories + statements GETs allowlisted (reads only, no writes).
+    assert.equal(
+      classifyLiveRealRequest(`${API_ORIGIN}/cards/accounts`, { method: "GET", headers: { "x-device-token": "device-opaque", "x-workspace-id": "household-a", accept: "application/json" } }, { apiOrigin: API_ORIGIN }).action,
+      "allow-api",
+    );
     assert.equal(
       classifyLiveRealRequest(`${API_ORIGIN}/categories?kind=expense`, { method: "GET", headers: { "x-device-token": "device-opaque", "x-workspace-id": "household-a", accept: "application/json" } }, { apiOrigin: API_ORIGIN }).action,
       "allow-api",
@@ -777,6 +792,12 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
         { method: "GET", headers: baseHeaders },
         "api_query",
       ],
+      // Card discovery: GET only, no query/body.
+      [`${API_ORIGIN}/cards/accounts`, { method: "POST", headers: baseHeaders, body: "{}" }, "api_method_path"],
+      [`${API_ORIGIN}/cards/accounts`, { method: "PATCH", headers: baseHeaders, body: "{}" }, "api_method_path"],
+      [`${API_ORIGIN}/cards/accounts`, { method: "DELETE", headers: baseHeaders }, "api_method_path"],
+      [`${API_ORIGIN}/cards/accounts?kind=credit_card`, { method: "GET", headers: baseHeaders }, "api_query"],
+      [`${API_ORIGIN}/cards/accounts/123`, { method: "GET", headers: baseHeaders }, "api_method_path"],
       // Statements: only the contract subsets with uuid/enum/canonical 1-50.
       [`${API_ORIGIN}/cards/statements`, { method: "POST", headers: baseHeaders, body: "{}" }, "api_method_path"],
       [`${API_ORIGIN}/cards/statements`, { method: "PATCH", headers: baseHeaders, body: "{}" }, "api_method_path"],
@@ -907,15 +928,16 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
     });
     const host = { token: "device-opaque", household: "household-a" };
     await transport.call({ route: "/accounts", method: "GET", host });
+    await transport.call({ route: "/cards/accounts", method: "GET", host });
     await transport.call({ route: "/dashboard/month-summary?yearMonth=2026-06", method: "GET", host });
     await transport.call({ route: "/cards/statements?accountId=11111111-1111-4111-8111-111111111114", method: "GET", host });
 
     // Exactly the contract pairs the runtime already sends (identity x2 +
-    // accounts + summary + statements); nothing blocked, every response a 200.
-    assert.equal(guard.stats.apiAllowed, 5);
+    // accounts + cards/accounts + summary + statements); nothing blocked, every response a 200.
+    assert.equal(guard.stats.apiAllowed, 6);
     assert.equal(guard.stats.apiBlocked, 0);
     assert.equal(guard.stats.blocked, 0);
-    assert.deepEqual(guard.stats.apiStatuses, [200, 200, 200, 200, 200]);
+    assert.deepEqual(guard.stats.apiStatuses, [200, 200, 200, 200, 200, 200]);
   });
 
   it("fails closed on a missing/invalid apiOrigin (never a generic localhost release)", () => {

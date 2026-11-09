@@ -69,7 +69,7 @@ describe('p3 category read: product catalog gating', () => {
   it('local opt-in exposes list_categories with complete input AND output schemas', () => {
     assert.equal(isP3ReadsEnabled(OPT_IN_ENV), true);
     const defs = productToolDefs(OPT_IN_ENV);
-    assert.deepEqual(defs.map((d) => d.name).sort(), ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories']);
+    assert.deepEqual(defs.map((d) => d.name).sort(), ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards']);
     const cat = defs.find((d) => d.name === 'list_categories');
     assert.ok(cat.input && cat.input.type === 'object', 'list_categories needs input schema (native 2.2.4)');
     assert.deepEqual(cat.input.properties.kind.enum, ['expense', 'income']);
@@ -78,7 +78,7 @@ describe('p3 category read: product catalog gating', () => {
     assert.ok(TOOL_NAMES.includes('list_categories'), 'TOOL_NAMES includes list_categories');
   });
 
-  it('plugin setup registers exactly 2 tools by default, 3 with the local opt-in', async () => {
+  it('plugin setup registers exactly 2 tools by default, the P3 reads with the local opt-in', async () => {
     const allowSetup = {
       permission: { assert: async () => {} },
       session: { hook: async () => ({ dispose: async () => {} }) },
@@ -91,7 +91,7 @@ describe('p3 category read: product catalog gating', () => {
     const addedOptIn = [];
     const optInDef = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), { env: OPT_IN_ENV });
     await optInDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedOptIn.push(t) }); } } });
-    assert.deepEqual(addedOptIn.map((t) => t.name).sort(), ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories']);
+    assert.deepEqual(addedOptIn.map((t) => t.name).sort(), ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards']);
 
     const addedProd = [];
     const prodDef = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), { env: PROD_ENV });
