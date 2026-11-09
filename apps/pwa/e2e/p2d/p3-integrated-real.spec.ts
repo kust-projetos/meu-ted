@@ -25,7 +25,12 @@ type Account = { id: string; name: string; kind: string; balanceCents: number };
 type State = { transactions: Tx[]; total: number; accounts: Account[] };
 type Statement = { id: string; accountId: string; cycleYearMonth: string; totalCents: number; paidCents: number; status: string };
 type Journal = { requests?: Array<{ method?: string; url?: string }>; financialWrites?: Array<{ method?: string; url?: string }> };
-type Stats = { promptCalls?: number; transportCalls?: number; financeReads?: Array<{ method?: string; route?: string; statusCode?: number }> };
+type Stats = {
+  promptCalls?: number;
+  transportCalls?: number;
+  financeReads?: Array<{ method?: string; route?: string; statusCode?: number }>;
+  financeToolNames?: string[] | null;
+};
 type StepEvidence = {
   step: number;
   operation: string;
@@ -355,7 +360,7 @@ test("P3.9 real six-flow: 7 operations, 7 confirmations, continuity and recovery
         entityId: decisionBody.receipt?.entity?.id,
         status: decisionBody.receipt?.status,
       };
-      stepEv.note = `toolNames=${JSON.stringify((afterStats as any).financeToolNames ?? null)}`;
+      stepEv.note = `toolNames=${JSON.stringify(afterStats.financeToolNames ?? null)}`;
       stepEv.stateAfter = {
         txCount: afterState.transactions.length,
         balances: {
