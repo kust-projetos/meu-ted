@@ -45,7 +45,7 @@ const MODES = {
   "live-prep": { flag: "P2D_LIVE_PREP", grep: "p2d-live-prep" },
   offline: { flag: "P2D_OFFLINE_CHAT", grep: "p2d-live-offline" },
   "live-real": { flag: "P2D_LIVE_REAL", grep: "p2d-live-real" },
-  "p3-pilot": { flag: "P2D_LIVE_REAL", grep: "real model chooses an expense proposal" },
+  "p3-pilot": { flag: "P2D_LIVE_REAL", grep: "P3\\.9 real six-flow|real model chooses an expense proposal" },
   "p38-smoke": { flag: "P2D_LIVE_REAL", grep: "p3\\.8 card discovery smoke" },
 };
 const MODE_FLAGS = ["P2D_LIVE_PREP", "P2D_OFFLINE_CHAT", "P2D_LIVE_REAL"];
