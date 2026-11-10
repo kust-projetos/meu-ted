@@ -119,7 +119,10 @@ jobs:
         id: local-identity
         run: |
           LOCKFILE_HASH="$(sha256sum pnpm-lock.yaml | cut -d' ' -f1)"
-          WRANGLER_VERSION="$(pnpm --filter pi-finance-agent --fail-if-no-match exec wrangler --version)"
+          # pnpm can print workspace engine warnings before the version (e.g.
+          # apps/ted-runtime wants node >=24 while the runner uses node 22);
+          # keep only the last line so $GITHUB_OUTPUT carries the real version.
+          WRANGLER_VERSION="$(pnpm --filter pi-finance-agent --fail-if-no-match exec wrangler --version 2>/dev/null | tail -n 1)"
           echo "lockfile-hash=$LOCKFILE_HASH" >> "$GITHUB_OUTPUT"
           echo "wrangler-version=$WRANGLER_VERSION" >> "$GITHUB_OUTPUT"
       - name: Resolve CI manifest run for the approved SHA
