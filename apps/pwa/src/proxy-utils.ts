@@ -97,6 +97,7 @@ type EnvLike = {
   AGENT_ORIGIN?: string;
   TED_OPENCODE_RUNTIME_ENABLED?: string;
   TED_OPENCODE_RUNTIME_KILL_SWITCH?: string;
+  TED_OPENCODE_WORKSPACES?: string;
   TED_OPENCODE_GATEWAY_ORIGIN?: string;
   TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS?: string;
 };
@@ -662,6 +663,22 @@ export function isTedOpencodeRuntimeEnabled(env?: EnvLike): boolean {
  */
 export function isTedOpencodeKillSwitchOn(env?: EnvLike): boolean {
   return env?.TED_OPENCODE_RUNTIME_KILL_SWITCH === "1";
+}
+
+/**
+ * Canary allowlist by workspace (`TED_OPENCODE_WORKSPACES`, CSV of exact
+ * workspace ids). Absent/empty = NO workspace (fail closed) — the global
+ * activation flag alone never opens the runtime to every workspace.
+ */
+export function isTedOpencodeWorkspaceEnabled(workspaceId: string | null, env?: EnvLike): boolean {
+  if (typeof workspaceId !== "string" || workspaceId.length === 0) return false;
+  const raw = env?.TED_OPENCODE_WORKSPACES;
+  if (typeof raw !== "string" || raw.trim().length === 0) return false;
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .includes(workspaceId);
 }
 
 /**
