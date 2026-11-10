@@ -129,7 +129,13 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
       promptHost,
       createRuntimeSession: async () => ({ runtimeSessionId: await tedEnv.serverOps.createNativeSession() }),
       withAuthenticatedSession: (sessionID, host, fn, opts) =>
-        tedEnv.serverOps.withAuthenticatedSession(sessionID, host, fn, opts),
+        tedEnv.serverOps.withAuthenticatedSession(sessionID, host, fn, {
+          // Turnos reais com modelo podem levar dezenas de segundos; a prova
+          // de idle (pré/pós) precisa de folga compatível com o timeout de
+          // requisição, senão um turno legítimo é quarentenado.
+          idleTimeoutMs: 60000,
+          ...(opts || {}),
+        }),
       requestTimeoutMs,
       diagnosticsSink: diagSink,
     });
