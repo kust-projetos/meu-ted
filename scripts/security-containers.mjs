@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { validateTrivyignoreFile } from './trivyignore-policy.mjs';
 
-const images = ['pi-finance-api:ci', 'pi-finance-codex-broker:ci'];
+const images = ['pi-finance-api:ci'];
 const repoPath = process.cwd();
 const commonArgs = [
   'run',

@@ -23,6 +23,7 @@ export function generateRuntimeFacts() {
   const pwaPkg = JSON.parse(fs.readFileSync(path.join(ROOT, "apps", "pwa", "package.json"), "utf8"));
   const apiPkg = JSON.parse(fs.readFileSync(path.join(ROOT, "apps", "api", "package.json"), "utf8"));
   const agentPkg = JSON.parse(fs.readFileSync(path.join(ROOT, "apps", "agent", "package.json"), "utf8"));
+  const tedRuntimePkg = JSON.parse(fs.readFileSync(path.join(ROOT, "apps", "ted-runtime", "package.json"), "utf8"));
 
   // FIX-FINAL-3 (V4, ADR-016): agent bindings are derived from the current
   // apps/agent/wrangler.jsonc instead of a hardcoded legacy list, so a
@@ -52,7 +53,7 @@ export function generateRuntimeFacts() {
     factsSchemaVersion: FACTS_SCHEMA_VERSION,
     productVersion: rootPkg.version ?? "0.0.0",
     lastVerified: new Date().toISOString().slice(0, 10),
-    activeWorkspaces: ["apps/api", "apps/pwa", "apps/agent"],
+    activeWorkspaces: ["apps/api", "apps/pwa", "apps/agent", "apps/ted-runtime"],
     apps: {
       api: {
         name: apiPkg.name || "@pi-financeiro/api",
@@ -71,6 +72,12 @@ export function generateRuntimeFacts() {
         bindings: agentBindings,
         llmConfig: "V034 global, providers opencode-zen/go, openai-api, openai-codex-subscription experimental_blocked",
       },
+      tedRuntime: {
+        name: tedRuntimePkg.name || "@pi-financeiro/ted-runtime",
+        framework: "OpenCode SDK (sessão, transcript, plugins e tools nativas)",
+        runtime: "Node.js container (Contabo VPS) atrás do Traefik",
+        role: "runtime conversacional principal",
+      },
     },
     counts: {
       apiRoutes: uniqueRoutes.length,
@@ -82,7 +89,7 @@ export function generateRuntimeFacts() {
     architecture: {
       sourceOfTruth: "Fastify PostgreSQL API (apps/api)",
       primaryClient: "PWA (apps/pwa)",
-      assistantEngine: "Cloudflare Agent Worker (apps/agent)",
+      assistantEngine: "OpenCode runtime (apps/ted-runtime) with Cloudflare Agent A0 (apps/agent) as rollback",
       canonicalPwaPath: "apps/pwa",
       deprecatedOrigin: "../pi-finance-web",
     },

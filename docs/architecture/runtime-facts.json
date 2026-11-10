@@ -1,11 +1,12 @@
 {
   "factsSchemaVersion": "1.0.0",
   "productVersion": "0.1.0",
-  "lastVerified": "2026-10-18",
+  "lastVerified": "2026-11-10",
   "activeWorkspaces": [
     "apps/api",
     "apps/pwa",
-    "apps/agent"
+    "apps/agent",
+    "apps/ted-runtime"
   ],
   "apps": {
     "api": {
@@ -26,6 +27,12 @@
         "FINANCE_CHAT_AGENT (FinanceChatAgent)"
       ],
       "llmConfig": "V034 global, providers opencode-zen/go, openai-api, openai-codex-subscription experimental_blocked"
+    },
+    "tedRuntime": {
+      "name": "pi-finance-ted-runtime",
+      "framework": "OpenCode SDK (sessão, transcript, plugins e tools nativas)",
+      "runtime": "Node.js container (Contabo VPS) atrás do Traefik",
+      "role": "runtime conversacional principal"
     }
   },
   "counts": {
@@ -38,7 +45,7 @@
   "architecture": {
     "sourceOfTruth": "Fastify PostgreSQL API (apps/api)",
     "primaryClient": "PWA (apps/pwa)",
-    "assistantEngine": "Cloudflare Agent Worker (apps/agent)",
+    "assistantEngine": "OpenCode runtime (apps/ted-runtime) with Cloudflare Agent A0 (apps/agent) as rollback",
     "canonicalPwaPath": "apps/pwa",
     "deprecatedOrigin": "../pi-finance-web"
   },

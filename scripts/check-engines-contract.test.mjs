@@ -11,7 +11,6 @@ const MANIFESTS = [
   'apps/pwa/package.json',
   'apps/agent/package.json',
   'apps/api/package.json',
-  'apps/codex-broker/package.json',
   'packages/llm-contracts/package.json',
 ];
 
@@ -52,7 +51,7 @@ test('project baseline doc matches the engine floor', () => {
 });
 
 test('production images run Node >=22', () => {
-  for (const dockerfile of ['apps/api/Dockerfile', 'apps/codex-broker/Dockerfile']) {
+  for (const dockerfile of ['apps/api/Dockerfile']) {
     const body = fs.readFileSync(dockerfile, 'utf8');
     assert.match(body, /^FROM node:(2[2-9]|[3-9][0-9])/m, `${dockerfile} base image`);
   }

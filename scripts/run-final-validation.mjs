@@ -12,7 +12,7 @@ export const VAL_GATES = [
   { id: "VAL.3", name: "TypeScript Compilation", command: "pnpm typecheck" },
   { id: "VAL.4", name: "API Unit & Contract Tests", command: "pnpm --filter meu-ted-api --fail-if-no-match test" },
   { id: "VAL.5", name: "Agent Tests & Deterministic Evals", command: "pnpm --filter pi-finance-agent --fail-if-no-match test && pnpm --filter pi-finance-agent --fail-if-no-match eval:ted-v2" },
-  { id: "VAL.6", name: "Codex Broker", command: "pnpm --filter pi-finance-codex-broker --fail-if-no-match typecheck && pnpm --filter pi-finance-codex-broker --fail-if-no-match test && pnpm --filter pi-finance-codex-broker --fail-if-no-match build" },
+  { id: "VAL.6", name: "TED Runtime", command: "pnpm --filter pi-finance-ted-runtime --fail-if-no-match lint && pnpm --filter pi-finance-ted-runtime --fail-if-no-match typecheck && pnpm --filter pi-finance-ted-runtime --fail-if-no-match test" },
   { id: "VAL.7", name: "PWA Unit & Contract Tests", command: "pnpm --filter pwa --fail-if-no-match test" },
   { id: "VAL.8", name: "Architecture Invariants", command: "pnpm architecture:check" },
   { id: "VAL-V4.9", name: "Workspace Agent Decommission Guards (ARCH-V4-06a/b)", command: "node scripts/check-legacy-runtime-references.mjs --check=all" },

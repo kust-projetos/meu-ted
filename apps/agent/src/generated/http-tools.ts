@@ -2,7 +2,6 @@
 import { Type } from "@sinclair/typebox";
 import { requestPiApiJson } from "../tools/api-client.js";
 import { capabilityDisabled, checkToolExecutionPolicy } from "../tools/api-tool-helpers.js";
-import { runShadowRead } from "../shadow/shadow-runner.js";
 
 type JsonObject = Record<string, unknown>;
 type ToolParams = Record<string, unknown>;
@@ -14,7 +13,6 @@ const specs = [
     "method": "GET",
     "path": "/pending-operations/details",
     "idempotency": false,
-    "shadow": false,
     "result": {
       "kind": "first",
       "key": "operation",
@@ -51,7 +49,6 @@ const specs = [
     "method": "POST",
     "path": "/pending-operations/approve",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -84,7 +81,6 @@ const specs = [
     "method": "POST",
     "path": "/pending-operations/reject",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -117,7 +113,6 @@ const specs = [
     "method": "GET",
     "path": "/audit-logs",
     "idempotency": false,
-    "shadow": true,
     "result": {
       "kind": "items",
       "key": "logs",
@@ -214,7 +209,6 @@ const specs = [
     "method": "GET",
     "path": "/accounts",
     "idempotency": false,
-    "shadow": true,
     "result": {
       "kind": "items",
       "key": "accounts",
@@ -277,7 +271,6 @@ const specs = [
     "method": "POST",
     "path": "/accounts",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -342,7 +335,6 @@ const specs = [
     "method": "GET",
     "path": "/categories",
     "idempotency": false,
-    "shadow": true,
     "result": {
       "kind": "items",
       "key": "categories",
@@ -386,7 +378,6 @@ const specs = [
     "method": "POST",
     "path": "/categories",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -492,7 +483,6 @@ const specs = [
     "method": "GET",
     "path": "/analytics/kpis",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -572,7 +562,6 @@ const specs = [
     "method": "GET",
     "path": "/analytics/category-breakdown",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -665,7 +654,6 @@ const specs = [
     "method": "GET",
     "path": "/dashboard/month-summary",
     "idempotency": false,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -687,6 +675,19 @@ const specs = [
           "type": "string",
           "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
         }
+      },
+      {
+        "name": "basis",
+        "in": "query",
+        "required": false,
+        "context": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "liquidez",
+            "competencia"
+          ]
+        }
       }
     ]
   },
@@ -697,7 +698,6 @@ const specs = [
     "method": "GET",
     "path": "/transactions",
     "idempotency": false,
-    "shadow": true,
     "result": {
       "kind": "items",
       "key": "transactions",
@@ -841,7 +841,6 @@ const specs = [
     "method": "POST",
     "path": "/transactions/expense",
     "idempotency": true,
-    "shadow": false,
     "result": {
       "kind": "first",
       "key": "transactionId",
@@ -949,7 +948,6 @@ const specs = [
     "method": "POST",
     "path": "/payables",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1099,7 +1097,6 @@ const specs = [
     "method": "GET",
     "path": "/payables",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -1159,7 +1156,6 @@ const specs = [
     "method": "POST",
     "path": "/payables/{payableId}/pay",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1212,7 +1208,6 @@ const specs = [
     "method": "POST",
     "path": "/payables/{payableId}/cancel",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1252,7 +1247,6 @@ const specs = [
     "method": "GET",
     "path": "/payables/reminders",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -1273,7 +1267,6 @@ const specs = [
     "method": "POST",
     "path": "/transactions/income",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1376,7 +1369,6 @@ const specs = [
     "method": "GET",
     "path": "/cards/recurring",
     "idempotency": false,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1422,7 +1414,6 @@ const specs = [
     "method": "POST",
     "path": "/cards/recurring",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1530,7 +1521,6 @@ const specs = [
     "method": "POST",
     "path": "/transfers",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1613,7 +1603,6 @@ const specs = [
     "method": "POST",
     "path": "/accounts/{accountId}/deactivate",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1653,7 +1642,6 @@ const specs = [
     "method": "POST",
     "path": "/categories/{categoryId}/deactivate",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1693,7 +1681,6 @@ const specs = [
     "method": "DELETE",
     "path": "/transactions/{transactionId}",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1733,7 +1720,6 @@ const specs = [
     "method": "PATCH",
     "path": "/transactions/{transactionId}",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1846,7 +1832,6 @@ const specs = [
     "method": "POST",
     "path": "/goals",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -1972,7 +1957,6 @@ const specs = [
     "method": "GET",
     "path": "/goals",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -1993,7 +1977,6 @@ const specs = [
     "method": "POST",
     "path": "/goals/{goalId}/contribute",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -2073,7 +2056,6 @@ const specs = [
     "method": "POST",
     "path": "/goals/{goalId}/cancel",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -2113,7 +2095,6 @@ const specs = [
     "method": "POST",
     "path": "/budgets",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -2210,7 +2191,6 @@ const specs = [
     "method": "GET",
     "path": "/budgets",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -2231,7 +2211,6 @@ const specs = [
     "method": "GET",
     "path": "/budgets/check",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -2252,7 +2231,6 @@ const specs = [
     "method": "GET",
     "path": "/budgets/{budgetId}/trends",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -2294,7 +2272,6 @@ const specs = [
     "method": "POST",
     "path": "/notifications",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -2428,7 +2405,6 @@ const specs = [
     "method": "GET",
     "path": "/notifications",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -2449,7 +2425,6 @@ const specs = [
     "method": "POST",
     "path": "/payables/templates",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -2566,7 +2541,6 @@ const specs = [
     "method": "GET",
     "path": "/payables/templates",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -2587,7 +2561,6 @@ const specs = [
     "method": "POST",
     "path": "/payables/refresh-status",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -2609,7 +2582,6 @@ const specs = [
     "method": "POST",
     "path": "/payables/auto-create-from-templates",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -2643,7 +2615,6 @@ const specs = [
     "method": "POST",
     "path": "/payables/from-template",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -2714,7 +2685,6 @@ const specs = [
     "method": "GET",
     "path": "/accounts/{accountId}",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -2745,7 +2715,6 @@ const specs = [
     "method": "PATCH",
     "path": "/accounts/{accountId}",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -2796,7 +2765,6 @@ const specs = [
     "method": "PATCH",
     "path": "/categories/{categoryId}",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -2889,7 +2857,6 @@ const specs = [
     "method": "POST",
     "path": "/cards",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -2963,7 +2930,6 @@ const specs = [
     "method": "POST",
     "path": "/cards/purchases",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -3088,7 +3054,6 @@ const specs = [
     "method": "POST",
     "path": "/cards/installments",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -3202,7 +3167,6 @@ const specs = [
     "method": "POST",
     "path": "/cards/statements/{statementId}/pay",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -3263,7 +3227,6 @@ const specs = [
     "method": "GET",
     "path": "/cards/statements",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -3322,7 +3285,6 @@ const specs = [
     "method": "GET",
     "path": "/cards/statements/{statementId}",
     "idempotency": false,
-    "shadow": true,
     "result": null,
     "parameters": [
       {
@@ -3353,7 +3315,6 @@ const specs = [
     "method": "PATCH",
     "path": "/budgets/{budgetId}",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -3415,7 +3376,6 @@ const specs = [
     "method": "POST",
     "path": "/pending-operations/undo",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": []
   },
@@ -3426,7 +3386,6 @@ const specs = [
     "method": "POST",
     "path": "/transactions/detect-duplicate",
     "idempotency": true,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -3541,7 +3500,6 @@ const specs = [
     "method": "GET",
     "path": "/insights/spending",
     "idempotency": false,
-    "shadow": false,
     "result": null,
     "parameters": [
       {
@@ -3728,6 +3686,7 @@ function createTool(spec: ToolSpec) {
   "get_month_summary": Type.Object({
     "householdId": Type.String({"format":"uuid"}),
     "yearMonth": Type.String({"pattern":"^\\d{4}-(0[1-9]|1[0-2])$"}),
+    "basis": Type.Optional(Type.Union([Type.Literal("liquidez"), Type.Literal("competencia")])),
   }),
   "list_recent_transactions": Type.Object({
     "householdId": Type.String({"format":"uuid"}),
@@ -4081,7 +4040,6 @@ function createTool(spec: ToolSpec) {
         ...(auth.hasAuth && auth.apiOrigin !== undefined ? { apiOrigin: auth.apiOrigin } : {}),
       });
       const projected = project(spec, response);
-      if (spec.shadow) void runShadowRead(spec.name, params as unknown as Parameters<typeof runShadowRead>[1], projected);
       onUpdate?.({ content: [{ type: "text", text: `${spec.label}...` }] });
       return projected;
     },

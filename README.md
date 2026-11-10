@@ -9,10 +9,10 @@ capability, confirmação e idempotência.
 
 | Componente | Responsabilidade | Runtime |
 | --- | --- | --- |
+| `apps/ted-runtime` | Runtime conversacional OpenCode (SDK nativo, gateway privado, tools financeiras) | Container Node 24 na Contabo VPS (Traefik) |
+| `apps/agent` | TED A0 (rollback), broker de propostas Pending V2 e confirmação/execução delegada | Cloudflare Workers + Durable Objects |
 | `apps/api` | Fonte de verdade financeira, Better-Auth, autorização de workspace e pending operations V2 | Contabo VPS (migrada em 2026-10-03) + PostgreSQL 15 |
 | `apps/pwa` | Cliente web/mobile canônico e proxies same-origin privados | Cloudflare Pages/Workers + OpenNext |
-| `apps/agent` | TED V2: orquestração, memória conversacional e decisão de aprovação delegada | Cloudflare Workers + Durable Objects |
-| `apps/codex-broker` | Broker isolado para provider Codex; sem capability financeira ou acesso a PostgreSQL | Container Node 22 |
 | `packages/llm-contracts` | Contratos compartilhados entre API e Agent | Biblioteca interna do monorepo |
 
 O antigo `apps/whatsapp-bridge` e a extensão `.pi/extensions/financial-tools`
@@ -223,8 +223,8 @@ status.
 ```
 apps/api                # API autoritativa (Fastify 5, Kysely, PostgreSQL, Zod, Better-Auth)
 apps/pwa                # PWA canônica (Next.js 16, React 19, Tailwind CSS v4, Serwist)
-apps/agent              # Assistente TED (Cloudflare Agents SDK + Durable Objects/SQLite)
-apps/codex-broker       # Broker isolado do provider Codex
+apps/agent              # A0 TED (Cloudflare Agents SDK + Durable Objects/SQLite)
+apps/ted-runtime        # Runtime conversacional OpenCode (gateway privado + tools financeiras)
 packages/llm-contracts  # Contratos compartilhados API <-> Agent
 docs/                   # Documentação canônica (PRODUCT, ARCHITECTURE, ROADMAP, adr/, runbooks/, reports/)
 scripts/                # Gates de qualidade, governança e validação
