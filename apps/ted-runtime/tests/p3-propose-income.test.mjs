@@ -1,4 +1,4 @@
-﻿// P3.2 income slice RED: propose_income as a PROPOSAL INTENT only.
+// P3.2 income slice RED: propose_income as a PROPOSAL INTENT only.
 //
 // Contract under test:
 // - The SAME local writes opt-in (`TED_OPENCODE_P3_WRITES_ENABLED=1`,
@@ -75,7 +75,9 @@ describe('p3 propose_income: catalog gating', () => {
       'list_categories',
       'list_credit_cards',
       'list_recent_transactions',
+      'propose_account_create',
       'propose_card_purchase',
+      'propose_category_create',
       'propose_expense',
       'propose_income',
       'propose_statement_payment',
@@ -213,7 +215,7 @@ describe('p3 propose_income: plugin registration', () => {
     await writesDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedWrites.push(t) }); } } });
     assert.deepEqual(
       addedWrites.map((t) => t.name).sort(),
-      ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards', 'list_recent_transactions', 'propose_card_purchase', 'propose_expense', 'propose_income', 'propose_statement_payment', 'propose_transfer', 'spending_insights'],
+      ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards', 'list_recent_transactions', 'propose_account_create', 'propose_card_purchase', 'propose_category_create', 'propose_expense', 'propose_income', 'propose_statement_payment', 'propose_transfer', 'spending_insights'],
     );
   });
 

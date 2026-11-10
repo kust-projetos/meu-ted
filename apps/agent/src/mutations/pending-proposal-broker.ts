@@ -28,6 +28,8 @@ export const PROPOSE_INCOME_TOOL = 'transactions.income.create';
 export const PROPOSE_CARD_PURCHASE_TOOL = 'cards.purchase.create';
 export const PROPOSE_TRANSFER_TOOL = 'transactions.transfer.create';
 export const PROPOSE_STATEMENT_PAYMENT_TOOL = 'cards.statement.pay';
+export const PROPOSE_ACCOUNT_CREATE_TOOL = 'accounts.create';
+export const PROPOSE_CATEGORY_CREATE_TOOL = 'categories.create';
 
 const isoDate = z
   .string()
@@ -138,6 +140,48 @@ export const statementPaymentProposalIntentSchema = z
   })
   .strict();
 
+/**
+ * P4.2 account creation — mirrors the API's createAccountInputSchema. kind is
+ * bank|cash (credit cards are created via /cards, not this tool) and the signed
+ * initial balance is bounded by MAX_MONEY_CENTS (1e12).
+ */
+export const accountCreateProposalArgsSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    kind: z.enum(['bank', 'cash']),
+    initialBalanceCents: z.number().int().min(-1_000_000_000_000).max(1_000_000_000_000),
+  })
+  .strict();
+
+export const accountCreateProposalIntentSchema = z
+  .object({
+    tool: z.literal(PROPOSE_ACCOUNT_CREATE_TOOL),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: accountCreateProposalArgsSchema,
+  })
+  .strict();
+
+/**
+ * P4.2 category creation — mirrors the API's createCategoryArgsSchema (strict
+ * subset: name, kind, optional parent). The API revalidates the parent against
+ * the workspace catalog.
+ */
+export const categoryCreateProposalArgsSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    kind: z.enum(['expense', 'income']),
+    parentId: z.string().uuid().optional(),
+  })
+  .strict();
+
+export const categoryCreateProposalIntentSchema = z
+  .object({
+    tool: z.literal(PROPOSE_CATEGORY_CREATE_TOOL),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: categoryCreateProposalArgsSchema,
+  })
+  .strict();
+
 /** Discriminated union: the broker route accepts these proposal tools. */
 export const proposalIntentSchema = z.discriminatedUnion('tool', [
   expenseProposalIntentSchema,
@@ -145,6 +189,8 @@ export const proposalIntentSchema = z.discriminatedUnion('tool', [
   cardPurchaseProposalIntentSchema,
   transferProposalIntentSchema,
   statementPaymentProposalIntentSchema,
+  accountCreateProposalIntentSchema,
+  categoryCreateProposalIntentSchema,
 ]);
 
 export type ExpenseProposalIntent = z.infer<typeof expenseProposalIntentSchema>;
@@ -167,6 +213,12 @@ function formatBRL(amountCents: number): string {
 }
 
 function proposalSummary(intent: TransactionProposalIntent): string {
+  if (intent.tool === PROPOSE_ACCOUNT_CREATE_TOOL) {
+    return `Conta "${intent.normalizedArgs.name}" (${intent.normalizedArgs.kind})`;
+  }
+  if (intent.tool === PROPOSE_CATEGORY_CREATE_TOOL) {
+    return `Categoria "${intent.normalizedArgs.name}" (${intent.normalizedArgs.kind})`;
+  }
   const amount = formatBRL(intent.normalizedArgs.amountCents);
   if (intent.tool === PROPOSE_STATEMENT_PAYMENT_TOOL) {
     return `Pagamento de fatura de ${amount}`;

@@ -117,6 +117,20 @@ const validStatementBody = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const validAccountCreateBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'accounts.create',
+  intentionId: 'int-account-abc123',
+  normalizedArgs: { name: 'Nubank', kind: 'bank', initialBalanceCents: 0 },
+  ...overrides,
+});
+
+const validCategoryCreateBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'categories.create',
+  intentionId: 'int-category-abc123',
+  normalizedArgs: { name: 'Alimentação', kind: 'expense' },
+  ...overrides,
+});
+
 const proposeRequest = (body: unknown, headers = identityHeaders()) =>
   new Request('https://agent.test.local/rpc/pending-operations/propose', {
     method: 'POST',
@@ -277,6 +291,65 @@ describe('P3 — POST /rpc/pending-operations/propose (Agent A4 broker)', () => 
     expect(sent.normalizedArgs).toEqual(validStatementBody().normalizedArgs);
     expect('description' in sent.normalizedArgs).toBe(false);
     expect('date' in sent.normalizedArgs).toBe(false);
+  });
+
+  it('accepts accounts.create on the same propose-only A4 path', async () => {
+    const { fn, calls } = captureFetch(() => Response.json({ id: 'op-account-1', existing: false }, { status: 201 }));
+    globalThis.fetch = fn;
+    const { agent } = createTestAgent();
+
+    const res = await agent.fetch(proposeRequest(validAccountCreateBody()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: 'op-account-1', existing: false });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${API_ORIGIN}/pending-operations/v2/propose`);
+    const headers = new Headers(calls[0]!.init?.headers);
+    const claims = await decodeDelegatedTurnToken(headers.get('authorization')!.slice('Bearer '.length), DELEGATION_SECRET);
+    expect(claims.capabilities).toEqual(['financial.approval.propose']);
+    expect(claims.request).toBe('int-account-abc123');
+    const sent = JSON.parse(String(calls[0]!.init?.body));
+    expect(sent.tool).toBe('accounts.create');
+    expect(sent.normalizedArgs).toEqual(validAccountCreateBody().normalizedArgs);
+    expect('initialBalanceCents' in sent.normalizedArgs).toBe(true);
+  });
+
+  it('accepts categories.create on the same propose-only A4 path', async () => {
+    const { fn, calls } = captureFetch(() => Response.json({ id: 'op-category-1', existing: false }, { status: 201 }));
+    globalThis.fetch = fn;
+    const { agent } = createTestAgent();
+
+    const res = await agent.fetch(proposeRequest(validCategoryCreateBody()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: 'op-category-1', existing: false });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${API_ORIGIN}/pending-operations/v2/propose`);
+    const headers = new Headers(calls[0]!.init?.headers);
+    const claims = await decodeDelegatedTurnToken(headers.get('authorization')!.slice('Bearer '.length), DELEGATION_SECRET);
+    expect(claims.capabilities).toEqual(['financial.approval.propose']);
+    expect(claims.request).toBe('int-category-abc123');
+    const sent = JSON.parse(String(calls[0]!.init?.body));
+    expect(sent.tool).toBe('categories.create');
+    expect(sent.normalizedArgs).toEqual(validCategoryCreateBody().normalizedArgs);
+  });
+
+  it('refuses invalid P4.2 payloads (unknown kind / non-integer balance / bad parent) before any transport', async () => {
+    for (const body of [
+      validAccountCreateBody({ normalizedArgs: { name: 'X', kind: 'credit_card', initialBalanceCents: 0 } }),
+      validAccountCreateBody({ normalizedArgs: { name: 'X', kind: 'bank', initialBalanceCents: 1.5 } }),
+      validAccountCreateBody({ normalizedArgs: { name: '', kind: 'bank', initialBalanceCents: 0 } }),
+      validCategoryCreateBody({ normalizedArgs: { name: 'X', kind: 'transfer' } }),
+      validCategoryCreateBody({ normalizedArgs: { name: 'X', kind: 'expense', parentId: 'nope' } }),
+    ]) {
+      const { fn, calls } = captureFetch(() => Response.json({ id: 'never' }));
+      globalThis.fetch = fn;
+      const { agent } = createTestAgent();
+      const res = await agent.fetch(proposeRequest(body));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ code: 'agent.invalid_payload' });
+      expect(calls).toHaveLength(0);
+    }
   });
 
   it('refuses an undefined statement amount or unknown args before any transport', async () => {
