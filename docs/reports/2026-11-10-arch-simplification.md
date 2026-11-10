@@ -47,8 +47,18 @@
 | `pnpm architecture:check` | **PASS** (536 arquivos) |
 | `pnpm test:skip-gate` | **PASS** (129 arquivos; 0 novos skips) |
 | `pnpm plans:check` | **PASS** |
+| PWA: ativação de runtime + rota P2D + rota P2 | **PASS** 36/36 |
+| API: slices P3 (expense/income/transfer/statement + broker flows) | **PASS** 36/36 |
 | `pnpm install --frozen-lockfile --offline` | Lockfile aceito (“Lockfile is up to date”); resolução parou por pacotes ausentes no cache offline |
 | `git diff --check` | **PASS** |
+
+## Regressão integrada (tentativa)
+
+Comando: `P2D_P3_PILOT=1 pnpm exec playwright test --config=e2e/playwright.config.ts --project=p2d-synthetic --workers=1`.
+
+Duas execuções completaram o boot do stack (API sintética + Agent + gateway OpenCode + PWA) e falharam no primeiro turno com o mesmo sintoma: a UI exibiu a pergunta de categoria do A0 (`Qual categoria devo usar? Mercado/Aluguel/Salário`) e nenhum card `Confirmar R$ 65,00` foi criado; nenhuma escrita financeira ocorreu.
+
+Causa concreta: o proxy PWA seleciona o runtime pela allowlist obrigatória `TED_OPENCODE_WORKSPACES` (introduzida no #306). `readProxyEnv()` prioriza o ambiente Cloudflare/wrangler, e `apps/pwa/wrangler.jsonc` lista apenas IDs de produção — não o `HOUSEHOLD_A` sintético. Resultado: `flagOn=false` e o turno vai para A0. O env do harness não sobrepõe o ambiente Cloudflare. É drift do harness em relação ao #306, não regressão das remoções desta mudança; não foi corrigido para não alterar configuração de produção nem a precedência de env do produto.
 
 ## Não executado / limitações
 
@@ -58,9 +68,10 @@
   comando integral.
 - **Biome agregado:** excedeu 300 s sem saída (issue histórica #291 de
   performance no Windows); não foi convertido em PASS.
-- **PWA/API completos, Postgres, browser E2E e modelo real:** não executados —
-  nenhum código dessas áreas foi alterado e não havia autorização de inferência
-  nesta missão.
+- **PWA/API completos, Postgres, browser E2E e modelo real:** a suíte PWA e os
+  gates de API rodaram no CI (verdes). Localmente, a regressão integrada de
+  browser ficou bloqueada pelo drift de allowlist descrito acima; nenhuma
+  inferência real foi usada.
 - **Dados financeiros, credenciais, deploy e merge:** não tocados.
 
 ## Pendências reais
