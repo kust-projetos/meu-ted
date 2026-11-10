@@ -56,7 +56,7 @@ export function isRouteAllowlisted(route) {
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
-function assertLoopbackBaseUrl(baseUrl) {
+function assertLoopbackBaseUrl(baseUrl, allowedOrigins = []) {
   let parsed;
   try {
     parsed = new URL(baseUrl);
@@ -71,10 +71,11 @@ function assertLoopbackBaseUrl(baseUrl) {
   }
   // WHATWG URL keeps brackets on IPv6 literals (hostname === '[::1]').
   const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
-  if (!LOOPBACK_HOSTS.has(hostname)) {
+  const allowlist = Array.isArray(allowedOrigins) ? allowedOrigins : [];
+  if (!LOOPBACK_HOSTS.has(hostname) && !allowlist.includes(parsed.origin)) {
     throw new ToolError(
       'tool.invalid_args',
-      `HttpFinanceTransport: baseUrl must be loopback in this local cycle (got '${parsed.hostname}') — no secrets to unauthorized networks`,
+      `HttpFinanceTransport: baseUrl must be loopback or an explicitly allowlisted internal origin (got '${parsed.hostname}') — no secrets to unauthorized networks`,
     );
   }
   // Origin-only: `${baseUrl}${route}` concatenates strings, so a base with
@@ -99,11 +100,11 @@ export function scrubSecrets(text, host) {
 }
 
 export class HttpFinanceTransport {
-  constructor({ baseUrl, timeoutMs = 15000, fetchImpl = globalThis.fetch } = {}) {
+  constructor({ baseUrl, timeoutMs = 15000, fetchImpl = globalThis.fetch, allowedOrigins = [] } = {}) {
     if (typeof baseUrl !== 'string' || baseUrl.length === 0) {
       throw new ToolError('tool.invalid_args', 'HttpFinanceTransport: baseUrl (string, non-empty) is required');
     }
-    assertLoopbackBaseUrl(baseUrl);
+    assertLoopbackBaseUrl(baseUrl, allowedOrigins);
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.timeoutMs = timeoutMs;
     this.fetchImpl = fetchImpl;
