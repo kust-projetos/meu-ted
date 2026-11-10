@@ -38,6 +38,8 @@ async function readProxyEnv(): Promise<ProxyEnv> {
       TED_OPENCODE_RUNTIME_KILL_SWITCH:
         cloudEnv.TED_OPENCODE_RUNTIME_KILL_SWITCH ?? process.env.TED_OPENCODE_RUNTIME_KILL_SWITCH,
       TED_OPENCODE_GATEWAY_ORIGIN: cloudEnv.TED_OPENCODE_GATEWAY_ORIGIN ?? process.env.TED_OPENCODE_GATEWAY_ORIGIN,
+      TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS:
+        cloudEnv.TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS ?? process.env.TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS,
     };
   } catch {
     return process.env as ProxyEnv;

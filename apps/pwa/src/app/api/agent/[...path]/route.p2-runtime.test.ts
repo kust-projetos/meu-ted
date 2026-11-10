@@ -505,12 +505,35 @@ describe("P2 runtime routing — production never touches the local runtime", ()
     expect(setCookiesOf(res).some((c) => c.includes("ted-runtime-conversation"))).toBe(false);
   });
 
-  it("production with the flag set cannot activate B: A0 exact, no local pins", async () => {
+  it("production with the flag set and no gateway: fail-closed 503 (never silently A0)", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("PWA_AGENT_PROXY_ORIGIN", EXPECTED_AGENT_ORIGIN);
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(JSON.stringify({ turnId: "t", status: "completed", output: "oi" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const req = new Request("https://pwa.example/api/agent/agents/finance-chat-agent/ws-1/rpc/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://pwa.example" },
+      body: JSON.stringify({ text: "oi" }),
+    });
+    const res = await POST(req, chatContext());
+    expect(res.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("production + flag + allowlisted HTTPS gateway: routes to the gateway (canary)", async () => {
+    const gateway = "https://ted-gateway.synkroo.com.br";
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("PWA_AGENT_PROXY_ORIGIN", EXPECTED_AGENT_ORIGIN);
+    vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", gateway);
+    vi.stubEnv("TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS", gateway);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      expect(String(input).startsWith(EXPECTED_AGENT_ORIGIN)).toBe(true);
+      expect(String(input).startsWith(gateway)).toBe(true);
       return new Response(JSON.stringify({ turnId: "t", status: "completed", output: "oi" }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -524,6 +547,33 @@ describe("P2 runtime routing — production never touches the local runtime", ()
     const res = await POST(req, chatContext());
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(setCookiesOf(res).some((c) => c.includes("ted-runtime-conversation"))).toBe(false);
+    expect(res.headers.get("x-ted-runtime")).toBe("opencode");
+    expect(setCookiesOf(res).some((c) => c.includes("ted-runtime-conversation=opencode."))).toBe(true);
+  });
+
+  it("kill switch: an opencode.* pin goes back to A0 and the pin is expired", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("PWA_AGENT_PROXY_ORIGIN", EXPECTED_AGENT_ORIGIN);
+    vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_RUNTIME_KILL_SWITCH", "1");
+    vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", "https://ted-gateway.synkroo.com.br");
+    vi.stubEnv("TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS", "https://ted-gateway.synkroo.com.br");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      expect(String(input).startsWith(EXPECTED_AGENT_ORIGIN)).toBe(true);
+      return new Response(JSON.stringify({ turnId: "t", status: "completed", output: "oi" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const req = new Request("https://pwa.example/api/agent/agents/finance-chat-agent/ws-1/rpc/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://pwa.example", cookie: B_PIN },
+      body: JSON.stringify({ text: "oi" }),
+    });
+    const res = await POST(req, chatContext());
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(setCookiesOf(res).some((c) => c.startsWith("ted-runtime-conversation=;"))).toBe(true);
+    expect(res.headers.get("x-ted-runtime")).toBe("agent");
   });
 });

@@ -98,6 +98,7 @@ type EnvLike = {
   TED_OPENCODE_RUNTIME_ENABLED?: string;
   TED_OPENCODE_RUNTIME_KILL_SWITCH?: string;
   TED_OPENCODE_GATEWAY_ORIGIN?: string;
+  TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS?: string;
 };
 
 export type AgentProxyEnv = EnvLike;
@@ -696,10 +697,31 @@ export function resolveTedGatewayOrigin(env?: EnvLike): string | null {
   const raw = env?.TED_OPENCODE_GATEWAY_ORIGIN?.trim();
   if (!raw) return null;
   const secure = parseTedGatewayHttps(raw);
-  if (secure) return secure;
+  // A remote HTTPS target must also be explicitly allowlisted by the
+  // operator (exact origin match) — a typo or a swapped value never becomes a
+  // credential-forwarding proxy to an arbitrary host.
+  if (secure && isTedGatewayOriginAllowed(secure, env)) return secure;
   if (env?.NODE_ENV !== "development" && env?.NODE_ENV !== "test") return null;
   if (env?.ALLOW_LOCAL_ORIGIN !== "1") return null;
   return parseTedGatewayLoopback(raw);
+}
+
+/**
+ * Exact-origin allowlist for the deployed gateway
+ * (`TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS`, CSV). Each entry is validated with
+ * the same strict HTTPS-origin rules; anything malformed is ignored, so a bad
+ * value can only narrow access, never widen it.
+ */
+export function isTedGatewayOriginAllowed(origin: string, env?: EnvLike): boolean {
+  const raw = env?.TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS;
+  if (typeof raw !== "string" || raw.trim().length === 0) return false;
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (trimmed.length === 0) continue;
+    const normalized = parseTedGatewayHttps(trimmed);
+    if (normalized !== null && normalized === origin) return true;
+  }
+  return false;
 }
 
 /**

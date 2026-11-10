@@ -16,25 +16,54 @@ import {
 } from "@/proxy-utils";
 
 describe("resolveTedGatewayOrigin (explicit activation)", () => {
-  it("accepts a bare HTTPS origin in production without NODE_ENV shortcuts", () => {
+  it("accepts a bare HTTPS origin in production when it is explicitly allowlisted", () => {
     expect(
       resolveTedGatewayOrigin({
         NODE_ENV: "production",
         TED_OPENCODE_GATEWAY_ORIGIN: "https://ted-gateway.synkroo.com.br",
+        TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS: "https://ted-gateway.synkroo.com.br",
       }),
     ).toBe("https://ted-gateway.synkroo.com.br");
   });
 
+  it("refuses an HTTPS origin that is not allowlisted (no arbitrary host)", () => {
+    expect(
+      resolveTedGatewayOrigin({
+        NODE_ENV: "production",
+        TED_OPENCODE_GATEWAY_ORIGIN: "https://gateway.attacker.example",
+      }),
+    ).toBeNull();
+    expect(
+      resolveTedGatewayOrigin({
+        NODE_ENV: "production",
+        TED_OPENCODE_GATEWAY_ORIGIN: "https://gateway.attacker.example",
+        TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS: "https://ted-gateway.synkroo.com.br",
+      }),
+    ).toBeNull();
+  });
+
   it("refuses http, credentials, paths and query in the HTTPS form", () => {
-    expect(resolveTedGatewayOrigin({ TED_OPENCODE_GATEWAY_ORIGIN: "http://ted-gateway.synkroo.com.br" })).toBeNull();
+    const allow = "https://ted-gateway.synkroo.com.br,https://user:pass@ted-gateway.synkroo.com.br";
     expect(
-      resolveTedGatewayOrigin({ TED_OPENCODE_GATEWAY_ORIGIN: "https://user:pass@ted-gateway.synkroo.com.br" }),
+      resolveTedGatewayOrigin({ TED_OPENCODE_GATEWAY_ORIGIN: "http://ted-gateway.synkroo.com.br" }),
     ).toBeNull();
     expect(
-      resolveTedGatewayOrigin({ TED_OPENCODE_GATEWAY_ORIGIN: "https://ted-gateway.synkroo.com.br/api" }),
+      resolveTedGatewayOrigin({
+        TED_OPENCODE_GATEWAY_ORIGIN: "https://user:pass@ted-gateway.synkroo.com.br",
+        TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS: allow,
+      }),
     ).toBeNull();
     expect(
-      resolveTedGatewayOrigin({ TED_OPENCODE_GATEWAY_ORIGIN: "https://ted-gateway.synkroo.com.br?x=1" }),
+      resolveTedGatewayOrigin({
+        TED_OPENCODE_GATEWAY_ORIGIN: "https://ted-gateway.synkroo.com.br/api",
+        TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS: allow,
+      }),
+    ).toBeNull();
+    expect(
+      resolveTedGatewayOrigin({
+        TED_OPENCODE_GATEWAY_ORIGIN: "https://ted-gateway.synkroo.com.br?x=1",
+        TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS: allow,
+      }),
     ).toBeNull();
   });
 
