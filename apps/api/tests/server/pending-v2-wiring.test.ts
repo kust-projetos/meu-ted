@@ -49,7 +49,7 @@ describe('pending V2 bootstrap wiring', () => {
     expect(source.match(/pendingV2Store: createPostgresPendingOperationV2Store\(pool\)/g)).toHaveLength(2);
     // P3.4: the V2 executor receives the CardStore so `cards.purchase.create`
     // can execute (and resolve the credit-card label) in both bootstrap branches.
-    expect(source.match(/pendingV2Executor: createPendingOperationV2Executor\(writes, cardStore\)/g)).toHaveLength(2);
+    expect(source.match(/pendingV2Executor: createPendingOperationV2Executor\(writes, cardStore, payableStore\)/g)).toHaveLength(2);
     expect(source.match(/pendingV2ReadModel: store/g)).toHaveLength(2);
     expect(source).not.toContain('v2Only: true');
     expect(source).not.toContain('registerPendingOperationRoutes(app,');

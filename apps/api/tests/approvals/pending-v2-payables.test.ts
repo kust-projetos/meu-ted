@@ -36,7 +36,6 @@ const ALL = [
 ];
 
 const ACCOUNT_ID = '00000000-0000-4000-8000-0000000000a1';
-const CATEGORY_ID = '00000000-0000-4000-8000-0000000000c1';
 
 const harness = async () => {
   const app = Fastify();
