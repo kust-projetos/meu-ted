@@ -23,6 +23,7 @@ import { isoDateSchema } from '../shared/iso-date.js';
 import { DomainError } from '../writes/errors.js';
 import type { WriteStore } from '../writes/store.js';
 import type { CardStore } from '../cards/store.js';
+import type { PayableStore } from '../payables/store.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
 import { AUTOEXECUTION_ELIGIBLE_TOOLS } from './policy.js';
 
@@ -39,6 +40,8 @@ export const APPROVAL_TOOL_IDS = [
   'categories.create',
   'categories.update',
   'categories.deactivate',
+  'payables.create',
+  'payables.pay',
 ] as const;
 
 export type ApprovalToolId = (typeof APPROVAL_TOOL_IDS)[number];
@@ -46,6 +49,7 @@ export type ApprovalToolId = (typeof APPROVAL_TOOL_IDS)[number];
 export type ApprovalToolExecutionContext = {
   writes: WriteStore;
   cardStore?: CardStore;
+  payableStore?: PayableStore;
   workspaceId: string;
   args: unknown;
   idempotencyKey: string;
@@ -735,6 +739,113 @@ const executeAccountUpdate: ApprovalToolExecutor = async ({
   };
 };
 
+/**
+ * V2-protocol envelope for `payables.create` (V1 completion, manual-only).
+ * Strict subset of the normal POST /payables create contract. The API
+ * revalidates the account/category against the workspace at execution.
+ */
+export const createPayableArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    description: z.string().trim().min(1).max(240),
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    dueDate: isoDateSchema,
+    type: z.enum(['one_time', 'recurring']).optional(),
+    frequency: z.enum(['monthly', 'quarterly', 'yearly']).optional(),
+    endDate: isoDateSchema.optional(),
+    reminderDaysBefore: z.number().int().min(0).max(30).optional(),
+    notes: z.string().optional(),
+    categoryId: z.string().uuid().optional(),
+  })
+  .strict();
+
+export type CreatePayableArgs = z.infer<typeof createPayableArgsSchema>;
+
+/**
+ * V2-protocol envelope for `payables.pay` (V1 completion, manual-only).
+ * `payableId` is the ONLY execution key; `description`/`amountCents`/`dueDate`/
+ * `accountId` are a hash-bound display snapshot resolved by the runtime from
+ * the authoritative payable list, used by the approval card — the executor
+ * never reads them.
+ */
+export const payPayableArgsSchema = z
+  .object({
+    payableId: z.string().uuid(),
+    description: z.string().trim().min(1).max(240),
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    dueDate: isoDateSchema,
+    accountId: z.string().uuid(),
+    paidDate: isoDateSchema.optional(),
+    prepayMonths: z.number().int().min(1).max(24).optional(),
+  })
+  .strict();
+
+export type PayPayableArgs = z.infer<typeof payPayableArgsSchema>;
+
+const executePayableCreate: ApprovalToolExecutor = async ({
+  workspaceId,
+  args,
+  payableStore,
+}) => {
+  const parsed = createPayableArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_payable_create_arguments');
+  if (!payableStore) throw new Error('validation.payable_store_unavailable');
+  let payable: { id: string };
+  try {
+    payable = await payableStore.createPayable(workspaceId, {
+      accountId: parsed.data.accountId,
+      description: parsed.data.description,
+      amountCents: parsed.data.amountCents,
+      dueDate: parsed.data.dueDate,
+      ...(parsed.data.type !== undefined ? { type: parsed.data.type } : {}),
+      ...(parsed.data.frequency !== undefined ? { frequency: parsed.data.frequency } : {}),
+      ...(parsed.data.endDate !== undefined ? { endDate: parsed.data.endDate } : {}),
+      ...(parsed.data.reminderDaysBefore !== undefined ? { reminderDaysBefore: parsed.data.reminderDaysBefore } : {}),
+      ...(parsed.data.notes !== undefined ? { notes: parsed.data.notes } : {}),
+      ...(parsed.data.categoryId !== undefined ? { categoryId: parsed.data.categoryId } : {}),
+    });
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('payables.create', payable.id, { type: 'payable', id: payable.id });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return { status: 'succeeded', operationId: payable.id, receipt };
+};
+
+const executePayablePay: ApprovalToolExecutor = async ({
+  workspaceId,
+  args,
+  payableStore,
+}) => {
+  const parsed = payPayableArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_payable_pay_arguments');
+  if (!payableStore) throw new Error('validation.payable_store_unavailable');
+  let payable: { id: string };
+  try {
+    // The display snapshot (description/amountCents/dueDate/accountId) never
+    // reaches the store: only the payable id and the payment inputs execute.
+    payable = await payableStore.markPayablePaid(workspaceId, parsed.data.payableId, {
+      ...(parsed.data.paidDate !== undefined ? { paidDate: parsed.data.paidDate } : {}),
+      ...(parsed.data.prepayMonths !== undefined ? { prepayMonths: parsed.data.prepayMonths } : {}),
+    });
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('payables.pay', payable.id, { type: 'payable', id: payable.id });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return { status: 'succeeded', operationId: payable.id, receipt };
+};
+
 const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
   'cards.purchase.create': {
     tool: 'cards.purchase.create',
@@ -832,6 +943,22 @@ const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
     authorizationPolicy: 'risk_based',
     autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('categories.deactivate'),
     executor: executeCategoryDeactivate,
+  },
+  'payables.create': {
+    tool: 'payables.create',
+    inputSchema: createPayableArgsSchema,
+    approvalRequired: true, // Manual-only: payable creation is never auto-executed.
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: false,
+    executor: executePayableCreate,
+  },
+  'payables.pay': {
+    tool: 'payables.pay',
+    inputSchema: payPayableArgsSchema,
+    approvalRequired: true, // Manual-only: payable payment is never auto-executed.
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: false,
+    executor: executePayablePay,
   },
 };
 

@@ -30,6 +30,13 @@ export const PROPOSE_TRANSFER_TOOL = 'transactions.transfer.create';
 export const PROPOSE_STATEMENT_PAYMENT_TOOL = 'cards.statement.pay';
 export const PROPOSE_ACCOUNT_CREATE_TOOL = 'accounts.create';
 export const PROPOSE_CATEGORY_CREATE_TOOL = 'categories.create';
+export const PROPOSE_TRANSACTION_UPDATE_TOOL = 'transactions.update';
+export const PROPOSE_ACCOUNT_UPDATE_TOOL = 'accounts.update';
+export const PROPOSE_ACCOUNT_DEACTIVATE_TOOL = 'accounts.deactivate';
+export const PROPOSE_CATEGORY_UPDATE_TOOL = 'categories.update';
+export const PROPOSE_CATEGORY_DEACTIVATE_TOOL = 'categories.deactivate';
+export const PROPOSE_PAYABLE_CREATE_TOOL = 'payables.create';
+export const PROPOSE_PAYABLE_PAY_TOOL = 'payables.pay';
 
 const isoDate = z
   .string()
@@ -182,6 +189,143 @@ export const categoryCreateProposalIntentSchema = z
   })
   .strict();
 
+/**
+ * V1 CRUD completion — description-only transaction edit. Mirrors the API's
+ * `editTransactionDescriptionArgsSchema`: exactly the target, the new text and
+ * the literal current description used as a CAS precondition.
+ */
+export const transactionUpdateProposalArgsSchema = z
+  .object({
+    transactionId: z.string().uuid(),
+    description: z.string().trim().min(1).max(240),
+    expectedDescription: z
+      .string()
+      .min(1)
+      .max(240)
+      .refine((value) => value.trim().length > 0, 'expectedDescription must be non-empty'),
+  })
+  .strict();
+
+export const transactionUpdateProposalIntentSchema = z
+  .object({
+    tool: z.literal(PROPOSE_TRANSACTION_UPDATE_TOOL),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: transactionUpdateProposalArgsSchema,
+  })
+  .strict();
+
+/** Account rename — name-only with the exact current name as CAS. */
+export const accountUpdateProposalArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    name: z.string().trim().min(1).max(120),
+    expectedName: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+export const accountUpdateProposalIntentSchema = z
+  .object({
+    tool: z.literal(PROPOSE_ACCOUNT_UPDATE_TOOL),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: accountUpdateProposalArgsSchema,
+  })
+  .strict();
+
+/**
+ * Account deactivation — the API binds the target by accountId; accountName
+ * is a display-only snapshot (never a CAS key).
+ */
+export const accountDeactivateProposalArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    accountName: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+
+export const accountDeactivateProposalIntentSchema = z
+  .object({
+    tool: z.literal(PROPOSE_ACCOUNT_DEACTIVATE_TOOL),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: accountDeactivateProposalArgsSchema,
+  })
+  .strict();
+
+/** Category rename — name-only with the exact current name as CAS. */
+export const categoryUpdateProposalArgsSchema = z
+  .object({
+    categoryId: z.string().uuid(),
+    name: z.string().trim().min(1).max(120),
+    expectedName: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+export const categoryUpdateProposalIntentSchema = z
+  .object({
+    tool: z.literal(PROPOSE_CATEGORY_UPDATE_TOOL),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: categoryUpdateProposalArgsSchema,
+  })
+  .strict();
+
+/** Category deactivation — exact current name as CAS. */
+export const categoryDeactivateProposalArgsSchema = z
+  .object({
+    categoryId: z.string().uuid(),
+    expectedName: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+export const categoryDeactivateProposalIntentSchema = z
+  .object({
+    tool: z.literal(PROPOSE_CATEGORY_DEACTIVATE_TOOL),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: categoryDeactivateProposalArgsSchema,
+  })
+  .strict();
+
+/**
+ * V1 completion — accounts-payable creation. `accountId`/`description`/
+ * `amountCents`/`dueDate` are the executable tuple; category is optional.
+ * `payableId` in the pay schema is the only execution key; the display fields
+ * are an authoritative-read snapshot used by the approval card.
+ */
+export const payableCreateProposalArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    description: z.string().trim().min(1).max(240),
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    dueDate: isoDate,
+    categoryId: z.string().uuid().optional(),
+  })
+  .strict();
+
+export const payableCreateProposalIntentSchema = z
+  .object({
+    tool: z.literal(PROPOSE_PAYABLE_CREATE_TOOL),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: payableCreateProposalArgsSchema,
+  })
+  .strict();
+
+export const payablePayProposalArgsSchema = z
+  .object({
+    payableId: z.string().uuid(),
+    description: z.string().trim().min(1).max(240),
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    dueDate: isoDate,
+    accountId: z.string().uuid(),
+    paidDate: isoDate.optional(),
+  })
+  .strict();
+
+export const payablePayProposalIntentSchema = z
+  .object({
+    tool: z.literal(PROPOSE_PAYABLE_PAY_TOOL),
+    intentionId: z.string().trim().min(1).max(128),
+    normalizedArgs: payablePayProposalArgsSchema,
+  })
+  .strict();
+
 /** Discriminated union: the broker route accepts these proposal tools. */
 export const proposalIntentSchema = z.discriminatedUnion('tool', [
   expenseProposalIntentSchema,
@@ -191,6 +335,13 @@ export const proposalIntentSchema = z.discriminatedUnion('tool', [
   statementPaymentProposalIntentSchema,
   accountCreateProposalIntentSchema,
   categoryCreateProposalIntentSchema,
+  transactionUpdateProposalIntentSchema,
+  accountUpdateProposalIntentSchema,
+  accountDeactivateProposalIntentSchema,
+  categoryUpdateProposalIntentSchema,
+  categoryDeactivateProposalIntentSchema,
+  payableCreateProposalIntentSchema,
+  payablePayProposalIntentSchema,
 ]);
 
 export type ExpenseProposalIntent = z.infer<typeof expenseProposalIntentSchema>;
@@ -218,6 +369,28 @@ function proposalSummary(intent: TransactionProposalIntent): string {
   }
   if (intent.tool === PROPOSE_CATEGORY_CREATE_TOOL) {
     return `Categoria "${intent.normalizedArgs.name}" (${intent.normalizedArgs.kind})`;
+  }
+  if (intent.tool === PROPOSE_TRANSACTION_UPDATE_TOOL) {
+    return `Alterar descrição de "${intent.normalizedArgs.expectedDescription}" para "${intent.normalizedArgs.description}"`;
+  }
+  if (intent.tool === PROPOSE_ACCOUNT_UPDATE_TOOL) {
+    return `Renomear conta de "${intent.normalizedArgs.expectedName}" para "${intent.normalizedArgs.name}"`;
+  }
+  if (intent.tool === PROPOSE_ACCOUNT_DEACTIVATE_TOOL) {
+    const name = intent.normalizedArgs.accountName;
+    return name ? `Desativar conta "${name}"` : 'Desativar conta';
+  }
+  if (intent.tool === PROPOSE_CATEGORY_UPDATE_TOOL) {
+    return `Renomear categoria de "${intent.normalizedArgs.expectedName}" para "${intent.normalizedArgs.name}"`;
+  }
+  if (intent.tool === PROPOSE_CATEGORY_DEACTIVATE_TOOL) {
+    return `Desativar categoria "${intent.normalizedArgs.expectedName}"`;
+  }
+  if (intent.tool === PROPOSE_PAYABLE_CREATE_TOOL) {
+    return `Conta a pagar de ${formatBRL(intent.normalizedArgs.amountCents)} em "${intent.normalizedArgs.description}"`;
+  }
+  if (intent.tool === PROPOSE_PAYABLE_PAY_TOOL) {
+    return `Pagar conta "${intent.normalizedArgs.description}" de ${formatBRL(intent.normalizedArgs.amountCents)}`;
   }
   const amount = formatBRL(intent.normalizedArgs.amountCents);
   if (intent.tool === PROPOSE_STATEMENT_PAYMENT_TOOL) {

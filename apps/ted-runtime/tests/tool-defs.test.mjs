@@ -12,6 +12,7 @@ import {
   createToolExecutors,
   ToolError,
 } from '../src/tool-defs.mjs';
+import { PRODUCT_TOOL_NAMES, P3_READ_TOOL_NAMES, P3_WRITE_TOOL_NAMES } from '../src/plugin.mjs';
 
 const host = Object.freeze({
   label: 'a',
@@ -32,8 +33,8 @@ function stubTransport(cases) {
 
 describe('ted-runtime tool catalogue (read-only + proposal intent)', () => {
   it('knows the P2 reads, the optional P3 reads and the proposal intent (no confirm/execute)', () => {
-    assert.deepEqual([...TOOL_NAMES].sort(), ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards', 'list_recent_transactions', 'propose_account_create', 'propose_card_purchase', 'propose_category_create', 'propose_expense', 'propose_income', 'propose_statement_payment', 'propose_transfer', 'spending_insights']);
-    assert.equal(TOOL_DEFS.length, 14);
+    assert.deepEqual([...TOOL_NAMES].sort(), [...PRODUCT_TOOL_NAMES, ...P3_READ_TOOL_NAMES, ...P3_WRITE_TOOL_NAMES].sort());
+    assert.equal(TOOL_DEFS.length, TOOL_NAMES.length);
     for (const def of TOOL_DEFS) {
       assert.ok(def.input && typeof def.input === 'object', `${def.name} needs input schema`);
       assert.ok(def.output && typeof def.output === 'object', `${def.name} needs output schema (native 2.2.4 requirement)`);

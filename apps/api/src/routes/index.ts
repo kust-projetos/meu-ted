@@ -225,11 +225,12 @@ function isPiAgentBearer(authorization: unknown): boolean {
  * executor so the keyed write commits its undo-eligible audit row with the
  * correct actor. No actor identity is ever read from normalizedArgs.
  */
-export const createPendingOperationV2Executor = (writes: WriteStore, cardStore?: import('../cards/store.js').CardStore): PendingExecutor => async (operation) => {
+export const createPendingOperationV2Executor = (writes: WriteStore, cardStore?: import('../cards/store.js').CardStore, payableStore?: import('../payables/store.js').PayableStore): PendingExecutor => async (operation) => {
   const contract = requireApprovalToolContract(operation.tool);
   return contract.executor({
     writes,
     ...(cardStore !== undefined ? { cardStore } : {}),
+    ...(payableStore !== undefined ? { payableStore } : {}),
     workspaceId: operation.workspaceId,
     args: operation.normalizedArgs,
     idempotencyKey: operation.idempotencyKey,

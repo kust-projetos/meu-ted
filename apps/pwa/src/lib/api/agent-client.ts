@@ -474,6 +474,121 @@ const categoryCreateProposalIntentSchema = z
   })
   .strict();
 
+const transactionUpdateProposalArgsSchema = z
+  .object({
+    transactionId: z.string().uuid(),
+    description: z.string().trim().min(1).max(240),
+    expectedDescription: z.string().min(1).max(240),
+  })
+  .strict();
+
+const accountUpdateProposalArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    name: z.string().trim().min(1).max(120),
+    expectedName: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+const accountDeactivateProposalArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    accountName: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+
+const categoryUpdateProposalArgsSchema = z
+  .object({
+    categoryId: z.string().uuid(),
+    name: z.string().trim().min(1).max(120),
+    expectedName: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+const categoryDeactivateProposalArgsSchema = z
+  .object({
+    categoryId: z.string().uuid(),
+    expectedName: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+const transactionUpdateProposalIntentSchema = z
+  .object({
+    tool: z.literal("transactions.update"),
+    ...proposalIntentBase,
+    normalizedArgs: transactionUpdateProposalArgsSchema,
+  })
+  .strict();
+
+const accountUpdateProposalIntentSchema = z
+  .object({
+    tool: z.literal("accounts.update"),
+    ...proposalIntentBase,
+    normalizedArgs: accountUpdateProposalArgsSchema,
+  })
+  .strict();
+
+const accountDeactivateProposalIntentSchema = z
+  .object({
+    tool: z.literal("accounts.deactivate"),
+    ...proposalIntentBase,
+    normalizedArgs: accountDeactivateProposalArgsSchema,
+  })
+  .strict();
+
+const categoryUpdateProposalIntentSchema = z
+  .object({
+    tool: z.literal("categories.update"),
+    ...proposalIntentBase,
+    normalizedArgs: categoryUpdateProposalArgsSchema,
+  })
+  .strict();
+
+const categoryDeactivateProposalIntentSchema = z
+  .object({
+    tool: z.literal("categories.deactivate"),
+    ...proposalIntentBase,
+    normalizedArgs: categoryDeactivateProposalArgsSchema,
+  })
+  .strict();
+
+const payableCreateProposalArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    description: z.string().trim().min(1).max(240),
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    categoryId: z.string().uuid().optional(),
+  })
+  .strict();
+
+const payablePayProposalArgsSchema = z
+  .object({
+    payableId: z.string().uuid(),
+    description: z.string().trim().min(1).max(240),
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    accountId: z.string().uuid(),
+    paidDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  })
+  .strict();
+
+const payableCreateProposalIntentSchema = z
+  .object({
+    tool: z.literal("payables.create"),
+    ...proposalIntentBase,
+    normalizedArgs: payableCreateProposalArgsSchema,
+  })
+  .strict();
+
+const payablePayProposalIntentSchema = z
+  .object({
+    tool: z.literal("payables.pay"),
+    ...proposalIntentBase,
+    normalizedArgs: payablePayProposalArgsSchema,
+  })
+  .strict();
+
 const proposalIntentSchema = z.discriminatedUnion("tool", [
   expenseProposalIntentSchema,
   incomeProposalIntentSchema,
@@ -482,6 +597,13 @@ const proposalIntentSchema = z.discriminatedUnion("tool", [
   statementPaymentProposalIntentSchema,
   accountCreateProposalIntentSchema,
   categoryCreateProposalIntentSchema,
+  transactionUpdateProposalIntentSchema,
+  accountUpdateProposalIntentSchema,
+  accountDeactivateProposalIntentSchema,
+  categoryUpdateProposalIntentSchema,
+  categoryDeactivateProposalIntentSchema,
+  payableCreateProposalIntentSchema,
+  payablePayProposalIntentSchema,
 ]);
 
 export type ProposalArgs = z.infer<typeof proposalArgsSchema>;
@@ -490,6 +612,13 @@ export type TransferProposalArgs = z.infer<typeof transferProposalArgsSchema>;
 export type StatementPaymentProposalArgs = z.infer<typeof statementPaymentProposalArgsSchema>;
 export type AccountCreateProposalArgs = z.infer<typeof accountCreateProposalArgsSchema>;
 export type CategoryCreateProposalArgs = z.infer<typeof categoryCreateProposalArgsSchema>;
+export type TransactionUpdateProposalArgs = z.infer<typeof transactionUpdateProposalArgsSchema>;
+export type AccountUpdateProposalArgs = z.infer<typeof accountUpdateProposalArgsSchema>;
+export type AccountDeactivateProposalArgs = z.infer<typeof accountDeactivateProposalArgsSchema>;
+export type CategoryUpdateProposalArgs = z.infer<typeof categoryUpdateProposalArgsSchema>;
+export type CategoryDeactivateProposalArgs = z.infer<typeof categoryDeactivateProposalArgsSchema>;
+export type PayableCreateProposalArgs = z.infer<typeof payableCreateProposalArgsSchema>;
+export type PayablePayProposalArgs = z.infer<typeof payablePayProposalArgsSchema>;
 export type ProposalIntent =
   | { tool: "transactions.expense.create"; intentionId: string; normalizedArgs: ProposalArgs }
   | { tool: "transactions.income.create"; intentionId: string; normalizedArgs: ProposalArgs }
@@ -497,7 +626,14 @@ export type ProposalIntent =
   | { tool: "transactions.transfer.create"; intentionId: string; normalizedArgs: TransferProposalArgs }
   | { tool: "cards.statement.pay"; intentionId: string; normalizedArgs: StatementPaymentProposalArgs }
   | { tool: "accounts.create"; intentionId: string; normalizedArgs: AccountCreateProposalArgs }
-  | { tool: "categories.create"; intentionId: string; normalizedArgs: CategoryCreateProposalArgs };
+  | { tool: "categories.create"; intentionId: string; normalizedArgs: CategoryCreateProposalArgs }
+  | { tool: "transactions.update"; intentionId: string; normalizedArgs: TransactionUpdateProposalArgs }
+  | { tool: "accounts.update"; intentionId: string; normalizedArgs: AccountUpdateProposalArgs }
+  | { tool: "accounts.deactivate"; intentionId: string; normalizedArgs: AccountDeactivateProposalArgs }
+  | { tool: "categories.update"; intentionId: string; normalizedArgs: CategoryUpdateProposalArgs }
+  | { tool: "categories.deactivate"; intentionId: string; normalizedArgs: CategoryDeactivateProposalArgs }
+  | { tool: "payables.create"; intentionId: string; normalizedArgs: PayableCreateProposalArgs }
+  | { tool: "payables.pay"; intentionId: string; normalizedArgs: PayablePayProposalArgs };
 export type ExpenseProposalIntent = Extract<ProposalIntent, { tool: "transactions.expense.create" }>;
 export type IncomeProposalIntent = Extract<ProposalIntent, { tool: "transactions.income.create" }>;
 export type TransferProposalIntent = Extract<ProposalIntent, { tool: "transactions.transfer.create" }>;

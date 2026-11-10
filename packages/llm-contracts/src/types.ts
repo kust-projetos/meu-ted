@@ -389,6 +389,8 @@ export const TED_APPROVAL_TOOLS = [
   'categories.deactivate',
   'cards.purchase.create',
   'cards.statement.pay',
+  'payables.create',
+  'payables.pay',
 ] as const;
 export type TedApprovalTool = (typeof TED_APPROVAL_TOOLS)[number];
 
@@ -699,6 +701,16 @@ export const isActionablePendingOperationPresentation = (
     if (!isPresentationLabel(presentation.toAccount)) return false;
     return true;
   }
+  if (presentation.tool === 'payables.create' || presentation.tool === 'payables.pay') {
+    // Payable card: amount + description + due date + the server-resolved
+    // account label are the context the user re-authorizes. The category is
+    // optional for payables.create and never gates Confirm.
+    if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents) || presentation.amountCents <= 0) return false;
+    if (!isNonEmptyString(presentation.description)) return false;
+    if (!isNonEmptyString(presentation.date)) return false;
+    if (!isPresentationLabel(presentation.account)) return false;
+    return true;
+  }
   if (!isNonEmptyString(presentation.description)) return false;
   if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents)) return false;
   if (!isNonEmptyString(presentation.date)) return false;
@@ -760,6 +772,11 @@ export const MUTATION_EFFECTS_REGISTRY: Record<MutationKind, MutationEffectsEntr
   'categories.update': { mutationKind: 'categories.update', affectedTargets: ['categories', 'transactions'] },
   'transactions.update': { mutationKind: 'transactions.update', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'categories.deactivate': { mutationKind: 'categories.deactivate', affectedTargets: ['categories', 'transactions'] },
+  // V1 completion: payables through the V2 approval protocol. Creating a
+  // payable changes the payables agenda; paying it also books the liquidity
+  // expense and moves the payer balance (same effect as the normal write).
+  'payables.create': { mutationKind: 'payables.create', affectedTargets: ['payables', 'dashboard-summary', 'quick-insights'] },
+  'payables.pay': { mutationKind: 'payables.pay', affectedTargets: ['payables', 'transactions', 'accounts', 'dashboard-summary', 'quick-insights'] },
   'transaction.create': { mutationKind: 'transaction.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transaction.update': { mutationKind: 'transaction.update', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transaction.delete': { mutationKind: 'transaction.delete', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },

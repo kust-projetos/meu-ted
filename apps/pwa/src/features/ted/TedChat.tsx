@@ -55,6 +55,13 @@ const PROPOSAL_NOUN: Readonly<Record<ProposalIntent["tool"], string>> = {
   "transactions.transfer.create": "transferência",
   "accounts.create": "conta",
   "categories.create": "categoria",
+  "transactions.update": "descrição do lançamento",
+  "accounts.update": "conta",
+  "accounts.deactivate": "conta",
+  "categories.update": "categoria",
+  "categories.deactivate": "categoria",
+  "payables.create": "conta a pagar",
+  "payables.pay": "pagamento de conta",
 };
 const proposalRecoveryError = (proposal?: ProposalIntent): string =>
   `Não foi possível recuperar a proposta de ${proposal ? PROPOSAL_NOUN[proposal.tool] : "operação"}. Recarregue a página para tentar novamente.`;

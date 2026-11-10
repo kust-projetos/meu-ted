@@ -43,14 +43,33 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
   'list_categories',
   'list_recent_transactions',
   'spending_insights',
+  'list_card_statements',
+  'analytics_kpis',
+  'analytics_category_breakdown',
+  'analytics_cashflow_series',
+  'analytics_budget_consumption',
+  'analytics_net_worth_history',
+  'list_budgets',
+  'check_budgets',
+  'budget_trends',
+  'list_goals',
+  'list_payables',
+  'payable_reminders',
+  'list_audit_logs',
   'propose_expense',
   'propose_income',
   'propose_card_purchase',
   'propose_transfer',
-  'list_card_statements',
   'propose_statement_payment',
   'propose_account_create',
   'propose_category_create',
+  'propose_transaction_update',
+  'propose_account_update',
+  'propose_account_deactivate',
+  'propose_category_update',
+  'propose_category_deactivate',
+  'propose_payable_create',
+  'propose_payable_pay',
 ]);
 
 // Opt-in reads. Explicit activation only: the operator sets
@@ -60,14 +79,47 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
 // absent flag keeps it OFF in every environment. The set carries the P3
 // prerequisite reads (category/statement/card discovery) and the P4 CORE
 // parity reads (recent transactions, spending insights).
-export const P3_READ_TOOL_NAMES = ['list_categories', 'list_card_statements', 'list_credit_cards', 'list_recent_transactions', 'spending_insights'];
+export const P3_READ_TOOL_NAMES = [
+  'list_categories',
+  'list_card_statements',
+  'list_credit_cards',
+  'list_recent_transactions',
+  'spending_insights',
+  'analytics_kpis',
+  'analytics_category_breakdown',
+  'analytics_cashflow_series',
+  'analytics_budget_consumption',
+  'analytics_net_worth_history',
+  'list_budgets',
+  'check_budgets',
+  'budget_trends',
+  'list_goals',
+  'list_payables',
+  'payable_reminders',
+  'list_audit_logs',
+];
 
 // P3 write slice: `propose_expense`, `propose_income`, `propose_card_purchase`,
 // `propose_transfer` and `propose_statement_payment` record a proposal intent
 // only (P3.1–P3.6 share the same intent-only contract). Exposed ONLY when the
 // operator sets TED_OPENCODE_P3_WRITES_ENABLED=1 (which also enables the
 // category read). Absent flag = hidden, in every environment.
-export const P3_WRITE_TOOL_NAMES = ['propose_expense', 'propose_income', 'propose_card_purchase', 'propose_transfer', 'propose_statement_payment', 'propose_account_create', 'propose_category_create'];
+export const P3_WRITE_TOOL_NAMES = [
+  'propose_expense',
+  'propose_income',
+  'propose_card_purchase',
+  'propose_transfer',
+  'propose_statement_payment',
+  'propose_account_create',
+  'propose_category_create',
+  'propose_transaction_update',
+  'propose_account_update',
+  'propose_account_deactivate',
+  'propose_category_update',
+  'propose_category_deactivate',
+  'propose_payable_create',
+  'propose_payable_pay',
+];
 
 export function isP3ReadsEnabled(env = process.env) {
   try {

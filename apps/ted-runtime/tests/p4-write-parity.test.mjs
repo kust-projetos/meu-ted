@@ -19,7 +19,7 @@ import {
   createToolExecutors,
 } from '../src/tool-defs.mjs';
 import { createProposalIntentRegistry } from '../src/proposal-intents.mjs';
-import { productToolDefs, isP3WritesEnabled } from '../src/plugin.mjs';
+import { productToolDefs, isP3WritesEnabled, PRODUCT_TOOL_NAMES, P3_READ_TOOL_NAMES, P3_WRITE_TOOL_NAMES } from '../src/plugin.mjs';
 
 const host = Object.freeze({
   label: 'a',
@@ -32,22 +32,7 @@ const host = Object.freeze({
 const WRITE_ENV = Object.freeze({ TED_OPENCODE_P3_WRITES_ENABLED: '1' });
 const OFF_ENV = Object.freeze({});
 
-const WRITE_TOOLS = [
-  'get_month_summary',
-  'list_accounts',
-  'list_card_statements',
-  'list_categories',
-  'list_credit_cards',
-  'list_recent_transactions',
-  'propose_account_create',
-  'propose_card_purchase',
-  'propose_category_create',
-  'propose_expense',
-  'propose_income',
-  'propose_statement_payment',
-  'propose_transfer',
-  'spending_insights',
-];
+const WRITE_TOOLS = [...PRODUCT_TOOL_NAMES, ...P3_READ_TOOL_NAMES, ...P3_WRITE_TOOL_NAMES].sort();
 
 function accountArgs(over = {}) {
   return { name: 'Nubank', kind: 'bank', initialBalanceCents: 0, ...over };

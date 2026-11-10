@@ -22,6 +22,9 @@ import {
   createToolExecutors,
 } from '../src/tool-defs.mjs';
 import {
+  PRODUCT_TOOL_NAMES,
+  P3_READ_TOOL_NAMES,
+  P3_WRITE_TOOL_NAMES,
   productToolDefs,
   defineTedFinancePlugin,
   isP3WritesEnabled,
@@ -35,6 +38,8 @@ const host = Object.freeze({
   actorId: 'actor-a',
   deviceId: 'dev-a',
 });
+
+const FULL_CATALOG = [...PRODUCT_TOOL_NAMES, ...P3_READ_TOOL_NAMES, ...P3_WRITE_TOOL_NAMES].sort();
 
 const CARD = '11111111-1111-4111-8111-111111111114';
 const CATEGORY = '22222222-2222-4222-8222-222222222221';
@@ -262,7 +267,7 @@ describe('p3 propose_card_purchase: plugin registration', () => {
     await writesDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedWrites.push(t) }); } } });
     assert.deepEqual(
       addedWrites.map((t) => t.name).sort(),
-      ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards', 'list_recent_transactions', 'propose_account_create', 'propose_card_purchase', 'propose_category_create', 'propose_expense', 'propose_income', 'propose_statement_payment', 'propose_transfer', 'spending_insights'],
+      FULL_CATALOG,
     );
   });
 

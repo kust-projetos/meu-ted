@@ -41,6 +41,10 @@ export const derivePresentationTitle = (tool: string): string =>
           ? 'Renomear categoria'
           : tool === 'categories.deactivate'
             ? 'Desativar categoria'
+          : tool === 'payables.create'
+            ? 'Criar conta a pagar'
+            : tool === 'payables.pay'
+              ? 'Pagar conta'
           : tool.includes('income')
           ? 'Confirmar receita'
           : tool.includes('expense')
@@ -459,6 +463,84 @@ export const buildPendingOperationPresentation = (input: {
     }
     if (typeof categoryId === 'string' && categoryId && typeof input.categoryLabel === 'string' && input.categoryLabel) {
       candidate.category = { id: categoryId, label: input.categoryLabel };
+    }
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    if (!parsed.success) return null;
+    return parsed.data as PendingOperationPresentation;
+  }
+  if (input.tool === 'payables.create') {
+    // Payable card: amount + description + due date + the server-resolved
+    // account label. Category is optional (an uncategorised bill is still
+    // confirmable), mirroring the normal POST /payables contract.
+    const { accountId, description, amountCents, dueDate, categoryId } = args as {
+      accountId?: unknown;
+      description?: unknown;
+      amountCents?: unknown;
+      dueDate?: unknown;
+      categoryId?: unknown;
+    };
+    if (
+      typeof accountId !== 'string' || !accountId ||
+      typeof description !== 'string' || !description ||
+      typeof amountCents !== 'number' || !Number.isFinite(amountCents) || amountCents <= 0 ||
+      typeof dueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)
+    ) {
+      return null;
+    }
+    const candidate: Record<string, unknown> = {
+      id: input.id,
+      status: input.status,
+      tool: input.tool,
+      title: derivePresentationTitle(input.tool),
+      amountCents,
+      description,
+      date: dueDate,
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
+    if (typeof input.accountLabel === 'string' && input.accountLabel) {
+      candidate.account = { id: accountId, label: input.accountLabel };
+    }
+    if (typeof categoryId === 'string' && categoryId && typeof input.categoryLabel === 'string' && input.categoryLabel) {
+      candidate.category = { id: categoryId, label: input.categoryLabel };
+    }
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    if (!parsed.success) return null;
+    return parsed.data as PendingOperationPresentation;
+  }
+  if (input.tool === 'payables.pay') {
+    // Payment card: the hash-bound display snapshot (description/amount/due
+    // date) plus the server-resolved account label. `payableId` is the only
+    // execution key; no amount is recomputed here.
+    const { payableId, description, amountCents, dueDate, accountId } = args as {
+      payableId?: unknown;
+      description?: unknown;
+      amountCents?: unknown;
+      dueDate?: unknown;
+      accountId?: unknown;
+    };
+    if (
+      typeof payableId !== 'string' || !payableId ||
+      typeof description !== 'string' || !description ||
+      typeof amountCents !== 'number' || !Number.isFinite(amountCents) || amountCents <= 0 ||
+      typeof dueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) ||
+      typeof accountId !== 'string' || !accountId
+    ) {
+      return null;
+    }
+    const candidate: Record<string, unknown> = {
+      id: input.id,
+      status: input.status,
+      tool: input.tool,
+      title: derivePresentationTitle(input.tool),
+      amountCents,
+      description,
+      date: dueDate,
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
+    if (typeof input.accountLabel === 'string' && input.accountLabel) {
+      candidate.account = { id: accountId, label: input.accountLabel };
     }
     const parsed = pendingOperationPresentationSchema.safeParse(candidate);
     if (!parsed.success) return null;

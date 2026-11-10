@@ -148,11 +148,17 @@ Paridade: linhas de ownership durável/reauth/ADR-027 seguem NOT_PROVEN.
 
 ## Estrutura
 
-- `src/tool-defs.mjs` — 2 P2 tools (schemas in+out) + `list_categories` opcional P3
-  + `propose_income` P3.2 (mesmo executor intent-only de `propose_expense`)
-  (defs/args/rota GET `/categories` exata/shape `{items, total}`/executor GET-only)
-  + `propose_expense` P3 (intent-only: sem HTTP, sem escrita, sem confirm/execute;
-  registra `{tool, intentionId, normalizedArgs, summary}` no registry process-local).
+- `src/tool-defs.mjs` — 2 P2 reads (schemas in+out), o conjunto opt-in de
+  leituras financeiras (categorias, cartões, faturas, transações, insights,
+  analytics, orçamentos, metas, contas a pagar e auditoria) e as propostas
+  intent-only (`propose_expense`, `propose_income`, `propose_card_purchase`,
+  `propose_transfer`, `propose_statement_payment`, `propose_account_create`,
+  `propose_category_create`, `propose_transaction_update`,
+  `propose_account_update`, `propose_account_deactivate`,
+  `propose_category_update`, `propose_category_deactivate`,
+  `propose_payable_create`, `propose_payable_pay`). Nenhuma proposta chama a
+  API: registra `{tool, intentionId, normalizedArgs, summary}` no registry
+  process-local; a persistência Pending V2 acontece só no broker do Agent (A4).
 - `src/proposal-intents.mjs` — registry process-local do intent (uma proposta por
   sessão nativa; `take` destrutivo, `clear` no início de cada turno). Não é registro
   financeiro e não sobrevive a restart.
@@ -178,9 +184,9 @@ Paridade: linhas de ownership durável/reauth/ADR-027 seguem NOT_PROVEN.
   `client.d.ts:7-12,232+` + `types.d.ts:98-100,4122-4126`) + gate de boot fail-closed
   + toda sonda `session.active` com AbortSignal e limite pelo prazo restante.
 - `src/plugin.mjs` — registro nativo 2.2.4 exatamente das 2 reads P2 por padrão
-  (opt-in local `TED_OPENCODE_P3_READS_ENABLED=1` com `NODE_ENV !== 'production'`
-  expõe `list_categories`; `TED_OPENCODE_P3_WRITES_ENABLED=1` expõe também
-  `propose_expense` e `propose_income`; produção força ambos off) + gate nativo de permissão em
+  (`TED_OPENCODE_P3_READS_ENABLED=1` expõe o conjunto de leituras financeiras;
+  `TED_OPENCODE_P3_WRITES_ENABLED=1` expõe também todas as propostas
+  intent-only; ausência de flag mantém tudo off em qualquer ambiente) + gate nativo de permissão em
   todo execute (`ctx.permission.assert` com `ted.finance.read`/`[toolName]` e o
   contexto real da invocação ANTES de host/executor/HTTP; sem a API/contexto
   falha fechado — mecanismo nativo, não um novo sistema de auth) +

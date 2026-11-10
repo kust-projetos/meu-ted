@@ -23,6 +23,7 @@ import {
 import { HttpFinanceTransport, isRouteAllowlisted } from '../src/transport.mjs';
 import {
   PRODUCT_TOOL_NAMES,
+  P3_READ_TOOL_NAMES,
   productToolDefs,
   defineTedFinancePlugin,
   isP3ReadsEnabled,
@@ -40,14 +41,9 @@ const READ_ENV = Object.freeze({ TED_OPENCODE_P3_READS_ENABLED: '1' });
 const OFF_ENV = Object.freeze({});
 
 const OPT_IN_READS = [
-  'get_month_summary',
-  'list_accounts',
-  'list_card_statements',
-  'list_categories',
-  'list_credit_cards',
-  'list_recent_transactions',
-  'spending_insights',
-];
+  ...P3_READ_TOOL_NAMES,
+  ...PRODUCT_TOOL_NAMES,
+].sort();
 
 function stubTransport(cases) {
   return async ({ route, method, host: h }) => {

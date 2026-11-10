@@ -41,7 +41,26 @@ import { ToolError } from './tool-defs.mjs';
 
 export { ToolError };
 
-const ALLOWED_PATHS = new Set(['/accounts', '/cards/accounts', '/dashboard/month-summary', '/categories', '/cards/statements', '/transactions', '/insights/spending']);
+const ALLOWED_PATHS = new Set([
+  '/accounts',
+  '/cards/accounts',
+  '/dashboard/month-summary',
+  '/categories',
+  '/cards/statements',
+  '/transactions',
+  '/insights/spending',
+  '/analytics/kpis',
+  '/analytics/category-breakdown',
+  '/analytics/cashflow-series',
+  '/analytics/budget-consumption',
+  '/analytics/net-worth-history',
+  '/budgets',
+  '/budgets/check',
+  '/goals',
+  '/payables',
+  '/payables/reminders',
+  '/audit-logs',
+]);
 const ALLOWED_METHODS = new Map([
   ['/accounts', new Set(['GET'])],
   ['/cards/accounts', new Set(['GET'])],
@@ -50,11 +69,40 @@ const ALLOWED_METHODS = new Map([
   ['/cards/statements', new Set(['GET'])],
   ['/transactions', new Set(['GET'])],
   ['/insights/spending', new Set(['GET'])],
+  ['/analytics/kpis', new Set(['GET'])],
+  ['/analytics/category-breakdown', new Set(['GET'])],
+  ['/analytics/cashflow-series', new Set(['GET'])],
+  ['/analytics/budget-consumption', new Set(['GET'])],
+  ['/analytics/net-worth-history', new Set(['GET'])],
+  ['/budgets', new Set(['GET'])],
+  ['/budgets/check', new Set(['GET'])],
+  ['/goals', new Set(['GET'])],
+  ['/payables', new Set(['GET'])],
+  ['/payables/reminders', new Set(['GET'])],
+  ['/audit-logs', new Set(['GET'])],
 ]);
+
+// Dynamic resource paths: only the exact read shape used by the runtime is
+// allowlisted (a UUID segment, no nesting). Prefix matching is still
+// forbidden — a non-UUID segment never matches.
+const ALLOWED_PATH_PATTERNS = [
+  { pattern: /^\/budgets\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/trends$/i, methods: new Set(['GET']) },
+];
+
+function allowedMethodsFor(pathname) {
+  const exact = ALLOWED_METHODS.get(pathname);
+  if (exact) return exact;
+  for (const entry of ALLOWED_PATH_PATTERNS) {
+    if (entry.pattern.test(pathname)) return entry.methods;
+  }
+  return undefined;
+}
 
 export function isRouteAllowlisted(route) {
   if (typeof route !== 'string') return false;
-  return ALLOWED_PATHS.has(route.split('?')[0]);
+  const pathname = route.split('?')[0];
+  if (ALLOWED_PATHS.has(pathname)) return true;
+  return ALLOWED_PATH_PATTERNS.some((entry) => entry.pattern.test(pathname));
 }
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
@@ -133,7 +181,7 @@ export class HttpFinanceTransport {
       throw new ToolError('tool.invalid_args', `route not allowlisted: ${route}`);
     }
     const pathname = String(route).split('?')[0];
-    const methods = ALLOWED_METHODS.get(pathname);
+    const methods = allowedMethodsFor(pathname);
     if (!methods || !methods.has(method)) {
       throw new ToolError('tool.invalid_args', `method not allowlisted for route: ${method} ${pathname}`);
     }

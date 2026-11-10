@@ -99,6 +99,61 @@ const categoryCreateIntent = (overrides: Record<string, unknown> = {}): Proposal
   ...overrides,
 });
 
+const transactionUpdateIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "transactions.update",
+  intentionId: "int-tx-update-abc",
+  normalizedArgs: { transactionId: ACCOUNT, description: "Mercado novo", expectedDescription: "Mercado" },
+  ...overrides,
+});
+
+const accountUpdateIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "accounts.update",
+  intentionId: "int-account-update-abc",
+  normalizedArgs: { accountId: ACCOUNT, name: "Reserva", expectedName: "Aurora" },
+  ...overrides,
+});
+
+const accountDeactivateIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "accounts.deactivate",
+  intentionId: "int-account-deactivate-abc",
+  normalizedArgs: { accountId: ACCOUNT, accountName: "Antiga" },
+  ...overrides,
+});
+
+const categoryUpdateIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "categories.update",
+  intentionId: "int-category-update-abc",
+  normalizedArgs: { categoryId: CATEGORY, name: "Supermercado", expectedName: "Mercado" },
+  ...overrides,
+});
+
+const categoryDeactivateIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "categories.deactivate",
+  intentionId: "int-category-deactivate-abc",
+  normalizedArgs: { categoryId: CATEGORY, expectedName: "Mercado" },
+  ...overrides,
+});
+
+const payableCreateIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "payables.create",
+  intentionId: "int-payable-create-abc",
+  normalizedArgs: { accountId: ACCOUNT, description: "Aluguel", amountCents: 150000, dueDate: "2026-12-05" },
+  ...overrides,
+});
+
+const payablePayIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "payables.pay",
+  intentionId: "int-payable-pay-abc",
+  normalizedArgs: {
+    payableId: "55555555-5555-4555-8555-555555555555",
+    description: "Aluguel",
+    amountCents: 150000,
+    dueDate: "2026-12-05",
+    accountId: ACCOUNT,
+  },
+  ...overrides,
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -196,6 +251,41 @@ describe("sanitizeProposalIntent", () => {
     ).toBeUndefined();
     expect(
       sanitizeProposalIntent({ ...categoryCreateIntent(), normalizedArgs: { ...categoryCreateIntent().normalizedArgs, parentId: "nope" } }),
+    ).toBeUndefined();
+  });
+
+  it("accepts the five V1 CRUD proposal intents and rejects smuggled fields", () => {
+    expect(sanitizeProposalIntent(transactionUpdateIntent())).toEqual(transactionUpdateIntent());
+    expect(sanitizeProposalIntent(accountUpdateIntent())).toEqual(accountUpdateIntent());
+    expect(sanitizeProposalIntent(accountDeactivateIntent())).toEqual(accountDeactivateIntent());
+    expect(sanitizeProposalIntent(categoryUpdateIntent())).toEqual(categoryUpdateIntent());
+    expect(sanitizeProposalIntent(categoryDeactivateIntent())).toEqual(categoryDeactivateIntent());
+
+    // transactions.update never carries amount/date/account/category.
+    for (const extra of [{ amountCents: 100 }, { date: "2026-11-10" }, { accountId: ACCOUNT }, { categoryId: CATEGORY }]) {
+      expect(
+        sanitizeProposalIntent({
+          ...transactionUpdateIntent(),
+          normalizedArgs: { ...transactionUpdateIntent().normalizedArgs, ...extra },
+        }),
+      ).toBeUndefined();
+    }
+    expect(
+      sanitizeProposalIntent({ ...transactionUpdateIntent(), normalizedArgs: { ...transactionUpdateIntent().normalizedArgs, expectedDescription: "  " } }),
+    ).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({ ...accountUpdateIntent(), normalizedArgs: { ...accountUpdateIntent().normalizedArgs, expectedName: "" } }),
+    ).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({ ...categoryDeactivateIntent(), normalizedArgs: { categoryId: CATEGORY } }),
+    ).toBeUndefined();
+    expect(sanitizeProposalIntent(payableCreateIntent())).toEqual(payableCreateIntent());
+    expect(sanitizeProposalIntent(payablePayIntent())).toEqual(payablePayIntent());
+    expect(
+      sanitizeProposalIntent({ ...payableCreateIntent(), normalizedArgs: { ...payableCreateIntent().normalizedArgs, dueDate: "05/12/2026" } }),
+    ).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({ ...payablePayIntent(), normalizedArgs: { ...payablePayIntent().normalizedArgs, amountCents: 0 } }),
     ).toBeUndefined();
   });
 
