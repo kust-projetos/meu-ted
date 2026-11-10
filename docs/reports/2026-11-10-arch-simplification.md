@@ -3,6 +3,8 @@
 **Base:** `main@420f90c` · **Branch:** `chore/arch-simplification-final`
 **Data:** 2026-11-10 · **Escopo:** local/sintético; sem deploy, merge ou dado real.
 
+**Status:** SIMPLIFICAÇÃO ARQUITETURAL — CONCLUÍDA (2026-11-10; PR #316 com CI verde).
+
 ## O que foi alterado
 
 ### Removido
