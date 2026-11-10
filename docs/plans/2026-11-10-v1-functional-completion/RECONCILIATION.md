@@ -106,15 +106,23 @@ teto. Todas as provas desta sessão são determinísticas/sintéticas.
 
 ### Evidências executadas
 
-- `apps/ted-runtime`: 71 testes focados PASS (leituras, propostas, catálogo,
+- `apps/ted-runtime`: 148 testes focados PASS (leituras, propostas, catálogo,
   permissões, contrato de API); suíte completa teve 3 falhas de ambiente já
   conhecidas (timeouts/SIGKILL em testes de SDK real, não relacionadas).
-- `apps/api`: `pending-v2-payables` 4/4 PASS; `tool-registry` 16/16 PASS;
-  `mutation-receipt-coverage` PASS; `typecheck` PASS.
-- `apps/agent`: `pending-propose-rpc` 18/18 PASS; `typecheck` PASS.
-- `apps/pwa`: `typecheck` PASS. O runner Vitest não inicia worker neste
-  ambiente (issue #277), então os testes de componente não foram executados.
-- `packages/llm-contracts`: build PASS.
+- `apps/api`: `pending-v2-payables` 5/5 PASS; `tool-registry` 16/16 PASS;
+  `mutation-receipt-coverage` PASS; `pending-v2-wiring` 4/4 PASS; `typecheck` PASS.
+- `apps/agent`: `pending-propose-rpc` 18/18 PASS; `f2a-structured-interpretation`
+  18/18 PASS; `typecheck` PASS.
+- `apps/pwa`: `typecheck` PASS; CI `quality (22, 10)` PASS (inclui `Test PWA`).
+- `packages/llm-contracts`: build PASS; `pnpm docs:lint` PASS; gates
+  `capabilities:check`, `write-policy:check`, `governance:check`,
+  `boundary:check`, `test:skip-gate` e `public-safety --strict` PASS.
+- **CI remoto no SHA `a7fd363` (PR #318): `CI` PASS (todos os jobs, incluindo
+  `Financial integrity — Postgres`, `TED Runtime` e `Gate — all checks`) e
+  `PWA CI` PASS (`quality (22, 10)`).**
+
+O runner Vitest da PWA não inicia worker neste host Windows (issue #277); a
+validação efetiva do teste de componente veio do CI Linux.
 
 ### Pendente / não executado
 
