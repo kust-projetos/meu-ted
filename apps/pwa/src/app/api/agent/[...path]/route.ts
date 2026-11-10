@@ -9,8 +9,10 @@ import {
   isTedP2RpcPath,
   tedWorkspaceIdFromPath,
   isTedOpencodeRuntimeEnabled,
+  isTedOpencodeKillSwitchOn,
   resolveTedGatewayOrigin,
   serializeTedRuntimeA0Pin,
+  serializeTedRuntimePinClear,
   type AgentProxyEnv,
 } from "@/proxy-utils";
 
@@ -33,7 +35,11 @@ async function readProxyEnv(): Promise<ProxyEnv> {
       PWA_AGENT_PROXY_ORIGIN: cloudEnv.PWA_AGENT_PROXY_ORIGIN ?? process.env.PWA_AGENT_PROXY_ORIGIN,
       AGENT_ORIGIN: cloudEnv.AGENT_ORIGIN ?? process.env.AGENT_ORIGIN,
       TED_OPENCODE_RUNTIME_ENABLED: cloudEnv.TED_OPENCODE_RUNTIME_ENABLED ?? process.env.TED_OPENCODE_RUNTIME_ENABLED,
+      TED_OPENCODE_RUNTIME_KILL_SWITCH:
+        cloudEnv.TED_OPENCODE_RUNTIME_KILL_SWITCH ?? process.env.TED_OPENCODE_RUNTIME_KILL_SWITCH,
       TED_OPENCODE_GATEWAY_ORIGIN: cloudEnv.TED_OPENCODE_GATEWAY_ORIGIN ?? process.env.TED_OPENCODE_GATEWAY_ORIGIN,
+      TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS:
+        cloudEnv.TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS ?? process.env.TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS,
     };
   } catch {
     return process.env as ProxyEnv;
@@ -326,9 +332,10 @@ async function proxy(request: Request, context: RouteContext): Promise<NextRespo
   // the flag is ON (explicit `session/new` included).
   const isP2 = isTedP2RpcPath(path);
   const pin = parseTedRuntimePin(request.headers.get("cookie"));
+  const killSwitch = isTedOpencodeKillSwitchOn(env);
   const flagOn = isTedOpencodeRuntimeEnabled(env);
   const workspaceId = tedWorkspaceIdFromPath(path);
-  const target = selectTedRuntimeTarget(pin, { isP2, flagOn });
+  const target = selectTedRuntimeTarget(pin, { isP2, flagOn, killSwitch });
 
   // Follow-up nuance: gateway absent/invalid AND no B pin AND an A0 target
   // → frozen legacy A0 path (no pin cookie, headers untouched). Production
@@ -450,11 +457,14 @@ async function proxy(request: Request, context: RouteContext): Promise<NextRespo
   headers.set("cache-control", "no-store");
   headers.set("cdn-cache-control", "no-store");
   // P2 — first A0 contact pins the conversation to A0 (scoped, HttpOnly;
-  // `Secure` only for HTTPS). This branch only runs when the local gateway
-  // origin is configured (development/test), so production never sets local
-  // pin cookies. No runtimeSessionId ever crosses in body/headers.
+  // `Secure` only for HTTPS). No runtimeSessionId ever crosses in body/headers.
   if (pin.pin === "none" && !flagOn && workspaceId) {
     headers.append("set-cookie", serializeTedRuntimeA0Pin(workspaceId, { secure: isHttpsRequest(request) }));
+  }
+  // Rollback — the kill switch sends even `opencode.*`-pinned conversations
+  // back to A0 and expires the stale pin so the next contact starts clean.
+  if (killSwitch && workspaceId && (pin.pin === "b" || pin.pin === "invalid")) {
+    headers.append("set-cookie", serializeTedRuntimePinClear(workspaceId));
   }
   // P2 — server-confirmed runtime, P2 responses only (the frozen legacy path
   // stays header-identical). Non-P2 operations never carry the seam.

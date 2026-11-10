@@ -60,10 +60,12 @@ describe('p3 category read: product catalog gating', () => {
     assert.deepEqual(defs.map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
   });
 
-  it('production forces the P3 read off even with the opt-in flag set', () => {
-    assert.equal(isP3ReadsEnabled(PROD_ENV), false);
+  it('explicit activation applies in production too (no NODE_ENV shortcut)', () => {
+    assert.equal(isP3ReadsEnabled(PROD_ENV), true);
     const defs = productToolDefs(PROD_ENV);
-    assert.deepEqual(defs.map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
+    assert.ok(defs.some((d) => d.name === 'list_categories'));
+    // Absent flag stays OFF even in production.
+    assert.deepEqual(productToolDefs({ NODE_ENV: 'production' }).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
   });
 
   it('local opt-in exposes list_categories with complete input AND output schemas', () => {
@@ -96,7 +98,7 @@ describe('p3 category read: product catalog gating', () => {
     const addedProd = [];
     const prodDef = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), { env: PROD_ENV });
     await prodDef.setup({ ...allowSetup, session: { hook: async () => ({ dispose: async () => {} }) }, tool: { transform: async (fn) => { fn({ add: (t) => addedProd.push(t) }); } } });
-    assert.deepEqual(addedProd.map((t) => t.name).sort(), ['get_month_summary', 'list_accounts']);
+    assert.ok(addedProd.some((t) => t.name === 'list_categories'), 'explicit flag registers the read in production too');
   });
 });
 

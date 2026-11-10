@@ -47,9 +47,10 @@ const NUBANK_CARD = Object.freeze({
 });
 
 describe('p3.8 card discovery: catalog and guidance', () => {
-  it('is absent from the default catalog and production, present under P3 reads opt-in', () => {
+  it('is absent from the default catalog and present under the explicit P3 reads opt-in (any environment)', () => {
     assert.ok(!productToolDefs(OFF_ENV).some((d) => d.name === 'list_credit_cards'));
-    assert.ok(!productToolDefs(PROD_ENV).some((d) => d.name === 'list_credit_cards'));
+    assert.ok(!productToolDefs({ NODE_ENV: 'production' }).some((d) => d.name === 'list_credit_cards'));
+    assert.ok(productToolDefs(PROD_ENV).some((d) => d.name === 'list_credit_cards'));
     const readDef = productToolDefs(READ_ENV).find((d) => d.name === 'list_credit_cards');
     assert.ok(readDef, 'list_credit_cards must be registered under P3 reads opt-in');
     assert.deepEqual(readDef.input.properties, {});
