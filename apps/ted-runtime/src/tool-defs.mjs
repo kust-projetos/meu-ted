@@ -70,6 +70,50 @@ export const TOOL_DEFS = [
     output: { type: 'object', description: 'Real GET /accounts body ({items, total}).' },
   },
   {
+    // P4 CORE parity (opt-in only — see plugin.mjs isP3ReadsEnabled): recent
+    // transactions via the exact existing API route GET /transactions
+    // (transactionFiltersSchema). Read-only; filters pass through to the real
+    // API, which owns domain validation.
+    name: 'list_recent_transactions',
+    description: 'TED read-only: list transactions via GET /transactions (identity-scoped server-side).',
+    input: {
+      type: 'object',
+      properties: {
+        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
+        categoryId: { type: 'string', description: 'Category uuid resolved from list_categories' },
+        kind: { type: 'string', enum: ['expense', 'income', 'transfer'] },
+        startDate: { type: 'string', description: 'Start date YYYY-MM-DD (inclusive)' },
+        endDate: { type: 'string', description: 'End date YYYY-MM-DD (inclusive)' },
+        minAmountCents: { type: 'integer', minimum: 0 },
+        maxAmountCents: { type: 'integer', minimum: 0 },
+        query: { type: 'string', description: 'Free-text query (max 120 chars)' },
+        limit: { type: 'integer', minimum: 1, maximum: 200 },
+        offset: { type: 'integer', minimum: 0, maximum: 100000 },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Real GET /transactions body ({items, total, limit, offset}).' },
+  },
+  {
+    // P4 CORE parity (opt-in only — see plugin.mjs isP3ReadsEnabled): spending
+    // insights via the exact existing API route GET /insights/spending
+    // (spendingInsightQuerySchema). Read-only.
+    name: 'spending_insights',
+    description: 'TED read-only: spending insights via GET /insights/spending (identity-scoped server-side).',
+    input: {
+      type: 'object',
+      properties: {
+        yearMonth: { type: 'string', description: 'Period YYYY-MM (defaults to the current month)' },
+        insightType: { type: 'string', enum: ['all', 'comparison', 'anomalies', 'income-share'] },
+        lookbackMonths: { type: 'integer', minimum: 1, maximum: 12 },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Real GET /insights/spending body.' },
+  },
+  {
     // P3.8 (opt-in only — see plugin.mjs isP3ReadsEnabled): credit-card
     // accounts via the exact existing route GET /cards/accounts (CardStore),
     // which returns ONLY credit cards. /accounts deliberately excludes cards;
@@ -275,6 +319,8 @@ const FORBIDDEN_KEYS = new Set([
 
 function knownKeys(name) {
   if (name === 'list_accounts') return ['kind', 'includeInactive'];
+  if (name === 'list_recent_transactions') return ['accountId', 'categoryId', 'kind', 'startDate', 'endDate', 'minAmountCents', 'maxAmountCents', 'query', 'limit', 'offset'];
+  if (name === 'spending_insights') return ['yearMonth', 'insightType', 'lookbackMonths'];
   if (name === 'list_credit_cards') return [];
   if (name === 'list_categories') return ['kind'];
   if (name === 'list_card_statements') return ['accountId', 'status', 'limit'];
@@ -311,6 +357,54 @@ export function validateToolArgs(name, args) {
     // API handler — values pass through so a 400 comes from the real route.
     if (args.kind !== undefined && typeof args.kind !== 'string') {
       throw new ToolError('tool.invalid_args', 'list_categories: kind must be a string');
+    }
+  } else if (name === 'list_recent_transactions') {
+    // Structural only: the filter contract (transactionFiltersSchema) is owned
+    // by the real API handler — values pass through so a 400 comes from the
+    // real route, never from a tool guess.
+    if (args.accountId !== undefined && (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId))) {
+      throw new ToolError('tool.invalid_args', 'list_recent_transactions: accountId must be a uuid');
+    }
+    if (args.categoryId !== undefined && (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId))) {
+      throw new ToolError('tool.invalid_args', 'list_recent_transactions: categoryId must be a uuid');
+    }
+    if (args.kind !== undefined && (typeof args.kind !== 'string' || !['expense', 'income', 'transfer'].includes(args.kind))) {
+      throw new ToolError('tool.invalid_args', 'list_recent_transactions: kind must be expense|income|transfer');
+    }
+    for (const key of ['startDate', 'endDate']) {
+      if (args[key] !== undefined) {
+        if (typeof args[key] !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(args[key])) {
+          throw new ToolError('tool.invalid_args', `list_recent_transactions: ${key} must be YYYY-MM-DD`);
+        }
+        const parsed = new Date(`${args[key]}T00:00:00Z`);
+        if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== args[key]) {
+          throw new ToolError('tool.invalid_args', `list_recent_transactions: ${key} must be YYYY-MM-DD`);
+        }
+      }
+    }
+    for (const key of ['minAmountCents', 'maxAmountCents']) {
+      if (args[key] !== undefined && (!Number.isSafeInteger(args[key]) || args[key] < 0)) {
+        throw new ToolError('tool.invalid_args', `list_recent_transactions: ${key} must be a non-negative safe integer`);
+      }
+    }
+    if (args.query !== undefined && (typeof args.query !== 'string' || args.query.trim().length === 0 || args.query.trim().length > 120)) {
+      throw new ToolError('tool.invalid_args', 'list_recent_transactions: query must be a non-empty string (max 120)');
+    }
+    if (args.limit !== undefined && (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 200)) {
+      throw new ToolError('tool.invalid_args', 'list_recent_transactions: limit must be an integer between 1 and 200');
+    }
+    if (args.offset !== undefined && (!Number.isInteger(args.offset) || args.offset < 0 || args.offset > 100000)) {
+      throw new ToolError('tool.invalid_args', 'list_recent_transactions: offset must be an integer between 0 and 100000');
+    }
+  } else if (name === 'spending_insights') {
+    if (args.yearMonth !== undefined && (typeof args.yearMonth !== 'string' || !/^\d{4}-\d{2}$/.test(args.yearMonth))) {
+      throw new ToolError('tool.invalid_args', 'spending_insights: yearMonth must be YYYY-MM');
+    }
+    if (args.insightType !== undefined && (typeof args.insightType !== 'string' || !['all', 'comparison', 'anomalies', 'income-share'].includes(args.insightType))) {
+      throw new ToolError('tool.invalid_args', 'spending_insights: insightType must be all|comparison|anomalies|income-share');
+    }
+    if (args.lookbackMonths !== undefined && (!Number.isInteger(args.lookbackMonths) || args.lookbackMonths < 1 || args.lookbackMonths > 12)) {
+      throw new ToolError('tool.invalid_args', 'spending_insights: lookbackMonths must be an integer between 1 and 12');
     }
   } else if (name === 'list_card_statements') {
     if (args.accountId !== undefined && (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId))) {
@@ -435,6 +529,26 @@ function routeFor(name, args) {
     const qs = q.toString();
     return qs ? `/categories?${qs}` : '/categories';
   }
+  if (name === 'list_recent_transactions') {
+    // Exact existing API route (transactions.ts:17): GET /transactions with the
+    // real filter query. Query strings pass through to the real API.
+    const q = new URLSearchParams();
+    for (const key of ['accountId', 'categoryId', 'kind', 'startDate', 'endDate', 'minAmountCents', 'maxAmountCents', 'query', 'limit', 'offset']) {
+      if (args[key] !== undefined) q.set(key, String(args[key]));
+    }
+    const qs = q.toString();
+    return qs ? `/transactions?${qs}` : '/transactions';
+  }
+  if (name === 'spending_insights') {
+    // Exact existing API route (insights.ts:45): GET /insights/spending with
+    // the real query. Query strings pass through to the real API.
+    const q = new URLSearchParams();
+    for (const key of ['yearMonth', 'insightType', 'lookbackMonths']) {
+      if (args[key] !== undefined) q.set(key, String(args[key]));
+    }
+    const qs = q.toString();
+    return qs ? `/insights/spending?${qs}` : '/insights/spending';
+  }
   if (name === 'list_card_statements') {
     // Exact existing API route (cards.ts GET /cards/statements) with the
     // optional card/status/limit filters. No invented query.
@@ -470,6 +584,32 @@ function assertShape(name, args, body) {
   if (name === 'list_accounts' || name === 'list_credit_cards' || name === 'list_categories') {
     if (!Array.isArray(body.items)) fail('items must be an array');
     if (!isSafeInt(body.total) || body.total < 0) fail('total must be a non-negative safe integer');
+    return body;
+  }
+  if (name === 'list_recent_transactions') {
+    if (!Array.isArray(body.items)) fail('items must be an array');
+    if (!isSafeInt(body.total) || body.total < 0) fail('total must be a non-negative safe integer');
+    if (!isSafeInt(body.limit) || body.limit < 1) fail('limit must be a positive safe integer');
+    if (!isSafeInt(body.offset) || body.offset < 0) fail('offset must be a non-negative safe integer');
+    // The model must never receive a transaction without the authoritative
+    // fields it needs to ground an answer or a follow-up proposal. Shape drift
+    // fails closed instead of inventing values.
+    for (const item of body.items) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) fail('transaction item must be an object');
+      if (typeof item.id !== 'string' || item.id.length === 0) fail('transaction id must be a non-empty string');
+      if (typeof item.kind !== 'string' || !['expense', 'income', 'transfer'].includes(item.kind)) fail('transaction kind must be expense|income|transfer');
+      if (typeof item.description !== 'string') fail('transaction description must be a string');
+      if (!isSafeInt(item.amountCents) || item.amountCents < 0) fail('transaction amountCents must be a non-negative safe integer');
+      if (typeof item.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(item.date)) fail('transaction date must be YYYY-MM-DD');
+      if (typeof item.accountId !== 'string' || item.accountId.length === 0) fail('transaction accountId must be a non-empty string');
+    }
+    return body;
+  }
+  if (name === 'spending_insights') {
+    if (typeof body.success !== 'boolean') fail('success must be a boolean');
+    if (typeof body.yearMonth !== 'string' || !/^\d{4}-\d{2}$/.test(body.yearMonth)) fail('yearMonth must be YYYY-MM');
+    if (!Array.isArray(body.insights)) fail('insights must be an array');
+    if (!isSafeInt(body.transactionCount) || body.transactionCount < 0) fail('transactionCount must be a non-negative safe integer');
     return body;
   }
   if (name === 'list_card_statements') {
@@ -630,6 +770,8 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
   };
   return {
     list_accounts: (args, host, opts) => run('list_accounts', args, host, opts),
+    list_recent_transactions: (args, host, opts) => run('list_recent_transactions', args, host, opts),
+    spending_insights: (args, host, opts) => run('spending_insights', args, host, opts),
     list_credit_cards: (args, host, opts) => run('list_credit_cards', args, host, opts),
     get_month_summary: (args, host, opts) => run('get_month_summary', args, host, opts),
     list_categories: (args, host, opts) => run('list_categories', args, host, opts),

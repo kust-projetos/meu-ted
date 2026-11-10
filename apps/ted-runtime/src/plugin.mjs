@@ -41,6 +41,8 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
   'list_credit_cards',
   'get_month_summary',
   'list_categories',
+  'list_recent_transactions',
+  'spending_insights',
   'propose_expense',
   'propose_income',
   'propose_card_purchase',
@@ -49,12 +51,14 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
   'propose_statement_payment',
 ]);
 
-// P3 prerequisite reads. Explicit activation only: the operator sets
+// Opt-in reads. Explicit activation only: the operator sets
 // TED_OPENCODE_P3_READS_ENABLED=1 (or the writes flag, which implies reads).
 // There is no NODE_ENV shortcut — deployment controls exposure, so a canary
 // can enable the slice without pretending to be a test process, and an
-// absent flag keeps it OFF in every environment.
-export const P3_READ_TOOL_NAMES = ['list_categories', 'list_card_statements', 'list_credit_cards'];
+// absent flag keeps it OFF in every environment. The set carries the P3
+// prerequisite reads (category/statement/card discovery) and the P4 CORE
+// parity reads (recent transactions, spending insights).
+export const P3_READ_TOOL_NAMES = ['list_categories', 'list_card_statements', 'list_credit_cards', 'list_recent_transactions', 'spending_insights'];
 
 // P3 write slice: `propose_expense`, `propose_income`, `propose_card_purchase`,
 // `propose_transfer` and `propose_statement_payment` record a proposal intent
