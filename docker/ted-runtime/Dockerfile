@@ -9,7 +9,10 @@ FROM node:24-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     NODE_ENV=production
-RUN corepack enable
+# Pin the workspace package manager: the lockfile is pnpm 10 and the root
+# `pnpm.overrides` are only honored by that major (pnpm 11+ ignores them and
+# refuses the frozen install).
+RUN npm install -g pnpm@10.34.1 && pnpm --version
 
 WORKDIR /app
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
