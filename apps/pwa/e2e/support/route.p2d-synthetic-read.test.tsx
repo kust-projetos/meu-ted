@@ -432,6 +432,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         vi.stubEnv("NODE_ENV", "test");
         vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
         vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+        vi.stubEnv("TED_OPENCODE_WORKSPACES", `${HOUSEHOLD_A},${HOUSEHOLD_B}`);
         vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", base);
 
         const chatPath = (ws: string) => ["agents", "finance-chat-agent", ws, "rpc", "chat"];
