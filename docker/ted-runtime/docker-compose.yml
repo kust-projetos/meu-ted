@@ -47,8 +47,14 @@ services:
       traefik.enable: "true"
       traefik.docker.network: proxy
       traefik.http.routers.ted-runtime.entrypoints: websecure
-      traefik.http.routers.ted-runtime.rule: Host(`ted-gateway.synkroo.com.br`)
+      # Mounted under the existing API host (no new DNS record): the PWA talks
+      # to https://api.synkroo.com.br/ted-runtime and Traefik strips the prefix.
+      # The explicit high priority beats the shorter API router rule.
+      traefik.http.routers.ted-runtime.rule: Host(`api.synkroo.com.br`) && PathPrefix(`/ted-runtime`)
+      traefik.http.routers.ted-runtime.priority: "1000"
       traefik.http.routers.ted-runtime.tls.certresolver: cf
+      traefik.http.routers.ted-runtime.middlewares: ted-runtime-strip
+      traefik.http.middlewares.ted-runtime-strip.stripprefix.prefixes: /ted-runtime
       traefik.http.services.ted-runtime.loadbalancer.server.port: "3101"
     healthcheck:
       test:

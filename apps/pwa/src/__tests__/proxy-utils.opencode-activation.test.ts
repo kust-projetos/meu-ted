@@ -26,6 +26,23 @@ describe("resolveTedGatewayOrigin (explicit activation)", () => {
     ).toBe("https://ted-gateway.synkroo.com.br");
   });
 
+  it("accepts an allowlisted HTTPS origin with a single path prefix (reverse-proxy mount)", () => {
+    expect(
+      resolveTedGatewayOrigin({
+        NODE_ENV: "production",
+        TED_OPENCODE_GATEWAY_ORIGIN: "https://api.synkroo.com.br/ted-runtime",
+        TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS: "https://api.synkroo.com.br/ted-runtime",
+      }),
+    ).toBe("https://api.synkroo.com.br/ted-runtime");
+    // The prefix must match exactly — a trailing slash or a deeper path is refused.
+    expect(
+      resolveTedGatewayOrigin({
+        TED_OPENCODE_GATEWAY_ORIGIN: "https://api.synkroo.com.br/ted-runtime/",
+        TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS: "https://api.synkroo.com.br/ted-runtime/",
+      }),
+    ).toBeNull();
+  });
+
   it("refuses an HTTPS origin that is not allowlisted (no arbitrary host)", () => {
     expect(
       resolveTedGatewayOrigin({

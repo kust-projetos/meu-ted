@@ -740,9 +740,20 @@ function parseTedGatewayHttps(value: string): string | null {
   if (parsed.protocol !== "https:") return null;
   if (parsed.username !== "" || parsed.password !== "") return null;
   if (!parsed.hostname) return null;
-  if (parsed.pathname !== "" && parsed.pathname !== "/") return null;
+  // Optional single path prefix (reverse-proxy mount), e.g.
+  // https://api.example.com/ted-runtime. Trailing slash, dot segments,
+  // query and hash are refused. The raw path must round-trip exactly: any
+  // normalization by the URL parser (., .., //, encoded dots) is refused.
+  const path = parsed.pathname;
+  if (path !== "/" && path !== "") {
+    if (!path.startsWith("/") || path.endsWith("/") || path.includes("//")) return null;
+    if (path.split("/").some((segment) => segment === "." || segment === "..")) return null;
+  }
   if (parsed.search !== "" || parsed.hash !== "") return null;
-  return parsed.origin;
+  const raw = value.trim();
+  const rawPath = raw.slice(raw.indexOf(parsed.origin) + parsed.origin.length).split(/[?#]/)[0];
+  if (rawPath !== path && !(path === "/" && rawPath === "")) return null;
+  return path === "/" || path === "" ? parsed.origin : `${parsed.origin}${path}`;
 }
 
 /**
