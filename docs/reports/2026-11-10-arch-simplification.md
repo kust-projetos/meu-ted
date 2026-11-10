@@ -49,16 +49,24 @@
 | `pnpm plans:check` | **PASS** |
 | PWA: ativação de runtime + rota P2D + rota P2 | **PASS** 36/36 |
 | API: slices P3 (expense/income/transfer/statement + broker flows) | **PASS** 36/36 |
+| Piloto integrado P2D_P3_PILOT (browser, provider scriptado) | **PASS** (7 confirmações, 7 execuções, 1 cancelamento, 0 writes diretos, 0 mismatches) |
 | `pnpm install --frozen-lockfile --offline` | Lockfile aceito (“Lockfile is up to date”); resolução parou por pacotes ausentes no cache offline |
 | `git diff --check` | **PASS** |
 
-## Regressão integrada (tentativa)
+## Regressão integrada (PASS)
 
 Comando: `P2D_P3_PILOT=1 pnpm exec playwright test --config=e2e/playwright.config.ts --project=p2d-synthetic --workers=1`.
 
-Duas execuções completaram o boot do stack (API sintética + Agent + gateway OpenCode + PWA) e falharam no primeiro turno com o mesmo sintoma: a UI exibiu a pergunta de categoria do A0 (`Qual categoria devo usar? Mercado/Aluguel/Salário`) e nenhum card `Confirmar R$ 65,00` foi criado; nenhuma escrita financeira ocorreu.
+A primeira execução falhou porque o proxy PWA selecionava A0: a allowlist obrigatória `TED_OPENCODE_WORKSPACES` (#306) não incluía o `HOUSEHOLD_A` sintético, e `readProxyEnv()` prioriza o ambiente Cloudflare local sobre `process.env`. A correção ficou restrita ao harness: `apps/pwa/.dev.vars` (mecanismo local de bindings, sem segredo) declara o workspace sintético e o gateway loopback. Nenhuma mudança em `readProxyEnv`, `wrangler.jsonc` de produção, autenticação, API, gateway ou A0.
 
-Causa concreta: o proxy PWA seleciona o runtime pela allowlist obrigatória `TED_OPENCODE_WORKSPACES` (introduzida no #306). `readProxyEnv()` prioriza o ambiente Cloudflare/wrangler, e `apps/pwa/wrangler.jsonc` lista apenas IDs de produção — não o `HOUSEHOLD_A` sintético. Resultado: `flagOn=false` e o turno vai para A0. O env do harness não sobrepõe o ambiente Cloudflare. É drift do harness em relação ao #306, não regressão das remoções desta mudança; não foi corrigido para não alterar configuração de produção nem a precedência de env do produto.
+Resultado: **1 passed (1.1m)**. Evidência `test-results/p3-integrated/evidence.json`:
+
+- 7 turnos confirmados; `proposes=8`, `confirms=7`, `executes=7`, `cancels=1`, `directFinancialWrites=0`, `stubMismatches=[]`.
+- Despesa, receita, transferência, compra 1x, parcelamento 3x, pagamento parcial e quitação da fatura.
+- Saldos/fatura: A1 `126500`, A2 `65000`, dívida do cartão `40000`; fatura Nov `32000/32000 paid`.
+- `month-summary`: liquidez `70500`, competência `38500`.
+- Reload com proposta pendente reidratada sem novo prompt; cancelamento sem escrita; contexto e pedido de esclarecimento sem proposta.
+- `promptCalls=11`, `stubTurns=19`; provider scriptado local, sem inferência paga.
 
 ## Não executado / limitações
 
@@ -69,9 +77,8 @@ Causa concreta: o proxy PWA seleciona o runtime pela allowlist obrigatória `TED
 - **Biome agregado:** excedeu 300 s sem saída (issue histórica #291 de
   performance no Windows); não foi convertido em PASS.
 - **PWA/API completos, Postgres, browser E2E e modelo real:** a suíte PWA e os
-  gates de API rodaram no CI (verdes). Localmente, a regressão integrada de
-  browser ficou bloqueada pelo drift de allowlist descrito acima; nenhuma
-  inferência real foi usada.
+  gates de API rodaram no CI (verdes). O piloto integrado de browser passou com
+  provider scriptado local; nenhuma inferência real foi usada.
 - **Dados financeiros, credenciais, deploy e merge:** não tocados.
 
 ## Pendências reais
