@@ -209,6 +209,12 @@ describe('runtime entrypoint (import-safe, seamed startup)', () => {
     assert.equal(delegated[0].sessionID, 'ses_probe_1');
     assert.equal(delegated[0].host, host, 'same host object is forwarded');
     assert.deepEqual(delegated[0].opts, { idleTimeoutMs: 11 }, 'same options object is forwarded');
+    // Real model turns take tens of seconds; the entrypoint must not keep the
+    // 5s default idle budget, otherwise a legitimate turn is quarantined
+    // (host_binding_quarantined) right after it finishes.
+    const defaultOut = await captured.withAuthenticatedSession('ses_probe_2', host, async () => 'ok');
+    assert.equal(defaultOut, 'ok');
+    assert.equal(delegated.at(-1).opts.idleTimeoutMs, 60000, 'default idle budget covers a real turn');
     await handle.close();
   });
 
