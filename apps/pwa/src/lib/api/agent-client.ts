@@ -478,7 +478,11 @@ const transactionUpdateProposalArgsSchema = z
   .object({
     transactionId: z.string().uuid(),
     description: z.string().trim().min(1).max(240),
-    expectedDescription: z.string().min(1).max(240),
+    expectedDescription: z
+      .string()
+      .min(1)
+      .max(240)
+      .refine((value) => value.trim().length > 0, "expectedDescription must be non-empty"),
   })
   .strict();
 
