@@ -1,5 +1,9 @@
 # OpenAI Codex Subscription Private Broker Runbook
 
+> **Status (2026-11-10):** `apps/codex-broker` foi removido do monorepo.
+> Este runbook permanece como registro histórico; o cliente opcional do A0
+> falha fechado sem `CODEX_BROKER_ORIGIN` e signing key.
+
 Este documento define os procedimentos de operação, governança de segurança e isolamento de runtime do **Codex Subscription Broker** (`apps/codex-broker`), utilizado como transporte privado e restrito para o assistente conversacional TED (`apps/agent`).
 
 ---

@@ -212,7 +212,7 @@ test('hermetic: delayed health passes and owned containers are cleaned up', { ti
       assert.equal(r.status, 0, `stdout=${r.stdout.slice(0, 500)} stderr=${r.stderr.slice(0, 500)}`);
       assert.match(r.stdout, /GREEN/);
       const removed = removedContainers(stateDir, binDir);
-      assert.equal(removed.length, 2, `expected 2 owned cleanups, got ${JSON.stringify(removed)}`);
+      assert.equal(removed.length, 1, `expected 1 owned cleanup, got ${JSON.stringify(removed)}`);
     },
   );
 });
@@ -235,7 +235,7 @@ test('hermetic: never-responding health fails RED with exit 1 (never 13) and sti
       assert.match(r.stderr, /health RED/);
       assert.ok(elapsed < 30000, `bounded run took ${elapsed}ms`);
       const removed = removedContainers(stateDir, binDir);
-      assert.equal(removed.length, 2, `expected 2 owned cleanups, got ${JSON.stringify(removed)}`);
+      assert.equal(removed.length, 1, `expected 1 owned cleanup, got ${JSON.stringify(removed)}`);
     },
   );
 });

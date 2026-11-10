@@ -25,7 +25,6 @@ export const AREA_RULES = [
     area: "agent",
     patterns: [
       /^apps\/agent\//,
-      /^apps\/codex-broker\//,
       /^apps\/ted-runtime\//,
       /^packages\/llm-contracts\//,
       /^scripts\/generate-agent-tools\.mjs$/,

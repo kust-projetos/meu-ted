@@ -8,7 +8,6 @@ COPY packages/llm-contracts/package.json packages/llm-contracts/package.json
 COPY apps/pwa/package.json apps/pwa/package.json
 COPY apps/api/package.json apps/api/package.json
 COPY apps/agent/package.json apps/agent/package.json
-COPY apps/codex-broker/package.json apps/codex-broker/package.json
 RUN pnpm install --frozen-lockfile
 COPY packages/llm-contracts packages/llm-contracts
 COPY apps/pwa apps/pwa

@@ -11,7 +11,6 @@ const containerScript = fs.readFileSync('scripts/security-containers.mjs', 'utf8
 const gitleaksConfig = fs.readFileSync('.gitleaks.toml', 'utf8');
 const auditsWorkflow = fs.readFileSync('.github/workflows/audits.yml', 'utf8');
 const apiDockerfile = fs.readFileSync('apps/api/Dockerfile', 'utf8');
-const brokerDockerfile = fs.readFileSync('apps/codex-broker/Dockerfile', 'utf8');
 
 for (const name of ['security:secrets', 'security:deps', 'security:containers']) {
   test(`package exposes ${name}`, () => {
@@ -44,20 +43,18 @@ test('dependency gate audits dependencies', () => {
   assert.match(command, /--audit-level(?:=| )(?:moderate|critical)/);
 });
 
-test('container gate fails on high or critical vulnerabilities for both CI images', () => {
+test('container gate fails on high or critical vulnerabilities for the API image', () => {
   assert.equal(packageJson.scripts['security:containers'], 'node scripts/security-containers.mjs');
   assert.match(containerScript, /aquasec\/trivy:0\.58\.1/);
   assert.match(containerScript, /trivy-cache:\/root\/\.cache\/trivy/);
   assert.match(containerScript, /--exit-code/);
   assert.match(containerScript, /HIGH,CRITICAL/);
   assert.match(containerScript, /pi-finance-api:ci/);
-  assert.match(containerScript, /pi-finance-codex-broker:ci/);
   assert.match(containerScript, /shell: false/);
 });
 
 test('runtime images install dependencies and exclude package-manager stores', () => {
   assert.match(apiDockerfile, /pnpm install --frozen-lockfile/);
-  assert.match(brokerDockerfile, /pnpm install --frozen-lockfile/);
   assert.match(apiDockerfile, /FROM node:24-alpine/);
 });
 

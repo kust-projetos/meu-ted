@@ -26,8 +26,8 @@ funcionar com simplicidade, sem perder a integridade financeira.
 - `apps/api`: Fastify/TypeScript/Postgres na VPS Contabo (Docker + Traefik);
   Ãºnica fonte da verdade financeira.
 - `apps/pwa/`: Next.js 16 + React 19 + Tailwind v4 + Serwist; Cloudflare.
-- `apps/agent`: Cloudflare Agents SDK + Durable Objects (assistente TED).
-- `apps/codex-broker`: broker isolado, sem acesso financeiro.
+- `apps/agent`: Cloudflare Agents SDK + Durable Objects (A0/rollback, broker Pending V2 e confirmação).
+- `apps/ted-runtime`: runtime conversacional OpenCode (SDK nativo, gateway privado e tools financeiras).
 - `packages/llm-contracts`: contratos compartilhados.
 - `../pi-finance-web` estÃ¡ depreciado e nÃ£o Ã© origem de produÃ§Ã£o.
 - ProduÃ§Ã£o: Agent/PWA na Cloudflare; API e Postgres na VPS Contabo.

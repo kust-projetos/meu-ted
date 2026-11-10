@@ -7,7 +7,6 @@ export default defineConfig({
       'apps/api',
       'apps/pwa',
       'apps/agent',
-      'apps/codex-broker',
     ],
   },
 });

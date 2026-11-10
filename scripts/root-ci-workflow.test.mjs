@@ -29,11 +29,11 @@ test("root CI keeps the required gate name and aggregates the new jobs", () => {
 });
 
 test("root CI runs lint, typecheck and build for backend workspaces", () => {
-  for (const workspace of ["@pi-finance/llm-contracts", "meu-ted-api", "pi-finance-agent", "pi-finance-codex-broker"]) {
+  for (const workspace of ["@pi-finance/llm-contracts", "meu-ted-api", "pi-finance-agent"]) {
     assert.match(workflow, new RegExp(`pnpm --filter ${workspace.replace(/[/@.]/g, "\\$&")} --fail-if-no-match lint`));
     assert.match(workflow, new RegExp(`pnpm --filter ${workspace.replace(/[/@.]/g, "\\$&")} --fail-if-no-match typecheck`));
   }
-  for (const workspace of ["meu-ted-api", "pi-finance-agent", "pi-finance-codex-broker"]) {
+  for (const workspace of ["meu-ted-api", "pi-finance-agent"]) {
     assert.match(workflow, new RegExp(`pnpm --filter ${workspace.replace(/[/@.]/g, "\\$&")} --fail-if-no-match build`));
   }
 });

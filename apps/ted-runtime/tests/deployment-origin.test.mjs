@@ -63,6 +63,37 @@ describe('assertLoopbackApiOrigin with an explicit allowlist', () => {
   });
 });
 
+describe('startTedRuntime transport wiring', () => {
+  it('forwards the allowlisted internal origin to the finance transport', async () => {
+    let seen = null;
+    await assert.rejects(
+      () =>
+        startTedRuntime({
+          env: {
+            TED_API_BASE_URL: 'http://pi-finance-api:3001',
+            TED_API_ALLOWED_ORIGINS: 'http://pi-finance-api:3001',
+            TED_RUNTIME_HOME: 'C:\\Users\\walis\\AppData\\Local\\Temp\\opencode\\ted-transport-wiring',
+          },
+          deps: {
+            HttpFinanceTransport: class {
+              constructor(options) {
+                seen = options;
+              }
+              call() {}
+            },
+            createTedEnvironment: async ({ transportFactory }) => {
+              transportFactory();
+              throw new Error('stop-after-transport');
+            },
+          },
+        }),
+      /stop-after-transport/,
+    );
+    assert.deepEqual(seen.allowedOrigins, ['http://pi-finance-api:3001']);
+    assert.equal(seen.baseUrl, 'http://pi-finance-api:3001');
+  });
+});
+
 describe('startTedRuntime host posture', () => {
   it('refuses a non-loopback listen host without the explicit opt-in', async () => {
     await assert.rejects(

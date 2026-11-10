@@ -90,17 +90,11 @@ jobs:
         run: pnpm --filter pi-finance-agent --fail-if-no-match lint
       - if: env.CODE_CHANGED == 'true'
         run: pnpm --filter pi-finance-agent --fail-if-no-match typecheck
-      - if: env.CODE_CHANGED == 'true'
-        run: pnpm --filter pi-finance-codex-broker --fail-if-no-match lint
-      - if: env.CODE_CHANGED == 'true'
-        run: pnpm --filter pi-finance-codex-broker --fail-if-no-match typecheck
 
       - if: env.CODE_CHANGED == 'true'
         run: pnpm --filter meu-ted-api --fail-if-no-match build
       - if: env.CODE_CHANGED == 'true'
         run: pnpm --filter pi-finance-agent --fail-if-no-match build
-      - if: env.CODE_CHANGED == 'true'
-        run: pnpm --filter pi-finance-codex-broker --fail-if-no-match build
 
       # Public-safety is fast (fs/git walk) and protects the public repo
       # from secrets/prohibited metadata; it stays on every PR.
@@ -166,10 +160,6 @@ jobs:
         run: |
           pnpm --filter pi-finance-agent --fail-if-no-match test
           pnpm --filter pi-finance-agent --fail-if-no-match eval:ted-v2
-
-      - name: Codex Broker tests
-        if: needs.changes.outputs.agent == 'true'
-        run: pnpm --filter pi-finance-codex-broker --fail-if-no-match test
 
   # ─── Financial integrity (Postgres) ───────────────────────────────────
   # Runs when the API, contracts or financial SQL changed. This is the

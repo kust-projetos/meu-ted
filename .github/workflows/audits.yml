@@ -71,8 +71,6 @@ jobs:
             --build-arg BUILD_SHA=${{ github.sha }} \
             --build-arg BUILD_ID=${{ github.run_id }} \
             --build-arg BUILD_TIME=${{ github.event.head_commit.timestamp }} .
-      - name: Build Codex Broker image for scan
-        run: docker build -f apps/codex-broker/Dockerfile -t pi-finance-codex-broker:ci .
       - name: Container smoke
         run: pnpm container:smoke
       - name: Container smoke contract
