@@ -536,7 +536,10 @@ describe("P2 runtime routing — production never touches the local runtime", ()
       expect(String(input).startsWith(gateway)).toBe(true);
       return new Response(JSON.stringify({ turnId: "t", status: "completed", output: "oi" }), {
         status: 200,
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "set-cookie": "ted-runtime-conversation=opencode.11111111-1111-4111-8111-111111111111; Path=/; HttpOnly",
+        },
       });
     });
     const req = new Request("https://pwa.example/api/agent/agents/finance-chat-agent/ws-1/rpc/chat", {
