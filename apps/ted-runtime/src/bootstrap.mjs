@@ -58,6 +58,23 @@ const SCRUB_VARS = [
 const RUNTIME_PROFILES = ['test', 'live'];
 const PRESERVE_VARS_BY_PROFILE = { live: ['OPENCODE_GO_API_KEY'] };
 
+// Live-only native credential bridge. OpenCode 2.2.4 resolves the
+// `opencode-go` provider from OPENCODE_API_KEY, while the product alias is
+// OPENCODE_GO_API_KEY — the isolation scrub deliberately removes the former
+// (ambient keys must never reach the SDK). This helper runs AFTER that scrub
+// and mirrors the preserved alias into the native variable in process memory
+// only. It never overwrites a value established after isolation, never reads
+// or writes a file, and never logs the secret. Pure + exported for tests.
+export function applyLiveCredentialAlias(profile, env = process.env) {
+  if (profile !== 'live') return false;
+  if (!env || typeof env !== 'object') return false;
+  const alias = env.OPENCODE_GO_API_KEY;
+  if (typeof alias !== 'string' || alias.length === 0) return false;
+  if (env.OPENCODE_API_KEY !== undefined) return false;
+  env.OPENCODE_API_KEY = alias;
+  return true;
+}
+
 export function resolveRuntimeProfile(explicit) {
   // NB: reads NO ambient env on purpose — only src/main.mjs reads
   // TED_RUNTIME_PROFILE and forwards it explicitly. Helpers default to
@@ -566,6 +583,14 @@ export async function createTedEnvironment({ root, identity = 'a', transportFact
   // are handled by native OpenCode itself.
   const resolvedProfile = profile === undefined ? 'test' : resolveRuntimeProfile(profile);
   const iso = setupIsolation(root, identity, resolvedProfile);
+  // Live profile only: the isolation scrub above removed the AMBIENT
+  // OPENCODE_API_KEY (contract: inherited keys never reach the SDK) and kept
+  // the product alias OPENCODE_GO_API_KEY. OpenCode 2.2.4 resolves the
+  // `opencode-go` provider from OPENCODE_API_KEY, so the preserved alias is
+  // mirrored into the native variable IN PROCESS MEMORY, after the scrub and
+  // before the SDK import. A value already established after the isolation is
+  // never overwritten; nothing is persisted, logged or handed to the model.
+  applyLiveCredentialAlias(resolvedProfile, process.env);
   // P3 write slice is a LOCAL opt-in (never production); the config must carry
   // the exact propose_expense permission only when the plugin will register it.
   const { isP3WritesEnabled } = await import('./plugin.mjs');
