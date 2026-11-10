@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isTedOpencodeKillSwitchOn,
+  isTedOpencodeWorkspaceEnabled,
   isTedOpencodeRuntimeEnabled,
   resolveTedGatewayOrigin,
   selectTedRuntimeTarget,
@@ -24,6 +25,23 @@ describe("resolveTedGatewayOrigin (explicit activation)", () => {
         TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS: "https://ted-gateway.synkroo.com.br",
       }),
     ).toBe("https://ted-gateway.synkroo.com.br");
+  });
+
+  it("accepts an allowlisted HTTPS origin with a single path prefix (reverse-proxy mount)", () => {
+    expect(
+      resolveTedGatewayOrigin({
+        NODE_ENV: "production",
+        TED_OPENCODE_GATEWAY_ORIGIN: "https://api.synkroo.com.br/ted-runtime",
+        TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS: "https://api.synkroo.com.br/ted-runtime",
+      }),
+    ).toBe("https://api.synkroo.com.br/ted-runtime");
+    // The prefix must match exactly — a trailing slash or a deeper path is refused.
+    expect(
+      resolveTedGatewayOrigin({
+        TED_OPENCODE_GATEWAY_ORIGIN: "https://api.synkroo.com.br/ted-runtime/",
+        TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS: "https://api.synkroo.com.br/ted-runtime/",
+      }),
+    ).toBeNull();
   });
 
   it("refuses an HTTPS origin that is not allowlisted (no arbitrary host)", () => {
@@ -99,6 +117,15 @@ describe("activation and rollback switches", () => {
     const pin = { pin: "b" as const, conversationId: "11111111-1111-4111-8111-111111111111" };
     expect(selectTedRuntimeTarget(pin, { isP2: true, flagOn: true, killSwitch: true })).toBe("A0");
     expect(selectTedRuntimeTarget(pin, { isP2: true, flagOn: true })).toBe("B");
+  });
+
+  it("canary allowlist is exact per workspace and empty means nobody", () => {
+    const env = { TED_OPENCODE_WORKSPACES: "ws-a, ws-b" };
+    expect(isTedOpencodeWorkspaceEnabled("ws-a", env)).toBe(true);
+    expect(isTedOpencodeWorkspaceEnabled("ws-b", env)).toBe(true);
+    expect(isTedOpencodeWorkspaceEnabled("ws-c", env)).toBe(false);
+    expect(isTedOpencodeWorkspaceEnabled("ws-a", {})).toBe(false);
+    expect(isTedOpencodeWorkspaceEnabled(null, env)).toBe(false);
   });
 
   it("non-P2 paths stay on A0 regardless of switches", () => {

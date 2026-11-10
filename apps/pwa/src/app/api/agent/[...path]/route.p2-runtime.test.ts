@@ -128,6 +128,7 @@ describe("P2 runtime routing — gateway absent keeps the frozen A0 path", () =>
   it("flag ON + no pin + missing gateway: fail-closed 503, upstream never called (never A0)", async () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
     const req = new Request("http://localhost:3000/api/agent/agents/finance-chat-agent/ws-1/rpc/chat", {
       method: "POST",
@@ -146,6 +147,7 @@ describe("P2 runtime routing — gateway absent keeps the frozen A0 path", () =>
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
     vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", "https://gateway.attacker.example");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
     const req = new Request("http://localhost:3000/api/agent/agents/finance-chat-agent/ws-1/rpc/chat", {
@@ -224,6 +226,7 @@ describe("P2 runtime routing — gateway configured (development/test)", () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
     vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", GATEWAY);
     let captured: Request | null = null;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -329,6 +332,7 @@ describe("P2 runtime routing — gateway configured (development/test)", () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
     vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", GATEWAY);
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       return new Response(JSON.stringify({ items: [] }), {
@@ -351,6 +355,7 @@ describe("P2 runtime routing — gateway configured (development/test)", () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
     vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", GATEWAY);
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       return new Response(JSON.stringify({ items: [], total: 0 }), {
@@ -393,6 +398,7 @@ describe("P2 runtime routing — gateway configured (development/test)", () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
     vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", GATEWAY);
     let seen = "";
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -418,6 +424,7 @@ describe("P2 runtime routing — gateway configured (development/test)", () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
     vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", GATEWAY);
     let seen = "";
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -463,6 +470,7 @@ describe("P2 runtime routing — gateway configured (development/test)", () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
     vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", "https://gateway.attacker.example");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
     const req = new Request("http://localhost:3000/api/agent/agents/finance-chat-agent/ws-1/rpc/chat", {
@@ -509,6 +517,7 @@ describe("P2 runtime routing — production never touches the local runtime", ()
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("PWA_AGENT_PROXY_ORIGIN", EXPECTED_AGENT_ORIGIN);
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       return new Response(JSON.stringify({ turnId: "t", status: "completed", output: "oi" }), {
         status: 200,
@@ -530,6 +539,7 @@ describe("P2 runtime routing — production never touches the local runtime", ()
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("PWA_AGENT_PROXY_ORIGIN", EXPECTED_AGENT_ORIGIN);
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
     vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", gateway);
     vi.stubEnv("TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS", gateway);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -558,6 +568,7 @@ describe("P2 runtime routing — production never touches the local runtime", ()
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("PWA_AGENT_PROXY_ORIGIN", EXPECTED_AGENT_ORIGIN);
     vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
     vi.stubEnv("TED_OPENCODE_RUNTIME_KILL_SWITCH", "1");
     vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", "https://ted-gateway.synkroo.com.br");
     vi.stubEnv("TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS", "https://ted-gateway.synkroo.com.br");

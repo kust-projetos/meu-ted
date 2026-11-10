@@ -97,6 +97,7 @@ type EnvLike = {
   AGENT_ORIGIN?: string;
   TED_OPENCODE_RUNTIME_ENABLED?: string;
   TED_OPENCODE_RUNTIME_KILL_SWITCH?: string;
+  TED_OPENCODE_WORKSPACES?: string;
   TED_OPENCODE_GATEWAY_ORIGIN?: string;
   TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS?: string;
 };
@@ -665,6 +666,22 @@ export function isTedOpencodeKillSwitchOn(env?: EnvLike): boolean {
 }
 
 /**
+ * Canary allowlist by workspace (`TED_OPENCODE_WORKSPACES`, CSV of exact
+ * workspace ids). Absent/empty = NO workspace (fail closed) — the global
+ * activation flag alone never opens the runtime to every workspace.
+ */
+export function isTedOpencodeWorkspaceEnabled(workspaceId: string | null, env?: EnvLike): boolean {
+  if (typeof workspaceId !== "string" || workspaceId.length === 0) return false;
+  const raw = env?.TED_OPENCODE_WORKSPACES;
+  if (typeof raw !== "string" || raw.trim().length === 0) return false;
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .includes(workspaceId);
+}
+
+/**
  * Strict well-formed HTTP loopback upstream check for the B gateway (pure, no
  * env). Same shape as the agent loopback check: `http://localhost[:port]` or
  * `http://127.0.0.1[:port]`, no userinfo/path/query/hash.
@@ -740,9 +757,20 @@ function parseTedGatewayHttps(value: string): string | null {
   if (parsed.protocol !== "https:") return null;
   if (parsed.username !== "" || parsed.password !== "") return null;
   if (!parsed.hostname) return null;
-  if (parsed.pathname !== "" && parsed.pathname !== "/") return null;
+  // Optional single path prefix (reverse-proxy mount), e.g.
+  // https://api.example.com/ted-runtime. Trailing slash, dot segments,
+  // query and hash are refused. The raw path must round-trip exactly: any
+  // normalization by the URL parser (., .., //, encoded dots) is refused.
+  const path = parsed.pathname;
+  if (path !== "/" && path !== "") {
+    if (!path.startsWith("/") || path.endsWith("/") || path.includes("//")) return null;
+    if (path.split("/").some((segment) => segment === "." || segment === "..")) return null;
+  }
   if (parsed.search !== "" || parsed.hash !== "") return null;
-  return parsed.origin;
+  const raw = value.trim();
+  const rawPath = raw.slice(raw.indexOf(parsed.origin) + parsed.origin.length).split(/[?#]/)[0];
+  if (rawPath !== path && !(path === "/" && rawPath === "")) return null;
+  return path === "/" || path === "" ? parsed.origin : `${parsed.origin}${path}`;
 }
 
 /**

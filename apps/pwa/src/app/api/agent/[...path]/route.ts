@@ -10,6 +10,7 @@ import {
   tedWorkspaceIdFromPath,
   isTedOpencodeRuntimeEnabled,
   isTedOpencodeKillSwitchOn,
+  isTedOpencodeWorkspaceEnabled,
   resolveTedGatewayOrigin,
   serializeTedRuntimeA0Pin,
   serializeTedRuntimePinClear,
@@ -37,6 +38,7 @@ async function readProxyEnv(): Promise<ProxyEnv> {
       TED_OPENCODE_RUNTIME_ENABLED: cloudEnv.TED_OPENCODE_RUNTIME_ENABLED ?? process.env.TED_OPENCODE_RUNTIME_ENABLED,
       TED_OPENCODE_RUNTIME_KILL_SWITCH:
         cloudEnv.TED_OPENCODE_RUNTIME_KILL_SWITCH ?? process.env.TED_OPENCODE_RUNTIME_KILL_SWITCH,
+      TED_OPENCODE_WORKSPACES: cloudEnv.TED_OPENCODE_WORKSPACES ?? process.env.TED_OPENCODE_WORKSPACES,
       TED_OPENCODE_GATEWAY_ORIGIN: cloudEnv.TED_OPENCODE_GATEWAY_ORIGIN ?? process.env.TED_OPENCODE_GATEWAY_ORIGIN,
       TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS:
         cloudEnv.TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS ?? process.env.TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS,
@@ -333,8 +335,8 @@ async function proxy(request: Request, context: RouteContext): Promise<NextRespo
   const isP2 = isTedP2RpcPath(path);
   const pin = parseTedRuntimePin(request.headers.get("cookie"));
   const killSwitch = isTedOpencodeKillSwitchOn(env);
-  const flagOn = isTedOpencodeRuntimeEnabled(env);
   const workspaceId = tedWorkspaceIdFromPath(path);
+  const flagOn = isTedOpencodeRuntimeEnabled(env) && isTedOpencodeWorkspaceEnabled(workspaceId, env);
   const target = selectTedRuntimeTarget(pin, { isP2, flagOn, killSwitch });
 
   // Follow-up nuance: gateway absent/invalid AND no B pin AND an A0 target

@@ -107,7 +107,7 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
   // read here so the resolved value is forwarded explicitly to the env boot.
   const profile = readEnv('TED_RUNTIME_PROFILE', 'test');
 
-  const transportFactory = () => new HttpFinanceTransport({ baseUrl: apiBaseUrl }).call;
+  const transportFactory = () => new HttpFinanceTransport({ baseUrl: apiBaseUrl, allowedOrigins: allowedApiOrigins }).call;
   const tedEnv = await createTedEnvironment({ root: home, identity, transportFactory, profile });
 
   // Anything below can still fail (unreadable/corrupt store dir, gateway
@@ -139,7 +139,7 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
 
     gateway = createGatewayServer({
       resolveIdentity: ({ cookie, deviceToken, workspaceId, signal }) =>
-        resolveGatewayIdentity({ apiBaseUrl, cookie, deviceToken, workspaceId, signal }),
+        resolveGatewayIdentity({ apiBaseUrl, cookie, deviceToken, workspaceId, signal, allowedApiOrigins }),
       store,
       promptHost,
       createRuntimeSession: async () => ({ runtimeSessionId: await tedEnv.serverOps.createNativeSession() }),

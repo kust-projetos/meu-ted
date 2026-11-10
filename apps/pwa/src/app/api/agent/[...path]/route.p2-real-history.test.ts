@@ -278,6 +278,7 @@ describe("P2 PWA real-history: proxy/client sobre a conversa reaberta pelo SDK r
       vi.stubEnv("NODE_ENV", "test");
       vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
       vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
+    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
       vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", base);
 
       const pinCookie = `ted-runtime-conversation=opencode.${seeded.conversationId}`;
