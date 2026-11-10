@@ -825,13 +825,39 @@ const executePayablePay: ApprovalToolExecutor = async ({
   const parsed = payPayableArgsSchema.safeParse(args);
   if (!parsed.success) throw new Error('validation.invalid_payable_pay_arguments');
   if (!payableStore) throw new Error('validation.payable_store_unavailable');
+  const snapshot = parsed.data;
+  // The display snapshot is hash-bound to the proposal; it must still match
+  // the authoritative payable before any money moves. A stale/forged card
+  // fails closed instead of debiting a different bill/account.
+  const payables = await payableStore.listPayables(workspaceId);
+  const target = payables.find((payable) => payable.id === snapshot.payableId);
+  if (!target) throw new DomainError('not_found', 'Conta a pagar não encontrada', 404);
+  if (
+    target.accountId !== snapshot.accountId ||
+    target.amountCents !== snapshot.amountCents ||
+    target.description !== snapshot.description ||
+    target.dueDate !== snapshot.dueDate
+  ) {
+    throw new DomainError('validation.invalid', 'Os dados da conta a pagar mudaram; refaça a proposta.', 409);
+  }
+  // Already paid (concurrent/reconciled effect): the intent outcome is
+  // satisfied — converge with the same entity id, never a second payment.
+  if (target.status === 'paid') {
+    let receipt: MutationReceipt;
+    try {
+      receipt = buildTedReceipt('payables.pay', target.id, { type: 'payable', id: target.id });
+    } catch {
+      throw createApprovalExecutionUncertainError();
+    }
+    return { status: 'succeeded', operationId: target.id, receipt };
+  }
   let payable: { id: string };
   try {
-    // The display snapshot (description/amountCents/dueDate/accountId) never
-    // reaches the store: only the payable id and the payment inputs execute.
-    payable = await payableStore.markPayablePaid(workspaceId, parsed.data.payableId, {
-      ...(parsed.data.paidDate !== undefined ? { paidDate: parsed.data.paidDate } : {}),
-      ...(parsed.data.prepayMonths !== undefined ? { prepayMonths: parsed.data.prepayMonths } : {}),
+    // The display snapshot never reaches the store: only the payable id and
+    // the payment inputs execute.
+    payable = await payableStore.markPayablePaid(workspaceId, snapshot.payableId, {
+      ...(snapshot.paidDate !== undefined ? { paidDate: snapshot.paidDate } : {}),
+      ...(snapshot.prepayMonths !== undefined ? { prepayMonths: snapshot.prepayMonths } : {}),
     });
   } catch (err) {
     if (err instanceof DomainError) throw err;

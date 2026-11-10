@@ -170,6 +170,33 @@ describe('V2 payables (manual-only)', () => {
     expect(state.transactions.some((t) => t.id === paid?.paidTransactionId)).toBe(true);
   });
 
+  it('payables.pay fails closed when the display snapshot diverges from the payable', async () => {
+    const { app, payableStore } = await harness();
+    const target = await payableStore.createPayable('w', {
+      accountId: ACCOUNT_ID,
+      description: 'Energia',
+      amountCents: 9000,
+      dueDate: '2026-12-15',
+    });
+    const proposed = await propose(app, {
+      tool: 'payables.pay',
+      normalizedArgs: {
+        payableId: target.id,
+        // Forged amount: the executor must reject before moving money.
+        description: 'Energia',
+        amountCents: 1,
+        dueDate: '2026-12-15',
+        accountId: ACCOUNT_ID,
+      },
+    });
+    expect(proposed.statusCode).toBe(201);
+    const pendingId = (proposed.json() as { id: string }).id;
+    const executed = await confirmAndExecute(app, pendingId);
+    expect(executed.statusCode).toBeGreaterThanOrEqual(400);
+    const paid = (await payableStore.listPayables('w')).find((p) => p.id === target.id);
+    expect(paid?.status).not.toBe('paid');
+  });
+
   it('refuses invalid payables args before any effect', async () => {
     const { app } = await harness();
     const badCreate = await propose(app, {
