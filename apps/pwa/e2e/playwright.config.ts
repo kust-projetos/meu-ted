@@ -49,6 +49,13 @@ const TRANSFER = process.env.P2D_TRANSFER === "1";
 const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
 const P3_PILOT = process.env.P2D_P3_PILOT === "1";
 const P38_CARD_SMOKE = process.env.P2D_P38_CARD_SMOKE === "1";
+// P2D rollback slice: a pre-existing `opencode.*` pin must return to A0 and be
+// expired when the runtime kill switch is on. Test-only; it starts the real
+// Agent Worker (A0) and the loopback gateway, but never prompts the gateway.
+const ROLLBACK = process.env.P2D_ROLLBACK === "1";
+if (ROLLBACK && ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY, LIVE_PREP, OFFLINE_CHAT, LIVE_REAL, P3_PILOT, P38_CARD_SMOKE].some(Boolean))) {
+  throw new Error("P2D_ROLLBACK is mutually exclusive with every other P2D mode");
+}
 if (P3_PILOT && ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY, LIVE_PREP, OFFLINE_CHAT, P38_CARD_SMOKE].some(Boolean))) {
   throw new Error("P2D_P3_PILOT is mutually exclusive with P3 slices, LIVE_PREP, OFFLINE_CHAT and P2D_P38_CARD_SMOKE");
 }
@@ -65,7 +72,8 @@ if ([LIVE_PREP, OFFLINE_CHAT, LIVE_REAL].filter(Boolean).length > 1) {
 }
 const P2D_LIVE_MODE = LIVE_PREP || OFFLINE_CHAT || LIVE_REAL;
 const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
-const P2D_ACTIVE = P2D || P2D_LIVE_MODE || PROPOSAL;
+const AGENT_RUN = PROPOSAL || ROLLBACK;
+const P2D_ACTIVE = P2D || P2D_LIVE_MODE || PROPOSAL || ROLLBACK;
 const P2D_SPEC = LIVE_PREP
   ? "**/p2d/p2d-live-prep.spec.ts"
   : OFFLINE_CHAT
@@ -76,6 +84,8 @@ const P2D_SPEC = LIVE_PREP
           : P38_CARD_SMOKE
             ? "**/p2d/p3-card-discovery-smoke.spec.ts"
             : "**/p2d/p2d-live-real.spec.ts"
+      : ROLLBACK
+        ? "**/p2d/p2d-rollback.spec.ts"
       : P3_PILOT
         ? "**/p2d/p3-integrated.spec.ts"
       : STATEMENT_PAY
@@ -134,7 +144,7 @@ const P2D_NEXT_BASE = `http://127.0.0.1:${p2dPorts.nextPort}`;
 // proposal runs and keep it untracked/ignored; it is removed on runner exit.
 const P2D_DEV_VARS_PATH = path.join(PWA_ROOT, ".dev.vars");
 const P2D_WORKSPACE_A = "00000000-0000-4000-8000-00000000000a";
-if (PROPOSAL) {
+if (AGENT_RUN) {
   fs.writeFileSync(
     P2D_DEV_VARS_PATH,
     [
@@ -275,7 +285,7 @@ export default defineConfig({
     // standalone Next, SW harness) so ONLY the P2D webServers below run — no
     // extra servers, no prebuilt .next/standalone dependency. Untouched when
     // no flag is set, including P2D_BROWSER=1 alone.
-    ...(!P2D_LIVE_MODE && !PROPOSAL
+    ...(!P2D_LIVE_MODE && !AGENT_RUN
       ? [
           {
             command: `pnpm exec tsx e2e/fixture-api/server.ts --port ${FIXTURE_PORT}`,
@@ -352,6 +362,7 @@ export default defineConfig({
               ...(STATEMENT_PAY ? { P2D_STATEMENT_PAY: "1" } : {}),
               ...(P3_PILOT ? { P2D_P3_PILOT: "1" } : {}),
               ...(P38_CARD_SMOKE ? { P2D_P38_CARD_SMOKE: "1" } : {}),
+              ...(ROLLBACK ? { P2D_ROLLBACK: "1" } : {}),
             },
           },
           {
@@ -366,8 +377,9 @@ export default defineConfig({
               HOSTNAME: "127.0.0.1",
               PWA_BACKEND_PROXY_ORIGIN: P2D_API_BASE,
               TED_OPENCODE_RUNTIME_ENABLED: "1",
+              ...(ROLLBACK ? { TED_OPENCODE_RUNTIME_KILL_SWITCH: "1" } : {}),
               TED_OPENCODE_GATEWAY_ORIGIN: P2D_GATEWAY_BASE,
-              ...(PROPOSAL
+              ...(AGENT_RUN
                 ? { PWA_AGENT_PROXY_ORIGIN: `http://127.0.0.1:${p2dPorts.agentPort}` }
                 : {}),
               ALLOW_LOCAL_ORIGIN: "1",

@@ -18,6 +18,7 @@ type Tx = { id: string; kind: string; amountCents: number; description: string; 
 type State = { transactions: Tx[]; accounts: Array<{ id: string; name: string; kind: string; balanceCents: number }> };
 type Statement = { id: string; accountId: string; cycleYearMonth: string; totalCents: number; paidCents: number; status: string };
 async function ctl<T>(route: string): Promise<T> { const r = await fetch(`${CTL}${route}`); if (!r.ok) throw Error(`ctl ${route}: ${r.status}`); return r.json() as Promise<T>; }
+async function ctlPost<T>(route: string): Promise<T> { const r = await fetch(`${CTL}${route}`, { method: "POST" }); if (!r.ok) throw Error(`ctl POST ${route}: ${r.status}`); return r.json() as Promise<T>; }
 const state = () => ctl<State>("/p2d/expense-state");
 const statements = () => ctl<{ statements: Statement[]; cardBalanceCents: number }>("/p2d/statement-state");
 const journal = () => ctl<{ requests: Array<{ method: string; url: string }>; financialWrites: Array<{ method: string; url: string }> }>("/p2d/journal");
@@ -86,9 +87,21 @@ test("integrated P3 journey: seven confirmed turns, recovery and context", async
   await expect(page.getByRole("button",{name:/Confirmar/})).toHaveCount(0);
   await send(page,"despesa extra"); const extra=page.getByRole("button",{name:/Confirmar R\$ 1\.000,00/}); await expect(extra).toBeVisible({timeout:300000});
   expect((await state()).transactions.filter(t=>t.description==="piloto extra")).toHaveLength(0);
-  const promptsBeforeReload=(await stats()).promptCalls;
-  await page.reload({waitUntil:"domcontentloaded"}); await expect(page.getByPlaceholder("Pergunte sobre gastos, metas ou pagamentos…")).toBeVisible({timeout:300000});
-  await expect(page.getByRole("button",{name:/Confirmar R\$ 1\.000,00/})).toBeVisible({timeout:300000}); expect((await stats()).promptCalls).toBe(promptsBeforeReload);
+  const promptsBeforeRestart=(await stats()).promptCalls;
+  expect(promptsBeforeRestart).toBeGreaterThan(0);
+  // Restart the OpenCode runtime process while the proposal is still pending:
+  // the intent lives in A0/Pending V2 and the transcript in the runtime, so a
+  // fresh OS process must reopen the same conversation and proposal without a
+  // new prompt or a duplicated tool call.
+  await page.goto("about:blank");
+  const closed = await ctlPost<{ ok?: boolean; pid?: number; forced?: boolean }>("/p2d/close-probe");
+  expect(closed.ok).toBe(true); expect(closed.forced).toBe(false); expect(typeof closed.pid).toBe("number");
+  const started = await ctlPost<{ ok?: boolean; pid?: number }>("/p2d/start-probe");
+  expect(started.ok).toBe(true); expect(typeof started.pid).toBe("number"); expect(started.pid).not.toBe(closed.pid);
+  expect((await stats()).promptCalls).toBe(0);
+  await page.goto("/", { waitUntil: "domcontentloaded" }); await openTed(page);
+  await expect(page.getByRole("button",{name:/Confirmar R\$ 1\.000,00/})).toBeVisible({timeout:300000});
+  expect((await stats()).promptCalls).toBe(0);
   const cancelled=await decide(page,page.getByRole("button",{name:"Cancelar"})); expect(cancelled.status()).toBe(200); expect((await cancelled.json()).status).toBe("cancelled");
   expect((await state()).transactions.filter(t=>t.description==="piloto extra")).toHaveLength(0);
   const beforeGeneric=await journal(); await send(page,"Pague a fatura"); await expect(page.getByText(/qual fatura e período/i)).toBeVisible({timeout:120000});
@@ -101,6 +114,6 @@ test("integrated P3 journey: seven confirmed turns, recovery and context", async
   expect(proposes).toBeGreaterThanOrEqual(8); expect([confirms,executes,cancels]).toEqual([7,7,1]); const directFinancialWrites=finalJournal.financialWrites.filter(w=>/^\/(transactions\/|transfers|cards\/purchases|cards\/.*\/pay)/.test(w.url)); expect(directFinancialWrites).toHaveLength(0);
   expect(finalState.transactions.filter(t=>t.description==="piloto extra")).toHaveLength(0);
   const finalStats=await stats(); expect(finalStats.stubMismatches).toEqual([]);
-  const evidence={scope:"p3-integrated-pilot",provider:"local-scripted-only",modelQualityProven:false,balancesCents:{a1:finalState.accounts.find(a=>a.id===a1.id)?.balanceCents,a2:finalState.accounts.find(a=>a.id===a2.id)?.balanceCents,cardDebt:finalStatements.cardBalanceCents},statement:{novemberTotalCents:nov.totalCents,paidCents:nov.paidCents,remainingCents:nov.totalCents-nov.paidCents,status:nov.status},installments:finalState.transactions.filter(t=>t.description==="compra parcelada").map(t=>({amountCents:t.amountCents,date:t.date})),monthSummary:{liquidityExpenseCents:expenseValue(summary.liquidity.body),competenceExpenseCents:expenseValue(summary.competence.body)},journal:{proposes,confirms,executes,cancels,directFinancialWrites:directFinancialWrites.length},stubMismatches:finalStats.stubMismatches,promptCalls:finalStats.promptCalls,stubTurns:finalStats.stubTurns,confirmedTurns:approved.length,initialLedgerRows:initialCount,observedLedgerRows:finalState.transactions.length};
+  const evidence={scope:"p3-integrated-pilot",provider:"local-scripted-only",modelQualityProven:false,balancesCents:{a1:finalState.accounts.find(a=>a.id===a1.id)?.balanceCents,a2:finalState.accounts.find(a=>a.id===a2.id)?.balanceCents,cardDebt:finalStatements.cardBalanceCents},statement:{novemberTotalCents:nov.totalCents,paidCents:nov.paidCents,remainingCents:nov.totalCents-nov.paidCents,status:nov.status},installments:finalState.transactions.filter(t=>t.description==="compra parcelada").map(t=>({amountCents:t.amountCents,date:t.date})),monthSummary:{liquidityExpenseCents:expenseValue(summary.liquidity.body),competenceExpenseCents:expenseValue(summary.competence.body)},journal:{proposes,confirms,executes,cancels,directFinancialWrites:directFinancialWrites.length},stubMismatches:finalStats.stubMismatches,promptCalls:finalStats.promptCalls,stubTurns:finalStats.stubTurns,confirmedTurns:approved.length,initialLedgerRows:initialCount,observedLedgerRows:finalState.transactions.length,restart:{prePid:closed.pid,postPid:started.pid,distinctProcess:started.pid!==closed.pid,newPrompts:0,newTransportCalls:0}};
   const output=path.resolve(process.cwd(),"test-results","p3-integrated","evidence.json"); fs.mkdirSync(path.dirname(output),{recursive:true}); fs.writeFileSync(output,`${JSON.stringify(evidence,null,2)}\n`); await info.attach("p3-integrated-evidence",{path:output,contentType:"application/json"});
 });

@@ -83,6 +83,19 @@ Resultado: **1 passed (1.1m)**. Evidência `test-results/p3-integrated/evidence.
   provider scriptado local; nenhuma inferência real foi usada.
 - **Dados financeiros, credenciais, deploy e merge:** não tocados.
 
+## Lacunas da sessão anterior (2026-11-10, continuação)
+
+| Lacuna | Entrega | Evidência |
+|---|---|---|
+| Auditoria/consolidação A0 ↔ OpenCode | Matriz arquivo/função e decisão por item (consolidar por guarda, manter rollback). | `docs/plans/2026-11-10-arch-simplification/A0-OPENCODE-AUDIT.md` |
+| Guarda contra drift de catálogo | Novo teste de paridade: `propose_*` → `APPROVAL_TOOL_IDS`, `propose_*` → `TOOL_DEFS`, leituras → rotas GET do `route-inventory`. | `apps/ted-runtime/tests/api-contract-parity.test.mjs` — **PASS 3/3** (suíte do runtime **PASS 344/344**) |
+| Aposentadoria de scripts | Inventário por consumidor real; 6 scripts de fases encerradas removidos com seus testes; 6 ferramentas de recuperação/operação mantidas com justificativa. | `docs/plans/2026-11-10-arch-simplification/SCRIPT-RETIREMENT.md` |
+| E2E de restart com proposta pendente | O piloto P3 agora encerra e reinicia o processo do runtime com a proposta ainda pendente, reabre a conversa e confirma que não há novo prompt/tool call. | `apps/pwa/e2e/p2d/p3-integrated.spec.ts` — **PASS (1.6m)** |
+| E2E de rollback com pin `opencode.*` | Novo cenário de browser: kill switch ligado + pin `opencode.*` pré-existente → resposta `x-ted-runtime: agent`, cookie expirado e zero prompt no gateway. | `apps/pwa/e2e/p2d/p2d-rollback.spec.ts` — **PASS (48s)** |
+| Isolamento cross-workspace | Já coberto em três camadas: `conversations.test.mjs` (recusa entre workspaces), `gateway.test.mjs` (workspace/device mismatch) e `route.p2-runtime.test.ts` (allowlist/pin). Nenhuma infraestrutura nova foi criada. | Suítes citadas |
+
+**Validação da continuação:** `pnpm --filter pi-finance-ted-runtime test` **PASS 344/344**; `pnpm test:scripts` **PASS 11/11**; `pnpm docs:lint` **PASS**; `pnpm plans:check` **PASS**; P2D rollback **PASS**; P2D P3 pilot **PASS**. Sem deploy, merge ou dado real.
+
 ## Pendências reais
 
 - O A0 mantém orquestração e roteamento próprios porque é o rollback aprovado;

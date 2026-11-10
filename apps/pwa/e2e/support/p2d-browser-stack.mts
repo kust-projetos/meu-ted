@@ -63,7 +63,15 @@ const TRANSFER = process.env.P2D_TRANSFER === "1";
 const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
 const P3_PILOT = process.env.P2D_P3_PILOT === "1";
 const P38_CARD_SMOKE = process.env.P2D_P38_CARD_SMOKE === "1";
+// P2D rollback slice: needs the real Agent Worker (A0) for the pin to land on,
+// plus the loopback gateway so a wrong route would be observable. Never prompts
+// the gateway (kill switch forces A0).
+const ROLLBACK = process.env.P2D_ROLLBACK === "1";
 const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+const AGENT_RUN = PROPOSAL || ROLLBACK;
+if (ROLLBACK && (PROPOSAL || OFFLINE_CHAT || LIVE_REAL)) {
+  throw new Error("[p2d-stack] P2D_ROLLBACK is exclusive with every other P2D mode");
+}
 if (P38_CARD_SMOKE && !LIVE_REAL) {
   throw new Error("[p2d-stack] P2D_P38_CARD_SMOKE requires P2D_LIVE_REAL (fail-closed)");
 }
@@ -600,7 +608,7 @@ type AgentHandle = {
 let agent: AgentHandle | null = null;
 
 async function startAgent(): Promise<void> {
-  if (!PROPOSAL) return;
+  if (!AGENT_RUN) return;
   if (agent && !agent.exited) throw new Error("agent already running");
   const agentDir = path.resolve(PWA_ROOT, "../agent");
   const env = {
@@ -719,7 +727,7 @@ async function stopAgent(): Promise<void> {
 await startProbe();
 console.log(`[p2d-stack] gateway=http://127.0.0.1:${GATEWAY_PORT} pid=${probe?.pid}`);
 await startAgent();
-if (PROPOSAL) console.log(`[p2d-stack] agent=http://127.0.0.1:${AGENT_PORT} pid=${agent?.pid}`);
+if (AGENT_RUN) console.log(`[p2d-stack] agent=http://127.0.0.1:${AGENT_PORT} pid=${agent?.pid}`);
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
