@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import { defineConfig } from "@playwright/test";
 import { resolveE2ePorts, resolveP2dPorts } from "./support/ports";
@@ -127,6 +128,33 @@ const p2dPorts = resolveP2dPorts(process.env);
 const P2D_API_BASE = `http://127.0.0.1:${p2dPorts.apiPort}`;
 const P2D_GATEWAY_BASE = `http://127.0.0.1:${p2dPorts.gatewayPort}`;
 const P2D_NEXT_BASE = `http://127.0.0.1:${p2dPorts.nextPort}`;
+
+// P2D local Cloudflare bindings (no secret): the #306 workspace allowlist is
+// mandatory, and the Cloudflare dev context reads .dev.vars. Generate it for
+// proposal runs and keep it untracked/ignored; it is removed on runner exit.
+const P2D_DEV_VARS_PATH = path.join(PWA_ROOT, ".dev.vars");
+const P2D_WORKSPACE_A = "00000000-0000-4000-8000-00000000000a";
+if (PROPOSAL) {
+  fs.writeFileSync(
+    P2D_DEV_VARS_PATH,
+    [
+      "TED_OPENCODE_RUNTIME_ENABLED=1",
+      `TED_OPENCODE_WORKSPACES=${P2D_WORKSPACE_A}`,
+      `TED_OPENCODE_GATEWAY_ORIGIN=${P2D_GATEWAY_BASE}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  if (!process.env.TEST_WORKER_INDEX) {
+    process.once("exit", () => {
+      try {
+        fs.rmSync(P2D_DEV_VARS_PATH, { force: true });
+      } catch {
+        /* best effort: the file is untracked and ignored */
+      }
+    });
+  }
+}
 
 const PRODUCTION_SMOKE = process.env.E2E_PRODUCTION_SMOKE === "1";
 if (PRODUCTION_SMOKE && !process.env.E2E_PRODUCTION_URL) {

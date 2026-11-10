@@ -57,7 +57,7 @@
 
 Comando: `P2D_P3_PILOT=1 pnpm exec playwright test --config=e2e/playwright.config.ts --project=p2d-synthetic --workers=1`.
 
-A primeira execução falhou porque o proxy PWA selecionava A0: a allowlist obrigatória `TED_OPENCODE_WORKSPACES` (#306) não incluía o `HOUSEHOLD_A` sintético, e `readProxyEnv()` prioriza o ambiente Cloudflare local sobre `process.env`. A correção ficou restrita ao harness: `apps/pwa/.dev.vars` (mecanismo local de bindings, sem segredo) declara o workspace sintético e o gateway loopback. Nenhuma mudança em `readProxyEnv`, `wrangler.jsonc` de produção, autenticação, API, gateway ou A0.
+A primeira execução falhou porque o proxy PWA selecionava A0: a allowlist obrigatória `TED_OPENCODE_WORKSPACES` (#306) não incluía o `HOUSEHOLD_A` sintético, e `readProxyEnv()` prioriza o ambiente Cloudflare local sobre `process.env`. A correção ficou restrita ao harness: o config P2D gera `apps/pwa/.dev.vars` (mecanismo local de bindings, sem segredo, ignorado pelo Git) com o workspace sintético e o gateway loopback. Nenhuma mudança em `readProxyEnv`, `wrangler.jsonc` de produção, autenticação, API, gateway ou A0.
 
 Resultado: **1 passed (1.1m)**. Evidência `test-results/p3-integrated/evidence.json`:
 
