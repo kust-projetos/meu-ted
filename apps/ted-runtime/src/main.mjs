@@ -139,7 +139,7 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
 
     gateway = createGatewayServer({
       resolveIdentity: ({ cookie, deviceToken, workspaceId, signal }) =>
-        resolveGatewayIdentity({ apiBaseUrl, cookie, deviceToken, workspaceId, signal }),
+        resolveGatewayIdentity({ apiBaseUrl, cookie, deviceToken, workspaceId, signal, allowedApiOrigins }),
       store,
       promptHost,
       createRuntimeSession: async () => ({ runtimeSessionId: await tedEnv.serverOps.createNativeSession() }),
