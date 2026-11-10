@@ -85,6 +85,20 @@ const statementIntent = (overrides: Record<string, unknown> = {}): ProposalInten
   ...overrides,
 });
 
+const accountCreateIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "accounts.create",
+  intentionId: "int-account-abc",
+  normalizedArgs: { name: "Nubank", kind: "bank", initialBalanceCents: 0 },
+  ...overrides,
+});
+
+const categoryCreateIntent = (overrides: Record<string, unknown> = {}): ProposalIntent => ({
+  tool: "categories.create",
+  intentionId: "int-category-abc",
+  normalizedArgs: { name: "Alimentação", kind: "expense" },
+  ...overrides,
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -162,6 +176,26 @@ describe("sanitizeProposalIntent", () => {
         ...statementIntent(),
         normalizedArgs: { ...statementIntent().normalizedArgs, amountCents: 0 },
       }),
+    ).toBeUndefined();
+  });
+
+  it("accepts the P4.2 account/category create intents and rejects invalid shapes", () => {
+    expect(sanitizeProposalIntent(accountCreateIntent())).toEqual(accountCreateIntent());
+    expect(sanitizeProposalIntent(categoryCreateIntent())).toEqual(categoryCreateIntent());
+    expect(
+      sanitizeProposalIntent({ ...accountCreateIntent(), normalizedArgs: { ...accountCreateIntent().normalizedArgs, kind: "credit_card" } }),
+    ).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({ ...accountCreateIntent(), normalizedArgs: { ...accountCreateIntent().normalizedArgs, initialBalanceCents: 1.5 } }),
+    ).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({ ...accountCreateIntent(), normalizedArgs: { ...accountCreateIntent().normalizedArgs, name: "" } }),
+    ).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({ ...categoryCreateIntent(), normalizedArgs: { ...categoryCreateIntent().normalizedArgs, kind: "transfer" } }),
+    ).toBeUndefined();
+    expect(
+      sanitizeProposalIntent({ ...categoryCreateIntent(), normalizedArgs: { ...categoryCreateIntent().normalizedArgs, parentId: "nope" } }),
     ).toBeUndefined();
   });
 

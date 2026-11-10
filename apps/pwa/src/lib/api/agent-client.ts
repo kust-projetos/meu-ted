@@ -442,24 +442,62 @@ const statementPaymentProposalIntentSchema = z
   })
   .strict();
 
+const accountCreateProposalArgsSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    kind: z.enum(["bank", "cash"]),
+    initialBalanceCents: z.number().int().min(-1_000_000_000_000).max(1_000_000_000_000),
+  })
+  .strict();
+
+const categoryCreateProposalArgsSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    kind: z.enum(["expense", "income"]),
+    parentId: z.string().uuid().optional(),
+  })
+  .strict();
+
+const accountCreateProposalIntentSchema = z
+  .object({
+    tool: z.literal("accounts.create"),
+    ...proposalIntentBase,
+    normalizedArgs: accountCreateProposalArgsSchema,
+  })
+  .strict();
+
+const categoryCreateProposalIntentSchema = z
+  .object({
+    tool: z.literal("categories.create"),
+    ...proposalIntentBase,
+    normalizedArgs: categoryCreateProposalArgsSchema,
+  })
+  .strict();
+
 const proposalIntentSchema = z.discriminatedUnion("tool", [
   expenseProposalIntentSchema,
   incomeProposalIntentSchema,
   cardPurchaseProposalIntentSchema,
   transferProposalIntentSchema,
   statementPaymentProposalIntentSchema,
+  accountCreateProposalIntentSchema,
+  categoryCreateProposalIntentSchema,
 ]);
 
 export type ProposalArgs = z.infer<typeof proposalArgsSchema>;
 export type CardPurchaseProposalArgs = z.infer<typeof cardPurchaseProposalArgsSchema>;
 export type TransferProposalArgs = z.infer<typeof transferProposalArgsSchema>;
 export type StatementPaymentProposalArgs = z.infer<typeof statementPaymentProposalArgsSchema>;
+export type AccountCreateProposalArgs = z.infer<typeof accountCreateProposalArgsSchema>;
+export type CategoryCreateProposalArgs = z.infer<typeof categoryCreateProposalArgsSchema>;
 export type ProposalIntent =
   | { tool: "transactions.expense.create"; intentionId: string; normalizedArgs: ProposalArgs }
   | { tool: "transactions.income.create"; intentionId: string; normalizedArgs: ProposalArgs }
   | { tool: "cards.purchase.create"; intentionId: string; normalizedArgs: CardPurchaseProposalArgs }
   | { tool: "transactions.transfer.create"; intentionId: string; normalizedArgs: TransferProposalArgs }
-  | { tool: "cards.statement.pay"; intentionId: string; normalizedArgs: StatementPaymentProposalArgs };
+  | { tool: "cards.statement.pay"; intentionId: string; normalizedArgs: StatementPaymentProposalArgs }
+  | { tool: "accounts.create"; intentionId: string; normalizedArgs: AccountCreateProposalArgs }
+  | { tool: "categories.create"; intentionId: string; normalizedArgs: CategoryCreateProposalArgs };
 export type ExpenseProposalIntent = Extract<ProposalIntent, { tool: "transactions.expense.create" }>;
 export type IncomeProposalIntent = Extract<ProposalIntent, { tool: "transactions.income.create" }>;
 export type TransferProposalIntent = Extract<ProposalIntent, { tool: "transactions.transfer.create" }>;

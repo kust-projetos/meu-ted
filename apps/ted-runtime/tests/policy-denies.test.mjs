@@ -45,7 +45,7 @@ const EXPECTED_TOOL_USE_DENIES = [
 // Exact product finance resources the native allowlist may name (no wildcards).
 // Includes the local-only P3 proposal intent; tedConfig() default carries the
 // read permissions (P3 writes are an explicit local opt-in).
-const EXPECTED_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards', 'list_recent_transactions', 'propose_card_purchase', 'propose_expense', 'propose_income', 'propose_statement_payment', 'propose_transfer', 'spending_insights'];
+const EXPECTED_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards', 'list_recent_transactions', 'propose_account_create', 'propose_card_purchase', 'propose_category_create', 'propose_expense', 'propose_income', 'propose_statement_payment', 'propose_transfer', 'spending_insights'];
 const DEFAULT_FINANCE_RESOURCES = ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards', 'list_recent_transactions', 'spending_insights'];
 
 function agentPerms(profile) {

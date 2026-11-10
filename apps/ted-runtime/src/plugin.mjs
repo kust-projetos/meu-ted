@@ -49,6 +49,8 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
   'propose_transfer',
   'list_card_statements',
   'propose_statement_payment',
+  'propose_account_create',
+  'propose_category_create',
 ]);
 
 // Opt-in reads. Explicit activation only: the operator sets
@@ -65,7 +67,7 @@ export const P3_READ_TOOL_NAMES = ['list_categories', 'list_card_statements', 'l
 // only (P3.1–P3.6 share the same intent-only contract). Exposed ONLY when the
 // operator sets TED_OPENCODE_P3_WRITES_ENABLED=1 (which also enables the
 // category read). Absent flag = hidden, in every environment.
-export const P3_WRITE_TOOL_NAMES = ['propose_expense', 'propose_income', 'propose_card_purchase', 'propose_transfer', 'propose_statement_payment'];
+export const P3_WRITE_TOOL_NAMES = ['propose_expense', 'propose_income', 'propose_card_purchase', 'propose_transfer', 'propose_statement_payment', 'propose_account_create', 'propose_category_create'];
 
 export function isP3ReadsEnabled(env = process.env) {
   try {

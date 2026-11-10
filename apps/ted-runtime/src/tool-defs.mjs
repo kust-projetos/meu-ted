@@ -287,6 +287,44 @@ export const TOOL_DEFS = [
     },
     output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
   },
+  {
+    // P4.2 account creation — same intent-only contract. The API validates
+    // kind (bank|cash) and the signed initial balance; there is no CAS
+    // precondition. The model never confirms or executes.
+    name: 'propose_account_create',
+    description:
+      'TED (P4 opt-in): propose creating a bank/cash account for the authenticated user to approve. Records a pending proposal only — never creates the account.',
+    input: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 120 },
+        kind: { type: 'string', enum: ['bank', 'cash'] },
+        initialBalanceCents: { type: 'integer', description: 'Signed initial balance in cents (BRL); 0 for an empty account' },
+      },
+      required: ['name', 'kind', 'initialBalanceCents'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
+  {
+    // P4.2 category creation — same intent-only contract. No CAS precondition.
+    // The optional parent is resolved from list_categories; the API revalidates
+    // kind/parent against the workspace catalog.
+    name: 'propose_category_create',
+    description:
+      'TED (P4 opt-in): propose creating an expense/income category for the authenticated user to approve. Records a pending proposal only — never creates the category.',
+    input: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 120 },
+        kind: { type: 'string', enum: ['expense', 'income'] },
+        parentId: { type: 'string', description: 'Parent category uuid resolved from list_categories (optional)' },
+      },
+      required: ['name', 'kind'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
 ];
 
 export const TOOL_NAMES = TOOL_DEFS.map((d) => d.name);
@@ -299,6 +337,8 @@ export const PROPOSAL_TOOL_SPECS = Object.freeze({
   propose_card_purchase: Object.freeze({ tool: 'cards.purchase.create', noun: 'Compra no cartão' }),
   propose_transfer: Object.freeze({ tool: 'transactions.transfer.create', noun: 'Transferência' }),
   propose_statement_payment: Object.freeze({ tool: 'cards.statement.pay', noun: 'Pagamento de fatura' }),
+  propose_account_create: Object.freeze({ tool: 'accounts.create', noun: 'Conta' }),
+  propose_category_create: Object.freeze({ tool: 'categories.create', noun: 'Categoria' }),
 });
 
 // Canonical uuid shape (any version) — the API revalidates against its real
@@ -325,6 +365,8 @@ function knownKeys(name) {
   if (name === 'list_categories') return ['kind'];
   if (name === 'list_card_statements') return ['accountId', 'status', 'limit'];
   if (name === 'propose_statement_payment') return ['statementId', 'fromAccountId', 'amountCents'];
+  if (name === 'propose_account_create') return ['name', 'kind', 'initialBalanceCents'];
+  if (name === 'propose_category_create') return ['name', 'kind', 'parentId'];
   if (name === 'propose_transfer') return ['amountCents', 'description', 'date', 'fromAccountId', 'toAccountId'];
   if (name === 'propose_card_purchase') return ['amountCents', 'description', 'date', 'accountId', 'categoryId', 'installmentsTotal'];
   if (name === 'propose_expense' || name === 'propose_income') return ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
@@ -425,6 +467,29 @@ export function validateToolArgs(name, args) {
     }
     if (!Number.isSafeInteger(args.amountCents) || args.amountCents <= 0) {
       throw new ToolError('tool.invalid_args', 'propose_statement_payment: amountCents must be a positive safe integer');
+    }
+  } else if (name === 'propose_account_create') {
+    // Structural only: the API owns the account contract (createAccountInputSchema:
+    // kind bank|cash, signed initial balance bounded by MAX_MONEY_CENTS). The
+    // runtime only stops the model from recording an unusable intent.
+    if (typeof args.name !== 'string' || args.name.trim().length === 0 || args.name.trim().length > 120) {
+      throw new ToolError('tool.invalid_args', 'propose_account_create: name must be a non-empty string (max 120)');
+    }
+    if (typeof args.kind !== 'string' || !['bank', 'cash'].includes(args.kind)) {
+      throw new ToolError('tool.invalid_args', 'propose_account_create: kind must be bank|cash');
+    }
+    if (!Number.isSafeInteger(args.initialBalanceCents) || Math.abs(args.initialBalanceCents) > 1_000_000_000_000) {
+      throw new ToolError('tool.invalid_args', 'propose_account_create: initialBalanceCents must be a safe integer within +/-1e12');
+    }
+  } else if (name === 'propose_category_create') {
+    if (typeof args.name !== 'string' || args.name.trim().length === 0 || args.name.trim().length > 120) {
+      throw new ToolError('tool.invalid_args', 'propose_category_create: name must be a non-empty string (max 120)');
+    }
+    if (typeof args.kind !== 'string' || !['expense', 'income'].includes(args.kind)) {
+      throw new ToolError('tool.invalid_args', 'propose_category_create: kind must be expense|income');
+    }
+    if (args.parentId !== undefined && (typeof args.parentId !== 'string' || !UUID_RE.test(args.parentId))) {
+      throw new ToolError('tool.invalid_args', 'propose_category_create: parentId must be a uuid');
     }
   } else if (
     name === 'propose_expense' ||
@@ -743,6 +808,31 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
       });
       return { status: 'proposed', summary };
     }
+    if (name === 'propose_account_create') {
+      // Account tuple: name + kind (bank|cash) + signed initial balance. No
+      // date/description is invented; the API revalidates kind and the bound.
+      const normalizedArgs = {
+        name: safe.name.trim(),
+        kind: safe.kind,
+        initialBalanceCents: safe.initialBalanceCents,
+      };
+      const summary = `Conta "${normalizedArgs.name}" (${normalizedArgs.kind})`;
+      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      return { status: 'proposed', summary };
+    }
+    if (name === 'propose_category_create') {
+      // Category tuple: name + kind (expense|income) + optional parent resolved
+      // from list_categories. The API revalidates kind/parent against the
+      // workspace catalog.
+      const normalizedArgs = {
+        name: safe.name.trim(),
+        kind: safe.kind,
+        ...(safe.parentId !== undefined ? { parentId: safe.parentId } : {}),
+      };
+      const summary = `Categoria "${normalizedArgs.name}" (${normalizedArgs.kind})`;
+      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      return { status: 'proposed', summary };
+    }
     const date = safe.date ?? new Date().toISOString().slice(0, 10);
     const baseArgs = {
       amountCents: safe.amountCents,
@@ -781,5 +871,7 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
     propose_card_purchase: (args, host, opts) => propose('propose_card_purchase', args, host, opts),
     propose_transfer: (args, host, opts) => propose('propose_transfer', args, host, opts),
     propose_statement_payment: (args, host, opts) => propose('propose_statement_payment', args, host, opts),
+    propose_account_create: (args, host, opts) => propose('propose_account_create', args, host, opts),
+    propose_category_create: (args, host, opts) => propose('propose_category_create', args, host, opts),
   };
 }
