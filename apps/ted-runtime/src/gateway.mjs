@@ -43,7 +43,43 @@ export class GatewayError extends Error {
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
-export function assertLoopbackApiOrigin(apiBaseUrl) {
+// Explicit, exact-origin allowlist for a co-located deployment (Docker
+// network): the API travels over plain HTTP inside the private network, so
+// the loopback rule alone cannot express it. Every entry is validated with
+// the same strict bare-origin rules and compared by exact `URL.origin` —
+// the allowlist can never widen to a prefix, a wildcard, or a public host.
+export function parseAllowedApiOrigins(raw) {
+  if (raw === undefined || raw === null || raw === '') return [];
+  const values = Array.isArray(raw) ? raw : String(raw).split(',');
+  const origins = [];
+  for (const value of values) {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed.length === 0) continue;
+    let parsed;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      throw new GatewayError('gateway.invalid_origin', 'gateway: TED_API_ALLOWED_ORIGINS entry must be an absolute http(s) origin');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new GatewayError('gateway.invalid_origin', 'gateway: TED_API_ALLOWED_ORIGINS entry must be http(s)');
+    }
+    if (parsed.username !== '' || parsed.password !== '') {
+      throw new GatewayError('gateway.invalid_origin', 'gateway: TED_API_ALLOWED_ORIGINS entry must not embed credentials');
+    }
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
+    if (LOOPBACK_HOSTS.has(hostname)) {
+      throw new GatewayError('gateway.invalid_origin', 'gateway: TED_API_ALLOWED_ORIGINS must not repeat a loopback origin (already allowed)');
+    }
+    if (parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '') {
+      throw new GatewayError('gateway.invalid_origin', 'gateway: TED_API_ALLOWED_ORIGINS entry must be a bare origin (no path, search or hash)');
+    }
+    origins.push(parsed.origin);
+  }
+  return origins;
+}
+
+function assertBareOrigin(apiBaseUrl) {
   let parsed;
   try {
     parsed = new URL(apiBaseUrl);
@@ -54,14 +90,7 @@ export function assertLoopbackApiOrigin(apiBaseUrl) {
     throw new GatewayError('gateway.invalid_origin', 'gateway: apiBaseUrl must be http(s)');
   }
   if (parsed.username !== '' || parsed.password !== '') {
-    throw new GatewayError('gateway.invalid_origin', 'gateway: apiBaseUrl must not embed credentials');
-  }
-  const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
-  if (!LOOPBACK_HOSTS.has(hostname)) {
-    throw new GatewayError(
-      'gateway.invalid_origin',
-      'gateway: apiBaseUrl must be loopback for this local cycle (no secrets to remote origins)',
-    );
+    throw new GatewayError('gateway: apiBaseUrl must not embed credentials');
   }
   if (parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '') {
     throw new GatewayError(
@@ -70,6 +99,18 @@ export function assertLoopbackApiOrigin(apiBaseUrl) {
     );
   }
   return parsed;
+}
+
+export function assertLoopbackApiOrigin(apiBaseUrl, { allowedOrigins = [] } = {}) {
+  const parsed = assertBareOrigin(apiBaseUrl);
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
+  if (LOOPBACK_HOSTS.has(hostname)) return parsed;
+  const allowlist = Array.isArray(allowedOrigins) ? allowedOrigins : [];
+  if (allowlist.includes(parsed.origin)) return parsed;
+  throw new GatewayError(
+    'gateway.invalid_origin',
+    'gateway: apiBaseUrl must be loopback or an explicitly allowlisted internal origin (TED_API_ALLOWED_ORIGINS) — no secrets to unlisted origins',
+  );
 }
 
 // Keys whose VALUES must never appear in logs/traces/errors.
@@ -168,11 +209,12 @@ export async function resolveGatewayIdentity({
   fetchImpl = globalThis.fetch,
   timeoutMs = 10000,
   signal,
+  allowedApiOrigins = [],
 } = {}) {
   if (typeof apiBaseUrl !== 'string' || apiBaseUrl.length === 0) {
     throw new GatewayError('gateway.invalid_args', 'gateway: apiBaseUrl is required');
   }
-  assertLoopbackApiOrigin(apiBaseUrl);
+  assertLoopbackApiOrigin(apiBaseUrl, { allowedOrigins: allowedApiOrigins });
   const origin = apiBaseUrl.replace(/\/+$/, '');
   if (typeof cookie !== 'string' || cookie.length === 0) {
     throw new GatewayError('auth.session_required', 'gateway: session cookie is required');

@@ -96,6 +96,7 @@ type EnvLike = {
   PWA_AGENT_PROXY_ORIGIN?: string;
   AGENT_ORIGIN?: string;
   TED_OPENCODE_RUNTIME_ENABLED?: string;
+  TED_OPENCODE_RUNTIME_KILL_SWITCH?: string;
   TED_OPENCODE_GATEWAY_ORIGIN?: string;
 };
 
@@ -641,14 +642,25 @@ export function serializeTedRuntimeA0Pin(workspaceId: string, opts?: { secure?: 
 }
 
 /**
- * Server-only flag: OFF unless exactly `1`, and never in production — a
- * leaked/accidental flag in production must not change routing (no B, no
- * local pins). Reads the passed env only — the client bundle must never read
- * this (no `NEXT_PUBLIC_` alias exists).
+ * Server-only flag: explicit activation, no NODE_ENV shortcut. The runtime is
+ * selected ONLY when the operator sets `TED_OPENCODE_RUNTIME_ENABLED=1`; the
+ * kill switch below wins over it (immediate rollback to A0). Reads the passed
+ * env only — the client bundle must never read this (no `NEXT_PUBLIC_`).
  */
 export function isTedOpencodeRuntimeEnabled(env?: EnvLike): boolean {
-  if (env?.NODE_ENV === "production") return false;
+  if (isTedOpencodeKillSwitchOn(env)) return false;
   return env?.TED_OPENCODE_RUNTIME_ENABLED === "1";
+}
+
+/**
+ * Rollback switch: when exactly `1`, every P2 conversation goes back to A0 —
+ * including conversations already pinned to `opencode.*`. The pin is cleared
+ * on the way so the next contact starts a clean A0 conversation. Pending
+ * financial operations live in the API (workspace-scoped), so switching the
+ * conversational runtime never duplicates or loses them.
+ */
+export function isTedOpencodeKillSwitchOn(env?: EnvLike): boolean {
+  return env?.TED_OPENCODE_RUNTIME_KILL_SWITCH === "1";
 }
 
 /**
@@ -672,17 +684,43 @@ function parseTedGatewayLoopback(value: string): string | null {
 }
 
 /**
- * Resolves the local B gateway origin. Loopback ONLY, and only when
- * NODE_ENV is exactly `development`/`test` AND `ALLOW_LOCAL_ORIGIN` is exactly
- * `1` — production (or undefined NODE_ENV, missing flag, malformed value)
- * resolves to null and the caller fails closed. Never throws.
+ * Resolves the B gateway origin. Two explicit forms, both operator-set:
+ * - HTTPS origin (production deployment): validated as a bare https origin
+ *   (no credentials, no path/query/hash). No NODE_ENV shortcut — activation
+ *   is the `TED_OPENCODE_RUNTIME_ENABLED` flag, not the build mode.
+ * - Loopback HTTP (local development only): requires NODE_ENV
+ *   development/test AND `ALLOW_LOCAL_ORIGIN=1`.
+ * Anything else resolves to null and the caller fails closed.
  */
 export function resolveTedGatewayOrigin(env?: EnvLike): string | null {
   const raw = env?.TED_OPENCODE_GATEWAY_ORIGIN?.trim();
   if (!raw) return null;
+  const secure = parseTedGatewayHttps(raw);
+  if (secure) return secure;
   if (env?.NODE_ENV !== "development" && env?.NODE_ENV !== "test") return null;
   if (env?.ALLOW_LOCAL_ORIGIN !== "1") return null;
   return parseTedGatewayLoopback(raw);
+}
+
+/**
+ * Strict bare HTTPS origin check for the deployed gateway (pure, no env).
+ * Production traffic is TLS-only; credentials, paths, query, hash and
+ * plain-HTTP are refused. This is the transport target, never an identity
+ * claim — the gateway still authenticates every request server-side.
+ */
+function parseTedGatewayHttps(value: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:") return null;
+  if (parsed.username !== "" || parsed.password !== "") return null;
+  if (!parsed.hostname) return null;
+  if (parsed.pathname !== "" && parsed.pathname !== "/") return null;
+  if (parsed.search !== "" || parsed.hash !== "") return null;
+  return parsed.origin;
 }
 
 /**
@@ -725,11 +763,27 @@ export type TedRuntimeTarget = "A0" | "B";
  */
 export function selectTedRuntimeTarget(
   pin: TedRuntimePin,
-  opts: { isP2: boolean; flagOn: boolean },
+  opts: { isP2: boolean; flagOn: boolean; killSwitch?: boolean },
 ): TedRuntimeTarget {
   if (!opts.isP2) return "A0";
+  if (opts.killSwitch === true) return "A0";
   if (pin.pin === "a0") return "A0";
   if (pin.pin === "b") return "B";
   if (pin.pin === "invalid") return "B";
   return opts.flagOn ? "B" : "A0";
+}
+
+/**
+ * Expiring pin used by the rollback switch: clears `opencode.*` AND `agent`
+ * for one workspace so the next contact starts clean. Same scoped Path as the
+ * pin itself — other workspaces are untouched.
+ */
+export function serializeTedRuntimePinClear(workspaceId: string): string {
+  return [
+    `${TED_RUNTIME_CONVERSATION_COOKIE}=`,
+    `Path=${scopedTedRuntimeCookiePath(workspaceId)}`,
+    "Max-Age=0",
+    "HttpOnly",
+    "SameSite=Lax",
+  ].join("; ");
 }

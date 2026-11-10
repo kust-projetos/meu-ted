@@ -45,6 +45,8 @@ import { defaultDiagnosticSink } from './diagnostics.mjs';
 const DEFAULT_HOME = path.join(os.homedir(), '.ted-runtime');
 const DEFAULT_IDENTITY = 'local';
 const DEFAULT_API_BASE_URL = 'http://127.0.0.1:3001';
+const DEFAULT_HOST = '127.0.0.1';
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 const DEFAULT_PORT = 3101;
 const DEFAULT_TIMEOUT_MS = 90000;
 
@@ -70,6 +72,7 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
     createGatewayServer = (await import('./server.mjs')).createGatewayServer,
     resolveGatewayIdentity = (await import('./gateway.mjs')).resolveGatewayIdentity,
     assertLoopbackApiOrigin = (await import('./gateway.mjs')).assertLoopbackApiOrigin,
+    parseAllowedApiOrigins = (await import('./gateway.mjs')).parseAllowedApiOrigins,
     HttpFinanceTransport = (await import('./transport.mjs')).HttpFinanceTransport,
   } = deps;
 
@@ -77,9 +80,21 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
   const identity = readEnv('TED_RUNTIME_IDENTITY', DEFAULT_IDENTITY);
   const apiBaseUrl = readEnv('TED_API_BASE_URL', DEFAULT_API_BASE_URL);
   if (typeof apiBaseUrl !== 'string' || apiBaseUrl.length === 0) {
-    throw new Error('main: TED_API_BASE_URL is required (bare loopback http(s) origin, never production)');
+    throw new Error('main: TED_API_BASE_URL is required (bare http(s) origin: loopback, or explicitly allowlisted internal origin)');
   }
-  assertLoopbackApiOrigin(apiBaseUrl);
+  // Explicit internal-origin allowlist (co-located Docker network). Empty by
+  // default: the loopback rule applies unchanged unless the operator opts in.
+  const allowedApiOrigins = parseAllowedApiOrigins(readEnv('TED_API_ALLOWED_ORIGINS', ''));
+  assertLoopbackApiOrigin(apiBaseUrl, { allowedOrigins: allowedApiOrigins });
+  // Listen host: loopback by default. A non-loopback bind is accepted ONLY
+  // with the explicit opt-in below (container on a private Docker network);
+  // it is never derived from the environment implicitly.
+  const requestedHost = readEnv('TED_GATEWAY_HOST', DEFAULT_HOST);
+  const allowNonLoopback = readEnv('TED_GATEWAY_ALLOW_NON_LOOPBACK', '') === '1';
+  if (!LOOPBACK_HOSTS.has(requestedHost) && !allowNonLoopback) {
+    throw new Error('main: TED_GATEWAY_HOST outside loopback requires TED_GATEWAY_ALLOW_NON_LOOPBACK=1 (explicit internal-network deployment)');
+  }
+  const listenHost = requestedHost;
   const port = Number.parseInt(readEnv('TED_GATEWAY_PORT', String(DEFAULT_PORT)), 10);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`main: TED_GATEWAY_PORT must be a valid port (got ${readEnv('TED_GATEWAY_PORT', '(default)')})`);
@@ -138,10 +153,13 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
         }),
       requestTimeoutMs,
       diagnosticsSink: diagSink,
+      allowNonLoopbackHost: !LOOPBACK_HOSTS.has(listenHost),
     });
 
-    // Host is ALWAYS loopback — never from env, never production.
-    const info = await gateway.listen({ port, host: '127.0.0.1' });
+    // Loopback by default; a non-loopback bind exists ONLY behind the explicit
+    // opt-in validated above (container on a private Docker network, reached
+    // by the reverse proxy — never published on a host interface).
+    const info = await gateway.listen({ port, host: listenHost });
     return { info, close, gateway, store };
   } catch (e) {
     await close().catch(() => {});

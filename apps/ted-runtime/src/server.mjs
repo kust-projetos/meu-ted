@@ -244,6 +244,7 @@ export function createGatewayServer({
   requestTimeoutMs = GATEWAY_REQUEST_TIMEOUT_MS,
   diagnosticsSink = defaultDiagnosticSink,
   proposalIntents = proposalIntentRegistry,
+  allowNonLoopbackHost = false,
 } = {}) {
   if (typeof resolveIdentity !== 'function') throw new Error('gateway server: resolveIdentity is required');
   if (!store || typeof store.get !== 'function') throw new Error('gateway server: conversation store is required');
@@ -1045,7 +1046,7 @@ export function createGatewayServer({
   return {
     server,
     async listen({ port = 0, host = '127.0.0.1' } = {}) {
-      if (!isLoopbackHost(host)) {
+      if (!isLoopbackHost(host) && allowNonLoopbackHost !== true) {
         throw new GatewayError('gateway.invalid_origin', `gateway listener refuses non-loopback host '${host}'`);
       }
       await new Promise((resolve, reject) => {

@@ -1,0 +1,72 @@
+# TED runtime (OpenCode) — production compose on the Contabo VPS.
+#
+# Deployment surface only. The container publishes NO host port: it joins the
+# existing `proxy` network (Traefik) and is reachable from the PWA exclusively
+# through the HTTPS router below. The API is reached over the internal
+# `pi-finance-postgres_default` network.
+#
+# Required host env (never committed):
+#   OPENCODE_GO_API_KEY   provider credential, injected at run time
+#
+# Usage:
+#   docker compose -f docker/ted-runtime/docker-compose.yml --project-name ted-runtime up -d --build
+#   docker compose -f docker/ted-runtime/docker-compose.yml --project-name ted-runtime logs -f
+name: ted-runtime
+
+services:
+  ted-runtime:
+    build:
+      context: ../..
+      dockerfile: docker/ted-runtime/Dockerfile
+    image: ted-runtime:main
+    container_name: ted-runtime
+    restart: unless-stopped
+    environment:
+      # Identity/transport: internal Docker DNS name of the authoritative API.
+      TED_API_BASE_URL: http://pi-finance-api:3001
+      TED_API_ALLOWED_ORIGINS: http://pi-finance-api:3001
+      # Internal-network bind (explicit opt-in; nothing is published on the host).
+      TED_GATEWAY_HOST: 0.0.0.0
+      TED_GATEWAY_ALLOW_NON_LOOPBACK: "1"
+      TED_GATEWAY_PORT: "3101"
+      TED_RUNTIME_PROFILE: live
+      TED_RUNTIME_IDENTITY: prod
+      TED_RUNTIME_HOME: /data
+      TED_REQUEST_TIMEOUT_MS: "90000"
+      # Explicit canary activation of the P3 tool slice (intent-only proposals).
+      TED_OPENCODE_P3_READS_ENABLED: "1"
+      TED_OPENCODE_P3_WRITES_ENABLED: "1"
+      # Provider credential comes from the host env only.
+      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:?OPENCODE_GO_API_KEY is required}
+    volumes:
+      - ted_runtime_data:/data
+    networks:
+      - proxy
+      - pi-finance-postgres_default
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: proxy
+      traefik.http.routers.ted-runtime.entrypoints: websecure
+      traefik.http.routers.ted-runtime.rule: Host(`ted-gateway.synkroo.com.br`)
+      traefik.http.routers.ted-runtime.tls.certresolver: cf
+      traefik.http.services.ted-runtime.loadbalancer.server.port: "3101"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3101/').then(r=>process.exit(r.status===404?0:1)).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  ted_runtime_data:
+    name: ted_runtime_data
+
+networks:
+  proxy:
+    external: true
+  pi-finance-postgres_default:
+    external: true

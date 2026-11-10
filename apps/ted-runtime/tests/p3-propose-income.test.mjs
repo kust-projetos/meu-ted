@@ -57,9 +57,12 @@ describe('p3 propose_income: catalog gating', () => {
     assert.deepEqual(productToolDefs(OFF_ENV).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
   });
 
-  it('production forces the writes opt-in off', () => {
-    assert.equal(isP3WritesEnabled(PROD_ENV), false);
-    assert.deepEqual(productToolDefs(PROD_ENV).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
+  it('explicit writes activation applies in production too (no NODE_ENV shortcut)', () => {
+    assert.equal(isP3WritesEnabled(PROD_ENV), true);
+    assert.ok(productToolDefs(PROD_ENV).some((d) => d.name === 'propose_expense'));
+    // Absent flag stays OFF even in production.
+    assert.equal(isP3WritesEnabled({ NODE_ENV: 'production' }), false);
+    assert.deepEqual(productToolDefs({ NODE_ENV: 'production' }).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
   });
 
   it('local writes opt-in adds ALL proposal tools and list_categories with both schemas', () => {

@@ -71,8 +71,12 @@ describe('p3.6 statement payment: catalog gating', () => {
     assert.deepEqual(productToolDefs(OFF_ENV).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
   });
 
-  it('production forces both opt-ins off', () => {
-    assert.deepEqual(productToolDefs(PROD_ENV).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
+  it('explicit activation applies in production too (no NODE_ENV shortcut)', () => {
+    assert.equal(isP3ReadsEnabled(PROD_ENV), true);
+    assert.equal(isP3WritesEnabled(PROD_ENV), true);
+    assert.ok(productToolDefs(PROD_ENV).some((d) => d.name === 'propose_statement_payment'));
+    // Absent flags stay OFF even in production.
+    assert.deepEqual(productToolDefs({ NODE_ENV: 'production' }).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
   });
 
   it('the reads opt-in exposes list_card_statements; the writes opt-in exposes both', () => {

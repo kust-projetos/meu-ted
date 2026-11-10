@@ -49,24 +49,23 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
   'propose_statement_payment',
 ]);
 
-// P3 prerequisite reads (opt-in only — TED_OPENCODE_P3_READS_ENABLED=1 with
-// NODE_ENV !== 'production'). Production forces it off (fail closed): a
-// production NODE_ENV never exposes the extra reads, even with the flag set.
-// The default product catalog is exactly PRODUCT_TOOL_NAMES (P2 behavior).
+// P3 prerequisite reads. Explicit activation only: the operator sets
+// TED_OPENCODE_P3_READS_ENABLED=1 (or the writes flag, which implies reads).
+// There is no NODE_ENV shortcut — deployment controls exposure, so a canary
+// can enable the slice without pretending to be a test process, and an
+// absent flag keeps it OFF in every environment.
 export const P3_READ_TOOL_NAMES = ['list_categories', 'list_card_statements', 'list_credit_cards'];
 
-// P3 write slice: `propose_expense`, `propose_income`, `propose_card_purchase`
-// and `propose_transfer` record a proposal intent only (P3.1–P3.4 share the
-// same intent-only contract). Exposed ONLY as a local opt-in —
-// TED_OPENCODE_P3_WRITES_ENABLED=1 with NODE_ENV !== 'production'. It also
-// enables the category read needed to resolve a transaction category.
-// Production forces all of them off (fail closed).
+// P3 write slice: `propose_expense`, `propose_income`, `propose_card_purchase`,
+// `propose_transfer` and `propose_statement_payment` record a proposal intent
+// only (P3.1–P3.6 share the same intent-only contract). Exposed ONLY when the
+// operator sets TED_OPENCODE_P3_WRITES_ENABLED=1 (which also enables the
+// category read). Absent flag = hidden, in every environment.
 export const P3_WRITE_TOOL_NAMES = ['propose_expense', 'propose_income', 'propose_card_purchase', 'propose_transfer', 'propose_statement_payment'];
 
 export function isP3ReadsEnabled(env = process.env) {
   try {
     if (!env || typeof env !== 'object') return false;
-    if (env.NODE_ENV === 'production') return false;
     return env.TED_OPENCODE_P3_READS_ENABLED === '1' || env.TED_OPENCODE_P3_WRITES_ENABLED === '1';
   } catch {
     return false;
@@ -76,7 +75,6 @@ export function isP3ReadsEnabled(env = process.env) {
 export function isP3WritesEnabled(env = process.env) {
   try {
     if (!env || typeof env !== 'object') return false;
-    if (env.NODE_ENV === 'production') return false;
     return env.TED_OPENCODE_P3_WRITES_ENABLED === '1';
   } catch {
     return false;
