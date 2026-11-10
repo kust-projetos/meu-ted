@@ -157,6 +157,10 @@ export const ARG_SPECS: Readonly<Record<string, ArgSpec>> = Object.freeze({
   expectedName: spec('string', true),
   transactionId: spec('string', true),
   expectedDescription: spec('string', true),
+  // V1 completion: accounts-payable proposals.
+  dueDate: spec('string', true),
+  payableId: spec('string', true),
+  paidDate: spec('string', true),
   // P3.6: statement payment targets an invoice id (resolved by the reader).
   statementId: spec('string', true),
   // P3.5: optional parcel count (1–48). The total stays in amountCents.
@@ -262,6 +266,25 @@ export const OPERATION_ARG_KEYS: Readonly<Record<string, ReadonlySet<string>>> =
   ),
   'categories.update': argKeys('categoryId', 'expectedName', 'categoryName'),
   'categories.deactivate': argKeys('categoryId', 'expectedName', 'categoryName'),
+  'payables.create': argKeys(
+    'accountId',
+    'description',
+    'amountCents',
+    'dueDate',
+    'categoryId',
+    'accountName',
+    'categoryName',
+    'categoryQuery',
+  ),
+  'payables.pay': argKeys(
+    'payableId',
+    'description',
+    'amountCents',
+    'dueDate',
+    'accountId',
+    'paidDate',
+    'accountName',
+  ),
 });
 
 export const isMutationOperation = (operation: string): boolean =>
