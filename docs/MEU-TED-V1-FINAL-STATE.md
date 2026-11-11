@@ -10,14 +10,16 @@ contas a pagar) foi mergeado como `219a4d6`. A API foi liberada na Contabo pelo
 wrapper (`source-build`) e a Release B (bearer legado) foi flipada: API com
 `SESSION_BEARER_FALLBACK_ENABLED=off` e PWA compilada com
 `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` (PR #320). O vigente: API `219a4d6`,
-Agent `57809a3` (PR #319, só CI) e PWA `5e69dec`.
+Agent `57809a3` (PR #319, só CI) e PWA `5e69dec`. O smoke read-only dedicado
+(`Production smoke` run `43068057036`, em `642137f`) passou contra a PWA
+publicada.
 
 | Camada | SHA vigente | Evidência |
 |---|---|---|
 | API (Contabo) | `219a4d6` (`219a4d610602f24ecf9c9480001ef54d181a4a9a`, build CI `43046355182`) | release via wrapper `api-release-20260930.sh --execute`, lane source-build (checkout pristine `~/pi-finance-release-219a4d6`), backup pré-release `pi-db-20261111T153706Z` (sha256 `522fd4fe…5665b083`), RELEASE OK, manifesto `release-manifest-219a4d6….json`, rollback tag `pi-finance-api:rollback-pre-219a4d6`; `/health` (gitSha `219a4d6`) + `/ready` 200; `SESSION_BEARER_FALLBACK_ENABLED=off` aplicado e verificado no container |
 | Agent (Cloudflare) | `57809a3` (`57809a35cb260f29a26caa5f7836a20bc7fb0cb5`, build `43061604887`) | Agent Deploy run `43061604887` ATTESTED deploy-smoke-pass; live `/health` ready `buildSha=57809a3`; `/health/agent` ready |
 | PWA (Cloudflare) | `5e69dec` (`5e69dece84e30d1e26553d19b946afa29651c59f`, build `43064573159`) | PWA Deploy run `43065822285` ATTESTED deploy-smoke-pass; live `/api/build-info` `gitSha=5e69dec`; build com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` |
-| origin/main | `5e69dec` | PRs #318/#319/#320 mergeados; CI + PWA CI verdes; baseline viva servida |
+| origin/main | `642137f` | PRs #318/#319/#320/#321 mergeados; CI + PWA CI verdes; baseline viva servida: API `219a4d6`, Agent `57809a3`, PWA `5e69dec` (delta posterior é docs/CI) |
 | API — release anterior (histórico) | `b21faff` (`b21faff9ebd6d16353ddb85fb2fef40607dc7938`, build CI `40047925720`) | manifest `release-manifest-b21faff….json`, lane source-build, rollback tag `pi-finance-api:rollback-pre-b21faff` |
 | Baseline de CÓDIGO V1-textual (histórico) | `fd3481f` (`fd3481f2f92c39ff8b68727ff73939121123280d`) | PR #157 (V1-textual); CI + PWA CI verdes (`38483695616`/`…618`); Gate + quality (22, 10) 100% verde; API/Agent/PWA atestados em 13/10 (noite) |
 | Agent/PWA — deploy atestado anterior (histórico) | `715b2cf` (`715b2cf3d11c8ac03e55fea1e35b15fa2049c4c1`, build `38487522792`) | Deploys runs `38488407037`/`38488407171` ATTESTED deploy-smoke-pass 14/10 |
