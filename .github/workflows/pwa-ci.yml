@@ -144,7 +144,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright browsers
-        run: pnpm --dir apps/pwa exec playwright install --with-deps chromium
+        # The runner image normally needs the extra OS packages, but a broken
+        # apt mirror/DNS must not fail the whole E2E job before the browser is
+        # even installed: fall back to the browser-only install, which is
+        # enough on images that already carry the Chromium runtime libs.
+        run: |
+          pnpm --dir apps/pwa exec playwright install --with-deps chromium \
+            || pnpm --dir apps/pwa exec playwright install chromium
 
       - name: Run matrix gate
         run: pnpm --dir apps/pwa exec tsx --test e2e/support/matrix.test.ts
