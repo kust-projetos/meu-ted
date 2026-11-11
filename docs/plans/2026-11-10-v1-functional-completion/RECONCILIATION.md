@@ -106,18 +106,17 @@ teto. Todas as provas desta sessão são determinísticas/sintéticas.
 
 ### Evidências executadas
 
-- `apps/ted-runtime`: 148 testes focados PASS (leituras, propostas, catálogo,
-  permissões, contrato de API); suíte completa teve 3 falhas de ambiente já
-  conhecidas (timeouts/SIGKILL em testes de SDK real, não relacionadas).
-- `apps/api`: `pending-v2-payables` 5/5 PASS; `tool-registry` 16/16 PASS;
-  `mutation-receipt-coverage` PASS; `pending-v2-wiring` 4/4 PASS; `typecheck` PASS.
-- `apps/agent`: `pending-propose-rpc` 18/18 PASS; `f2a-structured-interpretation`
-  18/18 PASS; `typecheck` PASS.
+- `apps/ted-runtime`: 137 testes focados PASS (leituras, propostas, catálogo,
+  permissões, contrato de API, prompt adapter).
+- `apps/api`: 44 testes PASS (`pending-v2-payables` 7/7, `tool-registry` 16/16,
+  `pending-v2-wiring` 4/4, `mutation-receipt-coverage`); `typecheck` PASS.
+- `apps/agent`: 36 testes PASS (`pending-propose-rpc` 18/18 e
+  `f2a-structured-interpretation` 18/18); `typecheck` PASS.
 - `apps/pwa`: `typecheck` PASS; CI `quality (22, 10)` PASS (inclui `Test PWA`).
 - `packages/llm-contracts`: build PASS; `pnpm docs:lint` PASS; gates
   `capabilities:check`, `write-policy:check`, `governance:check`,
   `boundary:check`, `test:skip-gate` e `public-safety --strict` PASS.
-- **CI remoto no SHA `a7fd363` (PR #318): `CI` PASS (todos os jobs, incluindo
+- **CI remoto no SHA `444ee52` (PR #318): `CI` PASS (todos os jobs, incluindo
   `Financial integrity — Postgres`, `TED Runtime` e `Gate — all checks`) e
   `PWA CI` PASS (`quality (22, 10)`).**
 
@@ -131,9 +130,11 @@ validação efetiva do teste de componente veio do CI Linux.
   propostas/7 confirmações/7 recibos, sem escrita antes de aprovação.
 - Um turno de leitura nova executou `list_budgets`, `list_goals`,
   `list_payables` e `analytics_kpis` com sucesso e produziu resposta
-  fundamentada (workspace sintético vazio); as tentativas seguintes
-  retornaram **HTTP 429 `provider.rate-limit`** (“The inference service is
-  overloaded”, `retryAfterMs` ~25–29 s). Nenhuma escrita/duplicidade.
+  fundamentada (workspace sintético vazio); em outra tentativa o mesmo turno
+  completou as leituras e o segundo passo do modelo foi interrompido pelo
+  provider (`Step interrupted`). As tentativas seguintes retornaram
+  **HTTP 429 `provider.rate-limit`** (“The inference service is overloaded”,
+  `retryAfterMs` ~25–29 s). Nenhuma escrita/duplicidade.
 - Correções de harness aplicadas: allowlist live-real do P2D agora inclui as
   leituras V1 (`/budgets`, `/goals`, `/payables`, `/analytics/*`,
   `/transactions`, `/audit-logs`, trends por UUID), com teste offline
