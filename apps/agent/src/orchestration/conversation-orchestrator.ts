@@ -2657,6 +2657,14 @@ export class ConversationOrchestrator {
   private dateFragmentOf(
     text: string,
   ): { date?: string; ambiguous: boolean; clarification?: string } {
+    // B058: an explicit absolute date ("15/03/2020", "15 de março de 2020")
+    // is parser-resolvable and must fill the draft instead of falling into the
+    // unresolved-absolute-date guard. Negation still wins (A06).
+    const explicit = explicitFinancialDate(text);
+    if (explicit) {
+      if (hasNegation(text)) return { ambiguous: true, clarification: DENIED_DATE_TEXT };
+      return { date: explicit.date, ambiguous: false };
+    }
     const fragment = resolveRelativeDateFragment(text, { now: new Date(this.draftNowMs()) });
     if (fragment.status === 'ambiguous') {
       return { ambiguous: true, clarification: ambiguityClarificationText('contradictory_dates') };
@@ -5881,7 +5889,7 @@ export class ConversationOrchestrator {
     // letting the relative win would still silently drop "dia 15". A pure
     // relative turn ("ontem", "categoria mercado ontem") has no absolute
     // material and keeps correcting normally.
-    if (hasUnresolvedAbsoluteDate(input.text)) {
+    if (hasUnresolvedAbsoluteDate(input.text) && !explicitFinancialDate(input.text)) {
       return this.stopDraftDate(input, plan, startedAt, base, currentDraft, UNRESOLVED_FOLLOWUP_DATE_TEXT);
     }
     const turnDate = dateFragment.date;
