@@ -375,21 +375,43 @@ export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250, 
     let out = '';
     let turnId = null;
     let terminalError = null;
+    let idleSeen = false;
+    let lastAssistant = null;
     for (const m of newerDesc.reverse()) {
       if (!m || typeof m !== 'object') continue;
       if (m.type === 'user') break;
+      if (m.type === 'idle') {
+        idleSeen = true;
+        continue;
+      }
       if (m.type !== 'assistant') continue;
       if (isProviderTransportTerminal(m)) {
         terminalError = 'provider.transport';
         continue;
       }
       const parts = Array.isArray(m.content) ? m.content : [];
+      let hasToolPart = false;
+      let hasText = false;
       for (const part of parts) {
-        if (part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string') out += part.text;
+        if (!part || typeof part !== 'object') continue;
+        if (part.type === 'tool') hasToolPart = true;
+        if (part.type === 'text' && typeof part.text === 'string' && part.text.length > 0) {
+          hasText = true;
+          out += part.text;
+        }
       }
+      lastAssistant = { hasToolPart, hasText };
       if (typeof m.id === 'string' && m.id.length > 0) turnId = m.id;
     }
-    return { text: out, turnId, terminalError };
+    // A turn is complete only when the LAST assistant message is a final
+    // answer (text and no tool parts) or the native session emitted an idle
+    // boundary after the turn. A pre-tool assistant message ("Vou localizar…"
+    // followed by a tool call) must never be mistaken for the final output:
+    // returning it early would let the caller revoke the host binding while
+    // the native loop is still running, making the later proposal fail with
+    // `host_binding_revoked`.
+    const settled = idleSeen || (lastAssistant !== null && lastAssistant.hasText && !lastAssistant.hasToolPart);
+    return { text: out, turnId, terminalError, settled };
   }
 
   async function interrupt(sessionID) {
@@ -525,7 +547,7 @@ export function createPromptHost({ oc, timeoutMs = 60000, pollIntervalMs = 250, 
             if (began) terminal.details = { ...terminal.details, outputBegan: true };
             throw terminal;
           }
-          if (found.text.trim().length > 0) {
+          if (found.text.trim().length > 0 && found.settled) {
             output = found.text;
             turnId = found.turnId ?? admittedId;
             break;

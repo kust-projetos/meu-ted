@@ -131,6 +131,61 @@ const validCategoryCreateBody = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const validTransactionUpdateBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'transactions.update',
+  intentionId: 'int-txupdate-abc123',
+  normalizedArgs: { transactionId: ACCOUNT, description: 'Mercado novo', expectedDescription: 'Mercado' },
+  ...overrides,
+});
+
+const validAccountUpdateBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'accounts.update',
+  intentionId: 'int-account-update-abc123',
+  normalizedArgs: { accountId: ACCOUNT, name: 'Reserva', expectedName: 'Aurora' },
+  ...overrides,
+});
+
+const validAccountDeactivateBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'accounts.deactivate',
+  intentionId: 'int-account-deactivate-abc123',
+  normalizedArgs: { accountId: ACCOUNT, accountName: 'Antiga' },
+  ...overrides,
+});
+
+const validCategoryUpdateBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'categories.update',
+  intentionId: 'int-category-update-abc123',
+  normalizedArgs: { categoryId: CATEGORY, name: 'Supermercado', expectedName: 'Mercado' },
+  ...overrides,
+});
+
+const validCategoryDeactivateBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'categories.deactivate',
+  intentionId: 'int-category-deactivate-abc123',
+  normalizedArgs: { categoryId: CATEGORY, expectedName: 'Mercado' },
+  ...overrides,
+});
+
+const validPayableCreateBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'payables.create',
+  intentionId: 'int-payable-create-abc123',
+  normalizedArgs: { accountId: ACCOUNT, description: 'Aluguel', amountCents: 150000, dueDate: '2026-12-05' },
+  ...overrides,
+});
+
+const validPayablePayBody = (overrides: Record<string, unknown> = {}) => ({
+  tool: 'payables.pay',
+  intentionId: 'int-payable-pay-abc123',
+  normalizedArgs: {
+    payableId: '55555555-5555-4555-8555-555555555555',
+    description: 'Aluguel',
+    amountCents: 150000,
+    dueDate: '2026-12-05',
+    accountId: ACCOUNT,
+  },
+  ...overrides,
+});
+
 const proposeRequest = (body: unknown, headers = identityHeaders()) =>
   new Request('https://agent.test.local/rpc/pending-operations/propose', {
     method: 'POST',
@@ -334,6 +389,50 @@ describe('P3 — POST /rpc/pending-operations/propose (Agent A4 broker)', () => 
     expect(sent.normalizedArgs).toEqual(validCategoryCreateBody().normalizedArgs);
   });
 
+  it('accepts the V1 CRUD and payable proposals on the same propose-only A4 path', async () => {
+    const cases = [
+      validTransactionUpdateBody(),
+      validAccountUpdateBody(),
+      validAccountDeactivateBody(),
+      validCategoryUpdateBody(),
+      validCategoryDeactivateBody(),
+      validPayableCreateBody(),
+      validPayablePayBody(),
+    ];
+    for (const body of cases) {
+      const { fn, calls } = captureFetch(() => Response.json({ id: `op-${body.tool}`, existing: false }, { status: 201 }));
+      globalThis.fetch = fn;
+      const { agent } = createTestAgent();
+      const res = await agent.fetch(proposeRequest(body));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ id: `op-${body.tool}`, existing: false });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.url).toBe(`${API_ORIGIN}/pending-operations/v2/propose`);
+      const headers = new Headers(calls[0]!.init?.headers);
+      const claims = await decodeDelegatedTurnToken(headers.get('authorization')!.slice('Bearer '.length), DELEGATION_SECRET);
+      expect(claims.capabilities).toEqual(['financial.approval.propose']);
+      const sent = JSON.parse(String(calls[0]!.init?.body));
+      expect(sent.tool).toBe(body.tool);
+      expect(sent.normalizedArgs).toEqual(body.normalizedArgs);
+    }
+  });
+
+  it('refuses transactions.update without the exact description CAS tuple', async () => {
+    const { fn, calls } = captureFetch(() => Response.json({ id: 'never' }));
+    globalThis.fetch = fn;
+    const { agent } = createTestAgent();
+    for (const normalizedArgs of [
+      { transactionId: ACCOUNT, description: 'Novo' },
+      { transactionId: ACCOUNT, description: 'Novo', expectedDescription: '  ' },
+      { transactionId: ACCOUNT, description: 'Novo', expectedDescription: 'Velho', amountCents: 100 },
+      { transactionId: ACCOUNT, description: 'Novo', expectedDescription: 'Velho', date: '2026-11-10' },
+    ]) {
+      const res = await agent.fetch(proposeRequest(validTransactionUpdateBody({ normalizedArgs })));
+      expect(res.status).toBe(400);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
   it('refuses invalid P4.2 payloads (unknown kind / non-integer balance / bad parent) before any transport', async () => {
     for (const body of [
       validAccountCreateBody({ normalizedArgs: { name: 'X', kind: 'credit_card', initialBalanceCents: 0 } }),
@@ -385,15 +484,14 @@ describe('P3 — POST /rpc/pending-operations/propose (Agent A4 broker)', () => 
     globalThis.fetch = fn;
     const { agent } = createTestAgent();
 
-    for (const tool of ['transactions.update', 'accounts.deactivate', 'transactions.unknown.create', 'evil']) {
+    for (const tool of ['transactions.unknown.create', 'evil']) {
       const res = await agent.fetch(proposeRequest(validBody({ tool })));
       expect(res.status).toBe(400);
     }
-    // A transfer-shaped payload sent under a different tool is refused too.
-    const wrongTool = await agent.fetch(
-      proposeRequest({ ...validTransferBody(), tool: 'transactions.expense.create' }),
-    );
-    expect(wrongTool.status).toBe(400);
+    // A valid tool carrying another tool's payload is refused as well.
+    expect((await agent.fetch(proposeRequest(validTransferBody({ tool: 'transactions.expense.create' })))).status).toBe(400);
+    // A transactions.update payload cannot smuggle amount/date/account/category.
+    expect((await agent.fetch(proposeRequest(validBody({ tool: 'transactions.update' })))).status).toBe(400);
     expect(calls).toHaveLength(0);
   });
 

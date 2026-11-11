@@ -156,7 +156,9 @@ const withTedReceipt = (
       ? 'category'
       : tool === 'cards.statement.pay'
         ? 'statement'
-        : 'transaction';
+        : tool === 'payables.create' || tool === 'payables.pay'
+          ? 'payable'
+          : 'transaction';
   let canonical: { mutationId: string };
   try {
     canonical = buildTedReceipt(

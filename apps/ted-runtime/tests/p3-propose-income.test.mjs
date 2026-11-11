@@ -21,6 +21,9 @@ import {
   createToolExecutors,
 } from '../src/tool-defs.mjs';
 import {
+  PRODUCT_TOOL_NAMES,
+  P3_READ_TOOL_NAMES,
+  P3_WRITE_TOOL_NAMES,
   productToolDefs,
   defineTedFinancePlugin,
   isP3WritesEnabled,
@@ -34,6 +37,8 @@ const host = Object.freeze({
   actorId: 'actor-a',
   deviceId: 'dev-a',
 });
+
+const FULL_CATALOG = [...PRODUCT_TOOL_NAMES, ...P3_READ_TOOL_NAMES, ...P3_WRITE_TOOL_NAMES].sort();
 
 const ACCOUNT = '11111111-1111-4111-8111-111111111111';
 const CATEGORY = '22222222-2222-4222-8222-222222222222';
@@ -68,22 +73,7 @@ describe('p3 propose_income: catalog gating', () => {
   it('local writes opt-in adds ALL proposal tools and list_categories with both schemas', () => {
     assert.equal(isP3WritesEnabled(WRITE_ENV), true);
     const names = productToolDefs(WRITE_ENV).map((d) => d.name).sort();
-    assert.deepEqual(names, [
-      'get_month_summary',
-      'list_accounts',
-      'list_card_statements',
-      'list_categories',
-      'list_credit_cards',
-      'list_recent_transactions',
-      'propose_account_create',
-      'propose_card_purchase',
-      'propose_category_create',
-      'propose_expense',
-      'propose_income',
-      'propose_statement_payment',
-      'propose_transfer',
-      'spending_insights',
-    ]);
+    assert.deepEqual(names, FULL_CATALOG);
     const propose = productToolDefs(WRITE_ENV).find((d) => d.name === 'propose_income');
     assert.equal(propose.input.type, 'object');
     assert.ok(propose.output && propose.output.type === 'object');
@@ -215,7 +205,7 @@ describe('p3 propose_income: plugin registration', () => {
     await writesDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedWrites.push(t) }); } } });
     assert.deepEqual(
       addedWrites.map((t) => t.name).sort(),
-      ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards', 'list_recent_transactions', 'propose_account_create', 'propose_card_purchase', 'propose_category_create', 'propose_expense', 'propose_income', 'propose_statement_payment', 'propose_transfer', 'spending_insights'],
+      FULL_CATALOG,
     );
   });
 

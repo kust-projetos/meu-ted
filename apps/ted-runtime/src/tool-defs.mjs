@@ -179,6 +179,165 @@ export const TOOL_DEFS = [
     output: { type: 'object', description: 'Real GET /cards/statements body ({items, total}).' },
   },
   {
+    // V1 completion (opt-in read set — see plugin.mjs isP3ReadsEnabled):
+    // analytics KPIs via the exact existing GET /analytics/kpis route. Every
+    // filter is passed through; the API owns period/date validation and the
+    // proof envelope.
+    name: 'analytics_kpis',
+    description: 'TED read-only: financial KPIs (balances, income/expense, savings rate, invoices) via GET /analytics/kpis.',
+    input: {
+      type: 'object',
+      properties: {
+        period: { type: 'string', enum: ['last30days', 'lastMonth', 'thisYear', 'custom'] },
+        from: { type: 'string', description: 'Start date YYYY-MM-DD (required for period=custom)' },
+        to: { type: 'string', description: 'End date YYYY-MM-DD (required for period=custom)' },
+        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts (optional scope)' },
+        basis: { type: 'string', enum: ['liquidez', 'competencia'] },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Real GET /analytics/kpis body with proof envelope.' },
+  },
+  {
+    // V1 completion: category breakdown via GET /analytics/category-breakdown.
+    name: 'analytics_category_breakdown',
+    description: 'TED read-only: expense/income totals by category via GET /analytics/category-breakdown.',
+    input: {
+      type: 'object',
+      properties: {
+        period: { type: 'string', enum: ['last30days', 'lastMonth', 'thisYear', 'custom'] },
+        from: { type: 'string', description: 'Start date YYYY-MM-DD (required for period=custom)' },
+        to: { type: 'string', description: 'End date YYYY-MM-DD (required for period=custom)' },
+        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts (optional scope)' },
+        basis: { type: 'string', enum: ['liquidez', 'competencia'] },
+        kind: { type: 'string', enum: ['expense', 'income'] },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Real GET /analytics/category-breakdown body with proof envelope.' },
+  },
+  {
+    // V1 completion: cash-flow series via GET /analytics/cashflow-series.
+    name: 'analytics_cashflow_series',
+    description: 'TED read-only: daily cash-flow series (current and previous period) via GET /analytics/cashflow-series.',
+    input: {
+      type: 'object',
+      properties: {
+        period: { type: 'string', enum: ['last30days', 'lastMonth', 'thisYear', 'custom'] },
+        from: { type: 'string', description: 'Start date YYYY-MM-DD (required for period=custom)' },
+        to: { type: 'string', description: 'End date YYYY-MM-DD (required for period=custom)' },
+        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts (optional scope)' },
+        basis: { type: 'string', enum: ['liquidez', 'competencia'] },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Real GET /analytics/cashflow-series body with proof envelope.' },
+  },
+  {
+    // V1 completion: budget consumption via GET /analytics/budget-consumption.
+    // Household-only and basis-free by contract; the route is intentionally
+    // argument-free so no unsupported filter can be invented here.
+    name: 'analytics_budget_consumption',
+    description: 'TED read-only: current budget consumption (household scope) via GET /analytics/budget-consumption.',
+    input: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    output: { type: 'object', description: 'Real GET /analytics/budget-consumption body with proof envelope.' },
+  },
+  {
+    // V1 completion: net-worth history via GET /analytics/net-worth-history.
+    name: 'analytics_net_worth_history',
+    description: 'TED read-only: 12-month net-worth history via GET /analytics/net-worth-history.',
+    input: {
+      type: 'object',
+      properties: {
+        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts (optional scope)' },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Real GET /analytics/net-worth-history body with proof envelope.' },
+  },
+  {
+    // V1 completion: budgets via GET /budgets.
+    name: 'list_budgets',
+    description: 'TED read-only: list workspace budgets with usage/limits via GET /budgets.',
+    input: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    output: { type: 'object', description: 'Real GET /budgets body ({items, total}).' },
+  },
+  {
+    // V1 completion: budgets at/over the alert threshold via GET /budgets/check.
+    name: 'check_budgets',
+    description: 'TED read-only: budgets whose spending reached the alert threshold via GET /budgets/check.',
+    input: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    output: { type: 'object', description: 'Real GET /budgets/check body ({items, total}).' },
+  },
+  {
+    // V1 completion: budget trends via GET /budgets/:id/trends.
+    name: 'budget_trends',
+    description: 'TED read-only: monthly trend for one budget via GET /budgets/:id/trends.',
+    input: {
+      type: 'object',
+      properties: {
+        budgetId: { type: 'string', description: 'Budget uuid resolved from list_budgets' },
+        monthsBack: { type: 'integer', minimum: 1, maximum: 12 },
+      },
+      required: ['budgetId'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Real GET /budgets/:id/trends body ({items, total}).' },
+  },
+  {
+    // V1 completion: goals and progress via GET /goals.
+    name: 'list_goals',
+    description: 'TED read-only: list financial goals with progress via GET /goals.',
+    input: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    output: { type: 'object', description: 'Real GET /goals body ({items, total}).' },
+  },
+  {
+    // V1 completion: payables/upcoming bills via GET /payables.
+    name: 'list_payables',
+    description: 'TED read-only: list accounts payable (pending, paid, overdue, cancelled) via GET /payables.',
+    input: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['pending', 'paid', 'overdue', 'cancelled'] },
+        type: { type: 'string', enum: ['one_time', 'recurring'] },
+        dueWithinDays: { type: 'integer', minimum: 0, maximum: 365 },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Real GET /payables body ({items, total}).' },
+  },
+  {
+    // V1 completion: payable reminders via GET /payables/reminders.
+    name: 'payable_reminders',
+    description: 'TED read-only: upcoming/overdue payable reminders via GET /payables/reminders.',
+    input: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    output: { type: 'object', description: 'Real GET /payables/reminders body ({items, total}).' },
+  },
+  {
+    // V1 completion: audit history via GET /audit-logs.
+    name: 'list_audit_logs',
+    description: 'TED read-only: workspace audit history (operations and receipts) via GET /audit-logs.',
+    input: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 100 },
+        operation: { type: 'string' },
+        eventType: { type: 'string' },
+        actorType: { type: 'string', enum: ['device', 'user'] },
+        entityType: { type: 'string' },
+        entityId: { type: 'string', description: 'Entity uuid' },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Real GET /audit-logs body ({items, total}).' },
+  },
+  {
     // P3 write slice (local opt-in only — see plugin.mjs isP3WritesEnabled).
     // This tool does NOT write and does NOT call the API: it records ONE
     // proposal intent (tool + normalizedArgs + stable intention) that the
@@ -188,7 +347,7 @@ export const TOOL_DEFS = [
     // execution; the LLM can never confirm or execute.
     name: 'propose_expense',
     description:
-      'TED (P3 opt-in): propose an expense for the authenticated user to approve. Records a pending proposal only — never creates the transaction.',
+      'TED (P3 opt-in): propose an expense for the authenticated user to approve. Records a pending proposal only — never creates the transaction. If the user gives a partial/ambiguous date (e.g. "15/03") and the year cannot be determined from context, ask for clarification instead of guessing; resolve account/category by authoritative reads and ask when more than one fits.',
     input: {
       type: 'object',
       properties: {
@@ -209,7 +368,7 @@ export const TOOL_DEFS = [
     // Pending V2 tool registry; this tool only records the intent.
     name: 'propose_income',
     description:
-      'TED (P3 opt-in): propose an income for the authenticated user to approve. Records a pending proposal only — never creates the transaction.',
+      'TED (P3 opt-in): propose an income for the authenticated user to approve. Records a pending proposal only — never creates the transaction. Use the same date/ambiguity rule: an undeterminable year or more than one matching account/category requires clarification before proposing.',
     input: {
       type: 'object',
       properties: {
@@ -229,7 +388,7 @@ export const TOOL_DEFS = [
     // Card identified via list_credit_cards; categoryId optional.
     name: 'propose_card_purchase',
     description:
-      'TED (P3 opt-in): propose a credit-card purchase for the authenticated user to approve, either single (1x) or in installments. Records a pending proposal only — never creates the purchase.',
+      'TED (P3 opt-in): propose a credit-card purchase for the authenticated user to approve, either single (1x) or in installments. Records a pending proposal only — never creates the purchase. Resolve the card via list_credit_cards; if the date year or the card is ambiguous, ask before proposing.',
     input: {
       type: 'object',
       properties: {
@@ -252,7 +411,7 @@ export const TOOL_DEFS = [
     // scope, same-account and the credit-card restriction at propose/execute.
     name: 'propose_transfer',
     description:
-      'TED (P3 opt-in): propose an internal transfer between two of the user\'s accounts. Records a pending proposal only — never moves money.',
+      'TED (P3 opt-in): propose an internal transfer between two of the user\'s accounts. Records a pending proposal only — never moves money. Both accounts are resolved from list_accounts; ask when ambiguous or when the date year is undeterminable.',
     input: {
       type: 'object',
       properties: {
@@ -325,6 +484,136 @@ export const TOOL_DEFS = [
     },
     output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
   },
+  {
+    // V1 completion (opt-in writes): create an accounts-payable commitment.
+    // The API's Pending V2 `payables.create` contract revalidates account,
+    // category and dates at execution.
+    name: 'propose_payable_create',
+    description:
+      'TED (opt-in): propose creating an accounts-payable (bill) for the authenticated user to approve. Records a pending proposal only — never creates the payable. If the due date lacks a determinable year or the payer account is ambiguous, ask before proposing.',
+    input: {
+      type: 'object',
+      properties: {
+        accountId: { type: 'string', description: 'Payer account uuid resolved from list_accounts' },
+        description: { type: 'string', minLength: 1, maxLength: 240 },
+        amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
+        dueDate: { type: 'string', description: 'Due date YYYY-MM-DD' },
+        categoryId: { type: 'string', description: 'Expense category uuid resolved from list_categories (optional)' },
+      },
+      required: ['accountId', 'description', 'amountCents', 'dueDate'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
+  {
+    // V1 completion (opt-in writes): pay an existing accounts-payable. The
+    // display tuple (description/amount/dueDate/accountId) must come from the
+    // authoritative list_payables read; payableId is the only execution key.
+    name: 'propose_payable_pay',
+    description:
+      'TED (opt-in): propose paying an accounts-payable for the authenticated user to approve. Records a pending proposal only — never pays the bill.',
+    input: {
+      type: 'object',
+      properties: {
+        payableId: { type: 'string', description: 'Payable uuid resolved from list_payables' },
+        description: { type: 'string', minLength: 1, maxLength: 240, description: 'Payable description read from list_payables (display/CAS snapshot)' },
+        amountCents: { type: 'integer', minimum: 1, description: 'Payable amount in cents read from list_payables' },
+        dueDate: { type: 'string', description: 'Payable due date YYYY-MM-DD read from list_payables' },
+        accountId: { type: 'string', description: 'Payer account uuid read from the payable' },
+        paidDate: { type: 'string', description: 'Payment date YYYY-MM-DD (defaults to today UTC)' },
+      },
+      required: ['payableId', 'description', 'amountCents', 'dueDate', 'accountId'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
+  {
+    // V1 CRUD completion (opt-in writes): description-only transaction edit.
+    // The API's transactions.update contract accepts ONLY the description and
+    // an exact expectedDescription CAS; amount/date/account/category are never
+    // part of this tool.
+    name: 'propose_transaction_update',
+    description:
+      'TED (opt-in): propose changing only the description of an existing transaction for the authenticated user to approve. Records a pending proposal only — never edits the transaction.',
+    input: {
+      type: 'object',
+      properties: {
+        transactionId: { type: 'string', description: 'Transaction uuid resolved from list_recent_transactions' },
+        description: { type: 'string', minLength: 1, maxLength: 240, description: 'New description' },
+        expectedDescription: { type: 'string', minLength: 1, maxLength: 240, description: 'Current description read from the authoritative transaction list (CAS)' },
+      },
+      required: ['transactionId', 'description', 'expectedDescription'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
+  {
+    // V1 CRUD completion (opt-in writes): account rename, name-only + CAS.
+    name: 'propose_account_update',
+    description:
+      'TED (opt-in): propose renaming an existing account for the authenticated user to approve. Records a pending proposal only — never renames the account.',
+    input: {
+      type: 'object',
+      properties: {
+        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
+        name: { type: 'string', minLength: 1, maxLength: 120, description: 'New account name' },
+        expectedName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current account name read from list_accounts (CAS)' },
+      },
+      required: ['accountId', 'name', 'expectedName'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
+  {
+    // V1 CRUD completion (opt-in writes): account deactivation. The API binds
+    // the target by accountId; accountName is display-only (never a CAS key).
+    name: 'propose_account_deactivate',
+    description:
+      'TED (opt-in): propose deactivating an existing account for the authenticated user to approve. Records a pending proposal only — never deactivates the account.',
+    input: {
+      type: 'object',
+      properties: {
+        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
+        accountName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current account name (display-only snapshot)' },
+      },
+      required: ['accountId'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
+  {
+    // V1 CRUD completion (opt-in writes): category rename, name-only + CAS.
+    name: 'propose_category_update',
+    description:
+      'TED (opt-in): propose renaming an existing category for the authenticated user to approve. Records a pending proposal only — never renames the category.',
+    input: {
+      type: 'object',
+      properties: {
+        categoryId: { type: 'string', description: 'Category uuid resolved from list_categories' },
+        name: { type: 'string', minLength: 1, maxLength: 120, description: 'New category name' },
+        expectedName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current category name read from list_categories (CAS)' },
+      },
+      required: ['categoryId', 'name', 'expectedName'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
+  {
+    // V1 CRUD completion (opt-in writes): category deactivation + CAS.
+    name: 'propose_category_deactivate',
+    description:
+      'TED (opt-in): propose deactivating an existing category for the authenticated user to approve. Records a pending proposal only — never deactivates the category.',
+    input: {
+      type: 'object',
+      properties: {
+        categoryId: { type: 'string', description: 'Category uuid resolved from list_categories' },
+        expectedName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current category name read from list_categories (CAS)' },
+      },
+      required: ['categoryId', 'expectedName'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+  },
 ];
 
 export const TOOL_NAMES = TOOL_DEFS.map((d) => d.name);
@@ -339,6 +628,13 @@ export const PROPOSAL_TOOL_SPECS = Object.freeze({
   propose_statement_payment: Object.freeze({ tool: 'cards.statement.pay', noun: 'Pagamento de fatura' }),
   propose_account_create: Object.freeze({ tool: 'accounts.create', noun: 'Conta' }),
   propose_category_create: Object.freeze({ tool: 'categories.create', noun: 'Categoria' }),
+  propose_transaction_update: Object.freeze({ tool: 'transactions.update', noun: 'Descrição do lançamento' }),
+  propose_account_update: Object.freeze({ tool: 'accounts.update', noun: 'Conta' }),
+  propose_account_deactivate: Object.freeze({ tool: 'accounts.deactivate', noun: 'Conta' }),
+  propose_category_update: Object.freeze({ tool: 'categories.update', noun: 'Categoria' }),
+  propose_category_deactivate: Object.freeze({ tool: 'categories.deactivate', noun: 'Categoria' }),
+  propose_payable_create: Object.freeze({ tool: 'payables.create', noun: 'Conta a pagar' }),
+  propose_payable_pay: Object.freeze({ tool: 'payables.pay', noun: 'Pagamento de conta' }),
 });
 
 // Canonical uuid shape (any version) — the API revalidates against its real
@@ -361,10 +657,25 @@ function knownKeys(name) {
   if (name === 'list_accounts') return ['kind', 'includeInactive'];
   if (name === 'list_recent_transactions') return ['accountId', 'categoryId', 'kind', 'startDate', 'endDate', 'minAmountCents', 'maxAmountCents', 'query', 'limit', 'offset'];
   if (name === 'spending_insights') return ['yearMonth', 'insightType', 'lookbackMonths'];
+  if (name === 'analytics_kpis' || name === 'analytics_cashflow_series') return ['period', 'from', 'to', 'accountId', 'basis'];
+  if (name === 'analytics_category_breakdown') return ['period', 'from', 'to', 'accountId', 'basis', 'kind'];
+  if (name === 'analytics_net_worth_history') return ['accountId'];
+  if (name === 'analytics_budget_consumption') return [];
+  if (name === 'budget_trends') return ['budgetId', 'monthsBack'];
+  if (name === 'list_payables') return ['status', 'type', 'dueWithinDays'];
+  if (name === 'list_audit_logs') return ['limit', 'operation', 'eventType', 'actorType', 'entityType', 'entityId'];
+  if (name === 'list_budgets' || name === 'check_budgets' || name === 'list_goals' || name === 'payable_reminders') return [];
   if (name === 'list_credit_cards') return [];
   if (name === 'list_categories') return ['kind'];
   if (name === 'list_card_statements') return ['accountId', 'status', 'limit'];
   if (name === 'propose_statement_payment') return ['statementId', 'fromAccountId', 'amountCents'];
+  if (name === 'propose_transaction_update') return ['transactionId', 'description', 'expectedDescription'];
+  if (name === 'propose_account_update') return ['accountId', 'name', 'expectedName'];
+  if (name === 'propose_account_deactivate') return ['accountId', 'accountName'];
+  if (name === 'propose_category_update') return ['categoryId', 'name', 'expectedName'];
+  if (name === 'propose_category_deactivate') return ['categoryId', 'expectedName'];
+  if (name === 'propose_payable_create') return ['accountId', 'description', 'amountCents', 'dueDate', 'categoryId'];
+  if (name === 'propose_payable_pay') return ['payableId', 'description', 'amountCents', 'dueDate', 'accountId', 'paidDate'];
   if (name === 'propose_account_create') return ['name', 'kind', 'initialBalanceCents'];
   if (name === 'propose_category_create') return ['name', 'kind', 'parentId'];
   if (name === 'propose_transfer') return ['amountCents', 'description', 'date', 'fromAccountId', 'toAccountId'];
@@ -448,6 +759,65 @@ export function validateToolArgs(name, args) {
     if (args.lookbackMonths !== undefined && (!Number.isInteger(args.lookbackMonths) || args.lookbackMonths < 1 || args.lookbackMonths > 12)) {
       throw new ToolError('tool.invalid_args', 'spending_insights: lookbackMonths must be an integer between 1 and 12');
     }
+  } else if (name === 'analytics_kpis' || name === 'analytics_cashflow_series' || name === 'analytics_category_breakdown' || name === 'analytics_net_worth_history' || name === 'analytics_budget_consumption') {
+    // Structural only: the analytics query contract (period presets, custom
+    // from/to, account scope, basis support per route) is owned by the real
+    // API handler. These checks stop the model recording an unusable intent.
+    if (args.period !== undefined && (typeof args.period !== 'string' || !['last30days', 'lastMonth', 'thisYear', 'custom'].includes(args.period))) {
+      throw new ToolError('tool.invalid_args', `${name}: period must be last30days|lastMonth|thisYear|custom`);
+    }
+    for (const key of ['from', 'to']) {
+      if (args[key] !== undefined) {
+        if (typeof args[key] !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(args[key])) {
+          throw new ToolError('tool.invalid_args', `${name}: ${key} must be YYYY-MM-DD`);
+        }
+        const parsed = new Date(`${args[key]}T00:00:00Z`);
+        if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== args[key]) {
+          throw new ToolError('tool.invalid_args', `${name}: ${key} must be YYYY-MM-DD`);
+        }
+      }
+    }
+    if (args.accountId !== undefined && (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId))) {
+      throw new ToolError('tool.invalid_args', `${name}: accountId must be a uuid`);
+    }
+    if (args.basis !== undefined && (typeof args.basis !== 'string' || !['liquidez', 'competencia'].includes(args.basis))) {
+      throw new ToolError('tool.invalid_args', `${name}: basis must be liquidez|competencia`);
+    }
+    if (args.kind !== undefined && (typeof args.kind !== 'string' || !['expense', 'income'].includes(args.kind))) {
+      throw new ToolError('tool.invalid_args', `${name}: kind must be expense|income`);
+    }
+  } else if (name === 'budget_trends') {
+    if (typeof args.budgetId !== 'string' || !UUID_RE.test(args.budgetId)) {
+      throw new ToolError('tool.invalid_args', 'budget_trends: budgetId must be a uuid');
+    }
+    if (args.monthsBack !== undefined && (!Number.isInteger(args.monthsBack) || args.monthsBack < 1 || args.monthsBack > 12)) {
+      throw new ToolError('tool.invalid_args', 'budget_trends: monthsBack must be an integer between 1 and 12');
+    }
+  } else if (name === 'list_payables') {
+    if (args.status !== undefined && (typeof args.status !== 'string' || !['pending', 'paid', 'overdue', 'cancelled'].includes(args.status))) {
+      throw new ToolError('tool.invalid_args', 'list_payables: status must be pending|paid|overdue|cancelled');
+    }
+    if (args.type !== undefined && (typeof args.type !== 'string' || !['one_time', 'recurring'].includes(args.type))) {
+      throw new ToolError('tool.invalid_args', 'list_payables: type must be one_time|recurring');
+    }
+    if (args.dueWithinDays !== undefined && (!Number.isInteger(args.dueWithinDays) || args.dueWithinDays < 0 || args.dueWithinDays > 365)) {
+      throw new ToolError('tool.invalid_args', 'list_payables: dueWithinDays must be an integer between 0 and 365');
+    }
+  } else if (name === 'list_audit_logs') {
+    if (args.limit !== undefined && (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 100)) {
+      throw new ToolError('tool.invalid_args', 'list_audit_logs: limit must be an integer between 1 and 100');
+    }
+    if (args.actorType !== undefined && (typeof args.actorType !== 'string' || !['device', 'user'].includes(args.actorType))) {
+      throw new ToolError('tool.invalid_args', 'list_audit_logs: actorType must be device|user');
+    }
+    for (const key of ['operation', 'eventType', 'entityType']) {
+      if (args[key] !== undefined && (typeof args[key] !== 'string' || args[key].trim().length === 0)) {
+        throw new ToolError('tool.invalid_args', `list_audit_logs: ${key} must be a non-empty string`);
+      }
+    }
+    if (args.entityId !== undefined && (typeof args.entityId !== 'string' || !UUID_RE.test(args.entityId))) {
+      throw new ToolError('tool.invalid_args', 'list_audit_logs: entityId must be a uuid');
+    }
   } else if (name === 'list_card_statements') {
     if (args.accountId !== undefined && (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId))) {
       throw new ToolError('tool.invalid_args', 'list_card_statements: accountId must be a uuid');
@@ -490,6 +860,90 @@ export function validateToolArgs(name, args) {
     }
     if (args.parentId !== undefined && (typeof args.parentId !== 'string' || !UUID_RE.test(args.parentId))) {
       throw new ToolError('tool.invalid_args', 'propose_category_create: parentId must be a uuid');
+    }
+  } else if (name === 'propose_payable_create') {
+    if (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId)) {
+      throw new ToolError('tool.invalid_args', 'propose_payable_create: accountId must be a uuid');
+    }
+    if (typeof args.description !== 'string' || args.description.trim().length === 0 || args.description.trim().length > 240) {
+      throw new ToolError('tool.invalid_args', 'propose_payable_create: description must be a non-empty string (max 240)');
+    }
+    if (!Number.isSafeInteger(args.amountCents) || args.amountCents <= 0) {
+      throw new ToolError('tool.invalid_args', 'propose_payable_create: amountCents must be a positive safe integer');
+    }
+    if (typeof args.dueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(args.dueDate)) {
+      throw new ToolError('tool.invalid_args', 'propose_payable_create: dueDate must be YYYY-MM-DD');
+    }
+    const due = new Date(`${args.dueDate}T00:00:00Z`);
+    if (Number.isNaN(due.getTime()) || due.toISOString().slice(0, 10) !== args.dueDate) {
+      throw new ToolError('tool.invalid_args', 'propose_payable_create: dueDate must be YYYY-MM-DD');
+    }
+    if (args.categoryId !== undefined && (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId))) {
+      throw new ToolError('tool.invalid_args', 'propose_payable_create: categoryId must be a uuid');
+    }
+  } else if (name === 'propose_payable_pay') {
+    for (const key of ['payableId', 'accountId']) {
+      if (typeof args[key] !== 'string' || !UUID_RE.test(args[key])) {
+        throw new ToolError('tool.invalid_args', `propose_payable_pay: ${key} must be a uuid`);
+      }
+    }
+    if (typeof args.description !== 'string' || args.description.trim().length === 0 || args.description.trim().length > 240) {
+      throw new ToolError('tool.invalid_args', 'propose_payable_pay: description must be a non-empty string (max 240)');
+    }
+    if (!Number.isSafeInteger(args.amountCents) || args.amountCents <= 0) {
+      throw new ToolError('tool.invalid_args', 'propose_payable_pay: amountCents must be a positive safe integer');
+    }
+    for (const key of ['dueDate', 'paidDate']) {
+      if (args[key] === undefined) continue;
+      if (typeof args[key] !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(args[key])) {
+        throw new ToolError('tool.invalid_args', `propose_payable_pay: ${key} must be YYYY-MM-DD`);
+      }
+      const parsed = new Date(`${args[key]}T00:00:00Z`);
+      if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== args[key]) {
+        throw new ToolError('tool.invalid_args', `propose_payable_pay: ${key} must be YYYY-MM-DD`);
+      }
+    }
+    if (args.dueDate === undefined) {
+      throw new ToolError('tool.invalid_args', 'propose_payable_pay: dueDate is required');
+    }
+  } else if (name === 'propose_transaction_update') {
+    // Description-only contract: the API schema accepts exactly
+    // transactionId + new description + the literal current description used
+    // as CAS. No amount/date/account/category can travel through this tool.
+    if (typeof args.transactionId !== 'string' || !UUID_RE.test(args.transactionId)) {
+      throw new ToolError('tool.invalid_args', 'propose_transaction_update: transactionId must be a uuid');
+    }
+    if (typeof args.description !== 'string' || args.description.trim().length === 0 || args.description.trim().length > 240) {
+      throw new ToolError('tool.invalid_args', 'propose_transaction_update: description must be a non-empty string (max 240)');
+    }
+    if (typeof args.expectedDescription !== 'string' || args.expectedDescription.length === 0 || args.expectedDescription.length > 240 || args.expectedDescription.trim().length === 0) {
+      throw new ToolError('tool.invalid_args', 'propose_transaction_update: expectedDescription must be the non-empty current description (max 240)');
+    }
+  } else if (name === 'propose_account_update' || name === 'propose_category_update') {
+    const idKey = name === 'propose_account_update' ? 'accountId' : 'categoryId';
+    const id = args[idKey];
+    if (typeof id !== 'string' || !UUID_RE.test(id)) {
+      throw new ToolError('tool.invalid_args', `${name}: ${idKey} must be a uuid`);
+    }
+    if (typeof args.name !== 'string' || args.name.trim().length === 0 || args.name.trim().length > 120) {
+      throw new ToolError('tool.invalid_args', `${name}: name must be a non-empty string (max 120)`);
+    }
+    if (typeof args.expectedName !== 'string' || args.expectedName.trim().length === 0 || args.expectedName.trim().length > 120) {
+      throw new ToolError('tool.invalid_args', `${name}: expectedName must be the non-empty current name (max 120)`);
+    }
+  } else if (name === 'propose_account_deactivate') {
+    if (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId)) {
+      throw new ToolError('tool.invalid_args', 'propose_account_deactivate: accountId must be a uuid');
+    }
+    if (args.accountName !== undefined && (typeof args.accountName !== 'string' || args.accountName.trim().length === 0 || args.accountName.trim().length > 120)) {
+      throw new ToolError('tool.invalid_args', 'propose_account_deactivate: accountName must be a non-empty string (max 120)');
+    }
+  } else if (name === 'propose_category_deactivate') {
+    if (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId)) {
+      throw new ToolError('tool.invalid_args', 'propose_category_deactivate: categoryId must be a uuid');
+    }
+    if (typeof args.expectedName !== 'string' || args.expectedName.trim().length === 0 || args.expectedName.trim().length > 120) {
+      throw new ToolError('tool.invalid_args', 'propose_category_deactivate: expectedName must be the non-empty current name (max 120)');
     }
   } else if (
     name === 'propose_expense' ||
@@ -624,6 +1078,54 @@ function routeFor(name, args) {
     const qs = q.toString();
     return qs ? `/cards/statements?${qs}` : '/cards/statements';
   }
+  if (name === 'analytics_kpis' || name === 'analytics_category_breakdown' || name === 'analytics_cashflow_series' || name === 'analytics_budget_consumption' || name === 'analytics_net_worth_history') {
+    // Exact existing analytics routes; the query string passes through to the
+    // real handler, which owns period/basis support per route.
+    const path = name === 'analytics_kpis'
+      ? '/analytics/kpis'
+      : name === 'analytics_category_breakdown'
+        ? '/analytics/category-breakdown'
+        : name === 'analytics_cashflow_series'
+          ? '/analytics/cashflow-series'
+          : name === 'analytics_budget_consumption'
+            ? '/analytics/budget-consumption'
+            : '/analytics/net-worth-history';
+    const q = new URLSearchParams();
+    for (const key of ['period', 'from', 'to', 'accountId', 'basis', 'kind']) {
+      if (args[key] !== undefined) q.set(key, String(args[key]));
+    }
+    const qs = q.toString();
+    return qs ? `${path}?${qs}` : path;
+  }
+  if (name === 'list_budgets') return '/budgets';
+  if (name === 'check_budgets') return '/budgets/check';
+  if (name === 'budget_trends') {
+    // Dynamic resource path: only the uuid already shape-validated above can
+    // reach the URL, and the transport allowlist matches the same pattern.
+    const q = new URLSearchParams();
+    if (args.monthsBack !== undefined) q.set('monthsBack', String(args.monthsBack));
+    const qs = q.toString();
+    const path = `/budgets/${encodeURIComponent(args.budgetId)}/trends`;
+    return qs ? `${path}?${qs}` : path;
+  }
+  if (name === 'list_goals') return '/goals';
+  if (name === 'list_payables') {
+    const q = new URLSearchParams();
+    if (args.status) q.set('status', args.status);
+    if (args.type) q.set('type', args.type);
+    if (args.dueWithinDays !== undefined) q.set('dueWithinDays', String(args.dueWithinDays));
+    const qs = q.toString();
+    return qs ? `/payables?${qs}` : '/payables';
+  }
+  if (name === 'payable_reminders') return '/payables/reminders';
+  if (name === 'list_audit_logs') {
+    const q = new URLSearchParams();
+    for (const key of ['limit', 'operation', 'eventType', 'actorType', 'entityType', 'entityId']) {
+      if (args[key] !== undefined) q.set(key, String(args[key]));
+    }
+    const qs = q.toString();
+    return qs ? `/audit-logs?${qs}` : '/audit-logs';
+  }
   return `/dashboard/month-summary?yearMonth=${encodeURIComponent(args.yearMonth)}`;
 }
 
@@ -645,6 +1147,60 @@ function assertShape(name, args, body) {
   };
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     fail(`expected object, got ${Array.isArray(body) ? 'array' : body === null ? 'null' : typeof body}`);
+  }
+  if (name === 'list_budgets' || name === 'check_budgets' || name === 'budget_trends' || name === 'list_goals' || name === 'list_payables' || name === 'payable_reminders' || name === 'list_audit_logs' || name === 'analytics_budget_consumption') {
+    if (!Array.isArray(body.items)) fail('items must be an array');
+    if (!isSafeInt(body.total) || body.total < 0) fail('total must be a non-negative safe integer');
+    return body;
+  }
+  if (name === 'analytics_kpis') {
+    for (const k of [
+      'incomeCents', 'expenseCents', 'previousIncomeCents', 'previousExpenseCents',
+      'accountsTotalCents', 'netWorthCents', 'netLiquidBalanceCents', 'dueSoonCents',
+    ]) {
+      if (!isSafeInt(body[k])) fail(`${k} must be a safe integer`);
+    }
+    if (!body.period || typeof body.period !== 'object' || Array.isArray(body.period)) fail('period must be an object');
+    if (typeof body.period.from !== 'string' || typeof body.period.to !== 'string') fail('period.from/to must be strings');
+    if (!isSafeInt(body.transactionCount) || body.transactionCount < 0) fail('transactionCount must be a non-negative safe integer');
+    return body;
+  }
+  if (name === 'analytics_category_breakdown') {
+    if (!isSafeInt(body.totalCents)) fail('totalCents must be a safe integer');
+    if (!Array.isArray(body.slices)) fail('slices must be an array');
+    if (body.kind !== 'expense' && body.kind !== 'income') fail('kind must be expense|income');
+    if (!body.period || typeof body.period !== 'object' || Array.isArray(body.period)) fail('period must be an object');
+    for (const slice of body.slices) {
+      if (!slice || typeof slice !== 'object' || Array.isArray(slice)) fail('slice must be an object');
+      if (typeof slice.categoryId !== 'string' || slice.categoryId.length === 0) fail('slice categoryId must be a non-empty string');
+      if (typeof slice.name !== 'string') fail('slice name must be a string');
+      if (!isSafeInt(slice.totalCents)) fail('slice totalCents must be a safe integer');
+    }
+    if (!isSafeInt(body.transactionCount) || body.transactionCount < 0) fail('transactionCount must be a non-negative safe integer');
+    return body;
+  }
+  if (name === 'analytics_cashflow_series') {
+    if (!body.period || typeof body.period !== 'object' || Array.isArray(body.period)) fail('period must be an object');
+    for (const key of ['current', 'previous']) {
+      if (!Array.isArray(body[key])) fail(`${key} must be an array`);
+      for (const point of body[key]) {
+        if (!point || typeof point !== 'object' || Array.isArray(point)) fail(`${key} point must be an object`);
+        if (typeof point.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(point.date)) fail(`${key} point date must be YYYY-MM-DD`);
+        if (!isSafeInt(point.valueCents)) fail(`${key} point valueCents must be a safe integer`);
+      }
+    }
+    if (!isSafeInt(body.transactionCount) || body.transactionCount < 0) fail('transactionCount must be a non-negative safe integer');
+    return body;
+  }
+  if (name === 'analytics_net_worth_history') {
+    if (!Array.isArray(body.months)) fail('months must be an array');
+    for (const point of body.months) {
+      if (!point || typeof point !== 'object' || Array.isArray(point)) fail('month point must be an object');
+      if (typeof point.month !== 'string' || !/^\d{4}-\d{2}$/.test(point.month)) fail('month must be YYYY-MM');
+      if (!isSafeInt(point.netWorthCents)) fail('netWorthCents must be a safe integer');
+    }
+    if (!isSafeInt(body.transactionCount) || body.transactionCount < 0) fail('transactionCount must be a non-negative safe integer');
+    return body;
   }
   if (name === 'list_accounts' || name === 'list_credit_cards' || name === 'list_categories') {
     if (!Array.isArray(body.items)) fail('items must be an array');
@@ -833,6 +1389,67 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
       proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
       return { status: 'proposed', summary };
     }
+    if (name === 'propose_payable_create') {
+      const normalizedArgs = {
+        accountId: safe.accountId,
+        description: safe.description.trim(),
+        amountCents: safe.amountCents,
+        dueDate: safe.dueDate,
+        ...(safe.categoryId !== undefined ? { categoryId: safe.categoryId } : {}),
+      };
+      const summary = `Conta a pagar de ${formatBRL(normalizedArgs.amountCents)} em "${normalizedArgs.description}"`;
+      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      return { status: 'proposed', summary };
+    }
+    if (name === 'propose_payable_pay') {
+      const normalizedArgs = {
+        payableId: safe.payableId,
+        description: safe.description.trim(),
+        amountCents: safe.amountCents,
+        dueDate: safe.dueDate,
+        accountId: safe.accountId,
+        ...(safe.paidDate !== undefined ? { paidDate: safe.paidDate } : {}),
+      };
+      const summary = `Pagar conta "${normalizedArgs.description}" de ${formatBRL(normalizedArgs.amountCents)}`;
+      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      return { status: 'proposed', summary };
+    }
+    if (name === 'propose_transaction_update') {
+      const normalizedArgs = {
+        transactionId: safe.transactionId,
+        description: safe.description.trim(),
+        expectedDescription: safe.expectedDescription,
+      };
+      const summary = `Alterar descrição de "${normalizedArgs.expectedDescription}" para "${normalizedArgs.description}"`;
+      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      return { status: 'proposed', summary };
+    }
+    if (name === 'propose_account_update' || name === 'propose_category_update') {
+      const normalizedArgs = name === 'propose_account_update'
+        ? { accountId: safe.accountId, name: safe.name.trim(), expectedName: safe.expectedName }
+        : { categoryId: safe.categoryId, name: safe.name.trim(), expectedName: safe.expectedName };
+      const noun = name === 'propose_account_update' ? 'conta' : 'categoria';
+      const summary = `Renomear ${noun} de "${normalizedArgs.expectedName}" para "${normalizedArgs.name}"`;
+      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      return { status: 'proposed', summary };
+    }
+    if (name === 'propose_account_deactivate') {
+      // The API binds the target by accountId; accountName is an optional
+      // display-only snapshot and never a CAS key.
+      const normalizedArgs = {
+        accountId: safe.accountId,
+        ...(safe.accountName !== undefined ? { accountName: safe.accountName.trim() } : {}),
+      };
+      const summary = `Desativar conta${normalizedArgs.accountName ? ` "${normalizedArgs.accountName}"` : ''}`;
+      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      return { status: 'proposed', summary };
+    }
+    if (name === 'propose_category_deactivate') {
+      const normalizedArgs = { categoryId: safe.categoryId, expectedName: safe.expectedName };
+      const summary = `Desativar categoria "${normalizedArgs.expectedName}"`;
+      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      return { status: 'proposed', summary };
+    }
     const date = safe.date ?? new Date().toISOString().slice(0, 10);
     const baseArgs = {
       amountCents: safe.amountCents,
@@ -866,6 +1483,18 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
     get_month_summary: (args, host, opts) => run('get_month_summary', args, host, opts),
     list_categories: (args, host, opts) => run('list_categories', args, host, opts),
     list_card_statements: (args, host, opts) => run('list_card_statements', args, host, opts),
+    analytics_kpis: (args, host, opts) => run('analytics_kpis', args, host, opts),
+    analytics_category_breakdown: (args, host, opts) => run('analytics_category_breakdown', args, host, opts),
+    analytics_cashflow_series: (args, host, opts) => run('analytics_cashflow_series', args, host, opts),
+    analytics_budget_consumption: (args, host, opts) => run('analytics_budget_consumption', args, host, opts),
+    analytics_net_worth_history: (args, host, opts) => run('analytics_net_worth_history', args, host, opts),
+    list_budgets: (args, host, opts) => run('list_budgets', args, host, opts),
+    check_budgets: (args, host, opts) => run('check_budgets', args, host, opts),
+    budget_trends: (args, host, opts) => run('budget_trends', args, host, opts),
+    list_goals: (args, host, opts) => run('list_goals', args, host, opts),
+    list_payables: (args, host, opts) => run('list_payables', args, host, opts),
+    payable_reminders: (args, host, opts) => run('payable_reminders', args, host, opts),
+    list_audit_logs: (args, host, opts) => run('list_audit_logs', args, host, opts),
     propose_expense: (args, host, opts) => propose('propose_expense', args, host, opts),
     propose_income: (args, host, opts) => propose('propose_income', args, host, opts),
     propose_card_purchase: (args, host, opts) => propose('propose_card_purchase', args, host, opts),
@@ -873,5 +1502,12 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
     propose_statement_payment: (args, host, opts) => propose('propose_statement_payment', args, host, opts),
     propose_account_create: (args, host, opts) => propose('propose_account_create', args, host, opts),
     propose_category_create: (args, host, opts) => propose('propose_category_create', args, host, opts),
+    propose_transaction_update: (args, host, opts) => propose('propose_transaction_update', args, host, opts),
+    propose_account_update: (args, host, opts) => propose('propose_account_update', args, host, opts),
+    propose_account_deactivate: (args, host, opts) => propose('propose_account_deactivate', args, host, opts),
+    propose_category_update: (args, host, opts) => propose('propose_category_update', args, host, opts),
+    propose_category_deactivate: (args, host, opts) => propose('propose_category_deactivate', args, host, opts),
+    propose_payable_create: (args, host, opts) => propose('propose_payable_create', args, host, opts),
+    propose_payable_pay: (args, host, opts) => propose('propose_payable_pay', args, host, opts),
   };
 }

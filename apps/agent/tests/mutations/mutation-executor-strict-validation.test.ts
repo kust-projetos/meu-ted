@@ -71,6 +71,90 @@ describe('MutationExecutor strict execute validation (RED)', () => {
     expect(result).toEqual({ status: 'succeeded', operationId: pendingId, receipt: statementReceipt });
   });
 
+  it('accepts the payable-create receipt (kind-only binding)', async () => {
+    const payableId = 'payable-strict-1';
+    const payableReceipt = {
+      mutationId: 'mut-payable-1',
+      mutationKind: 'payables.create',
+      status: 'succeeded',
+      affectedTargets: ['payables', 'dashboard-summary', 'quick-insights'],
+      operationId: pendingId,
+      entity: { type: 'payable', id: payableId },
+    };
+    const request = vi.fn().mockResolvedValueOnce({
+      id: pendingId,
+      status: 'succeeded',
+      execution: { status: 'succeeded', operationId: payableId, receipt: payableReceipt },
+    });
+    const executor = new MutationExecutor({ request });
+    const result = await executor.execute({ ...input, expected: { tool: 'payables.create' } });
+    expect(result).toEqual({ status: 'succeeded', operationId: pendingId, receipt: payableReceipt });
+  });
+
+  it('accepts the payable-pay receipt bound to the pre-existing payable', async () => {
+    const payableId = 'payable-strict-1';
+    const payableReceipt = {
+      mutationId: 'mut-payable-2',
+      mutationKind: 'payables.pay',
+      status: 'succeeded',
+      affectedTargets: ['payables', 'transactions', 'accounts', 'dashboard-summary', 'quick-insights'],
+      operationId: pendingId,
+      entity: { type: 'payable', id: payableId },
+    };
+    const request = vi.fn().mockResolvedValueOnce({
+      id: pendingId,
+      status: 'succeeded',
+      execution: { status: 'succeeded', operationId: payableId, receipt: payableReceipt },
+    });
+    const executor = new MutationExecutor({ request });
+    const result = await executor.execute({
+      ...input,
+      expected: { tool: 'payables.pay', entityId: payableId },
+    });
+    expect(result).toEqual({ status: 'succeeded', operationId: pendingId, receipt: payableReceipt });
+  });
+
+  it('fails closed when the payable-pay receipt targets a different payable', async () => {
+    const payableId = 'payable-strict-1';
+    const payableReceipt = {
+      mutationId: 'mut-payable-3',
+      mutationKind: 'payables.pay',
+      status: 'succeeded',
+      affectedTargets: ['payables', 'transactions', 'accounts', 'dashboard-summary', 'quick-insights'],
+      operationId: pendingId,
+      entity: { type: 'payable', id: payableId },
+    };
+    const request = vi.fn().mockResolvedValueOnce({
+      id: pendingId,
+      status: 'succeeded',
+      execution: { status: 'succeeded', operationId: payableId, receipt: payableReceipt },
+    });
+    const executor = new MutationExecutor({ request });
+    await expect(
+      executor.execute({ ...input, expected: { tool: 'payables.pay', entityId: 'payable-other' } }),
+    ).rejects.toThrow('approval.incomplete_result');
+  });
+
+  it('fails closed when a payable receipt carries a transaction entity', async () => {
+    const payableReceipt = {
+      mutationId: 'mut-payable-4',
+      mutationKind: 'payables.create',
+      status: 'succeeded',
+      affectedTargets: ['payables', 'dashboard-summary', 'quick-insights'],
+      operationId: pendingId,
+      entity: { type: 'transaction', id: transactionId },
+    };
+    const request = vi.fn().mockResolvedValueOnce({
+      id: pendingId,
+      status: 'succeeded',
+      execution: { status: 'succeeded', operationId: transactionId, receipt: payableReceipt },
+    });
+    const executor = new MutationExecutor({ request });
+    await expect(
+      executor.execute({ ...input, expected: { tool: 'payables.create' } }),
+    ).rejects.toThrow('approval.incomplete_result');
+  });
+
   it('fails closed when the statement receipt targets a different invoice', async () => {
     const statementId = 'stmt-strict-1';
     const statementReceipt = {

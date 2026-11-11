@@ -900,6 +900,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
             ...(typeof args.categoryId === 'string' ? { categoryId: args.categoryId } : {}),
             ...(typeof args.statementId === 'string' ? { statementId: args.statementId } : {}),
             ...(typeof args.fromAccountId === 'string' ? { fromAccountId: args.fromAccountId } : {}),
+            ...(typeof args.payableId === 'string' ? { payableId: args.payableId } : {}),
             ...(record.status === 'failed' && record.tool === 'categories.deactivate' && record.failureCode === 'in_use' ? { failureCode: 'in_use' } : {}),
             ...(presentation ? { presentation } : {}),
           };

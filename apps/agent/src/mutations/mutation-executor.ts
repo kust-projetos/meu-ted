@@ -96,6 +96,15 @@ const receiptFromExecution = (
   if (data.mutationKind === 'accounts.deactivate') return undefined;
   if (data.mutationKind === 'accounts.update') return undefined;
   if (data.mutationKind === 'categories.create') return undefined;
+  if (data.mutationKind === 'categories.update') return undefined;
+  if (data.mutationKind === 'categories.deactivate') return undefined;
+  // Non-transaction kinds never satisfy the generic transaction linkage: their
+  // receipts must carry their own entity type and are parsed by the dedicated
+  // validators below. A `payables.*`/statement kind with a transaction entity
+  // is a swapped result, never a success.
+  if (data.mutationKind === 'cards.statement.pay') return undefined;
+  if (data.mutationKind === 'payables.create') return undefined;
+  if (data.mutationKind === 'payables.pay') return undefined;
   if (entity.type !== 'transaction') return undefined;
   if (entity.id !== transactionId) return undefined;
   // Identity linkage: when the execution names a mutationId it must agree
@@ -251,6 +260,50 @@ const receiptFromStatementExecution = (
   return receipt as MutationReceipt;
 };
 
+/**
+ * payables.create / payables.pay receipt: `{ mutationKind: 'payables.create' |
+ * 'payables.pay', operationId: <pendingId>, entity: { type: 'payable', id:
+ * <payableId> } }`. Same strictness as the sibling parsers (origin linkage,
+ * persisted-payable linkage, mutationId agreement). `payables.pay` is a money
+ * movement: expected MUST name the pre-existing payable id and the entity must
+ * match it. `payables.create` binds kind only — the payable does not exist
+ * yet, so an absent expected entity id never blocks honest creation.
+ */
+const receiptFromPayableExecution = (
+  execution: unknown,
+  pendingOperationId: string,
+  payableId: string,
+  expected?: MutationExpectedContext,
+): MutationReceipt | undefined => {
+  if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return undefined;
+  const receipt = (execution as { receipt?: unknown }).receipt;
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return undefined;
+  const data = receipt as Record<string, unknown>;
+  if (data.mutationKind !== 'payables.create' && data.mutationKind !== 'payables.pay') return undefined;
+  if (data.status !== 'succeeded') return undefined;
+  if (typeof data.mutationId !== 'string' || data.mutationId.trim().length === 0) return undefined;
+  if (data.operationId !== pendingOperationId) return undefined;
+  const entity = data.entity as { type?: unknown; id?: unknown } | undefined;
+  if (!entity || typeof entity !== 'object') return undefined;
+  if (entity.type !== 'payable') return undefined;
+  if (entity.id !== payableId) return undefined;
+  if (expected === undefined || data.mutationKind !== expected.tool) return undefined;
+  if (data.mutationKind === 'payables.pay') {
+    if (expected.entityId === undefined || entity.id !== expected.entityId) return undefined;
+  } else if (expected.entityId !== undefined && entity.id !== expected.entityId) {
+    return undefined;
+  }
+  const executionMutationId = (execution as { mutationId?: unknown }).mutationId;
+  if (
+    typeof executionMutationId === 'string' &&
+    executionMutationId.trim().length > 0 &&
+    data.mutationId !== executionMutationId
+  ) {
+    return undefined;
+  }
+  return receipt as MutationReceipt;
+};
+
 export class MutationExecutor {
   private readonly consumed = new Set<string>();
   private readonly events: (eventType: string, fields: Record<string, unknown>) => void;
@@ -320,7 +373,8 @@ export class MutationExecutor {
     const receipt = receiptFromExecution(execution, pendingId, transactionId, expected)
       ?? receiptFromAccountExecution(execution, pendingId, transactionId, expected)
       ?? receiptFromCategoryExecution(execution, pendingId, transactionId, expected)
-      ?? receiptFromStatementExecution(execution, pendingId, transactionId, expected);
+      ?? receiptFromStatementExecution(execution, pendingId, transactionId, expected)
+      ?? receiptFromPayableExecution(execution, pendingId, transactionId, expected);
     if (!receipt) failClosed();
     this.emit('mutation.executed', { status: 'succeeded' });
     return { status: 'succeeded', operationId: input.operationId, receipt };

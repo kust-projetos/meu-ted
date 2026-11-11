@@ -83,6 +83,8 @@ const describePendingOperationEffect = (tool: string): string => {
   if (tool === "accounts.update") return "A conta será renomeada nos seus dados.";
   if (tool === "accounts.create") return "A conta será criada nos seus dados.";
   if (tool === "accounts.deactivate") return "A conta será desativada nos seus dados.";
+  if (tool === "payables.create") return "A conta a pagar será criada nos seus dados; nenhum valor será debitado agora.";
+  if (tool === "payables.pay") return "O pagamento criará a despesa no histórico e debitará a conta pagadora.";
   return "O valor será registrado no seu histórico financeiro.";
 };
 

@@ -330,6 +330,18 @@ export function tedConfig(profileOrOpts, { p3Writes = false } = {}) {
           { action: 'ted.finance.read', resource: 'list_credit_cards', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'list_recent_transactions', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'spending_insights', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'analytics_kpis', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'analytics_category_breakdown', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'analytics_cashflow_series', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'analytics_budget_consumption', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'analytics_net_worth_history', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'list_budgets', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'check_budgets', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'budget_trends', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'list_goals', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'list_payables', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'payable_reminders', effect: 'allow' },
+          { action: 'ted.finance.read', resource: 'list_audit_logs', effect: 'allow' },
           // P3 local write slice: these permissions are only meaningful when
           // the plugin registers the proposal tools
           // (TED_OPENCODE_P3_WRITES_ENABLED=1). Default config stays exactly
@@ -343,6 +355,13 @@ export function tedConfig(profileOrOpts, { p3Writes = false } = {}) {
                 { action: 'ted.finance.read', resource: 'propose_statement_payment', effect: 'allow' },
                 { action: 'ted.finance.read', resource: 'propose_account_create', effect: 'allow' },
                 { action: 'ted.finance.read', resource: 'propose_category_create', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'propose_transaction_update', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'propose_account_update', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'propose_account_deactivate', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'propose_category_update', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'propose_category_deactivate', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'propose_payable_create', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'propose_payable_pay', effect: 'allow' },
               ]
             : []),
         ],

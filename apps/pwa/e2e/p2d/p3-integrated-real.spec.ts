@@ -86,7 +86,10 @@ async function openTed(page: Page) {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: userEmail, password: "test-password-123", name: "TED P3.9 Real" }),
   })).status, email);
-  expect(status).toBe(200);
+  // The P2D stack is shared by both tests in this file: the first one may
+  // already have created this synthetic user, so 422 (already registered) is
+  // an acceptable idempotent outcome for the second test.
+  expect([200, 422]).toContain(status);
   await page.locator("#email").fill(email);
   await page.locator("#password").fill("test-password-123");
   await page.getByRole("button", { name: "Entrar" }).click();
@@ -148,7 +151,20 @@ async function decide(page: Page, button: ReturnType<Page["getByRole"]>) {
     { timeout: 180000 },
   );
   await button.click();
-  return response;
+  const res = await response;
+  if (res.status() !== 200) {
+    // Diagnostic only: the Agent maps API failures to 502; keep the sanitized
+    // API code/message so the failure names the real cause (no secrets).
+    const body = await res.text().catch(() => "");
+    const log = await fetch(`${CTL}/p2d/agent-log`).then((r) => r.json()).catch(() => null) as
+      | { lastLines?: string[] }
+      | null;
+    const failureLines = (log?.lastLines ?? []).filter((line) => /ted\.approval|decision_failed|approval_failed/i.test(line));
+    throw new Error(
+      `decision failed status=${res.status()} body=${body.slice(0, 300)} agentFailure=${JSON.stringify(failureLines).slice(0, 700)}`,
+    );
+  }
+  return res;
 }
 
 test("P3.9 real six-flow: 7 operations, 7 confirmations, continuity and recovery", async ({ page }, info) => {
@@ -518,6 +534,172 @@ test("P3.9 real six-flow: 7 operations, 7 confirmations, continuity and recovery
       failedAt,
       error: String((err as Error)?.message || err).slice(0, 400),
     }).catch(() => {});
+    throw err;
+  }
+});
+
+/**
+ * V1 functional completion — real-model journeys for the tools added in the
+ * V1 closure: financial reads, account/description updates and payables.
+ * Reuses the SAME P2D live-real stack (no new infrastructure); runs after the
+ * P3.9 pilot in the same file so `pnpm test:p2d-p3-pilot-real` still drives it.
+ */
+test("P3.9 real six-flow — V1 functional completion: reads, CRUD and payables with the real model", async ({ page }, info) => {
+  test.setTimeout(2_400_000);
+  const evidence: Record<string, unknown> = {
+    scope: "v1-functional-completion",
+    criterion: "V1_FUNCTIONAL_REAL_PASS",
+    model: "opencode-go/deepseek-v4.1-flash",
+    steps: [] as Array<Record<string, unknown>>,
+  };
+  const persist = async (extra: Record<string, unknown> = {}) => {
+    const ev = { ...evidence, ...extra };
+    const out = path.resolve(process.cwd(), "test-results", "v1-functional-real", "evidence.json");
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, `${JSON.stringify(ev, null, 2)}\n`, "utf8");
+    await info.attach("v1-functional-real-evidence", { path: out, contentType: "application/json" });
+    return ev;
+  };
+  const steps = evidence.steps as Array<Record<string, unknown>>;
+  const mark = (name: string, data: Record<string, unknown>) => {
+    steps.push({ name, result: "PASS", ...data });
+  };
+
+  async function waitTurnEnd() {
+    // The composer is intentionally disabled while the input is empty, so
+    // "send enabled" is NOT a turn-completion signal. The stable signal is the
+    // busy label disappearing; the assistant bubble/history follows.
+    await expect(page.getByText(/escrevendo\.\.\.|conectando\./i)).toHaveCount(0, { timeout: 240000 });
+    await page.waitForTimeout(1500);
+  }
+
+  async function waitCard(title: string, confirmLabel: RegExp, nudge: string) {
+    let confirm = await waitForConfirm(page, confirmLabel);
+    let used = 0;
+    while (!confirm && used < 2) {
+      await send(page, nudge);
+      confirm = await waitForConfirm(page, confirmLabel);
+      used++;
+    }
+    if (!confirm) {
+      await expect(page.getByRole("button", { name: confirmLabel }).last()).toBeVisible({ timeout: 30000 });
+    }
+    await expect(page.getByText(title).last()).toBeVisible({ timeout: 60000 });
+    return page.getByRole("button", { name: confirmLabel }).last();
+  }
+
+  try {
+    await openTed(page);
+    const before = await state();
+    const itau = byName(before.accounts, "Itaú");
+    const nubank = byName(before.accounts, "Nubank");
+    expect(itau, "Itaú account required").toBeTruthy();
+    expect(nubank, "Nubank account required").toBeTruthy();
+    expect(nubank!.name).toBe("Nubank");
+
+    // Journey 1 — financial reads (budgets/goals/payables/analytics/audit)
+    // in one grounded turn. No write may occur.
+    const readsBase = (await stats()).financeReads?.length ?? 0;
+    const txBase = (await state()).transactions.length;
+    await send(page, "Quais são meus orçamentos, metas, contas a pagar e KPIs deste mês?");
+    await waitTurnEnd();
+    await expect
+      .poll(async () => {
+        const reads = (await stats()).financeReads ?? [];
+        const routes = reads.slice(readsBase).map((r) => String(r.route ?? ""));
+        return ["/budgets", "/goals", "/payables", "/analytics/kpis"].filter((r) => routes.some((x) => x === r || x.startsWith(`${r}?`)));
+      }, { timeout: 180000 })
+      .toEqual(["/budgets", "/goals", "/payables", "/analytics/kpis"]);
+    expect((await state()).transactions.length).toBe(txBase);
+    mark("financial-reads", { routes: ((await stats()).financeReads ?? []).slice(readsBase).map((r) => r.route) });
+    await persist({ verdict: "IN_PROGRESS" });
+
+    // Journey 2 — account rename through the conversational CRUD.
+    await send(page, "Renomeie a conta Nubank para Nubank Principal.");
+    const renameConfirm = await waitCard("Renomear conta", /^Confirmar$/, "Prossiga com a proposta de renomear a conta Nubank para Nubank Principal.");
+    expect((await state()).accounts.some((a) => a.name === "Nubank Principal")).toBe(false);
+    const renameRes = await decide(page, renameConfirm);
+    expect(renameRes.status()).toBe(200);
+    const renameBody = (await renameRes.json()) as { status?: string; receipt?: { mutationKind?: string; entity?: { id?: string } } };
+    expect(renameBody.status).toBe("succeeded");
+    expect(renameBody.receipt?.mutationKind).toBe("accounts.update");
+    await expect.poll(async () => (await state()).accounts.some((a) => a.name === "Nubank Principal"), { timeout: 60000 }).toBe(true);
+    mark("account-rename", { receipt: renameBody.receipt });
+    await persist({ verdict: "IN_PROGRESS" });
+
+    // Journey 3 — description-only transaction update. The expense is created
+    // HERE with a description the pilot does NOT use: running both tests in the
+    // same stack must not leave two identical expenses (which correctly routes
+    // the update turn into disambiguation) and this test must not depend on
+    // another test having populated the ledger first.
+    await send(page, "Registre uma despesa de R$ 42,00 de Aluguel do escritório, na categoria Aluguel, paga pela conta Itaú, em 07/11/2026.");
+    const expenseConfirm = await waitCard("Confirmar despesa", /Confirmar R\$ 42,00/, "Prossiga com a proposta da despesa de R$ 42,00 de Aluguel do escritório.");
+    const expenseRes = await decide(page, expenseConfirm);
+    expect(expenseRes.status()).toBe(200);
+    const expenseBody = (await expenseRes.json()) as { status?: string; receipt?: { mutationKind?: string } };
+    expect(expenseBody.status).toBe("succeeded");
+    expect(expenseBody.receipt?.mutationKind).toBe("transactions.expense.create");
+    const aluguel = (await state()).transactions.find(
+      (t) => t.kind === "expense" && t.description?.toLowerCase().includes("aluguel do escritório") && t.amountCents === 4200,
+    );
+    expect(aluguel, "Aluguel expense created by this journey").toBeTruthy();
+    const aluguelId = aluguel!.id;
+    await send(page, "Altere a descrição da despesa Aluguel do escritório para Aluguel do escritório novembro.");
+    const descConfirm = await waitCard("Alterar descrição do lançamento", /^Confirmar$/, "Prossiga com a proposta de alterar a descrição da despesa Aluguel do escritório para Aluguel do escritório novembro.");
+    const descRes = await decide(page, descConfirm);
+    expect(descRes.status()).toBe(200);
+    const descBody = (await descRes.json()) as { status?: string; receipt?: { mutationKind?: string } };
+    expect(descBody.status).toBe("succeeded");
+    expect(descBody.receipt?.mutationKind).toBe("transactions.update");
+    await expect
+      .poll(async () => (await state()).transactions.find((t) => t.id === aluguelId)?.description, { timeout: 60000 })
+      .toBe("Aluguel do escritório novembro");
+    mark("transaction-description-update", { receipt: descBody.receipt });
+    await persist({ verdict: "IN_PROGRESS" });
+
+    // Journey 4 — create an accounts-payable through the conversation.
+    await send(page, "Crie uma conta a pagar de R$ 99,00 para Internet, vencendo em 20/11/2026, na conta Itaú.");
+    const createConfirm = await waitCard("Criar conta a pagar", /Confirmar R\$ 99,00/, "Prossiga com a proposta de criar a conta a pagar de R$ 99,00 para Internet, vencendo em 20/11/2026, na conta Itaú.");
+    const createRes = await decide(page, createConfirm);
+    expect(createRes.status()).toBe(200);
+    const createBody = (await createRes.json()) as { status?: string; receipt?: { mutationKind?: string; entity?: { id?: string } } };
+    expect(createBody.status).toBe("succeeded");
+    expect(createBody.receipt?.mutationKind).toBe("payables.create");
+    expect(typeof createBody.receipt?.entity?.id).toBe("string");
+    mark("payable-create", { receipt: createBody.receipt });
+    await persist({ verdict: "IN_PROGRESS" });
+
+    // Journey 5 — pay that payable: exactly one expense, one balance debit.
+    const beforePay = await state();
+    const itauBalanceBefore = balance(beforePay.accounts, itau!.id)!;
+    const txBeforePay = beforePay.transactions.length;
+    await send(page, "Pague a conta a pagar Internet de R$ 99,00 usando a conta Itaú.");
+    const payConfirm = await waitCard("Pagar conta", /Confirmar R\$ 99,00/, "Prossiga com a proposta de pagar a conta a pagar Internet de R$ 99,00 usando a conta Itaú.");
+    const payRes = await decide(page, payConfirm);
+    expect(payRes.status()).toBe(200);
+    const payBody = (await payRes.json()) as { status?: string; receipt?: { mutationKind?: string; entity?: { id?: string } } };
+    expect(payBody.status).toBe("succeeded");
+    expect(payBody.receipt?.mutationKind).toBe("payables.pay");
+    await expect.poll(async () => (await state()).transactions.length, { timeout: 60000 }).toBe(txBeforePay + 1);
+    expect(balance((await state()).accounts, itau!.id)).toBe(itauBalanceBefore - 9900);
+    mark("payable-pay", { receipt: payBody.receipt, itauDelta: -9900 });
+    await persist({ verdict: "IN_PROGRESS" });
+
+    // Journey 6 — ambiguous date must ask before proposing (issue #280).
+    const proposalsBefore = proposalCount(await journal());
+    const writesBefore = (await journal()).financialWrites?.length ?? 0;
+    await send(page, "Gastei R$ 20 em 15/03.");
+    await waitTurnEnd();
+    // Authoritative signals: an ambiguous date must NOT create a proposal and
+    // must NOT write. The card is only a projection of a proposal, so polling
+    // it here raced the history refresh; the journal is the source of truth.
+    expect(proposalCount(await journal())).toBe(proposalsBefore);
+    expect(((await journal()).financialWrites ?? []).length).toBe(writesBefore);
+    mark("ambiguous-date-clarification", { proposalsBefore, proposalsAfter: proposalCount(await journal()) });
+
+    await persist({ verdict: "V1_FUNCTIONAL_REAL_PASS", "V1_FUNCTIONAL_REAL_PASS": "SIM" });
+  } catch (err) {
+    await persist({ verdict: "FAIL", "V1_FUNCTIONAL_REAL_PASS": "NÃO", error: String((err as Error)?.message || err).slice(0, 400) }).catch(() => {});
     throw err;
   }
 });

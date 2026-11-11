@@ -24,6 +24,7 @@ import {
 import { HttpFinanceTransport, isRouteAllowlisted } from '../src/transport.mjs';
 import {
   PRODUCT_TOOL_NAMES,
+  P3_READ_TOOL_NAMES,
   productToolDefs,
   defineTedFinancePlugin,
   isP3ReadsEnabled,
@@ -40,6 +41,7 @@ const host = Object.freeze({
 const OPT_IN_ENV = Object.freeze({ TED_OPENCODE_P3_READS_ENABLED: '1', NODE_ENV: 'test' });
 const PROD_ENV = Object.freeze({ TED_OPENCODE_P3_READS_ENABLED: '1', NODE_ENV: 'production' });
 const OFF_ENV = Object.freeze({ NODE_ENV: 'test' });
+const EXPECTED_READS = [...PRODUCT_TOOL_NAMES, ...P3_READ_TOOL_NAMES].sort();
 
 function stubTransport(cases) {
   return async ({ route, method, host: h }) => {
@@ -71,7 +73,7 @@ describe('p3 category read: product catalog gating', () => {
   it('local opt-in exposes list_categories with complete input AND output schemas', () => {
     assert.equal(isP3ReadsEnabled(OPT_IN_ENV), true);
     const defs = productToolDefs(OPT_IN_ENV);
-    assert.deepEqual(defs.map((d) => d.name).sort(), ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards', 'list_recent_transactions', 'spending_insights']);
+    assert.deepEqual(defs.map((d) => d.name).sort(), EXPECTED_READS);
     const cat = defs.find((d) => d.name === 'list_categories');
     assert.ok(cat.input && cat.input.type === 'object', 'list_categories needs input schema (native 2.2.4)');
     assert.deepEqual(cat.input.properties.kind.enum, ['expense', 'income']);
@@ -93,7 +95,7 @@ describe('p3 category read: product catalog gating', () => {
     const addedOptIn = [];
     const optInDef = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), { env: OPT_IN_ENV });
     await optInDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedOptIn.push(t) }); } } });
-    assert.deepEqual(addedOptIn.map((t) => t.name).sort(), ['get_month_summary', 'list_accounts', 'list_card_statements', 'list_categories', 'list_credit_cards', 'list_recent_transactions', 'spending_insights']);
+    assert.deepEqual(addedOptIn.map((t) => t.name).sort(), EXPECTED_READS);
 
     const addedProd = [];
     const prodDef = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), { env: PROD_ENV });

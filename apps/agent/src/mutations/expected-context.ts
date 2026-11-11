@@ -32,6 +32,12 @@ const SENSITIVE_CATEGORY_TOOLS: ReadonlySet<string> = new Set([
 const SENSITIVE_TRANSACTION_TOOLS: ReadonlySet<string> = new Set(['transactions.update']);
 /** P3.6: the statement payment binds the pre-existing invoice id. */
 const SENSITIVE_STATEMENT_TOOLS: ReadonlySet<string> = new Set(['cards.statement.pay']);
+/**
+ * V1 completion: paying a payable moves money, so the pre-existing payable id
+ * is REQUIRED. `payables.create` stays kind-only (the payable does not exist
+ * yet) — same policy as the account/category creations.
+ */
+const SENSITIVE_PAYABLE_TOOLS: ReadonlySet<string> = new Set(['payables.pay']);
 
 /**
  * Tools whose receipt binds a PRE-EXISTING entity id. Without a resolvable
@@ -39,10 +45,10 @@ const SENSITIVE_STATEMENT_TOOLS: ReadonlySet<string> = new Set(['cards.statement
  * transport (never confirm/execute blind).
  */
 export const requiresExpectedEntity = (tool: string): boolean =>
-  SENSITIVE_ACCOUNT_TOOLS.has(tool) || SENSITIVE_CATEGORY_TOOLS.has(tool) || SENSITIVE_TRANSACTION_TOOLS.has(tool) || SENSITIVE_STATEMENT_TOOLS.has(tool);
+  SENSITIVE_ACCOUNT_TOOLS.has(tool) || SENSITIVE_CATEGORY_TOOLS.has(tool) || SENSITIVE_TRANSACTION_TOOLS.has(tool) || SENSITIVE_STATEMENT_TOOLS.has(tool) || SENSITIVE_PAYABLE_TOOLS.has(tool);
 
 export const resolveExpectedContext = (
-  record: Pick<ActiveOperationRecord, 'tool' | 'accountId' | 'categoryId' | 'statementId'> & {
+  record: Pick<ActiveOperationRecord, 'tool' | 'accountId' | 'categoryId' | 'statementId' | 'payableId'> & {
     presentation?: { account?: { id?: unknown; label?: unknown } | null; category?: { id?: unknown; label?: unknown } | null; statement?: { id?: unknown; label?: unknown } | null; transactionTargetId?: unknown } | null;
   } | null | undefined,
 ): MutationExpectedContext | undefined => {
@@ -61,6 +67,11 @@ export const resolveExpectedContext = (
     const entityId = presentationId || storedId;
     if (!entityId) return undefined;
     return { tool, entityId };
+  }
+  if (SENSITIVE_PAYABLE_TOOLS.has(tool)) {
+    const storedId = typeof record?.payableId === 'string' ? record.payableId.trim() : '';
+    if (!storedId) return undefined;
+    return { tool, entityId: storedId };
   }
   if (SENSITIVE_CATEGORY_TOOLS.has(tool)) {
     const fromPresentation =
