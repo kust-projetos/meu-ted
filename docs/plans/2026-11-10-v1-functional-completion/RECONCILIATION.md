@@ -159,12 +159,20 @@ validação efetiva do teste de componente veio do CI Linux.
 - Correção PWA: resposta de turno multi-ferramenta não é mais anexada duas
   vezes quando o histórico já a traz com o mesmo `turnId` (chave React
   duplicada); teste de identidade cobre o caso.
-- **Fase 5 (externa/operacional):** Bearer legado (consulta ao banco canônico),
-  isolamento WebSocket (`TED_PRIVATE_VIEWS_ENABLED` permanece desligada),
-  flakes de CI/PWA, smoke de produção, deploy, rollback e fechamento de
-  issues/PRs. Fechar PR #284/issue #283 é ação externa e requer confirmação do
-  usuário; a evidência local mostra `better-auth@1.7.7` instalado e o upgrade
-  já integrado em `a9ace19`.
+- **Fase 5 (externa/operacional):** isolamento WebSocket/per-ator (#269)
+  permanece P2 com `TED_PRIVATE_VIEWS_ENABLED` desligada; smoke de produção,
+  deploy, rollback e ativação de funcionalidades seguem pendentes de
+  autorização explícita.
+- **Release B (D11-R2):** janela conferida em 2026-11-11 na Contabo (somente
+  SELECT): **0 eventos** `auth.request.legacy_bearer_used` após a âncora
+  `2026-10-19T13:23:55.399917Z` (total histórico 406). Gate **PASS**; o flip
+  (`SESSION_BEARER_FALLBACK_ENABLED=off` + rebuild da PWA com
+  `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`) permanece pendente de autorização de
+  produção.
+- **better-auth (#283/#284):** a `main` já fixa `better-auth@1.7.7` (versão
+  corrigida do GHSA-965c-763c-88jm). `security:deps` sem critical e
+  `apps/api/tests/auth` **319 passed | 2 skipped**. Issue e PR antigos fechados
+  como corrigido/superseded.
 - **Live/E2E:** nenhum deploy e nenhum dado real; apenas o workspace sintético
   do P2D. O provider reportou `cost: 0` nas mensagens analisadas; faturamento
   não confirmado.
