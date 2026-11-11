@@ -126,14 +126,31 @@ validação efetiva do teste de componente veio do CI Linux.
 
 ### Pendente / não executado
 
-- **Fase 4 (datas/contexto/ambiguidade):** requer campanha com modelo real
-  (autorização de provider/modelo/teto). O runtime não possui system prompt
-  configurável; a regra de data ambígua precisa ser validada no modelo real e,
-  se necessário, implementada no perfil/instrução do agente.
+- **Fase 4 (campanha live): BLOCKED_PROVIDER.** O piloto P3.9 real passou
+  **7/7** duas vezes após a correção do prompt (commit `0835cb7`): 7
+  propostas/7 confirmações/7 recibos, sem escrita antes de aprovação.
+- Um turno de leitura nova executou `list_budgets`, `list_goals`,
+  `list_payables` e `analytics_kpis` com sucesso e produziu resposta
+  fundamentada (workspace sintético vazio); as tentativas seguintes
+  retornaram **HTTP 429 `provider.rate-limit`** (“The inference service is
+  overloaded”, `retryAfterMs` ~25–29 s). Nenhuma escrita/duplicidade.
+- Correções de harness aplicadas: allowlist live-real do P2D agora inclui as
+  leituras V1 (`/budgets`, `/goals`, `/payables`, `/analytics/*`,
+  `/transactions`, `/audit-logs`, trends por UUID), com teste offline
+  dedicado; o spec P2D foi ajustado para não usar “botão enviar habilitado”
+  como sinal de fim de turno (o composer fica desabilitado com input vazio).
+- Correção PWA: resposta de turno multi-ferramenta não é mais anexada duas
+  vezes quando o histórico já a traz com o mesmo `turnId` (chave React
+  duplicada); teste de identidade cobre o caso.
+- **Fase 4 (datas/contexto/ambiguidade):** requer nova janela de provider.
+  O runtime não possui system prompt configurável; a regra de data ambígua
+  está nas descrições das ferramentas e precisa de campanha real.
 - **Fase 5:** Bearer legado (consulta ao banco canônico), isolamento WebSocket
   (`TED_PRIVATE_VIEWS_ENABLED` permanece desligada), flakes de CI/PWA, smoke de
   produção, deploy, rollback e fechamento de issues/PRs. Fechar PR #284/issue
   #283 é ação externa e requer confirmação do usuário; a evidência local mostra
   `better-auth@1.7.7` instalado e o upgrade já integrado em `a9ace19`.
-- **Live/E2E:** nenhum deploy, nenhum dado real, nenhuma inferência paga.
+- **Live/E2E:** nenhum deploy, nenhum dado real, nenhuma inferência paga além
+  da campanha acima. O provider reportou `cost: 0` nas mensagens analisadas;
+  faturamento não confirmado.
 
