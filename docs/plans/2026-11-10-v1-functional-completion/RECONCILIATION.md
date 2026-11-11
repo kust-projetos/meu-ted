@@ -163,12 +163,20 @@ validação efetiva do teste de componente veio do CI Linux.
   permanece P2 com `TED_PRIVATE_VIEWS_ENABLED` desligada; smoke de produção,
   deploy, rollback e ativação de funcionalidades seguem pendentes de
   autorização explícita.
-- **Release B (D11-R2):** janela conferida em 2026-11-11 na Contabo (somente
-  SELECT): **0 eventos** `auth.request.legacy_bearer_used` após a âncora
-  `2026-10-19T13:23:55.399917Z` (total histórico 406). Gate **PASS**; o flip
-  (`SESSION_BEARER_FALLBACK_ENABLED=off` + rebuild da PWA com
-  `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`) permanece pendente de autorização de
-  produção.
+- **Release B (D11-R2): CONCLUÍDA em 2026-11-11.** A janela foi conferida na
+  Contabo (somente SELECT): **0 eventos** `auth.request.legacy_bearer_used`
+  após `2026-10-19T13:23:55.399917Z` (total histórico 406). O flip foi
+  executado: `SESSION_BEARER_FALLBACK_ENABLED=off` na API e build da PWA com
+  `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` (PR #320); bearer-only retorna 401 e
+  device/delegated tokens não mudam.
+- **Deploy de produção (2026-11-11):** API `219a4d6` na Contabo (wrapper
+  source-build, backup `pi-db-20261111T153706Z`, rollback tag
+  `pi-finance-api:rollback-pre-219a4d6`), Agent `57809a3` e PWA `5e69dec` na
+  Cloudflare (ATTESTED). A cópia do wrapper na VPS estava desatualizada (sem o
+  retry do gate de borda do #208) e foi sincronizada com
+  `scripts/ops/api-release-20260930.sh`; duas tentativas anteriores fizeram
+  rollback verificado por falso negativo do `/health` externo, sem impacto
+  (container antigo saudável).
 - **better-auth (#283/#284):** a `main` já fixa `better-auth@1.7.7` (versão
   corrigida do GHSA-965c-763c-88jm). `security:deps` sem critical e
   `apps/api/tests/auth` **319 passed | 2 skipped**. Issue e PR antigos fechados

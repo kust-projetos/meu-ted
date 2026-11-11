@@ -47,7 +47,11 @@ jobs:
           node scripts/validate-deploy-origins.mjs --name PRODUCTION_SMOKE_URL --expect pwa --env-file "$GITHUB_ENV"
 
       - name: Install Playwright browser
-        run: pnpm --dir apps/pwa exec playwright install --with-deps chromium
+        # Same fallback as PWA CI: a runner apt mirror/DNS failure must not
+        # abort the smoke before the browser is installed.
+        run: |
+          pnpm --dir apps/pwa exec playwright install --with-deps chromium \
+            || pnpm --dir apps/pwa exec playwright install chromium
 
       - name: Run read-only smoke against deployed URL
         env:

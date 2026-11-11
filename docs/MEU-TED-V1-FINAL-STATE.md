@@ -1,25 +1,27 @@
 # MEU-TED-V1-FINAL-STATE (estado vigente — snapshot somente-leitura)
 
-**Atualizado:** 14/10/2026 (release `3de0d3a` + E2E live + higiene, docs-only; homologação live + veredito V1-textual CLOSED; baseline viva `715b2cf`, código V1-textual `fd3481f`). Este documento é snapshot, não plano. A definição de
+**Atualizado:** 11/11/2026 (V1 funcional concluída: PR #318 mergeado em `219a4d6`, Release B flipado, API `219a4d6`, Agent `57809a3`, PWA `5e69dec`). Este documento é snapshot, não plano. A definição de
 encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 
 ## 1. Produção viva
 
-Em 13/10/2026 à noite, o PR #157 (V1-textual) foi mergeado por squash como
-`fd3481f` e implantado nas três camadas — detalhe na atualização incremental
-de 13/10 (noite) ao fim deste documento. Em 14/10 (~00:09Z), Agent/PWA
-avançaram para `715b2cf` (PR #158, SÓ-docs, código idêntico a `fd3481f`,
-ATTESTED). O vigente: API `fd3481f` (release via wrapper na Contabo, sem
-redeploy em 14/10) e Agent/PWA `715b2cf` (ATTESTED na Cloudflare).
+Em 11/11/2026, o PR #318 (V1 funcional: leituras, CRUD conversacional e
+contas a pagar) foi mergeado como `219a4d6`. A API foi liberada na Contabo pelo
+wrapper (`source-build`) e a Release B (bearer legado) foi flipada: API com
+`SESSION_BEARER_FALLBACK_ENABLED=off` e PWA compilada com
+`NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` (PR #320). O vigente: API `219a4d6`,
+Agent `57809a3` (PR #319, só CI) e PWA `5e69dec`.
 
 | Camada | SHA vigente | Evidência |
 |---|---|---|
-| API (Contabo) | `fd3481f` (`fd3481f2f92c39ff8b68727ff73939121123280d`, build CI `38483695616`) | release via wrapper `api-release-20260930.sh --execute`, lane source-build (checkout pristine `src-fd3481f`, sem GHCR login na VPS), backup pré-release `pi-db-20261013T195335Z` (sha256 `0b4b04ad…cdb7e`), RELEASE OK, manifesto `release-manifest-fd3481f….json` na VPS, rollback tag `pi-finance-api:rollback-pre-fd3481f` preservada; smokes `/health` (gitSha `fd3481f`, buildId `38483695616`) + `/ready` 200 + PWA `/api/backend/health` `fd3481f`; container 0 restarts healthy, sem `FST_ERR`/`DUPLICATED_ROUTE` nos logs; **sem redeploy em 14/10** (delta `fd3481f..715b2cf` é SÓ-docs — decisão registrada) |
-| Agent (Cloudflare) | `715b2cf` (`715b2cf3d11c8ac03e55fea1e35b15fa2049c4c1`, build `38487522792`) | Deploys runs `38488407037`/`38488407171` ATTESTED deploy-smoke-pass 14/10 (~00:09Z); live `/health` ready com `buildSha=715b2cf`; delta `fd3481f..715b2cf` SÓ-docs (AGENTS/CHANGELOG/FINAL-STATE), código idêntico a `fd3481f` |
-| PWA (Cloudflare) | `715b2cf` (mesmo build `38487522792`) | Mesmos deploys/runs ATTESTED acima; live `/api/build-info` com `gitSha=715b2cf`; código idêntico a `fd3481f` |
-| origin/main | `715b2cf` | PR #158 (SÓ-docs, sem código); CI + PWA CI verdes; baseline de CÓDIGO V1-textual permanece `fd3481f` |
+| API (Contabo) | `219a4d6` (`219a4d610602f24ecf9c9480001ef54d181a4a9a`, build CI `43046355182`) | release via wrapper `api-release-20260930.sh --execute`, lane source-build (checkout pristine `~/pi-finance-release-219a4d6`), backup pré-release `pi-db-20261111T153706Z` (sha256 `522fd4fe…5665b083`), RELEASE OK, manifesto `release-manifest-219a4d6….json`, rollback tag `pi-finance-api:rollback-pre-219a4d6`; `/health` (gitSha `219a4d6`) + `/ready` 200; `SESSION_BEARER_FALLBACK_ENABLED=off` aplicado e verificado no container |
+| Agent (Cloudflare) | `57809a3` (`57809a35cb260f29a26caa5f7836a20bc7fb0cb5`, build `43061604887`) | Agent Deploy run `43061604887` ATTESTED deploy-smoke-pass; live `/health` ready `buildSha=57809a3`; `/health/agent` ready |
+| PWA (Cloudflare) | `5e69dec` (`5e69dece84e30d1e26553d19b946afa29651c59f`, build `43064573159`) | PWA Deploy run `43065822285` ATTESTED deploy-smoke-pass; live `/api/build-info` `gitSha=5e69dec`; build com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` |
+| origin/main | `5e69dec` | PRs #318/#319/#320 mergeados; CI + PWA CI verdes; baseline viva servida |
+| API — release anterior (histórico) | `b21faff` (`b21faff9ebd6d16353ddb85fb2fef40607dc7938`, build CI `40047925720`) | manifest `release-manifest-b21faff….json`, lane source-build, rollback tag `pi-finance-api:rollback-pre-b21faff` |
 | Baseline de CÓDIGO V1-textual (histórico) | `fd3481f` (`fd3481f2f92c39ff8b68727ff73939121123280d`) | PR #157 (V1-textual); CI + PWA CI verdes (`38483695616`/`…618`); Gate + quality (22, 10) 100% verde; API/Agent/PWA atestados em 13/10 (noite) |
-| API — release anterior (histórico) | `414aefa` (`414aefad8e04cba1927338b8d6af0aa53b7fc9d7`, build CI `38437241159`) | swap manual + smokes verdes pós-recovery em 13/10 (`/health`+`/ready` 200, gitSha/buildId casados, 0 restarts); `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados; manifesto manual `release-manifest-414aefa-manual.json` na VPS; rollback tag preservada |
+| Agent/PWA — deploy atestado anterior (histórico) | `715b2cf` (`715b2cf3d11c8ac03e55fea1e35b15fa2049c4c1`, build `38487522792`) | Deploys runs `38488407037`/`38488407171` ATTESTED deploy-smoke-pass 14/10 |
+| API — release anterior (histórico) | `414aefa` (`414aefad8e04cba1927338b8d6af0aa53b7fc9d7`, build CI `38437241159`) | swap manual + smokes verdes pós-recovery em 13/10; `TED_RISK_BASED_AUTOEXECUTE=shadow`, `MIGRATIONS_MODE=disabled`, `DB_SCHEMA=canonical` preservados; manifesto manual `release-manifest-414aefa-manual.json` na VPS; rollback tag preservada |
 | Agent/PWA - tentativa `414aefa` (nunca servida) | `414aefad8e04cba1927338b8d6af0aa53b7fc9d7` | wave1 deploy-skipped + wave2 smoke-fail no outage da API 13/10; live foi direto `e91a3cd` |
 | Agent/PWA — deploy atestado anterior (histórico) | `e91a3cd` (`e91a3cdd051fabc7fb2fe6469aae70c80ac4e148`, build `38452770765`) | Deploys 38453779343/38453779281 ATTESTED deploy-smoke-pass 13/10; transcript fix validado live (T1/T2 sem read-fail, com evidência T1/T2 no live 3e90c30; código agent idêntico em e91a3cd, diff vazio) |
 | API — imagem anterior (histórico) | `bd1ed9b` (`bd1ed9bdbcaf99c407ac40f1d4a668099a405585`, build `37238430467`) | `/health` + `/ready` 200 em 12/10/2026, sem redeploy desde 04/10 até o incidente de 13/10; **não reutilizável após V060** (manifesto V059 × ledger V060 — ver apêndice) |
@@ -32,8 +34,8 @@ redeploy em 14/10) e Agent/PWA `715b2cf` (ATTESTED na Cloudflare).
 commits SÓ-docs não avançam a baseline de código e dispensam re-registro;
 re-registro só com mudança de código/comportamento. PRs de docs seguem CI
 normal. Baseline de CÓDIGO V1-textual: `fd3481f`; baseline viva servida:
-Agent/PWA `715b2cf` (código idêntico a `fd3481f`); API permanece `fd3481f`
-sem redeploy por delta só-docs (camadas com SHAs independentes têm precedente).
+Agent/PWA `5e69dec` e API `219a4d6` (camadas com SHAs independentes têm
+precedente).
 
 ## 2. Matriz de capabilities (config-de-deploy; coluna Live = estado verificado)
 
@@ -75,7 +77,7 @@ PWA: `NEXT_PUBLIC_TED_ATTACHMENT_*` (anúncio, não gate),
 |---|---|---|
 | #107 Phase A (gate+cohort+sink) | **CLOSED em 12/10/2026** (issue fechada com comentário de evidência): gate server-side, coorte attachment-specific, testes binding+OFF, sink durável G07 e inventário de 5 estados — todos implementados + testados (`tests/attachments` 26 arquivos/405 testes verdes); CI do `main` verde | Phase A encerrada; **A19 geral segue NOT READY** (rollout, expiração física R2, bounded PDF, privacidade/egress, canaries STT/Vision têm gates próprios) |
 | #105 Golden Workflows | Suite rápida 35/29 executáveis PASS (GW-033–038: categoria inexistente, conta não identificada, extrato com dados, fragmento de conta, forget redelivery, forget após esquecido), 6 `pending-capability` sem promoção; PG autoritativa: Bloco A (GW-023/024/025 + redelivery/recuperação) + Bloco B (GW-030 undo, GW-031 receita, GW-032 concorrência, GW-040 leitura), tudo SQL-verified | **CLOSED em 12/10/2026** (checklist de aceite + §5.4 mapeados em comentário). Residuais fora da issue: homologação E2E, Release B, cutover, rollout de capacidades |
-| Release B (flip bearer legado) | **Flip ABORTADO em 13/10** — 136 eventos pós-2026-10-02T21:36:06Z (último 2026-10-10T22:09:01.594968Z); nova janela zero-14-dias fecha ~2026-10-24T22:09Z | operador (gate temporal) |
+| Release B (flip bearer legado) | **Flip EXECUTADO em 11/11/2026** - janela D11-R2 com 0 eventos `legacy_bearer_used` após `2026-10-19T13:23:55.399917Z` (total histórico 406); API `SESSION_BEARER_FALLBACK_ENABLED=off` e PWA com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` | operador (concluído) |
 | Cutover F3–F5 | gate humano (ADR-024/ADR-025) | operador |
 | Privacidade A19 (PDF → relay/provider) | classificação “sem egress” retificada; conteúdo pode sair pelo relay; sem prova de ZDR/retention neste endpoint | **WAITING_OPERATOR** |
 | Web live inventory (Tavily/Brave) | pré-F2.4 | operador (credencial CF) |
@@ -120,7 +122,7 @@ Esta seção é ÍNDICE dos itens pós-V1 (snapshot somente-leitura): o estado c
 - PDF — fail-closed (parser `undefined` incondicional + flag `0`), reativação exige gate egress/retention + isolamento → §2/§3/§10.
 - web_search/web_fetch — gate `TED_WEB_SEARCH_ENABLED` (prod sem flag = disabled), sem provider/key → §2 + §14 decisão técnica.
 - Autoexecute low-risk — `shadow` (não re-verificado live); `on` exige sink + telemetria undo-after-autoexecute → §2/§4.
-- Release B — flip ABORTADO 13/10, nova janela zero-14-dias ~24/10 → §4/§10.
+- Release B - **flip executado em 11/11/2026** (gate D11-R2 PASS; API e PWA com a janela de compat fechada) → §4/§10.
 - Legado — F6 (backup + restore + recon) + remoção de código (twins/`DB_SCHEMA`/V1 pending-ops/analytics); KEEP bearer até Release B → canary 13/10 (f) + §4.
 - #87 SDK épico (+Dependabot #93/#94), #95 keepalive — POST-V1 backlog → §4.
 - Agents SDK major (linha 0.7.x + ai 6 + ai-sdk/react 3 + @cloudflare/ai-chat alinhado) — PRs #119/#120 CLOSED 14/10 como unmergeable (P1: shim agents/ai-chat-agent 0.3.10 x ai-chat 0.1.9 incompatível, export __DO_NOT_USE_WILL_BREAK__agentContext ausente; evidência nos comentários dos PRs) → §4 (fileira #87).
@@ -163,9 +165,9 @@ Agent/PWA avançaram para `e57bcec` (build `38325143776`) com deploys
 deploy-skipped:gate-not-ready); API Contabo segue `bd1ed9b` sem redeploy. E2E
 live-mobile-full PASS em 13/10 (~2.6 min: login→conta→transação→extrato→TED
 leitura com valores→TED mutação com aprovação, `workspaceWriteViolations`
-vazio, só Test Family) — detalhe no apêndice incremental ao fim deste
-documento. A19 segue **NOT READY**; Release B com flip ABORTADO em 13/10 (136 eventos; nova janela ~2026-10-24T22:09Z), cutover
-F3–F5 pendente, PDF fail-closed, coortes STT/Vision restritas ao workspace
+vazio, só Test Family) - detalhe no apêndice incremental ao fim deste
+documento. A19 segue **NOT READY**; Release B **flipada em 11/11/2026** (API `SESSION_BEARER_FALLBACK_ENABLED=off` + PWA com compat off), cutover
+F3-F5 pendente, PDF fail-closed, coortes STT/Vision restritas ao workspace
 real `junio`.
 
 ## 9. Ativação de attachments (08/10/2026) — evidência e achados
@@ -205,11 +207,11 @@ seções seguintes e na atualização de 10/10.
 | A19 | **NOT READY** | PDF fail-closed está implantado; faltam limites efetivos de CPU/memória antes de eventual reativação, aprovação de privacidade/egress/retention e gates restantes de canary/observabilidade. |
 | Golden #105 | **WAITING_OPERATOR** | Run local 10/10: 23/23 executáveis PASS e 6 `pending-capability` mantidos como skipped (§13); workflows completos e invariantes da issue ainda não executados/aceitos pelo operador; não transformar `pending-capability` em PASS. |
 | Autoexecute low-risk | **WAITING_OPERATOR** | Continua SHADOW; `on` exige sink e telemetria de undo-after-autoexecute. |
-| Release B | **WAITING_DATE (flip ABORTADO em 13/10)** | 136 eventos pós-2026-10-02T21:36:06Z (último 2026-10-10T22:09:01.594968Z); nova janela zero-14-dias fecha ~2026-10-24T22:09Z + procedimento autorizado. |
-| F3–F5 | **WAITING_OPERATOR** | Canonical cutover/aposentadoria do legado requer gate humano. |
+| Release B | **DONE em 11/11/2026** | Janela D11-R2 com 0 eventos `legacy_bearer_used` desde `2026-10-19T13:23:55.399917Z`; API `SESSION_BEARER_FALLBACK_ENABLED=off`, PWA com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`; bearer-only retorna 401. |
+| F3-F5 | **WAITING_OPERATOR** | Canonical cutover/aposentadoria do legado requer gate humano. |
 | Backup/restore | **RESTORE PROOF 13/10 (backup 19:53Z)** | Backup diário/configurado; restore proof executado em PG 15 descartável (removido após a prova) — detalhe na atualização incremental de 13/10 (noite) ao fim deste documento. |
 | Production E2E | **WAITING_OPERATOR** | Smoke autenticado parcial em 10/10 (chat/leitura PASS, zero mutação — §11); aceite final integrado (API/PWA/Agent, anexos, PDF/STT/Vision, mutation receipts/undo) ainda não executado. |
-| Release v1 | **BLOCKED_EXTERNAL** | Bloqueado por A19, #105, Release B, F3–F5, restore proof e E2E final; este pacote sozinho não conclui v1. |
+| Release v1 | **BLOCKED_EXTERNAL** | Bloqueado por A19, #105, F3-F5, restore proof e E2E final; Release B concluída em 11/11/2026. Este pacote sozinho não conclui v1. |
 
 ### Findings e implantação do pacote (#132, 10/10/2026)
 
