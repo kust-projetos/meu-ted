@@ -126,9 +126,10 @@ export const parseFinancialMutation = (text: string, options: { now?: Date; time
       descriptionTail = before + descriptionTail.slice(dateIndex + dateFragment.length);
     }
   }
+  // Only RESOLVABLE explicit dates are stripped above. Unresolved date
+  // material ("em 2020", invalid "31/02/2020") stays in the description so
+  // the semantic layer still detects it and clarifies (B058 copy contract).
   const remainder = descriptionTail
-    .replace(/\s*\b(?:em\s+)?\d{1,2}\/\d{1,2}\/\d{4}\b/iu, '')
-    .replace(/\s*\b(?:em|de)\s+\d{4}\b/iu, '')
     .replace(/^\s*(em|de|do|da|no|na|por)\s+/i, '').replace(/\s+(ontem|hoje|anteontem)$/i, '').trim();
   const description = remainder || (income ? 'receita' : 'despesa');
   return { kind: income ? 'income' : 'expense', amountCents, description, date: dateFor(text, options.now, options.timeZone), ...( /\b(categoria|categoria de)\s+([^,.;]+)/i.exec(text)?.[2] ? { categoryQuery: /\b(categoria|categoria de)\s+([^,.;]+)/i.exec(text)![2]!.trim() } : {}) };

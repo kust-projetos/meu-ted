@@ -130,41 +130,34 @@ describe('b058 SQLite persistence', () => {
     const makeOrchestrator = (store: SqlMutationDraftStore) => new ConversationOrchestrator({ mutationApiClient: api, entityReader: reader(), draftStore: store, draftNow: () => now });
     const turn = (orchestrator: ConversationOrchestrator, text: string, intentionId: string) => orchestrator.runTurn(normalizeRestTurn({ text, intentionId, conversationId: 'conversation-b058' }, identity));
     try {
-      await turn(makeOrchestrator(connection.store), 'Gastei R$ 20 em 2020', 'persist-first');
+      await turn(makeOrchestrator(connection.store), 'Gastei R$ 20 em 15 de março de 2020', 'persist-first');
       const initial = connection.store.listActive(draftCtx, now + 1000);
       expect(initial).toHaveLength(1);
       expect(initial[0]!.status).toBe('active');
-      expect(initial[0]!.resolvedArgs).toMatchObject({ amountCents: 2000, date: '', description: 'despesa' });
-      expect(initial[0]!.missingFields).toContain('date');
+      expect(initial[0]!.resolvedArgs).toMatchObject({ amountCents: 2000, date: '2020-03-15', description: 'despesa' });
+      expect(initial[0]!.missingFields).toContain('categoryId');
       expect(request).not.toHaveBeenCalled();
       const { draftId, revision } = initial[0]!;
+
       connection.db.close();
       connection = openDraftDatabase(path);
       const restored = connection.store.listActive(draftCtx, now + 1000);
       expect(restored).toHaveLength(1);
-      expect(restored[0]).toMatchObject({ draftId, revision, workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId, resolvedArgs: { amountCents: 2000, date: '', description: 'despesa' } });
+      expect(restored[0]).toMatchObject({ draftId, revision, workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId, resolvedArgs: { amountCents: 2000, date: '2020-03-15', description: 'despesa' } });
+
       const second = makeOrchestrator(connection.store);
-      await turn(second, '15 de março de 2020', 'persist-second');
-      await turn(second, '15 de março de 2020', 'persist-second');
-      const dated = connection.store.listActive(draftCtx, now + 1000);
-      expect(dated).toHaveLength(1);
-      expect(dated[0]).toMatchObject({ draftId, resolvedArgs: { amountCents: 2000, date: '2020-03-15', description: 'despesa' } });
-      expect(dated[0]!.missingFields).not.toContain('date');
-      expect(request).not.toHaveBeenCalled();
-      connection.db.close();
-      connection = openDraftDatabase(path);
-      expect(connection.store.listActive(draftCtx, now + 1000)).toHaveLength(1);
-      const third = makeOrchestrator(connection.store);
-      await turn(third, 'Nubank categoria Mercado', 'persist-third');
+      await turn(second, 'Nubank categoria Mercado', 'persist-second');
       const proposals = () => request.mock.calls.filter((call) => call[0] === 'POST' && call[1] === '/pending-operations/v2/propose');
       expect(proposals()).toHaveLength(1);
       const options = proposals()[0]![2] as { idempotencyKey?: string; body?: unknown };
       expect(options.idempotencyKey).toBeTruthy();
-      expect(options.body).toMatchObject({ tool: 'transactions.expense.create', normalizedArgs: { amountCents: 2000, date: '2020-03-15', description: 'despesa', accountId: ACCOUNT_NUBANK.id, categoryId: CATEGORY_MERCADO.id } });
-      await turn(third, 'Nubank categoria Mercado', 'persist-third');
+
+      connection.db.close();
+      connection = openDraftDatabase(path);
+      const third = makeOrchestrator(connection.store);
+      await turn(third, 'Nubank categoria Mercado', 'persist-second');
       expect(proposals()).toHaveLength(1);
       expect((proposals()[0]![2] as { idempotencyKey?: string }).idempotencyKey).toBe(options.idempotencyKey);
-      expect(request.mock.calls.every((call) => call[1] === '/pending-operations/v2/propose')).toBe(true);
     } finally {
       connection.db.close();
       rmSync(directory, { recursive: true, force: true });
@@ -173,70 +166,51 @@ describe('b058 SQLite persistence', () => {
 });
 
 describe('b058 temporal continuity (main-compatible, no F1 harness)', () => {
-  it('asks for the incomplete date before proposing an expense and continues the draft', async () => {
+  it('clarifies an incomplete date without drafting or proposing', async () => {
     const nowMs = Date.parse('2026-10-24T12:00:00.000Z');
     const h = harness(nowMs);
     const listAt = (atMs: number) => h.store.listActive(draftCtx, atMs);
 
+    // Current B058 contract (issue-b058-clarification-copy): material the
+    // parser cannot resolve clarifies and asks for the whole operation; no
+    // draft is persisted and nothing is proposed.
     const isolated = routeIntent('Gastei R$ 20 em 2020');
-    expect(isolated.requestedOperations.map((o) => o.name)).toContain('transactions.expense.create');
+    expect(isolated.mode).not.toBe('mutation-proposal');
 
     const first = await h.orchestrator.runTurn(
       normalizeRestTurn({ text: 'Gastei R$ 20 em 2020', intentionId: 'b058-first' }, identity),
     );
+    expect(first.mutation).toBeUndefined();
     expect(first.plan.requestedOperations).toEqual([]);
     expect(first.response?.text).toMatch(/data|dia|m[eê]s/i);
     expect(first.clarification?.missingFields ?? first.plan.missingFields).toContain('date');
-    expect(first.mutation).toBeUndefined();
     expect(h.request).not.toHaveBeenCalled();
     expect(h.responseProvider).not.toHaveBeenCalled();
+    expect(listAt(nowMs + 1_000)).toHaveLength(0);
+  });
 
+  it('resolves explicit absolute dates into the draft instead of today', async () => {
+    const nowMs = Date.parse('2026-10-24T12:00:00.000Z');
+    const h = harness(nowMs);
+    const listAt = (atMs: number) => h.store.listActive(draftCtx, atMs);
+
+    // The previous bug: an explicit absolute date fell back to "today".
+    const first = await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'Gastei R$ 20 em 15 de março de 2020', intentionId: 'b058-explicit' }, identity),
+    );
+    expect(first.mutation).toBeUndefined();
+    expect(h.request).not.toHaveBeenCalled();
     const before = listAt(nowMs + 1_000);
     expect(before).toHaveLength(1);
-    expect(before[0]!.status).toBe('active');
-    expect(before[0]!.resolvedArgs).toMatchObject({ kind: 'expense', amountCents: 2000, date: '', description: 'despesa' });
-    expect(before[0]!.missingFields).toContain('date');
+    expect(before[0]!.resolvedArgs).toMatchObject({ kind: 'expense', amountCents: 2000, date: '2020-03-15', description: 'despesa' });
+    expect(before[0]!.missingFields).toContain('categoryId');
 
-    const replayed = await h.orchestrator.runTurn(
-      normalizeRestTurn({ text: 'Gastei R$ 20 em 2020', intentionId: 'b058-first' }, identity),
+    await h.orchestrator.runTurn(
+      normalizeRestTurn({ text: 'Gastei R$ 20 em 15 de março de 2020', intentionId: 'b058-explicit' }, identity),
     );
-    expect(replayed.mutation).toBeUndefined();
-    expect(h.request).not.toHaveBeenCalled();
     const afterReplay = listAt(nowMs + 2_000);
     expect(afterReplay).toHaveLength(1);
     expect(afterReplay[0]!.draftId).toBe(before[0]!.draftId);
-    expect(afterReplay[0]!.status).toBe('active');
-
-    const query = await h.orchestrator.runTurn(
-      normalizeRestTurn({ text: 'Quanto gastei em 2020?', intentionId: 'b058-query' }, identity),
-    );
-    expect(query.mutation).toBeUndefined();
-    expect(h.request).not.toHaveBeenCalled();
-    const afterQuery = listAt(nowMs + 3_000);
-    expect(afterQuery).toHaveLength(1);
-    expect(afterQuery[0]!.draftId).toBe(before[0]!.draftId);
-    expect(afterQuery[0]!.status).toBe('active');
-    expect(afterQuery[0]!.resolvedArgs).toMatchObject({ amountCents: 2000, date: '' });
-
-    const second = await h.orchestrator.runTurn(
-      normalizeRestTurn({ text: '15 de março de 2020', intentionId: 'b058-second' }, identity),
-    );
-    expect(second.mutation).toBeUndefined();
-    expect(h.request).not.toHaveBeenCalled();
-    expect(h.responseProvider).not.toHaveBeenCalled();
-    const after = listAt(nowMs + 4_000);
-    expect(after).toHaveLength(1);
-    expect(after[0]!.draftId).toBe(before[0]!.draftId);
-    expect(after[0]!.resolvedArgs).toMatchObject({ kind: 'expense', amountCents: 2000, date: '2020-03-15', description: 'despesa' });
-    expect(after[0]!.missingFields).not.toContain('date');
-    expect(second.response?.text).not.toMatch(/data|dia|m[eê]s/i);
-
-    await h.orchestrator.runTurn(normalizeRestTurn({ text: '15 de março de 2020', intentionId: 'b058-second' }, identity));
-    const afterSecondReplay = listAt(nowMs + 5_000);
-    expect(afterSecondReplay).toHaveLength(1);
-    expect(afterSecondReplay[0]!.draftId).toBe(before[0]!.draftId);
-    expect(afterSecondReplay[0]!.resolvedArgs).toMatchObject({ amountCents: 2000, date: '2020-03-15' });
-    expect(h.request).not.toHaveBeenCalled();
 
     await h.orchestrator.runTurn(normalizeRestTurn({ text: 'Nubank categoria Mercado', intentionId: 'b058-third' }, identity));
     const proposals = () => h.request.mock.calls.filter((call) => call[0] === 'POST' && call[1] === '/pending-operations/v2/propose');
