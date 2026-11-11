@@ -127,7 +127,7 @@ teto. Todas as provas desta sessão são determinísticas/sintéticas.
   - `payables.create` e `payables.pay` com recibos `entity.type='payable'`,
     pagamento debitando Itaú em R$ 99,00 e exatamente uma despesa criada;
   - data ambígua (`15/03`) sem proposta e sem escrita (journal inalterado).
-- **CI remoto no SHA `444ee52` (PR #318): `CI` PASS (todos os jobs, incluindo
+- **CI remoto no SHA `1355a0f` (PR #318): `CI` PASS (todos os jobs, incluindo
   `Financial integrity — Postgres`, `TED Runtime` e `Gate — all checks`) e
   `PWA CI` PASS (`quality (22, 10)`).**
 
