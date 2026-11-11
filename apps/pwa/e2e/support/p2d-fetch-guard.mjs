@@ -59,7 +59,37 @@ export const LIVE_REAL_API_ROUTES = Object.freeze([
   "GET /dashboard/month-summary",
   "GET /categories",
   "GET /cards/statements",
+  // V1 completion reads (all GET, loopback-only).
+  "GET /transactions",
+  "GET /insights/spending",
+  "GET /analytics/kpis",
+  "GET /analytics/category-breakdown",
+  "GET /analytics/cashflow-series",
+  "GET /analytics/budget-consumption",
+  "GET /analytics/net-worth-history",
+  "GET /budgets",
+  "GET /budgets/check",
+  "GET /goals",
+  "GET /payables",
+  "GET /payables/reminders",
+  "GET /audit-logs",
 ]);
+
+const BUDGET_TRENDS_ROUTE_RE = /^GET \/budgets\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/trends$/;
+const READ_ANY_QUERY = new Set([
+  "GET /transactions",
+  "GET /insights/spending",
+  "GET /analytics/kpis",
+  "GET /analytics/category-breakdown",
+  "GET /analytics/cashflow-series",
+  "GET /analytics/budget-consumption",
+  "GET /analytics/net-worth-history",
+  "GET /budgets/check",
+  "GET /goals",
+  "GET /payables",
+  "GET /audit-logs",
+]);
+const READ_HEADERS = Object.freeze(["x-device-token", "x-workspace-id", "accept"]);
 
 const API_ROUTE_HEADERS = new Map([
   ["POST /auth/agent-token", Object.freeze(["cookie", "x-workspace-id", "x-device-token", "content-type", "accept"])],
@@ -69,7 +99,27 @@ const API_ROUTE_HEADERS = new Map([
   ["GET /dashboard/month-summary", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
   ["GET /categories", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
   ["GET /cards/statements", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
+  ["GET /transactions", READ_HEADERS],
+  ["GET /insights/spending", READ_HEADERS],
+  ["GET /analytics/kpis", READ_HEADERS],
+  ["GET /analytics/category-breakdown", READ_HEADERS],
+  ["GET /analytics/cashflow-series", READ_HEADERS],
+  ["GET /analytics/budget-consumption", READ_HEADERS],
+  ["GET /analytics/net-worth-history", READ_HEADERS],
+  ["GET /budgets", READ_HEADERS],
+  ["GET /budgets/check", READ_HEADERS],
+  ["GET /goals", READ_HEADERS],
+  ["GET /payables", READ_HEADERS],
+  ["GET /payables/reminders", READ_HEADERS],
+  ["GET /audit-logs", READ_HEADERS],
 ]);
+
+function allowedApiHeaders(route) {
+  const exact = API_ROUTE_HEADERS.get(route);
+  if (exact) return exact;
+  if (BUDGET_TRENDS_ROUTE_RE.test(route)) return READ_HEADERS;
+  return undefined;
+}
 
 const CATALOG_ALLOWED_HEADERS = Object.freeze(["user-agent", "if-none-match"]);
 // Catalog filter tokens the installed OpenCode 2.2.4 source actually sends:
@@ -250,7 +300,7 @@ function classifyCatalog(input, init, parsed, method) {
 
 function classifyApi(input, init, parsed, method) {
   const route = `${method} ${parsed.pathname}`;
-  const allowedHeaders = API_ROUTE_HEADERS.get(route);
+  const allowedHeaders = allowedApiHeaders(route);
   if (!allowedHeaders) return { action: "deny", reason: "api_method_path" };
   const queryOk = parsed.pathname === "/dashboard/month-summary"
     ? MONTH_QUERY_RE.test(parsed.search)
@@ -260,6 +310,8 @@ function classifyApi(input, init, parsed, method) {
       ? parsed.search === "" || CATEGORY_QUERY_RE.test(parsed.search)
     : parsed.pathname === "/cards/statements"
       ? statementsQueryAllowed(parsed.search)
+      : READ_ANY_QUERY.has(route) || BUDGET_TRENDS_ROUTE_RE.test(route)
+        ? true
       : parsed.search === "";
   if (!queryOk) return { action: "deny", reason: "api_query" };
   for (const name of requestHeaders(input, init)) {
