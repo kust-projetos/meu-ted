@@ -38,7 +38,8 @@
       "!**/.wrangler/**",
       "!**/.open-next/**",
       "!**/generated/**",
-      "!**/*.generated.*"
+      "!**/*.generated.*",
+      "!**/poc-structured/f2b0-runtime/evidence/**"
     ]
   }
 }
