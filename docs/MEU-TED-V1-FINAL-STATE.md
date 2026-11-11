@@ -50,6 +50,8 @@ têm precedente).
   (~1 GB, gitignored); lint raiz voltou a concluir (~85s).
 - **#277:** flake intermitente (duas assinaturas), sem reprodução determinística;
   issue permanece aberta e o ciclo foi encerrado sem correção especulativa.
+- Backlog priorizado para as próximas sessões:
+  [`reference/PENDENCIAS.md`](reference/PENDENCIAS.md).
 
 ## 2. Matriz de capabilities (config-de-deploy; coluna Live = estado verificado)
 

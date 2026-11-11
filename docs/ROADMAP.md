@@ -1,7 +1,9 @@
 # Meu Ted — Roadmap
 
-**Last verified:** 2026-10-14
+**Last verified:** 2026-11-11
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
+
+Backlog priorizado e pendências do plano: [`reference/PENDENCIAS.md`](reference/PENDENCIAS.md).
 
 | Marco | Status | Evidência/limite |
 | --- | --- | --- |
