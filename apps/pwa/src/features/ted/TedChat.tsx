@@ -1212,9 +1212,16 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // mesmo que a contagem por texto conte a resposta ainda-local de um
       // turno anterior. Sem identidade em jogo, a regra legada vale.
       const convergedByIdentity = isTurnAnswerConvergedByIdentity(turn.output, send.messageId, freshHistory);
+      // A multi-step turn can already be present in the authoritative history
+      // under the SAME native assistant id. Appending it again would create a
+      // duplicate React key and can leave the composer stuck in `loading`.
+      // Identity convergence above is intention-based; this is the final
+      // id-based guard for the same turn.
+      const alreadyHasTurnId = typeof turn.turnId === "string" && freshHistory.some((m) => m.id === turn.turnId);
       if (
         turn.output?.trim() &&
         !convergedByIdentity &&
+        !alreadyHasTurnId &&
         freshHistory.filter((m) => !m.isOwn && m.content === turn.output).length <= copiesBefore
       ) {
         setMessages((previous) => [
