@@ -66,7 +66,11 @@ jobs:
           NEXT_PUBLIC_BUILD_SHA: ${{ github.sha }}
           NEXT_PUBLIC_BUILD_ID: ${{ github.run_id }}
           NEXT_PUBLIC_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
-          # V1-textual: sem flags multimodais no build publicado — defaults fail-closed; PDF segue OFF.
+          # Release B (D11-R2, gate PASS 2026-11-11): janela de compat do
+          # bearer legado fechada. O boot limpa tokens órfãos e o bearer de
+          # sessão legado não é mais aceito pela API (SESSION_BEARER_FALLBACK_OFF).
+          NEXT_PUBLIC_LEGACY_BEARER_COMPAT: "off"
+          # V1-textual: sem flags multimodais no build publicado - defaults fail-closed; PDF segue OFF.
 
       - name: Pack tested Cloudflare build (SHA-pinned artifact)
         run: tar -czf /tmp/pwa-build-pwaci.tgz -C apps/pwa .open-next wrangler.jsonc
