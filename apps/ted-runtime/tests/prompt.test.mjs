@@ -272,6 +272,45 @@ describe('prompt adapter (2.2.4 facts)', () => {
     assert.ok(calls >= 2, 're-read native history until the admitted turn answers');
   });
 
+  it('does not return a pre-tool assistant text before the native turn settles', async () => {
+    let calls = 0;
+    const preTool = {
+      id: 'a_pre', type: 'assistant', agent: 'ted', model: { id: 'm', providerID: 'p' },
+      content: [
+        { type: 'text', text: 'Vou localizar a conta e a categoria.' },
+        { type: 'tool', name: 'list_accounts', state: { status: 'completed' } },
+      ],
+      time: { created: 2001 },
+    };
+    const final = {
+      id: 'a_final', type: 'assistant', agent: 'ted', model: { id: 'm', providerID: 'p' },
+      content: [{ type: 'text', text: 'Proposta de despesa pronta para confirmar.' }],
+      time: { created: 2002 },
+    };
+    const base = () => (calls < 2
+      ? [userRow('inbox_tool', 'gastei 65', 2000), preTool]
+      : [userRow('inbox_tool', 'gastei 65', 2000), preTool, final]);
+    const oc = {
+      session: {
+        prompt: async (args) => ({
+          id: 'inbox_tool', sessionID: 'ses_tool', time: { created: 2000 },
+          type: 'user', payload: { text: args.text }, delivery: 'steer',
+        }),
+      },
+      message: {
+        list: async (args) => {
+          calls++;
+          return pagedList(base())(args);
+        },
+      },
+    };
+    const host = createPromptHost({ oc, timeoutMs: 3000, pollIntervalMs: 20 });
+    const out = await host.chat({ sessionID: 'ses_tool', text: 'gastei 65', intentionId: 'tool-1' });
+    assert.equal(out.output, 'Vou localizar a conta e a categoria.Proposta de despesa pronta para confirmar.');
+    assert.equal(out.turnId, 'a_final');
+    assert.ok(calls >= 2, 'the pre-tool text must not end the turn');
+  });
+
   it('history projects PWA items; unknown shapes skipped, never invented', () => {
     const items = projectHistoryItems(
       [
