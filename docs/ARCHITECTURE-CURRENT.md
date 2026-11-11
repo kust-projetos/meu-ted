@@ -100,5 +100,8 @@ autorizada; fatos de código derivam de
   `pi_financeiro_canonical`); o banco legacy (`pi_financeiro`) permanece como
   archive intocado.
 - O uso de bearer legado é registrado em sink durável em `audit_logs`
-  (`auth.request.legacy_bearer_used`); a janela e o flip permanecem gate
-  humano documentado em [`ROADMAP.md`](ROADMAP.md).
+  (`auth.request.legacy_bearer_used`). A janela D11-R2 fechou com **0 eventos**
+  após `2026-10-19T13:23:55.399917Z` e o flip foi executado em 11/11/2026:
+  `SESSION_BEARER_FALLBACK_ENABLED=off` na API e
+  `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` no build da PWA (ver
+  [`ROADMAP.md`](ROADMAP.md)).
