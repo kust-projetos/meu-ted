@@ -72,6 +72,38 @@ jobs:
           NEXT_PUBLIC_LEGACY_BEARER_COMPAT: "off"
           # V1-textual: sem flags multimodais no build publicado - defaults fail-closed; PDF segue OFF.
 
+      - name: Boot the generated Worker (Cloudflare 1101 guard)
+        # Regression guard for the PR #274 incident (Cloudflare 1101 on every
+        # route after deploy): a successful Next build + unit tests do NOT
+        # prove the packaged Worker can start. Boot the EXACT .open-next
+        # artifact on the local workerd and require a real HTTP answer from a
+        # public route before the artifact is packed for deploy.
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          set -euo pipefail
+          cd apps/pwa
+          PORT=8787
+          LOG="$RUNNER_TEMP/wrangler-dev.log"
+          pnpm exec wrangler dev --port "$PORT" --ip 127.0.0.1 >"$LOG" 2>&1 &
+          PID=$!
+          cleanup() { kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; }
+          trap cleanup EXIT
+          ok=0
+          code=""
+          for _ in $(seq 1 90); do
+            if ! kill -0 "$PID" 2>/dev/null; then break; fi
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$PORT/" || true)"
+            if [ "$code" = "200" ]; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::Worker did not boot or did not answer 200 on / (last status: ${code:-none})"
+            tail -n 80 "$LOG" || true
+            exit 1
+          fi
+          echo "Worker boot OK (HTTP 200 on /)"
+
       - name: Pack tested Cloudflare build (SHA-pinned artifact)
         run: tar -czf /tmp/pwa-build-pwaci.tgz -C apps/pwa .open-next wrangler.jsonc
 
