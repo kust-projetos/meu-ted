@@ -151,7 +151,20 @@ async function decide(page: Page, button: ReturnType<Page["getByRole"]>) {
     { timeout: 180000 },
   );
   await button.click();
-  return response;
+  const res = await response;
+  if (res.status() !== 200) {
+    // Diagnostic only: the Agent maps API failures to 502; keep the sanitized
+    // API code/message so the failure names the real cause (no secrets).
+    const body = await res.text().catch(() => "");
+    const log = await fetch(`${CTL}/p2d/agent-log`).then((r) => r.json()).catch(() => null) as
+      | { lastLines?: string[] }
+      | null;
+    const failureLines = (log?.lastLines ?? []).filter((line) => /ted\.approval|decision_failed|approval_failed/i.test(line));
+    throw new Error(
+      `decision failed status=${res.status()} body=${body.slice(0, 300)} agentFailure=${JSON.stringify(failureLines).slice(0, 700)}`,
+    );
+  }
+  return res;
 }
 
 test("P3.9 real six-flow: 7 operations, 7 confirmations, continuity and recovery", async ({ page }, info) => {
@@ -614,23 +627,33 @@ test("P3.9 real six-flow — V1 functional completion: reads, CRUD and payables 
     mark("account-rename", { receipt: renameBody.receipt });
     await persist({ verdict: "IN_PROGRESS" });
 
-    // Journey 3 — description-only transaction update (the Mercado expense
-    // created by the previous test in this same stack).
-    const mercado = (await state()).transactions.find(
-      (t) => t.kind === "expense" && t.description?.toLowerCase().includes("mercado") && t.amountCents === 6500,
+    // Journey 3 — description-only transaction update. The expense is created
+    // HERE with a description the pilot does NOT use: running both tests in the
+    // same stack must not leave two identical expenses (which correctly routes
+    // the update turn into disambiguation) and this test must not depend on
+    // another test having populated the ledger first.
+    await send(page, "Registre uma despesa de R$ 42,00 de Aluguel do escritório, na categoria Aluguel, paga pela conta Itaú, em 07/11/2026.");
+    const expenseConfirm = await waitCard("Confirmar despesa", /Confirmar R\$ 42,00/, "Prossiga com a proposta da despesa de R$ 42,00 de Aluguel do escritório.");
+    const expenseRes = await decide(page, expenseConfirm);
+    expect(expenseRes.status()).toBe(200);
+    const expenseBody = (await expenseRes.json()) as { status?: string; receipt?: { mutationKind?: string } };
+    expect(expenseBody.status).toBe("succeeded");
+    expect(expenseBody.receipt?.mutationKind).toBe("transactions.expense.create");
+    const aluguel = (await state()).transactions.find(
+      (t) => t.kind === "expense" && t.description?.toLowerCase().includes("aluguel do escritório") && t.amountCents === 4200,
     );
-    expect(mercado, "Mercado expense from the pilot required").toBeTruthy();
-    const mercadoId = mercado!.id;
-    await send(page, "Altere a descrição da despesa Mercado para Mercado Semanal.");
-    const descConfirm = await waitCard("Alterar descrição do lançamento", /^Confirmar$/, "Prossiga com a proposta de alterar a descrição da despesa Mercado para Mercado Semanal.");
+    expect(aluguel, "Aluguel expense created by this journey").toBeTruthy();
+    const aluguelId = aluguel!.id;
+    await send(page, "Altere a descrição da despesa Aluguel do escritório para Aluguel do escritório novembro.");
+    const descConfirm = await waitCard("Alterar descrição do lançamento", /^Confirmar$/, "Prossiga com a proposta de alterar a descrição da despesa Aluguel do escritório para Aluguel do escritório novembro.");
     const descRes = await decide(page, descConfirm);
     expect(descRes.status()).toBe(200);
     const descBody = (await descRes.json()) as { status?: string; receipt?: { mutationKind?: string } };
     expect(descBody.status).toBe("succeeded");
     expect(descBody.receipt?.mutationKind).toBe("transactions.update");
     await expect
-      .poll(async () => (await state()).transactions.find((t) => t.id === mercadoId)?.description, { timeout: 60000 })
-      .toBe("Mercado Semanal");
+      .poll(async () => (await state()).transactions.find((t) => t.id === aluguelId)?.description, { timeout: 60000 })
+      .toBe("Aluguel do escritório novembro");
     mark("transaction-description-update", { receipt: descBody.receipt });
     await persist({ verdict: "IN_PROGRESS" });
 
@@ -667,8 +690,9 @@ test("P3.9 real six-flow — V1 functional completion: reads, CRUD and payables 
     const writesBefore = (await journal()).financialWrites?.length ?? 0;
     await send(page, "Gastei R$ 20 em 15/03.");
     await waitTurnEnd();
-    await page.waitForTimeout(2000);
-    expect(page.getByRole("button", { name: /Confirmar R\$ 20,00/ })).toHaveCount(0);
+    // Authoritative signals: an ambiguous date must NOT create a proposal and
+    // must NOT write. The card is only a projection of a proposal, so polling
+    // it here raced the history refresh; the journal is the source of truth.
     expect(proposalCount(await journal())).toBe(proposalsBefore);
     expect(((await journal()).financialWrites ?? []).length).toBe(writesBefore);
     mark("ambiguous-date-clarification", { proposalsBefore, proposalsAfter: proposalCount(await journal()) });

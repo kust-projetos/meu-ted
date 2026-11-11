@@ -278,6 +278,33 @@ describe('V2 payables (manual-only)', () => {
     expect((await payableStore.listPayables('w')).length).toBe(0);
   });
 
+  it('exposes the payable target id in the active listing (money movement binding)', async () => {
+    const { app, payableStore } = await harness();
+    const target = await payableStore.createPayable('w', {
+      accountId: ACCOUNT_ID,
+      description: 'Luz',
+      amountCents: 12000,
+      dueDate: '2026-12-05',
+    });
+    const response = await propose(app, {
+      tool: 'payables.pay',
+      normalizedArgs: {
+        payableId: target.id,
+        description: 'Luz',
+        amountCents: 12000,
+        dueDate: '2026-12-05',
+        accountId: ACCOUNT_ID,
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    const listing = await app.inject({ method: 'GET', url: '/pending-operations/v2/active' });
+    expect(listing.statusCode).toBe(200);
+    const body = listing.json() as { items: Array<Record<string, unknown>> };
+    const item = body.items.find((row) => row.id === (response.json() as { id: string }).id);
+    expect(item?.tool).toBe('payables.pay');
+    expect(item?.payableId).toBe(target.id);
+  });
+
   it('keeps both payables tools manual-only', () => {
     for (const tool of ['payables.create', 'payables.pay'] as const) {
       expect(AUTOEXECUTION_ELIGIBLE_TOOLS.has(tool)).toBe(false);

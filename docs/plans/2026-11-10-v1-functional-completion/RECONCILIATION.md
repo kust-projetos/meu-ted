@@ -108,14 +108,25 @@ teto. Todas as provas desta sessão são determinísticas/sintéticas.
 
 - `apps/ted-runtime`: 137 testes focados PASS (leituras, propostas, catálogo,
   permissões, contrato de API, prompt adapter).
-- `apps/api`: 44 testes PASS (`pending-v2-payables` 7/7, `tool-registry` 16/16,
+- `apps/api`: 45 testes PASS (`pending-v2-payables` 8/8, `tool-registry` 16/16,
   `pending-v2-wiring` 4/4, `mutation-receipt-coverage`); `typecheck` PASS.
-- `apps/agent`: 36 testes PASS (`pending-propose-rpc` 18/18 e
+- `apps/agent`: 62 testes PASS (`mutation-executor-strict-validation` 24/24,
+  `expected-context-payables` 2/2, `pending-propose-rpc` 18/18 e
   `f2a-structured-interpretation` 18/18); `typecheck` PASS.
 - `apps/pwa`: `typecheck` PASS; CI `quality (22, 10)` PASS (inclui `Test PWA`).
 - `packages/llm-contracts`: build PASS; `pnpm docs:lint` PASS; gates
   `capabilities:check`, `write-policy:check`, `governance:check`,
   `boundary:check`, `test:skip-gate` e `public-safety --strict` PASS.
+- **Campanha live real (2026-11-11, `opencode-go/deepseek-v4.1-flash`):**
+  `pnpm test:p2d-p3-pilot-real` **2/2 PASS** — piloto P3.9 7/7 e jornada V1
+  completa no mesmo stack sintético:
+  - leituras (`/budgets`, `/goals`, `/payables`, `/analytics/kpis`) sem escrita;
+  - rename de conta (`accounts.update`) com recibo;
+  - criação de despesa + atualização de descrição (`transactions.update`) com
+    recibo sobre o lançamento correto;
+  - `payables.create` e `payables.pay` com recibos `entity.type='payable'`,
+    pagamento debitando Itaú em R$ 99,00 e exatamente uma despesa criada;
+  - data ambígua (`15/03`) sem proposta e sem escrita (journal inalterado).
 - **CI remoto no SHA `444ee52` (PR #318): `CI` PASS (todos os jobs, incluindo
   `Financial integrity — Postgres`, `TED Runtime` e `Gate — all checks`) e
   `PWA CI` PASS (`quality (22, 10)`).**
@@ -125,33 +136,36 @@ validação efetiva do teste de componente veio do CI Linux.
 
 ### Pendente / não executado
 
-- **Fase 4 (campanha live): BLOCKED_PROVIDER.** O piloto P3.9 real passou
-  **7/7** duas vezes após a correção do prompt (commit `0835cb7`): 7
-  propostas/7 confirmações/7 recibos, sem escrita antes de aprovação.
-- Um turno de leitura nova executou `list_budgets`, `list_goals`,
-  `list_payables` e `analytics_kpis` com sucesso e produziu resposta
-  fundamentada (workspace sintético vazio); em outra tentativa o mesmo turno
-  completou as leituras e o segundo passo do modelo foi interrompido pelo
-  provider (`Step interrupted`). As tentativas seguintes retornaram
-  **HTTP 429 `provider.rate-limit`** (“The inference service is overloaded”,
-  `retryAfterMs` ~25–29 s). Nenhuma escrita/duplicidade.
+- **Fase 4 (campanha live): CONCLUÍDA.** O piloto P3.9 real (7/7) e a jornada
+  V1 completa passaram juntos no mesmo stack sintético
+  (`pnpm test:p2d-p3-pilot-real`, 2/2 na execução final).
+- **Causa raiz do 502 em `payables.*` (corrigida):** o `MutationExecutor` do
+  Agent validava o recibo de execução apenas contra as formas
+  transaction/account/category/statement. Um recibo canônico de payable era
+  rejeitado (`approval.incomplete_result`) e o Agent convertia para 502. A
+  correção adiciona o validador de payables, exige o `payableId` pré-existente
+  em `payables.pay` (contexto esperado) e faz o validador genérico recusar
+  kinds não-transaction com entidade `transaction` (recibo trocado).
+- As tentativas que encontraram **HTTP 429 `provider.rate-limit`** não
+  escreveram nada: o turno falha antes de qualquer proposta. Nenhuma
+  duplicidade, recibo falso ou mutação sem confirmação foi observada.
 - Correções de harness aplicadas: allowlist live-real do P2D agora inclui as
   leituras V1 (`/budgets`, `/goals`, `/payables`, `/analytics/*`,
   `/transactions`, `/audit-logs`, trends por UUID), com teste offline
   dedicado; o spec P2D foi ajustado para não usar “botão enviar habilitado”
-  como sinal de fim de turno (o composer fica desabilitado com input vazio).
+  como sinal de fim de turno, para criar seu próprio lançamento (sem depender
+  do piloto) e para checar a data ambígua pelo journal (a projeção do botão
+  corre com o refresh do histórico).
 - Correção PWA: resposta de turno multi-ferramenta não é mais anexada duas
   vezes quando o histórico já a traz com o mesmo `turnId` (chave React
   duplicada); teste de identidade cobre o caso.
-- **Fase 4 (datas/contexto/ambiguidade):** requer nova janela de provider.
-  O runtime não possui system prompt configurável; a regra de data ambígua
-  está nas descrições das ferramentas e precisa de campanha real.
-- **Fase 5:** Bearer legado (consulta ao banco canônico), isolamento WebSocket
-  (`TED_PRIVATE_VIEWS_ENABLED` permanece desligada), flakes de CI/PWA, smoke de
-  produção, deploy, rollback e fechamento de issues/PRs. Fechar PR #284/issue
-  #283 é ação externa e requer confirmação do usuário; a evidência local mostra
-  `better-auth@1.7.7` instalado e o upgrade já integrado em `a9ace19`.
-- **Live/E2E:** nenhum deploy, nenhum dado real, nenhuma inferência paga além
-  da campanha acima. O provider reportou `cost: 0` nas mensagens analisadas;
-  faturamento não confirmado.
+- **Fase 5 (externa/operacional):** Bearer legado (consulta ao banco canônico),
+  isolamento WebSocket (`TED_PRIVATE_VIEWS_ENABLED` permanece desligada),
+  flakes de CI/PWA, smoke de produção, deploy, rollback e fechamento de
+  issues/PRs. Fechar PR #284/issue #283 é ação externa e requer confirmação do
+  usuário; a evidência local mostra `better-auth@1.7.7` instalado e o upgrade
+  já integrado em `a9ace19`.
+- **Live/E2E:** nenhum deploy e nenhum dado real; apenas o workspace sintético
+  do P2D. O provider reportou `cost: 0` nas mensagens analisadas; faturamento
+  não confirmado.
 

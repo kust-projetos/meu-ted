@@ -30,6 +30,8 @@ export type ActiveOperationRecord = Readonly<{
   /** P3.6 statement payment: the invoice/payer ids (also in the presentation). */
   statementId?: string;
   fromAccountId?: string;
+  /** V1 completion: the payable targeted by `payables.pay` (money movement). */
+  payableId?: string;
   failureCode?: 'in_use';
   presentation?: PendingOperationPresentation;
 }>;
