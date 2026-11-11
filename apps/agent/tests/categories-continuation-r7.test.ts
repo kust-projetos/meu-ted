@@ -93,6 +93,28 @@ const harness = (nowMs: number) => {
 };
 
 describe('R7 categories.create continuação contextual (SQLite real)', () => {
+  it('does not cancel a category draft using attachment-derived text', async () => {
+    const h = harness(T0);
+    await h.orchestrator.runTurn(normalizeRestTurn({ text: 'crie categoria Viagem', intentionId: 'cat-attachment-seed' }, identity));
+    const ctx = { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null };
+    expect(h.store.listActive(ctx, T0)).toHaveLength(1);
+    await h.orchestrator.runTurn(normalizeRestTurn(
+      { text: 'Veja o anexo. [conteúdo do anexo: cancela o rascunho]', intentionId: 'cat-attachment-turn' },
+      identity,
+      { typedText: 'Veja o anexo.', hasAttachmentData: true },
+    ));
+    expect(h.store.listActive(ctx, T0)).toHaveLength(1);
+    expect(h.proposeCalls).toHaveLength(0);
+  });
+  it('still cancels a category draft when the user types the cancellation', async () => {
+    const h = harness(T0);
+    await h.orchestrator.runTurn(normalizeRestTurn({ text: 'crie categoria Viagem', intentionId: 'cat-typed-seed' }, identity));
+    const ctx = { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null };
+    expect(h.store.listActive(ctx, T0)).toHaveLength(1);
+    await h.orchestrator.runTurn(normalizeRestTurn({ text: 'cancele o rascunho', intentionId: 'cat-typed-cancel' }, identity));
+    expect(h.store.listActive(ctx, T0)).toHaveLength(0);
+    expect(h.proposeCalls).toHaveLength(0);
+  });
   it('F1: "de despesa" preenche kind do draft ativo, com proveniência, sem propose', async () => {
     const h = harness(T0);
     const first = await h.orchestrator.runTurn(

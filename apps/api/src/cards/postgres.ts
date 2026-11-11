@@ -16,6 +16,7 @@ import { lockCategoryReferencesInTx } from '../auth/category-lifecycle-guard.js'
 import { domainErrors } from '../writes/errors.js';
 import { resolveExpenseCategoryInTx, resolveSubcategoryInTx } from '../writes/postgres.js';
 import { installmentDates } from '../shared/billing-month.js';
+import { getClosingDate, getDueDate } from './billing.js';
 import { splitInstallmentAmounts } from './installments.js';
 
 type Row = Record<string, unknown>;
@@ -25,27 +26,6 @@ function todayISO(): string {
 }
 
 // ── Statement helpers (adapted for kind='credit_card') ───────────
-
-function getClosingDate(purchaseDate: string, closingDay: number): string {
-  const d = new Date(purchaseDate + 'T00:00:00.000Z');
-  let y = d.getUTCFullYear();
-  let m = d.getUTCMonth();
-  if (d.getUTCDate() > closingDay) { m += 1; if (m > 11) { m = 0; y += 1; } }
-  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-  const day = Math.min(closingDay, lastDay);
-  return `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-}
-
-function getDueDate(closingDate: string, dueDay: number): string {
-  const d = new Date(closingDate + 'T00:00:00.000Z');
-  let y = d.getUTCFullYear();
-  let m = d.getUTCMonth();
-  const cDay = d.getUTCDate();
-  if (dueDay <= cDay) { m += 1; if (m > 11) { m = 0; y += 1; } }
-  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-  const day = Math.min(dueDay, lastDay);
-  return `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-}
 
 function computeStatus(s: Statement, today: string): Statement['status'] {
   if (s.status === 'cancelled') return 'cancelled';
@@ -1047,12 +1027,35 @@ export const createPostgresCardStore = (pool: Pool): CardStore => {
       return { ...s, purchases };
     },
 
-    async createCardPurchase(householdId, input) {
-      return withTransaction(pool, (client) => createCardPurchaseInTx(client, householdId, input));
+    async createCardPurchase(householdId, input, options?) {
+      if (options?.idempotencyKey === undefined) {
+        return withTransaction(pool, (client) => createCardPurchaseInTx(client, householdId, input));
+      }
+      const { runKeyedCardPurchase } = await import('./card-purchase-idempotency.js');
+      return runKeyedCardPurchase({
+        pool,
+        householdId,
+        idempotencyKey: options.idempotencyKey,
+        payload: input,
+        mutate: (client) => createCardPurchaseInTx(client, householdId, input),
+      });
     },
 
-    async createCardInstallments(householdId, input) {
-      return withTransaction(pool, (client) => createCardInstallmentsInTx(client, householdId, input));
+    async createCardInstallments(householdId, input, options?) {
+      if (options?.idempotencyKey === undefined) {
+        return withTransaction(pool, (client) => createCardInstallmentsInTx(client, householdId, input));
+      }
+      // P3.5: the whole installment set is claimed under ONE key inside the
+      // same transaction that writes every parcel — claim + all parcels +
+      // completion commit together or not at all.
+      const { runKeyedCardPurchase } = await import('./card-purchase-idempotency.js');
+      return runKeyedCardPurchase({
+        pool,
+        householdId,
+        idempotencyKey: options.idempotencyKey,
+        payload: input,
+        mutate: (client) => createCardInstallmentsInTx(client, householdId, input),
+      });
     },
     async listRecurringPurchases(householdId, opts) {
       const params: unknown[] = [householdId];
@@ -1079,8 +1082,18 @@ export const createPostgresCardStore = (pool: Pool): CardStore => {
       return withTransaction(pool, (client) => createRecurringPurchaseInTx(client, householdId, input));
     },
 
-    async payStatement(householdId, statementId, input) {
-      return withTransaction(pool, (client) => payStatementInTx(client, householdId, statementId, input));
+    async payStatement(householdId, statementId, input, options?) {
+      if (options?.idempotencyKey === undefined) {
+        return withTransaction(pool, (client) => payStatementInTx(client, householdId, statementId, input));
+      }
+      const { runKeyedCardStatementPayment } = await import('./card-purchase-idempotency.js');
+      return runKeyedCardStatementPayment({
+        pool,
+        householdId,
+        idempotencyKey: options.idempotencyKey,
+        payload: { statementId, ...input },
+        mutate: (client) => payStatementInTx(client, householdId, statementId, input),
+      });
     },
 
     async updatePurchase(householdId, purchaseId, input) {

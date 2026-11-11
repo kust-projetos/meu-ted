@@ -1,0 +1,292 @@
+{
+  "runID": "2026-10-26T23-56-15-510Z-7596",
+  "cliVersion": "2.1.4",
+  "environment": "local mock only; synthetic placeholder credential stripped before send; no real provider credentials",
+  "nativeEndpoint": {
+    "origin": "https://opencode.ai",
+    "path": "/inference/openai/v1/chat/completions",
+    "provider": "opencode",
+    "model": "deepseek-v4.1-flash-free",
+    "kind": "primary",
+    "noTransportObserved": true
+  },
+  "cases": [
+    {
+      "mode": "429",
+      "exitCode": 1,
+      "timedOut": false,
+      "acceptedLocalConnections": 1,
+      "physicalRequestsReceived": 1,
+      "retryAttempts": [
+        2
+      ],
+      "toolCounts": [
+        0
+      ],
+      "assistantText": [],
+      "terminalErrors": [
+        {
+          "type": "provider.rate-limit",
+          "message": "mock failure"
+        }
+      ],
+      "eventTypes": [
+        "error"
+      ],
+      "hooks": [
+        "effective-config",
+        "context",
+        "auxiliary-blocked",
+        "http.request",
+        "http.response",
+        "retry",
+        "retry-veto"
+      ]
+    },
+    {
+      "mode": "500",
+      "exitCode": 1,
+      "timedOut": false,
+      "acceptedLocalConnections": 1,
+      "physicalRequestsReceived": 1,
+      "retryAttempts": [
+        2
+      ],
+      "toolCounts": [
+        0
+      ],
+      "assistantText": [],
+      "terminalErrors": [
+        {
+          "type": "provider.internal",
+          "message": "mock failure"
+        }
+      ],
+      "eventTypes": [
+        "error"
+      ],
+      "hooks": [
+        "effective-config",
+        "context",
+        "auxiliary-blocked",
+        "http.request",
+        "http.response",
+        "retry",
+        "retry-veto"
+      ]
+    },
+    {
+      "mode": "503",
+      "exitCode": 1,
+      "timedOut": false,
+      "acceptedLocalConnections": 1,
+      "physicalRequestsReceived": 1,
+      "retryAttempts": [
+        2
+      ],
+      "toolCounts": [
+        0
+      ],
+      "assistantText": [],
+      "terminalErrors": [
+        {
+          "type": "provider.internal",
+          "message": "mock failure"
+        }
+      ],
+      "eventTypes": [
+        "error"
+      ],
+      "hooks": [
+        "effective-config",
+        "context",
+        "auxiliary-blocked",
+        "http.request",
+        "http.response",
+        "retry",
+        "retry-veto"
+      ]
+    },
+    {
+      "mode": "timeout",
+      "exitCode": 1,
+      "timedOut": false,
+      "acceptedLocalConnections": 1,
+      "physicalRequestsReceived": 1,
+      "retryAttempts": [
+        2
+      ],
+      "toolCounts": [
+        0
+      ],
+      "assistantText": [],
+      "terminalErrors": [
+        {
+          "type": "provider.transport",
+          "message": "Timed out waiting for response headers"
+        }
+      ],
+      "eventTypes": [
+        "error"
+      ],
+      "hooks": [
+        "effective-config",
+        "context",
+        "auxiliary-blocked",
+        "http.request",
+        "retry",
+        "retry-veto"
+      ]
+    },
+    {
+      "mode": "reset",
+      "exitCode": 1,
+      "timedOut": false,
+      "acceptedLocalConnections": 1,
+      "physicalRequestsReceived": 1,
+      "retryAttempts": [
+        2
+      ],
+      "toolCounts": [
+        0
+      ],
+      "assistantText": [],
+      "terminalErrors": [
+        {
+          "type": "provider.transport",
+          "message": "ECONNRESET: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()"
+        }
+      ],
+      "eventTypes": [
+        "error"
+      ],
+      "hooks": [
+        "effective-config",
+        "context",
+        "auxiliary-blocked",
+        "http.request",
+        "retry",
+        "retry-veto"
+      ]
+    },
+    {
+      "mode": "refused",
+      "exitCode": 1,
+      "timedOut": false,
+      "acceptedLocalConnections": 0,
+      "physicalRequestsReceived": 0,
+      "retryAttempts": [
+        2
+      ],
+      "toolCounts": [],
+      "assistantText": [],
+      "terminalErrors": [
+        {
+          "type": "provider.transport",
+          "message": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+        }
+      ],
+      "eventTypes": [
+        "error"
+      ],
+      "hooks": [
+        "effective-config",
+        "context",
+        "auxiliary-blocked",
+        "http.request",
+        "retry",
+        "retry-veto"
+      ]
+    },
+    {
+      "mode": "proxy-refused",
+      "exitCode": 1,
+      "timedOut": false,
+      "acceptedLocalConnections": 1,
+      "physicalRequestsReceived": 0,
+      "retryAttempts": [
+        2
+      ],
+      "toolCounts": [],
+      "assistantText": [],
+      "terminalErrors": [
+        {
+          "type": "provider.transport",
+          "message": "ECONNRESET: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()"
+        }
+      ],
+      "eventTypes": [
+        "error"
+      ],
+      "hooks": [
+        "effective-config",
+        "context",
+        "auxiliary-blocked",
+        "http.request",
+        "retry",
+        "retry-veto"
+      ]
+    },
+    {
+      "mode": "stream",
+      "exitCode": 1,
+      "timedOut": false,
+      "acceptedLocalConnections": 1,
+      "physicalRequestsReceived": 1,
+      "retryAttempts": [
+        2
+      ],
+      "toolCounts": [
+        0
+      ],
+      "assistantText": [
+        "partial"
+      ],
+      "terminalErrors": [
+        {
+          "type": "provider.transport",
+          "message": "Connection lost while reading the response: ECONNRESET: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()"
+        }
+      ],
+      "eventTypes": [
+        "step_start",
+        "text",
+        "error"
+      ],
+      "hooks": [
+        "effective-config",
+        "context",
+        "auxiliary-blocked",
+        "http.request",
+        "http.response",
+        "retry",
+        "retry-veto"
+      ]
+    },
+    {
+      "mode": "valid",
+      "exitCode": 0,
+      "timedOut": false,
+      "acceptedLocalConnections": 1,
+      "physicalRequestsReceived": 1,
+      "retryAttempts": [],
+      "toolCounts": [
+        0
+      ],
+      "assistantText": [
+        "OK"
+      ],
+      "terminalErrors": [],
+      "eventTypes": [
+        "text"
+      ],
+      "hooks": [
+        "effective-config",
+        "context",
+        "auxiliary-blocked",
+        "http.request",
+        "http.response"
+      ]
+    }
+  ]
+}

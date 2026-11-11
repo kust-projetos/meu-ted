@@ -34,7 +34,9 @@ interface TedApprovalCardProps {
 }
 
 const deriveFallbackTitle = (operation: TedPendingOperation): string => {
+  if (operation.operation.includes("cards.statement.pay")) return "Pagamento de fatura";
   if (operation.operation.includes("transactions.update")) return "Alterar descrição do lançamento";
+  if (operation.operation.includes("transactions.transfer.create")) return "Transferência";
   if (operation.operation.includes("categories.create")) return "Criar categoria";
   if (operation.operation.includes("categories.update")) return "Renomear categoria";
   if (operation.operation.includes("categories.deactivate")) return "Desativar categoria";
@@ -72,6 +74,8 @@ const describeCategoryKind = (kind: string): string => {
  * catálogo/conta. Uma renomeação não registra valor: ela renomeia.
  */
 const describePendingOperationEffect = (tool: string): string => {
+  if (tool === "cards.statement.pay") return "O valor será debitado da conta pagadora e aplicado à fatura do cartão.";
+  if (tool === "transactions.transfer.create") return "O valor será transferido entre as suas contas; receitas e despesas não serão alteradas.";
   if (tool === "transactions.update") return "A descrição do lançamento será alterada; valor, data e conta não serão modificados.";
   if (tool === "categories.create") return "A categoria será criada nos seus dados.";
   if (tool === "categories.update") return "A categoria será renomeada nos seus dados.";
@@ -79,6 +83,8 @@ const describePendingOperationEffect = (tool: string): string => {
   if (tool === "accounts.update") return "A conta será renomeada nos seus dados.";
   if (tool === "accounts.create") return "A conta será criada nos seus dados.";
   if (tool === "accounts.deactivate") return "A conta será desativada nos seus dados.";
+  if (tool === "payables.create") return "A conta a pagar será criada nos seus dados; nenhum valor será debitado agora.";
+  if (tool === "payables.pay") return "O pagamento criará a despesa no histórico e debitará a conta pagadora.";
   return "O valor será registrado no seu histórico financeiro.";
 };
 
@@ -197,6 +203,9 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
               : {}),
             ...(presentation.tool === "transactions.update" && presentation.transactionTargetId
               ? { entityId: presentation.transactionTargetId }
+              : {}),
+            ...(presentation.tool === "cards.statement.pay" && presentation.statement
+              ? { entityId: presentation.statement.id }
               : {}),
           }
         : undefined;
@@ -460,6 +469,18 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
                 <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
               </div>
             )}
+            {presentation.tool === "transactions.transfer.create" && presentation.fromAccount && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Origem</dt>
+                <dd className="font-semibold">{presentation.fromAccount.label}</dd>
+              </div>
+            )}
+            {presentation.tool === "transactions.transfer.create" && presentation.toAccount && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Destino</dt>
+                <dd className="font-semibold">{presentation.toAccount.label}</dd>
+              </div>
+            )}
             {presentation.accountName && !presentation.account && (
               <div className="flex justify-between gap-2">
                 <dt className="text-text-muted">Conta</dt>
@@ -539,6 +560,213 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
         </div>
       );
     }
+    if (presentation.tool === "cards.statement.pay") {
+      // P3.6 statement payment: the invoice, the card and the payer account
+      // are the context; the amount paid NOW is explicit. All amounts come
+      // from the server presentation — the PWA never recomputes the
+      // remaining balance.
+      const confirmLabel =
+        typeof presentation.amountCents === "number"
+          ? `Confirmar ${formatCentsToBRL(presentation.amountCents)}`
+          : "Confirmar";
+      return (
+        <div className="my-2 rounded-[16px] border border-warning/30 bg-warning-tint p-3.5 text-xs shadow-xs">
+          <div className="font-bold text-warning">⚠️ {title}</div>
+          <dl className="mt-2 space-y-1 text-text-primary">
+            {presentation.account && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Cartão</dt>
+                <dd className="font-semibold">{presentation.account.label}</dd>
+              </div>
+            )}
+            {presentation.statement && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Fatura</dt>
+                <dd className="font-semibold">{presentation.statement.label}</dd>
+              </div>
+            )}
+            {typeof presentation.statementTotalCents === "number" && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Valor da fatura</dt>
+                <dd className="font-bold">{formatCentsToBRL(presentation.statementTotalCents)}</dd>
+              </div>
+            )}
+            {typeof presentation.statementPaidCents === "number" && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Já pago</dt>
+                <dd className="font-semibold">{formatCentsToBRL(presentation.statementPaidCents)}</dd>
+              </div>
+            )}
+            {typeof presentation.amountCents === "number" && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Pagamento agora</dt>
+                <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
+              </div>
+            )}
+            {presentation.fromAccount && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Conta pagadora</dt>
+                <dd className="font-semibold">{presentation.fromAccount.label}</dd>
+              </div>
+            )}
+            {presentation.statementDueDate && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Vencimento</dt>
+                <dd className="font-semibold">{formatDateToBR(presentation.statementDueDate)}</dd>
+              </div>
+            )}
+          </dl>
+          {presentation.warnings.length > 0 && (
+            <ul className="mt-2 space-y-0.5 text-warning">
+              {presentation.warnings.map((warning) => (
+                <li key={warning}>⚠️ {warning}</li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-0.5 text-text-muted">
+            {describePendingOperationEffect(presentation.tool)} {describePendingOperationStatus("proposed")}.
+          </div>
+
+          {error && <div className="mt-1 font-semibold text-danger">{error}</div>}
+
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              disabled={loading}
+              onClick={handleApprove}
+              className="rounded-[10px] bg-primary px-3.5 py-2 font-bold text-white shadow-xs transition-all hover:bg-primary-hover active:scale-95 disabled:opacity-50"
+            >
+              {loading ? "Processando…" : confirmLabel}
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={handleReject}
+              className="rounded-[10px] border border-border-subtle bg-surface-1 px-3.5 py-2 font-bold text-text-secondary transition-all hover:bg-surface-2 active:scale-95 disabled:opacity-50"
+            >
+              Rejeitar
+            </button>
+          </div>
+        </div>
+      );
+    }
+    if (presentation.tool === "cards.purchase.create") {
+      // P3.4 card purchase (1x): the canonical card shows the CARD, the
+      // value, the description and the single installment the user is
+      // authorizing. Category is optional and never gates Confirm.
+      //
+      // P3.5 installments: the preview renders ONLY the server-computed
+      // parcel amounts (`installmentAmountsCents`) — the PWA never applies
+      // its own rounding rule. `amountCents` is the TOTAL of the purchase.
+      const totalInstallments =
+        typeof presentation.installmentsTotal === "number" ? presentation.installmentsTotal : 1;
+      const isInstallmentPurchase = totalInstallments > 1;
+      const installmentAmounts = presentation.installmentAmountsCents ?? [];
+      const installmentLabel = (() => {
+        if (!isInstallmentPurchase || installmentAmounts.length !== totalInstallments) return "1x";
+        const first = installmentAmounts[0]!;
+        const last = installmentAmounts[installmentAmounts.length - 1]!;
+        return first === last
+          ? `${totalInstallments}x de ${formatCentsToBRL(first)}`
+          : `${totalInstallments}x de ${formatCentsToBRL(first)} (última de ${formatCentsToBRL(last)})`;
+      })();
+      const confirmLabel =
+        typeof presentation.amountCents === "number"
+          ? `Confirmar ${formatCentsToBRL(presentation.amountCents)}`
+          : "Confirmar";
+      return (
+        <div className="my-2 rounded-[16px] border border-warning/30 bg-warning-tint p-3.5 text-xs shadow-xs">
+          <div className="font-bold text-warning">
+            {isInstallmentPurchase && typeof presentation.amountCents === "number"
+              ? `⚠️ Compra parcelada — ${formatCentsToBRL(presentation.amountCents)}`
+              : `⚠️ ${title}`}
+          </div>
+          <dl className="mt-2 space-y-1 text-text-primary">
+            {presentation.description && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Descrição</dt>
+                <dd className="font-semibold">{presentation.description}</dd>
+              </div>
+            )}
+            {presentation.account && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Cartão</dt>
+                <dd className="font-semibold">{presentation.account.label}</dd>
+              </div>
+            )}
+            {isInstallmentPurchase ? (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Parcelamento</dt>
+                <dd className="font-semibold">{installmentLabel}</dd>
+              </div>
+            ) : (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Parcela</dt>
+                <dd className="font-semibold">1x</dd>
+              </div>
+            )}
+            {typeof presentation.amountCents === "number" && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Valor total</dt>
+                <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
+              </div>
+            )}
+            {isInstallmentPurchase && presentation.firstStatementDueDate && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Primeira fatura</dt>
+                <dd className="font-semibold">{formatDateToBR(presentation.firstStatementDueDate)}</dd>
+              </div>
+            )}
+            {presentation.category && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Categoria</dt>
+                <dd className="font-semibold">{presentation.category.label}</dd>
+              </div>
+            )}
+            {presentation.date && (
+              <div className="flex justify-between gap-2">
+                <dt className="text-text-muted">Data</dt>
+                <dd className="font-semibold">{formatDateToBR(presentation.date)}</dd>
+              </div>
+            )}
+          </dl>
+          {presentation.warnings.length > 0 && (
+            <ul className="mt-2 space-y-0.5 text-warning">
+              {presentation.warnings.map((warning) => (
+                <li key={warning}>⚠️ {warning}</li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-0.5 text-text-muted">
+            {isInstallmentPurchase
+              ? "As parcelas serão registradas no cartão e vinculadas às faturas correspondentes."
+              : "A compra será registrada no cartão e vinculada à fatura correspondente."}{" "}
+            {describePendingOperationStatus("proposed")}.
+          </div>
+
+          {error && <div className="mt-1 font-semibold text-danger">{error}</div>}
+
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              disabled={loading}
+              onClick={handleApprove}
+              className="rounded-[10px] bg-primary px-3.5 py-2 font-bold text-white shadow-xs transition-all hover:bg-primary-hover active:scale-95 disabled:opacity-50"
+            >
+              {loading ? "Processando…" : confirmLabel}
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={handleReject}
+              className="rounded-[10px] border border-border-subtle bg-surface-1 px-3.5 py-2 font-bold text-text-secondary transition-all hover:bg-surface-2 active:scale-95 disabled:opacity-50"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      );
+    }
     const confirmLabel =
       typeof presentation.amountCents === "number" ? `Confirmar ${formatCentsToBRL(presentation.amountCents)}` : "Confirmar";
     return (
@@ -600,6 +828,18 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
             <div className="flex justify-between gap-2">
               <dt className="text-text-muted">Valor</dt>
               <dd className="font-bold">{formatCentsToBRL(presentation.amountCents)}</dd>
+            </div>
+          )}
+          {presentation.tool === "transactions.transfer.create" && presentation.fromAccount && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Origem</dt>
+              <dd className="font-semibold">{presentation.fromAccount.label}</dd>
+            </div>
+          )}
+          {presentation.tool === "transactions.transfer.create" && presentation.toAccount && (
+            <div className="flex justify-between gap-2">
+              <dt className="text-text-muted">Destino</dt>
+              <dd className="font-semibold">{presentation.toAccount.label}</dd>
             </div>
           )}
           {presentation.tool === "accounts.update" && presentation.account && (
@@ -677,7 +917,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
             onClick={handleReject}
             className="rounded-[10px] border border-border-subtle bg-surface-1 px-3.5 py-2 font-bold text-text-secondary transition-all hover:bg-surface-2 active:scale-95 disabled:opacity-50"
           >
-            Cancelar
+            {presentation.tool === "transactions.transfer.create" ? "Rejeitar" : "Cancelar"}
           </button>
         </div>
       </div>

@@ -1,16 +1,170 @@
 import path from "node:path";
+import fs from "node:fs";
+import { createRequire } from "node:module";
 import { defineConfig } from "@playwright/test";
-import { resolveE2ePorts } from "./support/ports";
+import { resolveE2ePorts, resolveP2dPorts } from "./support/ports";
 
-// Opt-in local overrides (E2E_FIXTURE_PORT / E2E_NEXT_PORT / E2E_HARNESS_PORT);
-// defaults preserve the historical topology (fixture 4010 · Next 3001 · harness 3000).
-const { fixturePort: FIXTURE_PORT, nextPort: NEXT_PORT, harnessPort: HARNESS_PORT } =
-  resolveE2ePorts(process.env);
+// The prep-only contract is required from the strict-CJS single source,
+// never reimplemented here: the config is the authority for the Next-env
+// preflight and the env scrub on the P2D_LIVE_PREP=1 opt-in path
+// (including a direct CLI entrypoint). The Playwright config loader
+// transpiles this file to CJS, so the contract MUST be require-safe:
+// `./support/p2d-live-credential.cjs` (no `import.meta`, no ESM syntax).
+// Requiring the `.mjs` facade here breaks with `SyntaxError: Cannot use
+// 'import.meta' outside a module` (the `.mjs` stays the ESM entrypoint for
+// `p2d-live-prep.mjs` and the node:test contract only).
+const require = createRequire(__filename);
+const { assertNoBlockingNextEnvFiles, buildPlaywrightEnv } = require("./support/p2d-live-credential.cjs") as {
+  assertNoBlockingNextEnvFiles: (pwaDir: string) => true;
+  buildPlaywrightEnv: (
+    baseEnv?: Record<string, string | undefined>,
+    opts?: { livePrep?: boolean; offlineChat?: boolean; liveReal?: boolean },
+  ) => Record<string, string>;
+};
+
+// P2D synthetic-conversation browser stack (test-only, loopback only):
+// own Fastify API + gateway probe + Next dev + control server. Started ONLY
+// with P2D_BROWSER=1 (or the prep-only P2D_LIVE_PREP=1 opt-in, which implies
+// it); the historical topology above is untouched.
+const P2D = process.env.P2D_BROWSER === "1";
+// P2D live-mode opt-ins (each implies P2D_BROWSER and the p2d-synthetic
+// project so the -g selection always has a target):
+// - P2D_LIVE_PREP=1  prep-only boot (no prompt, no provider);
+// - P2D_OFFLINE_CHAT=1  full offline chat through the loopback provider;
+// - P2D_LIVE_REAL=1  future real-provider run (credential only in the
+//   isolated runtime child; never in this config/PWA/Next env).
+// Default path (all unset) is untouched. At most one mode may be selected.
+const LIVE_PREP = process.env.P2D_LIVE_PREP === "1";
+const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
+const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
+// P3 proposal slices: loopback Agent + Pending V2 + scripted propose_expense
+// (P3.1), propose_income (P3.2), propose_transfer (P3.3), propose_card_purchase
+// 1x (P3.4) or with installments (P3.5). They reuse the synthetic stack and
+// never carry a real credential.
+const EXPENSE = process.env.P2D_EXPENSE === "1";
+const INCOME = process.env.P2D_INCOME === "1";
+const CARD = process.env.P2D_CARD === "1";
+const CARD_INSTALLMENTS = process.env.P2D_CARD_INSTALLMENTS === "1";
+const TRANSFER = process.env.P2D_TRANSFER === "1";
+const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
+const P3_PILOT = process.env.P2D_P3_PILOT === "1";
+const P38_CARD_SMOKE = process.env.P2D_P38_CARD_SMOKE === "1";
+// P2D rollback slice: a pre-existing `opencode.*` pin must return to A0 and be
+// expired when the runtime kill switch is on. Test-only; it starts the real
+// Agent Worker (A0) and the loopback gateway, but never prompts the gateway.
+const ROLLBACK = process.env.P2D_ROLLBACK === "1";
+if (ROLLBACK && ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY, LIVE_PREP, OFFLINE_CHAT, LIVE_REAL, P3_PILOT, P38_CARD_SMOKE].some(Boolean))) {
+  throw new Error("P2D_ROLLBACK is mutually exclusive with every other P2D mode");
+}
+if (P3_PILOT && ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY, LIVE_PREP, OFFLINE_CHAT, P38_CARD_SMOKE].some(Boolean))) {
+  throw new Error("P2D_P3_PILOT is mutually exclusive with P3 slices, LIVE_PREP, OFFLINE_CHAT and P2D_P38_CARD_SMOKE");
+}
+if (P38_CARD_SMOKE && !LIVE_REAL) {
+  throw new Error("P2D_P38_CARD_SMOKE requires P2D_LIVE_REAL (fail-closed)");
+}
+if ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].filter(Boolean).length > 1) {
+  throw new Error(
+    "select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD|P2D_CARD_INSTALLMENTS|P2D_TRANSFER|P2D_STATEMENT_PAY)",
+  );
+}
+if ([LIVE_PREP, OFFLINE_CHAT, LIVE_REAL].filter(Boolean).length > 1) {
+  throw new Error("select at most one P2D live mode (P2D_LIVE_PREP|P2D_OFFLINE_CHAT|P2D_LIVE_REAL)");
+}
+const P2D_LIVE_MODE = LIVE_PREP || OFFLINE_CHAT || LIVE_REAL;
+const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+const AGENT_RUN = PROPOSAL || ROLLBACK;
+const P2D_ACTIVE = P2D || P2D_LIVE_MODE || PROPOSAL || ROLLBACK;
+const P2D_SPEC = LIVE_PREP
+  ? "**/p2d/p2d-live-prep.spec.ts"
+  : OFFLINE_CHAT
+    ? "**/p2d/p2d-live-offline.spec.ts"
+      : LIVE_REAL
+        ? P3_PILOT
+          ? "**/p2d/p3-integrated-real.spec.ts"
+          : P38_CARD_SMOKE
+            ? "**/p2d/p3-card-discovery-smoke.spec.ts"
+            : "**/p2d/p2d-live-real.spec.ts"
+      : ROLLBACK
+        ? "**/p2d/p2d-rollback.spec.ts"
+      : P3_PILOT
+        ? "**/p2d/p3-integrated.spec.ts"
+      : STATEMENT_PAY
+        ? "**/p2d/p3-statement-payment.spec.ts"
+      : CARD_INSTALLMENTS
+        ? "**/p2d/p3-installments.spec.ts"
+      : CARD
+        ? "**/p2d/p3-card-purchase.spec.ts"
+      : TRANSFER
+        ? "**/p2d/p3-transfer.spec.ts"
+        : INCOME
+          ? "**/p2d/p3-income.spec.ts"
+          : EXPENSE
+            ? "**/p2d/p3-expense.spec.ts"
+            : "**/p2d/*.spec.ts";
 // Fail-closed, unconditionally: Playwright starts and cleans up its own
 // servers per run and never attaches to a pre-existing (possibly alien)
 // process. There is no ownership flag and no reuse pathway.
 const PWA_ROOT = path.resolve(__dirname, "..");
 const PWA_APP_DIR = PWA_ROOT;
+
+// P2D live-mode authority (fail-closed, BEFORE any port is resolved or any
+// webServer is constructed): with any live-mode flag this config runs the
+// Next-env preflight (contents never read) and replaces process.env with
+// the allowlisted Playwright env (same builder the launcher uses), so even
+// a direct CLI entrypoint can never start servers with a raw env — no raw
+// E2E_*/P2D_* value can reach an error message or a listener. The real
+// credential alias/target are stripped in every mode; the runtime child
+// loads the credential itself in live-real. Untouched when unset: the
+// default path keeps resolving the ambient env.
+if (P2D_LIVE_MODE) {
+  assertNoBlockingNextEnvFiles(PWA_ROOT);
+  const clean = buildPlaywrightEnv(process.env, {
+    livePrep: LIVE_PREP,
+    offlineChat: OFFLINE_CHAT,
+    liveReal: LIVE_REAL,
+  });
+  if (LIVE_REAL && P3_PILOT) clean.P2D_P3_PILOT = "1";
+  if (LIVE_REAL && P38_CARD_SMOKE) clean.P2D_P38_CARD_SMOKE = "1";
+  for (const key of Object.keys(process.env)) delete process.env[key];
+  Object.assign(process.env, clean);
+}
+
+// Opt-in local overrides (E2E_FIXTURE_PORT / E2E_NEXT_PORT / E2E_HARNESS_PORT);
+// defaults preserve the historical topology (fixture 4010 · Next 3001 · harness 3000).
+// Under LIVE_PREP these resolve from the ALREADY-sanitized env above.
+const { fixturePort: FIXTURE_PORT, nextPort: NEXT_PORT, harnessPort: HARNESS_PORT } =
+  resolveE2ePorts(process.env);
+const p2dPorts = resolveP2dPorts(process.env);
+const P2D_API_BASE = `http://127.0.0.1:${p2dPorts.apiPort}`;
+const P2D_GATEWAY_BASE = `http://127.0.0.1:${p2dPorts.gatewayPort}`;
+const P2D_NEXT_BASE = `http://127.0.0.1:${p2dPorts.nextPort}`;
+
+// P2D local Cloudflare bindings (no secret): the #306 workspace allowlist is
+// mandatory, and the Cloudflare dev context reads .dev.vars. Generate it for
+// proposal runs and keep it untracked/ignored; it is removed on runner exit.
+const P2D_DEV_VARS_PATH = path.join(PWA_ROOT, ".dev.vars");
+const P2D_WORKSPACE_A = "00000000-0000-4000-8000-00000000000a";
+if (AGENT_RUN) {
+  fs.writeFileSync(
+    P2D_DEV_VARS_PATH,
+    [
+      "TED_OPENCODE_RUNTIME_ENABLED=1",
+      `TED_OPENCODE_WORKSPACES=${P2D_WORKSPACE_A}`,
+      `TED_OPENCODE_GATEWAY_ORIGIN=${P2D_GATEWAY_BASE}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  if (!process.env.TEST_WORKER_INDEX) {
+    process.once("exit", () => {
+      try {
+        fs.rmSync(P2D_DEV_VARS_PATH, { force: true });
+      } catch {
+        /* best effort: the file is untracked and ignored */
+      }
+    });
+  }
+}
 
 const PRODUCTION_SMOKE = process.env.E2E_PRODUCTION_SMOKE === "1";
 if (PRODUCTION_SMOKE && !process.env.E2E_PRODUCTION_URL) {
@@ -41,98 +195,199 @@ export default defineConfig({
   },
 
   projects: [
-    {
-      name: "functional-mobile",
-      use: {
-        viewport: { width: 390, height: 844 },
-        serviceWorkers: "block",
-      },
-      testMatch: "specs/**/*.spec.ts",
-      testIgnore: ["**/pwa-runtime.spec.ts", "**/push-runtime.spec.ts"],
-    },
-    {
-      name: "functional-desktop",
-      use: {
-        viewport: { width: 1440, height: 900 },
-        serviceWorkers: "block",
-      },
-      testMatch: "specs/**/*.spec.ts",
-      testIgnore: ["**/pwa-runtime.spec.ts", "**/push-runtime.spec.ts"],
-    },
-    {
-      name: "pwa-runtime",
-      use: {
-        viewport: { width: 390, height: 844 },
-        serviceWorkers: "allow",
-        baseURL: `http://127.0.0.1:${HARNESS_PORT}`,
-      },
-      testMatch: "**/pwa-runtime.spec.ts",
-      fullyParallel: false,
-      timeout: 60000,
-    },
-    {
-      name: "push-runtime",
-      use: {
-        viewport: { width: 390, height: 844 },
-        serviceWorkers: "allow",
-        baseURL: `http://127.0.0.1:${HARNESS_PORT}`,
-        headless: true,
-      },
-      testMatch: "**/push-runtime.spec.ts",
-      fullyParallel: false,
-      timeout: 60000,
-    },
-    {
-      name: "production-smoke",
-      use: {
-        baseURL:
-          // Fallback only: live smoke always sets E2E_PRODUCTION_URL (the
-          // deploy workflows fail closed when the repo variable is unset).
-          process.env.E2E_PRODUCTION_URL || "https://pwa.example",
-      },
-      testMatch: "**/production-smoke.spec.ts",
-      grepInvert: process.env.E2E_PRODUCTION_SMOKE ? undefined : /.*/,
-    },
+    // Any live-mode opt-in exposes ONLY the p2d-synthetic project below: a
+    // direct CLI can never select functional-mobile/desktop, pwa-runtime
+    // or push-runtime with a live flag. Untouched when unset.
+    ...(!P2D_LIVE_MODE
+      ? [
+          {
+            name: "functional-mobile",
+            use: {
+              viewport: { width: 390, height: 844 },
+              serviceWorkers: "block",
+            },
+            testMatch: "specs/**/*.spec.ts",
+            testIgnore: ["**/pwa-runtime.spec.ts", "**/push-runtime.spec.ts"],
+          },
+          {
+            name: "functional-desktop",
+            use: {
+              viewport: { width: 1440, height: 900 },
+              serviceWorkers: "block",
+            },
+            testMatch: "specs/**/*.spec.ts",
+            testIgnore: ["**/pwa-runtime.spec.ts", "**/push-runtime.spec.ts"],
+          },
+          {
+            name: "pwa-runtime",
+            use: {
+              viewport: { width: 390, height: 844 },
+              serviceWorkers: "allow",
+              baseURL: `http://127.0.0.1:${HARNESS_PORT}`,
+            },
+            testMatch: "**/pwa-runtime.spec.ts",
+            fullyParallel: false,
+            timeout: 60000,
+          },
+          {
+            name: "push-runtime",
+            use: {
+              viewport: { width: 390, height: 844 },
+              serviceWorkers: "allow",
+              baseURL: `http://127.0.0.1:${HARNESS_PORT}`,
+              headless: true,
+            },
+            testMatch: "**/push-runtime.spec.ts",
+            fullyParallel: false,
+            timeout: 60000,
+          },
+          {
+            name: "production-smoke",
+            use: {
+              baseURL:
+                // Fallback only: live smoke always sets E2E_PRODUCTION_URL (the
+                // deploy workflows fail closed when the repo variable is unset).
+                process.env.E2E_PRODUCTION_URL || "https://pwa.example",
+            },
+            testMatch: "**/production-smoke.spec.ts",
+            grepInvert: process.env.E2E_PRODUCTION_SMOKE ? undefined : /.*/,
+          },
+        ]
+      : []),
+    ...(P2D_ACTIVE
+      ? [
+          {
+            // P2D synthetic conversation (test-only, loopback only): real Next/PWA
+            // browser → same-origin proxy → real loopback gateway → real SDK →
+            // scripted local stub → real finance tools → real Fastify handlers.
+            // Registered with P2D_BROWSER=1 (or a live-mode opt-in, which
+            // implies it), with the stack webServers below; without opt-in
+            // the project does not exist. On a live-mode opt-in the selection
+            // is forced to that mode's spec only, on ANY entrypoint (direct
+            // CLI included) — no other P2D spec runs.
+            name: "p2d-synthetic",
+            use: {
+              viewport: { width: 390, height: 844 },
+              serviceWorkers: "block",
+              baseURL: P2D_NEXT_BASE,
+            },
+            testMatch: P2D_SPEC,
+            fullyParallel: false,
+            timeout: 600000,
+          },
+        ]
+      : []),
   ],
 
   webServer: PRODUCTION_SMOKE ? undefined : [
-    {
-      command: `pnpm exec tsx e2e/fixture-api/server.ts --port ${FIXTURE_PORT}`,
-      port: FIXTURE_PORT,
-      cwd: PWA_ROOT,
-      reuseExistingServer: false,
-      timeout: 90000,
-    },
-    {
-      // Next standalone server (harness proxies harness-port → next-port).
-      command: `node e2e/standalone-server.mjs`,
-      port: NEXT_PORT,
-      cwd: PWA_APP_DIR,
-      reuseExistingServer: false,
-      timeout: 90000,
-      env: {
-        ...process.env,
-        PORT: String(NEXT_PORT),
-        HOSTNAME: "127.0.0.1",
-        NEXT_PUBLIC_PI_FINANCE_API_BASE_URL: `http://127.0.0.1:${FIXTURE_PORT}`,
-        // Root cause fix: the built client calls the relative /api/backend
-        // proxy (baked from .env.local at build time), so the runtime
-        // NEXT_PUBLIC_* env above never reaches the browser. The proxy route
-        // (/api/backend/[...path]) forwards to PWA_BACKEND_PROXY_ORIGIN,
-        // defaulting to production — point it at the fixture instead, or the
-        // fixture journal stays empty and AUTH-01 can never pass.
-        PWA_BACKEND_PROXY_ORIGIN: `http://127.0.0.1:${FIXTURE_PORT}`,
-      },
-    },
-    {
-      // SW harness owns /sw.js + /__e2e/sw/deploy; proxies the rest to Next.
-      // --fixture lets the harness apply the same CSP accommodation the
-      // page.route rewrite applies (SW-served navigations bypass page.route).
-      command: `pnpm exec tsx e2e/sw-harness/server.ts --target=${NEXT_PORT} --port=${HARNESS_PORT} --fixture=${FIXTURE_PORT}`,
-      port: HARNESS_PORT,
-      cwd: PWA_ROOT,
-      reuseExistingServer: false,
-      timeout: 90000,
-    },
+    // Any live-mode opt-in (P2D_LIVE_PREP / P2D_OFFLINE_CHAT / P2D_LIVE_REAL)
+    // and the P3 proposal slices skip the historical topology (fixture API,
+    // standalone Next, SW harness) so ONLY the P2D webServers below run — no
+    // extra servers, no prebuilt .next/standalone dependency. Untouched when
+    // no flag is set, including P2D_BROWSER=1 alone.
+    ...(!P2D_LIVE_MODE && !AGENT_RUN
+      ? [
+          {
+            command: `pnpm exec tsx e2e/fixture-api/server.ts --port ${FIXTURE_PORT}`,
+            port: FIXTURE_PORT,
+            cwd: PWA_ROOT,
+            reuseExistingServer: false,
+            timeout: 90000,
+          },
+          {
+            // Next standalone server (harness proxies harness-port → next-port).
+            command: `node e2e/standalone-server.mjs`,
+            port: NEXT_PORT,
+            cwd: PWA_APP_DIR,
+            reuseExistingServer: false,
+            timeout: 90000,
+            env: {
+              ...process.env,
+              PORT: String(NEXT_PORT),
+              HOSTNAME: "127.0.0.1",
+              NEXT_PUBLIC_PI_FINANCE_API_BASE_URL: `http://127.0.0.1:${FIXTURE_PORT}`,
+              // Root cause fix: the built client calls the relative /api/backend
+              // proxy (baked from .env.local at build time), so the runtime
+              // NEXT_PUBLIC_* env above never reaches the browser. The proxy route
+              // (/api/backend/[...path]) forwards to PWA_BACKEND_PROXY_ORIGIN,
+              // defaulting to production — point it at the fixture instead, or the
+              // fixture journal stays empty and AUTH-01 can never pass.
+              PWA_BACKEND_PROXY_ORIGIN: `http://127.0.0.1:${FIXTURE_PORT}`,
+            },
+          },
+          {
+            // SW harness owns /sw.js + /__e2e/sw/deploy; proxies the rest to Next.
+            // --fixture lets the harness apply the same CSP accommodation the
+            // page.route rewrite applies (SW-served navigations bypass page.route).
+            command: `pnpm exec tsx e2e/sw-harness/server.ts --target=${NEXT_PORT} --port=${HARNESS_PORT} --fixture=${FIXTURE_PORT}`,
+            port: HARNESS_PORT,
+            cwd: PWA_ROOT,
+            reuseExistingServer: false,
+            timeout: 90000,
+          },
+        ]
+      : []),
+    // P2D synthetic-conversation stack (P2D_BROWSER=1, or any live-mode
+    // opt-in which implies it): the coordinator owns the Fastify API +
+    // gateway probe + control server lifecycle, and a separate Next dev
+    // process serves the REAL PWA against that stack (NEXT_PUBLIC base
+    // forced empty so the browser uses the same-origin proxy; no fixture,
+    // no production). The scrubbed env carries only the selected mode flag;
+    // the real credential is never present here.
+    ...(P2D_ACTIVE
+      ? [
+          {
+            command: `pnpm exec tsx e2e/support/p2d-browser-stack.mts`,
+            port: p2dPorts.ctlPort,
+            cwd: PWA_ROOT,
+            reuseExistingServer: false,
+            // Live-real cold boot is probe (catalog + SDK) + wrangler agent,
+            // sequentially, before ctl listens — 240s is not enough. Synthetic
+            // boots are unchanged (fast stub); this only raises the ceiling.
+            timeout: 600000,
+            env: {
+              ...process.env,
+              P2D_API_PORT: String(p2dPorts.apiPort),
+              P2D_GATEWAY_PORT: String(p2dPorts.gatewayPort),
+              P2D_CTL_PORT: String(p2dPorts.ctlPort),
+              P2D_NEXT_PORT: String(p2dPorts.nextPort),
+              P2D_AGENT_PORT: String(p2dPorts.agentPort),
+              ...(OFFLINE_CHAT ? { P2D_OFFLINE_CHAT: "1" } : {}),
+              ...(LIVE_REAL ? { P2D_LIVE_REAL: "1" } : {}),
+              ...(EXPENSE ? { P2D_EXPENSE: "1" } : {}),
+              ...(INCOME ? { P2D_INCOME: "1" } : {}),
+              ...(CARD ? { P2D_CARD: "1" } : {}),
+              ...(CARD_INSTALLMENTS ? { P2D_CARD_INSTALLMENTS: "1" } : {}),
+              ...(TRANSFER ? { P2D_TRANSFER: "1" } : {}),
+              ...(STATEMENT_PAY ? { P2D_STATEMENT_PAY: "1" } : {}),
+              ...(P3_PILOT ? { P2D_P3_PILOT: "1" } : {}),
+              ...(P38_CARD_SMOKE ? { P2D_P38_CARD_SMOKE: "1" } : {}),
+              ...(ROLLBACK ? { P2D_ROLLBACK: "1" } : {}),
+            },
+          },
+          {
+            command: `pnpm exec next dev --webpack --port ${p2dPorts.nextPort} --hostname 127.0.0.1`,
+            port: p2dPorts.nextPort,
+            cwd: PWA_ROOT,
+            reuseExistingServer: false,
+            timeout: 240000,
+            env: {
+              ...process.env,
+              PORT: String(p2dPorts.nextPort),
+              HOSTNAME: "127.0.0.1",
+              PWA_BACKEND_PROXY_ORIGIN: P2D_API_BASE,
+              TED_OPENCODE_RUNTIME_ENABLED: "1",
+              ...(ROLLBACK ? { TED_OPENCODE_RUNTIME_KILL_SWITCH: "1" } : {}),
+              TED_OPENCODE_GATEWAY_ORIGIN: P2D_GATEWAY_BASE,
+              ...(AGENT_RUN
+                ? { PWA_AGENT_PROXY_ORIGIN: `http://127.0.0.1:${p2dPorts.agentPort}` }
+                : {}),
+              ALLOW_LOCAL_ORIGIN: "1",
+              NEXT_PUBLIC_PI_FINANCE_API_BASE_URL: "",
+              NEXT_PUBLIC_LEGACY_BEARER_COMPAT: "off",
+            },
+          },
+        ]
+      : []),
   ],
 });

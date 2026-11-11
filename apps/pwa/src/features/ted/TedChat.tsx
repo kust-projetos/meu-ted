@@ -7,6 +7,7 @@ import {
   fetchActivePendingOperations,
   fetchActiveUndoProposals,
   sendAgentMessage,
+  proposePendingOperation,
   renewAgentSession,
   composeChatSend,
   loadPendingChatSend,
@@ -20,6 +21,7 @@ import {
   type ActivePendingOperation,
   type ActiveUndoProposal,
   type AgentMessage,
+  type ProposalIntent,
   type PendingChatSend,
 } from "@/lib/api/agent-client";
 import { TedMessage, type TedDeliveryState } from "./TedMessage";
@@ -33,11 +35,38 @@ import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 import { isActionablePendingOperationPresentation } from "@pi-finance/llm-contracts/types";
 import type { PendingOperationDecision, UndoDecision } from "@/lib/api/agent-client";
 import { notifyPendingOperationsChanged } from "@/lib/state/use-pending-operations";
-import { Sparkles, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, Trash2, RefreshCw, Lock } from "lucide-react";
+import { getTedRuntimeView, clearTedRuntimeViews, type TedRuntimeView } from "@/lib/api/ted-runtime-view";
+import { Sparkles, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, Trash2, RefreshCw, Lock, X } from "lucide-react";
 
 const HISTORY_LOAD_ERROR = "Não foi possível carregar o histórico. Tente novamente.";
 const ACTIVE_LOAD_ERROR = "Não foi possível carregar as aprovações agora.";
 const MESSAGE_SEND_ERROR = "Não foi possível enviar a mensagem. Tente novamente.";
+/**
+ * P3 recovery: the turn succeeded but the broker call was lost. The original
+ * intent stays in the existing retry anchor; a reload re-sends it under the
+ * same `intentionId` (the broker's idempotency seed). This copy tells the user
+ * the recovery did not land yet without inventing a card.
+ */
+const PROPOSAL_NOUN: Readonly<Record<ProposalIntent["tool"], string>> = {
+  "transactions.expense.create": "despesa",
+  "transactions.income.create": "receita",
+  "cards.purchase.create": "compra no cartão",
+  "cards.statement.pay": "pagamento de fatura",
+  "transactions.transfer.create": "transferência",
+  "accounts.create": "conta",
+  "categories.create": "categoria",
+  "transactions.update": "descrição do lançamento",
+  "accounts.update": "conta",
+  "accounts.deactivate": "conta",
+  "categories.update": "categoria",
+  "categories.deactivate": "categoria",
+  "payables.create": "conta a pagar",
+  "payables.pay": "pagamento de conta",
+};
+const proposalRecoveryError = (proposal?: ProposalIntent): string =>
+  `Não foi possível recuperar a proposta de ${proposal ? PROPOSAL_NOUN[proposal.tool] : "operação"}. Recarregue a página para tentar novamente.`;
+const proposalBrokerError = (proposal?: ProposalIntent): string =>
+  `Não foi possível preparar a proposta de ${proposal ? PROPOSAL_NOUN[proposal.tool] : "operação"}. Tente novamente.`;
 /**
  * FIX-AGENT-QUOTA-MESSAGE: the Agent relays the usage-gate denial verbatim as
  * 429 `agent.quota_exceeded` (the daily token budget, reset on the 24h window)
@@ -227,6 +256,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // deduped by requestId; expired summaries are dropped.
   const [undoProposals, setUndoProposals] = useState<TedUndoProposal[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  // P2 — server-confirmed runtime for the live conversation (from the
+  // proxied `x-ted-runtime` header). The cancel affordance renders ONLY when
+  // B is confirmed; A0/unknown keeps the existing disabled submit (no false
+  // cancel — A0 has no turn-cancel path upstream). Local per mount, reset on
+  // scope teardown; the module view stays keyed by workspace.
+  const [tedRuntime, setTedRuntime] = useState<TedRuntimeView>("unknown");
+  const canCancelTurn = tedRuntime === "opencode";
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -380,6 +416,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const anchorSnapshotsRef = useRef<
     Map<string, Pick<PendingChatSend, "content" | "createdAt" | "attachments" | "messageId">>
   >(new Map());
+  /**
+   * P3 recovery: one broker attempt per persisted intent per mount. A failed
+   * attempt keeps the anchor (the next reload retries under the SAME
+   * intentionId); a successful one clears it. The ref prevents a history
+   * refresh loop from hammering the broker.
+   */
+  const proposalRecoveryRef = useRef<string | null>(null);
   const discardDrafts = useCallback(() => {
     for (const draft of draftsRef.current.values()) {
       revokeAttachmentUrls(draft.attachments ?? []);
@@ -460,6 +503,10 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     if (!activeWorkspace) return [];
     // A02/R02 (AC07 HIGH): this refresh belongs to the scope that started it.
     const scopeId = activeWorkspace.id;
+    // P2: re-ground the runtime belief on every history batch — a B pin
+    // cleared gateway-side must not keep offering cancel on the A0 that
+    // follows. The fetch below re-captures when the header is present.
+    clearTedRuntimeViews(scopeId);
     let history: AgentMessage[];
     try {
       setStatus("connecting");
@@ -471,8 +518,16 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // signals staleness — never invents a card, never wipes history.
       setError(HISTORY_LOAD_ERROR);
       setStatus("error");
+      // P2: even a failed batch may have revealed the runtime (a B 400 with
+      // no cookie yet still carries the runtime header, captured above).
+      setTedRuntime(getTedRuntimeView(scopeId));
       return [];
     }
+    // P2: sync the server-confirmed runtime from whatever the history batch
+    // (or its error) revealed — including a B 400 with no cookie yet, whose
+    // response still carries the runtime header. No header (legacy A0) keeps
+    // the reset value below: unknown.
+    if (!isStaleScope(scopeId)) setTedRuntime(getTedRuntimeView(scopeId));
     // The scope may have changed while the batch was in flight: this batch
     // belongs to the previous conversation and must never reach the new one.
     if (isStaleScope(scopeId)) return [];
@@ -502,7 +557,11 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     const anchored = loadPendingChatSend(scopeId);
     // Decisão pura de storage, fora do updater: âncora superada é obsoleta.
     const anchoredSuperseded = anchored ? isAnchorSupersededByHistory(anchored, history) : false;
-    if (anchored && anchoredSuperseded) {
+    // P3: a proposal anchor is a recovery record, not a failed send. Never
+    // discard it merely because history already carries the user message —
+    // the broker has not necessarily accepted the intent yet. It is cleared
+    // only after the broker responds.
+    if (anchored && anchoredSuperseded && !anchored.proposal) {
       clearPendingChatSend(scopeId);
     }
     // R2 FIX 3: reconciliação em TODA carga de histórico — snapshots
@@ -617,6 +676,27 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     }
     setHistoryLoaded(true);
     if (!preserveError) setError(null);
+    // P3 recovery — the turn succeeded but its broker call was lost. The
+    // persisted intent is replayed to the authenticated Agent broker BEFORE
+    // the active list is read, so the authoritative card is part of this same
+    // refresh. The idempotency seed is the intent's own intentionId: if the
+    // first call actually landed, the broker returns `existing: true` and no
+    // second operation exists.
+    let proposalRecoveryFailed = false;
+    if (anchored?.proposal && proposalRecoveryRef.current !== anchored.messageId) {
+      proposalRecoveryRef.current = anchored.messageId;
+      try {
+        await proposePendingOperation(scopeId, anchored.proposal);
+        if (isStaleScope(scopeId)) return [];
+        clearPendingChatSend(scopeId);
+        setMessages((prev) =>
+          prev.map((m) => (m.id === anchored.messageId ? { ...m, delivery: "sent" as const } : m)),
+        );
+      } catch {
+        if (isStaleScope(scopeId)) return [];
+        proposalRecoveryFailed = true;
+      }
+    }
     // FIX-P1: live cards come EXCLUSIVELY from the authoritative active
     // list (server-derived canonical presentation) — history NEVER mints a
     // card, even when a legacy turn still carries a pendingOperation.
@@ -651,6 +731,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // Last-known undo cards stay (untouched); staleness is already
       // signaled by the history/active error paths above when they fail.
     }
+    if (proposalRecoveryFailed) setError(proposalRecoveryError(anchored?.proposal));
     return history;
   }, [activeWorkspace, applyActiveUndoProposals, isStaleScope]);
 
@@ -760,7 +841,9 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       setUndoProposals([]);
       setHistoryLoaded(false);
       setError(null);
+      setTedRuntime("unknown");
       setStatus("ready");
+      proposalRecoveryRef.current = null;
     }
     activeWorkspaceIdRef.current = newId;
     prevWorkspaceIdRef.current = newId;
@@ -999,6 +1082,19 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // retries. Success marks the optimistic bubble as sent and lets the
   // authoritative history own the log; failure keeps the bubble visible as
   // failed (never silently discarded) with the draft intact for retry.
+  //
+  // P2 — cancellable turn, B-confirmed only (see `tedRuntime` above). The
+  // active send owns ONE AbortController (ref, never state — transient by
+  // `rerender-use-ref-transient-values`). Cancel aborts the in-flight
+  // `sendAgentMessage` only; `loading` stays true until the abort settles in
+  // `finally`, no second send is enabled meanwhile, and the abort lands in
+  // the existing failed+retry UX (same anchor/messageId, same draft — no new
+  // delivery enum, no card cancellation). A0/unknown sends carry no abort
+  // wiring at all: no effective cancel is ever invoked off-B.
+  const activeSendControllerRef = useRef<AbortController | null>(null);
+  const handleCancelSend = useCallback(() => {
+    activeSendControllerRef.current?.abort();
+  }, []);
   const executeSend = async (send: PendingChatSend): Promise<void> => {
     if (!activeWorkspace) return;
     // A02/R02 (AC07): the turn is bound to the scope that issued it.
@@ -1012,6 +1108,11 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     setLoading(true);
     setError(null);
     setStatus("streaming");
+    // P2: abort wiring exists only for a server-confirmed B turn. A0/unknown
+    // sends pass no signal — fetchWithAgentAuth still tracks the flight for
+    // session teardown, but nothing can cancel it as a turn.
+    const controller = canCancelTurn ? new AbortController() : null;
+    activeSendControllerRef.current = controller;
     try {
       const turn = await sendAgentMessage(
         sendWorkspaceId,
@@ -1021,6 +1122,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
           // SPEC §7.7: retries pass the SAME messageId back — a lost HTTP
           // response can never produce a second proposal.
           messageId: send.messageId,
+          ...(controller ? { signal: controller.signal } : {}),
         },
       );
       // A02/R02 (AC07): a result that lands after a workspace switch or a
@@ -1032,12 +1134,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       }
       const returnedPendingOperation = turn.pendingOperation;
       const returnedUndoProposal = turn.undoProposal;
+      const returnedProposal = turn.proposal;
       // P1 output vazio: um 200 sem texto de resposta E sem decisão estruturada
-      // (pendingOperation/undoProposal) não é sucesso — é falha retentável.
+      // (pendingOperation/undoProposal/proposal) não é sucesso — é falha retentável.
       // Marca o balão como failed com retry e preserva âncora/draft (sem
       // reload de histórico, sem limpar nada), em vez do falso sucesso
       // (sent + âncora limpa).
-      if (!turn.output?.trim() && !returnedPendingOperation && !returnedUndoProposal) {
+      if (!turn.output?.trim() && !returnedPendingOperation && !returnedUndoProposal && !returnedProposal) {
         if (isStaleScope(sendWorkspaceId)) return;
         setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
         setError(MESSAGE_SEND_ERROR);
@@ -1066,6 +1169,33 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // on, EVERY write below is chat state and belongs to the new scope only.
       if (isStaleScope(sendWorkspaceId)) return;
       setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "sent" as const } : m)));
+      // P3 — the runtime's proposal INTENT becomes a real Pending V2 operation
+      // ONLY through the authenticated Agent broker (A4): the browser never
+      // mints a capability and the LLM never confirms. The card itself is then
+      // rehydrated from the authoritative active list by loadHistory below.
+      if (returnedProposal) {
+        try {
+          await proposePendingOperation(
+            sendWorkspaceId,
+            returnedProposal,
+            controller ? { signal: controller.signal } : undefined,
+          );
+          // P3: the broker accepted the intent (new or existing operation).
+          // Only now is the recovery anchor consumed — a lost broker response
+          // keeps it for the next reload.
+          clearPendingChatSend(sendWorkspaceId);
+        } catch {
+          if (isStaleScope(sendWorkspaceId)) return;
+          // No card is invented. The message stays retryable with the SAME
+          // messageId, so a lost broker response can never duplicate the
+          // proposal (the backend idempotency key is derived from it). The
+          // anchor keeps the intent for a broker-only retry or a reload.
+          setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
+          setError(proposalBrokerError(returnedProposal));
+          setStatus("error");
+          return;
+        }
+      }
       const copiesBefore = answerBefore(turn.output);
       const freshHistory = await loadHistory();
       // …and it may have changed again while the refresh was in flight.
@@ -1082,9 +1212,16 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // mesmo que a contagem por texto conte a resposta ainda-local de um
       // turno anterior. Sem identidade em jogo, a regra legada vale.
       const convergedByIdentity = isTurnAnswerConvergedByIdentity(turn.output, send.messageId, freshHistory);
+      // A multi-step turn can already be present in the authoritative history
+      // under the SAME native assistant id. Appending it again would create a
+      // duplicate React key and can leave the composer stuck in `loading`.
+      // Identity convergence above is intention-based; this is the final
+      // id-based guard for the same turn.
+      const alreadyHasTurnId = typeof turn.turnId === "string" && freshHistory.some((m) => m.id === turn.turnId);
       if (
         turn.output?.trim() &&
         !convergedByIdentity &&
+        !alreadyHasTurnId &&
         freshHistory.filter((m) => !m.isOwn && m.content === turn.output).length <= copiesBefore
       ) {
         setMessages((previous) => [
@@ -1145,12 +1282,18 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // in the chat now on screen. The failed draft of the OLD scope was
       // already dropped by the workspace-change teardown.
       if (isStaleScope(sendWorkspaceId)) return;
+      // P2 cancel/timeout: same failed+retry UX — the abort keeps the anchor,
+      // messageId and draft intact for retry (no new delivery enum).
       setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
       setError(sendErrorMessage(err));
       setStatus("error");
       // No history reload on failure: it would wipe the failed bubble.
       // The draft (messageId, content, live URLs) stays for retry.
     } finally {
+      if (activeSendControllerRef.current === controller) activeSendControllerRef.current = null;
+      // P2: re-read the server-confirmed runtime after the turn settles (the
+      // turn response carries the header too). Stale scopes write nothing.
+      if (!isStaleScope(sendWorkspaceId)) setTedRuntime(getTedRuntimeView(sendWorkspaceId));
       setLoading(false);
     }
   };
@@ -1222,6 +1365,38 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // the message to `failed` keeping the draft; success consumes it.
   // R3 FIX 1: sem o draft fiel (com anexos), o retry é RECUSADO — reenviar
   // sem os anexos mudaria o payload sob a mesma identidade (`intentionId`).
+  /**
+   * P3: a failed BROKER call is retried as a broker call. Re-sending the chat
+   * turn would replay the gateway's completed intention (it returns the
+   * recovered output but never the consumed intent), so the proposal would be
+   * lost. The persisted intent carries the same `intentionId`; the broker's
+   * idempotency key makes the retry converge to the existing operation.
+   */
+  const retryProposalBroker = async (
+    messageId: string,
+    proposal: ProposalIntent,
+    scopeId: string,
+  ): Promise<void> => {
+    setLoading(true);
+    setError(null);
+    setStatus("streaming");
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "sending" as const } : m)));
+    try {
+      await proposePendingOperation(scopeId, proposal);
+      if (isStaleScope(scopeId)) return;
+      clearPendingChatSend(scopeId);
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "sent" as const } : m)));
+      await loadHistory();
+    } catch {
+      if (isStaleScope(scopeId)) return;
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "failed" as const } : m)));
+      setError(proposalBrokerError(proposal));
+      setStatus("error");
+    } finally {
+      if (!isStaleScope(scopeId)) setLoading(false);
+    }
+  };
+
   const handleRetry = (messageId: string) => {
     if (!activeWorkspace || loading) return;
     const failed = messages.find((m) => m.id === messageId && m.delivery === "failed");
@@ -1229,6 +1404,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     // (`retryable: false`) não tem retry — defesa em profundidade (o botão
     // nem é oferecido).
     if (!failed || failed.retryable === false) return;
+    const scopeId = activeWorkspace.id;
+    // P3: the persisted intent owns this retry; the chat turn is not re-sent.
+    const anchored = loadPendingChatSend(scopeId);
+    if (anchored?.messageId === messageId && anchored.proposal) {
+      void retryProposalBroker(messageId, anchored.proposal, scopeId);
+      return;
+    }
     const stored = draftsRef.current.get(messageId);
     const snapshot = anchorSnapshotsRef.current.get(messageId);
     const send = resolveRetrySend({
@@ -1258,6 +1440,9 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       await renewAgentSession(scopeId);
       // O escopo pode ter mudado durante o POST: nada da sessão antiga entra na nova.
       if (isStaleScope(scopeId)) return;
+      // P2: a renewal defines a fresh conversation lifecycle (the client
+      // reset the view on success) — sync the local gate from it.
+      setTedRuntime(getTedRuntimeView(scopeId));
       setMessages([]);
       setInput("");
       // Nova sessão limpa SÓ a exibição local: o lote do /rpc/history logo
@@ -1656,14 +1841,26 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
               rows={1}
               className="max-h-28 min-h-[24px] flex-1 resize-none bg-transparent py-1 text-[14px] leading-5 text-text-primary placeholder:text-text-muted focus:outline-none"
             />
-            <button
-              type="submit"
-              disabled={loading || uploadingAttachments || (!input.trim() && attachments.length === 0)}
-              aria-label="Enviar mensagem"
-              className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-primary text-white shadow-fab transition-all hover:bg-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none cursor-pointer"
-            >
-              <Send size={15} />
-            </button>
+            {loading && canCancelTurn ? (
+              <button
+                type="button"
+                onClick={handleCancelSend}
+                aria-label="Cancelar envio"
+                title="Cancelar envio"
+                className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-primary text-white shadow-fab transition-all hover:bg-primary-hover active:scale-95 cursor-pointer"
+              >
+                <X size={15} />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={loading || uploadingAttachments || (!input.trim() && attachments.length === 0)}
+                aria-label="Enviar mensagem"
+                className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-primary text-white shadow-fab transition-all hover:bg-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none cursor-pointer"
+              >
+                <Send size={15} />
+              </button>
+            )}
           </div>
           {/* §19.5/§24: keyboard hints assume a physical keyboard — they do
               not occupy space on touch devices (hover:none + pointer:coarse). */}

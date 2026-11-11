@@ -19,9 +19,17 @@ import {
   pendingOperationPresentationSchema,
   type PendingOperationPresentation,
 } from '@pi-finance/llm-contracts';
+import { getClosingDate, getDueDate } from '../cards/billing.js';
+import { splitInstallmentAmounts } from '../cards/installments.js';
 
 export const derivePresentationTitle = (tool: string): string =>
-  tool === 'transactions.update'
+  tool === 'cards.statement.pay'
+    ? 'Pagamento de fatura'
+    : tool === 'cards.purchase.create'
+    ? 'Confirmar compra no cartão'
+    : tool === 'transactions.transfer.create'
+      ? 'Transferência'
+    : tool === 'transactions.update'
     ? 'Alterar descrição do lançamento'
     : tool === 'accounts.deactivate'
     ? 'Desativar conta'
@@ -33,6 +41,10 @@ export const derivePresentationTitle = (tool: string): string =>
           ? 'Renomear categoria'
           : tool === 'categories.deactivate'
             ? 'Desativar categoria'
+          : tool === 'payables.create'
+            ? 'Criar conta a pagar'
+            : tool === 'payables.pay'
+              ? 'Pagar conta'
           : tool.includes('income')
           ? 'Confirmar receita'
           : tool.includes('expense')
@@ -44,6 +56,22 @@ export const derivePresentationTitle = (tool: string): string =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
 
+const formatAmountBRL = (amountCents: number): string =>
+  `R$ ${(amountCents / 100).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
+
+const MONTHS_PT = [
+  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
+] as const;
+
+const formatStatementPeriod = (cycleYearMonth: string): string => {
+  const match = /^(\d{4})-(\d{2})$/.exec(cycleYearMonth);
+  if (!match) return cycleYearMonth;
+  const month = Number(match[2]);
+  if (!Number.isInteger(month) || month < 1 || month > 12) return cycleYearMonth;
+  return `${MONTHS_PT[month - 1]}/${match[1]}`;
+};
+
 export const buildPendingOperationPresentation = (input: {
   id: string;
   status: string;
@@ -51,14 +79,78 @@ export const buildPendingOperationPresentation = (input: {
   normalizedArgs: unknown;
   expiresAt: string;
   accountLabel?: string;
+  fromAccountLabel?: string;
+  toAccountLabel?: string;
   categoryLabel?: string;
   categoryKind?: string;
   categoryParentLabel?: { id: string; name: string };
   transactionTarget?: { id:string; amountCents:number; date:string; accountId:string; accountName:string };
+  /**
+   * Card billing cycle, resolved server-side from the authoritative card
+   * account. Used only to name the first invoice of an installment purchase;
+   * the PWA never computes it.
+   */
+  cardCycle?: { closingDay: number; dueDay: number };
+  /**
+   * Authoritative statement snapshot for `cards.statement.pay`. Resolved
+   * server-side from the CardStore; the PWA never recomputes the remaining
+   * balance. Absent/divergent ⇒ the card fails closed.
+   */
+  statementContext?: {
+    id: string;
+    accountId: string;
+    cycleYearMonth: string;
+    totalCents: number;
+    paidCents: number;
+    remainingCents: number;
+    dueDate: string;
+    status: string;
+  };
   warnings?: string[];
 }): PendingOperationPresentation | null => {
   const args = isRecord(input.normalizedArgs) ? input.normalizedArgs : null;
   if (!args) return null;
+  if (input.tool === 'transactions.transfer.create') {
+    // Internal transfer card: amount + description + date + BOTH server-
+    // resolved account labels. No category exists by definition (an internal
+    // transfer is neither income nor expense). A missing label means one of
+    // the accounts is gone/changed in this workspace; the card renders
+    // degraded and the shared predicate fails closed — Confirm is never
+    // offered for an unverifiable transfer.
+    const { amountCents, description, date, fromAccountId, toAccountId } = args as {
+      amountCents?: unknown;
+      description?: unknown;
+      date?: unknown;
+      fromAccountId?: unknown;
+      toAccountId?: unknown;
+    };
+    if (typeof amountCents !== 'number' || !Number.isFinite(amountCents) || amountCents <= 0) return null;
+    if (typeof description !== 'string' || !description) return null;
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    if (typeof fromAccountId !== 'string' || !fromAccountId) return null;
+    if (typeof toAccountId !== 'string' || !toAccountId) return null;
+    if (fromAccountId === toAccountId) return null;
+    const candidate: Record<string, unknown> = {
+      id: input.id,
+      status: input.status,
+      tool: input.tool,
+      title: `Transferência de ${formatAmountBRL(amountCents)}`,
+      amountCents,
+      description,
+      date,
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
+    if (typeof input.fromAccountLabel === 'string' && input.fromAccountLabel) {
+      candidate.fromAccount = { id: fromAccountId, label: input.fromAccountLabel };
+    }
+    if (typeof input.toAccountLabel === 'string' && input.toAccountLabel) {
+      candidate.toAccount = { id: toAccountId, label: input.toAccountLabel };
+    }
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    if (!parsed.success) return null;
+    return parsed.data as PendingOperationPresentation;
+  }
   if (input.tool === 'accounts.deactivate') {
     const { accountId, accountName, accountKind, balanceCents } = args as {
       accountId?: unknown;
@@ -264,6 +356,192 @@ export const buildPendingOperationPresentation = (input: {
       warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
     };
     if (input.categoryLabel === expectedName) candidate.category = { id: categoryId, label: input.categoryLabel };
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    if (!parsed.success) return null;
+    return parsed.data as PendingOperationPresentation;
+  }
+  if (input.tool === 'cards.statement.pay') {
+    // P3.6 statement payment: the invoice + the CARD + the PAYER account are
+    // the context. The amount paid NOW is explicit (never a "total" sentinel)
+    // and must not exceed the authoritative remaining balance at presentation
+    // time; a stale card renders non-actionable instead of confirming into an
+    // overpay (the executor re-checks under the statement row lock).
+    const { statementId, fromAccountId, amountCents } = args as {
+      statementId?: unknown;
+      fromAccountId?: unknown;
+      amountCents?: unknown;
+    };
+    if (typeof statementId !== 'string' || !statementId) return null;
+    if (typeof fromAccountId !== 'string' || !fromAccountId) return null;
+    if (typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents <= 0) return null;
+    const statement = input.statementContext;
+    if (!statement || statement.id !== statementId) return null;
+    if (statement.remainingCents <= 0 || amountCents > statement.remainingCents) return null;
+    if (statement.paidCents + statement.remainingCents !== statement.totalCents) return null;
+    if (typeof input.accountLabel !== 'string' || !input.accountLabel) return null;
+    if (typeof input.fromAccountLabel !== 'string' || !input.fromAccountLabel) return null;
+    const candidate: Record<string, unknown> = {
+      id: input.id,
+      status: input.status,
+      tool: input.tool,
+      title: `Pagamento de fatura — ${formatAmountBRL(amountCents)}`,
+      amountCents,
+      statement: { id: statementId, label: formatStatementPeriod(statement.cycleYearMonth) },
+      statementTotalCents: statement.totalCents,
+      statementPaidCents: statement.paidCents,
+      statementRemainingCents: statement.remainingCents,
+      statementDueDate: statement.dueDate,
+      statementStatus: statement.status,
+      account: { id: statement.accountId, label: input.accountLabel },
+      fromAccount: { id: fromAccountId, label: input.fromAccountLabel },
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    if (!parsed.success) return null;
+    return parsed.data as PendingOperationPresentation;
+  }
+  if (input.tool === 'cards.purchase.create') {
+    // P3.4 card purchase (1x): the card is the credit-card account
+    // (`accountId`) and the category is OPTIONAL - an unclassified purchase
+    // is still confirmable, so only the card label gates Confirm. The
+    // actionable predicate below mirrors exactly that tuple.
+    const { amountCents, description, date, accountId, categoryId, installmentsTotal } = args;
+    if (
+      typeof amountCents !== 'number' ||
+      typeof description !== 'string' ||
+      !description ||
+      typeof date !== 'string' ||
+      !date ||
+      typeof accountId !== 'string' ||
+      !accountId
+    ) {
+      return null;
+    }
+    // P3.5: an explicitly declared split must be a real parcel count. A
+    // malformed value is NOT silently treated as 1x — the card fails closed.
+    if (installmentsTotal !== undefined) {
+      if (
+        typeof installmentsTotal !== 'number' ||
+        !Number.isInteger(installmentsTotal) ||
+        installmentsTotal < 1 ||
+        installmentsTotal > 48
+      ) {
+        return null;
+      }
+    }
+    const installmentsCount = typeof installmentsTotal === 'number' ? installmentsTotal : 1;
+    const isInstallmentPurchase = installmentsCount > 1;
+    const candidate: Record<string, unknown> = {
+      id: input.id,
+      status: input.status,
+      tool: input.tool,
+      title: isInstallmentPurchase ? 'Confirmar compra parcelada' : derivePresentationTitle(input.tool),
+      amountCents,
+      description,
+      date,
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
+    if (isInstallmentPurchase) {
+      // Same financial rule the executor uses — the preview is never a second
+      // rounding implementation.
+      const amounts = splitInstallmentAmounts(amountCents, installmentsCount);
+      // A declared split must produce real parcels (>= 1 cent each); otherwise
+      // the card fails closed instead of previewing zero-cent rows.
+      if (amounts.some((amount) => amount <= 0)) return null;
+      candidate.installmentsTotal = installmentsCount;
+      candidate.installmentAmountsCents = amounts;
+      if (input.cardCycle) {
+        const closing = getClosingDate(date, input.cardCycle.closingDay);
+        candidate.firstStatementClosingDate = closing;
+        candidate.firstStatementDueDate = getDueDate(closing, input.cardCycle.dueDay);
+      }
+    }
+    if (typeof input.accountLabel === 'string' && input.accountLabel) {
+      candidate.account = { id: accountId, label: input.accountLabel };
+    }
+    if (typeof categoryId === 'string' && categoryId && typeof input.categoryLabel === 'string' && input.categoryLabel) {
+      candidate.category = { id: categoryId, label: input.categoryLabel };
+    }
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    if (!parsed.success) return null;
+    return parsed.data as PendingOperationPresentation;
+  }
+  if (input.tool === 'payables.create') {
+    // Payable card: amount + description + due date + the server-resolved
+    // account label. Category is optional (an uncategorised bill is still
+    // confirmable), mirroring the normal POST /payables contract.
+    const { accountId, description, amountCents, dueDate, categoryId } = args as {
+      accountId?: unknown;
+      description?: unknown;
+      amountCents?: unknown;
+      dueDate?: unknown;
+      categoryId?: unknown;
+    };
+    if (
+      typeof accountId !== 'string' || !accountId ||
+      typeof description !== 'string' || !description ||
+      typeof amountCents !== 'number' || !Number.isFinite(amountCents) || amountCents <= 0 ||
+      typeof dueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)
+    ) {
+      return null;
+    }
+    const candidate: Record<string, unknown> = {
+      id: input.id,
+      status: input.status,
+      tool: input.tool,
+      title: derivePresentationTitle(input.tool),
+      amountCents,
+      description,
+      date: dueDate,
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
+    if (typeof input.accountLabel === 'string' && input.accountLabel) {
+      candidate.account = { id: accountId, label: input.accountLabel };
+    }
+    if (typeof categoryId === 'string' && categoryId && typeof input.categoryLabel === 'string' && input.categoryLabel) {
+      candidate.category = { id: categoryId, label: input.categoryLabel };
+    }
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    if (!parsed.success) return null;
+    return parsed.data as PendingOperationPresentation;
+  }
+  if (input.tool === 'payables.pay') {
+    // Payment card: the hash-bound display snapshot (description/amount/due
+    // date) plus the server-resolved account label. `payableId` is the only
+    // execution key; no amount is recomputed here.
+    const { payableId, description, amountCents, dueDate, accountId } = args as {
+      payableId?: unknown;
+      description?: unknown;
+      amountCents?: unknown;
+      dueDate?: unknown;
+      accountId?: unknown;
+    };
+    if (
+      typeof payableId !== 'string' || !payableId ||
+      typeof description !== 'string' || !description ||
+      typeof amountCents !== 'number' || !Number.isFinite(amountCents) || amountCents <= 0 ||
+      typeof dueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) ||
+      typeof accountId !== 'string' || !accountId
+    ) {
+      return null;
+    }
+    const candidate: Record<string, unknown> = {
+      id: input.id,
+      status: input.status,
+      tool: input.tool,
+      title: derivePresentationTitle(input.tool),
+      amountCents,
+      description,
+      date: dueDate,
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
+    if (typeof input.accountLabel === 'string' && input.accountLabel) {
+      candidate.account = { id: accountId, label: input.accountLabel };
+    }
     const parsed = pendingOperationPresentationSchema.safeParse(candidate);
     if (!parsed.success) return null;
     return parsed.data as PendingOperationPresentation;

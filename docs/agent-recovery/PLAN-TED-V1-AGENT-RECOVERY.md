@@ -7,6 +7,19 @@
 **Prioridade:** P0
 **Documento-base:** `SPEC-TED-V1-AGENT-RECOVERY.md` (v2.1)
 
+## Reconciliação documental — 29/10/2026
+
+O restante do plano registra a baseline e os gates de 19/10; expressões como “pendente” ou “sem teste” abaixo não foram atualizadas individualmente e não são status corrente. Checkout inspecionado: `7ce96d03a6492a724cd8c6cb90bc1931a6a6a1ca`, branch `test/ted-f2b0-no-retry-controlled`.
+
+| Item | Evidência posterior | Estado nesta reconciliação |
+| --- | --- | --- |
+| #255 | [Closure](../reports/2026-10-20-issue-255-partial-draft-closure.md), PR #260 / `dd4b164a` | Implementada no escopo relatado; teste dedicado presente, não reexecutado aqui. |
+| #256 / #257 | [Relatório](../reports/2026-10-20-ted-256-257-month-summary-cards.md), PR #263 / `fc3006c` | Implementadas no escopo relatado; testes dedicados presentes, não reexecutados aqui. |
+| POC V1 e recuperação | [Fechamento V1](../reports/2026-10-20-ted-v1-full-recovery.md), PRs #266/#267 | POC reads-only A×B e decisão `deterministic_fix` relatadas; alternativa C não executada. Não é a POC F2 posterior. |
+| Gates G0–G9 | Corpo histórico deste plano e relatórios posteriores | **Não reconciliados individualmente** nesta revisão; não inferir que todos estejam abertos ou fechados. |
+
+As pendências mais recentes do núcleo conversacional e suas fases constam do [plano de recuperação do núcleo](../plans/TED-AGENT-CORE-RECOVERY-PLAN.md). Nenhuma evidência histórica de CI, live ou deploy foi reexecutada nesta revisão; permanece o freeze de produção descrito no `AGENTS.md`.
+
 ## Revisão 2.1
 
 - Baseline real: branch `fix/issue-255-partial-draft`, HEAD `1bd706d`

@@ -386,14 +386,32 @@ export const pendingOperationPresentationSchema = z
       .regex(/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_]*)+$/),
     title: z.string().trim().min(1).max(120),
     amountCents: z.number().int().min(0).optional(),
+    /**
+     * Installment display fields (tool `cards.purchase.create` only). All are
+     * SERVER-COMPUTED: the PWA renders them verbatim and never derives a
+     * parcel amount with its own rounding rule.
+     */
+    installmentsTotal: z.number().int().min(1).max(48).optional(),
+    installmentAmountsCents: z.array(z.number().int().min(0)).min(1).max(48).optional(),
+    firstStatementClosingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    firstStatementDueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     description: z.string().trim().min(1).max(500).optional(),
     date: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD')
       .optional(),
     account: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
+    fromAccount: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
+    toAccount: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
     category: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
     categoryParent: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
+    /** Statement-payment display fields (tool `cards.statement.pay` only). */
+    statement: z.object({ id: z.string().trim().min(1).max(128), label: z.string().trim().min(1).max(120) }).strict().optional(),
+    statementTotalCents: z.number().int().min(0).optional(),
+    statementPaidCents: z.number().int().min(0).optional(),
+    statementRemainingCents: z.number().int().min(0).optional(),
+    statementDueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    statementStatus: z.string().trim().min(1).max(32).optional(),
     accountName: z.string().trim().min(1).max(120).optional(),
     accountKind: z.string().trim().min(1).max(32).optional(),
     initialBalanceCents: z.number().int().optional(),

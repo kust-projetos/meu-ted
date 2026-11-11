@@ -163,6 +163,27 @@ const turn = (orchestrator: ConversationOrchestrator, text: string, intentionId:
   orchestrator.runTurn(normalizeRestTurn({ text, intentionId }, identity));
 
 describe('SPEC §25.3.1 — MutationDraft multi-turno', () => {
+  it('does not discard an unrelated draft when budget creation is negated', async () => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const orchestrator = setup(fake, store);
+    await turn(orchestrator, 'Gastei R$ 85 no mercado', 'budget-negation-seed');
+    expect(store.listActive(ctxOf(), Date.now())).toHaveLength(1);
+    await turn(orchestrator, 'Não crie um orçamento', 'budget-negation-turn');
+    expect(store.listActive(ctxOf(), Date.now())).toHaveLength(1);
+    expect(fake.proposePosts()).toBe(0);
+  });
+  it.each(['Não sei como criar um orçamento; cancele o rascunho', 'Não sei como criar um orçamento e cancele o rascunho'])('clarifies mixed budget and cancellation: %s', async (text) => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const orchestrator = setup(fake, store);
+    await turn(orchestrator, 'Gastei R$ 85 no mercado', 'budget-compound-seed');
+    expect(store.listActive(ctxOf(), Date.now())).toHaveLength(1);
+    const result = await turn(orchestrator, text, 'budget-compound-turn');
+    expect(store.listActive(ctxOf(), Date.now())).toHaveLength(1);
+    expect(result.clarification).toBeDefined();
+    expect(fake.proposePosts()).toBe(0);
+  });
   it('recognizes "cancele" and cancels only the local draft', async () => {
     expect(isCancelText('cancele o rascunho')).toBe(true);
     const fake = makeFakeApi();

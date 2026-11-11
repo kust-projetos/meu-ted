@@ -5,7 +5,18 @@
 **Data:** 2026-10-19
 **Versão:** 2.1-revisada (base v2.0 do operador + auditoria 2026-10-19)
 **Prioridade:** P0
-**Status:** Proposta para implementação
+**Status original em 19/10:** proposta para implementação; veja a reconciliação posterior abaixo.
+
+## Reconciliação documental — 29/10/2026
+
+Este documento preserva o diagnóstico e os critérios da V1 de 19/10; referências abaixo a bugs atuais, linhas de código e tarefas pendentes descrevem aquela baseline, não o checkout de 29/10 (`7ce96d03a6492a724cd8c6cb90bc1931a6a6a1ca`, branch `test/ted-f2b0-no-retry-controlled`).
+
+- **#255 — implementada no escopo relatado:** rascunho parcial e retomada com valor no PR #260, merge `dd4b164a`; validações históricas e limites em [closure #255](../reports/2026-10-20-issue-255-partial-draft-closure.md).
+- **#256 e #257 — implementadas no escopo relatado:** resumo mensal e leitura de cartões no PR #263, merge `fc3006c`; evidência histórica em [relatório #256/#257](../reports/2026-10-20-ted-256-257-month-summary-cards.md). Os testes dedicados existem no checkout; não foram reexecutados nesta reconciliação.
+- A recuperação V1 posterior registrou POC **reads-only** A×B e decisão `deterministic_fix`, com C não executado por gate de custo: [relatório de fechamento](../reports/2026-10-20-ted-v1-full-recovery.md) e [comparação](04-poc-comparison.md). Isso não equivale à POC A/B mais recente da [SPEC do núcleo](../specs/TED-AGENT-CORE-REFACTOR-SPEC.md).
+- O fechamento V1 relatado é histórico e limitado ao escopo de então; não comprova paridade TED × PWA nem fecha automaticamente todos os gates antigos. Consulte o [plano V1](PLAN-TED-V1-AGENT-RECOVERY.md) e o [plano do núcleo](../plans/TED-AGENT-CORE-RECOVERY-PLAN.md) para o estado e os limites atuais.
+
+Nenhum teste, CI, produção ou deploy foi verificado nesta reconciliação; relatos de deploy e testes pertencem aos SHAs e ambientes indicados nas fontes.
 
 ## Revisão 2.1 — o que mudou vs v2.0
 

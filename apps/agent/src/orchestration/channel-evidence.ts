@@ -153,6 +153,8 @@ const OPERATION_TO_READ: Record<string, ReadKind> = {
   spending_insights: 'month-summary',
   list_cards: 'cards',
   list_statements: 'statements',
+  // P3.6 runtime read alias — same authoritative GET /cards/statements.
+  list_card_statements: 'statements',
   get_statement_details: 'statements',
   list_payables: 'payables',
   list_accounts_payable: 'payables',
@@ -231,7 +233,13 @@ const selectReads = (plan: TurnPlan): readonly ReadKind[] => {
   // Breakdown por categoria é autossuficiente: nunca soma catálogo nem
   // extrato via fallback — uma leitura por turno, sem máscara de escopo.
   const hasBreakdown = selected.includes('analytics-breakdown');
-  if (fallback && !selected.includes(fallback) && selected.length < MAX_EVIDENCE_READS && !(hasSummary && fallback === 'transactions') && !hasBreakdown) selected.push(fallback);
+  // F1-B010/C010: fatura nua (`list_statements`, domain `payables` por falta
+  // de domain `statements` no contrato) NUNCA soma `/payables` via fallback
+  // de domínio — a segunda leitura é a leitura indevida de contas a pagar do
+  // FAIL de qualidade congelado. Vencimento explícito (`venc*`/`a pagar`/
+  // `boleto`) já planeja `list_payables`, então o fallback é no-op ali.
+  const hasStatements = selected.includes('statements');
+  if (fallback && !selected.includes(fallback) && selected.length < MAX_EVIDENCE_READS && !(hasSummary && fallback === 'transactions') && !hasBreakdown && !(hasStatements && fallback === 'payables')) selected.push(fallback);
   return selected;
 };
 
@@ -252,6 +260,11 @@ export const resolveSummaryYearMonth = (text: string, now: Date = new Date()): s
     if (month) return `${explicit[2]}-${month}`;
   };
   const current = now.toISOString().slice(0, 7);
+  if (/\bmes\s+retrasado\b|\bpenultimo\s+mes\b|\bmes\s+anteanterior\b/.test(normalized)) {
+    const [year, month] = current.split('-').map(Number);
+    const prev = new Date(Date.UTC(year ?? 1970, (month ?? 1) - 3, 1));
+    return prev.toISOString().slice(0, 7);
+  }
   if (/\bmes\s+passado\b|\bultimo\s+mes\b|\bmes\s+anterior\b/.test(normalized)) {
     const [year, month] = current.split('-').map(Number);
     const prev = new Date(Date.UTC(year ?? 1970, (month ?? 1) - 2, 1));
@@ -511,13 +524,26 @@ const mapTransactions = (result: unknown): EvidenceInput[] => {
  * - Zero totals WITH entries stay `ok` and the row count travels with the
  *   evidence: `totalCents = 0` never means "no entries".
  */
-const mapMonthSummary = (result: unknown): EvidenceInput[] => {
+export const mapMonthSummary = (result: unknown): EvidenceInput[] => {
   const record = asRecord(result);
   // An invalid shape (undefined/null/string/array) proves NOTHING about the
   // period: it is a read failure, never `period_empty`. Only a well-formed
   // payload with an explicit zero count proves absence.
   if (record === null) return [errorItem('month-summary', 'month-summary', 'permanent_error')];
-  const entries = toCents(record.transactionCount) ?? toCents(record.entryCount) ?? toCents(record.count);
+  const countKeys = ['transactionCount', 'entryCount', 'count'] as const;
+  const countKey = countKeys.find((key) => Object.hasOwn(record, key));
+  const rawCount = countKey === undefined ? undefined : record[countKey];
+  const hasCount = countKey !== undefined;
+  const entries = rawCount;
+  const income = toCents(record.incomeCents) ?? toCents(record.income_cents) ?? toCents(record.income);
+  const expense = toCents(record.expenseCents) ?? toCents(record.expense_cents) ?? toCents(record.expense);
+  const balance = toCents(record.balanceCents) ?? toCents(record.balance_cents) ?? toCents(record.balance);
+  const hasTotals = income !== null && expense !== null && balance !== null;
+  // Accept the complete current contract and the fixed legacy totals-only
+  // shape; partial payloads never establish either presence or absence.
+  if (!hasTotals || (hasCount && (typeof entries !== 'number' || !Number.isInteger(entries) || entries < 0))) {
+    return [errorItem('month-summary', 'month-summary', 'permanent_error')];
+  }
   if (entries === 0) return [emptyItem('month-summary', 'month-summary', 'period_empty')];
   return [{ ref: 'month-summary', source: READ_SOURCE['month-summary'], retrievedAt: now(), status: 'ok', data: result }];
 };

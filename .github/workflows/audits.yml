@@ -1,0 +1,78 @@
+name: Audits
+
+# Heavy checks moved out of the per-PR path. They still run weekly and on
+# demand; they are not required checks.
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audits-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pwa-audit:
+    name: PWA — Lighthouse + scoped audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: '10'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Build shared contracts (workspace exports resolve dist)
+        run: pnpm --filter @pi-finance/llm-contracts build
+      - name: Build PWA (Cloudflare)
+        run: pnpm --dir apps/pwa build:cloudflare
+        env:
+          NEXT_PUBLIC_BUILD_SHA: ${{ github.sha }}
+          NEXT_PUBLIC_BUILD_ID: ${{ github.run_id }}
+          NEXT_PUBLIC_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
+      - name: Lighthouse CI
+        run: |
+          cd apps/pwa
+          pnpm exec lhci autorun
+      - name: Test PWA audit policy
+        run: node --test scripts/pwa-audit-policy.test.mjs scripts/pwa-audit-output.test.mjs scripts/pwa-audit-workspace.test.mjs
+      - name: Scoped audit
+        run: node scripts/pwa-audit.mjs
+
+  security:
+    name: Security — secrets + dependencies + containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: '10'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm security:secrets
+      - run: pnpm security:deps
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build API image for scan
+        run: |
+          docker build -f apps/api/Dockerfile -t pi-finance-api:ci \
+            --build-arg BUILD_SHA=${{ github.sha }} \
+            --build-arg BUILD_ID=${{ github.run_id }} \
+            --build-arg BUILD_TIME=${{ github.event.head_commit.timestamp }} .
+      - name: Container smoke
+        run: pnpm container:smoke
+      - name: Container smoke contract
+        run: node --test scripts/container-smoke.test.mjs
+      - run: pnpm security:containers

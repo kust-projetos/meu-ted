@@ -1134,6 +1134,15 @@
               "type": "string",
               "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
             }
+          },
+          {
+            "name": "basis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["liquidez", "competencia"]
+            }
           }
         ]
       }

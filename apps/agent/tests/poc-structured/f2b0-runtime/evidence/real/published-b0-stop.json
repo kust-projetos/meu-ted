@@ -1,0 +1,432 @@
+{
+  "schemaVersion": "f2b0-safe-stop-v1",
+  "status": "STOPPED_NO_FURTHER_INFERENCE",
+  "sourceRunID": "2026-10-27T01-04-23-758Z-13588",
+  "provider": "opencode",
+  "model": "deepseek-v4.1-flash-free",
+  "nativeURL": "https://opencode.ai/inference/openai/v1/chat/completions",
+  "counts": {
+    "denominator": 23,
+    "infrastructureInconclusive": 1,
+    "providerFailures": 1,
+    "notRun": 21,
+    "actualProviderRequests": 1,
+    "generatedResponses": 0
+  },
+  "catalogCostUSDPerMillionTokens": [
+    {
+      "tier": null,
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    }
+  ],
+  "billing": {
+    "actualChargeUSD": {
+      "value": null,
+      "observed": false,
+      "authorized": false
+    },
+    "note": "No usage-cost or billing amount was observed; catalog free pricing is not evidence of a billed amount."
+  },
+  "tokens": {
+    "input": {
+      "value": null,
+      "observed": false
+    },
+    "output": {
+      "value": null,
+      "observed": false
+    },
+    "total": {
+      "value": null,
+      "observed": false
+    },
+    "reasoning": {
+      "value": null,
+      "observed": false
+    },
+    "cacheRead": {
+      "value": null,
+      "observed": false
+    },
+    "cacheWrite": {
+      "value": null,
+      "observed": false
+    }
+  },
+  "latencyMs": {
+    "observed": true,
+    "samples": [
+      702
+    ],
+    "p50": 702,
+    "p95": 702,
+    "method": "nearest-rank"
+  },
+  "authHeaderValuesIncluded": false,
+  "sessionIdentifiersIncluded": false,
+  "rawStdoutIncluded": false,
+  "mockProof": {
+    "runID": "2026-10-26T23-56-15-510Z-7596",
+    "cliVersion": "2.1.4",
+    "nativeEndpoint": {
+      "origin": "https://opencode.ai",
+      "path": "/inference/openai/v1/chat/completions",
+      "provider": "opencode",
+      "model": "deepseek-v4.1-flash-free",
+      "kind": "primary",
+      "noTransportObserved": true
+    },
+    "cases": 9,
+    "capturedRequests": 7,
+    "allCapturedRequestsAuthless": true,
+    "caseResults": [
+      {
+        "mode": "429",
+        "exitCode": 1,
+        "acceptedLocalConnections": 1,
+        "requestsReceived": 1,
+        "retryAttempts": [
+          2
+        ],
+        "toolCounts": [
+          0
+        ],
+        "terminalErrorTypes": [
+          "provider.rate-limit"
+        ],
+        "assistantText": []
+      },
+      {
+        "mode": "500",
+        "exitCode": 1,
+        "acceptedLocalConnections": 1,
+        "requestsReceived": 1,
+        "retryAttempts": [
+          2
+        ],
+        "toolCounts": [
+          0
+        ],
+        "terminalErrorTypes": [
+          "provider.internal"
+        ],
+        "assistantText": []
+      },
+      {
+        "mode": "503",
+        "exitCode": 1,
+        "acceptedLocalConnections": 1,
+        "requestsReceived": 1,
+        "retryAttempts": [
+          2
+        ],
+        "toolCounts": [
+          0
+        ],
+        "terminalErrorTypes": [
+          "provider.internal"
+        ],
+        "assistantText": []
+      },
+      {
+        "mode": "timeout",
+        "exitCode": 1,
+        "acceptedLocalConnections": 1,
+        "requestsReceived": 1,
+        "retryAttempts": [
+          2
+        ],
+        "toolCounts": [
+          0
+        ],
+        "terminalErrorTypes": [
+          "provider.transport"
+        ],
+        "assistantText": []
+      },
+      {
+        "mode": "reset",
+        "exitCode": 1,
+        "acceptedLocalConnections": 1,
+        "requestsReceived": 1,
+        "retryAttempts": [
+          2
+        ],
+        "toolCounts": [
+          0
+        ],
+        "terminalErrorTypes": [
+          "provider.transport"
+        ],
+        "assistantText": []
+      },
+      {
+        "mode": "refused",
+        "exitCode": 1,
+        "acceptedLocalConnections": 0,
+        "requestsReceived": 0,
+        "retryAttempts": [
+          2
+        ],
+        "toolCounts": [],
+        "terminalErrorTypes": [
+          "provider.transport"
+        ],
+        "assistantText": []
+      },
+      {
+        "mode": "proxy-refused",
+        "exitCode": 1,
+        "acceptedLocalConnections": 1,
+        "requestsReceived": 0,
+        "retryAttempts": [
+          2
+        ],
+        "toolCounts": [],
+        "terminalErrorTypes": [
+          "provider.transport"
+        ],
+        "assistantText": []
+      },
+      {
+        "mode": "stream",
+        "exitCode": 1,
+        "acceptedLocalConnections": 1,
+        "requestsReceived": 1,
+        "retryAttempts": [
+          2
+        ],
+        "toolCounts": [
+          0
+        ],
+        "terminalErrorTypes": [
+          "provider.transport"
+        ],
+        "assistantText": [
+          "partial"
+        ]
+      },
+      {
+        "mode": "valid",
+        "exitCode": 0,
+        "acceptedLocalConnections": 1,
+        "requestsReceived": 1,
+        "retryAttempts": [],
+        "toolCounts": [
+          0
+        ],
+        "terminalErrorTypes": [],
+        "assistantText": [
+          "OK"
+        ]
+      }
+    ]
+  },
+  "nativePluginSelfTest": {
+    "pluginReady": true,
+    "zeroCost": true,
+    "mcpCount": 0,
+    "skillCount": 0,
+    "otherPluginCount": 0,
+    "promptRequests": 0,
+    "inferenceRequests": 0
+  },
+  "cases": [
+    {
+      "caseID": "F1-B005",
+      "status": "INCONCLUSIVE_INFRASTRUCTURE",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED",
+      "reason": "F2B0_REAL_EVIDENCE was absent from the child environment, so plugin appendFile received undefined (ERR_INVALID_ARG_TYPE).",
+      "reservationConsumed": true
+    },
+    {
+      "caseID": "F1-B010",
+      "status": "PROVIDER_FAILURE",
+      "attemptCount": 1,
+      "requestCount": 1,
+      "responseStatus": 429,
+      "providerError": {
+        "type": "provider.free-limit",
+        "status": 429
+      },
+      "elapsedMs": 702,
+      "responseGenerated": false,
+      "responseText": "",
+      "jsonValid": null,
+      "schemaValid": null,
+      "qualityJudgment": "NOT_JUDGED_PROVIDER_FAILURE",
+      "retryRequests": 0,
+      "retryVetoed": true,
+      "input": {
+        "caseId": "F1-B010",
+        "currentText": "Mostre minhas faturas",
+        "referenceDate": "2026-10-24",
+        "history": [],
+        "accounts": [],
+        "categories": [],
+        "displayedOptions": [],
+        "priorTransactions": [],
+        "suppliedValues": {},
+        "resolvableFields": []
+      },
+      "prompt": "Interpret the supplied synthetic user input and contextual history/catalogs.\nReturn exactly one JSON object and no prose, in the supplied closed contract.\nThe top-level object must have exactly one key: \"interpretation\".\nIts value must be an object. allowedResponseKeys and requiredResponseKeys apply inside interpretation, not at the top level.\nDo not execute, authorize, or claim a mutation. Use only supplied input context; do not invent IDs or facts.\nResponse contract descriptor (not a response example): {\"responseFields\":{\"intent\":[\"read\",\"mutation-proposal\",\"confirmation\",\"cancel\",\"advice\",\"conversation\",\"unsupported\",\"clarify\"],\"operation\":[\"none\",\"get_balance\",\"list_accounts\",\"list_transactions\",\"list_recent_transactions\",\"get_month_summary\",\"spending_insights\",\"list_cards\",\"list_statements\",\"get_statement_details\",\"list_payables\",\"list_accounts_payable\",\"check_payable_reminders\",\"list_budgets\",\"check_budgets\",\"budget_trends\",\"list_goals\",\"list_categories\",\"analytics_kpis\",\"analytics_category_breakdown\",\"transactions.expense.create\",\"transactions.income.create\",\"transactions.update\",\"accounts.create\",\"accounts.deactivate\",\"accounts.update\",\"categories.create\",\"categories.update\",\"categories.deactivate\"],\"args\":\"object; each value follows the ARG_SPECS descriptor below; keys must be allowed for operation\",\"contextProvenance\":{\"origin\":[\"local-fixture\",\"f1-corpus-text\",\"f1-journey-turn\"],\"corpusId\":\"exact supplied Synthetic input ID\",\"turnIndex\":\"exact supplied turnIndex for journey turns; omit otherwise\"},\"entities\":{\"item\":{\"kind\":[\"account\",\"category\",\"amount\",\"date\",\"period\",\"description\",\"card\",\"counterparty\"],\"value\":\"non-empty string, max 200\",\"provenance\":[\"utterance\",\"local-fixture\",\"corpus-context\",\"displayed-option\"]},\"maxItems\":8},\"ambiguities\":\"string[], max 8; each non-empty, max 200\",\"missingFields\":{\"type\":\"string[]\",\"allowed\":[\"amount\",\"description\",\"account\",\"category\",\"date\",\"period\",\"entity\",\"accountKind\",\"initialBalance\"],\"maxItems\":8},\"clarification\":\"null or non-empty string, max 500\",\"requestedAction\":{\"optional\":true,\"allowed\":[\"none\",\"get_balance\",\"list_accounts\",\"list_transactions\",\"list_recent_transactions\",\"get_month_summary\",\"spending_insights\",\"list_cards\",\"list_statements\",\"get_statement_details\",\"list_payables\",\"list_accounts_payable\",\"check_payable_reminders\",\"list_budgets\",\"check_budgets\",\"budget_trends\",\"list_goals\",\"list_categories\",\"analytics_kpis\",\"analytics_category_breakdown\",\"transactions.expense.create\",\"transactions.income.create\",\"transactions.update\",\"accounts.create\",\"accounts.deactivate\",\"accounts.update\",\"categories.create\",\"categories.update\",\"categories.deactivate\",\"budgets.create\"],\"meaning\":\"semantic action only; never execution or authorization\"}},\"descriptor\":{\"allowedResponseKeys\":[\"intent\",\"operation\",\"args\",\"contextProvenance\",\"entities\",\"ambiguities\",\"clarification\",\"missingFields\",\"requestedAction\"],\"requiredResponseKeys\":[\"intent\",\"operation\",\"args\",\"contextProvenance\",\"entities\",\"ambiguities\",\"clarification\",\"missingFields\"],\"argSpecs\":{\"amountCents\":{\"kind\":\"cents\",\"supportedInProduction\":true},\"description\":{\"kind\":\"string\",\"supportedInProduction\":true},\"date\":{\"kind\":\"string\",\"supportedInProduction\":true},\"categoryQuery\":{\"kind\":\"string\",\"supportedInProduction\":true},\"accountId\":{\"kind\":\"string\",\"supportedInProduction\":true},\"categoryId\":{\"kind\":\"string\",\"supportedInProduction\":true},\"accountName\":{\"kind\":\"string\",\"supportedInProduction\":true},\"accountKind\":{\"kind\":\"account-kind\",\"supportedInProduction\":true},\"initialBalanceCents\":{\"kind\":\"signed-cents\",\"supportedInProduction\":true},\"categoryName\":{\"kind\":\"string\",\"supportedInProduction\":true},\"categoryKind\":{\"kind\":\"category-kind\",\"supportedInProduction\":true},\"parentCategoryId\":{\"kind\":\"string\",\"supportedInProduction\":true},\"parentCategoryName\":{\"kind\":\"string\",\"supportedInProduction\":true},\"parentQuery\":{\"kind\":\"string\",\"supportedInProduction\":true},\"requiresParent\":{\"kind\":\"boolean\",\"supportedInProduction\":true},\"expectedName\":{\"kind\":\"string\",\"supportedInProduction\":true},\"transactionId\":{\"kind\":\"string\",\"supportedInProduction\":true},\"expectedDescription\":{\"kind\":\"string\",\"supportedInProduction\":true},\"targetReference\":{\"kind\":\"string\",\"supportedInProduction\":false},\"target\":{\"kind\":\"string\",\"supportedInProduction\":false},\"priorAmountCents\":{\"kind\":\"cents\",\"supportedInProduction\":false},\"correctedAmountCents\":{\"kind\":\"cents\",\"supportedInProduction\":false},\"yearMonth\":{\"kind\":\"string\",\"supportedInProduction\":false},\"period\":{\"kind\":\"string\",\"supportedInProduction\":false},\"from\":{\"kind\":\"string\",\"supportedInProduction\":false},\"to\":{\"kind\":\"string\",\"supportedInProduction\":false},\"startDate\":{\"kind\":\"string\",\"supportedInProduction\":false},\"endDate\":{\"kind\":\"string\",\"supportedInProduction\":false}},\"operationArgs\":{\"none\":[],\"get_balance\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"list_accounts\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"list_transactions\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"list_recent_transactions\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"get_month_summary\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"spending_insights\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"list_cards\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"list_statements\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"get_statement_details\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"list_payables\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"list_accounts_payable\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"check_payable_reminders\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"list_budgets\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"check_budgets\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"budget_trends\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"list_goals\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"list_categories\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"analytics_kpis\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"analytics_category_breakdown\":[\"yearMonth\",\"period\",\"from\",\"to\",\"startDate\",\"endDate\"],\"transactions.expense.create\":[\"amountCents\",\"description\",\"date\",\"accountId\",\"categoryId\",\"accountName\",\"categoryName\",\"categoryQuery\"],\"transactions.income.create\":[\"amountCents\",\"description\",\"date\",\"accountId\",\"categoryId\",\"accountName\",\"categoryName\",\"categoryQuery\"],\"transactions.update\":[\"transactionId\",\"expectedDescription\",\"description\",\"amountCents\",\"date\",\"accountId\",\"categoryId\",\"targetReference\"],\"accounts.create\":[\"accountName\",\"accountKind\",\"initialBalanceCents\"],\"accounts.update\":[\"accountId\",\"expectedName\",\"accountName\"],\"accounts.deactivate\":[\"accountId\",\"expectedName\",\"accountName\"],\"categories.create\":[\"categoryName\",\"categoryKind\",\"parentCategoryId\",\"parentCategoryName\",\"parentQuery\",\"requiresParent\"],\"categories.update\":[\"categoryId\",\"expectedName\",\"categoryName\"],\"categories.deactivate\":[\"categoryId\",\"expectedName\",\"categoryName\"]},\"limits\":{\"maxSerializedBytes\":8192,\"maxDepth\":8,\"maxArgs\":12,\"maxEntities\":8,\"maxAmbiguities\":8,\"maxString\":200,\"maxClarification\":500},\"enumValues\":{\"accountKind\":[\"bank\",\"cash\"],\"categoryKind\":[\"expense\",\"income\"]},\"semantics\":[\"This is a contract descriptor, NOT a JSON response example; return only allowedResponseKeys inside the interpretation envelope.\",\"operation none requires empty args; read intent requires a read operation; mutation-proposal requires a mutation operation.\",\"clarify requires operation none; confirmation, cancel, advice, conversation, unsupported require operation none.\",\"missingFields are required values unavailable from supplied context; ambiguities are unresolved alternatives, not missing values.\",\"Known unsupported capabilities are not ambiguities. requestedAction describes intent only and never executes or authorizes an action.\"]}}\nManifest case ID: F1-B010\nSynthetic input ID (corpusId): F1-B010\nInput turn index: not a journey turn\nSynthetic input context: {\"caseId\":\"F1-B010\",\"currentText\":\"Mostre minhas faturas\",\"referenceDate\":\"2026-10-24\",\"history\":[],\"accounts\":[],\"categories\":[],\"displayedOptions\":[],\"priorTransactions\":[],\"suppliedValues\":{},\"resolvableFields\":[]}"
+    },
+    {
+      "caseID": "F1-B012",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "F1-B017",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "F1-B036",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "F1-B058",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "F2A1-B013-catalog",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "F2A1-B015-colloquial",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "F2A1-B027-approx",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "F2A1-B006-reference",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "F2A1-B016-homonyms",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "F2A1-B021-correction",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "F2A1-B008-concept",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "J01:T1",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "J01:T2",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "J02:T1",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "J02:T2",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "J03:T1",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "J03:T2",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "J05:T1",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "J05:T2",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "J09:T1",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    },
+    {
+      "caseID": "J09:T2",
+      "status": "NOT_RUN",
+      "attemptCount": 0,
+      "responseText": null,
+      "qualityJudgment": "NOT_EVALUATED"
+    }
+  ],
+  "sourceArtifacts": {
+    "realStopRunID": "2026-10-27T01-04-23-758Z-13588",
+    "mockProofRunID": "2026-10-26T23-56-15-510Z-7596",
+    "nativePluginSelfTestRunID": "2026-10-27T01-13-36-063Z-17984"
+  }
+}

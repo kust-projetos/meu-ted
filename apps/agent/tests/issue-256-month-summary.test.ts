@@ -7,7 +7,7 @@
  * consulta transacional com filtro de categoria e continua `list_transactions`.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { createChannelGrounding, resolveSummaryYearMonth, type ChannelReadTools } from '../src/orchestration/channel-evidence.js';
+import { createChannelGrounding, mapMonthSummary, resolveSummaryYearMonth, type ChannelReadTools } from '../src/orchestration/channel-evidence.js';
 import { routeIntent } from '../src/orchestration/intent-router.js';
 import {
   ConversationOrchestrator,
@@ -193,13 +193,18 @@ describe('issue #256 month-summary routing', () => {
     expect(result.response?.text).not.toContain('Mercado');
   });
 
-  it('9) P2a: resolveSummaryYearMonth distingue mês corrente vs. passado (relógio fixo)', () => {
+  it('9) P2a: resolveSummaryYearMonth distingue mês corrente vs. passado/retrasado (relógio fixo)', () => {
     const now = new Date('2026-10-15T12:00:00.000Z');
     expect(resolveSummaryYearMonth('Quanto gastei esse mês?', now)).toBe('2026-10');
     expect(resolveSummaryYearMonth('Quanto gastei no mês passado?', now)).toBe('2026-09');
     expect(resolveSummaryYearMonth('resumo do último mês', now)).toBe('2026-09');
+    // Mês retrasado: dois meses atrás.
+    expect(resolveSummaryYearMonth('Quanto gastei no mês retrasado?', now)).toBe('2026-08');
+    expect(resolveSummaryYearMonth('resumo do penúltimo mês', now)).toBe('2026-08');
     // Virada de ano: janeiro passado é dezembro anterior.
     expect(resolveSummaryYearMonth('mês passado', new Date('2026-01-10T12:00:00.000Z'))).toBe('2025-12');
+    // Virada de ano: janeiro retrasado é novembro anterior.
+    expect(resolveSummaryYearMonth('mês retrasado', new Date('2026-01-10T12:00:00.000Z'))).toBe('2025-11');
   });
 
   it('10) P2a: "mês passado" transporta o yearMonth anterior ao reader (relógio fixo)', async () => {
@@ -258,5 +263,58 @@ describe('issue #256 month-summary routing', () => {
     const ops = opNames('mostre os extratos deste mês');
     expect(ops).toContain('list_transactions');
     expect(ops).not.toContain('get_month_summary');
+  });
+});
+
+describe('mapMonthSummary (F3 read vertical)', () => {
+  it('invalid shape (null) → permanent_error, never period_empty', () => {
+    const items = mapMonthSummary(null);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.status).toBe('error');
+  });
+  it('zero transactionCount → period_empty', () => {
+    const items = mapMonthSummary({ transactionCount: 0, incomeCents: 0, expenseCents: 0, balanceCents: 0, yearMonth: '2026-10' });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.status).toBe('empty');
+  });
+  it('fractional transactionCount → error/permanent_error, never period_empty', () => {
+    const items = mapMonthSummary({ yearMonth: '2026-10', incomeCents: 100, expenseCents: 50, balanceCents: 50, transactionCount: 0.5 });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.status).toBe('error');
+    expect(items[0]).toMatchObject({ reason: 'permanent_error' });
+  });
+  it('positive transactionCount → ok with data', () => {
+    const items = mapMonthSummary({ transactionCount: 3, incomeCents: 100, expenseCents: 50, balanceCents: 50, yearMonth: '2026-10' });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.status).toBe('ok');
+  });
+  it('P1 fail-closed: {} → error/permanent_error, never ok with empty data', () => {
+    const items = mapMonthSummary({});
+    expect(items).toHaveLength(1);
+    expect(items[0]?.status).toBe('error');
+    expect(items[0]).toMatchObject({ reason: 'permanent_error' });
+  });
+  it('P1 fail-closed: {transactionCount:3} without totals → error/permanent_error', () => {
+    const items = mapMonthSummary({ transactionCount: 3 });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.status).toBe('error');
+    expect(items[0]).toMatchObject({ reason: 'permanent_error' });
+  });
+  it('P1 fail-closed: {expenseCents:5000} without count → error/permanent_error', () => {
+    const items = mapMonthSummary({ expenseCents: 5000 });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.status).toBe('error');
+    expect(items[0]).toMatchObject({ reason: 'permanent_error' });
+  });
+  it('partial totals with a positive count → error/permanent_error', () => {
+    const items = mapMonthSummary({ transactionCount: 3, expenseCents: 5000 });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.status).toBe('error');
+    expect(items[0]).toMatchObject({ reason: 'permanent_error' });
+  });
+  it('legacy totals without transactionCount → ok', () => {
+    const items = mapMonthSummary({ yearMonth: '2026-09', incomeCents: 0, expenseCents: 5000, balanceCents: -5000 });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.status).toBe('ok');
   });
 });

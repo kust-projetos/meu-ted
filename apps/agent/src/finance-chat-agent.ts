@@ -151,7 +151,7 @@ const bindPendingOutcomeToHistoryLink = (
   if (outcome.status === 'proposed' || outcome.status === 'confirmed' || outcome.status === 'executing') return undefined;
   const expected = 'expectedContext' in outcome ? outcome.expectedContext : undefined;
   if (expected && (expected.tool !== link.expectedContext.tool || expected.entityId !== link.expectedContext.entityId)) return undefined;
-  const targetRequired = outcome.tool === 'accounts.update' || outcome.tool === 'accounts.deactivate' || outcome.tool === 'categories.update' || outcome.tool === 'categories.deactivate' || outcome.tool === 'transactions.update';
+  const targetRequired = outcome.tool === 'accounts.update' || outcome.tool === 'accounts.deactivate' || outcome.tool === 'categories.update' || outcome.tool === 'categories.deactivate' || outcome.tool === 'transactions.update' || outcome.tool === 'cards.statement.pay';
   if (targetRequired && !link.expectedContext.entityId) return undefined;
   if (outcome.status === 'succeeded') {
     if (outcome.expectedContext.tool !== link.expectedContext.tool || outcome.expectedContext.entityId !== link.expectedContext.entityId) return undefined;
@@ -252,6 +252,11 @@ import { hasTransactionDescriptionSignal } from "./mutations/transaction-descrip
 import { MutationApiClient, type ActiveOperationRecord } from "./mutations/mutation-api-client.js";
 import type { MutationExpectedContext } from "./mutations/mutation-executor.js";
 import { requiresExpectedEntity, resolveExpectedContext } from "./mutations/expected-context.js";
+import {
+  proposalIntentSchema,
+  proposeTransactionFromIntent,
+  type ProposalBrokerIdentity,
+} from "./mutations/pending-proposal-broker.js";
 import { PendingOperationCoordinator, isRetryText } from "./orchestration/pending-operation-coordinator.js";
 import { initializeMutationDraftSchema, SqlMutationDraftStore, hasRecoverableDraft, type DraftContext } from "./mutations/mutation-draft.js";
 import {
@@ -3179,6 +3184,77 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /**
+   * P3 — narrow A4 proposal broker (`POST /rpc/pending-operations/propose`).
+   *
+   * Called by the authenticated PWA with the OpenCode runtime's proposal
+   * INTENT. The Agent is the ONLY component allowed to mint
+   * `financial.approval.propose`; it delegates the authoritative validation,
+   * persistence and (later) decision to the API. This route cannot confirm,
+   * execute, cancel, retry or authorize — those paths do not exist here.
+   */
+  private async handleProposePendingOperation(request: Request): Promise<Response> {
+    const token = request.headers.get("x-agent-connection-token")?.trim();
+    const secret = this.env?.AGENT_DELEGATION_SECRET?.trim();
+    const actorId = request.headers.get("x-agent-actor")?.trim();
+    const workspaceId = request.headers.get("x-agent-workspace")?.trim();
+    const deviceId = request.headers.get("x-agent-device")?.trim();
+    if (!token || !secret || !actorId || !workspaceId || !deviceId) {
+      return Response.json({ code: "agent.approval_context_required" }, { status: 401 });
+    }
+    const fence = this.deletionFenceRefusal(workspaceId);
+    if (fence) {
+      return Response.json(fence, { status: fence.status });
+    }
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return Response.json({ code: "agent.invalid_payload" }, { status: 400 });
+    }
+    // P3.1 expense + P3.2 income share the same propose-only contract; the
+    // discriminated union is the closed allowlist (everything else → 400).
+    const parsed = proposalIntentSchema.safeParse(raw);
+    if (!parsed.success) {
+      return Response.json({ code: "agent.invalid_payload" }, { status: 400 });
+    }
+    const identity: ProposalBrokerIdentity = {
+      actorId,
+      workspaceId,
+      deviceId,
+      role: request.headers.get("x-agent-role") === "owner" ? "owner" : "member",
+    };
+    try {
+      const result = await proposeTransactionFromIntent({
+        intent: parsed.data,
+        identity,
+        secret,
+        apiOrigin: this.env?.API_ORIGIN,
+      });
+      try {
+        emitSanitizedEvent("approval.proposed", { status: "proposed" });
+      } catch {
+        // Observability must never break the proposal response.
+      }
+      return Response.json(result);
+    } catch (error) {
+      const record = error as { statusCode?: unknown; code?: unknown };
+      const status = typeof record.statusCode === "number" ? record.statusCode : undefined;
+      // Preserve only meaningful authority/conflict signals; everything else
+      // is a generic proposal failure (never dependency text in the response).
+      if (status === 400 || status === 422) {
+        return Response.json({ code: "agent.invalid_payload" }, { status: 400 });
+      }
+      if (status === 403) {
+        return Response.json({ code: "auth.workspace_forbidden" }, { status: 403 });
+      }
+      if (status === 409) {
+        return Response.json({ code: "idempotency.conflict" }, { status: 409 });
+      }
+      return Response.json({ code: "agent.proposal_failed" }, { status: 502 });
+    }
+  }
+
+  /**
    * T5.3 (H-14, SPEC §22): authoritative listing of the workspace's active
    * pending operations, relayed lean to trusted PWA surfaces (Home badge,
    * Aprovações page). The browser NEVER decides here — this is a read-only
@@ -4044,6 +4120,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       return await this.handleAttachmentObservability(request);
     }
     const activeMatch = url.pathname === "/rpc/pending-operations/active" && request.method === "GET";
+    // P3 (A4): the ONLY write-adjacent bridge for the external OpenCode
+    // runtime. It mints propose-only and never confirms/executes.
+    if (url.pathname === "/rpc/pending-operations/propose" && request.method === "POST") {
+      return await this.handleProposePendingOperation(request);
+    }
     if (activeMatch) {
       return await this.handleActivePendingOperations(request);
     }

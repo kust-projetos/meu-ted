@@ -956,11 +956,21 @@ export const createLegacyPostgresWriteStore = (opts: { pool: Pool }): WriteStore
         ...(options.audit ? { audit: { ...options.audit, schema: 'legacy' as const } } : {}),
       });
     },
-    async createTransfer(householdId: string, input: CreateTransferInput) {
+    async createTransfer(householdId: string, input: CreateTransferInput, options?: WriteIdempotencyOptions) {
       if (input.amountCents <= 0) throw domainErrors.invalid('amountCents', 'deve ser maior que zero');
       if (input.fromAccountId === input.toAccountId) throw domainErrors.invalid('toAccountId', 'deve ser diferente');
-      return withTransaction(pool, async (client: PoolClient) =>
-        createTransferLegacyInTx(client, householdId, input));
+      if (options?.idempotencyKey === undefined) {
+        return withTransaction(pool, async (client: PoolClient) =>
+          createTransferLegacyInTx(client, householdId, input));
+      }
+      return runKeyedMutation({
+        pool,
+        householdId,
+        idempotencyKey: options.idempotencyKey,
+        payload: input,
+        mutate: (client) => createTransferLegacyInTx(client, householdId, input),
+        ...(options.audit ? { audit: { ...options.audit, schema: 'legacy' as const } } : {}),
+      });
     },
     async updateTransaction(householdId: string, id: string, patch: UpdateTransactionInput) {
       return withTransaction(pool, async (client: PoolClient) =>

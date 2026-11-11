@@ -157,7 +157,7 @@ export const runKeyedMutation = async (opts: {
 }): Promise<Transaction> => {
   const { pool, householdId, payload } = opts;
   const key = namespacedPendingV2Key(opts.idempotencyKey);
-  if (opts.audit !== undefined && opts.audit.operation !== 'transactions.expense.create' && opts.audit.operation !== 'transactions.income.create' && opts.audit.operation !== 'transaction.update') {
+  if (opts.audit !== undefined && opts.audit.operation !== 'transactions.expense.create' && opts.audit.operation !== 'transactions.income.create' && opts.audit.operation !== 'transactions.transfer.create' && opts.audit.operation !== 'transaction.update') {
     throw new Error(`unsupported V2 audit operation: ${String((opts.audit as { operation?: unknown }).operation)}`);
   }
   if (opts.audit?.operation === 'transaction.update' &&
@@ -415,3 +415,4 @@ const isCategorySnapshot = (value: unknown, householdId: string): value is Categ
   }
   return true;
 };
+

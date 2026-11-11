@@ -58,3 +58,34 @@ export function fixtureUrlFor(fixturePort: number): string {
 export function harnessUrlFor(harnessPort: number): string {
   return `http://127.0.0.1:${harnessPort}`;
 }
+
+// P2D synthetic-conversation browser stack (test-only, loopback only).
+// Dedicated ports so the P2D run never touches the historical topology
+// above: its own Fastify API + gateway probe + Next dev + control server. Same fail-closed ownership as the main topology.
+export const DEFAULT_P2D_API_PORT = 4110;
+export const DEFAULT_P2D_NEXT_PORT = 3201;
+export const DEFAULT_P2D_GATEWAY_PORT = 3221;
+export const DEFAULT_P2D_CTL_PORT = 3200;
+export const DEFAULT_P2D_AGENT_PORT = 3222;
+
+export type P2dPorts = {
+  apiPort: number;
+  nextPort: number;
+  gatewayPort: number;
+  ctlPort: number;
+  agentPort: number;
+};
+
+export function resolveP2dPorts(env: EnvLike = process.env): P2dPorts {
+  return {
+    apiPort: parsePort(env.P2D_API_PORT, DEFAULT_P2D_API_PORT, "P2D_API_PORT"),
+    nextPort: parsePort(env.P2D_NEXT_PORT, DEFAULT_P2D_NEXT_PORT, "P2D_NEXT_PORT"),
+    gatewayPort: parsePort(env.P2D_GATEWAY_PORT, DEFAULT_P2D_GATEWAY_PORT, "P2D_GATEWAY_PORT"),
+    ctlPort: parsePort(env.P2D_CTL_PORT, DEFAULT_P2D_CTL_PORT, "P2D_CTL_PORT"),
+    agentPort: parsePort(env.P2D_AGENT_PORT, DEFAULT_P2D_AGENT_PORT, "P2D_AGENT_PORT"),
+  };
+}
+
+export function p2dNextUrlFor(nextPort: number): string {
+  return `http://127.0.0.1:${nextPort}`;
+}

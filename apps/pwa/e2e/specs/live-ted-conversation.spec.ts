@@ -109,10 +109,25 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
   };
 
   const openTed = async (page: Page) => {
+    const workspaceSelector = page.getByRole("button", { name: "Selecionar espaço" });
+    if (await workspaceSelector.getAttribute("aria-expanded") === "true") {
+      await workspaceSelector.press("Escape");
+      await expect(workspaceSelector).not.toHaveAttribute("aria-expanded", "true", { timeout: 10000 });
+    }
     const launcher = page.getByRole("button", { name: /abrir assistente ted/i }).last();
     await expect(launcher).toBeVisible({ timeout: 20000 });
     await launcher.click();
-    await page.waitForURL(/\/ted/);
+    try {
+      await page.waitForURL(/\/ted/, { timeout: 60_000 });
+    } catch (error) {
+      const currentUrl = page.url();
+      const launcherVisible = await launcher.isVisible().catch(() => false);
+      throw new Error(
+        `Navegação para TED expirou; URL atual: ${currentUrl}; launcher ainda visível: ${launcherVisible}; ` +
+        "clique sem efeito — ver dropdown/overlay",
+        { cause: error },
+      );
+    }
     const dialog = page.getByRole("region", { name: /chat com ted/i });
     await expect(dialog).toBeVisible({ timeout: 15000 });
     return dialog;
@@ -552,8 +567,26 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     await passwordInput.first().fill(PASSWORD);
     await page.getByRole("button", { name: "Entrar" }).click();
     await expect(page.getByRole("button", { name: "Nova transação" })).toBeVisible({ timeout: 30000 });
-    await page.getByRole("button", { name: "Selecionar espaço" }).click();
-    await page.getByRole("option", { name: /Test Family/ }).click();
+    const workspaceSelector = page.getByRole("button", { name: "Selecionar espaço" });
+    await workspaceSelector.click();
+    const testFamilyOption = page.getByRole("option", { name: /Test Family/ });
+    try {
+      await testFamilyOption.click({ timeout: 60_000 });
+    } catch (error) {
+      const currentUrl = page.url();
+      const dropdownExpanded = await workspaceSelector.getAttribute("aria-expanded").catch(() => null);
+      const visibleOptions = await page.getByRole("option").all()
+        .then(async (options) => Promise.all(options.map(async (option) => {
+          if (!await option.isVisible().catch(() => false)) return null;
+          return (await option.innerText().catch(() => "")).trim();
+        })))
+        .then((options) => options.filter((name): name is string => Boolean(name)));
+      throw new Error(
+        `Seleção de workspace expirou; URL atual: ${currentUrl}; dropdown aberto (aria-expanded): ${dropdownExpanded}; ` +
+        `options visíveis: ${JSON.stringify(visibleOptions)}; opção Test Family ausente — ver membership do admin`,
+        { cause: error },
+      );
+    }
     await expect(page.getByRole("button", { name: "Selecionar espaço" })).toContainText("Test Family", { timeout: 15000 });
 
     // ── R5 pre-flight: isolamento do RUN_ID (fail-fast, read-only) ────

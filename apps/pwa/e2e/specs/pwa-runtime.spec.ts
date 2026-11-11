@@ -314,11 +314,25 @@ test("[PWA-05] reload with active SW → offline shell still renders on network 
   await page.reload({ waitUntil: "domcontentloaded" });
   await waitForController(page);
 
-  await context.setOffline(true);
-  await page.goto("/compromissos", { waitUntil: "domcontentloaded" }).catch(() => undefined);
   await expect
-    .poll(async () => page.title(), { timeout: 15000 })
-    .toMatch(/Offline|Pi Financeiro/i);
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          const hit = await caches.match("/offline-shell.html", {
+            ignoreSearch: true,
+          });
+          return hit !== undefined && hit !== null;
+        }),
+      { timeout: 25000 },
+    )
+    .toBe(true);
+
+  // route.fetch() masks browser offline mode; remove interception before testing the SW fallback.
+  await page.unrouteAll();
+  await context.setOffline(true);
+  await page.goto("/compromissos", { waitUntil: "domcontentloaded" });
+  await expect(page).toHaveTitle("Meu Ted — Offline");
+  await expect(page.getByRole("alert")).toContainText("Modo offline");
   await context.setOffline(false);
 });
 

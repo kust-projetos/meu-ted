@@ -2,7 +2,7 @@ packages:
   - 'apps/pwa'
   - 'apps/api'
   - 'apps/agent'
-  - 'apps/codex-broker'
+  - 'apps/ted-runtime'
   - 'packages/llm-contracts'
 
 ignoredBuiltDependencies:

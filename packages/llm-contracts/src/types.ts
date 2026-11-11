@@ -379,6 +379,7 @@ export type RefreshTarget = (typeof REFRESH_TARGETS)[number];
 export const TED_APPROVAL_TOOLS = [
   'transactions.expense.create',
   'transactions.income.create',
+  'transactions.transfer.create',
   'transactions.update',
   'accounts.create',
   'accounts.deactivate',
@@ -386,6 +387,10 @@ export const TED_APPROVAL_TOOLS = [
   'categories.create',
   'categories.update',
   'categories.deactivate',
+  'cards.purchase.create',
+  'cards.statement.pay',
+  'payables.create',
+  'payables.pay',
 ] as const;
 export type TedApprovalTool = (typeof TED_APPROVAL_TOOLS)[number];
 
@@ -461,12 +466,45 @@ export interface PendingOperationPresentation {
   tool: string;
   title: string;
   amountCents?: number;
+  /**
+   * Credit-card purchase installment display fields (tool
+   * `cards.purchase.create` only). The API computes them with the SAME
+   * financial rule the executor uses (`splitInstallmentAmounts` +
+   * `installmentDates` over the card cycle); the PWA only renders them.
+   * `amountCents` is always the TOTAL of the purchase, never a parcel.
+   */
+  installmentsTotal?: number;
+  installmentAmountsCents?: number[];
+  firstStatementClosingDate?: string;
+  firstStatementDueDate?: string;
   description?: string;
   date?: string;
   account?: PendingOperationPresentationLabel;
+  /**
+   * Internal-transfer display fields (tool `transactions.transfer.create`
+   * only): source and destination labels, both server-resolved from the
+   * authoritative read model. Transfer cards never carry a category — an
+   * internal transfer is neither income nor expense.
+   */
+  fromAccount?: PendingOperationPresentationLabel;
+  toAccount?: PendingOperationPresentationLabel;
   category?: PendingOperationPresentationLabel;
   /** Parent of an existing category target, when server-resolved from the catalog. */
   categoryParent?: PendingOperationPresentationLabel;
+  /**
+   * Statement-payment display fields (tool `cards.statement.pay` only).
+   * `statement` names the invoice being paid; `account` carries the CARD
+   * label and `fromAccount` the payer account label, both server-resolved.
+   * The amount fields come from the authoritative statement at presentation
+   * time — the PWA only renders them and never recomputes the remaining
+   * balance. `amountCents` is the amount paid NOW.
+   */
+  statement?: PendingOperationPresentationLabel;
+  statementTotalCents?: number;
+  statementPaidCents?: number;
+  statementRemainingCents?: number;
+  statementDueDate?: string;
+  statementStatus?: string;
   /**
    * Account-creation display fields (tool `accounts.create` only): the card
    * shows the account name/kind/initial balance instead of the
@@ -605,6 +643,74 @@ export const isActionablePendingOperationPresentation = (
   if (presentation.tool === 'categories.deactivate') {
     return isPresentationLabel(presentation.category);
   }
+  if (presentation.tool === 'cards.purchase.create') {
+    // P3.4 card purchase (1x): the card (a credit-card account) + amount +
+    // description + date are the executable tuple the user re-authorizes.
+    // The category is OPTIONAL - an unclassified purchase is still
+    // actionable, so it never gates Confirm.
+    if (
+      !isNonEmptyString(presentation.description) ||
+      typeof presentation.amountCents !== 'number' ||
+      !Number.isFinite(presentation.amountCents) ||
+      !isNonEmptyString(presentation.date) ||
+      !isPresentationLabel(presentation.account)
+    ) {
+      return false;
+    }
+    // P3.5 installments: a declared parcel count must be complete and
+    // self-consistent before the user may confirm it. The amounts are the
+    // server's exact split, so their sum must equal the TOTAL amount and the
+    // count must match — a preview that disagrees with what will execute is
+    // not actionable.
+    if (presentation.installmentsTotal === undefined) return true;
+    const total = presentation.installmentsTotal;
+    if (!Number.isInteger(total) || total < 1 || total > 48) return false;
+    if (total === 1) return true;
+    const amounts = presentation.installmentAmountsCents;
+    if (!Array.isArray(amounts) || amounts.length !== total) return false;
+    if (amounts.some((amount) => !Number.isInteger(amount) || amount < 0)) return false;
+    return amounts.reduce((sum, amount) => sum + amount, 0) === presentation.amountCents;
+  }
+  if (presentation.tool === 'cards.statement.pay') {
+    // Statement payment: the invoice (id + label), the CARD label and the
+    // PAYER account label are the executable context. The server-computed
+    // amounts must be coherent (paid + remaining = total) and the amount paid
+    // now must not exceed what remains — a stale card never offers Confirm.
+    if (!isPresentationLabel(presentation.statement)) return false;
+    if (!isPresentationLabel(presentation.account)) return false;
+    if (!isPresentationLabel(presentation.fromAccount)) return false;
+    if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents) || presentation.amountCents <= 0) return false;
+    const total = presentation.statementTotalCents;
+    const paid = presentation.statementPaidCents;
+    const remaining = presentation.statementRemainingCents;
+    if (typeof total !== 'number' || !Number.isInteger(total) || total < 0) return false;
+    if (typeof paid !== 'number' || !Number.isInteger(paid) || paid < 0) return false;
+    if (typeof remaining !== 'number' || !Number.isInteger(remaining) || remaining <= 0) return false;
+    if (paid + remaining !== total) return false;
+    if (presentation.amountCents > remaining) return false;
+    if (!isNonEmptyString(presentation.statementDueDate)) return false;
+    return true;
+  }
+  if (presentation.tool === 'transactions.transfer.create') {
+    // Internal transfer card: amount, date, description and BOTH
+    // server-resolved account labels gate Confirm. No category is involved.
+    if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents)) return false;
+    if (!isNonEmptyString(presentation.date)) return false;
+    if (!isNonEmptyString(presentation.description)) return false;
+    if (!isPresentationLabel(presentation.fromAccount)) return false;
+    if (!isPresentationLabel(presentation.toAccount)) return false;
+    return true;
+  }
+  if (presentation.tool === 'payables.create' || presentation.tool === 'payables.pay') {
+    // Payable card: amount + description + due date + the server-resolved
+    // account label are the context the user re-authorizes. The category is
+    // optional for payables.create and never gates Confirm.
+    if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents) || presentation.amountCents <= 0) return false;
+    if (!isNonEmptyString(presentation.description)) return false;
+    if (!isNonEmptyString(presentation.date)) return false;
+    if (!isPresentationLabel(presentation.account)) return false;
+    return true;
+  }
   if (!isNonEmptyString(presentation.description)) return false;
   if (typeof presentation.amountCents !== 'number' || !Number.isFinite(presentation.amountCents)) return false;
   if (!isNonEmptyString(presentation.date)) return false;
@@ -650,6 +756,15 @@ export type MutationEffectsEntry =
 export const MUTATION_EFFECTS_REGISTRY: Record<MutationKind, MutationEffectsEntry> = {
   'transactions.expense.create': { mutationKind: 'transactions.expense.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transactions.income.create': { mutationKind: 'transactions.income.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
+  'cards.purchase.create': { mutationKind: 'cards.purchase.create', affectedTargets: ['transactions', 'accounts', 'statement', 'dashboard-summary', 'quick-insights'] },
+  // Statement payment moves the payer balance, reduces the card debt, updates
+  // the invoice and writes the liquidity expense row (the competence basis
+  // excludes it by statement_payment_id — the original purchases stay).
+  'cards.statement.pay': { mutationKind: 'cards.statement.pay', affectedTargets: ['transactions', 'accounts', 'statement', 'dashboard-summary', 'quick-insights'] },
+  // Internal transfer: balances and the ledger move; budgets/quick-insights
+  // (income/expense derived) are intentionally NOT refreshed — a transfer is
+  // not revenue nor expense.
+  'transactions.transfer.create': { mutationKind: 'transactions.transfer.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary'] },
   'accounts.create': { mutationKind: 'accounts.create', affectedTargets: ['accounts', 'dashboard-summary'] },
   'accounts.deactivate': { mutationKind: 'accounts.deactivate', affectedTargets: ['accounts', 'dashboard-summary'] },
   'accounts.update': { mutationKind: 'accounts.update', affectedTargets: ['accounts', 'dashboard-summary'] },
@@ -657,6 +772,11 @@ export const MUTATION_EFFECTS_REGISTRY: Record<MutationKind, MutationEffectsEntr
   'categories.update': { mutationKind: 'categories.update', affectedTargets: ['categories', 'transactions'] },
   'transactions.update': { mutationKind: 'transactions.update', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'categories.deactivate': { mutationKind: 'categories.deactivate', affectedTargets: ['categories', 'transactions'] },
+  // V1 completion: payables through the V2 approval protocol. Creating a
+  // payable changes the payables agenda; paying it also books the liquidity
+  // expense and moves the payer balance (same effect as the normal write).
+  'payables.create': { mutationKind: 'payables.create', affectedTargets: ['payables', 'dashboard-summary', 'quick-insights'] },
+  'payables.pay': { mutationKind: 'payables.pay', affectedTargets: ['payables', 'transactions', 'accounts', 'dashboard-summary', 'quick-insights'] },
   'transaction.create': { mutationKind: 'transaction.create', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transaction.update': { mutationKind: 'transaction.update', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },
   'transaction.delete': { mutationKind: 'transaction.delete', affectedTargets: ['transactions', 'accounts', 'dashboard-summary', 'budgets', 'quick-insights'] },

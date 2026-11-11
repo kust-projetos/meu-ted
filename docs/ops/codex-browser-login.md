@@ -1,4 +1,7 @@
-# Codex — login via browser (plano Coding)
+# Codex - login via browser (plano Coding)
+
+> **Status (2026-11-10):** `apps/codex-broker` foi removido do monorepo.
+> Procedimento histórico; não existe broker local para autenticar.
 
 Fluxo mínimo viável para autenticar o provider `openai-codex-subscription`
 (Catalogo: **Codex (plano Coding)**) no broker privado, no mesmo espírito do

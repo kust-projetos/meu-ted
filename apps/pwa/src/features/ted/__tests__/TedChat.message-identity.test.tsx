@@ -408,6 +408,27 @@ describe("TedChat — AC06: dois textos iguais com IDs distintos = DUAS mensagen
     expect(screen.getAllByText(answer)).toHaveLength(1);
   });
 
+  it("resposta já presente no histórico com o MESMO turnId não é anexada de novo", async () => {
+    const user = userEvent.setup();
+    const answer = "Resposta multi-ferramenta do turno.";
+    await renderReady();
+    const flight = deferred<agentClient.AgentTurn>();
+    vi.mocked(agentClient.sendAgentMessage).mockReturnValueOnce(flight.promise);
+    await send(user, "quais são meus orçamentos e metas?");
+    await waitFor(() => expect(vi.mocked(agentClient.sendAgentMessage)).toHaveBeenCalledTimes(1));
+    histories["ws-1"] = [
+      userMsg("srv-u1", "quais são meus orçamentos e metas?"),
+      assistantMsg("t_dup", answer),
+    ];
+    const historyCallsBefore = vi.mocked(agentClient.fetchAgentHistory).mock.calls.length;
+    flight.resolve(okTurn("t_dup", answer));
+    await waitFor(() =>
+      expect(vi.mocked(agentClient.fetchAgentHistory).mock.calls.length).toBeGreaterThan(historyCallsBefore),
+    );
+    await settle();
+    expect(screen.getAllByText(answer)).toHaveLength(1);
+  });
+
   it("a retenção local da resposta do turno continua existindo (histórico já persistiu a resposta)", async () => {
     const user = userEvent.setup();
     const reply = "Tudo certo por aqui.";

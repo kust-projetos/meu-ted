@@ -1,6 +1,7 @@
 import { apiFetch, announceUnauthorized } from "./client";
 import { registerDeviceToken } from "./auth";
 import { getToken, setToken } from "../auth/token-store";
+import { clearTedRuntimeViews } from "./ted-runtime-view";
 
 export type AgentConnectionTokenResponse = {
   token: string;
@@ -241,6 +242,16 @@ function throwWithExpirySignal(err: unknown, generation: number): never {
   throw err;
 }
 
+/**
+ * P2 — scoped read of the active device token for the B gateway path.
+ *
+ * Storage-first with the session-memory fallback (same authority as the mint
+ * self-heal read): returns the persisted device token, the in-memory session
+ * token when persistence failed, or null when no device is registered. Sync
+ * and side-effect free — never registers, never announces expiry.
+ */
+export const getActiveDeviceToken = (): string | null => readDeviceToken();
+
 export const fetchAgentToken = async (
   workspaceId: string,
   forceFresh = false,
@@ -349,6 +360,9 @@ export const clearAgentSession = (): void => {
   // registers its own device instead of joining the previous session's.
   sessionGeneration += 1;
   pendingDeviceSelfHeal = null;
+  // P2: session teardown also drops per-conversation runtime beliefs, so a
+  // stale B confirmation can never offer cancel to another login's A0 turns.
+  clearTedRuntimeViews();
   // T04 follow-up: o cache em memória pertence à sessão — cai junto com ela
   // (todo clearSensitiveSession, logout, 401/403, switch passa por aqui),
   // com o marcador de supersede (wave1-fix-pwa-2).

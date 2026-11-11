@@ -13,15 +13,26 @@
  */
 import { z } from 'zod';
 import type { MutationReceipt } from '@pi-finance/llm-contracts';
-import { createAccountInputSchema, createExpenseInputSchema, createIncomeInputSchema } from '../writes/types.js';
+import {
+  createAccountInputSchema,
+  createExpenseInputSchema,
+  createIncomeInputSchema,
+  createTransferInputSchema,
+} from '../writes/types.js';
+import { isoDateSchema } from '../shared/iso-date.js';
 import { DomainError } from '../writes/errors.js';
 import type { WriteStore } from '../writes/store.js';
+import type { CardStore } from '../cards/store.js';
+import type { PayableStore } from '../payables/store.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
 import { AUTOEXECUTION_ELIGIBLE_TOOLS } from './policy.js';
 
 export const APPROVAL_TOOL_IDS = [
   'transactions.expense.create',
   'transactions.income.create',
+  'cards.purchase.create',
+  'cards.statement.pay',
+  'transactions.transfer.create',
   'transactions.update',
   'accounts.create',
   'accounts.deactivate',
@@ -29,12 +40,16 @@ export const APPROVAL_TOOL_IDS = [
   'categories.create',
   'categories.update',
   'categories.deactivate',
+  'payables.create',
+  'payables.pay',
 ] as const;
 
 export type ApprovalToolId = (typeof APPROVAL_TOOL_IDS)[number];
 
 export type ApprovalToolExecutionContext = {
   writes: WriteStore;
+  cardStore?: CardStore;
+  payableStore?: PayableStore;
   workspaceId: string;
   args: unknown;
   idempotencyKey: string;
@@ -184,6 +199,197 @@ const executeIncomeCreate: ApprovalToolExecutor = async ({
   let receipt: MutationReceipt;
   try {
     receipt = buildTedReceipt('transactions.income.create', operationId, { type: 'transaction', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId,
+    receipt,
+  };
+};
+
+export const createCardPurchaseArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    /** TOTAL of the purchase — never a per-parcel amount. */
+    amountCents: z.number().int().positive(),
+    description: z.string().trim().min(1).max(240),
+    date: isoDateSchema,
+    categoryId: z.string().uuid().optional(),
+    subcategoryId: z.string().uuid().optional(),
+    notes: z.string().trim().max(500).optional(),
+    /**
+     * P3.5: optional parcel count (1–48). Absent or 1 keeps the exact P3.4
+     * single-purchase path. 2–48 goes through `createCardInstallments` and
+     * NEVER falls back to a silent 1x when the declared split cannot run.
+     */
+    installmentsTotal: z.number().int().min(1).max(48).optional(),
+  })
+  .strict()
+  // Every parcel must carry at least one cent: a total below the declared
+  // count would create zero-cent rows (and break replay snapshots).
+  .refine(
+    (value) => value.installmentsTotal === undefined || value.installmentsTotal <= value.amountCents,
+    { message: 'amountCents must cover at least 1 cent per installment', path: ['installmentsTotal'] },
+  );
+
+export type CreateCardPurchaseArgs = z.infer<typeof createCardPurchaseArgsSchema>;
+
+const executeCardPurchaseCreate: ApprovalToolExecutor = async ({
+  writes: _writes,
+  cardStore,
+  workspaceId,
+  args,
+  idempotencyKey,
+  actorId,
+}) => {
+  const parsed = createCardPurchaseArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_card_purchase_arguments');
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  const store = cardStore;
+  if (!store) throw new Error('validation.card_store_unavailable');
+  const metadata = {
+    ...(parsed.data.categoryId ? { categoryId: parsed.data.categoryId } : {}),
+    ...(parsed.data.subcategoryId ? { subcategoryId: parsed.data.subcategoryId } : {}),
+    ...(parsed.data.notes ? { notes: parsed.data.notes } : {}),
+  };
+  const keyOption = idempotencyKey !== undefined ? { idempotencyKey } : undefined;
+  const installmentsTotal = parsed.data.installmentsTotal;
+  let transactions: { id: string }[];
+  try {
+    // P3.5: 2–48 parcels take the existing installment store path (one
+    // transaction for the whole set). A declared split never degrades into a
+    // silent single purchase: if this branch throws, the operation fails
+    // closed instead of writing 1x.
+    transactions = installmentsTotal !== undefined && installmentsTotal > 1
+      ? await store.createCardInstallments(workspaceId, {
+        accountId: parsed.data.accountId,
+        description: parsed.data.description,
+        totalAmountCents: parsed.data.amountCents,
+        purchaseDate: parsed.data.date,
+        installmentsTotal,
+        ...metadata,
+      }, keyOption)
+      : await store.createCardPurchase(workspaceId, {
+        accountId: parsed.data.accountId,
+        amountCents: parsed.data.amountCents,
+        description: parsed.data.description,
+        date: parsed.data.date,
+        ...metadata,
+      }, keyOption);
+  } catch (err) {
+    const { DomainError } = await import('../writes/errors.js');
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  const first = Array.isArray(transactions) ? transactions[0] : (transactions as { id: string });
+  if (!first || typeof first.id !== 'string') throw createApprovalExecutionUncertainError();
+  const operationId = first.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('cards.purchase.create', operationId, { type: 'transaction', id: operationId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId,
+    receipt,
+  };
+};
+
+/**
+ * P3.6 statement payment. The execution tuple is EXACT: the invoice id, the
+ * payer account id and the amount in cents. There is no `amountCents:
+ * "total"` sentinel — a total payment is proposed with the authoritative
+ * remaining amount resolved by the reader, never by the executor.
+ */
+export const payStatementArgsSchema = z
+  .object({
+    statementId: z.string().uuid(),
+    fromAccountId: z.string().uuid(),
+    amountCents: z.number().int().positive(),
+  })
+  .strict();
+
+export type PayStatementArgs = z.infer<typeof payStatementArgsSchema>;
+
+const executeCardStatementPay: ApprovalToolExecutor = async ({
+  cardStore,
+  workspaceId,
+  args,
+  idempotencyKey,
+}) => {
+  const parsed = payStatementArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_statement_payment_arguments');
+  const store = cardStore;
+  if (!store) throw new Error('validation.card_store_unavailable');
+  let statement: { id: string };
+  try {
+    // P3.6: the persisted Pending V2 key rides into the store. Debit,
+    // statement update, card debt delta and the key commit atomically; a
+    // reconcile re-run after a lost post-commit response replays the SAME
+    // statement instead of paying twice.
+    statement = await store.payStatement(
+      workspaceId,
+      parsed.data.statementId,
+      { amountCents: parsed.data.amountCents, fromAccountId: parsed.data.fromAccountId },
+      { idempotencyKey },
+    );
+  } catch (err) {
+    // DomainError is pre-commit validation (already paid, overpay, credit-card
+    // payer, unknown account/statement) with proven rollback — deterministic.
+    // Anything else may be post-write and stays uncertain for lease recovery.
+    const { DomainError } = await import('../writes/errors.js');
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  if (!statement || typeof statement.id !== 'string') throw createApprovalExecutionUncertainError();
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('cards.statement.pay', statement.id, { type: 'statement', id: statement.id });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return {
+    status: 'succeeded' as const,
+    operationId: statement.id,
+    receipt,
+  };
+};
+
+const executeTransferCreate: ApprovalToolExecutor = async ({
+  writes,
+  workspaceId,
+  args,
+  idempotencyKey,
+  actorId,
+}) => {
+  const parsed = createTransferInputSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_transfer_arguments');
+  // Fail-closed actor binding (same contract as the sibling transaction paths).
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  // ONE atomic transfer: the writer creates a single `transfer` row and moves
+  // both balance legs inside the same transaction (never two independent
+  // expense/income writes). T12c carve-out mirrors expense/income:
+  // DomainError is pre-commit validation (same account, unknown/inactive
+  // account, credit card, workspace lifecycle) and rethrows deterministic;
+  // any other throw may be post-write and stays uncertain for lease recovery.
+  let transaction: { id: string };
+  try {
+    transaction = await writes.createTransfer(workspaceId, parsed.data, {
+      idempotencyKey,
+      audit: { operation: 'transactions.transfer.create', actorId },
+    });
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  const operationId = transaction.id;
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('transactions.transfer.create', operationId, { type: 'transaction', id: operationId });
   } catch {
     throw createApprovalExecutionUncertainError();
   }
@@ -533,7 +739,157 @@ const executeAccountUpdate: ApprovalToolExecutor = async ({
   };
 };
 
+/**
+ * V2-protocol envelope for `payables.create` (V1 completion, manual-only).
+ * Strict subset of the normal POST /payables create contract. The API
+ * revalidates the account/category against the workspace at execution.
+ */
+export const createPayableArgsSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    description: z.string().trim().min(1).max(240),
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    dueDate: isoDateSchema,
+    type: z.enum(['one_time', 'recurring']).optional(),
+    frequency: z.enum(['monthly', 'quarterly', 'yearly']).optional(),
+    endDate: isoDateSchema.optional(),
+    reminderDaysBefore: z.number().int().min(0).max(30).optional(),
+    notes: z.string().optional(),
+    categoryId: z.string().uuid().optional(),
+  })
+  .strict();
+
+export type CreatePayableArgs = z.infer<typeof createPayableArgsSchema>;
+
+/**
+ * V2-protocol envelope for `payables.pay` (V1 completion, manual-only).
+ * `payableId` is the ONLY execution key; `description`/`amountCents`/`dueDate`/
+ * `accountId` are a hash-bound display snapshot resolved by the runtime from
+ * the authoritative payable list, used by the approval card — the executor
+ * never reads them.
+ */
+export const payPayableArgsSchema = z
+  .object({
+    payableId: z.string().uuid(),
+    description: z.string().trim().min(1).max(240),
+    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    dueDate: isoDateSchema,
+    accountId: z.string().uuid(),
+    paidDate: isoDateSchema.optional(),
+    prepayMonths: z.number().int().min(1).max(24).optional(),
+  })
+  .strict();
+
+export type PayPayableArgs = z.infer<typeof payPayableArgsSchema>;
+
+const executePayableCreate: ApprovalToolExecutor = async ({
+  workspaceId,
+  args,
+  payableStore,
+}) => {
+  const parsed = createPayableArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_payable_create_arguments');
+  if (!payableStore) throw new Error('validation.payable_store_unavailable');
+  let payable: { id: string };
+  try {
+    payable = await payableStore.createPayable(workspaceId, {
+      accountId: parsed.data.accountId,
+      description: parsed.data.description,
+      amountCents: parsed.data.amountCents,
+      dueDate: parsed.data.dueDate,
+      ...(parsed.data.type !== undefined ? { type: parsed.data.type } : {}),
+      ...(parsed.data.frequency !== undefined ? { frequency: parsed.data.frequency } : {}),
+      ...(parsed.data.endDate !== undefined ? { endDate: parsed.data.endDate } : {}),
+      ...(parsed.data.reminderDaysBefore !== undefined ? { reminderDaysBefore: parsed.data.reminderDaysBefore } : {}),
+      ...(parsed.data.notes !== undefined ? { notes: parsed.data.notes } : {}),
+      ...(parsed.data.categoryId !== undefined ? { categoryId: parsed.data.categoryId } : {}),
+    });
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('payables.create', payable.id, { type: 'payable', id: payable.id });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return { status: 'succeeded', operationId: payable.id, receipt };
+};
+
+const executePayablePay: ApprovalToolExecutor = async ({
+  workspaceId,
+  args,
+  payableStore,
+}) => {
+  const parsed = payPayableArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_payable_pay_arguments');
+  if (!payableStore) throw new Error('validation.payable_store_unavailable');
+  const snapshot = parsed.data;
+  // The display snapshot is hash-bound to the proposal; it must still match
+  // the authoritative payable before any money moves. A stale/forged card
+  // fails closed instead of debiting a different bill/account.
+  const payables = await payableStore.listPayables(workspaceId);
+  const target = payables.find((payable) => payable.id === snapshot.payableId);
+  if (!target) throw new DomainError('not_found', 'Conta a pagar não encontrada', 404);
+  if (
+    target.accountId !== snapshot.accountId ||
+    target.amountCents !== snapshot.amountCents ||
+    target.description !== snapshot.description ||
+    target.dueDate !== snapshot.dueDate
+  ) {
+    throw new DomainError('validation.invalid', 'Os dados da conta a pagar mudaram; refaça a proposta.', 409);
+  }
+  // Already paid (concurrent/reconciled effect): the intent outcome is
+  // satisfied — converge with the same entity id, never a second payment.
+  if (target.status === 'paid') {
+    let receipt: MutationReceipt;
+    try {
+      receipt = buildTedReceipt('payables.pay', target.id, { type: 'payable', id: target.id });
+    } catch {
+      throw createApprovalExecutionUncertainError();
+    }
+    return { status: 'succeeded', operationId: target.id, receipt };
+  }
+  let payable: { id: string };
+  try {
+    // The display snapshot never reaches the store: only the payable id and
+    // the payment inputs execute.
+    payable = await payableStore.markPayablePaid(workspaceId, snapshot.payableId, {
+      ...(snapshot.paidDate !== undefined ? { paidDate: snapshot.paidDate } : {}),
+      ...(snapshot.prepayMonths !== undefined ? { prepayMonths: snapshot.prepayMonths } : {}),
+    });
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('payables.pay', payable.id, { type: 'payable', id: payable.id });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return { status: 'succeeded', operationId: payable.id, receipt };
+};
+
 const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
+  'cards.purchase.create': {
+    tool: 'cards.purchase.create',
+    inputSchema: createCardPurchaseArgsSchema,
+    approvalRequired: true,
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: false,
+    executor: executeCardPurchaseCreate,
+  },
+  'cards.statement.pay': {
+    tool: 'cards.statement.pay',
+    inputSchema: payStatementArgsSchema,
+    approvalRequired: true,
+    authorizationPolicy: 'risk_based',
+    // Money movement is always human-confirmed; never auto-executed.
+    autoExecutionEligible: false,
+    executor: executeCardStatementPay,
+  },
   'transactions.expense.create': {
     tool: 'transactions.expense.create',
     inputSchema: createExpenseInputSchema,
@@ -549,6 +905,14 @@ const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
     authorizationPolicy: 'risk_based',
     autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('transactions.income.create'),
     executor: executeIncomeCreate,
+  },
+  'transactions.transfer.create': {
+    tool: 'transactions.transfer.create',
+    inputSchema: createTransferInputSchema,
+    approvalRequired: true, // Manual-only: internal transfers are never auto-executed.
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('transactions.transfer.create'),
+    executor: executeTransferCreate,
   },
   'transactions.update': {
     tool: 'transactions.update',
@@ -605,6 +969,22 @@ const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
     authorizationPolicy: 'risk_based',
     autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('categories.deactivate'),
     executor: executeCategoryDeactivate,
+  },
+  'payables.create': {
+    tool: 'payables.create',
+    inputSchema: createPayableArgsSchema,
+    approvalRequired: true, // Manual-only: payable creation is never auto-executed.
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: false,
+    executor: executePayableCreate,
+  },
+  'payables.pay': {
+    tool: 'payables.pay',
+    inputSchema: payPayableArgsSchema,
+    approvalRequired: true, // Manual-only: payable payment is never auto-executed.
+    authorizationPolicy: 'risk_based',
+    autoExecutionEligible: false,
+    executor: executePayablePay,
   },
 };
 

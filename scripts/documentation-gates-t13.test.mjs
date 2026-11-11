@@ -82,15 +82,18 @@ test("T13 documentation gates coverage", async (t) => {
     assert.doesNotMatch(facts.production.database, /16\+/, "must not claim PostgreSQL 16+");
   });
 
-  await t.test("CI runs llm-contracts lint and the boundary gate", () => {
+  await t.test("CI runs llm-contracts lint and PWA CI runs the boundary gate", () => {
     const ci = read(".github/workflows/ci.yml");
+    const pwaCi = read(".github/workflows/pwa-ci.yml");
     assert.match(ci, /@pi-finance\/llm-contracts.*lint|lint.*@pi-finance\/llm-contracts/, "CI must lint llm-contracts");
-    assert.match(ci, /pnpm boundary:check/, "CI must run boundary:check");
+    assert.match(pwaCi, /pnpm boundary:check/, "PWA CI must run boundary:check");
   });
 
-  await t.test("pre-commit hook runs boundary and carries no stale lint note", () => {
+  await t.test("pre-commit runs the light commit gate; area gates stay opt-in", () => {
     const hook = read(".husky/pre-commit");
-    assert.match(hook, /pnpm boundary:check/, "hook must run boundary:check");
+    assert.match(hook, /pnpm commit:check/, "hook must run the light commit gate");
+    const area = read("scripts/check-changed-areas.mjs");
+    assert.match(area, /pnpm boundary:check/, "area gates must still cover boundary:check");
     assert.doesNotMatch(hook, /only for API and PWA/, "hook must not claim lint runs only for API and PWA");
   });
 

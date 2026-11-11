@@ -288,12 +288,27 @@ describe('relay receipt gating (RED)', () => {
 
   it('end-to-end: grounding failure + denied correction reservation returns 429 with no fallback and no second dispatch', async () => {
     const { agent, persisted, store } = createChatAgent(SNAP_SINGLE);
-    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({ items: [], total: 0 });
+    // list_payables with a real payable: `mapEntityList('payables',...)`
+    // yields `ok`, and the payables domain has no deterministic renderer, so
+    // the turn falls through to the relay (a month-summary prompt would
+    // render deterministically before the relay). The R$ 999,99 first-leg
+    // claim is unsupported by this evidence, so correction still runs.
+    vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({
+      items: [
+        {
+          id: '00000000-0000-4000-8000-0000000000b1',
+          description: 'Conta de luz',
+          amountCents: 12500,
+          dueDate: '2026-11-10',
+        },
+      ],
+      total: 1,
+    });
     // Size one reservation so the initial dispatch fits but the grounding
     // correction redispatch is denied: remaining budget covers exactly one
     // more attempt. The correction input is longer than the initial input,
     // so its reservation can only be larger — denial is deterministic.
-    const promptText = 'Quanto gastei este mês?';
+    const promptText = 'Quais contas tenho que pagar?';
     const cognition = assembleCognition(promptText, { webEnv: {} });
     const estimated = estimateTokens(`${cognition.system.slice(0, 7_900)}${promptText.slice(0, 15_000)}`);
     const oneReservation = estimated + DEFAULT_POLICY.maxOutputTokens;

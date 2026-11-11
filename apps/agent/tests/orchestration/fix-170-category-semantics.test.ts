@@ -22,6 +22,7 @@ import {
 import { MutationApiClient } from '../../src/mutations/mutation-api-client.js';
 import {
   InMemoryMutationDraftStore,
+  buildDraftRecord,
   type MutationDraftStore,
 } from '../../src/mutations/mutation-draft.js';
 import {
@@ -158,6 +159,119 @@ describe('FIX-170 (b): resposta curta completa o MESMO draft', () => {
     });
   }
 });
+
+describe('T3 final full-flow reproduction variants', () => {
+  it('V1: fresh path with unrelated catalog persists category-only draft and T3 proposes', async () => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const orchestrator = setup(fake, store, reader([NUBANK], [
+      { id: '00000000-0000-4000-8000-000000000030', name: 'Moradia' },
+      { id: '00000000-0000-4000-8000-000000000031', name: 'Transporte' },
+      MERCADO,
+    ]));
+    const first = await turn(orchestrator, 'gastei 90 com carne', 't3-v1-t2');
+    expect(first.clarification?.missingFields).toEqual(['categoryId']);
+    expect(store.listActive({ workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null }, NOW())).toHaveLength(1);
+    const second = await turn(orchestrator, 'Mercado', 't3-v1-t3');
+    expect(second.mutation?.status).toBe('proposed');
+    expect(fake.proposePosts()).toBe(1);
+  });
+
+  it('V2: two active drafts respond with ambiguity clarification, no proposal', async () => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const orchestrator = setup(fake, store, reader());
+    await turn(orchestrator, 'gastei 90 com carne', 't3-v2-t2a');
+    const initial = store.listActive({ workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null }, NOW())[0]!;
+    store.getOrCreate(buildDraftRecord({
+      workspaceId: identity.workspaceId,
+      actorId: identity.actorId,
+      deviceId: identity.deviceId ?? null,
+      intentionId: 't3-v2-t2b',
+      tool: initial.tool,
+      resolvedArgs: { ...initial.resolvedArgs, description: 'com almoço' },
+      missingFields: ['categoryId'],
+      question: initial.lastQuestion,
+      nowMs: NOW(),
+    }));
+    expect(store.listActive({ workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId ?? null }, NOW())).toHaveLength(2);
+    const second = await turn(orchestrator, 'Mercado', 't3-v2-t3');
+    expect(second.clarification?.text).toMatch(/mais de uma intenção pendente/i);
+    expect(second.mutation).toBeUndefined();
+    expect(fake.proposePosts()).toBe(0);
+  });
+
+  it('replacement check classifies bare category answer as continuation', async () => {
+    const { first, orchestrator, fake } = await openDraft();
+    expect(first.clarification?.missingFields).toContain('categoryId');
+    const second = await turn(orchestrator, 'Mercado', 't3-replacement-check');
+    expect(second.mutation?.status).toBe('proposed');
+    expect(fake.proposePosts()).toBe(1);
+  });
+
+  it('V3: private pwa-rest audience stamp remains identical across T2 and T3', async () => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const orchestrator = setup(fake, store, reader());
+    const audience = { visibility: 'private' as const, ownerActorId: identity.actorId, conversationId: 'conversation-t3' };
+    const first = await orchestrator.runTurn(normalizeRestTurn({ text: 'gastei 90 com carne', intentionId: 't3-v3-t2' }, identity, { audience }));
+    expect(first.clarification?.missingFields).toEqual(['categoryId']);
+    const second = await orchestrator.runTurn(normalizeRestTurn({ text: 'Mercado', intentionId: 't3-v3-t3' }, identity, { audience }));
+    expect(second.mutation?.status).toBe('proposed');
+    expect(fake.proposePosts()).toBe(1);
+  });
+
+  it('P2a: private draft from conversation C1 is isolated from C2', async () => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const orchestrator = setup(fake, store, reader());
+    const audience = (conversationId: string) => ({
+      visibility: 'private' as const,
+      ownerActorId: identity.actorId,
+      conversationId,
+    });
+    const first = await orchestrator.runTurn(normalizeRestTurn(
+      { text: 'gastei 90 com carne', intentionId: 't3-p2a-t2' }, identity,
+      { audience: audience('conversation-c1') },
+    ));
+    expect(first.clarification?.missingFields).toContain('categoryId');
+    const second = await orchestrator.runTurn(normalizeRestTurn(
+      { text: 'Mercado', intentionId: 't3-p2a-t3' }, identity,
+      { audience: audience('conversation-c2') },
+    ));
+    expect(second.mutation).toBeUndefined();
+    expect(fake.proposePosts()).toBe(0);
+  });
+
+  it('P2b: partial amount draft is persisted with the private conversation scope', async () => {
+    const fake = makeFakeApi();
+    const store = new InMemoryMutationDraftStore();
+    const orchestrator = new ConversationOrchestrator({
+      mutationApiClient: fake.api,
+      entityReader: reader(),
+      draftStore: store,
+      draftNow: NOW,
+      responseProvider: async () => 'unused',
+      evidenceProvider: async () => ({ version: '1' as const, items: [] }) as never,
+      events: () => undefined,
+    });
+    const audience = { visibility: 'private' as const, ownerActorId: identity.actorId, conversationId: 'conversation-partial' };
+    const first = await orchestrator.runTurn(normalizeRestTurn(
+      { text: 'comprei uma bicicleta parcela em 10 x', intentionId: 't3-p2b-t1' }, identity,
+      { audience },
+    ));
+    expect(first.clarification?.missingFields).toContain('amount');
+    const second = await orchestrator.runTurn(normalizeRestTurn(
+      { text: '2500', intentionId: 't3-p2b-t2' }, identity,
+      { audience },
+    ));
+    expect(second.clarification?.missingFields).not.toContain('amount');
+    expect(second.clarification?.missingFields).toContain('categoryId');
+    expect(second.response?.text).toMatch(/categoria/i);
+  });
+});
+
+
 
 describe('FIX-170 (c): negação com alternativa corrige a categoria', () => {
   it("'não, transporte' completa o mesmo draft com Transporte", async () => {

@@ -32,6 +32,8 @@ const buildRecord = (source: ActiveOperationRecord): ActiveOperationRecord => ({
   ...(source.date !== undefined ? { date: source.date } : {}),
   ...(source.accountId !== undefined ? { accountId: source.accountId } : {}),
   ...(source.categoryId !== undefined ? { categoryId: source.categoryId } : {}),
+  ...(source.statementId !== undefined ? { statementId: source.statementId } : {}),
+  ...(source.fromAccountId !== undefined ? { fromAccountId: source.fromAccountId } : {}),
   ...(source.status === 'failed' && source.tool === 'categories.deactivate' && source.failureCode === 'in_use' ? { failureCode: 'in_use' as const } : {}),
   ...(source.presentation !== undefined ? { presentation: source.presentation } : {}),
 });
@@ -74,6 +76,8 @@ export const toActiveOperationRecords = (input: unknown): ActiveOperationRecord[
         ...(asOptionalString(source.date) !== undefined ? { date: asOptionalString(source.date) } : {}),
         ...(asOptionalString(source.accountId) !== undefined ? { accountId: asOptionalString(source.accountId) } : {}),
         ...(asOptionalString(source.categoryId) !== undefined ? { categoryId: asOptionalString(source.categoryId) } : {}),
+        ...(asOptionalString(source.statementId) !== undefined ? { statementId: asOptionalString(source.statementId) } : {}),
+        ...(asOptionalString(source.fromAccountId) !== undefined ? { fromAccountId: asOptionalString(source.fromAccountId) } : {}),
         ...(status === 'failed' && tool === 'categories.deactivate' && source.failureCode === 'in_use' ? { failureCode: 'in_use' as const } : {}),
         ...(parsePresentation(source.presentation) !== undefined ? { presentation: parsePresentation(source.presentation) } : {}),
       }),

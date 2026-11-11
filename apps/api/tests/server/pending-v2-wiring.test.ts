@@ -47,7 +47,9 @@ describe('pending V2 bootstrap wiring', () => {
     // 2º registro v2Only no mesmo app em server/index.ts (era ele que
     // registrava /undo 2x e derrubava o boot com FST_ERR_DUPLICATED_ROUTE).
     expect(source.match(/pendingV2Store: createPostgresPendingOperationV2Store\(pool\)/g)).toHaveLength(2);
-    expect(source.match(/pendingV2Executor: createPendingOperationV2Executor\(writes\)/g)).toHaveLength(2);
+    // P3.4: the V2 executor receives the CardStore so `cards.purchase.create`
+    // can execute (and resolve the credit-card label) in both bootstrap branches.
+    expect(source.match(/pendingV2Executor: createPendingOperationV2Executor\(writes, cardStore, payableStore\)/g)).toHaveLength(2);
     expect(source.match(/pendingV2ReadModel: store/g)).toHaveLength(2);
     expect(source).not.toContain('v2Only: true');
     expect(source).not.toContain('registerPendingOperationRoutes(app,');

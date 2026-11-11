@@ -25,7 +25,15 @@
     "enabled": true
   },
   "vars": {
-    "NEXT_PRIVATE_MINIMAL_MODE": "1"
+    "NEXT_PRIVATE_MINIMAL_MODE": "1",
+    // P4.2 canary: OpenCode runtime for the named workspaces (CSV of exact
+    // ids). The allowlist is mandatory (empty = nobody); every other workspace
+    // keeps A0. Rollback: set TED_OPENCODE_RUNTIME_KILL_SWITCH=1 (returns even
+    // opencode.* pins).
+    "TED_OPENCODE_RUNTIME_ENABLED": "1",
+    "TED_OPENCODE_GATEWAY_ORIGIN": "https://api.synkroo.com.br/ted-runtime",
+    "TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS": "https://api.synkroo.com.br/ted-runtime",
+    "TED_OPENCODE_WORKSPACES": "d36cb649-4462-486d-940a-47128ad329f2,550e8400-e29b-41d4-a716-446655440000"
     // V1-textual: nenhum NEXT_PUBLIC_TED_* aqui — capabilities default-off
     // (ausente = desligado). Re-adicionar só com pipeline de ingestão + gate.
   }

@@ -37,9 +37,15 @@ export type CardStore = {
     notes?: string;
     installmentNumber?: number;
     installmentsTotal?: number;
-  }): Promise<import('../types/domain.js').Transaction[]>;
+  }, options?: { idempotencyKey?: string }): Promise<import('../types/domain.js').Transaction[]>;
 
-  /** Register all installments of a purchase at once. */
+  /**
+   * Register all installments of a purchase at once (single transaction).
+   * `totalAmountCents` is always the TOTAL of the purchase; the store owns the
+   * exact split. With `options.idempotencyKey` the whole set is claimed under
+   * one key (P3.5): a retry/reconcile replays the same transactions, a
+   * different payload under the same key conflicts and writes nothing.
+   */
   createCardInstallments(householdId: string, input: {
     accountId: string;
     description: string;
@@ -49,7 +55,7 @@ export type CardStore = {
     categoryId?: string;
     subcategoryId?: string;
     notes?: string;
-  }): Promise<import('../types/domain.js').Transaction[]>;
+  }, options?: { idempotencyKey?: string }): Promise<import('../types/domain.js').Transaction[]>;
 
   /** Create a recurring purchase on a credit card. */
   createRecurringPurchase(householdId: string, input: {
@@ -62,11 +68,18 @@ export type CardStore = {
     categoryId?: string;
   }): Promise<RecurringPurchase>;
 
-  /** Pay (total or partial) a credit card statement. */
+  /**
+   * Pay (total or partial) a credit card statement.
+   *
+   * With `options.idempotencyKey` the debit, the statement update, the card
+   * debt delta and the recorded key commit in ONE transaction: a retry /
+   * reconcile with the same key + same payload replays the original
+   * statement instead of paying twice; a divergent payload conflicts.
+   */
   payStatement(householdId: string, statementId: string, input: {
     amountCents: number;
     fromAccountId: string;
-  }): Promise<Statement>;
+  }, options?: { idempotencyKey?: string }): Promise<Statement>;
 
   /** Create a credit card account. */
   createCard(householdId: string, input: {

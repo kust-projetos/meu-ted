@@ -18,10 +18,16 @@ const ALL = [
   'financial.approval.cancel',
 ];
 
-const scopedApp = (identity: { workspace: string; actor: string; device: string }, readModel?: {
-  listAccounts: (householdId: string) => Promise<Array<{ id: string; name: string }>>;
-  listCategories: (householdId: string) => Promise<Array<{ id: string; name: string }>>;
-}) => {
+const scopedApp = (
+  identity: { workspace: string; actor: string; device: string },
+  readModel?: {
+    listAccounts: (householdId: string) => Promise<Array<{ id: string; name: string }>>;
+    listCategories: (householdId: string) => Promise<Array<{ id: string; name: string }>>;
+  },
+  cardStore?: {
+    listCreditCardAccounts: (householdId: string) => Promise<Array<{ id: string; name: string }>>;
+  },
+) => {
   const app = Fastify();
   app.addHook('preHandler', async (request) => {
     request.delegatedTurn = {
@@ -41,6 +47,7 @@ const scopedApp = (identity: { workspace: string; actor: string; device: string 
     v2Store,
     v2Only: true,
     ...(readModel ? { readModel } : {}),
+    ...(cardStore ? { cardStore } : {}),
   } as Parameters<typeof registerPendingOperationRoutes>[1]);
   return { app, v2Store };
 };
@@ -188,12 +195,55 @@ describe('FIX-P1 RED: GET /pending-operations/v2/active carries canonical presen
     expect(presentation.amountCents).toBe(85000);
     expect(presentation).not.toHaveProperty('account');
     expect(presentation).not.toHaveProperty('category');
-    // A read-model outage degrades honestly — never a 500, never invented labels.
+    // A read-model outage degrades honestly - never a 500, never invented labels.
     expect(presentation.warnings).toEqual(
       expect.arrayContaining([
         'Dados da conta indisponíveis no momento',
         'Dados da categoria indisponíveis no momento',
       ]),
     );
+  });
+
+  it('P3.4: resolves the CARD label from the CardStore and keeps the card purchase actionable', async () => {
+    const cardId = crypto.randomUUID();
+    // The generic read model deliberately excludes credit cards - it only
+    // returns bank/cash accounts. The card label must come from CardStore.
+    const readModel = {
+      listAccounts: async () => [{ id: crypto.randomUUID(), name: 'Conta corrente' }],
+      listCategories: async () => [],
+    };
+    const cardStore = {
+      listCreditCardAccounts: async (householdId: string) => {
+        expect(householdId).toBe('ws-p1-card');
+        return [{ id: cardId, name: 'Nubank Card' }];
+      },
+    };
+    const { app } = scopedApp({ workspace: 'ws-p1-card', actor: 'a', device: 'd' }, readModel, cardStore);
+    const created = await app.inject({
+      method: 'POST',
+      url: '/pending-operations/v2/propose',
+      headers: { 'idempotency-key': 'p34-card-key-1' },
+      payload: {
+        tool: 'cards.purchase.create',
+        normalizedArgs: {
+          description: 'supermercado',
+          amountCents: 15000,
+          date: '2026-11-07',
+          accountId: cardId,
+        },
+      },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const res = await app.inject({ method: 'GET', url: '/pending-operations/v2/active' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { items: Array<Record<string, unknown>>; total: number };
+    expect(body.total).toBe(1);
+    const presentation = body.items[0]!.presentation as Record<string, unknown>;
+    expect(presentation.title).toBe('Confirmar compra no cartão');
+    expect(presentation.account).toEqual({ id: cardId, label: 'Nubank Card' });
+    expect(presentation.amountCents).toBe(15000);
+    expect(presentation.description).toBe('supermercado');
+    expect(presentation.warnings).toEqual([]);
   });
 });

@@ -9,9 +9,8 @@ const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 const secretScript = fs.readFileSync('scripts/security-secrets.mjs', 'utf8');
 const containerScript = fs.readFileSync('scripts/security-containers.mjs', 'utf8');
 const gitleaksConfig = fs.readFileSync('.gitleaks.toml', 'utf8');
-const workflow = fs.readFileSync('.github/workflows/ci.yml', 'utf8');
+const auditsWorkflow = fs.readFileSync('.github/workflows/audits.yml', 'utf8');
 const apiDockerfile = fs.readFileSync('apps/api/Dockerfile', 'utf8');
-const brokerDockerfile = fs.readFileSync('apps/codex-broker/Dockerfile', 'utf8');
 
 for (const name of ['security:secrets', 'security:deps', 'security:containers']) {
   test(`package exposes ${name}`, () => {
@@ -44,33 +43,31 @@ test('dependency gate audits dependencies', () => {
   assert.match(command, /--audit-level(?:=| )(?:moderate|critical)/);
 });
 
-test('container gate fails on high or critical vulnerabilities for both CI images', () => {
+test('container gate fails on high or critical vulnerabilities for the API image', () => {
   assert.equal(packageJson.scripts['security:containers'], 'node scripts/security-containers.mjs');
   assert.match(containerScript, /aquasec\/trivy:0\.58\.1/);
   assert.match(containerScript, /trivy-cache:\/root\/\.cache\/trivy/);
   assert.match(containerScript, /--exit-code/);
   assert.match(containerScript, /HIGH,CRITICAL/);
   assert.match(containerScript, /pi-finance-api:ci/);
-  assert.match(containerScript, /pi-finance-codex-broker:ci/);
   assert.match(containerScript, /shell: false/);
 });
 
 test('runtime images install dependencies and exclude package-manager stores', () => {
   assert.match(apiDockerfile, /pnpm install --frozen-lockfile/);
-  assert.match(brokerDockerfile, /pnpm install --frozen-lockfile/);
   assert.match(apiDockerfile, /FROM node:24-alpine/);
 });
 
-test('CI security job runs scans and global gate depends on it', () => {
-  assert.match(workflow, /\n  security:/);
-  assert.match(workflow, /pnpm security:secrets/);
-  assert.match(workflow, /pnpm security:deps/);
-  assert.match(workflow, /security/);
-  assert.match(workflow, /needs: \[.*security.*\]/);
+test('scheduled Audits workflow runs the security scans', () => {
+  assert.match(auditsWorkflow, /\n  security:/);
+  assert.match(auditsWorkflow, /pnpm security:secrets/);
+  assert.match(auditsWorkflow, /pnpm security:deps/);
+  assert.match(auditsWorkflow, /pnpm security:containers/);
+  assert.match(auditsWorkflow, /schedule:/);
 });
 
 test('security job has no production credentials or deployment commands', () => {
-  const security = workflow.slice(workflow.indexOf('\n  security:'));
+  const security = auditsWorkflow.slice(auditsWorkflow.indexOf('\n  security:'));
   assert.doesNotMatch(security, /DATABASE_URL(?!_TEST)/);
   assert.doesNotMatch(security, /wrangler deploy|pm2|ssh|curl .*prod/i);
 });

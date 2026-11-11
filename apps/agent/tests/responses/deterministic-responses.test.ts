@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderInconclusive, renderMutationResult } from '../../src/responses/deterministic-responses.js';
+import { renderInconclusive, renderMonthSummary, renderMutationResult } from '../../src/responses/deterministic-responses.js';
 
 /**
  * R01 (SPEC "prova de resultado e resposta tipada"): an inconclusive
@@ -86,5 +86,18 @@ describe('renderMutationResult — outcome copy por kind (contas)', () => {
       'Lançamento registrado com sucesso.',
     );
     expect(renderMutationResult('succeeded', 'operação', {})).toBe('Lançamento registrado com sucesso.');
+  });
+});
+
+describe('renderMonthSummary (F3 read vertical)', () => {
+  it('renders total from payload', () => {
+    const text = renderMonthSummary({ expenseCents: 5000, incomeCents: 10000, balanceCents: 5000, transactionCount: 3, yearMonth: '2026-10' });
+    expect(text).toContain('Resumo 2026-10');
+    expect(text).toContain('gastos');
+    expect(text).toContain('50,00');
+  });
+  it('returns null when no totals present', () => {
+    expect(renderMonthSummary({})).toBeNull();
+    expect(renderMonthSummary(null)).toBeNull();
   });
 });

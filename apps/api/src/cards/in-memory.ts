@@ -31,32 +31,12 @@ import { resolveSubcategory } from '../writes/in-memory.js';
 import { domainErrors } from '../writes/errors.js';
 import { CARD_EXPENSE_KIND_MESSAGE, resolveCategoryForWrite } from '../categories/resolve.js';
 import { installmentDates } from '../shared/billing-month.js';
+import { getClosingDate, getDueDate } from './billing.js';
 import { splitInstallmentAmounts } from './installments.js';
 
 function stableId(prefix: string, accountId: string, cycle: string): string {
   const h = createHash('sha256').update(`${prefix}:${accountId}:${cycle}`).digest('hex');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
-}
-
-function getClosingDate(purchaseDate: string, closingDay: number): string {
-  const d = new Date(purchaseDate + 'T00:00:00.000Z');
-  let y = d.getUTCFullYear();
-  let m = d.getUTCMonth();
-  if (d.getUTCDate() > closingDay) { m += 1; if (m > 11) { m = 0; y += 1; } }
-  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-  const day = Math.min(closingDay, lastDay);
-  return `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-}
-
-function getDueDate(closingDate: string, dueDay: number): string {
-  const d = new Date(closingDate + 'T00:00:00.000Z');
-  let y = d.getUTCFullYear();
-  let m = d.getUTCMonth();
-  const cDay = d.getUTCDate();
-  if (dueDay <= cDay) { m += 1; if (m > 11) { m = 0; y += 1; } }
-  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-  const day = Math.min(dueDay, lastDay);
-  return `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 function cycleYearMonth(closingDate: string): string {
@@ -266,7 +246,7 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
       return { ...s, purchases: txsByPeriod };
     },
 
-    async createCardPurchase(householdId, input) {
+    async createCardPurchase(householdId, input, _options?) {
       const card = findAccount(input.accountId, householdId);
       if (input.categoryId) {
         resolveCardCategory(householdId, input.categoryId);
@@ -310,7 +290,7 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
       return [tx];
     },
 
-    async createCardInstallments(householdId, input) {
+    async createCardInstallments(householdId, input, _options?) {
       const card = findAccount(input.accountId, householdId);
       if (input.categoryId) {
         resolveCardCategory(householdId, input.categoryId);
@@ -393,7 +373,7 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
       return r;
     },
 
-    async payStatement(householdId, statementId, input) {
+    async payStatement(householdId, statementId, input, _options?) {
       const s = statements.find(x => x.id === statementId && x.householdId === householdId);
       if (!s) throw domainErrors.notFound('Fatura');
 

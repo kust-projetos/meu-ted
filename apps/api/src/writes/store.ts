@@ -47,8 +47,8 @@ export type WriteIdempotencyOptions = {
    * TED Pending-V2 execution audit (bounded, server-side only).
    *
    * When present, the keyed mutation commits claim + financial effect +
-   * audit in ONE transaction. `operation` is a closed vocabulary (the two
-   * V2 TED tools — never client-derived), `actorId` comes from the
+   * audit in ONE transaction. `operation` is a closed vocabulary (the V2 TED
+   * tools — never client-derived), `actorId` comes from the
    * server-persisted pending-operation record (never from normalizedArgs).
    * Absent → previous behavior (ledger + record only), unkeyed writes
    * never audit.
@@ -57,11 +57,11 @@ export type WriteIdempotencyOptions = {
 };
 
 /**
- * Closed keyed-write audit vocabulary: the two TED approval tools plus the
+ * Closed keyed-write audit vocabulary: the three TED approval tools plus the
  * dedicated manual transaction-description update. No generic mutation name
  * is admitted.
  */
-export type V2ToolAuditOperation = 'transactions.expense.create' | 'transactions.income.create';
+export type V2ToolAuditOperation = 'transactions.expense.create' | 'transactions.income.create' | 'transactions.transfer.create';
 export type KeyedWriteAuditOperation = V2ToolAuditOperation | 'transaction.update';
 
 export type WriteAuditContext = {
@@ -126,7 +126,7 @@ export type WriteStore = {
   // transactions
   createExpense(householdId: string, input: CreateExpenseInput, options?: WriteIdempotencyOptions): Promise<Transaction>;
   createIncome(householdId: string, input: CreateIncomeInput, options?: WriteIdempotencyOptions): Promise<Transaction>;
-  createTransfer(householdId: string, input: CreateTransferInput): Promise<Transaction>;
+  createTransfer(householdId: string, input: CreateTransferInput, options?: WriteIdempotencyOptions): Promise<Transaction>;
   updateTransaction(householdId: string, id: string, patch: UpdateTransactionInput): Promise<Transaction>;
   editTransactionDescription(householdId: string, input: EditTransactionDescriptionInput, options: EditTransactionDescriptionOptions): Promise<Transaction>;
   softDeleteTransaction(householdId: string, id: string): Promise<Transaction>;

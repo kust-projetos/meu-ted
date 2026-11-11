@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkInvariants } from './check-agent-v2-invariants.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const fixtures = (name) => path.join(ROOT, '__fixtures__', 'agent-v2-invariants', name);
+const fixtures = (...names) => path.join(ROOT, '__fixtures__', 'agent-v2-invariants', ...names);
+const A5_DENYLIST_PARSER = 'apps/agent/src/poc-structured/structured-interpretation.ts';
 
 test('accepts a compliant V2 production fixture', () => {
   const result = checkInvariants(fixtures('compliant'));
@@ -28,4 +30,39 @@ test('reports each architectural invariant violation with stable codes', () => {
 test('excludes docs, tests, fixtures and generated files from production scan', () => {
   const result = checkInvariants(fixtures('excluded'));
   assert.deepEqual(result.diagnostics, []);
+});
+
+test('exempts only the exact readonly denylist definition in the structured POC parser', () => {
+  const result = checkInvariants(fixtures('a5-denylist', 'allowed'));
+  assert.deepEqual(result.diagnostics, []);
+});
+
+test('keeps the A5 denylist member in place instead of deleting it to silence the gate', () => {
+  const source = readFileSync(fixtures('a5-denylist', 'allowed', A5_DENYLIST_PARSER), 'utf8');
+  assert.match(source, /FORBIDDEN_NORMALIZED_KEYS[\s\S]*'mutationApproved'/);
+});
+
+test('still reports A5 issuers injected around or outside the exact denylist definition', () => {
+  const result = checkInvariants(fixtures('a5-denylist', 'rejected'));
+  assert.deepEqual(new Set(result.diagnostics.map((item) => item.code)), new Set([
+    'A5_MUTATION_ISSUER_OUTSIDE_EXECUTOR',
+  ]));
+  const perFile = new Map();
+  for (const item of result.diagnostics) {
+    perFile.set(item.file, (perFile.get(item.file) ?? 0) + 1);
+  }
+  // Any non-string member (object/array/computed) fails the whole constant
+  // closed, so even its own direct string member flags again. Declaration-
+  // adjacent objects and quoted keys stay violations too.
+  assert.equal(perFile.get(A5_DENYLIST_PARSER), 6);
+  const structuredLines = result.diagnostics
+    .filter((item) => item.file === A5_DENYLIST_PARSER)
+    .map((item) => item.line)
+    .sort((left, right) => left - right);
+  assert.deepEqual(structuredLines, [1, 4, 6, 7, 10, 11]);
+  // A renamed constant is not the recognized denylist definition.
+  assert.equal(perFile.get('apps/agent/src/poc-structured/renamed-denylist.ts'), 1);
+  // A quoted string in an unrelated file stays a violation.
+  assert.equal(perFile.get('apps/agent/src/unrelated-issuer.ts'), 1);
+  assert.equal(result.diagnostics.length, 8);
 });

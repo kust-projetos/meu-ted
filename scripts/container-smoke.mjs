@@ -95,17 +95,8 @@ try {
     ['NODE_ENV', 'test'],
     ['MIGRATIONS_MODE', 'disabled'],
   ]);
-  // Fail-closed broker startup (V4.1 Phase 8) refuses to boot in production
-  // mode without a strong signing key and an explicit private-network escape
-  // hatch. Both values below are disposable smoke literals: never shipped,
-  // never used as a real secret, and not the rejected insecure fallback.
-  const broker = start('pi-finance-codex-broker-smoke', 'pi-finance-codex-broker:ci', 3005, [
-    ['CODEX_SIGNING_KEY', 'smoke-disposable-signing-key-0123456789abcdef0123456789abcdef'],
-    ['BROKER_TRUST_PRIVATE_NETWORK', '1'],
-  ]);
   await waitForHealth('API', api.port);
-  await waitForHealth('Codex Broker', broker.port);
-  console.log('Container smoke GREEN: API and Codex Broker are non-root and healthy.');
+  console.log('Container smoke GREEN: API is non-root and healthy.');
 } catch (error) {
   for (const container of containers) {
     try {

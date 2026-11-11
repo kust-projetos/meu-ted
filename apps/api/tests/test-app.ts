@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
-import { registerRoutes } from "../src/routes/index.js";
+import { createPendingOperationV2Executor, registerRoutes } from "../src/routes/index.js";
 import { createInMemoryAuditLogStore, type AuditLogStore } from "../src/audit/store.js";
 import type { OwnershipTransferStore } from "../src/auth/ownership-transfers-postgres.js";
 import type { BetterAuth } from "../src/auth/better-auth.js";
@@ -30,6 +30,7 @@ import { createInMemoryPushSubscriptionStore } from "../src/push/store.js";
 import type { PushDelivery } from "../src/push/delivery.js";
 import type { AdoptionStore } from "../src/observability/adoption.js";
 import type { PendingOperationStore } from "../src/approvals/pending.js";
+import type { PendingOperationV2Store } from "../src/approvals/pending-v2.js";
 import { createUndoService } from "../src/approvals/undo.js";
 export type TestAppOptions = {
   clock?: () => Date;
@@ -39,6 +40,8 @@ export type TestApp = {
   app: FastifyInstance;
   store: ReadModelStore;
   state: InMemoryState;
+  /** In-memory CardStore (P3.4/P3.6 test stacks seed statements directly). */
+  cardStore: ReturnType<typeof createInMemoryCardStore>;
 };
 
 const createTestTokenStore = (): DeviceTokenStore => {
@@ -184,6 +187,18 @@ export const buildTestApp = (
       typeof (value as { create?: unknown }).create === "function" &&
       typeof (value as { findByChatId?: unknown }).findByChatId === "function",
   );
+  // P3 E2E: an injected V2 store turns this composition into the real
+  // Pending V2 surface (propose/active/confirm/execute). The executor is the
+  // SAME API-owned bridge used in production, bound to the in-memory write
+  // store; existing tests that inject nothing keep the previous behavior.
+  const pendingV2Store = optional.find(
+    (value): value is PendingOperationV2Store =>
+      typeof value === "object" &&
+      value !== null &&
+      typeof (value as { propose?: unknown }).propose === "function" &&
+      typeof (value as { listActive?: unknown }).listActive === "function" &&
+      typeof (value as { findByIdempotencyKey?: unknown }).findByIdempotencyKey === "function",
+  );
   const auditLogsSeed = (seed as { auditLogs?: Parameters<typeof createInMemoryAuditLogStore>[0] }).auditLogs;
   const auditStore =
     auditLogsSeed !== undefined
@@ -288,6 +303,13 @@ export const buildTestApp = (
     ...(approvalPolicy ? { approvalPolicy } : {}),
     ...(pushDelivery ? { pushDelivery } : {}),
     ...(pendingStore ? { pendingStore } : {}),
+    ...(pendingV2Store
+      ? {
+          pendingV2Store,
+          pendingV2Executor: createPendingOperationV2Executor(writes, cardStore, payableStore),
+          pendingV2ReadModel: store,
+        }
+      : {}),
     ...(adoptionStore ? { adoptionStore } : {}),
     auditLogs: auditStore,
     undoService,
@@ -300,7 +322,7 @@ export const buildTestApp = (
     ...(clock ? { clock } : {}),
   });
 
-  return { app, store, state };
+  return { app, store, state, cardStore };
 };
 
 export const TOKEN_A = "dev-token-1";

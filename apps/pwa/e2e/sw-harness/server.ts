@@ -90,6 +90,12 @@ function rewriteCspForFixture(csp: string): string {
 
 function proxyRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
   const headers = { ...req.headers, host: `${TARGET_HOST}:${TARGET_PORT}` };
+  // Match Next's same-origin check only for the harness's exact public Origin.
+  const publicOrigin = `http://127.0.0.1:${HARNESS_PORT}`;
+  const internalOrigin = `http://127.0.0.1:${TARGET_PORT}`;
+  if (headers.origin === publicOrigin) {
+    headers.origin = internalOrigin;
+  }
   const opts: http.RequestOptions = {
     hostname: TARGET_HOST,
     port: TARGET_PORT,

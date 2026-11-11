@@ -7,6 +7,15 @@ import { fileURLToPath } from 'node:url';
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REQUIRED_BINDINGS = ['workspaceId', 'actorId', 'deviceId', 'proposalHash', 'pendingOperationId', 'idempotencyKey'];
 const EXCLUDED_SEGMENTS = new Set(['docs', 'test', 'tests', 'spec', 'specs', 'fixtures', 'generated', 'dist', 'build', 'coverage', 'node_modules']);
+// A5 narrow allowlist target: the authority DENYLIST definition in the
+// structured-interpretation POC parser. Only that exact file and that exact
+// readonly `new Set([...])` array qualify (see isForbiddenDenylistMember).
+const STRUCTURED_POC_PARSER = 'apps/agent/src/poc-structured/structured-interpretation.ts';
+const A5_DENYLIST_CONSTANT = 'FORBIDDEN_NORMALIZED_KEYS';
+const A5_DENYLIST_MEMBERS = new Set(['mutationApproved', 'approvedTool']);
+const A5_DENYLIST_DECLARATION = new RegExp(
+  `\\bconst\\s+${A5_DENYLIST_CONSTANT}\\b[^=]*=\\s*new\\s+Set\\b[^(]*\\(\\s*\\[`,
+);
 
 const normalize = (value) => value.replaceAll('\\', '/');
 
@@ -67,6 +76,92 @@ function isApiVerifierDefinition(relative, source, index) {
   if (relative !== 'apps/api/src/routes/index.ts') return false;
   const line = lineTextOf(source, index);
   return line.includes('mutationCapability') && line.includes('financial.write');
+}
+
+/** True when `index` sits inside a quoted/template string (comments are already masked). */
+function isInsideStringLiteral(source, index) {
+  let quote = null;
+  for (let cursor = 0; cursor < index; cursor += 1) {
+    const char = source[cursor];
+    if (quote) {
+      if (char === '\\') cursor += 1;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') quote = char;
+  }
+  return quote !== null;
+}
+
+/**
+ * Parse the array literal starting at `open` with a deliberately tiny grammar:
+ * quoted string literals separated by commas, plus whitespace/comments (already
+ * masked to spaces). Anything else — object, nested array, computed call,
+ * spread, identifier — returns null so the whole constant fails closed.
+ * Returns `{ start, value }[]`, where `start` is the first content char.
+ */
+function parseStringArrayLiteral(source, open) {
+  if (source[open] !== '[') return null;
+  const members = [];
+  let cursor = open + 1;
+  const skip = () => {
+    while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
+  };
+  skip();
+  if (source[cursor] === ']') return members;
+  for (;;) {
+    skip();
+    const quote = source[cursor];
+    if (quote !== "'" && quote !== '"') return null;
+    const start = cursor + 1;
+    cursor += 1;
+    while (cursor < source.length && source[cursor] !== quote) {
+      if (source[cursor] === '\\') cursor += 1;
+      cursor += 1;
+    }
+    if (cursor >= source.length) return null;
+    members.push({ start, value: source.slice(start, cursor) });
+    cursor += 1;
+    skip();
+    if (source[cursor] === ']') return members;
+    if (source[cursor] !== ',') return null;
+    cursor += 1;
+    skip();
+    if (source[cursor] === ']') return members;
+  }
+}
+
+/** Direct string members of the first genuine denylist declaration, or null. */
+function denylistArrayMembers(source) {
+  const pattern = new RegExp(A5_DENYLIST_DECLARATION.source, 'g');
+  for (let match = pattern.exec(source); match; match = pattern.exec(source)) {
+    // A declaration inside a string literal is not the real definition.
+    if (isInsideStringLiteral(source, match.index)) continue;
+    const open = match.index + match[0].length - 1;
+    // Fail closed: if the real declaration has any non-string member, no
+    // member of that constant is exempt.
+    return parseStringArrayLiteral(source, open);
+  }
+  return null;
+}
+
+/**
+ * A5 narrow allowlist (auditable): `FORBIDDEN_NORMALIZED_KEYS` in the
+ * structured-interpretation POC parser is the DENYLIST that rejects
+ * model-provided authority keys, so a literal member of that array is a
+ * definition, not an issuance. Exempt ONLY a quoted string member that the
+ * strict whole-array grammar accepts as a direct member of that exact readonly
+ * `new Set([...])` array in that exact file. Every other occurrence still
+ * flags: an issuer before or after the declaration, a quoted object key, a
+ * nested array, a computed member, a renamed constant, or a quoted string in
+ * any other file. The file itself is never exempted.
+ */
+function isForbiddenDenylistMember(relative, source, index) {
+  if (relative !== STRUCTURED_POC_PARSER) return false;
+  const member = /^[A-Za-z]+/.exec(source.slice(index))?.[0];
+  if (!member || !A5_DENYLIST_MEMBERS.has(member)) return false;
+  const members = denylistArrayMembers(source);
+  return !!members && members.some((item) => item.start === index && item.value === member);
 }
 
 function diagnostic(code, root, filePath, source, index, message) {
@@ -148,6 +243,7 @@ export function checkInvariants(root = path.resolve(SCRIPT_DIR, '..')) {
         diagnostics.push(diagnostic('A4_WRITE_CAPABILITY_OUTSIDE_EXECUTOR', root, filePath, source, match.index, 'financial.write capability assembled obliquely (join/concat) outside MutationExecutor — use the open literal so the gate can audit it'));
       }
       for (const match of code.matchAll(/\b(?:mutationApproved|approvedTool)\b/g)) {
+        if (isForbiddenDenylistMember(relative, code, match.index)) continue;
         diagnostics.push(diagnostic('A5_MUTATION_ISSUER_OUTSIDE_EXECUTOR', root, filePath, source, match.index, 'mutation approval issuer appears outside MutationExecutor'));
       }
     }

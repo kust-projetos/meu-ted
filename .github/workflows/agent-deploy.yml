@@ -1,10 +1,7 @@
 name: Agent Deploy
 
 on:
-  workflow_run:
-    workflows: ["CI", "PWA CI"]
-    types: [completed]
-    branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: agent-deploy-${{ github.ref }}
@@ -13,10 +10,8 @@ concurrency:
 jobs:
   gate:
     name: Gate — CI + PWA CI green for SHA
-    # SPEC CI-03 (§14): deploys may only follow push-originated CI/PWA CI
-    # runs on main. workflow_run events from other triggers (e.g. another
-    # workflow_run chain) must never satisfy the deploy gate.
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    # Only a manually started run on main can deploy.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -25,30 +20,11 @@ jobs:
     outputs:
       deploy_ready: ${{ steps.checks.outputs.deploy_ready }}
     steps:
-      # V4.1 closure (SPEC CI-03): explicit same-repository origin check.
-      # Fork-originated workflow_run events must never satisfy the deploy
-      # gate, even if every other check below passes.
-      - name: Require same-repository origin (fork fail-closed)
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
-          EXPECTED_REPO: ${{ github.repository }}
-        with:
-          script: |
-            const headRepo = process.env.HEAD_REPO;
-            const expected = process.env.EXPECTED_REPO;
-            core.info(`head_repository=${headRepo} repository=${expected}`);
-            if (headRepo !== expected) {
-              core.setFailed(`Deploy blocked: workflow_run head_repository '${headRepo}' does not match '${expected}'. Fork-originated runs cannot deploy.`);
-              return;
-            }
-            core.info(`Repository-origin gate passed for ${headRepo}.`);
-
       - name: Require CI and PWA CI success for the deployed SHA
         id: checks
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_SHA: ${{ github.sha }}
         with:
           script: |
             const sha = process.env.HEAD_SHA;
@@ -74,14 +50,9 @@ jobs:
               }
               const latest = runs.sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
               core.info(`${name}: latest run #${latest.run_number} status=${latest.status} conclusion=${latest.conclusion}`);
-              // CI and PWA CI start together on a push to main, so the first
-              // completion fires this gate while the other workflow is still
-              // running. "Still running" means NOT READY (skip, green), never
-              // a failure: that workflow's own completion fires a new
-              // workflow_run event and re-evaluates this deploy.
+              // A manual deploy requires both CI runs to be complete.
               if (latest.status !== 'completed' || latest.conclusion == null) {
-                core.notice(`Deploy not ready: ${name} run #${latest.run_number} is still in progress (status=${latest.status}, conclusion=${latest.conclusion}) for ${sha}. This run will deploy only if ${name} completes successfully; its completion re-evaluates the deploy.`);
-                core.setOutput('deploy_ready', 'false');
+                core.setFailed(`Deploy blocked: ${name} run #${latest.run_number} is not complete for ${sha}.`);
                 return;
               }
               if (latest.conclusion !== 'success') {
@@ -92,13 +63,11 @@ jobs:
             core.setOutput('deploy_ready', 'true');
             core.info(`Deploy gate passed for ${sha}.`);
 
-      # Only meaningful when something will actually deploy — a not-ready run
-      # (the other workflow still in progress) skips this check instead.
       - name: Reject stale deployment (candidate must equal current main)
         if: steps.checks.outputs.deploy_ready == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_SHA: ${{ github.sha }}
         with:
           script: |
             const sha = process.env.HEAD_SHA;
@@ -114,10 +83,6 @@ jobs:
 
   deploy:
     needs: [gate]
-    # Skip (not fail) when the gate found the other CI still in progress:
-    # that workflow's completion fires a new workflow_run event that
-    # re-evaluates this deploy. Failures are never skipped — the gate result
-    # must be 'success'.
     if: needs.gate.result == 'success' && needs.gate.outputs.deploy_ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -128,7 +93,7 @@ jobs:
       - name: Checkout approved SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 10
@@ -154,14 +119,17 @@ jobs:
         id: local-identity
         run: |
           LOCKFILE_HASH="$(sha256sum pnpm-lock.yaml | cut -d' ' -f1)"
-          WRANGLER_VERSION="$(pnpm --filter pi-finance-agent --fail-if-no-match exec wrangler --version)"
+          # pnpm can print workspace engine warnings before the version (e.g.
+          # apps/ted-runtime wants node >=24 while the runner uses node 22);
+          # keep only the last line so $GITHUB_OUTPUT carries the real version.
+          WRANGLER_VERSION="$(pnpm --filter pi-finance-agent --fail-if-no-match exec wrangler --version 2>/dev/null | tail -n 1)"
           echo "lockfile-hash=$LOCKFILE_HASH" >> "$GITHUB_OUTPUT"
           echo "wrangler-version=$WRANGLER_VERSION" >> "$GITHUB_OUTPUT"
       - name: Resolve CI manifest run for the approved SHA
         id: manifest-run
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_SHA: ${{ github.sha }}
         with:
           script: |
             const sha = process.env.HEAD_SHA;
@@ -182,13 +150,13 @@ jobs:
       - name: Download CI manifest
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: agent-deploy-manifest-${{ github.event.workflow_run.head_sha }}
+          name: agent-deploy-manifest-${{ github.sha }}
           path: /tmp/agent-manifest
           run-id: ${{ steps.manifest-run.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify manifest identity matches this installation (fail closed)
         env:
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_SHA: ${{ github.sha }}
           LOCAL_LOCKFILE_HASH: ${{ steps.local-identity.outputs.lockfile-hash }}
           LOCAL_WRANGLER_VERSION: ${{ steps.local-identity.outputs.wrangler-version }}
           MANIFEST_RUN_ID: ${{ steps.manifest-run.outputs.run_id }}
@@ -204,7 +172,7 @@ jobs:
         run: |
           node scripts/validate-deploy-origins.mjs --name PWA_PROD_URL --expect pwa --env-file "$GITHUB_ENV"
       - name: Deploy Agent Worker (source verified, no independent rebuild)
-        run: pnpm --dir apps/agent exec wrangler deploy --var BUILD_SHA:${{ github.event.workflow_run.head_sha }} --var BUILD_ID:${{ github.event.workflow_run.id }} --var BUILD_TIME:${{ github.event.workflow_run.created_at }} --var "PWA_ORIGIN:$PWA_PROD_URL"
+        run: pnpm --dir apps/agent exec wrangler deploy --var BUILD_SHA:${{ github.sha }} --var BUILD_ID:${{ github.run_id }} --var BUILD_TIME:$(date -u +%Y-%m-%dT%H:%M:%SZ) --var "PWA_ORIGIN:$PWA_PROD_URL"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -223,7 +191,7 @@ jobs:
       - name: Checkout deployed SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
       # DEBT2-CODER-SMOKE-URL-FIX: validate BEFORE any curl (runner-provided
       # node is enough — the helper has no dependencies). The repo variable
       # enters ONLY via step `env:` below; the helper pins it to the exact
@@ -246,7 +214,7 @@ jobs:
       # genuine mismatch still fails after the budget runs out.
       - name: Agent release identity matches deployed SHA (bounded propagation retry)
         env:
-          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          EXPECTED_SHA: ${{ github.sha }}
         run: node scripts/agent-release-smoke.mjs --url "$AGENT_PROD_URL" --expected-sha "$EXPECTED_SHA"
       - name: API health (public GET only)
         run: |
@@ -254,19 +222,7 @@ jobs:
 
   attest:
     name: Attestation — ATTESTED vs NOT-ATTESTED (fail-closed, §5.6)
-    # Always runs: a skipped deploy/smoke is a legitimate green state (the
-    # other CI's completion re-fires this workflow), but green MUST NOT be
-    # readable as a release. This job records the explicit terminal state:
-    # ATTESTED (deploy ran + smoke ran + PASS, with sha/buildId) vs
-    # NOT-ATTESTED with an explicit reason. It never deploys, never touches
-    # credentials or the API, and never changes the outcome of
-    # gate/deploy/smoke — it only records. Contract (fail-closed): a missing
-    # or negative attestation MUST be read as NOT DEPLOYED. Only
-    # `attestation=ATTESTED` with a matching sha constitutes a release;
-    # consumers must check the `attestation`/`reason` job outputs, never the
-    # workflow's green status alone. Gates stay intact: the workflow_run
-    # origin check, the CI+PWA-CI gate, the freshness/staleness gate and the
-    # manifest verification above are untouched.
+    # Record outcome of this manual deployment and smoke test.
     needs: [gate, deploy, smoke]
     if: always()
     runs-on: ubuntu-latest
@@ -280,8 +236,8 @@ jobs:
       - name: Compute deployment attestation (records only, never deploys)
         id: verdict
         env:
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_SHA: ${{ github.sha }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
           GATE_RESULT: ${{ needs.gate.result }}
           DEPLOY_READY: ${{ needs.gate.outputs.deploy_ready }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
@@ -309,7 +265,7 @@ jobs:
             '## Deployment attestation: ' + attestation,
             '',
             '- sha: ' + sha,
-            '- buildId (workflow_run.id): ' + runId,
+            '- buildId (manual-run-id): ' + runId,
             '- reason: ' + reason,
             '- gate: ' + gate + ' deploy_ready: ' + (ready || '(empty)') + ' deploy: ' + deploy + ' smoke: ' + smoke,
             '',
