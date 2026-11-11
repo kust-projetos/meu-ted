@@ -79,7 +79,7 @@ const harness = async () => {
       listCategories: async () => [],
     },
   });
-  return { app, state, payableStore };
+  return { app, state, payableStore, writes };
 };
 
 const propose = (app: FastifyInstance, body: unknown) =>
@@ -217,6 +217,65 @@ describe('V2 payables (manual-only)', () => {
     });
     expect(badPay.statusCode).toBe(422);
     expect(badPay.json().code).toBe('approval.invalid_args');
+  });
+
+  it('payables.pay converges on re-execution without duplicating the expense', async () => {
+    const { payableStore, writes, state } = await harness();
+    const target = await payableStore.createPayable('w', {
+      accountId: ACCOUNT_ID,
+      description: 'Água',
+      amountCents: 4500,
+      dueDate: '2026-12-12',
+    });
+    const args = {
+      payableId: target.id,
+      description: 'Água',
+      amountCents: 4500,
+      dueDate: '2026-12-12',
+      accountId: ACCOUNT_ID,
+    };
+    const run = () =>
+      requireApprovalToolContract('payables.pay').executor({
+        writes,
+        payableStore,
+        workspaceId: 'w',
+        args,
+        idempotencyKey: 'pay-key-1',
+        actorId: 'a',
+      });
+    const first = await run();
+    expect(first.status).toBe('succeeded');
+    expect(first.operationId).toBe(target.id);
+    const afterFirst = state.transactions.length;
+    const second = await run();
+    expect(second.status).toBe('succeeded');
+    expect(second.operationId).toBe(target.id);
+    expect(state.transactions.length).toBe(afterFirst);
+    const paid = (await payableStore.listPayables('w')).find((p) => p.id === target.id);
+    expect(paid?.status).toBe('paid');
+    expect((await payableStore.listPayables('w')).length).toBe(1);
+  });
+
+  it('payables.create replay with the same idempotency key returns the same pending id', async () => {
+    const { app, payableStore } = await harness();
+    const key = randomUUID();
+    const body = {
+      tool: 'payables.create',
+      normalizedArgs: { accountId: ACCOUNT_ID, description: 'Gás', amountCents: 8000, dueDate: '2026-12-20' },
+    };
+    const first = await app.inject({
+      method: 'POST', url: '/pending-operations/v2/propose', headers: { 'idempotency-key': key }, payload: body,
+    });
+    expect(first.statusCode).toBe(201);
+    const firstId = (first.json() as { id: string }).id;
+    const replay = await app.inject({
+      method: 'POST', url: '/pending-operations/v2/propose', headers: { 'idempotency-key': key }, payload: body,
+    });
+    expect(replay.statusCode).toBe(200);
+    const replayed = replay.json() as { id: string; existing: boolean };
+    expect(replayed.id).toBe(firstId);
+    expect(replayed.existing).toBe(true);
+    expect((await payableStore.listPayables('w')).length).toBe(0);
   });
 
   it('keeps both payables tools manual-only', () => {
