@@ -3519,7 +3519,7 @@ const specs = [
         "context": false,
         "schema": {
           "type": "string",
-          "pattern": "^\\d{4}-\\d{2}$"
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
         }
       },
       {
@@ -4000,7 +4000,7 @@ function createTool(spec: ToolSpec) {
   }),
   "spending_insights": Type.Object({
     "householdId": Type.String({"format":"uuid"}),
-    "yearMonth": Type.Optional(Type.String({"pattern":"^\\d{4}-\\d{2}$"})),
+    "yearMonth": Type.Optional(Type.String({"pattern":"^\\d{4}-(0[1-9]|1[0-2])$"})),
     "insightType": Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("comparison"), Type.Literal("anomalies"), Type.Literal("income-share")])),
     "lookbackMonths": Type.Optional(Type.Integer({"minimum":1,"maximum":12})),
   }),

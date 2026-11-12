@@ -10,9 +10,10 @@ import type { CardStore } from '../cards/store.js';
 import { computePaymentScore, parsePeriodQuery } from '../insights/payment-score.js';
 import { computeInstallmentScore, parseMonthQuery } from '../insights/installment-score.js';
 import { computeMonthlyProjection, parseYearMonthQuery } from '../insights/monthly-projection.js';
+import { buildSpendingInsights } from '../lib/spending-insights.js';
 
 export const spendingInsightQuerySchema = z.object({
-  yearMonth: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  yearMonth: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(),
   insightType: z.enum(['all', 'comparison', 'anomalies', 'income-share']).optional(),
   lookbackMonths: z.coerce.number().int().min(1).max(12).optional(),
 });
@@ -59,12 +60,54 @@ export const registerInsightRoutes = (
     if (!parsed.success) {
       return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
     }
-    const transactions = await opts.store.listAllTransactions(ctx.householdId);
+    const [transactions, categories] = await Promise.all([
+      opts.store.listAllTransactions(ctx.householdId),
+      opts.store.listCategories(ctx.householdId),
+    ]);
+    const now = opts.clock?.() ?? new Date();
+    const yearMonth = parsed.data.yearMonth ?? now.toISOString().slice(0, 7);
+    const insightType = parsed.data.insightType ?? 'all';
+    const lookbackMonths = parsed.data.lookbackMonths ?? 3;
+    const result = buildSpendingInsights(transactions, categories, yearMonth, insightType, lookbackMonths);
+    const incomeCents = transactions.reduce(
+      (sum, transaction) => sum + (transaction.kind === 'income' && transaction.date.slice(0, 7) === yearMonth ? transaction.amountCents : 0),
+      0,
+    );
+    const insights = [
+      ...(result.comparisons ?? []).map((comparison) => ({
+        type: 'category-comparison',
+        category: comparison.category,
+        currentCents: comparison.currentCents,
+        averageCents: comparison.previousCents,
+        deltaCents: comparison.absoluteChange,
+        deltaPercent: comparison.percentChange,
+        trend: comparison.trend,
+      })),
+      ...(result.anomalies ?? []).map((anomaly) => ({
+        type: 'anomaly',
+        category: anomaly.category,
+        message: anomaly.message,
+        currentCents: anomaly.currentCents,
+        averageTransactionCents: anomaly.previousCents,
+        deltaPercent: anomaly.percentChange,
+      })),
+      ...(result.incomeShare ?? []).map((share) => ({
+        type: 'income-share',
+        category: share.category,
+        expenseCents: share.totalCents,
+        incomeCents,
+        sharePercent: share.sharePercent,
+      })),
+    ];
+    // message reflects only original trend insights; transactionCount covers the household's full history, not this period.
     return reply.code(200).send({
       success: true,
-      yearMonth: parsed.data.yearMonth ?? new Date().toISOString().slice(0, 7),
-      insights: [],
+      yearMonth,
+      basis: 'competencia',
+      lookbackMonths,
+      insights,
       transactionCount: transactions.length,
+      message: result.message,
     });
   });
 
