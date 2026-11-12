@@ -1,8 +1,10 @@
-# Pendências do Meu Ted — pós-V1 (2026-11-11)
+# Pendências do Meu Ted — pós-V1 (2026-11-12)
 
-**Estado de referência:** `main` com a V1 funcional e a manutenção pós-V1
-mergeadas; produção em API `219a4d6`, Agent `000191b` e PWA `5e69dec`
-(Release B flipada). Detalhe por camada em
+**Estado de referência:** `main` em `fa3ee6e`, após a sessão de 2026-11-12,
+que mergeou #333 (B058: datas explícitas), #334 (aporte em metas), #335/#336/#337
+(orçamentos por conversa: criar/ajustar/apagar, manual-only e idempotentes) e
+#338 (flake #277). Produção permanece API `219a4d6`, Agent `000191b` e PWA
+`5e69dec` (Release B flipada). Detalhe por camada em
 [`MEU-TED-V1-FINAL-STATE.md`](../MEU-TED-V1-FINAL-STATE.md).
 
 Este arquivo lista o que o plano da V1 deixou explicitamente para depois e o
@@ -13,25 +15,21 @@ missão é escolhida pelo usuário.
 
 - **#269 — isolamento por ator dos eventos WebSocket.** A flag
   `TED_PRIVATE_VIEWS_ENABLED` continua **OFF**. O PR #205 implementou a
-  visibilidade privada, mas o live-sync do SDK é por workspace; falta provar
-  que frames privados não chegam a outro ator. Próximo passo: F0 (inventário
-  do fluxo WS) + F1 (teste negativo com dois atores sintéticos e captura de
-  frames); só depois decidir a entrega server-side mínima. Não ligar a flag
-  antes disso.
+  visibilidade privada, e o PR #330 mergeou o surface guard do live-sync
+  (`apps/agent/tests/worker-live-sync-surface.test.ts`). Ainda falta o
+  inventário F0 do fluxo WS e o teste negativo com dois atores sintéticos e
+  captura de frames; só depois decidir a entrega server-side mínima. Não ligar
+  a flag antes disso.
 
 ## 2. Qualidade e CI
 
-- **#277 — flake de cold boot da PWA.** Duas assinaturas já registradas:
-  - Vitest `t07c-workspace-cold-boot`: `unreachable` em vez de
-    `unauthenticated`;
-  - Playwright `PWA-05`: `Entrar` disabled porque o formulário remonta e zera
-    os campos.
-  Ambas passam no rerun; sem reprodução determinística. Próximo passo:
-  instrumentar identidade do formulário/estado do probe antes de qualquer
-  correção; não adicionar retry/timeout especulativo.
-- **Dependabot:** PRs #317, #296, #292 e #287 abertos. **#285** (Zod 4.6.7) é
-  `DO NOT MERGE`; **#278** (POC F2-A) é draft.
+- **#277 — flake de cold boot da PWA:** resolvido pelo PR #338 (fix do `t07c`).
+  A instrumentação fica como referência caso o flake reapareça.
+- **Dependabot:** #317, #296 e #287 estão CLOSED; #292 está MERGED. Abertos:
+  **#285** (draft, `DO NOT MERGE`) e **#278** (draft).
 - **#143** — triagem de dependabot de 2026-10-12.
+- A cobertura LOW de `budgets.delete` (propagação de DomainError diferente de
+  `not_found` e isolamento por household) foi fechada nesta entrega.
 
 ## 3. Gates de release
 
@@ -46,10 +44,11 @@ missão é escolhida pelo usuário.
 
 ## 4. Decisões de produto (PÓS-V1 no plano)
 
-O plano da V1 marcou estes itens como fora do escopo; continuam sem
-autorização:
+O plano da V1 marcou estes itens como fora do escopo. Metas e orçamentos por
+conversa foram implementados em #334–#337; os demais seguem sem autorização:
 
-- Metas e orçamentos por conversa (mutação) — a PWA segue dona.
+- Metas e orçamentos por conversa (mutação): implementados em #334–#337,
+  manual-only e idempotentes.
 - Conversas privadas — dependem de #269.
 - Exclusões arbitrárias de dados.
 - Áudio, visão, PDF, busca web e notificações proativas.
@@ -59,7 +58,8 @@ autorização:
 
 Issues `[post-V1]` abertas (ordem numérica): #229, #230, #231, #232, #233,
 #234, #235, #236, #237, #238, #239, #240, #241, #242, #243, #244, #245, #246,
-#247, #248, #249, #250, #251, #252. Também abertas: #218 (revalidar evidência
+#247, #248, #249, #250, #251, #252. Também abertas: #165 (evidência E2E
+live-mobile-full v1.0.1), #218 (revalidar evidência
 fresca do backend), #151 (record/replay determinístico de E2E), #136
 (concorrência de memória), #134 (avaliação Clef-omni), #131 (estados de
 memória versionados), #116 (protótipo de UX), #95 (keepalive de I/O do DO) e
