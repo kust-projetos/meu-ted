@@ -13,14 +13,18 @@ const describeIfDb = DATABASE_URL && MARKER ? describe : describe.skip;
 if (!DATABASE_URL || !MARKER) console.log('[budget-keyed-pg] SKIP: DATABASE_URL_TEST + DB_TEST_MARKER required.');
 
 describeIfDb('budget create idempotency PostgreSQL', () => {
-  let pool: Pool;
+  let poolPromise: Promise<Pool> | undefined;
+  const ensurePool = (): Promise<Pool> => poolPromise ??= prepareAccountValidationDatabases({ baseUrl: DATABASE_URL!, profile: validationDatabaseProfileFromEnvironment() }).then((prepared) => {
+    if (!prepared.main) throw new Error('budget-keyed-pg: validation database setup did not provide a main pool');
+    return prepared.main;
+  });
   const households: string[] = [];
   beforeAll(async () => {
-    const prepared = await prepareAccountValidationDatabases({ baseUrl: DATABASE_URL!, profile: validationDatabaseProfileFromEnvironment() });
-    pool = prepared.main;
+    await ensurePool();
   }, 240_000);
   afterAll(async () => {
-    if (!pool) return;
+    if (!poolPromise) return;
+    const pool = await poolPromise;
     await requireTestDatabase(pool as never, 'budget-keyed-pg-cleanup');
     for (const householdId of households) {
       await pool.query('DELETE FROM budgets WHERE household_id=$1', [householdId]).catch(() => undefined);
@@ -29,6 +33,7 @@ describeIfDb('budget create idempotency PostgreSQL', () => {
     await pool.end();
   });
   it('replays concurrent key, converges after category deactivation and rejects divergent args', async () => {
+    const pool = await ensurePool();
     const householdId = randomUUID();
     households.push(householdId);
     const category = await createPostgresWriteStore(pool).createCategory(householdId, { name: 'Food', kind: 'expense' });
