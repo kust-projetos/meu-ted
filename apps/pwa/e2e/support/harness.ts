@@ -105,6 +105,38 @@ export async function authenticate(
     .then(() => true)
     .catch(() => false);
   if (loginFormVisible) {
+    await page.evaluate(() => {
+      const state = window as typeof window & { __coldBootLogin?: { nextId: number; remounts: number; observer?: MutationObserver } };
+      const instrumentation = (state.__coldBootLogin ??= { nextId: 0, remounts: 0 });
+      let lastForm: HTMLFormElement | null = null;
+      const mark = () => {
+        const form = document.querySelector('input[autocomplete="email"]')?.closest("form") ??
+          document.querySelector('input[type="email"]')?.closest("form");
+        if (form && form !== lastForm) {
+          if (lastForm) instrumentation.remounts++;
+          (form as HTMLFormElement & { __coldBootInstance: number }).__coldBootInstance = ++instrumentation.nextId;
+          lastForm = form as HTMLFormElement;
+        }
+      };
+      mark();
+      instrumentation.observer?.disconnect();
+      instrumentation.observer = new MutationObserver(() => mark());
+      instrumentation.observer.observe(document.body, { childList: true, subtree: true });
+    });
+    const coldBootSnapshot = () => page.evaluate(() => {
+      const state = window as typeof window & { __coldBootLogin?: { remounts: number } };
+      const email = document.querySelector<HTMLInputElement>('input[autocomplete="email"], input[type="email"]');
+      const password = document.querySelector<HTMLInputElement>('input[type="password"]');
+      const form = email?.closest("form") as (HTMLFormElement & { __coldBootInstance?: number }) | null;
+      const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "Entrar");
+      return {
+        timestamp: new Date().toISOString(), formInstance: form?.__coldBootInstance ?? null,
+        email: email?.value ?? null, passwordLength: password?.value.length ?? 0,
+        buttonDisabled: button ? (button as HTMLButtonElement).disabled : null,
+        bootPlaceholderPresent: Boolean(document.querySelector('[data-testid="root-boot-placeholder"]')),
+        remounts: state.__coldBootLogin?.remounts ?? 0,
+      };
+    });
     // Hydration gate: server-rendered inputs accept fill() before React
     // hydrates, but hydration then resets the uncontrolled DOM values to
     // React state (empty) and Entrar stays disabled forever (remote PWA-03 /
@@ -131,7 +163,11 @@ export async function authenticate(
         },
         { timeout },
       )
-      .toBe(true);
+      .toBe(true)
+      .catch(async (error: unknown) => {
+        const snapshot = await coldBootSnapshot();
+        throw new Error(`${String(error)}\n[cold-boot-instrumentation] ${JSON.stringify(snapshot)}`);
+      });
     await loginBtn.click();
     await page.waitForLoadState("networkidle");
   }
