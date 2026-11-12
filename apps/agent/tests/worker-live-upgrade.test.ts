@@ -83,7 +83,8 @@ describe("live-sync websocket upgrade", () => {
     }), env);
     expect(response.status).toBe(200);
     const forwarded = doFetch.mock.calls[0]![0];
-    for (const key of ["x-agent-connection-token", "x-agent-runtime-admin-token", "x-agent-props", "x-partykit-props", "x-partykit-namespace"]) expect(forwarded.headers.has(key)).toBe(false);
+    expect(forwarded.headers.get("x-agent-connection-token")).toBe(token);
+    for (const key of ["x-agent-runtime-admin-token", "x-agent-props", "x-partykit-props", "x-partykit-namespace"]) expect(forwarded.headers.has(key)).toBe(false);
     expect(forwarded.headers.get("x-agent-actor")).toBe("rest-actor");
     expect(forwarded.headers.get("x-agent-workspace")).toBe(canonical);
     expect(forwarded.headers.get("x-agent-role")).toBe("member");

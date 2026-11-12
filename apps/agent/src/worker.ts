@@ -400,7 +400,7 @@ export default {
         headers.forEach((_value, key) => rpcHeaderNames.push(key));
         for (const key of rpcHeaderNames) {
           const lower = key.toLowerCase();
-          if (lower.startsWith("x-agent-") || lower.startsWith("x-partykit-")) headers.delete(key);
+          if ((lower.startsWith("x-agent-") && lower !== "x-agent-connection-token") || lower.startsWith("x-partykit-")) headers.delete(key);
         }
         headers.set("x-agent-actor", auth.actorId);
         headers.set("x-agent-role", auth.role);
