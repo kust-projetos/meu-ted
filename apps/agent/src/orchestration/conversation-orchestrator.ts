@@ -94,6 +94,7 @@ import { hasInstallmentIntent, hasWholeEntityName, isCardPurchaseIntent } from '
 import { isGoalContributionIntent } from '../mutations/goal-contribution-intent.js';
 import { budgetPeriodOf, extractNamedAmountCents, isBudgetCreationIntent } from '../mutations/budget-creation-intent.js';
 import { extractBudgetUpdateAmount, hasThresholdIntent, isBudgetUpdateIntent, thresholdOf } from '../mutations/budget-update-intent.js';
+import { isBudgetDeleteIntent } from '../mutations/budget-delete-intent.js';
 import {
   CONFIRMATION_OPERATION_SKEW_MS,
   CONFIRMATION_UNBOUND_OPERATION_ID,
@@ -2208,7 +2209,7 @@ export class ConversationOrchestrator {
   private proposedMutation(input: {
     operationId: string;
     tool: string;
-    normalizedArgs: { amountCents: number; description: string; date: string; accountId: string; categoryId?: string } | { amountCents: number; goalId: string; contributionDate?: string } | { amountCents: number; categoryId: string; name: string; period: 'monthly' | 'quarterly' | 'yearly'; startDate: string } | { budgetId: string; amountCents: number; alertThreshold?: number };
+    normalizedArgs: { amountCents: number; description: string; date: string; accountId: string; categoryId?: string } | { amountCents: number; goalId: string; contributionDate?: string } | { amountCents: number; categoryId: string; name: string; period: 'monthly' | 'quarterly' | 'yearly'; startDate: string } | { budgetId: string; amountCents: number; alertThreshold?: number } | { budgetId: string };
     accountName?: string;
     categoryName?: string;
     expiresAt?: string;
@@ -6514,16 +6515,16 @@ export class ConversationOrchestrator {
     return this.completeTurn(input, plan, startedAt, base, { policy: freeze({ ...base.policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, categoryName: category.name, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
   }
 
-  /** Resolve an existing budget authoritatively and propose its new ceiling only. */
-  private async runBudgetUpdateTurn(input: TurnInput, plan: TurnPlan, client: MutationApiClient | null, startedAt: number, base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy }): Promise<TurnResult> {
-    const clarify = (missing: string[], text: string) => this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(missing), text }), response: freeze({ text }) });
-    if (hasNegation(input.text)) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não vou propor essa alteração porque sua mensagem contém uma negação.' }) });
+  private async resolveBudgetTarget(input: TurnInput, action = 'ajustar'): Promise<
+    | { reader: EntityReader; budgets: EntitySummary[]; categories: EntitySummary[]; budget: EntitySummary; matchedName: string }
+    | { clarification: { missing: string[]; text: string } }
+  > {
     const reader = this.dependencies.entityReader;
-    if (!reader?.listBudgets) return clarify(['budgetId'], 'Não consigo consultar seus orçamentos nesta sessão. Tente novamente em instantes.');
+    if (!reader?.listBudgets) return { clarification: { missing: ['budgetId'], text: 'Não consigo consultar seus orçamentos nesta sessão. Tente novamente em instantes.' } };
     let budgets: EntitySummary[];
     let categories: EntitySummary[];
     try { [budgets, categories] = await Promise.all([reader.listBudgets().then(normalizeEntities), reader.listCategories().then(normalizeEntities)]); }
-    catch { return clarify(['budgetId'], 'Não consegui consultar seus orçamentos agora. Tente novamente em instantes.'); }
+    catch { return { clarification: { missing: ['budgetId'], text: 'Não consegui consultar seus orçamentos agora. Tente novamente em instantes.' } }; }
     const scope = reader.scope?.workspaceId;
     budgets = budgets.filter((row) => (!scope || row.scopeId === undefined || row.scopeId === scope) && row.isActive !== false && !['inactive', 'archived'].includes(row.status?.toLowerCase() ?? ''));
     categories = categories.filter((row) => (!scope || row.scopeId === undefined || row.scopeId === scope) && row.isActive !== false && !['inactive', 'archived'].includes(row.status?.toLowerCase() ?? ''));
@@ -6540,10 +6541,19 @@ export class ConversationOrchestrator {
     const disjoint = spans.some((a, i) => spans.slice(i + 1).some((b) => a.budget.id !== b.budget.id && (a.end <= b.start || b.end <= a.start)));
     const longest = Math.max(0, ...spans.map((span) => span.end - span.start));
     const selected = spans.filter((span) => span.end - span.start === longest);
-    if (disjoint || selected.length !== 1) return clarify(['budgetId'], `Qual orçamento ativo devo ajustar?${budgets.length ? `\n${budgets.map((row) => row.name).join('\n')}` : ''}`);
-    const budget = selected[0]!.budget;
+    if (disjoint || selected.length !== 1) return { clarification: { missing: ['budgetId'], text: `Qual orçamento ativo devo ${action}?${budgets.length ? `\n${budgets.map((row) => row.name).join('\n')}` : ''}` } };
+    return { reader, budgets, categories, budget: selected[0]!.budget, matchedName: selected[0]!.name };
+  }
+
+  /** Resolve an existing budget authoritatively and propose its new ceiling only. */
+  private async runBudgetUpdateTurn(input: TurnInput, plan: TurnPlan, client: MutationApiClient | null, startedAt: number, base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy }): Promise<TurnResult> {
+    const clarify = (missing: string[], text: string) => this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(missing), text }), response: freeze({ text }) });
+    if (hasNegation(input.text)) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não vou propor essa alteração porque sua mensagem contém uma negação.' }) });
+    const target = await this.resolveBudgetTarget(input);
+    if ('clarification' in target) return clarify(target.clarification.missing, target.clarification.text);
+    const { budget, categories } = target;
     const categoryName = categories.find((row) => row.id === budget.categoryId)?.name;
-    const amountCents = extractBudgetUpdateAmount(input.text, [selected[0]!.name]);
+    const amountCents = extractBudgetUpdateAmount(input.text, [target.matchedName]);
     if (!amountCents) return clarify(['amountCents'], 'Qual deve ser o novo teto do orçamento?');
     const alertThreshold = hasThresholdIntent(input.text) ? thresholdOf(input.text) : undefined;
     if (hasThresholdIntent(input.text) && !alertThreshold) return clarify(['alertThreshold'], 'Qual limiar de alerta entre 1% e 100% você quer usar?');
@@ -6556,6 +6566,24 @@ export class ConversationOrchestrator {
     const label = budget.name || categoryName || '';
     const summary = `Ajustar orçamento de ${label} para R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}`;
     try { proposal = await client.propose({ tool, normalizedArgs, summary, identity, idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool) }); }
+    catch { return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) }); }
+    return this.completeTurn(input, plan, startedAt, base, { policy: freeze({ ...base.policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, categoryName: label, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
+  }
+
+  private async runBudgetDeleteTurn(input: TurnInput, plan: TurnPlan, client: MutationApiClient | null, startedAt: number, base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy }): Promise<TurnResult> {
+    const clarify = (missing: string[], text: string) => this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(missing), text }), response: freeze({ text }) });
+    if (hasNegation(input.text)) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não vou propor a exclusão porque sua mensagem contém uma negação.' }) });
+    const target = await this.resolveBudgetTarget(input, 'apagar');
+    if ('clarification' in target) return clarify(target.clarification.missing, target.clarification.text);
+    if (!client) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não foi possível preparar a exclusão com segurança nesta sessão.' }) });
+    const { budget, categories } = target;
+    const label = budget.name || categories.find((row) => row.id === budget.categoryId)?.name || '';
+    const tool = 'budgets.delete';
+    const normalizedArgs = { budgetId: budget.id };
+    const identity: MutationIdentity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })() };
+    this.budgetFor(base).noteProposeAttempt();
+    let proposal: Awaited<ReturnType<MutationApiClient['propose']>>;
+    try { proposal = await client.propose({ tool, normalizedArgs, summary: `Apagar orçamento de ${label}`, identity, idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool) }); }
     catch { return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) }); }
     return this.completeTurn(input, plan, startedAt, base, { policy: freeze({ ...base.policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, categoryName: label, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
   }
@@ -7639,6 +7667,7 @@ export class ConversationOrchestrator {
     // own texts. An active draft is preserved untouched: no CAS, no write.
     if (isBudgetCreationIntent(input.text)) return this.runBudgetCreateTurn(input, plan, this.dependencies.mutationApiClient ?? null, startedAt, result);
     if (isBudgetUpdateIntent(input.text)) return this.runBudgetUpdateTurn(input, plan, this.dependencies.mutationApiClient ?? null, startedAt, result);
+    if (isBudgetDeleteIntent(input.text)) return this.runBudgetDeleteTurn(input, plan, this.dependencies.mutationApiClient ?? null, startedAt, result);
     const ambiguous = this.ambiguousMutationClarification(input.text);
     if (ambiguous) return this.stopAmbiguousMutation(input, plan, startedAt, result, ambiguous);
     const client = this.dependencies.mutationApiClient;

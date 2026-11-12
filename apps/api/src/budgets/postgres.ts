@@ -56,6 +56,12 @@ const updateBudgetInTx = async (
   return { id: r['id'] as string, householdId, categoryId: r['category_id'] as string, name: r['name'] as string, amountCents: Number(r['amount_cents']), period: r['period'] as Budget['period'], startDate: (r['start_date'] as Date).toISOString().slice(0, 10), alertThreshold: Number(r['alert_threshold']), rollover: r['rollover'] as boolean };
 };
 
+const deleteBudgetInTx = async (client: PoolClient, householdId: string, budgetId: string): Promise<void> => {
+  await assertWorkspaceWritableInTx(client, householdId);
+  const result = await client.query(`DELETE FROM budgets WHERE id=$1 AND household_id=$2 RETURNING id`, [budgetId, householdId]);
+  if ((result.rowCount ?? 0) === 0) throw domainErrors.notFound('Orçamento');
+};
+
 /**
  * Canonical-schema category gate for budget creation (V4.1 Task 2.15,
  * SPEC §9.8): the budget category must be an active expense-kind category
@@ -202,6 +208,10 @@ export const createPostgresBudgetStore = (pool: Pool): BudgetStore => {
       return withTransaction(pool, (client) => updateBudgetInTx(client, householdId, budgetId, patch));
     },
 
+    async deleteBudget(householdId, budgetId) {
+      return withTransaction(pool, (client) => deleteBudgetInTx(client, householdId, budgetId));
+    },
+
     async getBudgetTrends(householdId, budgetId, monthsBack = 3) {
       const existing = await query<Row>(`SELECT * FROM budgets WHERE id=$1 AND household_id=$2`, [budgetId, householdId]);
       if (existing.length === 0) throw domainErrors.notFound('Orçamento');
@@ -254,5 +264,6 @@ export const createPostgresBudgetStore = (pool: Pool): BudgetStore => {
   return Object.assign(store, {
     createBudgetInTx,
     updateBudgetInTx,
+    deleteBudgetInTx,
   });
 };

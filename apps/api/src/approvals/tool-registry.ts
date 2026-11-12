@@ -47,6 +47,7 @@ export const APPROVAL_TOOL_IDS = [
   'goals.contribute',
   'budgets.create',
   'budgets.update',
+  'budgets.delete',
 ] as const;
 
 export type ApprovalToolId = (typeof APPROVAL_TOOL_IDS)[number];
@@ -869,6 +870,33 @@ const executeBudgetUpdate: ApprovalToolExecutor = async ({ workspaceId, args, bu
   } catch { throw createApprovalExecutionUncertainError(); }
 };
 
+export const deleteBudgetArgsSchema = z.object({ budgetId: z.string().uuid() }).strict();
+
+const executeBudgetDelete: ApprovalToolExecutor = async ({ workspaceId, args, budgetStore, actorId }) => {
+  const parsed = deleteBudgetArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_budget_delete_arguments');
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  if (!budgetStore) throw new Error('validation.budget_store_unavailable');
+  const { budgetId } = parsed.data;
+  try {
+    await budgetStore.deleteBudget(workspaceId, budgetId);
+  } catch (err) {
+    // Deleting an already-absent target satisfies the desired state, including replay after commit.
+    if (err instanceof DomainError && err.code === 'not_found') {
+      try {
+        const receipt = buildTedReceipt('budgets.delete', budgetId, { type: 'budget', id: budgetId });
+        return { status: 'succeeded', operationId: budgetId, receipt };
+      } catch { throw createApprovalExecutionUncertainError(); }
+    }
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  try {
+    const receipt = buildTedReceipt('budgets.delete', budgetId, { type: 'budget', id: budgetId });
+    return { status: 'succeeded', operationId: budgetId, receipt };
+  } catch { throw createApprovalExecutionUncertainError(); }
+};
+
 const executePayableCreate: ApprovalToolExecutor = async ({
   workspaceId,
   args,
@@ -960,6 +988,7 @@ const executePayablePay: ApprovalToolExecutor = async ({
 };
 
 const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
+  'budgets.delete': { tool: 'budgets.delete', inputSchema: deleteBudgetArgsSchema, approvalRequired: true, authorizationPolicy: 'risk_based', autoExecutionEligible: false, executor: executeBudgetDelete },
   'budgets.update': { tool: 'budgets.update', inputSchema: updateBudgetArgsSchema, approvalRequired: true, authorizationPolicy: 'risk_based', autoExecutionEligible: false, executor: executeBudgetUpdate },
   'budgets.create': { tool: 'budgets.create', inputSchema: createBudgetArgsSchema, approvalRequired: true, authorizationPolicy: 'risk_based', autoExecutionEligible: false, executor: executeBudgetCreate },
   'goals.contribute': {

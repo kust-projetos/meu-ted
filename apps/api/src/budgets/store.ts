@@ -10,5 +10,6 @@ export type BudgetStore = {
   updateBudget(householdId: string, budgetId: string, patch: {
     amountCents?: number; alertThreshold?: number;
   }): Promise<Budget>;
+  deleteBudget(householdId: string, budgetId: string): Promise<void>;
   getBudgetTrends(householdId: string, budgetId: string, monthsBack?: number): Promise<BudgetTrend[]>;
 };

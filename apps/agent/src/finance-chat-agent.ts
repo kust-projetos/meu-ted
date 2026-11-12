@@ -249,6 +249,7 @@ import { createRequestEntityReader, type EntityReader } from "./mutations/entity
 import { isGoalContributionIntent } from "./mutations/goal-contribution-intent.js";
 import { isBudgetCreationIntent } from "./mutations/budget-creation-intent.js";
 import { isBudgetUpdateIntent } from "./mutations/budget-update-intent.js";
+import { isBudgetDeleteIntent } from "./mutations/budget-delete-intent.js";
 import { hasCategoryCreateSignal } from "./mutations/category-creation.js";
 import { hasCategoryRenameSignal } from "./mutations/category-rename.js";
 import { hasCategoryDeactivateSignal } from "./mutations/category-deactivation.js";
@@ -4380,7 +4381,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // orquestrador abre `runDeactivateTurn` → `readDeactivationAccounts`,
         // que exige o reader. Sem ele o turno degrada para
         // DEACTIVATE_READ_FAILURE_TEXT. Turnos sem sinal seguem byte-idênticos.
-        const needsEntityReader = needsMutation || isGoalContributionIntent(restInput.text) || isBudgetCreationIntent(restInput.text) || isBudgetUpdateIntent(restInput.text) || hasAccountDeactivationSignal(restInput.text) || hasAccountRenameSignal(restInput.text) || hasCategoryCreateSignal(restInput.text) || hasCategoryRenameSignal(restInput.text) || hasCategoryDeactivateSignal(restInput.text) || hasTransactionDescriptionSignal(restInput.text);
+        const needsEntityReader = needsMutation || isGoalContributionIntent(restInput.text) || isBudgetCreationIntent(restInput.text) || isBudgetUpdateIntent(restInput.text) || isBudgetDeleteIntent(restInput.text) || hasAccountDeactivationSignal(restInput.text) || hasAccountRenameSignal(restInput.text) || hasCategoryCreateSignal(restInput.text) || hasCategoryRenameSignal(restInput.text) || hasCategoryDeactivateSignal(restInput.text) || hasTransactionDescriptionSignal(restInput.text);
         const entityReader = needsEntityReader ? await this.entityReaderForTurn(restInput) : undefined;
         turnOrchestrator = this.orchestratorForChannel({
           ...(mutationPlan ? { plan: () => mutationPlan } : {}),
