@@ -36,13 +36,14 @@ describeIfDb('budget create idempotency PostgreSQL', () => {
     const pool = await ensurePool();
     const householdId = randomUUID();
     households.push(householdId);
-    const category = await createPostgresWriteStore(pool).createCategory(householdId, { name: 'Food', kind: 'expense' });
+    const writes = createPostgresWriteStore({ pool });
+    const category = await writes.createCategory(householdId, { name: 'Food', kind: 'expense' });
     const store = createPostgresBudgetStore(pool);
     const input = { categoryId: category.id, name: 'Food', amountCents: 50000, period: 'monthly' as const, startDate: '2026-11-01' };
     const first = await store.createBudget(householdId, input, { idempotencyKey: 'same' });
     const replay = await Promise.all([store.createBudget(householdId, input, { idempotencyKey: 'same' }), store.createBudget(householdId, input, { idempotencyKey: 'same' })]);
     expect(replay.map((budget) => budget.id)).toEqual([first.id, first.id]);
-    await createPostgresWriteStore(pool).deactivateCategory(householdId, category.id, { idempotencyKey: 'deactivate-category', expectedName: 'Food' });
+    await writes.deactivateCategory(householdId, category.id, { idempotencyKey: 'deactivate-category', expectedName: 'Food' });
     expect((await store.createBudget(householdId, input, { idempotencyKey: 'same' })).id).toBe(first.id);
     await expect(store.createBudget(householdId, { ...input, amountCents: 60000 }, { idempotencyKey: 'same' })).rejects.toMatchObject({ code: 'validation.invalid' });
     for (const changed of [{ name: 'Other' }, { startDate: '2026-12-01' }, { alertThreshold: 90 }]) {
