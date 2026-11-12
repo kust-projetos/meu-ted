@@ -65,6 +65,38 @@ describe('A0 goal contribution proposals', () => {
     const { request } = await run(text);
     expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ normalizedArgs: { goalId, amountCents: 5000 } });
   });
+  it.each(['Aportar R$ 12,345 na meta Viagem', 'Aportar 1.500 reais na meta Viagem', 'Aportar R$ 12.345 na meta Viagem'])('clarifies ambiguous monetary format: %s', async (text) => {
+    const { result, request } = await run(text);
+    expect(result.response?.text).toMatch(/Qual valor/);
+    expect(request).not.toHaveBeenCalled();
+  });
+  it('accepts grouped thousands with explicit cents', async () => {
+    const { request } = await run('Aportar R$ 1.500,00 na meta Viagem');
+    expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ normalizedArgs: { goalId, amountCents: 150000 } });
+  });
+  it.each([
+    ['em 2026-11-10 aportar 100 na meta Viagem', 10000],
+    ['dia 10/11 aportar 100 na meta Viagem', 10000],
+  ])('ignores date digits when parsing amount: %s', async (text, amountCents) => {
+    const { request } = await run(text);
+    expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ normalizedArgs: { goalId, amountCents } });
+  });
+  it('asks which meta when distinct goal names are mentioned', async () => {
+    const goals = [{ id: '00000000-0000-4000-8000-000000000311', name: 'Viagem', status: 'active' }, { id: '00000000-0000-4000-8000-000000000312', name: 'Casa Própria', status: 'active' }];
+    const { result, request } = await run('Aportar R$ 20 na meta Viagem e Casa Própria', goals);
+    expect(result.response?.text).toMatch(/mais de uma meta/i);
+    expect(request).not.toHaveBeenCalled();
+  });
+  it('collapses nested goal-name mentions to the containing goal', async () => {
+    const goals = [{ id: '00000000-0000-4000-8000-000000000313', name: 'Reserva', status: 'active' }, { id: '00000000-0000-4000-8000-000000000314', name: 'Reserva de Emergência', status: 'active' }];
+    const { request } = await run('Aportar R$ 20 na meta Reserva de Emergência', goals);
+    expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ normalizedArgs: { goalId: goals[1]!.id, amountCents: 2000 } });
+  });
+  it('does not treat date components as amount when another amount is present', async () => {
+    const { request, result } = await run('meta Viagem 10/11 aportar 100');
+    expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ normalizedArgs: { amountCents: 10000 } });
+    expect(result.mutation?.operationId).toBeTruthy();
+  });
   it.each([
     ['Aportar R$ 20 na meta reserva de emergência', 'Reserva de Emergência'],
     ['Aportar R$ 20 na meta Viagem 2026', 'Viagem 2026'],
