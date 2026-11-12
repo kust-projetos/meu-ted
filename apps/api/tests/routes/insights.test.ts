@@ -7,6 +7,7 @@ import {
   CATEGORY_FOOD_A,
   CATEGORY_RENT_A,
   CATEGORY_FOOD_B,
+  CATEGORY_SALARY_A,
   TRANSACTIONS,
 } from '../fixtures/seed.js';
 
@@ -110,40 +111,74 @@ describe('GET /insights/spending with unified authenticatedContext (session-firs
 });
 
 describe('GET /insights/spending', () => {
-  it('returns comparison and income-share insights with the competence basis', async () => {
-    const { app } = buildTestApp(seed);
-    const res = await app.inject({
-      method: 'GET', url: '/insights/spending?yearMonth=2026-06&insightType=all',
+  const insightSeed = {
+    ...seed,
+    transactions: [
+      { ...TRANSACTIONS[0], id: 'spending-test-1', date: '2026-05-05', amountCents: 10000 },
+      { ...TRANSACTIONS[1], id: 'spending-test-2', date: '2026-05-06', amountCents: 20000 },
+      { ...TRANSACTIONS[0], id: 'spending-test-3', date: '2026-06-10', amountCents: 30000, description: 'Large grocery purchase' },
+      { ...TRANSACTIONS[1], id: 'spending-test-4', date: '2026-06-12', amountCents: 15000 },
+      { ...TRANSACTIONS[2], id: 'spending-test-5', categoryId: CATEGORY_SALARY_A.id, date: '2026-06-01', amountCents: 100000 },
+    ],
+  };
+
+  const getInsights = async (query = 'insightType=all') => {
+    const { app } = buildTestApp(insightSeed);
+    return app.inject({
+      method: 'GET', url: `/insights/spending?yearMonth=2026-06&${query}`,
       headers: { 'x-device-token': TOKEN_A },
     });
+  };
+
+  it('returns all applicable insight types with basis and lookbackMonths', async () => {
+    const res = await getInsights();
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body).toMatchObject({ success: true, yearMonth: '2026-06', basis: 'competencia', transactionCount: 4 });
-    expect(body.insights).toHaveLength(2);
+    expect(body).toMatchObject({ success: true, yearMonth: '2026-06', basis: 'competencia', lookbackMonths: 3, transactionCount: 5 });
+    expect(typeof body.message).toBe('string');
+    expect(body.insights.map((item: { type: string }) => item.type)).toEqual([
+      'category-comparison', 'category-comparison', 'anomaly', 'income-share', 'income-share',
+    ]);
     expect(body.insights[0]).toMatchObject({
-      type: 'comparison', basis: 'competencia', yearMonth: '2026-06', previousYearMonth: '2026-05',
-      currentExpenseCents: expect.any(Number), previousExpenseCents: expect.any(Number), averageExpenseCents: expect.any(Number),
-      deltaVsPreviousCents: expect.any(Number),
-      deltaVsAverageCents: expect.any(Number),
+      type: 'category-comparison', category: 'Mercado', currentCents: 30000,
+      averageCents: 3333, deltaCents: 26667, deltaPercent: 800, trend: 'up',
     });
-    expect(body.insights[1]).toMatchObject({
-      type: 'income-share', basis: 'competencia', yearMonth: '2026-06',
-      expenseCents: expect.any(Number), incomeCents: expect.any(Number), sharePercent: expect.any(Number),
-    });
-    expect(body.insights[0].deltaVsPreviousPercent === null || typeof body.insights[0].deltaVsPreviousPercent === 'number').toBe(true);
-    expect(body.insights[0].deltaVsAveragePercent === null || typeof body.insights[0].deltaVsAveragePercent === 'number').toBe(true);
+    expect(body.insights[2]).toMatchObject({ type: 'anomaly', category: 'Mercado', currentCents: 30000, averageCents: 10000 });
+    expect(body.insights[3]).toMatchObject({ type: 'income-share', category: 'Mercado', expenseCents: 30000, incomeCents: 100000, sharePercent: 30 });
   });
 
-  it('filters comparison and leaves anomalies empty', async () => {
+  it('returns only category comparisons for comparison', async () => {
+    const res = await getInsights('insightType=comparison');
+    expect(res.statusCode).toBe(200);
+    expect(res.json().insights.every((item: { type: string }) => item.type === 'category-comparison')).toBe(true);
+    expect(res.json().insights).toHaveLength(2);
+  });
+
+  it('returns only anomalies for anomalies', async () => {
+    const res = await getInsights('insightType=anomalies');
+    expect(res.statusCode).toBe(200);
+    expect(res.json().insights.map((item: { type: string }) => item.type)).toEqual(['anomaly']);
+  });
+
+  it('returns only income-share items for income-share', async () => {
+    const res = await getInsights('insightType=income-share');
+    expect(res.statusCode).toBe(200);
+    expect(res.json().insights.map((item: { type: string }) => item.type)).toEqual(['income-share', 'income-share']);
+  });
+
+  it('continues to reject invalid yearMonth values', async () => {
     const { app } = buildTestApp(seed);
-    for (const [type, expectedCount] of [['comparison', 1], ['anomalies', 0]] as const) {
-      const res = await app.inject({
-        method: 'GET', url: `/insights/spending?yearMonth=2026-06&insightType=${type}`,
-        headers: { 'x-device-token': TOKEN_A },
-      });
-      expect(res.statusCode).toBe(200);
-      expect(res.json().insights).toHaveLength(expectedCount);
-    }
+    const res = await app.inject({
+      method: 'GET', url: '/insights/spending?yearMonth=2026-6',
+      headers: { 'x-device-token': TOKEN_A },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('requires auth', async () => {
+    const { app } = buildTestApp(seed);
+    const res = await app.inject({ method: 'GET', url: '/insights/spending' });
+    expect(res.statusCode).toBe(401);
   });
 
   it('continues to reject an invalid lookbackMonths', async () => {

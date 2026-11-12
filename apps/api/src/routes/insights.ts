@@ -60,19 +60,52 @@ export const registerInsightRoutes = (
     if (!parsed.success) {
       return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
     }
-    const transactions = await opts.store.listAllTransactions(ctx.householdId);
+    const [transactions, categories] = await Promise.all([
+      opts.store.listAllTransactions(ctx.householdId),
+      opts.store.listCategories(ctx.householdId),
+    ]);
     const yearMonth = parsed.data.yearMonth ?? new Date().toISOString().slice(0, 7);
+    const insightType = parsed.data.insightType ?? 'all';
+    const lookbackMonths = parsed.data.lookbackMonths ?? 3;
+    const result = buildSpendingInsights(transactions, categories, yearMonth, insightType, lookbackMonths);
+    const incomeCents = transactions.reduce(
+      (sum, transaction) => sum + (transaction.kind === 'income' && transaction.date.slice(0, 7) === yearMonth ? transaction.amountCents : 0),
+      0,
+    );
+    const insights = [
+      ...(result.comparisons ?? []).map((comparison) => ({
+        type: 'category-comparison',
+        category: comparison.category,
+        currentCents: comparison.currentCents,
+        averageCents: comparison.previousCents,
+        deltaCents: comparison.absoluteChange,
+        deltaPercent: comparison.percentChange,
+        trend: comparison.trend,
+      })),
+      ...(result.anomalies ?? []).map((anomaly) => ({
+        type: 'anomaly',
+        category: anomaly.category,
+        message: anomaly.message,
+        currentCents: anomaly.currentCents,
+        averageCents: anomaly.previousCents,
+        deltaPercent: anomaly.percentChange,
+      })),
+      ...(result.incomeShare ?? []).map((share) => ({
+        type: 'income-share',
+        category: share.category,
+        expenseCents: share.totalCents,
+        incomeCents,
+        sharePercent: share.sharePercent,
+      })),
+    ];
     return reply.code(200).send({
       success: true,
       yearMonth,
       basis: 'competencia',
-      insights: buildSpendingInsights(
-        transactions,
-        yearMonth,
-        parsed.data.insightType ?? 'all',
-        parsed.data.lookbackMonths ?? 3,
-      ),
+      lookbackMonths,
+      insights,
       transactionCount: transactions.length,
+      message: result.message,
     });
   });
 
