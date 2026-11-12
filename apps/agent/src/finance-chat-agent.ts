@@ -341,6 +341,8 @@ export type Env = {
    * permanecem como estão (rollback = desabilitar a flag).
    */
   TED_PRIVATE_VIEWS_ENABLED?: string;
+  /** Live-sync is default-off; only exact '1' enables it. This flag does not replace authorization; the Worker also gates upgrades. */
+  TED_LIVE_SYNC_ENABLED?: string;
   /**
    * A14/R12: STT de áudio via Groq (G05) — default-off com TRAVA TRIPLA.
    * `GROQ_API_KEY` é a credencial (lida no call time, nunca logada),
@@ -991,6 +993,10 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   static override readonly messageConcurrency = "queue" as const;
 
   override async onConnect(connection: unknown, ctx: unknown): Promise<void> {
+    if (this.env.TED_LIVE_SYNC_ENABLED !== '1') {
+      (connection as AgentConnection<ConnectionBinding>).close(1008, 'live_sync_disabled');
+      return;
+    }
     const context = ctx as { request?: Request } | null;
     const request = context?.request;
     const binding = request instanceof Request ? bindingFromUpgradeHeaders(request.headers) : null;
@@ -1014,6 +1020,13 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
+    // ADR-032/C3 — WS is push-only; chat/decision/mutation remain REST-only.
+    (this as any)._notifyStreamResuming = () => {};
+    (this as any)._sendStreamChunks = () => {};
+    this.onMessage = async (connection) => {
+      const conn = connection as AgentConnection<ConnectionBinding>;
+      conn.close(1008, this.env.TED_LIVE_SYNC_ENABLED === '1' ? 'inbound_not_allowed' : 'live_sync_disabled');
+    };
     if (state?.storage?.sql) {
       try {
         initializeUsageSchema(state.storage.sql);

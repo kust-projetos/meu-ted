@@ -25,6 +25,7 @@ type TypedAgentNamespace<T> = {
 type Env = {
   FINANCE_CHAT_AGENT: TypedAgentNamespace<FinanceAgentStub>;
   API_ORIGIN: string;
+  TED_LIVE_SYNC_ENABLED?: string;
   /**
    * DEBT2 allowlist migration: the browser (PWA) origin trusted by CORS.
    * Production MUST set this binding to the real PWA host (deploy `--var
@@ -290,6 +291,35 @@ export default {
     }
 
     const handle = async (): Promise<Response> => {
+      const liveMatch = url.pathname.match(/^\/agents\/finance-chat-agent\/([^/]+)\/live$/);
+      if (liveMatch) {
+        if (env.TED_LIVE_SYNC_ENABLED !== "1") return new Response("Not found", { status: 404 });
+        if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return new Response("Not found", { status: 404 });
+        const origin = request.headers.get("origin") ?? "";
+        if (!origin || !resolveAllowedOrigins(env).includes(origin)) return new Response("Forbidden", { status: 403 });
+        let workspaceId: string;
+        try { workspaceId = decodeURIComponent(liveMatch[1]!); }
+        catch { return new Response("Bad request", { status: 400 }); }
+        const auth = await authorizeWorkspaceMembership(request, env as unknown as { API_ORIGIN: string; AGENT_CONNECTION_TOKEN_SECRET?: string; AGENT_AUTH_SERVICE_TOKEN?: string }, workspaceId);
+        if (auth instanceof Response) return auth;
+        const headers = new Headers(request.headers);
+        const upgradeHeaderNames: string[] = [];
+        headers.forEach((_value, key) => upgradeHeaderNames.push(key));
+        for (const key of upgradeHeaderNames) {
+          const lower = key.toLowerCase();
+          if (lower.startsWith("x-agent-") || lower.startsWith("x-partykit-") || lower === "cookie" || lower === "authorization") headers.delete(key);
+        }
+        headers.set("x-agent-actor", auth.actorId);
+        headers.set("x-agent-role", auth.role);
+        headers.set("x-agent-workspace", auth.workspaceId);
+        if (auth.deviceId) headers.set("x-agent-device", auth.deviceId);
+        headers.set("x-partykit-room", auth.workspaceId);
+        const stub = env.FINANCE_CHAT_AGENT.get(env.FINANCE_CHAT_AGENT.idFromName(auth.workspaceId));
+        const url2 = new URL(request.url);
+        url2.searchParams.delete("_pk");
+        return stub.fetch(new Request(url2, { headers }));
+      }
+
       if (url.pathname === "/health/agent") {
         return Response.json({ status: "ready", binding: "FINANCE_CHAT_AGENT" });
       }
@@ -366,6 +396,12 @@ export default {
         const financeAgent = env.FINANCE_CHAT_AGENT.get(env.FINANCE_CHAT_AGENT.idFromName(canonicalId));
 
         const headers = new Headers(request.headers);
+        const rpcHeaderNames: string[] = [];
+        headers.forEach((_value, key) => rpcHeaderNames.push(key));
+        for (const key of rpcHeaderNames) {
+          const lower = key.toLowerCase();
+          if ((lower.startsWith("x-agent-") && lower !== "x-agent-connection-token") || lower.startsWith("x-partykit-")) headers.delete(key);
+        }
         headers.set("x-agent-actor", auth.actorId);
         headers.set("x-agent-role", auth.role);
         headers.set("x-agent-workspace", auth.workspaceId);
@@ -405,6 +441,7 @@ export default {
     };
 
     const response = await handle();
+    if (response.status === 101) return response;
     const headers = new Headers(response.headers);
     Object.entries(corsHeaders()).forEach(([k, v]) => headers.set(k, v));
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers });

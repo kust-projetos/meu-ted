@@ -4,6 +4,8 @@
  */
 import { canAccessMessage } from './conversation-visibility.js';
 
+export const LIVE_BINDING_TTL_MS = 5 * 60_000;
+
 export type ConnectionBinding = {
   actorId: string;
   workspaceId: string;
@@ -45,14 +47,19 @@ export function filterFrameForBinding(frame: Record<string, unknown>, binding: C
     : null;
 }
 
-export type DeliveryConnection = { id: string; state: ConnectionBinding | null; send: (data: string) => void };
+export type DeliveryConnection = { id: string; state: ConnectionBinding | null; send: (data: string) => void; close?: (code?: number, reason?: string) => void };
 
-export function deliverFrameJson(connections: Iterable<DeliveryConnection>, raw: string, without: string[] = []): { delivered: number; dropped: number } {
+export function deliverFrameJson(connections: Iterable<DeliveryConnection>, raw: string, without: string[] = [], now = Date.now()): { delivered: number; dropped: number } {
   let frame: unknown;
   try { frame = JSON.parse(raw); } catch { frame = null; }
   let delivered = 0;
   let dropped = 0;
   for (const connection of connections) {
+    if (connection.state && now - connection.state.validatedAt > LIVE_BINDING_TTL_MS) {
+      connection.close?.(1008, 'binding_expired');
+      dropped++;
+      continue;
+    }
     if (without.includes(connection.id)) continue;
     const filtered = frame && typeof frame === 'object' && !Array.isArray(frame) && connection.state
       ? filterFrameForBinding(frame as Record<string, unknown>, connection.state)
