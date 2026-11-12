@@ -948,7 +948,7 @@ describe("T07c-F2R2-F4-F2: purge direto do login rejeitado com probe pendente", 
       releasePurgeGate();
     });
     await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
-    expect(getSessionStatus().status).toBe("unauthenticated");
+    await waitFor(() => expect(getSessionStatus().status).toBe("unauthenticated"));
     expect(getOfflinePrincipalId()).toBeNull();
   });
 });
