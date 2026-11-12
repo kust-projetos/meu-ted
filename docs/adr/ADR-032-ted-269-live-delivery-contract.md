@@ -1,6 +1,6 @@
 # ADR-032 - Contrato de entrega por ator do live-sync (TED #269)
 
-**Status:** accepted (C2: filtro de entrega implementado, transporte fechado; C3 pendente)
+**Status:** accepted (C3: transporte push-only atrás de `TED_LIVE_SYNC_ENABLED`, default-off; F1 de frames reais pendente)
 **Data:** 2026-11-12
 
 ## Contexto
@@ -52,6 +52,19 @@ REST já aplica o isolamento por D3; isso não prova isolamento de entrega ao vi
 - Confirmação de que `setState` não sobrescreve estado interno do SDK (o merge atual preserva campos, mas exige teste de integração).
 
 A C2 está implementada e testada com conexões sintéticas, mas **não** prova frames reais (F1) e mantém a rota e a flag fechadas.
+
+## C3 — transporte push-only
+
+C3 adiciona upgrade autenticado em `/agents/finance-chat-agent/<workspace>/live`,
+somente quando `TED_LIVE_SYNC_ENABLED` é exatamente `1` (default-off). O Worker
+valida Origin e membership/token, remove credenciais e headers de identidade do
+cliente e carimba a identidade autorizada. O DO nega inbound, desliga resume/
+replay e expira bindings após 5 minutos; REST continua o único canal de chat,
+decisão e mutação.
+
+C3 **não** prova frames reais (F1 permanece pendente), não liga a flag e a PWA
+ainda não usa WS. Revogação de membership pode levar até 5 minutos para invalidar
+uma conexão já estabelecida; este residual é aceito nesta fatia.
 
 ## Validação e critérios para reabrir
 
