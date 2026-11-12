@@ -32,6 +32,9 @@ const contributeToGoalInTxLegacy = async (
 ) => {
   const date = input.contributionDate ?? new Date().toISOString().slice(0, 10);
   if (opts?.idempotencyKey) {
+    const lockedGoal = await client.query<Row>(`SELECT status FROM goals WHERE id=$1 AND household_id=$2 FOR UPDATE`, [goalId, householdId]);
+    if (!lockedGoal.rows[0]) throw domainErrors.notFound('Meta');
+    if (lockedGoal.rows[0]['status'] === 'cancelled') throw domainErrors.invalid('goal', 'meta cancelada não aceita aportes');
     const bytes = createHash('sha256').update(`${householdId}:${opts.idempotencyKey}`).digest().subarray(0, 16);
     bytes[6] = (bytes[6]! & 0x0f) | 0x50;
     bytes[8] = (bytes[8]! & 0x3f) | 0x80;
@@ -40,8 +43,10 @@ const contributeToGoalInTxLegacy = async (
     if ((inserted.rowCount ?? 0) === 0) {
       const prior = await client.query<Row>(`SELECT id, goal_id, amount_cents, contribution_date FROM goal_contributions WHERE id=$1`, [cid]);
       if (!prior.rows[0]) throw new Error('goal_contribution.idempotency_conflict_missing');
-      if (prior.rows[0]['goal_id'] !== goalId) throw domainErrors.invalid('goal', 'idempotency key reutilizada');
-      return { id: prior.rows[0]['id'] as string, goalId, amountCents: Number(prior.rows[0]['amount_cents']), contributionDate: String(prior.rows[0]['contribution_date']).slice(0, 10) };
+      const priorDateValue = prior.rows[0]['contribution_date'];
+      const priorDate = priorDateValue instanceof Date ? priorDateValue.toISOString().slice(0, 10) : String(priorDateValue).slice(0, 10);
+      if (prior.rows[0]['goal_id'] !== goalId || Number(prior.rows[0]['amount_cents']) !== input.amountCents || (input.contributionDate !== undefined && priorDate !== input.contributionDate)) throw domainErrors.invalid('goal', 'idempotency key reutilizada');
+      return { id: prior.rows[0]['id'] as string, goalId, amountCents: Number(prior.rows[0]['amount_cents']), contributionDate: priorDate };
     }
     const updated = await client.query<Row>(`UPDATE goals SET current_amount_cents=current_amount_cents+$3, status=CASE WHEN current_amount_cents+$3>=target_amount_cents THEN 'achieved' ELSE status END, updated_at=NOW() WHERE id=$1 AND household_id=$2 AND status <> 'cancelled'`, [goalId, householdId, input.amountCents]);
     if ((updated.rowCount ?? 0) === 0) {
