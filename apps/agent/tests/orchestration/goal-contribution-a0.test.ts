@@ -74,6 +74,18 @@ describe('A0 goal contribution proposals', () => {
     const { request } = await run('Aportar R$ 1.500,00 na meta Viagem');
     expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ normalizedArgs: { goalId, amountCents: 150000 } });
   });
+  it('checks ambiguity on the captured monetary amount, not an earlier count', async () => {
+    const ambiguous = await run('aportar 3 vezes R$ 1.500 na meta Viagem');
+    expect(ambiguous.request).not.toHaveBeenCalled();
+    expect(ambiguous.result.response?.text).toMatch(/Qual valor/);
+
+    const explicitCents = await run('aportar 3 vezes R$ 1.500,00 na meta Viagem');
+    expect(explicitCents.request.mock.calls[0]?.[2]?.body).toMatchObject({ normalizedArgs: { amountCents: 150000 } });
+  });
+  it('uses the single explicit currency amount despite a contribution count', async () => {
+    const { request } = await run('aportar 2 aportes de R$ 50,00 na meta Viagem');
+    expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ normalizedArgs: { amountCents: 5000 } });
+  });
   it.each([
     ['em 2026-11-10 aportar 100 na meta Viagem', 10000],
     ['dia 10/11 aportar 100 na meta Viagem', 10000],

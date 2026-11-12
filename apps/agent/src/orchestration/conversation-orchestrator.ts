@@ -6468,14 +6468,16 @@ export class ConversationOrchestrator {
     if (/\b\d[\d.,]*\s*(?:milh(?:ao|oes)|mil|k|mi)\b/iu.test(amountText)) {
       return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['amount']), text: 'Qual valor você quer aportar na meta?' }), response: freeze({ text: 'Qual valor você quer aportar na meta?' }) });
     }
-    const number = '(\\d{1,3}(?:\\.\\d{3})+(?:,\\d{1,2})?|\\d{1,12}(?:[.,]\\d{1,2})?)(?![\\d])';
+    const number = '(\\d{1,3}(?:\\.\\d{3})+(?:,\\d{1,2})?|\\d{1,12}(?:[.,]\\d{1,2})?)(?![\\d.,])';
     const monetaryMatch = amountText.match(new RegExp(`(?:r\\$\\s*${number}|${number}\\s*reais?)`, 'iu'));
-    const rawValue = amountText.match(/\b\d[\d.,]*\b/u)?.[0];
+    const monetaryValue = monetaryMatch?.slice(1).find((part) => part !== undefined);
+    const looseValue = amountText.match(/\b\d[\d.,]*\b/u)?.[0];
+    const rawValue = monetaryValue ?? looseValue;
     const explicitCentsGrouped = !!rawValue && /^\d{1,3}(?:\.\d{3})+,\d{1,2}$/u.test(rawValue);
     const unclearFormatted = !!rawValue && !explicitCentsGrouped && (
-      /\b\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?\b/u.test(rawValue) ||
-      /\b\d+,\d{3,}\b/u.test(rawValue) ||
-      /\b\d+\.\d{3,}\b/u.test(rawValue) && !/\b\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?\b/u.test(rawValue)
+      /^\d{1,3}(?:\.\d{3})+$/u.test(rawValue) ||
+      /^\d+,\d{3,}$/u.test(rawValue) ||
+      /^\d+\.\d{3,}$/u.test(rawValue)
     );
     const numberCandidates = [...amountText.matchAll(/\b\d[\d.,]*\b/gu)];
     if (!monetaryMatch && numberCandidates.length > 1) {
