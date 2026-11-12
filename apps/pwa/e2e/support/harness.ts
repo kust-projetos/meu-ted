@@ -122,7 +122,7 @@ export async function authenticate(
       instrumentation.observer?.disconnect();
       instrumentation.observer = new MutationObserver(() => mark());
       instrumentation.observer.observe(document.body, { childList: true, subtree: true });
-    });
+    }).catch(() => undefined);
     const coldBootSnapshot = () => page.evaluate(() => {
       const state = window as typeof window & { __coldBootLogin?: { remounts: number } };
       const email = document.querySelector<HTMLInputElement>('input[autocomplete="email"], input[type="email"]');
@@ -136,7 +136,7 @@ export async function authenticate(
         bootPlaceholderPresent: Boolean(document.querySelector('[data-testid="root-boot-placeholder"]')),
         remounts: state.__coldBootLogin?.remounts ?? 0,
       };
-    });
+    }).catch(() => null);
     // Hydration gate: server-rendered inputs accept fill() before React
     // hydrates, but hydration then resets the uncontrolled DOM values to
     // React state (empty) and Entrar stays disabled forever (remote PWA-03 /
@@ -166,6 +166,9 @@ export async function authenticate(
       .toBe(true)
       .catch(async (error: unknown) => {
         const snapshot = await coldBootSnapshot();
+        if (snapshot === null) {
+          throw new Error(`${String(error)}\n[cold-boot-instrumentation] snapshot unavailable (navigation)`);
+        }
         throw new Error(`${String(error)}\n[cold-boot-instrumentation] ${JSON.stringify(snapshot)}`);
       });
     await loginBtn.click();
