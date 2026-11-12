@@ -54,6 +54,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
    * from this store; absent it, the card stays fail-closed (no Confirm).
    */
   cardStore?: Pick<import('../cards/store.js').CardStore, 'listCreditCardAccounts' | 'getStatementDetail'>;
+  goalStore?: Pick<import('../goals/store.js').GoalStore, 'listGoals'>;
   approvalPolicy?: ApprovalPolicy;
 }): void => {
   // PR-1 (retire-pending-v1): the registration is unconditionally V2-only.
@@ -191,6 +192,12 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         }
       }
       const categoryLabels = new Map(categories.map((category) => [category.id, category.name]));
+      const goalLabels = new Map<string, string>();
+      if (record.tool === 'goals.contribute' && opts.goalStore) {
+        try {
+          for (const goal of await opts.goalStore.listGoals(ctx.householdId)) goalLabels.set(goal.id, goal.name);
+        } catch { /* honest omission: use generic goal label */ }
+      }
       const storedArgs = (record.normalizedArgs ?? {}) as Record<string, unknown>;
       // P3.6: statement payment presentation is derived from the
       // authoritative statement (amounts/due date/status) plus the CARD and
@@ -283,7 +290,8 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         ...(accountLabel !== undefined ? { accountLabel } : {}),
         ...(transferFromLabel !== undefined ? { fromAccountLabel: transferFromLabel } : {}),
         ...(transferToLabel !== undefined ? { toAccountLabel: transferToLabel } : {}),
-         ...(categoryLabel !== undefined ? { categoryLabel } : {}),
+        ...(categoryLabel !== undefined ? { categoryLabel } : {}),
+        ...(typeof storedArgs.goalId === 'string' && goalLabels.has(storedArgs.goalId) ? { goalLabel: goalLabels.get(storedArgs.goalId)! } : {}),
          ...(transactionTarget ? { transactionTarget } : {}),
          ...(record.tool === 'categories.deactivate' && categoryTarget?.kind ? { categoryKind: categoryTarget.kind } : {}),
          ...(record.tool === 'categories.deactivate' && categoryParent ? { categoryParentLabel: { id: categoryParent.id, name: categoryParent.name } } : {}),
@@ -750,6 +758,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         const payerAccountLabels = new Map<string, string>();
         const cardCycles = new Map<string, { closingDay: number; dueDay: number }>();
         const categoryLabels = new Map<string, string>();
+        const goalLabels = new Map<string, string>();
         const categoryRows = new Map<string, { id: string; name: string; kind?: string; parentId?: string | null }>();
         const transactionRows = new Map<string, import('../types/domain.js').Transaction>();
         if (opts.readModel) {
@@ -775,6 +784,11 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
               for (const transaction of transactions) transactionRows.set(transaction.id,transaction);
             } catch { /* no target context: description card remains degraded/non-actionable */ }
           }
+        }
+        if (records.some((record) => record.tool === 'goals.contribute') && opts.goalStore) {
+          try {
+            for (const goal of await opts.goalStore.listGoals(ctx.householdId)) goalLabels.set(goal.id, goal.name);
+          } catch { /* honest omission: use generic goal label */ }
         }
         // P3.4/P3.6: card operations target a credit-card account, which the
         // generic read model excludes. Merge the workspace's card labels so
@@ -876,6 +890,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
             ...(transferFromLabel !== undefined ? { fromAccountLabel: transferFromLabel } : {}),
             ...(transferToLabel !== undefined ? { toAccountLabel: transferToLabel } : {}),
             ...(categoryLabel !== undefined ? { categoryLabel } : {}),
+            ...(typeof args.goalId === 'string' && goalLabels.has(args.goalId) ? { goalLabel: goalLabels.get(args.goalId)! } : {}),
             ...(transactionContextMatches && transactionAccountName ? { transactionTarget:{id:transaction.id,amountCents:transaction.amountCents,date:transaction.date,accountId:transaction.accountId,accountName:transactionAccountName} } : {}),
             ...(record.tool === 'categories.deactivate' && categoryTarget?.kind ? { categoryKind: categoryTarget.kind } : {}),
             ...(record.tool === 'categories.deactivate' && categoryParent ? { categoryParentLabel: { id: categoryParent.id, name: categoryParent.name } } : {}),

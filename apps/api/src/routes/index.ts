@@ -661,6 +661,7 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
     // P3.4: card-purchase presentation resolves the credit-card label from
     // the CardStore (the generic read model excludes cards by design).
     ...(deps.cardStore ? { cardStore: deps.cardStore } : {}),
+    ...(deps.goalStore ? { goalStore: deps.goalStore } : {}),
   });
   registerAdoptionRoutes(app, {
     store: deps.adoptionStore ?? createInMemoryAdoptionStore(),

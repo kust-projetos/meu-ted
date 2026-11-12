@@ -84,6 +84,7 @@ export const buildPendingOperationPresentation = (input: {
   fromAccountLabel?: string;
   toAccountLabel?: string;
   categoryLabel?: string;
+  goalLabel?: string;
   categoryKind?: string;
   categoryParentLabel?: { id: string; name: string };
   transactionTarget?: { id:string; amountCents:number; date:string; accountId:string; accountName:string };
@@ -554,9 +555,9 @@ export const buildPendingOperationPresentation = (input: {
     const candidate: Record<string, unknown> = {
       id: input.id, status: input.status, tool: input.tool,
       title: `${derivePresentationTitle(input.tool)} — ${formatAmountBRL(amountCents)}`,
-      amountCents, description: `Meta ${goalId}`,
+      amountCents, description: input.goalLabel || 'Aporte em meta',
       ...(typeof contributionDate === 'string' ? { date: contributionDate } : {}),
-      goal: { id: goalId, label: `Meta ${goalId}` },
+      goal: { id: goalId, label: input.goalLabel || 'Meta' },
       expiresAt: input.expiresAt,
       warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
     };

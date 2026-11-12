@@ -17,13 +17,33 @@ const base = {
 };
 
 describe('buildPendingOperationPresentation (SPEC §16)', () => {
-  it('presents a goal contribution with amount and goal identity', () => {
+  it('presents a goal contribution with its resolved name, never its UUID', () => {
+    const goalId = '00000000-0000-4000-8000-000000000020';
     const presentation = buildPendingOperationPresentation({
       ...base, tool: 'goals.contribute',
-      normalizedArgs: { goalId: 'goal-1', amountCents: 25000, contributionDate: '2026-11-10' },
+      normalizedArgs: { goalId, amountCents: 25000, contributionDate: '2026-11-10' },
+      goalLabel: 'Reserva de emergência',
     });
-    expect(presentation).toMatchObject({ title: 'Aporte na meta — R$ 250,00', description: 'Meta goal-1', amountCents: 25000, date: '2026-11-10' });
+    expect(presentation).toMatchObject({
+      title: 'Aporte na meta — R$ 250,00', description: 'Reserva de emergência', amountCents: 25000, date: '2026-11-10',
+      goal: { id: goalId, label: 'Reserva de emergência' },
+    });
+    expect(presentation!.goal?.id).toBe(goalId);
+    expect([presentation!.title, presentation!.description, presentation!.goal?.label].join(' ')).not.toContain(goalId);
     expect(pendingOperationPresentationSchema.safeParse(presentation).success).toBe(true);
+    expect(isActionablePendingOperationPresentation(presentation!)).toBe(true);
+  });
+
+  it('uses a non-identifying fallback when the goal name is unavailable', () => {
+    const goalId = '00000000-0000-4000-8000-000000000021';
+    const presentation = buildPendingOperationPresentation({
+      ...base, tool: 'goals.contribute',
+      normalizedArgs: { goalId, amountCents: 25000 },
+    });
+    expect(presentation).toMatchObject({ description: 'Aporte em meta', goal: { label: 'Meta' } });
+    expect(presentation!.goal?.id).toBe(goalId);
+    expect([presentation!.title, presentation!.description, presentation!.goal?.label].join(' ')).not.toContain(goalId);
+    expect(isActionablePendingOperationPresentation(presentation!)).toBe(true);
   });
   it('derives the card from the same canonical args that will execute (INV-02)', () => {
     const presentation = buildPendingOperationPresentation({
