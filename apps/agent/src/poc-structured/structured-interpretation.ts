@@ -328,6 +328,10 @@ const checkArgValue = (key: string, value: unknown): string | number | boolean |
       }
       return value;
     }
+    case 'alert-threshold': {
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 100) invalid('args-value-shape');
+      return value;
+    }
   }
 };
 
