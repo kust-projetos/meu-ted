@@ -46,6 +46,7 @@ export const APPROVAL_TOOL_IDS = [
   'payables.pay',
   'goals.contribute',
   'budgets.create',
+  'budgets.update',
 ] as const;
 
 export type ApprovalToolId = (typeof APPROVAL_TOOL_IDS)[number];
@@ -841,6 +842,33 @@ const executeBudgetCreate: ApprovalToolExecutor = async ({ workspaceId, args, bu
   } catch { throw createApprovalExecutionUncertainError(); }
 };
 
+export const updateBudgetArgsSchema = z.object({
+  budgetId: z.string().uuid(),
+  amountCents: z.number().int().min(1).max(1_000_000_000_000).optional(),
+  alertThreshold: z.number().int().min(1).max(100).optional(),
+}).strict().refine((value) => value.amountCents !== undefined || value.alertThreshold !== undefined);
+
+const executeBudgetUpdate: ApprovalToolExecutor = async ({ workspaceId, args, budgetStore, actorId }) => {
+  const parsed = updateBudgetArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_budget_update_arguments');
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  if (!budgetStore) throw new Error('validation.budget_store_unavailable');
+  const patch = {
+    ...(parsed.data.amountCents !== undefined ? { amountCents: parsed.data.amountCents } : {}),
+    ...(parsed.data.alertThreshold !== undefined ? { alertThreshold: parsed.data.alertThreshold } : {}),
+  };
+  const { budgetId } = parsed.data;
+  let budget: { id: string };
+  try {
+    // Set-to-value updates converge on replay; no store-level idempotency key is needed.
+    budget = await budgetStore.updateBudget(workspaceId, budgetId, patch);
+  } catch (err) { if (err instanceof DomainError) throw err; throw createApprovalExecutionUncertainError(); }
+  try {
+    const receipt = buildTedReceipt('budgets.update', budget.id, { type: 'budget', id: budget.id });
+    return { status: 'succeeded', operationId: budget.id, receipt };
+  } catch { throw createApprovalExecutionUncertainError(); }
+};
+
 const executePayableCreate: ApprovalToolExecutor = async ({
   workspaceId,
   args,
@@ -932,6 +960,7 @@ const executePayablePay: ApprovalToolExecutor = async ({
 };
 
 const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
+  'budgets.update': { tool: 'budgets.update', inputSchema: updateBudgetArgsSchema, approvalRequired: true, authorizationPolicy: 'risk_based', autoExecutionEligible: false, executor: executeBudgetUpdate },
   'budgets.create': { tool: 'budgets.create', inputSchema: createBudgetArgsSchema, approvalRequired: true, authorizationPolicy: 'risk_based', autoExecutionEligible: false, executor: executeBudgetCreate },
   'goals.contribute': {
     tool: 'goals.contribute', inputSchema: contributeToGoalArgsSchema,

@@ -52,6 +52,15 @@ describe('buildPendingOperationPresentation (SPEC §16)', () => {
     expect(isActionablePendingOperationPresentation(presentation!)).toBe(true);
     expect(buildPendingOperationPresentation(input)).toBeNull();
   });
+  it('presents budget updates only with an amount and resolved budget label', () => {
+    const budgetId = '00000000-0000-4000-8000-000000000025';
+    const input = { ...base, tool: 'budgets.update', normalizedArgs: { budgetId, amountCents: 75000 } };
+    const presentation = buildPendingOperationPresentation({ ...input, budgetLabel: 'Mercado' });
+    expect(presentation).toMatchObject({ title: 'Ajustar orçamento', description: 'Orçamento de Mercado', amountCents: 75000 });
+    expect(isActionablePendingOperationPresentation(presentation!)).toBe(true);
+    expect(buildPendingOperationPresentation({ ...input, normalizedArgs: { budgetId, alertThreshold: 80 }, budgetLabel: 'Mercado' })).toBeNull();
+    expect(buildPendingOperationPresentation(input)).toBeNull();
+  });
   it('derives the card from the same canonical args that will execute (INV-02)', () => {
     const presentation = buildPendingOperationPresentation({
       ...base,
