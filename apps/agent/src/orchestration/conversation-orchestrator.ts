@@ -90,6 +90,7 @@ import type { MutationApiClient, MutationIdentity } from '../mutations/mutation-
 import type { MutationExpectedContext } from '../mutations/mutation-executor.js';
 import { requiresExpectedEntity, resolveExpectedContext } from '../mutations/expected-context.js';
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
+import { hasInstallmentIntent, hasWholeEntityName, isCardPurchaseIntent } from '../mutations/card-purchase-intent.js';
 import {
   CONFIRMATION_OPERATION_SKEW_MS,
   CONFIRMATION_UNBOUND_OPERATION_ID,
@@ -266,6 +267,10 @@ export type TurnPlan = Readonly<{
   ambiguity: string | null;
   confidence: number;
 }>;
+
+const isTransactionMutationPlan = (plan: TurnPlan): boolean =>
+  plan.mode === 'mutation-proposal' && plan.requestedOperations.some(({ name }) =>
+    name === 'transactions.expense.create' || name === 'transactions.income.create' || name === 'cards.purchase.create');
 
 export type MutationPolicy = Readonly<{
   capability: 'financial.read';
@@ -2200,7 +2205,7 @@ export class ConversationOrchestrator {
   private proposedMutation(input: {
     operationId: string;
     tool: string;
-    normalizedArgs: { amountCents: number; description: string; date: string; accountId: string; categoryId: string };
+    normalizedArgs: { amountCents: number; description: string; date: string; accountId: string; categoryId?: string };
     accountName?: string;
     categoryName?: string;
     expiresAt?: string;
@@ -6174,6 +6179,9 @@ export class ConversationOrchestrator {
     if (hasAccountCreationSignal(input.text)) {
       return this.accountFreshFlow(input, plan, startedAt, base, client);
     }
+    if (isTransactionMutationPlan(plan) && isCardPurchaseIntent(input.text)) {
+      return this.runCardPurchaseTurn(input, plan, client, startedAt, base);
+    }
     // R06/A06: interpret once, then keep the historical flow. An ambiguous
     // utterance (AC13) stops before entity resolution: no read, no draft, no
     // proposal, and no invented value.
@@ -6679,6 +6687,85 @@ export class ConversationOrchestrator {
       return this.continueDraft(input, plan, startedAt, base, draft, client);
     }
     return this.freshMutationFlow(input, plan, startedAt, base, client);
+  }
+
+  /** A0/V2 card-purchase proposal. Deliberately bypasses transaction category resolution. */
+  private async runCardPurchaseTurn(
+    input: TurnInput,
+    plan: TurnPlan,
+    client: MutationApiClient | null,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+  ): Promise<TurnResult> {
+    if (hasInstallmentIntent(input.text)) {
+      const text = 'Não consigo confirmar o total dessa compra parcelada com segurança. Informe o valor total ou registre as parcelas separadamente.';
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text }) });
+    }
+    const interpreted = this.interpretTurn(input.text);
+    if (interpreted.status !== 'candidate' || interpreted.parsed.kind !== 'expense') {
+      const text = 'Não consegui identificar com segurança o valor e a descrição da compra. Informe novamente.';
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text }) });
+    }
+    let accounts: readonly EntitySummary[];
+    const reader = this.entityReaderOrClosed();
+    try {
+      accounts = normalizeEntities(await reader.listAccounts());
+    } catch {
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não consegui consultar seus cartões agora. Tente novamente em instantes.' }) });
+    }
+    const scope = reader.scope?.workspaceId;
+    const inScope = accounts.filter((account) => !scope || account.scopeId === undefined || account.scopeId === scope);
+    const cards = inScope.filter((account) => account.kind === 'credit_card' &&
+      account.isActive !== false && (account.status === undefined || account.status.trim().toLowerCase() === 'active'));
+    const citedActiveCard = cards.some((card) => hasWholeEntityName(input.text, card.name));
+    const inactiveCard = inScope.find((account) => account.kind === 'credit_card' &&
+      (account.isActive === false || (account.status !== undefined && account.status.trim().toLowerCase() !== 'active')) &&
+      hasWholeEntityName(input.text, account.name));
+    const citedCardReference = input.text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+      .match(/\bcartao\s+([^.!?,;\n]+)/)?.[1]
+      ?.split(/\s+(?:e|mas|com|na|no|para|por)\s+/)[0]
+      ?.trim().split(/\s+/).slice(0, 3)
+      .filter((word) => !/^(?:a|as|o|os|um|uma|de|do|da|dos|das|em|no|na|com|para|por|credito|debito|virtual|vista|hoje|ontem|amanha|agora|tambem|mesmo|fisico|fisica|digital|novo|nova|reais|real|brl|dia|semana|mes|noite|manha|tarde)$/.test(word)).join(' ') || undefined;
+    const originalCardToken = input.text.match(/\bcart[aã]o\s+([^\s.!?,;]+)/iu)?.[1];
+    const citedUnknownCard = Boolean(citedCardReference) && !/^\d/u.test(originalCardToken ?? '') && !citedActiveCard &&
+      !/^(?:credito|debito|virtual)$/.test(citedCardReference!) &&
+      !cards.some((card) => hasWholeEntityName(citedCardReference!, card.name));
+    if (cards.length > 0 && !citedActiveCard && (inactiveCard || citedUnknownCard)) {
+      const name = inactiveCard?.name ?? citedCardReference;
+      const text = `O cartão ${name} está indisponível ou não foi encontrado. Escolha entre os cartões de crédito disponíveis:\n${cards.map((card) => `• ${card.name}`).join('\n')}`;
+      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['accountId']), text }), response: freeze({ text }) });
+    }
+    const namedNonCard = !citedActiveCard && inScope.some((account) => account.kind !== 'credit_card' &&
+      account.isActive !== false && (account.status === undefined || account.status.trim().toLowerCase() === 'active') &&
+      hasWholeEntityName(input.text, account.name));
+    if (namedNonCard) {
+      const text = `Sua mensagem menciona uma conta que não é cartão. Escolha um cartão disponível para registrar a compra.${cards.length ? `\n${cards.map((card) => `• ${card.name}`).join('\n')}` : ''}`;
+      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['accountId']), text }), response: freeze({ text }) });
+    }
+    if (cards.length !== 1) {
+      const text = cards.length
+        ? `Encontrei mais de um cartão disponível. Qual devo usar?\n${cards.map((card) => `• ${card.name}`).join('\n')}`
+        : 'Não encontrei cartões de crédito disponíveis para essa compra.';
+      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['accountId']), text }), response: freeze({ text }) });
+    }
+    const card = cards[0]!;
+    if (!client) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não foi possível preparar a compra com segurança nesta sessão.' }) });
+    const parsed = interpreted.parsed;
+    const tool = 'cards.purchase.create';
+    const normalizedArgs = { accountId: card.id, amountCents: parsed.amountCents, description: parsed.description, date: parsed.date };
+    const identity: MutationIdentity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })() };
+    this.budgetFor(base).noteProposeAttempt();
+    let proposal: Awaited<ReturnType<MutationApiClient['propose']>>;
+    try {
+      proposal = await client.propose({ tool, normalizedArgs, summary: parsed.description, identity, idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool) });
+    } catch {
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) });
+    }
+    return this.completeTurn(input, plan, startedAt, base, {
+      policy: freeze({ ...base.policy, authorizationMode: 'manual' }),
+      mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, accountName: card.name, expiresAt: proposal.operation.expiresAt }),
+      response: freeze({ text: renderMutationResult('proposed', proposal.summary) }),
+    });
   }
 
   /** Recovery re-emission without a turn response (result converges in store). */
@@ -7494,6 +7581,9 @@ export class ConversationOrchestrator {
     // the same pipeline and fails closed without reviving a V1 relay path.
     if (plan.mode === 'mutation-proposal' && !client) {
       return freeze({ ...result, response: freeze({ text: 'Não foi possível preparar a operação com segurança. A sessão precisa de um dispositivo autenticado.' }) });
+    }
+    if (isTransactionMutationPlan(plan) && isCardPurchaseIntent(input.text) && !this.dependencies.draftStore) {
+      return this.runCardPurchaseTurn(input, plan, client ?? null, startedAt, result);
     }
     if (plan.mode === 'mutation-proposal' && client && !this.dependencies.draftStore) {
       const interpretation = interpretMutationUtterance(input.text);
