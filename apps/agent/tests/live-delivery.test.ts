@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { bindingFromUpgradeHeaders, deliverFrameJson, type ConnectionBinding } from '../src/privacy/live-delivery.js';
+import { bindingFromUpgradeHeaders, deliverFrameJson, LIVE_BINDING_TTL_MS, type ConnectionBinding } from '../src/privacy/live-delivery.js';
 import { FinanceChatAgent } from '../src/finance-chat-agent.js';
 
 const headers = (actor = 'A', workspace = 'ws', role = 'member', device?: string) => {
@@ -7,7 +7,7 @@ const headers = (actor = 'A', workspace = 'ws', role = 'member', device?: string
   if (device) h.set('x-agent-device', device);
   return h;
 };
-const binding = (actorId: string, workspaceId = 'ws'): ConnectionBinding => ({ actorId, workspaceId, role: 'member', validatedAt: 123 });
+const binding = (actorId: string, workspaceId = 'ws'): ConnectionBinding => ({ actorId, workspaceId, role: 'member', validatedAt: Date.now() });
 const connection = (id: string, state: ConnectionBinding | null) => {
   const received: string[] = [];
   return { value: { id, state, send: (data: string) => { received.push(data); }, close: () => {}, setState: () => null }, received };
@@ -58,8 +58,20 @@ describe('live delivery filtering', () => {
     expect(deliverFrameJson(all, '{bad json')).toEqual({ delivered: 0, dropped: 4 });
   });
 
+  it('closes expired bindings and delivers within the TTL', () => {
+    const expired = connection('expired', { ...binding('A'), validatedAt: 10 });
+    const valid = connection('valid', { ...binding('A'), validatedAt: 10 });
+    const expiredClose = vi.fn();
+    expired.value.close = expiredClose;
+    expect(deliverFrameJson([expired.value], JSON.stringify({ messages: [{ metadata: { workspaceId: 'ws', visibility: 'workspace' } }] }), [], 10 + LIVE_BINDING_TTL_MS + 1)).toEqual({ delivered: 0, dropped: 1 });
+    expect(expiredClose).toHaveBeenCalledWith(1008, 'binding_expired');
+    expect(expired.received).toHaveLength(0);
+    expect(deliverFrameJson([valid.value], JSON.stringify({ messages: [{ metadata: { workspaceId: 'ws', visibility: 'workspace' } }] }), [], 10 + LIVE_BINDING_TTL_MS)).toEqual({ delivered: 1, dropped: 0 });
+  });
+
   it('wires actor binding and broadcast to the filtering module', async () => {
     const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent;
+    Object.defineProperty(agent, 'env', { value: { TED_LIVE_SYNC_ENABLED: '1' }, configurable: true });
     Object.defineProperty(agent, 'name', { value: 'ws', configurable: true });
     const a = connection('a', null);
     Object.defineProperty(agent, 'getConnections', { value: () => [a.value] });
@@ -81,5 +93,13 @@ describe('live delivery filtering', () => {
     await agent.onConnect({ setState, close }, { request: new Request('https://example.test') });
     expect(close).toHaveBeenCalledWith(1008, 'actor_binding_required');
     expect(setState).toHaveBeenCalledTimes(count);
+  });
+
+  it('closes a connection when live-sync is disabled', async () => {
+    const agent = Object.create(FinanceChatAgent.prototype) as FinanceChatAgent;
+    Object.defineProperty(agent, 'env', { value: {}, configurable: true });
+    const close = vi.fn();
+    await agent.onConnect({ close }, {});
+    expect(close).toHaveBeenCalledWith(1008, 'live_sync_disabled');
   });
 });
