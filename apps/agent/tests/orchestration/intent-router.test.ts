@@ -3,6 +3,10 @@ import { routeIntent } from '../../src/orchestration/intent-router.js';
 import { hasExplicitMutationIntent } from '../../src/safety/tool-approvals.js';
 
 describe('T2.2 intent router', () => {
+  it('routes an update as a manual mutation and keeps creation distinct', () => {
+    expect(routeIntent('Aumente o orçamento de mercado para 600').requestedTools).toContain('budgets.update');
+    expect(routeIntent('Crie orçamento de mercado para 600').requestedTools).toContain('budgets.create');
+  });
   it.each(['quanto gastei em alimentação', 'meus orçamentos', 'qual meu orçamento de mercado'])('never routes budget reads to creation: %s', (text) => {
     expect(routeIntent(text).requestedTools ?? []).not.toContain('budgets.create');
   });

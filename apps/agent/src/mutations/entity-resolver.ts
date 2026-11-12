@@ -58,6 +58,7 @@ export type EntitySummary = Readonly<{
   scopeId?: string;
   targetAmountCents?: number;
   currentAmountCents?: number;
+  categoryId?: string;
 }>;
 
 export type EntityReader = Readonly<{
@@ -70,6 +71,7 @@ export type EntityReader = Readonly<{
   listAccounts(): Promise<readonly EntitySummary[]>;
   listCategories(): Promise<readonly EntitySummary[]>;
   listGoals?(): Promise<readonly EntitySummary[]>;
+  listBudgets?(): Promise<readonly EntitySummary[]>;
   listTransactions?(): Promise<readonly import('./transaction-description.js').EditableTransaction[]>;
 }>;
 
@@ -170,7 +172,7 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
  * (`GET /accounts`, `GET /categories`), the generic `{ data }` envelope, and
  * the generated client's projected `accounts`/`categories` keys.
  */
-const COLLECTION_KEYS = ['items', 'data', 'accounts', 'categories'] as const;
+const COLLECTION_KEYS = ['items', 'data', 'accounts', 'categories', 'budgets'] as const;
 
 /**
  * A payload this module cannot read as a collection. Fail-closed by contract:
@@ -266,6 +268,7 @@ export const normalizeEntities = (response: unknown): EntitySummary[] => {
             : undefined;
       const targetAmountCents = typeof row.targetAmountCents === 'number' ? row.targetAmountCents : undefined;
       const currentAmountCents = typeof row.currentAmountCents === 'number' ? row.currentAmountCents : undefined;
+      const categoryId = typeof row.categoryId === 'string' ? row.categoryId : undefined;
       entities.push({
         id,
         name,
@@ -276,6 +279,7 @@ export const normalizeEntities = (response: unknown): EntitySummary[] => {
         ...(scopeId !== undefined ? { scopeId } : {}),
         ...(targetAmountCents !== undefined ? { targetAmountCents } : {}),
         ...(currentAmountCents !== undefined ? { currentAmountCents } : {}),
+        ...(categoryId !== undefined ? { categoryId } : {}),
       });
     }
   }
@@ -299,6 +303,7 @@ export const createRequestEntityReader = (request: RequestFn, scope?: Readonly<{
   listAccounts: async () => normalizeEntities(await request('GET', '/accounts')),
   listCategories: async () => normalizeEntities(await request('GET', '/categories')),
   listGoals: async () => normalizeEntities(await request('GET', '/goals')),
+  listBudgets: async () => normalizeEntities(await request('GET', '/budgets')),
   listTransactions: async () => {
     const pageSize = 200;
     const maxPages = 10;

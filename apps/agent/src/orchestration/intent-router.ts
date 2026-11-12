@@ -7,6 +7,7 @@ import { hasTransactionDescriptionSignal } from '../mutations/transaction-descri
 import { selectToolsFor } from '../agent-config/tools.js';
 import { validateTurnPlan, type TurnPlanV2 } from './turn-plan.js';
 import { isBudgetCreationIntent } from '../mutations/budget-creation-intent.js';
+import { isBudgetUpdateIntent } from '../mutations/budget-update-intent.js';
 
 /**
  * Canonical domain→skill mapping (#236/#237). Skill names come from the
@@ -361,6 +362,7 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
     if (isBudgetCreationIntent(normalized)) return makePlan('mutation-proposal', 'budgets', [{ name: 'budgets.create', kind: 'mutation' }], ['orcamentos-metas'], ['budgets.create']);
     return unsupportedBudgetCreatePlan();
   }
+  if (isBudgetUpdateIntent(normalized)) return makePlan('mutation-proposal', 'budgets', [{ name: 'budgets.update', kind: 'mutation' }], ['orcamentos-metas'], ['budgets.update']);
   // S7 (POC Fase 2) + P2a: pergunta CONCEITUAL ("o que e X?", "como funciona
   // X?") sobre entidade financeira, sem verbo de acao nem consulta de dados,
   // e conversa geral — nunca leitura. O possessivo ("o que e MEU saldo?")

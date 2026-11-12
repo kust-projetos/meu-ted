@@ -30,6 +30,7 @@ export const derivePresentationTitle = (tool: string): string =>
       : tool === 'goals.contribute'
         ? 'Aporte na meta'
     : tool === 'budgets.create' ? 'Criar orçamento'
+    : tool === 'budgets.update' ? 'Ajustar orçamento'
     : tool === 'transactions.transfer.create'
       ? 'Transferência'
     : tool === 'transactions.update'
@@ -86,6 +87,7 @@ export const buildPendingOperationPresentation = (input: {
   toAccountLabel?: string;
   categoryLabel?: string;
   goalLabel?: string;
+  budgetLabel?: string;
   categoryKind?: string;
   categoryParentLabel?: { id: string; name: string };
   transactionTarget?: { id:string; amountCents:number; date:string; accountId:string; accountName:string };
@@ -571,6 +573,15 @@ export const buildPendingOperationPresentation = (input: {
     const labels: Record<string, string> = { monthly: 'mensal', quarterly: 'trimestral', yearly: 'anual' };
     if (typeof categoryId !== 'string' || typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents <= 0 || typeof name !== 'string' || !name || typeof startDate !== 'string' || !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(startDate) || typeof period !== 'string' || !labels[period] || !input.categoryLabel?.trim()) return null;
     const candidate = { id: input.id, status: input.status, tool: input.tool, title: derivePresentationTitle(input.tool), amountCents, description: `Orçamento ${labels[period]} de ${name}`, date: startDate, category: { id: categoryId, label: input.categoryLabel }, expiresAt: input.expiresAt, warnings: input.warnings ?? [] };
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    return parsed.success ? parsed.data as PendingOperationPresentation : null;
+  }
+  if (input.tool === 'budgets.update') {
+    const { budgetId, amountCents, alertThreshold } = args as Record<string, unknown>;
+    // Threshold-only changes are supported by the tool but are not actionable in the UI in this slice.
+    if (typeof budgetId !== 'string' || typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents <= 0 || !input.budgetLabel?.trim()) return null;
+    const thresholdText = alertThreshold === undefined ? '' : ` — alerta em ${alertThreshold}%`;
+    const candidate = { id: input.id, status: input.status, tool: input.tool, title: derivePresentationTitle(input.tool), description: `Orçamento de ${input.budgetLabel}${thresholdText}`, amountCents, expiresAt: input.expiresAt, warnings: input.warnings ?? [] };
     const parsed = pendingOperationPresentationSchema.safeParse(candidate);
     return parsed.success ? parsed.data as PendingOperationPresentation : null;
   }

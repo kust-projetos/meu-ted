@@ -122,7 +122,8 @@ export type ArgValueKind =
   | 'boolean'
   | 'account-kind'
   | 'category-kind'
-  | 'installment-count';
+  | 'installment-count'
+  | 'alert-threshold';
 
 export type ArgSpec = Readonly<{
   kind: ArgValueKind;
@@ -165,6 +166,8 @@ export const ARG_SPECS: Readonly<Record<string, ArgSpec>> = Object.freeze({
   // P3.6: statement payment targets an invoice id (resolved by the reader).
   statementId: spec('string', true),
   goalId: spec('string', true),
+  budgetId: spec('string', true),
+  alertThreshold: spec('alert-threshold', true),
   contributionDate: spec('string', true),
   notes: spec('string', true),
   // P3.5: optional parcel count (1–48). The total stays in amountCents.
@@ -291,6 +294,7 @@ export const OPERATION_ARG_KEYS: Readonly<Record<string, ReadonlySet<string>>> =
   ),
   'goals.contribute': argKeys('goalId', 'amountCents', 'contributionDate', 'notes'),
   'budgets.create': argKeys('categoryId', 'name', 'amountCents', 'period', 'startDate'),
+  'budgets.update': argKeys('budgetId', 'amountCents', 'alertThreshold'),
 });
 
 export const isMutationOperation = (operation: string): boolean =>

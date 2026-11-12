@@ -93,6 +93,7 @@ import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
 import { hasInstallmentIntent, hasWholeEntityName, isCardPurchaseIntent } from '../mutations/card-purchase-intent.js';
 import { isGoalContributionIntent } from '../mutations/goal-contribution-intent.js';
 import { budgetPeriodOf, extractNamedAmountCents, isBudgetCreationIntent } from '../mutations/budget-creation-intent.js';
+import { extractBudgetUpdateAmount, hasThresholdIntent, isBudgetUpdateIntent, thresholdOf } from '../mutations/budget-update-intent.js';
 import {
   CONFIRMATION_OPERATION_SKEW_MS,
   CONFIRMATION_UNBOUND_OPERATION_ID,
@@ -2207,7 +2208,7 @@ export class ConversationOrchestrator {
   private proposedMutation(input: {
     operationId: string;
     tool: string;
-    normalizedArgs: { amountCents: number; description: string; date: string; accountId: string; categoryId?: string } | { amountCents: number; goalId: string; contributionDate?: string } | { amountCents: number; categoryId: string; name: string; period: 'monthly' | 'quarterly' | 'yearly'; startDate: string };
+    normalizedArgs: { amountCents: number; description: string; date: string; accountId: string; categoryId?: string } | { amountCents: number; goalId: string; contributionDate?: string } | { amountCents: number; categoryId: string; name: string; period: 'monthly' | 'quarterly' | 'yearly'; startDate: string } | { budgetId: string; amountCents: number; alertThreshold?: number };
     accountName?: string;
     categoryName?: string;
     expiresAt?: string;
@@ -6513,6 +6514,52 @@ export class ConversationOrchestrator {
     return this.completeTurn(input, plan, startedAt, base, { policy: freeze({ ...base.policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, categoryName: category.name, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
   }
 
+  /** Resolve an existing budget authoritatively and propose its new ceiling only. */
+  private async runBudgetUpdateTurn(input: TurnInput, plan: TurnPlan, client: MutationApiClient | null, startedAt: number, base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy }): Promise<TurnResult> {
+    const clarify = (missing: string[], text: string) => this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(missing), text }), response: freeze({ text }) });
+    if (hasNegation(input.text)) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não vou propor essa alteração porque sua mensagem contém uma negação.' }) });
+    const reader = this.dependencies.entityReader;
+    if (!reader?.listBudgets) return clarify(['budgetId'], 'Não consigo consultar seus orçamentos nesta sessão. Tente novamente em instantes.');
+    let budgets: EntitySummary[];
+    let categories: EntitySummary[];
+    try { [budgets, categories] = await Promise.all([reader.listBudgets().then(normalizeEntities), reader.listCategories().then(normalizeEntities)]); }
+    catch { return clarify(['budgetId'], 'Não consegui consultar seus orçamentos agora. Tente novamente em instantes.'); }
+    const scope = reader.scope?.workspaceId;
+    budgets = budgets.filter((row) => (!scope || row.scopeId === undefined || row.scopeId === scope) && row.isActive !== false && !['inactive', 'archived'].includes(row.status?.toLowerCase() ?? ''));
+    categories = categories.filter((row) => (!scope || row.scopeId === undefined || row.scopeId === scope) && row.isActive !== false && !['inactive', 'archived'].includes(row.status?.toLowerCase() ?? ''));
+    const folded = input.text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const spans = budgets.flatMap((budget) => {
+      const category = categories.find((row) => row.id === budget.categoryId);
+      return [...new Set([budget.name, category?.name].filter((name): name is string => !!name))].flatMap((name) => {
+        if (!hasWholeEntityName(input.text, name)) return [];
+        const escaped = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+        const match = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'u').exec(folded);
+        return match ? [{ budget, name, start: match.index, end: match.index + match[0].length }] : [];
+      });
+    });
+    const disjoint = spans.some((a, i) => spans.slice(i + 1).some((b) => a.budget.id !== b.budget.id && (a.end <= b.start || b.end <= a.start)));
+    const longest = Math.max(0, ...spans.map((span) => span.end - span.start));
+    const selected = spans.filter((span) => span.end - span.start === longest);
+    if (disjoint || selected.length !== 1) return clarify(['budgetId'], `Qual orçamento ativo devo ajustar?${budgets.length ? `\n${budgets.map((row) => row.name).join('\n')}` : ''}`);
+    const budget = selected[0]!.budget;
+    const categoryName = categories.find((row) => row.id === budget.categoryId)?.name;
+    const amountCents = extractBudgetUpdateAmount(input.text, [selected[0]!.name]);
+    if (!amountCents) return clarify(['amountCents'], 'Qual deve ser o novo teto do orçamento?');
+    const alertThreshold = hasThresholdIntent(input.text) ? thresholdOf(input.text) : undefined;
+    if (hasThresholdIntent(input.text) && !alertThreshold) return clarify(['alertThreshold'], 'Qual limiar de alerta entre 1% e 100% você quer usar?');
+    if (!client) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não foi possível preparar o ajuste com segurança nesta sessão.' }) });
+    const tool = 'budgets.update';
+    const normalizedArgs = { budgetId: budget.id, amountCents, ...(alertThreshold !== undefined ? { alertThreshold } : {}) };
+    const identity: MutationIdentity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })() };
+    this.budgetFor(base).noteProposeAttempt();
+    let proposal: Awaited<ReturnType<MutationApiClient['propose']>>;
+    const label = budget.name || categoryName || '';
+    const summary = `Ajustar orçamento de ${label} para R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}`;
+    try { proposal = await client.propose({ tool, normalizedArgs, summary, identity, idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool) }); }
+    catch { return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) }); }
+    return this.completeTurn(input, plan, startedAt, base, { policy: freeze({ ...base.policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, categoryName: label, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
+  }
+
   /**
    * debt-undo-confirmation-protocol: free text only proposes. Returns null
    * when this turn is not an undo turn (normal flow continues). Every
@@ -7591,6 +7638,7 @@ export class ConversationOrchestrator {
     // an undo) and after the decision modes below are reached only for their
     // own texts. An active draft is preserved untouched: no CAS, no write.
     if (isBudgetCreationIntent(input.text)) return this.runBudgetCreateTurn(input, plan, this.dependencies.mutationApiClient ?? null, startedAt, result);
+    if (isBudgetUpdateIntent(input.text)) return this.runBudgetUpdateTurn(input, plan, this.dependencies.mutationApiClient ?? null, startedAt, result);
     const ambiguous = this.ambiguousMutationClarification(input.text);
     if (ambiguous) return this.stopAmbiguousMutation(input, plan, startedAt, result, ambiguous);
     const client = this.dependencies.mutationApiClient;

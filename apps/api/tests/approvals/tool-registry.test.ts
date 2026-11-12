@@ -24,12 +24,13 @@ import {
 } from '../../src/writes/types.js';
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
 import { createInMemoryStores } from '../../src/writes/in-memory.js';
+import { DomainError, domainErrors } from '../../src/writes/errors.js';
 
-const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'transactions.transfer.create', 'cards.purchase.create', 'cards.statement.pay', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'payables.create', 'payables.pay', 'goals.contribute', 'budgets.create'] as const;
+const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'transactions.transfer.create', 'cards.purchase.create', 'cards.statement.pay', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'payables.create', 'payables.pay', 'goals.contribute', 'budgets.create', 'budgets.update'] as const;
 
 // Manual-only tools: never auto-executed (absent from
 // AUTOEXECUTION_ELIGIBLE_TOOLS, contract pin autoExecutionEligible=false).
-const MANUAL_ONLY_TOOLS = ['transactions.transfer.create', 'cards.purchase.create', 'cards.statement.pay', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'payables.create', 'payables.pay', 'goals.contribute', 'budgets.create'] as const;
+const MANUAL_ONLY_TOOLS = ['transactions.transfer.create', 'cards.purchase.create', 'cards.statement.pay', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'payables.create', 'payables.pay', 'goals.contribute', 'budgets.create', 'budgets.update'] as const;
 
 describe('T0.1: Approval Tool Contract registry', () => {
   it('executes goal contribution using the workspace-scoped GoalStore and returns a bound receipt', async () => {
@@ -63,6 +64,31 @@ describe('T0.1: Approval Tool Contract registry', () => {
     });
     expect(store.createBudget).toHaveBeenCalledWith('ws', args, { idempotencyKey: 'budget-key' });
     await expect(contract.executor({ writes: {} as never, workspaceId: 'ws', actorId: 'actor', args, idempotencyKey: 'budget-key' })).rejects.toThrow('validation.budget_store_unavailable');
+  });
+  it('executes budgets.update for amount and threshold with a bound receipt; validates strictly', async () => {
+    const id = '00000000-0000-4000-8000-000000000014';
+    const budgetId = '00000000-0000-4000-8000-000000000015';
+    const store = { updateBudget: vi.fn().mockResolvedValue({ id }) } as never;
+    const contract = requireApprovalToolContract('budgets.update');
+    expect(contract.autoExecutionEligible).toBe(false);
+    expect(contract.inputSchema.safeParse({ budgetId, amountCents: 20000 }).success).toBe(true);
+    expect(contract.inputSchema.safeParse({ budgetId, alertThreshold: 80 }).success).toBe(true);
+    expect(contract.inputSchema.safeParse({ budgetId }).success).toBe(false);
+    expect(contract.inputSchema.safeParse({}).success).toBe(false);
+    expect(contract.inputSchema.safeParse({ budgetId, amountCents: 1, extra: true }).success).toBe(false);
+    await expect(contract.executor({ writes: {} as never, budgetStore: store, workspaceId: 'ws', actorId: 'actor', args: { budgetId, amountCents: 20000 }, idempotencyKey: 'budget-key' })).resolves.toMatchObject({
+      operationId: id, receipt: { mutationKind: 'budgets.update', operationId: id, entity: { type: 'budget', id } },
+    });
+    expect(store.updateBudget).toHaveBeenCalledWith('ws', budgetId, { amountCents: 20000 });
+    await contract.executor({ writes: {} as never, budgetStore: store, workspaceId: 'ws', actorId: 'actor', args: { budgetId, alertThreshold: 80 }, idempotencyKey: 'budget-key' });
+    expect(store.updateBudget).toHaveBeenLastCalledWith('ws', budgetId, { alertThreshold: 80 });
+    await expect(contract.executor({ writes: {} as never, workspaceId: 'ws', actorId: 'actor', args: { budgetId, amountCents: 20000 }, idempotencyKey: 'budget-key' })).rejects.toThrow('validation.budget_store_unavailable');
+    const notFound = domainErrors.notFound('Orçamento');
+    const missingStore = { updateBudget: vi.fn().mockRejectedValue(notFound) } as never;
+    await expect(contract.executor({ writes: {} as never, budgetStore: missingStore, workspaceId: 'ws', actorId: 'actor', args: { budgetId, amountCents: 20000 }, idempotencyKey: 'budget-key' })).rejects.toBeInstanceOf(DomainError);
+    await expect(contract.executor({ writes: {} as never, budgetStore: missingStore, workspaceId: 'ws', actorId: 'actor', args: { budgetId, amountCents: 20000 }, idempotencyKey: 'budget-key' })).rejects.toMatchObject({ code: 'not_found' });
+    const failingStore = { updateBudget: vi.fn().mockRejectedValue(new Error('store unavailable')) } as never;
+    await expect(contract.executor({ writes: {} as never, budgetStore: failingStore, workspaceId: 'ws', actorId: 'actor', args: { budgetId, amountCents: 20000 }, idempotencyKey: 'budget-key' })).rejects.toMatchObject({ code: 'approval.execution_uncertain' });
   });
   it('registers exactly the V2 mutable tools in the closed registry', () => {
     expect([...APPROVAL_TOOL_IDS].sort()).toEqual([...EXPECTED_TOOLS].sort());

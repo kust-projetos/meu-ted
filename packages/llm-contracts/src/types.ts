@@ -393,6 +393,7 @@ export const TED_APPROVAL_TOOLS = [
   'payables.pay',
   'goals.contribute',
   'budgets.create',
+  'budgets.update',
 ] as const;
 export type TedApprovalTool = (typeof TED_APPROVAL_TOOLS)[number];
 
@@ -700,6 +701,9 @@ export const isActionablePendingOperationPresentation = (
   if (presentation.tool === 'budgets.create') {
     return typeof presentation.amountCents === 'number' && Number.isFinite(presentation.amountCents) && presentation.amountCents > 0 && isNonEmptyString(presentation.description) && isNonEmptyString(presentation.date) && isPresentationLabel(presentation.category);
   }
+  if (presentation.tool === 'budgets.update') {
+    return typeof presentation.amountCents === 'number' && Number.isInteger(presentation.amountCents) && presentation.amountCents > 0 && isNonEmptyString(presentation.description);
+  }
   if (presentation.tool === 'transactions.transfer.create') {
     // Internal transfer card: amount, date, description and BOTH
     // server-resolved account labels gate Confirm. No category is involved.
@@ -806,6 +810,7 @@ export const MUTATION_EFFECTS_REGISTRY: Record<MutationKind, MutationEffectsEntr
   'goal.delete': { mutationKind: 'goal.delete', affectedTargets: ['goals', 'dashboard-summary'] },
   'goals.contribute': { mutationKind: 'goals.contribute', affectedTargets: ['goals', 'dashboard-summary'] },
   'budgets.create': { mutationKind: 'budgets.create', affectedTargets: ['budgets', 'dashboard-summary'] },
+  'budgets.update': { mutationKind: 'budgets.update', affectedTargets: ['budgets', 'dashboard-summary'] },
   'account.create': { mutationKind: 'account.create', affectedTargets: ['accounts', 'dashboard-summary'] },
   'account.update': { mutationKind: 'account.update', affectedTargets: ['accounts', 'dashboard-summary'] },
   'account.delete': { mutationKind: 'account.delete', affectedTargets: ['accounts', 'dashboard-summary'] },

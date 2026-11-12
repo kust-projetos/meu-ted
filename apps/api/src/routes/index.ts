@@ -663,6 +663,7 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
     // the CardStore (the generic read model excludes cards by design).
     ...(deps.cardStore ? { cardStore: deps.cardStore } : {}),
     ...(deps.goalStore ? { goalStore: deps.goalStore } : {}),
+    ...(deps.budgetStore ? { budgetStore: deps.budgetStore } : {}),
   });
   registerAdoptionRoutes(app, {
     store: deps.adoptionStore ?? createInMemoryAdoptionStore(),

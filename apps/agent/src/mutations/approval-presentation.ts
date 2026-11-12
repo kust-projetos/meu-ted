@@ -47,6 +47,14 @@ export const buildApprovalPresentation = (input: {
     const parsed = pendingOperationPresentationSchema.safeParse(candidate);
     return parsed.success ? parsed.data as PendingOperationPresentation : null;
   }
+  if (input.tool === 'budgets.update') {
+    const { amountCents, budgetId, alertThreshold } = args;
+    if (typeof budgetId !== 'string' || typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents <= 0 || (alertThreshold !== undefined && (typeof alertThreshold !== 'number' || !Number.isInteger(alertThreshold) || alertThreshold < 1 || alertThreshold > 100)) || !input.categoryLabel) return null;
+    const thresholdLabel = typeof alertThreshold === 'number' ? `; alerta em ${alertThreshold}%` : '';
+    const candidate: Record<string, unknown> = { id: input.operationId, status: input.status, tool: input.tool, title: 'Confirmar ajuste de orçamento', amountCents, description: `Novo teto de ${input.categoryLabel}${thresholdLabel}`, expiresAt: input.expiresAt, warnings: [] };
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    return parsed.success ? parsed.data as PendingOperationPresentation : null;
+  }
   const { amountCents, description, date, accountId, categoryId } = args;
   if (
     typeof amountCents !== 'number' ||

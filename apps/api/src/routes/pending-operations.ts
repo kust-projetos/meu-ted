@@ -55,6 +55,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
    */
   cardStore?: Pick<import('../cards/store.js').CardStore, 'listCreditCardAccounts' | 'getStatementDetail'>;
   goalStore?: Pick<import('../goals/store.js').GoalStore, 'listGoals'>;
+  budgetStore?: Pick<import('../budgets/store.js').BudgetStore, 'listBudgets'>;
   approvalPolicy?: ApprovalPolicy;
 }): void => {
   // PR-1 (retire-pending-v1): the registration is unconditionally V2-only.
@@ -193,6 +194,12 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
       }
       const categoryLabels = new Map(categories.map((category) => [category.id, category.name]));
       const goalLabels = new Map<string, string>();
+      const budgetLabels = new Map<string, string>();
+      if (record.tool === 'budgets.update' && opts.budgetStore) {
+        try {
+          for (const budget of await opts.budgetStore.listBudgets(ctx.householdId)) budgetLabels.set(budget.id, budget.name);
+        } catch { /* honest omission: no budget label → not actionable */ }
+      }
       if (record.tool === 'goals.contribute' && opts.goalStore) {
         try {
           for (const goal of await opts.goalStore.listGoals(ctx.householdId)) goalLabels.set(goal.id, goal.name);
@@ -292,6 +299,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         ...(transferToLabel !== undefined ? { toAccountLabel: transferToLabel } : {}),
         ...(categoryLabel !== undefined ? { categoryLabel } : {}),
         ...(typeof storedArgs.goalId === 'string' && goalLabels.has(storedArgs.goalId) ? { goalLabel: goalLabels.get(storedArgs.goalId)! } : {}),
+        ...(typeof storedArgs.budgetId === 'string' && budgetLabels.has(storedArgs.budgetId) ? { budgetLabel: budgetLabels.get(storedArgs.budgetId)! } : {}),
          ...(transactionTarget ? { transactionTarget } : {}),
          ...(record.tool === 'categories.deactivate' && categoryTarget?.kind ? { categoryKind: categoryTarget.kind } : {}),
          ...(record.tool === 'categories.deactivate' && categoryParent ? { categoryParentLabel: { id: categoryParent.id, name: categoryParent.name } } : {}),
@@ -759,6 +767,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         const cardCycles = new Map<string, { closingDay: number; dueDay: number }>();
         const categoryLabels = new Map<string, string>();
         const goalLabels = new Map<string, string>();
+        const budgetLabels = new Map<string, string>();
         const categoryRows = new Map<string, { id: string; name: string; kind?: string; parentId?: string | null }>();
         const transactionRows = new Map<string, import('../types/domain.js').Transaction>();
         if (opts.readModel) {
@@ -789,6 +798,11 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
           try {
             for (const goal of await opts.goalStore.listGoals(ctx.householdId)) goalLabels.set(goal.id, goal.name);
           } catch { /* honest omission: use generic goal label */ }
+        }
+        if (records.some((record) => record.tool === 'budgets.update') && opts.budgetStore) {
+          try {
+            for (const budget of await opts.budgetStore.listBudgets(ctx.householdId)) budgetLabels.set(budget.id, budget.name);
+          } catch { /* honest omission: no budget label → degraded card */ }
         }
         // P3.4/P3.6: card operations target a credit-card account, which the
         // generic read model excludes. Merge the workspace's card labels so
@@ -891,6 +905,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
             ...(transferToLabel !== undefined ? { toAccountLabel: transferToLabel } : {}),
             ...(categoryLabel !== undefined ? { categoryLabel } : {}),
             ...(typeof args.goalId === 'string' && goalLabels.has(args.goalId) ? { goalLabel: goalLabels.get(args.goalId)! } : {}),
+            ...(typeof args.budgetId === 'string' && budgetLabels.has(args.budgetId) ? { budgetLabel: budgetLabels.get(args.budgetId)! } : {}),
             ...(transactionContextMatches && transactionAccountName ? { transactionTarget:{id:transaction.id,amountCents:transaction.amountCents,date:transaction.date,accountId:transaction.accountId,accountName:transactionAccountName} } : {}),
             ...(record.tool === 'categories.deactivate' && categoryTarget?.kind ? { categoryKind: categoryTarget.kind } : {}),
             ...(record.tool === 'categories.deactivate' && categoryParent ? { categoryParentLabel: { id: categoryParent.id, name: categoryParent.name } } : {}),
