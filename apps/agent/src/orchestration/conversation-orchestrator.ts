@@ -6479,10 +6479,10 @@ export class ConversationOrchestrator {
     if (hasNegation(input.text)) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não vou propor esse orçamento porque sua mensagem contém uma negação.' }) });
     if (!client) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não foi possível preparar o orçamento com segurança nesta sessão.' }) });
     const reader = this.dependencies.entityReader;
-    if (!reader) return clarification(['categoryId'], 'Não consigo consultar suas categorias nesta sessão. Qual categoria de despesa devo usar?');
+    if (!reader) return clarification(['categoryId'], 'Não consigo consultar as categorias para montar o orçamento nesta sessão. Qual categoria de despesa devo usar?');
     let categories: EntitySummary[];
     try { categories = normalizeEntities(await reader.listCategories()); }
-    catch { return clarification(['categoryId'], 'Não consegui consultar suas categorias agora. Tente novamente em instantes.'); }
+    catch { return clarification(['categoryId'], 'Não consegui consultar as categorias para montar o orçamento agora. Tente novamente em instantes.'); }
     const scope = reader.scope?.workspaceId;
     categories = categories.filter((category) => (!scope || category.scopeId === undefined || category.scopeId === scope) && category.kind === 'expense' && category.isActive !== false && category.status?.toLowerCase() !== 'inactive' && category.status?.toLowerCase() !== 'archived');
     const spans = categories.flatMap((category) => {
@@ -6495,7 +6495,7 @@ export class ConversationOrchestrator {
     const longest = Math.max(0, ...spans.map((span) => span.end - span.start));
     const matches = spans.filter((span) => span.end - span.start === longest);
     if (spans.some((a) => spans.some((b) => a.category.id !== b.category.id && (a.end <= b.start || b.end <= a.start)))) return clarification(['categoryId'], `Você mencionou mais de uma categoria. Qual devo usar?\n${[...new Set(spans.map((span) => span.category.name))].map((name) => `• ${name}`).join('\n')}`);
-    if (matches.length !== 1) return clarification(['categoryId'], categories.length ? `Qual categoria de despesa devo usar?\n${categories.map((category) => `• ${category.name}`).join('\n')}` : 'Não encontrei categorias de despesa disponíveis. Qual categoria devo usar?');
+    if (matches.length !== 1) return clarification(['categoryId'], categories.length ? `Qual categoria de despesa devo usar para o orçamento?\n${categories.map((category) => `• ${category.name}`).join('\n')}` : 'Não encontrei categorias de despesa disponíveis para o orçamento. Qual categoria devo usar?');
     const category = matches[0]!.category;
     const amountCents = extractNamedAmountCents(input.text, category.name);
     if (!amountCents) return clarification(['amount'], 'Qual valor você quer definir para o orçamento?');
