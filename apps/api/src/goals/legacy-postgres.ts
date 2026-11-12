@@ -41,7 +41,7 @@ const contributeToGoalInTxLegacy = async (
     const cid = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('').replace(/^(........)(....)(....)(....)(............)$/, '$1-$2-$3-$4-$5');
     const inserted = await client.query<Row>(`INSERT INTO goal_contributions (id, goal_id, household_id, amount_cents, contribution_date, source, notes) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING RETURNING id`, [cid, goalId, householdId, input.amountCents, date, input.source ?? null, input.notes ?? null]);
     if ((inserted.rowCount ?? 0) === 0) {
-      const prior = await client.query<Row>(`SELECT id, goal_id, amount_cents, contribution_date FROM goal_contributions WHERE id=$1`, [cid]);
+      const prior = await client.query<Row>(`SELECT id, goal_id, amount_cents, contribution_date FROM goal_contributions WHERE id=$1 AND household_id=$2`, [cid, householdId]);
       if (!prior.rows[0]) throw new Error('goal_contribution.idempotency_conflict_missing');
       const priorDateValue = prior.rows[0]['contribution_date'];
       const priorDate = priorDateValue instanceof Date ? priorDateValue.toISOString().slice(0, 10) : String(priorDateValue).slice(0, 10);

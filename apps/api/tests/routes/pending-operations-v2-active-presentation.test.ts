@@ -126,7 +126,7 @@ describe('FIX-P1 RED: GET /pending-operations/v2/active carries canonical presen
     expect([presentation.title, presentation.description, presentation.goal.label].join(' ')).not.toContain(goalId);
   });
 
-  it('uses a generic goal label and keeps the listing available when goal lookup fails', async () => {
+  it('fails closed without a resolved goal label while keeping the listing available', async () => {
     const goalId = crypto.randomUUID();
     const { app } = scopedApp(
       { workspace: 'ws-goal-label-error', actor: 'a', device: 'd' },
@@ -141,10 +141,11 @@ describe('FIX-P1 RED: GET /pending-operations/v2/active carries canonical presen
     });
     const response = await app.inject({ method: 'GET', url: '/pending-operations/v2/active' });
     expect(response.statusCode).toBe(200);
-    const presentation = response.json().items[0].presentation;
-    expect(presentation).toMatchObject({ description: 'Aporte em meta', goal: { label: 'Meta' } });
-    expect(presentation.goal.id).toBe(goalId);
-    expect([presentation.title, presentation.description, presentation.goal.label].join(' ')).not.toContain(goalId);
+    const listing = response.json();
+    expect(listing.items).toHaveLength(1);
+    expect(listing.items[0]).toBeDefined();
+    expect(listing.items[0].presentation).toBeUndefined();
+    expect(JSON.stringify(listing.items[0])).not.toContain(goalId);
   });
 
   it('FIX-P1 labels RED: resolves account/category labels server-side from the authoritative read model', async () => {
