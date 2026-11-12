@@ -1,4 +1,4 @@
-import { AIChatAgent, type UIMessage } from "agents/ai-chat-agent";
+import { AIChatAgent, type AgentConnection, type UIMessage } from "agents/ai-chat-agent";
 import { streamText, generateText, stepCountIs } from "ai";
 import { z } from "zod";
 import { protocolSchema } from "@pi-finance/llm-contracts/schemas";
@@ -48,6 +48,7 @@ import {
   stampMessageAudience,
   type ConversationAudience,
 } from "./privacy/conversation-visibility.js";
+import { bindingFromUpgradeHeaders, deliverFrameJson, type ConnectionBinding } from "./privacy/live-delivery.js";
 import {
   ensureTurnAudienceBinding,
   initializeTurnAudienceBindingSchema,
@@ -988,6 +989,28 @@ export const toMemorySql = (storage: unknown): MemorySql | null => {
 
 export class FinanceChatAgent extends AIChatAgent<Env> {
   static override readonly messageConcurrency = "queue" as const;
+
+  override async onConnect(connection: unknown, ctx: unknown): Promise<void> {
+    const context = ctx as { request?: Request } | null;
+    const request = context?.request;
+    const binding = request instanceof Request ? bindingFromUpgradeHeaders(request.headers) : null;
+    if (!binding) {
+      (connection as AgentConnection<ConnectionBinding>).close(1008, 'actor_binding_required');
+      return;
+    }
+    if (typeof this.name === 'string' && this.name.length > 0 && binding.workspaceId !== this.name) {
+      (connection as AgentConnection<ConnectionBinding>).close(1008, 'workspace_binding_mismatch');
+      return;
+    }
+    (connection as AgentConnection<ConnectionBinding>).setState((prev) => ({ ...(prev ?? {}), ...binding }));
+  }
+
+  // ADR-032: frames without classifiable message audiences (including stream
+  // responses) are denied until explicitly classified; WS transport stays closed.
+  override broadcast(msg: string | ArrayBuffer | ArrayBufferView, without?: string[]): void {
+    if (typeof msg !== 'string') return;
+    deliverFrameJson(this.getConnections<ConnectionBinding>(), msg, without);
+  }
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
