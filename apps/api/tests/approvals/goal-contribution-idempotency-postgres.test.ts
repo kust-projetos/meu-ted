@@ -44,6 +44,8 @@ describeIfDb('goal contribution idempotency PostgreSQL', () => {
     const first = await store.contributeToGoal(householdId, goal.id, input, { idempotencyKey: 'replay-key' });
     const replay = await store.contributeToGoal(householdId, goal.id, input, { idempotencyKey: 'replay-key' });
     expect(replay.id).toBe(first.id);
+    await expect(store.contributeToGoal(householdId, goal.id, { ...input, amountCents: 3000 }, { idempotencyKey: 'replay-key' }))
+      .rejects.toMatchObject({ code: 'validation.invalid' });
     expect((await store.listGoals(householdId))[0]?.currentAmountCents).toBe(2500);
     expect((await pool.query('SELECT id FROM goal_contributions WHERE goal_id=$1', [goal.id])).rowCount).toBe(1);
 
