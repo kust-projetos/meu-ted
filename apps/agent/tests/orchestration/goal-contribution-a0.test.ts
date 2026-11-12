@@ -56,4 +56,18 @@ describe('A0 goal contribution proposals', () => {
     const retry = await run('Guardar R$ 20 na meta Viagem', undefined, true, 'same-intention');
     expect(first.request.mock.calls[0]?.[2]?.idempotencyKey).toBe(retry.request.mock.calls[0]?.[2]?.idempotencyKey);
   });
+  it.each(['Guardar na meta Viagem em 10/11/2026', 'Aportar 12,345 na meta Viagem', 'Aportar 2 mil na meta Viagem', 'Aportar 1.500 na meta Viagem'])('asks amount instead of guessing from ambiguous text: %s', async (text) => {
+    const { result, request } = await run(text);
+    expect(result.response?.text).toMatch(/Qual valor/);
+    expect(request).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['Aportar R$ 20 na meta reserva de emergência', 'Reserva de Emergência'],
+    ['Aportar R$ 20 na meta Viagem 2026', 'Viagem 2026'],
+  ])('resolves the longest goal name: %s', async (text, name) => {
+    const goals = [{ id: '00000000-0000-4000-8000-000000000301', name: 'Reserva', status: 'active' }, { id: '00000000-0000-4000-8000-000000000302', name: 'Reserva de Emergência', status: 'active' }, { id: '00000000-0000-4000-8000-000000000303', name: 'Viagem', status: 'active' }, { id: '00000000-0000-4000-8000-000000000304', name: 'Viagem 2026', status: 'active' }];
+    const { request } = await run(text, goals);
+    const expected = goals.find((goal) => goal.name === name)!;
+    expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ normalizedArgs: { goalId: expected.id, amountCents: 2000 } });
+  });
 });

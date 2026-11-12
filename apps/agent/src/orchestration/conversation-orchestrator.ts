@@ -6420,11 +6420,13 @@ export class ConversationOrchestrator {
     goals = goals.filter((goal) => !scope || goal.scopeId === undefined || goal.scopeId === scope);
     const active = goals.filter((goal) => goal.isActive !== false && !['cancelled', 'achieved'].includes(goal.status?.toLowerCase() ?? ''));
     const matches = active.filter((goal) => hasWholeEntityName(input.text, goal.name));
-    if (matches.length > 1) {
+    const longestLength = Math.max(0, ...matches.map((goal) => goal.name.trim().length));
+    const bestMatches = matches.filter((goal) => goal.name.trim().length === longestLength);
+    if (bestMatches.length > 1) {
       const text = `Encontrei mais de uma meta com esse nome. Qual delas?\n${matches.map((goal) => `• ${goal.name}`).join('\n')}`;
       return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['goalId']), text }), response: freeze({ text }) });
     }
-    if (matches.length === 0) {
+    if (bestMatches.length === 0) {
       const unavailable = goals.find((goal) => hasWholeEntityName(input.text, goal.name) && (['cancelled', 'achieved'].includes(goal.status?.toLowerCase() ?? '') || goal.isActive === false));
       const text = unavailable
         ? `A meta ${unavailable.name} está ${unavailable.status?.toLowerCase() === 'achieved' ? 'atingida' : 'indisponível'}. Escolha uma meta ativa.`
@@ -6434,17 +6436,28 @@ export class ConversationOrchestrator {
       return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['goalId']), text }), response: freeze({ text }) });
     }
     if (!client) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não foi possível preparar o aporte com segurança nesta sessão.' }) });
-    const goal = matches[0]!;
+    const goal = bestMatches[0]!;
     // Remove the resolved name after accent/case folding before looking for
     // numerals: names such as "Viagem 2026" must never supply the amount.
     const foldedText = input.text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     const foldedName = goal.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
     const escapedName = foldedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
     const goalNamePattern = new RegExp(`(?<![\\p{L}\\p{N}])${escapedName}(?![\\p{L}\\p{N}])`, 'u');
-    const amountText = foldedText.replace(goalNamePattern, ' ');
-    const number = '(\\d{1,3}(?:\\.\\d{3})+(?:,\\d{1,2})?|\\d{1,12}(?:[.,]\\d{1,2})?)';
+    let amountText = foldedText.replace(goalNamePattern, ' ');
+    amountText = amountText
+      .replace(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/g, ' ')
+      .replace(/\b\d{1,2}\s+de\s+(?:janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+de\s+\d{4}\b/g, ' ')
+      .replace(/\bem\s+\d{4}\b/g, ' ')
+      .replace(/\b\d+(?:[.,]\d+)?\s*%/g, ' ')
+      .replace(/\bdia\s+\d+\b/g, ' ');
+    if (/\b\d[\d.,]*\s*(?:milh(?:ao|oes)|mil|k|mi)\b/iu.test(amountText)) {
+      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['amount']), text: 'Qual valor você quer aportar na meta?' }), response: freeze({ text: 'Qual valor você quer aportar na meta?' }) });
+    }
+    const number = '(\\d{1,3}(?:\\.\\d{3})+(?:,\\d{1,2})?|\\d{1,12}(?:[.,]\\d{1,2})?)(?![\\d])';
     const monetaryMatch = amountText.match(new RegExp(`(?:r\\$\\s*${number}|${number}\\s*reais?)`, 'iu'));
-    const valueMatch = monetaryMatch ?? amountText.match(new RegExp(number, 'iu'));
+    const rawValue = amountText.match(/\b\d[\d.,]*\b/u)?.[0];
+    const unclearFormatted = !!rawValue && /[.,]/.test(rawValue) && !monetaryMatch;
+    const valueMatch = unclearFormatted ? null : monetaryMatch ?? amountText.match(new RegExp(number, 'iu'));
     let amountCents: number | undefined;
     const rawAmount = valueMatch?.slice(1).find((part) => part !== undefined);
     if (rawAmount) {
