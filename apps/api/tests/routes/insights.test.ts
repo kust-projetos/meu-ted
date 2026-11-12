@@ -108,3 +108,50 @@ describe('GET /insights/spending with unified authenticatedContext (session-firs
     expect(body.transactionCount).toBe(0);
   });
 });
+
+describe('GET /insights/spending', () => {
+  it('returns comparison and income-share insights with the competence basis', async () => {
+    const { app } = buildTestApp(seed);
+    const res = await app.inject({
+      method: 'GET', url: '/insights/spending?yearMonth=2026-06&insightType=all',
+      headers: { 'x-device-token': TOKEN_A },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({ success: true, yearMonth: '2026-06', basis: 'competencia', transactionCount: 4 });
+    expect(body.insights).toHaveLength(2);
+    expect(body.insights[0]).toMatchObject({
+      type: 'comparison', basis: 'competencia', yearMonth: '2026-06', previousYearMonth: '2026-05',
+      currentExpenseCents: expect.any(Number), previousExpenseCents: expect.any(Number), averageExpenseCents: expect.any(Number),
+      deltaVsPreviousCents: expect.any(Number),
+      deltaVsAverageCents: expect.any(Number),
+    });
+    expect(body.insights[1]).toMatchObject({
+      type: 'income-share', basis: 'competencia', yearMonth: '2026-06',
+      expenseCents: expect.any(Number), incomeCents: expect.any(Number), sharePercent: expect.any(Number),
+    });
+    expect(body.insights[0].deltaVsPreviousPercent === null || typeof body.insights[0].deltaVsPreviousPercent === 'number').toBe(true);
+    expect(body.insights[0].deltaVsAveragePercent === null || typeof body.insights[0].deltaVsAveragePercent === 'number').toBe(true);
+  });
+
+  it('filters comparison and leaves anomalies empty', async () => {
+    const { app } = buildTestApp(seed);
+    for (const [type, expectedCount] of [['comparison', 1], ['anomalies', 0]] as const) {
+      const res = await app.inject({
+        method: 'GET', url: `/insights/spending?yearMonth=2026-06&insightType=${type}`,
+        headers: { 'x-device-token': TOKEN_A },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().insights).toHaveLength(expectedCount);
+    }
+  });
+
+  it('continues to reject an invalid lookbackMonths', async () => {
+    const { app } = buildTestApp(seed);
+    const res = await app.inject({
+      method: 'GET', url: '/insights/spending?lookbackMonths=13',
+      headers: { 'x-device-token': TOKEN_A },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
