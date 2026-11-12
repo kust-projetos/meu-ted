@@ -6456,7 +6456,10 @@ export class ConversationOrchestrator {
     const number = '(\\d{1,3}(?:\\.\\d{3})+(?:,\\d{1,2})?|\\d{1,12}(?:[.,]\\d{1,2})?)(?![\\d])';
     const monetaryMatch = amountText.match(new RegExp(`(?:r\\$\\s*${number}|${number}\\s*reais?)`, 'iu'));
     const rawValue = amountText.match(/\b\d[\d.,]*\b/u)?.[0];
-    const unclearFormatted = !!rawValue && /[.,]/.test(rawValue) && !monetaryMatch;
+    const unclearFormatted = !!rawValue && !monetaryMatch && (
+      /\b\d{1,3}(?:\.\d{3})+\b/u.test(rawValue) ||
+      /\b\d+,\d{3,}\b/u.test(rawValue)
+    );
     const valueMatch = unclearFormatted ? null : monetaryMatch ?? amountText.match(new RegExp(number, 'iu'));
     let amountCents: number | undefined;
     const rawAmount = valueMatch?.slice(1).find((part) => part !== undefined);

@@ -61,6 +61,10 @@ describe('A0 goal contribution proposals', () => {
     expect(result.response?.text).toMatch(/Qual valor/);
     expect(request).not.toHaveBeenCalled();
   });
+  it.each(['aportar 50,00 na meta Viagem', 'aportar 50.00 na meta Viagem'])('accepts unambiguous decimal amount: %s', async (text) => {
+    const { request } = await run(text);
+    expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ normalizedArgs: { goalId, amountCents: 5000 } });
+  });
   it.each([
     ['Aportar R$ 20 na meta reserva de emergência', 'Reserva de Emergência'],
     ['Aportar R$ 20 na meta Viagem 2026', 'Viagem 2026'],
