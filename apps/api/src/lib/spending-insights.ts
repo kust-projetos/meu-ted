@@ -1,111 +1,79 @@
-import type { Category, Transaction } from '../types/domain.js';
+import type { Transaction } from '../types/domain.js';
 
 export type SpendingInsightType = 'all' | 'comparison' | 'anomalies' | 'income-share';
 
-type Comparison = {
-  category: string;
-  currentCents: number;
-  previousCents: number;
-  absoluteChange: number;
-  percentChange: number | null;
-  trend: 'up' | 'down' | 'stable' | 'new' | 'gone';
+type ComparisonInsight = {
+  type: 'comparison';
+  basis: 'competencia';
+  yearMonth: string;
+  previousYearMonth: string;
+  currentExpenseCents: number;
+  previousExpenseCents: number;
+  averageExpenseCents: number;
+  deltaVsPreviousCents: number;
+  deltaVsPreviousPercent: number | null;
+  deltaVsAverageCents: number;
+  deltaVsAveragePercent: number | null;
 };
 
-type Insight = {
-  type: 'anomaly' | 'trend_up' | 'trend_down' | 'category_gone' | 'new_category';
-  severity: 'info' | 'warning' | 'alert';
-  category: string;
-  message: string;
-  currentCents?: number;
-  previousCents?: number;
-  percentChange?: number;
+type IncomeShareInsight = {
+  type: 'income-share';
+  basis: 'competencia';
+  yearMonth: string;
+  expenseCents: number;
+  incomeCents: number;
+  sharePercent: number | null;
 };
 
-const monthStart = (yearMonth: string, offset: number): string => {
-  const parts = yearMonth.split('-');
-  const year = Number(parts[0]);
-  const month = Number(parts[1]);
+export type SpendingInsight = ComparisonInsight | IncomeShareInsight;
+
+const monthOffset = (yearMonth: string, offset: number): string => {
+  const [year = 0, month = 1] = yearMonth.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1 + offset, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-01`;
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 };
 
-const monthEnd = (yearMonth: string): string => {
-  const parts = yearMonth.split('-');
-  const year = Number(parts[0]);
-  const month = Number(parts[1]);
-  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
-};
-
-const categoryLabel = (tx: Transaction, categories: Map<string, Category>): string =>
-  (tx.categoryId ? categories.get(tx.categoryId)?.name : undefined) ?? 'Sem categoria';
+const round1 = (value: number): number => Math.round(value * 10) / 10;
 
 export const buildSpendingInsights = (
   transactions: Transaction[],
-  categories: Category[],
   yearMonth: string,
   insightType: SpendingInsightType = 'all',
   lookbackMonths = 3,
-) => {
-  const categoryMap = new Map(categories.map((category) => [category.id, category]));
-  const start = monthStart(yearMonth, 0);
-  const end = monthEnd(yearMonth);
-  const previousStart = monthStart(yearMonth, -lookbackMonths);
-  const current = transactions.filter((tx) => tx.kind === 'expense' && tx.date >= start && tx.date <= end);
-  const previous = transactions.filter((tx) => tx.kind === 'expense' && tx.date >= previousStart && tx.date < start);
-  const currentByCategory = new Map<string, number>();
-  const previousByCategory = new Map<string, number>();
-  for (const tx of current) {
-    const category = categoryLabel(tx, categoryMap);
-    currentByCategory.set(category, (currentByCategory.get(category) ?? 0) + tx.amountCents);
-  }
-  for (const tx of previous) {
-    const category = categoryLabel(tx, categoryMap);
-    previousByCategory.set(category, (previousByCategory.get(category) ?? 0) + tx.amountCents);
-  }
+): SpendingInsight[] => {
+  if (insightType === 'anomalies') return []; // Anomaly detection is intentionally deferred.
 
-  const comparisons: Comparison[] = [];
-  const insights: Insight[] = [];
-  for (const [category, currentCents] of currentByCategory) {
-    const previousCents = Math.round((previousByCategory.get(category) ?? 0) / lookbackMonths);
-    const absoluteChange = currentCents - previousCents;
-    const percentChange = previousCents > 0 ? Math.round((absoluteChange / previousCents) * 100) : null;
-    const trend = previousCents === 0 ? 'new' : percentChange !== null && percentChange > 20 ? 'up' : percentChange !== null && percentChange < -20 ? 'down' : 'stable';
-    comparisons.push({ category, currentCents, previousCents, absoluteChange, percentChange, trend });
-    if (trend === 'up' && percentChange !== null && percentChange > 50) {
-      insights.push({ type: 'trend_up', severity: percentChange > 100 ? 'alert' : 'warning', category, message: `📈 ${category}: +${percentChange}% vs média`, currentCents, previousCents, percentChange });
-    } else if (trend === 'down' && percentChange !== null && percentChange < -30) {
-      insights.push({ type: 'trend_down', severity: 'info', category, message: `📉 ${category}: ${percentChange}% vs média`, currentCents, previousCents, percentChange });
-    } else if (trend === 'new' && currentCents > 10_000) {
-      insights.push({ type: 'new_category', severity: 'info', category, message: `🆕 Nova categoria: ${category}`, currentCents });
-    }
-  }
-  for (const [category, total] of previousByCategory) {
-    if (!currentByCategory.has(category) && total / lookbackMonths > 5_000) {
-      const average = Math.round(total / lookbackMonths);
-      comparisons.push({ category, currentCents: 0, previousCents: average, absoluteChange: -average, percentChange: -100, trend: 'gone' });
-      insights.push({ type: 'category_gone', severity: 'info', category, message: `👋 ${category} não teve gastos este mês`, previousCents: average });
-    }
-  }
-  comparisons.sort((a, b) => Math.abs(b.absoluteChange) - Math.abs(a.absoluteChange));
+  const sumKindForMonth = (kind: 'expense' | 'income', month: string): number =>
+    transactions.reduce((sum, tx) => sum + (tx.kind === kind && tx.date.slice(0, 7) === month ? tx.amountCents : 0), 0);
 
-  const anomalies: Insight[] = [];
-  for (const tx of current.sort((a, b) => b.amountCents - a.amountCents).slice(0, 20)) {
-    const category = categoryLabel(tx, categoryMap);
-    const categoryPrevious = previous.filter((item) => categoryLabel(item, categoryMap) === category);
-    const average = categoryPrevious.length === 0 ? 0 : categoryPrevious.reduce((sum, item) => sum + item.amountCents, 0) / categoryPrevious.length;
-    if (average > 0 && tx.amountCents > average * 2.5 && tx.amountCents > 10_000) {
-      const percentChange = Math.round(((tx.amountCents - average) / average) * 100);
-      anomalies.push({ type: 'anomaly', severity: 'warning', category, message: `🔍 ${tx.description}: ${percentChange}% da média`, currentCents: tx.amountCents, previousCents: Math.round(average), percentChange });
-    }
-  }
+  const currentExpenseCents = sumKindForMonth('expense', yearMonth);
+  const previousYearMonth = monthOffset(yearMonth, -1);
+  const previousExpenseCents = sumKindForMonth('expense', previousYearMonth);
+  const historicalExpenses = Array.from({ length: lookbackMonths }, (_, index) =>
+    sumKindForMonth('expense', monthOffset(yearMonth, -(index + 1))),
+  );
+  const averageExpenseCents = Math.round(historicalExpenses.reduce((sum, value) => sum + value, 0) / lookbackMonths);
+  const deltaVsPreviousCents = currentExpenseCents - previousExpenseCents;
+  const deltaVsAverageCents = currentExpenseCents - averageExpenseCents;
+  const expenseCents = currentExpenseCents;
+  const incomeCents = sumKindForMonth('income', yearMonth);
 
-  const income = transactions.filter((tx) => tx.kind === 'income' && tx.date >= start && tx.date <= end).reduce((sum, tx) => sum + tx.amountCents, 0);
-  const incomeShare = income === 0 ? [] : [...currentByCategory.entries()].map(([category, totalCents]) => ({ category, totalCents, sharePercent: Math.round((totalCents / income) * 100) })).sort((a, b) => b.totalCents - a.totalCents).slice(0, 10);
-  return {
-    yearMonth,
-    ...(insightType === 'all' || insightType === 'comparison' ? { comparisons } : {}),
-    ...(insightType === 'all' || insightType === 'anomalies' ? { anomalies } : {}),
-    ...(insightType === 'all' || insightType === 'income-share' ? { incomeShare } : {}),
-    message: [...(insightType === 'all' || insightType === 'comparison' ? insights : []), ...(insightType === 'all' || insightType === 'anomalies' ? anomalies : [])].map((item) => item.message).join('\n') || 'Sem insights para este período',
-  };
+  const insights: SpendingInsight[] = [];
+  if (insightType === 'all' || insightType === 'comparison') {
+    insights.push({
+      type: 'comparison', basis: 'competencia', yearMonth, previousYearMonth,
+      currentExpenseCents, previousExpenseCents, averageExpenseCents,
+      deltaVsPreviousCents,
+      deltaVsPreviousPercent: previousExpenseCents > 0 ? round1(deltaVsPreviousCents / previousExpenseCents * 100) : null,
+      deltaVsAverageCents,
+      deltaVsAveragePercent: averageExpenseCents > 0 ? round1(deltaVsAverageCents / averageExpenseCents * 100) : null,
+    });
+  }
+  if (insightType === 'all' || insightType === 'income-share') {
+    insights.push({
+      type: 'income-share', basis: 'competencia', yearMonth, expenseCents, incomeCents,
+      sharePercent: incomeCents > 0 ? round1(expenseCents / incomeCents * 100) : null,
+    });
+  }
+  return insights;
 };

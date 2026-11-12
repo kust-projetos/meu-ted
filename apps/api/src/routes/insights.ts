@@ -10,6 +10,7 @@ import type { CardStore } from '../cards/store.js';
 import { computePaymentScore, parsePeriodQuery } from '../insights/payment-score.js';
 import { computeInstallmentScore, parseMonthQuery } from '../insights/installment-score.js';
 import { computeMonthlyProjection, parseYearMonthQuery } from '../insights/monthly-projection.js';
+import { buildSpendingInsights } from '../lib/spending-insights.js';
 
 export const spendingInsightQuerySchema = z.object({
   yearMonth: z.string().regex(/^\d{4}-\d{2}$/).optional(),
@@ -60,10 +61,17 @@ export const registerInsightRoutes = (
       return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
     }
     const transactions = await opts.store.listAllTransactions(ctx.householdId);
+    const yearMonth = parsed.data.yearMonth ?? new Date().toISOString().slice(0, 7);
     return reply.code(200).send({
       success: true,
-      yearMonth: parsed.data.yearMonth ?? new Date().toISOString().slice(0, 7),
-      insights: [],
+      yearMonth,
+      basis: 'competencia',
+      insights: buildSpendingInsights(
+        transactions,
+        yearMonth,
+        parsed.data.insightType ?? 'all',
+        parsed.data.lookbackMonths ?? 3,
+      ),
       transactionCount: transactions.length,
     });
   });
