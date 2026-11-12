@@ -391,6 +391,7 @@ export const TED_APPROVAL_TOOLS = [
   'cards.statement.pay',
   'payables.create',
   'payables.pay',
+  'goals.contribute',
 ] as const;
 export type TedApprovalTool = (typeof TED_APPROVAL_TOOLS)[number];
 
@@ -489,6 +490,7 @@ export interface PendingOperationPresentation {
   fromAccount?: PendingOperationPresentationLabel;
   toAccount?: PendingOperationPresentationLabel;
   category?: PendingOperationPresentationLabel;
+  goal?: PendingOperationPresentationLabel;
   /** Parent of an existing category target, when server-resolved from the catalog. */
   categoryParent?: PendingOperationPresentationLabel;
   /**
@@ -691,6 +693,9 @@ export const isActionablePendingOperationPresentation = (
     if (!isNonEmptyString(presentation.statementDueDate)) return false;
     return true;
   }
+  if (presentation.tool === 'goals.contribute') {
+    return typeof presentation.amountCents === 'number' && Number.isInteger(presentation.amountCents) && presentation.amountCents > 0 && isPresentationLabel(presentation.goal);
+  }
   if (presentation.tool === 'transactions.transfer.create') {
     // Internal transfer card: amount, date, description and BOTH
     // server-resolved account labels gate Confirm. No category is involved.
@@ -795,6 +800,7 @@ export const MUTATION_EFFECTS_REGISTRY: Record<MutationKind, MutationEffectsEntr
   'goal.create': { mutationKind: 'goal.create', affectedTargets: ['goals', 'dashboard-summary'] },
   'goal.update': { mutationKind: 'goal.update', affectedTargets: ['goals', 'dashboard-summary'] },
   'goal.delete': { mutationKind: 'goal.delete', affectedTargets: ['goals', 'dashboard-summary'] },
+  'goals.contribute': { mutationKind: 'goals.contribute', affectedTargets: ['goals', 'dashboard-summary'] },
   'account.create': { mutationKind: 'account.create', affectedTargets: ['accounts', 'dashboard-summary'] },
   'account.update': { mutationKind: 'account.update', affectedTargets: ['accounts', 'dashboard-summary'] },
   'account.delete': { mutationKind: 'account.delete', affectedTargets: ['accounts', 'dashboard-summary'] },
