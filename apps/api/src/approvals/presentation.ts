@@ -27,8 +27,9 @@ export const derivePresentationTitle = (tool: string): string =>
     ? 'Pagamento de fatura'
     : tool === 'cards.purchase.create'
     ? 'Confirmar compra no cartão'
-    : tool === 'goals.contribute'
-      ? 'Aporte na meta'
+      : tool === 'goals.contribute'
+        ? 'Aporte na meta'
+    : tool === 'budgets.create' ? 'Criar orçamento'
     : tool === 'transactions.transfer.create'
       ? 'Transferência'
     : tool === 'transactions.update'
@@ -562,6 +563,14 @@ export const buildPendingOperationPresentation = (input: {
       expiresAt: input.expiresAt,
       warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
     };
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    return parsed.success ? parsed.data as PendingOperationPresentation : null;
+  }
+  if (input.tool === 'budgets.create') {
+    const { categoryId, amountCents, period, startDate, name } = args as Record<string, unknown>;
+    const labels: Record<string, string> = { monthly: 'mensal', quarterly: 'trimestral', yearly: 'anual' };
+    if (typeof categoryId !== 'string' || typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents <= 0 || typeof name !== 'string' || !name || typeof startDate !== 'string' || !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(startDate) || typeof period !== 'string' || !labels[period] || !input.categoryLabel?.trim()) return null;
+    const candidate = { id: input.id, status: input.status, tool: input.tool, title: derivePresentationTitle(input.tool), amountCents, description: `Orçamento ${labels[period]} de ${name}`, date: startDate, category: { id: categoryId, label: input.categoryLabel }, expiresAt: input.expiresAt, warnings: input.warnings ?? [] };
     const parsed = pendingOperationPresentationSchema.safeParse(candidate);
     return parsed.success ? parsed.data as PendingOperationPresentation : null;
   }

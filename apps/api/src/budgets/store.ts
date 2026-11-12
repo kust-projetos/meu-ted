@@ -6,7 +6,7 @@ export type BudgetStore = {
     categoryId: string; name: string; amountCents: number;
     period: 'monthly' | 'quarterly' | 'yearly'; startDate: string;
     alertThreshold?: number;
-  }): Promise<Budget>;
+  }, opts?: { idempotencyKey?: string }): Promise<Budget>;
   updateBudget(householdId: string, budgetId: string, patch: {
     amountCents?: number; alertThreshold?: number;
   }): Promise<Budget>;

@@ -247,6 +247,7 @@ import { hasAccountRenameSignal } from "./mutations/account-rename.js";
 import { toActiveOperationRecords } from "./mutations/active-operation-projection.js";
 import { createRequestEntityReader, type EntityReader } from "./mutations/entity-resolver.js";
 import { isGoalContributionIntent } from "./mutations/goal-contribution-intent.js";
+import { isBudgetCreationIntent } from "./mutations/budget-creation-intent.js";
 import { hasCategoryCreateSignal } from "./mutations/category-creation.js";
 import { hasCategoryRenameSignal } from "./mutations/category-rename.js";
 import { hasCategoryDeactivateSignal } from "./mutations/category-deactivation.js";
@@ -4378,7 +4379,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         // orquestrador abre `runDeactivateTurn` → `readDeactivationAccounts`,
         // que exige o reader. Sem ele o turno degrada para
         // DEACTIVATE_READ_FAILURE_TEXT. Turnos sem sinal seguem byte-idênticos.
-        const needsEntityReader = needsMutation || isGoalContributionIntent(restInput.text) || hasAccountDeactivationSignal(restInput.text) || hasAccountRenameSignal(restInput.text) || hasCategoryCreateSignal(restInput.text) || hasCategoryRenameSignal(restInput.text) || hasCategoryDeactivateSignal(restInput.text) || hasTransactionDescriptionSignal(restInput.text);
+        const needsEntityReader = needsMutation || isGoalContributionIntent(restInput.text) || isBudgetCreationIntent(restInput.text) || hasAccountDeactivationSignal(restInput.text) || hasAccountRenameSignal(restInput.text) || hasCategoryCreateSignal(restInput.text) || hasCategoryRenameSignal(restInput.text) || hasCategoryDeactivateSignal(restInput.text) || hasTransactionDescriptionSignal(restInput.text);
         const entityReader = needsEntityReader ? await this.entityReaderForTurn(restInput) : undefined;
         turnOrchestrator = this.orchestratorForChannel({
           ...(mutationPlan ? { plan: () => mutationPlan } : {}),

@@ -6,6 +6,7 @@ import { hasCategoryDeactivateSignal } from '../mutations/category-deactivation.
 import { hasTransactionDescriptionSignal } from '../mutations/transaction-description.js';
 import { selectToolsFor } from '../agent-config/tools.js';
 import { validateTurnPlan, type TurnPlanV2 } from './turn-plan.js';
+import { isBudgetCreationIntent } from '../mutations/budget-creation-intent.js';
 
 /**
  * Canonical domain→skill mapping (#236/#237). Skill names come from the
@@ -327,12 +328,16 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
     && /(?:[;,]|\be\s+(?:cancele|cancelar|cancela)\b)/.test(decision)) {
     return ambiguousCompoundRequestPlan();
   }
-  if (/\bnao\s+(?:crie|criar|cria|cadastre|cadastrar|adicione|adicionar|defina|definir|monte|montar)\b/.test(decision)
+  if (/\bnao\s+(?:crie|criar|cria|cadastre|cadastrar|monte|montar)\b/.test(decision)
     && /\b(?:orcament\w*|budget\w*)\b/.test(decision)) {
     return unsupportedBudgetCreatePlan();
   }
   if (/\bnao\s+sei\s+como\s+(?:criar|cadastrar|adicionar|definir|montar)\b/.test(decision)
     && /\b(?:orcament\w*|budget\w*)\b/.test(decision)) {
+    return unsupportedBudgetCreatePlan();
+  }
+  if (/\b(?:defina|definir|adicione|adicionar)\b/.test(normalized)
+    && /\b(?:orcament\w*|budget\w*)\b/.test(normalized)) {
     return unsupportedBudgetCreatePlan();
   }
   if (/^cancele o rascunho\b/.test(decision) && !/^cancele o rascunho\s*[.!?]*$/.test(decision)) {
@@ -349,11 +354,11 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   // are reads and stay on the full text below.
   if (decisionFastPath.kind === 'confirm') return makePlan('confirmation', 'general', [], [], ['conversation']);
   if (decisionFastPath.kind === 'cancel') return makePlan('cancel', 'general', [], [], ['conversation']);
-  // Budget creation has no V2 writer. Do not turn a creation request into a read.
   if (normalized.split(/\b(?:e|mas|ou)\b|[;,]/).some((clause) =>
-    /\b(crie|criar|cria|cadastre|cadastrar|adicione|adicionar|defina|definir|monte|montar)\b/.test(clause)
+    /\b(crie|criar|cria|cadastre|cadastrar|monte|montar)\b/.test(clause)
       && /\b(orcament\w*|budget\w*)\b/.test(clause)
       && !/\bnao\b/.test(clause))) {
+    if (isBudgetCreationIntent(normalized)) return makePlan('mutation-proposal', 'budgets', [{ name: 'budgets.create', kind: 'mutation' }], ['orcamentos-metas'], ['budgets.create']);
     return unsupportedBudgetCreatePlan();
   }
   // S7 (POC Fase 2) + P2a: pergunta CONCEITUAL ("o que e X?", "como funciona

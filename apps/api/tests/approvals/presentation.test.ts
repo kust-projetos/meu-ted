@@ -42,6 +42,16 @@ describe('buildPendingOperationPresentation (SPEC §16)', () => {
     });
     expect(presentation).toBeNull();
   });
+  it('presents budget creation with category label and fails closed without it', () => {
+    const categoryId = '00000000-0000-4000-8000-000000000024';
+    const input = { ...base, tool: 'budgets.create', normalizedArgs: { categoryId, name: 'Mercado', amountCents: 50000, period: 'monthly', startDate: '2026-11-01' } };
+    const presentation = buildPendingOperationPresentation({ ...input, categoryLabel: 'Alimentação' });
+    expect(presentation).toMatchObject({ title: 'Criar orçamento', description: 'Orçamento mensal de Mercado', amountCents: 50000, date: '2026-11-01', category: { id: categoryId, label: 'Alimentação' } });
+    expect(`${presentation?.title} ${presentation?.description}`).not.toContain(categoryId);
+    expect(pendingOperationPresentationSchema.safeParse(presentation).success).toBe(true);
+    expect(isActionablePendingOperationPresentation(presentation!)).toBe(true);
+    expect(buildPendingOperationPresentation(input)).toBeNull();
+  });
   it('derives the card from the same canonical args that will execute (INV-02)', () => {
     const presentation = buildPendingOperationPresentation({
       ...base,

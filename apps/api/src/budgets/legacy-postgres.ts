@@ -12,7 +12,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { domainErrors } from '../writes/errors.js';
 import { assertCategoryKind } from '../categories/resolve.js';
-import { createPostgresBudgetStore, insertBudgetRow } from './postgres.js';
+import { assertBudgetReplayMatches, budgetFromRow, createPostgresBudgetStore, deterministicBudgetId, insertBudgetRow } from './postgres.js';
 import { withTransaction } from '../db/pool.js';
 import { lockCategoryReferencesInTx } from '../auth/category-lifecycle-guard.js';
 import type { BudgetStore } from './store.js';
@@ -51,8 +51,26 @@ export const createLegacyPostgresBudgetStore = (pool: Pool): BudgetStore => {
 
   const store: BudgetStore = {
     ...base,
-    async createBudget(householdId, input) {
-      return withTransaction(pool, (client) => createBudgetInTxLegacy(client, householdId, input));
+    async createBudget(householdId, input, opts) {
+      if (!opts?.idempotencyKey) return withTransaction(pool, (client) => createBudgetInTxLegacy(client, householdId, input));
+      return withTransaction(pool, async (client) => {
+        const id = deterministicBudgetId(householdId, opts.idempotencyKey!);
+        const existing = await client.query<Row>(`SELECT * FROM budgets WHERE id=$1 AND household_id=$2`, [id, householdId]);
+        if (existing.rows[0]) {
+          assertBudgetReplayMatches(existing.rows[0], input);
+          return budgetFromRow(existing.rows[0], householdId);
+        }
+        await lockCategoryReferencesInTx(client, householdId);
+        const gate = async <R extends Row = Row>(text: string, values: unknown[] = []): Promise<R[]> => (await client.query<R>(text, values)).rows;
+        const categories = await gate<Row>(`SELECT id, kind FROM categories WHERE id = $1 AND household_id = $2 AND active = true AND deleted_at IS NULL`, [input.categoryId, householdId]);
+        if (categories.length === 0) throw domainErrors.notFound('Categoria');
+        assertCategoryKind({ id: input.categoryId, householdId, kind: String(categories[0]!['kind']), status: 'active' }, 'expense');
+        await insertBudgetRow(gate, householdId, input, { id, onConflictDoNothing: true });
+        const row = (await client.query<Row>(`SELECT * FROM budgets WHERE id=$1 AND household_id=$2`, [id, householdId])).rows[0];
+        if (!row) throw domainErrors.invalid('budget', 'idempotency key reutilizada');
+        assertBudgetReplayMatches(row, input);
+        return budgetFromRow(row, householdId);
+      });
     },
   };
   // UOW2: override the inherited canonical extension with the legacy core

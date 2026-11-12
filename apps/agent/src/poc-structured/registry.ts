@@ -138,6 +138,7 @@ const hasOwn = (record: object, key: string): boolean =>
 /** Complete argument vocabulary with value shape and production-support flag. */
 export const ARG_SPECS: Readonly<Record<string, ArgSpec>> = Object.freeze({
   amountCents: spec('cents', true),
+  name: spec('string', true),
   description: spec('string', true),
   date: spec('string', true),
   categoryQuery: spec('string', true),
@@ -173,10 +174,10 @@ export const ARG_SPECS: Readonly<Record<string, ArgSpec>> = Object.freeze({
   priorAmountCents: spec('cents', false),
   correctedAmountCents: spec('cents', false),
   yearMonth: spec('string', false),
-  period: spec('string', false),
+  period: spec('string', true),
   from: spec('string', false),
   to: spec('string', false),
-  startDate: spec('string', false),
+  startDate: spec('string', true),
   endDate: spec('string', false),
 });
 
@@ -289,6 +290,7 @@ export const OPERATION_ARG_KEYS: Readonly<Record<string, ReadonlySet<string>>> =
     'accountName',
   ),
   'goals.contribute': argKeys('goalId', 'amountCents', 'contributionDate', 'notes'),
+  'budgets.create': argKeys('categoryId', 'name', 'amountCents', 'period', 'startDate'),
 });
 
 export const isMutationOperation = (operation: string): boolean =>

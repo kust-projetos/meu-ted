@@ -39,6 +39,14 @@ export const buildApprovalPresentation = (input: {
 }): PendingOperationPresentation | null => {
   const args = isRecord(input.normalizedArgs) ? input.normalizedArgs : null;
   if (!args) return null;
+  if (input.tool === 'budgets.create') {
+    const { amountCents, categoryId, name, period, startDate } = args;
+    const periods: Record<string, string> = { monthly: 'mensal', quarterly: 'trimestral', yearly: 'anual' };
+    if (typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents <= 0 || typeof categoryId !== 'string' || typeof name !== 'string' || !name || typeof period !== 'string' || !periods[period] || typeof startDate !== 'string' || !input.categoryLabel) return null;
+    const candidate: Record<string, unknown> = { id: input.operationId, status: input.status, tool: input.tool, title: 'Confirmar orçamento', amountCents, description: `Orçamento ${periods[period]} de ${name}`, date: startDate, category: { id: categoryId, label: input.categoryLabel }, expiresAt: input.expiresAt, warnings: [] };
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    return parsed.success ? parsed.data as PendingOperationPresentation : null;
+  }
   const { amountCents, description, date, accountId, categoryId } = args;
   if (
     typeof amountCents !== 'number' ||

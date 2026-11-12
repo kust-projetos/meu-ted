@@ -354,26 +354,29 @@ describe('F2-A A/B runner (actual parse, independent F1 oracle)', () => {
     expect(undoItem.reasons).toContain('f1-taxonomy-unsupported:undo-proposal');
     // Vocabulary this POC does not own is unsupported, not a mismatch.
     const b004 = scenarioById(scenarios, 'F1-B004');
+    const b004Parsed = candidate(
+      JSON.stringify({
+        interpretation: {
+          intent: 'mutation-proposal',
+          operation: 'accounts.update',
+          args: { accountId: 'a-1', expectedName: 'Aurora' },
+          contextProvenance: { origin: 'f1-corpus-text', corpusId: 'F1-B004' },
+          entities: [],
+          ambiguities: [],
+          clarification: null,
+        },
+      }),
+    );
     const b004Item = comparisonFor(
       'F1-B004',
-      candidate(
-        JSON.stringify({
-          interpretation: {
-            intent: 'mutation-proposal',
-            operation: 'accounts.update',
-            args: { accountId: 'a-1', expectedName: 'Aurora', accountName: 'Reserva' },
-            contextProvenance: { origin: 'f1-corpus-text', corpusId: 'F1-B004' },
-            entities: [],
-            ambiguities: [],
-            clarification: null,
-          },
-        }),
-      ),
-      b004,
+      // The parser rejects unknown keys; inject the unknown vocabulary at
+      // the comparison boundary to exercise its INCONCLUSIVE taxonomy result.
+      b004Parsed ? { ...b004Parsed, args: { ...b004Parsed.args, alias: 'Reserva' } } : null,
+      { ...b004, oracle: { ...b004.oracle, expectedArgs: { alias: 'Reserva' } } },
       baseline.get('F1-B004') as string,
     );
     expect(b004Item.verdict).toBe('INCONCLUSIVE');
-    expect(b004Item.reasons).toContain('args-vocabulary-unsupported:name');
+    expect(b004Item.reasons).toContain('args-vocabulary-unsupported:alias');
   });
 
   it('covers all 10 journey IDs: no global PASS, original completion retained', () => {
