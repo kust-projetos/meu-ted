@@ -95,6 +95,12 @@ export const createInMemoryBudgetStore = (state: InMemoryState, clock: () => Dat
       return b;
     },
 
+    async deleteBudget(householdId, budgetId) {
+      const index = budgets.findIndex((budget) => budget.id === budgetId && budget.householdId === householdId);
+      if (index < 0) throw domainErrors.notFound('Orçamento');
+      budgets.splice(index, 1);
+    },
+
     async getBudgetTrends(householdId, budgetId, monthsBack = 3) {
       const b = budgets.find(x => x.id === budgetId && x.householdId === householdId);
       if (!b) throw domainErrors.notFound('Orçamento');

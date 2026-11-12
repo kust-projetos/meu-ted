@@ -63,6 +63,18 @@ describe('buildPendingOperationPresentation (SPEC §16)', () => {
     expect(buildPendingOperationPresentation({ ...input, normalizedArgs: { budgetId, amountCents: 75000 }, budgetLabel: 'Mercado' })?.description).not.toContain('alerta');
     expect(buildPendingOperationPresentation({ ...input, normalizedArgs: { budgetId, amountCents: 75000 } })).toBeNull();
   });
+  it('presents budget deletion with the resolved label and optional current ceiling', () => {
+    const budgetId = '00000000-0000-4000-8000-000000000026';
+    const input = { ...base, tool: 'budgets.delete', normalizedArgs: { budgetId } };
+    const withAmount = buildPendingOperationPresentation({ ...input, budgetLabel: 'Mercado', budgetAmountCents: 75000 });
+    expect(withAmount).toMatchObject({ title: 'Apagar orçamento', description: 'Orçamento de Mercado', amountCents: 75000 });
+    expect(isActionablePendingOperationPresentation(withAmount!)).toBe(true);
+    const withoutAmount = buildPendingOperationPresentation({ ...input, budgetLabel: 'Mercado' });
+    expect(withoutAmount).toMatchObject({ title: 'Apagar orçamento', description: 'Orçamento de Mercado' });
+    expect(withoutAmount).not.toHaveProperty('amountCents');
+    expect(isActionablePendingOperationPresentation(withoutAmount!)).toBe(true);
+    expect(buildPendingOperationPresentation(input)).toBeNull();
+  });
   it('derives the card from the same canonical args that will execute (INV-02)', () => {
     const presentation = buildPendingOperationPresentation({
       ...base,

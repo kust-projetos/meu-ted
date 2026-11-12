@@ -3,8 +3,10 @@
  *
  * The canonical store (`postgres.ts`) is schema-compatible for every
  * method EXCEPT the new category gate, which queries the `status` column
- * that does not exist on the legacy schema (`active` boolean instead).
- * This twin inherits everything and overrides only `createBudget` with
+ * that does not exist on the legacy schema (`active` boolean instead). The
+ * budgets table has the same `id` and `household_id` columns in both schemas,
+ * so delete is inherited without an override. This twin overrides only
+ * `createBudget` with
  * the legacy-shaped gate (same 404/400 shapes) over the shared insert
  * core. `updateBudget` takes no category field, so it needs no gate.
  */
