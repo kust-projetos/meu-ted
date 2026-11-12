@@ -56,6 +56,8 @@ export type EntitySummary = Readonly<{
   parentId?: string;
   /** Scope the authoritative read reported for this row (defensive R08 check). */
   scopeId?: string;
+  targetAmountCents?: number;
+  currentAmountCents?: number;
 }>;
 
 export type EntityReader = Readonly<{
@@ -67,6 +69,7 @@ export type EntityReader = Readonly<{
   scope?: Readonly<{ workspaceId?: string }>;
   listAccounts(): Promise<readonly EntitySummary[]>;
   listCategories(): Promise<readonly EntitySummary[]>;
+  listGoals?(): Promise<readonly EntitySummary[]>;
   listTransactions?(): Promise<readonly import('./transaction-description.js').EditableTransaction[]>;
 }>;
 
@@ -261,6 +264,8 @@ export const normalizeEntities = (response: unknown): EntitySummary[] => {
           : typeof row.scopeId === 'string'
             ? row.scopeId
             : undefined;
+      const targetAmountCents = typeof row.targetAmountCents === 'number' ? row.targetAmountCents : undefined;
+      const currentAmountCents = typeof row.currentAmountCents === 'number' ? row.currentAmountCents : undefined;
       entities.push({
         id,
         name,
@@ -269,6 +274,8 @@ export const normalizeEntities = (response: unknown): EntitySummary[] => {
         ...(kind !== undefined ? { kind } : {}),
         ...(parentId !== undefined ? { parentId } : {}),
         ...(scopeId !== undefined ? { scopeId } : {}),
+        ...(targetAmountCents !== undefined ? { targetAmountCents } : {}),
+        ...(currentAmountCents !== undefined ? { currentAmountCents } : {}),
       });
     }
   }
@@ -291,6 +298,7 @@ export const createRequestEntityReader = (request: RequestFn, scope?: Readonly<{
   ...(scope?.workspaceId ? { scope: { workspaceId: scope.workspaceId } } : {}),
   listAccounts: async () => normalizeEntities(await request('GET', '/accounts')),
   listCategories: async () => normalizeEntities(await request('GET', '/categories')),
+  listGoals: async () => normalizeEntities(await request('GET', '/goals')),
   listTransactions: async () => {
     const pageSize = 200;
     const maxPages = 10;

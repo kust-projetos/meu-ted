@@ -27,6 +27,7 @@ const scopedApp = (
   cardStore?: {
     listCreditCardAccounts: (householdId: string) => Promise<Array<{ id: string; name: string }>>;
   },
+  goalStore?: { listGoals: (householdId: string) => Promise<Array<{ id: string; name: string }>> },
 ) => {
   const app = Fastify();
   app.addHook('preHandler', async (request) => {
@@ -48,6 +49,7 @@ const scopedApp = (
     v2Only: true,
     ...(readModel ? { readModel } : {}),
     ...(cardStore ? { cardStore } : {}),
+    ...(goalStore ? { goalStore } : {}),
   } as Parameters<typeof registerPendingOperationRoutes>[1]);
   return { app, v2Store };
 };
@@ -94,6 +96,56 @@ describe('FIX-P1 RED: GET /pending-operations/v2/active carries canonical presen
     expect(JSON.stringify(body)).not.toContain('attestation');
     expect(JSON.stringify(body)).not.toContain('normalizedArgs');
     expect(JSON.stringify(body)).not.toContain('proposalHash');
+  });
+
+  it('resolves goal contribution name on active presentation without exposing the goal UUID', async () => {
+    const goalId = crypto.randomUUID();
+    const { app } = scopedApp(
+      { workspace: 'ws-goal-label', actor: 'a', device: 'd' },
+      undefined,
+      undefined,
+      { listGoals: async (householdId) => {
+        expect(householdId).toBe('ws-goal-label');
+        return [{ id: goalId, name: 'Reserva da casa' }];
+      } },
+    );
+    const created = await app.inject({
+      method: 'POST', url: '/pending-operations/v2/propose',
+      headers: { 'idempotency-key': 'goal-label-key' },
+      payload: { tool: 'goals.contribute', normalizedArgs: { goalId, amountCents: 5000 } },
+    });
+    expect(created.statusCode).toBe(201);
+    const response = await app.inject({ method: 'GET', url: '/pending-operations/v2/active' });
+    expect(response.statusCode).toBe(200);
+    const presentation = response.json().items[0].presentation;
+    expect(presentation).toMatchObject({
+      title: 'Aporte na meta — R$ 50,00', description: 'Reserva da casa',
+      goal: { label: 'Reserva da casa' },
+    });
+    expect(presentation.goal.id).toBe(goalId);
+    expect([presentation.title, presentation.description, presentation.goal.label].join(' ')).not.toContain(goalId);
+  });
+
+  it('fails closed without a resolved goal label while keeping the listing available', async () => {
+    const goalId = crypto.randomUUID();
+    const { app } = scopedApp(
+      { workspace: 'ws-goal-label-error', actor: 'a', device: 'd' },
+      undefined,
+      undefined,
+      { listGoals: async () => { throw new Error('lookup unavailable'); } },
+    );
+    await app.inject({
+      method: 'POST', url: '/pending-operations/v2/propose',
+      headers: { 'idempotency-key': 'goal-label-error-key' },
+      payload: { tool: 'goals.contribute', normalizedArgs: { goalId, amountCents: 5000 } },
+    });
+    const response = await app.inject({ method: 'GET', url: '/pending-operations/v2/active' });
+    expect(response.statusCode).toBe(200);
+    const listing = response.json();
+    expect(listing.items).toHaveLength(1);
+    expect(listing.items[0]).toBeDefined();
+    expect(listing.items[0].presentation).toBeUndefined();
+    expect(JSON.stringify(listing.items[0])).not.toContain(goalId);
   });
 
   it('FIX-P1 labels RED: resolves account/category labels server-side from the authoritative read model', async () => {

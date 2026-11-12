@@ -27,6 +27,8 @@ export const derivePresentationTitle = (tool: string): string =>
     ? 'Pagamento de fatura'
     : tool === 'cards.purchase.create'
     ? 'Confirmar compra no cartão'
+    : tool === 'goals.contribute'
+      ? 'Aporte na meta'
     : tool === 'transactions.transfer.create'
       ? 'Transferência'
     : tool === 'transactions.update'
@@ -82,6 +84,7 @@ export const buildPendingOperationPresentation = (input: {
   fromAccountLabel?: string;
   toAccountLabel?: string;
   categoryLabel?: string;
+  goalLabel?: string;
   categoryKind?: string;
   categoryParentLabel?: { id: string; name: string };
   transactionTarget?: { id:string; amountCents:number; date:string; accountId:string; accountName:string };
@@ -545,6 +548,22 @@ export const buildPendingOperationPresentation = (input: {
     const parsed = pendingOperationPresentationSchema.safeParse(candidate);
     if (!parsed.success) return null;
     return parsed.data as PendingOperationPresentation;
+  }
+  if (input.tool === 'goals.contribute') {
+    const { goalId, amountCents, contributionDate } = args;
+    if (typeof goalId !== 'string' || !goalId || typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents < 1) return null;
+    if (typeof input.goalLabel !== 'string' || !input.goalLabel.trim()) return null;
+    const candidate: Record<string, unknown> = {
+      id: input.id, status: input.status, tool: input.tool,
+      title: `${derivePresentationTitle(input.tool)} — ${formatAmountBRL(amountCents)}`,
+      amountCents, description: input.goalLabel,
+      ...(typeof contributionDate === 'string' ? { date: contributionDate } : {}),
+      goal: { id: goalId, label: input.goalLabel },
+      expiresAt: input.expiresAt,
+      warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
+    };
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    return parsed.success ? parsed.data as PendingOperationPresentation : null;
   }
   const { amountCents, description, date, accountId, categoryId } = args;
   if (

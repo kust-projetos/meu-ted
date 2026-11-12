@@ -163,6 +163,9 @@ export const ARG_SPECS: Readonly<Record<string, ArgSpec>> = Object.freeze({
   paidDate: spec('string', true),
   // P3.6: statement payment targets an invoice id (resolved by the reader).
   statementId: spec('string', true),
+  goalId: spec('string', true),
+  contributionDate: spec('string', true),
+  notes: spec('string', true),
   // P3.5: optional parcel count (1–48). The total stays in amountCents.
   installmentsTotal: spec('installment-count', true),
   targetReference: spec('string', false),
@@ -285,6 +288,7 @@ export const OPERATION_ARG_KEYS: Readonly<Record<string, ReadonlySet<string>>> =
     'paidDate',
     'accountName',
   ),
+  'goals.contribute': argKeys('goalId', 'amountCents', 'contributionDate', 'notes'),
 });
 
 export const isMutationOperation = (operation: string): boolean =>

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Goal, GoalContribution } from '../types/domain.js';
 import type { GoalStore } from './store.js';
 import type { InMemoryState } from '../writes/in-memory.js';
@@ -28,7 +28,20 @@ export const createInMemoryGoalStore = (state: InMemoryState): GoalStore => {
       goals.push(g);
       return g;
     },
-    async contributeToGoal(householdId, goalId, input) {
+    async contributeToGoal(householdId, goalId, input, opts) {
+      const keyedId = opts?.idempotencyKey ? (() => {
+        const bytes = createHash('sha256').update(`${householdId}:${opts.idempotencyKey}`).digest().subarray(0, 16);
+        bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+        bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+        return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('').replace(/^(........)(....)(....)(....)(............)$/, '$1-$2-$3-$4-$5');
+      })() : undefined;
+      if (keyedId) {
+        const prior = contributions.find((item) => item.id === keyedId);
+        if (prior) {
+          if (prior.goalId !== goalId) throw domainErrors.invalid('goal', 'idempotency key reutilizada');
+          return prior;
+        }
+      }
       const g = goals.find(x => x.id === goalId && x.householdId === householdId);
       if (!g) throw domainErrors.notFound('Meta');
       // Status guard mirroring the Postgres stores (single-threaded mutation
@@ -37,7 +50,7 @@ export const createInMemoryGoalStore = (state: InMemoryState): GoalStore => {
       g.currentAmountCents += input.amountCents;
       if (g.currentAmountCents >= g.targetAmountCents) g.status = 'achieved';
       const c = opt<GoalContribution>(
-        { id: randomUUID(), goalId, amountCents: input.amountCents, contributionDate: input.contributionDate ?? new Date().toISOString().slice(0, 10) },
+        { id: keyedId ?? randomUUID(), goalId, amountCents: input.amountCents, contributionDate: input.contributionDate ?? new Date().toISOString().slice(0, 10) },
         { source: input.source, notes: input.notes } as Partial<GoalContribution>,
       );
       contributions.push(c);

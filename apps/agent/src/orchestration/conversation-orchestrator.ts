@@ -91,6 +91,7 @@ import type { MutationExpectedContext } from '../mutations/mutation-executor.js'
 import { requiresExpectedEntity, resolveExpectedContext } from '../mutations/expected-context.js';
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
 import { hasInstallmentIntent, hasWholeEntityName, isCardPurchaseIntent } from '../mutations/card-purchase-intent.js';
+import { isGoalContributionIntent } from '../mutations/goal-contribution-intent.js';
 import {
   CONFIRMATION_OPERATION_SKEW_MS,
   CONFIRMATION_UNBOUND_OPERATION_ID,
@@ -2205,7 +2206,7 @@ export class ConversationOrchestrator {
   private proposedMutation(input: {
     operationId: string;
     tool: string;
-    normalizedArgs: { amountCents: number; description: string; date: string; accountId: string; categoryId?: string };
+    normalizedArgs: { amountCents: number; description: string; date: string; accountId: string; categoryId?: string } | { amountCents: number; goalId: string; contributionDate?: string };
     accountName?: string;
     categoryName?: string;
     expiresAt?: string;
@@ -6179,6 +6180,9 @@ export class ConversationOrchestrator {
     if (hasAccountCreationSignal(input.text)) {
       return this.accountFreshFlow(input, plan, startedAt, base, client);
     }
+    if (isGoalContributionIntent(input.text)) {
+      return this.runGoalContributionTurn(input, plan, client, startedAt, base);
+    }
     if (isTransactionMutationPlan(plan) && isCardPurchaseIntent(input.text)) {
       return this.runCardPurchaseTurn(input, plan, client, startedAt, base);
     }
@@ -6383,6 +6387,125 @@ export class ConversationOrchestrator {
         categoryName: verified.categoryName,
         expiresAt: proposal.operation.expiresAt,
       }),
+      response: freeze({ text: renderMutationResult('proposed', proposal.summary) }),
+    });
+  }
+
+  /** A0/V2 goal contribution: resolve the named goal from an authoritative read and propose only. */
+  private async runGoalContributionTurn(
+    input: TurnInput,
+    plan: TurnPlan,
+    client: MutationApiClient | null,
+    startedAt: number,
+    base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy },
+  ): Promise<TurnResult> {
+    if (hasNegation(input.text)) {
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não vou propor o aporte porque sua mensagem contém uma negação. Se quiser continuar, descreva o aporte novamente.' }) });
+    }
+    if (hasUnsupportedCurrency(input.text)) {
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: ambiguityClarificationText('unsupported_currency') }) });
+    }
+    const reader = this.entityReaderOrClosed();
+    if (!reader.listGoals) {
+      const text = 'Não consigo consultar suas metas nesta sessão. Tente novamente em instantes.';
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text }) });
+    }
+    let goals: readonly EntitySummary[];
+    try { goals = normalizeEntities(await reader.listGoals()); }
+    catch {
+      const text = 'Não consegui consultar suas metas agora. Tente novamente em instantes.';
+      return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text }) });
+    }
+    const scope = reader.scope?.workspaceId;
+    goals = goals.filter((goal) => !scope || goal.scopeId === undefined || goal.scopeId === scope);
+    const active = goals.filter((goal) => goal.isActive !== false && !['cancelled', 'achieved'].includes(goal.status?.toLowerCase() ?? ''));
+    const foldedText = input.text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const matches = active.filter((goal) => hasWholeEntityName(input.text, goal.name));
+    const matchSpans = matches.map((goal) => {
+      const name = goal.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+      const found = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'u').exec(foldedText);
+      return { goal, start: found?.index ?? -1, end: found ? found.index + found[0].length : -1 };
+    });
+    const hasDisjointMentions = matchSpans.some((a, i) => matchSpans.slice(i + 1).some((b) =>
+      a.start >= 0 && b.start >= 0 && a.goal.name !== b.goal.name && !(a.start <= b.start && a.end >= b.end) && !(b.start <= a.start && b.end >= a.end),
+    ));
+    if (hasDisjointMentions) {
+      const text = `Você mencionou mais de uma meta. Qual delas devo usar?\n${matches.map((goal) => `• ${goal.name}`).join('\n')}`;
+      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['goalId']), text }), response: freeze({ text }) });
+    }
+    const longestLength = Math.max(0, ...matchSpans.map((span) => span.end - span.start));
+    const bestMatches = matchSpans.filter((span) => span.end - span.start === longestLength).map((span) => span.goal);
+    if (bestMatches.length > 1) {
+      const text = `Encontrei mais de uma meta com esse nome. Qual delas?\n${bestMatches.map((goal) => `• ${goal.name}`).join('\n')}`;
+      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['goalId']), text }), response: freeze({ text }) });
+    }
+    if (bestMatches.length === 0) {
+      const unavailable = goals.find((goal) => hasWholeEntityName(input.text, goal.name) && (['cancelled', 'achieved'].includes(goal.status?.toLowerCase() ?? '') || goal.isActive === false));
+      const text = unavailable
+        ? `A meta ${unavailable.name} está ${unavailable.status?.toLowerCase() === 'achieved' ? 'atingida' : 'indisponível'}. Escolha uma meta ativa.`
+        : goals.length
+          ? `Não encontrei a meta mencionada. Qual meta ativa devo usar?\n${active.map((goal) => `• ${goal.name}`).join('\n')}`
+          : 'Não encontrei metas disponíveis. Qual meta você quer usar?';
+      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['goalId']), text }), response: freeze({ text }) });
+    }
+    if (!client) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não foi possível preparar o aporte com segurança nesta sessão.' }) });
+    const goal = bestMatches[0]!;
+    // Remove the resolved name after accent/case folding before looking for
+    // numerals: names such as "Viagem 2026" must never supply the amount.
+    const foldedName = goal.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    const escapedName = foldedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    const goalNamePattern = new RegExp(`(?<![\\p{L}\\p{N}])${escapedName}(?![\\p{L}\\p{N}])`, 'u');
+    let amountText = foldedText.replace(goalNamePattern, ' ');
+    amountText = amountText
+      .replace(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/g, ' ')
+      .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ')
+      .replace(/\b\d{1,2}\/\d{1,2}\b/g, ' ')
+      .replace(/\b\d{1,2}\s+de\s+(?:janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+de\s+\d{4}\b/g, ' ')
+      .replace(/\bem\s+\d{4}\b/g, ' ')
+      .replace(/\b\d+(?:[.,]\d+)?\s*%/g, ' ')
+      .replace(/\bdia\s+\d+\b/g, ' ');
+    if (/\b\d[\d.,]*\s*(?:milh(?:ao|oes)|mil|k|mi)\b/iu.test(amountText)) {
+      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['amount']), text: 'Qual valor você quer aportar na meta?' }), response: freeze({ text: 'Qual valor você quer aportar na meta?' }) });
+    }
+    const number = '(\\d{1,3}(?:\\.\\d{3})+(?:,\\d{1,2})?|\\d{1,12}(?:[.,]\\d{1,2})?)(?![\\d.,])';
+    const monetaryMatch = amountText.match(new RegExp(`(?:r\\$\\s*${number}|${number}\\s*reais?)`, 'iu'));
+    const monetaryValue = monetaryMatch?.slice(1).find((part) => part !== undefined);
+    const looseValue = amountText.match(/\b\d[\d.,]*\b/u)?.[0];
+    const rawValue = monetaryValue ?? looseValue;
+    const explicitCentsGrouped = !!rawValue && /^\d{1,3}(?:\.\d{3})+,\d{1,2}$/u.test(rawValue);
+    const unclearFormatted = !!rawValue && !explicitCentsGrouped && (
+      /^\d{1,3}(?:\.\d{3})+$/u.test(rawValue) ||
+      /^\d+,\d{3,}$/u.test(rawValue) ||
+      /^\d+\.\d{3,}$/u.test(rawValue)
+    );
+    const numberCandidates = [...amountText.matchAll(/\b\d[\d.,]*\b/gu)];
+    if (!monetaryMatch && numberCandidates.length > 1) {
+      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['amount']), text: 'Qual valor você quer aportar na meta?' }), response: freeze({ text: 'Qual valor você quer aportar na meta?' }) });
+    }
+    const valueMatch = unclearFormatted ? null : monetaryMatch ?? amountText.match(new RegExp(number, 'iu'));
+    let amountCents: number | undefined;
+    const rawAmount = valueMatch?.slice(1).find((part) => part !== undefined);
+    if (rawAmount) {
+      try {
+        const parsed = parseMoneyToCents(rawAmount);
+        if (Number.isSafeInteger(parsed) && parsed > 0) amountCents = parsed;
+      } catch { /* clarify below */ }
+    }
+    if (!amountCents) {
+      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['amount']), text: 'Qual valor você quer aportar na meta?' }), response: freeze({ text: 'Qual valor você quer aportar na meta?' }) });
+    }
+    const contributionDate = explicitFinancialDate(input.text)?.date;
+    const tool = 'goals.contribute';
+    const normalizedArgs = { goalId: goal.id, amountCents, ...(contributionDate ? { contributionDate } : {}) };
+    const identity: MutationIdentity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })() };
+    this.budgetFor(base).noteProposeAttempt();
+    let proposal: Awaited<ReturnType<MutationApiClient['propose']>>;
+    try { proposal = await client.propose({ tool, normalizedArgs, summary: `Aportar R$ ${(amountCents / 100).toFixed(2).replace('.', ',')} na meta ${goal.name}`, identity, idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool) }); }
+    catch { return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) }); }
+    return this.completeTurn(input, plan, startedAt, base, {
+      policy: freeze({ ...base.policy, authorizationMode: 'manual' }),
+      mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, accountName: goal.name, expiresAt: proposal.operation.expiresAt }),
       response: freeze({ text: renderMutationResult('proposed', proposal.summary) }),
     });
   }
@@ -7581,6 +7704,9 @@ export class ConversationOrchestrator {
     // the same pipeline and fails closed without reviving a V1 relay path.
     if (plan.mode === 'mutation-proposal' && !client) {
       return freeze({ ...result, response: freeze({ text: 'Não foi possível preparar a operação com segurança. A sessão precisa de um dispositivo autenticado.' }) });
+    }
+    if (isGoalContributionIntent(input.text) && !this.dependencies.draftStore) {
+      return this.runGoalContributionTurn(input, plan, client ?? null, startedAt, result);
     }
     if (isTransactionMutationPlan(plan) && isCardPurchaseIntent(input.text) && !this.dependencies.draftStore) {
       return this.runCardPurchaseTurn(input, plan, client ?? null, startedAt, result);
