@@ -1,6 +1,6 @@
 # ADR-032 - Contrato de entrega por ator do live-sync (TED #269)
 
-**Status:** accepted (F2a: transporte fechado + guard; entrega por ator pendente)
+**Status:** accepted (C2: filtro de entrega implementado, transporte fechado; C3 pendente)
 **Data:** 2026-11-12
 
 ## Contexto
@@ -41,6 +41,17 @@ REST já aplica o isolamento por D3; isso não prova isolamento de entrega ao vi
 - REST continua a fonte da verdade e os caminhos REST permanecem disponíveis.
 - Este ADR especifica o contrato futuro; a implementação C não existe nesta
   entrega e a flag permanece OFF.
+
+## Bloqueadores para abrir o transporte (C3)
+
+- Ramo de upgrade no Worker com `authorizeWorkspaceMembership`, carimbo de `x-agent-actor/role/workspace/device`, remoção de `x-agent-connection-token`/`cookie` do cliente e teste de header forjado.
+- Retomada/replay de stream e envios diretos por `connection.send` devem passar pelo mesmo predicado (hoje ficam fora do `broadcast`).
+- `onMessage` inbound precisa de allowlist explícita de tipos; o caminho WS não pode alcançar o handler de chat do SDK sem as travas financeiras do REST (confirmação, Pending V2, `Idempotency-Key`, `decisionText` server-side).
+- TTL de `validatedAt`, revalidação de membership, logout e revogação de sockets já conectados.
+- Teste estático de que nenhum envio ocorre fora do wrapper e validação contra a versão real do SDK.
+- Confirmação de que `setState` não sobrescreve estado interno do SDK (o merge atual preserva campos, mas exige teste de integração).
+
+A C2 está implementada e testada com conexões sintéticas, mas **não** prova frames reais (F1) e mantém a rota e a flag fechadas.
 
 ## Validação e critérios para reabrir
 
