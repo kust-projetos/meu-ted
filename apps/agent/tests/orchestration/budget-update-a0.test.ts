@@ -17,6 +17,7 @@ describe('A0 budget update proposals', () => {
   it.each(['Aumente o orçamento Mercado mensal para 600', 'Ajuste o teto de Mercado para R$ 600'])('resolves by budget or category name and proposes manually: %s', async (text) => {
     const { result, request } = await run(text);
     expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ tool: 'budgets.update', normalizedArgs: { budgetId, amountCents: 60000 } });
+    expect(result.response?.text).toContain('Ajustar orçamento de Mercado mensal para R$ 600,00');
     expect(result.policy?.authorizationMode).toBe('manual');
     expect(result.response?.text).not.toContain(budgetId);
   });

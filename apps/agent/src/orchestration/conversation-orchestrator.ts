@@ -6553,7 +6553,7 @@ export class ConversationOrchestrator {
     const identity: MutationIdentity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })() };
     this.budgetFor(base).noteProposeAttempt();
     let proposal: Awaited<ReturnType<MutationApiClient['propose']>>;
-    const label = categoryName ?? budget.name;
+    const label = budget.name || categoryName || '';
     const summary = `Ajustar orçamento de ${label} para R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}`;
     try { proposal = await client.propose({ tool, normalizedArgs, summary, identity, idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool) }); }
     catch { return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) }); }
