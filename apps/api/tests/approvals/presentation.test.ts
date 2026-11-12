@@ -34,16 +34,13 @@ describe('buildPendingOperationPresentation (SPEC §16)', () => {
     expect(isActionablePendingOperationPresentation(presentation!)).toBe(true);
   });
 
-  it('uses a non-identifying fallback when the goal name is unavailable', () => {
+  it('fails closed when the goal name is unavailable', () => {
     const goalId = '00000000-0000-4000-8000-000000000021';
     const presentation = buildPendingOperationPresentation({
       ...base, tool: 'goals.contribute',
       normalizedArgs: { goalId, amountCents: 25000 },
     });
-    expect(presentation).toMatchObject({ description: 'Aporte em meta', goal: { label: 'Meta' } });
-    expect(presentation!.goal?.id).toBe(goalId);
-    expect([presentation!.title, presentation!.description, presentation!.goal?.label].join(' ')).not.toContain(goalId);
-    expect(isActionablePendingOperationPresentation(presentation!)).toBe(true);
+    expect(presentation).toBeNull();
   });
   it('derives the card from the same canonical args that will execute (INV-02)', () => {
     const presentation = buildPendingOperationPresentation({

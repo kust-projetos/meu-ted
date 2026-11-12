@@ -792,7 +792,7 @@ export const contributeToGoalArgsSchema = z.object({
   notes: z.string().max(2000).optional(),
 }).strict();
 
-const executeGoalContribute: ApprovalToolExecutor = async ({ workspaceId, args, goalStore, actorId }) => {
+const executeGoalContribute: ApprovalToolExecutor = async ({ workspaceId, args, goalStore, actorId, idempotencyKey }) => {
   const parsed = contributeToGoalArgsSchema.safeParse(args);
   if (!parsed.success) throw new Error('validation.invalid_goal_contribute_arguments');
   if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
@@ -803,7 +803,7 @@ const executeGoalContribute: ApprovalToolExecutor = async ({ workspaceId, args, 
       amountCents: parsed.data.amountCents,
       ...(parsed.data.contributionDate !== undefined ? { contributionDate: parsed.data.contributionDate } : {}),
       ...(parsed.data.notes !== undefined ? { notes: parsed.data.notes } : {}),
-    });
+    }, { idempotencyKey });
   } catch (err) {
     if (err instanceof DomainError) throw err;
     throw createApprovalExecutionUncertainError();

@@ -9,7 +9,7 @@ export type GoalStore = {
   }): Promise<Goal>;
   contributeToGoal(householdId: string, goalId: string, input: {
     amountCents: number; contributionDate?: string; source?: string; notes?: string;
-  }): Promise<GoalContribution>;
+  }, opts?: { idempotencyKey?: string }): Promise<GoalContribution>;
   cancelGoal(householdId: string, goalId: string, reason?: string): Promise<Goal>;
 
   updateGoal(householdId: string, goalId: string, input: {

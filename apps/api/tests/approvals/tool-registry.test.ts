@@ -45,7 +45,7 @@ describe('T0.1: Approval Tool Contract registry', () => {
     });
     expect(goalStore.contributeToGoal).toHaveBeenCalledWith('household-1', goalId, {
       amountCents: args.amountCents, contributionDate: args.contributionDate, notes: args.notes,
-    });
+    }, { idempotencyKey: 'pending-key' });
     expect(contract.inputSchema.safeParse({ ...args, extra: 1 }).success).toBe(false);
     await expect(contract.executor({ writes: {} as never, workspaceId: 'household-1', actorId: 'actor-1', args, idempotencyKey: 'pending-key' })).rejects.toThrow('validation.goal_store_unavailable');
     await expect(contract.executor({ writes: {} as never, goalStore, workspaceId: 'household-1', actorId: 'actor-1', args: { ...args, amountCents: 0 }, idempotencyKey: 'pending-key' })).rejects.toThrow('validation.invalid_goal_contribute_arguments');

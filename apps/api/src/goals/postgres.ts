@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { Goal, } from '../types/domain.js';
 import type { GoalStore } from './store.js';
@@ -45,9 +45,32 @@ const contributeToGoalInTx = async (
   householdId: string,
   goalId: string,
   input: ContributeGoalInput,
+  opts?: { idempotencyKey?: string },
 ) => {
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
+  const date = input.contributionDate ?? new Date().toISOString().slice(0, 10);
+  if (opts?.idempotencyKey) {
+    const bytes = createHash('sha256').update(`${householdId}:${opts.idempotencyKey}`).digest().subarray(0, 16);
+    bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+    bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+    const cid = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('').replace(/^(........)(....)(....)(....)(............)$/, '$1-$2-$3-$4-$5');
+    const inserted = await client.query<Row>(`INSERT INTO goal_contributions (id,goal_id,amount_cents,contribution_date,source,notes) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING RETURNING id`, [cid, goalId, input.amountCents, date, input.source ?? null, input.notes ?? null]);
+    if ((inserted.rowCount ?? 0) === 0) {
+      const prior = await client.query<Row>(`SELECT id, goal_id, amount_cents, contribution_date FROM goal_contributions WHERE id=$1`, [cid]);
+      if (!prior.rows[0]) throw new Error('goal_contribution.idempotency_conflict_missing');
+      if (prior.rows[0]['goal_id'] !== goalId) throw domainErrors.invalid('goal', 'idempotency key reutilizada');
+      return { id: prior.rows[0]['id'] as string, goalId, amountCents: Number(prior.rows[0]['amount_cents']), contributionDate: String(prior.rows[0]['contribution_date']).slice(0, 10) };
+    }
+    // Increment only after the unique contribution row claims the key.
+    const updated = await client.query<Row>(`UPDATE goals SET current_amount_cents=current_amount_cents+$3, status=CASE WHEN current_amount_cents+$3>=target_amount_cents THEN 'achieved' ELSE status END, updated_at=NOW() WHERE id=$1 AND household_id=$2 AND status <> 'cancelled'`, [goalId, householdId, input.amountCents]);
+    if ((updated.rowCount ?? 0) === 0) {
+      const existing = await client.query<Row>(`SELECT status FROM goals WHERE id=$1 AND household_id=$2`, [goalId, householdId]);
+      if (!existing.rows[0]) throw domainErrors.notFound('Meta');
+      throw domainErrors.invalid('goal', 'meta cancelada não aceita aportes');
+    }
+    return { id: cid, goalId, amountCents: input.amountCents, contributionDate: date };
+  }
   // V4.1 SPEC §9.6: atomic increment — never read-modify-write. The
   // single UPDATE both adds the contribution and flips status, so N
   // concurrent contributions sum exactly (goal.current == SUM).
@@ -125,8 +148,8 @@ export const createPostgresGoalStore = (pool: Pool): GoalStore => {
     async createGoal(householdId, input) {
       return withTransaction(pool, (client) => createGoalInTx(client, householdId, input));
     },
-    async contributeToGoal(householdId, goalId, input) {
-      return withTransaction(pool, (client) => contributeToGoalInTx(client, householdId, goalId, input));
+    async contributeToGoal(householdId, goalId, input, opts) {
+      return withTransaction(pool, (client) => contributeToGoalInTx(client, householdId, goalId, input, opts));
     },
     async cancelGoal(householdId, goalId, _reason) {
       // FIX-WS-D2-R3 item 2: guarda FOR SHARE + efeito na mesma

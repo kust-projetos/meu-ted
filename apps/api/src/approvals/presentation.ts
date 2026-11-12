@@ -552,12 +552,13 @@ export const buildPendingOperationPresentation = (input: {
   if (input.tool === 'goals.contribute') {
     const { goalId, amountCents, contributionDate } = args;
     if (typeof goalId !== 'string' || !goalId || typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents < 1) return null;
+    if (typeof input.goalLabel !== 'string' || !input.goalLabel.trim()) return null;
     const candidate: Record<string, unknown> = {
       id: input.id, status: input.status, tool: input.tool,
       title: `${derivePresentationTitle(input.tool)} — ${formatAmountBRL(amountCents)}`,
-      amountCents, description: input.goalLabel || 'Aporte em meta',
+      amountCents, description: input.goalLabel,
       ...(typeof contributionDate === 'string' ? { date: contributionDate } : {}),
-      goal: { id: goalId, label: input.goalLabel || 'Meta' },
+      goal: { id: goalId, label: input.goalLabel },
       expiresAt: input.expiresAt,
       warnings: Array.isArray(input.warnings) ? input.warnings.filter((w): w is string => typeof w === 'string') : [],
     };
