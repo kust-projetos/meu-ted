@@ -12,6 +12,9 @@ describe('budget update intent', () => {
   it('extracts a valid alert threshold', () => {
     expect(hasThresholdIntent('alerta em 90%')).toBe(true);
     expect(thresholdOf('alerta em 90%')).toBe(90);
+    expect(hasThresholdIntent('limite de 80%')).toBe(true);
+    expect(thresholdOf('limite de 80%')).toBe(80);
+    expect(hasThresholdIntent('ajuste o limite do orçamento para 600')).toBe(false);
     expect(thresholdOf('limiar 101')).toBeUndefined();
   });
 });

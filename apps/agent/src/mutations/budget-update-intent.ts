@@ -28,7 +28,10 @@ export const extractBudgetUpdateAmount = (text: string, names: string[]): number
   return extractNamedAmountCents(text, names[0]!);
 };
 
-export const hasThresholdIntent = (text: string): boolean => /\b(?:alerta|limiar|limite)\b/i.test(fold(text));
+export const hasThresholdIntent = (text: string): boolean => {
+  const value = fold(text);
+  return /\b(?:alerta|limiar)\b/.test(value) || (/\blimite\b/.test(value) && value.includes('%'));
+};
 
 export const thresholdOf = (text: string): number | undefined => {
   if (!hasThresholdIntent(text)) return undefined;

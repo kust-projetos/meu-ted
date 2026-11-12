@@ -31,6 +31,12 @@ describe('A0 budget update proposals', () => {
     const { request } = await run('Ajuste o orçamento Mercado mensal para 600, alerta em 90%');
     expect(request.mock.calls[0]?.[2]?.body.normalizedArgs).toEqual({ budgetId, amountCents: 60000, alertThreshold: 90 });
   });
+  it('treats limite without percent as ceiling text, and alerta with percent as threshold', async () => {
+    const ceiling = await run('Ajuste o limite do orçamento de mercado para 600');
+    expect(ceiling.request.mock.calls[0]?.[2]?.body.normalizedArgs).toEqual({ budgetId, amountCents: 60000 });
+    const threshold = await run('Aumente o teto de mercado para 600 com alerta em 90%');
+    expect(threshold.request.mock.calls[0]?.[2]?.body.normalizedArgs).toEqual({ budgetId, amountCents: 60000, alertThreshold: 90 });
+  });
   it('clarifies zero/multiple matches and unavailable reader', async () => {
     const cases: Array<{ budgets: any[]; categories: any[]; reader: boolean }> = [
       { budgets: [], categories: [category], reader: true },

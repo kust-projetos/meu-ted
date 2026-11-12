@@ -6517,13 +6517,13 @@ export class ConversationOrchestrator {
   /** Resolve an existing budget authoritatively and propose its new ceiling only. */
   private async runBudgetUpdateTurn(input: TurnInput, plan: TurnPlan, client: MutationApiClient | null, startedAt: number, base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy }): Promise<TurnResult> {
     const clarify = (missing: string[], text: string) => this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(missing), text }), response: freeze({ text }) });
-    if (hasNegation(input.text)) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Nao vou propor essa alteracao porque sua mensagem contem uma negacao.' }) });
+    if (hasNegation(input.text)) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não vou propor essa alteração porque sua mensagem contém uma negação.' }) });
     const reader = this.dependencies.entityReader;
-    if (!reader?.listBudgets) return clarify(['budgetId'], 'Nao consigo consultar seus orcamentos nesta sessao. Tente novamente em instantes.');
+    if (!reader?.listBudgets) return clarify(['budgetId'], 'Não consigo consultar seus orçamentos nesta sessão. Tente novamente em instantes.');
     let budgets: EntitySummary[];
     let categories: EntitySummary[];
     try { [budgets, categories] = await Promise.all([reader.listBudgets().then(normalizeEntities), reader.listCategories().then(normalizeEntities)]); }
-    catch { return clarify(['budgetId'], 'Nao consegui consultar seus orcamentos agora. Tente novamente em instantes.'); }
+    catch { return clarify(['budgetId'], 'Não consegui consultar seus orçamentos agora. Tente novamente em instantes.'); }
     const scope = reader.scope?.workspaceId;
     budgets = budgets.filter((row) => (!scope || row.scopeId === undefined || row.scopeId === scope) && row.isActive !== false && !['inactive', 'archived'].includes(row.status?.toLowerCase() ?? ''));
     categories = categories.filter((row) => (!scope || row.scopeId === undefined || row.scopeId === scope) && row.isActive !== false && !['inactive', 'archived'].includes(row.status?.toLowerCase() ?? ''));
@@ -6540,14 +6540,14 @@ export class ConversationOrchestrator {
     const disjoint = spans.some((a, i) => spans.slice(i + 1).some((b) => a.budget.id !== b.budget.id && (a.end <= b.start || b.end <= a.start)));
     const longest = Math.max(0, ...spans.map((span) => span.end - span.start));
     const selected = spans.filter((span) => span.end - span.start === longest);
-    if (disjoint || selected.length !== 1) return clarify(['budgetId'], `Qual orcamento ativo devo ajustar?${budgets.length ? `\n${budgets.map((row) => row.name).join('\n')}` : ''}`);
+    if (disjoint || selected.length !== 1) return clarify(['budgetId'], `Qual orçamento ativo devo ajustar?${budgets.length ? `\n${budgets.map((row) => row.name).join('\n')}` : ''}`);
     const budget = selected[0]!.budget;
     const categoryName = categories.find((row) => row.id === budget.categoryId)?.name;
     const amountCents = extractBudgetUpdateAmount(input.text, [selected[0]!.name]);
-    if (!amountCents) return clarify(['amountCents'], 'Qual deve ser o novo teto do orcamento?');
+    if (!amountCents) return clarify(['amountCents'], 'Qual deve ser o novo teto do orçamento?');
     const alertThreshold = hasThresholdIntent(input.text) ? thresholdOf(input.text) : undefined;
-    if (hasThresholdIntent(input.text) && !alertThreshold) return clarify(['alertThreshold'], 'Qual limiar de alerta entre 1% e 100% voce quer usar?');
-    if (!client) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Nao foi possivel preparar o ajuste com seguranca nesta sessao.' }) });
+    if (hasThresholdIntent(input.text) && !alertThreshold) return clarify(['alertThreshold'], 'Qual limiar de alerta entre 1% e 100% você quer usar?');
+    if (!client) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não foi possível preparar o ajuste com segurança nesta sessão.' }) });
     const tool = 'budgets.update';
     const normalizedArgs = { budgetId: budget.id, amountCents, ...(alertThreshold !== undefined ? { alertThreshold } : {}) };
     const identity: MutationIdentity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })() };
