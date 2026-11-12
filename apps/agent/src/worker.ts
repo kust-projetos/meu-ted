@@ -283,7 +283,7 @@ export default {
       "access-control-max-age": "600",
     });
 
-    if (request.method === "OPTIONS" && !/^\/agents\/finance-chat-agent\/[^/]+\/live$/.test(url.pathname)) {
+    if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
         headers: corsHeaders(),
@@ -301,7 +301,7 @@ export default {
         const auth = await authorizeWorkspaceMembership(request, env as unknown as { API_ORIGIN: string; AGENT_CONNECTION_TOKEN_SECRET?: string; AGENT_AUTH_SERVICE_TOKEN?: string }, workspaceId);
         if (auth instanceof Response) return auth;
         const headers = new Headers(request.headers);
-        for (const key of ["cookie", "authorization", "x-agent-connection-token", "x-agent-actor", "x-agent-role", "x-agent-workspace", "x-agent-device"]) headers.delete(key);
+        for (const key of ["cookie", "authorization", "x-agent-connection-token", "x-agent-actor", "x-agent-role", "x-agent-workspace", "x-agent-device", "x-partykit-namespace"]) headers.delete(key);
         headers.set("x-agent-actor", auth.actorId);
         headers.set("x-agent-role", auth.role);
         headers.set("x-agent-workspace", auth.workspaceId);
