@@ -13,7 +13,7 @@ missão é escolhida pelo usuário.
 
 ## 1. Gate de segurança (antes de conversas privadas)
 
-- **#269 - isolamento por ator dos eventos WebSocket.** A flag
+- **#269 — isolamento por ator dos eventos WebSocket.** A flag
   `TED_PRIVATE_VIEWS_ENABLED` continua **OFF**. O PR #205 implementou a
   visibilidade privada, e o PR #330 mergeou o surface guard do live-sync
   (`apps/agent/tests/worker-live-sync-surface.test.ts`). F0 registrado em
@@ -67,8 +67,8 @@ memória versionados), #116 (protótipo de UX), #95 (keepalive de I/O do DO) e
 
 ## 6. Sugestão para a próxima sessão
 
-1. **#269 F0/F1** (sem impacto em produção e sem ligar a flag): inventariar o
-   fluxo WS e escrever o teste negativo com dois atores.
+1. **#269 F2 — entrega por ator** (sem ligar a flag; F0 está concluído no
+   inventário e F1, captura de frames, depende deste contrato).
 2. Em paralelo, se o foco for produto, escolher **uma** decisão da seção 4
    (ex.: metas/orçamentos por conversa) e tratá-la como nova missão.
 

@@ -35,6 +35,10 @@ const deniedPaths = [
   "/rpc/chat/stream",
   "/rpc/attachments/stream",
   "/rpc/unknown",
+  "/rpc/undo//verify-target",
+  "/rpc/undo/a/b/verify-target",
+  "/rpc/chat/",
+  "/rpc/undo/x/verify-target/extra",
 ];
 
 describe("agent RPC path allowlist", () => {
