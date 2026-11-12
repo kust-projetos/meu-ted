@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { Budget, BudgetStatus, BudgetTrend } from '../types/domain.js';
 import type { BudgetStore } from './store.js';
@@ -97,6 +97,11 @@ export const insertBudgetRow = async (
   return { id, householdId, categoryId: input.categoryId, name: input.name, amountCents: input.amountCents, period: input.period, startDate: input.startDate, alertThreshold: input.alertThreshold ?? 80, rollover: false };
 };
 
+const deterministicBudgetId = (householdId: string, key: string): string => {
+  const hex = createHash('sha256').update(`${householdId}:${key}`).digest('hex').slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20)}`;
+};
+
 function getPeriodBounds(date: string, period: string): { start: string; end: string } {
   const d = new Date(date + 'T00:00:00');
   const y = d.getUTCFullYear(); const m = d.getUTCMonth();
@@ -156,8 +161,19 @@ export const createPostgresBudgetStore = (pool: Pool): BudgetStore => {
       return result;
     },
 
-    async createBudget(householdId, input) {
-      return withTransaction(pool, (client) => createBudgetInTx(client, householdId, input));
+    async createBudget(householdId, input, opts) {
+      if (!opts?.idempotencyKey) return withTransaction(pool, (client) => createBudgetInTx(client, householdId, input));
+      return withTransaction(pool, async (client) => {
+        await assertWorkspaceWritableInTx(client, householdId);
+        await lockCategoryReferencesInTx(client, householdId);
+        await assertBudgetCategory(async <R extends Row = Row>(text: string, values?: unknown[]) => (await client.query<R>(text, values)).rows, householdId, input.categoryId);
+      const id = deterministicBudgetId(householdId, opts.idempotencyKey!);
+        const inserted = await client.query<Row>(`INSERT INTO budgets (id,household_id,category_id,name,amount_cents,period,start_date,alert_threshold) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING RETURNING *`, [id, householdId, input.categoryId, input.name, input.amountCents, input.period, input.startDate, input.alertThreshold ?? 80]);
+        const row = inserted.rows[0] ?? (await client.query<Row>(`SELECT * FROM budgets WHERE id=$1 AND household_id=$2`, [id, householdId])).rows[0];
+        if (!row) throw domainErrors.invalid('budget', 'idempotency key reutilizada');
+        if (row.category_id !== input.categoryId || row.period !== input.period || Number(row.amount_cents) !== input.amountCents) throw domainErrors.invalid('budget', 'idempotency key reutilizada');
+        return { id: String(row.id), householdId, categoryId: String(row.category_id), name: String(row.name), amountCents: Number(row.amount_cents), period: row.period as Budget['period'], startDate: (row.start_date as Date).toISOString().slice(0, 10), alertThreshold: Number(row.alert_threshold), rollover: row.rollover as boolean };
+      });
     },
 
     async updateBudget(householdId, budgetId, patch) {

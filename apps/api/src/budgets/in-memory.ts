@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Budget, BudgetTrend } from '../types/domain.js';
 import type { BudgetStore } from './store.js';
 import type { InMemoryState } from '../writes/in-memory.js';
@@ -57,7 +57,13 @@ export const createInMemoryBudgetStore = (state: InMemoryState, clock: () => Dat
         .sort((a, b) => b.percentUsed - a.percentUsed);
     },
 
-    async createBudget(householdId, input) {
+    async createBudget(householdId, input, opts) {
+      const id = opts?.idempotencyKey ? createHash('sha256').update(`${householdId}:${opts.idempotencyKey}`).digest('hex').slice(0, 32).replace(/^(.{12})(.)/, '$1' + '5').replace(/^(.{16})(.)/, '$1' + '8') : randomUUID();
+      const existing = budgets.find((b) => b.id === id);
+      if (existing) {
+        if (existing.categoryId !== input.categoryId || existing.period !== input.period || existing.amountCents !== input.amountCents) throw domainErrors.invalid('budget', 'idempotency key reutilizada');
+        return existing;
+      }
       // V4.1 Task 2.15: budgets had no category validation — the category
       // must now be an active expense-kind category of the household
       // (budgets track expense spending).
@@ -67,7 +73,7 @@ export const createInMemoryBudgetStore = (state: InMemoryState, clock: () => Dat
         expectedKind: 'expense',
       });
       const b = opt<Budget>(
-        { id: randomUUID(), householdId, categoryId: input.categoryId, name: input.name, amountCents: input.amountCents, period: input.period, startDate: input.startDate, alertThreshold: input.alertThreshold ?? 80, rollover: false },
+        { id, householdId, categoryId: input.categoryId, name: input.name, amountCents: input.amountCents, period: input.period, startDate: input.startDate, alertThreshold: input.alertThreshold ?? 80, rollover: false },
         {} as Partial<Budget>,
       );
       budgets.push(b);

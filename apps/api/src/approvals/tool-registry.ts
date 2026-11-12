@@ -25,6 +25,7 @@ import type { WriteStore } from '../writes/store.js';
 import type { CardStore } from '../cards/store.js';
 import type { PayableStore } from '../payables/store.js';
 import type { GoalStore } from '../goals/store.js';
+import type { BudgetStore } from '../budgets/store.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
 import { AUTOEXECUTION_ELIGIBLE_TOOLS } from './policy.js';
 
@@ -44,6 +45,7 @@ export const APPROVAL_TOOL_IDS = [
   'payables.create',
   'payables.pay',
   'goals.contribute',
+  'budgets.create',
 ] as const;
 
 export type ApprovalToolId = (typeof APPROVAL_TOOL_IDS)[number];
@@ -53,6 +55,7 @@ export type ApprovalToolExecutionContext = {
   cardStore?: CardStore;
   payableStore?: PayableStore;
   goalStore?: GoalStore;
+  budgetStore?: BudgetStore;
   workspaceId: string;
   args: unknown;
   idempotencyKey: string;
@@ -817,6 +820,27 @@ const executeGoalContribute: ApprovalToolExecutor = async ({ workspaceId, args, 
   return { status: 'succeeded', operationId: contribution.id, receipt };
 };
 
+export const createBudgetArgsSchema = z.object({
+  categoryId: z.string().uuid(), name: z.string().trim().min(1).max(120),
+  amountCents: z.number().int().min(1).max(1_000_000_000_000),
+  period: z.enum(['monthly', 'quarterly', 'yearly']), startDate: isoDateSchema,
+  alertThreshold: z.number().int().min(1).max(100).optional(),
+}).strict();
+
+const executeBudgetCreate: ApprovalToolExecutor = async ({ workspaceId, args, budgetStore, actorId, idempotencyKey }) => {
+  const parsed = createBudgetArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_budget_create_arguments');
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  if (!budgetStore) throw new Error('validation.budget_store_unavailable');
+  let budget: { id: string };
+  try { budget = await budgetStore.createBudget(workspaceId, { categoryId: parsed.data.categoryId, name: parsed.data.name, amountCents: parsed.data.amountCents, period: parsed.data.period, startDate: parsed.data.startDate, ...(typeof parsed.data.alertThreshold === 'number' ? { alertThreshold: parsed.data.alertThreshold } : {}) }, { idempotencyKey }); }
+  catch (err) { if (err instanceof DomainError) throw err; throw createApprovalExecutionUncertainError(); }
+  try {
+    const receipt = buildTedReceipt('budgets.create', budget.id, { type: 'budget', id: budget.id });
+    return { status: 'succeeded', operationId: budget.id, receipt };
+  } catch { throw createApprovalExecutionUncertainError(); }
+};
+
 const executePayableCreate: ApprovalToolExecutor = async ({
   workspaceId,
   args,
@@ -908,6 +932,7 @@ const executePayablePay: ApprovalToolExecutor = async ({
 };
 
 const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
+  'budgets.create': { tool: 'budgets.create', inputSchema: createBudgetArgsSchema, approvalRequired: true, authorizationPolicy: 'risk_based', autoExecutionEligible: false, executor: executeBudgetCreate },
   'goals.contribute': {
     tool: 'goals.contribute', inputSchema: contributeToGoalArgsSchema,
     approvalRequired: true, authorizationPolicy: 'risk_based', autoExecutionEligible: false,
