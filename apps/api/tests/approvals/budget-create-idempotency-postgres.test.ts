@@ -43,8 +43,12 @@ describeIfDb('budget create idempotency PostgreSQL', () => {
     const first = await store.createBudget(householdId, input, { idempotencyKey: 'same' });
     const replay = await Promise.all([store.createBudget(householdId, input, { idempotencyKey: 'same' }), store.createBudget(householdId, input, { idempotencyKey: 'same' })]);
     expect(replay.map((budget) => budget.id)).toEqual([first.id, first.id]);
-    await writes.deactivateCategory(householdId, category.id, { idempotencyKey: 'deactivate-category', expectedName: 'Food' });
+    // Bypass the business route intentionally: it rejects categories referenced by budgets.
+    // This simulates post-commit deactivation and verifies replay returns before the category gate.
+    await pool.query(`UPDATE categories SET status='inactive' WHERE id=$1 AND household_id=$2`, [category.id, householdId]);
     expect((await store.createBudget(householdId, input, { idempotencyKey: 'same' })).id).toBe(first.id);
+    // Canonical category gate rejects an inactive category as not_found on a new key.
+    await expect(store.createBudget(householdId, { ...input, amountCents: 51000 }, { idempotencyKey: 'new-key' })).rejects.toMatchObject({ code: 'not_found' });
     await expect(store.createBudget(householdId, { ...input, amountCents: 60000 }, { idempotencyKey: 'same' })).rejects.toMatchObject({ code: 'validation.invalid' });
     for (const changed of [{ name: 'Other' }, { startDate: '2026-12-01' }, { alertThreshold: 90 }]) {
       await expect(store.createBudget(householdId, { ...input, ...changed }, { idempotencyKey: 'same' })).rejects.toMatchObject({ code: 'validation.invalid' });
