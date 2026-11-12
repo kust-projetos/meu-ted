@@ -315,11 +315,12 @@ export default {
         catch { return new Response("Bad request", { status: 400 }); }
         const offer = parseLiveProtocolOffer(request.headers.get("sec-websocket-protocol"));
         const offeredProtocols = request.headers.has("sec-websocket-protocol");
-        if ((offeredProtocols && !offer.protocol) || (!request.headers.get("x-agent-connection-token") && !offer.token)) {
+        const headerToken = request.headers.get("x-agent-connection-token")?.trim();
+        if ((offeredProtocols && !offer.protocol) || (!headerToken && !offer.token)) {
           return new Response("Bad request", { status: 400 });
         }
         const authHeaders = new Headers(request.headers);
-        if (!authHeaders.has("x-agent-connection-token") && offer.token) authHeaders.set("x-agent-connection-token", offer.token);
+        if (!headerToken && offer.token) authHeaders.set("x-agent-connection-token", offer.token);
         const authRequest = new Request(request, { headers: authHeaders });
         const auth = await authorizeWorkspaceMembership(authRequest, env as unknown as { API_ORIGIN: string; AGENT_CONNECTION_TOKEN_SECRET?: string; AGENT_AUTH_SERVICE_TOKEN?: string }, workspaceId);
         if (auth instanceof Response) return auth;

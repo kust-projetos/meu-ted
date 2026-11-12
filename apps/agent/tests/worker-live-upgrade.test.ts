@@ -15,6 +15,40 @@ describe("live-sync websocket upgrade", () => {
     expect(parseLiveProtocolOffer("bearer.secret-token, ted.v1")).toEqual({ protocol: true, token: "secret-token" });
     expect(parseLiveProtocolOffer("bearer.secret-token")).toEqual({ protocol: false, token: "secret-token" });
     expect(parseLiveProtocolOffer("ted.v1, bearer.bad token")).toEqual({ protocol: true });
+    expect(parseLiveProtocolOffer("ted.v1, bearer.x, bearer.y")).toEqual({ protocol: true });
+    expect(parseLiveProtocolOffer("ted.v1, bearer.")).toEqual({ protocol: true });
+    expect(parseLiveProtocolOffer("ted.v1, ted.v1, bearer.x")).toEqual({ protocol: false, token: "x" });
+    expect(parseLiveProtocolOffer("Bearer.x, TED.V1")).toEqual({ protocol: false });
+    expect(parseLiveProtocolOffer("ted.v1,,bearer.x")).toEqual({ protocol: true, token: "x" });
+    expect(parseLiveProtocolOffer("ted.v1, unknown.proto, bearer.x")).toEqual({ protocol: true, token: "x" });
+  });
+
+  it("uses bearer when the connection-token header is blank, but gives any nonblank header precedence", async () => {
+    const headerActorToken = await createAgentConnectionToken({ sub: "header-actor", workspace: canonical, role: "owner" }, secret);
+    const bearerActorToken = await createAgentConnectionToken({ sub: "bearer-actor", workspace: canonical, role: "member" }, secret);
+    const doFetch = vi.fn(async (_request: Request) => new Response(null, { status: 200 }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/internal/workspace-alias/")) return Response.json({ canonicalHouseholdId: canonical });
+      if (url.includes("/internal/agent/consume-token")) return Response.json({ ok: true, consumed: true });
+      return new Response("unexpected", { status: 500 });
+    });
+    const env: WorkerEnv = {
+      FINANCE_CHAT_AGENT: { idFromName: (name) => ({ name }) as unknown as DurableObjectId, get: () => ({ fetch: doFetch }) },
+      API_ORIGIN: "https://api.test.local", PWA_ORIGIN: "https://pwa.example", TED_LIVE_SYNC_ENABLED: "1",
+      AGENT_CONNECTION_TOKEN_SECRET: secret, AGENT_AUTH_SERVICE_TOKEN: "test-auth-service-token",
+    };
+    const live = (tokenHeader: string, bearer: string) => worker.fetch(new Request(`https://agent.test.local/agents/finance-chat-agent/${alias}/live`, {
+      headers: { origin: "https://pwa.example", upgrade: "websocket", "x-agent-connection-token": tokenHeader, "sec-websocket-protocol": `ted.v1, bearer.${bearer}` },
+    }), env);
+
+    expect((await live("   ", bearerActorToken)).status).toBe(200);
+    expect(doFetch.mock.calls[0]![0].headers.get("x-agent-actor")).toBe("bearer-actor");
+    expect([401, 403]).toContain((await live("invalid-header", bearerActorToken)).status);
+    expect(doFetch).toHaveBeenCalledOnce();
+    expect((await live(headerActorToken, bearerActorToken)).status).toBe(200);
+    expect(doFetch).toHaveBeenCalledTimes(2);
+    expect(doFetch.mock.calls[1]![0].headers.get("x-agent-actor")).toBe("header-actor");
   });
 
   it("authenticates bearer subprotocol, strips offered credentials, and stamps canonical identity", async () => {
@@ -90,11 +124,13 @@ describe("live-sync websocket upgrade", () => {
     const call = (headers: HeadersInit = {}, enabled?: string) => worker.fetch(new Request(`https://agent.test.local/agents/finance-chat-agent/${alias}/live?_pk=forged&keep=1`, { headers: { origin: "https://pwa.example", upgrade: "WebSocket", "x-agent-connection-token": token, ...headers } }), { ...env, TED_LIVE_SYNC_ENABLED: enabled } as WorkerEnv);
     expect((await call({}, "0")).status).toBe(404);
     expect(doFetch).not.toHaveBeenCalled();
+    expect((await call({ "sec-websocket-protocol": "ted.v1, bearer.any" }, "0")).status).toBe(404);
     expect((await call({ origin: "https://evil.example", "x-agent-connection-token": "invalid" }, undefined)).status).toBe(404);
     for (const invalidFlag of ["true", "01", " 1"]) expect((await call({}, invalidFlag)).status).toBe(404);
     expect((await worker.fetch(new Request(`https://agent.test.local/agents/finance-chat-agent/${alias}/live`, { headers: { origin: "https://pwa.example" } }), { ...env, TED_LIVE_SYNC_ENABLED: "1" } as WorkerEnv)).status).toBe(404);
     expect((await worker.fetch(new Request(`https://agent.test.local/agents/finance-chat-agent/${alias}/live`, { headers: { upgrade: "websocket" } }), { ...env, TED_LIVE_SYNC_ENABLED: "1" } as WorkerEnv)).status).toBe(403);
     expect((await call({ origin: "https://evil.example" }, "1")).status).toBe(403);
+    expect((await call({ origin: "https://evil.example", "sec-websocket-protocol": "ted.v1, bearer.any" }, "1")).status).toBe(403);
     expect(doFetch).not.toHaveBeenCalled();
 
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
