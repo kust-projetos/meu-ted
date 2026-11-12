@@ -23,6 +23,10 @@ describe('F1-B012 budget creation', () => {
   it.each(['Não crie um orçamento', 'Não sei como criar um orçamento'])('keeps unsupported for %s', (text) => {
     const plan = routeIntent(text); expect(plan.mode).toBe('unsupported'); expect(plan.ambiguity).toBe('unsupported_budget_create');
   });
+  it.each(['Defina o orçamento de Alimentação em R$ 800', 'Adicione R$ 200 ao orçamento de mercado'])('does not propose creation for %s', (text) => {
+    const plan = routeIntent(text); expect(plan.mode).toBe('unsupported'); expect(plan.ambiguity).toBe('unsupported_budget_create'); expect(plan.requestedTools ?? []).not.toContain('budgets.create');
+  });
+  it.each(['Crie um orçamento de alimentação de 500', 'Monte um orçamento de alimentação de 500'])('proposes explicit creation for %s', (text) => expect(routeIntent(text).requestedTools).toContain('budgets.create'));
   it.each(['Crie um orçamento de R$ 500', 'Crie um orçamento para Alimentação'])('clarifies missing category or amount in %s', async (text) => {
     const { request, orchestrator } = setup();
     const result = await orchestrator.runTurn(normalizeRestTurn({ text, intentionId: 'b012-incomplete' }, { actorId: 'actor', workspaceId: 'workspace', role: 'member', deviceId: 'device' }));

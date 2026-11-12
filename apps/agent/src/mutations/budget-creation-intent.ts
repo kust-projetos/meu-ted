@@ -5,10 +5,10 @@ export const isBudgetCreationIntent = (text: string): boolean => {
   const value = fold(text);
   if (!value || /\b(?:quanto|qual|como|posso)\b/.test(value)) return false;
   if (/\bnao\s+sei\s+como\b/.test(value)) return false;
-  if (/\b(?:nao|nunca)\s+(?:crie|criar|cria|cadastre|cadastrar|adicione|adicionar|defina|definir|monte|montar)\b/.test(value)) return false;
+  if (/\b(?:nao|nunca)\s+(?:crie|criar|cria|cadastre|cadastrar|monte|montar)\b/.test(value)) return false;
   if (/\b(?:cancele|cancelar|cancela|desista|desistir)\b/.test(value)) return false;
   if (/\b(?:e|mas|ou)\s+(?:crie|criar|cria|liste|listar|cadastre|adicione|defina|monte)\b/.test(value)) return false;
-  return /\b(?:crie|criar|cria|cadastre|cadastrar|adicione|adicionar|defina|definir|monte|montar)\b/.test(value) && /\b(?:orcament\w*|budget\w*)\b/.test(value);
+  return /\b(?:crie|criar|cria|cadastre|cadastrar|monte|montar)\b/.test(value) && /\b(?:orcament\w*|budget\w*)\b/.test(value);
 };
 
 export const budgetPeriodOf = (text: string): 'monthly' | 'quarterly' | 'yearly' => {

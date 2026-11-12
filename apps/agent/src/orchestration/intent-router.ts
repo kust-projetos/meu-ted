@@ -328,12 +328,16 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
     && /(?:[;,]|\be\s+(?:cancele|cancelar|cancela)\b)/.test(decision)) {
     return ambiguousCompoundRequestPlan();
   }
-  if (/\bnao\s+(?:crie|criar|cria|cadastre|cadastrar|adicione|adicionar|defina|definir|monte|montar)\b/.test(decision)
+  if (/\bnao\s+(?:crie|criar|cria|cadastre|cadastrar|monte|montar)\b/.test(decision)
     && /\b(?:orcament\w*|budget\w*)\b/.test(decision)) {
     return unsupportedBudgetCreatePlan();
   }
   if (/\bnao\s+sei\s+como\s+(?:criar|cadastrar|adicionar|definir|montar)\b/.test(decision)
     && /\b(?:orcament\w*|budget\w*)\b/.test(decision)) {
+    return unsupportedBudgetCreatePlan();
+  }
+  if (/\b(?:defina|definir|adicione|adicionar)\b/.test(normalized)
+    && /\b(?:orcament\w*|budget\w*)\b/.test(normalized)) {
     return unsupportedBudgetCreatePlan();
   }
   if (/^cancele o rascunho\b/.test(decision) && !/^cancele o rascunho\s*[.!?]*$/.test(decision)) {
@@ -351,7 +355,7 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   if (decisionFastPath.kind === 'confirm') return makePlan('confirmation', 'general', [], [], ['conversation']);
   if (decisionFastPath.kind === 'cancel') return makePlan('cancel', 'general', [], [], ['conversation']);
   if (normalized.split(/\b(?:e|mas|ou)\b|[;,]/).some((clause) =>
-    /\b(crie|criar|cria|cadastre|cadastrar|adicione|adicionar|defina|definir|monte|montar)\b/.test(clause)
+    /\b(crie|criar|cria|cadastre|cadastrar|monte|montar)\b/.test(clause)
       && /\b(orcament\w*|budget\w*)\b/.test(clause)
       && !/\bnao\b/.test(clause))) {
     if (isBudgetCreationIntent(normalized)) return makePlan('mutation-proposal', 'budgets', [{ name: 'budgets.create', kind: 'mutation' }], ['orcamentos-metas'], ['budgets.create']);

@@ -3,6 +3,9 @@ import { routeIntent } from '../../src/orchestration/intent-router.js';
 import { hasExplicitMutationIntent } from '../../src/safety/tool-approvals.js';
 
 describe('T2.2 intent router', () => {
+  it.each(['quanto gastei em alimentação', 'meus orçamentos', 'qual meu orçamento de mercado'])('never routes budget reads to creation: %s', (text) => {
+    expect(routeIntent(text).requestedTools ?? []).not.toContain('budgets.create');
+  });
   it('routes Brazilian Portuguese negation without turning it into a mutation', () => {
     const plan = routeIntent('não registre uma despesa de 20 reais');
     expect(plan.mode).toBe('cancel');
