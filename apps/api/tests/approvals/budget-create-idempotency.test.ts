@@ -6,10 +6,15 @@ describe('budget create idempotency', () => {
   it('deletes only the household budget and reports a missing second delete', async () => {
     const { state, writes } = createInMemoryStores();
     const category = await writes.createCategory('ws', { name: 'Food', kind: 'expense' });
+    const otherCategory = await writes.createCategory('other-household', { name: 'Other food', kind: 'expense' });
     const store = createInMemoryBudgetStore(state);
     const budget = await store.createBudget('ws', { categoryId: category.id, name: 'Food', amountCents: 50000, period: 'monthly', startDate: '2026-11-01' });
+    const otherBudget = await store.createBudget('other-household', { categoryId: otherCategory.id, name: 'Other food', amountCents: 70000, period: 'monthly', startDate: '2026-11-01' });
     await store.deleteBudget('ws', budget.id);
     expect(await store.listBudgets('ws')).toHaveLength(0);
+    expect(await store.listBudgets('other-household')).toContainEqual(otherBudget);
+    await expect(store.deleteBudget('ws', otherBudget.id)).rejects.toMatchObject({ code: 'not_found' });
+    expect(await store.listBudgets('other-household')).toContainEqual(otherBudget);
     await expect(store.deleteBudget('ws', budget.id)).rejects.toMatchObject({ code: 'not_found' });
   });
 

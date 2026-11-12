@@ -95,6 +95,7 @@ describe('T0.1: Approval Tool Contract registry', () => {
     const args = { budgetId };
     const contract = requireApprovalToolContract('budgets.delete');
     expect(contract.autoExecutionEligible).toBe(false);
+    expect(contract.inputSchema.safeParse({}).success).toBe(false);
     expect(contract.inputSchema.safeParse({ ...args, extra: 1 }).success).toBe(false);
     expect(contract.inputSchema.safeParse({ budgetId: 'invalid' }).success).toBe(false);
     const store = { deleteBudget: vi.fn().mockResolvedValue(undefined) } as never;
@@ -106,6 +107,11 @@ describe('T0.1: Approval Tool Contract registry', () => {
       status: 'succeeded', operationId: budgetId,
       receipt: { mutationKind: 'budgets.delete', operationId: budgetId, entity: { type: 'budget', id: budgetId } },
     });
+    const conflict = domainErrors.conflict('Orçamento em uso');
+    const conflictingStore = { deleteBudget: vi.fn().mockRejectedValue(conflict) } as never;
+    await expect(contract.executor({ writes: {} as never, budgetStore: conflictingStore, workspaceId: 'ws', actorId: 'actor', args, idempotencyKey: 'budget-delete-key' })).rejects.toBeInstanceOf(DomainError);
+    await expect(contract.executor({ writes: {} as never, budgetStore: conflictingStore, workspaceId: 'ws', actorId: 'actor', args, idempotencyKey: 'budget-delete-key' })).rejects.toMatchObject({ code: 'conflict' });
+    await expect(contract.executor({ writes: {} as never, budgetStore: conflictingStore, workspaceId: 'ws', actorId: 'actor', args, idempotencyKey: 'budget-delete-key' })).rejects.toBe(conflict);
     const failing = { deleteBudget: vi.fn().mockRejectedValue(new Error('store unavailable')) } as never;
     await expect(contract.executor({ writes: {} as never, budgetStore: failing, workspaceId: 'ws', actorId: 'actor', args, idempotencyKey: 'budget-delete-key' })).rejects.toMatchObject({ code: 'approval.execution_uncertain' });
     await expect(contract.executor({ writes: {} as never, workspaceId: 'ws', actorId: 'actor', args, idempotencyKey: 'budget-delete-key' })).rejects.toThrow('validation.budget_store_unavailable');
