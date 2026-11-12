@@ -169,6 +169,12 @@ const transport = vi.hoisted(() => ({
   probeGateResolve: null as null | ((v: unknown) => void),
 }));
 let MockApiError: new (status: number, code: string, message: string) => Error;
+const probeDiagnostic = () =>
+  `[cold-boot-instrumentation] ${JSON.stringify({
+    observedStatus: getSessionStatus().status,
+    configuredProbe: transport.sessionProbe,
+    probeCalls: transport.sessionCalls,
+  })}`;
 function armProbeGate() {
   let resolve!: (v: unknown) => void;
   const promise = new Promise<unknown>((r) => {
@@ -698,7 +704,7 @@ describe("T07c-F2R2-F1: reprobe tardio não sobrescreve autoridade mais nova (ep
 
     // Purge + login executados pelo caminho canônico.
     await screen.findByPlaceholderText(/seu\.email@exemplo\.com/, {}, { timeout: 3000 });
-    expect(getSessionStatus().status).toBe("unauthenticated");
+    expect(getSessionStatus().status, probeDiagnostic()).toBe("unauthenticated");
     expect(getOfflinePrincipalId()).toBeNull();
 
     // O reprobe tardio resolve com um usuário válido — deve ser descartado.
@@ -707,7 +713,7 @@ describe("T07c-F2R2-F1: reprobe tardio não sobrescreve autoridade mais nova (ep
     });
 
     // Nada mudou: sem re-bind do principal antigo, sem flip para authenticated.
-    expect(getSessionStatus().status).toBe("unauthenticated");
+    expect(getSessionStatus().status, probeDiagnostic()).toBe("unauthenticated");
     expect(getOfflinePrincipalId()).toBeNull();
     expect(screen.queryByTestId("is-offline-read-only")).not.toBeInTheDocument();
   });
