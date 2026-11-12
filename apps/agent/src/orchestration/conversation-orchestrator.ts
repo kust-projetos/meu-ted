@@ -6405,17 +6405,6 @@ export class ConversationOrchestrator {
     if (hasUnsupportedCurrency(input.text)) {
       return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: ambiguityClarificationText('unsupported_currency') }) });
     }
-    const valueMatch = input.text.match(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{1,12}(?:[.,]\d{1,2})?)(?:\s*(?:reais?|rs\.))?/iu);
-    let amountCents: number | undefined;
-    if (valueMatch?.[1]) {
-      try {
-        const parsed = parseMoneyToCents(valueMatch[1]);
-        if (Number.isSafeInteger(parsed) && parsed > 0) amountCents = parsed;
-      } catch { /* clarify below */ }
-    }
-    if (!amountCents) {
-      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['amount']), text: 'Qual valor você quer aportar na meta?' }), response: freeze({ text: 'Qual valor você quer aportar na meta?' }) });
-    }
     const reader = this.entityReaderOrClosed();
     if (!reader.listGoals) {
       const text = 'Não consigo consultar suas metas nesta sessão. Tente novamente em instantes.';
@@ -6446,6 +6435,27 @@ export class ConversationOrchestrator {
     }
     if (!client) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não foi possível preparar o aporte com segurança nesta sessão.' }) });
     const goal = matches[0]!;
+    // Remove the resolved name after accent/case folding before looking for
+    // numerals: names such as "Viagem 2026" must never supply the amount.
+    const foldedText = input.text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const foldedName = goal.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    const escapedName = foldedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    const goalNamePattern = new RegExp(`(?<![\\p{L}\\p{N}])${escapedName}(?![\\p{L}\\p{N}])`, 'u');
+    const amountText = foldedText.replace(goalNamePattern, ' ');
+    const number = '(\\d{1,3}(?:\\.\\d{3})+(?:,\\d{1,2})?|\\d{1,12}(?:[.,]\\d{1,2})?)';
+    const monetaryMatch = amountText.match(new RegExp(`(?:r\\$\\s*${number}|${number}\\s*reais?)`, 'iu'));
+    const valueMatch = monetaryMatch ?? amountText.match(new RegExp(number, 'iu'));
+    let amountCents: number | undefined;
+    const rawAmount = valueMatch?.slice(1).find((part) => part !== undefined);
+    if (rawAmount) {
+      try {
+        const parsed = parseMoneyToCents(rawAmount);
+        if (Number.isSafeInteger(parsed) && parsed > 0) amountCents = parsed;
+      } catch { /* clarify below */ }
+    }
+    if (!amountCents) {
+      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['amount']), text: 'Qual valor você quer aportar na meta?' }), response: freeze({ text: 'Qual valor você quer aportar na meta?' }) });
+    }
     const contributionDate = explicitFinancialDate(input.text)?.date;
     const tool = 'goals.contribute';
     const normalizedArgs = { goalId: goal.id, amountCents, ...(contributionDate ? { contributionDate } : {}) };

@@ -23,6 +23,16 @@ describe('A0 goal contribution proposals', () => {
     expect(result.response?.text).not.toContain(goalId);
     expect(result.policy?.authorizationMode).toBe('manual');
   });
+  it.each([
+    ['aportar 300 reais na meta Viagem 2026', 30000],
+    ['aportar 300 na meta Viagem 2026', 30000],
+    ['aportar R$ 250 na meta Viagem 2026', 25000],
+  ])('does not parse digits in the goal name as money: %s', async (text, amountCents) => {
+    const numberedGoalId = '00000000-0000-4000-8000-000000000202';
+    const { result, request } = await run(text, [{ id: numberedGoalId, name: 'Viagem 2026', status: 'active' }]);
+    expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ tool: 'goals.contribute', normalizedArgs: { goalId: numberedGoalId, amountCents } });
+    expect(result.response?.text).not.toContain(numberedGoalId);
+  });
   it('clarifies ambiguity and never proposes on negative or unavailable reader', async () => {
     for (const [text, rows, reader] of [
       ['Aportar R$ 20 na meta Viagem', [], true],
