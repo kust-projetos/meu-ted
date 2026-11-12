@@ -13,7 +13,7 @@ import { computeMonthlyProjection, parseYearMonthQuery } from '../insights/month
 import { buildSpendingInsights } from '../lib/spending-insights.js';
 
 export const spendingInsightQuerySchema = z.object({
-  yearMonth: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  yearMonth: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(),
   insightType: z.enum(['all', 'comparison', 'anomalies', 'income-share']).optional(),
   lookbackMonths: z.coerce.number().int().min(1).max(12).optional(),
 });
@@ -64,7 +64,8 @@ export const registerInsightRoutes = (
       opts.store.listAllTransactions(ctx.householdId),
       opts.store.listCategories(ctx.householdId),
     ]);
-    const yearMonth = parsed.data.yearMonth ?? new Date().toISOString().slice(0, 7);
+    const now = opts.clock?.() ?? new Date();
+    const yearMonth = parsed.data.yearMonth ?? now.toISOString().slice(0, 7);
     const insightType = parsed.data.insightType ?? 'all';
     const lookbackMonths = parsed.data.lookbackMonths ?? 3;
     const result = buildSpendingInsights(transactions, categories, yearMonth, insightType, lookbackMonths);
@@ -87,7 +88,7 @@ export const registerInsightRoutes = (
         category: anomaly.category,
         message: anomaly.message,
         currentCents: anomaly.currentCents,
-        averageCents: anomaly.previousCents,
+        averageTransactionCents: anomaly.previousCents,
         deltaPercent: anomaly.percentChange,
       })),
       ...(result.incomeShare ?? []).map((share) => ({
@@ -98,6 +99,7 @@ export const registerInsightRoutes = (
         sharePercent: share.sharePercent,
       })),
     ];
+    // message reflects only original trend insights; transactionCount covers the household's full history, not this period.
     return reply.code(200).send({
       success: true,
       yearMonth,

@@ -119,11 +119,12 @@ describe('GET /insights/spending', () => {
       { ...TRANSACTIONS[0], id: 'spending-test-3', date: '2026-06-10', amountCents: 30000, description: 'Large grocery purchase' },
       { ...TRANSACTIONS[1], id: 'spending-test-4', date: '2026-06-12', amountCents: 15000 },
       { ...TRANSACTIONS[2], id: 'spending-test-5', categoryId: CATEGORY_SALARY_A.id, date: '2026-06-01', amountCents: 100000 },
+      TRANSACTIONS[4],
     ],
   };
 
-  const getInsights = async (query = 'insightType=all') => {
-    const { app } = buildTestApp(insightSeed);
+  const getInsights = async (query = 'insightType=all', testSeed = insightSeed) => {
+    const { app } = buildTestApp(testSeed);
     return app.inject({
       method: 'GET', url: `/insights/spending?yearMonth=2026-06&${query}`,
       headers: { 'x-device-token': TOKEN_A },
@@ -143,7 +144,7 @@ describe('GET /insights/spending', () => {
       type: 'category-comparison', category: 'Mercado', currentCents: 30000,
       averageCents: 3333, deltaCents: 26667, deltaPercent: 800, trend: 'up',
     });
-    expect(body.insights[2]).toMatchObject({ type: 'anomaly', category: 'Mercado', currentCents: 30000, averageCents: 10000 });
+    expect(body.insights[2]).toMatchObject({ type: 'anomaly', category: 'Mercado', currentCents: 30000, averageTransactionCents: 10000 });
     expect(body.insights[3]).toMatchObject({ type: 'income-share', category: 'Mercado', expenseCents: 30000, incomeCents: 100000, sharePercent: 30 });
   });
 
@@ -167,12 +168,14 @@ describe('GET /insights/spending', () => {
   });
 
   it('continues to reject invalid yearMonth values', async () => {
-    const { app } = buildTestApp(seed);
-    const res = await app.inject({
-      method: 'GET', url: '/insights/spending?yearMonth=2026-6',
-      headers: { 'x-device-token': TOKEN_A },
-    });
-    expect(res.statusCode).toBe(400);
+    for (const yearMonth of ['2026-6', '2026-13', '2026-00']) {
+      const { app } = buildTestApp(seed);
+      const res = await app.inject({
+        method: 'GET', url: `/insights/spending?yearMonth=${yearMonth}`,
+        headers: { 'x-device-token': TOKEN_A },
+      });
+      expect(res.statusCode).toBe(400);
+    }
   });
 
   it('requires auth', async () => {
@@ -188,5 +191,31 @@ describe('GET /insights/spending', () => {
       headers: { 'x-device-token': TOKEN_A },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('accepts lookbackMonths at both bounds and rejects zero', async () => {
+    for (const lookbackMonths of [1, 12]) {
+      expect((await getInsights(`lookbackMonths=${lookbackMonths}`)).statusCode).toBe(200);
+    }
+    expect((await getInsights('lookbackMonths=0')).statusCode).toBe(400);
+  });
+
+  it('returns no income-share items when the period has zero income', async () => {
+    const noIncomeSeed = {
+      ...insightSeed,
+      transactions: insightSeed.transactions.filter((transaction) => transaction.kind !== 'income'),
+    };
+    const res = await getInsights('insightType=income-share', noIncomeSeed);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().insights).toEqual([]);
+  });
+
+  it('excludes transactions from another household', async () => {
+    const res = await getInsights();
+    const body = res.json();
+    const foodComparison = body.insights.find((item: { type: string; category: string }) =>
+      item.type === 'category-comparison' && item.category === 'Mercado');
+    expect(foodComparison.currentCents).toBe(30000);
+    expect(body.transactionCount).toBe(5);
   });
 });

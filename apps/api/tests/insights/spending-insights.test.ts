@@ -73,4 +73,40 @@ describe('buildSpendingInsights', () => {
     expect(result.incomeShare).toEqual([]);
     expect(result.yearMonth).toBe('2026-06');
   });
+
+  it('marks historical-only categories gone and new categories with null percent change', () => {
+    const result = buildSpendingInsights([
+      tx('2026-05-01', 'expense', 20000, food.id),
+      tx('2026-06-01', 'expense', 12000, rent.id),
+    ], categories, '2026-06', 'comparison', 1);
+    expect(result.comparisons).toEqual([
+      { category: 'Food', currentCents: 0, previousCents: 20000, absoluteChange: -20000, percentChange: -100, trend: 'gone' },
+      { category: 'Rent', currentCents: 12000, previousCents: 0, absoluteChange: 12000, percentChange: null, trend: 'new' },
+    ]);
+  });
+
+  it('does not flag anomalies at exactly 2.5 times average or exactly 10000 cents', () => {
+    const result = buildSpendingInsights([
+      tx('2026-05-01', 'expense', 10000, food.id),
+      tx('2026-05-02', 'expense', 2000, rent.id),
+      tx('2026-06-01', 'expense', 25000, food.id),
+      tx('2026-06-02', 'expense', 10000, rent.id),
+    ], categories, '2026-06', 'anomalies', 1);
+    expect(result.anomalies).toEqual([]);
+  });
+
+  it('ignores transactions after the selected month and before the lookback window', () => {
+    const insideWindow = [
+      tx('2026-05-01', 'expense', 10000, food.id),
+      tx('2026-06-01', 'expense', 20000, food.id),
+      tx('2026-06-02', 'income', 50000, salary.id),
+    ];
+    const withOutOfRange = [
+      ...insideWindow,
+      tx('2026-07-01', 'expense', 999999, food.id),
+      tx('2026-04-30', 'expense', 888888, food.id),
+    ];
+    expect(buildSpendingInsights(withOutOfRange, categories, '2026-06', 'all', 1))
+      .toEqual(buildSpendingInsights(insideWindow, categories, '2026-06', 'all', 1));
+  });
 });
