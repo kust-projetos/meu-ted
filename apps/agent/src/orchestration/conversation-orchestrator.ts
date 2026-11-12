@@ -92,6 +92,7 @@ import { requiresExpectedEntity, resolveExpectedContext } from '../mutations/exp
 import { deriveIdempotencyKey } from '../tools/intention-ledger.js';
 import { hasInstallmentIntent, hasWholeEntityName, isCardPurchaseIntent } from '../mutations/card-purchase-intent.js';
 import { isGoalContributionIntent } from '../mutations/goal-contribution-intent.js';
+import { budgetPeriodOf, extractNamedAmountCents, isBudgetCreationIntent } from '../mutations/budget-creation-intent.js';
 import {
   CONFIRMATION_OPERATION_SKEW_MS,
   CONFIRMATION_UNBOUND_OPERATION_ID,
@@ -2206,7 +2207,7 @@ export class ConversationOrchestrator {
   private proposedMutation(input: {
     operationId: string;
     tool: string;
-    normalizedArgs: { amountCents: number; description: string; date: string; accountId: string; categoryId?: string } | { amountCents: number; goalId: string; contributionDate?: string };
+    normalizedArgs: { amountCents: number; description: string; date: string; accountId: string; categoryId?: string } | { amountCents: number; goalId: string; contributionDate?: string } | { amountCents: number; categoryId: string; name: string; period: 'monthly' | 'quarterly' | 'yearly'; startDate: string };
     accountName?: string;
     categoryName?: string;
     expiresAt?: string;
@@ -6453,45 +6454,7 @@ export class ConversationOrchestrator {
     const goal = bestMatches[0]!;
     // Remove the resolved name after accent/case folding before looking for
     // numerals: names such as "Viagem 2026" must never supply the amount.
-    const foldedName = goal.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-    const escapedName = foldedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-    const goalNamePattern = new RegExp(`(?<![\\p{L}\\p{N}])${escapedName}(?![\\p{L}\\p{N}])`, 'u');
-    let amountText = foldedText.replace(goalNamePattern, ' ');
-    amountText = amountText
-      .replace(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/g, ' ')
-      .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ')
-      .replace(/\b\d{1,2}\/\d{1,2}\b/g, ' ')
-      .replace(/\b\d{1,2}\s+de\s+(?:janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+de\s+\d{4}\b/g, ' ')
-      .replace(/\bem\s+\d{4}\b/g, ' ')
-      .replace(/\b\d+(?:[.,]\d+)?\s*%/g, ' ')
-      .replace(/\bdia\s+\d+\b/g, ' ');
-    if (/\b\d[\d.,]*\s*(?:milh(?:ao|oes)|mil|k|mi)\b/iu.test(amountText)) {
-      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['amount']), text: 'Qual valor você quer aportar na meta?' }), response: freeze({ text: 'Qual valor você quer aportar na meta?' }) });
-    }
-    const number = '(\\d{1,3}(?:\\.\\d{3})+(?:,\\d{1,2})?|\\d{1,12}(?:[.,]\\d{1,2})?)(?![\\d.,])';
-    const monetaryMatch = amountText.match(new RegExp(`(?:r\\$\\s*${number}|${number}\\s*reais?)`, 'iu'));
-    const monetaryValue = monetaryMatch?.slice(1).find((part) => part !== undefined);
-    const looseValue = amountText.match(/\b\d[\d.,]*\b/u)?.[0];
-    const rawValue = monetaryValue ?? looseValue;
-    const explicitCentsGrouped = !!rawValue && /^\d{1,3}(?:\.\d{3})+,\d{1,2}$/u.test(rawValue);
-    const unclearFormatted = !!rawValue && !explicitCentsGrouped && (
-      /^\d{1,3}(?:\.\d{3})+$/u.test(rawValue) ||
-      /^\d+,\d{3,}$/u.test(rawValue) ||
-      /^\d+\.\d{3,}$/u.test(rawValue)
-    );
-    const numberCandidates = [...amountText.matchAll(/\b\d[\d.,]*\b/gu)];
-    if (!monetaryMatch && numberCandidates.length > 1) {
-      return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['amount']), text: 'Qual valor você quer aportar na meta?' }), response: freeze({ text: 'Qual valor você quer aportar na meta?' }) });
-    }
-    const valueMatch = unclearFormatted ? null : monetaryMatch ?? amountText.match(new RegExp(number, 'iu'));
-    let amountCents: number | undefined;
-    const rawAmount = valueMatch?.slice(1).find((part) => part !== undefined);
-    if (rawAmount) {
-      try {
-        const parsed = parseMoneyToCents(rawAmount);
-        if (Number.isSafeInteger(parsed) && parsed > 0) amountCents = parsed;
-      } catch { /* clarify below */ }
-    }
+    const amountCents = extractNamedAmountCents(input.text, goal.name);
     if (!amountCents) {
       return this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(['amount']), text: 'Qual valor você quer aportar na meta?' }), response: freeze({ text: 'Qual valor você quer aportar na meta?' }) });
     }
@@ -6508,6 +6471,46 @@ export class ConversationOrchestrator {
       mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, accountName: goal.name, expiresAt: proposal.operation.expiresAt }),
       response: freeze({ text: renderMutationResult('proposed', proposal.summary) }),
     });
+  }
+
+  /** Propose a budget only after authoritative category resolution; this path never executes it. */
+  private async runBudgetCreateTurn(input: TurnInput, plan: TurnPlan, client: MutationApiClient | null, startedAt: number, base: { input: TurnInput; plan: TurnPlan; policy: MutationPolicy }): Promise<TurnResult> {
+    const clarification = (missing: string[], text: string) => this.completeTurn(input, plan, startedAt, base, { clarification: freeze({ missingFields: freeze(missing), text }), response: freeze({ text }) });
+    if (hasNegation(input.text)) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não vou propor esse orçamento porque sua mensagem contém uma negação.' }) });
+    if (!client) return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não foi possível preparar o orçamento com segurança nesta sessão.' }) });
+    const reader = this.dependencies.entityReader;
+    if (!reader) return clarification(['categoryId'], 'Não consigo consultar suas categorias nesta sessão. Qual categoria de despesa devo usar?');
+    let categories: EntitySummary[];
+    try { categories = normalizeEntities(await reader.listCategories()); }
+    catch { return clarification(['categoryId'], 'Não consegui consultar suas categorias agora. Tente novamente em instantes.'); }
+    const scope = reader.scope?.workspaceId;
+    categories = categories.filter((category) => (!scope || category.scopeId === undefined || category.scopeId === scope) && category.kind === 'expense' && category.isActive !== false && category.status?.toLowerCase() !== 'inactive' && category.status?.toLowerCase() !== 'archived');
+    const spans = categories.flatMap((category) => {
+      if (!hasWholeEntityName(input.text, category.name)) return [];
+      const folded = input.text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      const name = category.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+      const found = new RegExp(`(?<![\\p{L}\\p{N}])${name}(?![\\p{L}\\p{N}])`, 'u').exec(folded);
+      return found ? [{ category, start: found.index, end: found.index + found[0].length }] : [];
+    });
+    const longest = Math.max(0, ...spans.map((span) => span.end - span.start));
+    const matches = spans.filter((span) => span.end - span.start === longest);
+    if (spans.some((a) => spans.some((b) => a.category.id !== b.category.id && (a.end <= b.start || b.end <= a.start)))) return clarification(['categoryId'], `Você mencionou mais de uma categoria. Qual devo usar?\n${[...new Set(spans.map((span) => span.category.name))].map((name) => `• ${name}`).join('\n')}`);
+    if (matches.length !== 1) return clarification(['categoryId'], categories.length ? `Qual categoria de despesa devo usar?\n${categories.map((category) => `• ${category.name}`).join('\n')}` : 'Não encontrei categorias de despesa disponíveis. Qual categoria devo usar?');
+    const category = matches[0]!.category;
+    const amountCents = extractNamedAmountCents(input.text, category.name);
+    if (!amountCents) return clarification(['amount'], 'Qual valor você quer definir para o orçamento?');
+    const now = new Date(this.draftNowMs());
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(now);
+    const startDate = `${today.slice(0, 7)}-01`;
+    const period = budgetPeriodOf(input.text);
+    const normalizedArgs = { categoryId: category.id, name: category.name, amountCents, period, startDate };
+    const tool = 'budgets.create';
+    const identity: MutationIdentity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId ?? (() => { throw new Error('mutation.device_required'); })() };
+    this.budgetFor(base).noteProposeAttempt();
+    let proposal: Awaited<ReturnType<MutationApiClient['propose']>>;
+    try { proposal = await client.propose({ tool, normalizedArgs, summary: `Criar orçamento ${period === 'monthly' ? 'mensal' : period === 'quarterly' ? 'trimestral' : 'anual'} de R$ ${(amountCents / 100).toFixed(2).replace('.', ',')} para ${category.name}`, identity, idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, tool) }); }
+    catch { return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: renderInconclusive() }) }); }
+    return this.completeTurn(input, plan, startedAt, base, { policy: freeze({ ...base.policy, authorizationMode: 'manual' }), mutation: this.proposedMutation({ operationId: proposal.id, tool, normalizedArgs, categoryName: category.name, expiresAt: proposal.operation.expiresAt }), response: freeze({ text: renderMutationResult('proposed', proposal.summary) }) });
   }
 
   /**
@@ -7587,6 +7590,7 @@ export class ConversationOrchestrator {
     // before the provider. It runs after the undo turn (an explicit undo stays
     // an undo) and after the decision modes below are reached only for their
     // own texts. An active draft is preserved untouched: no CAS, no write.
+    if (isBudgetCreationIntent(input.text)) return this.runBudgetCreateTurn(input, plan, this.dependencies.mutationApiClient ?? null, startedAt, result);
     const ambiguous = this.ambiguousMutationClarification(input.text);
     if (ambiguous) return this.stopAmbiguousMutation(input, plan, startedAt, result, ambiguous);
     const client = this.dependencies.mutationApiClient;

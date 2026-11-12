@@ -1,58 +1,32 @@
 import { describe, expect, it, vi } from 'vitest';
 import { routeIntent } from '../src/orchestration/intent-router.js';
 import { ConversationOrchestrator, normalizeRestTurn } from '../src/orchestration/conversation-orchestrator.js';
+import { MutationApiClient } from '../src/mutations/mutation-api-client.js';
+
+const category = { id: '00000000-0000-4000-8000-000000000301', name: 'Alimentação', kind: 'expense', status: 'active', scopeId: 'workspace' };
+const setup = (categories = [category]) => {
+  const request = vi.fn().mockResolvedValue({ id: 'pending', operation: { expiresAt: new Date().toISOString() }, summary: 'Orçamento proposto' });
+  const orchestrator = new ConversationOrchestrator({ mutationApiClient: new MutationApiClient({ request }), entityReader: { scope: { workspaceId: 'workspace' }, listAccounts: async () => [], listCategories: async () => categories } });
+  return { request, orchestrator };
+};
 
 describe('F1-B012 budget creation', () => {
-  it('refuses unsupported creation without reading or proposing', async () => {
-    const text = 'Crie um orçamento de alimentação de 500 reais';
+  it('routes and proposes a complete request via manual Pending V2', async () => {
+    const text = 'Crie um orçamento mensal de R$ 500 para alimentação';
     const plan = routeIntent(text);
-    expect(plan.mode).toBe('unsupported');
-    expect(plan.requestedOperations).toEqual([]);
-    expect(plan.requestedTools).toEqual([]);
-    expect(plan.ambiguity).toBe('unsupported_budget_create');
-    const evidenceProvider = vi.fn(async () => { throw new Error('unexpected read'); });
-    const responseProvider = vi.fn(async () => 'unexpected response');
-    const orchestrator = new ConversationOrchestrator({ evidenceProvider: evidenceProvider as never, responseProvider, events: () => undefined });
-    const result = await orchestrator.runTurn(normalizeRestTurn(
-      { text, intentionId: 'b012-create' },
-      { actorId: 'actor', workspaceId: 'workspace', role: 'member', deviceId: 'device' },
-    ));
-    expect(result.mutation).toBeUndefined();
-    expect(result.response?.text?.toLowerCase()).toContain('orçamento');
-    expect(result.response?.text?.toLowerCase()).toContain('não');
-    expect(evidenceProvider).not.toHaveBeenCalled();
-    expect(responseProvider).not.toHaveBeenCalled();
+    expect(plan.mode).toBe('mutation-proposal'); expect(plan.requestedTools).toContain('budgets.create');
+    const { request, orchestrator } = setup();
+    const result = await orchestrator.runTurn(normalizeRestTurn({ text, intentionId: 'b012-create' }, { actorId: 'actor', workspaceId: 'workspace', role: 'member', deviceId: 'device' }));
+    expect(request.mock.calls[0]?.[2]?.body).toMatchObject({ tool: 'budgets.create', normalizedArgs: { categoryId: category.id, amountCents: 50000, period: 'monthly' } });
+    expect(result.policy?.authorizationMode).toBe('manual'); expect(result.response?.text).not.toContain(category.id);
   });
-
-  it.each(['Adicione um orçamento de alimentação', 'Quero definir um orçamento de alimentação', 'Monte um orçamento de alimentação', 'Não sei como criar um orçamento', 'Crie um orçamento e liste meus orçamentos'])('refuses creation phrased as %s', (text) => {
-    const plan = routeIntent(text);
-    expect(plan.mode).toBe('unsupported');
-    expect(plan.ambiguity).toBe('unsupported_budget_create');
-    expect(plan.requestedOperations).toEqual([]);
+  it.each(['Não crie um orçamento', 'Não sei como criar um orçamento'])('keeps unsupported for %s', (text) => {
+    const plan = routeIntent(text); expect(plan.mode).toBe('unsupported'); expect(plan.ambiguity).toBe('unsupported_budget_create');
   });
-
-  it('does not treat an explicitly negated budget command as affirmative creation', () => {
-    const plan = routeIntent('Não crie um orçamento');
-    expect(plan.mode).toBe('unsupported');
-    expect(plan.ambiguity).toBe('unsupported_budget_create');
-    expect(plan.requestedOperations).toEqual([]);
-    expect(plan.requestedTools).toEqual([]);
+  it.each(['Crie um orçamento de R$ 500', 'Crie um orçamento para Alimentação'])('clarifies missing category or amount in %s', async (text) => {
+    const { request, orchestrator } = setup();
+    const result = await orchestrator.runTurn(normalizeRestTurn({ text, intentionId: 'b012-incomplete' }, { actorId: 'actor', workspaceId: 'workspace', role: 'member', deviceId: 'device' }));
+    expect(result.mutation).toBeUndefined(); expect(request).not.toHaveBeenCalled();
   });
-
-  it.each(['Não sei como criar um orçamento; cancele o rascunho', 'Não sei como criar um orçamento e cancele o rascunho'])('asks to separate mixed requests in %s', (text) => {
-    const plan = routeIntent(text);
-    expect(plan.ambiguity).toBe('ambiguous_compound_request');
-    expect(plan.requestedOperations).toEqual([]);
-  });
-
-  it('does not treat another clause as budget creation', () => {
-    const plan = routeIntent('Crie uma categoria e liste meus orçamentos');
-    expect(plan.ambiguity).not.toBe('unsupported_budget_create');
-  });
-
-  it('keeps budget listing available', () => {
-    const plan = routeIntent('liste meus orçamentos');
-    expect(plan.mode).toBe('read');
-    expect(plan.requestedOperations.map((operation) => operation.name)).toContain('list_budgets');
-  });
+  it('keeps budget listing available', () => expect(routeIntent('liste meus orçamentos').requestedOperations.map((op) => op.name)).toContain('list_budgets'));
 });

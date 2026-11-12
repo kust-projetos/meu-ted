@@ -6,6 +6,7 @@ import { hasCategoryDeactivateSignal } from '../mutations/category-deactivation.
 import { hasTransactionDescriptionSignal } from '../mutations/transaction-description.js';
 import { selectToolsFor } from '../agent-config/tools.js';
 import { validateTurnPlan, type TurnPlanV2 } from './turn-plan.js';
+import { isBudgetCreationIntent } from '../mutations/budget-creation-intent.js';
 
 /**
  * Canonical domain→skill mapping (#236/#237). Skill names come from the
@@ -349,11 +350,11 @@ export const routeIntent = (text: string, decisionText?: string): TurnPlanV2 => 
   // are reads and stay on the full text below.
   if (decisionFastPath.kind === 'confirm') return makePlan('confirmation', 'general', [], [], ['conversation']);
   if (decisionFastPath.kind === 'cancel') return makePlan('cancel', 'general', [], [], ['conversation']);
-  // Budget creation has no V2 writer. Do not turn a creation request into a read.
   if (normalized.split(/\b(?:e|mas|ou)\b|[;,]/).some((clause) =>
     /\b(crie|criar|cria|cadastre|cadastrar|adicione|adicionar|defina|definir|monte|montar)\b/.test(clause)
       && /\b(orcament\w*|budget\w*)\b/.test(clause)
       && !/\bnao\b/.test(clause))) {
+    if (isBudgetCreationIntent(normalized)) return makePlan('mutation-proposal', 'budgets', [{ name: 'budgets.create', kind: 'mutation' }], ['orcamentos-metas'], ['budgets.create']);
     return unsupportedBudgetCreatePlan();
   }
   // S7 (POC Fase 2) + P2a: pergunta CONCEITUAL ("o que e X?", "como funciona
