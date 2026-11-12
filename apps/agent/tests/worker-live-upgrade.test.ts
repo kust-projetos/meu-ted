@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import worker from "../src/worker.js";
+import worker, { parseLiveProtocolOffer } from "../src/worker.js";
 import { createAgentConnectionToken } from "../../api/src/auth/agent-connection-token.js";
 
 type WorkerEnv = Parameters<typeof worker.fetch>[1];
@@ -10,6 +10,74 @@ const canonical = "00000000-0000-4000-8000-000000000001";
 afterEach(() => vi.restoreAllMocks());
 
 describe("live-sync websocket upgrade", () => {
+  it("parses a strict protocol offer", () => {
+    expect(parseLiveProtocolOffer("ted.v1, bearer.secret-token")).toEqual({ protocol: true, token: "secret-token" });
+    expect(parseLiveProtocolOffer("bearer.secret-token, ted.v1")).toEqual({ protocol: true, token: "secret-token" });
+    expect(parseLiveProtocolOffer("bearer.secret-token")).toEqual({ protocol: false, token: "secret-token" });
+    expect(parseLiveProtocolOffer("ted.v1, bearer.bad token")).toEqual({ protocol: true });
+  });
+
+  it("authenticates bearer subprotocol, strips offered credentials, and stamps canonical identity", async () => {
+    const token = await createAgentConnectionToken({ sub: "protocol-actor", workspace: canonical, role: "owner" }, secret);
+    const doFetch = vi.fn(async (request: Request) => new Response(null, { status: 200, headers: { "x-seen-upgrade": request.headers.get("upgrade") ?? "" } }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/internal/workspace-alias/")) return Response.json({ canonicalHouseholdId: canonical });
+      if (url.includes("/internal/agent/consume-token")) return Response.json({ ok: true, consumed: true });
+      return new Response("unexpected", { status: 500 });
+    });
+    const env: WorkerEnv = {
+      FINANCE_CHAT_AGENT: { idFromName: (name) => ({ name }) as unknown as DurableObjectId, get: () => ({ fetch: doFetch }) },
+      API_ORIGIN: "https://api.test.local", PWA_ORIGIN: "https://pwa.example", TED_LIVE_SYNC_ENABLED: "1",
+      AGENT_CONNECTION_TOKEN_SECRET: secret, AGENT_AUTH_SERVICE_TOKEN: "test-auth-service-token",
+    };
+    const response = await worker.fetch(new Request(`https://agent.test.local/agents/finance-chat-agent/${alias}/live`, {
+      headers: { origin: "https://pwa.example", upgrade: "websocket", "sec-websocket-protocol": `ted.v1, bearer.${token}` },
+    }), env);
+    expect(response.status).toBe(200);
+    expect(doFetch).toHaveBeenCalledOnce();
+    const forwarded = doFetch.mock.calls[0]![0];
+    expect(forwarded.headers.has("sec-websocket-protocol")).toBe(false);
+    expect(forwarded.headers.has("x-agent-connection-token")).toBe(false);
+    let forwardedValues = "";
+    forwarded.headers.forEach((value) => { forwardedValues += ` ${value}`; });
+    expect(forwardedValues).not.toContain(token);
+    expect(forwarded.headers.get("x-agent-actor")).toBe("protocol-actor");
+    expect(forwarded.headers.get("x-agent-workspace")).toBe(canonical);
+    expect(forwarded.headers.get("x-agent-role")).toBe("owner");
+    expect(forwarded.headers.get("x-partykit-room")).toBe(canonical);
+  });
+
+  it("rejects protocol offer without ted.v1 before calling auth or the DO", async () => {
+    const doFetch = vi.fn();
+    const env: WorkerEnv = {
+      FINANCE_CHAT_AGENT: { idFromName: () => ({} as DurableObjectId), get: () => ({ fetch: doFetch }) },
+      API_ORIGIN: "https://api.test.local", PWA_ORIGIN: "https://pwa.example", TED_LIVE_SYNC_ENABLED: "1",
+    };
+    const authFetch = vi.spyOn(globalThis, "fetch");
+    const response = await worker.fetch(new Request(`https://agent.test.local/agents/finance-chat-agent/${alias}/live`, {
+      headers: { origin: "https://pwa.example", upgrade: "websocket", "sec-websocket-protocol": "bearer.anything" },
+    }), env);
+    expect(response.status).toBe(400);
+    expect(authFetch).not.toHaveBeenCalled();
+    expect(doFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects ted.v1 without bearer or header before auth and DO", async () => {
+    const doFetch = vi.fn();
+    const env: WorkerEnv = {
+      FINANCE_CHAT_AGENT: { idFromName: () => ({} as DurableObjectId), get: () => ({ fetch: doFetch }) },
+      API_ORIGIN: "https://api.test.local", PWA_ORIGIN: "https://pwa.example", TED_LIVE_SYNC_ENABLED: "1",
+    };
+    const authFetch = vi.spyOn(globalThis, "fetch");
+    const response = await worker.fetch(new Request(`https://agent.test.local/agents/finance-chat-agent/${alias}/live`, {
+      headers: { origin: "https://pwa.example", upgrade: "websocket", "sec-websocket-protocol": "ted.v1" },
+    }), env);
+    expect(response.status).toBe(400);
+    expect(authFetch).not.toHaveBeenCalled();
+    expect(doFetch).not.toHaveBeenCalled();
+  });
+
   it("gates flag, origin, authorization and stamps only authorized headers", async () => {
     const token = await createAgentConnectionToken({ sub: "verified-actor", workspace: canonical, role: "owner", deviceId: "verified-device" }, secret);
     const doFetch = vi.fn(async (request: Request) => new Response(null, { status: 200, headers: { "x-seen-upgrade": request.headers.get("upgrade") ?? "" } }));
@@ -35,12 +103,12 @@ describe("live-sync websocket upgrade", () => {
       if (url.includes("/internal/agent/consume-token")) return Response.json({ ok: true, consumed: true });
       return new Response("unexpected", { status: 500 });
     });
-    const response = await call({ cookie: "session=secret", authorization: "Bearer forged", "x-agent-actor": "forged", "x-agent-role": "member", "x-agent-workspace": "forged", "x-agent-device": "forged", "x-agent-runtime-admin-token": "forged", "x-partykit-props": "forged", "x-partykit-namespace": "forged", "x-partykit-jurisdiction": "forged" }, "1");
+    const response = await call({ "sec-websocket-protocol": "ted.v1, bearer.invalid-token", cookie: "session=secret", authorization: "Bearer forged", "x-agent-actor": "forged", "x-agent-role": "member", "x-agent-workspace": "forged", "x-agent-device": "forged", "x-agent-runtime-admin-token": "forged", "x-partykit-props": "forged", "x-partykit-namespace": "forged", "x-partykit-jurisdiction": "forged" }, "1");
     expect(response.status).toBe(200);
     expect(response.headers.get("x-seen-upgrade")).toBe("WebSocket");
     expect(doFetch).toHaveBeenCalledOnce();
     const forwarded = doFetch.mock.calls[0]![0];
-    for (const key of ["cookie", "authorization", "x-agent-connection-token", "x-agent-runtime-admin-token", "x-partykit-props", "x-partykit-namespace", "x-partykit-jurisdiction"]) expect(forwarded.headers.has(key)).toBe(false);
+    for (const key of ["cookie", "authorization", "sec-websocket-protocol", "x-agent-connection-token", "x-agent-runtime-admin-token", "x-partykit-props", "x-partykit-namespace", "x-partykit-jurisdiction"]) expect(forwarded.headers.has(key)).toBe(false);
     expect(forwarded.headers.get("x-agent-actor")).toBe("verified-actor");
     expect(forwarded.headers.get("x-agent-workspace")).toBe(canonical);
     expect(forwarded.headers.get("x-agent-role")).toBe("owner");
