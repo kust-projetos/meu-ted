@@ -24,6 +24,7 @@ import { DomainError } from '../writes/errors.js';
 import type { WriteStore } from '../writes/store.js';
 import type { CardStore } from '../cards/store.js';
 import type { PayableStore } from '../payables/store.js';
+import type { GoalStore } from '../goals/store.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
 import { AUTOEXECUTION_ELIGIBLE_TOOLS } from './policy.js';
 
@@ -42,6 +43,7 @@ export const APPROVAL_TOOL_IDS = [
   'categories.deactivate',
   'payables.create',
   'payables.pay',
+  'goals.contribute',
 ] as const;
 
 export type ApprovalToolId = (typeof APPROVAL_TOOL_IDS)[number];
@@ -50,6 +52,7 @@ export type ApprovalToolExecutionContext = {
   writes: WriteStore;
   cardStore?: CardStore;
   payableStore?: PayableStore;
+  goalStore?: GoalStore;
   workspaceId: string;
   args: unknown;
   idempotencyKey: string;
@@ -782,6 +785,38 @@ export const payPayableArgsSchema = z
 
 export type PayPayableArgs = z.infer<typeof payPayableArgsSchema>;
 
+export const contributeToGoalArgsSchema = z.object({
+  goalId: z.string().uuid(),
+  amountCents: z.number().int().min(1).max(1_000_000_000_000),
+  contributionDate: isoDateSchema.optional(),
+  notes: z.string().max(2000).optional(),
+}).strict();
+
+const executeGoalContribute: ApprovalToolExecutor = async ({ workspaceId, args, goalStore, actorId }) => {
+  const parsed = contributeToGoalArgsSchema.safeParse(args);
+  if (!parsed.success) throw new Error('validation.invalid_goal_contribute_arguments');
+  if (typeof actorId !== 'string' || actorId.length === 0) throw new Error('validation.invalid_actor');
+  if (!goalStore) throw new Error('validation.goal_store_unavailable');
+  let contribution: { id: string };
+  try {
+    contribution = await goalStore.contributeToGoal(workspaceId, parsed.data.goalId, {
+      amountCents: parsed.data.amountCents,
+      ...(parsed.data.contributionDate !== undefined ? { contributionDate: parsed.data.contributionDate } : {}),
+      ...(parsed.data.notes !== undefined ? { notes: parsed.data.notes } : {}),
+    });
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw createApprovalExecutionUncertainError();
+  }
+  let receipt: MutationReceipt;
+  try {
+    receipt = buildTedReceipt('goals.contribute', contribution.id, { type: 'goal', id: parsed.data.goalId });
+  } catch {
+    throw createApprovalExecutionUncertainError();
+  }
+  return { status: 'succeeded', operationId: contribution.id, receipt };
+};
+
 const executePayableCreate: ApprovalToolExecutor = async ({
   workspaceId,
   args,
@@ -873,6 +908,11 @@ const executePayablePay: ApprovalToolExecutor = async ({
 };
 
 const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
+  'goals.contribute': {
+    tool: 'goals.contribute', inputSchema: contributeToGoalArgsSchema,
+    approvalRequired: true, authorizationPolicy: 'risk_based', autoExecutionEligible: false,
+    executor: executeGoalContribute,
+  },
   'cards.purchase.create': {
     tool: 'cards.purchase.create',
     inputSchema: createCardPurchaseArgsSchema,

@@ -25,13 +25,31 @@ import {
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
 import { createInMemoryStores } from '../../src/writes/in-memory.js';
 
-const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'transactions.transfer.create', 'cards.purchase.create', 'cards.statement.pay', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'payables.create', 'payables.pay'] as const;
+const EXPECTED_TOOLS = ['transactions.expense.create', 'transactions.income.create', 'transactions.transfer.create', 'cards.purchase.create', 'cards.statement.pay', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'payables.create', 'payables.pay', 'goals.contribute'] as const;
 
 // Manual-only tools: never auto-executed (absent from
 // AUTOEXECUTION_ELIGIBLE_TOOLS, contract pin autoExecutionEligible=false).
-const MANUAL_ONLY_TOOLS = ['transactions.transfer.create', 'cards.purchase.create', 'cards.statement.pay', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'payables.create', 'payables.pay'] as const;
+const MANUAL_ONLY_TOOLS = ['transactions.transfer.create', 'cards.purchase.create', 'cards.statement.pay', 'transactions.update', 'accounts.create', 'accounts.deactivate', 'accounts.update', 'categories.create', 'categories.update', 'categories.deactivate', 'payables.create', 'payables.pay', 'goals.contribute'] as const;
 
 describe('T0.1: Approval Tool Contract registry', () => {
+  it('executes goal contribution using the workspace-scoped GoalStore and returns a bound receipt', async () => {
+    const goalId = '00000000-0000-4000-8000-000000000010';
+    const contributionId = '00000000-0000-4000-8000-000000000011';
+    const goalStore = { contributeToGoal: vi.fn().mockResolvedValue({ id: contributionId }) } as never;
+    const contract = requireApprovalToolContract('goals.contribute');
+    const args = { goalId, amountCents: 5000, contributionDate: '2026-11-10', notes: 'mensal' };
+    expect(contract.autoExecutionEligible).toBe(false);
+    await expect(contract.executor({ writes: {} as never, goalStore, workspaceId: 'household-1', actorId: 'actor-1', args, idempotencyKey: 'pending-key' })).resolves.toMatchObject({
+      status: 'succeeded', operationId: contributionId,
+      receipt: { mutationKind: 'goals.contribute', operationId: contributionId, entity: { type: 'goal', id: goalId } },
+    });
+    expect(goalStore.contributeToGoal).toHaveBeenCalledWith('household-1', goalId, {
+      amountCents: args.amountCents, contributionDate: args.contributionDate, notes: args.notes,
+    });
+    expect(contract.inputSchema.safeParse({ ...args, extra: 1 }).success).toBe(false);
+    await expect(contract.executor({ writes: {} as never, workspaceId: 'household-1', actorId: 'actor-1', args, idempotencyKey: 'pending-key' })).rejects.toThrow('validation.goal_store_unavailable');
+    await expect(contract.executor({ writes: {} as never, goalStore, workspaceId: 'household-1', actorId: 'actor-1', args: { ...args, amountCents: 0 }, idempotencyKey: 'pending-key' })).rejects.toThrow('validation.invalid_goal_contribute_arguments');
+  });
   it('registers exactly the V2 mutable tools in the closed registry', () => {
     expect([...APPROVAL_TOOL_IDS].sort()).toEqual([...EXPECTED_TOOLS].sort());
     for (const tool of EXPECTED_TOOLS) {

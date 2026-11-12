@@ -17,6 +17,14 @@ const base = {
 };
 
 describe('buildPendingOperationPresentation (SPEC §16)', () => {
+  it('presents a goal contribution with amount and goal identity', () => {
+    const presentation = buildPendingOperationPresentation({
+      ...base, tool: 'goals.contribute',
+      normalizedArgs: { goalId: 'goal-1', amountCents: 25000, contributionDate: '2026-11-10' },
+    });
+    expect(presentation).toMatchObject({ title: 'Aporte na meta — R$ 250,00', description: 'Meta goal-1', amountCents: 25000, date: '2026-11-10' });
+    expect(pendingOperationPresentationSchema.safeParse(presentation).success).toBe(true);
+  });
   it('derives the card from the same canonical args that will execute (INV-02)', () => {
     const presentation = buildPendingOperationPresentation({
       ...base,
