@@ -66,6 +66,11 @@ C3 **não** prova frames reais (F1 permanece pendente), não liga a flag e a PWA
 ainda não usa WS. Revogação de membership pode levar até 5 minutos para invalidar
 uma conexão já estabelecida; este residual é aceito nesta fatia.
 
+- O wrapper do SDK pode enviar `CF_AGENT_MCP_SERVERS`/`CF_AGENT_STATE` antes da
+  validação do binding no `onConnect`; hoje o agente não configura MCP nem
+  `initialState`, então não há payload, mas antes de ligar a flag isso precisa
+  ser verificado/eliminado.
+
 Antes de ligar a flag, é necessário decidir como o browser entrega o token de
 conexão no handshake WebSocket (subprotocolo ou query; o browser não oferece
 header customizado). A PWA atual não usa WS; manter a flag desligada até F1 ser
