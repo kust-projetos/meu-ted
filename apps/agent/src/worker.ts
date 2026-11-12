@@ -317,6 +317,7 @@ export default {
         const stub = env.FINANCE_CHAT_AGENT.get(env.FINANCE_CHAT_AGENT.idFromName(auth.workspaceId));
         const url2 = new URL(request.url);
         url2.searchParams.delete("_pk");
+        url2.pathname = "/live";
         return stub.fetch(new Request(url2, { headers }));
       }
 

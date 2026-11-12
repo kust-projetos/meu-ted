@@ -1,4 +1,6 @@
 /// <reference types="@cloudflare/vitest-plugin/types" />
+// Opens the DO directly without Worker auth (covered in worker-live-upgrade.test.ts).
+// TTL behavior is the residual covered in live-delivery.test.ts.
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
@@ -54,6 +56,10 @@ describe("workerd live delivery", () => {
       await runInDurableObject(stub, (instance) => instance.broadcast(JSON.stringify({ type: "chat" })));
       expect(chatFrames(receivedA)).toHaveLength(previousA);
       expect(chatFrames(receivedB)).toHaveLength(previousB);
+
+      await runInDurableObject(stub, (instance) => instance.broadcast(frame("workspace")));
+      expect(chatFrames(receivedA)).toHaveLength(previousA + 1);
+      expect(chatFrames(receivedB)).toHaveLength(previousB + 1);
     } finally {
       socketA.close();
       socketB.close();
