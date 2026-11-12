@@ -998,7 +998,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       (connection as AgentConnection<ConnectionBinding>).close(1008, 'actor_binding_required');
       return;
     }
-    (connection as AgentConnection<ConnectionBinding>).setState(binding);
+    if (typeof this.name === 'string' && this.name.length > 0 && binding.workspaceId !== this.name) {
+      (connection as AgentConnection<ConnectionBinding>).close(1008, 'workspace_binding_mismatch');
+      return;
+    }
+    (connection as AgentConnection<ConnectionBinding>).setState((prev) => ({ ...(prev ?? {}), ...binding }));
   }
 
   // ADR-032: frames without classifiable message audiences (including stream

@@ -25,8 +25,6 @@ export function bindingFromUpgradeHeaders(headers: Headers, now = Date.now()): C
   }
 }
 
-export type FrameAudience = { workspaceId: string; visibility: 'workspace' | 'private'; ownerActorId?: string };
-
 export function frameMessages(frame: unknown): Array<Record<string, unknown>> | null {
   if (!frame || typeof frame !== 'object' || Array.isArray(frame)) return null;
   const messages = (frame as Record<string, unknown>).messages;
@@ -42,7 +40,9 @@ export function filterFrameForBinding(frame: Record<string, unknown>, binding: C
     workspaceId: binding.workspaceId,
     meta: item.metadata as import('./conversation-visibility.js').MessageAudienceMeta | undefined,
   }));
-  return accessible.length ? { ...frame, messages: accessible } : null;
+  return accessible.length
+    ? { ...(typeof frame.type === 'string' ? { type: frame.type } : {}), messages: accessible }
+    : null;
 }
 
 export type DeliveryConnection = { id: string; state: ConnectionBinding | null; send: (data: string) => void };

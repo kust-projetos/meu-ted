@@ -28,6 +28,7 @@ declare module "agents/ai-chat-agent" {
   }
 
   export class AIChatAgent<Env = unknown> {
+    readonly name: string;
     constructor(ctx: DurableObjectState, env: Env);
     /** Durable Object context: durable SQLite lives at ctx.storage.sql. */
     ctx: DurableObjectState;
