@@ -19,6 +19,14 @@ declare module "agents/ai-chat-agent" {
     metadata?: UIMessageMetadata;
   }
 
+  export interface AgentConnection<TState = Record<string, unknown>> {
+    id: string;
+    state: TState | null;
+    send(data: string): void;
+    close(code?: number, reason?: string): void;
+    setState(state: TState | ((prev: TState | null) => TState) | null): TState | null;
+  }
+
   export class AIChatAgent<Env = unknown> {
     constructor(ctx: DurableObjectState, env: Env);
     /** Durable Object context: durable SQLite lives at ctx.storage.sql. */
@@ -31,6 +39,8 @@ declare module "agents/ai-chat-agent" {
     onConnect?(connection: unknown, ctx: unknown): Promise<void>;
     onChatMessage?(msg: unknown, ...args: unknown[]): Promise<unknown>;
     onMessage(connection: unknown, message: string): Promise<void>;
+    broadcast(msg: string | ArrayBuffer | ArrayBufferView, without?: string[]): void;
+    getConnections<TState = Record<string, unknown>>(tag?: string): Iterable<AgentConnection<TState>>;
     static messageConcurrency?: string;
   }
 }
