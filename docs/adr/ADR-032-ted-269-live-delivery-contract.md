@@ -66,6 +66,11 @@ C3 **não** prova frames reais (F1 permanece pendente), não liga a flag e a PWA
 ainda não usa WS. Revogação de membership pode levar até 5 minutos para invalidar
 uma conexão já estabelecida; este residual é aceito nesta fatia.
 
+Antes de ligar a flag, é necessário decidir como o browser entrega o token de
+conexão no handshake WebSocket (subprotocolo ou query; o browser não oferece
+header customizado). A PWA atual não usa WS; manter a flag desligada até F1 ser
+validado e o contrato de transporte do token ser decidido.
+
 ## Validação e critérios para reabrir
 
 - Testar o distribuidor com conexões sintéticas de atores distintos.
