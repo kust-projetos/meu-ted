@@ -241,6 +241,7 @@ import { routeIntent } from "./orchestration/intent-router.js";
 import { createChannelGrounding } from "./orchestration/channel-evidence.js";
 import type { EvidenceEnvelope } from "./evidence/evidence-envelope.js";
 import { hasMutationIntentSignal, interpretMutationUtterance } from "./mutations/semantic-interpretation.js";
+import { isCardPurchaseIntent } from "./mutations/card-purchase-intent.js";
 import { hasAccountDeactivationSignal } from "./mutations/account-deactivation.js";
 import { hasAccountRenameSignal } from "./mutations/account-rename.js";
 import { toActiveOperationRecords } from "./mutations/active-operation-projection.js";
@@ -3313,15 +3314,17 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     const parsed = interpretation.parsed;
 
     const routed = routeIntent(input.text);
+    const isCardPurchase = isCardPurchaseIntent(input.text);
+    const operationName = parsed.kind === "income" ? "transactions.income.create" : isCardPurchase ? "cards.purchase.create" : "transactions.expense.create";
     return {
       version: "2",
       mode: "mutation-proposal",
       domain: "transactions",
       skillNames: routed.skillNames.slice(0, 2),
-      requestedOperations: [{ name: parsed.kind === "income" ? "transactions.income.create" : "transactions.expense.create", kind: "mutation" }],
+      requestedOperations: [{ name: operationName, kind: "mutation" }],
       // SPEC §7.6: canonical IDs are never resolved at plan time — the
       // orchestrator resolves them against authoritative reads (§7.2/§7.3).
-      missingFields: ["accountId", "categoryId"],
+      missingFields: isCardPurchase ? ["accountId"] : ["accountId", "categoryId"],
       ambiguity: null,
       confidence: routed.confidence,
     };

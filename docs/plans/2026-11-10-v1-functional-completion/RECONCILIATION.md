@@ -134,7 +134,7 @@ teto. Todas as provas desta sessão são determinísticas/sintéticas.
 O runner Vitest da PWA não inicia worker neste host Windows (issue #277); a
 validação efetiva do teste de componente veio do CI Linux.
 
-### Pendente / não executado
+### Fechamento e pendências
 
 - **Fase 4 (campanha live): CONCLUÍDA.** O piloto P3.9 real (7/7) e a jornada
   V1 completa passaram juntos no mesmo stack sintético
@@ -159,10 +159,11 @@ validação efetiva do teste de componente veio do CI Linux.
 - Correção PWA: resposta de turno multi-ferramenta não é mais anexada duas
   vezes quando o histórico já a traz com o mesmo `turnId` (chave React
   duplicada); teste de identidade cobre o caso.
-- **Fase 5 (externa/operacional):** isolamento WebSocket/per-ator (#269)
-  permanece P2 com `TED_PRIVATE_VIEWS_ENABLED` desligada; smoke de produção,
-  deploy, rollback e ativação de funcionalidades seguem pendentes de
-  autorização explícita.
+- **Fase 5 (externa/operacional):** deploy e smoke de produção concluídos
+  (ver abaixo). Permanecem como backlog pós-V1, sem bloquear a V1 funcional:
+  isolamento WebSocket/per-ator (#269, P2 com `TED_PRIVATE_VIEWS_ENABLED`
+  desligada), flake de cold boot da PWA (#277), lint do Biome (#291) e prova
+  de boot do Worker (#281).
 - **Release B (D11-R2): CONCLUÍDA em 2026-11-11.** A janela foi conferida na
   Contabo (somente SELECT): **0 eventos** `auth.request.legacy_bearer_used`
   após `2026-10-19T13:23:55.399917Z` (total histórico 406). O flip foi
@@ -181,7 +182,7 @@ validação efetiva do teste de componente veio do CI Linux.
   corrigida do GHSA-965c-763c-88jm). `security:deps` sem critical e
   `apps/api/tests/auth` **319 passed | 2 skipped**. Issue e PR antigos fechados
   como corrigido/superseded.
-- **Live/E2E:** nenhum deploy e nenhum dado real; apenas o workspace sintético
-  do P2D. O provider reportou `cost: 0` nas mensagens analisadas; faturamento
-  não confirmado.
+- **Live/E2E:** a campanha live rodou somente no workspace sintético do P2D,
+  sem dados reais e sem escrita não confirmada. O provider reportou `cost: 0`
+  nas mensagens analisadas; faturamento não confirmado.
 

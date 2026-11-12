@@ -1,6 +1,6 @@
 # MEU-TED-V1-FINAL-STATE (estado vigente — snapshot somente-leitura)
 
-**Atualizado:** 11/11/2026 (V1 funcional concluída: PR #318 mergeado em `219a4d6`, Release B flipado, API `219a4d6`, Agent `57809a3`, PWA `5e69dec`). Este documento é snapshot, não plano. A definição de
+**Atualizado:** 11/11/2026 (V1 funcional + manutenção pós-V1: API `219a4d6`, Agent `000191b`, PWA `5e69dec`; Release B flipada). Este documento é snapshot, não plano. A definição de
 encerramento vive em `docs/MEU-TED-SPEC-V1-FINAL-CLOSURE.md`.
 
 ## 1. Produção viva
@@ -9,17 +9,17 @@ Em 11/11/2026, o PR #318 (V1 funcional: leituras, CRUD conversacional e
 contas a pagar) foi mergeado como `219a4d6`. A API foi liberada na Contabo pelo
 wrapper (`source-build`) e a Release B (bearer legado) foi flipada: API com
 `SESSION_BEARER_FALLBACK_ENABLED=off` e PWA compilada com
-`NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` (PR #320). O vigente: API `219a4d6`,
-Agent `57809a3` (PR #319, só CI) e PWA `5e69dec`. O smoke read-only dedicado
-(`Production smoke` run `43068057036`, em `642137f`) passou contra a PWA
-publicada.
+`NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` (PR #320). Na mesma data, a manutenção
+pós-V1 mergeou #326 (lint Biome), #325 (gate de boot do Worker OpenNext) e #282
+(B058 datas financeiras) em `000191b`, e o **Agent** foi publicado nesse SHA
+(ATTESTED). O vigente: API `219a4d6`, Agent `000191b` e PWA `5e69dec`.
 
 | Camada | SHA vigente | Evidência |
 |---|---|---|
 | API (Contabo) | `219a4d6` (`219a4d610602f24ecf9c9480001ef54d181a4a9a`, build CI `43046355182`) | release via wrapper `api-release-20260930.sh --execute`, lane source-build (checkout pristine `~/pi-finance-release-219a4d6`), backup pré-release `pi-db-20261111T153706Z` (sha256 `522fd4fe…5665b083`), RELEASE OK, manifesto `release-manifest-219a4d6….json`, rollback tag `pi-finance-api:rollback-pre-219a4d6`; `/health` (gitSha `219a4d6`) + `/ready` 200; `SESSION_BEARER_FALLBACK_ENABLED=off` aplicado e verificado no container |
-| Agent (Cloudflare) | `57809a3` (`57809a35cb260f29a26caa5f7836a20bc7fb0cb5`, build `43061604887`) | Agent Deploy run `43061604887` ATTESTED deploy-smoke-pass; live `/health` ready `buildSha=57809a3`; `/health/agent` ready |
+| Agent (Cloudflare) | `000191b` (`000191b420335aa56663f91425a7795905654e9d`, build `43113650744`) | Agent Deploy run `43113650744` ATTESTED deploy-smoke-pass; live `/health` ready `buildSha=000191b`; `/health/agent` ready; rollback anterior `57809a3` (run `43061604887`) |
 | PWA (Cloudflare) | `5e69dec` (`5e69dece84e30d1e26553d19b946afa29651c59f`, build `43064573159`) | PWA Deploy run `43065822285` ATTESTED deploy-smoke-pass; live `/api/build-info` `gitSha=5e69dec`; build com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` |
-| origin/main | `642137f` | PRs #318/#319/#320/#321 mergeados; CI + PWA CI verdes; baseline viva servida: API `219a4d6`, Agent `57809a3`, PWA `5e69dec` (delta posterior é docs/CI) |
+| origin/main | `000191b` | PRs #318-#326 mergeados; CI + PWA CI verdes; baseline viva servida: API `219a4d6`, Agent/PWA code `000191b` (PWA publicada em `5e69dec`, sem delta de runtime) |
 | API — release anterior (histórico) | `b21faff` (`b21faff9ebd6d16353ddb85fb2fef40607dc7938`, build CI `40047925720`) | manifest `release-manifest-b21faff….json`, lane source-build, rollback tag `pi-finance-api:rollback-pre-b21faff` |
 | Baseline de CÓDIGO V1-textual (histórico) | `fd3481f` (`fd3481f2f92c39ff8b68727ff73939121123280d`) | PR #157 (V1-textual); CI + PWA CI verdes (`38483695616`/`…618`); Gate + quality (22, 10) 100% verde; API/Agent/PWA atestados em 13/10 (noite) |
 | Agent/PWA — deploy atestado anterior (histórico) | `715b2cf` (`715b2cf3d11c8ac03e55fea1e35b15fa2049c4c1`, build `38487522792`) | Deploys runs `38488407037`/`38488407171` ATTESTED deploy-smoke-pass 14/10 |
@@ -36,8 +36,22 @@ publicada.
 commits SÓ-docs não avançam a baseline de código e dispensam re-registro;
 re-registro só com mudança de código/comportamento. PRs de docs seguem CI
 normal. Baseline de CÓDIGO V1-textual: `fd3481f`; baseline viva servida:
-Agent/PWA `5e69dec` e API `219a4d6` (camadas com SHAs independentes têm
-precedente).
+Agent `000191b`, PWA `5e69dec` e API `219a4d6` (camadas com SHAs independentes
+têm precedente).
+
+### Manutenção pós-V1 (11/11/2026)
+
+- **B058 (datas financeiras):** PR #282 mergeado (`000191b`) e publicado no
+  Agent; data explícita completa resolve a data real, data sem ano/inválida
+  pede esclarecimento e o rascunho sobrevive a reaberturas. 37/37 testes B058.
+- **Boot do Worker OpenNext:** PR #325 adicionou o gate que inicia o
+  `.open-next` exato e exige HTTP 200 em `/` antes do pack; ativo e verde.
+- **Biome:** PR #326 excluiu do scan o diretório local de evidências do POC
+  (~1 GB, gitignored); lint raiz voltou a concluir (~85s).
+- **#277:** flake intermitente (duas assinaturas), sem reprodução determinística;
+  issue permanece aberta e o ciclo foi encerrado sem correção especulativa.
+- Backlog priorizado para as próximas sessões:
+  [`reference/PENDENCIAS.md`](reference/PENDENCIAS.md).
 
 ## 2. Matriz de capabilities (config-de-deploy; coluna Live = estado verificado)
 
