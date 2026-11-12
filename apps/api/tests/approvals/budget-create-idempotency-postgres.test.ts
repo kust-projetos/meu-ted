@@ -28,16 +28,22 @@ describeIfDb('budget create idempotency PostgreSQL', () => {
     }
     await pool.end();
   });
-  it('replays one id for the same key and rejects a divergent amount', async () => {
+  it('replays concurrent key, converges after category deactivation and rejects divergent args', async () => {
     const householdId = randomUUID();
     households.push(householdId);
     const category = await createPostgresWriteStore(pool).createCategory(householdId, { name: 'Food', kind: 'expense' });
     const store = createPostgresBudgetStore(pool);
     const input = { categoryId: category.id, name: 'Food', amountCents: 50000, period: 'monthly' as const, startDate: '2026-11-01' };
     const first = await store.createBudget(householdId, input, { idempotencyKey: 'same' });
-    const replay = await store.createBudget(householdId, input, { idempotencyKey: 'same' });
-    expect(replay.id).toBe(first.id);
+    const replay = await Promise.all([store.createBudget(householdId, input, { idempotencyKey: 'same' }), store.createBudget(householdId, input, { idempotencyKey: 'same' })]);
+    expect(replay.map((budget) => budget.id)).toEqual([first.id, first.id]);
+    await createPostgresWriteStore(pool).deactivateCategory(householdId, category.id, { idempotencyKey: 'deactivate-category', expectedName: 'Food' });
+    expect((await store.createBudget(householdId, input, { idempotencyKey: 'same' })).id).toBe(first.id);
     await expect(store.createBudget(householdId, { ...input, amountCents: 60000 }, { idempotencyKey: 'same' })).rejects.toMatchObject({ code: 'validation.invalid' });
+    for (const changed of [{ name: 'Other' }, { startDate: '2026-12-01' }, { alertThreshold: 90 }]) {
+      await expect(store.createBudget(householdId, { ...input, ...changed }, { idempotencyKey: 'same' })).rejects.toMatchObject({ code: 'validation.invalid' });
+    }
+    await expect(store.createBudget(householdId, { ...input, categoryId: randomUUID() }, { idempotencyKey: 'missing' })).rejects.toMatchObject({ code: 'not_found' });
     expect((await pool.query('SELECT id FROM budgets WHERE household_id=$1', [householdId])).rowCount).toBe(1);
   });
 });

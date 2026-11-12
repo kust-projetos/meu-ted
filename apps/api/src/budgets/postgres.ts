@@ -90,16 +90,32 @@ export const insertBudgetRow = async (
   query: QueryFn,
   householdId: string,
   input: CreateBudgetInput,
+  options?: { id?: string; onConflictDoNothing?: boolean },
 ): Promise<Budget> => {
-  const id = randomUUID();
-  await query(`INSERT INTO budgets (id,household_id,category_id,name,amount_cents,period,start_date,alert_threshold) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+  const id = options?.id ?? randomUUID();
+  await query(`INSERT INTO budgets (id,household_id,category_id,name,amount_cents,period,start_date,alert_threshold) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)${options?.onConflictDoNothing ? ' ON CONFLICT (id) DO NOTHING' : ''}`,
     [id, householdId, input.categoryId, input.name, input.amountCents, input.period, input.startDate, input.alertThreshold ?? 80]);
   return { id, householdId, categoryId: input.categoryId, name: input.name, amountCents: input.amountCents, period: input.period, startDate: input.startDate, alertThreshold: input.alertThreshold ?? 80, rollover: false };
 };
 
-const deterministicBudgetId = (householdId: string, key: string): string => {
+export const budgetFromRow = (row: Row, householdId: string): Budget => ({
+  id: String(row['id']), householdId, categoryId: String(row['category_id']), name: String(row['name']),
+  amountCents: Number(row['amount_cents']), period: row['period'] as Budget['period'],
+  startDate: row['start_date'] instanceof Date ? row['start_date'].toISOString().slice(0, 10) : String(row['start_date']).slice(0, 10),
+  alertThreshold: Number(row['alert_threshold']), rollover: row['rollover'] as boolean,
+});
+
+export const deterministicBudgetId = (householdId: string, key: string): string => {
   const hex = createHash('sha256').update(`${householdId}:${key}`).digest('hex').slice(0, 32);
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20)}`;
+  const variant = (parseInt(hex[16]!, 16) & 0x3 | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20)}`;
+};
+
+export const assertBudgetReplayMatches = (row: Row, input: CreateBudgetInput): void => {
+  const startDate = row['start_date'] instanceof Date ? row['start_date'].toISOString().slice(0, 10) : String(row['start_date']).slice(0, 10);
+  if (row['category_id'] !== input.categoryId || row['period'] !== input.period || Number(row['amount_cents']) !== input.amountCents || row['name'] !== input.name || startDate !== input.startDate || Number(row['alert_threshold']) !== (input.alertThreshold ?? 80)) {
+    throw domainErrors.invalid('budget', 'idempotency key reutilizada');
+  }
 };
 
 function getPeriodBounds(date: string, period: string): { start: string; end: string } {
@@ -164,15 +180,21 @@ export const createPostgresBudgetStore = (pool: Pool): BudgetStore => {
     async createBudget(householdId, input, opts) {
       if (!opts?.idempotencyKey) return withTransaction(pool, (client) => createBudgetInTx(client, householdId, input));
       return withTransaction(pool, async (client) => {
+        const id = deterministicBudgetId(householdId, opts.idempotencyKey!);
+        const existing = await client.query<Row>(`SELECT * FROM budgets WHERE id=$1 AND household_id=$2`, [id, householdId]);
+        if (existing.rows[0]) {
+          assertBudgetReplayMatches(existing.rows[0], input);
+          return budgetFromRow(existing.rows[0], householdId);
+        }
         await assertWorkspaceWritableInTx(client, householdId);
         await lockCategoryReferencesInTx(client, householdId);
         await assertBudgetCategory(async <R extends Row = Row>(text: string, values?: unknown[]) => (await client.query<R>(text, values)).rows, householdId, input.categoryId);
-      const id = deterministicBudgetId(householdId, opts.idempotencyKey!);
-        const inserted = await client.query<Row>(`INSERT INTO budgets (id,household_id,category_id,name,amount_cents,period,start_date,alert_threshold) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING RETURNING *`, [id, householdId, input.categoryId, input.name, input.amountCents, input.period, input.startDate, input.alertThreshold ?? 80]);
-        const row = inserted.rows[0] ?? (await client.query<Row>(`SELECT * FROM budgets WHERE id=$1 AND household_id=$2`, [id, householdId])).rows[0];
+        const insert = async <R extends Row = Row>(text: string, values: unknown[] = []) => (await client.query<R>(text, values)).rows;
+        await insertBudgetRow(insert, householdId, input, { id, onConflictDoNothing: true });
+        const row = (await client.query<Row>(`SELECT * FROM budgets WHERE id=$1 AND household_id=$2`, [id, householdId])).rows[0];
         if (!row) throw domainErrors.invalid('budget', 'idempotency key reutilizada');
-        if (row.category_id !== input.categoryId || row.period !== input.period || Number(row.amount_cents) !== input.amountCents) throw domainErrors.invalid('budget', 'idempotency key reutilizada');
-        return { id: String(row.id), householdId, categoryId: String(row.category_id), name: String(row.name), amountCents: Number(row.amount_cents), period: row.period as Budget['period'], startDate: (row.start_date as Date).toISOString().slice(0, 10), alertThreshold: Number(row.alert_threshold), rollover: row.rollover as boolean };
+        assertBudgetReplayMatches(row, input);
+        return budgetFromRow(row, householdId);
       });
     },
 

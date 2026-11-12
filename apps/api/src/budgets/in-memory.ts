@@ -58,11 +58,17 @@ export const createInMemoryBudgetStore = (state: InMemoryState, clock: () => Dat
     },
 
     async createBudget(householdId, input, opts) {
-      const id = opts?.idempotencyKey ? createHash('sha256').update(`${householdId}:${opts.idempotencyKey}`).digest('hex').slice(0, 32).replace(/^(.{12})(.)/, '$1' + '5').replace(/^(.{16})(.)/, '$1' + '8') : randomUUID();
+      let id = randomUUID();
+      if (opts?.idempotencyKey) {
+        const hex = createHash('sha256').update(`${householdId}:${opts.idempotencyKey}`).digest('hex').slice(0, 32);
+        const variant = (parseInt(hex[16]!, 16) & 3 | 8).toString(16);
+        id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20)}`;
+      }
       const existing = budgets.find((b) => b.id === id);
       if (existing) {
-        if (existing.categoryId !== input.categoryId || existing.period !== input.period || existing.amountCents !== input.amountCents) throw domainErrors.invalid('budget', 'idempotency key reutilizada');
-        return existing;
+        if (existing.categoryId !== input.categoryId || existing.period !== input.period || existing.amountCents !== input.amountCents || existing.name !== input.name || existing.startDate !== input.startDate || existing.alertThreshold !== (input.alertThreshold ?? 80)) throw domainErrors.invalid('budget', 'idempotency key reutilizada');
+        const spentCents = calcSpent(existing);
+        return { ...existing, spentCents, remainingCents: Math.max(0, existing.amountCents - spentCents), percentUsed: Math.round((spentCents / existing.amountCents) * 100) };
       }
       // V4.1 Task 2.15: budgets had no category validation — the category
       // must now be an active expense-kind category of the household
@@ -77,7 +83,8 @@ export const createInMemoryBudgetStore = (state: InMemoryState, clock: () => Dat
         {} as Partial<Budget>,
       );
       budgets.push(b);
-      return { ...b, ...calcSpent(b) ? { spentCents: calcSpent(b), remainingCents: 0, percentUsed: 0 } : {} } as any;
+      const spentCents = calcSpent(b);
+      return { ...b, spentCents, remainingCents: Math.max(0, b.amountCents - spentCents), percentUsed: Math.round((spentCents / b.amountCents) * 100) };
     },
 
     async updateBudget(householdId, budgetId, patch) {
