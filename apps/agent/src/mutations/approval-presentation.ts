@@ -55,6 +55,13 @@ export const buildApprovalPresentation = (input: {
     const parsed = pendingOperationPresentationSchema.safeParse(candidate);
     return parsed.success ? parsed.data as PendingOperationPresentation : null;
   }
+  if (input.tool === 'budgets.delete') {
+    const { budgetId } = args;
+    if (typeof budgetId !== 'string' || !budgetId || !input.categoryLabel) return null;
+    const candidate: Record<string, unknown> = { id: input.operationId, status: input.status, tool: input.tool, title: 'Confirmar exclusão de orçamento', description: `Excluir orçamento de ${input.categoryLabel}`, expiresAt: input.expiresAt, warnings: [] };
+    const parsed = pendingOperationPresentationSchema.safeParse(candidate);
+    return parsed.success ? parsed.data as PendingOperationPresentation : null;
+  }
   const { amountCents, description, date, accountId, categoryId } = args;
   if (
     typeof amountCents !== 'number' ||

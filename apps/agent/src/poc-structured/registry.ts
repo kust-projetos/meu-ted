@@ -295,6 +295,7 @@ export const OPERATION_ARG_KEYS: Readonly<Record<string, ReadonlySet<string>>> =
   'goals.contribute': argKeys('goalId', 'amountCents', 'contributionDate', 'notes'),
   'budgets.create': argKeys('categoryId', 'name', 'amountCents', 'period', 'startDate'),
   'budgets.update': argKeys('budgetId', 'amountCents', 'alertThreshold'),
+  'budgets.delete': argKeys('budgetId'),
 });
 
 export const isMutationOperation = (operation: string): boolean =>
