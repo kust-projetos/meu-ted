@@ -6,6 +6,11 @@ import { FIXED_ENDPOINTS } from "./llm/provider-registry.js";
 
 export { FinanceChatAgent };
 
+/** Deny-by-default agent boundary; live transports require ADR-032 and actor-scoped delivery. */
+export function isAllowedAgentRpcPath(subPath: string): boolean {
+  return subPath === "/rpc/chat" || subPath === "/rpc/history" || subPath === "/rpc/session/new" || subPath === "/rpc/memory/prefs" || subPath === "/rpc/pending-operations/active" || subPath === "/rpc/pending-operations/propose" || subPath === "/rpc/undo/active" || subPath === "/rpc/undo/decision" || subPath === "/rpc/attachments" || subPath === "/rpc/attachments/observability" || /^\/rpc\/undo\/[^/]+\/verify-target$/.test(subPath) || /^\/rpc\/pending-operations\/[^/]+\/decision$/.test(subPath) || /^\/rpc\/workspace\/[^/]+\/attest-empty$/.test(subPath);
+}
+
 type ExportedHandler<E, _U = unknown> = { fetch(request: Request, env: E, ctx?: unknown): Promise<Response> };
 
 type FinanceAgentStub = {
@@ -355,7 +360,7 @@ export default {
       // T4.3 (SPEC section 11 E4): the retired legacy-agent migration gate
       // is gone — the canonical RPC surface talks to FinanceChatAgent
       // directly (INV-07, single runtime).
-      const isRestRpc = subPath === "/rpc/chat" || subPath === "/rpc/history" || subPath === "/rpc/session/new" || subPath === "/rpc/memory/prefs" || subPath === "/rpc/pending-operations/active" || subPath === "/rpc/pending-operations/propose" || subPath === "/rpc/undo/active" || subPath === "/rpc/undo/decision" || subPath === "/rpc/attachments" || subPath === "/rpc/attachments/observability" || /^\/rpc\/undo\/[^/]+\/verify-target$/.test(subPath) || /^\/rpc\/pending-operations\/[^/]+\/decision$/.test(subPath) || /^\/rpc\/workspace\/[^/]+\/attest-empty$/.test(subPath);
+      const isRestRpc = isAllowedAgentRpcPath(subPath);
 
       if (isRestRpc) {
         const financeAgent = env.FINANCE_CHAT_AGENT.get(env.FINANCE_CHAT_AGENT.idFromName(canonicalId));
