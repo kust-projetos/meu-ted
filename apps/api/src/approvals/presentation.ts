@@ -577,10 +577,11 @@ export const buildPendingOperationPresentation = (input: {
     return parsed.success ? parsed.data as PendingOperationPresentation : null;
   }
   if (input.tool === 'budgets.update') {
-    const { budgetId, amountCents } = args as Record<string, unknown>;
+    const { budgetId, amountCents, alertThreshold } = args as Record<string, unknown>;
     // Threshold-only changes are supported by the tool but are not actionable in the UI in this slice.
     if (typeof budgetId !== 'string' || typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents <= 0 || !input.budgetLabel?.trim()) return null;
-    const candidate = { id: input.id, status: input.status, tool: input.tool, title: derivePresentationTitle(input.tool), description: `Orçamento de ${input.budgetLabel}`, amountCents, expiresAt: input.expiresAt, warnings: input.warnings ?? [] };
+    const thresholdText = alertThreshold === undefined ? '' : ` — alerta em ${alertThreshold}%`;
+    const candidate = { id: input.id, status: input.status, tool: input.tool, title: derivePresentationTitle(input.tool), description: `Orçamento de ${input.budgetLabel}${thresholdText}`, amountCents, expiresAt: input.expiresAt, warnings: input.warnings ?? [] };
     const parsed = pendingOperationPresentationSchema.safeParse(candidate);
     return parsed.success ? parsed.data as PendingOperationPresentation : null;
   }

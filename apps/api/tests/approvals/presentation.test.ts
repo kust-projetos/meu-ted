@@ -59,7 +59,9 @@ describe('buildPendingOperationPresentation (SPEC §16)', () => {
     expect(presentation).toMatchObject({ title: 'Ajustar orçamento', description: 'Orçamento de Mercado', amountCents: 75000 });
     expect(isActionablePendingOperationPresentation(presentation!)).toBe(true);
     expect(buildPendingOperationPresentation({ ...input, normalizedArgs: { budgetId, alertThreshold: 80 }, budgetLabel: 'Mercado' })).toBeNull();
-    expect(buildPendingOperationPresentation(input)).toBeNull();
+    expect(buildPendingOperationPresentation({ ...input, normalizedArgs: { budgetId, amountCents: 75000, alertThreshold: 90 }, budgetLabel: 'Mercado' })?.description).toContain('alerta em 90%');
+    expect(buildPendingOperationPresentation({ ...input, normalizedArgs: { budgetId, amountCents: 75000 }, budgetLabel: 'Mercado' })?.description).not.toContain('alerta');
+    expect(buildPendingOperationPresentation({ ...input, normalizedArgs: { budgetId, amountCents: 75000 } })).toBeNull();
   });
   it('derives the card from the same canonical args that will execute (INV-02)', () => {
     const presentation = buildPendingOperationPresentation({
