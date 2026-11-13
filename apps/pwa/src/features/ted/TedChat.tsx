@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
+import { createTedLiveClient } from "@/lib/live/ted-live-client";
 import {
   fetchAgentHistory,
   fetchActivePendingOperations,
@@ -423,6 +424,9 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
    * refresh loop from hammering the broker.
    */
   const proposalRecoveryRef = useRef<string | null>(null);
+  const loadSeqRef = useRef(0);
+  const nonSilentInFlightRef = useRef(0);
+  const scheduleLiveRefreshRef = useRef<() => void>(() => {});
   const discardDrafts = useCallback(() => {
     for (const draft of draftsRef.current.values()) {
       revokeAttachmentUrls(draft.attachments ?? []);
@@ -499,8 +503,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
    * that must compare a turn result against the refreshed log (A02/R02 AC06)
    * need the batch itself, never a conversation-wide text scan.
    */
-  const loadHistory = useCallback(async (preserveError = false): Promise<AgentMessage[]> => {
+  const loadHistory = useCallback(async (options?: { silent?: boolean }): Promise<AgentMessage[]> => {
+    const silent = options?.silent === true;
     if (!activeWorkspace) return [];
+    const seq = ++loadSeqRef.current;
+    if (!silent) nonSilentInFlightRef.current += 1;
+    const isObsoleteSilentLoad = () => silent && seq !== loadSeqRef.current;
+    try {
     // A02/R02 (AC07 HIGH): this refresh belongs to the scope that started it.
     const scopeId = activeWorkspace.id;
     // P2: re-ground the runtime belief on every history batch — a B pin
@@ -509,11 +518,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     clearTedRuntimeViews(scopeId);
     let history: AgentMessage[];
     try {
-      setStatus("connecting");
+      if (!silent) setStatus("connecting");
       history = await fetchAgentHistory(scopeId);
+      if (isObsoleteSilentLoad()) return [];
     } catch {
       // A failed refresh never writes another scope's error.
-      if (isStaleScope(scopeId)) return [];
+      if (isStaleScope(scopeId) || isObsoleteSilentLoad()) return [];
+      if (silent) return [];
       // SPEC §25.4: a failed reload keeps last-known server state and
       // signals staleness — never invents a card, never wipes history.
       setError(HISTORY_LOAD_ERROR);
@@ -527,10 +538,10 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     // (or its error) revealed — including a B 400 with no cookie yet, whose
     // response still carries the runtime header. No header (legacy A0) keeps
     // the reset value below: unknown.
-    if (!isStaleScope(scopeId)) setTedRuntime(getTedRuntimeView(scopeId));
+    if (!isStaleScope(scopeId) && !isObsoleteSilentLoad()) setTedRuntime(getTedRuntimeView(scopeId));
     // The scope may have changed while the batch was in flight: this batch
     // belongs to the previous conversation and must never reach the new one.
-    if (isStaleScope(scopeId)) return [];
+    if (isStaleScope(scopeId) || isObsoleteSilentLoad()) return [];
     // TASK-08 FIX 1 + R2 FIXES 1–3 + R3 FIXES 1–3: consume the in-flight send
     // anchor (SPEC §7.7, `savePendingChatSend` in `sendAgentMessage`) and
     // rehydrate it as a `failed` bubble with retry — the SAME stable
@@ -675,7 +686,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       });
     }
     setHistoryLoaded(true);
-    if (!preserveError) setError(null);
+    if (!silent) setError(null);
     // P3 recovery — the turn succeeded but its broker call was lost. The
     // persisted intent is replayed to the authenticated Agent broker BEFORE
     // the active list is read, so the authoritative card is part of this same
@@ -683,11 +694,11 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     // first call actually landed, the broker returns `existing: true` and no
     // second operation exists.
     let proposalRecoveryFailed = false;
-    if (anchored?.proposal && proposalRecoveryRef.current !== anchored.messageId) {
+    if (!silent && anchored?.proposal && proposalRecoveryRef.current !== anchored.messageId) {
       proposalRecoveryRef.current = anchored.messageId;
       try {
         await proposePendingOperation(scopeId, anchored.proposal);
-        if (isStaleScope(scopeId)) return [];
+        if (isStaleScope(scopeId) || isObsoleteSilentLoad()) return [];
         clearPendingChatSend(scopeId);
         setMessages((prev) =>
           prev.map((m) => (m.id === anchored.messageId ? { ...m, delivery: "sent" as const } : m)),
@@ -703,37 +714,53 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     try {
       const active = await fetchActivePendingOperations(scopeId);
       // Cards minted by another scope never enter this chat.
-      if (isStaleScope(scopeId)) return [];
+      if (isStaleScope(scopeId) || isObsoleteSilentLoad()) return [];
       const cards = new Map<string, TedPendingOperation>();
       for (const item of active) {
         const card = toLiveCard(item);
         if (card && !cards.has(card.id)) cards.set(card.id, card);
       }
       setPendingOps([...cards.values()]);
-      if (!preserveError) setError(null);
-      setStatus("ready");
+      if (!silent) setError(null);
+      if (!silent) setStatus("ready");
     } catch {
       if (isStaleScope(scopeId)) return [];
       // Fail closed on first load (no cards invented) and honest afterwards:
       // last-known cards stay (untouched), staleness is signaled, history is
       // untouched.
-      setError(ACTIVE_LOAD_ERROR);
-      setStatus("ready");
+      if (!silent) {
+        setError(ACTIVE_LOAD_ERROR);
+        setStatus("ready");
+      }
     }
     // debt-undo-proposal-rehydration: reload/remount rehydrates the live undo
     // cards from the authenticated active-list RPC (bound summaries only).
     // Read-only: failures keep last-known cards, never invent, never decide.
     try {
       const activeUndo = await fetchActiveUndoProposals(scopeId);
-      if (isStaleScope(scopeId)) return [];
+      if (isStaleScope(scopeId) || isObsoleteSilentLoad()) return [];
       applyActiveUndoProposals(activeUndo);
     } catch {
       // Last-known undo cards stay (untouched); staleness is already
       // signaled by the history/active error paths above when they fail.
     }
-    if (proposalRecoveryFailed) setError(proposalRecoveryError(anchored?.proposal));
+    if (proposalRecoveryFailed && !silent) setError(proposalRecoveryError(anchored?.proposal));
     return history;
+    } finally {
+      if (!silent) {
+        nonSilentInFlightRef.current -= 1;
+        if (nonSilentInFlightRef.current === 0) scheduleLiveRefreshRef.current();
+      }
+    }
   }, [activeWorkspace, applyActiveUndoProposals, isStaleScope]);
+  const loadHistoryRef = useRef(loadHistory);
+  useEffect(() => { loadHistoryRef.current = loadHistory; }, [loadHistory]);
+  const streamingRef = useRef(status === "streaming");
+  useEffect(() => {
+    const streaming = status === "streaming";
+    streamingRef.current = streaming;
+    if (!streaming) scheduleLiveRefreshRef.current();
+  }, [status]);
 
   // Post-approval reconciliation (SPEC §15.4, T3.3): chat history AND
   // financial UI refresh. The REAL execution receipt (API-emitted, relayed
@@ -858,6 +885,58 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       notifyPendingOperationsChanged();
     }
   }, [activeWorkspace, loadHistory]);
+
+  useEffect(() => {
+    if (process.env.NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED !== "1" || !activeWorkspace?.id) return;
+    const workspaceId = activeWorkspace.id;
+    const client = createTedLiveClient({ workspaceId });
+    const liveRefreshTimer = { current: undefined as ReturnType<typeof setTimeout> | undefined };
+    const liveRefreshInFlight = { current: false };
+    const liveRefreshDirty = { current: false };
+    const lastLiveRefreshAt = { current: 0 };
+    const scheduleRefresh = () => {
+      if (isStaleScope(workspaceId)) return;
+      if (streamingRef.current) { liveRefreshDirty.current = true; return; }
+      if (nonSilentInFlightRef.current > 0) { liveRefreshDirty.current = true; return; }
+      if (liveRefreshInFlight.current) { liveRefreshDirty.current = true; return; }
+      if (liveRefreshTimer.current !== undefined) return;
+      const delay = Math.max(0, 2000 - (Date.now() - lastLiveRefreshAt.current));
+      liveRefreshTimer.current = setTimeout(() => {
+        liveRefreshTimer.current = undefined;
+        if (isStaleScope(workspaceId)) return;
+        if (streamingRef.current) { liveRefreshDirty.current = true; return; }
+        if (nonSilentInFlightRef.current > 0) { liveRefreshDirty.current = true; return; }
+        liveRefreshInFlight.current = true;
+        liveRefreshDirty.current = false;
+        lastLiveRefreshAt.current = Date.now();
+        void loadHistoryRef.current({ silent: true }).catch(() => {}).finally(() => {
+          liveRefreshInFlight.current = false;
+          if (liveRefreshDirty.current) scheduleRefresh();
+        });
+      }, delay);
+    };
+    scheduleLiveRefreshRef.current = () => {
+      if (liveRefreshDirty.current) scheduleRefresh();
+    };
+    const unsubscribe = client.onFrame(() => { scheduleRefresh(); });
+    let previousState = client.getState();
+    const unsubscribeState = client.onState((nextState) => {
+      if (previousState === "reconnecting" && nextState === "open") scheduleRefresh();
+      previousState = nextState;
+    });
+    void client.start().catch(() => {});
+    return () => {
+      if (liveRefreshTimer.current !== undefined) clearTimeout(liveRefreshTimer.current);
+      liveRefreshTimer.current = undefined;
+      liveRefreshInFlight.current = false;
+      liveRefreshDirty.current = false;
+      lastLiveRefreshAt.current = 0;
+      scheduleLiveRefreshRef.current = () => {};
+      unsubscribe();
+      unsubscribeState();
+      client.stop();
+    };
+  }, [activeWorkspace?.id, isStaleScope]);
 
   /**
    * FIX-P1-UX #173: reduced-motion users always get instant jumps — every
