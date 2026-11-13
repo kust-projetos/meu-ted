@@ -139,12 +139,15 @@ const P2D_API_BASE = `http://127.0.0.1:${p2dPorts.apiPort}`;
 const P2D_GATEWAY_BASE = `http://127.0.0.1:${p2dPorts.gatewayPort}`;
 const P2D_NEXT_BASE = `http://127.0.0.1:${p2dPorts.nextPort}`;
 
-// P2D local Cloudflare bindings (no secret): the #306 workspace allowlist is
-// mandatory, and the Cloudflare dev context reads .dev.vars. Generate it for
-// proposal runs and keep it untracked/ignored; it is removed on runner exit.
+// Cloudflare dev context vars override process.env, so P2D needs a local .dev.vars
+// override (including live modes) for its synthetic workspace and gateway.
 const P2D_DEV_VARS_PATH = path.join(PWA_ROOT, ".dev.vars");
 const P2D_WORKSPACE_A = "00000000-0000-4000-8000-00000000000a";
-if (AGENT_RUN || (P2D && !P2D_LIVE_MODE)) {
+if (AGENT_RUN || P2D) {
+  const hadPreviousDevVars = fs.existsSync(P2D_DEV_VARS_PATH);
+  const previousDevVars = hadPreviousDevVars
+    ? fs.readFileSync(P2D_DEV_VARS_PATH)
+    : undefined;
   fs.writeFileSync(
     P2D_DEV_VARS_PATH,
     [
@@ -158,9 +161,13 @@ if (AGENT_RUN || (P2D && !P2D_LIVE_MODE)) {
   if (!process.env.TEST_WORKER_INDEX) {
     process.once("exit", () => {
       try {
-        fs.rmSync(P2D_DEV_VARS_PATH, { force: true });
+        if (hadPreviousDevVars) {
+          fs.writeFileSync(P2D_DEV_VARS_PATH, previousDevVars);
+        } else {
+          fs.rmSync(P2D_DEV_VARS_PATH, { force: true });
+        }
       } catch {
-        /* best effort: the file is untracked and ignored */
+        /* best effort: restore the pre-run local state */
       }
     });
   }
