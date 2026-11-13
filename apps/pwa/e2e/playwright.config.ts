@@ -144,7 +144,7 @@ const P2D_NEXT_BASE = `http://127.0.0.1:${p2dPorts.nextPort}`;
 // proposal runs and keep it untracked/ignored; it is removed on runner exit.
 const P2D_DEV_VARS_PATH = path.join(PWA_ROOT, ".dev.vars");
 const P2D_WORKSPACE_A = "00000000-0000-4000-8000-00000000000a";
-if (AGENT_RUN) {
+if (AGENT_RUN || (P2D && !P2D_LIVE_MODE)) {
   fs.writeFileSync(
     P2D_DEV_VARS_PATH,
     [

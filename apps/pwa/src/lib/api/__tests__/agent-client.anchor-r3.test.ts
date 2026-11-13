@@ -213,20 +213,21 @@ describe("R3 FIX 1 — retry sem draft fiel é recusado", () => {
       failed: { content: "Segue o comprovante" },
       stored,
     });
-    expect(resolved).toBe(stored);
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(resolved.send).toBe(stored);
   });
 
-  it("sem draft + snapshot com anexos: RECUSA (null) — reenviar mudaria o payload", () => {
+  it("sem draft + snapshot com anexos: RECUSA (attachments) — reenviar mudaria o payload", () => {
     expect(
       resolveRetrySend({
         messageId: "msg-x",
         failed: { content: "Segue o comprovante" },
         snapshotAttachments: [att("nota.jpg")],
       }),
-    ).toBeNull();
+    ).toEqual({ ok: false, reason: "attachments" });
   });
 
-  it("sem draft + balão com anexos locais: RECUSA (null)", () => {
+  it("sem draft + balão com anexos locais: RECUSA (attachments)", () => {
     expect(
       resolveRetrySend({
         messageId: "msg-x",
@@ -235,7 +236,7 @@ describe("R3 FIX 1 — retry sem draft fiel é recusado", () => {
           attachments: [{ type: "image", url: "blob:http://x/1", name: "foto.png" }],
         },
       }),
-    ).toBeNull();
+    ).toEqual({ ok: false, reason: "attachments" });
   });
 
   it("sem draft + texto puro: recompõe o mesmo messageId e conteúdo", () => {
@@ -243,9 +244,20 @@ describe("R3 FIX 1 — retry sem draft fiel é recusado", () => {
       messageId: "msg-text",
       failed: { content: "Bom dia" },
     });
-    expect(resolved).not.toBeNull();
-    expect(resolved?.messageId).toBe("msg-text");
-    expect(resolved?.content).toBe("Bom dia");
-    expect(resolved?.attachments ?? []).toHaveLength(0);
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(resolved.send.messageId).toBe("msg-text");
+      expect(resolved.send.content).toBe("Bom dia");
+      expect(resolved.send.attachments ?? []).toHaveLength(0);
+    }
+  });
+
+  it("sem draft + sem texto: RECUSA (no_draft)", () => {
+    expect(
+      resolveRetrySend({
+        messageId: "msg-empty",
+        failed: { content: "   " },
+      }),
+    ).toEqual({ ok: false, reason: "no_draft" });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { sendAgentMessage, fetchAgentHistory } from "../agent-client";
+import { sendAgentMessage, fetchAgentHistory, agentBaseUrl } from "../agent-client";
 import * as agentAuth from "../agent-auth";
 
 /**
@@ -83,5 +83,36 @@ describe("agent-client proxy fallback (regressão chat widget)", () => {
       })
     );
     await expect(fetchAgentHistory("ws-1")).rejects.toThrow();
+  });
+});
+
+describe("agentBaseUrl NODE_ENV gate (issue #251)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("ignores NEXT_PUBLIC override in production and returns /api/agent", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
+    expect(agentBaseUrl()).toBe("/api/agent");
+  });
+
+  it("uses NEXT_PUBLIC override in development when set", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
+    expect(agentBaseUrl()).toBe("https://agent.example.test");
+  });
+
+  it("uses NEXT_PUBLIC override in test env when set", () => {
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
+    expect(agentBaseUrl()).toBe("https://agent.example.test");
+  });
+
+  it("defaults to /api/agent when override absent (any env)", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "");
+    expect(agentBaseUrl()).toBe("/api/agent");
   });
 });

@@ -85,12 +85,16 @@ export type AgentMessage = {
   pendingOperation?: AgentTurn["pendingOperation"];
 };
 
-function agentBaseUrl(): string {  // ADR-011: canonical browser transport is the same-origin proxy /api/agent.
+export function agentBaseUrl(): string {  // ADR-011: canonical browser transport is the same-origin proxy /api/agent.
   // V4.1 Phase 5 (SPEC §12.6): the browser default is the same-origin proxy —
   // no production hostname is an architectural dependency. An explicitly
   // configured direct URL is a dev/test-only escape hatch (ADR-011 transient
   // compat) — never a published production default.
-  const direct = process.env.NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL?.replace(/\/$/, "");
+  // Dev/test-only escape hatch: in production the override is ignored so the
+  // same-origin /api/agent proxy (CSRF/session handling) is always used.
+  const direct = process.env.NODE_ENV === "production"
+    ? undefined
+    : process.env.NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL?.replace(/\/$/, "");
   if (direct) return direct;
   // Fallback seguro ao proxy Next.js /api/agent quando a URL direta não estiver configurada.
   // Preserva token e X-Workspace-Id via forwardHeaders do proxy e evita CORS/misconfig.
@@ -1324,6 +1328,10 @@ export function isAnchorSupersededByHistory(
  * os anexos mudaria o envio sob a mesma identidade (`intentionId`). Sem
  * draft e texto puro, recompõe o mesmo messageId e conteúdo.
  */
+export type RetrySendResult =
+  | { ok: true; send: PendingChatSend; draft?: PendingChatSend }
+  | { ok: false; reason: "attachments" | "no_draft" };
+
 export function resolveRetrySend(input: {
   messageId: string;
   failed: {
@@ -1332,13 +1340,17 @@ export function resolveRetrySend(input: {
   };
   stored?: PendingChatSend;
   snapshotAttachments?: ReadonlyArray<OutgoingAttachment>;
-}): PendingChatSend | null {
-  if (input.stored) return input.stored;
+}): RetrySendResult {
+  if (input.stored) return { ok: true, send: input.stored, draft: input.stored };
   const snapshotHas =
     Array.isArray(input.snapshotAttachments) && input.snapshotAttachments.length > 0;
   const balloonHas = Array.isArray(input.failed.attachments) && input.failed.attachments.length > 0;
-  if (snapshotHas || balloonHas) return null;
-  return composeChatSend(input.failed.content, { messageId: input.messageId });
+  if (snapshotHas || balloonHas) return { ok: false, reason: "attachments" };
+  if (!input.failed.content || !input.failed.content.trim()) {
+    return { ok: false, reason: "no_draft" };
+  }
+  const send = composeChatSend(input.failed.content, { messageId: input.messageId });
+  return { ok: true, send, draft: send };
 }
 
 export function clearPendingChatSend(workspaceId: string, actorId?: string | null): void {

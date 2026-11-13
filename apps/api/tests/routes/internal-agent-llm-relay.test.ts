@@ -177,7 +177,7 @@ describe('Fase 2 item 8 — dynamic relay allowlist (RED)', () => {
         method: 'POST', url: '/internal/agent/llm-relay', headers,
         payload: { provider: 'opencode-zen', model: 'muse-spark-1.2-contributor-free', prompt: 'hi' },
       });
-      expect(res.statusCode).toBe(504);
+      expect(res.statusCode).toBe(502);
       expect(clearSpy).toHaveBeenCalled();
     } finally {
       clearSpy.mockRestore();
@@ -682,16 +682,16 @@ describe('FIX-API-RELAY-ALL-ERROR-MESSAGES-SAFE — fixed safe messages on every
     expect(raw2).not.toContain('Injected-Log-Line');
   });
 
-  it('network throw keeps 504/agent.provider_timeout with fixed safe message', async () => {
+  it('network throw keeps 502/agent.provider_error with fixed safe message', async () => {
     const evil = new TypeError(`fetch failed for prompt ${PROMPT_MARK} key=${KEY_MARK}\r\nInjected: evil`);
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(evil);
     const res = await app.inject({
       method: 'POST', url: '/internal/agent/llm-relay', headers,
       payload: { provider: 'opencode-zen', model: 'muse-spark-1.2-contributor-free', prompt: 'hi' },
     });
-    expect(res.statusCode).toBe(504);
+    expect(res.statusCode).toBe(502);
     const json = res.json() as { code?: string; message?: string };
-    expect(json.code).toBe('agent.provider_timeout');
+    expect(json.code).toBe('agent.provider_error');
     expect(json.message).toBe(SAFE_NETWORK);
     const raw2 = JSON.stringify(json);
     expect(raw2).not.toContain(PROMPT_MARK);
@@ -1127,8 +1127,8 @@ describe('RELAY-ATTEMPT-RECEIPT — maxOutputTokens + providerAttempted + usage 
 
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed'));
     const timedOut = await app.inject({ method: 'POST', url: '/internal/agent/llm-relay', headers, payload });
-    expect(timedOut.statusCode).toBe(504);
-    expect(timedOut.json()).toMatchObject({ code: 'agent.provider_timeout', providerAttempted: true });
+    expect(timedOut.statusCode).toBe(502);
+    expect(timedOut.json()).toMatchObject({ code: 'agent.provider_error', providerAttempted: true });
   });
 
   it('invalid maxOutputTokens is 400 with providerAttempted:false and no fetch', async () => {

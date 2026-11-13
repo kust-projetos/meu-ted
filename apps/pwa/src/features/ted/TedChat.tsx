@@ -1492,13 +1492,21 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     }
     const stored = draftsRef.current.get(messageId);
     const snapshot = anchorSnapshotsRef.current.get(messageId);
-    const send = resolveRetrySend({
+    const result = resolveRetrySend({
       messageId,
       failed,
       ...(stored ? { stored } : {}),
       ...(snapshot?.attachments?.length ? { snapshotAttachments: snapshot.attachments } : {}),
     });
-    if (!send) return;
+    if (!result.ok) {
+      if (result.reason === "attachments") {
+        setError("Não é possível reenviar esta mensagem com anexos. Reenvie a mensagem (os anexos não são reproduzidos).");
+      } else {
+        setError("Não há rascunho salvo para reenviar. Reenvie a mensagem original.");
+      }
+      return;
+    }
+    const send = result.send;
     draftsRef.current.set(messageId, send);
     setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "sending" as const } : m)));
     void executeSend(send);
