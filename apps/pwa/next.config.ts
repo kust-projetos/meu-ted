@@ -20,6 +20,7 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_PI_FINANCE_API_BASE_URL: process.env.NEXT_PUBLIC_PI_FINANCE_API_BASE_URL ?? "",
     NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL: process.env.NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL ?? "",
+    NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED: process.env.NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED ?? "",
     NEXT_PUBLIC_TED_MICROPHONE: process.env.NEXT_PUBLIC_TED_MICROPHONE ?? "",
     NEXT_PUBLIC_TED_ATTACHMENT_INGESTION: process.env.NEXT_PUBLIC_TED_ATTACHMENT_INGESTION ?? "",
     // V1-textual: per-type attachment flags explicitamente inlinadas como ""
