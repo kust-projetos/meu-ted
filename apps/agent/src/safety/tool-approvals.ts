@@ -39,7 +39,7 @@ export type IntentGateInput = {
   isMutating: boolean;
   explicitMutationIntent: boolean;
   autoExecutionEligible: boolean;
-  autoExecutionMode: 'off' | 'shadow' | 'enabled';
+  autoExecutionMode: 'off' | 'shadow' | 'on';
 };
 
 export type IntentGateDecision = {
@@ -51,11 +51,11 @@ export type IntentGateDecision = {
 /**
  * Deterministic precedence: reads are never blocked; mutations remain
  * approval-gated regardless of explicit intent; auto-execution is only
- * eligible in enabled mode and never replaces approval.
+ * eligible in `on` mode and never replaces approval.
  */
 export const resolveIntentGate = (input: IntentGateInput): IntentGateDecision => {
   if (!input.isMutating) return { blocked: false, requiresApproval: false, executeAutomatically: false };
-  const executeAutomatically = input.autoExecutionEligible && input.autoExecutionMode === 'enabled';
+  const executeAutomatically = input.autoExecutionEligible && input.autoExecutionMode === 'on';
   return {
     blocked: !input.explicitMutationIntent,
     requiresApproval: true,
@@ -91,13 +91,18 @@ export const validateActorIntentForMutation = (
   toolName: string,
   isMutating: boolean,
 ): { allowed: boolean; reason?: string } => {
-  if (!isMutating) return { allowed: true };
+  const lower = lastActorMessage.toLowerCase().trim();
+  const isSummaryOrReadQuery = /^(resuma|resumo|listar|mostre|consultar|ver|quais s[aã]o|me mostre|saldo|extrato)\b/i.test(lower);
+  const gate = resolveIntentGate({
+    isMutating,
+    explicitMutationIntent: !isSummaryOrReadQuery,
+    autoExecutionEligible: false,
+    autoExecutionMode: 'off',
+  });
+  if (!gate.blocked) return { allowed: true };
 
   // Anti-prompt-injection: If last user message is asking for read/summary or doesn't request mutation,
   // do not allow mutating tool calls planted by prior history or untrusted tool outputs.
-  const lower = lastActorMessage.toLowerCase().trim();
-
-  const isSummaryOrReadQuery = /^(resuma|resumo|listar|mostre|consultar|ver|quais s[aã]o|me mostre|saldo|extrato)\b/i.test(lower);
   if (isSummaryOrReadQuery && isMutating) {
     return {
       allowed: false,

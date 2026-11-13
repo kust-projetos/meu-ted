@@ -46,7 +46,7 @@ import {
   renderEvidenceForPrompt,
   sanitizeExternalQuery,
 } from './web-evidence.js';
-import { isMutatingTool } from '../safety/tool-approvals.js';
+import { hasExplicitMutationIntent, isMutatingTool, resolveIntentGate } from '../safety/tool-approvals.js';
 
 export type ToolExecutionContext = {
   delegatedToken?: string;
@@ -475,7 +475,13 @@ export const buildExposedTools = (
       inputSchema: jsonSchema(sanitizeSchema(generatedTool.parameters)),
       execute: async (params: Record<string, unknown>) => {
         const isMutating = isMutatingTool(name);
-        if (isMutating) {
+        const intentGate = resolveIntentGate({
+          isMutating,
+          explicitMutationIntent: hasExplicitMutationIntent(ctx.lastUserMessage),
+          autoExecutionEligible: false,
+          autoExecutionMode: 'off',
+        });
+        if (intentGate.requiresApproval) {
           return { blocked: true, reason: 'Mutação bloqueada: somente MutationExecutor V2 pode executar escrita.' };
         }
         return generatedTool.execute('model-tool', params, undefined, undefined, invocationAuth);
