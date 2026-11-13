@@ -1,10 +1,14 @@
 # Pendências do Meu Ted — pós-V1 (2026-11-12)
 
-**Estado de referência:** `main` em `d4cf315f35cfb54561ef2f62e6c77acfd18cb21a`;
-produção em API `d4cf315`, Agent `d4cf315` e PWA `d4cf315`. A entrega inclui
-insights de gastos por conversa (#343) e orçamentos por conversa (#335/#336/#337).
-A homologação live e a tag `v1.0.4` seguem pendentes por falta de credenciais de
-admin. Detalhe por camada em
+**Estado de referência:** `main` em `15c9691932e3d767f2873c63de6ce9726492c15a`;
+produção: PWA `15c9691` (build `43434093369`) e Agent `15c9691` (deploy
+`43435350750`), ambos `attestation=ATTESTED reason=deploy-smoke-pass`. API
+(Contabo) em `32a05cb` (build `43419632296`, manifesto
+`release-manifest-32a05cb0cc277c92db625895259070a2de3b1c38.json`); `apps/api`
+é idêntico entre `32a05cb` e `15c9691` (diff vazio), portanto está no mesmo
+código da main. Release `v1.0.4` publicada; a tag anotada aponta para `32a05cb`.
+A entrega inclui insights de gastos por conversa (#343) e orçamentos por
+conversa (#335/#336/#337). Detalhe por camada em
 [`MEU-TED-V1-FINAL-STATE.md`](../MEU-TED-V1-FINAL-STATE.md).
 
 Este arquivo lista o que o plano da V1 deixou explicitamente para depois e o
@@ -13,18 +17,28 @@ missão é escolhida pelo usuário.
 
 ## 1. Gate de segurança (antes de conversas privadas)
 
-- **#269 — isolamento por ator dos eventos WebSocket.** Issue CLOSED (`status:done`).
+- **#269 - isolamento por ator dos eventos WebSocket.** Issue CLOSED (`status:done`).
   C3 está implementado e F1 provado em workerd (frames reais privados e de
-  workspace, por ator). `TED_LIVE_SYNC_ENABLED` e `TED_PRIVATE_VIEWS_ENABLED`
-  continuam **OFF**. Ainda faltam cliente WS na PWA e validação em
-  staging/produção. Não é uma autorização de trabalho.
+  workspace, por ator). Live-sync está **ATIVO**: `TED_LIVE_SYNC_ENABLED=1` em
+  `apps/agent/wrangler.jsonc`; a PWA foi construída com
+  `NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED=1` e
+  `NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN=${{ vars.AGENT_PROD_URL }}`; sua CSP permite
+  `https://` e `wss://` do host do Agent (PR #358). Handshake real foi validado
+  em produção: socket `wss://<host-do-agent>/agents/finance-chat-agent/<ws>/live`
+  (origem vinda de `AGENT_PROD_URL`) abriu, recebeu 1 frame e não fechou com
+  1008/1006 em 10s. No chat, frames
+  disparam revalidação REST silenciosa com throttle de 2s (PR #355). Revogação
+  de membership ainda pode levar até 5 min. Contas `Conta E2E Mobile *`
+  desativadas continuam listáveis com `includeInactive=true`; não há rota para
+  exclusão de conta. `TED_PRIVATE_VIEWS_ENABLED` continua **OFF**. Não é uma
+  autorização de trabalho.
 
 ## 2. Qualidade e CI
 
 - **#277 — flake de cold boot da PWA:** resolvido pelo PR #338 (fix do `t07c`).
   A instrumentação fica como referência caso o flake reapareça.
-- **Dependabot:** #317, #296 e #287 estão CLOSED; #292 está MERGED. Abertos:
-  **#285** (draft, `DO NOT MERGE`) e **#278** (draft).
+- **Dependabot:** #317, #296 e #287 estão CLOSED; #292 está MERGED. #285 e #278
+  estão CLOSED como superados.
 - **#143** — triagem de dependabot de 2026-10-12.
 - A cobertura LOW de `budgets.delete` (propagação de DomainError diferente de
   `not_found` e isolamento por household) foi fechada nesta entrega.
