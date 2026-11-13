@@ -37,6 +37,7 @@ Este diretório contém o registro imutável de decisões de arquitetura do proj
 | [ADR-029](ADR-029-typed-pending-v2-account-rename.md) | Extensão tipada Pending V2 para renomear contas | accepted (validação local em andamento) | 2026-10-21 | — |
 | [ADR-030](ADR-030-ted-runtime-experiment.md) | Experimento de runtime conversacional dedicado (OpenCode V2 prioritário) | proposed | 2026-10-30 | — |
 | [ADR-031](ADR-031-ted-opencode-first.md) | OpenCode-first como núcleo conversacional (sem autorizar produção) | accepted (direção); implementação P2 parcial | 2026-10-31 | SELECT_B |
+| [ADR-032](ADR-032-ted-269-live-delivery-contract.md) | Contrato de entrega por ator do live-sync (TED #269) | decisão aceita; C3 implementado; F1 provado em workerd; flag default-off; PWA sem cliente WS | 2026-11-12 | — |
 
 ## Template para Novos ADRs
 

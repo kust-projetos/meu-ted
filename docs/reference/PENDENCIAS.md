@@ -13,13 +13,11 @@ missão é escolhida pelo usuário.
 
 ## 1. Gate de segurança (antes de conversas privadas)
 
-- **#269 — isolamento por ator dos eventos WebSocket.** A flag
-  `TED_PRIVATE_VIEWS_ENABLED` continua **OFF**. O PR #205 implementou a
-  visibilidade privada, e o PR #330 mergeou o surface guard do live-sync
-  (`apps/agent/tests/worker-live-sync-surface.test.ts`). F0 registrado em
-  [`docs/agent/2026-11-12-ted-269-f0-live-sync-inventory.md`](../agent/2026-11-12-ted-269-f0-live-sync-inventory.md);
-  ADR-032 aceito para F2a (transporte fechado + guard). Entrega por ator segue
-  pendente; a flag permanece OFF.
+- **#269 — isolamento por ator dos eventos WebSocket.** Issue CLOSED (`status:done`).
+  C3 está implementado e F1 provado em workerd (frames reais privados e de
+  workspace, por ator). `TED_LIVE_SYNC_ENABLED` e `TED_PRIVATE_VIEWS_ENABLED`
+  continuam **OFF**. Ainda faltam cliente WS na PWA e validação em
+  staging/produção. Não é uma autorização de trabalho.
 
 ## 2. Qualidade e CI
 
