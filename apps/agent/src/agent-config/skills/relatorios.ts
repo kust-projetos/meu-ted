@@ -6,7 +6,7 @@ export const relatoriosSkill: Skill = {
   when: 'resumo do mês, comparações, para onde o dinheiro foi, diagnóstico geral',
   keywords: [
     'como estou', 'resumo', 'relatório', 'relatorio', 'balanço', 'balanco',
-    'para onde', 'onde foi', 'gastei quanto', 'comparar', 'comparação', 'comparacao',
+    'para onde', 'onde foi', 'gastei quanto', 'quanto gastei', 'quanto gastamos', 'quanto gastou', 'comparar', 'comparação', 'comparacao',
     'mês', 'mes passado', 'diagnóstico', 'diagnostico', 'análise', 'analise',
     'evolução', 'evolucao', 'tendência', 'tendencia',
   ],

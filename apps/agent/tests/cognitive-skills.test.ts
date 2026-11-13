@@ -45,7 +45,11 @@ describe('skills catalog', () => {
 
 describe('skill selection heuristic', () => {
   it.each([
+    ['quanto gastei esse mês?', 'relatorios'],
+    ['quanto gastamos no mês passado?', 'relatorios'],
+    ['gastei 50 no mercado', 'registros'],
     ['lancei um gasto no mercado hoje', 'registros'],
+    ['liste meus gastos', 'registros'],
     ['qual o meu saldo?', 'saldo-extrato'],
     ['crie uma subcategoria em alimentação', 'categorias'],
     ['quero um orçamento para lazer', 'orcamentos-metas'],
