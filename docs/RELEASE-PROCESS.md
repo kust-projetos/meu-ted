@@ -10,10 +10,12 @@
 ## Ordem canônica
 
 1. Push na `main` → **CI + PWA CI** (job `Gate — all checks`) verdes.
-2. `workflow_run` dispara **Agent Deploy** e **PWA Deploy**:
-   `gate → deploy → smoke → attest`, exigindo `attestation=ATTESTED` com
-   `reason=deploy-smoke-pass` no **mesmo SHA** (verde com
-   `deploy=skipped` **não** é release).
+2. Dispare manualmente **Agent Deploy** e **PWA Deploy** (`workflow_dispatch`
+   na `main`). Cada run precisa terminar com
+   `attestation=ATTESTED reason=deploy-smoke-pass` no **mesmo SHA** (verde com
+   `deploy=skipped` **não** é release). `release-promote` aceita deploys
+   originados por `workflow_run` ou por dispatch manual, exigindo os quatro
+   jobs `gate` + `deploy` + `smoke` + `attest` verdes.
 3. **API na Contabo** via wrapper manual `api-release-20260930.sh
    --execute` (backup pré-release + manifesto + rollback tag + smokes
    `/health`+`/ready` com `gitSha`/`buildId` casados).
