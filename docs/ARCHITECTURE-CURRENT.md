@@ -1,6 +1,6 @@
 # Meu Ted — Arquitetura atual
 
-**Last verified:** 2026-11-10
+**Last verified:** 2026-11-13
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 ## Topologia implementada
@@ -9,6 +9,7 @@
 graph TD
     User([Usuário]) --> PWA[PWA canônica<br/>Cloudflare/OpenNext]
     PWA --> Proxy[Proxies same-origin<br/>/api/backend e /api/agent]
+    PWA -. wss /live (push-only) .-> A0
     Proxy --> API[API Fastify autoritativa<br/>Contabo VPS]
     Proxy --> A0[TED A0<br/>Cloudflare Worker + DO]
     Proxy --> OC[ted-runtime<br/>OpenCode + gateway privado<br/>Contabo VPS]
@@ -52,6 +53,7 @@ troca de runtime não duplica nem perde nada.
   capability, aprovação ou write.
 - **Contratos (`packages/llm-contracts`):** schemas e tipos compartilhados
   entre API, A0 e testes de contrato.
+- **Sincronização ao vivo (live-sync):** rota `/agents/finance-chat-agent/<ws>/live`, transporte push-only; token single-use por subprotocolo (`ted.v1` + `bearer.<jwt>`), filtro por ator no servidor e binding com expiração em 5 min. REST permanece autoritativo para chat, decisão e mutação. Flag `TED_LIVE_SYNC_ENABLED=1` no Agent e `NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED=1` no build da PWA; origem WS vem de `vars.AGENT_PROD_URL`, separada da origem REST, e CSP permite HTTPS/WSS dessa origem.
 
 ## Autorização de mutações
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.4 (2026-11-13)
+
+- Release publicada e atestada: tag `v1.0.4` aponta para `32a05cb0cc277c92db625895259070a2de3b1c38`; Agent Deploy `43420642428` e PWA Deploy `43420646867` com `ATTESTED reason=deploy-smoke-pass`. Manifesto da API: `release-manifest-32a05cb0cc277c92db625895259070a2de3b1c38.json`.
+- Conteúdo funcional: insights de gastos por conversa (#343), orçamentos por conversa via Pending V2 (#335/#336/#337) e live-sync (C3+F1 e ativação).
+- Homologação: [evidência de PASS](https://github.com/kust-projetos/meu-ted/issues/269#issuecomment-6852134432).
+- Produção PWA/Agent seguiu para `15c9691` (live-sync/CSP/E2E); a API permanece em `32a05cb`, pois `apps/api` não tem diff entre esse SHA e `main`.
+
 ## Unreleased (2026-10-23 — correção Vite CVE)
 
 - Segurança de dependências: override raiz fixa Vite em `8.1.6`, corrigindo GHSA-587h-7wmj-h5pm / CVE-2026-112942 identificado na imagem da API pelo Trivy; versão publicada compatível com o engine do projeto e peers existentes. Lockfile e auditorias/testes focados em validação; nenhum código ou imagem de produção alterado aqui.
