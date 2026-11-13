@@ -1,6 +1,6 @@
 # ADR-032 - Contrato de entrega por ator do live-sync (TED #269)
 
-**Status:** accepted (C3: transporte push-only atrás de `TED_LIVE_SYNC_ENABLED`, default-off; F1 de frames reais pendente)
+**Status:** decisão aceita; C3 implementado; F1 provado em workerd; `TED_LIVE_SYNC_ENABLED` default-off; PWA sem cliente WS
 **Data:** 2026-11-12
 
 ## Contexto
@@ -86,6 +86,10 @@ ecoar bearer); para clientes usando apenas header não adiciona subprotocolo.
 A flag continua default-off. A resposta 101 e o eco de `ted.v1` não podem ser
 construídos/testados no Node atual; validar o handshake real em staging/F1 antes
 de habilitar. A PWA atual não usa WS.
+
+> **Atualização de implementação (2026-11-13, flag ainda OFF):** PR #346 implementou o token via subprotocolo e o tratamento seguro do handshake; PR #347 adicionou o harness workerd e a rota `/live`; PR #348 adicionou o E2E workerd. F1 agora prova upgrade autenticado pelo Worker e entrega de frames reais `private` e `workspace` por ator, em `apps/agent/tests/workerd/live-delivery-e2e.workerd.test.ts`; o teste complementar está em `apps/agent/tests/workerd/live-delivery.workerd.test.ts`. A validação do handshake real em workerd cobre a necessidade de F1 indicada acima; permanecem abertos staging/produção e a validação negativa antes de ligar a flag. A PWA ainda não tem cliente WS. A janela aceita de revogação de membership é de até 5 minutos. Antes de ligar a flag, ainda é necessário verificar/eliminar frames `CF_AGENT_MCP_SERVERS`/`CF_AGENT_STATE` emitidos pelo SDK antes do binding no `onConnect`.
+
+> Dos critérios abaixo, a entrega real por ator do distribuidor está coberta pelo E2E workerd; paridade com `/rpc/history`, cenários de default deny/classificação desconhecida/logout/troca de workspace/revogação após TTL, garantia estática abrangente e captura negativa pré-flag seguem abertos ou não demonstrados por essa evidência.
 
 ## Validação e critérios para reabrir
 
