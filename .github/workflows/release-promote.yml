@@ -193,19 +193,17 @@ jobs:
               const { data } = await github.rest.actions.listWorkflowRunsForRepo({
                 owner, repo, head_sha: sha, per_page: 50,
               });
-              // Agent/PWA Deploy run on `workflow_run` (agent-deploy.yml:3-7,
-              // pwa-deploy.yml:3-7), never on `push`. The push-origin check
-              // lives one layer down: the per-run `gate` job (matched by
-              // suffix below) only succeeds when the push-originated CI +
-              // PWA CI runs for the same SHA are green. Require that gate
-              // job success here, so a workflow_run detached from a green
-              // push CI can never satisfy the promote gate.
+              // Agent/PWA Deploy are dispatched manually (historically also
+              // via `workflow_run`), never on `push`. The `gate` job is the
+              // evidence for push-originated CI + PWA CI on the same SHA;
+              // require that gate and the attestation jobs below so a deploy
+              // detached from green CI can never satisfy the promote gate.
               const candidates = data.workflow_runs
-                .filter((r) => r.name === name && r.event === 'workflow_run' && r.status === 'completed' && r.head_branch === 'main')
+                .filter((r) => r.name === name && (r.event === 'workflow_run' || r.event === 'workflow_dispatch') && r.status === 'completed' && r.head_branch === 'main')
                 .sort((a, b) => b.created_at.localeCompare(a.created_at))
                 .slice(0, 10);
               if (candidates.length === 0) {
-                core.setFailed(`Promote blocked: no completed workflow_run-originated '${name}' run found for ${sha}.`);
+                core.setFailed(`Promote blocked: no completed deploy run (workflow_run or manual dispatch) found for '${name}' for ${sha}.`);
                 return;
               }
               let accepted = null;
