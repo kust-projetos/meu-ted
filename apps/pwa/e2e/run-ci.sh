@@ -17,6 +17,7 @@ RESULT=0
 
 # This runner is fixture-only. Pin every API path before the Next build and
 # clear opt-in live/deployed targets inherited from the caller or dotenv files.
+# Live-sync is build-time inlined and must not leak into the fixture harness.
 # The backend proxy otherwise defaults to the production API.
 #
 # src/lib/api/client.ts:baseUrl() returns undefined when this is unset and the
@@ -35,6 +36,8 @@ export NEXT_PUBLIC_PI_FINANCE_API_BASE_URL="http://127.0.0.1:${E2E_FIXTURE_PORT}
 export NEXT_PUBLIC_LEGACY_BEARER_COMPAT="off"
 export PWA_BACKEND_PROXY_ORIGIN="http://127.0.0.1:${E2E_FIXTURE_PORT}"
 export NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL=""
+export NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED="0"
+export NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN=""
 export PWA_AGENT_PROXY_ORIGIN=""
 export AGENT_ORIGIN=""
 export ALLOW_LOCAL_ORIGIN="0"
