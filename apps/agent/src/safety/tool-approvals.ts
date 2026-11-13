@@ -19,6 +19,50 @@ export const APPROVAL_REQUIRED_TOOLS = new Map<string, ToolApprovalRequirement>(
   ['delete_transaction', { toolName: 'delete_transaction', action: 'delete_transaction', category: 'write', requiresFreshApproval: true }],
 ]);
 
+const READ_TOOL_PREFIXES = [
+  'list_', 'get_', 'check_', 'spending_', 'detect_', 'budget_trends', 'audit_', 'analytics_',
+] as const;
+const NON_MUTATING_TOOLS = new Set(['web_search', 'web_fetch']);
+
+/**
+ * Conservative classifier: the former exposed-tool heuristic is unioned with
+ * the explicit approval registry, so a registered sensitive mutation can
+ * never be downgraded to a read by its name or prefix.
+ */
+export const isMutatingTool = (name: string): boolean =>
+  APPROVAL_REQUIRED_TOOLS.has(name) ||
+  (!NON_MUTATING_TOOLS.has(name) &&
+    !READ_TOOL_PREFIXES.some((prefix) => name.startsWith(prefix)) &&
+    !['get_balance', 'list_accounts', 'list_recent_transactions', 'get_month_summary', 'list_categories', 'recall'].includes(name));
+
+export type IntentGateInput = {
+  isMutating: boolean;
+  explicitMutationIntent: boolean;
+  autoExecutionEligible: boolean;
+  autoExecutionMode: 'off' | 'shadow' | 'enabled';
+};
+
+export type IntentGateDecision = {
+  blocked: boolean;
+  requiresApproval: boolean;
+  executeAutomatically: boolean;
+};
+
+/**
+ * Deterministic precedence: reads are never blocked; mutations remain
+ * approval-gated regardless of explicit intent; auto-execution is only
+ * eligible in enabled mode and never replaces approval.
+ */
+export const resolveIntentGate = (input: IntentGateInput): IntentGateDecision => {
+  if (!input.isMutating) return { blocked: false, requiresApproval: false, executeAutomatically: false };
+  const executeAutomatically = input.autoExecutionEligible && input.autoExecutionMode === 'enabled';
+  return {
+    blocked: !input.explicitMutationIntent,
+    requiresApproval: true,
+    executeAutomatically,
+  };
+};
+
 export const requiresApproval = (toolName: string): boolean => {
   return APPROVAL_REQUIRED_TOOLS.has(toolName);
 };

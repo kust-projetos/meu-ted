@@ -46,6 +46,7 @@ import {
   renderEvidenceForPrompt,
   sanitizeExternalQuery,
 } from './web-evidence.js';
+import { isMutatingTool } from '../safety/tool-approvals.js';
 
 export type ToolExecutionContext = {
   delegatedToken?: string;
@@ -473,8 +474,7 @@ export const buildExposedTools = (
       description: generatedTool.description ?? name,
       inputSchema: jsonSchema(sanitizeSchema(generatedTool.parameters)),
       execute: async (params: Record<string, unknown>) => {
-        const isMutating = !CORE_READ_TOOLS.includes(name) && name !== 'web_search' && name !== 'web_fetch' &&
-          !['list_', 'get_', 'check_', 'spending_', 'detect_', 'budget_trends', 'audit_', 'analytics_'].some((prefix) => name.startsWith(prefix));
+        const isMutating = isMutatingTool(name);
         if (isMutating) {
           return { blocked: true, reason: 'Mutação bloqueada: somente MutationExecutor V2 pode executar escrita.' };
         }
