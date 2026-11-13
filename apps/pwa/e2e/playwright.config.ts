@@ -379,6 +379,8 @@ export default defineConfig({
               TED_OPENCODE_RUNTIME_ENABLED: "1",
               ...(ROLLBACK ? { TED_OPENCODE_RUNTIME_KILL_SWITCH: "1" } : {}),
               TED_OPENCODE_GATEWAY_ORIGIN: P2D_GATEWAY_BASE,
+              // The proxy fails closed without this allowlist (#306); scope it to live modes only.
+              ...(P2D_LIVE_MODE ? { TED_OPENCODE_WORKSPACES: P2D_WORKSPACE_A } : {}),
               ...(AGENT_RUN
                 ? { PWA_AGENT_PROXY_ORIGIN: `http://127.0.0.1:${p2dPorts.agentPort}` }
                 : {}),
