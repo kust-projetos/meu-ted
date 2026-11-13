@@ -61,7 +61,9 @@ têm precedente).
 - Backlog priorizado para as próximas sessões:
   [`reference/PENDENCIAS.md`](reference/PENDENCIAS.md).
 
-## 2. Matriz de capabilities (config-de-deploy; coluna Live = estado verificado)
+## 2. Matriz de capabilities — registro histórico (08–10/10/2026; não é o estado vigente)
+
+> Estado vigente das flags: [`ARCHITECTURE-CURRENT.md`](ARCHITECTURE-CURRENT.md) §"Flags financeiras e capacidades" (wrangler atual: anexos/STT/PDF/Vision = 0, live-sync = 1).
 
 | Capability | Código | Config-de-deploy | Live | Gate para avançar |
 |---|---|---|---|---|
@@ -77,9 +79,11 @@ têm precedente).
 
 Regra: `infra provisionada != capability habilitada`; `repo config != live runtime`.
 
-## 3. Flags — estados atuais (nem todas default-off; trava exata `=== '1'`)
+## 3. Flags — registro histórico (08–10/10/2026; não é o estado vigente)
 
-| Flag | Estado atual | Restrição |
+> Estado vigente das flags: [`ARCHITECTURE-CURRENT.md`](ARCHITECTURE-CURRENT.md) §"Flags financeiras e capacidades" (wrangler atual: anexos/STT/PDF/Vision = 0, live-sync = 1).
+
+| Flag | Estado registrado | Restrição |
 |---|---|---|
 | `TED_ATTACHMENTS_ENABLED` (anexos) | `1` | coorte `*`; binding R2 `pi-finance-ted-attachments` |
 | `TED_AUDIO_STT_ENABLED` (áudio/STT) | `1` | coorte restrita ao workspace **real** `junio` `d36cb649-4462-486d-940a-47128ad329f2` (household com dados financeiros reais segundo notas antigas — ver nota de retificação 13/10 no apêndice canary; **não** o sintético Test Family); flag sozinha não autoriza egress |
