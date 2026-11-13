@@ -24,8 +24,9 @@ missão é escolhida pelo usuário.
   `NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED=1` e
   `NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN=${{ vars.AGENT_PROD_URL }}`; sua CSP permite
   `https://` e `wss://` do host do Agent (PR #358). Handshake real foi validado
-  em produção: socket `wss://pi-finance-agent.walissonead.workers.dev/agents/finance-chat-agent/<ws>/live`
-  abriu, recebeu 1 frame e não fechou com 1008/1006 em 10s. No chat, frames
+  em produção: socket `wss://<host-do-agent>/agents/finance-chat-agent/<ws>/live`
+  (origem vinda de `AGENT_PROD_URL`) abriu, recebeu 1 frame e não fechou com
+  1008/1006 em 10s. No chat, frames
   disparam revalidação REST silenciosa com throttle de 2s (PR #355). Revogação
   de membership ainda pode levar até 5 min. Contas `Conta E2E Mobile *`
   desativadas continuam listáveis com `includeInactive=true`; não há rota para
