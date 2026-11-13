@@ -69,14 +69,14 @@ export function isExpectedOrigin(value: string, expectedOrigin: string): boolean
 /**
  * V4 T2.7 G1 — remaining external origins allowed by the production CSP.
  *
- * EMPTY by design: T2.1 converged browser traffic to the same-origin
- * proxies (/api/backend, /api/agent), so production connect-src is 'self'
- * only. PRODUCTION_API_ORIGIN / PRODUCTION_AGENT_ORIGIN above are kept as
- * documented reference (upstream targets the proxies forward to), never as
- * browser connect targets. Any future external origin needs a per-origin
- * capability entry here before it may enter connect-src.
+ * Contains exclusively the live-sync origin derived from
+ * NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN (HTTPS and its WSS equivalent). Any other
+ * external origin still requires an explicit per-origin capability entry.
  */
-export const REMAINING_EXTERNAL_ORIGINS: readonly string[] = [];
+const liveSyncOrigin = (process.env.NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN ?? "").trim();
+export const REMAINING_EXTERNAL_ORIGINS: readonly string[] = liveSyncOrigin
+  ? [liveSyncOrigin, liveSyncOrigin.replace(/^https:/, "wss:")]
+  : [];
 
 /**
  * Non-prod fallback PWA host (DEBT2 allowlist migration). Used as the
