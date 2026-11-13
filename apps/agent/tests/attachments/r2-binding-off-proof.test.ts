@@ -1,6 +1,7 @@
 /**
  * V1-textual (ADENDO V1-TEXTUAL da SPEC, 13/10 — commit 4e46301) — prova de
- * config: binding R2 PRESERVADO + upload/STT/Vision OFF.
+ * config: binding R2 PRESERVADO + upload/STT/PDF/Vision OFF; live-sync
+ * declarado e ligado.
  *
  * História: o estado canary anterior (upload ATIVO flag '1' + coorte geral
  * '*', STT canary e Vision canary single-workspace) foi SUBSTITUÍDO pelo
@@ -15,8 +16,8 @@
  * desligada (`TED_VISION_ENABLED === '0'`, provider/modelo preservados
  * `gemini`/`gemini-2.5-flash` + coorte `''`).
  *
- * Nenhum binding novo além do R2, nenhuma outra env `TED_*` além das listadas
- * no teste de vars. A prova tem duas pernas:
+ * Nenhum binding novo além do R2; a env live-sync é declarada e ligada, sem
+ * alterar as travas de upload/STT/PDF/Vision OFF. A prova tem duas pernas:
  *   [config] o manifesto declara exatamente o binding esperado e as envs OFF
  *   no estado real (o próprio parse deste arquivo já é a checagem de validade
  *   JSON do manifesto);
@@ -72,6 +73,7 @@ describe("V1-textual manifest — binding R2 preservado, upload/STT/Vision OFF",
       // V1-textual (adendo 13/10): STT pós-V1 — flag + coorte OFF.
       TED_AUDIO_STT_ENABLED: "0",
       TED_AUDIO_STT_COHORT: "",
+      TED_LIVE_SYNC_ENABLED: "1",
       // P1 fail-closed (bounded execution pendente): a extração LOCAL da
       // camada de texto (unpdf) segue DESLIGADA no manifesto. A flag não é
       // a única trava: `pdfTextProcessorOverride` devolve `undefined`
