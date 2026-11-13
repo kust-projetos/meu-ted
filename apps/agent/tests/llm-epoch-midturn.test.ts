@@ -90,9 +90,11 @@ describe('H-14: revogação fail-closed + epoch comparado durante a resposta', (
     const res = await agent.fetch(chatRequest('como está meu orçamento?'));
     expect(res.status).toBe(409);
     expect(((await res.json()) as { code?: string }).code).toBe('agent.security_epoch_changed');
-    // A mensagem do usuário (pré-inferência, autorizada) persiste; a do
-    // assistente (pós-revogação) NUNCA é publicada nem persistida.
-    expect(persisted.filter((m) => m.role === 'assistant')).toHaveLength(0);
+    // Nenhum output de modelo e publicado; persiste apenas a bolha de erro.
+    const assistant = persisted.filter((m) => m.role === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.id).toBe('msg-asst-intent-h14');
+    expect(assistant[0]?.parts?.[0]?.text).toContain('Tente novamente.');
   });
 
   it('autoridade indisponível ANTES do turno → fail-closed determinístico, relay nunca chamado', async () => {
@@ -145,7 +147,10 @@ describe('H-14: revogação fail-closed + epoch comparado durante a resposta', (
 
     const res = await agent.fetch(chatRequest('como está meu orçamento?'));
     expect(res.status).toBe(503);
-    expect(persisted.filter((m) => m.role === 'assistant')).toHaveLength(0);
+    const assistant = persisted.filter((m) => m.role === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.id).toBe('msg-asst-intent-h14');
+    expect(assistant[0]?.parts?.[0]?.text).toContain('Tente novamente.');
   });
 
   it('provider disabled no meio do turno → 503 e output não publicado', async () => {
@@ -170,7 +175,10 @@ describe('H-14: revogação fail-closed + epoch comparado durante a resposta', (
 
     const res = await agent.fetch(chatRequest('como está meu orçamento?'));
     expect(res.status).toBe(503);
-    expect(persisted.filter((m) => m.role === 'assistant')).toHaveLength(0);
+    const assistant = persisted.filter((m) => m.role === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.id).toBe('msg-asst-intent-h14');
+    expect(assistant[0]?.parts?.[0]?.text).toContain('Tente novamente.');
   });
 
   it('stream do relay falha após o primeiro chunk → 502 sem publicar parcial', async () => {
@@ -199,6 +207,9 @@ describe('H-14: revogação fail-closed + epoch comparado durante a resposta', (
 
     const res = await agent.fetch(chatRequest('como está meu orçamento?'));
     expect(res.status).toBe(502);
-    expect(persisted.filter((m) => m.role === 'assistant')).toHaveLength(0);
+    const assistant = persisted.filter((m) => m.role === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.id).toBe('msg-asst-intent-h14');
+    expect(assistant[0]?.parts?.[0]?.text).toContain('Tente novamente.');
   });
 });
