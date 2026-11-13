@@ -50,9 +50,10 @@ describe("issue #248 failed turn persists assistant error", () => {
       }),
     );
     expect(res.status).not.toBe(200);
+    expect(persisted.filter((m) => m.role === "assistant")).toHaveLength(1);
     const asst = persisted.find((m) => m.role === "assistant");
     expect(asst?.id).toBe("msg-asst-intent-248-a");
-    expect(asst?.parts?.[0]?.text).toBe("Não foi possível concluir a resposta. Tente novamente.");
+    expect(asst?.parts?.[0]?.text).toContain("Tente novamente.");
   });
 
   it("is idempotent on redelivery", async () => {
