@@ -37,7 +37,7 @@ describe("issue #248 failed turn persists assistant error", () => {
 
   it("persists one assistant error bubble on failure", async () => {
     const { agent, persisted } = createTestAgent();
-    agent.orchestratorForChannel = () => ({ runTurn: async () => { throw Object.assign(new Error("boom"), { status: 500, code: "agent.inference_error" }); } }) as never;
+    (agent as unknown as { orchestratorForChannel: () => unknown }).orchestratorForChannel = () => ({ runTurn: async () => { throw Object.assign(new Error("boom"), { status: 500, code: "agent.inference_error" }); } }) as never;
     const res = await agent.fetch(
       new Request("https://agent.test.local/rpc/chat", {
         method: "POST",
@@ -57,7 +57,7 @@ describe("issue #248 failed turn persists assistant error", () => {
 
   it("is idempotent on redelivery", async () => {
     const { agent, persisted } = createTestAgent();
-    agent.orchestratorForChannel = () => ({ runTurn: async () => { throw Object.assign(new Error("boom"), { status: 500, code: "agent.inference_error" }); } }) as never;
+    (agent as unknown as { orchestratorForChannel: () => unknown }).orchestratorForChannel = () => ({ runTurn: async () => { throw Object.assign(new Error("boom"), { status: 500, code: "agent.inference_error" }); } }) as never;
     const makeReq = () => new Request("https://agent.test.local/rpc/chat", {
       method: "POST",
       headers: {
