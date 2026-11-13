@@ -1,0 +1,65 @@
+{
+  "suite": "spike-05d-durable",
+  "events": [
+    {
+      "at": "2026-10-31T17:42:08.781Z",
+      "event": "intention.derived",
+      "intentionId": "int-b20f80cffaaf67e952e7697996e7ae97",
+      "idempotencyKey": "ted-5ee49289a8dd705416e59b2e87ce5be8",
+      "date": "2026-10-30"
+    },
+    {
+      "at": "2026-10-31T17:42:10.182Z",
+      "event": "propose.201",
+      "proposalId": "00af3c51-09d0-4289-a090-d089157f9afa"
+    },
+    {
+      "at": "2026-10-31T17:42:10.182Z",
+      "event": "process.restart",
+      "label": "get-same-process",
+      "marker": 1
+    },
+    {
+      "at": "2026-10-31T17:42:11.580Z",
+      "event": "get.same",
+      "proposalId": "00af3c51-09d0-4289-a090-d089157f9afa",
+      "status": "proposed"
+    },
+    {
+      "at": "2026-10-31T17:42:11.580Z",
+      "event": "process.restart",
+      "label": "D03-restart",
+      "marker": 2
+    },
+    {
+      "at": "2026-10-31T17:42:12.867Z",
+      "event": "get.restart",
+      "proposalId": "00af3c51-09d0-4289-a090-d089157f9afa",
+      "status": "proposed"
+    },
+    {
+      "at": "2026-10-31T17:42:12.867Z",
+      "event": "process.restart",
+      "label": "confirm",
+      "marker": 3
+    },
+    {
+      "at": "2026-10-31T17:42:14.295Z",
+      "event": "confirm.confirmed",
+      "proposalId": "00af3c51-09d0-4289-a090-d089157f9afa",
+      "attestationLength": 43
+    },
+    {
+      "at": "2026-10-31T17:42:14.295Z",
+      "event": "process.restart",
+      "label": "execute",
+      "marker": 4
+    },
+    {
+      "at": "2026-10-31T17:42:15.769Z",
+      "event": "execute.succeeded",
+      "proposalId": "00af3c51-09d0-4289-a090-d089157f9afa"
+    }
+  ],
+  "restartMarkers": 4
+}

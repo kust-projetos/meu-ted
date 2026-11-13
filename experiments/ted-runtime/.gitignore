@@ -2,7 +2,11 @@
 .ted-home-a/
 .ted-home-b/
 .ted-home-c/
+.ted-home-03b-a/
+.ted-home-04/
+.ted-home-04-*/
 node_modules/
 bootstrap/node_modules/
 *.log
 SHELL_BYPASS_MARKER.txt
+.ted-home-*/

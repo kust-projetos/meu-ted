@@ -48,6 +48,22 @@ function toNativeError(toolName, e) {
 // as technical correlation (opts.callId). P1: tool-call opts forward ONLY the
 // allowlisted passthrough fields — host/route/method are owned by the
 // executor and can never be smuggled through opts.
+// LIMIT 03B PASS (restored 2026-10-31; P1 hook removed).
+//
+// Enforcement = config denies (shell/edit/write/subagent + provider
+// deny-all with single allow -- see run-03b-turn build03BConfig) + runner
+// pre-prompt fail-closed on non-readonly expects + immediate interrupt +
+// journey abort on first foreign observation (post-observation) + trace
+// evidence. There is NO total pre-execution gate on the codemode execute
+// wrapper in this runtime: the hook input is {code:string} and the inner
+// finance target resolves only after execution, so validating the target
+// in the hook is impossible; allowing execute unchecked would reopen
+// access. Redesign at that point would be NEW INFRA, out of scope
+// (SPIKE 04 section 7/10). Total wrapper pre-execution enforcement is therefore
+// a KNOWN LIMITATION (same as 03B PASS) and a future standalone
+// experiment -- NOT attempted here, and deliberately NOT approximated by
+// regex over code (brittle, bypassable, false-positive prone).
+
 export function buildExecute(def, run) {
   return async (input, ctx, opts = {}) => {
     try {
@@ -123,15 +139,30 @@ export default Plugin.define({
     // travels ONLY as technical correlation (opts.callId) — never as
     // identity, never as intentionId.
     await ctx.tool.transform((editor) => {
-      for (const def of TOOL_DEFS) {
+      // 05L HIGH-allowlist: TED_FINANCE_TOOLS_CSV restricts native
+      // registration to the listed tools ONLY. Unset/empty => all TOOL_DEFS
+      // (preserves 03B frozen behavior — 03B never sets it). 05L boot sets
+      // CSV=list_accounts,list_categories,propose_expense.
+      const csvRaw = process.env.TED_FINANCE_TOOLS_CSV;
+      const csvList = typeof csvRaw === 'string' && csvRaw.trim().length > 0
+        ? csvRaw.split(',').map((s) => s.trim()).filter(Boolean)
+        : null;
+      const defs = csvList ? TOOL_DEFS.filter((d) => csvList.includes(d.name)) : TOOL_DEFS;
+      for (const def of defs) {
         editor.add({
           name: def.name,
           description: def.description,
           input: def.input,
+          // 03B-T1 fix: the native 2.2.4 loop rejects {output} results from
+          // tools registered WITHOUT an output schema — forward it.
+          output: def.output,
           execute: buildExecute(def, executors[def.name]),
         });
       }
     });
+    // LIMIT 03B PASS: NO execute.before hook (P1 removed 2026-10-31).
+    // Total wrapper pre-execution enforcement is a known limitation;
+    // enforcement here is post-observation (runner interrupt + abort).
     // Registration proof (G2-01): the native post-transform catalog read.
     // Marker is written ONLY after transform + list succeed, and ONLY when
     // the harness requests it via env (normal boots stay side-effect free).

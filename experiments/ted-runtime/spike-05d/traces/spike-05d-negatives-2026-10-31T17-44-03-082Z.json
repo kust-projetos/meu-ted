@@ -1,0 +1,58 @@
+{
+  "suite": "spike-05d-negatives",
+  "events": [
+    {
+      "at": "2026-10-31T17:43:36.018Z",
+      "event": "neg.01.unknown-id",
+      "status": 403,
+      "code": "approval.forbidden",
+      "note": "real authority: 403 no-oracle, not 404"
+    },
+    {
+      "at": "2026-10-31T17:43:38.694Z",
+      "event": "neg.02.foreign-workspace",
+      "status": 403,
+      "code": "approval.forbidden"
+    },
+    {
+      "at": "2026-10-31T17:43:41.282Z",
+      "event": "neg.03.foreign-confirm",
+      "status": 403,
+      "code": "approval.forbidden",
+      "effects": 0
+    },
+    {
+      "at": "2026-10-31T17:43:42.545Z",
+      "event": "neg.04.birth-expired",
+      "status": 409,
+      "rows": 0
+    },
+    {
+      "at": "2026-10-31T17:43:45.278Z",
+      "event": "neg.05.expired-confirm",
+      "status": 409,
+      "code": "approval.expired",
+      "effects": 0
+    },
+    {
+      "at": "2026-10-31T17:43:50.740Z",
+      "event": "neg.06.idempotent-replay",
+      "proposalId": "d217760b-559c-4218-a1c3-64f9e89c3ac9",
+      "effects": 1
+    },
+    {
+      "at": "2026-10-31T17:43:54.979Z",
+      "event": "neg.07.concurrent-execute",
+      "winner": 200,
+      "loser": "approval.execution_in_progress",
+      "effects": 1
+    },
+    {
+      "at": "2026-10-31T17:43:57.796Z",
+      "event": "neg.08.divergent-payload",
+      "status": 409,
+      "code": "idempotency.conflict",
+      "effects": 0
+    }
+  ]
+}

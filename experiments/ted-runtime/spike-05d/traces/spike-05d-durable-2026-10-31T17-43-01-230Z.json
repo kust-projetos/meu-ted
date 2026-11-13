@@ -1,0 +1,78 @@
+{
+  "suite": "spike-05d-durable",
+  "events": [
+    {
+      "at": "2026-10-31T17:42:52.890Z",
+      "event": "intention.derived",
+      "intentionId": "int-b20f80cffaaf67e952e7697996e7ae97",
+      "idempotencyKey": "ted-5ee49289a8dd705416e59b2e87ce5be8",
+      "date": "2026-10-30"
+    },
+    {
+      "at": "2026-10-31T17:42:54.499Z",
+      "event": "propose.201",
+      "proposalId": "3b53178b-08fb-4ad5-8017-4588b69fa060"
+    },
+    {
+      "at": "2026-10-31T17:42:54.499Z",
+      "event": "process.restart",
+      "label": "get-same-process",
+      "marker": 1
+    },
+    {
+      "at": "2026-10-31T17:42:55.805Z",
+      "event": "get.same",
+      "proposalId": "3b53178b-08fb-4ad5-8017-4588b69fa060",
+      "status": "proposed"
+    },
+    {
+      "at": "2026-10-31T17:42:55.805Z",
+      "event": "process.restart",
+      "label": "D03-restart",
+      "marker": 2
+    },
+    {
+      "at": "2026-10-31T17:42:57.090Z",
+      "event": "get.restart",
+      "proposalId": "3b53178b-08fb-4ad5-8017-4588b69fa060",
+      "status": "proposed"
+    },
+    {
+      "at": "2026-10-31T17:42:57.090Z",
+      "event": "process.restart",
+      "label": "confirm",
+      "marker": 3
+    },
+    {
+      "at": "2026-10-31T17:42:58.458Z",
+      "event": "confirm.confirmed",
+      "proposalId": "3b53178b-08fb-4ad5-8017-4588b69fa060",
+      "attestationLength": 43
+    },
+    {
+      "at": "2026-10-31T17:42:58.458Z",
+      "event": "process.restart",
+      "label": "execute",
+      "marker": 4
+    },
+    {
+      "at": "2026-10-31T17:42:59.860Z",
+      "event": "execute.succeeded",
+      "proposalId": "3b53178b-08fb-4ad5-8017-4588b69fa060"
+    },
+    {
+      "at": "2026-10-31T17:42:59.866Z",
+      "event": "sql.verified",
+      "transactionId": "216c7b7e-c367-4177-9eaf-31f8b21ce01c",
+      "mutationId": "d05c7a80-c41f-450d-9f43-eb92d5c36a52",
+      "txCount": 1
+    },
+    {
+      "at": "2026-10-31T17:42:59.866Z",
+      "event": "process.restart",
+      "label": "replay",
+      "marker": 5
+    }
+  ],
+  "restartMarkers": 5
+}

@@ -260,7 +260,7 @@ describe('spike-02 steps 2-3: finance gateway + native plugin', () => {
         list: async () => [],
       },
     });
-    assert.equal(added.length, 2, 'both finance tools registered via native transform');
+    assert.equal(added.length, 4, 'all finance tools registered via native transform');
     for (const tool of added) {
       for (const args of (tool.name === 'get_month_summary' ? [{}, { yearMonth: '2026-06' }] : [{}])) {
         const err = await tool.execute(args).then(() => null, (e) => e);
@@ -279,6 +279,7 @@ describe('spike-02 steps 2-3: finance gateway + native plugin', () => {
       'listCatalogs',
       'listSessions',
       'list_accounts',
+      'list_categories',
       'removeSession',
     ]);
     for (const k of ['shell', 'prompt', 'edit', 'call', 'mcp', 'subagent', 'tool', 'config', 'host', 'token']) {

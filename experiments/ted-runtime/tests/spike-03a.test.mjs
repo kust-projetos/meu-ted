@@ -386,7 +386,7 @@ describe('spike-03a host-bound session bindings', () => {
     );
   });
 
-  it('(k) facade surface unchanged: exact 7 keys, frozen, no admin/identity surface', async () => {
+  it('(k) facade surface unchanged: exact 8 keys, frozen, no admin/identity surface', async () => {
     const facade = env.facadeFor(HOST_A);
     assert.deepEqual(Object.keys(facade).sort(), [
       'createSession',
@@ -395,6 +395,7 @@ describe('spike-03a host-bound session bindings', () => {
       'listCatalogs',
       'listSessions',
       'list_accounts',
+      'list_categories',
       'removeSession',
     ]);
     for (const key of ['shell', 'prompt', 'edit', 'call', 'mcp', 'subagent', 'tool', 'config', 'host', 'token', 'bindings']) {

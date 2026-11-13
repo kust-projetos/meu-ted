@@ -1,5 +1,11 @@
 // One-shot finance transport (spike 02).
 //
+// ONE-SHOT LIMIT (S05-REV-01 P1-2): every call spawns a fresh OS process +
+// fresh in-memory app (no cross-process persistence; production uses
+// Postgres). Same-instance replay/conflict is proven INSIDE one bridge
+// invocation (verifyReplay/verifyConflictBody); two separate callFinance
+// calls never share state by construction.
+//
 // Spawns the repo's REAL pi-financeiro handlers through a tsx-run bridge
 // (bootstrap/finance-bridge.ts -> real buildTestApp + real fixtures). Each
 // call is a fresh OS process + fresh in-memory app: stateless, deterministic,
@@ -60,27 +66,61 @@ function extractJson(stdout) {
 // gated here; the query string (if any) passes through to the REAL handler.
 // Exported for unit tests; the bridge mirrors the same predicate (TS) as
 // defense-in-depth behind this pre-spawn gate.
-const ALLOWED_PATHS = new Set(['/accounts', '/dashboard/month-summary']);
+const ALLOWED_PATHS = new Set(['/accounts', '/categories', '/dashboard/month-summary', '/pending-operations/v2/propose']);
+
+// Methods per allowlisted path (S05): reads are GET-only; the propose path is
+// POST-only (confirm/execute/outcome routes are NOT allowlisted anywhere, so
+// no tool path can execute before an explicit authenticated confirmation).
+const ALLOWED_METHODS = new Map([
+  ['/accounts', new Set(['GET'])],
+  ['/categories', new Set(['GET'])],
+  ['/dashboard/month-summary', new Set(['GET'])],
+  ['/pending-operations/v2/propose', new Set(['POST'])],
+]);
 
 export function isRouteAllowlisted(route) {
   if (typeof route !== 'string') return false;
   return ALLOWED_PATHS.has(route.split('?')[0]);
 }
 
-export async function callFinance({ route, method = 'GET', host, seed = 'standard', fault = null, workspaceId = null, tokenStore = null, access = null, delayMs = null, timeoutMs = 15000, signal = null }) {
+export async function callFinance({ route, method = 'GET', host, seed = 'standard', fault = null, workspaceId = null, tokenStore = null, access = null, delayMs = null, timeoutMs = 15000, signal = null, body = null, idempotencyKey = null, delegated = null, verifyReplay = false, verifyConflictBody = undefined }) {
   if (!host || typeof host.token !== 'string' || host.token.length === 0) {
     throw new ToolError('tool.invalid_args', 'host-bound token is required (never a tool arg)');
   }
-  // Route allowlist: EXACT pathname only (§5 contract: /accounts and
-  // /dashboard/month-summary). Query strings pass through to the REAL handler
-  // (it owns domain validation, e.g. kind enum / yearMonth format). Prefix
-  // matching is FORBIDDEN: it would forward /accounts/123 or
-  // /dashboard/month-summary-extra to Fastify (spike02-fix-r2).
+  // Route allowlist: EXACT pathname only (§5 contract: /accounts,
+  // /categories, /dashboard/month-summary and /pending-operations/v2/propose). Query
+  // strings pass through to the REAL handler (it owns domain validation,
+  // e.g. kind enum / yearMonth format). Prefix matching is FORBIDDEN: it
+  // would forward /accounts/123 or /dashboard/month-summary-extra to Fastify
+  // (spike02-fix-r2).
   if (!isRouteAllowlisted(route)) {
     throw new ToolError('tool.invalid_args', `route not allowlisted: ${route}`);
   }
+  // Method gate per path (S05): POST only on propose; GET only on reads.
+  const pathname = String(route).split('?')[0];
+  const methods = ALLOWED_METHODS.get(pathname);
+  if (!methods || !methods.has(method)) {
+    throw new ToolError('tool.invalid_args', `method not allowlisted for route: ${method} ${pathname}`);
+  }
+  // S05 write contract: POST propose requires an executor-constructed body
+  // and a deterministic Idempotency-Key plus a delegated capability request
+  // (the bridge mints the token host-side from the frozen binding — identity
+  // never comes from tool args). Reads must not carry a body.
+  if (pathname === '/pending-operations/v2/propose') {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw new ToolError('tool.invalid_args', 'propose requires a body object (executor-constructed)');
+    }
+    if (typeof idempotencyKey !== 'string' || idempotencyKey.length === 0) {
+      throw new ToolError('tool.invalid_args', 'propose requires a deterministic idempotencyKey (executor-constructed)');
+    }
+    if (!delegated || typeof delegated !== 'object' || !Array.isArray(delegated.capabilities)) {
+      throw new ToolError('tool.invalid_args', 'propose requires a delegated capability request (executor-constructed)');
+    }
+  } else if (body !== null && body !== undefined) {
+    throw new ToolError('tool.invalid_args', `body not allowed for read route: ${pathname}`);
+  }
   const cli = resolveTsxCli();
-  const request = { token: host.token, route, method, seed, fault, workspaceId, tokenStore, access, delayMs };
+  const request = { token: host.token, route, method, seed, fault, workspaceId, tokenStore, access, delayMs, body, idempotencyKey, delegated, verifyReplay, verifyConflictBody };
   // NOTE: implemented with spawn + explicit stdin write/end (not execFile's
   // `input` option): in this Windows env an execFile `input` pipe to the tsx
   // child hangs indefinitely (bridge never sees EOF), while the identical

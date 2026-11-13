@@ -1,0 +1,61 @@
+{
+  "task": "SPIKE05L-CONFIRM-IDEMP",
+  "at": "2026-10-31T15:30:17.610Z",
+  "mode": "synthetic-confirm-only",
+  "liveProposal": {
+    "id": "66635d44-6d84-443d-92df-0c5b92a88bef",
+    "actor": "dev-device-1",
+    "note": "one-shot process encerrado; NAO confirmada cross-process; NOT_PROVEN_CROSS_PROCESS para durabilidade live"
+  },
+  "syntheticOperator": {
+    "actor": "synth-actor-s05-01",
+    "workspace": "00000000-0000-4000-8000-00000000000a",
+    "cli": "scripts/confirm-cli.mjs",
+    "exits": {
+      "list": 0,
+      "show": 0,
+      "confirm": 0,
+      "freeTextSim": 2,
+      "textFlag": 2,
+      "noAction": 2,
+      "intruder": 3,
+      "workspaceMismatch": 3
+    }
+  },
+  "receipt": {
+    "operationId": "s05-prop-001",
+    "entityId": "synth-tx-s05-prop-001",
+    "amountCents": 3500
+  },
+  "ledger": {
+    "confirmed": 1,
+    "untouched": 0
+  },
+  "twoLegitSameValue": {
+    "a": "s05-prop-001",
+    "b": "s05-prop-002",
+    "distinct": true,
+    "replaySameIntentionSameId": true
+  },
+  "negatives": "19/19 pass",
+  "R1": "replay mesma chave+payload 200 existing:true mesmo id (mesma instancia)",
+  "R2": "conflito 409 idempotency.conflict (mesma instancia)",
+  "R3": {
+    "key": "ted-s05-confirm-idemp-1793460604839",
+    "first": "7713897c-93b8-4503-80e6-f311b39f730c",
+    "second": "608120a1-c53e-439e-b23f-4239c389ad20",
+    "distinct": true,
+    "note": "2 processos = 2 ids distintos; one-shot NAO persiste cross-processo; NOT_PROVEN_CROSS_PROCESS"
+  },
+  "cost": {
+    "inference": "1/1 consumida no LIVE_PASS (teto US); confirmacao deterministica custo 0",
+    "liveTokens": {
+      "input": 9396,
+      "output": 312,
+      "reasoning": 173
+    },
+    "liveCost": 0
+  },
+  "distinction": "chamadas do modelo (live propose list_accounts/list_categories/propose_expense) vs acoes do operador sintetico (confirm-cli --action confirm)",
+  "claim": "idempotencia distribuida NAO declarada; sem persistencia cross-process; NOT_PROVEN_CROSS_PROCESS"
+}

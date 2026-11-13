@@ -1,0 +1,97 @@
+{
+  "suite": "spike-05d-durable",
+  "events": [
+    {
+      "at": "2026-10-31T17:45:08.177Z",
+      "event": "intention.derived",
+      "intentionId": "int-b20f80cffaaf67e952e7697996e7ae97",
+      "idempotencyKey": "ted-5ee49289a8dd705416e59b2e87ce5be8",
+      "date": "2026-10-30"
+    },
+    {
+      "at": "2026-10-31T17:45:09.627Z",
+      "event": "propose.201",
+      "proposalId": "99802c35-b750-4a0e-b697-221cb1d571ca"
+    },
+    {
+      "at": "2026-10-31T17:45:09.627Z",
+      "event": "process.restart",
+      "label": "get-same-process",
+      "marker": 1
+    },
+    {
+      "at": "2026-10-31T17:45:10.981Z",
+      "event": "get.same",
+      "proposalId": "99802c35-b750-4a0e-b697-221cb1d571ca",
+      "status": "proposed"
+    },
+    {
+      "at": "2026-10-31T17:45:10.981Z",
+      "event": "process.restart",
+      "label": "D03-restart",
+      "marker": 2
+    },
+    {
+      "at": "2026-10-31T17:45:12.294Z",
+      "event": "get.restart",
+      "proposalId": "99802c35-b750-4a0e-b697-221cb1d571ca",
+      "status": "proposed"
+    },
+    {
+      "at": "2026-10-31T17:45:12.294Z",
+      "event": "process.restart",
+      "label": "confirm",
+      "marker": 3
+    },
+    {
+      "at": "2026-10-31T17:45:13.646Z",
+      "event": "confirm.confirmed",
+      "proposalId": "99802c35-b750-4a0e-b697-221cb1d571ca",
+      "attestationLength": 43
+    },
+    {
+      "at": "2026-10-31T17:45:13.646Z",
+      "event": "process.restart",
+      "label": "execute",
+      "marker": 4
+    },
+    {
+      "at": "2026-10-31T17:45:15.031Z",
+      "event": "execute.succeeded",
+      "proposalId": "99802c35-b750-4a0e-b697-221cb1d571ca"
+    },
+    {
+      "at": "2026-10-31T17:45:15.036Z",
+      "event": "sql.verified",
+      "transactionId": "95925a1e-4ff4-4535-bfbb-4b2f31a16810",
+      "mutationId": "e3b347a4-51e9-4c5c-b7ae-9704ca8705df",
+      "txCount": 1
+    },
+    {
+      "at": "2026-10-31T17:45:15.036Z",
+      "event": "process.restart",
+      "label": "replay",
+      "marker": 5
+    },
+    {
+      "at": "2026-10-31T17:45:17.711Z",
+      "event": "replay.no-second-effect",
+      "replayStatus": 403,
+      "code": "approval.attestation_replayed",
+      "txCount": 1
+    },
+    {
+      "at": "2026-10-31T17:45:17.711Z",
+      "event": "process.restart",
+      "label": "outcome",
+      "marker": 6
+    },
+    {
+      "at": "2026-10-31T17:45:19.039Z",
+      "event": "outcome.succeeded",
+      "proposalId": "99802c35-b750-4a0e-b697-221cb1d571ca",
+      "receiptStable": true
+    }
+  ],
+  "restartMarkers": 6
+}

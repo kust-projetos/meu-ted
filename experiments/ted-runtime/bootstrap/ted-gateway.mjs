@@ -6,7 +6,7 @@
 //   read-only catalogs: listCatalogs (agents/commands/skills/plugins/mcp/
 //     providers/models/sessions counts+ids; there is NO tool-catalog endpoint
 //     in 2.2.4 — hasToolCatalog:false documents the limit)
-//   finance: list_accounts / get_month_summary (same execute functions the
+//   finance: list_accounts / list_categories / get_month_summary (same execute functions the
 //     native plugin registers; host-bound identity injected by the host)
 //
 // There is NO dynamic method dispatch (no facade.call(name,...)), NO shell /
@@ -31,6 +31,7 @@ const FACADE_KEYS = [
   'removeSession',
   'listCatalogs',
   'list_accounts',
+  'list_categories',
   'get_month_summary',
 ];
 
@@ -102,7 +103,7 @@ export async function createTedEnvironment({ identity = 'c' } = {}) {
     const facade = {
       // Spike 03A: creating a session AUTO-BINDS it to this facade's frozen
       // host (session-bindings.bindSession); removing a session REVOKES its
-      // binding. The facade itself keeps the exact 7-key allowlist below.
+      // binding. The facade itself keeps the exact 8-key allowlist below.
       createSession: async (title) => {
         const s = await oc.session.create({ title: title || 'ted-finance' });
         bindSession(s.id, bound);
@@ -171,6 +172,8 @@ export async function createTedEnvironment({ identity = 'c' } = {}) {
       // stable-intention guard, and neither accepts identity from args.
       list_accounts: (args, opts) =>
         executors.list_accounts(args, bound, { ...(opts || {}), intentionId: newIntention() }),
+      list_categories: (args, opts) =>
+        executors.list_categories(args, bound, { ...(opts || {}), intentionId: newIntention() }),
       get_month_summary: (args, opts) =>
         executors.get_month_summary(args, bound, { ...(opts || {}), intentionId: newIntention() }),
     };

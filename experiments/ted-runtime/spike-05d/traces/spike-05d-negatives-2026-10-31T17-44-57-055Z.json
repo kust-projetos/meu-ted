@@ -1,0 +1,98 @@
+{
+  "suite": "spike-05d-negatives",
+  "events": [
+    {
+      "at": "2026-10-31T17:44:12.811Z",
+      "event": "neg.01.unknown-id",
+      "status": 403,
+      "code": "approval.forbidden",
+      "note": "real authority: 403 no-oracle, not 404"
+    },
+    {
+      "at": "2026-10-31T17:44:15.532Z",
+      "event": "neg.02.foreign-workspace",
+      "status": 403,
+      "code": "approval.forbidden"
+    },
+    {
+      "at": "2026-10-31T17:44:18.264Z",
+      "event": "neg.03.foreign-confirm",
+      "status": 403,
+      "code": "approval.forbidden",
+      "effects": 0
+    },
+    {
+      "at": "2026-10-31T17:44:19.524Z",
+      "event": "neg.04.birth-expired",
+      "status": 409,
+      "rows": 0
+    },
+    {
+      "at": "2026-10-31T17:44:22.336Z",
+      "event": "neg.05.expired-confirm",
+      "status": 409,
+      "code": "approval.expired",
+      "effects": 0
+    },
+    {
+      "at": "2026-10-31T17:44:27.921Z",
+      "event": "neg.06.idempotent-replay",
+      "proposalId": "1d3f84e6-7fab-4d16-8b16-3e185b66384e",
+      "effects": 1
+    },
+    {
+      "at": "2026-10-31T17:44:32.185Z",
+      "event": "neg.07.concurrent-execute",
+      "winner": 200,
+      "loser": "approval.execution_in_progress",
+      "effects": 1
+    },
+    {
+      "at": "2026-10-31T17:44:34.823Z",
+      "event": "neg.08.divergent-payload",
+      "status": 409,
+      "code": "idempotency.conflict",
+      "effects": 0
+    },
+    {
+      "at": "2026-10-31T17:44:44.858Z",
+      "event": "neg.09.timeout-after-persist",
+      "timeout": true,
+      "reconciled": "succeeded",
+      "effects": 1
+    },
+    {
+      "at": "2026-10-31T17:44:48.757Z",
+      "event": "neg.10.crash-before-confirm",
+      "status": "proposed",
+      "effects": 0
+    },
+    {
+      "at": "2026-10-31T17:44:52.905Z",
+      "event": "neg.11.lease-recovery",
+      "status": "succeeded",
+      "effects": 1
+    },
+    {
+      "at": "2026-10-31T17:44:54.223Z",
+      "event": "neg.12.receipt-after-restart",
+      "status": "succeeded",
+      "mutationStable": true
+    },
+    {
+      "at": "2026-10-31T17:44:55.615Z",
+      "event": "neg.13.llm-cannot-confirm",
+      "hostless": "host_context_required",
+      "toolDefs": "list_accounts,get_month_summary,list_categories,propose_expense",
+      "noIntention": "tool.invalid_args",
+      "effects": 0
+    },
+    {
+      "at": "2026-10-31T17:44:57.055Z",
+      "event": "neg.sim-text-never-confirms",
+      "allowlisted": false,
+      "refusal": "tool.invalid_args",
+      "effects": 0
+    }
+  ]
+}
