@@ -3,6 +3,25 @@ import { NextRequest, NextResponse } from "next/server";
 import { middleware } from "../middleware";
 import { SECURITY_HEADERS } from "../proxy-utils";
 
+describe("live-sync CSP origins", () => {
+  it("adds only the configured HTTPS and WSS origins without changing the policy", async () => {
+    vi.stubEnv("NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN", "https://agent.example.test");
+    vi.resetModules();
+    const { buildCspValue } = await import("../proxy-utils");
+
+    expect(buildCspValue("n")).toBe(
+      "script-src 'self' 'nonce-n'; style-src 'self' 'unsafe-inline'; worker-src 'self'; connect-src 'self' https://agent.example.test wss://agent.example.test; default-src 'self'; object-src 'none'; form-action 'self'; img-src 'self' blob: data:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; report-uri /api/csp-report",
+    );
+
+    vi.stubEnv("NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN", "");
+    vi.resetModules();
+    const withoutOrigin = await import("../proxy-utils");
+    expect(withoutOrigin.buildCspValue("n")).toBe(
+      "script-src 'self' 'nonce-n'; style-src 'self' 'unsafe-inline'; worker-src 'self'; connect-src 'self'; default-src 'self'; object-src 'none'; form-action 'self'; img-src 'self' blob: data:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; report-uri /api/csp-report",
+    );
+  });
+});
+
 function mockRequest(url = "https://example.com/"): NextRequest {
   return new NextRequest(url);
 }
