@@ -163,6 +163,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
       const rpc = path.slice(prefix.length);
       return method === "POST" && (
         rpc === "chat" ||
+        rpc === "pending-operations/propose" ||
         /^pending-operations\/[^/]+\/decision$/.test(rpc) ||
         rpc === "undo/decision"
       );
@@ -172,13 +173,30 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     // finance-chat-agent pending-operations decision POST, in any workspace;
     // the final assertion requires exactly the single expected path.
     const decisionRequestPaths: string[] = [];
+    const proposeRequestPaths: string[] = [];
+    const proposeResponses: Array<{ status: number }> = [];
     const trackDecisionRequest = (request: Request) => {
       if (request.method() !== "POST") return;
       const pathname = new URL(request.url()).pathname;
       if (!/^\/api\/agent\/agents\/finance-chat-agent\/[^/]+\/rpc\/pending-operations\/[^/]+\/decision$/.test(pathname)) return;
       decisionRequestPaths.push(pathname);
     };
+    const trackProposeRequest = (request: Request) => {
+      if (request.method() !== "POST") return;
+      const pathname = new URL(request.url()).pathname;
+      if (!/^\/api\/agent\/agents\/finance-chat-agent\/[^/]+\/rpc\/pending-operations\/propose$/.test(pathname)) return;
+      proposeRequestPaths.push(pathname);
+    };
+    const trackProposeResponse = (response: import("@playwright/test").Response) => {
+      const request = response.request();
+      if (request.method() !== "POST") return;
+      const pathname = new URL(response.url()).pathname;
+      if (!/^\/api\/agent\/agents\/finance-chat-agent\/[^/]+\/rpc\/pending-operations\/propose$/.test(pathname)) return;
+      proposeResponses.push({ status: response.status() });
+    };
     page.on("request", trackDecisionRequest);
+    page.on("request", trackProposeRequest);
+    page.on("response", trackProposeResponse);
     // Install before the first navigation. Off-origin mutations (NEXT_PUBLIC_*
     // direct transport overrides) are blocked; auth/device bootstrap is
     // explicitly exempt; financial/agent writes fail closed until Test Family
@@ -678,7 +696,13 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     }
     expect(decisionRequestPaths, "one approval must dispatch exactly one financial decision POST")
       .toEqual([decisionRequestPath]);
+    expect(proposeRequestPaths, "one mutation turn must dispatch exactly one propose POST")
+      .toHaveLength(1);
+    expect(proposeResponses, "propose must succeed before the approval card")
+      .toEqual([{ status: 200 }]);
     page.off("request", trackDecisionRequest);
+    page.off("request", trackProposeRequest);
+    page.off("response", trackProposeResponse);
 
     // ── HIGIENE: nenhum erro de página não tratado durante a jornada ───────
     // Diagnostic: early agent-token attempts above were deliberately
@@ -689,7 +713,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
       type: "live-auth-guard",
       description: `blocked early agent-token attempts (client-aborted, never sent): ${blockedEarlyAgentTokenAttempts.length} :: ${blockedEarlyAgentTokenAttempts.join(" | ")}`,
     });
-    expect(workspaceWriteViolations, `writes outside selected workspace: ${workspaceWriteViolations.join(" | ")}`).toHaveLength(0);
+    expect(workspaceWriteViolations, `writes outside selected workspace or unexpected agent write: ${workspaceWriteViolations.join(" | ")}`).toHaveLength(0);
     expect(pageErrors, `page errors: ${pageErrors.join(" | ")}`).toHaveLength(0);
     expect(consoleErrors, `console errors after login: ${consoleErrors.join(" | ")}`).toHaveLength(0);
     expect(serverErrors, `server errors (>=500) after login: ${serverErrors.join(" | ")}`).toHaveLength(0);
