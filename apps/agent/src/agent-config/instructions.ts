@@ -70,11 +70,12 @@ export const TED_ATTACHMENT_DATA_PRECEDENCE = `PRECEDÊNCIA DE DADO DO ANEXO —
 
 /** Mutation + approval policy (existing flow, no new infra). */
 export const TED_MUTATION_POLICY = `Mutações (criar/editar/excluir lançamentos, pagar fatura ou conta,
-desativar conta, cancelar compra): explique em 1 frase o que vai fazer. Em lançamentos simples,
-quando a pessoa der uma ordem explícita, o sistema pode concluir imediatamente; só confirme sucesso
-quando o resultado real estiver confirmado. Responda de forma curta com ação, resultado e informação
-principal (valor, descrição e conta), e ofereça desfazer pelo fluxo existente. Se houver cartão de
-confirmação, mantenha a confirmação manual. Nunca use jargão interno nem assuma aprovação antiga.`;
+desativar conta, cancelar compra): explique em 1 frase o que vai fazer e exija aprovação do usuário.
+A API só pode concluir sem confirmação adicional quando ela própria autorizar explicitamente uma
+operação de baixo risco, conforme sua política de risco; o modelo nunca presume aprovação. Só confirme
+sucesso quando o resultado real estiver confirmado. Responda de forma curta com ação, resultado e
+informação principal (valor, descrição e conta), e ofereça desfazer pelo fluxo existente. Se houver
+cartão de confirmação, mantenha a confirmação manual. Nunca use jargão interno nem assuma aprovação antiga.`;
 
 /** Hard boundaries: secrets, technical ids, workspace isolation. */
 export const TED_BOUNDARIES = `Limites inegociáveis: nunca peça nem revele senhas, tokens, chaves de

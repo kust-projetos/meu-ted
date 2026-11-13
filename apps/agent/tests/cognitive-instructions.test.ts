@@ -70,6 +70,17 @@ describe('TED instructions (Part A, item 15)', () => {
     expect(TED_MUTATION_POLICY).toMatch(/confirmação/i);
   });
 
+  it('requires approval for mutations without promising immediate completion', () => {
+    expect(TED_MUTATION_POLICY).toMatch(/exija aprovação do usuário/i);
+    expect(TED_MUTATION_POLICY).toMatch(/política de risco/i);
+    expect(TED_MUTATION_POLICY).toMatch(/nunca presume aprovação/i);
+    expect(TED_MUTATION_POLICY).not.toMatch(/pode concluir imediatamente/i);
+    const cognition = assembleCognition('Quanto gastei este mês?', {});
+    expect(estimateTokens(cognition.system.slice(0, 7_900))).toBeLessThanOrEqual(
+      DEFAULT_POLICY.maxInputTokens,
+    );
+  });
+
   it('boundaries ban secrets and technical ids', () => {
     expect(TED_BOUNDARIES).toMatch(/segredos|tokens|chaves/i);
     expect(TED_BOUNDARIES).toMatch(/IDs técnicos/i);
