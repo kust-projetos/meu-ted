@@ -35,6 +35,18 @@ missão é escolhida pelo usuário.
   main — não mesclar) e pelo workflow agendado `Audits`.
 - Cobertura LOW de `budgets.delete` (propagação de DomainError diferente de
   `not_found` e isolamento por household) fechada nesta entrega.
+- **E2E sintético local (2026-11-13):** funcional mobile **145/145 PASS** em 6 lotes
+  (autenticação, isolamento entre workspaces, contas, receitas/despesas,
+  transferências, cartões/parcelas, faturas e pagamentos, metas, orçamentos,
+  contas a pagar, TED pending/UI); rollback A0 (P2D) **1/1 PASS**. A jornada
+  conversacional de leitura (P2D offline) ficou **NÃO VERIFICADA** neste
+  ambiente: todas as chamadas `/api/agent` retornam **502
+  `upstream_unavailable`** (o código só emite esse erro quando o fetch ao
+  gateway loopback do harness falha), reproduzido 3×. O harness foi corrigido
+  para passar `TED_OPENCODE_WORKSPACES` ao Next dev nos modos live (sem isso o
+  caminho B nem era selecionado); a causa do gateway inalcançável no Windows
+  segue aberta. Execução local contra fixture/loopback — não é homologação em
+  produção.
 
 ## 3. Gates de release
 
@@ -71,11 +83,15 @@ conversa foram implementados em #334–#337; os demais seguem sem autorização:
 Issues abertas (31) — ordem numérica: #229, #230, #231, #232, #233, #234,
 #235, #236, #237, #238, #239, #240, #241, #242, #243, #245, #246, #247,
 #248, #249, #250, #251, #252, #218, #151, #136, #134, #131, #116, #95,
-#87. Fechadas: #244, #165, #143, #345.
+#87. Fechadas: #244, #165, #143, #345, #362.
 
 Classificação: 14 itens da era A0 (#229–#242) revalidados como válidos porque
 o A0 permanece ativo como rollback e broker Pending V2. Prioridade para #218,
 #243, #248, #249, #251, #252.
+
+#362 era duplicata do gate Release B (aberta pela última execução agendada do
+workflow `release-b-reminder.yml`, já removido) e foi encerrada com a mesma
+evidência de #345.
 
 ## 6. Sugestão para a próxima sessão
 
