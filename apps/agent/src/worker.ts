@@ -6,6 +6,19 @@ import { FIXED_ENDPOINTS } from "./llm/provider-registry.js";
 
 export { FinanceChatAgent };
 
+export function parseLiveProtocolOffer(header: string | null): { protocol: boolean; token?: string } {
+  if (!header) return { protocol: false };
+  const items = header.split(",").map((item) => item.trim());
+  const protocolItems = items.filter((item) => item === "ted.v1");
+  const bearerItems = items.filter((item) => item.startsWith("bearer."));
+  return {
+    protocol: protocolItems.length === 1,
+    ...(bearerItems.length === 1 && bearerItems[0]!.length > "bearer.".length && !/\s/.test(bearerItems[0]!.slice("bearer.".length))
+      ? { token: bearerItems[0]!.slice("bearer.".length) }
+      : {}),
+  };
+}
+
 /** Deny-by-default agent boundary; live transports require ADR-032 and actor-scoped delivery. */
 export function isAllowedAgentRpcPath(subPath: string): boolean {
   return subPath === "/rpc/chat" || subPath === "/rpc/history" || subPath === "/rpc/session/new" || subPath === "/rpc/memory/prefs" || subPath === "/rpc/pending-operations/active" || subPath === "/rpc/pending-operations/propose" || subPath === "/rpc/undo/active" || subPath === "/rpc/undo/decision" || subPath === "/rpc/attachments" || subPath === "/rpc/attachments/observability" || /^\/rpc\/undo\/[^/]+\/verify-target$/.test(subPath) || /^\/rpc\/pending-operations\/[^/]+\/decision$/.test(subPath) || /^\/rpc\/workspace\/[^/]+\/attest-empty$/.test(subPath);
@@ -300,14 +313,23 @@ export default {
         let workspaceId: string;
         try { workspaceId = decodeURIComponent(liveMatch[1]!); }
         catch { return new Response("Bad request", { status: 400 }); }
-        const auth = await authorizeWorkspaceMembership(request, env as unknown as { API_ORIGIN: string; AGENT_CONNECTION_TOKEN_SECRET?: string; AGENT_AUTH_SERVICE_TOKEN?: string }, workspaceId);
+        const offer = parseLiveProtocolOffer(request.headers.get("sec-websocket-protocol"));
+        const offeredProtocols = request.headers.has("sec-websocket-protocol");
+        const headerToken = request.headers.get("x-agent-connection-token")?.trim();
+        if ((offeredProtocols && !offer.protocol) || (!headerToken && !offer.token)) {
+          return new Response("Bad request", { status: 400 });
+        }
+        const authHeaders = new Headers(request.headers);
+        if (!headerToken && offer.token) authHeaders.set("x-agent-connection-token", offer.token);
+        const authRequest = new Request(request, { headers: authHeaders });
+        const auth = await authorizeWorkspaceMembership(authRequest, env as unknown as { API_ORIGIN: string; AGENT_CONNECTION_TOKEN_SECRET?: string; AGENT_AUTH_SERVICE_TOKEN?: string }, workspaceId);
         if (auth instanceof Response) return auth;
         const headers = new Headers(request.headers);
         const upgradeHeaderNames: string[] = [];
         headers.forEach((_value, key) => upgradeHeaderNames.push(key));
         for (const key of upgradeHeaderNames) {
           const lower = key.toLowerCase();
-          if (lower.startsWith("x-agent-") || lower.startsWith("x-partykit-") || lower === "cookie" || lower === "authorization") headers.delete(key);
+          if (lower.startsWith("x-agent-") || lower.startsWith("x-partykit-") || lower === "cookie" || lower === "authorization" || lower === "sec-websocket-protocol") headers.delete(key);
         }
         headers.set("x-agent-actor", auth.actorId);
         headers.set("x-agent-role", auth.role);
@@ -317,7 +339,11 @@ export default {
         const stub = env.FINANCE_CHAT_AGENT.get(env.FINANCE_CHAT_AGENT.idFromName(auth.workspaceId));
         const url2 = new URL(request.url);
         url2.searchParams.delete("_pk");
-        return stub.fetch(new Request(url2, { headers }));
+        const response = await stub.fetch(new Request(url2, { headers }));
+        if (response.status !== 101) return response;
+        const responseHeaders = new Headers(response.headers);
+        if (offeredProtocols) responseHeaders.set("sec-websocket-protocol", "ted.v1");
+        return new Response(null, { status: 101, headers: responseHeaders, webSocket: (response as Response & { webSocket?: WebSocket }).webSocket } as ResponseInit & { webSocket?: WebSocket });
       }
 
       if (url.pathname === "/health/agent") {
