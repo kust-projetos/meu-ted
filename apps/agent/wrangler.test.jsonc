@@ -10,6 +10,9 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["FinanceChatAgent"] }],
   "vars": {
     "API_ORIGIN": "https://api.test.local",
-    "TED_LIVE_SYNC_ENABLED": "1"
+    "TED_LIVE_SYNC_ENABLED": "1",
+    "AGENT_CONNECTION_TOKEN_SECRET": "test-agent-connection-secret-32-chars",
+    "AGENT_AUTH_SERVICE_TOKEN": "test-agent-auth-service-token",
+    "PWA_ORIGIN": "https://pwa.example"
   }
 }
