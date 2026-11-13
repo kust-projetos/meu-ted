@@ -89,6 +89,8 @@ de habilitar. A PWA atual não usa WS.
 
 > **Atualização de implementação (2026-11-13, flag ainda OFF):** PR #346 implementou o token via subprotocolo e o tratamento seguro do handshake; PR #347 adicionou o harness workerd e a rota `/live`; PR #348 adicionou o E2E workerd. F1 agora prova upgrade autenticado pelo Worker e entrega de frames reais `private` e `workspace` por ator, em `apps/agent/tests/workerd/live-delivery-e2e.workerd.test.ts`; o teste complementar está em `apps/agent/tests/workerd/live-delivery.workerd.test.ts`. A validação do handshake real em workerd cobre a necessidade de F1 indicada acima; permanecem abertos staging/produção e a validação negativa antes de ligar a flag. A PWA ainda não tem cliente WS. A janela aceita de revogação de membership é de até 5 minutos. Antes de ligar a flag, ainda é necessário verificar/eliminar frames `CF_AGENT_MCP_SERVERS`/`CF_AGENT_STATE` emitidos pelo SDK antes do binding no `onConnect`.
 
+> **Atualização de implementação (2026-11-13, ativação):** a flag está ligada no Agent e no build da PWA. A origem WS é configurada separadamente da origem REST, sem alterar o transporte REST. A validação pendente é o handshake real em produção via probe de browser; rollback: reverter a var para `"0"` ou removê-la.
+
 > Dos critérios abaixo, a entrega real por ator do distribuidor está coberta pelo E2E workerd; paridade com `/rpc/history`, cenários de default deny/classificação desconhecida/logout/troca de workspace/revogação após TTL, garantia estática abrangente e captura negativa pré-flag seguem abertos ou não demonstrados por essa evidência.
 
 ## Validação e critérios para reabrir
