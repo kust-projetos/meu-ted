@@ -21,7 +21,7 @@ export const relatoriosSkill: Skill = {
   pitfalls: [
     'Somar lançamentos manualmente gera número divergente do app — proibido quando há agregação.',
     'Não afirme tendência com um único mês de dados; peça contexto ou diga a limitação.',
-    'As tools analytics_* exigem period: mande period=custom com from e to (a janela pedida) e diga qual período respondeu.',
-    'analytics_* aceitam basis: liquidez (padrão, conta compra no cartão E o pagamento da fatura) ou competencia (a compra fica na data da compra e o pagamento da fatura não conta). Use competencia para "quanto gastei em <mês>" e liquidez para "quanto saiu do meu bolso". Diga qual base respondeu — a resposta traz o campo basis.',
+    'Nas tools analytics_*, presets yearMonth/mês são permitidos e resolvidos pelo envelope. Use period=custom somente com from e to explícitos; declare basis e o período efetivo que o envelope retornou.',
+    'analytics_* aceitam basis: liquidez (padrão, conta compra no cartão E o pagamento da fatura) ou competencia (a compra fica na data da compra e o pagamento da fatura não conta). Use competencia para "quanto gastei em <mês>" e liquidez para "quanto saiu do meu bolso". Declare a base e o período efetivo da resposta.',
   ],
 };
