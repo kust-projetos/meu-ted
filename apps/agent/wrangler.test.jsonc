@@ -1,0 +1,15 @@
+{
+  "$schema": "../agent/node_modules/wrangler/config-schema.json",
+  "name": "pi-finance-agent-test",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [{ "name": "FINANCE_CHAT_AGENT", "class_name": "FinanceChatAgent" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["FinanceChatAgent"] }],
+  "vars": {
+    "API_ORIGIN": "https://api.test.local",
+    "TED_LIVE_SYNC_ENABLED": "1"
+  }
+}

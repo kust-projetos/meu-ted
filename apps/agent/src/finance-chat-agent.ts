@@ -4141,6 +4141,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       ? this.admitDeletionFenceWrite()
       : null;
     try {
+    if (url.pathname === "/live" && request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+      return await super.fetch(request);
+    }
     // H-07 defense in depth: the gateway authenticates and stamps
     // x-agent-actor/workspace, but the DO never trusts those headers alone
     // when the connection token is present — the token signature is

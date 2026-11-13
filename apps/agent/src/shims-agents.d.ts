@@ -39,6 +39,7 @@ declare module "agents/ai-chat-agent" {
     persistMessages(messages: UIMessage[]): Promise<void> | void;
     onConnect?(connection: unknown, ctx: unknown): Promise<void>;
     onChatMessage?(msg: unknown, ...args: unknown[]): Promise<unknown>;
+    fetch(request: Request): Promise<Response>;
     onMessage(connection: unknown, message: string): Promise<void>;
     broadcast(msg: string | ArrayBuffer | ArrayBufferView, without?: string[]): void;
     getConnections<TState = Record<string, unknown>>(tag?: string): Iterable<AgentConnection<TState>>;

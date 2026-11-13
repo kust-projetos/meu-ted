@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "test": "vitest run",
+    "test:worker": "vitest run --config vitest.worker.config.ts",
     "test:golden": "vitest run tests/golden",
     "lint": "biome check src tests",
     "typecheck": "tsc --noEmit",
@@ -29,7 +30,8 @@
     "@biomejs/biome": "2.2.4",
     "@opencode/client": "2.2.0",
     "wrangler": "4.152.0",
-    "vitest": "4.1.12"
+    "vitest": "4.1.12",
+    "@cloudflare/vitest-plugin": "1.8.1"
   },
   "engines": {
     "node": ">=22.12.0",

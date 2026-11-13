@@ -161,6 +161,10 @@ jobs:
           pnpm --filter pi-finance-agent --fail-if-no-match test
           pnpm --filter pi-finance-agent --fail-if-no-match eval:ted-v2
 
+      - name: Workerd — live delivery
+        if: needs.changes.outputs.agent == 'true'
+        run: pnpm --filter pi-finance-agent --fail-if-no-match test:worker
+
   # ─── Financial integrity (Postgres) ───────────────────────────────────
   # Runs when the API, contracts or financial SQL changed. This is the
   # authoritative API suite: unit + approvals + idempotency + integration,

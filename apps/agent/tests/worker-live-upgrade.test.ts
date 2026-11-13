@@ -150,6 +150,7 @@ describe("live-sync websocket upgrade", () => {
     expect(forwarded.headers.get("x-agent-role")).toBe("owner");
     expect(forwarded.headers.get("x-partykit-room")).toBe(canonical);
     expect(forwarded.headers.get("x-agent-device")).toBe("verified-device");
+    expect(new URL(forwarded.url).pathname).toBe("/live");
     expect(new URL(forwarded.url).search).toBe("?keep=1");
     expect(idFromName).toHaveBeenCalledWith(canonical);
   });
