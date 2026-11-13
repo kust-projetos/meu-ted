@@ -23,7 +23,7 @@ type Options = {
 
 export function createTedLiveClient(options: Options) {
   const enabled = options.enabled ?? process.env.NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED === "1";
-  const rawOrigin = options.origin ?? process.env.NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL ?? "";
+  const rawOrigin = options.origin ?? (process.env.NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN || process.env.NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL || "");
   const mintToken = options.mintToken ?? (async () => {
     const token = await fetchAgentConnectionToken(options.workspaceId, true);
     clearAgentConnectionTokenCache();

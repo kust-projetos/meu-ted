@@ -13,7 +13,7 @@ class FakeSocket {
   closed(code: number, reason = "") { this.onclose?.({ code, reason } as CloseEvent); }
 }
 
-afterEach(() => { FakeSocket.instances = []; vi.useRealTimers(); });
+afterEach(() => { FakeSocket.instances = []; vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 describe("createTedLiveClient", () => {
   const setup = (overrides: Record<string, unknown> = {}) => {
@@ -141,6 +141,19 @@ describe("createTedLiveClient", () => {
     } finally { vi.stubGlobal("WebSocket", original); }
     const { client } = setup({ origin: "https://agent.example/path/" }); await client.start();
     expect(FakeSocket.instances.at(-1)!.url).toBe("https://agent.example/agents/finance-chat-agent/ws%2Fa%20b/live");
+  });
+
+  it("prefers the dedicated live origin and falls back to the REST agent origin", async () => {
+    vi.stubEnv("NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN", "https://live.example/path");
+    vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://rest.example");
+    const dedicated = createTedLiveClient({ enabled: true, workspaceId: "ws", mintToken: async () => "t", WebSocketImpl: FakeSocket as never });
+    await dedicated.start();
+    expect(FakeSocket.instances[0]!.url).toBe("https://live.example/agents/finance-chat-agent/ws/live");
+
+    vi.stubEnv("NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN", "");
+    const compatible = createTedLiveClient({ enabled: true, workspaceId: "ws", mintToken: async () => "t", WebSocketImpl: FakeSocket as never });
+    await compatible.start();
+    expect(FakeSocket.instances[1]!.url).toBe("https://rest.example/agents/finance-chat-agent/ws/live");
   });
 
   it("stops for an unknown 1008 reason", async () => {
