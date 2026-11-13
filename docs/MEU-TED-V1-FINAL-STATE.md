@@ -11,15 +11,15 @@ wrapper (`source-build`) e a Release B (bearer legado) foi flipada: API com
 `SESSION_BEARER_FALLBACK_ENABLED=off` e PWA compilada com
 `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` (PR #320). Na mesma data, a manutenção
 pós-V1 mergeou #326 (lint Biome), #325 (gate de boot do Worker OpenNext) e #282
-(B058 datas financeiras) em `000191b`, e o **Agent** foi publicado nesse SHA
-(ATTESTED). O vigente: API `219a4d6`, Agent `000191b` e PWA `5e69dec`.
+(B058 datas financeiras) em `000191b` (histórico, 11/11), e o **Agent** foi publicado nesse SHA
+(ATTESTED). Estado intermediário de 11/11 (histórico): API `219a4d6`, Agent `000191b` e PWA `5e69dec`. Vigente (2026-11-13): API `32a05cb`, Agent `15c9691` e PWA `15c9691`.
 
 | Camada | SHA vigente | Evidência |
 |---|---|---|
 | API (Contabo) | `32a05cb0cc277c92db625895259070a2de3b1c38` (`32a05cb`, build CI `43419632296`) | manifesto `release-manifest-32a05cb0cc277c92db625895259070a2de3b1c38.json`; `/health` com gitSha `32a05cb`; `apps/api` não tem diff entre `32a05cb` e a main |
 | Agent (Cloudflare) | `15c9691932e3d767f2873c63de6ce9726492c15a` (`15c9691`) | deploy `43435350750`, ATTESTED deploy-smoke-pass; `TED_LIVE_SYNC_ENABLED=1` |
 | PWA (Cloudflare) | `15c9691` | build `43434093369`, deploy `43435345101`, ATTESTED deploy-smoke-pass; live-sync ativo no build e CSP permitindo https+wss da origem do Agent |
-| origin/main | `000191b` | PRs #318-#326 mergeados; CI + PWA CI verdes; baseline viva servida: API `219a4d6`, Agent/PWA code `000191b` (PWA publicada em `5e69dec`, sem delta de runtime) |
+| origin/main | `26014bf` | auditoria 2026-11-13; CI 43441230429 e PWA CI 43441230568 verdes |
 | API — release anterior (histórico) | `b21faff` (`b21faff9ebd6d16353ddb85fb2fef40607dc7938`, build CI `40047925720`) | manifest `release-manifest-b21faff….json`, lane source-build, rollback tag `pi-finance-api:rollback-pre-b21faff` |
 | Baseline de CÓDIGO V1-textual (histórico) | `fd3481f` (`fd3481f2f92c39ff8b68727ff73939121123280d`) | PR #157 (V1-textual); CI + PWA CI verdes (`38483695616`/`…618`); Gate + quality (22, 10) 100% verde; API/Agent/PWA atestados em 13/10 (noite) |
 | Agent/PWA — deploy atestado anterior (histórico) | `715b2cf` (`715b2cf3d11c8ac03e55fea1e35b15fa2049c4c1`, build `38487522792`) | Deploys runs `38488407037`/`38488407171` ATTESTED deploy-smoke-pass 14/10 |
@@ -37,6 +37,7 @@ pós-V1 mergeou #326 (lint Biome), #325 (gate de boot do Worker OpenNext) e #282
 - Release v1.0.4 publicada (tag → `32a05cb`), com homologação live-mobile-full PASS e evidência registrada na issue #269.
 - Live-sync ativo em produção: `TED_LIVE_SYNC_ENABLED=1` no Agent; PWA construída com `NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED=1` e origem do WS separada da origem REST; CSP inclui `https://` e `wss://` de `<host-do-agent>`.
 - Handshake provado em browser real: socket `/live` abriu, recebeu 1 frame e não fechou com 1008/1006 em 10s.
+- Baseline auditada: `main@26014bf`; Release B concluída; workflow `release-b-reminder.yml` removido.
 - Residuais: revogação de membership pode levar até 5 min; `TED_PRIVATE_VIEWS_ENABLED` segue OFF; contas `Conta E2E Mobile *` desativadas permanecem listáveis em `includeInactive=true`.
 
 **Convenção de baseline (14/10, para quebrar o loop deploy-docs-deploy):**

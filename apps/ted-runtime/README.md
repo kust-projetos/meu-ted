@@ -1,4 +1,13 @@
-# @pi-finance/ted-runtime — runtime dedicado OpenCode (fatia P1, núcleo parcial)
+# @pi-finance/ted-runtime — runtime conversacional OpenCode
+
+## Status atual (2026-11-13)
+
+- Este runtime é o runtime conversacional principal do Meu TED, atrás de um canário por workspace.
+- Container `ted-runtime` na VPS Contabo (Traefik, rota `https://api.synkroo.com.br/ted-runtime`), `TED_RUNTIME_PROFILE=live`, `TED_RUNTIME_IDENTITY=prod`.
+- Flags efetivas no compose: `TED_OPENCODE_P3_READS_ENABLED=1` e `TED_OPENCODE_P3_WRITES_ENABLED=1`; o catálogo exposto é 2 tools padrão + 17 leituras + 14 propostas intent-only (as propostas nunca chamam a API, nunca confirmam e nunca executam).
+- Canário da PWA: `TED_OPENCODE_RUNTIME_ENABLED=1` e `TED_OPENCODE_WORKSPACES` com dois workspaces (`d36cb649-4462-486d-940a-47128ad329f2` e `550e8400-e29b-41d4-a716-446655440000`); apenas `chat`, `history` e `session/new` vão para este runtime — pending/undo/attachments continuam no A0.
+- Rollback: `TED_OPENCODE_RUNTIME_KILL_SWITCH=1` devolve todas as conversas ao A0.
+- A seção "Fatia P1" abaixo é registro histórico da entrega incremental, não o estado vigente.
 
 Fatia P1 da migração OpenCode-first (ADR-031, `docs/plans/2026-10-31-ted-opencode-first/`).
 
@@ -56,8 +65,7 @@ acessam produção/Postgres. A fatia P3 de escrita foi entregue como INTENÇÃO 
 proposta: `propose_expense` e `propose_income` registram o intent e o gateway o
 entrega à PWA autenticada; a PWA chama o broker estreito do Agent, o ÚNICO componente que
 emite `financial.approval.propose` (A4). O runtime não possui segredo de
-delegação, não cria capability e não confirma/executa. Nada aqui equivale a
-funcionamento em produção.
+delegação, não cria capability e não confirma/executa. O texto desta seção descreve a fatia P1 histórica; o estado vigente é o registrado em "Status atual" no topo deste arquivo.
 
 ## Aproveitamento do spike (revisão, nunca cópia cega)
 

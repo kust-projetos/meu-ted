@@ -89,6 +89,37 @@ deploy/secret e seu adapter falhava fechado por ausência de runtime real. O
 cliente opcional `private-broker-client` do A0 permanece inerte sem
 `CODEX_BROKER_ORIGIN` e signing key.
 
+### Alcance do canário OpenCode
+
+Canário ativo com `TED_OPENCODE_RUNTIME_ENABLED=1` e gateway
+`https://api.synkroo.com.br/ted-runtime`. Workspaces no canário:
+`d36cb649-4462-486d-940a-47128ad329f2` e
+`550e8400-e29b-41d4-a716-446655440000`. Apenas os RPCs `chat`, `history`
+e `session/new` vão para o OpenCode; pending/undo/attachments permanecem no A0.
+Kill switch: `TED_OPENCODE_RUNTIME_KILL_SWITCH=1` devolve até conversas com
+pin `opencode.*` ao A0 e expira o pin.
+
+### Flags financeiras e capacidades
+
+| Flag | Onde | Valor efetivo | Efeito |
+|---|---|---|---|
+| `TED_LIVE_SYNC_ENABLED` | Agent (wrangler) | `1` | Live-sync push-only habilitado |
+| `TED_ATTACHMENTS_ENABLED` | Agent (wrangler) | `0` | Upload de anexos desabilitado |
+| `TED_AUDIO_STT_ENABLED` | Agent (wrangler) | `0` | STT de áudio desabilitado |
+| `TED_PDF_TEXT_ENABLED` | Agent (wrangler) | `0` | Extração de texto de PDF desabilitada |
+| `TED_VISION_ENABLED` | Agent (wrangler) | `0` | Visão de imagem desabilitada |
+| `TED_OPENCODE_P3_READS_ENABLED` | ted-runtime (compose) | `1` | 17 leituras financeiras expostas |
+| `TED_OPENCODE_P3_WRITES_ENABLED` | ted-runtime (compose) | `1` | 14 propostas intent-only (sem API/confirm/execute) |
+| `TED_OPENCODE_RUNTIME_ENABLED` | PWA (wrangler) | `1` | Canário OpenCode ativo |
+| `TED_OPENCODE_WORKSPACES` | PWA (wrangler) | `d36cb649-4462-486d-940a-47128ad329f2,550e8400-e29b-41d4-a716-446655440000` | Workspaces no canário |
+| `TED_RISK_BASED_AUTOEXECUTE` | API (env) | `shadow` (documentado, não re-verificado live) | Autorização por risco em modo shadow |
+| `TED_PRIVATE_VIEWS_ENABLED` | Agent (env) | off | Conversas privadas desabilitadas |
+| `SESSION_BEARER_FALLBACK_ENABLED` | API (env) | off | Bearer legado desabilitado |
+| `NEXT_PUBLIC_LEGACY_BEARER_COMPAT` | PWA (build) | off | Compat legado desabilitado |
+
+WhatsApp está fora de escopo por ora; o Bridge foi removido e não será reconstruído.
+
+
 Produção: OpenCode (`ted-runtime`) e API/PostgreSQL na VPS Contabo atrás do
 Traefik; PWA e A0 do Agent na Cloudflare. O estado vivo de produção (SHAs,
 flags e ledger) é registrado apenas em

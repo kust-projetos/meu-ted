@@ -5,6 +5,15 @@ assistente TED. Dados financeiros e decisões de escrita pertencem à API; o TED
 é um cliente conversacional sujeito às mesmas fronteiras de identidade,
 capability, confirmação e idempotência.
 
+## Estado atual (2026-11-13)
+
+- **Baseline:** `main` `26014bf` (CI `43441230429` success; PWA CI `43441230568` success).
+- **Produção:** API `32a05cb` (build `43419632296`, Contabo VPS); Agent `15c9691` (deploy `43435350750`, ATTESTED); PWA `15c9691` (build `43434093369`, deploy `43435345101`, ATTESTED). Release `v1.0.4` → `32a05cb`.
+- **Release B fechada (2026-11-11):** `SESSION_BEARER_FALLBACK_ENABLED=off` e PWA com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`.
+- **Assistente:** OpenCode (`apps/ted-runtime`) é o runtime conversacional primário; A0 (`apps/agent`) segue ativo como rollback e único broker de propostas Pending V2.
+- **Canary OpenCode:** `TED_OPENCODE_RUNTIME_ENABLED=1`, gateway `https://api.synkroo.com.br/ted-runtime`, allowlist `TED_OPENCODE_WORKSPACES` = `d36cb649-4462-486d-940a-47128ad329f2` e `550e8400-e29b-41d4-a716-446655440000`. Apenas `chat`, `history` e `session/new` roteiam para OpenCode; pending/undo/attachments permanecem no A0. Kill switch `TED_OPENCODE_RUNTIME_KILL_SWITCH=1` devolve toda conversa ao A0.
+- **WhatsApp:** fora de escopo por ora (bridge removida; não reconstruir nem replanejar).
+
 ## Componentes ativos
 
 | Componente | Responsabilidade | Runtime |
