@@ -1,10 +1,10 @@
 # Pendências do Meu Ted — pós-V1 (2026-11-12)
 
-**Estado de referência:** `main` em `fa3ee6e`, após a sessão de 2026-11-12,
-que mergeou #333 (B058: datas explícitas), #334 (aporte em metas), #335/#336/#337
-(orçamentos por conversa: criar/ajustar/apagar, manual-only e idempotentes) e
-#338 (flake #277). Produção permanece API `219a4d6`, Agent `000191b` e PWA
-`5e69dec` (Release B flipada). Detalhe por camada em
+**Estado de referência:** `main` em `d4cf315f35cfb54561ef2f62e6c77acfd18cb21a`;
+produção em API `d4cf315`, Agent `d4cf315` e PWA `d4cf315`. A entrega inclui
+insights de gastos por conversa (#343) e orçamentos por conversa (#335/#336/#337).
+A homologação live e a tag `v1.0.4` seguem pendentes por falta de credenciais de
+admin. Detalhe por camada em
 [`MEU-TED-V1-FINAL-STATE.md`](../MEU-TED-V1-FINAL-STATE.md).
 
 Este arquivo lista o que o plano da V1 deixou explicitamente para depois e o
