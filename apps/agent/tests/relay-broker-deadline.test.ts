@@ -560,7 +560,7 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
     vi.restoreAllMocks();
   });
 
-  it('first hung relay times out with typed 504 and no assistant persistence, then second turn succeeds while provider promise stays pending', async () => {
+  it('first hung relay times out with typed 504 and one assistant error bubble, then second turn succeeds while provider promise stays pending', async () => {
     const { agent, persisted } = createChatAgent();
     vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({});
     // Never-resolved provider promise: the first leg stays hung forever.
@@ -591,8 +591,12 @@ describe('W2-ITEM6 RED: next REST turn not queued behind a hung relay', () => {
       expect(firstRes.status).toBe(504);
       const firstBody = (await firstRes.json()) as { code?: string };
       expect(firstBody.code).toBe('agent.provider_timeout');
-      // No successful assistant persistence from the timed-out turn.
-      expect(persisted.filter((m) => m.role === 'assistant')).toHaveLength(0);
+      // The failed turn persists its error bubble, never successful model output.
+      const firstAssistant = persisted.filter((m) => m.role === 'assistant');
+      expect(firstAssistant).toHaveLength(1);
+      expect(firstAssistant[0]?.id).toBe('msg-asst-intent-hung-timeout-1');
+      expect(firstAssistant[0]?.parts?.[0]?.text).toContain('Tente novamente.');
+      expect(firstAssistant.every((m) => m.id === 'msg-asst-intent-hung-timeout-1')).toBe(true);
       // Provider promise still unresolved after the timeout.
       await new Promise((r) => setTimeout(r, 10));
       expect(hungSettled).toBe(false);

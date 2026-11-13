@@ -532,14 +532,15 @@ export const registerAgentLlmRelayRoutes = (
         if (deadlineTimer) clearTimeout(deadlineTimer);
       }
     } catch (err) {
-      // FIX-API-RELAY-ALL-ERROR-MESSAGES-SAFE: transport/catch errors keep
-      // the 504 agent.provider_timeout classification but the message is
-      // fixed by class only — `err.message` (fetch internals, URLs,
-      // AbortError text) is never echoed. W2-ITEM6 owns the absolute
-      // transport deadline above and preserves these fixed messages.
+      // FIX-API-RELAY-ALL-ERROR-MESSAGES-SAFE: transport/catch errors are
+      // classified by class — AbortError/deadline expiry -> 504
+      // agent.provider_timeout; any other transport throw (fetch/network) ->
+      // 502 agent.provider_error. The message is fixed by class only —
+      // `err.message` (fetch internals, URLs, AbortError text) is never
+      // echoed. W2-ITEM6 owns the absolute transport deadline above.
       const isAbort = (err as { name?: string })?.name === 'AbortError';
-      return reply.code(504).send({
-        code: 'agent.provider_timeout',
+      return reply.code(isAbort ? 504 : 502).send({
+        code: isAbort ? 'agent.provider_timeout' : 'agent.provider_error',
         message: isAbort ? 'Timeout aguardando provider.' : 'Falha de comunicação com o provider.',
         providerAttempted: true,
       });

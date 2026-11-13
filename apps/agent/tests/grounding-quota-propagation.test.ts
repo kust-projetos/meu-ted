@@ -335,7 +335,10 @@ describe('relay receipt gating (RED)', () => {
     expect(((await res.json()) as { code?: string }).code).toBe('agent.quota_exceeded');
     // The denied correction never dispatched: exactly the initial leg ran.
     expect(relayCalls).toBe(1);
-    // No grounded fallback 200 was published: no assistant message persisted.
-    expect(persisted.filter((m) => m.role === 'assistant')).toHaveLength(0);
+    // No grounded fallback 200 was published; only the error bubble persists.
+    const assistant = persisted.filter((m) => m.role === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.id).toBe('msg-asst-intent-quota-prop-e2e');
+    expect(assistant[0]?.parts?.[0]?.text).toContain('Tente novamente.');
   });
 });

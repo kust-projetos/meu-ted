@@ -48,6 +48,27 @@ function avatarColor(actorId: string, role: string): string {
   return `hsl(${hue} 58% 42%)`;
 }
 
+export function safeAttachmentUrl(url: unknown): string | null {
+  if (typeof url !== "string" || url === "") return null;
+  // Reject control chars / whitespace / quotes that browsers may normalize
+  // into a different scheme (e.g. `java\\nscript:`).
+  for (const ch of url) {
+    const code = ch.codePointAt(0)!;
+    if (code <= 0x20 || code === 0x7f) return null;
+    if (ch === "<" || ch === ">" || ch === '"' || ch === "'" || ch === "\\\\") return null;
+  }
+  const schemeMatch = /^(https?|blob):/i.exec(url);
+  if (!schemeMatch) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "blob:") return null;
+    if (parsed.protocol === "https:" && parsed.hostname.length === 0) return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
 export function TedMessage({ message, isCurrentUser, senderName, delivery, onRetry }: TedMessageProps) {
   const isAssistant = message.role === "assistant";
   const displayName = isCurrentUser ? "Você" : isAssistant ? "TED" : (senderName || "Membro");
@@ -97,31 +118,66 @@ export function TedMessage({ message, isCurrentUser, senderName, delivery, onRet
             (message as unknown as { attachments: Array<{ type: string; url: string; name?: string }> }).attachments.length > 0 && (
               <div className="mt-2 flex flex-col gap-2">
                 {(message as unknown as { attachments: Array<{ type: string; url: string; name?: string }> }).attachments.map((att, idx) => {
+                  const safeUrl = safeAttachmentUrl(att.url);
                   if (att.type === "image") {
+                    if (!safeUrl) {
+                      return (
+                        <div
+                          key={`unsafe-${idx}`}
+                          data-testid="ted-attachment-placeholder"
+                          className="max-h-[220px] max-w-full rounded-[10px] border border-border-subtle bg-surface-1 px-3 py-2 text-xs text-text-muted"
+                        >
+                          Anexo indisponível
+                        </div>
+                      );
+                    }
                     return (
                       <img
                         key={`${att.url}-${idx}`}
-                        src={att.url}
+                        src={safeUrl}
                         alt={att.name || "imagem anexada"}
                         className="max-h-[220px] max-w-full rounded-[10px] border border-border-subtle object-cover"
                       />
                     );
                   }
                   if (att.type === "audio") {
+                    if (!safeUrl) {
+                      return (
+                        <div
+                          key={`unsafe-${idx}`}
+                          data-testid="ted-attachment-placeholder"
+                          className="w-full max-w-[260px] rounded-[10px] border border-border-subtle bg-surface-1 px-3 py-2 text-xs text-text-muted"
+                        >
+                          Anexo indisponível
+                        </div>
+                      );
+                    }
                     return (
                       <audio
                         key={`${att.url}-${idx}`}
                         controls
-                        src={att.url}
+                        src={safeUrl}
                         className="w-full max-w-[260px] rounded-[10px]"
                       />
                     );
                   }
                   if (att.type === "pdf") {
+                    if (!safeUrl) {
+                      return (
+                        <div
+                          key={`unsafe-${idx}`}
+                          data-testid="ted-attachment-placeholder"
+                          className="inline-flex items-center gap-1.5 rounded-[10px] border border-border-subtle bg-surface-1 px-3 py-2 text-xs font-semibold text-text-muted"
+                        >
+                          <span>📄</span>
+                          <span>{att.name || "documento.pdf"}</span>
+                        </div>
+                      );
+                    }
                     return (
                       <a
                         key={`${att.url}-${idx}`}
-                        href={att.url}
+                        href={safeUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1.5 rounded-[10px] border border-border-subtle bg-surface-1 px-3 py-2 text-xs font-semibold text-primary hover:bg-surface-2"

@@ -4748,8 +4748,36 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         } catch {
           // Compensation never breaks the error mapping below.
         }
-        const status = (error as { status?: unknown }).status;
         const code = (error as { code?: unknown }).code;
+        // Issue #248: on a failed turn, persist ONE assistant message carrying
+        // a safe, short error cause (stable id dedupes redelivery to zero extra
+        // rows). Best-effort: never masks the original error mapping below.
+        // Skip when the failure is itself a persistence failure: persistence is
+        // unavailable by definition, so attempting to persist would be futile.
+        if (!(typeof code === 'string' && code.startsWith('agent.persistence'))) {
+        try {
+          const failedAssistantId = stableHistoryMessageId('assistant', intentionId);
+          const existingIds = new Set(
+            (Array.isArray(this.messages) ? this.messages : []).map((m) => String((m as { id?: unknown }).id ?? '')),
+          );
+          if (!existingIds.has(failedAssistantId) && typeof this.persistMessages === 'function') {
+            const failedAssistantMessage: UIMessage = {
+              id: failedAssistantId,
+              role: 'assistant',
+              parts: [{ type: 'text', text: 'Não foi possível concluir a resposta. Tente novamente.' }],
+              metadata: stampMessageAudience(
+                { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: new Date().toISOString(), intentionId },
+                turnAudience,
+              ),
+            } as unknown as UIMessage;
+            await this.persistMessages([failedAssistantMessage]);
+          }
+        } catch {
+          // Best-effort persistence of the error turn must never mask the
+          // original failure below.
+        }
+        }
+        const status = (error as { status?: unknown }).status;
         if (typeof status === 'number' && status >= 400 && status < 600) {
           return Response.json({ code: typeof code === 'string' ? code : 'agent.inference_error', message: redactTranscript((error as Error).message) }, { status });
         }
