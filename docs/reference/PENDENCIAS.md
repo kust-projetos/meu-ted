@@ -38,15 +38,17 @@ missão é escolhida pelo usuário.
 - **E2E sintético local (2026-11-13):** funcional mobile **145/145 PASS** em 6 lotes
   (autenticação, isolamento entre workspaces, contas, receitas/despesas,
   transferências, cartões/parcelas, faturas e pagamentos, metas, orçamentos,
-  contas a pagar, TED pending/UI); rollback A0 (P2D) **1/1 PASS**. A jornada
-  conversacional de leitura (P2D offline) ficou **NÃO VERIFICADA** neste
-  ambiente: todas as chamadas `/api/agent` retornam **502
-  `upstream_unavailable`** (o código só emite esse erro quando o fetch ao
-  gateway loopback do harness falha), reproduzido 3×. O harness foi corrigido
-  para passar `TED_OPENCODE_WORKSPACES` ao Next dev nos modos live (sem isso o
-  caminho B nem era selecionado); a causa do gateway inalcançável no Windows
-  segue aberta. Execução local contra fixture/loopback — não é homologação em
-  produção.
+  contas a pagar, TED pending/UI); rollback A0 (P2D) **1/1 PASS**; leitura
+  conversacional com runtime real (P2D offline) **PASS** — browser → Next →
+  gateway loopback → SDK → `list_accounts`/`get_month_summary` → API, com 1
+  prompt, 2 tools e 2 GETs, zero escrita; mutações conversacionais (P3
+  integrado) **PASS** — 7 turnos confirmados, 1 cancelamento e recuperação de
+  contexto, zero escrita financeira direta. Um 502 `upstream_unavailable` foi
+  reproduzido no caminho: em dev o `getCloudflareContext` resolve as `vars` de
+  produção do `wrangler.jsonc` (allowlist e gateway) e sobrepõe `process.env`;
+  o harness só escrevia `.dev.vars` nos modos A0. Corrigido para escrever e
+  restaurar `.dev.vars` em qualquer execução P2D e para repassar a allowlist ao
+  env dos modos live. Execução local — não é homologação em produção.
 
 ## 3. Gates de release
 
