@@ -338,7 +338,7 @@ describe('item5: /rpc/chat via relay com failover restrito', () => {
     expect(relayCalls).toBe(1);
   });
 
-  it('epoch muda entre pernas => 409 sem fallback nem output', async () => {
+  it('epoch muda entre pernas => bolha de erro, sem fallback nem output de sucesso', async () => {
     const { agent, persisted } = createChatAgent(SNAP_FALLBACK);
     vi.spyOn(apiClient, 'requestPiApiJson').mockResolvedValue({});
     let configCalls = 0;
@@ -357,10 +357,13 @@ describe('item5: /rpc/chat via relay com failover restrito', () => {
     const res = await agent.fetch(CHAT_REQ('intent-relay-epoch'));
     expect(res.status).toBe(409);
     expect(relayCalls).toBe(1);
-    expect(persisted.filter((m) => m.role === 'assistant')).toHaveLength(0);
+    const assistant = persisted.filter((m) => m.role === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.id).toBe('msg-asst-intent-relay-epoch');
+    expect(assistant[0]?.parts?.[0]?.text).toContain('Tente novamente.');
   });
 
-  it('epoch muda apos resposta final => sem publicacao', async () => {
+  it('epoch muda apos resposta final => bolha de erro, sem publicacao de sucesso', async () => {
     const { agent, persisted } = createChatAgent({
       ...SNAP_FALLBACK,
       fallback_provider_id: null,
@@ -381,7 +384,11 @@ describe('item5: /rpc/chat via relay com failover restrito', () => {
 
     const res = await agent.fetch(CHAT_REQ('intent-relay-post-epoch'));
     expect(res.status).toBe(409);
-    expect(persisted.filter((m) => m.role === 'assistant')).toHaveLength(0);
+    const assistant = persisted.filter((m) => m.role === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.id).toBe('msg-asst-intent-relay-post-epoch');
+    expect(assistant[0]?.parts?.[0]?.text).toContain('Tente novamente.');
+    expect(assistant.every((m) => m.id === 'msg-asst-intent-relay-post-epoch')).toBe(true);
   });
 
   it('ambas falham => 502 composto seguro, sem vazar provider', async () => {
