@@ -71,10 +71,21 @@ uma conexão já estabelecida; este residual é aceito nesta fatia.
   `initialState`, então não há payload, mas antes de ligar a flag isso precisa
   ser verificado/eliminado.
 
-Antes de ligar a flag, é necessário decidir como o browser entrega o token de
-conexão no handshake WebSocket (subprotocolo ou query; o browser não oferece
-header customizado). A PWA atual não usa WS; manter a flag desligada até F1 ser
-validado e o contrato de transporte do token ser decidido.
+O browser não oferece header customizado no handshake e o proxy da PWA não
+suporta upgrade. O cliente WebSocket oferece `ted.v1` e `bearer.<token>` como
+subprotocols (`new WebSocket(url, ["ted.v1", "bearer.<token>"])`). O Worker
+exige exatamente um `ted.v1` quando a lista de subprotocols é apresentada e
+exatamente um item bearer não vazio; um `x-agent-connection-token` existente
+tem precedência sobre bearer. Sem protocolo ou credencial suficiente retorna
+400 genérico antes de auth/DO. A autenticação recebe request clonada com o
+token no header consumido pelo autorizador. O Worker remove a oferta inteira,
+cookies, authorization e headers `x-agent-*`/`x-partykit-*` antes de encaminhar;
+nenhum token é encaminhado. Em resposta 101, seleciona somente `ted.v1` (sem
+ecoar bearer); para clientes usando apenas header não adiciona subprotocolo.
+
+A flag continua default-off. A resposta 101 e o eco de `ted.v1` não podem ser
+construídos/testados no Node atual; validar o handshake real em staging/F1 antes
+de habilitar. A PWA atual não usa WS.
 
 ## Validação e critérios para reabrir
 
@@ -88,9 +99,9 @@ validado e o contrato de transporte do token ser decidido.
 
 ## Rollback
 
-Esta entrega contém apenas documentação, teste e extração de função pura sem
-efeito em runtime. Reverter os artefatos restaura o estado anterior; não há
-mudança de transporte, autenticação, persistência ou produção.
+Reverter os artefatos restaura o estado anterior; a flag permanece default-off.
+O transporte autenticado só é exercitado quando habilitado e não altera
+persistência ou produção por si só.
 
 ## Referências
 
