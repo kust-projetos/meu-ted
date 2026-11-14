@@ -3,6 +3,41 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { registerAgentLlmRelayRoutes } from '../../src/routes/internal-agent-llm-relay.js';
 import { createInMemoryLlmConfigStore } from '../../src/agent/llm-config-memory.js';
 
+describe('relay allowlist log descriptor', () => {
+  it('sorts and caps model names, reports empty sets, and logs only once', async () => {
+    const { describeRelayAllowlist, createRelayModelResolver } = await import('../../src/routes/internal-agent-llm-relay.js');
+    const described = describeRelayAllowlist({
+      source: 'db',
+      allowed: new Set(Array.from({ length: 52 }, (_, index) => `provider:model-${String(index).padStart(2, '0')}`)),
+    });
+    expect(described).toMatchObject({
+      source: 'db',
+      models: Array.from({ length: 50 }, (_, index) => `provider:model-${String(index).padStart(2, '0')}`),
+      count: 52,
+      truncated: true,
+    });
+    expect(describeRelayAllowlist({ source: 'env', allowed: new Set() })).toEqual({
+      source: 'env',
+      models: [],
+      count: 0,
+      truncated: false,
+    });
+    expect(JSON.stringify(described)).not.toMatch(/secret|token|header|https?:\/\//i);
+
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const resolver = createRelayModelResolver();
+    await resolver();
+    await resolver();
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'relay.allowlist_effective',
+      source: 'default',
+      count: expect.any(Number),
+    }));
+    log.mockRestore();
+  });
+});
+
 const ADMIN_TOKEN = 'test-relay-admin-token-32-chars-min!';
 const ZEN_KEY = 'test-zen-key';
 
