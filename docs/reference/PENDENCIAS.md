@@ -1,7 +1,8 @@
 # Pendências do Meu Ted - pós-V1 (2026-11-14)
 
-**Estado de referência:** `main@07c654c`; PRs #361, #363, #364 e #365
-mergeados; CI e PWA CI verdes. Produção documentada: API `32a05cb` (build
+**Estado de referência:** `main@37090d7`; PRs #361, #363, #364, #365 e #367
+mergeados; #367 implementa freshness de evidência. CI e PWA CI verdes.
+Produção documentada: API `32a05cb` (build
 `43419632296`, Contabo), Agent `15c9691` (deploy `43435350750`, ATTESTED),
 PWA `15c9691` (build `43434093369`, deploy `43435345101`, ATTESTED). Release
 `v1.0.4` → `32a05cb`. Release B concluída em 2026-11-11. Live-sync ativo.
@@ -82,8 +83,10 @@ conversa foram implementados em #334–#337; os demais seguem sem autorização:
 
 ## 5. Backlog técnico pós-V1
 
-Issues abertas (11): #87, #95, #116, #131, #134, #136, #151, #218, #235,
+Issues abertas (10): #87, #95, #116, #131, #134, #136, #151, #235,
 #245, #246.
+
+Issue #218 foi implementada e fechada em 2026-11-14 pelo PR #367.
 
 Issues fechadas no saneamento: #229, #230, #231, #232, #233, #236, #237,
 #238, #239, #240, #241, #242, #243, #247, #248, #249, #251, #252, #234 e
@@ -101,8 +104,11 @@ Classificação atual:
   decodificação confiável ou recusa do formato).
 - **Gates humanos:** #245 (purge Test Family), #246 (cutover F3–F5).
 - **Pós-V1 / pesquisa:** #87, #95, #116, #131, #134, #136, #151.
-- **Evolução de produto:** #218 (freshness de evidência financeira — feature,
-  não defeito reproduzido; próxima missão recomendada).
+- **Entrega de produto:** #218 (freshness de evidência financeira), implementada
+  pelo PR #367: política em
+  [`evidence-freshness-policy.md`](../architecture/evidence-freshness-policy.md),
+  gate em `runGroundedRead`, telemetria `agent.evidence.stale` e goldens
+  TEDV2-064/065/066.
 
 #362 era duplicata do gate Release B (aberta pela última execução agendada do
 workflow `release-b-reminder.yml`, já removido) e foi encerrada com a mesma
@@ -110,10 +116,10 @@ evidência de #345.
 
 ## 6. Sugestão para a próxima sessão
 
-1. Resolver os bloqueios que dependem de decisão do operador e os gates humanos
-   antes de reabrir os respectivos trabalhos.
-2. Em paralelo, se o foco for produto, escolher **uma** decisão da seção 4 e
-   tratá-la como nova missão.
+1. Se o foco for produto, escolher **uma** decisão da seção 4 e tratá-la como
+   nova missão.
+2. Se o foco for plataforma, priorizar #87; para gates humanos, #245/#246; para
+   dívida de teste, #151.
 
 **Limites que continuam valendo:** nada foi deployado neste saneamento; deploy
 é manual (`workflow_dispatch`) e exige autorização explícita, assim como merge
