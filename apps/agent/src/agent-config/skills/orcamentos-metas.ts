@@ -6,7 +6,7 @@ export const orcamentosMetasSkill: Skill = {
   when: 'criar ou acompanhar orçamentos por categoria e metas de economia',
   keywords: [
     'orçamento', 'orcamento', 'teto', 'limite', 'meta', 'metas', 'economizar',
-    'guardar', 'reserva', 'objetivo', 'contribuir', 'aporte',
+    'guardar', 'reserva', 'objetivo', 'contribuir', 'aporte', 'excluir meta',
   ],
   tools: [
     'list_budgets',

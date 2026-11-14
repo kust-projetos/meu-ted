@@ -6,8 +6,7 @@ export const registrosSkill: Skill = {
   when: 'criar, consultar, editar ou excluir um lançamento, incluindo parcelados',
   keywords: [
     'lanç', 'gasto', 'gastei', 'despesa', 'receita', 'recebi', 'registr', 'anotar',
-    'parcela', 'parcel', 'compra', 'paguei', 'pagar', 'editar', 'corrigir', 'excluir',
-    'apagar', 'reembolso', 'pix', 'boleto',
+    'parcela', 'parcel', 'compra', 'paguei', 'pagar', 'reembolso', 'pix', 'boleto',
   ],
   tools: [
     'create_expense',
