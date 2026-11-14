@@ -7,7 +7,7 @@ Runtime conversacional do Meu TED na VPS Contabo, atrás do Traefik existente.
 | Item | Valor |
 |---|---|
 | Container | `ted-runtime` (imagem `ted-runtime:main`) |
-| Rede interna | `proxy` (Traefik) + `pi-finance-postgres_default` (API) |
+| Rede interna | `proxy` (Traefik) + `dbcentral_net` (API) |
 | Porta | `3101` — **nenhuma porta publicada no host** |
 | Rota | `https://ted-gateway.synkroo.com.br` (TLS via `certresolver=cf`) |
 | Estado | volume `ted_runtime_data` em `/data` (`TED_RUNTIME_HOME`) |

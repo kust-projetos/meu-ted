@@ -10,8 +10,9 @@ services:
       - ../../.env.pi
     environment:
       - HOME=/home/pi-stack
-      # DATABASE_URL e EVOLUTION_GO_API_URL vem do .env.pi (gitignored) - stack roda na VPS,
-      # Postgres so e alcancavel via tunel SSH (docker/pi-stack/ssh-tunnel-postgres.bat)
+      # DATABASE_URL vem do .env.pi (gitignored) — na VPS aponta para o database
+      # pi_financeiro_canonical na stack centralizada db-central (instância homologação,
+      # host Docker db-hml, rede dbcentral_net); cópia local de debug segue via túnel SSH
       - PI_AGENT_RUNTIME=pi-native
       - PI_RPC_TIMEOUT_MS=${PI_RPC_TIMEOUT_MS:-120000}
       - PI_RPC_PROVIDER=${PI_RPC_PROVIDER:-minimax}
@@ -61,4 +62,3 @@ services:
     depends_on:
       pi-stack:
         condition: service_healthy
-
