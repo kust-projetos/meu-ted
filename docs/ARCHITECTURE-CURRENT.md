@@ -1,6 +1,6 @@
 # Meu Ted — Arquitetura atual
 
-**Last verified:** 2026-11-13
+**Last verified:** 2026-11-14
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 ## Topologia implementada
@@ -53,6 +53,12 @@ troca de runtime não duplica nem perde nada.
   capability, aprovação ou write.
 - **Contratos (`packages/llm-contracts`):** schemas e tipos compartilhados
   entre API, A0 e testes de contrato.
+- **Memória e sessão:** OpenCode mantém sessão nativa, registry de metadados
+  (`apps/ted-runtime/src/conversations.mjs`), intenção de proposta em memória
+  por sessão (`proposal-intents.mjs`) e turnos serializados. A0 mantém memória
+  e sessões em SQLite do DO (`apps/agent/src/agent-config/memory/`) apenas no
+  fallback/rollback e como broker. API permanece autoridade financeira e de
+  Pending V2.
 - **Sincronização ao vivo (live-sync):** rota `/agents/finance-chat-agent/<ws>/live`, transporte push-only; token single-use por subprotocolo (`ted.v1` + `bearer.<jwt>`), filtro por ator no servidor e binding com expiração em 5 min. REST permanece autoritativo para chat, decisão e mutação. Flag `TED_LIVE_SYNC_ENABLED=1` no Agent e `NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED=1` no build da PWA; origem WS vem de `vars.AGENT_PROD_URL`, separada da origem REST, e CSP permite HTTPS/WSS dessa origem.
 
 ## Autorização de mutações
@@ -88,6 +94,14 @@ extensão Pi foram removidos dos workspaces, CI e runtime ativo. O
 deploy/secret e seu adapter falhava fechado por ausência de runtime real. O
 cliente opcional `private-broker-client` do A0 permanece inerte sem
 `CODEX_BROKER_ORIGIN` e signing key.
+
+### Estado de entrega (2026-11-14)
+
+OpenCode é o runtime conversacional principal; A0 permanece fallback/broker.
+Live-sync ativo; conversas privadas desabilitadas (`TED_PRIVATE_VIEWS_ENABLED`
+OFF). #218 (freshness de evidência) concluída no PR #367; WhatsApp fora de
+escopo. Produção documentada: API `32a05cb`; Agent e PWA `15c9691`.
+Main de referência: `3d4e0c1`. Nenhuma mudança de arquitetura nesta missão.
 
 ### Alcance do canário OpenCode
 

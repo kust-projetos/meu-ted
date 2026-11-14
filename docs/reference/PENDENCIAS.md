@@ -1,11 +1,16 @@
 # Pendências do Meu Ted - pós-V1 (2026-11-14)
 
-**Estado de referência:** `main@37090d7`; PRs #361, #363, #364, #365 e #367
-mergeados; #367 implementa freshness de evidência. CI e PWA CI verdes.
-Produção documentada: API `32a05cb` (build
+**Estado de referência:** `main@3d4e0c1`; CI `43607796925` e PWA CI
+`43607797036` verdes. Saneamento final de 2026-11-14: #151 e #136 encerradas
+com evidência; #95, #116, #131 e #134 classificadas fora do backlog ativo;
+#235 suspensa; #245/#246 mantidas como gates humanos; #87 mantida com decisão
+KEEP + migração adiada; PR #354 encerrado como incompatível.
+Produção documentada (não redeployada): API `32a05cb` (build
 `43419632296`, Contabo), Agent `15c9691` (deploy `43435350750`, ATTESTED),
 PWA `15c9691` (build `43434093369`, deploy `43435345101`, ATTESTED). Release
-`v1.0.4` → `32a05cb`. Release B concluída em 2026-11-11. Live-sync ativo.
+`v1.0.4` → `32a05cb`. Release B concluída em 2026-11-11. Live-sync ativo;
+`TED_PRIVATE_VIEWS_ENABLED` off.
+Relatório do ciclo em [`../reports/2026-11-14-simplification-sweep.md`](../reports/2026-11-14-simplification-sweep.md).
 Detalhe por camada em [`MEU-TED-V1-FINAL-STATE.md`](../MEU-TED-V1-FINAL-STATE.md).
 
 Este arquivo lista o que o plano da V1 deixou explicitamente para depois e o
@@ -32,10 +37,17 @@ missão é escolhida pelo usuário.
 - **#277 — flake de cold boot da PWA:** resolvido pelo PR #338 (fix do
   `t07c`); instrumentação fica como referência.
 - **Dependabot:** #143 fechada como triagem concluída. Revisão de
-  dependências flui via PRs do Dependabot (ex.: #354, vermelho e atrás da
-  main — não mesclar) e pelo workflow agendado `Audits`.
+  dependências flui via PRs do Dependabot e pelo workflow agendado `Audits`;
+  o PR #354 foi encerrado como incompatível (peer graph de `agents@0.3.x`).
 - Cobertura LOW de `budgets.delete` (propagação de DomainError diferente de
   `not_found` e isolamento por household) fechada nesta entrega.
+- **Jornadas críticas E2E (2026-11-14):** login (`AUTH-01/02`), despesa
+  (`TX-01..09`) e aprovação de operação (`OP-01..06b`) = **21/21 PASS** com
+  `--retries=1` (política do gate), sem retry necessário, com journal do
+  backend sintético verificado. Com `--retries=0`, `AUTH-01/02` apresentaram
+  flake de cold start (`page.goto` load timeout e preenchimento antes da
+  hidratação) e passaram no rerun; residual da mesma família do #277, sem
+  correção especulativa.
 - **E2E sintético local (2026-11-13):** funcional mobile **145/145 PASS** em 6 lotes
   (autenticação, isolamento entre workspaces, contas, receitas/despesas,
   transferências, cartões/parcelas, faturas e pagamentos, metas, orçamentos,
@@ -83,8 +95,56 @@ conversa foram implementados em #334–#337; os demais seguem sem autorização:
 
 ## 5. Backlog técnico pós-V1
 
-Issues abertas (10): #87, #95, #116, #131, #134, #136, #151, #235,
-#245, #246.
+Issues abertas (4): #87, #235, #245, #246.
+
+### Encerradas no saneamento final de 2026-11-14
+
+- **#151 — cobertura E2E determinística já atende.** Login, despesa e
+  aprovação de operação rodam em Playwright com fixture API e journal
+  determinístico, sem LLM no caminho feliz e com gate de matriz
+  (`e2e/support/matrix.test.ts`). Não foi criado motor separado de
+  record/replay; o residual de cold start está na seção 2.
+- **#136 — concorrência, recuperação e replay comprovados.** Sessão/memória:
+  `session-renew-sqlite-proof` (renovação concorrente A/B, 1 aberta por ator,
+  sem lost write) e `memory-forget-transactional` (11 confirmações
+  concorrentes, uma vence). Recuperação: `b058-temporal-continuity` (dois
+  reopenings), `p0-recovery`/`server` (retry/restart sem segundo prompt) e
+  rollback A0. Replay sem duplicar: `confirmation-idempotency-hardening`
+  (dupla confirmação → 1 execute; replay após restart),
+  `pending-adversarial` (approve/approve → 1 execução) e `retry-no-repeat`.
+  Execuções: Agent 132/132 + failover 44/44, runtime 40/40, API 10/10.
+- **#95 — keepalive de Durable Object não aplicável.** `compatibility_date`
+  do Agent é `2026-07-01` (anterior à mudança de 2026-10-01), e não há
+  `waitUntil`, `schedule`, `setAlarm` nem Workflow no Agent. Turnos são
+  bounded pelo request; trabalho durável já está na API. Não criar Workflow.
+- **#131 — memória versionada não planejada nesta versão.** A promoção de
+  skill já exige replay + safety + humano (A18) e memória não é autoridade
+  financeira; não há requisito funcional comprovado para estados
+  CURRENT/SUPERSEDED/HISTORICAL/CONFLICTED.
+- **#134 — Clef-omni não planejado nesta versão.** Áudio/visão seguem
+  default-off e a camada de decisão é advisory/default-off; sem provider novo
+  nem PoC.
+- **#116 — views adaptativas fora do backlog técnico ativo.** Preservada como
+  possibilidade de produto futura no ROADMAP, sem protótipo.
+
+### Mantidas
+
+- **#87 — KEEP + migração adiada.** O A0 segue necessário (broker único de
+  `financial.approval.propose` para o OpenCode, rollback e live-sync) e
+  `agents`/`ai` são runtime. `@cloudflare/ai-chat` não tem consumidor real,
+  mas fica retido até o lockfile poder ser regenerado. AI SDK v6/agents 0.26
+  só com necessidade funcional e prova de bundle.
+- **#235 — suspensa até a decisão de reativar áudio.** STT segue
+  `TED_AUDIO_STT_ENABLED=0` e coorte vazia; residual de duração por formato
+  documentado em `apps/agent/AGENTS.md` (F10).
+- **#245 — gate humano.** Detecta resíduos Test Family; purge exige
+  autorização, backup prévio e escopo por household. Nenhuma exclusão nesta
+  missão.
+- **#246 — gate humano.** Stores legacy seguem ligados sob
+  `DB_SCHEMA=legacy`; produção serve `DB_SCHEMA=canonical`. Remoção só após
+  cutover F3–F5 (ADR-024/025), com grep de `DB_SCHEMA=legacy` no CI.
+
+### Histórico do saneamento anterior
 
 Issue #218 foi implementada e fechada em 2026-11-14 pelo PR #367.
 
@@ -97,31 +157,20 @@ como **não planejado**: token single-use no servidor; mint por chamada
 preservado e proteção de replay inalterada. Também estão fechadas as anteriores
 #244, #165, #143, #345 e #362.
 
-Classificação atual:
-- **Concluídos no saneamento:** #229–#243 (exceto #234/#235/#245/#246),
-  #247, #248, #249, #251, #252.
-- **Suspensa pós-V1:** #235 (STT desligado; duração de áudio não-WAV exige
-  decodificação confiável ou recusa do formato).
-- **Gates humanos:** #245 (purge Test Family), #246 (cutover F3–F5).
-- **Pós-V1 / pesquisa:** #87, #95, #116, #131, #134, #136, #151.
-- **Entrega de produto:** #218 (freshness de evidência financeira), implementada
-  pelo PR #367: política em
-  [`evidence-freshness-policy.md`](../architecture/evidence-freshness-policy.md),
-  gate em `runGroundedRead`, telemetria `agent.evidence.stale` e goldens
-  TEDV2-064/065/066.
-
 #362 era duplicata do gate Release B (aberta pela última execução agendada do
 workflow `release-b-reminder.yml`, já removido) e foi encerrada com a mesma
 evidência de #345.
 
 ## 6. Sugestão para a próxima sessão
 
-1. Se o foco for produto, escolher **uma** decisão da seção 4 e tratá-la como
-   nova missão.
-2. Se o foco for plataforma, priorizar #87; para gates humanos, #245/#246; para
-   dívida de teste, #151.
+1. Gates humanos: #245 (purge Test Family) e #246 (cutover F3–F5) exigem
+   autorização explícita, backup prévio e decisão de operador; nenhum dos dois
+   bloqueia o produto.
+2. Plataforma: só reabrir #87 se houver necessidade funcional de AI SDK v6;
+   o PR #354 foi encerrado por incompatibilidade de peer graph.
+3. Áudio: #235 só entra quando a reativação de STT for decidida.
 
 **Limites que continuam valendo:** nada foi deployado neste saneamento; deploy
 é manual (`workflow_dispatch`) e exige autorização explícita, assim como merge
-ou alteração em produção. `TED_PRIVATE_VIEWS_ENABLED` permanece OFF; o trabalho
-local não commitado do cartão deve ser preservado.
+ou alteração em produção. `TED_PRIVATE_VIEWS_ENABLED` permanece OFF; live-sync
+está ativo conforme a configuração publicada.
