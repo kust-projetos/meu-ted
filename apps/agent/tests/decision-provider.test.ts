@@ -690,6 +690,39 @@ describe('issue #86/R3 — confidence outside [0,1] is malformed, never usable',
     expect(provider.stats().breakerOpens).toBe(1);
   });
 
+  it.each(['jev', 'clef', 'strands'] as const)(
+    '%s counts malformed responses, while a valid response resets consecutive failures',
+    async (dialect) => {
+      const malformed = dialect === 'jev' ? { choice: 'continuation', confidence: 2 }
+        : compatibleAnswers('continuation', 2);
+      const valid = dialect === 'jev' ? { choice: 'continuation', confidence: 0.9 }
+        : compatibleAnswers('continuation', 0.9);
+      const fetchImpl = vi.fn()
+        .mockResolvedValueOnce(json(malformed))
+        .mockResolvedValueOnce(json(valid))
+        .mockResolvedValueOnce(json(malformed))
+        .mockResolvedValueOnce(json(malformed));
+      const env = dialect === 'jev' ? { ...JEV_ENV }
+        : dialect === 'strands' ? { ...STRANDS_ENV }
+          : { TED_DECISION_PROVIDER: 'clef', AI: aiStub(null).binding };
+      if (dialect === 'clef') {
+        const run = (env.AI as { run: ReturnType<typeof vi.fn> }).run;
+        run.mockResolvedValueOnce(malformed).mockResolvedValueOnce(valid)
+          .mockResolvedValueOnce(malformed).mockResolvedValueOnce(malformed);
+      }
+      const provider = createDecisionProvider({
+        env,
+        ...(dialect === 'clef' ? {} : { fetchImpl: fetchImpl as unknown as typeof fetch }),
+      });
+      expect((await provider.evaluate(request(`${dialect}-bad-1`))).reason).toBe('malformed_response');
+      expect((await provider.evaluate(request(`${dialect}-valid`))).status).toBe('decision');
+      expect((await provider.evaluate(request(`${dialect}-bad-2`))).reason).toBe('malformed_response');
+      expect((await provider.evaluate(request(`${dialect}-bad-3`))).reason).toBe('malformed_response');
+      expect((await provider.evaluate(request(`${dialect}-blocked`))).reason).toBe('circuit_open');
+      expect(provider.stats().breakerOpens).toBe(1);
+    },
+  );
+
   it('the RESOLVER refuses it too, even from a provider the layer did not build', async () => {
     for (const confidence of [1.5, 100, -1, Number.NaN]) {
       const lying = {
