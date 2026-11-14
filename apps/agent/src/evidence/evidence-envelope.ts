@@ -50,6 +50,7 @@ export type EvidenceItem =
 export type EvidenceEnvelope = Readonly<{
   version: '1';
   items: readonly EvidenceItem[];
+  omittedReads?: readonly string[];
 }>;
 
 const MAX_PAYLOAD_BYTES = 10_000;
@@ -224,5 +225,8 @@ export const serializeEvidenceForPrompt = (envelope: EvidenceEnvelope): string =
     items: usable.map((item) => ({ retrievedAt: item.retrievedAt, data: item.data })),
     ...(absences.length > 0 ? { absences } : {}),
     ...(usable.length === 0 ? { noEvidence: true } : {}),
+    ...(envelope.omittedReads?.length
+      ? { evidence_truncated: true, evidence_omitted: [...envelope.omittedReads] }
+      : {}),
   });
 };

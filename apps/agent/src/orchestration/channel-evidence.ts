@@ -217,14 +217,24 @@ const READ_TOOL_NAME: Record<ReadKind, string> = {
   'analytics-breakdown': 'analytics_category_breakdown',
 };
 
-const selectReads = (plan: TurnPlan): readonly ReadKind[] => {
+const READ_KIND_ORDER: readonly ReadKind[] = [
+  'accounts', 'transactions', 'month-summary', 'cards', 'statements', 'payables',
+  'budgets', 'goals', 'categories', 'analytics-kpis', 'analytics-breakdown',
+];
+
+const selectReads = (plan: TurnPlan): { kinds: readonly ReadKind[]; omittedReads: readonly ReadKind[] } => {
   const selected: ReadKind[] = [];
+  const planned: ReadKind[] = [];
   for (const operation of plan.requestedOperations) {
     if (operation.kind !== 'read') continue;
     const kind = OPERATION_TO_READ[operation.name];
-    if (kind && !selected.includes(kind)) selected.push(kind);
-    if (selected.length >= MAX_EVIDENCE_READS) return selected;
+    if (kind && !planned.includes(kind)) planned.push(kind);
   }
+  selected.push(...planned.slice(0, MAX_EVIDENCE_READS));
+  const omittedReads = READ_KIND_ORDER.filter((kind) =>
+    planned.includes(kind) && !selected.includes(kind),
+  );
+  if (selected.length >= MAX_EVIDENCE_READS) return { kinds: selected, omittedReads };
   const fallback = DOMAIN_DEFAULT_READ[plan.domain] ?? null;
   // #256 P1: plano com `get_month_summary` (ou `spending_insights`) NUNCA
   // soma `list_transactions` via fallback de domínio — a segunda leitura
@@ -240,7 +250,7 @@ const selectReads = (plan: TurnPlan): readonly ReadKind[] => {
   // `boleto`) já planeja `list_payables`, então o fallback é no-op ali.
   const hasStatements = selected.includes('statements');
   if (fallback && !selected.includes(fallback) && selected.length < MAX_EVIDENCE_READS && !(hasSummary && fallback === 'transactions') && !hasBreakdown && !(hasStatements && fallback === 'payables')) selected.push(fallback);
-  return selected;
+  return { kinds: selected, omittedReads };
 };
 
 /**
@@ -731,7 +741,7 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
   const emit = deps.events ?? emitSanitizedEvent;
 
   const evidenceProvider = async (input: TurnInput, plan: TurnPlan): Promise<EvidenceEnvelope | null> => {
-    const kinds = selectReads(plan);
+    const { kinds, omittedReads } = selectReads(plan);
     if (kinds.length === 0) return null;
     // Per-turn credential, threaded explicitly into every read below — the
     // same scoping the model-tool path uses. This provider NEVER touches the
@@ -836,7 +846,10 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
       }
     }));
     try {
-      return createEvidenceEnvelope(withWorkspaceEmptyAggregate(settled.flat()), {});
+      const envelope = createEvidenceEnvelope(withWorkspaceEmptyAggregate(settled.flat()), {});
+      return omittedReads.length > 0
+        ? Object.freeze({ ...envelope, omittedReads: Object.freeze([...omittedReads]) })
+        : envelope;
     } catch (error) {
       // A19: the rejection's OWN reason is preserved when it is typed (an
       // item that violated the contract, or a payload past the cap — both are
