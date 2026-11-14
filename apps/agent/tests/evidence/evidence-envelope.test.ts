@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { collectEvidence, type EvidenceSource } from '../../src/evidence/evidence-collector.js';
 import {
   createEvidenceEnvelope,
+  assessEvidenceFreshness,
   ENTITY_RESOLUTION_OUTCOMES,
   isCurrentEvidence,
   READ_ABSENCE_REASONS,
@@ -101,8 +102,54 @@ describe('T2.3 evidence envelope', () => {
   });
 });
 
+describe('evidence freshness assessment', () => {
+  const now = Date.parse('2026-09-13T12:00:00.000Z');
+  const item = (ref: string, retrievedAt: string, status: EvidenceItem['status'] = 'ok'): EvidenceItem => ({
+    ref, source: 'api.balance', retrievedAt, status, data: {},
+  } as EvidenceItem);
+
+  it('classifies fresh evidence and includes the exact freshness-window boundary', () => {
+    const result = assessEvidenceFreshness([
+      item('fresh', new Date(now - 60_000).toISOString()),
+      item('boundary', new Date(now - 5 * 60_000).toISOString()),
+      item('outside', new Date(now - 5 * 60_000 - 1).toISOString()),
+    ], { now });
+    expect(result.current.map(({ ref }) => ref)).toEqual(['fresh', 'boundary']);
+    expect(result.stale.map(({ ref }) => ref)).toEqual(['outside']);
+  });
+
+  it('classifies future and invalid timestamps as stale without throwing', () => {
+    const result = assessEvidenceFreshness([
+      item('future', new Date(now + 1).toISOString()),
+      item('invalid', 'not-a-date'),
+    ], { now });
+    expect(result.stale.map(({ ref }) => ref)).toEqual(['future', 'invalid']);
+  });
+
+  it('keeps empty/error separate from freshness and preserves input order', () => {
+    const items = [
+      item('error', new Date(now).toISOString(), 'error'),
+      item('current-1', new Date(now).toISOString()),
+      item('empty', new Date(now).toISOString(), 'empty'),
+      item('stale', new Date(now - 5 * 60_000 - 1).toISOString()),
+      item('current-2', new Date(now - 1).toISOString()),
+    ];
+    const result = assessEvidenceFreshness(items, { now });
+    expect(result.current.map(({ ref }) => ref)).toEqual(['current-1', 'current-2']);
+    expect(result.stale.map(({ ref }) => ref)).toEqual(['stale']);
+    expect(result.nonOk.map(({ ref }) => ref)).toEqual(['error', 'empty']);
+    expect(assessEvidenceFreshness([], { now })).toEqual({ current: [], stale: [], nonOk: [] });
+  });
+
+  it('uses a five-minute default and honors a custom maxAgeMs in isCurrentEvidence', () => {
+    const evidence = item('dated', new Date(now - 6 * 60_000).toISOString());
+    expect(isCurrentEvidence(evidence, now)).toBe(false);
+    expect(isCurrentEvidence(evidence, now, 6 * 60_000)).toBe(true);
+  });
+});
+
 /**
- * A04(a) / R04 — typed SEPARATE axes on the existing envelope (never a single
+ * A04(a) / R04 - typed SEPARATE axes on the existing envelope (never a single
  * enumeration): read absence, entity resolution and read failure each keep
  * their own vocabulary, and `reason` is sanitized by construction (closed
  * axis), so no raw exception/HTTP text can reach the prompt.

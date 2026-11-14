@@ -34,7 +34,7 @@ const DOMAINS = [
 
 const envelope = (data: unknown): EvidenceEnvelope => ({
   version: '1',
-  items: [{ ref: 'api', source: 'accounts.list', retrievedAt: '2026-10-19T12:00:00Z', status: 'ok', data }],
+  items: [{ ref: 'api', source: 'accounts.list', retrievedAt: new Date().toISOString(), status: 'ok', data }],
 });
 
 const identity: AuthenticatedIdentity = { actorId: 'actor-1', workspaceId: 'ws-1', role: 'owner', deviceId: 'dev-1' };
