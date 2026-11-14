@@ -135,6 +135,31 @@ const parseEnvAllowlist = (raw: string | undefined): string[] | null => {
   return items.length > 0 ? items : null;
 };
 
+export interface ResolvedRelayAllowlist {
+  source: 'env' | 'db' | 'default';
+  allowed: Set<string>;
+}
+
+export const describeRelayAllowlist = (
+  resolved: ResolvedRelayAllowlist,
+): { source: ResolvedRelayAllowlist['source']; models: string[]; count: number; truncated: boolean } => {
+  const models = [...resolved.allowed].sort();
+  return {
+    source: resolved.source,
+    models: models.slice(0, 50),
+    count: models.length,
+    truncated: models.length > 50,
+  };
+};
+
+let relayAllowlistLogged = false;
+
+const logRelayAllowlistOnce = (resolved: ResolvedRelayAllowlist): void => {
+  if (relayAllowlistLogged) return;
+  relayAllowlistLogged = true;
+  console.info({ event: 'relay.allowlist_effective', ...describeRelayAllowlist(resolved) });
+};
+
 export interface RelayModelSource {
   listModels(): Promise<Array<{ providerId: string; modelId: string; enabled: boolean; protocol?: string }>>;
   listProviders(): Promise<Array<{ id: string; enabled: boolean; kind: string }>>;
@@ -158,13 +183,17 @@ export const createRelayModelResolver = (deps: {
   store?: RelayModelSource;
   cacheTtlMs?: number;
   now?: () => number;
-} = {}): (() => Promise<{ allowed: Set<string>; protocols: Map<string, string> }>) => {
+} = {}): (() => Promise<{ source: 'env' | 'db' | 'default'; allowed: Set<string>; protocols: Map<string, string> }>) => {
   const ttl = deps.cacheTtlMs ?? RELAY_MODEL_CACHE_TTL_MS;
   const now = deps.now ?? Date.now;
-  let cache: { at: number; allowed: Set<string>; protocols: Map<string, string> } | null = null;
-  return async (): Promise<{ allowed: Set<string>; protocols: Map<string, string> }> => {
+  let cache: { at: number; source: 'db'; allowed: Set<string>; protocols: Map<string, string> } | null = null;
+  return async (): Promise<{ source: 'env' | 'db' | 'default'; allowed: Set<string>; protocols: Map<string, string> }> => {
     const envList = parseEnvAllowlist(process.env.RELAY_ALLOWED_MODELS);
-    if (envList) return { allowed: new Set(envList), protocols: new Map() };
+    if (envList) {
+      const resolved = { source: 'env' as const, allowed: new Set(envList), protocols: new Map<string, string>() };
+      logRelayAllowlistOnce(resolved);
+      return resolved;
+    }
     if (deps.store) {
       if (!cache || now() - cache.at >= ttl) {
         const [models, providers] = await Promise.all([
@@ -184,11 +213,15 @@ export const createRelayModelResolver = (deps: {
             protocols.set(key, m.protocol);
           }
         }
-        cache = { at: now(), allowed, protocols };
+        cache = { at: now(), source: 'db', allowed, protocols };
       }
-      return { allowed: cache.allowed, protocols: cache.protocols };
+      const resolved = { source: cache.source, allowed: cache.allowed, protocols: cache.protocols };
+      logRelayAllowlistOnce(resolved);
+      return resolved;
     }
-    return { allowed: DEFAULT_ALLOWED_MODELS, protocols: new Map() };
+    const resolved = { source: 'default' as const, allowed: DEFAULT_ALLOWED_MODELS, protocols: new Map<string, string>() };
+    logRelayAllowlistOnce(resolved);
+    return resolved;
   };
 };
 
