@@ -1,7 +1,8 @@
-# Pendências do Meu Ted — pós-V1 (2026-11-13)
+# Pendências do Meu Ted - pós-V1 (2026-11-14)
 
-**Estado de referência:** baseline `main@26014bf`; CI `43441230429` e PWA CI
-`43441230568` verdes nesse SHA. Produção documentada: API `32a05cb` (build
+**Estado de referência:** saneamento de 2026-11-14; PRs #361, #363 e #364
+mergeados. Referência do merge do #364: `main@1479b4f`. CI `43441230429` e PWA CI
+`43441230568` verdes no baseline anterior `main@26014bf`. Produção documentada: API `32a05cb` (build
 `43419632296`, Contabo), Agent `15c9691` (deploy `43435350750`, ATTESTED),
 PWA `15c9691` (build `43434093369`, deploy `43435345101`, ATTESTED). Release
 `v1.0.4` → `32a05cb`. Release B concluída em 2026-11-11. Live-sync ativo.
@@ -82,14 +83,24 @@ conversa foram implementados em #334–#337; os demais seguem sem autorização:
 
 ## 5. Backlog técnico pós-V1
 
-Issues abertas (31) — ordem numérica: #229, #230, #231, #232, #233, #234,
-#235, #236, #237, #238, #239, #240, #241, #242, #243, #245, #246, #247,
-#248, #249, #250, #251, #252, #218, #151, #136, #134, #131, #116, #95,
-#87. Fechadas: #244, #165, #143, #345, #362.
+Issues abertas (13): #87, #95, #116, #131, #134, #136, #151, #218, #234,
+#235, #245, #246, #250.
 
-Classificação: 14 itens da era A0 (#229–#242) revalidados como válidos porque
-o A0 permanece ativo como rollback e broker Pending V2. Prioridade para #218,
-#243, #248, #249, #251, #252.
+Issues fechadas no saneamento: #229, #230, #231, #232, #233, #236, #237,
+#238, #239, #240, #241, #242, #243, #247, #248, #249, #251, #252. Também
+estão fechadas as anteriores #244, #165, #143, #345 e #362.
+
+Classificação atual:
+- **Concluídos no saneamento:** #229–#243 (exceto #234/#235/#245/#246),
+  #247, #248, #249, #251, #252.
+- **Bloqueados por decisão do operador:** #234 (manter parser+unpdf ou apagar
+  ambos), #235 (teto temporal de STT não-WAV; STT desligado), #250 (cache de
+  token é incompatível com token single-use; aceitar mint por chamada ou mudar
+  o modelo de replay).
+- **Gates humanos:** #245 (purge Test Family), #246 (cutover F3–F5).
+- **Pós-V1 / pesquisa:** #87, #95, #116, #131, #134, #136, #151.
+- **Feature de produto:** #218 (freshness de evidência financeira — feature,
+  não defeito reproduzido).
 
 #362 era duplicata do gate Release B (aberta pela última execução agendada do
 workflow `release-b-reminder.yml`, já removido) e foi encerrada com a mesma
@@ -97,11 +108,12 @@ evidência de #345.
 
 ## 6. Sugestão para a próxima sessão
 
-1. Corrigir os itens P2 (#243, #248, #249, #251, #252) antes de qualquer
-   nova feature.
+1. Resolver os bloqueios que dependem de decisão do operador e os gates humanos
+   antes de reabrir os respectivos trabalhos.
 2. Em paralelo, se o foco for produto, escolher **uma** decisão da seção 4 e
    tratá-la como nova missão.
 
-**Limites que continuam valendo:** sem deploy, merge ou alteração em produção
-sem autorização explícita; `TED_PRIVATE_VIEWS_ENABLED` permanece OFF; o
-trabalho local não commitado do cartão deve ser preservado.
+**Limites que continuam valendo:** nada foi deployado neste saneamento; deploy
+é manual (`workflow_dispatch`) e exige autorização explícita, assim como merge
+ou alteração em produção. `TED_PRIVATE_VIEWS_ENABLED` permanece OFF; o trabalho
+local não commitado do cartão deve ser preservado.
