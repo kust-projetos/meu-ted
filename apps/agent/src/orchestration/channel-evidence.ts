@@ -230,11 +230,8 @@ const selectReads = (plan: TurnPlan): { kinds: readonly ReadKind[]; omittedReads
     const kind = OPERATION_TO_READ[operation.name];
     if (kind && !planned.includes(kind)) planned.push(kind);
   }
-  selected.push(...planned.slice(0, MAX_EVIDENCE_READS));
-  const omittedReads = READ_KIND_ORDER.filter((kind) =>
-    planned.includes(kind) && !selected.includes(kind),
-  );
-  if (selected.length >= MAX_EVIDENCE_READS) return { kinds: selected, omittedReads };
+  selected.push(...planned);
+  const omittedReads: ReadKind[] = [];
   const fallback = DOMAIN_DEFAULT_READ[plan.domain] ?? null;
   // #256 P1: plano com `get_month_summary` (ou `spending_insights`) NUNCA
   // soma `list_transactions` via fallback de domínio — a segunda leitura
@@ -249,7 +246,7 @@ const selectReads = (plan: TurnPlan): { kinds: readonly ReadKind[]; omittedReads
   // FAIL de qualidade congelado. Vencimento explícito (`venc*`/`a pagar`/
   // `boleto`) já planeja `list_payables`, então o fallback é no-op ali.
   const hasStatements = selected.includes('statements');
-  if (fallback && !selected.includes(fallback) && selected.length < MAX_EVIDENCE_READS && !(hasSummary && fallback === 'transactions') && !hasBreakdown && !(hasStatements && fallback === 'payables')) selected.push(fallback);
+  if (fallback && !selected.includes(fallback) && !(hasSummary && fallback === 'transactions') && !hasBreakdown && !(hasStatements && fallback === 'payables')) selected.push(fallback);
   return { kinds: selected, omittedReads };
 };
 
@@ -739,10 +736,31 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
   const tools = deps.readTools ?? defaultChannelReadTools();
   const timeoutMs = deps.readTimeoutMs ?? DEFAULT_READ_TIMEOUT_MS;
   const emit = deps.events ?? emitSanitizedEvent;
+  const readCache = new Map<string, Promise<EvidenceInput[]>>();
+  const readCounts = new Map<string, number>();
 
   const evidenceProvider = async (input: TurnInput, plan: TurnPlan): Promise<EvidenceEnvelope | null> => {
-    const { kinds, omittedReads } = selectReads(plan);
-    if (kinds.length === 0) return null;
+    const { kinds: candidates } = selectReads(plan);
+    const intentionId = input.intentionId;
+    const signatureFor = (kind: ReadKind) => JSON.stringify([intentionId, kind, input.workspaceId, input.text]);
+    const kinds: ReadKind[] = [];
+    const omittedSet = new Set<ReadKind>();
+    let remaining = MAX_EVIDENCE_READS - (readCounts.get(intentionId) ?? 0);
+    for (const kind of candidates) {
+      const key = signatureFor(kind);
+      if (readCache.has(key)) kinds.push(kind);
+      else if (remaining > 0) {
+        kinds.push(kind);
+        remaining -= 1;
+        readCounts.set(intentionId, (readCounts.get(intentionId) ?? 0) + 1);
+      } else omittedSet.add(kind);
+    }
+    const omittedReads = READ_KIND_ORDER.filter((kind) => omittedSet.has(kind));
+    if (kinds.length === 0) {
+      if (omittedReads.length === 0) return null;
+      const envelope = createEvidenceEnvelope([], {});
+      return Object.freeze({ ...envelope, omittedReads: Object.freeze([...omittedReads]) });
+    }
     // Per-turn credential, threaded explicitly into every read below — the
     // same scoping the model-tool path uses. This provider NEVER touches the
     // legacy module-global token slot: concurrent turns from different
@@ -816,6 +834,10 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
       ),
     };
     const settled = await Promise.all(kinds.map(async (kind) => {
+      const key = signatureFor(kind);
+      const cached = readCache.get(key);
+      if (cached) return cached;
+      const readPromise = (async (): Promise<EvidenceInput[]> => {
       const toolName = READ_TOOL_NAME[kind];
       const startedAt = Date.now();
       // Sanitized lifecycle: name/status/latency only — never params,
@@ -844,6 +866,9 @@ export const createChannelGrounding = (deps: ChannelGroundingDeps): ChannelGroun
         }
         return [errorItem(kind, kind, classifyReadFailure(error))];
       }
+      })();
+      readCache.set(key, readPromise);
+      return readPromise;
     }));
     try {
       const envelope = createEvidenceEnvelope(withWorkspaceEmptyAggregate(settled.flat()), {});

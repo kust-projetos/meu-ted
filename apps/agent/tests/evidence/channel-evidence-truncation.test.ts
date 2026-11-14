@@ -51,4 +51,40 @@ describe('channel evidence read-cap signaling', () => {
     expect(prompt).not.toHaveProperty('evidence_truncated');
     expect(prompt).not.toHaveProperty('evidence_omitted');
   });
+
+  it('memoizes repeated reads for the same intention and arguments', async () => {
+    const calls: string[] = [];
+    const tools = makeTools(calls);
+    const grounding = createChannelGrounding({ respond: async () => '', readTools: tools });
+    const plan = makePlan(['list_accounts', 'list_recent_transactions']);
+
+    await grounding.evidenceProvider(input, plan);
+    await grounding.evidenceProvider(input, plan);
+
+    expect(calls).toEqual(['accounts', 'transactions']);
+  });
+
+  it('does not share cached reads across intentions', async () => {
+    const calls: string[] = [];
+    const grounding = createChannelGrounding({ respond: async () => '', readTools: makeTools(calls) });
+
+    await grounding.evidenceProvider(input, makePlan(['list_accounts', 'list_recent_transactions']));
+    await grounding.evidenceProvider({ ...input, intentionId: 'another-intention' }, makePlan(['list_accounts', 'list_recent_transactions']));
+
+    expect(calls).toEqual(['accounts', 'transactions', 'accounts', 'transactions']);
+  });
+
+  it('applies the read cap across calls and reports newly omitted reads', async () => {
+    const calls: string[] = [];
+    const grounding = createChannelGrounding({ respond: async () => '', readTools: makeTools(calls) });
+    await grounding.evidenceProvider(input, makePlan(['list_accounts', 'list_recent_transactions']));
+
+    const envelope = await grounding.evidenceProvider(
+      { ...input, text: 'outro plano' },
+      makePlan(['list_budgets', 'list_goals']),
+    );
+
+    expect(calls).toEqual(['accounts', 'transactions']);
+    expect(envelope?.omittedReads).toEqual(['budgets', 'goals']);
+  });
 });
