@@ -46,6 +46,7 @@ import {
   renderEvidenceForPrompt,
   sanitizeExternalQuery,
 } from './web-evidence.js';
+import { hasExplicitMutationIntent, isMutatingTool, resolveIntentGate } from '../safety/tool-approvals.js';
 
 export type ToolExecutionContext = {
   delegatedToken?: string;
@@ -174,6 +175,19 @@ const generatedByName = (): Map<string, (typeof generatedHttpTools)[number]> => 
   return map;
 };
 
+export const unresolvedCatalogTools = ({
+  descriptions,
+  generatedNames,
+  nativeNames = [],
+}: {
+  descriptions: Record<string, string>;
+  generatedNames: readonly string[];
+  nativeNames?: readonly string[];
+}): string[] => {
+  const resolved = new Set([...generatedNames, ...nativeNames, ...CORE_READ_TOOLS]);
+  return Object.keys(descriptions).filter((name) => !resolved.has(name)).sort();
+};
+
 /**
  * Curated subset for a turn: core reads + tools of the matched skills,
  * capped at MAX_EXPOSED_TOOLS (reads win ties). Order is stable.
@@ -279,6 +293,17 @@ export const buildExposedTools = (
 ): Record<string, ReturnType<typeof tool>> => {
   const generated = generatedByName();
   const out: Record<string, ReturnType<typeof tool>> = {};
+  const missingCatalogTools = unresolvedCatalogTools({
+    descriptions: TOOL_DESCRIPTIONS,
+    generatedNames: [...generated.keys()],
+    nativeNames: ['web_search', 'web_fetch', ...ANALYTICS_READ_TOOLS, ...Object.keys(extraTools ?? {})],
+  });
+  if (missingCatalogTools.length > 0) {
+    console.error({
+      event: 'tool.catalog_missing_registry_entry',
+      names: missingCatalogTools,
+    });
+  }
   const webProvider = createWebSearchProvider(ctx.webEnv ?? {}, ctx.fetchImpl ?? fetch);
   // A11: the egress allowlist is resolved once per turn from the operator env
   // and handed to the guard; empty (default) means `web_fetch` is unavailable.
@@ -439,14 +464,24 @@ export const buildExposedTools = (
       continue;
     }
     const generatedTool = generated.get(name);
-    if (!generatedTool) continue;
+    if (!generatedTool) {
+      if (name in TOOL_DESCRIPTIONS) {
+        console.error({ event: 'tool.catalog_missing_registry_entry', names: [name] });
+      }
+      continue;
+    }
     out[name] = tool({
       description: generatedTool.description ?? name,
       inputSchema: jsonSchema(sanitizeSchema(generatedTool.parameters)),
       execute: async (params: Record<string, unknown>) => {
-        const isMutating = !CORE_READ_TOOLS.includes(name) && name !== 'web_search' && name !== 'web_fetch' &&
-          !['list_', 'get_', 'check_', 'spending_', 'detect_', 'budget_trends', 'audit_', 'analytics_'].some((prefix) => name.startsWith(prefix));
-        if (isMutating) {
+        const isMutating = isMutatingTool(name);
+        const intentGate = resolveIntentGate({
+          isMutating,
+          explicitMutationIntent: hasExplicitMutationIntent(ctx.lastUserMessage),
+          autoExecutionEligible: false,
+          autoExecutionMode: 'off',
+        });
+        if (intentGate.requiresApproval) {
           return { blocked: true, reason: 'Mutação bloqueada: somente MutationExecutor V2 pode executar escrita.' };
         }
         return generatedTool.execute('model-tool', params, undefined, undefined, invocationAuth);

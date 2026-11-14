@@ -4,6 +4,7 @@ import {
   getApprovalRequirement,
   validateActorIntentForMutation,
   hasExplicitMutationIntent,
+  resolveIntentGate,
 } from '../src/safety/tool-approvals.js';
 import { isAutoExecutionEligible } from '../src/safety/auto-execution.js';
 
@@ -62,5 +63,37 @@ describe('deterministic auto-execution eligibility', () => {
     expect(isAutoExecutionEligible({ ...eligible, ambiguity: 'which account' })).toBe(false);
     expect(isAutoExecutionEligible({ ...eligible, latestActorText: 'Quanto gastei?' })).toBe(false);
     // Memory, assistant history and tool output are deliberately not inputs.
+  });
+});
+
+describe('intent gate precedence', () => {
+  it('keeps a mutation approval-gated despite explicit intent and ineligibility', () => {
+    expect(resolveIntentGate({
+      isMutating: true, explicitMutationIntent: true, autoExecutionEligible: false, autoExecutionMode: 'on',
+    })).toEqual({ blocked: false, requiresApproval: true, executeAutomatically: false });
+  });
+
+  it('autoexecutes only in on mode when eligible', () => {
+    expect(resolveIntentGate({
+      isMutating: true, explicitMutationIntent: true, autoExecutionEligible: true, autoExecutionMode: 'on',
+    }).executeAutomatically).toBe(true);
+  });
+
+  it.each(['off', 'shadow'] as const)('does not autoexecute in %s mode', (autoExecutionMode) => {
+    expect(resolveIntentGate({
+      isMutating: true, explicitMutationIntent: true, autoExecutionEligible: true, autoExecutionMode,
+    }).executeAutomatically).toBe(false);
+  });
+
+  it('does not block a read because text expresses mutation intent', () => {
+    expect(resolveIntentGate({
+      isMutating: false, explicitMutationIntent: true, autoExecutionEligible: false, autoExecutionMode: 'on',
+    })).toEqual({ blocked: false, requiresApproval: false, executeAutomatically: false });
+  });
+
+  it('is independent of input property order', () => {
+    const first = { isMutating: true, explicitMutationIntent: false, autoExecutionEligible: true, autoExecutionMode: 'on' as const };
+    const reordered = { autoExecutionMode: 'on' as const, autoExecutionEligible: true, explicitMutationIntent: false, isMutating: true };
+    expect(resolveIntentGate(first)).toEqual(resolveIntentGate(reordered));
   });
 });

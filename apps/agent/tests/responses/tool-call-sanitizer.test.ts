@@ -55,10 +55,15 @@ describe('stripToolCallMarkup (TEDV3-003 deterministic defense)', () => {
     expect(stripToolCallMarkup('<|tool_call|>').removedBlocks).toBe(1);
   });
 
-  it('removes a fenced JSON tool-call block at the message boundary', () => {
+  it('removes a fenced invocation-shaped JSON block at the message boundary', () => {
     const result = stripToolCallMarkup('```json\n{"name": "check_budgets", "arguments": {}}\n```');
     expect(result.text).toBe('');
     expect(result.removedBlocks).toBe(1);
+  });
+
+  it('preserves literal tool_call markup in a fenced citation, including at the boundary', () => {
+    const quote = '```text\n<tool_call>check_budgets</tool_call>\n```';
+    expect(stripToolCallMarkup(quote).text).toBe(quote);
   });
 
   it('keeps a fenced code block that is NOT a tool-call payload', () => {
@@ -81,12 +86,14 @@ describe('stripToolCallMarkup (TEDV3-003 deterministic defense)', () => {
     expect(result.removedBlocks).toBe(2);
   });
 
-  it('does NOT corrupt mid-prose markup (quoted literal or syntax explanation)', () => {
+  it('neutralizes mid-prose markers', () => {
     const quoted = 'Você escreveu "<tool_call>" — isso não é um comando que eu execute.';
-    expect(stripToolCallMarkup(quoted)).toEqual({ text: quoted, removedBlocks: 0, changed: false });
+    expect(stripToolCallMarkup(quoted).text).toBe(quoted.replace('<tool_call>', ''));
 
     const explained = 'Para consultar orçamentos o sistema usaria <tool_call>check_budgets</tool_call> internamente.';
-    expect(stripToolCallMarkup(explained)).toEqual({ text: explained, removedBlocks: 0, changed: false });
+    expect(stripToolCallMarkup(explained).text).toBe(explained.replace('<tool_call>', '').replace('</tool_call>', ''));
+    const fenced = '```text\n<tool_call>x</tool_call>\n```';
+    expect(stripToolCallMarkup(fenced).text).toBe(fenced);
   });
 
   it('removes a truncated leading <tool_call> with no closing tag', () => {
@@ -155,7 +162,7 @@ describe('grounded response pipeline with the sanitizer (TEDV3-003)', () => {
     const text = 'Você tentou escrever <tool_call> como comando — isso não é algo que eu execute.';
     const result = await createGroundedResponseWithRetry(text, env);
     expect(result.grounded).toBe(true);
-    expect(result.text).toBe(text);
+    expect(result.text).toBe(text.replace('<tool_call>', ''));
   });
 
   it('a correction retry that returns markup-only still falls back safe', async () => {

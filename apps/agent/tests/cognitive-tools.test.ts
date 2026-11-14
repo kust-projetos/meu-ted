@@ -9,6 +9,7 @@ import {
   toolSkillLines,
   toolSkillMap,
 } from '../src/agent-config/tools.js';
+import { isMutatingTool } from '../src/safety/tool-approvals.js';
 
 const baseCtx = {
   delegatedToken: 'delegated-test-token',
@@ -18,6 +19,23 @@ const baseCtx = {
   intentionId: 'intent-1',
   lastUserMessage: 'qual o meu saldo?',
 };
+
+describe('single mutation classifier', () => {
+  it.each([
+    'create_expense', 'create_income', 'create_transfer', 'update_transaction',
+    'delete_transaction', 'create_card_purchase', 'create_card_installments',
+    'pay_statement', 'deactivate_account', 'deactivate_category',
+  ])('classifies sensitive mutation %s as mutating', (name) => {
+    expect(isMutatingTool(name)).toBe(true);
+  });
+
+  it.each([
+    'list_accounts', 'get_balance', 'get_month_summary', 'analytics_kpis',
+    'spending_insights', 'audit_logs', 'web_search', 'web_fetch',
+  ])('classifies read %s as non-mutating', (name) => {
+    expect(isMutatingTool(name)).toBe(false);
+  });
+});
 
 describe('tool subset + skill map', () => {
   it('always includes core reads and caps the set', () => {

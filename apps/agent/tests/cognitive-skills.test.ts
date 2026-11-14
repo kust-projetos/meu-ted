@@ -6,6 +6,7 @@ import { CORE_READ_TOOLS, selectToolsFor } from '../src/agent-config/tools.js';
 import { assembleCognition } from '../src/agent-config/index.js';
 import type { UserSkillVersion } from '../src/agent-config/user-skills/store.js';
 import { toSelectableSkills } from '../src/agent-config/user-skills/resolve.js';
+import { normalizeAnalyticsQuery } from '../src/agent-config/analytics-envelope.js';
 
 describe('skills catalog', () => {
   it('covers every required situation with one line each', () => {
@@ -41,11 +42,23 @@ describe('skills catalog', () => {
     expect(body).toMatch(/NUNCA some/i);
     expect(body).toMatch(/agregação/i);
   });
+
+  it('relatorios aligns analytics period guidance with envelope presets', () => {
+    const body = renderSkillBody(ALL_SKILLS.find((s) => s.name === 'relatorios')!);
+    expect(body).toMatch(/presets yearMonth\/mês são permitidos e resolvidos pelo envelope/i);
+    expect(body).toMatch(/period=custom somente com from e to explícitos/i);
+    expect(body).toMatch(/declare basis e o período efetivo/i);
+    expect(normalizeAnalyticsQuery({ yearMonth: '2026-11' })).toMatchObject({ ok: true });
+  });
 });
 
 describe('skill selection heuristic', () => {
   it.each([
+    ['quanto gastei esse mês?', 'relatorios'],
+    ['quanto gastamos no mês passado?', 'relatorios'],
+    ['gastei 50 no mercado', 'registros'],
     ['lancei um gasto no mercado hoje', 'registros'],
+    ['liste meus gastos', 'registros'],
     ['qual o meu saldo?', 'saldo-extrato'],
     ['crie uma subcategoria em alimentação', 'categorias'],
     ['quero um orçamento para lazer', 'orcamentos-metas'],

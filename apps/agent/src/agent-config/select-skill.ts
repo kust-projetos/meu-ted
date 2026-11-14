@@ -87,7 +87,11 @@ export const fitSkills = (
   let best = 0;
   for (const skill of catalog) {
     const score = skillScore(skill, haystack);
-    if (score > best) {
+    // Prefer aggregation over transaction lookup when both skills tie.
+    if (
+      score > best ||
+      (score === best && skill.name === 'relatorios' && selected?.name === 'registros')
+    ) {
       best = score;
       selected = skill;
     }

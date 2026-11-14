@@ -1,4 +1,4 @@
-import { hasExplicitMutationIntent } from './tool-approvals.js';
+import { hasExplicitMutationIntent, resolveIntentGate } from './tool-approvals.js';
 
 export const AUTOEXECUTION_ELIGIBLE_TOOLS = [
   'transactions.expense.create',
@@ -30,9 +30,16 @@ export const isAutoExecutionEligible = (input: {
   ambiguity: string | null;
   latestActorText: string;
   attachments: readonly unknown[];
-}): boolean =>
-  input.attachments.length === 0 &&
+}): boolean => {
+  const eligible = input.attachments.length === 0 &&
   AUTOEXECUTION_ELIGIBLE_TOOLS.includes(input.tool as (typeof AUTOEXECUTION_ELIGIBLE_TOOLS)[number]) &&
   input.missingFields.length === 0 &&
   input.ambiguity === null &&
   hasExplicitMutationIntent(input.latestActorText);
+  return resolveIntentGate({
+    isMutating: true,
+    explicitMutationIntent: hasExplicitMutationIntent(input.latestActorText),
+    autoExecutionEligible: eligible,
+    autoExecutionMode: 'on',
+  }).executeAutomatically;
+};
