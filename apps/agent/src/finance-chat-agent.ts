@@ -4521,6 +4521,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
             );
             const readUserId = stableHistoryMessageId('user', intentionId);
             const readAsstId = stableHistoryMessageId('assistant', intentionId);
+            const readToPersist: UIMessage[] = [];
             if (!readExistingIds.has(readUserId)) {
               const readUserMessage: UIMessage = {
                 id: readUserId,
@@ -4531,7 +4532,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
                   turnAudience,
                 ),
               } as unknown as UIMessage;
-              await this.persistMessages([readUserMessage]);
+              readToPersist.push(readUserMessage);
             }
             if (readExistingIds.has(readAsstId)) {
               // Redelivery: the durable answer already exists — skip the
@@ -4546,8 +4547,11 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
                   turnAudience,
                 ),
               } as unknown as UIMessage;
+              readToPersist.push(assistantMessage);
+            }
+            if (readToPersist.length > 0) {
               try {
-                await this.persistMessages([assistantMessage]);
+                await this.persistMessages(readToPersist);
               } catch (persistError) {
                 // §40 (issue #99): a pergunta publicada é a evidência do turno —
                 // se a persistência falhou (502), pendings de forget criados POR
@@ -4760,17 +4764,33 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
           const existingIds = new Set(
             (Array.isArray(this.messages) ? this.messages : []).map((m) => String((m as { id?: unknown }).id ?? '')),
           );
-          if (!existingIds.has(failedAssistantId) && typeof this.persistMessages === 'function') {
-            const failedAssistantMessage: UIMessage = {
-              id: failedAssistantId,
-              role: 'assistant',
-              parts: [{ type: 'text', text: 'Não foi possível concluir a resposta. Tente novamente.' }],
-              metadata: stampMessageAudience(
-                { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: new Date().toISOString(), intentionId },
-                turnAudience,
-              ),
-            } as unknown as UIMessage;
-            await this.persistMessages([failedAssistantMessage]);
+          if (typeof this.persistMessages === 'function') {
+            const failedToPersist: UIMessage[] = [];
+            const failedUserId = stableHistoryMessageId('user', intentionId);
+            if (!existingIds.has(failedUserId)) {
+              failedToPersist.push({
+                id: failedUserId,
+                role: 'user',
+                parts: [{ type: 'text', text: scrubForPersistence(restInput.text) }],
+                metadata: stampMessageAudience(
+                  { actorId: identity.actorId, workspaceId: identity.workspaceId, createdAt: new Date().toISOString(), intentionId },
+                  turnAudience,
+                ),
+              } as unknown as UIMessage);
+            }
+            if (!existingIds.has(failedAssistantId)) {
+              const failedAssistantMessage: UIMessage = {
+                id: failedAssistantId,
+                role: 'assistant',
+                parts: [{ type: 'text', text: 'Não foi possível concluir a resposta. Tente novamente.' }],
+                metadata: stampMessageAudience(
+                  { actorId: 'ted', workspaceId: identity.workspaceId, createdAt: new Date().toISOString(), intentionId },
+                  turnAudience,
+                ),
+              } as unknown as UIMessage;
+              failedToPersist.push(failedAssistantMessage);
+            }
+            if (failedToPersist.length > 0) await this.persistMessages(failedToPersist);
           }
         } catch {
           // Best-effort persistence of the error turn must never mask the
