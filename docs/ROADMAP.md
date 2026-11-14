@@ -1,6 +1,6 @@
 # Meu Ted — Roadmap
 
-**Last verified:** 2026-11-13
+**Last verified:** 2026-11-14
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 Backlog priorizado e pendências do plano: [`reference/PENDENCIAS.md`](reference/PENDENCIAS.md).
@@ -16,14 +16,16 @@ Backlog priorizado e pendências do plano: [`reference/PENDENCIAS.md`](reference
 | CI, containers e deploys gateados | Concluído | Billing do GitHub Actions resolvido (repo público, 2026-09-25); branch protection em `main` (sem push direto); deploys verificam `head_repository` e `workflow_run.event == push`; falso-verde do comprehensive E2E provado corrigido (2026-10-01). |
 | Dados canônicos (conversor + cutover) | Em andamento — gate humano | A API de produção serve o esquema canônico `pi_financeiro_canonical` (rota fresh concluída); repair commitado com residual zero (32 contas vivas) e reconciliação `--provenance=fresh` drifted=0; conversor pronto ([ADR-025](adr/ADR-025-canonical-converter.md)) com F2 smoke PASS e real-dump NO-GO documentado (irrelevante para produção). A aposentadoria do legacy/archive (F3–F5) é gate humano por design ([ADR-024](adr/ADR-024-legacy-canonical-conversion-policy.md)). |
 | Release B (descomissionamento do bearer legado) | **Concluído em 11/11/2026** | Janela D11-R2 conferida na Contabo (somente SELECT): **0 eventos** `auth.request.legacy_bearer_used` após `2026-10-19T13:23:55.399917Z` (total histórico 406). Flip aplicado: `SESSION_BEARER_FALLBACK_ENABLED=off` na API (env do container, health/ready verdes, bearer-only 401) e build da PWA com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` (PR #320, deploy ATTESTED `5e69dec`). Sink e evidência histórica em [`reports/2026-10-03-vps-migration-contabo.md`](reports/2026-10-03-vps-migration-contabo.md). |
-| Auditoria de estado 2026-11-14 | Verificado | `main@07c654c`; PRs #361, #363, #364 e #365 mergeados; CI e PWA CI verdes; Release B concluída; live-sync ativo; OpenCode canary em 2 workspaces e 3 RPC paths; 11 issues abertas classificadas. Produção documentada: API `32a05cb`, Agent/PWA `15c9691` (ATTESTED). |
+| Auditoria de estado 2026-11-14 | Verificado | `main@3d4e0c1`; saneamento final concluído; CI `43607796925` e PWA CI `43607797036` verdes. Produção documentada: API `32a05cb`, Agent/PWA `15c9691` (ATTESTED). |
+| Saneamento final 2026-11-14 | Concluído (documentação e evidência) | #151/#136 fechadas; #95/#116/#131/#134 encerradas; #87 KEEP; #354 encerrado por incompatibilidade; #245/#246 gates humanos; E2E 21/21 e testes focais 226/226. |
+| Possibilidades de produto (não planejadas) | Fora do backlog ativo | Views adaptativas (#116), memória versionada (#131), Clef-omni (#134); reabrir só com requisito funcional. |
 | Itens future-dated | Planejado | Compat localStorage/bearer em 2026-12-01 (ADR-011/015) e allowlists (`pwa-audit` + `.trivyignore`) em 2026-12-31. Histórico detalhado em [`docs/reports/`](reports/) e [`MEU-TED-V1-FINAL-STATE.md`](MEU-TED-V1-FINAL-STATE.md). |
 | TED Agent A19 (anexos/decision/STT/vision/PDF) | V1-textual CLOSED 14/10; multimodal pós-V1 NOT READY | PDF fail-closed; STT/Vision em coorte restrita; autoexecute `shadow`. Histórico completo em [`docs/reports/`](reports/) e [`MEU-TED-V1-FINAL-STATE.md`](MEU-TED-V1-FINAL-STATE.md). |
 
 ## Próximos passos (gates humanos)
 
 Nenhum trabalho de engenharia está bloqueando os gates com data abaixo; dependências de sink/telemetria (canary) e rollout A19 seguem como pré-condições explicitadas nos marcos. Os passos
-restantes são gates humanos com data:
+restantes são gates humanos:
 
 1. **Release B — CONCLUÍDA em 2026-11-11:** janela D11-R2 conferida na Contabo
    (somente SELECT) com **0 eventos** `auth.request.legacy_bearer_used` após
@@ -35,7 +37,11 @@ restantes são gates humanos com data:
    (a API já serve o canônico). A transação ambígua `49c01613…` do legacy só
    exige decisão humana se o caminho legacy→canonical for reanimado
    (recomendação: não reanimar).
-3. **2026-12-01 e 2026-12-31 — revisões future-dated** (nenhum rito manual
+3. **Quando o operador decidir — gates de dados:** #246 (remoção dos stores
+   legacy após o cutover F3–F5) e #245 (purge de resíduos Test Family) exigem
+   autorização, backup prévio e escopo por household; nenhum é pré-requisito
+   do produto.
+4. **2026-12-01 e 2026-12-31 — revisões future-dated** (nenhum rito manual
    necessário antes das datas).
 
 Evidência corrente: [`reports/2026-10-03-vps-migration-contabo.md`](reports/2026-10-03-vps-migration-contabo.md),
