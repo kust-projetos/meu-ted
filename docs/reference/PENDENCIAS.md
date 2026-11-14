@@ -1,8 +1,7 @@
 # Pendências do Meu Ted - pós-V1 (2026-11-14)
 
-**Estado de referência:** saneamento de 2026-11-14; PRs #361, #363 e #364
-mergeados. Referência do merge do #364: `main@1479b4f`. CI `43441230429` e PWA CI
-`43441230568` verdes no baseline anterior `main@26014bf`. Produção documentada: API `32a05cb` (build
+**Estado de referência:** `main@07c654c`; PRs #361, #363, #364 e #365
+mergeados; CI e PWA CI verdes. Produção documentada: API `32a05cb` (build
 `43419632296`, Contabo), Agent `15c9691` (deploy `43435350750`, ATTESTED),
 PWA `15c9691` (build `43434093369`, deploy `43435345101`, ATTESTED). Release
 `v1.0.4` → `32a05cb`. Release B concluída em 2026-11-11. Live-sync ativo.
@@ -83,24 +82,27 @@ conversa foram implementados em #334–#337; os demais seguem sem autorização:
 
 ## 5. Backlog técnico pós-V1
 
-Issues abertas (13): #87, #95, #116, #131, #134, #136, #151, #218, #234,
-#235, #245, #246, #250.
+Issues abertas (11): #87, #95, #116, #131, #134, #136, #151, #218, #235,
+#245, #246.
 
 Issues fechadas no saneamento: #229, #230, #231, #232, #233, #236, #237,
-#238, #239, #240, #241, #242, #243, #247, #248, #249, #251, #252. Também
-estão fechadas as anteriores #244, #165, #143, #345 e #362.
+#238, #239, #240, #241, #242, #243, #247, #248, #249, #251, #252, #234 e
+#250 — **20 issues encerradas no ciclo** (18 anteriores + #234 e #250).
+#234 foi encerrada em 2026-11-14 como **não aplicável**: parser preservado e
+testado; `unpdf` não é dependência morta. #250 foi encerrada em 2026-11-14
+como **não planejado**: token single-use no servidor; mint por chamada
+preservado e proteção de replay inalterada. Também estão fechadas as anteriores
+#244, #165, #143, #345 e #362.
 
 Classificação atual:
 - **Concluídos no saneamento:** #229–#243 (exceto #234/#235/#245/#246),
   #247, #248, #249, #251, #252.
-- **Bloqueados por decisão do operador:** #234 (manter parser+unpdf ou apagar
-  ambos), #235 (teto temporal de STT não-WAV; STT desligado), #250 (cache de
-  token é incompatível com token single-use; aceitar mint por chamada ou mudar
-  o modelo de replay).
+- **Suspensa pós-V1:** #235 (STT desligado; duração de áudio não-WAV exige
+  decodificação confiável ou recusa do formato).
 - **Gates humanos:** #245 (purge Test Family), #246 (cutover F3–F5).
 - **Pós-V1 / pesquisa:** #87, #95, #116, #131, #134, #136, #151.
-- **Feature de produto:** #218 (freshness de evidência financeira — feature,
-  não defeito reproduzido).
+- **Evolução de produto:** #218 (freshness de evidência financeira — feature,
+  não defeito reproduzido; próxima missão recomendada).
 
 #362 era duplicata do gate Release B (aberta pela última execução agendada do
 workflow `release-b-reminder.yml`, já removido) e foi encerrada com a mesma
