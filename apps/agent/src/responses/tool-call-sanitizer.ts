@@ -12,9 +12,10 @@
  * (`TED_RESPONSE_DISCIPLINE` in agent-config/instructions.ts); this module
  * is defense #2 and must stay deterministic — no model in the loop.
  *
- * HEURISTIC — remove only what looks like MODEL OUTPUT, never prose.
- * A segment is removed ONLY when it is anchored at the very beginning or
- * the very end of the trimmed message AND is invocation-shaped:
+ * HEURISTIC - remove invocation-shaped markup at message boundaries, and
+ * neutralize tool-call markers in ordinary prose without consuming the
+ * surrounding text. Fenced citations remain verbatim unless they are
+ * invocation-shaped JSON payloads at a message boundary:
  *   1. `<tool_call>…</tool_call>` pairs (repeated, whitespace or JSON
  *      arguments inside);
  *   2. a leading `<tool_call>` with NO closing tag anywhere (truncated
@@ -24,15 +25,13 @@
  *      `<|…|>` special token (e.g. `<|end|>`);
  *   4. fenced code blocks whose body parses as a tool-call JSON object
  *      (string `name`, or `function.name`; optional `arguments`/
- *      `parameters`) — fences holding any other content are code the model
- *      may legitimately be showing the user and are KEPT.
+ *      `parameters`) are removed at a boundary. Fenced literal tool-call
+ *      markup and other non-payload code are preserved verbatim.
  *
- * Mid-message occurrences are deliberately PRESERVED: a user quoting the
- * literal `<tool_call>` or a model explaining the syntax places the marker
- * between prose on both sides, and corrupting that text would be wrong. The
- * observed failure mode (TEDV3-003 raw outputs) is always a boundary dump —
- * the invocation markup IS the whole message or trails/leads otherwise
- * useful prose — so anchoring keeps the heuristic conservative.
+ * Markers recognized by the module (`<tool_call>`, `[TOOL_CALL]`, and
+ * special-token variants) are removed from ordinary prose, preserving all
+ * text around them. Thus a literal citation in a fence is retained while an
+ * executable-looking marker cannot pass through normal text.
  *
  * Cost is trivial: sticky boundary regexes plus a bounded balanced-brace
  * scan per block; untrusted input larger than MAX_SANITIZE_INPUT chars is
@@ -65,9 +64,6 @@ const LEADING_TRUNCATED = /^<tool_call>(?![\s\S]*<\/tool_call>)/;
 const LEADING_SPECIAL = /^<\|tool[_\u2581]call\|>/;
 const SPECIAL_TOKEN = /^<\|[^|<>]{1,32}\|>/;
 const FENCE = /^```[ \t]*[A-Za-z0-9_-]*[ \t]*\r?\n[\s\S]*?\r?\n?```/;
-const FENCED_PAIR =
-  /^```[ \t]*[A-Za-z0-9_-]*[ \t]*\r?\n[ \t\r\n]*<tool_call>[\s\S]*?<\/tool_call>[ \t\r\n]*```/;
-
 const isToolCallPayload = (value: unknown): boolean => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -107,9 +103,8 @@ const skipWhitespace = (text: string, from: number): number => {
   return index;
 };
 
-/** True when the fenced block parses as a tool-call JSON payload (or wraps a tool_call pair). */
+/** True only when the fenced block parses as an invocation-shaped JSON payload. */
 const isToolCallFence = (fence: string): boolean => {
-  if (FENCED_PAIR.test(fence)) return true;
   const bodyStart = fence.indexOf('\n') + 1;
   const bodyEnd = fence.lastIndexOf('```');
   if (bodyStart <= 0 || bodyEnd <= bodyStart) return false;
@@ -207,5 +202,19 @@ export const stripToolCallMarkup = (raw: string): ToolCallSanitizeResult => {
     }
     break;
   }
+  // Fenced code is quoted content: sanitize only the prose between fences.
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  for (let index = 0; index < parts.length; index += 1) {
+    if (index % 2 !== 0) continue;
+    const sanitized = parts[index]!.replace(
+      /<\/?tool_call>|\[\/?TOOL_CALL\]|<\|tool[_\u2581?]call\|>|<\|\/?tool[_\u2581?]call\|>/gi,
+      '',
+    );
+    if (sanitized !== parts[index]) {
+      parts[index] = sanitized;
+      removedBlocks += 1;
+    }
+  }
+  text = parts.join('');
   return { text, removedBlocks, changed: removedBlocks > 0 };
 };
