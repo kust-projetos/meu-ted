@@ -25,7 +25,7 @@ import type { EvidenceEnvelope } from '../../src/evidence/evidence-envelope.js';
 
 const envelope = (data: unknown): EvidenceEnvelope => ({
   version: '1',
-  items: [{ ref: 'api', source: 'budgets.summary', retrievedAt: '2026-09-15T12:00:00Z', status: 'ok', data }],
+  items: [{ ref: 'api', source: 'budgets.summary', retrievedAt: new Date().toISOString(), status: 'ok', data }],
 });
 
 const silent = (): void => undefined;

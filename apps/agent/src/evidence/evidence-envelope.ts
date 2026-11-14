@@ -54,6 +54,7 @@ export type EvidenceEnvelope = Readonly<{
 }>;
 
 const MAX_PAYLOAD_BYTES = 10_000;
+export const EVIDENCE_FRESHNESS_WINDOW_MS = 5 * 60_000;
 /** Upper bound for the absence/failure states added to the prompt payload. */
 export const MAX_PROMPT_ABSENCES = 4;
 const technicalFields = new Set(['workspaceId', 'actorId', 'deviceId', 'token', 'accessToken', 'authorization', 'headers', 'internalId', 'id']);
@@ -167,9 +168,31 @@ export const createEvidenceEnvelope = (items: readonly EvidenceInput[], options:
   return deepFreeze(envelope);
 };
 
-export const isCurrentEvidence = (item: EvidenceItem, now = Date.now(), maxAgeMs = 5 * 60_000): boolean => {
+export const isCurrentEvidence = (item: EvidenceItem, now = Date.now(), maxAgeMs = EVIDENCE_FRESHNESS_WINDOW_MS): boolean => {
   const timestamp = Date.parse(item.retrievedAt);
   return item.status === 'ok' && Number.isFinite(timestamp) && timestamp <= now && now - timestamp <= maxAgeMs;
+};
+
+export const assessEvidenceFreshness = (
+  items: readonly EvidenceItem[],
+  options: { now?: number; maxAgeMs?: number } = {},
+): { current: readonly EvidenceItem[]; stale: readonly EvidenceItem[]; nonOk: readonly EvidenceItem[] } => {
+  const now = options.now ?? Date.now();
+  const maxAgeMs = options.maxAgeMs ?? EVIDENCE_FRESHNESS_WINDOW_MS;
+  const current: EvidenceItem[] = [];
+  const stale: EvidenceItem[] = [];
+  const nonOk: EvidenceItem[] = [];
+
+  for (const item of items) {
+    if (item.status !== 'ok') {
+      nonOk.push(item);
+    } else if (isCurrentEvidence(item, now, maxAgeMs)) {
+      current.push(item);
+    } else {
+      stale.push(item);
+    }
+  }
+  return { current, stale, nonOk };
 };
 
 /**

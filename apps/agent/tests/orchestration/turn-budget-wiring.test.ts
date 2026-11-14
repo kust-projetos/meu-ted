@@ -51,16 +51,16 @@ const mutationPlan = () => ({
   confidence: 1,
 });
 
-const unshapedEnvelope: EvidenceEnvelope = {
+const makeUnshapedEnvelope = (): EvidenceEnvelope => ({
   version: '1',
   items: [{
     ref: 'note',
     source: 'api.notes',
-    retrievedAt: '2026-10-03T00:00:00.000Z',
+    retrievedAt: new Date().toISOString(),
     status: 'ok',
     data: { note: 'sem formato determinístico', hint: 'Conta principal' },
   }],
-};
+});
 
 /** Entity reader that never resolves the account, forcing a clarify. */
 const unresolvedReader: EntityReader = {
@@ -110,7 +110,7 @@ describe('R10 turn recovery budget wiring', () => {
     const seen: Array<{ type: string; fields: Record<string, unknown> }> = [];
     const orchestrator = new ConversationOrchestrator({
       plan: readPlan,
-      evidenceProvider: async () => unshapedEnvelope,
+      evidenceProvider: async () => makeUnshapedEnvelope(),
       responseProvider: async () => 'Resumo na Conta principal.',
       events: (type, fields) => seen.push({ type, fields }),
     });
@@ -131,7 +131,7 @@ describe('R10 turn recovery budget wiring', () => {
     const seen: Array<{ type: string; fields: Record<string, unknown> }> = [];
     const orchestrator = new ConversationOrchestrator({
       plan: readPlan,
-      evidenceProvider: async () => unshapedEnvelope,
+      evidenceProvider: async () => makeUnshapedEnvelope(),
       responseProvider: async () => 'Seu saldo é R$ 999,99 na Conta principal.',
       correctionProvider: async () => 'Outro texto na Conta principal.',
       events: (type, fields) => seen.push({ type, fields }),

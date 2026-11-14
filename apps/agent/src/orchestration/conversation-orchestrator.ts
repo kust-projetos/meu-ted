@@ -125,7 +125,7 @@ import type { MutationDraftChannelMessage, MutationReceipt, PendingOperationPres
 import { TED_APPROVAL_TOOLS } from '@pi-finance/llm-contracts';
 import { buildApprovalPresentation } from '../mutations/approval-presentation.js';
 import { emitSanitizedEvent } from '../observability/events.js';
-import type { EvidenceEnvelope } from '../evidence/evidence-envelope.js';
+import { assessEvidenceFreshness, type EvidenceEnvelope } from '../evidence/evidence-envelope.js';
 import { createGroundedResponseWithRetry } from '../responses/grounded-response.js';
 import { stripToolCallMarkup } from '../responses/tool-call-sanitizer.js';
 import { renderCategories, renderCategoryBreakdown, renderEmpty, renderFailure, renderInconclusive, renderMonthSummary, renderMutationResult, renderReadAbsence, renderStatement, renderUnavailable, resolveDomainSubject, FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT } from '../responses/deterministic-responses.js';
@@ -1407,6 +1407,26 @@ export class ConversationOrchestrator {
       envelope = await this.dependencies.evidenceProvider!(input, plan);
     } catch {
       envelope = null;
+    }
+    if (envelope) {
+      const { current, stale } = assessEvidenceFreshness(envelope.items);
+      if (stale.length > 0) {
+        this.emit('agent.evidence.stale', {
+          intentionId: input.intentionId,
+          traceId: input.traceId,
+          domain: plan.domain,
+          staleCount: stale.length,
+          currentCount: current.length,
+        });
+        const staleSet = new Set(stale);
+        const items = envelope.items.filter((item) => !staleSet.has(item));
+        const hadOk = envelope.items.some((item) => item.status === 'ok');
+        envelope = freeze({ ...envelope, items: freeze(items) });
+        if (hadOk && !items.some((item) => item.status === 'ok')) {
+          this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', grounded: false, latencyMs: Date.now() - startedAt });
+          return freeze({ ...base, failClosed: true as const, response: freeze({ text: FINANCIAL_EVIDENCE_UNAVAILABLE_TEXT }) });
+        }
+      }
     }
     // A04/R04 (AC10): a FAILED read blocks any conclusive "nothing there"
     // reading, so an envelope with a failure and NO usable evidence also fails
