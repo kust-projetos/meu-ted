@@ -55,4 +55,4 @@ Full-page screenshots; home-viewport is viewport-only. Home section checks are r
 | light | 375 | login | `/` | ok |  |
 | dark | 375 | login | `/` | ok |  |
 
-Distinct screenshot SHA-256 values: 41
+Distinct screenshot SHA-256 values: 43
