@@ -34,6 +34,8 @@ const mapAccount = (r: Row): Account => ({
   kind: (r['kind'] as string) ? (r['kind'] as Account['kind']) : 'bank',
   balanceCents: Number(r['balance_cents'] ?? 0),
   status: r['active'] ? 'active' : 'inactive',
+  institutionId: (r['institution_id'] as string | null) ?? null,
+  cardProductId: (r['card_product_id'] as string | null) ?? null,
 });
 const mapCategory = (r: Row): Category => {
   const parentId = r['parent_id'] as string | null | undefined;
@@ -340,10 +342,10 @@ export const createAccountLegacyInTx = async (
   );
   if ((duplicate.rowCount ?? 0) > 0) throw domainErrors.inUse('Conta', 'nome duplicado');
   const res = await client.query<Row>(
-    `INSERT INTO accounts (id, household_id, name, initial_balance_cents, active)
-     VALUES (gen_random_uuid(), $1, $2, $3, true)
-     RETURNING id, household_id, name, initial_balance_cents, active`,
-    [householdId, input.name, input.initialBalanceCents]);
+    `INSERT INTO accounts (id, household_id, name, initial_balance_cents, active, institution_id, card_product_id)
+     VALUES (gen_random_uuid(), $1, $2, $3, true, $4, $5)
+     RETURNING id, household_id, name, initial_balance_cents, active, institution_id, card_product_id`,
+    [householdId, input.name, input.initialBalanceCents, input.institutionId ?? null, input.cardProductId ?? null]);
   const existing = await client.query(
     `SELECT 1 FROM categories WHERE household_id = $1 AND active = true AND deleted_at IS NULL LIMIT 1`,
     [householdId]);
@@ -781,8 +783,12 @@ export const createLegacyPostgresWriteStore = (opts: { pool: Pool }): WriteStore
       if (options?.idempotencyKey === undefined) {
         return withTransaction(pool, async (client: PoolClient) => {
           const res = await client.query<Row>(
-            `UPDATE accounts SET name = COALESCE($3, name) WHERE id = $1 AND household_id = $2 AND active = true AND deleted_at IS NULL
-            RETURNING id, household_id, name, initial_balance_cents, active`, [id, householdId, patch.name ?? null]);
+            `UPDATE accounts SET name = COALESCE($3, name),
+                institution_id = CASE WHEN $4 THEN $5 ELSE institution_id END,
+                card_product_id = CASE WHEN $6 THEN $7 ELSE card_product_id END
+              WHERE id = $1 AND household_id = $2 AND active = true AND deleted_at IS NULL
+             RETURNING id, household_id, name, initial_balance_cents, active, institution_id, card_product_id`,
+            [id, householdId, patch.name ?? null, patch.institutionId !== undefined, patch.institutionId ?? null, patch.cardProductId !== undefined, patch.cardProductId ?? null]);
           if (res.rowCount === 0) throw domainErrors.notFound('Conta');
           return mapAccount(res.rows[0]!);
         });

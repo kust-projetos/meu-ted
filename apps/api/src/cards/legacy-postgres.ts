@@ -68,6 +68,8 @@ const mapAccount = (r: Row): Account => opt<Account>(
     kind: 'credit_card',
     balanceCents: Number(r['balance_cents'] ?? 0),
     status: r['active'] ? 'active' : 'inactive',
+  institutionId: (r['institution_id'] as string | null) ?? null,
+  cardProductId: (r['card_product_id'] as string | null) ?? null,
     // Legacy semantics: balance is computed from the ledger
     // (initial + income − expense …), NOT outstanding debt.
     // Mapper constant — no persisted-schema change, no raw config leak.
@@ -750,12 +752,12 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
   ): Promise<Account> => {
     const id = randomUUID();
     await client.query(
-      `INSERT INTO accounts (id, household_id, name, is_credit_card, active, credit_limit_cents, closing_day, due_day, initial_balance_cents, created_at, updated_at)
-       VALUES ($1, $2, $3, true, true, $4, $5, $6, 0, NOW(), NOW())`,
-      [id, householdId, input.name, input.creditLimitCents, input.closingDay, input.dueDay],
+      `INSERT INTO accounts (id, household_id, name, is_credit_card, active, credit_limit_cents, closing_day, due_day, initial_balance_cents, created_at, updated_at, institution_id, card_product_id)
+       VALUES ($1, $2, $3, true, true, $4, $5, $6, 0, NOW(), NOW(), $7, $8)`,
+      [id, householdId, input.name, input.creditLimitCents, input.closingDay, input.dueDay, input.institutionId ?? null, input.cardProductId ?? null],
     );
     const res = await client.query<Row>(
-      `SELECT id, household_id, name, active, credit_limit_cents, closing_day, due_day
+      `SELECT id, household_id, name, active, credit_limit_cents, closing_day, due_day, institution_id, card_product_id
          FROM accounts WHERE id = $1 AND household_id = $2`,
       [id, householdId],
     );
@@ -776,13 +778,15 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
     if (input.creditLimitCents !== undefined) { sets.push(`credit_limit_cents = $${params.length + 1}`); params.push(input.creditLimitCents); }
     if (input.closingDay !== undefined) { sets.push(`closing_day = $${params.length + 1}`); params.push(input.closingDay); }
     if (input.dueDay !== undefined) { sets.push(`due_day = $${params.length + 1}`); params.push(input.dueDay); }
+    if (input.institutionId !== undefined) { sets.push(`institution_id = $${params.length + 1}`); params.push(input.institutionId); }
+    if (input.cardProductId !== undefined) { sets.push(`card_product_id = $${params.length + 1}`); params.push(input.cardProductId); }
     if (sets.length === 0) throw domainErrors.invalid('body', 'nenhum campo para atualizar');
 
     const res = await client.query<Row>(
       `UPDATE accounts
           SET ${sets.join(', ')}, updated_at = NOW()
         WHERE id = $1 AND household_id = $2 AND is_credit_card = true AND active = true AND deleted_at IS NULL
-        RETURNING id, household_id, name, active, credit_limit_cents, closing_day, due_day`,
+        RETURNING id, household_id, name, active, credit_limit_cents, closing_day, due_day, institution_id, card_product_id`,
       params,
     );
     if (res.rowCount === 0 || res.rows.length === 0) throw domainErrors.notFound('Cartão');
@@ -810,7 +814,7 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
   const store: CardStore = {
     async listCreditCardAccounts(householdId) {
       const rows = await query<Row>(
-        `SELECT a.id, a.household_id, a.name, a.active,
+        `SELECT a.id, a.household_id, a.name, a.active, a.institution_id, a.card_product_id,
                 a.credit_limit_cents, a.closing_day, a.due_day,
                 COALESCE(a.initial_balance_cents, 0)
                 + COALESCE(totals.income, 0)
@@ -1010,12 +1014,12 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
     async createCard(householdId, input) {
       const id = randomUUID();
       await query(
-        `INSERT INTO accounts (id, household_id, name, is_credit_card, active, credit_limit_cents, closing_day, due_day, initial_balance_cents, created_at, updated_at)
-         VALUES ($1, $2, $3, true, true, $4, $5, $6, 0, NOW(), NOW())`,
-        [id, householdId, input.name, input.creditLimitCents, input.closingDay, input.dueDay],
+        `INSERT INTO accounts (id, household_id, name, is_credit_card, active, credit_limit_cents, closing_day, due_day, initial_balance_cents, created_at, updated_at, institution_id, card_product_id)
+         VALUES ($1, $2, $3, true, true, $4, $5, $6, 0, NOW(), NOW(), $7, $8)`,
+        [id, householdId, input.name, input.creditLimitCents, input.closingDay, input.dueDay, input.institutionId ?? null, input.cardProductId ?? null],
       );
       const res = await query<Row>(
-        `SELECT id, household_id, name, active, credit_limit_cents, closing_day, due_day
+        `SELECT id, household_id, name, active, credit_limit_cents, closing_day, due_day, institution_id, card_product_id
            FROM accounts WHERE id = $1 AND household_id = $2`,
         [id, householdId],
       );
@@ -1032,13 +1036,15 @@ export const createLegacyPostgresCardStore = (pool: Pool): CardStore => {
         if (input.creditLimitCents !== undefined) { sets.push(`credit_limit_cents = $${params.length + 1}`); params.push(input.creditLimitCents); }
         if (input.closingDay !== undefined) { sets.push(`closing_day = $${params.length + 1}`); params.push(input.closingDay); }
         if (input.dueDay !== undefined) { sets.push(`due_day = $${params.length + 1}`); params.push(input.dueDay); }
+    if (input.institutionId !== undefined) { sets.push(`institution_id = $${params.length + 1}`); params.push(input.institutionId); }
+    if (input.cardProductId !== undefined) { sets.push(`card_product_id = $${params.length + 1}`); params.push(input.cardProductId); }
         if (sets.length === 0) throw domainErrors.invalid('body', 'nenhum campo para atualizar');
 
         const res = await client.query<Row>(
           `UPDATE accounts
               SET ${sets.join(', ')}, updated_at = NOW()
             WHERE id = $1 AND household_id = $2 AND is_credit_card = true AND active = true AND deleted_at IS NULL
-            RETURNING id, household_id, name, active, credit_limit_cents, closing_day, due_day`,
+            RETURNING id, household_id, name, active, credit_limit_cents, closing_day, due_day, institution_id, card_product_id`,
           params,
         );
         if (res.rowCount === 0 || res.rows.length === 0) throw domainErrors.notFound('Cartão');

@@ -106,3 +106,10 @@ describe('legacy-safe inventory pin (deploy)', () => {
     expect(columns).not.toContain('status');
   });
 });
+
+describe('V064 account presentation migration', () => {
+  it('is discovered in migration order for canonical and legacy manifests', () => {
+    expect(expectedMigrationManifest(false).map(({ version }) => version).at(-1)).toBe(64);
+    expect(expectedMigrationManifest(true).map(({ version }) => version)).not.toContain(64);
+  });
+});

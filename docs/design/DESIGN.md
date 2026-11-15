@@ -63,6 +63,11 @@ Third-party brand marks use Simple Icons (CC0) when available. Otherwise use
 a legible monogram fallback. Illustrative card art may be original and
 abstract; never use official payment-card imagery or imitate a real card face.
 
+Institution and card-product appearance metadata is persisted server-side on
+`accounts` (`institution_id`, `card_product_id`, both nullable) and mirrored to
+`localStorage` as an offline fallback. Resolution precedence is server data,
+then local data, then the name/color heuristic.
+
 ## Do / don't
 
 - **Do:** use the shared tokens and primitives; align money with tabular

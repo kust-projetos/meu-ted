@@ -18,6 +18,8 @@ export const accountSchema = z.object({
   closingDay: z.number().int().optional(),
   dueDay: z.number().int().optional(),
   color: z.string().optional(),
+  institutionId: z.string().nullable().optional().default(null),
+  cardProductId: z.string().nullable().optional().default(null),
   initialBalanceCents: cents.optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),

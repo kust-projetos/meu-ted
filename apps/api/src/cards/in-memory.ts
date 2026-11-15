@@ -432,6 +432,8 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
         creditLimitCents: input.creditLimitCents,
         closingDay: input.closingDay,
         dueDay: input.dueDay,
+        institutionId: input.institutionId ?? null,
+        cardProductId: input.cardProductId ?? null,
       };
       state.accounts.push(card);
       return card;
@@ -443,6 +445,8 @@ export const createInMemoryCardStore = (state: InMemoryState): CardStore => {
       if (input.creditLimitCents !== undefined) card.creditLimitCents = input.creditLimitCents;
       if (input.closingDay !== undefined) card.closingDay = input.closingDay;
       if (input.dueDay !== undefined) card.dueDay = input.dueDay;
+      if (input.institutionId !== undefined) card.institutionId = input.institutionId;
+      if (input.cardProductId !== undefined) card.cardProductId = input.cardProductId;
       return card;
     },
 

@@ -2,13 +2,28 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { getInstitution } from "./catalog";
-import { isKnownCardProduct } from "./card-products";
+import { isKnownCardProduct, getCardProduct, type CardProduct } from "./card-products";
 
 export interface AccountAppearance {
   institutionId?: string;
   cardProductId?: string;
   manualInstitutionName?: string;
   customCardName?: string;
+}
+
+import type { Account } from "@/lib/state/types";
+import { resolveInstitution } from "./catalog";
+
+export function resolveAccountPresentation(
+  account: Account,
+  savedAppearance?: AccountAppearance,
+) {
+  const institutionId = account.institutionId ?? savedAppearance?.institutionId;
+  const institution = (institutionId ? getInstitution(institutionId) : undefined)
+    ?? resolveInstitution({ name: account.name, color: account.color });
+  const productId = account.cardProductId ?? savedAppearance?.cardProductId;
+  const product: CardProduct | undefined = productId ? getCardProduct(productId) : undefined;
+  return { institution, product };
 }
 
 export type AppearanceMap = Record<string, AccountAppearance>;

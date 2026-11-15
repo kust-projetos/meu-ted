@@ -541,6 +541,8 @@ async function handleFixtureRequest(
       kind: ((body?.kind as string) ?? "bank") as "bank" | "cash" | "credit_card",
       initialBalanceCents: (body?.initialBalanceCents as number) ?? 0,
       balanceCents: (body?.balanceCents as number) ?? (body?.initialBalanceCents as number) ?? 0,
+      institutionId: (body?.institutionId as string | null | undefined) ?? null,
+      cardProductId: (body?.cardProductId as string | null | undefined) ?? null,
     };
     store.seed.accounts.push(newAcc);
     journalPush(testId, method, pathname, body, 200);
@@ -551,7 +553,11 @@ async function handleFixtureRequest(
   const accIdMatch = pathname.match(/^\/accounts\/([a-zA-Z0-9_-]+)$/);
   if (accIdMatch && method === "PATCH") {
     const accId = accIdMatch[1];
-    const acc = mutateById(store.seed.accounts, accId, { name: (body?.name as string) ?? "" });
+    const acc = mutateById(store.seed.accounts, accId, {
+      name: body?.name as string | undefined,
+      institutionId: body?.institutionId as string | null | undefined,
+      cardProductId: body?.cardProductId as string | null | undefined,
+    });
     if (!acc) { sendJson(res, 404, { error: "Account not found" }); return; }
     journalPush(testId, method, pathname, body, 200);
     sendJson(res, 200, acc as unknown as Record<string, unknown>);
@@ -727,6 +733,8 @@ async function handleFixtureRequest(
       creditLimitCents: (body?.creditLimitCents as number) ?? 0,
       closingDay: (body?.closingDay as number) ?? 1,
       dueDay: (body?.dueDay as number) ?? 10,
+      institutionId: (body?.institutionId as string | null | undefined) ?? null,
+      cardProductId: (body?.cardProductId as string | null | undefined) ?? null,
       currentSpendCents: 0,
     };
     store.seed.cardAccounts.push(newCard);
@@ -764,6 +772,8 @@ async function handleFixtureRequest(
       creditLimitCents: body?.creditLimitCents as number | undefined,
       closingDay: body?.closingDay as number | undefined,
       dueDay: body?.dueDay as number | undefined,
+      institutionId: body?.institutionId as string | null | undefined,
+      cardProductId: body?.cardProductId as string | null | undefined,
     });
     if (!card) { sendJson(res, 404, { error: "Card not found" }); return; }
     journalPush(testId, method, pathname, body, 200);

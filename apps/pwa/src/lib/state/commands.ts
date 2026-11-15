@@ -148,6 +148,8 @@ export interface AccountInput {
   name: string;
   kind: "bank" | "cash" | "credit_card";
   initialBalanceCents: number;
+  institutionId?: string | null;
+  cardProductId?: string | null;
   idempotencyKey?: string;
 }
 
@@ -198,6 +200,8 @@ export interface CardInput {
   creditLimitCents: number;
   closingDay: number;
   dueDay: number;
+  institutionId?: string | null;
+  cardProductId?: string | null;
   idempotencyKey?: string;
 }
 
@@ -206,6 +210,8 @@ export interface CardUpdateInput {
   creditLimitCents?: number;
   closingDay?: number;
   dueDay?: number;
+  institutionId?: string | null;
+  cardProductId?: string | null;
   idempotencyKey?: string;
 }
 
@@ -279,7 +285,7 @@ export interface Commands {
 
   // ── Accounts (create / update / deactivate) ────────────────────
   addAccount(input: AccountInput): Promise<Account>;
-  updateAccount(id: string, input: { name: string }): Promise<Account>;
+  updateAccount(id: string, input: { name?: string; institutionId?: string | null; cardProductId?: string | null }): Promise<Account>;
   deactivateAccount(id: string, options?: CommandIdOptions): Promise<void>;
 
   // ── Categories (create / update / deactivate) ──────────────────

@@ -83,6 +83,19 @@ const updateCardSchema = z.object({
   dueDay: z.number().int().min(1).max(31).optional(),
 }).refine((v) => v.name !== undefined || v.creditLimitCents !== undefined || v.closingDay !== undefined || v.dueDay !== undefined, { message: 'nenhum campo para atualizar' });
 
+const cardPresentation = {
+  institutionId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/).nullable().optional(),
+  cardProductId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/).nullable().optional(),
+};
+const createCardHttpSchema = createCardSchema.extend(cardPresentation);
+const updateCardHttpSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  creditLimitCents: positiveMoneyCentsSchema.optional(),
+  closingDay: z.number().int().min(1).max(31).optional(),
+  dueDay: z.number().int().min(1).max(31).optional(),
+  ...cardPresentation,
+}).refine((v) => v.name !== undefined || v.creditLimitCents !== undefined || v.closingDay !== undefined || v.dueDay !== undefined || v.institutionId !== undefined || v.cardProductId !== undefined, { message: 'nenhum campo para atualizar' });
+
 const querySchema = z.object({
   accountId: z.string().uuid().optional(),
   status: z.enum(['open', 'closed', 'paid', 'partial', 'overdue', 'cancelled']).optional(),
@@ -339,7 +352,7 @@ export const registerCardRoutes = (
   // POST /cards — create a credit card account
   app.post('/cards', async (req, reply) => {
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
-    const parsed = createCardSchema.safeParse(req.body ?? {});
+    const parsed = createCardHttpSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
     // Fail-closed: missing/invalid key → 400 before any producer.
     let key: string;
@@ -349,7 +362,7 @@ export const registerCardRoutes = (
     const fn = async (claimTx?: unknown) => {
       // V4.1 Phase 4 (card-atomic-three): the card create joins the
       // idempotency claim tx (claim + effect + completion, one commit).
-      const card = await runCardMutation(opts.cardStore, claimTx, ctx.householdId, 'createCard', parsed.data);
+      const card = await runCardMutation(opts.cardStore, claimTx, ctx.householdId, 'createCard', parsed.data as Parameters<CardStore['createCard']>[1]);
       // T3.2 (SPEC §15.1): a credit card is an account → account.create.
       // Receipt built inside the idempotent producer so keyed replays
       // preserve the mutationId.
@@ -367,7 +380,7 @@ export const registerCardRoutes = (
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
-    const parsed = updateCardSchema.safeParse(req.body ?? {});
+    const parsed = updateCardHttpSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
     // Fail-closed: missing/invalid key → 400 before any producer.
     let key: string;

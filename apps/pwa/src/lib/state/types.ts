@@ -36,6 +36,8 @@ export interface Account {
   closingDay?: number;
   dueDay?: number;
   color?: string;
+  institutionId?: string | null;
+  cardProductId?: string | null;
   /** From API response */
   status?: string;
   initialBalanceCents?: number;

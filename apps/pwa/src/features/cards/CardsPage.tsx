@@ -10,15 +10,17 @@ import { WriteErrorBanner } from "@/components/WriteErrorBanner";
 import { fetchStatementDetail, updateCardPurchase } from "@/lib/api/endpoints";
 import { resolveCardOutstanding } from "@/lib/cards/card-debt";
 import type { StatementDetail, StatementPurchase } from "@/lib/state/types";
+import type { Account } from "@/lib/state/types";
 import { useAppState } from "@/lib/state/app-state-context";
 import { Plus, ChevronLeft, Edit3 } from "lucide-react";
 import BankCard from "@/components/BankCard";
 import { BANK_PRESETS, resolveBankPreset, formatMaskedNumber } from "@/lib/bank-presets";
 import { InstitutionPicker } from "@/components/brand/InstitutionPicker";
-import { useAccountAppearance } from "@/lib/institutions/appearance-store";
+import { useAccountAppearance, writeAccountAppearance } from "@/lib/institutions/appearance-store";
 import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
 import { getInstitution, resolveInstitution, type Institution } from "@/lib/institutions/catalog";
 import { cardProductsForInstitution, customCardProduct, getCardProduct, resolveCardNetworkLabel, type CardNetwork, type CardProduct } from "@/lib/institutions/card-products";
+import { resolveAccountPresentation } from "@/lib/institutions/appearance-store";
 
 function formatBRL(cents: number): string {
   return new Intl.NumberFormat("pt-BR", {
@@ -96,6 +98,8 @@ function NewCardSheet({
     creditLimitCents: number;
     closingDay: number;
     dueDay: number;
+    institutionId: string | null;
+    cardProductId: string | null;
   }) => Promise<{ id: string } | undefined>;
   onCreated: (accountId: string, appearance: { institutionId?: string; manualInstitutionName?: string; cardProductId?: string; customCardName?: string }) => void;
 }) {
@@ -135,6 +139,8 @@ function NewCardSheet({
         creditLimitCents: parseBRLToCents(limit),
         closingDay: parseInt(closingDay, 10) || 15,
         dueDay: parseInt(dueDay, 10) || 25,
+        institutionId: institutionId ?? null,
+        cardProductId: product?.id ?? null,
       });
       if (created?.id && (institutionId || manualInstitutionName)) onCreated(created.id, product
         ? { institutionId, cardProductId: product.id }
@@ -403,7 +409,7 @@ function EditSheet({
   onClose: () => void;
   card: CardData | null;
   appearance?: { institutionId?: string; cardProductId?: string; customCardName?: string };
-  onUpdate: (id: string, input: { name?: string; creditLimitCents?: number; closingDay?: number; dueDay?: number }, appearance: { institutionId?: string; cardProductId?: string; customCardName?: string }) => void | Promise<void>;
+  onUpdate: (id: string, input: { name?: string; creditLimitCents?: number; closingDay?: number; dueDay?: number; institutionId?: string | null; cardProductId?: string | null }, appearance: { institutionId?: string; cardProductId?: string; customCardName?: string }) => void | Promise<void>;
 }) {
   const { markDirty, markClean } = useFormDirtySafe();
   const [name, setName] = useState(card?.name ?? "");
@@ -439,7 +445,9 @@ function EditSheet({
         name: name.trim() || card!.name,
         creditLimitCents: parseBRLToCents(limit) || card!.creditLimitCents,
         closingDay: parseInt(closingDay, 10) || card!.closingDay,
-        dueDay: parseInt(dueDay, 10) || card!.dueDay,
+      dueDay: parseInt(dueDay, 10) || card!.dueDay,
+      institutionId: institutionId ?? null,
+      cardProductId: productId || null,
       }, productId ? { institutionId, cardProductId: productId } : { institutionId, customCardName: customName });
       markClean();
       onClose();
@@ -613,6 +621,15 @@ export default function CardsPage() {
     addCard, payStatement, updateCard, writeError, clearWriteError, retryWriteError } = useAppState();
   const workspaceId = useWorkspaceSafe()?.activeWorkspace?.id ?? "default";
   const appearance = useAccountAppearance(workspaceId);
+  useEffect(() => {
+    for (const account of accounts) {
+      const patch = {
+        ...(account.institutionId ? { institutionId: account.institutionId } : {}),
+        ...(account.cardProductId ? { cardProductId: account.cardProductId } : {}),
+      };
+      if (Object.keys(patch).length) writeAccountAppearance(workspaceId, account.id, patch);
+    }
+  }, [accounts, workspaceId]);
   const [payCard, setPayCard] = useState<CardData | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
   const [editCard, setEditCard] = useState<CardData | null>(null);
@@ -696,12 +713,11 @@ export default function CardsPage() {
 
   const cardsData: CardData[] = creditCards.map((card) => {
     const savedAppearance = appearance.map[card.id];
-    const institution = getInstitution(savedAppearance?.institutionId ?? "") ?? resolveInstitution({ name: card.name, color: card.color });
-    const product = savedAppearance?.cardProductId
-      ? getCardProduct(savedAppearance.cardProductId)
-      : savedAppearance?.customCardName && institution
+    const presentation = resolveAccountPresentation(card as Account, savedAppearance);
+    const institution = presentation.institution;
+    const product = presentation.product ?? (savedAppearance?.customCardName && institution
         ? customCardProduct({ institutionId: institution.id, name: savedAppearance.customCardName, network: "unknown" })
-        : undefined;
+        : undefined);
     const txPurchases = transactions
       .filter((t) => t.accountId === card.id && t.kind === "expense")
       .sort((a, b) => b.date.localeCompare(a.date))
@@ -998,7 +1014,7 @@ export default function CardsPage() {
         card={editCard}
         appearance={editCard ? appearance.map[editCard.id] : undefined}
         onUpdate={async (id, input, selectedAppearance) => {
-          await updateCard(id, input);
+          await updateCard(id, { ...input, institutionId: selectedAppearance.institutionId ?? null, cardProductId: selectedAppearance.cardProductId ?? null });
           appearance.set(id, selectedAppearance);
         }}
       />

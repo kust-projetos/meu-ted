@@ -32,7 +32,8 @@ import { AttentionChip } from "@/components/ui/AttentionChip";
 import { ProportionBand } from "@/components/ui/ProportionBand";
 import { InsightLine } from "@/components/ui/InsightLine";
 import { getInstitution, resolveInstitution } from "@/lib/institutions/catalog";
-import { useAccountAppearance } from "@/lib/institutions/appearance-store";
+import { useAccountAppearance, writeAccountAppearance } from "@/lib/institutions/appearance-store";
+import { resolveAccountPresentation } from "@/lib/institutions/appearance-store";
 import { getCardProduct } from "@/lib/institutions/card-products";
 import { resolveCardOutstanding } from "@/lib/cards/card-debt";
 import { openTedChat } from "@/features/ted/TedChatLauncher";
@@ -134,6 +135,15 @@ export default function HomePage() {
   const { hidden, toggle } = useHideBalance();
   const animatedBalance = useAnimatedNumber(totalBalance ?? 0);
   const appearance = useAccountAppearance(workspaceId).map;
+  useEffect(() => {
+    for (const account of accounts) {
+      const patch = {
+        ...(account.institutionId ? { institutionId: account.institutionId } : {}),
+        ...(account.cardProductId ? { cardProductId: account.cardProductId } : {}),
+      };
+      if (Object.keys(patch).length) writeAccountAppearance(workspaceId, account.id, patch);
+    }
+  }, [accounts, workspaceId]);
   const handleRefresh = useCallback(async () => {
     if (!hasActiveWorkspace) return;
     await refreshDomains?.(["accounts", "transactions", "payables", "budgets"]);
@@ -330,12 +340,7 @@ export default function HomePage() {
             <Ledger label="Contas conectadas" className="mt-2">
               {checkingAccounts.map((account) => {
                 const a = appearance[account.id] ?? {};
-                const institution =
-                  getInstitution(a.institutionId ?? "") ??
-                  resolveInstitution({
-                    name: a.manualInstitutionName ?? account.name,
-                    color: account.color,
-                  });
+                const institution = resolveAccountPresentation(account, a).institution;
                 return (
                   <LedgerRow
                     key={account.id}

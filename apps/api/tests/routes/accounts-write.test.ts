@@ -72,6 +72,27 @@ describe('POST /accounts', () => {
     const list = await app.inject({ method: 'GET', url: '/accounts', headers: { 'x-device-token': TOKEN_A, 'idempotency-key': crypto.randomUUID() } });
     expect(list.json().items.find((a: { name: string }) => a.name === 'New')).toBeDefined();
   });
+
+  it('persists presentation ids through create, read, PATCH set, and clear without changing balance', async () => {
+    const { app } = buildTestApp();
+    const created = await app.inject({ method: 'POST', url: '/accounts', headers: { 'x-device-token': TOKEN_A, 'idempotency-key': crypto.randomUUID() }, payload: { name: 'Presented', kind: 'bank', initialBalanceCents: 1234, institutionId: 'bank.foo', cardProductId: 'product-1' } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ institutionId: 'bank.foo', cardProductId: 'product-1', balanceCents: 1234 });
+    const id = created.json().id;
+    const read = await app.inject({ method: 'GET', url: '/accounts', headers: { 'x-device-token': TOKEN_A } });
+    expect(read.json().items.find((x: { id: string }) => x.id === id)).toMatchObject({ institutionId: 'bank.foo', cardProductId: 'product-1', balanceCents: 1234 });
+    const set = await app.inject({ method: 'PATCH', url: `/accounts/${id}`, headers: { 'x-device-token': TOKEN_A, 'idempotency-key': crypto.randomUUID() }, payload: { institutionId: 'bank.bar' } });
+    expect(set.json()).toMatchObject({ institutionId: 'bank.bar', balanceCents: 1234 });
+    const clear = await app.inject({ method: 'PATCH', url: `/accounts/${id}`, headers: { 'x-device-token': TOKEN_A, 'idempotency-key': crypto.randomUUID() }, payload: { institutionId: null, cardProductId: null } });
+    expect(clear.json()).toMatchObject({ institutionId: null, cardProductId: null, balanceCents: 1234 });
+  });
+
+  it('rejects invalid presentation identifiers', async () => {
+    const { app } = buildTestApp();
+    const response = await app.inject({ method: 'POST', url: '/accounts', headers: { 'x-device-token': TOKEN_A, 'idempotency-key': crypto.randomUUID() }, payload: { name: 'Invalid', kind: 'bank', initialBalanceCents: 0, institutionId: 'Upper Case' } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe('validation.error');
+  });
 });
 
 describe('PATCH /accounts/:id', () => {

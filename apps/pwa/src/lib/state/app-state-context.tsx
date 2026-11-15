@@ -219,9 +219,11 @@ export interface AppState {
     name: string;
     kind: "bank" | "cash" | "credit_card";
     initialBalanceCents: number;
+    institutionId?: string | null;
+    cardProductId?: string | null;
     idempotencyKey?: string;
   }) => Promise<Account | undefined>;
-  updateAccount: (id: string, input: { name: string; idempotencyKey?: string }) => Promise<void>;
+  updateAccount: (id: string, input: { name?: string; institutionId?: string | null; cardProductId?: string | null; idempotencyKey?: string }) => Promise<void>;
   deactivateAccount: (id: string, options?: CommandIdOptions) => Promise<void>;
   addCategory: (input: {
     name: string;
@@ -243,6 +245,8 @@ export interface AppState {
     creditLimitCents: number;
     closingDay: number;
     dueDay: number;
+    institutionId?: string | null;
+    cardProductId?: string | null;
     idempotencyKey?: string;
   }) => Promise<Account | undefined>;
   updateCard: (
@@ -252,6 +256,8 @@ export interface AppState {
       creditLimitCents?: number;
       closingDay?: number;
       dueDay?: number;
+      institutionId?: string | null;
+      cardProductId?: string | null;
       idempotencyKey?: string;
     },
   ) => Promise<void>;
@@ -1311,14 +1317,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // ── Account update / deactivate ────────────────────────────
 
   const updateAccount = useCallback(
-    async (id: string, input: { name: string; idempotencyKey?: string }) => {
+    async (id: string, input: { name?: string; institutionId?: string | null; cardProductId?: string | null; idempotencyKey?: string }) => {
       if (guardWriteRef.current()) return;
       const prev = accountsRef.current.find((a) => a.id === id);
       if (!prev) return;
 
       // Optimistic update
       setAccounts((curr) =>
-        curr.map((a) => (a.id === id ? { ...a, name: input.name } : a)),
+        curr.map((a) => (a.id === id ? { ...a, ...input } : a)),
       );
 
       if (!apiUsable()) return;
@@ -1480,6 +1486,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       name: string;
       kind: "bank" | "cash" | "credit_card";
       initialBalanceCents: number;
+      institutionId?: string | null;
+      cardProductId?: string | null;
       idempotencyKey?: string;
     }) => {
       if (guardWriteRef.current()) return undefined;
@@ -1489,6 +1497,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         name: input.name,
         balanceCents: input.initialBalanceCents,
         kind: input.kind === "credit_card" ? "credit_card" : "checking",
+        institutionId: input.institutionId,
+        cardProductId: input.cardProductId,
         status: "active",
       };
       setAccounts((prev) => [optimistic, ...prev]);
@@ -1561,6 +1571,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       creditLimitCents: number;
       closingDay: number;
       dueDay: number;
+      institutionId?: string | null;
+      cardProductId?: string | null;
       idempotencyKey?: string;
     }) => {
       if (guardWriteRef.current()) return undefined;
@@ -1573,6 +1585,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         creditLimitCents: input.creditLimitCents,
         closingDay: input.closingDay,
         dueDay: input.dueDay,
+        institutionId: input.institutionId,
+        cardProductId: input.cardProductId,
         status: "active",
       };
       setAccounts((prev) => [optimistic, ...prev]);
@@ -1611,6 +1625,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         creditLimitCents?: number;
         closingDay?: number;
         dueDay?: number;
+        institutionId?: string | null;
+        cardProductId?: string | null;
         idempotencyKey?: string;
       },
     ) => {
@@ -1631,6 +1647,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
                 ...(input.dueDay !== undefined
                   ? { dueDay: input.dueDay }
                   : {}),
+                ...(input.institutionId !== undefined ? { institutionId: input.institutionId } : {}),
+                ...(input.cardProductId !== undefined ? { cardProductId: input.cardProductId } : {}),
               }
             : c,
         ),
