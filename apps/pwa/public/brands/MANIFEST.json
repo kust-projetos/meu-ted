@@ -45,6 +45,15 @@
     "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
   },
   {
+    "slug": "paypal",
+    "category": "institutions",
+    "sourceUrl": "https://cdn.simpleicons.org/paypal",
+    "package": "Simple Icons CDN",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-15",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
     "slug": "picpay",
     "category": "institutions",
     "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/picpay.svg",
@@ -61,6 +70,24 @@
     "license": "CC0-1.0",
     "retrievalDate": "2026-11-14",
     "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "stripe",
+    "category": "institutions",
+    "sourceUrl": "https://cdn.simpleicons.org/stripe",
+    "package": "Simple Icons CDN",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-15",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "sumup",
+    "category": "institutions",
+    "sourceUrl": "https://cdn.simpleicons.org/sumup",
+    "package": "Simple Icons CDN",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-15",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
   },
   {
     "slug": "wise",

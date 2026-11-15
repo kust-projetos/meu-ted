@@ -28,6 +28,19 @@ export interface Institution {
   popular?: boolean;
 }
 
+const NEW_INSTITUTION_MONOGRAM_COLORS = {
+  asaas: "#1F4E79",
+  "pagar-me": "#7A2E5D",
+  efi: "#2F5D3A",
+  iugu: "#6B3FA0",
+  cielo: "#8A4B1F",
+  rede: "#245A63",
+  getnet: "#7A1F2B",
+  infinitepay: "#3D4A6B",
+  recargapay: "#533D2D",
+  "99pay": "#42504C",
+} as const;
+
 export const INSTITUTIONS: Institution[] = [
   {
     id: "itau",
@@ -370,6 +383,126 @@ export const INSTITUTIONS: Institution[] = [
     category: "cooperative",
     country: "BR",
     colors: { primary: "#087E54" },
+  },
+  {
+    id: "paypal",
+    name: "PayPal",
+    shortName: "PayPal",
+    aliases: ["paypal"],
+    category: "wallet",
+    country: "US",
+    colors: { primary: "#1F2A27" }, // neutro: logo CC0 disponível
+    logoSrc: "/brands/institutions/paypal.svg",
+  },
+  {
+    id: "stripe",
+    name: "Stripe",
+    shortName: "Stripe",
+    aliases: ["stripe"],
+    category: "gateway",
+    country: "US",
+    colors: { primary: "#1F2A27" }, // neutro: logo CC0 disponível
+    logoSrc: "/brands/institutions/stripe.svg",
+  },
+  {
+    id: "asaas",
+    name: "Asaas",
+    shortName: "Asaas",
+    aliases: ["asaas"],
+    category: "gateway",
+    country: "BR",
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["asaas"] }, // cor de monograma própria (não oficial)
+  },
+  {
+    id: "pagar-me",
+    name: "Pagar.me",
+    shortName: "Pagar.me",
+    aliases: ["pagar me", "pagarme", "pagar.me"],
+    category: "gateway",
+    country: "BR",
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["pagar-me"] }, // cor de monograma própria (não oficial)
+  },
+  {
+    id: "efi",
+    name: "Efí",
+    shortName: "Efí",
+    aliases: ["efi", "gerencianet"],
+    category: "gateway",
+    country: "BR",
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["efi"] }, // cor de monograma própria (não oficial)
+  },
+  {
+    id: "iugu",
+    name: "Iugu",
+    shortName: "Iugu",
+    aliases: ["iugu"],
+    category: "gateway",
+    country: "BR",
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["iugu"] }, // cor de monograma própria (não oficial)
+  },
+  {
+    id: "cielo",
+    name: "Cielo",
+    shortName: "Cielo",
+    aliases: ["cielo"],
+    category: "acquirer",
+    country: "BR",
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["cielo"] }, // cor de monograma própria (não oficial)
+  },
+  {
+    id: "rede",
+    name: "Rede",
+    shortName: "Rede",
+    aliases: ["rede", "userede"],
+    category: "acquirer",
+    country: "BR",
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["rede"] }, // cor de monograma própria (não oficial)
+  },
+  {
+    id: "getnet",
+    name: "Getnet",
+    shortName: "Getnet",
+    aliases: ["getnet", "get net"],
+    category: "acquirer",
+    country: "BR",
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["getnet"] }, // cor de monograma própria (não oficial)
+  },
+  {
+    id: "sumup",
+    name: "SumUp",
+    shortName: "SumUp",
+    aliases: ["sumup", "sum up"],
+    category: "acquirer",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: logo CC0 disponível
+    logoSrc: "/brands/institutions/sumup.svg",
+  },
+  {
+    id: "infinitepay",
+    name: "InfinitePay",
+    shortName: "InfinitePay",
+    aliases: ["infinite", "infinitepay", "cloudwalk"],
+    category: "acquirer",
+    country: "BR",
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["infinitepay"] }, // cor de monograma própria (não oficial)
+  },
+  {
+    id: "recargapay",
+    name: "RecargaPay",
+    shortName: "RecargaPay",
+    aliases: ["recarga pay", "recargapay"],
+    category: "wallet",
+    country: "BR",
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["recargapay"] }, // cor de monograma própria (não oficial)
+  },
+  {
+    id: "99pay",
+    name: "99Pay",
+    shortName: "99Pay",
+    aliases: ["99 pay", "99pay"],
+    category: "wallet",
+    country: "BR",
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["99pay"] }, // cor de monograma própria (não oficial)
   },
 ];
 
