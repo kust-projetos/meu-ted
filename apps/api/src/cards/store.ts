@@ -87,6 +87,8 @@ export type CardStore = {
     creditLimitCents: number;
     closingDay: number;
     dueDay: number;
+    institutionId?: string | null;
+    cardProductId?: string | null;
   }): Promise<Account>;
 
   /** Update a credit card account (name, limit, closingDay, dueDay). */
@@ -95,6 +97,8 @@ export type CardStore = {
     creditLimitCents?: number;
     closingDay?: number;
     dueDay?: number;
+    institutionId?: string | null;
+    cardProductId?: string | null;
   }): Promise<Account>;
 
   /** Update a purchase on a statement. Returns updated statement detail. */

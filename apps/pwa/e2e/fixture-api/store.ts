@@ -30,6 +30,8 @@ export interface SeedData {
     kind: "bank" | "cash" | "credit_card";
     initialBalanceCents: number;
     balanceCents?: number;
+    institutionId?: string | null;
+    cardProductId?: string | null;
     creditLimitCents?: number;
     closingDay?: number;
     dueDay?: number;
@@ -84,6 +86,8 @@ export interface SeedData {
     closingDay: number;
     dueDay: number;
     currentSpendCents: number;
+    institutionId?: string | null;
+    cardProductId?: string | null;
   }>;
   cardStatements: Array<{
     id: string;

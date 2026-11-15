@@ -228,6 +228,7 @@ describeIfDb('POST /transactions/expense cardId — Postgres single-tx proofs', 
         initial_balance_cents BIGINT NOT NULL DEFAULT 0, active BOOLEAN NOT NULL DEFAULT true,
         is_credit_card BOOLEAN NOT NULL DEFAULT false, credit_limit_cents BIGINT,
         closing_day INTEGER, due_day INTEGER, deleted_at TIMESTAMPTZ,
+        institution_id TEXT, card_product_id TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       CREATE TABLE categories (

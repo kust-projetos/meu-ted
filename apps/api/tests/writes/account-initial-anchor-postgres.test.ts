@@ -53,6 +53,7 @@ const createTables = async (pool: Pool): Promise<void> => {
       kind TEXT NOT NULL, balance_cents BIGINT NOT NULL DEFAULT 0,
       initial_balance_cents BIGINT NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'active',
+      institution_id TEXT, card_product_id TEXT,
       deleted_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CONSTRAINT accounts_balance_nonnegative_card_chk CHECK (kind <> 'credit_card' OR balance_cents >= 0)

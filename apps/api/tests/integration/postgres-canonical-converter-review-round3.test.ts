@@ -191,7 +191,10 @@ describeIfDb('Postgres canonical converter review round 3', () => {
       const shape = await db!.query(
         `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'accounts'`,
       );
-      expect(shape.rows.map((row) => String(row.column_name))).toContain('kind');
+      const canonicalColumns = shape.rows.map((row) => String(row.column_name));
+      expect(canonicalColumns).toContain('kind');
+      expect(canonicalColumns).toContain('institution_id');
+      expect(canonicalColumns).toContain('card_product_id');
     } finally {
       // Leave the converted database behind; the suite database is dropped
       // in afterAll. Re-mark the fresh canonical public so any later

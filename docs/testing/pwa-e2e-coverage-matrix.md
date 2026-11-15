@@ -69,6 +69,7 @@ Every ID is atomic: one visible action, required state, expected UI/API effect, 
 | ACC-04 | `/contas` | M | edit bank account → `PATCH /accounts/:id` | 500 banner/retry | accounts |
 | ACC-05 | `/contas` | M | edit credit card → `PATCH /cards/:id` | 500 banner/retry | accounts |
 | ACC-06 | `/contas` | M | confirm deactivation → `POST /accounts/:id/deactivate` | cancel/no mutation | accounts |
+| ACC-07 | `/hub/patrimonio?aba=contas` | M | create account with institution → `POST /accounts`; reload keeps the mark | reload reads `GET /accounts` | accounts |
 | CAT-01 | `/categorias` | M | create expense category → `POST /categories` | blank/422 | categories |
 | CAT-02 | `/categorias` | M | create income category → `POST /categories` | blank/422 | categories |
 | CAT-03 | `/categorias` | M | add subcategory → correct journal | cancel/error | categories |

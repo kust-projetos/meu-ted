@@ -10,6 +10,7 @@
 import { z } from 'zod';
 import { isoDateSchema as isoDate } from '../shared/iso-date.js';
 import { moneyCentsSchema, positiveMoneyCentsSchema } from '../shared/money.js';
+const presentationId = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/).nullable();
 
 export const createAccountInputSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -20,14 +21,24 @@ export const createAccountInputSchema = z.object({
   // created via /cards with zero balance and keep non-negative semantics).
   initialBalanceCents: moneyCentsSchema,
 });
-export type CreateAccountInput = z.infer<typeof createAccountInputSchema>;
+export type CreateAccountInput = z.infer<typeof createAccountInputSchema> & { institutionId?: string | null | undefined; cardProductId?: string | null | undefined };
 
 export const updateAccountInputSchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
   })
   .refine((v) => v.name !== undefined, { message: 'patch vazio' });
-export type UpdateAccountInput = z.infer<typeof updateAccountInputSchema>;
+export type UpdateAccountInput = z.infer<typeof updateAccountInputSchema> & { institutionId?: string | null | undefined; cardProductId?: string | null | undefined };
+
+export const createAccountHttpInputSchema = createAccountInputSchema.extend({
+  institutionId: presentationId.optional(),
+  cardProductId: presentationId.optional(),
+});
+export const updateAccountHttpInputSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  institutionId: presentationId.optional(),
+  cardProductId: presentationId.optional(),
+}).refine((v) => v.name !== undefined || v.institutionId !== undefined || v.cardProductId !== undefined, { message: 'patch vazio' });
 
 const hexColor = z
   .string()

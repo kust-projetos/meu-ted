@@ -475,6 +475,8 @@ export const createInMemoryWriteStore = (state: InMemoryState): WriteStore => {
         kind: input.kind,
         balanceCents: input.initialBalanceCents,
         status: 'active',
+        institutionId: input.institutionId ?? null,
+        cardProductId: input.cardProductId ?? null,
       };
       state.accounts.push(acc);
       // Item 11: new accounts bootstrap the default set, but only for
@@ -554,6 +556,8 @@ export const createInMemoryWriteStore = (state: InMemoryState): WriteStore => {
         const acc = findAccount(id, householdId);
         if (acc.status !== 'active') throw domainErrors.notFound('Conta');
         if (patch.name !== undefined) acc.name = patch.name;
+        if (patch.institutionId !== undefined) acc.institutionId = patch.institutionId;
+        if (patch.cardProductId !== undefined) acc.cardProductId = patch.cardProductId;
         return acc;
       }
       // Rename-only V2 path (ADR-029): keyed replay + atomic before-condition.

@@ -478,6 +478,27 @@ describe('POST /cards', () => {
     expect(card.status).toBe('active');
   });
 
+  it('persists presentation ids while preserving card financial values', async () => {
+    const { app } = buildTestApp(freshSeed());
+    const created = await app.inject({
+      method: 'POST', url: '/cards',
+      headers: { ...auth(TOKEN_A), 'idempotency-key': crypto.randomUUID(), 'Content-Type': 'application/json' },
+      payload: { name: 'Presented card', creditLimitCents: 120000, closingDay: 20, dueDay: 5, institutionId: 'bank.x', cardProductId: 'visa.gold' },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ institutionId: 'bank.x', cardProductId: 'visa.gold', creditLimitCents: 120000, balanceCents: 0 });
+    const list = await app.inject({ method: 'GET', url: '/cards/accounts', headers: auth(TOKEN_A) });
+    expect(list.json().items.find((x: { id: string }) => x.id === created.json().id)).toMatchObject({ institutionId: 'bank.x', cardProductId: 'visa.gold', creditLimitCents: 120000, balanceCents: 0 });
+    const patch = async (body: object) => app.inject({ method: 'PATCH', url: `/cards/${created.json().id}`, headers: { ...auth(TOKEN_A), 'idempotency-key': crypto.randomUUID(), 'Content-Type': 'application/json' }, payload: body });
+    const set = await patch({ institutionId: 'bank.y' });
+    expect(set.statusCode).toBe(200);
+    expect(set.json()).toMatchObject({ institutionId: 'bank.y', creditLimitCents: 120000, balanceCents: 0 });
+    const clear = await patch({ institutionId: null, cardProductId: null });
+    expect(clear.json()).toMatchObject({ institutionId: null, cardProductId: null, creditLimitCents: 120000, balanceCents: 0 });
+    const invalid = await app.inject({ method: 'POST', url: '/cards', headers: { ...auth(TOKEN_A), 'idempotency-key': crypto.randomUUID() }, payload: { name: 'bad', creditLimitCents: 1, closingDay: 1, dueDay: 2, institutionId: 'Bad ID' } });
+    expect(invalid.statusCode).toBe(400);
+  });
+
   it('lists the new card via GET /cards/accounts', async () => {
     const { app } = buildTestApp(freshSeed());
     const existingCount = (await app.inject({

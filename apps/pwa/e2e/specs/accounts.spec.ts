@@ -144,3 +144,23 @@ test("[ACC-06] deactivate account confirm dialog opens", async ({ page }) => {
 
   assertNoUndeclaredFailures(g);
 });
+
+test("[ACC-07] account institution mark survives reload from server data", async ({ page }) => {
+  const id = tid(); const g = await init(page, id);
+
+  await page.getByRole("button", { name: "Nova", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Nova conta" })).toBeVisible({ timeout: 5000 });
+  await page.getByRole("combobox", { name: "Instituição" }).fill("Itaú");
+  await page.getByRole("option", { name: /Itaú/ }).first().click();
+  await page.getByPlaceholder("Ex: Nubank, Itaú...").fill("Conta Itaú Sync");
+  await page.getByRole("button", { name: "Salvar" }).click();
+  await expectJournal(id, "POST", "/accounts", 200);
+  await expect(page.getByRole("img", { name: "Itaú" })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: /Conta Itaú Sync/ })).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("img", { name: "Itaú" })).toBeVisible();
+  expect((await getJournal(id)).some((entry) => entry.method === "GET" && entry.path === "/accounts")).toBe(true);
+
+  assertNoUndeclaredFailures(g);
+});

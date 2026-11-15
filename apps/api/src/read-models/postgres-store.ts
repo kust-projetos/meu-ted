@@ -22,6 +22,8 @@ const mapAccount = (r: Row): Account => ({
   kind: r['kind'] as Account['kind'],
   balanceCents: Number(r['balance_cents']),
   status: r['status'] as Account['status'],
+  institutionId: (r['institution_id'] as string | null) ?? null,
+  cardProductId: (r['card_product_id'] as string | null) ?? null,
 });
 
 const mapCategory = (r: Row): Category => {
@@ -92,7 +94,7 @@ export const createPostgresReadModelStore = (opts: { pool: Pool }): ReadModelSto
       // a literal chosen by a boolean - never interpolated input.
       const activeFilter = options?.includeInactive === true ? '' : "AND status = 'active'";
       const rows = await query<Row>(
-        `SELECT id, household_id, name, kind, balance_cents, status
+        `SELECT id, household_id, name, kind, balance_cents, status, institution_id, card_product_id
            FROM accounts
           WHERE household_id = $1
             ${activeFilter}

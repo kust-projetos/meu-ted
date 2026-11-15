@@ -141,6 +141,8 @@ export async function createCard(input: {
   creditLimitCents: number;
   closingDay: number;
   dueDay: number;
+  institutionId?: string | null;
+  cardProductId?: string | null;
 }): Promise<Account> {
   return apiFetch<Account>("/cards", mutationOptions("POST", input));
 }
@@ -152,6 +154,8 @@ export async function updateCard(
     creditLimitCents?: number;
     closingDay?: number;
     dueDay?: number;
+    institutionId?: string | null;
+    cardProductId?: string | null;
   },
 ): Promise<Account> {
   return apiFetch<Account>(`/cards/${id}`, mutationOptions("PATCH", input));
@@ -238,6 +242,8 @@ export async function addAccount(input: {
   name: string;
   kind: "bank" | "cash" | "credit_card";
   initialBalanceCents: number;
+  institutionId?: string | null;
+  cardProductId?: string | null;
 }): Promise<Account> {
   return apiFetch<Account>("/accounts", mutationOptions("POST", input));
 }
@@ -366,7 +372,7 @@ export async function deleteTransaction(id: string, commandId?: string): Promise
 
 export async function updateAccount(
   id: string,
-  input: { name: string },
+  input: { name?: string; institutionId?: string | null; cardProductId?: string | null },
 ): Promise<Account> {
   return apiFetch<Account>(`/accounts/${id}`, mutationOptions("PATCH", input));
 }

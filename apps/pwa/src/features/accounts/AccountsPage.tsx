@@ -14,8 +14,9 @@ import { resolveBankPreset } from "@/lib/bank-presets";
 import { InstitutionPicker } from "@/components/brand/InstitutionPicker";
 import { InstitutionMark } from "@/components/brand/InstitutionMark";
 import { getInstitution, normalize, resolveInstitution, type Institution } from "@/lib/institutions/catalog";
-import { useAccountAppearance } from "@/lib/institutions/appearance-store";
+import { useAccountAppearance, writeAccountAppearance } from "@/lib/institutions/appearance-store";
 import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
+import { resolveAccountPresentation } from "@/lib/institutions/appearance-store";
 
 function formatBRL(cents: number): string {
   return new Intl.NumberFormat("pt-BR", {
@@ -92,6 +93,7 @@ function AccountFormSheet({
     kind: "bank" | "cash" | "credit_card";
     initialBalanceCents: number;
     bankColor: string;
+    institutionId: string | null;
   }) => Promise<{ id: string } | undefined>;
   onAppearance: (id: string, selection: { institutionId?: string; manualInstitutionName?: string }) => void;
 }) {
@@ -119,6 +121,7 @@ function AccountFormSheet({
         kind: apiKind,
         initialBalanceCents,
         bankColor,
+        institutionId: institutionId ?? null,
       });
       if (created?.id) onAppearance(created.id, institutionId ? { institutionId } : { manualInstitutionName });
       setName("");
@@ -410,6 +413,15 @@ export default function AccountsPage() {
   const [editOpen, setEditOpen] = useState(false);
   const workspaceId = useWorkspaceSafe()?.activeWorkspace?.id ?? "default";
   const appearance = useAccountAppearance(workspaceId);
+  useEffect(() => {
+    for (const account of accounts) {
+      const patch = {
+        ...(account.institutionId ? { institutionId: account.institutionId } : {}),
+        ...(account.cardProductId ? { cardProductId: account.cardProductId } : {}),
+      };
+      if (Object.keys(patch).length) writeAccountAppearance(workspaceId, account.id, patch);
+    }
+  }, [accounts, workspaceId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -508,7 +520,7 @@ export default function AccountsPage() {
             {checkingAccounts.map((acc) => {
               // Name-key fallback keeps appearance readable when a synced id differs from its optimistic key.
               const institutionId = appearanceFor(acc.id, acc.name)?.institutionId;
-              const institution = (institutionId ? getInstitution(institutionId) : undefined) ?? resolveInstitution({ name: acc.name, color: acc.color });
+              const institution = resolveAccountPresentation(acc, appearanceFor(acc.id, acc.name)).institution;
               const preset = resolveBankPreset({ name: acc.name, color: acc.color });
               return (
                 <button
@@ -591,7 +603,7 @@ export default function AccountsPage() {
       <AccountFormSheet
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onAdd={async ({ name, kind, initialBalanceCents, bankColor }) => addAccount({ name, kind, initialBalanceCents, bankColor } as Parameters<typeof addAccount>[0] & { bankColor: string })}
+        onAdd={async ({ name, kind, initialBalanceCents, bankColor, institutionId }) => addAccount({ name, kind, initialBalanceCents, institutionId } as Parameters<typeof addAccount>[0] & { bankColor: string })}
         onAppearance={(id, selection) => appearance.set(id, selection)}
       />
 
@@ -605,7 +617,7 @@ export default function AccountsPage() {
           setEditAccount(null);
         }}
         onSave={async (id, name, selection) => {
-          await updateAccount(id, { name });
+          await updateAccount(id, { name, institutionId: selection.institutionId ?? null });
           appearance.set(id, selection);
         }}
       />

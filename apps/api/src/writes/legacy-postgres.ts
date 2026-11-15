@@ -34,6 +34,8 @@ const mapAccount = (r: Row): Account => ({
   kind: (r['kind'] as string) ? (r['kind'] as Account['kind']) : 'bank',
   balanceCents: Number(r['balance_cents'] ?? 0),
   status: r['active'] ? 'active' : 'inactive',
+  institutionId: null,
+  cardProductId: null,
 });
 const mapCategory = (r: Row): Category => {
   const parentId = r['parent_id'] as string | null | undefined;
@@ -781,8 +783,10 @@ export const createLegacyPostgresWriteStore = (opts: { pool: Pool }): WriteStore
       if (options?.idempotencyKey === undefined) {
         return withTransaction(pool, async (client: PoolClient) => {
           const res = await client.query<Row>(
-            `UPDATE accounts SET name = COALESCE($3, name) WHERE id = $1 AND household_id = $2 AND active = true AND deleted_at IS NULL
-            RETURNING id, household_id, name, initial_balance_cents, active`, [id, householdId, patch.name ?? null]);
+            `UPDATE accounts SET name = COALESCE($3, name)
+         WHERE id = $1 AND household_id = $2 AND active = true AND deleted_at IS NULL
+         RETURNING id, household_id, name, initial_balance_cents, active`,
+            [id, householdId, patch.name ?? null]);
           if (res.rowCount === 0) throw domainErrors.notFound('Conta');
           return mapAccount(res.rows[0]!);
         });

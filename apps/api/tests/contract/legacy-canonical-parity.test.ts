@@ -146,6 +146,7 @@ const createCanonicalTables = async (pool: Pool): Promise<void> => {
       initial_balance_cents BIGINT NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'active',
       credit_limit_cents BIGINT, closing_day INTEGER, due_day INTEGER,
+      institution_id TEXT, card_product_id TEXT,
       deleted_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CONSTRAINT accounts_balance_nonnegative_card_chk CHECK (kind <> 'credit_card' OR balance_cents >= 0)
@@ -234,7 +235,8 @@ const createLegacyTables = async (pool: Pool): Promise<void> => {
       id UUID PRIMARY KEY, household_id UUID NOT NULL, name TEXT NOT NULL,
       initial_balance_cents BIGINT NOT NULL DEFAULT 0, active BOOLEAN NOT NULL DEFAULT true,
       is_credit_card BOOLEAN NOT NULL DEFAULT false, credit_limit_cents BIGINT,
-      closing_day INTEGER, due_day INTEGER, deleted_at TIMESTAMPTZ,
+      closing_day INTEGER, due_day INTEGER,
+      institution_id TEXT, card_product_id TEXT, deleted_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE TABLE categories (
@@ -338,6 +340,21 @@ describeIfDb('Legacy × Canonical parity — Parts B/C (PG-gated)', () => {
     await canonPool?.end();
     await legPool?.end();
     await adminPool?.end();
+  });
+
+  it('V064 account metadata columns exist and are nullable in canonical and legacy schemas', async () => {
+    for (const [pool, schema] of [[canonPool!, CANON_SCHEMA], [legPool!, LEG_SCHEMA]] as const) {
+      const result = await pool.query<{ column_name: string; is_nullable: string }>(
+        `SELECT column_name, is_nullable FROM information_schema.columns
+         WHERE table_schema = $1 AND table_name = 'accounts'
+           AND column_name IN ('institution_id', 'card_product_id')`,
+        [schema],
+      );
+      expect(Object.fromEntries(result.rows.map((row) => [row.column_name, row.is_nullable]))).toEqual({
+        institution_id: 'YES',
+        card_product_id: 'YES',
+      });
+    }
   });
 
   it('Part B: equivalent happy-path sequence yields equivalent outcomes on both families', async () => {

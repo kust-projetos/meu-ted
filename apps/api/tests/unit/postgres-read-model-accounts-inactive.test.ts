@@ -68,7 +68,7 @@ describe('canonical read model — listAccounts includeInactive SQL', () => {
     expect(text).toMatch(/deleted_at IS NULL/);
     // The inactive row comes back with its status, not as an active row.
     expect(rows).toEqual([
-      { id: INACTIVE_ROW.id, householdId: H, name: 'Conta desativada', kind: 'cash', balanceCents: 0, status: 'inactive' },
+      { id: INACTIVE_ROW.id, householdId: H, name: 'Conta desativada', kind: 'cash', balanceCents: 0, status: 'inactive', institutionId: null, cardProductId: null },
     ]);
   });
 

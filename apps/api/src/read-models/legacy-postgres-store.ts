@@ -30,6 +30,8 @@ const mapAccount = (r: Row): Account => ({
   kind: (r['kind'] as string) ? (r['kind'] as Account['kind']) : 'bank',
   balanceCents: Number(r['balance_cents'] ?? 0),
   status: r['active'] ? 'active' : 'inactive',
+  institutionId: null,
+  cardProductId: null,
 });
 
 const mapCategory = (r: Row): Category => {

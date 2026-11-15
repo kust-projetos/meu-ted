@@ -35,6 +35,8 @@ export type Account = {
   kind: AccountKind;
   balanceCents: MoneyCents;
   status: AccountStatus;
+  institutionId?: string | null;
+  cardProductId?: string | null;
   /** Card balance semantics discriminator (credit-card only; absent = unknown fallback). */
   balanceSemantics?: CardBalanceSemantics;
   /** Credit-card only. Null for bank/cash accounts. */

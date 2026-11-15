@@ -44,6 +44,8 @@ const mapAccount = (r: Row): Account => ({
   kind: r['kind'] as Account['kind'],
   balanceCents: Number(r['balance_cents']),
   status: r['status'] as Account['status'],
+  institutionId: (r['institution_id'] as string | null) ?? null,
+  cardProductId: (r['card_product_id'] as string | null) ?? null,
 });
 
 const mapCategory = (r: Row): Category => {
@@ -627,10 +629,10 @@ export const createAccountInTx = async (
   );
   if ((duplicate.rowCount ?? 0) > 0) throw domainErrors.inUse('Conta', 'nome duplicado');
   const res = await client.query<Row>(
-    `INSERT INTO accounts (id, household_id, name, kind, balance_cents, initial_balance_cents, status)
-      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'active')
-      RETURNING id, household_id, name, kind, balance_cents, status`,
-    [householdId, input.name, input.kind, input.initialBalanceCents, input.initialBalanceCents],
+    `INSERT INTO accounts (id, household_id, name, kind, balance_cents, initial_balance_cents, status, institution_id, card_product_id)
+      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'active', $6, $7)
+      RETURNING id, household_id, name, kind, balance_cents, status, institution_id, card_product_id`,
+    [householdId, input.name, input.kind, input.initialBalanceCents, input.initialBalanceCents, input.institutionId ?? null, input.cardProductId ?? null],
   );
   // Item 11: bootstrap the default set for households without categories.
   const existing = await client.query(
@@ -660,10 +662,12 @@ export const updateAccountInTx = async (
   if (existing.status !== 'active') throw domainErrors.notFound('Conta');
   const res = await client.query<Row>(
     `UPDATE accounts
-        SET name = COALESCE($3, name)
+        SET name = COALESCE($3, name),
+            institution_id = CASE WHEN $4 THEN $5 ELSE institution_id END,
+            card_product_id = CASE WHEN $6 THEN $7 ELSE card_product_id END
       WHERE id = $1 AND household_id = $2
-      RETURNING id, household_id, name, kind, balance_cents, status`,
-    [id, householdId, patch.name ?? null],
+      RETURNING id, household_id, name, kind, balance_cents, status, institution_id, card_product_id`,
+    [id, householdId, patch.name ?? null, patch.institutionId !== undefined, patch.institutionId ?? null, patch.cardProductId !== undefined, patch.cardProductId ?? null],
   );
   return mapAccount(res.rows[0]!);
 };

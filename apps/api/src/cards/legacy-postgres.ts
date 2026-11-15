@@ -68,6 +68,8 @@ const mapAccount = (r: Row): Account => opt<Account>(
     kind: 'credit_card',
     balanceCents: Number(r['balance_cents'] ?? 0),
     status: r['active'] ? 'active' : 'inactive',
+  institutionId: null,
+  cardProductId: null,
     // Legacy semantics: balance is computed from the ledger
     // (initial + income − expense …), NOT outstanding debt.
     // Mapper constant — no persisted-schema change, no raw config leak.

@@ -309,6 +309,8 @@ const mapAccount = (r: Row): Account => opt<Account>(
     kind: r['kind'] as Account['kind'],
     balanceCents: toSafeMoneyCents(r['balance_cents'], 'balanceCents'),
     status: r['status'] as Account['status'],
+  institutionId: (r['institution_id'] as string | null) ?? null,
+  cardProductId: (r['card_product_id'] as string | null) ?? null,
     // Canonical semantics (ADR-018): balance_cents IS outstanding debt.
     // Mapper constant — no persisted-schema change, no raw config leak.
     balanceSemantics: 'outstanding_debt',
@@ -859,10 +861,10 @@ const createCardInTx = async (
   // FIX-WS-D2-R2 item 2: lifecycle active dentro da transação do efeito.
   await assertWorkspaceWritableInTx(client, householdId);
   const res = await client.query<Row>(
-    `INSERT INTO accounts (id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day)
-     VALUES (gen_random_uuid(), $1, $2, 'credit_card', 0, 'active', $3, $4, $5)
-     RETURNING id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day`,
-    [householdId, input.name, input.creditLimitCents, input.closingDay, input.dueDay],
+    `INSERT INTO accounts (id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day, institution_id, card_product_id)
+     VALUES (gen_random_uuid(), $1, $2, 'credit_card', 0, 'active', $3, $4, $5, $6, $7)
+     RETURNING id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day, institution_id, card_product_id`,
+    [householdId, input.name, input.creditLimitCents, input.closingDay, input.dueDay, input.institutionId ?? null, input.cardProductId ?? null],
   );
   return mapAccount(res.rows[0]!);
 };
@@ -883,12 +885,15 @@ const updateCardInTx = async (
   if (input.creditLimitCents !== undefined) { sets.push(`credit_limit_cents = $${++idx}`); params.push(input.creditLimitCents); }
   if (input.closingDay !== undefined) { sets.push(`closing_day = $${++idx}`); params.push(input.closingDay); }
   if (input.dueDay !== undefined) { sets.push(`due_day = $${++idx}`); params.push(input.dueDay); }
+  for (const key of ['institutionId', 'cardProductId'] as const) {
+    if (input[key] !== undefined) { sets.push(`${key === 'institutionId' ? 'institution_id' : 'card_product_id'} = $${++idx}`); params.push(input[key]); }
+  }
   if (sets.length === 0) throw domainErrors.invalid('body', 'nenhum campo para atualizar');
   params.unshift(id, householdId);
   const res = await client.query<Row>(
     `UPDATE accounts SET ${sets.join(', ')}, updated_at = NOW()
       WHERE id = $1 AND household_id = $2 AND kind = 'credit_card' AND status = 'active' AND deleted_at IS NULL
-      RETURNING id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day`,
+      RETURNING id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day, institution_id, card_product_id`,
     params,
   );
   if (res.rowCount === 0 || res.rows.length === 0) throw domainErrors.notFound('Cartão');
@@ -923,7 +928,7 @@ export const createPostgresCardStore = (pool: Pool): CardStore => {
     async listCreditCardAccounts(householdId) {
       const rows = await query<Row>(
         `SELECT id, household_id, name, kind, balance_cents, status,
-                credit_limit_cents, closing_day, due_day
+                credit_limit_cents, closing_day, due_day, institution_id, card_product_id
            FROM accounts
           WHERE household_id = $1
             AND kind = 'credit_card'
@@ -1136,7 +1141,7 @@ export const createPostgresCardStore = (pool: Pool): CardStore => {
         const res = await client.query<Row>(
           `UPDATE accounts SET ${sets.join(', ')}, updated_at = NOW()
             WHERE id = $1 AND household_id = $2 AND kind = 'credit_card' AND status = 'active' AND deleted_at IS NULL
-            RETURNING id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day`,
+            RETURNING id, household_id, name, kind, balance_cents, status, credit_limit_cents, closing_day, due_day, institution_id, card_product_id`,
           params,
         );
         if (res.rowCount === 0 || res.rows.length === 0) throw domainErrors.notFound('Cartão');

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { DEVICE_TOKEN_HEADER } from '../auth/device-token.js';
 import type { ReadModelStore } from '../read-models/store.js';
 import type { WriteStore } from '../writes/store.js';
-import { createAccountInputSchema, updateAccountInputSchema } from '../writes/types.js';
+import { createAccountHttpInputSchema, updateAccountHttpInputSchema } from '../writes/types.js';
 import { DomainError } from '../writes/errors.js';
 import { requireIdempotencyKey, httpIdempotencyPayload, type IdempotencyStore } from '../writes/idempotency.js';
 import type { AuthResolver } from './auth.js';
@@ -91,7 +91,7 @@ export const registerAccountRoutes = (
 
   app.post('/accounts', async (req, reply) => {
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
-    const parsed = createAccountInputSchema.safeParse(req.body ?? {});
+    const parsed = createAccountHttpInputSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
 try {
       const result = await runIdempotent(req, ctx.householdId, parsed.data, async (claimTx) => {
@@ -113,7 +113,7 @@ try {
     let ctx; try { ctx = await resolve(req); } catch (e) { return handleError(e, reply); }
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
-    const parsed = updateAccountInputSchema.safeParse(req.body ?? {});
+    const parsed = updateAccountHttpInputSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
 try {
       const result = await runIdempotent(req, ctx.householdId, { id: params.data.id, ...parsed.data }, async (claimTx) => {

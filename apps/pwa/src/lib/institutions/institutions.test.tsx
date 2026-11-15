@@ -9,10 +9,25 @@ import {
   clearWorkspaceAppearance,
   readAppearance,
   writeAccountAppearance,
+  resolveAccountPresentation,
 } from "./appearance-store";
 import { INSTITUTIONS, resolveInstitution, searchInstitutions } from "./catalog";
 
 describe("institution identity", () => {
+  it("resolves server presentation before saved appearance and heuristic", () => {
+    const account = { id: "a", name: "Nubank", balanceCents: 0, kind: "credit_card" as const, institutionId: "itau", cardProductId: "nubank-roxinho" };
+    expect(resolveAccountPresentation(account, { institutionId: "nubank", cardProductId: "nubank-ultravioleta" })).toMatchObject({
+      institution: { id: "itau" },
+      product: { id: "nubank-roxinho" },
+    });
+    expect(resolveAccountPresentation({ ...account, institutionId: null, cardProductId: null }, { institutionId: "itau", cardProductId: "nubank-roxinho" })).toMatchObject({
+      institution: { id: "itau" },
+      product: { id: "nubank-roxinho" },
+    });
+    expect(resolveAccountPresentation({ ...account, institutionId: null, cardProductId: null }, undefined)).toMatchObject({
+      institution: { id: "nubank" },
+    });
+  });
   it("prioritizes popular exact matches and searches without accent sensitivity", () => {
     expect(searchInstitutions("NU")[0].id).toBe("nubank");
     expect(searchInstitutions("Itaú").some((institution) => institution.id === "itau")).toBe(true);
