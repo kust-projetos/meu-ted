@@ -18,7 +18,7 @@ import { BANK_PRESETS, resolveBankPreset, formatMaskedNumber } from "@/lib/bank-
 import { InstitutionPicker } from "@/components/brand/InstitutionPicker";
 import { useAccountAppearance, writeAccountAppearance } from "@/lib/institutions/appearance-store";
 import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
-import { getInstitution, resolveInstitution, type Institution } from "@/lib/institutions/catalog";
+import { getInstitution, type Institution } from "@/lib/institutions/catalog";
 import { cardProductsForInstitution, customCardProduct, getCardProduct, resolveCardNetworkLabel, type CardNetwork, type CardProduct } from "@/lib/institutions/card-products";
 import { resolveAccountPresentation } from "@/lib/institutions/appearance-store";
 
@@ -169,8 +169,6 @@ function NewCardSheet({
               product={product}
               cardName={name.trim() || product?.name || institution?.name || selectedPreset.name}
               maskedNumber="•••• •••• •••• 0000"
-              holderName="SEU NOME"
-              expiry="12/30"
               network={product?.network === "unknown" ? undefined : product?.network ?? selectedPreset.network}
               compact
             />
@@ -798,8 +796,6 @@ export default function CardsPage() {
                     product={card.product}
                     cardName={card.name}
                     maskedNumber={masked}
-                    holderName="TITULAR"
-                    expiry={`${String(card.dueDay).padStart(2, "0")}/30`}
                     network={card.product?.network === "unknown" ? undefined : card.product?.network ?? preset.network}
                   />
                   <div className="rounded-[16px] border border-border-subtle bg-surface-1 p-3 shadow-card">
@@ -811,12 +807,19 @@ export default function CardsPage() {
                     </div>
                     <div className="mt-1 text-[11px] font-medium text-text-muted">Fatura atual</div>
                     <div className="font-mono tabular-nums text-[18px] font-bold text-text-primary">{formatBRL(card.spentCents)}</div>
-                    <div className="mt-2 h-[6px] rounded-full bg-surface-2 overflow-hidden">
+                    <div
+                      role="progressbar"
+                      aria-label={`Uso do limite: ${formatPct(card.pct)}`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={card.pct}
+                      className="mt-2 h-[6px] rounded-full bg-surface-2 overflow-hidden"
+                    >
                       <div className="h-full rounded-full transition-all duration-300" style={{ width: `${card.pct}%`, background: preset.gradient }} />
                     </div>
                     <div className="mt-1.5 flex justify-between font-mono tabular-nums text-[11px] font-semibold text-text-muted">
-                      <span>{formatPct(card.pct)} de {formatBRL(card.creditLimitCents)}</span>
-                      <span>{formatBRL(availCents)} livre</span>
+                      <span>Limite total {formatBRL(card.creditLimitCents)}</span>
+                      <span>Disponível {formatBRL(availCents)}</span>
                     </div>
                   </div>
                 </div>
@@ -873,25 +876,31 @@ export default function CardsPage() {
                   product={card.product}
                   cardName={card.name}
                   maskedNumber={masked}
-                  holderName="TITULAR"
-                  expiry={`${String(detailDueDay).padStart(2, "0")}/30`}
                   network={card.product?.network === "unknown" ? undefined : card.product?.network ?? preset.network}
                 />
 
                 {/* Hero KPIs */}
                 <div className="rounded-[16px] border border-border-subtle bg-surface-1 p-4 shadow-card">
-                  <div className="flex justify-between">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2">
+                      <div className="text-[11px] font-medium text-text-muted">Fatura atual</div>
+                      <div className="font-mono tabular-nums text-[20px] font-bold text-text-primary">{formatBRL(detailSpent)}</div>
+                    </div>
                     <div>
-                      <div className="text-[11px] font-medium text-text-muted">Fatura</div>
-                      <div className="font-mono tabular-nums text-[18px] font-bold text-text-primary">{formatBRL(detailSpent)}</div>
+                      <div className="text-[11px] font-medium text-text-muted">Limite total</div>
+                      <div className="font-mono tabular-nums text-[14px] font-bold text-text-primary">{formatBRL(card.creditLimitCents)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-medium text-text-muted">Limite disponível</div>
+                      <div className="font-mono tabular-nums text-[14px] font-bold text-primary">{formatBRL(availCents)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-medium text-text-muted">Fecha dia</div>
+                      <div className="font-mono tabular-nums text-[14px] font-bold text-text-primary">{card.closingDay}</div>
                     </div>
                     <div>
                       <div className="text-[11px] font-medium text-text-muted">Vence dia</div>
-                      <div className="font-mono tabular-nums text-[18px] font-bold text-text-primary">{detailDueDay}</div>
-                    </div>
-                    <div>
-                      <div className="text-[11px] font-medium text-text-muted">Limite livre</div>
-                      <div className="font-mono tabular-nums text-[18px] font-bold text-primary">{formatBRL(availCents)}</div>
+                      <div className="font-mono tabular-nums text-[14px] font-bold text-text-primary">{detailDueDay}</div>
                     </div>
                   </div>
                 </div>

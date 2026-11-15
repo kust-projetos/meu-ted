@@ -67,8 +67,8 @@ describe("CardsPage", () => {
       await user.click(backBtn);
       expect(screen.getByText("Inter Mastercard")).toBeInTheDocument();
     });
-    it("shows limit usage percentage", () => { render(<CardsPage />); expect(screen.getByText(/0\.3%/)).toBeInTheDocument(); expect(screen.getByText(/2\.3%/)).toBeInTheDocument(); });
-    it("shows available limit for each card", () => { render(<CardsPage />); expect(screen.getAllByText(/livre/).length).toBe(2); });
+    it("exposes limit usage accessibly", () => { render(<CardsPage />); expect(screen.getByRole("progressbar", { name: /uso do limite: 0\.3%/i })).toBeInTheDocument(); expect(screen.getByRole("progressbar", { name: /uso do limite: 2\.3%/i })).toBeInTheDocument(); });
+    it("shows total and available limit for each card", () => { render(<CardsPage />); expect(screen.getAllByText(/Limite total/).length).toBe(2); expect(screen.getAllByText(/Disponível/).length).toBe(2); });
     it("shows pagar fatura button in card detail", async () => {
       const user = userEvent.setup();
       render(<CardsPage />);

@@ -62,6 +62,9 @@ interaction; these primitives add no default animation. Honor
 Third-party brand marks use Simple Icons (CC0) when available. Otherwise use
 a legible monogram fallback. Illustrative card art may be original and
 abstract; never use official payment-card imagery or imitate a real card face.
+Custom card imagery is outside this scope: it requires asset storage and must
+not mix financial data with image bytes. A future minimum should store an asset
+reference per account, never inline image data in financial records.
 
 Institution and card-product appearance metadata is persisted server-side on
 `accounts` (`institution_id`, `card_product_id`, both nullable) and mirrored to
