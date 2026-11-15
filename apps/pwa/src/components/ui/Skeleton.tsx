@@ -61,7 +61,7 @@ export default function Skeleton({
       role="status"
       aria-label="Carregando"
       data-testid="skeleton"
-      className={`animate-pulse bg-fill-medium ${className}`}
+      className={`motion-safe:animate-pulse bg-fill-medium ${className}`}
       style={{ ...computed, ...style }}
     />
   );

@@ -83,7 +83,7 @@ export function Dialog({
             type="button"
             onClick={onClose}
             aria-label="Fechar"
-            className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-surface-2 text-text-muted transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+            className="flex h-11 w-11 flex-none items-center justify-center rounded-full bg-surface-2 text-text-muted transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
           >
             <svg
               width="16"

@@ -34,7 +34,7 @@ export function CategoryBadge({
   withBorder?: boolean;
 }) {
   const baseColor = color ?? getCategoryColor(name);
-  const initial = name.slice(0, 1).toUpperCase();
+  const initial = (name.trim().slice(0, 1) || "•").toUpperCase();
   const fontSize = Math.max(Math.round(size * 0.5), 8);
 
   const hasKnownIcon = Boolean(icon && hasCategoryIcon(icon));

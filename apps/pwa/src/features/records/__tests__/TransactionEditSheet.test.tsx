@@ -64,6 +64,25 @@ describe("TransactionEditSheet", () => {
     expect(updateSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps edited data when close is attempted and closes only after discard confirmation", () => {
+    const updateSpy = vi.fn();
+    const onClose = vi.fn();
+    vi.spyOn(appStateModule, "useAppState").mockReturnValue(mockState({ updateTransaction: updateSpy }));
+    render(<TransactionEditSheet open onClose={onClose} transaction={expenseTx} />);
+    const description = screen.getByDisplayValue("Mercado");
+    fireEvent.change(description, { target: { value: "Mercado editado" } });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByDisplayValue("Mercado editado")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Descartar alterações?" })).toBeInTheDocument();
+    expect(updateSpy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Continuar editando" }));
+    expect(screen.getByDisplayValue("Mercado editado")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Descartar" }));
+    expect(onClose).toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
   it("does not save when date is empty", () => {
     const updateSpy = vi.fn();
     vi.spyOn(appStateModule, "useAppState").mockReturnValue(mockState({ updateTransaction: updateSpy }));

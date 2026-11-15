@@ -379,7 +379,7 @@ export default function RecordsPage() {
                     setTypeFilter(chip.key === typeFilter ? "all" : chip.key);
                     setFilterOpen(false);
                   }}
-                  className={`rounded-full px-3.5 py-1.5 text-[12px] font-bold transition-all ${
+                  className={`min-h-11 rounded-full px-3.5 py-1.5 text-[12px] font-bold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                     typeFilter === chip.key
                       ? "bg-primary text-white shadow-xs"
                       : "bg-surface-2 text-text-secondary hover:bg-surface-3"
@@ -402,7 +402,7 @@ export default function RecordsPage() {
                     setPeriodFilter(chip.key === periodFilter ? "all" : chip.key);
                     if (chip.key !== "custom") setFilterOpen(false);
                   }}
-                  className={`rounded-full px-3.5 py-1.5 text-[12px] font-bold transition-all ${
+                  className={`min-h-11 rounded-full px-3.5 py-1.5 text-[12px] font-bold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                     periodFilter === chip.key
                       ? "bg-primary text-white shadow-xs"
                       : "bg-surface-2 text-text-secondary hover:bg-surface-3"
@@ -563,10 +563,12 @@ export default function RecordsPage() {
                           : "";
 
                     return (
-                      <div
+                      <button
+                        type="button"
                         key={tx.id}
                         onClick={() => handleRowClick(tx)}
-                        className="flex cursor-pointer items-center gap-3 border-b border-border-subtle px-4 py-3.5 last:border-none hover:bg-surface-2/60 active:bg-surface-2 transition-colors"
+                        aria-label={`${tx.description}, ${formatBRL(tx.amountCents)}, ${tx.kind === "expense" ? "despesa" : tx.kind === "income" ? "receita" : "transferência"}`}
+                        className="flex min-h-11 w-full cursor-pointer items-center gap-3 border-b border-border-subtle px-4 py-3.5 text-left last:border-none hover:bg-surface-2/60 active:bg-surface-2 transition-colors focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                       >
                         <div className="flex h-10 w-10 flex-none items-center justify-center rounded-[12px] bg-surface-2 shadow-xs">
                           <CategoryBadge
@@ -597,7 +599,7 @@ export default function RecordsPage() {
                           {prefix}
                           {formatBRL(tx.amountCents)}
                         </div>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>

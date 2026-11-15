@@ -18,6 +18,7 @@ export const SHEET_EXIT_MS = 200;
 export interface BottomSheetProps {
   open: boolean;
   onClose: () => void;
+  onBeforeClose?: () => boolean;
   title: string;
   children: ReactNode;
   className?: string;
@@ -26,6 +27,7 @@ export interface BottomSheetProps {
 export function BottomSheet({
   open,
   onClose,
+  onBeforeClose,
   title,
   children,
   className = "",
@@ -38,6 +40,7 @@ export function BottomSheet({
   const leavingRef = useRef(false);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onCloseRef = useRef(onClose);
+  const onBeforeCloseRef = useRef(onBeforeClose);
   useBodyScrollLock(rendered);
   const containerRef = useRef<HTMLDivElement>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
@@ -46,6 +49,9 @@ export function BottomSheet({
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+  useEffect(() => {
+    onBeforeCloseRef.current = onBeforeClose;
+  }, [onBeforeClose]);
 
   const clearExitTimer = useCallback(() => {
     if (closeTimerRef.current !== null) {
@@ -61,6 +67,7 @@ export function BottomSheet({
    * chamar onClose de fato; instantâneo sob prefers-reduced-motion. */
   const requestClose = useCallback(() => {
     if (leavingRef.current) return;
+    if (onBeforeCloseRef.current && !onBeforeCloseRef.current()) return;
     if (prefersReducedMotion()) {
       onCloseRef.current();
       return;
@@ -258,9 +265,9 @@ export function BottomSheet({
       <div
         ref={sheetRef}
         data-testid="bottom-sheet-panel"
-        className={`fixed bottom-0 left-0 right-0 z-50 flex max-h-[92vh] flex-col overflow-y-auto rounded-t-[26px] border-t border-border-strong bg-surface-3 shadow-sheet ${leaving ? "" : "animate-sheet-up "}${className}`}
+        className={`fixed bottom-0 left-0 right-0 z-50 flex max-h-[92dvh] flex-col overflow-y-auto rounded-t-[26px] border-t border-border-strong bg-surface-3 shadow-sheet ${leaving ? "" : "animate-sheet-up "}${className}`}
         style={{
-          padding: "20px 20px 32px",
+          padding: "20px 20px calc(32px + env(safe-area-inset-bottom))",
           ...(leaving
             ? {
                 animation: "none",
@@ -291,7 +298,7 @@ export function BottomSheet({
             <button
               type="button"
               onClick={requestClose}
-              className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-surface-2 text-text-muted transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+              className="flex h-11 w-11 flex-none items-center justify-center rounded-full bg-surface-2 text-text-muted transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
               aria-label="Fechar"
             >
               <X size={16} strokeWidth={2.4} />
