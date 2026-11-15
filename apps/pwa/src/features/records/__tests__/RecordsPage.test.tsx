@@ -105,7 +105,7 @@ describe("RecordsPage", () => {
   describe("with data", () => {
     it("renders the page header", () => {
       render(<RecordsPage />);
-      expect(screen.getByText("Registros")).toBeInTheDocument();
+      expect(screen.getByText("Extrato")).toBeInTheDocument();
     });
 
     it("renders all transactions by default", () => {

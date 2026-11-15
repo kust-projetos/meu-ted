@@ -14,7 +14,7 @@ describe("BottomNav", () => {
     onNavClick: vi.fn(),
   };
 
-  function renderNav(active: "home" | "records" | "compromissos" | "hub" | null = "home") {
+  function renderNav(active: "home" | "records" | "cards" | "reports" | null = "home") {
     return render(<BottomNav active={active} onNavClick={handlers.onNavClick} />);
   }
 
@@ -35,9 +35,9 @@ describe("BottomNav", () => {
       renderNav();
       expect(screen.getByText("Início")).toBeInTheDocument();
       expect(screen.getByText("Extrato")).toBeInTheDocument();
-      expect(screen.getByText("Compromissos")).toBeInTheDocument();
-      expect(screen.getByText("Mais")).toBeInTheDocument();
-      expect(screen.getByLabelText("Nova transação")).toBeInTheDocument();
+      expect(screen.getByText("Cartões")).toBeInTheDocument();
+      expect(screen.getByText("Relatórios")).toBeInTheDocument();
+      expect(screen.getByLabelText("Novo lançamento")).toBeInTheDocument();
     });
   });
 
@@ -66,8 +66,8 @@ describe("BottomNav", () => {
     it("calls onNavClick when a tab is clicked", async () => {
       const user = userEvent.setup();
       renderNav();
-      await user.click(screen.getByText("Mais"));
-      expect(handlers.onNavClick).toHaveBeenCalledWith("hub");
+      await user.click(screen.getByText("Relatórios"));
+      expect(handlers.onNavClick).toHaveBeenCalledWith("reports");
     });
 
     // SPEC §24: the quick-action popup is a disclosure (button + group of
@@ -76,7 +76,7 @@ describe("BottomNav", () => {
     it("toggles the quick actions disclosure when FAB is clicked", async () => {
       const user = userEvent.setup();
       renderNav();
-      const fab = screen.getByLabelText("Nova transação");
+      const fab = screen.getByLabelText("Novo lançamento");
       expect(fab).toHaveAttribute("aria-expanded", "false");
       expect(fab).not.toHaveAttribute("aria-haspopup", "menu");
       await user.click(fab);
@@ -94,7 +94,7 @@ describe("BottomNav", () => {
       const user = userEvent.setup();
       const dispatch = vi.spyOn(window, "dispatchEvent");
       renderNav();
-      await user.click(screen.getByLabelText("Nova transação"));
+      await user.click(screen.getByLabelText("Novo lançamento"));
       await user.click(screen.getByText("Receita"));
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({ type: "pwa:open-tx" }),
@@ -107,7 +107,7 @@ describe("BottomNav", () => {
     it("navigates to /capture for Ler Comprovante", async () => {
       const user = userEvent.setup();
       renderNav();
-      await user.click(screen.getByLabelText("Nova transação"));
+      await user.click(screen.getByLabelText("Novo lançamento"));
       await user.click(screen.getByText("Ler Comprovante"));
       expect(navigation.push).toHaveBeenCalledWith("/capture");
     });
@@ -115,7 +115,7 @@ describe("BottomNav", () => {
     it("closes the disclosure on Escape and returns focus to the FAB", async () => {
       const user = userEvent.setup();
       renderNav();
-      const fab = screen.getByLabelText("Nova transação");
+      const fab = screen.getByLabelText("Novo lançamento");
       await user.click(fab);
       expect(screen.getByRole("group", { name: "Novo lançamento" })).toBeInTheDocument();
       await user.keyboard("{Escape}");
@@ -129,7 +129,7 @@ describe("BottomNav", () => {
       const { container } = renderNav();
       const nav = container.querySelector('[data-nav="bottom"]')!;
       const iconSvgs = Array.from(nav.querySelectorAll("button svg")).filter(
-        (svg) => svg.closest('button')?.getAttribute("aria-label") !== "Nova transação",
+        (svg) => svg.closest('button')?.getAttribute("aria-label") !== "Novo lançamento",
       );
       expect(iconSvgs).toHaveLength(4);
       for (const svg of iconSvgs) {
@@ -140,7 +140,7 @@ describe("BottomNav", () => {
 
     it("renders labels at 11px", () => {
       renderNav();
-      for (const label of ["Início", "Extrato", "Compromissos", "Mais"]) {
+      for (const label of ["Início", "Extrato", "Cartões", "Relatórios"]) {
         expect(screen.getByText(label).className).toMatch(/text-\[11px\]/);
       }
     });
@@ -178,10 +178,11 @@ describe("BottomNav", () => {
 
     it("uses token-driven FAB gradient (A10, no hardcoded hex)", () => {
       renderNav();
-      const fab = screen.getByLabelText("Nova transação") as HTMLElement;
+      const fab = screen.getByLabelText("Novo lançamento") as HTMLElement;
       expect(fab.style.background).toContain("var(--primary)");
       expect(fab.style.background).toContain("var(--primary-dark)");
       expect(fab.style.background).not.toMatch(/#[0-9A-Fa-f]{6}/);
     });
   });
 });
+

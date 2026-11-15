@@ -14,6 +14,7 @@ import type { AppState } from "@/lib/state/app-state-context";
 let mockPath = "/";
 vi.mock("next/navigation", () => ({
   usePathname: () => mockPath,
+  useSearchParams: () => new URLSearchParams(mockPath === "/hub/patrimonio" ? "aba=cartoes" : ""),
   useRouter: () => ({ push: vi.fn() }),
 }));
 vi.mock("@/lib/api/auth", () => ({
@@ -58,7 +59,7 @@ function defaultState(): AppState {
 }
 
 async function openSheetViaFab(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByLabelText("Nova transação"));
+  await user.click(screen.getByLabelText("Novo lançamento"));
   await user.click(screen.getByRole("button", { name: "Despesa" }));
   expect(screen.getByRole("dialog")).toBeInTheDocument();
 }
@@ -128,7 +129,7 @@ describe("AppShell", () => {
       mockPath = "/";
       render(<AppShell><div>Content</div></AppShell>);
       expectActive("Início");
-      expectInactive("Mais");
+      expectInactive("Relatórios");
     });
 
     it("highlights Extrato for /registros", () => {
@@ -138,17 +139,17 @@ describe("AppShell", () => {
       expectInactive("Início");
     });
 
-    it("highlights Compromissos for /compromissos", () => {
+    it("leaves tabs inactive for commitments", () => {
       mockPath = "/compromissos";
       render(<AppShell><div>Content</div></AppShell>);
-      expectActive("Compromissos");
+      expectInactive("Cartões");
       expectInactive("Início");
     });
 
-    it("highlights Mais for hub subroutes", () => {
+    it("highlights Cartões only for its selected tab", () => {
       mockPath = "/hub/patrimonio";
       render(<AppShell><div>Content</div></AppShell>);
-      expectActive("Mais");
+      expectActive("Cartões");
       expectInactive("Início");
     });
 
@@ -158,7 +159,7 @@ describe("AppShell", () => {
         mockPath = route;
         render(<AppShell><div>{route}</div></AppShell>);
         expectInactive("Início");
-        expectInactive("Mais");
+        expectInactive("Relatórios");
       },
     );
   });
@@ -167,7 +168,7 @@ describe("AppShell", () => {
     it("opens the quick actions disclosure when FAB is clicked", async () => {
       const user = userEvent.setup();
       render(<AppShell><div>Content</div></AppShell>);
-      await user.click(screen.getByLabelText("Nova transação"));
+      await user.click(screen.getByLabelText("Novo lançamento"));
       expect(screen.getByRole("group", { name: "Novo lançamento" })).toBeInTheDocument();
       expect(screen.getByText("Despesa")).toBeInTheDocument();
     });
@@ -175,7 +176,7 @@ describe("AppShell", () => {
     it("opens the preselected expense sheet from the FAB quick actions", async () => {
       const user = userEvent.setup();
       render(<AppShell><div>Content</div></AppShell>);
-      await user.click(screen.getByLabelText("Nova transação"));
+      await user.click(screen.getByLabelText("Novo lançamento"));
       await user.click(screen.getByRole("button", { name: "Despesa" }));
       expect(screen.getByText("Nova despesa")).toBeInTheDocument();
     });
