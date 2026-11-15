@@ -5,6 +5,8 @@ import { useFormDirtySafe } from "@/lib/unsaved-changes";
 import StatusBar from "@/components/StatusBar";
 import PageHeader from "@/components/PageHeader";
 import BottomSheet from "@/components/BottomSheet";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
+import Skeleton from "@/components/ui/Skeleton";
 import { StaleBanner } from "@/components/StaleBanner";
 import { WriteErrorBanner } from "@/components/WriteErrorBanner";
 import { fetchStatementDetail, updateCardPurchase } from "@/lib/api/endpoints";
@@ -103,7 +105,14 @@ function NewCardSheet({
   }) => Promise<{ id: string } | undefined>;
   onCreated: (accountId: string, appearance: { institutionId?: string; manualInstitutionName?: string; cardProductId?: string; customCardName?: string }) => void;
 }) {
-  const { markDirty, markClean } = useFormDirtySafe();
+  const { markDirty, markClean, isDirty } = useFormDirtySafe();
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const requestClose = () => {
+    if (!isDirty) return true;
+    setDiscardOpen(true);
+    return false;
+  };
+  const confirmDiscard = () => { setDiscardOpen(false); markClean(); onClose(); };
   const [institution, setInstitution] = useState<Institution | undefined>(() => getInstitution("nubank"));
   const [institutionId, setInstitutionId] = useState<string | undefined>("nubank");
   const [manualInstitutionName, setManualInstitutionName] = useState("");
@@ -157,7 +166,8 @@ function NewCardSheet({
     : undefined);
   const selectedPreset = resolveBankPreset({ id: institutionId, name: institution?.name });
   return (
-    <BottomSheet open={open} onClose={onClose} title="Novo cartão">
+    <>
+    <BottomSheet open={open} onClose={onClose} onBeforeClose={requestClose} title="Novo cartão">
       <div className="flex flex-col gap-4" onChangeCapture={markDirty}>
         <div>
           <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">
@@ -250,6 +260,8 @@ function NewCardSheet({
         </button>
       </div>
     </BottomSheet>
+    <ConfirmActionDialog open={discardOpen} title="Descartar alterações?" message="Os dados digitados no cartão serão perdidos." confirmLabel="Descartar" cancelLabel="Continuar editando" danger onConfirm={confirmDiscard} onCancel={() => setDiscardOpen(false)} />
+    </>
   );
 }
 
@@ -409,7 +421,14 @@ function EditSheet({
   appearance?: { institutionId?: string; cardProductId?: string; customCardName?: string };
   onUpdate: (id: string, input: { name?: string; creditLimitCents?: number; closingDay?: number; dueDay?: number; institutionId?: string | null; cardProductId?: string | null }, appearance: { institutionId?: string; cardProductId?: string; customCardName?: string }) => void | Promise<void>;
 }) {
-  const { markDirty, markClean } = useFormDirtySafe();
+  const { markDirty, markClean, isDirty } = useFormDirtySafe();
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const requestClose = () => {
+    if (!isDirty) return true;
+    setDiscardOpen(true);
+    return false;
+  };
+  const confirmDiscard = () => { setDiscardOpen(false); markClean(); onClose(); };
   const [name, setName] = useState(card?.name ?? "");
   const [limit, setLimit] = useState("");
   const [closingDay, setClosingDay] = useState(String(card?.closingDay ?? "15"));
@@ -455,7 +474,8 @@ function EditSheet({
   }
 
   return (
-    <BottomSheet open={open} onClose={onClose} title="Editar cartão">
+    <>
+    <BottomSheet open={open} onClose={onClose} onBeforeClose={requestClose} title="Editar cartão">
       <div className="flex flex-col gap-4" onChangeCapture={markDirty}>
         <InstitutionPicker value={institution} onSelect={(selected) => {
           setInstitution(selected); setInstitutionId(selected.id); setProductId(""); setCustomName("");
@@ -513,6 +533,8 @@ function EditSheet({
         </button>
       </div>
     </BottomSheet>
+    <ConfirmActionDialog open={discardOpen} title="Descartar alterações?" message="Os dados alterados do cartão serão perdidos." confirmLabel="Descartar" cancelLabel="Continuar editando" danger onConfirm={confirmDiscard} onCancel={() => setDiscardOpen(false)} />
+    </>
   );
 }
 
@@ -616,7 +638,7 @@ function PurchaseEditSheet({
 
 export default function CardsPage() {
   const { accounts, transactions, categories, cardStatements, loading, error,
-    addCard, payStatement, updateCard, writeError, clearWriteError, retryWriteError } = useAppState();
+    addCard, payStatement, updateCard, writeError, clearWriteError, retryWriteError, refreshDomains } = useAppState();
   const workspaceId = useWorkspaceSafe()?.activeWorkspace?.id ?? "default";
   const appearance = useAccountAppearance(workspaceId);
   useEffect(() => {
@@ -697,11 +719,10 @@ export default function CardsPage() {
     return (
       <div className="flex min-h-dvh flex-col bg-bg">
         <StatusBar />
-        <div className="flex flex-1 items-center justify-center">
-          <div className="flex flex-col items-center gap-3">
-            <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-border-subtle border-t-primary" />
-            <span className="text-[13px] font-semibold text-text-muted">Carregando...</span>
-          </div>
+        <div className="flex flex-1 flex-col gap-4 px-5 py-6" aria-label="Carregando cartões">
+          <Skeleton variant="card" height={190} />
+          <Skeleton variant="card" height={96} />
+          <Skeleton variant="card" height={190} />
         </div>
       </div>
     );
@@ -770,7 +791,10 @@ export default function CardsPage() {
         />
 
         {error && (
-          <div className="mx-5 mb-3 rounded-[12px] bg-danger-tint px-4 py-2.5 text-[12px] font-semibold text-danger">⚠ {error}</div>
+          <div className="mx-5 mb-3 flex items-center justify-between gap-3 rounded-[12px] bg-danger-tint px-4 py-2.5 text-[12px] font-semibold text-danger">
+            <span>⚠ {error}</span>
+            <button type="button" onClick={() => void refreshDomains(["accounts", "cardStatements", "transactions"])} className="min-h-11 flex-none rounded-lg px-3 underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">Tentar novamente</button>
+          </div>
         )}
 
         <WriteErrorBanner message={writeError} onDismiss={clearWriteError} onRetry={retryWriteError ?? undefined} />
@@ -864,7 +888,7 @@ export default function CardsPage() {
                   </button>
                   <button
                     onClick={() => setEditCard(card)}
-                    className="flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface-1 px-3.5 py-1.5 text-[12px] font-bold text-text-secondary hover:bg-surface-2 transition-colors"
+                    className="flex min-h-11 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-1 px-3.5 py-1.5 text-[12px] font-bold text-text-secondary hover:bg-surface-2 transition-colors focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                   >
                     <Edit3 size={14} />
                     Editar

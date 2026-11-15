@@ -199,7 +199,7 @@ describe("CardsPage", () => {
 
   // ── Loading/Error ──
   describe("loading", () => {
-    it("shows loading indicator", () => { vi.spyOn(appStateModule, "useAppState").mockReturnValue(mockState({ loading: true })); render(<CardsPage />); expect(screen.getByText(/carregando/i)).toBeInTheDocument(); expect(screen.queryByText("Nubank Crédito")).not.toBeInTheDocument(); });
+    it("shows card skeletons while loading", () => { vi.spyOn(appStateModule, "useAppState").mockReturnValue(mockState({ loading: true })); render(<CardsPage />); expect(screen.getAllByTestId("skeleton")).toHaveLength(3); expect(screen.queryByText("Nubank Crédito")).not.toBeInTheDocument(); });
   });
 
   describe("error", () => {
@@ -556,6 +556,28 @@ describe("CardsPage", () => {
         closingDay: 5,
         dueDay: 12,
       }));
+    });
+
+    it("retains a new-card draft until discard is explicitly confirmed", async () => {
+      resetUrl();
+      const addSpy = vi.fn();
+      vi.spyOn(appStateModule, "useAppState").mockReturnValue(mockState({ addCard: addSpy }));
+      const user = userEvent.setup();
+      render(<CardsPage />);
+      await user.click(screen.getByText("Novo"));
+      const name = screen.getByPlaceholderText(/Nubank, It/i);
+      await user.clear(name);
+      await user.type(name, "Rascunho");
+      await user.keyboard("{Escape}");
+      expect(screen.getByDisplayValue("Rascunho")).toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: "Descartar alterações?" })).toBeInTheDocument();
+      expect(addSpy).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", { name: "Continuar editando" }));
+      expect(screen.getByDisplayValue("Rascunho")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Fechar" }));
+      await user.click(screen.getByRole("button", { name: "Descartar" }));
+      expect(addSpy).not.toHaveBeenCalled();
+      expect(screen.queryByDisplayValue("Rascunho")).not.toBeInTheDocument();
     });
 
     it("edits card fields and saves", async () => {

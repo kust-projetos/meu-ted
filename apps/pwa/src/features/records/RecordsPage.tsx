@@ -379,7 +379,7 @@ export default function RecordsPage() {
                     setTypeFilter(chip.key === typeFilter ? "all" : chip.key);
                     setFilterOpen(false);
                   }}
-                  className={`rounded-full px-3.5 py-1.5 text-[12px] font-bold transition-all ${
+                  className={`min-h-11 rounded-full px-3.5 py-1.5 text-[12px] font-bold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                     typeFilter === chip.key
                       ? "bg-primary text-white shadow-xs"
                       : "bg-surface-2 text-text-secondary hover:bg-surface-3"
@@ -402,7 +402,7 @@ export default function RecordsPage() {
                     setPeriodFilter(chip.key === periodFilter ? "all" : chip.key);
                     if (chip.key !== "custom") setFilterOpen(false);
                   }}
-                  className={`rounded-full px-3.5 py-1.5 text-[12px] font-bold transition-all ${
+                  className={`min-h-11 rounded-full px-3.5 py-1.5 text-[12px] font-bold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                     periodFilter === chip.key
                       ? "bg-primary text-white shadow-xs"
                       : "bg-surface-2 text-text-secondary hover:bg-surface-3"

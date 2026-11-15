@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import BottomSheet from "@/components/BottomSheet";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { useAppState } from "@/lib/state/app-state-context";
 import { useFormDirtySafe } from "@/lib/unsaved-changes";
 import type { Transaction } from "@/lib/state/types";
@@ -33,7 +34,7 @@ export function TransactionEditSheet({
   onClose,
 }: TransactionEditSheetProps) {
   const { updateTransaction, categories, accounts } = useAppState();
-  const { markDirty, markClean } = useFormDirtySafe();
+  const { markDirty, markClean, isDirty } = useFormDirtySafe();
   const isTransfer = transaction?.kind === "transfer";
 
   const [description, setDescription] = useState("");
@@ -56,15 +57,19 @@ export function TransactionEditSheet({
     }
   }, [transaction, open, markClean]);
 
+  const [discardOpen, setDiscardOpen] = useState(false);
   if (!transaction) return null;
 
   const filteredCategories = categories.filter(
     (c) => c.kind === (transaction.kind === "income" ? "income" : "expense"),
   );
 
-  function handleClose() {
-    markClean();
-    onClose();
+  function handleClose() { markClean(); onClose(); }
+  function confirmDiscard() { setDiscardOpen(false); handleClose(); }
+  function requestClose() {
+    if (!isDirty) return true;
+    setDiscardOpen(true);
+    return false;
   }
 
   const handleSave = async () => {
@@ -101,7 +106,8 @@ export function TransactionEditSheet({
   };
 
   return (
-    <BottomSheet open={open} onClose={handleClose} title="Editar lançamento">
+    <>
+    <BottomSheet open={open} onClose={handleClose} onBeforeClose={requestClose} title="Editar lançamento">
       <div className="flex flex-col gap-4" onChangeCapture={markDirty}>
         {/* Description */}
         <div>
@@ -220,5 +226,7 @@ export function TransactionEditSheet({
         </button>
       </div>
     </BottomSheet>
+    <ConfirmActionDialog open={discardOpen} title="Descartar alterações?" message="As alterações não salvas serão perdidas." confirmLabel="Descartar" cancelLabel="Continuar editando" danger onConfirm={confirmDiscard} onCancel={() => setDiscardOpen(false)} />
+    </>
   );
 }
