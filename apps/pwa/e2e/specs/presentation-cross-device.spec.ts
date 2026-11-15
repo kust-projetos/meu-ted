@@ -75,6 +75,6 @@ test("[CARD-09] card product appearance persists cross-device from server", asyn
   await startCleanDevice(page);
   await page.goto("/hub/patrimonio?aba=cartoes");
   await expect(page.getByText("Ultravioleta").first()).toBeVisible();
-  await expect(page.getByText(/R\$\s*3\.000,00 livre/)).toBeVisible();
+  await expect(page.getByText(/Disponível\s+R\$\s*3\.000,00/)).toBeVisible();
   assertNoUndeclaredFailures(guard);
 });

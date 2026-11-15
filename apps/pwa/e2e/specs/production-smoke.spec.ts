@@ -39,7 +39,7 @@ test.describe("production-smoke", () => {
     // Assert registration shell is visible
     await expect(page.getByRole("button", { name: /Registrar|Entrar/i })).toBeVisible({ timeout: 15000 });
     // Assert no authenticated elements leak through
-    await expect(page.getByLabel("Nova transação")).toBeHidden();
+    await expect(page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" })).toBeHidden();
     await expect(page.getByRole("heading", { name: /Resumo|Dashboard/i })).toBeHidden();
   });
 

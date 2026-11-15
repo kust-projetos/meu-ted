@@ -116,7 +116,7 @@ test.describe("V2 visual audit", () => {
       await customizer.getByRole("button", { name: "Fechar" }).click();
       await expect(customizer).toHaveCount(0);
       for (const mode of ["Despesa", "Receita", "Transfer\u00eancia"]) {
-        await page.getByLabel("Nova transa\u00e7\u00e3o").first().click();
+        await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click();
         await page.getByRole("button", { name: mode, exact: true }).click();
         const sheet = page.getByRole("dialog");
         await expect(sheet).toBeVisible();

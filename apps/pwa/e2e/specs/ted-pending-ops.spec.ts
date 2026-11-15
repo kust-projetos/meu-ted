@@ -171,10 +171,10 @@ function bodyOf(entry: JournalEntry): Record<string, unknown> {
 
 async function authenticate(page: Page, timeout = 15000): Promise<void> {
   // Authenticated signal is viewport-dependent: the BottomNav FAB
-  // ("Nova transação") is lg:hidden by design, while the TED launcher pill
+  // ("Novo lançamento") is lg:hidden by design, while the TED launcher pill
   // stays mounted on desktop (repositioned, not hidden). Either proves the
   // authenticated shell rendered.
-  const fab = page.getByLabel("Nova transação");
+  const fab = page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" });
   const tedLauncher = page.getByRole("button", { name: /abrir assistente ted/i }).last();
   if (await fab.isVisible().catch(() => false)) return;
   if (await tedLauncher.isVisible().catch(() => false)) return;

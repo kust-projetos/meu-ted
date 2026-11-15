@@ -1,7 +1,7 @@
 /**
  * Viewport-agnostic "new transaction" opener for E2E specs.
  *
- * Mobile (functional-mobile, 390px): the BottomNav FAB ("Nova transação")
+ * Mobile (functional-mobile, 390px): the BottomNav FAB ("Novo lançamento")
  * opens a `group` "Novo lançamento" with plain BUTTONS (Despesa, Receita,
  * Transferência, Ler Comprovante). Desktop (functional-desktop, 1440px):
  * the BottomNav is `lg:hidden` and the SidebarRail CTA ("Novo lançamento",
@@ -84,7 +84,7 @@ export async function openNewTransaction(
     return dialog;
   }
 
-  await page.getByLabel("Nova transação").click();
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click();
   const group = page.getByLabel("Novo lançamento");
   await expect(group).toBeVisible();
   await group.getByRole("button", { name: label }).click();

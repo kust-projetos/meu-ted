@@ -775,7 +775,7 @@ export default function CardsPage() {
   return (
     <div className="flex min-h-dvh flex-col bg-bg">
       <StatusBar />
-      <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
+      <main className="flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-0">
         <PageHeader
           title="Cartões"
           action={
@@ -802,7 +802,7 @@ export default function CardsPage() {
         <StaleBanner domains={["accounts", "cardStatements", "transactions"]} />
 
         {!selectedCardId ? (
-          <div className="flex flex-col gap-5 px-5 sm:px-8 lg:px-12">
+          <div className="grid gap-3 px-5 sm:px-8 lg:grid-cols-2 lg:px-12 xl:grid-cols-3">
             {cardsData.length === 0 && (
               <div className="py-[50px] text-center text-text-muted">
                 <div className="text-[14px] font-semibold">Nenhum cartão</div>
@@ -814,7 +814,7 @@ export default function CardsPage() {
               const availCents = card.creditLimitCents - card.spentCents;
               const masked = formatMaskedNumber(getLastFour(card.id));
               return (
-                <button type="button" key={card.id} aria-label={`${card.name}, fatura ${formatBRL(card.spentCents)}, limite ${formatBRL(card.creditLimitCents)}`} onClick={() => setSelectedCardId(card.id)} className="w-full cursor-pointer flex flex-col gap-2 rounded-[16px] text-left focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none">
+                <button type="button" key={card.id} aria-label={`${card.name}, fatura ${formatBRL(card.spentCents)}, limite ${formatBRL(card.creditLimitCents)}`} onClick={() => setSelectedCardId(card.id)} className="flex w-full max-w-[440px] cursor-pointer flex-col gap-2 rounded-[16px] text-left focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none">
                   <BankCard
                     bankId={card.institution?.id ?? preset.id}
                     product={card.product}
@@ -823,9 +823,9 @@ export default function CardsPage() {
                     network={card.product?.network === "unknown" ? undefined : card.product?.network ?? preset.network}
                   />
                   <div className="rounded-[16px] border border-border-subtle bg-surface-1 p-3 shadow-card">
-                    <div className="flex items-center justify-between text-[11px] font-medium text-text-muted">
-                      <span>Fecha dia {card.closingDay} · vence dia {card.dueDay}</span>
-                      <span className="font-bold" style={{ color: preset.primaryColor }}>
+                    <div className="flex min-w-0 items-center justify-between gap-2 text-[11px] font-medium text-text-muted">
+                      <span className="min-w-0 truncate">Fecha dia {card.closingDay} · vence dia {card.dueDay}</span>
+                      <span className="shrink-0 whitespace-nowrap font-bold" style={{ color: preset.primaryColor }}>
                         {preset.name}
                       </span>
                     </div>
@@ -896,7 +896,7 @@ export default function CardsPage() {
                 </div>
 
                 {/* Cartão e dados da fatura em uma única superfície */}
-                <div className="overflow-hidden rounded-[18px] border border-border-subtle bg-surface-1 shadow-card">
+                <div className="overflow-hidden rounded-[18px] border border-border-subtle bg-surface-1 shadow-card lg:max-w-[440px]">
                   <BankCard
                     bankId={card.institution?.id ?? preset.id}
                     product={card.product}

@@ -20,7 +20,9 @@ export function AttentionChip({ tone, label, value, icon, onClick, className = "
   const content = (
     <>
       {icon && <span className="shrink-0" aria-hidden="true">{icon}</span>}
-      <span className="min-w-0 truncate text-sm font-medium">{label}</span>
+      <span className="min-w-0 truncate text-sm font-medium lg:overflow-visible lg:text-clip lg:whitespace-normal">
+        {label}
+      </span>
       {value !== undefined && <span className="tabular ml-auto shrink-0 text-sm font-semibold">{value}</span>}
     </>
   );

@@ -52,7 +52,7 @@ async function registerAndHome(page: Page, testId: string) {
 }
 
 async function dirtifyExpenseSheet(page: Page) {
-  await page.getByLabel("Nova transação").click();
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click();
   // The FAB opens the quick-action group first (NAV-05..08 pattern) — pick
   // Despesa to open the preselected expense sheet (dialog).
   await page.getByLabel("Novo lançamento").getByRole("button", { name: "Despesa" }).click();

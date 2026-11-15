@@ -6,7 +6,7 @@
  * origin, destination, date).
  *
  * Real UI (NewTransactionSheet.tsx, transfer mode):
- *   - FAB "Nova transação" → menuitem "Transferência"
+ *   - FAB "Novo lançamento" → menuitem "Transferência"
  *     → dialog "Nova transferência" (NAV-08 proves this entry point).
  *   - Amount (placeholder "0,00"), description
  *     (placeholder "Ex: Aluguel, mercado..."), origin chips [0] /

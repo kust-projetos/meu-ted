@@ -566,7 +566,7 @@ test.describe("live-ted-conversation (5+ turnos, modelo real)", () => {
     await emailInput.first().fill(EMAIL);
     await passwordInput.first().fill(PASSWORD);
     await page.getByRole("button", { name: "Entrar" }).click();
-    await expect(page.getByRole("button", { name: "Nova transação" })).toBeVisible({ timeout: 30000 });
+    await expect(page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" })).toBeVisible({ timeout: 30000 });
     const workspaceSelector = page.getByRole("button", { name: "Selecionar espaço" });
     await workspaceSelector.click();
     const testFamilyOption = page.getByRole("option", { name: /Test Family/ });

@@ -203,7 +203,7 @@ test("[NAV-01] BottomNav Início click navigates to /", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/registros"); await registerDevice(page);
 
-  await page.getByRole("button", { name: "Início" }).click({ timeout: 5000 });
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Início", exact: true }).click({ timeout: 5000 });
   await expect(page).toHaveURL(/\/$/);
   assertNoUndeclaredFailures(guard);
 });
@@ -213,7 +213,7 @@ test("[NAV-02] BottomNav Extrato click navigates to /registros", async ({ page }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/"); await registerDevice(page);
 
-  await page.getByRole("button", { name: "Extrato" }).click({ timeout: 5000 });
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Extrato", exact: true }).click({ timeout: 5000 });
   await expect(page).toHaveURL(/\/registros$/);
   assertNoUndeclaredFailures(guard);
 });
@@ -223,7 +223,7 @@ test("[NAV-03] BottomNav Cartões click navigates to its canonical route", async
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/"); await registerDevice(page);
 
-  await page.getByRole("button", { name: "Cartões" }).click({ timeout: 5000 });
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Cartões", exact: true }).click({ timeout: 5000 });
   await expect(page).toHaveURL(/\/hub\/patrimonio\?aba=cartoes$/);
   assertNoUndeclaredFailures(guard);
 });
@@ -233,7 +233,7 @@ test("[NAV-04] BottomNav Relatórios click navigates to /hub/relatorios", async 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/"); await registerDevice(page);
 
-  await page.getByRole("button", { name: "Relatórios" }).click({ timeout: 5000 });
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Relatórios", exact: true }).click({ timeout: 5000 });
   await expect(page).toHaveURL(/\/hub\/relatorios$/);
   assertNoUndeclaredFailures(guard);
 });
@@ -352,5 +352,33 @@ test("[NAV-13] Escape closes the FAB quick-action group, route preserved", async
   await page.keyboard.press("Escape");
   await expect(page.getByRole("group", { name: "Novo lançamento" })).toBeHidden();
   await expect(page).toHaveURL(/\/$/);
+  assertNoUndeclaredFailures(guard);
+});
+
+test("[NAV-14] TED launcher does not overlap bottom nav on mobile home", async ({ page }) => {
+  const id = tid("nav14");
+  const guard = await setup(page, id);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await registerDevice(page);
+  await expect(page.getByText(/Saldo total em contas/i)).toBeVisible({ timeout: 90_000 });
+  await expect(page.locator('[data-nav="bottom"]')).toBeVisible({ timeout: 10000 });
+  const launcher = page.getByLabel("Abrir assistente TED");
+  await expect(launcher).toBeVisible({ timeout: 10000 });
+  const [launcherBox, navBox] = await Promise.all([
+    launcher.boundingBox(),
+    page.locator('[data-nav="bottom"]').boundingBox(),
+  ]);
+  expect(launcherBox, "TED launcher bounding box should be available").toBeTruthy();
+  expect(navBox, "Bottom nav bounding box should be available").toBeTruthy();
+  const overlap =
+    launcherBox!.x < navBox!.x + navBox!.width &&
+    launcherBox!.x + launcherBox!.width > navBox!.x &&
+    launcherBox!.y < navBox!.y + navBox!.height &&
+    launcherBox!.y + launcherBox!.height > navBox!.y;
+  expect(
+    overlap,
+    `TED launcher (${JSON.stringify(launcherBox)}) must not overlap bottom nav (${JSON.stringify(navBox)})`,
+  ).toBe(false);
   assertNoUndeclaredFailures(guard);
 });

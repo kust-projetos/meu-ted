@@ -142,7 +142,7 @@ test("[UI-03] confirm discard on dirty form → navigates away", async ({ page }
   await expect(confirm).toBeHidden();
   await expect(page.getByRole("dialog").filter({ hasText: "Novo lançamento" })).toHaveCount(0);
   // Shell signal is viewport-dependent (FAB mobile / CTA desktop).
-  const ui03Fab = page.getByLabel("Nova transação");
+  const ui03Fab = page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" });
   const ui03Cta = page.getByRole("button", { name: "Novo lançamento" });
   await expect
     .poll(
@@ -374,7 +374,7 @@ test("[UI-08] write-error dismiss button → no retry", async ({ page }) => {
   await expect(page).toHaveURL(/\/registros/);
   // Authenticated shell signal is viewport-dependent (FAB on mobile,
   // SidebarRail CTA on desktop) — reuse the harness probe shape.
-  const shellFab = page.getByLabel("Nova transação");
+  const shellFab = page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" });
   const shellCta = page.getByRole("button", { name: "Novo lançamento" });
   await expect
     .poll(
