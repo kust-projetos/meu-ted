@@ -38,6 +38,7 @@ Every ID is atomic: one visible action, required state, expected UI/API effect, 
 | NAV-11 | Explorar | M | Avisos → `/hub/alertas` | canonical route loaded | navigation |
 | NAV-12 | Explorar | M | Configurações → `/hub/configuracoes` | canonical route loaded | navigation |
 | NAV-13 | BottomNav FAB | M | Escape closes disclosure and returns focus | route preserved | navigation |
+| NAV-14 | `/` (TED launcher) | M | authenticated home: TED launcher (`Abrir assistente TED`) bounding box does not intersect bottom nav (`nav[data-nav="bottom"]`) | overlap fails with clear message | navigation |
 | TX-01 | FAB | M,D | tap FAB opens expense sheet | no sheet visible | transaction-sheet |
 | TX-02 | expense sheet | M | save expense → `POST /transactions/expense` | required amount/category/account | transaction-sheet |
 | TX-03 | income sheet | M | save income → `POST /transactions/income` | 422 preserves inputs | transaction-sheet |
@@ -57,6 +58,8 @@ Every ID is atomic: one visible action, required state, expected UI/API effect, 
 | HOME-08 | `/` | M | dismiss notification → notification removed | swipe fails | home |
 | HOME-09 | `/` | M | tap quick income → income sheet opens | cancel safe | home |
 | HOME-10 | `/` | M | tap quick transfer → transfer sheet opens | cancel safe | home |
+| HOME-11 | `/` | M,D | "Personalizar início": reorder blocks via move ↑/↓ buttons, close, reload → persisted order by workspace | first move disabled/unchanged state | home |
+C:\Users\walis
 | REC-01 | `/registros` | M | type in search bar → filtered results show | empty result | records |
 | REC-02 | `/registros` | M | select period filter → filtered results show | empty result | records |
 | REC-03 | `/registros` | M | select category filter → filtered results show | empty result | records |

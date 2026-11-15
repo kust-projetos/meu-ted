@@ -599,7 +599,7 @@ test.describe("live-closure (fechamento autenticado em produção)", () => {
     await passwordInput.first().fill(PASSWORD);
     collectServerErrors = true;
     await page.getByRole("button", { name: "Entrar" }).click();
-    const fab = page.getByRole("button", { name: "Nova transação" });
+    const fab = page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" });
     await expect(fab).toBeVisible({ timeout: 30000 });
     authComplete = true;
     await page.getByRole("button", { name: "Selecionar espaço" }).click();

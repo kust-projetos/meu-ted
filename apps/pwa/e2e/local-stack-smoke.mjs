@@ -146,7 +146,7 @@ try {
   await page.getByLabel("E-mail").fill(email);
   await page.getByLabel("Senha").fill(password);
   await page.getByRole("button", { name: "Entrar" }).click();
-  await page.getByLabel("Nova transação").waitFor({ state: "visible", timeout: 15000 });
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).waitFor({ state: "visible", timeout: 15000 });
   expectStatus(await api("/auth/session"), 200, "cookie session after PWA login");
 
   // Opt-in OpenCode Go single-relay probe (LOCAL_E2E_OPENCODE_GO=1 only).

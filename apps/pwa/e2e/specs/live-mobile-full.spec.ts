@@ -319,8 +319,8 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     collectServerErrors = true; // capture 5xx from sign-in dispatch onward
     await page.getByRole("button", { name: "Entrar" }).click();
 
-    // Shell autenticado: FAB "Nova transação" do BottomNav aparece.
-    const fab = page.getByRole("button", { name: "Nova transação" });
+    // Shell autenticado: FAB "Novo lançamento" do BottomNav aparece.
+    const fab = page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" });
     await expect(fab).toBeVisible({ timeout: 30000 });
     authComplete = true; // 401 no bootstrap antes do login é esperado.
     // Isolar todos os writes no workspace de teste (nunca no junio pessoal).

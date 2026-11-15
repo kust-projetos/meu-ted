@@ -113,7 +113,7 @@ test("[HOME-03] tap quick expense opens expense sheet", async ({ page }) => {
   const guard = await init(page, id);
 
   if ((page.viewportSize()?.width ?? 0) < 1024) {
-    await page.getByLabel("Nova transação").click();
+    await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click();
     await page.getByRole("group", { name: "Novo lançamento" }).getByRole("button", { name: "Despesa" }).click();
   } else {
     await page.getByRole("button", { name: "Novo lançamento" }).click();
@@ -226,7 +226,7 @@ test("[HOME-09] tap quick income opens income sheet", async ({ page }) => {
   const guard = await init(page, id);
 
   if ((page.viewportSize()?.width ?? 0) < 1024) {
-    await page.getByLabel("Nova transação").click();
+    await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click();
     await page.getByRole("group", { name: "Novo lançamento" }).getByRole("button", { name: "Receita" }).click();
   } else {
     await page.getByRole("button", { name: "Novo lançamento" }).click();
@@ -253,7 +253,7 @@ test("[HOME-10] tap quick transfer opens transfer sheet", async ({ page }) => {
   const guard = await init(page, id);
 
   if ((page.viewportSize()?.width ?? 0) < 1024) {
-    await page.getByLabel("Nova transação").click();
+    await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click();
     await page.getByRole("group", { name: "Novo lançamento" }).getByRole("button", { name: "Transferência" }).click();
   } else {
     await page.getByRole("button", { name: "Novo lançamento" }).click();
@@ -269,6 +269,47 @@ test("[HOME-10] tap quick transfer opens transfer sheet", async ({ page }) => {
 
   await dialog.getByRole("button", { name: "Fechar" }).click();
   await expect(dialog).toBeHidden();
+  await assertNoUnexpectedWrites(id);
+  assertNoUndeclaredFailures(guard);
+});
+
+test("[HOME-11] home customization order persists after reload by workspace", async ({ page }) => {
+  const id = tid();
+  const guard = await init(page, id);
+  await expect(page.getByText(/Saldo total em contas/i)).toBeVisible({ timeout: 90_000 });
+
+  await page.getByRole("button", { name: "Personalizar início" }).click();
+  const customizer = page.getByRole("dialog", { name: "Personalizar início" });
+  await expect(customizer).toBeVisible();
+  const list = customizer.locator('ol[aria-label="Blocos da página inicial"]');
+  const readOrder = async () =>
+    list.locator("> li > span.min-w-0.flex-1").evaluateAll((nodes) =>
+      nodes.map((n) => (n.textContent ?? "").trim()),
+    );
+  const before = await readOrder();
+  expect(before.length, "customizer should list at least 2 blocks").toBeGreaterThan(1);
+  const firstTitle = before[0]!;
+  await customizer.getByRole("button", { name: `Mover ${firstTitle} para baixo` }).click();
+  const expected = [before[1], before[0], ...before.slice(2)];
+  await expect.poll(readOrder).toEqual(expected);
+  await customizer.getByRole("button", { name: "Fechar" }).click();
+  await expect(customizer).toBeHidden();
+
+  await page.reload();
+  await expect(page.getByText(/Saldo total em contas/i)).toBeVisible({ timeout: 90_000 });
+  await page.getByRole("button", { name: "Personalizar início" }).click();
+  const customizerAfter = page.getByRole("dialog", { name: "Personalizar início" });
+  await expect(customizerAfter).toBeVisible();
+  const listAfter = customizerAfter.locator('ol[aria-label="Blocos da página inicial"]');
+  await expect
+    .poll(() =>
+      listAfter.locator("> li > span.min-w-0.flex-1").evaluateAll((nodes) =>
+        nodes.map((n) => (n.textContent ?? "").trim()),
+      ),
+    )
+    .toEqual(expected);
+  await customizerAfter.getByRole("button", { name: "Fechar" }).click();
+
   await assertNoUnexpectedWrites(id);
   assertNoUndeclaredFailures(guard);
 });

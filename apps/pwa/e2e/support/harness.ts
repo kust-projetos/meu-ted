@@ -72,12 +72,12 @@ export async function authenticate(
 ): Promise<void> {
   const timeout = options.timeout ?? 15000;
   // Authenticated-shell signal is viewport-dependent: the mobile shell shows
-  // the BottomNav FAB ("Nova transação", hidden at `lg`), while the desktop
+  // the BottomNav FAB ("Novo lançamento", hidden at `lg`), while the desktop
   // shell shows the SidebarRail CTA ("Novo lançamento", `hidden lg:flex`).
   // Either one proves a signed-in shell; neither is weakened (both only
   // render after AuthGate accepts the session — a rejected login still shows
   // the "Entrar" form and neither signal, so the final wait still fails).
-  const mobileFab = page.getByLabel("Nova transação");
+  const mobileFab = page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" });
   // Scoped to the rail: some pages (e.g. /registros) render their own
   // "Novo lançamento" button in the main content, and an unscoped lookup
   // trips strict mode there (probe would read "no shell" forever).

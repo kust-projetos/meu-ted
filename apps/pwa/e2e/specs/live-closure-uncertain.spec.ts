@@ -140,7 +140,7 @@ function bodyOf(entry: JournalEntry): Record<string, unknown> {
 }
 
 async function authenticate(page: Page, timeout = 15000): Promise<void> {
-  const fab = page.getByLabel("Nova transação");
+  const fab = page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" });
   const tedLauncher = page.getByRole("button", { name: /abrir assistente ted/i }).last();
   if (await fab.isVisible().catch(() => false)) return;
   if (await tedLauncher.isVisible().catch(() => false)) return;
