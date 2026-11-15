@@ -371,6 +371,126 @@ export const INSTITUTIONS: Institution[] = [
     country: "BR",
     colors: { primary: "#087E54" },
   },
+  {
+    id: "paypal",
+    name: "PayPal",
+    shortName: "PayPal",
+    aliases: ["paypal"],
+    category: "wallet",
+    country: "US",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    logoSrc: "/brands/institutions/paypal.svg",
+  },
+  {
+    id: "stripe",
+    name: "Stripe",
+    shortName: "Stripe",
+    aliases: ["stripe"],
+    category: "gateway",
+    country: "US",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    logoSrc: "/brands/institutions/stripe.svg",
+  },
+  {
+    id: "asaas",
+    name: "Asaas",
+    shortName: "Asaas",
+    aliases: ["asaas"],
+    category: "gateway",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+  },
+  {
+    id: "pagar-me",
+    name: "Pagar.me",
+    shortName: "Pagar.me",
+    aliases: ["pagar me", "pagarme", "pagar.me"],
+    category: "gateway",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+  },
+  {
+    id: "efi",
+    name: "Efí",
+    shortName: "Efí",
+    aliases: ["efi", "gerencianet"],
+    category: "gateway",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+  },
+  {
+    id: "iugu",
+    name: "Iugu",
+    shortName: "Iugu",
+    aliases: ["iugu"],
+    category: "gateway",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+  },
+  {
+    id: "cielo",
+    name: "Cielo",
+    shortName: "Cielo",
+    aliases: ["cielo"],
+    category: "acquirer",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+  },
+  {
+    id: "rede",
+    name: "Rede",
+    shortName: "Rede",
+    aliases: ["rede", "userede"],
+    category: "acquirer",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+  },
+  {
+    id: "getnet",
+    name: "Getnet",
+    shortName: "Getnet",
+    aliases: ["getnet", "get net"],
+    category: "acquirer",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+  },
+  {
+    id: "sumup",
+    name: "SumUp",
+    shortName: "SumUp",
+    aliases: ["sumup", "sum up"],
+    category: "acquirer",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    logoSrc: "/brands/institutions/sumup.svg",
+  },
+  {
+    id: "infinitepay",
+    name: "InfinitePay",
+    shortName: "InfinitePay",
+    aliases: ["infinite", "infinitepay", "cloudwalk"],
+    category: "acquirer",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+  },
+  {
+    id: "recargapay",
+    name: "RecargaPay",
+    shortName: "RecargaPay",
+    aliases: ["recarga pay", "recargapay"],
+    category: "wallet",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+  },
+  {
+    id: "99pay",
+    name: "99Pay",
+    shortName: "99Pay",
+    aliases: ["99 pay", "99pay"],
+    category: "wallet",
+    country: "BR",
+    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+  },
 ];
 
 const byId = new Map(INSTITUTIONS.map((institution) => [institution.id, institution]));

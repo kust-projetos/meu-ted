@@ -113,6 +113,66 @@ export const CARD_PRODUCTS: CardProduct[] = [
     colors: { base: "#B80018", accent: "#FF6666", text: "#fff" },
     artSource: "illustrative",
   },
+  {
+    // Current product name/network: https://nubank.com.br/ultravioleta/cartao
+    id: "nubank-ultravioleta-mastercard-black",
+    institutionId: "nubank",
+    name: "Nubank Ultravioleta",
+    network: "mastercard",
+    material: "metal",
+    colors: { base: "#21152E", accent: "#D2B4F2", text: "#fff" },
+    artSource: "illustrative",
+  },
+  {
+    // Current product name/network: https://www.c6bank.com.br/cartao-c6-carbon-mastercard-black
+    id: "c6-carbon-mastercard-black",
+    institutionId: "c6-bank",
+    name: "C6 Carbon Mastercard Black",
+    network: "mastercard",
+    material: "carbon",
+    colors: { base: "#202124", accent: "#B7B7B7", text: "#fff" },
+    artSource: "illustrative",
+  },
+  {
+    // Current product name/network: https://www.c6bank.com.br/cartao-de-credito
+    id: "c6-black-mastercard",
+    institutionId: "c6-bank",
+    name: "C6 Black",
+    network: "mastercard",
+    material: "classic",
+    colors: { base: "#202124", accent: "#8992A5", text: "#fff" },
+    artSource: "illustrative",
+  },
+  {
+    // Current product name/network: https://www.itau.com.br/cartoes/escolha/
+    id: "itau-azul-infinite",
+    institutionId: "itau",
+    name: "Azul Infinite",
+    network: "visa",
+    material: "classic",
+    colors: { base: "#153B7A", accent: "#6AA7E8", text: "#fff" },
+    artSource: "illustrative",
+  },
+  {
+    // Current product name/network: https://www.itau.com.br/cartoes/escolha/
+    id: "itau-latam-pass-mastercard-black",
+    institutionId: "itau",
+    name: "LATAM Pass Itaú Mastercard Black",
+    network: "mastercard",
+    material: "classic",
+    colors: { base: "#202124", accent: "#B7B7B7", text: "#fff" },
+    artSource: "illustrative",
+  },
+  {
+    // Current product name/network: https://www.itau.com.br/cartoes/escolha/
+    id: "itau-azul-visa-platinum",
+    institutionId: "itau",
+    name: "Azul Itaú Visa Platinum",
+    network: "visa",
+    material: "classic",
+    colors: { base: "#373B45", accent: "#8992A5", text: "#fff" },
+    artSource: "illustrative",
+  },
 ];
 
 export function getCardProduct(id: string): CardProduct | undefined {
