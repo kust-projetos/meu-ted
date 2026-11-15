@@ -104,10 +104,14 @@ export function useFallbackInsights({
           u.pct > max.pct ? u : max,
         );
         if (maxEntry.pct > 0) {
+          const budgetUsagePct = new Intl.NumberFormat("pt-BR", {
+            minimumFractionDigits: 1,
+            maximumFractionDigits: 1,
+          }).format(maxEntry.pct);
           fallback.push({
             color: "var(--color-primary)",
             title: "Orçamentos sob controle",
-            body: `O mais utilizado é ${maxEntry.name} (${formatPct(maxEntry.pct)}).`,
+            body: `${maxEntry.name}: ${budgetUsagePct}% do orçamento.`,
           });
         }
       }

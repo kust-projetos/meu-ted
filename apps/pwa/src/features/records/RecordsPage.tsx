@@ -251,7 +251,7 @@ export default function RecordsPage() {
       <div className="flex min-h-dvh flex-col bg-bg">
         <StatusBar />
         <PageHeader title="Extrato" />
-        <main className="flex flex-1 flex-col gap-3 px-5 pb-[var(--tab-bar-height)] sm:px-8 lg:px-12">
+        <main className="flex flex-1 flex-col gap-3 px-5 pb-[calc(9rem+env(safe-area-inset-bottom))] sm:px-8 lg:px-12 lg:pb-0">
           <Skeleton variant="card" height={42} />
           <div className="flex gap-2">
             <Skeleton width={64} height={30} />
@@ -288,7 +288,7 @@ export default function RecordsPage() {
   return (
     <div className="flex min-h-dvh flex-col bg-bg">
       <StatusBar />
-      <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
+      <main className="flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-0">
         <PullToRefreshIndicator state={pull} />
         <PageHeader title="Extrato" />
 

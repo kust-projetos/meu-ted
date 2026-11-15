@@ -278,7 +278,7 @@ export default function HomePage() {
     "home-attention": { title: "Atenção", node: <>        {attention.length > 0 && (
           <nav
             aria-label="Itens que precisam de atenção"
-            className="no-scrollbar -mx-5 flex snap-x snap-mandatory gap-2 overflow-x-auto px-5 py-4 sm:-mx-8 sm:px-8"
+            className="no-scrollbar -mx-5 flex snap-x snap-mandatory gap-2 overflow-x-auto px-5 py-4 sm:-mx-8 sm:px-8 lg:flex-wrap lg:overflow-visible"
           >
             {attention.map((item) => (
               <AttentionChip
@@ -287,7 +287,7 @@ export default function HomePage() {
                 label={item.label}
                 value={item.value}
                 onClick={() => router.push(item.route)}
-                className="max-w-[90%] shrink-0 snap-start"
+                className="max-w-[90%] shrink-0 snap-start lg:max-w-full"
               />
             ))}
           </nav>
@@ -397,7 +397,7 @@ export default function HomePage() {
           />
           {cards.length > 0 ? (
             <>
-              <div className="mt-3">
+              <div className="mt-3 sm:max-w-[360px]">
                 {cards[0] && (
                   <>
                     <BankCard
@@ -524,9 +524,9 @@ export default function HomePage() {
                     pct: Math.round(item.pct),
                     colorToken: [
                       "primary",
-                      "accent-money",
-                      "warning",
                       "info",
+                      "warning",
+                      "accent-money",
                       "surface-3",
                     ][i % 5]!,
                     amount: formatBRL(item.amountCents),
@@ -589,7 +589,7 @@ export default function HomePage() {
           {state.error}
         </div>
       )}
-      <main className="mx-auto flex w-full max-w-[640px] flex-1 flex-col overflow-y-auto px-5 pb-[calc(8rem+env(safe-area-inset-bottom))] sm:px-8">
+      <main className="mx-auto flex w-full max-w-[640px] flex-1 flex-col overflow-y-auto px-5 pb-[calc(9rem+env(safe-area-inset-bottom))] sm:px-8 lg:pb-0">
         <PullToRefreshIndicator state={pull} />
         <header className="flex items-center justify-between pb-5 pt-[calc(1rem+env(safe-area-inset-top))]">
           <div>

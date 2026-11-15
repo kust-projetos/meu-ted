@@ -100,4 +100,21 @@ describe("useFallbackInsights", () => {
     const body = result.current.map((i) => i.body).join(" ");
     expect(body).toMatch(/Alimentação está perto do limite/);
   });
+
+  it("names the budget as the denominator for ordinary usage insights", () => {
+    const budget: Budget = {
+      id: "b1",
+      categoryId: "cat1",
+      name: "Alimentação Mensal",
+      amountCents: 100000,
+      spentCents: 18800,
+      period: "monthly",
+    };
+    const { result } = renderHook(() =>
+      useFallbackInsights({ ...base, budgets: [budget] }),
+    );
+
+    expect(result.current.find((i) => i.title === "Orçamentos sob controle")?.body)
+      .toBe("Alimentação Mensal: 18,8% do orçamento.");
+  });
 });
