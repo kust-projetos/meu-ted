@@ -70,6 +70,7 @@ Every ID is atomic: one visible action, required state, expected UI/API effect, 
 | ACC-05 | `/contas` | M | edit credit card → `PATCH /cards/:id` | 500 banner/retry | accounts |
 | ACC-06 | `/contas` | M | confirm deactivation → `POST /accounts/:id/deactivate` | cancel/no mutation | accounts |
 | ACC-07 | `/hub/patrimonio?aba=contas` | M | create account with institution → `POST /accounts`; reload keeps the mark | reload reads `GET /accounts` | accounts |
+| ACC-08 | `/hub/patrimonio?aba=contas` | M | create institution-linked account and resolve mark in clean second device from server | local appearance storage absent | presentation-cross-device |
 | CAT-01 | `/categorias` | M | create expense category → `POST /categories` | blank/422 | categories |
 | CAT-02 | `/categorias` | M | create income category → `POST /categories` | blank/422 | categories |
 | CAT-03 | `/categorias` | M | add subcategory → correct journal | cancel/error | categories |
@@ -99,6 +100,7 @@ Every ID is atomic: one visible action, required state, expected UI/API effect, 
 | CARD-06 | `/cartoes` | M | tap statement row → statement line items show | empty state | cards |
 | CARD-07 | `/cartoes` | M | tap purchase row → purchase detail shows | empty state | cards |
 | CARD-08 | `/cartoes` | M | save purchase edit → `PATCH /cards/purchases/:id` | 422 | cards |
+| CARD-09 | `/hub/patrimonio?aba=cartoes` | M | create product-linked card and resolve product in clean second device from server | local appearance storage absent | presentation-cross-device |
 | SUB-01 | `/assinaturas` | M | tap subscription tab → list renders | empty state | subscriptions |
 | SUB-02 | `/assinaturas` | M | fill and submit create subscription → `POST /subscriptions` | invalid amount | subscriptions |
 | SUB-03 | `/assinaturas` | M | detail subscription → display values | empty state | subscriptions |

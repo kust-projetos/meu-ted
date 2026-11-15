@@ -32,7 +32,7 @@ Consequência: nenhuma alteração em cálculo financeiro, contratos de API, Pen
 
 - **D1 — Direção visual.** Direção A (Esmeralda Editorial) como base: saldo como manchete, contas em ledger com hairlines, um único painel esmeralda do mês, faixa proporcional de categorias, insight como linha. Da direção B adota-se apenas o rail de atenção. Rejeitados: cockpit de cartões empilhados e grades de cards repetidos.
 - **D2 — Ativos de marca.** Logos reais apenas quando há direito de uso: Simple Icons v15 (CC0-1.0) com manifesto de proveniência. Instituições sem ativo licenciado usam monograma desenhado com cor oficial; nenhuma marca é redistribuída sem direito. Arte de cartão é original e ilustrativa, nunca imagem oficial de produto.
-- **D3 — Persistência de aparência.** Implementada em código: `institutionId`/`cardProductId` são metadados de apresentação persistidos em `accounts` (colunas nullable) e espelhados no `localStorage` por workspace para fallback offline. Resolução: servidor → local → heurística de nome/cor. Rollout pendente, sob responsabilidade do operador: aplicar a migration V064 e fazer o deploy da API pelo job documentado.
+- **D3 - Persistência de aparência.** Implementada em código: `institutionId`/`cardProductId` são metadados de apresentação persistidos em `accounts` (colunas nullable) e espelhados no `localStorage` por workspace para fallback offline. Resolução: servidor → local → heurística de nome/cor. Verificado em 2026-11-15: V064 aplicada; API e PWA em `e40d338` (`/ready` retornou 200 e o guard de startup falha fechado quando o schema é inválido).
 - **D4 — Layout da Home.** Visão Essencial (saldo, mês, atenção, contas, compromissos) e Visão Completa (acrescenta cartões, categorias e insights). Persistência por workspace, com mover/ocultar/restaurar acessíveis por teclado e alternativa por toque.
 - **D5 — Dependências.** Nenhuma biblioteca nova; gráficos, drag-and-drop e gestos são implementados com o que já existe.
 
@@ -55,7 +55,7 @@ Cada fatia exige: implementação mínima funcional, teste proporcional, evidên
 ## 5. Restrições e riscos
 
 - **Ativos de terceiros:** Itaú, Bradesco, Santander, BB, Caixa, C6, Inter, XP, Elo e Hipercard não têm ativo licenciado; permanecem monograma. Documentado em `apps/pwa/public/brands/README.md`.
-- **Rollout de aparência:** sincronização entre dispositivos depende do rollout pelo operador (migration V064 + deploy da API); até lá, o comportamento local segue disponível como fallback.
+- **Persistência de aparência:** V064 aplicada e API/PWA em `e40d338`, verificados por `/ready` 200 e guard de startup fail-closed; o E2E cross-device valida a leitura server-side sem localStorage prévio.
 - **E2E existente:** `home.spec.ts`, `accounts.spec.ts`, `cards.spec.ts`, `navigation.spec.ts` e `reports.spec.ts` dependem de seletores e rótulos; toda mudança de estrutura precisa mantê-los ou atualizá-los de forma justificada.
 - **Performance:** SVGs inline e novos componentes não podem estourar o orçamento de JS do PWA.
 - **Integridade financeira:** nenhuma fórmula de saldo, fatura, limite ou resultado é alterada; métricas derivadas novas exigem fórmula definida e dados suficientes.
