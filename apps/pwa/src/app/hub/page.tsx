@@ -34,11 +34,11 @@ const MODULES: HubModule[] = [
   { href: "/hub/patrimonio?aba=patrimonio", label: "Patrimônio", description: "Visão do seu patrimônio", Icon: Wallet },
   { href: "/hub/relatorios", label: "Relatórios", description: "Fluxo, categorias e tendências", Icon: BarChart3 },
   { href: "/hub/alertas", label: "Avisos e Lembretes", description: "Alertas financeiros e de preço", Icon: Bell },
-  { href: "/hub/categorias", label: "Organizar Gastos", description: "Organize seus lançamentos", Icon: FolderOpen },
+  { href: "/hub/categorias", label: "Categorias", description: "Organize seus lançamentos", Icon: FolderOpen },
   { href: "/hub/configuracoes", label: "Configurações", description: "Perfil, espaços e auditoria", Icon: Settings },
   { href: "/workspaces", label: "Meus Espaços", description: "Gerencie seus espaços", Icon: Layers },
   { href: "/perfil", label: "Perfil", description: "Seus dados e preferências", Icon: User },
-  { href: "/auditoria", label: "Auditoria", description: "Histórico de atividades", Icon: ClipboardList },
+  { href: "/audit", label: "Auditoria", description: "Histórico de atividades", Icon: ClipboardList },
 ];
 
 /**

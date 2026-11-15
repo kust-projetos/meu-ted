@@ -52,7 +52,7 @@ const SECONDARY_NAV: NavItemDef[] = [
   { label: "Patrimônio", href: "/hub/patrimonio?aba=patrimonio", icon: Wallet },
   { label: "Categorias", href: "/hub/categorias", icon: FolderOpen },
   { label: "Avisos e Lembretes", href: "/hub/alertas", icon: Bell },
-  { label: "Auditoria", href: "/auditoria", icon: ClipboardList },
+  { label: "Auditoria", href: "/audit", icon: ClipboardList },
   { label: "Configurações", href: "/hub/configuracoes", icon: Settings },
   { label: "Meus Espaços", href: "/workspaces", icon: Layers },
 ];

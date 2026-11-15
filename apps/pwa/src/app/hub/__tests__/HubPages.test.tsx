@@ -23,7 +23,7 @@ describe("hub pages (item 13)", () => {
       ["Patrimônio", "/hub/patrimonio?aba=patrimonio"],
       ["Relatórios", "/hub/relatorios"],
       ["Avisos e Lembretes", "/hub/alertas"],
-      ["Organizar Gastos", "/hub/categorias"],
+      ["Categorias", "/hub/categorias"],
       ["Configurações", "/hub/configuracoes"],
     ] as const) {
       const link = screen.getAllByRole("link").find((candidate) =>

@@ -290,7 +290,7 @@ export default function RecordsPage() {
       <StatusBar />
       <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
         <PullToRefreshIndicator state={pull} />
-      <PageHeader title="Extrato" />
+        <PageHeader title="Extrato" />
 
         {error && (
           <div className="mx-5 mb-3 rounded-[12px] bg-danger-tint px-4 py-2.5 text-[12px] font-semibold text-danger">

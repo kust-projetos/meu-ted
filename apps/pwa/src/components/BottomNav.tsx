@@ -32,9 +32,7 @@ interface ItemDef {
 const ITEMS: ItemDef[] = [
   { key: "home", label: "Início", Icon: Home },
   { key: "records", label: "Extrato", Icon: Receipt },
-  // §24 naming review: the /compromissos section (A Pagar + Pendências) keeps
-  // its canonical route name so "Contas e Cartões" stays unambiguous for
-  // /hub/patrimonio (accounts & cards).
+  // Primary navigation: Início, Extrato, Cartões, Relatórios.
   { key: "cards", label: "Cartões", Icon: CreditCard },
   { key: "reports", label: "Relatórios", Icon: BarChart3 },
 ];
@@ -223,7 +221,7 @@ export function BottomNav({
         )}
       </div>
 
-      {/* Items: right side (Compromissos, Mais) */}
+      {/* Items: right side (Cartões, Relatórios) */}
       {ITEMS.slice(2).map((item) => (
         <NavButton
           key={item.key}
