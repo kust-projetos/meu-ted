@@ -57,7 +57,7 @@ describe("page render smoke", () => {
   it("renders RecordsPage without crashing", async () => {
     const { default: RecordsPage } = await import("@/features/records/RecordsPage");
     render(<RecordsPage />);
-    expect(screen.getByText("Registros")).toBeInTheDocument();
+    expect(screen.getByText("Extrato")).toBeInTheDocument();
   });
 
   it("renders PayablesPage without crashing", async () => {
