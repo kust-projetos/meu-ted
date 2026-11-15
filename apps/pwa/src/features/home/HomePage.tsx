@@ -4,7 +4,7 @@ import StatusBar from "@/components/StatusBar";
 import { StaleBanner } from "@/components/StaleBanner";
 import { useRouter } from "next/navigation";
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertCircle, Bell, Eye, EyeOff, Pencil, GripVertical, ChevronUp, ChevronDown } from "lucide-react";
+import { AlertCircle, Bell, Compass, Eye, EyeOff, Pencil, GripVertical, ChevronUp, ChevronDown } from "lucide-react";
 import { useAppState } from "@/lib/state/app-state-context";
 import { usePendingOperations } from "@/lib/state/use-pending-operations";
 import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
@@ -602,6 +602,15 @@ export default function HomePage() {
             </p>
           </div>
           <div className="flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="Explorar"
+              onClick={() => router.push("/hub")}
+              className="flex h-11 items-center justify-center gap-1 rounded-full px-2 text-sm font-semibold text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              <Compass size={18} aria-hidden="true" />
+              Explorar
+            </button>
             <button
               aria-label="Abrir perfil"
               onClick={() => router.push("/perfil")}

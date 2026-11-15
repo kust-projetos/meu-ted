@@ -14,17 +14,23 @@ vi.mock("@/components/AppShell", () => ({
 describe("hub pages (item 13)", () => {
   it("hub lists the six canonical modules with links", () => {
     render(<Hub />);
-    expect(screen.getByRole("heading", { name: "Mais" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Explorar" })).toBeInTheDocument();
     for (const [label, href] of [
-      ["Contas e Cartões", "/hub/patrimonio"],
-      ["Metas e Orçamento", "/hub/planejamento"],
+      ["Contas", "/hub/patrimonio?aba=contas"],
+      ["Cartões", "/hub/patrimonio?aba=cartoes"],
+      ["Planejamento", "/hub/planejamento"],
+      ["Metas", "/hub/planejamento?aba=metas"],
+      ["Patrimônio", "/hub/patrimonio?aba=patrimonio"],
       ["Relatórios", "/hub/relatorios"],
       ["Avisos e Lembretes", "/hub/alertas"],
-      ["Organizar Gastos", "/hub/categorias"],
+      ["Categorias", "/hub/categorias"],
       ["Configurações", "/hub/configuracoes"],
     ] as const) {
-      const link = screen.getByRole("link", { name: new RegExp(label) });
-      expect(link).toHaveAttribute("href", href);
+      const link = screen.getAllByRole("link").find((candidate) =>
+        candidate.getAttribute("href") === href,
+      );
+      expect(link).toBeDefined();
+      expect(link).toHaveTextContent(label);
     }
   });
 

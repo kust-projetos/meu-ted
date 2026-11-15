@@ -250,7 +250,7 @@ export default function RecordsPage() {
     return (
       <div className="flex min-h-dvh flex-col bg-bg">
         <StatusBar />
-        <PageHeader title="Registros" />
+        <PageHeader title="Extrato" />
         <main className="flex flex-1 flex-col gap-3 px-5 pb-[var(--tab-bar-height)] sm:px-8 lg:px-12">
           <Skeleton variant="card" height={42} />
           <div className="flex gap-2">
@@ -290,7 +290,7 @@ export default function RecordsPage() {
       <StatusBar />
       <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
         <PullToRefreshIndicator state={pull} />
-        <PageHeader title="Registros" />
+        <PageHeader title="Extrato" />
 
         {error && (
           <div className="mx-5 mb-3 rounded-[12px] bg-danger-tint px-4 py-2.5 text-[12px] font-semibold text-danger">
