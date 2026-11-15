@@ -134,20 +134,10 @@ export const CARD_PRODUCTS: CardProduct[] = [
     artSource: "illustrative",
   },
   {
-    // Current product name/network: https://www.c6bank.com.br/cartao-de-credito
-    id: "c6-black-mastercard",
-    institutionId: "c6-bank",
-    name: "C6 Black",
-    network: "mastercard",
-    material: "classic",
-    colors: { base: "#202124", accent: "#8992A5", text: "#fff" },
-    artSource: "illustrative",
-  },
-  {
     // Current product name/network: https://www.itau.com.br/cartoes/escolha/
-    id: "itau-azul-infinite",
+    id: "itau-azul-visa-infinite",
     institutionId: "itau",
-    name: "Azul Infinite",
+    name: "Azul Itaú Visa Infinite",
     network: "visa",
     material: "classic",
     colors: { base: "#153B7A", accent: "#6AA7E8", text: "#fff" },

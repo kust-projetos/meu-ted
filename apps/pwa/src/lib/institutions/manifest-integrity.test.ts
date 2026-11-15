@@ -10,6 +10,23 @@ const manifest = JSON.parse(
 ) as Array<{ slug: string; category: string; license: string; sourceUrl: string }>;
 
 describe("institution catalog asset integrity", () => {
+  it("gives each new monogram-only institution a distinct high-contrast assigned color", () => {
+    const monogramOnlyIds = [
+      "asaas", "pagar-me", "efi", "iugu", "cielo",
+      "rede", "getnet", "infinitepay", "recargapay", "99pay",
+    ];
+    const colors = monogramOnlyIds.map((id) => INSTITUTIONS.find((item) => item.id === id)!.colors.primary);
+    expect(new Set(colors).size).toBe(monogramOnlyIds.length);
+
+    for (const color of colors) {
+      const channels = color.match(/[0-9a-f]{2}/gi)!.map((channel) => parseInt(channel, 16) / 255);
+      const luminance = channels
+        .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+        .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+      expect(1.05 / (luminance + 0.05)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it("resolves every catalog logo in code, public assets, and the manifest", () => {
     for (const institution of INSTITUTIONS) {
       if (!institution.logoSrc) continue;

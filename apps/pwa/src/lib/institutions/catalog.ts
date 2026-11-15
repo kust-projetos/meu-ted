@@ -28,6 +28,19 @@ export interface Institution {
   popular?: boolean;
 }
 
+const NEW_INSTITUTION_MONOGRAM_COLORS = {
+  asaas: "#1F4E79",
+  "pagar-me": "#7A2E5D",
+  efi: "#2F5D3A",
+  iugu: "#6B3FA0",
+  cielo: "#8A4B1F",
+  rede: "#245A63",
+  getnet: "#7A1F2B",
+  infinitepay: "#3D4A6B",
+  recargapay: "#533D2D",
+  "99pay": "#42504C",
+} as const;
+
 export const INSTITUTIONS: Institution[] = [
   {
     id: "itau",
@@ -378,7 +391,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["paypal"],
     category: "wallet",
     country: "US",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: "#1F2A27" }, // neutro: logo CC0 disponível
     logoSrc: "/brands/institutions/paypal.svg",
   },
   {
@@ -388,7 +401,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["stripe"],
     category: "gateway",
     country: "US",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: "#1F2A27" }, // neutro: logo CC0 disponível
     logoSrc: "/brands/institutions/stripe.svg",
   },
   {
@@ -398,7 +411,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["asaas"],
     category: "gateway",
     country: "BR",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["asaas"] }, // cor de monograma própria (não oficial)
   },
   {
     id: "pagar-me",
@@ -407,7 +420,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["pagar me", "pagarme", "pagar.me"],
     category: "gateway",
     country: "BR",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["pagar-me"] }, // cor de monograma própria (não oficial)
   },
   {
     id: "efi",
@@ -416,7 +429,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["efi", "gerencianet"],
     category: "gateway",
     country: "BR",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["efi"] }, // cor de monograma própria (não oficial)
   },
   {
     id: "iugu",
@@ -425,7 +438,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["iugu"],
     category: "gateway",
     country: "BR",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["iugu"] }, // cor de monograma própria (não oficial)
   },
   {
     id: "cielo",
@@ -434,7 +447,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["cielo"],
     category: "acquirer",
     country: "BR",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["cielo"] }, // cor de monograma própria (não oficial)
   },
   {
     id: "rede",
@@ -443,7 +456,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["rede", "userede"],
     category: "acquirer",
     country: "BR",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["rede"] }, // cor de monograma própria (não oficial)
   },
   {
     id: "getnet",
@@ -452,7 +465,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["getnet", "get net"],
     category: "acquirer",
     country: "BR",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["getnet"] }, // cor de monograma própria (não oficial)
   },
   {
     id: "sumup",
@@ -461,7 +474,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["sumup", "sum up"],
     category: "acquirer",
     country: "BR",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: "#1F2A27" }, // neutro: logo CC0 disponível
     logoSrc: "/brands/institutions/sumup.svg",
   },
   {
@@ -471,7 +484,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["infinite", "infinitepay", "cloudwalk"],
     category: "acquirer",
     country: "BR",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["infinitepay"] }, // cor de monograma própria (não oficial)
   },
   {
     id: "recargapay",
@@ -480,7 +493,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["recarga pay", "recargapay"],
     category: "wallet",
     country: "BR",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["recargapay"] }, // cor de monograma própria (não oficial)
   },
   {
     id: "99pay",
@@ -489,7 +502,7 @@ export const INSTITUTIONS: Institution[] = [
     aliases: ["99 pay", "99pay"],
     category: "wallet",
     country: "BR",
-    colors: { primary: "#1F2A27" }, // neutro: cor oficial não verificada
+    colors: { primary: NEW_INSTITUTION_MONOGRAM_COLORS["99pay"] }, // cor de monograma própria (não oficial)
   },
 ];
 
