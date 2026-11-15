@@ -220,7 +220,7 @@ export interface AppState {
     kind: "bank" | "cash" | "credit_card";
     initialBalanceCents: number;
     idempotencyKey?: string;
-  }) => Promise<void>;
+  }) => Promise<Account | undefined>;
   updateAccount: (id: string, input: { name: string; idempotencyKey?: string }) => Promise<void>;
   deactivateAccount: (id: string, options?: CommandIdOptions) => Promise<void>;
   addCategory: (input: {
@@ -244,7 +244,7 @@ export interface AppState {
     closingDay: number;
     dueDay: number;
     idempotencyKey?: string;
-  }) => Promise<void>;
+  }) => Promise<Account | undefined>;
   updateCard: (
     id: string,
     input: {
@@ -1482,7 +1482,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       initialBalanceCents: number;
       idempotencyKey?: string;
     }) => {
-      if (guardWriteRef.current()) return;
+      if (guardWriteRef.current()) return undefined;
       const optimisticId = `opt-${crypto.randomUUID()}`;
       const optimistic: Account = {
         id: optimisticId,
@@ -1493,7 +1493,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       };
       setAccounts((prev) => [optimistic, ...prev]);
 
-      if (!apiUsable()) return;
+      if (!apiUsable()) return optimistic;
 
       try {
         const created = await commandsRef.current!.addAccount(input);
@@ -1505,11 +1505,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           ),
         );
         reconcileAfterWrite(created, "account.create");
+        return created;
       } catch (e) {
         setAccounts((prev) => prev.filter((a) => a.id !== optimisticId));
         handleWriteErrorRef.current(e, (commandId) =>
           () => writeApiRef.current!.addAccount({ ...input, idempotencyKey: commandId }),
         );
+        return undefined;
       }
     },
     [reconcileAfterWrite],
@@ -1561,7 +1563,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       dueDay: number;
       idempotencyKey?: string;
     }) => {
-      if (guardWriteRef.current()) return;
+      if (guardWriteRef.current()) return undefined;
       const optimisticId = `opt-${crypto.randomUUID()}`;
       const optimistic: Account = {
         id: optimisticId,
@@ -1575,7 +1577,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       };
       setAccounts((prev) => [optimistic, ...prev]);
 
-      if (!apiUsable()) return;
+      if (!apiUsable()) return optimistic;
 
       try {
         const created = await commandsRef.current!.createCard(input);
@@ -1589,11 +1591,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // FIX-P1: POST /cards attaches an account.create receipt, forwarded
         // by reconcileAfterWrite when present (kind fallback otherwise).
         reconcileAfterWrite(created, "account.create");
+        return created;
       } catch (e) {
         setAccounts((prev) => prev.filter((a) => a.id !== optimisticId));
         handleWriteErrorRef.current(e, (commandId) =>
           () => writeApiRef.current!.addCard({ ...input, idempotencyKey: commandId }),
         );
+        return undefined;
       }
     },
     [reconcileAfterWrite],

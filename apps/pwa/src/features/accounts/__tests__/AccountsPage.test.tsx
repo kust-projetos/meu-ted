@@ -15,7 +15,6 @@ vi.mock("@/lib/api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api/client")>();
   return { ...actual, isApiConfigured: () => false };
 });
-
 function defaultState(): AppState {
   return {
     accounts: [...mockAccounts], categories: [...mockCategories],
@@ -199,7 +198,8 @@ describe("AccountsPage", () => {
       render(<AccountsPage />);
       fireEvent.click(screen.getByText("Nova"));
       const dialog = screen.getByRole("dialog");
-      fireEvent.click(within(dialog).getByText("Caixa Econômica"));
+      fireEvent.focus(within(dialog).getByRole("combobox"));
+      fireEvent.click(within(dialog).getByText("Caixa Econômica Federal"));
       fireEvent.click(within(dialog).getByText("Salvar conta"));
       expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({ name: "#005CA9" }));
     });
@@ -221,7 +221,7 @@ describe("AccountsPage", () => {
       render(<AccountsPage />);
       fireEvent.click(screen.getAllByTestId("account-card")[0]);
       fireEvent.click(screen.getByText("Editar conta"));
-      const input = screen.getByDisplayValue("Nubank") as HTMLInputElement;
+      const input = screen.getAllByDisplayValue("Nubank").find((element) => element.getAttribute("role") !== "combobox") as HTMLInputElement;
       fireEvent.change(input, { target: { value: "Nubank Editado" } });
       fireEvent.click(screen.getByText("Salvar"));
       expect(updateSpy).toHaveBeenCalledWith("acc1", { name: "Nubank Editado" });
@@ -233,7 +233,7 @@ describe("AccountsPage", () => {
       render(<AccountsPage />);
       fireEvent.click(screen.getAllByTestId("account-card")[0]);
       fireEvent.click(screen.getByText("Editar conta"));
-      const input = screen.getByDisplayValue("Nubank") as HTMLInputElement;
+      const input = screen.getAllByDisplayValue("Nubank").find((element) => element.getAttribute("role") !== "combobox") as HTMLInputElement;
       fireEvent.change(input, { target: { value: "" } });
       fireEvent.click(screen.getByText("Salvar"));
       expect(updateSpy).not.toHaveBeenCalled();
@@ -312,7 +312,6 @@ describe("AccountsPage", () => {
     });
   });
 });
-
 describe("AccountsPage — P2-1/P2-3 (payload bankColor + failure UX)", () => {
   beforeEach(() => { vi.restoreAllMocks(); });
 
@@ -322,7 +321,8 @@ describe("AccountsPage — P2-1/P2-3 (payload bankColor + failure UX)", () => {
     render(<AccountsPage />);
     fireEvent.click(screen.getByText("Nova"));
     const dialog = screen.getByRole("dialog");
-    fireEvent.click(within(dialog).getByText("Itaú"));
+    fireEvent.focus(within(dialog).getByRole("combobox"));
+    fireEvent.click(within(dialog).getByText("Itaú Unibanco"));
     fireEvent.change(within(dialog).getByPlaceholderText(/Nubank, Itaú/i), { target: { value: "Banco Laranja" } });
     fireEvent.click(within(dialog).getByText("Salvar conta"));
     expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({ name: "Banco Laranja", bankColor: "#EC7000" }));
@@ -370,7 +370,7 @@ describe("AccountsPage — P2-1/P2-3 (payload bankColor + failure UX)", () => {
     render(<AccountsPage />);
     fireEvent.click(screen.getAllByTestId("account-card")[0]);
     fireEvent.click(screen.getByText("Editar conta"));
-    const input = screen.getByDisplayValue("Nubank") as HTMLInputElement;
+    const input = screen.getAllByDisplayValue("Nubank").find((element) => element.getAttribute("role") !== "combobox") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "Nubank Editado" } });
     fireEvent.click(screen.getByText("Salvar"));
     await waitFor(() => expect(updateSpy).toHaveBeenCalled());

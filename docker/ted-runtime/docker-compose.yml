@@ -3,7 +3,7 @@
 # Deployment surface only. The container publishes NO host port: it joins the
 # existing `proxy` network (Traefik) and is reachable from the PWA exclusively
 # through the HTTPS router below. The API is reached over the internal
-# `pi-finance-postgres_default` network.
+# `dbcentral_net` network (stack db-central; a API migra para essa rede no cutover).
 #
 # Required host env (never committed):
 #   OPENCODE_GO_API_KEY   provider credential, injected at run time
@@ -42,7 +42,7 @@ services:
       - ted_runtime_data:/data
     networks:
       - proxy
-      - pi-finance-postgres_default
+      - dbcentral_net
     labels:
       traefik.enable: "true"
       traefik.docker.network: proxy
@@ -74,5 +74,5 @@ volumes:
 networks:
   proxy:
     external: true
-  pi-finance-postgres_default:
+  dbcentral_net:
     external: true

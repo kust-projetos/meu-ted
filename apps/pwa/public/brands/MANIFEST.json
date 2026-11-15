@@ -1,0 +1,119 @@
+[
+  {
+    "slug": "mercado-pago",
+    "category": "institutions",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/mercadopago.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "n26",
+    "category": "institutions",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/n26.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "nomad",
+    "category": "institutions",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/nomad.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "nubank",
+    "category": "institutions",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/nubank.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "pagseguro",
+    "category": "institutions",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/pagseguro.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "picpay",
+    "category": "institutions",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/picpay.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "revolut",
+    "category": "institutions",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/revolut.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "wise",
+    "category": "institutions",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/wise.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "americanexpress",
+    "category": "networks",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/americanexpress.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "dinersclub",
+    "category": "networks",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/dinersclub.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "discover",
+    "category": "networks",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/discover.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "mastercard",
+    "category": "networks",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/mastercard.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  },
+  {
+    "slug": "visa",
+    "category": "networks",
+    "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/visa.svg",
+    "package": "simple-icons@15",
+    "license": "CC0-1.0",
+    "retrievalDate": "2026-11-14",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
+  }
+]

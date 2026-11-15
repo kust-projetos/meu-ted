@@ -17,11 +17,10 @@ import {
 } from "@/components/charts";
 import { formatBRL, formatPct } from "@/lib/format/brl";
 import { useAnalytics, type CategorySlice } from "../../charts-data/useAnalytics";
-import { useBlockLayout } from "../../charts-data/useBlockLayout";
+import { useBlockLayout } from "@/lib/ui/use-block-layout";
 import { BlockEmpty, BlockShell, BlockSkeleton, ZoneError } from "../../charts-data/BlockShell";
 import { formatDeltaPp, trendOf } from "../../charts-data/analytics-format";
 
-const REPORT_BLOCKS_KEY = "meu-ted:report-blocks";
 const REPORT_DEFAULT_ORDER = [
   "reports-kpis",
   "reports-donut",
@@ -53,18 +52,18 @@ const topSlicesWithOthers = (slices: CategorySlice[]) => {
   return head;
 };
 
-function ReportsAnalyticsBlocks({ accounts }: { accounts: FilterAccount[] }) {
+function ReportsAnalyticsBlocks({ accounts, workspaceId }: { accounts: FilterAccount[]; workspaceId: string }) {
   const { filters, setPeriod, setAccountId } = useAnalyticsFilters();
   const bundle = useAnalytics(filters);
-  const layout = useBlockLayout(REPORT_BLOCKS_KEY, REPORT_DEFAULT_ORDER);
-  const { visible, editing, setEditing } = layout;
+  const layout = useBlockLayout({ workspaceId, surface: "reports", schema: { all: REPORT_DEFAULT_ORDER, essentialDefaultHidden: [] } });
+  const [editing, setEditing] = useState(false);
   const [selectedSlice, setSelectedSlice] = useState<string | null>(null);
 
   const editProps = (id: string, index: number) => ({
     editMode: editing,
-    hidden: layout.layout.hidden.includes(id),
+    hidden: layout.state.hidden.includes(id),
     disableUp: index === 0,
-    disableDown: index === layout.layout.order.length - 1,
+    disableDown: index === layout.state.order.length - 1,
     onToggleHidden: () => layout.toggle(id),
     onMoveUp: () => layout.move(id, -1),
     onMoveDown: () => layout.move(id, 1),
@@ -221,7 +220,7 @@ function ReportsAnalyticsBlocks({ accounts }: { accounts: FilterAccount[] }) {
       {bundle.error && !bundle.loading ? (
         <ZoneError message="Não foi possível carregar os gráficos." onRetry={bundle.reload} />
       ) : (
-        (editing ? layout.layout.order : visible).map((id, index) => renderBlock(id, index))
+        (editing ? layout.state.order : layout.visible).map((id, index) => renderBlock(id, index))
       )}
     </div>
   );
@@ -232,7 +231,7 @@ export function ReportsAnalyticsZone({ accounts }: { accounts: FilterAccount[] }
   const workspaceId = useWorkspaceSafe()?.activeWorkspace?.id ?? null;
   return (
     <AnalyticsFiltersProvider workspaceId={workspaceId}>
-      <ReportsAnalyticsBlocks accounts={accounts} />
+      <ReportsAnalyticsBlocks accounts={accounts} workspaceId={workspaceId ?? "default"} />
     </AnalyticsFiltersProvider>
   );
 }

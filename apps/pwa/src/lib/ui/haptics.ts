@@ -21,3 +21,8 @@ export function haptic(pattern: number | number[] = 10): void {
     /* best-effort */
   }
 }
+export function hapticTap(): void {
+  if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+    navigator.vibrate(10);
+  }
+}

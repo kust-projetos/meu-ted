@@ -572,6 +572,7 @@ export default function RecordsPage() {
                           <CategoryBadge
                             name={cat?.name ?? ""}
                             size={22}
+                            icon={cat?.icon}
                           />
                         </div>
                         <div className="min-w-0 flex-1">

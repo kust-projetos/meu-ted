@@ -143,8 +143,10 @@ autorizada; fatos de código derivam de
 
 ## Dados e esquema
 
-- A API de produção serve o esquema canônico (`DB_SCHEMA=canonical`, banco
-  `pi_financeiro_canonical`); o banco legacy (`pi_financeiro`) permanece como
+- A API de produção serve o esquema canônico (`DB_SCHEMA=canonical`, database
+  `pi_financeiro_canonical` agora na stack centralizada db-central na VPS
+  (instância homologação db-hml, role `pi_financeiro`, rede `dbcentral_net`;
+  classificação: homologação)); o banco legacy (`pi_financeiro`) permanece como
   archive intocado.
 - O uso de bearer legado é registrado em sink durável em `audit_logs`
   (`auth.request.legacy_bearer_used`). A janela D11-R2 fechou com **0 eventos**

@@ -20,8 +20,14 @@ import { checkDuplicate, formatDuplicateWarning } from "@/lib/api/endpoints";
 import { getFailedCommandId, newCommandId } from "@/lib/api/command-id";
 import { isApiConfigured } from "@/lib/api/client";
 import { splitInstallmentAmounts } from "@/lib/finance/installments";
+import { hapticTap } from "@/lib/ui/haptics";
 
 export type SheetTab = "expense" | "income" | "transfer";
+type Draft = Pick<SaveData, never> & {
+  amountDisplay: string; description: string; categoryId: string; subcategoryId: string;
+  originKind: OriginKind; originId: string; fromAccountId: string; toAccountId: string;
+  installmentsCount: number; notes: string;
+};
 
 export interface SaveData {
   kind: SheetTab;
@@ -160,6 +166,7 @@ export default function NewTransactionSheet({
 }: NewTransactionSheetProps) {
   const { markDirty, markClean } = useFormDirtySafe();
   const [tab, setTab] = useState<SheetTab>(initialTab);
+  const draftsRef = useRef<Partial<Record<SheetTab, Draft>>>({});
   const [amountDisplay, setAmountDisplay] = useState("");
   const [description, setDescription] = useState(initialDescription);
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -399,19 +406,26 @@ export default function NewTransactionSheet({
     setOriginSheetOpen(false);
   }
 
-  function resetDraft() {
-    // Draft genuinamente novo (troca de aba limpa todos os campos) = nova
-    // intent: rotaciona a chave para nunca reusar o id de um commit anterior
-    // num payload distinto (#185 anti-falso-positivo).
+  function switchTab(nextTab: SheetTab) {
+    if (nextTab === tab) return;
+    draftsRef.current[tab] = {
+      amountDisplay, description, categoryId, subcategoryId, originKind, originId,
+      fromAccountId, toAccountId, installmentsCount, notes,
+    };
     rotateCommandId();
-    setCategoryId("");
-    setSubcategoryId("");
-    setOriginKind("account");
-    setOriginId("");
-    setFromAccountId("");
-    setToAccountId("");
-    setInstallmentsCount(1);
-    setNotes("");
+    const draft = draftsRef.current[nextTab];
+    setAmountDisplay(draft?.amountDisplay ?? "");
+    setDescription(draft?.description ?? "");
+    setCategoryId(draft?.categoryId ?? "");
+    setSubcategoryId(draft?.subcategoryId ?? "");
+    setOriginKind(draft?.originKind ?? "account");
+    setOriginId(draft?.originId ?? "");
+    setFromAccountId(draft?.fromAccountId ?? "");
+    setToAccountId(draft?.toAccountId ?? "");
+    setInstallmentsCount(draft?.installmentsCount ?? 1);
+    setNotes(draft?.notes ?? "");
+    setTab(nextTab);
+    hapticTap();
     setDetailsOpen(false);
     setCategorySheetOpen(false);
     setOriginSheetOpen(false);
@@ -419,8 +433,6 @@ export default function NewTransactionSheet({
     setAddingCategory(false);
     setAddingAccount(false);
     setAddingCard(false);
-    setAmountDisplay("");
-    setDescription("");
   }
 
   // Duplicate-detector state
@@ -443,6 +455,7 @@ export default function NewTransactionSheet({
     try {
       await onSave(data);
       markClean();
+      draftsRef.current = {};
       rotateCommandId();
       return true;
     } catch (e) {
@@ -589,12 +602,7 @@ export default function NewTransactionSheet({
           <button
             key={t.key}
             onClick={() => {
-              // Reset ALL draft fields when switching tabs. Without this,
-              // amount/description leak across tabs (e.g. typing a Despesa
-              // draft, switching to Transferência by mistake, and the wrong
-              // amount/description silently carrying over).
-              setTab(t.key);
-              resetDraft();
+              switchTab(t.key);
             }}
             className={`flex-1 rounded-[10px] py-2.5 text-center text-[13px] font-bold transition-colors ${
               tab === t.key
@@ -742,7 +750,7 @@ export default function NewTransactionSheet({
           >
             <span className="flex min-w-0 items-center gap-2">
               {selectedCategory || selectedSubcategory ? (
-                <CategoryBadge name={selectedSubcategory?.name ?? selectedCategory?.name ?? ""} size={16} />
+                <CategoryBadge name={selectedSubcategory?.name ?? selectedCategory?.name ?? ""} size={16} icon={selectedSubcategory?.icon ?? selectedCategory?.icon} />
               ) : null}
               <span className={`truncate text-[15px] ${categoryId ? "font-semibold text-text-primary" : "text-text-muted"}`}>
                 {categoryPillLabel}
@@ -1171,7 +1179,7 @@ export default function NewTransactionSheet({
                                   : "border-border-strong bg-fill-light text-text-secondary"
                               }`}
                             >
-                              <CategoryBadge name={sub.name} size={12} />
+                              <CategoryBadge name={sub.name} size={12} icon={sub.icon} />
                               {sub.name}
                             </button>
                           );
@@ -1391,7 +1399,7 @@ function CategoryRow({
         selected ? "border-primary bg-primary/5" : "border-border-subtle"
       }`}
     >
-      <CategoryBadge name={cat.name} size={18} />
+      <CategoryBadge name={cat.name} size={18} icon={cat.icon} />
       <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-text-primary">
         {cat.name}
       </span>

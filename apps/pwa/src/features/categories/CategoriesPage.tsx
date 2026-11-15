@@ -1,23 +1,18 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useMemo, createElement } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo } from "react";
 import StatusBar from "@/components/StatusBar";
 import PageHeader from "@/components/PageHeader";
 import BottomSheet from "@/components/BottomSheet";
 import { WriteErrorBanner } from "@/components/WriteErrorBanner";
 import { CategoryBadge, getCategoryColor } from "@/components/ui/CategoryBadge";
+import { CategoryIcon } from "@/components/ui/category-icon";
 import { StaleBanner } from "@/components/StaleBanner";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { useAppState } from "@/lib/state/app-state-context";
 import type { Category } from "@/lib/state/types";
-import { Activity, Armchair, ArrowLeftRight, Award, Baby, BadgeDollarSign, Banknote, BedDouble, Beer, Bell, Bike, Bone, BookHeart, BookOpen, Brain, Briefcase, Building2, Bus, CakeSlice, Calculator, CalendarClock, Camera, Car, CarFront, Cat, ChefHat, Check, ChevronDown, ChevronRight, CircleDollarSign, Clapperboard, ClipboardList, Coffee, Coins, CreditCard, Cross, Dices, Dog, DollarSign, DoorOpen, Droplets, Dumbbell, Fence, FileText, Film, Flag, Flame, Flower2, Fuel, Gamepad2, Gift, Glasses, GraduationCap, Hammer, HandCoins, Heart, HeartHandshake, HeartPulse, KeyRound, Lamp, Landmark, Languages, Laptop, LayoutTemplate, Library, Lightbulb, LineChart, Mail, MapPin, Martini, Milestone, Moon, Music, Palette, PartyPopper, PawPrint, PenLine, Percent, Phone, PiggyBank, Pill, Pizza, Plane, Plug, Plus, Popcorn, Presentation, Receipt, RotateCcw, Salad, Sandwich, Scale, Search, ShieldPlus, Shirt, ShoppingBag, ShoppingBasket, Smartphone, Smile, Sofa, Sparkles, Sprout, SquareParking, Star, Stethoscope, Store, Sun, Syringe, Tag, Target, Ticket, ToyBrick, Train, Trash2, TrendingDown, TrendingUp, Tv, Umbrella, Users, UtensilsCrossed, Vault, Wallet, Watch, Wifi, Wrench, X, Zap } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, LayoutTemplate, Plus, Search, Sparkles, Tag, Trash2, X } from "lucide-react";
 import { COLOR_PALETTE, getCategoryIconName, searchIconGroups } from "./category-constants";
-
-const CATEGORY_ICONS: Record<string, typeof Tag> = { Activity, Armchair, ArrowLeftRight, Award, Baby, BadgeDollarSign, Banknote, BedDouble, Beer, Bell, Bike, Bone, BookHeart, BookOpen, Brain, Briefcase, Building2, Bus, CakeSlice, Calculator, CalendarClock, Camera, Car, CarFront, Cat, ChefHat, Check, ChevronDown, ChevronRight, CircleDollarSign, Clapperboard, ClipboardList, Coffee, Coins, CreditCard, Cross, Dices, Dog, DollarSign, DoorOpen, Droplets, Dumbbell, Fence, FileText, Film, Flag, Flame, Flower2, Fuel, Gamepad2, Gift, Glasses, GraduationCap, Hammer, HandCoins, Heart, HeartHandshake, HeartPulse, KeyRound, Lamp, Landmark, Languages, Laptop, LayoutTemplate, Library, Lightbulb, LineChart, Mail, MapPin, Martini, Milestone, Moon, Music, Palette, PartyPopper, PawPrint, PenLine, Percent, Phone, PiggyBank, Pill, Pizza, Plane, Plug, Popcorn, Presentation, Receipt, RotateCcw, Salad, Sandwich, Scale, ShieldPlus, Shirt, ShoppingBag, ShoppingBasket, Smartphone, Smile, Sofa, Sparkles, Sprout, SquareParking, Star, Stethoscope, Store, Sun, Syringe, Tag, Target, Ticket, ToyBrick, Train, TrendingDown, TrendingUp, Tv, Umbrella, Users, UtensilsCrossed, Vault, Wallet, Watch, Wifi, Wrench, Zap };
-
-function getIconComponent(name: string) {
-  return CATEGORY_ICONS[name] ?? Tag;
-}
 
 function IconPicker({
   value,
@@ -111,11 +106,6 @@ function ColorPicker({
       })}
     </div>
   );
-}
-
-function CategoryIcon({ name, size = 18, className }: { name: string; size?: number; className?: string }) {
-  const comp = getIconComponent(name);
-  return createElement(comp, { size, className });
 }
 
 function NewCategorySheet({

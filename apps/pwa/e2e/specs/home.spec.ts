@@ -112,10 +112,17 @@ test("[HOME-03] tap quick expense opens expense sheet", async ({ page }) => {
   const id = tid();
   const guard = await init(page, id);
 
-  await page.getByRole("button", { name: /^Despesa$/ }).click();
+  if ((page.viewportSize()?.width ?? 0) < 1024) {
+    await page.getByLabel("Nova transação").click();
+    await page.getByRole("group", { name: "Novo lançamento" }).getByRole("button", { name: "Despesa" }).click();
+  } else {
+    await page.getByRole("button", { name: "Novo lançamento" }).click();
+  }
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("Nova despesa")).toBeVisible();
+  if ((page.viewportSize()?.width ?? 0) < 1024) {
+    await expect(dialog.getByText("Nova despesa")).toBeVisible();
+  }
   await expect(dialog.getByRole("button", { name: /^Despesa$/ })).toBeVisible();
   await expect(dialog.getByPlaceholder("0,00")).toBeVisible();
 
@@ -157,8 +164,8 @@ test("[HOME-06] payable card navigates to compromissos", async ({ page }) => {
   const id = tid();
   const guard = await init(page, id);
 
-  // Payable summary card is a clickable region (div), not a button
-  await page.getByText(/Contas a pagar/).click();
+  // The section is now "Compromissos" and its rows are buttons.
+  await page.getByRole("button", { name: /em Contas a pagar/i }).first().click();
   await expect(page).toHaveURL(/\/compromissos\?aba=a-pagar/);
   await assertNoUnexpectedWrites(id);
   assertNoUndeclaredFailures(guard);
@@ -218,10 +225,18 @@ test("[HOME-09] tap quick income opens income sheet", async ({ page }) => {
   const id = tid();
   const guard = await init(page, id);
 
-  await page.getByRole("button", { name: /^Receita$/ }).click();
+  if ((page.viewportSize()?.width ?? 0) < 1024) {
+    await page.getByLabel("Nova transação").click();
+    await page.getByRole("group", { name: "Novo lançamento" }).getByRole("button", { name: "Receita" }).click();
+  } else {
+    await page.getByRole("button", { name: "Novo lançamento" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Receita" }).click();
+  }
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("Nova receita")).toBeVisible();
+  await expect(dialog.getByText(
+    (page.viewportSize()?.width ?? 0) < 1024 ? "Nova receita" : "Novo lançamento",
+  )).toBeVisible();
   await expect(dialog.getByRole("button", { name: /^Receita$/ })).toBeVisible();
   await expect(dialog.getByPlaceholder("0,00")).toBeVisible();
 
@@ -237,10 +252,18 @@ test("[HOME-10] tap quick transfer opens transfer sheet", async ({ page }) => {
   const id = tid();
   const guard = await init(page, id);
 
-  await page.getByRole("button", { name: /^Transferir$/ }).click();
+  if ((page.viewportSize()?.width ?? 0) < 1024) {
+    await page.getByLabel("Nova transação").click();
+    await page.getByRole("group", { name: "Novo lançamento" }).getByRole("button", { name: "Transferência" }).click();
+  } else {
+    await page.getByRole("button", { name: "Novo lançamento" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Transferência" }).click();
+  }
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("Nova transferência")).toBeVisible();
+  await expect(dialog.getByText(
+    (page.viewportSize()?.width ?? 0) < 1024 ? "Nova transferência" : "Novo lançamento",
+  )).toBeVisible();
   await expect(dialog.getByText("Origem (saída)")).toBeVisible();
   await expect(dialog.getByText("Destino (entrada)")).toBeVisible();
 

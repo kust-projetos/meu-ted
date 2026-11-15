@@ -5,13 +5,17 @@ import { useMemo, useState, useEffect } from "react";
 import StatusBar from "@/components/StatusBar";
 import PageHeader from "@/components/PageHeader";
 import BottomSheet from "@/components/BottomSheet";
-import Badge from "@/components/ui/Badge";
 import { WriteErrorBanner } from "@/components/WriteErrorBanner";
 import { StaleBanner } from "@/components/StaleBanner";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { useAppState } from "@/lib/state/app-state-context";
 import { Plus, ChevronRight, FileText } from "lucide-react";
-import { BANK_PRESETS, resolveBankPreset } from "@/lib/bank-presets";
+import { resolveBankPreset } from "@/lib/bank-presets";
+import { InstitutionPicker } from "@/components/brand/InstitutionPicker";
+import { InstitutionMark } from "@/components/brand/InstitutionMark";
+import { getInstitution, normalize, resolveInstitution, type Institution } from "@/lib/institutions/catalog";
+import { useAccountAppearance } from "@/lib/institutions/appearance-store";
+import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
 
 function formatBRL(cents: number): string {
   return new Intl.NumberFormat("pt-BR", {
@@ -40,11 +44,6 @@ const ACCOUNT_KINDS = [
   { value: "savings", label: "Poupança" },
   { value: "investment", label: "Investimento" },
 ];
-
-const BANK_COLORS = BANK_PRESETS.filter((p) => !p.id.includes("prime") && !p.id.includes("personnalite")).map((p) => ({
-  value: p.primaryColor,
-  label: p.name,
-})).concat([{ value: "#4A5568", label: "Outro" }]);
 
 /**
  * Maps the UI subkinds to the kinds the authoritative API accepts on account
@@ -84,6 +83,7 @@ function AccountFormSheet({
   open,
   onClose,
   onAdd,
+  onAppearance,
 }: {
   open: boolean;
   onClose: () => void;
@@ -92,13 +92,16 @@ function AccountFormSheet({
     kind: "bank" | "cash" | "credit_card";
     initialBalanceCents: number;
     bankColor: string;
-  }) => void | Promise<void>;
+  }) => Promise<{ id: string } | undefined>;
+  onAppearance: (id: string, selection: { institutionId?: string; manualInstitutionName?: string }) => void;
 }) {
   const [name, setName] = useState("");
   const [kind, setKind] = useState("checking");
   const [bankColor, setBankColor] = useState("#820AD1");
   const [balance, setBalance] = useState("");
   const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [institutionId, setInstitutionId] = useState<string>();
+  const [manualInstitutionName, setManualInstitutionName] = useState("");
 
   async function handleSave() {
     const displayName = name.trim() || (bankColor === "#820AD1" ? "Nubank" : bankColor);
@@ -111,12 +114,13 @@ function AccountFormSheet({
       return;
     }
     try {
-      await onAdd({
+      const created = await onAdd({
         name: displayName,
         kind: apiKind,
         initialBalanceCents,
         bankColor,
       });
+      if (created?.id) onAppearance(created.id, institutionId ? { institutionId } : { manualInstitutionName });
       setName("");
       setBalance("");
       setBalanceError(null);
@@ -131,29 +135,7 @@ function AccountFormSheet({
     <BottomSheet open={open} onClose={onClose} title="Nova conta">
       <div className="flex flex-col gap-4">
         <div>
-          <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">
-            Banco / cor
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {BANK_COLORS.map((b) => (
-              <button
-                key={b.value}
-                type="button"
-                onClick={() => setBankColor(b.value)}
-                className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold transition-all ${
-                  bankColor === b.value
-                    ? "bg-primary text-white shadow-xs"
-                    : "bg-surface-2 text-text-secondary hover:bg-surface-3"
-                }`}
-              >
-                <span
-                  className="h-2.5 w-2.5 rounded-full shadow-xs"
-                  style={{ background: b.value }}
-                />
-                {b.label}
-              </button>
-            ))}
-          </div>
+          <InstitutionPicker onSelect={(institution) => { setInstitutionId(institution.id); setManualInstitutionName(""); setBankColor(institution.colors.primary); }} onManual={(value) => { setInstitutionId(undefined); setManualInstitutionName(value); setBankColor("#4A5568"); }} />
         </div>
 
         <fieldset>
@@ -235,23 +217,25 @@ function AccountFormSheet({
   );
 }
 
-function AccountEditSheet({ open, account, onClose, onSave }: {
+function AccountEditSheet({ open, account, appearance, onClose, onSave }: {
   open: boolean;
-  account: { id: string; name: string } | null;
+  account: { id: string; name: string; color?: string } | null;
+  appearance?: { institutionId?: string; manualInstitutionName?: string };
   onClose: () => void;
-  onSave: (id: string, name: string) => void | Promise<void>;
+  onSave: (id: string, name: string, selection: { institutionId?: string; manualInstitutionName?: string }) => void | Promise<void>;
 }) {
-  const [name, setName] = useState("");
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (account) setName(account.name);
-  }, [account]);
+  const [name, setName] = useState(account?.name ?? "");
+  const initialInstitution = account
+    ? getInstitution(appearance?.institutionId ?? "") ?? resolveInstitution({ name: account.name, color: account.color })
+    : undefined;
+  const [institution, setInstitution] = useState<Institution | undefined>(initialInstitution);
+  const [institutionId, setInstitutionId] = useState<string | undefined>(initialInstitution?.id);
+  const [manualName, setManualName] = useState(appearance?.manualInstitutionName ?? "");
 
   async function handleSave() {
     if (!account || !name.trim()) return;
     try {
-      await onSave(account.id, name.trim());
+      await onSave(account.id, name.trim(), institutionId ? { institutionId } : { manualInstitutionName: manualName });
       onClose();
     } catch {
       // Save failed: sheet stays open with the typed value.
@@ -261,6 +245,7 @@ function AccountEditSheet({ open, account, onClose, onSave }: {
   return (
     <BottomSheet open={open} onClose={onClose} title="Editar conta">
       <div className="flex flex-col gap-4">
+        <InstitutionPicker value={institution} onSelect={(selected) => { setInstitution(selected); setInstitutionId(selected.id); setManualName(""); }} onManual={(value) => { setInstitution(undefined); setInstitutionId(undefined); setManualName(value); }} />
         <fieldset>
           <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">
             Nome
@@ -286,6 +271,7 @@ function AccountEditSheet({ open, account, onClose, onSave }: {
 
 function AccountDetailSheet({
   account,
+  appearance,
   miniHistory,
   open,
   onClose,
@@ -293,6 +279,7 @@ function AccountDetailSheet({
   onDeactivate,
 }: {
   account: { id: string; name: string; balanceCents: number; kind: string; color?: string } | null;
+  appearance?: { institutionId?: string; manualInstitutionName?: string };
   miniHistory: { id: string; description: string; amountCents: number; date: string; kind: string }[];
   open: boolean;
   onClose: () => void;
@@ -314,18 +301,19 @@ function AccountDetailSheet({
   }
 
   const preset = account ? resolveBankPreset({ name: account.name, color: account.color }) : null;
+  const institution = getInstitution(appearance?.institutionId ?? "") ?? resolveInstitution({ name: account.name, color: account.color });
   return (
     <BottomSheet open={open} onClose={onClose} title="Detalhes da conta">
       <div className="flex flex-col gap-4">
         {/* Header with bank identity */}
         <div className="flex items-center gap-3 rounded-[16px] border p-3.5" style={{ background: preset ? `linear-gradient(135deg, ${preset.primaryColor}14, var(--surface-2))` : undefined, borderColor: preset ? `${preset.primaryColor}30` : undefined }}>
-          <span
+          {institution ? <InstitutionMark institution={institution} size="md" /> : <span
             className="flex h-10 w-10 items-center justify-center rounded-[12px] text-[12px] font-black text-white shadow-sm"
             style={{ background: preset?.gradient ?? "#4A5568", color: preset?.textColor ?? "#fff" }}
             aria-hidden="true"
           >
             {preset ? preset.shortName.slice(0, 2).toUpperCase() : account.name.slice(0, 2).toUpperCase()}
-          </span>
+          </span>}
           <div className="flex-1 min-w-0">
             <div className="truncate text-[14px] font-bold text-text-primary">{account.name}</div>
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted">
@@ -417,9 +405,11 @@ export default function AccountsPage() {
   const { accounts, transactions, loading, error, writeError, clearWriteError, retryWriteError, addAccount, updateAccount, deactivateAccount } = useAppState();
   const [createOpen, setCreateOpen] = useState(false);
   const [detailAccount, setDetailAccount] = useState<(typeof accounts)[0] | null>(null);
-  const [editAccount, setEditAccount] = useState<{ id: string; name: string } | null>(null);
+  const [editAccount, setEditAccount] = useState<{ id: string; name: string; color?: string } | null>(null);
   const [confirmDeactivate, setConfirmDeactivate] = useState<{ id: string; name: string } | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const workspaceId = useWorkspaceSafe()?.activeWorkspace?.id ?? "default";
+  const appearance = useAccountAppearance(workspaceId);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -436,6 +426,8 @@ export default function AccountsPage() {
     () => accounts.filter((a) => a.kind !== "credit_card"),
     [accounts],
   );
+  const appearanceFor = (accountId: string, accountName: string) =>
+    appearance.map[accountId] ?? Object.entries(appearance.map).find(([key]) => normalize(key) === normalize(accountName))?.[1];
 
   if (loading) {
     return (
@@ -514,6 +506,9 @@ export default function AccountsPage() {
           {/* Account cards with bank identity */}
           <div className="flex flex-col gap-3">
             {checkingAccounts.map((acc) => {
+              // Name-key fallback keeps appearance readable when a synced id differs from its optimistic key.
+              const institutionId = appearanceFor(acc.id, acc.name)?.institutionId;
+              const institution = (institutionId ? getInstitution(institutionId) : undefined) ?? resolveInstitution({ name: acc.name, color: acc.color });
               const preset = resolveBankPreset({ name: acc.name, color: acc.color });
               return (
                 <button
@@ -540,13 +535,13 @@ export default function AccountsPage() {
                     style={{ background: preset.gradient }}
                   />
                   <div className="flex items-center gap-3">
-                    <span
+                    {institution ? <InstitutionMark institution={institution} size="md" /> : <span
                       className="flex h-9 w-9 items-center justify-center rounded-[10px] text-[11px] font-black text-white shadow-sm"
                       style={{ background: preset.gradient, color: preset.textColor }}
                       aria-hidden="true"
                     >
                       {preset.shortName.slice(0, 2).toUpperCase()}
-                    </span>
+                    </span>}
                     <div className="flex-1 min-w-0">
                       <div className="truncate text-[14px] font-bold text-text-primary">
                         {acc.name}
@@ -596,31 +591,34 @@ export default function AccountsPage() {
       <AccountFormSheet
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onAdd={async (input) => {
-          // bankColor travels in the payload (the API strips unknown fields
-          // today, but the choice is preserved end-to-end for forward-compat).
-          await addAccount({ ...input });
-        }}
+        onAdd={async ({ name, kind, initialBalanceCents, bankColor }) => addAccount({ name, kind, initialBalanceCents, bankColor } as Parameters<typeof addAccount>[0] & { bankColor: string })}
+        onAppearance={(id, selection) => appearance.set(id, selection)}
       />
 
       <AccountEditSheet
+        key={`${editAccount?.id ?? ""}:${editAccount ? appearanceFor(editAccount.id, editAccount.name)?.institutionId ?? "" : ""}`}
         open={editOpen}
         account={editAccount}
+        appearance={editAccount ? appearanceFor(editAccount.id, editAccount.name) : undefined}
         onClose={() => {
           setEditOpen(false);
           setEditAccount(null);
         }}
-        onSave={(id, name) => updateAccount(id, { name })}
+        onSave={async (id, name, selection) => {
+          await updateAccount(id, { name });
+          appearance.set(id, selection);
+        }}
       />
 
       <AccountDetailSheet
         account={detailAccount}
+        appearance={detailAccount ? appearanceFor(detailAccount.id, detailAccount.name) : undefined}
         miniHistory={detailAccount ? getMiniHistory(detailAccount.id) : []}
         open={detailAccount !== null}
         onClose={() => setDetailAccount(null)}
-        onEdit={(id, name) => {
+        onEdit={() => {
           setDetailAccount(null);
-          setEditAccount({ id, name });
+          setEditAccount(detailAccount);
           setEditOpen(true);
         }}
         onDeactivate={(id, name) => {
