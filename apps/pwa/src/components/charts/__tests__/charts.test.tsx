@@ -25,9 +25,12 @@ describe("DonutChart", () => {
   });
 
   it("shows the tapped slice value in the center", () => {
-    render(<DonutChart slices={slices} formatValue={fmt} onSelect={vi.fn()} />);
+    const onSelect = vi.fn();
+    const { rerender } = render(<DonutChart slices={slices} formatValue={fmt} onSelect={onSelect} />);
     fireEvent.click(screen.getByRole("button", { name: /Comida/ }));
-    expect(screen.getByText("R$ 300.00")).toBeInTheDocument();
+    expect(onSelect).toHaveBeenCalledWith("m2");
+    rerender(<DonutChart slices={slices} formatValue={fmt} onSelect={onSelect} selectedId="m2" />);
+    expect(screen.getByTestId("donut-center-value")).toHaveTextContent("R$ 300.00");
   });
 
   it("renders a gray Outras slice passed by the caller", () => {

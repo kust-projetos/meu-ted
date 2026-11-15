@@ -4,6 +4,10 @@ import userEvent from "@testing-library/user-event";
 import AuditPage from "../AuditPage";
 
 describe("AuditPage", () => {
+  it("includes the operational product adoption section", () => {
+    render(<AuditPage />);
+    expect(screen.getByRole("heading", { name: "Adoção do produto" })).toBeInTheDocument();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_API_BASE_URL", "https://api.example.com");

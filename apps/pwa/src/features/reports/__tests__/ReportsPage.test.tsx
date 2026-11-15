@@ -14,6 +14,11 @@ describe("ReportsPage", () => {
     expect(screen.getByTestId("reports-analytics-zone")).toBeInTheDocument();
   });
 
+  it("keeps operational adoption metrics out of financial reports", () => {
+    render(<ReportsPage />);
+    expect(screen.queryByText("Adoção das notificações")).not.toBeInTheDocument();
+  });
+
   it("does not render legacy client-computed duplicates", () => {
     render(<ReportsPage />);
     expect(screen.queryByText(/Resultado do período/)).not.toBeInTheDocument();

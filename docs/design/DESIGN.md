@@ -73,6 +73,20 @@ then local data, then the name/color heuristic.
 
 ## Do / don't
 
+## Definições de indicadores financeiros
+
+| Indicador | Fórmula | Fonte | Período | Escopo |
+|---|---|---|---|---|
+| Saldo total (Home) | Soma de saldos | Resumo do servidor | Atual | Todas as contas |
+| Receitas (Home) | Soma de receitas | Resumo do servidor | Mês corrente | Todas as contas |
+| Despesas (Home) | Soma de despesas | Resumo do servidor | Mês corrente | Todas as contas |
+| Resultado do mês | Receitas − despesas | Resumo do servidor | Mês corrente | Todas as contas |
+| Resultado / receitas | Resultado ÷ receitas × 100 | Resumo do servidor | Mês corrente; receitas > 0 | Todas as contas |
+| Para onde foi | Despesas por macrocategoria ÷ despesas locais × 100 | Agregação local de transações | Mês corrente | Transações locais disponíveis |
+| Fluxo de caixa | Saldo acumulado diário | Agregação analítica do servidor | Período selecionado | Contas selecionadas ou todas |
+| Distribuição por categoria | Valor por categoria ÷ total de despesas × 100 | Analytics do servidor | Período selecionado | Contas selecionadas ou todas |
+| Mapa de gastos | Total de despesas diárias | Analytics do servidor | Período selecionado | Contas selecionadas ou todas |
+
 - **Do:** use the shared tokens and primitives; align money with tabular
   figures; separate ledger rows with hairlines; keep one focal statement.
 - **Don't:** introduce new palette literals in primitives; rely on color alone;

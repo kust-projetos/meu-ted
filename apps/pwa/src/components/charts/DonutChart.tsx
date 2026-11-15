@@ -113,7 +113,7 @@ export function DonutChart({
               onClick={onSelect ? () => onSelect(slice.id) : undefined}
               aria-pressed={active?.id === slice.id}
               aria-label={`${slice.name}, ${formatValue(slice.valueCents)}`}
-              className={`flex w-full items-center gap-2 rounded-[10px] px-2 py-1 text-left transition-colors ${
+              className={`flex min-h-11 w-full items-center gap-2 rounded-[10px] px-2 py-1 text-left transition-colors ${
                 active?.id === slice.id ? "bg-surface-2" : "hover:bg-surface-2/60"
               }`}
             >
@@ -123,7 +123,7 @@ export function DonutChart({
                 aria-hidden="true"
               />
               <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-text-primary">{slice.name}</span>
-              <span className="text-[12px] font-bold tabular-nums text-text-secondary">{formatValue(slice.valueCents)}</span>
+              <span className="shrink-0 text-[12px] font-bold tabular-nums text-text-secondary">{formatValue(slice.valueCents)} · {total > 0 ? `${((slice.valueCents / total) * 100).toFixed(1).replace(".", ",")}%` : "0,0%"}</span>
             </button>
           </li>
         ))}
