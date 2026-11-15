@@ -42,7 +42,7 @@ export function useFallbackInsights({
   return useMemo(() => {
     const fallback: InsightItem[] = [];
 
-    if (monthIncome !== null && monthIncome > 0 && monthExpenses !== null) {
+    if (monthIncome !== null && monthIncome > 0 && monthExpenses !== null && monthExpenses > 0) {
       const savingsRate = ((monthIncome - monthExpenses) / monthIncome) * 100;
       const isGood = savingsRate >= 20;
       const isWarn = savingsRate >= 5;
@@ -52,14 +52,22 @@ export function useFallbackInsights({
           : isWarn
             ? "var(--color-warning)"
             : "var(--color-danger)",
-        title: "Taxa de poupança",
-        body: `Você poupa ${formatPct(savingsRate)} da sua renda.${
-          isGood ? " Excelente!" : isWarn ? " Pode melhorar." : " Atenção!"
-        }`,
+        title: "Sobra do mês",
+        body: savingsRate >= 0
+          ? `Sobraram ${formatPct(savingsRate)} das receitas neste mês.`
+          : `As despesas superaram as receitas em ${formatPct(Math.abs(savingsRate))}.`,
       });
     }
 
-    if (macros.length > 0) {
+    const today = new Date();
+    const currentPeriodExpenses = transactions.filter((t) => {
+      if (t.kind !== "expense") return false;
+      const match = /^(\d{4})-(\d{2})-\d{2}/.exec(t.date);
+      return match !== null &&
+        Number(match[1]) === today.getFullYear() &&
+        Number(match[2]) === today.getMonth() + 1;
+    });
+    if (currentPeriodExpenses.length >= 3 && macros.length > 0) {
       const top = macros[0]!;
       fallback.push({
         color: "var(--color-info)",

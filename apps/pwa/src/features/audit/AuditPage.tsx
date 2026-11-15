@@ -5,6 +5,7 @@ import StatusBar from "@/components/StatusBar";
 import PageHeader from "@/components/PageHeader";
 import { fetchAuditLogs, type AuditLog, type AuditLogFilters } from "@/lib/api/endpoints";
 import { FileText, Filter, RotateCcw } from "lucide-react";
+import AdoptionMetrics from "@/features/reports/AdoptionMetrics";
 
 export default function AuditPage() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
@@ -63,6 +64,7 @@ export default function AuditPage() {
       <StatusBar />
       <PageHeader title="Auditoria" />
       <main className="flex flex-1 flex-col gap-4 px-5 pb-[var(--tab-bar-height)] sm:px-8 lg:px-12">
+        <AdoptionMetrics />
         {/* Filters */}
         <div className="rounded-[18px] border border-border-subtle bg-surface-1 p-4 shadow-card">
           <div className="mb-3 text-[11px] font-bold uppercase tracking-wider text-text-muted">Filtros</div>

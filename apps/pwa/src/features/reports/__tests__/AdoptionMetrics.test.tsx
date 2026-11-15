@@ -27,7 +27,7 @@ describe("AdoptionMetrics", () => {
     render(<AdoptionMetrics />);
 
     await waitFor(() => {
-      expect(screen.getByText("Adoção das notificações")).toBeInTheDocument();
+      expect(screen.getByText("Adoção do produto")).toBeInTheDocument();
       expect(screen.getByText("8 · 80.0%")).toBeInTheDocument();
       expect(screen.getByText("1.2s")).toBeInTheDocument();
       expect(screen.getByText("2.5s")).toBeInTheDocument();

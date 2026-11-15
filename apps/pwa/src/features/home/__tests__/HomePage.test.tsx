@@ -29,10 +29,15 @@ vi.mock("next/navigation", () => ({
 }));
 
 function defaultState(): AppState {
+  const today = new Date();
+  const currentMonthDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-05`;
   return {
     accounts: [...mockAccounts],
     categories: [...mockCategories],
-    transactions: [...ALL_MOCK_TRANSACTIONS],
+    transactions: ALL_MOCK_TRANSACTIONS.map((transaction) => ({
+      ...transaction,
+      date: currentMonthDate,
+    })),
     payables: [...mockPayables],
     budgets: [...mockBudgets],
     goals: [...mockGoals],
@@ -121,7 +126,7 @@ describe("HomePage editorial composition", () => {
     expect(screen.getByText("Receitas")).toBeInTheDocument();
     expect(screen.getByText("Despesas")).toBeInTheDocument();
     expect(screen.getByText("Resultado do mês")).toBeInTheDocument();
-    expect(screen.getByText(/% guardado/)).toBeInTheDocument();
+    expect(screen.getByText(/% das receitas/)).toBeInTheDocument();
   });
   it("omits the savings rate when income is zero", () => {
     vi.spyOn(appStateModule, "useAppState").mockReturnValue({
@@ -132,6 +137,7 @@ describe("HomePage editorial composition", () => {
     expect(screen.queryByText(/% guardado/)).not.toBeInTheDocument();
   });
   it("uses only category color tokens defined by the design variables", () => {
+    vi.spyOn(appStateModule, "useAppState").mockReturnValue(defaultState());
     const css = readFileSync("src/app/globals.css", "utf8");
     const defined = new Set(
       Array.from(css.matchAll(/--([a-zA-Z0-9-]+)\s*:/g), (match) => match[1]),
@@ -261,6 +267,7 @@ describe("HomePage editorial composition", () => {
     ).toBeInTheDocument();
   });
   it("renders proportion accessible summary and TED insight action", () => {
+    vi.spyOn(appStateModule, "useAppState").mockReturnValue(defaultState());
     render(<HomePage />);
     expect(
       screen.getByRole("img", { name: /Proporção por categoria/ }),

@@ -3,7 +3,6 @@
 import StatusBar from "@/components/StatusBar";
 import PageHeader from "@/components/PageHeader";
 import { useAppState } from "@/lib/state/app-state-context";
-import AdoptionMetrics from "./AdoptionMetrics";
 import { ReportsAnalyticsZone } from "./components/ReportsAnalyticsZone";
 
 // H-10: single source of truth. All period/account aggregates come from
@@ -36,8 +35,6 @@ export default function ReportsPage() {
       <StatusBar />
       <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
         <PageHeader title="Relatórios" />
-        <AdoptionMetrics />
-
         <div className="flex flex-col gap-3.5 px-5 pt-3">
           <ReportsAnalyticsZone accounts={accounts.map((a) => ({ id: a.id, name: a.name }))} />
         </div>

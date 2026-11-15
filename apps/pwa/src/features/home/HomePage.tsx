@@ -123,6 +123,7 @@ export default function HomePage() {
         : 0))
     : null;
   const macros = useCategoryBreakdown(transactions, categories);
+  const breakdownTotalExpenses = macros.reduce((sum, item) => sum + item.amountCents, 0);
   const insights = useFallbackInsights({
     transactions,
     budgets,
@@ -291,7 +292,7 @@ export default function HomePage() {
             ))}
           </nav>
         )}</> },
-    "home-statement": { title: "Fechamento do mês", node: <>        <StatementPanel eyebrow={`Fechamento · ${month}`} className="my-3">
+    "home-statement": { title: "Fechamento do mês", node: <>        <StatementPanel eyebrow={`Fechamento · ${month} · todas as contas`} className="my-3">
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             <div>
               <p className="text-xs text-[var(--statement-muted)]">Receitas</p>
@@ -318,7 +319,7 @@ export default function HomePage() {
                 totalIncome > 0 &&
                 netResult !== null && (
                   <p className="text-xs text-[var(--statement-muted)]">
-                    {Math.round((netResult / totalIncome) * 100)}% guardado
+                    {Math.round((netResult / totalIncome) * 100)}% das receitas
                   </p>
                 )}
             </div>
@@ -509,9 +510,9 @@ export default function HomePage() {
           <SectionHeader
             title="Para onde foi"
             meta={
-              totalExpenses === null
+              breakdownTotalExpenses === 0 && totalExpenses === null
                 ? undefined
-                : `${formatBRL(totalExpenses)} no mês`
+                : `${formatBRL(breakdownTotalExpenses > 0 ? breakdownTotalExpenses : totalExpenses!)} no mês`
             }
           />
           {categoriesForBand.length > 0 ? (
