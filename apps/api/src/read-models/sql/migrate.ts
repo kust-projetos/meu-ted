@@ -84,6 +84,7 @@ export const LEGACY_SAFE_PREFIXES = [
   "V052",
   "V053",
   "V054",
+  "V064",
 ];
 
 /**
@@ -112,7 +113,6 @@ export const LEGACY_EXCLUDED_JUSTIFICATIONS: Record<string, string> = {
   V061: 'canonical-only D1 N-personal lift (ADR-027): drops ONLY the V021 partial unique index memberships_personal_user_uidx and adds an equivalent non-unique lookup; V021 triggers untouched; the legacy ledger tops at V054 and verifySchema fails closed on a V061 manifest entry',
   V062: 'canonical-only D2 delete-vazio tombstone (ADR-027): extends households status with terminal deleted (row preserved as marker) plus workspace_closure_log and workspace_tombstones tables; no data deletion, no cascade; the legacy ledger tops at V054 and verifySchema fails closed on a V062 manifest entry',
   V063: 'canonical-only FIX-WS-D2-R5 empty-attestation deposit (ADR-027): pure new table workspace_empty_attestations (opaque handle, server-side join on delete, single-use consumed_at); no data deletion, no cascade; the legacy ledger tops at V054 and verifySchema fails closed on a V063 manifest entry',
-  V064: 'canonical-only account presentation columns; legacy ledger remains pinned at V054 pending an explicitly approved migration rollout',
 };
 
 export const migrationChecksum = (sql: string): string =>
