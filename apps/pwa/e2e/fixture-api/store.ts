@@ -39,6 +39,7 @@ export interface SeedData {
     name: string;
     kind: "expense" | "income";
     parentId?: string;
+    icon?: string;
   }>;
   transactions: Array<{
     id: string;
@@ -266,10 +267,10 @@ export const SEEDS: Record<string, SeedData> = {
       { id: "acc-2", name: "Dinheiro", kind: "cash", initialBalanceCents: 20000, balanceCents: 20000 },
     ],
     categories: [
-      { id: "cat-1", name: "Alimentação", kind: "expense" },
-      { id: "cat-2", name: "Transporte", kind: "expense" },
-      { id: "cat-3", name: "Salário", kind: "income" },
-      { id: "cat-4", name: "Sub-alimentação", kind: "expense", parentId: "cat-1" },
+      { id: "cat-1", name: "Alimentação", kind: "expense", icon: "UtensilsCrossed" },
+      { id: "cat-2", name: "Transporte", kind: "expense", icon: "Bus" },
+      { id: "cat-3", name: "Salário", kind: "income", icon: "Banknote" },
+      { id: "cat-4", name: "Sub-alimentação", kind: "expense", parentId: "cat-1", icon: "ShoppingBasket" },
     ],
     transactions: [
       { id: "tx-1", description: "Supermercado", amountCents: 15000, date: "2026-07-10", categoryId: "cat-1", accountId: "acc-1", kind: "expense" },
