@@ -80,7 +80,7 @@ describe("BottomNav", () => {
       expect(fab).toHaveAttribute("aria-expanded", "false");
       expect(fab).not.toHaveAttribute("aria-haspopup", "menu");
       await user.click(fab);
-      const panel = screen.getByRole("group", { name: "Novo lançamento" });
+      const panel = screen.getByRole("group", { name: "Ações de novo lançamento" });
       expect(panel).toBeInTheDocument();
       expect(fab).toHaveAttribute("aria-expanded", "true");
       expect(fab).toHaveAttribute("aria-controls", "quick-actions");
@@ -101,7 +101,7 @@ describe("BottomNav", () => {
       );
       const event = dispatch.mock.calls.map(([e]) => e).find((e) => (e as Event).type === "pwa:open-tx") as CustomEvent;
       expect(event.detail).toMatchObject({ kind: "income" });
-      expect(screen.queryByRole("group", { name: "Novo lançamento" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Ações de novo lançamento" })).not.toBeInTheDocument();
     });
 
     it("navigates to /capture for Ler Comprovante", async () => {
@@ -117,9 +117,9 @@ describe("BottomNav", () => {
       renderNav();
       const fab = screen.getByLabelText("Novo lançamento");
       await user.click(fab);
-      expect(screen.getByRole("group", { name: "Novo lançamento" })).toBeInTheDocument();
+      expect(screen.getByRole("group", { name: "Ações de novo lançamento" })).toBeInTheDocument();
       await user.keyboard("{Escape}");
-      expect(screen.queryByRole("group", { name: "Novo lançamento" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Ações de novo lançamento" })).not.toBeInTheDocument();
       expect(fab).toHaveFocus();
     });
   });
@@ -185,4 +185,3 @@ describe("BottomNav", () => {
     });
   });
 });
-
