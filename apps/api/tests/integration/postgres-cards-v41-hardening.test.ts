@@ -67,6 +67,7 @@ const createCanonicalTables = async (db: Pool): Promise<void> => {
       kind TEXT NOT NULL, balance_cents BIGINT NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'active',
       credit_limit_cents BIGINT, closing_day INTEGER, due_day INTEGER,
+      institution_id TEXT, card_product_id TEXT,
       deleted_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
