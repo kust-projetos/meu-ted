@@ -790,7 +790,7 @@ export default function CardsPage() {
               const availCents = card.creditLimitCents - card.spentCents;
               const masked = formatMaskedNumber(getLastFour(card.id));
               return (
-                <div key={card.id} onClick={() => setSelectedCardId(card.id)} className="cursor-pointer flex flex-col gap-2">
+                <button type="button" key={card.id} aria-label={`${card.name}, fatura ${formatBRL(card.spentCents)}, limite ${formatBRL(card.creditLimitCents)}`} onClick={() => setSelectedCardId(card.id)} className="w-full cursor-pointer flex flex-col gap-2 rounded-[16px] text-left focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none">
                   <BankCard
                     bankId={card.institution?.id ?? preset.id}
                     product={card.product}
@@ -822,7 +822,7 @@ export default function CardsPage() {
                       <span>Disponível {formatBRL(availCents)}</span>
                     </div>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -871,16 +871,16 @@ export default function CardsPage() {
                   </button>
                 </div>
 
-                <BankCard
-                  bankId={card.institution?.id ?? preset.id}
-                  product={card.product}
-                  cardName={card.name}
-                  maskedNumber={masked}
-                  network={card.product?.network === "unknown" ? undefined : card.product?.network ?? preset.network}
-                />
-
-                {/* Hero KPIs */}
-                <div className="rounded-[16px] border border-border-subtle bg-surface-1 p-4 shadow-card">
+                {/* Cartão e dados da fatura em uma única superfície */}
+                <div className="overflow-hidden rounded-[18px] border border-border-subtle bg-surface-1 shadow-card">
+                  <BankCard
+                    bankId={card.institution?.id ?? preset.id}
+                    product={card.product}
+                    cardName={card.name}
+                    maskedNumber={masked}
+                    network={card.product?.network === "unknown" ? undefined : card.product?.network ?? preset.network}
+                  />
+                  <div className="border-t border-border-subtle p-4">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="col-span-2">
                       <div className="text-[11px] font-medium text-text-muted">Fatura atual</div>
@@ -903,6 +903,7 @@ export default function CardsPage() {
                       <div className="font-mono tabular-nums text-[14px] font-bold text-text-primary">{detailDueDay}</div>
                     </div>
                   </div>
+                  </div>
                 </div>
 
                 {/* Pagar fatura */}
@@ -923,7 +924,7 @@ export default function CardsPage() {
                       <div className="px-4 py-6 text-center text-[12px] text-text-muted">Nenhuma compra nesta fatura.</div>
                     ) : (
                       detailPurchases.map((p) => (
-                        <div key={p.id} onClick={() => setEditPurchase(p)} className="flex cursor-pointer items-center justify-between border-b border-border-subtle px-4 py-3.5 last:border-none hover:bg-surface-2/60 active:bg-surface-2 transition-colors">
+                        <button type="button" key={p.id} aria-label={`${p.description}, ${formatBRL(p.amountCents)}, compra`} onClick={() => setEditPurchase(p)} className="flex min-h-11 w-full cursor-pointer items-center justify-between border-b border-border-subtle px-4 py-3.5 text-left last:border-none hover:bg-surface-2/60 active:bg-surface-2 transition-colors focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none">
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1.5">
                               <span className="text-[13px] font-bold text-text-primary">{p.description}</span>
@@ -934,7 +935,7 @@ export default function CardsPage() {
                             <div className="mt-0.5 text-[11px] font-medium text-text-muted">{new Date(p.date + "T12:00:00").toLocaleDateString("pt-BR")}</div>
                           </div>
                           <div className="ml-3 flex-none font-mono tabular-nums text-[13px] font-bold text-danger">{formatBRL(p.amountCents)}</div>
-                        </div>
+                        </button>
                       ))
                     )}
                   </div>

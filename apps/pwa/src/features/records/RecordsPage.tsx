@@ -563,10 +563,12 @@ export default function RecordsPage() {
                           : "";
 
                     return (
-                      <div
+                      <button
+                        type="button"
                         key={tx.id}
                         onClick={() => handleRowClick(tx)}
-                        className="flex cursor-pointer items-center gap-3 border-b border-border-subtle px-4 py-3.5 last:border-none hover:bg-surface-2/60 active:bg-surface-2 transition-colors"
+                        aria-label={`${tx.description}, ${formatBRL(tx.amountCents)}, ${tx.kind === "expense" ? "despesa" : tx.kind === "income" ? "receita" : "transferência"}`}
+                        className="flex min-h-11 w-full cursor-pointer items-center gap-3 border-b border-border-subtle px-4 py-3.5 text-left last:border-none hover:bg-surface-2/60 active:bg-surface-2 transition-colors focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                       >
                         <div className="flex h-10 w-10 flex-none items-center justify-center rounded-[12px] bg-surface-2 shadow-xs">
                           <CategoryBadge
@@ -597,7 +599,7 @@ export default function RecordsPage() {
                           {prefix}
                           {formatBRL(tx.amountCents)}
                         </div>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
