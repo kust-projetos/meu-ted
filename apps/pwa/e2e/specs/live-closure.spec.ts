@@ -653,7 +653,7 @@ test.describe("live-closure (fechamento autenticado em produção)", () => {
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("button", { name: "Selecionar espaço" })).toContainText("Test Family", { timeout: 15000 });
     await fab.click();
-    const launchGroup = page.getByRole("group", { name: "Novo lançamento" });
+    const launchGroup = page.getByRole("group", { name: "Ações de novo lançamento" });
     await expect(launchGroup).toBeVisible({ timeout: 10000 });
     await launchGroup.getByRole("button", { name: "Despesa" }).click();
     const txSheet = page.getByRole("dialog", { name: /Nova despesa|Novo lançamento/ });

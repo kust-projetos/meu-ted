@@ -55,7 +55,7 @@ async function dirtifyExpenseSheet(page: Page) {
   await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click();
   // The FAB opens the quick-action group first (NAV-05..08 pattern) — pick
   // Despesa to open the preselected expense sheet (dialog).
-  await page.getByLabel("Novo lançamento").getByRole("button", { name: "Despesa" }).click();
+  await page.getByRole("group", { name: "Ações de novo lançamento" }).getByRole("button", { name: "Despesa" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   const amount = dialog.getByPlaceholder("0,00");

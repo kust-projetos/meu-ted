@@ -143,12 +143,14 @@ test("[UI-03] confirm discard on dirty form → navigates away", async ({ page }
   await expect(page.getByRole("dialog").filter({ hasText: "Novo lançamento" })).toHaveCount(0);
   // Shell signal is viewport-dependent (FAB mobile / CTA desktop).
   const ui03Fab = page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" });
-  const ui03Cta = page.getByRole("button", { name: "Novo lançamento" });
+  const ui03Cta = page.getByRole("complementary").getByRole("button", { name: "Novo lançamento" });
+  const ui03IsDesktop = (page.viewportSize()?.width ?? 0) >= 1024;
   await expect
     .poll(
       async () =>
-        (await ui03Fab.isVisible().catch(() => false)) ||
-        (await ui03Cta.isVisible().catch(() => false)),
+        ui03IsDesktop
+          ? await ui03Cta.isVisible().catch(() => false)
+          : await ui03Fab.isVisible().catch(() => false),
     )
     .toBe(true);
   assertNoUndeclaredFailures(guard);
@@ -375,12 +377,14 @@ test("[UI-08] write-error dismiss button → no retry", async ({ page }) => {
   // Authenticated shell signal is viewport-dependent (FAB on mobile,
   // SidebarRail CTA on desktop) — reuse the harness probe shape.
   const shellFab = page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" });
-  const shellCta = page.getByRole("button", { name: "Novo lançamento" });
+  const shellCta = page.getByRole("complementary").getByRole("button", { name: "Novo lançamento" });
+  const shellIsDesktop = (page.viewportSize()?.width ?? 0) >= 1024;
   await expect
     .poll(
       async () =>
-        (await shellFab.isVisible().catch(() => false)) ||
-        (await shellCta.isVisible().catch(() => false)),
+        shellIsDesktop
+          ? await shellCta.isVisible().catch(() => false)
+          : await shellFab.isVisible().catch(() => false),
       { timeout: 10000 },
     )
     .toBe(true);
