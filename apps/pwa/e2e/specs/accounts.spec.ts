@@ -68,6 +68,7 @@ test("[ACC-03] create card → POST /cards", async ({ page }) => {
   await page.getByRole("button", { name: "Novo", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Novo cartão" })).toBeVisible({ timeout: 5000 });
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "Novo cartão" })).toBeHidden();
   const j = await getJournal(id);
   expect(j.filter(e => e.method === "POST" && e.path === "/cards")).toHaveLength(0);
 

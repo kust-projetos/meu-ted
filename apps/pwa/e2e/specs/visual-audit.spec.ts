@@ -37,6 +37,10 @@ test.describe("V2 visual audit", () => {
       await expect.poll(() => page.locator('[data-testid*="skeleton"], [aria-busy="true"]').count()).toBe(0).catch(() => undefined);
       if (name === "home") await page.getByText(/Saldo total em contas/i).waitFor({ state: "visible" });
       await page.waitForTimeout(400);
+      if (name === "registros") {
+        const iconCount = await page.locator('[data-testid="category-badge"] svg').count();
+        console.log(`[visual-audit] category badge SVGs=${iconCount} theme=${theme} width=${width}`);
+      }
       await mkdir(path.dirname(file), { recursive: true });
       const bytes = await page.screenshot({ path: file, fullPage, animations: "disabled" });
       hashes.set(`${theme}/${width}/${name}`, createHash("sha256").update(bytes).digest("hex"));
