@@ -87,6 +87,49 @@ export function BottomSheet({
    * `rendered` cobre a animação de saída (mesmo ciclo do scroll lock). */
   useOverlayDialog(containerRef, { open: rendered, onEscape: requestClose });
 
+  useEffect(() => {
+    const panel = sheetRef.current;
+    const viewport = window.visualViewport;
+    if (!rendered || !panel || !viewport) return;
+    const updateViewport = () => {
+      const inset = Math.max(0, window.innerHeight - (viewport.height + viewport.offsetTop));
+      const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+      if (inset > 80 && coarse) {
+        panel.style.maxHeight = `${Math.min(0.92 * viewport.height, viewport.height - 8)}px`;
+        panel.style.translate = `0 ${-inset}px`;
+        if (!prefersReducedMotion()) panel.style.transition = "translate 150ms ease-out";
+      } else {
+        panel.style.maxHeight = "";
+        panel.style.translate = "";
+        if (panel.style.transition === "translate 150ms ease-out") panel.style.transition = "";
+      }
+    };
+    const focusIn = (event: FocusEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || !panel.contains(target)) return;
+      requestAnimationFrame(() => {
+        if (!panel.contains(target)) return;
+        const box = target.getBoundingClientRect();
+        const parent = panel.getBoundingClientRect();
+        if (box.top < parent.top || box.bottom > parent.bottom) {
+          target.scrollIntoView({ block: "center" });
+        }
+      });
+    };
+    updateViewport();
+    viewport.addEventListener("resize", updateViewport);
+    viewport.addEventListener("scroll", updateViewport);
+    panel.addEventListener("focusin", focusIn);
+    return () => {
+      viewport.removeEventListener("resize", updateViewport);
+      viewport.removeEventListener("scroll", updateViewport);
+      panel.removeEventListener("focusin", focusIn);
+      panel.style.maxHeight = "";
+      panel.style.translate = "";
+      if (panel.style.transition === "translate 150ms ease-out") panel.style.transition = "";
+    };
+  }, [rendered]);
+
   /* Fechamento vindo do pai (open true->false): se a saída já foi animada
    * via requestClose, desmonta direto; senão anima antes de desmontar.
    * Reabertura no meio da saída cancela o timer e restaura a posição. */

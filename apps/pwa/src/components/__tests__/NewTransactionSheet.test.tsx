@@ -1,4 +1,5 @@
 ﻿import { render, screen, fireEvent, within, waitFor } from "@/lib/test-utils";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import NewTransactionSheet from "../NewTransactionSheet";
 import type { Account, Category } from "@/lib/state/types";
@@ -42,6 +43,91 @@ async function selectCategory(user: ReturnType<typeof userEvent.setup>, name: st
 }
 
 describe("NewTransactionSheet", () => {
+  it("restores an expense draft after switching tabs while keeping other tabs pristine", async () => {
+    const user = userEvent.setup();
+    render(<NewTransactionSheet accounts={accounts} categories={categories} onSave={vi.fn()} />);
+    const amount = screen.getByLabelText("Valor");
+    const description = screen.getByLabelText("Descrição");
+    await user.type(amount, "12345");
+    await user.type(description, "Aluguel");
+    await user.click(screen.getByText("Receita"));
+    expect(screen.getByLabelText("Valor")).toHaveValue("");
+    expect(screen.getByLabelText("Descrição")).toHaveValue("");
+    await user.click(screen.getByText("Despesa"));
+    expect(screen.getByLabelText("Valor")).toHaveValue("123,45");
+    expect(screen.getByLabelText("Descrição")).toHaveValue("Aluguel");
+  });
+
+  it("uses a fresh idempotency key after switching tabs", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<NewTransactionSheet accounts={accounts} categories={categories} onSave={onSave} />);
+    await user.type(screen.getByLabelText("Valor"), "1000");
+    await selectOrigin(user, "Nubank");
+    await user.click(screen.getByRole("button", { name: "Salvar" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const firstKey = onSave.mock.calls[0][0].idempotencyKey;
+    await user.click(screen.getByText("Receita"));
+    await user.type(screen.getByLabelText("Valor"), "2000");
+    await selectOrigin(user, "Itaú");
+    await user.click(screen.getByRole("button", { name: "Salvar" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    const secondKey = onSave.mock.calls[1][0].idempotencyKey;
+    expect(secondKey).toEqual(expect.any(String));
+    expect(secondKey).not.toBe(firstKey);
+  });
+
+  it("does not carry expense category or account selections into transfer", async () => {
+    const user = userEvent.setup();
+    render(<NewTransactionSheet accounts={accounts} categories={categories} onSave={vi.fn()} />);
+    await selectCategory(user, "Alimentação");
+    await selectOrigin(user, "Nubank");
+    await user.click(screen.getByText("Transferência"));
+    expect(screen.queryByRole("button", { name: "Selecionar categoria" })).not.toBeInTheDocument();
+    const transferAccount = screen.getAllByRole("button", { name: /^NUNubank$/ })[0];
+    expect(transferAccount).toBeDefined();
+    expect(transferAccount.className).not.toContain("bg-primary");
+    expect(screen.getByText("Origem (saída)")).toBeInTheDocument();
+  });
+
+  it("clears every saved tab draft after a successful save", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<NewTransactionSheet accounts={accounts} categories={categories} onSave={onSave} />);
+    await user.type(screen.getByLabelText("Valor"), "12345");
+    await user.type(screen.getByLabelText("Descrição"), "Despesa");
+    await user.click(screen.getByText("Receita"));
+    await user.type(screen.getByLabelText("Valor"), "6789");
+    await user.type(screen.getByLabelText("Descrição"), "Receita");
+    await selectOrigin(user, "Itaú");
+    await user.click(screen.getByRole("button", { name: "Salvar" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByText("Despesa"));
+    expect(screen.getByLabelText("Valor")).toHaveValue("");
+    expect(screen.getByLabelText("Descrição")).toHaveValue("");
+  });
+
+  it("clears drafts when the form closes after confirmed discard and is reopened", async () => {
+    const user = userEvent.setup();
+    function DiscardHarness() {
+      const [open, setOpen] = useState(true);
+      return open ? (
+        <>
+          <NewTransactionSheet accounts={accounts} categories={categories} onSave={vi.fn()} />
+          <button onClick={() => setOpen(false)}>Confirmar descarte</button>
+        </>
+      ) : <button onClick={() => setOpen(true)}>Reabrir</button>;
+    }
+    render(<DiscardHarness />);
+    await user.type(screen.getByLabelText("Valor"), "12345");
+    await user.click(screen.getByText("Receita"));
+    await user.click(screen.getByText("Despesa"));
+    expect(screen.getByLabelText("Valor")).toHaveValue("123,45");
+    await user.click(screen.getByText("Confirmar descarte"));
+    await user.click(screen.getByText("Reabrir"));
+    expect(screen.getByLabelText("Valor")).toHaveValue("");
+  });
+
   it("renders all 3 tab buttons", () => {
     render(<NewTransactionSheet accounts={accounts} categories={categories} onSave={vi.fn()} />);
     expect(screen.getByText("Despesa")).toBeInTheDocument();
@@ -389,7 +475,6 @@ describe("NewTransactionSheet", () => {
   });
 
   it("disables the Cartão toggle on the income tab (H-01)", async () => {
-    const user = userEvent.setup();
     render(<NewTransactionSheet accounts={accountsWithCard} categories={categories} onSave={vi.fn()} initialTab="income" />);
     const cardToggle = screen.getByRole("button", { name: "Cartão" });
     expect(cardToggle).toBeDisabled();

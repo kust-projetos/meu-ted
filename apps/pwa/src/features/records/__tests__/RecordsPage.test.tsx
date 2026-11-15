@@ -137,6 +137,44 @@ describe("RecordsPage", () => {
       expect(screen.getByText("Compra do mês")).toBeInTheDocument();
     });
 
+    it("renders category icons in Extrato rows and initials when the icon is null", () => {
+      vi.spyOn(appStateModule, "useAppState").mockReturnValue(
+        mockState({
+          categories: mockCategories.map((category) => ({
+            ...category,
+            icon: category.id === "cat1" ? "UtensilsCrossed" : category.id === "cat2" ? "" : category.icon,
+          })),
+          transactions: [
+            {
+              id: "tx-icon",
+              kind: "expense",
+              description: "Ícone conhecido",
+              amountCents: 5000,
+              date: "2026-06-20",
+              categoryId: "cat1",
+              accountId: "acc1",
+            },
+            {
+              id: "tx-no-icon",
+              kind: "expense",
+              description: "Sem ícone",
+              amountCents: 5000,
+              date: "2026-06-20",
+              categoryId: "cat2",
+              accountId: "acc1",
+            },
+          ] as never,
+        }),
+      );
+      render(<RecordsPage />);
+
+      const iconRow = screen.getByText("Ícone conhecido").closest(".border-b");
+      expect(iconRow?.querySelector("[data-testid='category-badge'] svg")).toBeInTheDocument();
+      const noIconRow = screen.getByText("Sem ícone").closest(".border-b");
+      expect(noIconRow?.querySelector("[data-testid='category-badge']")).toHaveTextContent("T");
+      expect(noIconRow?.querySelector("[data-testid='category-badge'] svg")).not.toBeInTheDocument();
+    });
+
     it("filters by type: only expenses (via filter sheet)", () => {
       render(<RecordsPage />);
       fireEvent.click(screen.getByTestId("filter-trigger"));

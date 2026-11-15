@@ -124,3 +124,7 @@ scripts/runtime-pins.test.mjs
 # Goal-runs dated micro-runs and console text logs
 docs/superpowers/goal-runs/2026[0-9]*.md
 docs/superpowers/goal-runs/*.txt
+
+# Matriz visual completa é evidência local; o repositório versiona uma amostra.
+docs/design/v2-audit/**/*.png
+docs/design/v2-directions/shots/*.png

@@ -37,12 +37,7 @@ export function CategoryBadge({
   const initial = name.slice(0, 1).toUpperCase();
   const fontSize = Math.max(Math.round(size * 0.5), 8);
 
-  // If an icon name is provided, try to render the Lucide icon; fallback to initial
-  // We keep the implementation simple: when icon is truthy we still render initial
-  // but expose data-icon for tests and style via color. Full icon rendering is
-  // done by the parent via `lucide-react` dynamic import when needed.
-  // To keep bundle light, we render initial with icon hint; the parent
-  // CategoryRow / IconPicker will render actual SVG when needed.
+  const hasKnownIcon = Boolean(icon && hasCategoryIcon(icon));
 
   return (
     <span
@@ -57,7 +52,13 @@ export function CategoryBadge({
       aria-hidden="true"
       data-icon={icon ?? undefined}
     >
-      {initial}
+      {hasKnownIcon ? (
+        <>
+          <CategoryIcon name={icon!} size={Math.round(size * 0.55)} className="text-white" />
+          <span className="sr-only">{initial}</span>
+        </>
+      ) : initial}
     </span>
   );
 }
+import { CategoryIcon, hasCategoryIcon } from "./category-icon";

@@ -1,0 +1,127 @@
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@/lib/test-utils";
+import { InstitutionPicker } from "@/components/brand/InstitutionPicker";
+import { InstitutionMark } from "@/components/brand/InstitutionMark";
+import { CardArtwork } from "@/components/brand/CardArtwork";
+import BankCard from "@/components/BankCard";
+import { institutionSvg } from "@/components/brand/institution-svgs";
+import {
+  clearWorkspaceAppearance,
+  readAppearance,
+  writeAccountAppearance,
+} from "./appearance-store";
+import { INSTITUTIONS, resolveInstitution, searchInstitutions } from "./catalog";
+
+describe("institution identity", () => {
+  it("prioritizes popular exact matches and searches without accent sensitivity", () => {
+    expect(searchInstitutions("NU")[0].id).toBe("nubank");
+    expect(searchInstitutions("Itaú").some((institution) => institution.id === "itau")).toBe(true);
+    expect(searchInstitutions("banco-do-brasil")[0].id).toBe("banco-do-brasil");
+  });
+
+  it("resolves ids, exact aliases, and legacy preset names accent-insensitively", () => {
+    expect(resolveInstitution({ id: "nubank" })?.id).toBe("nubank");
+    expect(resolveInstitution({ name: "ITAÚ" })?.id).toBe("itau");
+    expect(resolveInstitution({ name: "Personnalite" })?.id).toBe("itau");
+    expect(resolveInstitution({ name: "unlisted institution" })).toBeUndefined();
+  });
+
+  it("keeps vendored institution logo paths and inline SVG map keys in sync", () => {
+    for (const institution of INSTITUTIONS) {
+      if (institution.logoSrc) expect(institutionSvg).toHaveProperty(institution.logoSrc);
+    }
+    for (const id of ["nubank", "mercado-pago", "pagseguro", "wise"]) {
+      const institution = INSTITUTIONS.find((entry) => entry.id === id);
+      expect(institution?.logoSrc).toBeDefined();
+      expect(institutionSvg).toHaveProperty(institution!.logoSrc!);
+    }
+  });
+
+  it("isolates appearance by workspace and tolerates corrupt storage", () => {
+    writeAccountAppearance("one", "account-a", { institutionId: "nubank" });
+    expect(readAppearance("two")).toEqual({});
+    localStorage.setItem("meu-ted:account-appearance:v1:bad", "{");
+    expect(readAppearance("bad")).toEqual({});
+    expect(readAppearance("one")["account-a"].institutionId).toBe("nubank");
+    clearWorkspaceAppearance("one");
+  });
+
+  it("uses two-character monograms and has a neutral mark without institution", () => {
+    render(
+      <>
+        <InstitutionMark institution={searchInstitutions("neon")[0]} />
+        <InstitutionMark institution={searchInstitutions("bradesco")[0]} />
+        <InstitutionMark />
+      </>,
+    );
+    expect(screen.getByRole("img", { name: "Neon" })).toHaveTextContent("NE");
+    expect(screen.getByRole("img", { name: "Bradesco" })).toHaveTextContent("BR");
+    expect(screen.getByRole("img", { name: "Instituição" })).toBeInTheDocument();
+  });
+
+  it("never fabricates card digits and renders proper chip/contactless SVGs", () => {
+    render(<CardArtwork network="unknown" />);
+    expect(screen.getByText("•••• •••• •••• ••••")).toBeInTheDocument();
+    expect(screen.getByTestId("card-chip").tagName.toLowerCase()).toBe("svg");
+    expect(screen.getByTestId("card-contactless").tagName.toLowerCase()).toBe("svg");
+  });
+
+  it("uses supplied product material instead of a legacy preset gradient", () => {
+    const product = {
+      id: "custom-product",
+      institutionId: "nubank",
+      name: "Metal test",
+      network: "visa" as const,
+      material: "metal" as const,
+      colors: { base: "#222222", accent: "#D8C18A", text: "#fff" },
+      artSource: "illustrative" as const,
+    };
+    const { getByTestId } = render(<BankCard bankId="nubank" product={product} cardName="Metal test" />);
+    expect(getByTestId("bank-card").style.background).toContain("rgb(216, 193, 138)");
+  });
+
+  it("selects a picker option with keyboard", () => {
+    const onSelect = vi.fn();
+    const onManual = vi.fn();
+    render(<InstitutionPicker onSelect={onSelect} onManual={onManual} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "nubank" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "nubank" }));
+  });
+
+  it("hides empty manual entry and commits non-empty manual text with Enter", () => {
+    const onSelect = vi.fn();
+    const onManual = vi.fn();
+    render(<InstitutionPicker onSelect={onSelect} onManual={onManual} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.focus(input);
+    expect(screen.queryByText(/Outra instituição/)).not.toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "Banco novo" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onManual).toHaveBeenCalledWith("Banco novo");
+  });
+
+  it("reflects selected-value changes from its caller", () => {
+    const onSelect = vi.fn();
+    const onManual = vi.fn();
+    const { rerender } = render(
+      <InstitutionPicker
+        value={INSTITUTIONS.find((institution) => institution.id === "inter")}
+        onSelect={onSelect}
+        onManual={onManual}
+      />,
+    );
+    const input = screen.getByRole("combobox");
+    expect(input).toHaveValue("Banco Inter");
+    rerender(
+      <InstitutionPicker
+        value={INSTITUTIONS.find((institution) => institution.id === "caixa")}
+        onSelect={onSelect}
+        onManual={onManual}
+      />,
+    );
+    expect(screen.getByRole("combobox")).toHaveValue("Caixa Econômica Federal");
+  });
+});

@@ -11,9 +11,14 @@ import { fetchStatementDetail, updateCardPurchase } from "@/lib/api/endpoints";
 import { resolveCardOutstanding } from "@/lib/cards/card-debt";
 import type { StatementDetail, StatementPurchase } from "@/lib/state/types";
 import { useAppState } from "@/lib/state/app-state-context";
-import { Plus, ChevronLeft, CreditCard as CreditCardIcon, Edit3 } from "lucide-react";
+import { Plus, ChevronLeft, Edit3 } from "lucide-react";
 import BankCard from "@/components/BankCard";
 import { BANK_PRESETS, resolveBankPreset, formatMaskedNumber } from "@/lib/bank-presets";
+import { InstitutionPicker } from "@/components/brand/InstitutionPicker";
+import { useAccountAppearance } from "@/lib/institutions/appearance-store";
+import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
+import { getInstitution, resolveInstitution, type Institution } from "@/lib/institutions/catalog";
+import { cardProductsForInstitution, customCardProduct, getCardProduct, resolveCardNetworkLabel, type CardNetwork, type CardProduct } from "@/lib/institutions/card-products";
 
 function formatBRL(cents: number): string {
   return new Intl.NumberFormat("pt-BR", {
@@ -59,6 +64,8 @@ interface CardData {
   pct: number;
   purchases: CardPurchase[];
   currentStmtId?: string;
+  product?: CardProduct;
+  institution?: Institution;
 }
 
 function gradientFor(color: string | undefined): string {
@@ -67,8 +74,6 @@ function gradientFor(color: string | undefined): string {
   if (preset) return preset.cardGradient;
   return `linear-gradient(145deg, ${color}, ${color}dd)`;
 }
-
-const CARD_BRANDS = BANK_PRESETS.map((p) => ({ name: p.name, color: p.primaryColor, id: p.id }));
 
 function getLastFour(id: string): string {
   const digits = id.replace(/\D/g, "");
@@ -82,6 +87,7 @@ function NewCardSheet({
   open,
   onClose,
   onAddCard,
+  onCreated,
 }: {
   open: boolean;
   onClose: () => void;
@@ -90,11 +96,17 @@ function NewCardSheet({
     creditLimitCents: number;
     closingDay: number;
     dueDay: number;
-  }) => void | Promise<void>;
+  }) => Promise<{ id: string } | undefined>;
+  onCreated: (accountId: string, appearance: { institutionId?: string; manualInstitutionName?: string; cardProductId?: string; customCardName?: string }) => void;
 }) {
   const { markDirty, markClean } = useFormDirtySafe();
-  const [brand, setBrand] = useState("Nubank");
-  const [name, setName] = useState("");
+  const [institution, setInstitution] = useState<Institution | undefined>(() => getInstitution("nubank"));
+  const [institutionId, setInstitutionId] = useState<string | undefined>("nubank");
+  const [manualInstitutionName, setManualInstitutionName] = useState("");
+  const [productId, setProductId] = useState("nubank-roxinho");
+  const [customName, setCustomName] = useState("");
+  const [network, setNetwork] = useState<CardNetwork>("unknown");
+  const [name, setName] = useState("Nubank");
   const [limit, setLimit] = useState("");
   const [closingDay, setClosingDay] = useState("1");
   const [dueDay, setDueDay] = useState("10");
@@ -102,22 +114,31 @@ function NewCardSheet({
   useEffect(() => {
     if (!open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setBrand("Nubank");
-      setName("");
+      setInstitution(getInstitution("nubank"));
+      setInstitutionId("nubank");
+      setManualInstitutionName("");
+      setProductId("nubank-roxinho");
+      setCustomName("");
+      setNetwork("unknown");
+      setName("Nubank");
       setLimit("");
       markClean();
     }
   }, [open, markClean]);
 
   async function handleSave() {
-    const displayName = name.trim() || brand;
+    const product = getCardProduct(productId);
+    const displayName = name.trim() || product?.name || customName.trim() || institution?.name || "Cartão";
     try {
-      await onAddCard({
+      const created = await onAddCard({
         name: displayName,
         creditLimitCents: parseBRLToCents(limit),
         closingDay: parseInt(closingDay, 10) || 15,
         dueDay: parseInt(dueDay, 10) || 25,
       });
+      if (created?.id && (institutionId || manualInstitutionName)) onCreated(created.id, product
+        ? { institutionId, cardProductId: product.id }
+        : { institutionId, manualInstitutionName: manualInstitutionName || undefined, customCardName: customName.trim() || displayName });
       markClean();
       onClose();
     } catch {
@@ -125,7 +146,10 @@ function NewCardSheet({
     }
   }
 
-  const selectedPreset = BANK_PRESETS.find((p) => p.name === brand) ?? BANK_PRESETS[0]!;
+  const product = getCardProduct(productId) ?? (institutionId && customName.trim()
+    ? customCardProduct({ institutionId, name: customName.trim(), network })
+    : undefined);
+  const selectedPreset = resolveBankPreset({ id: institutionId, name: institution?.name });
   return (
     <BottomSheet open={open} onClose={onClose} title="Novo cartão">
       <div className="flex flex-col gap-4" onChangeCapture={markDirty}>
@@ -136,36 +160,41 @@ function NewCardSheet({
           <div className="mb-3">
             <BankCard
               bankId={selectedPreset.id}
-              cardName={name.trim() || selectedPreset.name}
+              product={product}
+              cardName={name.trim() || product?.name || institution?.name || selectedPreset.name}
               maskedNumber="•••• •••• •••• 0000"
               holderName="SEU NOME"
               expiry="12/30"
-              network={selectedPreset.network}
+              network={product?.network === "unknown" ? undefined : product?.network ?? selectedPreset.network}
               compact
             />
           </div>
-          <div className="flex flex-wrap gap-2">
-            {CARD_BRANDS.map((b) => {
-              const p = BANK_PRESETS.find((x) => x.name === b.name) ?? BANK_PRESETS[0]!;
-              const isSelected = brand === b.name;
-              return (
-                <button
-                  key={b.name}
-                  type="button"
-                  onClick={() => { markDirty(); setBrand(b.name); }}
-                  className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold transition-all border ${
-                    isSelected
-                      ? "text-white shadow-xs border-transparent"
-                      : "bg-surface-2 text-text-secondary hover:bg-surface-3 border-border-subtle"
-                  }`}
-                  style={isSelected ? { background: p.gradient, color: p.textColor } : undefined}
-                >
-                  <span className="h-2.5 w-2.5 rounded-full shadow-xs border border-white/30" style={{ background: p.primaryColor }} />
-                  {b.name}
-                </button>
-              );
-            })}
-          </div>
+          <InstitutionPicker value={institution} onSelect={(value) => {
+            markDirty(); setInstitution(value); setInstitutionId(value.id); setProductId("");
+            setManualInstitutionName(""); setCustomName(""); setName(value.name);
+          }} onManual={(value) => {
+            markDirty(); setInstitution(undefined); setInstitutionId(undefined); setProductId("");
+            setManualInstitutionName(value); setCustomName(""); setName(value);
+          }} />
+          {institutionId && <fieldset>
+            <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">Modelo do cartão</label>
+            <select aria-label="Modelo do cartão" value={productId || (customName ? "custom" : "")} onChange={(event) => {
+              markDirty();
+              const value = event.target.value;
+              if (value === "custom") { setProductId(""); setCustomName(""); }
+              else { const selected = getCardProduct(value); setProductId(value); setCustomName(""); if (selected) setName(selected.name); }
+            }} className="min-h-11 w-full rounded-xl border border-border-medium bg-surface-1 px-3 text-text-primary">
+              <option value="">Selecione um modelo</option>
+              {cardProductsForInstitution(institutionId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              <option value="custom">Outro modelo</option>
+            </select>
+            {(!productId) && <div className="mt-2 flex gap-2">
+              <input aria-label="Outro modelo" value={customName} onChange={(event) => setCustomName(event.target.value)} placeholder="Nome do modelo" className="min-h-11 flex-1 rounded-xl border border-border-medium bg-surface-1 px-3 text-text-primary" />
+              <select aria-label="Bandeira do cartão" value={network} onChange={(event) => setNetwork(event.target.value as CardNetwork)} className="min-h-11 rounded-xl border border-border-medium bg-surface-1 px-2 text-text-primary">
+                {(["unknown", "visa", "mastercard", "elo", "amex", "hipercard"] as const).map((item) => <option key={item} value={item}>{resolveCardNetworkLabel(item)}</option>)}
+              </select>
+            </div>}
+          </fieldset>}
         </div>
 
         <fieldset>
@@ -368,17 +397,23 @@ function EditSheet({
   onClose,
   card,
   onUpdate,
+  appearance,
 }: {
   open: boolean;
   onClose: () => void;
   card: CardData | null;
-  onUpdate: (id: string, input: { name?: string; creditLimitCents?: number; closingDay?: number; dueDay?: number }) => void | Promise<void>;
+  appearance?: { institutionId?: string; cardProductId?: string; customCardName?: string };
+  onUpdate: (id: string, input: { name?: string; creditLimitCents?: number; closingDay?: number; dueDay?: number }, appearance: { institutionId?: string; cardProductId?: string; customCardName?: string }) => void | Promise<void>;
 }) {
   const { markDirty, markClean } = useFormDirtySafe();
   const [name, setName] = useState(card?.name ?? "");
   const [limit, setLimit] = useState("");
   const [closingDay, setClosingDay] = useState(String(card?.closingDay ?? "15"));
   const [dueDay, setDueDay] = useState(String(card?.dueDay ?? "25"));
+  const [institution, setInstitution] = useState<Institution | undefined>(card?.institution);
+  const [institutionId, setInstitutionId] = useState(appearance?.institutionId ?? card?.institution?.id);
+  const [productId, setProductId] = useState(appearance?.cardProductId ?? "");
+  const [customName, setCustomName] = useState(appearance?.customCardName ?? "");
 
   useEffect(() => {
     if (card && open) {
@@ -387,9 +422,14 @@ function EditSheet({
       setLimit("");
       setClosingDay(String(card.closingDay));
       setDueDay(String(card.dueDay));
+      const selectedInstitution = getInstitution(appearance?.institutionId ?? "") ?? card.institution;
+      setInstitution(selectedInstitution);
+      setInstitutionId(selectedInstitution?.id);
+      setProductId(appearance?.cardProductId ?? "");
+      setCustomName(appearance?.customCardName ?? "");
       markClean();
     }
-  }, [card, open, markClean]);
+  }, [card, open, markClean, appearance?.institutionId, appearance?.cardProductId, appearance?.customCardName]);
 
   if (!card) return null;
 
@@ -400,7 +440,7 @@ function EditSheet({
         creditLimitCents: parseBRLToCents(limit) || card!.creditLimitCents,
         closingDay: parseInt(closingDay, 10) || card!.closingDay,
         dueDay: parseInt(dueDay, 10) || card!.dueDay,
-      });
+      }, productId ? { institutionId, cardProductId: productId } : { institutionId, customCardName: customName });
       markClean();
       onClose();
     } catch {
@@ -411,6 +451,22 @@ function EditSheet({
   return (
     <BottomSheet open={open} onClose={onClose} title="Editar cartão">
       <div className="flex flex-col gap-4" onChangeCapture={markDirty}>
+        <InstitutionPicker value={institution} onSelect={(selected) => {
+          setInstitution(selected); setInstitutionId(selected.id); setProductId(""); setCustomName("");
+        }} onManual={(value) => { setInstitution(undefined); setInstitutionId(undefined); setProductId(""); setCustomName(value); }} />
+        {institutionId && <fieldset>
+          <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">Modelo do cartão</label>
+          <select aria-label="Modelo do cartão" value={productId || (customName ? "custom" : "")} onChange={(event) => {
+            const value = event.target.value;
+            if (value === "custom") { setProductId(""); setCustomName(""); }
+            else { const selected = getCardProduct(value); setProductId(value); setCustomName(""); if (selected) setName(selected.name); }
+          }} className="min-h-11 w-full rounded-xl border border-border-medium bg-surface-1 px-3 text-text-primary">
+            <option value="">Selecione um modelo</option>
+            {cardProductsForInstitution(institutionId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            <option value="custom">Outro modelo</option>
+          </select>
+          {(!productId) && <input aria-label="Outro modelo" value={customName} onChange={(event) => setCustomName(event.target.value)} placeholder="Nome do modelo" className="mt-2 min-h-11 w-full rounded-xl border border-border-medium bg-surface-1 px-3 text-text-primary" />}
+        </fieldset>}
         <fieldset>
           <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">Apelido</label>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)}
@@ -555,6 +611,8 @@ function PurchaseEditSheet({
 export default function CardsPage() {
   const { accounts, transactions, categories, cardStatements, loading, error,
     addCard, payStatement, updateCard, writeError, clearWriteError, retryWriteError } = useAppState();
+  const workspaceId = useWorkspaceSafe()?.activeWorkspace?.id ?? "default";
+  const appearance = useAccountAppearance(workspaceId);
   const [payCard, setPayCard] = useState<CardData | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
   const [editCard, setEditCard] = useState<CardData | null>(null);
@@ -637,6 +695,13 @@ export default function CardsPage() {
   const creditCards = accounts.filter((a) => a.kind === "credit_card");
 
   const cardsData: CardData[] = creditCards.map((card) => {
+    const savedAppearance = appearance.map[card.id];
+    const institution = getInstitution(savedAppearance?.institutionId ?? "") ?? resolveInstitution({ name: card.name, color: card.color });
+    const product = savedAppearance?.cardProductId
+      ? getCardProduct(savedAppearance.cardProductId)
+      : savedAppearance?.customCardName && institution
+        ? customCardProduct({ institutionId: institution.id, name: savedAppearance.customCardName, network: "unknown" })
+        : undefined;
     const txPurchases = transactions
       .filter((t) => t.accountId === card.id && t.kind === "expense")
       .sort((a, b) => b.date.localeCompare(a.date))
@@ -667,6 +732,8 @@ export default function CardsPage() {
       creditLimitCents: limit, closingDay: card.closingDay ?? 1, dueDay: card.dueDay ?? 1,
       spentCents, pct, purchases: txPurchases,
       currentStmtId: currentStmt?.id,
+      institution,
+      product,
     };
   });
 
@@ -711,12 +778,13 @@ export default function CardsPage() {
               return (
                 <div key={card.id} onClick={() => setSelectedCardId(card.id)} className="cursor-pointer flex flex-col gap-2">
                   <BankCard
-                    bankId={preset.id}
+                    bankId={card.institution?.id ?? preset.id}
+                    product={card.product}
                     cardName={card.name}
                     maskedNumber={masked}
                     holderName="TITULAR"
                     expiry={`${String(card.dueDay).padStart(2, "0")}/30`}
-                    network={preset.network}
+                    network={card.product?.network === "unknown" ? undefined : card.product?.network ?? preset.network}
                   />
                   <div className="rounded-[16px] border border-border-subtle bg-surface-1 p-3 shadow-card">
                     <div className="flex items-center justify-between text-[11px] font-medium text-text-muted">
@@ -785,12 +853,13 @@ export default function CardsPage() {
                 </div>
 
                 <BankCard
-                  bankId={preset.id}
+                  bankId={card.institution?.id ?? preset.id}
+                  product={card.product}
                   cardName={card.name}
                   maskedNumber={masked}
                   holderName="TITULAR"
                   expiry={`${String(detailDueDay).padStart(2, "0")}/30`}
-                  network={preset.network}
+                  network={card.product?.network === "unknown" ? undefined : card.product?.network ?? preset.network}
                 />
 
                 {/* Hero KPIs */}
@@ -889,7 +958,12 @@ export default function CardsPage() {
         )}
       </main>
 
-      <NewCardSheet open={createOpen} onClose={() => setCreateOpen(false)} onAddCard={addCard} />
+      <NewCardSheet
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onAddCard={addCard}
+        onCreated={(id, selectedAppearance) => appearance.set(id, selectedAppearance)}
+      />
 
       <PayStatementSheet
         open={payCard !== null}
@@ -917,7 +991,17 @@ export default function CardsPage() {
         }}
       />
 
-      <EditSheet open={editCard !== null} onClose={() => setEditCard(null)} card={editCard} onUpdate={updateCard} />
+      <EditSheet
+        key={`${editCard?.id ?? ""}:${editCard ? appearance.map[editCard.id]?.cardProductId ?? "" : ""}`}
+        open={editCard !== null}
+        onClose={() => setEditCard(null)}
+        card={editCard}
+        appearance={editCard ? appearance.map[editCard.id] : undefined}
+        onUpdate={async (id, input, selectedAppearance) => {
+          await updateCard(id, input);
+          appearance.set(id, selectedAppearance);
+        }}
+      />
 
       <PurchaseEditSheet
         purchase={editPurchase}

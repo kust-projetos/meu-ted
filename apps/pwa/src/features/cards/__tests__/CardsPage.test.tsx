@@ -79,6 +79,42 @@ describe("CardsPage", () => {
 
   // ── Card creation ──
   describe("creating a card", () => {
+    it("filters products by institution and derives network from the selected product", async () => {
+      const user = userEvent.setup();
+      render(<CardsPage />);
+      await user.click(screen.getByText("Novo"));
+      const institution = screen.getByRole("combobox", { name: "Instituição" });
+      await user.click(institution);
+      await user.clear(institution);
+      await user.type(institution, "Itaú");
+      await user.click(await screen.findByText("Itaú Unibanco"));
+      const model = screen.getByRole("combobox", { name: "Modelo do cartão" });
+      expect(model).toHaveTextContent("Itaú Click");
+      expect(model).toHaveTextContent("Personnalité");
+      await user.selectOptions(model, "itau-personnalite");
+      const flags = screen.getAllByTestId("card-flag");
+      expect(flags[flags.length - 1]).toHaveAttribute("aria-label", "Visa");
+    });
+
+    it("persists selected appearance against the returned account id", async () => {
+      const addSpy = vi.fn().mockResolvedValue({ id: "created-card-id" });
+      vi.spyOn(appStateModule, "useAppState").mockReturnValue(mockState({ addCard: addSpy }));
+      const user = userEvent.setup();
+      render(<CardsPage />);
+      await user.click(screen.getByText("Novo"));
+      await user.type(screen.getByPlaceholderText("0,00"), "500000");
+      await user.click(screen.getByRole("button", { name: "Salvar cartão" }));
+      await waitFor(() => expect(addSpy).toHaveBeenCalled());
+      const stored = JSON.parse(localStorage.getItem("meu-ted:account-appearance:v1:default") ?? "{}");
+      expect(stored["created-card-id"]).toEqual({ institutionId: "nubank", cardProductId: "nubank-roxinho" });
+    });
+
+    it("renders legacy cards without stored appearance", () => {
+      render(<CardsPage />);
+      expect(screen.getAllByTestId("bank-card")).toHaveLength(2);
+      expect(screen.getAllByText("Nubank").length).toBeGreaterThan(0);
+    });
+
     it("calls addCard with form data when saving", async () => {
       const addSpy = vi.fn();
       vi.spyOn(appStateModule, "useAppState").mockReturnValue(mockState({ addCard: addSpy }));
@@ -500,7 +536,12 @@ describe("CardsPage", () => {
       const user = userEvent.setup();
       render(<CardsPage />);
       await user.click(screen.getByText("Novo"));
-      await user.click(screen.getByText(/Ita/i));
+      const institution = screen.getByRole("combobox", { name: "Instituição" });
+      await user.click(institution);
+      await user.clear(institution);
+      await user.type(institution, "Itaú");
+      await user.click(await screen.findByText("Itaú Unibanco"));
+      await user.clear(screen.getByPlaceholderText(/Nubank, It/i));
       await user.type(screen.getByPlaceholderText(/Nubank, It/i), "Meu Cartao");
       const [closing, due] = screen.getAllByRole("spinbutton");
       await user.clear(closing);
