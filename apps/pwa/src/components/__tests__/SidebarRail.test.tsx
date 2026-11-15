@@ -6,6 +6,7 @@ import SidebarRail from "../SidebarRail";
 let mockPath = "/";
 vi.mock("next/navigation", () => ({
   usePathname: () => mockPath,
+  useSearchParams: () => new URLSearchParams(""),
   useRouter: () => ({ push: vi.fn() }),
 }));
 
@@ -22,10 +23,10 @@ describe("SidebarRail", () => {
 
   it("renders canonical navigation items (item 13)", () => {
     render(<SidebarRail onNewTransaction={vi.fn()} />);
-    for (const label of ["Início", "Extrato", "Compromissos", "Mais", "Contas e Cartões", "Metas e Orçamento", "Relatórios", "Avisos e Lembretes", "Organizar Gastos", "Configurações", "Meus Espaços"]) {
+    for (const label of ["Início", "Extrato", "Cartões", "Relatórios", "Compromissos", "Contas", "Planejamento", "Metas", "Patrimônio", "Categorias", "Avisos e Lembretes", "Configurações", "Meus Espaços", "Auditoria"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
-    expect(screen.getByRole("link", { name: "Contas e Cartões" })).toHaveAttribute("href", "/hub/patrimonio");
+    expect(screen.getByRole("link", { name: "Contas" })).toHaveAttribute("href", "/hub/patrimonio?aba=contas");
   });
 
   it("marks the active route with aria-current='page'", () => {

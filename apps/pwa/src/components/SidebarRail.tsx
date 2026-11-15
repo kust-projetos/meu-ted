@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import type { ComponentType } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useTheme } from "@/lib/theme";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { Button } from "@/components/ui/Button";
@@ -13,8 +13,7 @@ import {
   Plus,
   Home,
   Receipt,
-  CalendarClock,
-  LayoutGrid,
+  CreditCard,
   Wallet,
   CalendarCheck,
   FileText,
@@ -23,6 +22,7 @@ import {
   Settings,
   Layers,
   User,
+  ClipboardList,
   type LucideProps,
 } from "lucide-react";
 
@@ -40,16 +40,19 @@ interface NavItemDef {
 const PRIMARY_NAV: NavItemDef[] = [
   { label: "Início", href: "/", icon: Home },
   { label: "Extrato", href: "/registros", icon: Receipt },
-  { label: "Compromissos", href: "/compromissos", icon: CalendarClock },
-  { label: "Mais", href: "/hub", icon: LayoutGrid },
+  { label: "Cartões", href: "/hub/patrimonio?aba=cartoes", icon: CreditCard },
+  { label: "Relatórios", href: "/hub/relatorios", icon: FileText },
 ];
 
 const SECONDARY_NAV: NavItemDef[] = [
-  { label: "Contas e Cartões", href: "/hub/patrimonio", icon: Wallet },
-  { label: "Metas e Orçamento", href: "/hub/planejamento", icon: CalendarCheck },
-  { label: "Relatórios", href: "/hub/relatorios", icon: FileText },
+  { label: "Compromissos", href: "/compromissos", icon: CalendarCheck },
+  { label: "Contas", href: "/hub/patrimonio?aba=contas", icon: Wallet },
+  { label: "Planejamento", href: "/hub/planejamento", icon: CalendarCheck },
+  { label: "Metas", href: "/hub/planejamento?aba=metas", icon: CalendarCheck },
+  { label: "Patrimônio", href: "/hub/patrimonio?aba=patrimonio", icon: Wallet },
+  { label: "Categorias", href: "/hub/categorias", icon: FolderOpen },
   { label: "Avisos e Lembretes", href: "/hub/alertas", icon: Bell },
-  { label: "Organizar Gastos", href: "/hub/categorias", icon: FolderOpen },
+  { label: "Auditoria", href: "/audit", icon: ClipboardList },
   { label: "Configurações", href: "/hub/configuracoes", icon: Settings },
   { label: "Meus Espaços", href: "/workspaces", icon: Layers },
 ];
@@ -59,6 +62,8 @@ export function SidebarRail({
   className = "",
 }: SidebarRailProps) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentRoute = `${pathname}${searchParams.size ? `?${searchParams.toString()}` : ""}`;
   const { resolvedTheme, toggleTheme } = useTheme();
 
   return (
@@ -113,6 +118,8 @@ export function SidebarRail({
               const isActive =
                 item.href === "/"
                   ? pathname === "/"
+                  : item.href.includes("?")
+                    ? currentRoute === item.href
                   : pathname.startsWith(item.href);
               const ItemIcon = item.icon;
 
@@ -141,11 +148,13 @@ export function SidebarRail({
 
         <div>
           <div className="px-3 mb-2 text-[10px] font-bold uppercase tracking-wider text-text-muted">
-            Gestão & Ferramentas
+            Explorar
           </div>
           <nav className="space-y-1">
             {SECONDARY_NAV.map((item) => {
-              const isActive = pathname.startsWith(item.href);
+              const isActive = item.href.includes("?")
+                ? currentRoute === item.href
+                : pathname.startsWith(item.href);
               const ItemIcon = item.icon;
 
               return (

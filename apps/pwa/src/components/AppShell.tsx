@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import BottomNav from "@/components/BottomNav";
 import BottomSheet from "@/components/BottomSheet";
 import NewTransactionSheet from "@/components/NewTransactionSheet";
@@ -45,6 +45,7 @@ function nextId(): string {
 
 export default function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetMode, setSheetMode] = useState<"new" | "preselected">(
@@ -128,10 +129,10 @@ export default function AppShell({ children }: AppShellProps) {
       ? "home"
       : pathname === "/registros"
         ? "records"
-        : pathname === "/compromissos"
-          ? "compromissos"
-          : pathname === "/hub" || pathname?.startsWith("/hub/")
-            ? "hub"
+        : pathname === "/hub/patrimonio" && searchParams.get("aba") === "cartoes"
+          ? "cards"
+          : pathname === "/hub/relatorios"
+            ? "reports"
             : null;
 
   // B1: top-5 most-used categories feed the picker's "Mais usadas" section.
@@ -166,8 +167,8 @@ export default function AppShell({ children }: AppShellProps) {
   function navigateTo(item: NavItem) {
     if (item === "home") router.push("/");
     else if (item === "records") router.push("/registros");
-    else if (item === "compromissos") router.push("/compromissos");
-    else if (item === "hub") router.push("/hub");
+    else if (item === "cards") router.push("/hub/patrimonio?aba=cartoes");
+    else if (item === "reports") router.push("/hub/relatorios");
   }
 
   /** Close sheet, but confirm first when the form has unsaved edits. */

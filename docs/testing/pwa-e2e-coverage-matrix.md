@@ -25,19 +25,19 @@ Every ID is atomic: one visible action, required state, expected UI/API effect, 
 | DIRECT-10 | `/patrimonio` | M,D | direct load renders patrimonio shell | empty | navigation |
 | DIRECT-11 | `/perfil` | M,D | direct load renders perfil shell | empty | navigation |
 | DIRECT-12 | `/relatorios` | M,D | direct load renders relatorios shell | empty | navigation |
-| NAV-01 | BottomNav | M,D | Resumo → `/` client navigation | no chunk/CSP error | navigation |
-| NAV-02 | BottomNav | M,D | Registros → `/registros` client navigation | no chunk/CSP error | navigation |
-| NAV-03 | BottomNav | M,D | A pagar → `/a-pagar` client navigation | no chunk/CSP error | navigation |
-| NAV-04 | BottomNav | M | tap Mais opens bottom sheet | overlay accessible | navigation |
-| NAV-05 | More | M | Patrimônio → `/patrimonio` | direct load parity | navigation |
-| NAV-06 | More | M | Contas → `/contas` | direct load parity | navigation |
-| NAV-07 | More | M | Cartões → `/cartoes` | direct load parity | navigation |
-| NAV-08 | More | M | Assinaturas → `/assinaturas` | direct load parity | navigation |
-| NAV-09 | More | M | Orçamentos → `/orcamentos` | direct load parity | navigation |
-| NAV-10 | More | M | Metas & Dívidas → `/metas` | direct load parity | navigation |
-| NAV-11 | More | M | Categorias → `/categorias` | direct load parity | navigation |
-| NAV-12 | More | M | Relatórios → `/relatorios` | direct load parity | navigation |
-| NAV-13 | BottomNav | M | tap overlay/backdrop closes Mais sheet | cancel preserves route | navigation |
+| NAV-01 | BottomNav | M,D | Início → `/` client navigation | no chunk/CSP error | navigation |
+| NAV-02 | BottomNav | M,D | Extrato → `/registros` client navigation | no chunk/CSP error | navigation |
+| NAV-03 | BottomNav | M,D | Cartões → `/hub/patrimonio?aba=cartoes` | canonical tab retained | navigation |
+| NAV-04 | BottomNav | M,D | Relatórios → `/hub/relatorios` | canonical route loaded | navigation |
+| NAV-05 | BottomNav FAB | M | open quick action disclosure | four actions visible | navigation |
+| NAV-06 | Quick actions | M | Despesa opens preselected sheet | expense sheet visible | navigation |
+| NAV-07 | Quick actions | M | Ler Comprovante launches capture flow | expense sheet and canonical URL | navigation |
+| NAV-08 | Quick actions | M | Transferência opens transfer sheet | transfer sheet visible | navigation |
+| NAV-09 | Explorar | M | Cartões → `/hub/patrimonio?aba=cartoes` | canonical tab retained | navigation |
+| NAV-10 | Explorar | M | Planejamento → `/hub/planejamento` | canonical route loaded | navigation |
+| NAV-11 | Explorar | M | Avisos → `/hub/alertas` | canonical route loaded | navigation |
+| NAV-12 | Explorar | M | Configurações → `/hub/configuracoes` | canonical route loaded | navigation |
+| NAV-13 | BottomNav FAB | M | Escape closes disclosure and returns focus | route preserved | navigation |
 | TX-01 | FAB | M,D | tap FAB opens expense sheet | no sheet visible | transaction-sheet |
 | TX-02 | expense sheet | M | save expense → `POST /transactions/expense` | required amount/category/account | transaction-sheet |
 | TX-03 | income sheet | M | save income → `POST /transactions/income` | 422 preserves inputs | transaction-sheet |
@@ -70,6 +70,7 @@ Every ID is atomic: one visible action, required state, expected UI/API effect, 
 | ACC-05 | `/contas` | M | edit credit card → `PATCH /cards/:id` | 500 banner/retry | accounts |
 | ACC-06 | `/contas` | M | confirm deactivation → `POST /accounts/:id/deactivate` | cancel/no mutation | accounts |
 | ACC-07 | `/hub/patrimonio?aba=contas` | M | create account with institution → `POST /accounts`; reload keeps the mark | reload reads `GET /accounts` | accounts |
+| ACC-08 | `/hub/patrimonio?aba=contas` | M | create institution-linked account and resolve mark in clean second device from server | local appearance storage absent | presentation-cross-device |
 | CAT-01 | `/categorias` | M | create expense category → `POST /categories` | blank/422 | categories |
 | CAT-02 | `/categorias` | M | create income category → `POST /categories` | blank/422 | categories |
 | CAT-03 | `/categorias` | M | add subcategory → correct journal | cancel/error | categories |
@@ -99,6 +100,7 @@ Every ID is atomic: one visible action, required state, expected UI/API effect, 
 | CARD-06 | `/cartoes` | M | tap statement row → statement line items show | empty state | cards |
 | CARD-07 | `/cartoes` | M | tap purchase row → purchase detail shows | empty state | cards |
 | CARD-08 | `/cartoes` | M | save purchase edit → `PATCH /cards/purchases/:id` | 422 | cards |
+| CARD-09 | `/hub/patrimonio?aba=cartoes` | M | create product-linked card and resolve product in clean second device from server | local appearance storage absent | presentation-cross-device |
 | SUB-01 | `/assinaturas` | M | tap subscription tab → list renders | empty state | subscriptions |
 | SUB-02 | `/assinaturas` | M | fill and submit create subscription → `POST /subscriptions` | invalid amount | subscriptions |
 | SUB-03 | `/assinaturas` | M | detail subscription → display values | empty state | subscriptions |
