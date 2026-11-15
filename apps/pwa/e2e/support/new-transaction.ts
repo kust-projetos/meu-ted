@@ -41,31 +41,18 @@ function desktopCta(page: Page): Locator {
     .getByRole("button", { name: "Novo lançamento" });
 }
 
-async function isDesktopCtaVisible(page: Page): Promise<boolean> {
-  if (await desktopCta(page).isVisible().catch(() => false)) return true;
-  // Fallback for shells without the rail landmark: only resolves when the
-  // generic lookup is unambiguous (strict violations count as not visible).
-  try {
-    return await page
-      .getByRole("button", { name: "Novo lançamento", exact: true })
-      .isVisible();
-  } catch {
-    return false;
-  }
-}
-
 export async function openNewTransaction(
   page: Page,
   kind: NewTransactionKind = "expense",
 ): Promise<Locator> {
   const label = KIND_LABEL[kind];
-  const desktop = (await isDesktopCtaVisible(page)) || isDesktopViewport(page);
+  // The mobile FAB has the same accessible name; only the rail or viewport
+  // can identify the desktop entry point without matching that FAB.
+  const desktop = (await desktopCta(page).isVisible().catch(() => false)) ||
+    isDesktopViewport(page);
 
   if (desktop) {
-    const cta = (await desktopCta(page).isVisible().catch(() => false))
-      ? desktopCta(page)
-      : page.getByRole("button", { name: "Novo lançamento", exact: true });
-    await cta.first().click();
+    await desktopCta(page).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
     // "new" mode hosts the kind as an in-sheet tab. The draft is empty at
@@ -85,7 +72,7 @@ export async function openNewTransaction(
   }
 
   await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click();
-  const group = page.getByLabel("Novo lançamento");
+  const group = page.getByRole("group", { name: "Ações de novo lançamento" });
   await expect(group).toBeVisible();
   await group.getByRole("button", { name: label }).click();
   const dialog = page.getByRole("dialog");

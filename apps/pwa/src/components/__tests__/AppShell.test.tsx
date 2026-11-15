@@ -169,7 +169,7 @@ describe("AppShell", () => {
       const user = userEvent.setup();
       render(<AppShell><div>Content</div></AppShell>);
       await user.click(screen.getByLabelText("Novo lançamento"));
-      expect(screen.getByRole("group", { name: "Novo lançamento" })).toBeInTheDocument();
+      expect(screen.getByRole("group", { name: "Ações de novo lançamento" })).toBeInTheDocument();
       expect(screen.getByText("Despesa")).toBeInTheDocument();
     });
 

@@ -198,7 +198,7 @@ export function BottomNav({
             <div
               id="quick-actions"
               role="group"
-              aria-label="Novo lançamento"
+              aria-label="Ações de novo lançamento"
               className="absolute bottom-full left-1/2 mb-3 flex w-[218px] -translate-x-1/2 flex-col gap-1 rounded-[18px] border border-border-subtle bg-surface-1 p-2 shadow-elevated"
             >
               {QUICK_ACTIONS.map((action) => (

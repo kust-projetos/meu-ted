@@ -247,8 +247,8 @@ test("[NAV-05] FAB opens the quick-action group with 4 actions", async ({ page }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/"); await registerDevice(page);
 
-  await page.getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
-  const actions = page.getByRole("group", { name: "Novo lançamento" });
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
+  const actions = page.getByRole("group", { name: "Ações de novo lançamento" });
   await expect(actions).toBeVisible({ timeout: 5000 });
   await expect(actions.getByRole("button")).toHaveCount(4);
   assertNoUndeclaredFailures(guard);
@@ -259,8 +259,8 @@ test("[NAV-06] quick menu Despesa opens the preselected expense sheet", async ({
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/"); await registerDevice(page);
 
-  await page.getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
-  await page.getByLabel("Novo lançamento").getByRole("button", { name: "Despesa" }).click({ timeout: 5000 });
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
+  await page.getByRole("group", { name: "Ações de novo lançamento" }).getByRole("button", { name: "Despesa" }).click({ timeout: 5000 });
   await expect(page.getByText("Nova despesa")).toBeVisible({ timeout: 5000 });
   assertNoUndeclaredFailures(guard);
 });
@@ -270,8 +270,8 @@ test("[NAV-07] quick action Ler Comprovante opens the capture expense sheet", as
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/"); await registerDevice(page);
 
-  await page.getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
-  await page.getByRole("group", { name: "Novo lançamento" }).getByRole("button", { name: "Ler Comprovante", exact: true }).click({ timeout: 5000 });
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
+  await page.getByRole("group", { name: "Ações de novo lançamento" }).getByRole("button", { name: "Ler Comprovante", exact: true }).click({ timeout: 5000 });
   // /capture is a bridge: it opens the prefilled transaction sheet then
   // replaces the URL back to the canonical home route.
   await expect(page.getByRole("heading", { name: "Nova despesa" })).toBeVisible({ timeout: 5000 });
@@ -284,8 +284,8 @@ test("[NAV-08] quick menu Transferência opens the preselected transfer sheet", 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/"); await registerDevice(page);
 
-  await page.getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
-  await page.getByRole("group", { name: "Novo lançamento" }).getByRole("button", { name: "Transferência", exact: true }).click({ timeout: 5000 });
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
+  await page.getByRole("group", { name: "Ações de novo lançamento" }).getByRole("button", { name: "Transferência", exact: true }).click({ timeout: 5000 });
   await expect(page.getByText("Nova transferência")).toBeVisible({ timeout: 5000 });
   assertNoUndeclaredFailures(guard);
 });
@@ -346,11 +346,11 @@ test("[NAV-13] Escape closes the FAB quick-action group, route preserved", async
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/"); await registerDevice(page);
 
-  await page.getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
-  await expect(page.getByRole("group", { name: "Novo lançamento" })).toBeVisible({ timeout: 5000 });
+  await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
+  await expect(page.getByRole("group", { name: "Ações de novo lançamento" })).toBeVisible({ timeout: 5000 });
 
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("group", { name: "Novo lançamento" })).toBeHidden();
+  await expect(page.getByRole("group", { name: "Ações de novo lançamento" })).toBeHidden();
   await expect(page).toHaveURL(/\/$/);
   assertNoUndeclaredFailures(guard);
 });

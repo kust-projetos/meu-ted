@@ -114,9 +114,9 @@ test("[HOME-03] tap quick expense opens expense sheet", async ({ page }) => {
 
   if ((page.viewportSize()?.width ?? 0) < 1024) {
     await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click();
-    await page.getByRole("group", { name: "Novo lançamento" }).getByRole("button", { name: "Despesa" }).click();
+    await page.getByRole("group", { name: "Ações de novo lançamento" }).getByRole("button", { name: "Despesa" }).click();
   } else {
-    await page.getByRole("button", { name: "Novo lançamento" }).click();
+    await page.getByRole("complementary").getByRole("button", { name: "Novo lançamento" }).click();
   }
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -227,9 +227,9 @@ test("[HOME-09] tap quick income opens income sheet", async ({ page }) => {
 
   if ((page.viewportSize()?.width ?? 0) < 1024) {
     await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click();
-    await page.getByRole("group", { name: "Novo lançamento" }).getByRole("button", { name: "Receita" }).click();
+    await page.getByRole("group", { name: "Ações de novo lançamento" }).getByRole("button", { name: "Receita" }).click();
   } else {
-    await page.getByRole("button", { name: "Novo lançamento" }).click();
+    await page.getByRole("complementary").getByRole("button", { name: "Novo lançamento" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Receita" }).click();
   }
   const dialog = page.getByRole("dialog");
@@ -254,9 +254,9 @@ test("[HOME-10] tap quick transfer opens transfer sheet", async ({ page }) => {
 
   if ((page.viewportSize()?.width ?? 0) < 1024) {
     await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click();
-    await page.getByRole("group", { name: "Novo lançamento" }).getByRole("button", { name: "Transferência" }).click();
+    await page.getByRole("group", { name: "Ações de novo lançamento" }).getByRole("button", { name: "Transferência" }).click();
   } else {
-    await page.getByRole("button", { name: "Novo lançamento" }).click();
+    await page.getByRole("complementary").getByRole("button", { name: "Novo lançamento" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Transferência" }).click();
   }
   const dialog = page.getByRole("dialog");
