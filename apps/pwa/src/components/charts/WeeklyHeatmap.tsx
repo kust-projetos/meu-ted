@@ -23,6 +23,9 @@ export function WeeklyHeatmap({
     peak <= 0
       ? "Mapa de calor sem gastos no período"
       : `Mapa de calor de gastos, pico de ${formatValue(peak)} por dia`;
+  if (weeks.length === 0 || weeks.every((week) => week.days.length === 0)) {
+    return <p className="py-4 text-center text-sm text-text-muted">Sem dados no período.</p>;
+  }
   return (
     <div>
       <div
@@ -36,6 +39,7 @@ export function WeeklyHeatmap({
               <div
                 key={day.date}
                 title={`${day.date}: ${formatValue(day.totalCents)}`}
+                aria-label={`${day.date}: ${formatValue(day.totalCents)}`}
                 className="aspect-square w-full rounded-[4px] border border-border-subtle transition-all duration-300 motion-reduce:transition-none"
                 style={
                   day.level === 0

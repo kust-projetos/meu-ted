@@ -3,11 +3,13 @@ import { useCategoryBreakdown } from "./useCategoryBreakdown";
 import type { Category, Transaction } from "@/lib/state/types";
 
 function tx(id: string, amountCents: number, categoryId: string): Transaction {
+  const today = new Date();
+  const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-05`;
   return {
     id,
     description: id,
     amountCents,
-    date: "2026-06-20",
+    date,
     kind: "expense",
     categoryId,
     accountId: "acc1",
@@ -19,6 +21,17 @@ function cat(id: string, name: string, parentId?: string): Category {
 }
 
 describe("useCategoryBreakdown", () => {
+  it("excludes expenses from the previous month", () => {
+    const today = new Date();
+    const currentDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-10`;
+    const previous = new Date(today.getFullYear(), today.getMonth() - 1, 10);
+    const previousDate = `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, "0")}-10`;
+    const { result } = renderHook(() => useCategoryBreakdown([
+      { ...tx("current", 1000, "food"), date: currentDate },
+      { ...tx("previous", 9000, "home"), date: previousDate },
+    ], [cat("food", "Alimentação"), cat("home", "Moradia")]));
+    expect(result.current).toEqual([{ name: "Alimentação", amountCents: 1000, pct: 100 }]);
+  });
   it("aggregates subcategories under the macro and sorts desc with pct", () => {
     const { result } = renderHook(() =>
       useCategoryBreakdown(

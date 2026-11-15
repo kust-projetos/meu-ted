@@ -34,7 +34,7 @@ export default function AdoptionMetrics() {
           id="adoption-metrics-title"
           className="text-[14px] font-bold text-text-primary"
         >
-          Adoção das notificações
+          Adoção do produto
         </h2>
         <p className="text-[11px] text-text-muted">
           Funil operacional do período recente

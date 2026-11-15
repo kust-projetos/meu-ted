@@ -18,6 +18,9 @@ export function useCategoryBreakdown(
   categories: Category[],
 ): MacroSlice[] {
   return useMemo(() => {
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth();
     const parentById = new Map<string, string>();
     for (const c of categories) {
       parentById.set(c.id, c.name);
@@ -36,6 +39,8 @@ export function useCategoryBreakdown(
     let total = 0;
     for (const t of transactions) {
       if (t.kind !== "expense") continue;
+      const match = /^(\d{4})-(\d{2})-\d{2}/.exec(t.date);
+      if (!match || Number(match[1]) !== currentYear || Number(match[2]) - 1 !== currentMonth) continue;
       total += t.amountCents;
       const macro =
         idToMacro.get(t.categoryId) ??
