@@ -30,8 +30,8 @@ const mapAccount = (r: Row): Account => ({
   kind: (r['kind'] as string) ? (r['kind'] as Account['kind']) : 'bank',
   balanceCents: Number(r['balance_cents'] ?? 0),
   status: r['active'] ? 'active' : 'inactive',
-  institutionId: (r['institution_id'] as string | null) ?? null,
-  cardProductId: (r['card_product_id'] as string | null) ?? null,
+  institutionId: null,
+  cardProductId: null,
 });
 
 const mapCategory = (r: Row): Category => {
@@ -100,7 +100,7 @@ export const createLegacyPostgresReadModelStore = (opts: { pool: Pool }): ReadMo
       // soft-delete guard and the card exclusion.
       const activeFilter = options?.includeInactive === true ? '' : 'AND a.active = true';
       const rows = await query<Row>(
-        `SELECT a.id, a.household_id, a.name, a.initial_balance_cents, a.institution_id, a.card_product_id,
+        `SELECT a.id, a.household_id, a.name, a.initial_balance_cents,
                 COALESCE(a.initial_balance_cents, 0)
                 + COALESCE(totals.income, 0)
                 - COALESCE(totals.expense, 0)

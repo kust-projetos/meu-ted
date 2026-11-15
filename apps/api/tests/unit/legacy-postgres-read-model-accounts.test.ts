@@ -87,6 +87,9 @@ describe('legacy read model — listAccounts excludes credit cards', () => {
       kind: 'bank',
       balanceCents: 50000,
       status: 'active',
+      institutionId: null,
+      cardProductId: null,
     });
+    expect(captured[0]!.text).not.toMatch(/institution_id|card_product_id/i);
   });
 });
