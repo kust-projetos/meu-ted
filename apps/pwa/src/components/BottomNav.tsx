@@ -4,9 +4,9 @@ import { useEffect, useRef, useState, type ComponentType } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeftRight,
-  CalendarClock,
+  CreditCard,
+  BarChart3,
   Home,
-  LayoutGrid,
   Receipt,
   ReceiptText,
   TrendingDown,
@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { haptic } from "@/lib/ui/haptics";
 
-export type NavItem = "home" | "records" | "compromissos" | "hub";
+export type NavItem = "home" | "records" | "cards" | "reports";
 
 interface BottomNavProps {
   active: NavItem | null;
@@ -35,8 +35,8 @@ const ITEMS: ItemDef[] = [
   // §24 naming review: the /compromissos section (A Pagar + Pendências) keeps
   // its canonical route name so "Contas e Cartões" stays unambiguous for
   // /hub/patrimonio (accounts & cards).
-  { key: "compromissos", label: "Compromissos", Icon: CalendarClock },
-  { key: "hub", label: "Mais", Icon: LayoutGrid },
+  { key: "cards", label: "Cartões", Icon: CreditCard },
+  { key: "reports", label: "Relatórios", Icon: BarChart3 },
 ];
 
 type QuickActionKind = "expense" | "income" | "transfer" | "receipt";
@@ -166,7 +166,7 @@ export function BottomNav({
           style={{
             background: "linear-gradient(145deg, var(--primary), var(--primary-dark))",
           }}
-          aria-label="Nova transação"
+          aria-label="Novo lançamento"
           aria-expanded={menuOpen}
           aria-controls="quick-actions"
         >

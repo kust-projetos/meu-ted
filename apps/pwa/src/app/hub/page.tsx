@@ -11,6 +11,10 @@ import {
   Settings,
   Target,
   Wallet,
+  Layers,
+  User,
+  ClipboardList,
+  CalendarClock,
   type LucideProps,
 } from "lucide-react";
 
@@ -22,12 +26,19 @@ interface HubModule {
 }
 
 const MODULES: HubModule[] = [
-  { href: "/hub/patrimonio", label: "Contas e Cartões", description: "Suas contas e cartões em um lugar", Icon: Wallet },
-  { href: "/hub/planejamento", label: "Metas e Orçamento", description: "Metas, orçamentos e assinaturas", Icon: Target },
+  { href: "/compromissos", label: "Compromissos", description: "Contas a pagar e pendências", Icon: CalendarClock },
+  { href: "/hub/patrimonio?aba=contas", label: "Contas", description: "Suas contas em um lugar", Icon: Wallet },
+  { href: "/hub/patrimonio?aba=cartoes", label: "Cartões", description: "Seus cartões", Icon: Wallet },
+  { href: "/hub/planejamento", label: "Planejamento", description: "Orçamentos e assinaturas", Icon: Target },
+  { href: "/hub/planejamento?aba=metas", label: "Metas", description: "Acompanhe seus objetivos", Icon: Target },
+  { href: "/hub/patrimonio?aba=patrimonio", label: "Patrimônio", description: "Visão do seu patrimônio", Icon: Wallet },
   { href: "/hub/relatorios", label: "Relatórios", description: "Fluxo, categorias e tendências", Icon: BarChart3 },
   { href: "/hub/alertas", label: "Avisos e Lembretes", description: "Alertas financeiros e de preço", Icon: Bell },
   { href: "/hub/categorias", label: "Organizar Gastos", description: "Organize seus lançamentos", Icon: FolderOpen },
   { href: "/hub/configuracoes", label: "Configurações", description: "Perfil, espaços e auditoria", Icon: Settings },
+  { href: "/workspaces", label: "Meus Espaços", description: "Gerencie seus espaços", Icon: Layers },
+  { href: "/perfil", label: "Perfil", description: "Seus dados e preferências", Icon: User },
+  { href: "/auditoria", label: "Auditoria", description: "Histórico de atividades", Icon: ClipboardList },
 ];
 
 /**
@@ -39,7 +50,7 @@ export default function Hub() {
       <div className="flex min-h-dvh flex-col bg-bg pb-[var(--tab-bar-height)]">
         <StatusBar />
         <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-5 py-4 sm:px-8 lg:px-12">
-          <PageHeader title="Mais" subtitle="Tudo o que você precisa no Meu Ted em um só lugar." />
+          <PageHeader title="Explorar" subtitle="Tudo o que você precisa no Meu Ted em um só lugar." />
           <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
             {MODULES.map((module) => (
               <Link
