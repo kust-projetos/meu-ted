@@ -365,8 +365,19 @@ export const createMemorySql = (): MemorySqlMock => {
           assertNotKeyword(column);
           row[column] = bindings[index];
         });
+        if (name === 'agent_prefs') {
+          const existing = table(name).find((entry) => entry['workspace_id'] === row['workspace_id']);
+          if (existing) Object.assign(existing, row);
+          else table(name).push(row);
+          return [] as T[];
+        }
         table(name).push(row);
         return [] as T[];
+      }
+
+      if (q.startsWith('SELECT memory_enabled FROM agent_prefs WHERE workspace_id = ?')) {
+        const row = table('agent_prefs').find((entry) => entry['workspace_id'] === bindings[0]);
+        return row ? [{ memory_enabled: row['memory_enabled'] }] as T[] : [] as T[];
       }
 
       const select = q.match(/^SELECT \* FROM (\w+)\s*(?:WHERE (.+?))?(?:\s+LIMIT\s+(\d+))?$/i);

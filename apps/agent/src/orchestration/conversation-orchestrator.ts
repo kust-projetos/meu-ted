@@ -136,6 +136,7 @@ import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
 import {
   recallCorrectionByFingerprint,
   rememberCorrection,
+  isMemoryEnabled,
   type MemorySql,
 } from '../agent-config/memory/store.js';
 import {
@@ -1105,6 +1106,10 @@ export class ConversationOrchestrator {
     const target = normalizeCategoryMemoryTarget(description);
     if (!sql || !target || !input.actorId) return;
     try {
+      if (!isMemoryEnabled(sql, input.workspaceId)) {
+        this.emit('mutation.category_memory', { status: 'skipped' });
+        return;
+      }
       rememberCorrection(sql, {
         workspaceId: input.workspaceId,
         actor: input.actorId,
@@ -6085,12 +6090,13 @@ export class ConversationOrchestrator {
         },
       },
     );
-    if (turnCategoryQuery !== undefined && resolution.complete) {
+    const typedCategoryQuery = categoryQueryFrom(input.decisionText ?? input.text, { allowBareFragment: true })?.query;
+    if (turnCategoryQuery !== undefined && typedCategoryQuery !== undefined && resolution.complete) {
       this.rememberCategoryChoice(input, merged.description, resolution.categoryId, resolution.categoryName);
     }
     const stamp = new Date(this.draftNowMs()).toISOString();
     this.emitEntityResolution(input, plan, resolution.trace);
-    if (!resolution.complete && resolution.missingFields.length === 1 &&
+    if (!categoryQuery && !resolution.complete && resolution.missingFields.length === 1 &&
         resolution.missingFields[0] === 'categoryId') {
       const memoryTarget = normalizeCategoryMemoryTarget(financialMerged.description);
       let categoryMemoryStatus: 'hit' | 'miss' | 'invalidated' = 'miss';
@@ -6139,9 +6145,6 @@ export class ConversationOrchestrator {
         // Memory/catalog failures degrade to the existing inference path.
       }
       this.emit('mutation.category_memory', {
-        intentionId: input.intentionId,
-        traceId: input.traceId,
-        channel: input.channel,
         status: categoryMemoryStatus,
       });
       if (!learnedCategoryId && this.dependencies.categorySuggestionProvider) {

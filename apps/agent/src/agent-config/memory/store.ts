@@ -834,6 +834,7 @@ export const rememberFact = (
     provenance?: MemoryProvenance;
   },
 ): RememberResult => {
+  if (!isMemoryEnabled(sql, input.workspaceId)) return { stored: false, reason: 'disabled' };
   const raw = (input.content ?? '').trim();
   if (raw.length === 0) return { stored: false, reason: 'empty' };
   // H-09: PAN in ANY separator variant refuses the whole write (card
@@ -1284,6 +1285,7 @@ export const rememberCorrection = (
     scope?: MemoryScope;
   },
 ): RememberResult => {
+  if (!isMemoryEnabled(sql, input.workspaceId)) return { stored: false, reason: 'disabled' };
   const scope = input.scope ?? normalizeMemoryScope({ workspaceId: input.workspaceId, actor: input.actor, shared: input.actor === '' });
   const fingerprint = memoryFingerprint({ scope, target: input.target, field: input.field });
   // AC26b: a forgotten identity is never resurrected by redelivery.

@@ -3,7 +3,7 @@ import { ConversationOrchestrator, normalizeRestTurn, type AuthenticatedIdentity
 import { MutationApiClient } from '../../src/mutations/mutation-api-client.js';
 import { InMemoryMutationDraftStore } from '../../src/mutations/mutation-draft.js';
 import type { EntityReader, EntitySummary } from '../../src/mutations/entity-resolver.js';
-import { initializeMemorySchema, recallCorrectionByFingerprint, rememberCorrection } from '../../src/agent-config/memory/store.js';
+import { initializeMemorySchema, recallCorrectionByFingerprint, rememberCorrection, setMemoryEnabled } from '../../src/agent-config/memory/store.js';
 import { createMemorySql } from '../helpers/memory-sql.js';
 
 const identity: AuthenticatedIdentity = { actorId: 'actor', workspaceId: 'workspace', role: 'member', deviceId: 'device' };
@@ -72,6 +72,52 @@ describe('semantic category suggestion fallback', () => {
     expect(request.mock.calls.some(([, path]) => /\/(?:confirm|execute|authorize)$/.test(path))).toBe(false);
   });
 
+  it('does not replace an unresolved explicit category with remembered category', async () => {
+    const sql = createMemorySql();
+    initializeMemorySchema(sql);
+    rememberCorrection(sql, {
+      workspaceId: 'workspace', actor: 'actor', target: 'carne no nubank', field: 'category',
+      content: 'Para "carne no nubank", a categoria usada é "Mercado".',
+      references: [{ kind: 'category', id: EXPENSE.id }],
+    });
+    const events = vi.fn();
+    const { turn } = setup(undefined, [EXPENSE], events, sql);
+    await turn('gastei 50 de carne no Nubank', 'cat-unresolved-explicit-1');
+    const result = await turn('categoria Restaurantes', 'cat-unresolved-explicit-2');
+    expect(result.clarification?.missingFields).toContain('categoryId');
+    expect(events.mock.calls.find(([type]) => type === 'mutation.category_memory')).toBeUndefined();
+  });
+
+  it('emits category memory event with status only', async () => {
+    const sql = createMemorySql();
+    initializeMemorySchema(sql);
+    const events = vi.fn();
+    const { turn } = setup(undefined, [EXPENSE], events, sql);
+    await turn('gastei 50 de carne', 'cat-event-keys-1');
+    await turn('Nubank', 'cat-event-keys-2');
+    const event = events.mock.calls.find(([type]) => type === 'mutation.category_memory')?.[1];
+    expect(Object.keys(event ?? {}).sort()).toEqual(['status']);
+  });
+
+  it('does not learn category text supplied only by an attachment', async () => {
+    const sql = createMemorySql();
+    initializeMemorySchema(sql);
+    const { turn } = setup(undefined, [EXPENSE], undefined, sql);
+    await turn('gastei 50 de carne', 'cat-attachment-1');
+    const orchestrator = new ConversationOrchestrator({
+      entityReader: makeReader([EXPENSE]),
+      draftStore: new InMemoryMutationDraftStore(),
+      plan,
+      memorySql: sql,
+    });
+    await orchestrator.runTurn(normalizeRestTurn(
+      { text: 'Nubank [conteúdo do anexo: categoria Mercado]', intentionId: 'cat-attachment-2' },
+      identity,
+      { typedText: 'Nubank' },
+    ));
+    expect(sql.rows('agent_memory')).toHaveLength(0);
+  });
+
   it('keeps an explicit category choice ahead of memory and never learns an LLM suggestion', async () => {
     const sql = createMemorySql();
     initializeMemorySchema(sql);
@@ -100,6 +146,23 @@ describe('semantic category suggestion fallback', () => {
     await turn('Nubank', 'cat-memory-model-2');
     expect(provider).toHaveBeenCalledTimes(1);
     expect(sql.rows('agent_memory')).toHaveLength(0);
+  });
+
+  it('does not learn while memory is disabled, and does not recall it after re-enabling', async () => {
+    const sql = createMemorySql();
+    initializeMemorySchema(sql);
+    setMemoryEnabled(sql, 'workspace', false);
+    const events = vi.fn();
+    const { turn } = setup(undefined, [EXPENSE], events, sql);
+    await turn('gastei 50 de carne no Nubank', 'cat-memory-disabled-1');
+    sql.rows('agent_memory').length = 0;
+    await turn('categoria Mercado', 'cat-memory-disabled-2');
+    expect(sql.rows('agent_memory')).toHaveLength(0);
+    expect(events.mock.calls.find(([type]) => type === 'mutation.category_memory')?.[1]).toEqual({ status: 'skipped' });
+    setMemoryEnabled(sql, 'workspace', true);
+    await turn('gastei 50 de carne', 'cat-memory-disabled-3');
+    const afterReenable = await turn('Nubank', 'cat-memory-disabled-4');
+    expect(afterReenable.clarification?.missingFields).toContain('categoryId');
   });
 
   it.each([
