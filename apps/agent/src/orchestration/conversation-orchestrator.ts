@@ -433,6 +433,14 @@ export type TurnResult = Readonly<{
   }>;
 }>;
 export type TurnResponseProvider = (input: TurnInput, plan: TurnPlan) => Promise<string>;
+export type CategorySuggestion = Readonly<{ categoryId: string }>;
+export type CategorySuggestionProvider = (request: {
+  readonly input: TurnInput;
+  readonly kind: 'expense' | 'income';
+  readonly description: string;
+  readonly amountCents: number;
+  readonly date: string;
+}) => Promise<CategorySuggestion | null>;
 export type AuthenticatedIdentity = Readonly<{
   actorId: string;
   workspaceId: string;
@@ -991,6 +999,7 @@ export class ConversationOrchestrator {
      * (tests/back-compat; production always wires it).
      */
     contentQueryProvider?: TurnResponseProvider;
+    categorySuggestionProvider?: CategorySuggestionProvider;
     /** Read-path evidence source (EvidenceCollector). Absent = legacy pass-through. */
     evidenceProvider?: (input: TurnInput, plan: TurnPlan) => Promise<EvidenceEnvelope | null>;
     /** ONE structured correction retry for unsupported grounded claims. */
@@ -6011,7 +6020,7 @@ export class ConversationOrchestrator {
         draft.missingFields.length > 0 ? draft.missingFields : ['accountId', 'categoryId'],
       );
     }
-    const resolution = await resolveMutationEntities(
+    let resolution = await resolveMutationEntities(
       financialMerged,
       resolutionHint,
       this.entityReaderOrClosed(),
@@ -6027,6 +6036,50 @@ export class ConversationOrchestrator {
     );
     const stamp = new Date(this.draftNowMs()).toISOString();
     this.emitEntityResolution(input, plan, resolution.trace);
+    if (!resolution.complete && resolution.missingFields.length === 1 &&
+        resolution.missingFields[0] === 'categoryId' &&
+        this.dependencies.categorySuggestionProvider) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const suggestion = await Promise.race([
+          this.dependencies.categorySuggestionProvider({
+            input,
+            kind: financialMerged.kind,
+            description: financialMerged.description,
+            amountCents: financialMerged.amountCents,
+            date: financialMerged.date,
+          }),
+          new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), 3000);
+          }),
+        ]);
+        if (suggestion && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(suggestion.categoryId)) {
+          const suggestedResolution = await resolveMutationEntities(
+            { ...financialMerged, categoryQuery: suggestion.categoryId },
+            resolutionHint,
+            this.entityReaderOrClosed(),
+            { confirmed: {
+              ...(draft.resolvedArgs.accountId ? { accountId: draft.resolvedArgs.accountId } : {}),
+              ...(draft.resolvedArgs.categoryId ? { categoryId: draft.resolvedArgs.categoryId } : {}),
+            } },
+          );
+          if (suggestedResolution.complete) {
+            resolution = suggestedResolution;
+            this.emit('mutation.category_suggestion', {
+              intentionId: input.intentionId,
+              traceId: input.traceId,
+              channel: input.channel,
+              source: 'model',
+              status: 'accepted',
+            });
+          }
+        }
+      } catch {
+        // Optional inference fails closed to the established clarification.
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
     if (!resolution.complete) {
       // FIX-170 (d): an identical category answer that adds nothing new and
       // still does not resolve converges to a STABLE impasse instead of
