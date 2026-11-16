@@ -34,7 +34,8 @@ function entry(id, layer, operation, method, routePath, source) {
 export function discoverPwaCommands(source, sourcePath) {
   const body = source.match(/export interface Commands\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? '';
   const result = [];
-  const methodPattern = /^\s*([A-Za-z_$][\w$]*)\s*\([^;\n]*\):\s*Promise<[^;\n]+>;\s*$/gm;
+  // Parameter lists may contain `;` (inline object types such as `{ a?: string; b?: string }`).
+  const methodPattern = /^\s*([A-Za-z_$][\w$]*)\s*\([^\n]*\):\s*Promise<[^;\n]+>;\s*$/gm;
   for (const match of body.matchAll(methodPattern)) {
     const operation = match[1];
     result.push(entry(`pwa.command.${operation}`, 'pwa-command', operation, 'COMMAND', `commands.${operation}`, sourcePath));

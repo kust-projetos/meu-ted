@@ -119,3 +119,12 @@ test('rejects duplicate ids, unknown ids, and blank policy fields', () => {
     'policy id unknown is not discovered',
   ]);
 });
+
+test('discovers PWA commands whose parameter list contains an inline object type', () => {
+  const commands = discoverPwaCommands(`
+    export interface Commands {
+      updateThing(id: string, input: { name?: string; kind?: string | null }): Promise<Thing>;
+    }
+  `, 'apps/pwa/src/lib/state/commands.ts');
+  assert.deepEqual(commands.map((c) => c.id), ['pwa.command.updateThing']);
+});
