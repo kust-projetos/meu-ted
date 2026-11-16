@@ -40,6 +40,12 @@ test("test-only diff runs the skip gate", () => {
 });
 
 test("unrelated diff selects no gate", () => {
-  const areas = classifyFiles(["apps/api/src/routes/accounts.ts"]);
+  const areas = classifyFiles(["apps/api/src/lib/dashboard.ts"]);
   assert.deepEqual(selectCommands(areas), []);
+});
+
+test("API route and PWA write-surface changes select the agent policy gates", () => {
+  for (const file of ["apps/api/src/routes/accounts.ts", "apps/pwa/src/lib/state/commands.ts", "docs/architecture/write-mutator-policy.md"]) {
+    assert.ok(selectCommands(classifyFiles([file])).includes("pnpm write-policy:check"), file);
+  }
 });

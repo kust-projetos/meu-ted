@@ -29,6 +29,12 @@ export const AREA_RULES = [
       /^packages\/llm-contracts\//,
       /^scripts\/generate-agent-tools\.mjs$/,
       /^docs\/architecture\/tool-capability-inventory\.md$/,
+      // write-policy:check scans these write surfaces and the ledger that documents them.
+      /^apps\/api\/src\/routes\//,
+      /^apps\/pwa\/src\/lib\/state\/commands\.ts$/,
+      /^apps\/pwa\/src\/lib\/api\/endpoints\.ts$/,
+      /^apps\/pwa\/src\/app\/.*route\.ts$/,
+      /^docs\/architecture\/write-mutator-policy\.md$/,
     ],
   },
   { area: "docs", patterns: [/^docs\/.*\.md$/, /^README\.md$/, /^AGENTS\.md$/] },
