@@ -8984,6 +8984,6 @@ export class ConversationOrchestrator {
       }
     }
     this.emit('turn.completed', { intentionId: input.intentionId, traceId: input.traceId, channel: input.channel, domain: plan.domain, mode: plan.mode, status: 'completed', latencyMs: Date.now() - startedAt });
-    return freeze(result);
+    return freeze({ ...result, response: freeze({ text: responseText }) });
   }
 }
