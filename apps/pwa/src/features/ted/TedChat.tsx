@@ -129,6 +129,7 @@ function toLiveCard(item: ActivePendingOperation): TedPendingOperation | null {
     id: item.id,
     status: item.status as TedPendingOperation["status"],
     operation: item.tool,
+    ...(item.supersedes ? { supersedes: item.supersedes } : {}),
     ...(typeof item.description === "string" && item.description ? { summary: item.description } : {}),
     ...(item.presentation ? { presentation: item.presentation } : {}),
     ...(item.status === 'failed' && item.tool === 'categories.deactivate' && item.failureCode === 'in_use' ? { failureCode: 'in_use' as const } : {}),
