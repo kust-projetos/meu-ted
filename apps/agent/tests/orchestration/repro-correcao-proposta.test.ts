@@ -120,10 +120,11 @@ const makeFakeApi = (supersedeFailure?: { statusCode: number; code: string; afte
 const setup = (
   fake: ReturnType<typeof makeFakeApi>,
   categorySuggestionProvider?: CategorySuggestionProvider,
+  entityReader: EntityReader = reader(),
 ) => {
   const store = new InMemoryMutationDraftStore();
   const orchestrator = new ConversationOrchestrator({
-    mutationApiClient: fake.api, entityReader: reader(), draftStore: store,
+    mutationApiClient: fake.api, entityReader, draftStore: store,
     ...(categorySuggestionProvider ? { categorySuggestionProvider } : {}),
   });
   const run = (text: string, intentionId: string) => orchestrator.runTurn(normalizeRestTurn({ text, intentionId }, identity));
@@ -235,25 +236,19 @@ describe("repro: correção de proposta ativa - Coloca como décimo terceiro", (
     expect(fake.proposePosts()).toHaveLength(0);
   });
 
-  it("reconcilia resultado incerto sem afirmar estado sem prova", async () => {
+  it("responde de forma neutra a falha de supersede sem leitura de reconciliação", async () => {
     const committed = makeFakeApi({ statusCode: 503, code: "response_lost", afterCommit: true });
     committed.seed();
     const updated = await setup(committed).run("Coloca como décimo terceiro", "intent-uncertain-new");
-    expect(updated.response?.text).toContain("A proposta foi atualizada");
-    expect(updated.response?.text).toContain("Confira o cartão");
+    expect(updated.response?.text).toBe("Não consegui confirmar o resultado da atualização. Confira o cartão antes de aprovar.");
+    expect(updated.response?.text).not.toContain("proposta foi atualizada");
+    expect(committed.calls.filter((call) => call.method === "GET" && call.path === "/pending-operations/v2/active")).toHaveLength(1);
 
     const unchanged = makeFakeApi({ statusCode: 503, code: "offline" });
     unchanged.seed();
     const stillActive = await setup(unchanged).run("Coloca como décimo terceiro", "intent-uncertain-old");
-    expect(stillActive.response?.text).toContain("A proposta anterior continua valendo");
-
-    for (const mode of ["empty", "error"] as const) {
-      const unknown = makeFakeApi({ statusCode: 503, code: "offline" }, mode);
-      unknown.seed();
-      const result = await setup(unknown).run("Coloca como décimo terceiro", `intent-uncertain-${mode}`);
-      expect(result.response?.text).toContain("Confira o cartão");
-      expect(result.response?.text).not.toContain("A proposta anterior continua valendo");
-    }
+    expect(stillActive.response?.text).toBe("Não consegui confirmar o resultado da atualização. Confira o cartão antes de aprovar.");
+    expect(unchanged.calls.filter((call) => call.method === "GET" && call.path === "/pending-operations/v2/active")).toHaveLength(1);
   });
 
   it("não consulta provider semântico ao corrigir somente a descrição", async () => {
@@ -306,6 +301,25 @@ describe("repro: correção de proposta ativa - Coloca como décimo terceiro", (
     });
   });
 
+  it("na verdade era no Inter corrige somente a conta", async () => {
+    const fake = makeFakeApi();
+    fake.seed();
+    await setup(fake).run("na verdade era no Inter", "intent-era-account-exact");
+    const replacement = [...fake.ops.values()].find((op) => op.id !== "pending-seeded");
+    expect(JSON.parse(replacement!.payload).normalizedArgs).toMatchObject({ accountId: INTER.id, description: "décimo" });
+  });
+
+  it("na verdade era em conta inexistente não altera nem substitui", async () => {
+    const fake = makeFakeApi();
+    const original = { amountCents: 320000, description: "décimo", date: "2026-11-15", accountId: NUBANK.id, categoryId: "salario" };
+    fake.seed("pending-seeded", "transactions.income.create", original);
+    const entities: EntityReader = { listAccounts: async () => [NUBANK], listCategories: async () => catalogCategories() };
+    const result = await setup(fake, undefined, entities).run("na verdade era no Banco Fantasma", "intent-era-account-missing");
+    expect(fake.calls.some((call) => call.path.endsWith("/supersede"))).toBe(false);
+    expect(JSON.parse(fake.ops.get("pending-seeded")!.payload).normalizedArgs).toEqual(original);
+    expect(result.response?.text).toContain("Não consegui atualizar");
+  });
+
   it("prioriza a data relativa sem reescrever descrição/valor/conta", async () => {
     const fake = makeFakeApi();
     fake.seed("pending-seeded", "transactions.income.create", {
@@ -327,7 +341,7 @@ describe("repro: correção de proposta ativa - Coloca como décimo terceiro", (
     fake.seed();
     const { run } = setup(fake);
     const result = await run("Coloca como décimo terceiro", `intent-${failure.statusCode}`);
-    expect(result.response?.text).toContain("A proposta anterior continua valendo");
+    expect(result.response?.text).toBe("Não consegui confirmar o resultado da atualização. Confira o cartão antes de aprovar.");
     expect(fake.proposePosts()).toHaveLength(0);
     expect(fake.ops.get("pending-seeded")?.status).toBe("proposed");
     expect([...fake.ops.keys()]).toEqual(["pending-seeded"]);

@@ -446,8 +446,10 @@ export type CategorySuggestionProvider = (request: {
 export const isReferentialCorrectionText = (text: string): boolean =>
   /^(?:coloca|colocar|na verdade|era|foi|isso é|isso e|o valor certo é|o valor certo e|corrige|ajusta|muda|troca)(?:\s|$)/iu.test(text.trim());
 
-const hasExplicitNamingConstruct = (text: string): boolean =>
-  /^(?:coloca(?:r)?\s+como|isso\s+(?:é|e)|na verdade\s+(?:era|é|e))\s+\S/iu.test(text.trim());
+const hasExplicitNamingConstruct = (text: string): boolean => {
+  const match = /^(?:coloca(?:r)?\s+como|isso\s+(?:é|e)|na verdade\s+(?:era|é|e))\s+(.+)/iu.exec(text.trim());
+  return !!match && !/^(?:no|na|nos|nas|para o|para a|em)\s+\S/iu.test(match[1]!);
+};
 // A bare "era <X>" is intentionally excluded: account corrections can look like descriptions.
 
 const correctionHintText = (text: string): string =>
@@ -7004,7 +7006,7 @@ export class ConversationOrchestrator {
       const raw = input.text.trim();
       const explicitDateSignal = !!explicitFinancialDate(raw)?.date || resolveRelativeDateFragment(raw, { now: new Date(now) }).status === 'date';
       const amountSignal = /valor certo\s+(?:é|e|para|por)\s*(?:R\$\s*)?[\d.,]+/iu.test(raw);
-      const accountSignal = /(?:coloca|colocar|muda|troca)\s+(?:no|na|para o|para a)\s+\S/iu.test(raw);
+      const accountSignal = /(?:coloca|colocar|muda|troca|era|na verdade era)\s+(?:no|na|nos|nas|para o|para a|em)\s+\S/iu.test(raw);
       const namingSignal = hasExplicitNamingConstruct(raw);
       if (!explicitDateSignal && !amountSignal && !accountSignal && !namingSignal) {
         return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não consegui identificar uma alteração específica. A proposta anterior continua valendo.' }) });
@@ -7047,7 +7049,7 @@ export class ConversationOrchestrator {
             const cents = parseMoneyToCents(amountText);
             if (Number.isInteger(cents) && cents > 0) args.amountCents = cents;
           } else {
-            const accountHint = /(?:coloca|colocar|muda|troca)\s+(?:no|na|para o|para a)\s+(.+)$/iu.exec(raw)?.[1]?.trim();
+            const accountHint = /(?:coloca|colocar|muda|troca|era|na verdade era)\s+(?:no|na|nos|nas|para o|para a|em)\s+(.+)$/iu.exec(raw)?.[1]?.trim();
             const exactAccount = accountHint
               ? accounts.filter((item) => item.name.toLocaleLowerCase('pt-BR') === accountHint.toLocaleLowerCase('pt-BR'))
               : [];
@@ -7081,22 +7083,8 @@ export class ConversationOrchestrator {
             response: freeze({ text: 'Atualizei a proposta. Revise os dados e aprove se estiver tudo certo.' }),
           });
         } catch {
-          try {
-            const reconciled = await client.listActive(identity);
-            const proposed = reconciled.items.filter((item) => item.status === 'proposed');
-            if (!proposed.some((item) => item.id === target.operation.id) && proposed.length === 1) {
-              return this.completeTurn(input, plan, startedAt, base, {
-                response: freeze({ text: 'A proposta foi atualizada. Confira o cartão e revise os dados antes de aprovar.' }),
-              });
-            }
-            if (proposed.some((item) => item.id === target.operation.id)) {
-              return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text }) });
-            }
-          } catch {
-            // Unknown outcome: do not claim which proposal remains active.
-          }
           return this.completeTurn(input, plan, startedAt, base, {
-            response: freeze({ text: 'Não consegui confirmar o resultado da atualização. Confira o cartão para verificar a proposta ativa.' }),
+            response: freeze({ text: 'Não consegui confirmar o resultado da atualização. Confira o cartão antes de aprovar.' }),
           });
         }
       }
