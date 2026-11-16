@@ -11,6 +11,7 @@ pending operations V2.
   delegada estreita e proposta confirmada.
 - Atestações não são retornadas ao browser. A API aceita execução V2 somente
   pela fronteira delegada do Agent.
+- Substituição atômica de propostas fica habilitada somente com `PENDING_V2_SUPERSEDE_ENABLED=1`.
 - O processo web é verify-only para migrations. Use somente o job explícito
   descrito em [`../../docs/runbooks/api-migration-v2.md`](../../docs/runbooks/api-migration-v2.md).
 

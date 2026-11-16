@@ -739,6 +739,47 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
     };
     app.post('/pending-operations/v2/propose', proposeV2);
     app.post('/pending-operations/v2', proposeV2);
+    app.post('/pending-operations/v2/:id/supersede', async (req, reply) => {
+      if (process.env.PENDING_V2_SUPERSEDE_ENABLED !== '1') {
+        return reply.code(404).send({ code: 'pending.supersede_disabled' });
+      }
+      if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.propose)) return;
+      let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
+      try {
+        requireIdempotencyKey(req.headers as Record<string, unknown>);
+        const params = idSchema.safeParse(req.params);
+        if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
+        const parsed = z.object({
+          tool: z.string().min(1),
+          normalizedArgs: z.record(z.unknown()),
+          expiresAt: z.string().datetime({ offset: true }).optional(),
+          expectedProposalHash: z.string().regex(/^[0-9a-f]{64}$/),
+        }).strict().safeParse(req.body ?? {});
+        if (!parsed.success) return reply.code(400).send({ code: 'validation.error', issues: parsed.error.issues });
+        const checked = validateApprovalToolArgs(parsed.data.tool, parsed.data.normalizedArgs);
+        if (!checked.success && checked.code === 'tool.not_allowed') return reply.code(403).send({ code: 'tool.not_allowed', message: 'Ferramenta não permitida no protocolo de aprovação.' });
+        if (!checked.success) return reply.code(422).send({ code: 'approval.invalid_args', message: 'Argumentos inválidos para a ferramenta de aprovação.', details: checked.issues });
+        const now = Date.now();
+        const expiresAt = parsed.data.expiresAt ?? new Date(now + PENDING_V2_MAX_TTL_MS).toISOString();
+        const bound = identity(ctx);
+        const draft = {
+          version: 2 as const, ...bound, tool: parsed.data.tool,
+          normalizedArgs: checked.data as PendingOperationV2['normalizedArgs'],
+          proposalHash: '', idempotencyKey: '', createdAt: new Date(now).toISOString(),
+          expiresAt, bindings: bound,
+        };
+        const proposalHash = await computePendingOperationV2Hash(draft);
+        // Stable key for the old proposal + canonical replacement hash. The
+        // required caller key is validated above; it is not trusted as identity.
+        const idempotencyKey = `sup:${params.data.id}:${proposalHash}`;
+        const operation = { ...draft, proposalHash, idempotencyKey };
+        const result = await v2Store!.supersede(bound, params.data.id, operation, {
+          expectedProposalHash: parsed.data.expectedProposalHash,
+          idempotencyKey,
+        });
+        return reply.code(result.existing ? 200 : 201).send({ ...result, supersedes: params.data.id, existing: result.existing });
+      } catch (error) { return handleError(error, reply, true); }
+    });
     // T1.5 (SPEC §8.3): Agent-only authoritative listing. Identity comes
     // exclusively from the authenticated context — the PWA never declares
     // which operations it believes are pending. Lean projection: enough for
@@ -919,6 +960,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
           });
           return {
             id: record.id,
+            ...(record.supersedesId ? { supersedes: record.supersedesId } : {}),
             status: record.status,
             tool: record.tool,
             createdAt: record.createdAt,
