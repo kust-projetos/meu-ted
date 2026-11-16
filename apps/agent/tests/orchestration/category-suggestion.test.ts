@@ -37,7 +37,6 @@ const setup = (suggest?: CategorySuggestionProvider, categories: readonly Entity
 };
 
 const CATEGORY_ID = '00000000-0000-4000-8000-000000000021';
-const AUTOCREATE_ID = '00000000-0000-4000-8000-000000000022';
 const autoCreateSetup = (
   suggest: CategorySuggestionProvider,
   initialCategories: readonly EntitySummary[],
