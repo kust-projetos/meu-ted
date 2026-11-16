@@ -118,15 +118,15 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig =
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
 
-  const smtpHost = process.env.SMTP_HOST?.trim() || null;
-  const smtpPortRaw = process.env.SMTP_PORT?.trim();
+  const smtpHost = source.SMTP_HOST?.trim() || null;
+  const smtpPortRaw = source.SMTP_PORT?.trim();
   const smtpPort = smtpPortRaw ? Number(smtpPortRaw) : null;
-  const smtpUser = process.env.SMTP_USER?.trim() || null;
-  const smtpPass = process.env.SMTP_PASS?.trim() || null;
-  const smtpFrom = process.env.SMTP_FROM?.trim() || null;
-  const smtpSecure = process.env.SMTP_SECURE?.trim().toLowerCase() === 'true' || (smtpPort === 465);
-  const rawInviteAcceptUrl = process.env.INVITE_ACCEPT_URL?.trim() || null;
-  const pwaOrigin = process.env.PWA_ORIGIN?.trim() || null;
+  const smtpUser = source.SMTP_USER?.trim() || null;
+  const smtpPass = source.SMTP_PASS?.trim() || null;
+  const smtpFrom = source.SMTP_FROM?.trim() || null;
+  const smtpSecure = source.SMTP_SECURE?.trim().toLowerCase() === 'true' || (smtpPort === 465);
+  const rawInviteAcceptUrl = source.INVITE_ACCEPT_URL?.trim() || null;
+  const pwaOrigin = source.PWA_ORIGIN?.trim() || null;
   const inviteAcceptUrl = rawInviteAcceptUrl ?? (pwaOrigin ? `${pwaOrigin.replace(/\/$/, '')}/convite` : null);
 
   return {
