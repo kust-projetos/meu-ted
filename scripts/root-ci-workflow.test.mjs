@@ -92,19 +92,20 @@ test("CI is not duplicated between root and PWA workflows", () => {
   assert.doesNotMatch(pwaWorkflow, /pnpm --filter meu-ted-api/);
 });
 
-test("deployment workflows gate on CI + PWA CI success and Node 22", () => {
+test("deployment workflows are manual, main-only and gated on CI + PWA CI success", () => {
   const pwaDeploy = fs.readFileSync(".github/workflows/pwa-deploy.yml", "utf8");
   const agentDeploy = fs.readFileSync(".github/workflows/agent-deploy.yml", "utf8");
   for (const deploy of [pwaDeploy, agentDeploy]) {
-    assert.match(deploy, /workflow_run:/);
-    assert.match(deploy, /workflows:\s*\["CI", "PWA CI"\]/);
-    assert.match(deploy, /workflow_run\.conclusion == 'success'/);
-    assert.match(deploy, /workflow_run\.head_sha/);
-    assert.doesNotMatch(deploy, /workflow_dispatch:/);
+    // Deliberately manual (commit 4fc7fc5): a merge must never deploy by itself.
+    assert.match(deploy, /on:\s*\r?\n\s*workflow_dispatch:/);
+    assert.doesNotMatch(deploy, /workflow_run:/);
+    assert.match(deploy, /github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main'/);
     assert.match(deploy, /needs: \[gate\]/);
     assert.match(deploy, /listWorkflowRunsForRepo/);
+    assert.match(deploy, /\['CI', 'PWA CI'\]/);
     assert.match(deploy, /runs\.length === 0/);
     assert.match(deploy, /Deploy blocked: no /);
+    assert.match(deploy, /Reject stale deployment/);
     assert.doesNotMatch(deploy, /\bcontinue;/);
   }
   assert.doesNotMatch(overallWorkflowNode(), /node-version: ['"]20['"]/);
