@@ -109,7 +109,14 @@ describe('legacy-safe inventory pin (deploy)', () => {
 
 describe('V064 account presentation migration', () => {
   it('is discovered in migration order for canonical and legacy manifests', () => {
-    expect(expectedMigrationManifest(false).map(({ version }) => version).at(-1)).toBe(64);
+    expect(expectedMigrationManifest(false).map(({ version }) => version)).toContain(64);
     expect(expectedMigrationManifest(true).map(({ version }) => version)).toContain(64);
+  });
+});
+
+describe('V065 pending operation supersede migration', () => {
+  it('is canonical-only and is the newest canonical migration', () => {
+    expect(expectedMigrationManifest(false).map(({ version }) => version).at(-1)).toBe(65);
+    expect(expectedMigrationManifest(true).map(({ version }) => version)).not.toContain(65);
   });
 });
