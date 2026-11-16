@@ -97,7 +97,7 @@ export class IsolatedBackend {
     this.proposeFailuresLeft = initial.faults?.failProposeTimes ?? 0;
     this.proposeAlwaysFails = initial.faults?.failProposeAlways ?? false;
     this.accounts = (initial.accounts ?? []).map((entry) => ({ id: entry.id, name: entry.name }));
-    this.categories = (initial.categories ?? []).map((entry) => ({ id: entry.id, name: entry.name }));
+    this.categories = (initial.categories ?? []).map((entry) => ({ id: entry.id, name: entry.name, kind: entry.kind }));
     const mock: MemorySqlMock = createMemorySql();
     initializeMemorySchema(mock as unknown as MemorySql);
     this.memorySql = mock as unknown as MemorySql;

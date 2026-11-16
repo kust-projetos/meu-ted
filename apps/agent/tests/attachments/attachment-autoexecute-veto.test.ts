@@ -247,7 +247,7 @@ describe("A19/F1 — no orquestrador, anexo + imperativo digitado nunca autoriza
       },
       entityReader: {
         listAccounts: async () => [{ id: "00000000-0000-4000-8000-000000000001", name: "Nubank" }],
-        listCategories: async () => [{ id: "00000000-0000-4000-8000-000000000011", name: "Almoço" }],
+        listCategories: async () => [{ id: "00000000-0000-4000-8000-000000000011", name: "Almoço" , kind: 'expense' }],
       },
     });
   };

@@ -26,8 +26,8 @@ const identity: AuthenticatedIdentity = {
 };
 
 const ACCOUNT_NUBANK = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
-const CATEGORY_MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' };
-const CATEGORY_SAUDE = { id: '00000000-0000-4000-8000-000000000012', name: 'Saúde' };
+const CATEGORY_MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' , kind: 'expense' };
+const CATEGORY_SAUDE = { id: '00000000-0000-4000-8000-000000000012', name: 'Saúde' , kind: 'expense' };
 
 const reader = (): EntityReader => ({
   listAccounts: async () => [ACCOUNT_NUBANK],

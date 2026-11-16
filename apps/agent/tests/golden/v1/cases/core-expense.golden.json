@@ -9,7 +9,7 @@
       "status": "executable",
       "initialState": {
         "accounts": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }],
-        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }]
+        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação", "kind": "expense" }]
       },
       "inputs": [{ "text": "gastei 50 de carne categoria alimentação" }],
       "expectations": {
@@ -28,7 +28,7 @@
       "status": "executable",
       "initialState": {
         "accounts": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }],
-        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }]
+        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação", "kind": "expense" }]
       },
       "inputs": [{ "text": "gstei 50 de carne categoria alimentação" }],
       "expectations": {
@@ -47,7 +47,7 @@
       "status": "executable",
       "initialState": {
         "accounts": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }],
-        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }]
+        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação", "kind": "expense" }]
       },
       "inputs": [
         { "text": "gastei 50 de carne", "intentionId": "intent-frag-1" },
@@ -69,7 +69,7 @@
       "status": "executable",
       "initialState": {
         "accounts": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }],
-        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }]
+        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação", "kind": "expense" }]
       },
       "inputs": [{ "text": "gastei uns 80 no mercado" }],
       "expectations": {
@@ -88,7 +88,7 @@
       "status": "executable",
       "initialState": {
         "accounts": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "Conta Corrente" }],
-        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação" }]
+        "categories": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Alimentação", "kind": "expense" }]
       },
       "inputs": [{ "text": "gastei 600 de carne categoria alimentação" }],
       "expectations": {

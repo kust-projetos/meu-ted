@@ -67,7 +67,7 @@ const reader: EntityReader = {
   ],
   listCategories: async () => [
     { id: 'cat_padarias', name: 'Padarias' },
-    { id: 'cat_mercado', name: 'Mercado' },
+    { id: 'cat_mercado', name: 'Mercado' , kind: 'expense' },
   ],
 };
 

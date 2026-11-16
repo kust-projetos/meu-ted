@@ -52,7 +52,7 @@ describe('T2.4 mutation integration', () => {
     // SPEC §7.2/§7.3: single account auto-resolves, UUID category verified.
     const entityReader = {
       listAccounts: async () => [{ id: '00000000-0000-4000-8000-0000000000a1', name: 'Nubank' }],
-      listCategories: async () => [{ id: '00000000-0000-4000-8000-000000000001', name: 'Mercado' }],
+      listCategories: async () => [{ id: '00000000-0000-4000-8000-000000000001', name: 'Mercado' , kind: 'expense' }],
     };
     const orchestrator = new ConversationOrchestrator({ mutationApiClient: api, plan: planner, entityReader, draftStore: new InMemoryMutationDraftStore() });
 

@@ -17,7 +17,7 @@
         "categories": [
           {
             "id": "22222222-2222-4222-8222-222222222222",
-            "name": "Alimentação"
+            "name": "Alimentação", "kind": "expense"
           }
         ],
         "faults": {
@@ -113,7 +113,7 @@
         "categories": [
           {
             "id": "22222222-2222-4222-8222-222222222222",
-            "name": "Alimentação"
+            "name": "Alimentação", "kind": "expense"
           }
         ],
         "faults": {
@@ -173,7 +173,7 @@
         "categories": [
           {
             "id": "22222222-2222-4222-8222-222222222222",
-            "name": "Alimentação"
+            "name": "Alimentação", "kind": "expense"
           }
         ]
       },
@@ -230,7 +230,7 @@
         "categories": [
           {
             "id": "22222222-2222-4222-8222-222222222222",
-            "name": "Alimentação"
+            "name": "Alimentação", "kind": "expense"
           }
         ]
       },
@@ -284,7 +284,7 @@
         "categories": [
           {
             "id": "22222222-2222-4222-8222-222222222222",
-            "name": "Alimentação"
+            "name": "Alimentação", "kind": "expense"
           }
         ]
       },

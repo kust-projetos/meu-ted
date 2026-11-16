@@ -69,7 +69,7 @@ const agentWithSkills = (seed: (sql: MemorySqlMock) => void) => {
     listCategories: async () => {
       catalogReads += 1;
       return [
-        { id: "cat_padarias", name: "Alimentação" },
+        { id: "cat_padarias", name: "Alimentação" , kind: 'expense' },
         { id: "cat_farmacia", name: "Farmácia" },
       ];
     },

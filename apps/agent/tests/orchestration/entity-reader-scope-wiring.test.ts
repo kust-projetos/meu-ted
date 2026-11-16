@@ -24,7 +24,7 @@ type AgentInternals = {
 };
 
 /** Raw API row shape (what `GET /accounts` actually returns). */
-type RawRow = { id: string; name: string; householdId: string };
+type RawRow = { id: string; name: string; householdId: string; kind?: 'expense' | 'income' };
 
 const rows = (...items: RawRow[]): EntitySummary[] =>
   items as unknown as EntitySummary[];
@@ -47,7 +47,7 @@ describe('A08 entity reader scope wiring in production (R08)', () => {
     const unscopedResult = await resolveMutationEntities(
       { kind: 'expense', amountCents: 5000, description: 'carne', date: '2026-09-14', categoryQuery: 'carne' },
       'gastei 50 de carne no Nubank PJ categoria carne',
-      { ...unscoped, listAccounts: async () => foreignRow, listCategories: async () => rows({ id: '00000000-0000-4000-8000-000000000014', name: 'Carne', householdId: SCOPE }) },
+      { ...unscoped, listAccounts: async () => foreignRow, listCategories: async () => rows({ id: '00000000-0000-4000-8000-000000000014', name: 'Carne', householdId: SCOPE , kind: 'expense' }) },
     );
     // Sem escopo, a linha estrangeira vira a conta resolvida — o defeito.
     expect(unscopedResult.complete).toBe(true);
@@ -66,7 +66,7 @@ describe('A08 entity reader scope wiring in production (R08)', () => {
         { id: ACCOUNT, name: 'Nubank PJ', householdId: FOREIGN },
         { id: '00000000-0000-4000-8000-000000000002', name: 'Itaú', householdId: SCOPE },
       ),
-      listCategories: async () => rows({ id: '00000000-0000-4000-8000-000000000014', name: 'Carne', householdId: SCOPE }),
+      listCategories: async () => rows({ id: '00000000-0000-4000-8000-000000000014', name: 'Carne', householdId: SCOPE , kind: 'expense' }),
     };
     const result = await resolveMutationEntities(
       { kind: 'expense', amountCents: 5000, description: 'carne', date: '2026-09-14', categoryQuery: 'carne' },
@@ -101,3 +101,4 @@ describe('A08 entity reader scope wiring in production (R08)', () => {
     expect(typeof reader.listCategories).toBe('function');
   });
 });
+

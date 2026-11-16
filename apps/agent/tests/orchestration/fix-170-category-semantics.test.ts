@@ -38,13 +38,13 @@ const identity: AuthenticatedIdentity = {
 };
 
 const NUBANK = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
-const ALIMENTACAO = { id: '00000000-0000-4000-8000-000000000010', name: 'Alimentação' };
-const MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' };
-const TRANSPORTE = { id: '00000000-0000-4000-8000-000000000012', name: 'Transporte' };
+const ALIMENTACAO = { id: '00000000-0000-4000-8000-000000000010', name: 'Alimentação' , kind: 'expense' as const };
+const MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' , kind: 'expense' as const };
+const TRANSPORTE = { id: '00000000-0000-4000-8000-000000000012', name: 'Transporte', kind: 'expense' as const };
 
 const reader = (
   accounts = [NUBANK],
-  categories = [ALIMENTACAO, MERCADO],
+  categories: { id: string; name: string; kind?: string }[] = [ALIMENTACAO, MERCADO],
 ): EntityReader => ({
   listAccounts: async () => accounts,
   listCategories: async () => categories,
@@ -302,7 +302,7 @@ describe('FIX-170 (d): ausente/homônima esclarece sem criar e sem loop', () => 
   it('homônimas: lista as duas, sem escolha silenciosa', async () => {
     const fake = makeFakeApi();
     const store = new InMemoryMutationDraftStore();
-    const twin = { id: '00000000-0000-4000-8000-000000000099', name: 'Mercado' };
+    const twin = { id: '00000000-0000-4000-8000-000000000099', name: 'Mercado', kind: 'expense' as const };
     const orchestrator = setup(fake, store, reader([NUBANK], [MERCADO, twin]));
     const first = await turn(orchestrator, 'gastei 90 com carne', 'fix170-hom-1');
     expect(first.mutation).toBeUndefined();
@@ -329,7 +329,7 @@ describe('FIX-170 (d): ausente/homônima esclarece sem criar e sem loop', () => 
 
 describe('FIX-170 regressão: bare com conta pendente não rouba a resposta', () => {
   it("'Nubank' com conta+categoria pendentes resolve a conta e segue perguntando a categoria", async () => {
-    const CARNE_BOVINA = { id: '00000000-0000-4000-8000-000000000021', name: 'Carne Bovina' };
+    const CARNE_BOVINA = { id: '00000000-0000-4000-8000-000000000021', name: 'Carne Bovina' , kind: 'expense' as const };
     const ITAU = { id: '00000000-0000-4000-8000-000000000002', name: 'Itaú' };
     const fake = makeFakeApi();
     const store = new InMemoryMutationDraftStore();
@@ -461,7 +461,7 @@ describe('FIX-170 resolver: descrição vira sugestão, nunca seleção', () => 
     ...(categoryQuery ? { categoryQuery } : {}),
   });
   it("sugere candidata do catálogo vigente sem selecionar ('carne' → Carne Bovina?)", async () => {
-    const CARNE_BOVINA = { id: '00000000-0000-4000-8000-000000000021', name: 'Carne Bovina' };
+    const CARNE_BOVINA = { id: '00000000-0000-4000-8000-000000000021', name: 'Carne Bovina' , kind: 'expense' as const };
     const result = await resolveMutationEntities(
       parsed('carne'),
       'gastei 90 com carne',
@@ -477,3 +477,4 @@ describe('FIX-170 resolver: descrição vira sugestão, nunca seleção', () => 
     }
   });
 });
+

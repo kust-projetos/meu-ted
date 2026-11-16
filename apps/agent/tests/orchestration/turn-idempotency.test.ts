@@ -16,7 +16,7 @@ const identity: AuthenticatedIdentity = {
 };
 
 const ACCOUNT = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
-const CATEGORY = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' };
+const CATEGORY = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' , kind: 'expense' };
 
 const mutationPlan = () => ({
   version: '2' as const,
