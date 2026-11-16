@@ -57,6 +57,8 @@ describe("H-13: limpeza central do agent no logout/401/troca (+ abort)", () => {
   });
 
   it("troca rápida de workspace invalida o cache mesmo sem clearToken", async () => {
+    // As respostas são contadas (2 mints): o dispositivo já está vinculado a ws-a, então não há sondagem.
+    setToken("device-token-h13", "ws-a");
     const apiSpy = vi
       .spyOn(client, "apiFetch")
       .mockResolvedValueOnce({ token: "agent-token-ws-a", expiresIn: 120 })

@@ -127,6 +127,19 @@ describe("device token vinculado ao workspace do mint (#392)", () => {
     expect(mints().every((m) => m.headers["x-device-token"] === "device-A")).toBe(true);
   });
 
+  it("sondagem sem household na resposta: não sonda de novo a cada mint", async () => {
+    fetchMock.mockImplementation(async (input: unknown) =>
+      String(input).includes("/auth/devices/me") ? json({ deviceId: "dev-1" }) : json({ token: "conn-jwt", expiresIn: 120 }),
+    );
+    setToken("device-legacy");
+    for (let i = 0; i < 3; i += 1) {
+      clearAgentConnectionTokenCache();
+      await fetchAgentConnectionToken("ws-A");
+    }
+    expect(probes()).toHaveLength(1);
+    expect(registers()).toHaveLength(0);
+  });
+
   it("sem token: registra já no workspace do mint", async () => {
     const api = routeApi({});
     await fetchAgentConnectionToken("ws-B");

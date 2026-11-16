@@ -106,6 +106,9 @@ let pendingDeviceSelfHeal: { workspaceId: string | undefined; promise: Promise<s
  */
 const reboundFor = new Set<string>();
 
+/** Tokens cujo household já foi sondado (GET /auth/devices/me) nesta sessão: no máximo 1 sondagem por token. */
+const probedFor = new Set<string>();
+
 /**
  * T04 follow-up (review wave1-fix-pwa): cache em memória do device token,
  * APENAS para storage indisponível (ex.: Safari privado — `getItem`/`setItem`
@@ -289,6 +292,9 @@ const deviceTokenForWorkspace = async (workspaceId: string, signal?: AbortSignal
 
   let household = getTokenHousehold();
   if (!household) {
+    const probeKey = stored.slice(-12);
+    if (probedFor.has(probeKey)) return stored;
+    probedFor.add(probeKey);
     try {
       household = await probeDeviceHousehold(stored, signal);
       if (household) setTokenHousehold(household);
@@ -405,6 +411,7 @@ export const clearAgentSession = (): void => {
   sessionGeneration += 1;
   pendingDeviceSelfHeal = null;
   reboundFor.clear();
+  probedFor.clear();
   // P2: session teardown also drops per-conversation runtime beliefs, so a
   // stale B confirmation can never offer cancel to another login's A0 turns.
   clearTedRuntimeViews();
