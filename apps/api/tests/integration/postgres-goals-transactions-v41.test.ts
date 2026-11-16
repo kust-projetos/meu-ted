@@ -3,7 +3,6 @@ import type { Pool } from 'pg';
 import { createPool } from '../../src/db/pool.js';
 import { runMigrations } from '../../src/read-models/sql/migrate.js';
 import { createPostgresGoalStore } from '../../src/goals/postgres.js';
-import { createPostgresWriteStore } from '../../src/writes/postgres.js';
 import { requireTestDatabase } from '../../src/db/db-guard.js';
 
 // V4.1 tasks 2.10/2.11/2.13 — PG-gated proofs (SPEC §9.6 + §9.7).

@@ -78,8 +78,3 @@ export const assertWorkspaceWritable = async (
   }
 };
 
-/** PG `undefined_table` (42P01) / `undefined_column` (42703). */
-const isMissingLifecycleRelation = (error: unknown): boolean => {
-  const code = (error as { code?: unknown } | null)?.code;
-  return code === '42P01' || code === '42703';
-};

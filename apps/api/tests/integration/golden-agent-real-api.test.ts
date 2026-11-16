@@ -748,6 +748,7 @@ describe('F4 golden verticals against the authoritative PostgreSQL API (issue #1
         (await readModel.listCategories(householdId)).map((category) => ({
           id: category.id,
           name: category.name,
+          kind: category.kind,
           status: category.status,
         })),
     };
@@ -1959,6 +1960,7 @@ describe('F4 golden Bloco B — conversational undo against the authoritative Po
         (await readModel.listCategories(householdId)).map((category) => ({
           id: category.id,
           name: category.name,
+          kind: category.kind,
           status: category.status,
         })),
     };

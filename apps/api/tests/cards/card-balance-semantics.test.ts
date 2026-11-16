@@ -133,4 +133,29 @@ describe('card read DTO — balanceSemantics discriminator', () => {
     expect(parseBalanceSemantics(null)).toBe('unknown');
   });
 
+  it('card DTOs leak no raw persistence/schema detail', async () => {
+    const store = createPostgresCardStore(
+      fakePool([
+        [
+          {
+            id: 'c1',
+            household_id: H,
+            name: 'C',
+            kind: 'credit_card',
+            balance_cents: 100,
+            status: 'active',
+            credit_limit_cents: 5000,
+            closing_day: 1,
+            due_day: 10,
+          },
+        ],
+      ]),
+    );
+
+    const [dto] = await store.listCreditCardAccounts(H);
+    for (const leaked of LEAK_KEYS) {
+      expect(dto, `must not leak ${leaked}`).not.toHaveProperty(leaked);
+    }
+    expect(dto!.balanceSemantics).toBe('outstanding_debt');
+  });
 });

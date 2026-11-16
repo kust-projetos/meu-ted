@@ -226,35 +226,6 @@ const seedCanonCategory = async (db: Pool, householdId: string, kind: 'expense' 
 
 // ── Legacy seed helpers ───────────────────────────────────────────────
 
-const seedLegacyCard = async (db: Pool, householdId: string): Promise<string> => {
-  const id = randomUUID();
-  await db.query(
-    `INSERT INTO accounts (id, household_id, name, is_credit_card, active, credit_limit_cents, closing_day, due_day, initial_balance_cents)
-     VALUES ($1, $2, 'Nubank', true, true, 500000, 15, 25, 0)`,
-    [id, householdId],
-  );
-  return id;
-};
-
-const seedLegacyBank = async (db: Pool, householdId: string): Promise<string> => {
-  const id = randomUUID();
-  await db.query(
-    `INSERT INTO accounts (id, household_id, name, is_credit_card, active, initial_balance_cents)
-     VALUES ($1, $2, 'Itaú', false, true, 100000)`,
-    [id, householdId],
-  );
-  return id;
-};
-
-const seedLegacyCategory = async (db: Pool, householdId: string, kind: 'expense' | 'income'): Promise<string> => {
-  const id = randomUUID();
-  await db.query(
-    `INSERT INTO categories (id, household_id, name, kind, active) VALUES ($1, $2, $3, $4, true)`,
-    [id, householdId, `Cat-${kind}-${randomUUID().slice(0, 8)}`, kind],
-  );
-  return id;
-};
-
 describeIfDb('Postgres cards V4.1 hardening (tasks 2.5–2.9, 2.18)', () => {
   beforeAll(async () => {
     adminPool = createPool({ connectionString: DB_URL!, max: 2 });

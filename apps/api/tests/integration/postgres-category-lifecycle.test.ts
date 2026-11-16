@@ -188,13 +188,6 @@ const activeCanonical = async (db: Pool, householdId: string, categoryId: string
   return result.rows[0]?.status === 'active';
 };
 
-const activeLegacy = async (db: Pool, householdId: string, categoryId: string): Promise<boolean> => {
-  const result = await db.query<{ active: boolean }>(
-    `SELECT active FROM categories WHERE id = $1 AND household_id = $2`, [categoryId, householdId],
-  );
-  return result.rows[0]?.active === true;
-};
-
 const transactionReferenceCount = async (db: Pool, householdId: string, categoryId: string): Promise<number> => {
   const result = await db.query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM transactions

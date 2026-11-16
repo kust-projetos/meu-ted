@@ -63,11 +63,6 @@ describeIfDb('accounts.update rename PG — canonical + legacy', () => {
     households.push(h);
     return h;
   };
-  const trackLegacy = (h: string): string => {
-    legacyHouseholds.push(h);
-    return h;
-  };
-
   beforeAll(async () => {
     const pools = await prepareAccountValidationDatabases({
       baseUrl: DB_URL!,
