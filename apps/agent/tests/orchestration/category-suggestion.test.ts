@@ -18,7 +18,7 @@ const makeReader = (categories: readonly EntitySummary[] = [EXPENSE]): EntityRea
   listAccounts: async () => [ACCOUNT_A, ACCOUNT_B],
   listCategories: async () => categories,
 });
-const setup = (suggest?: CategorySuggestionProvider, categories: readonly EntitySummary[] = [EXPENSE]) => {
+const setup = (suggest?: CategorySuggestionProvider, categories: readonly EntitySummary[] = [EXPENSE], events?: (type: string, fields: Record<string, unknown>) => void) => {
   const request = vi.fn(async (method: string, path: string, options?: { body?: unknown }) => {
     if (method === 'GET' && path === '/pending-operations/v2/active') return { items: [], total: 0 };
     if (method === 'POST' && path === '/pending-operations/v2/propose') return { id: 'pending-test' };
@@ -29,6 +29,7 @@ const setup = (suggest?: CategorySuggestionProvider, categories: readonly Entity
     entityReader: makeReader(categories),
     draftStore: new InMemoryMutationDraftStore(),
     plan,
+    ...(events ? { events } : {}),
     ...(suggest ? { categorySuggestionProvider: suggest } : {}),
   });
   const turn = (text: string, intentionId: string) => orchestrator.runTurn(normalizeRestTurn({ text, intentionId }, identity));
@@ -57,16 +58,42 @@ describe('semantic category suggestion fallback', () => {
   });
 
   it.each([
-    ['other category kind', async () => ({ categoryId: INCOME.id }), [EXPENSE, INCOME]],
-    ['nonexistent category', async () => ({ categoryId: '00000000-0000-4000-8000-000000000099' }), [EXPENSE]],
-    ['provider error', async () => { throw new Error('provider failure'); }, [EXPENSE]],
-    ['null result', async () => null, [EXPENSE]],
-  ])('%s falls back to clarification', async (_label, provider, cats) => {
+    ['other category kind', async () => ({ categoryId: INCOME.id }), [EXPENSE, INCOME], 'rejected'],
+    ['nonexistent category', async () => ({ categoryId: '00000000-0000-4000-8000-000000000099' }), [EXPENSE], 'rejected'],
+    ['provider error', async () => { throw new Error('provider failure'); }, [EXPENSE], 'error'],
+    ['null result', async () => null, [EXPENSE], 'unavailable'],
+  ])('%s falls back to clarification and emits telemetry', async (_label, provider, cats, status) => {
     const suggestion = vi.fn(async () => await (provider as () => Promise<{ categoryId: string } | null>)());
-    const { turn } = setup(suggestion, cats as EntitySummary[]);
+    const events = vi.fn();
+    const { turn } = setup(suggestion, cats as EntitySummary[], events);
     await turn('gastei 50 de carne', `cat-fallback-1-${String(_label)}`);
     const result = await turn('Nubank', `cat-fallback-2-${String(_label)}`);
     expect(result.clarification?.missingFields).toContain('categoryId');
+    const emitted = events.mock.calls.filter(([type]) => type === 'mutation.category_suggestion');
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]?.[1]).toMatchObject({ status, source: 'model' });
+    expect(JSON.stringify(emitted[0]?.[1])).not.toContain('carne');
+  });
+
+  it('emits accepted and timeout outcomes', async () => {
+    const accepted = vi.fn();
+    const ok = setup(vi.fn(async () => ({ categoryId: EXPENSE.id })), [EXPENSE], accepted);
+    await ok.turn('gastei 50 de carne', 'cat-ev-ok-1');
+    await ok.turn('Nubank', 'cat-ev-ok-2');
+    expect(accepted.mock.calls.find(([t]) => t === 'mutation.category_suggestion')?.[1]).toMatchObject({ status: 'accepted' });
+
+    vi.useFakeTimers();
+    try {
+      const slowEvents = vi.fn();
+      const slow = setup(vi.fn(() => new Promise<null>(() => {})), [EXPENSE], slowEvents);
+      await slow.turn('gastei 50 de carne', 'cat-ev-slow-1');
+      const pending = slow.turn('Nubank', 'cat-ev-slow-2');
+      await vi.advanceTimersByTimeAsync(3100);
+      await pending;
+      expect(slowEvents.mock.calls.find(([t]) => t === 'mutation.category_suggestion')?.[1]).toMatchObject({ status: 'timeout' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not spend inference when explicit category resolves the draft', async () => {
