@@ -76,7 +76,7 @@ describe('AGENT-010 sanitized lifecycle events', () => {
       // SPEC §7.2/§7.3: single account auto-resolves, UUID category verified.
       entityReader: {
         listAccounts: async () => [{ id: '00000000-0000-4000-8000-0000000000a1', name: 'Nubank' }],
-        listCategories: async () => [{ id: '00000000-0000-4000-8000-000000000001', name: 'Mercado' }],
+        listCategories: async () => [{ id: '00000000-0000-4000-8000-000000000001', name: 'Mercado' , kind: 'expense' }],
       },
     });
     await orchestrator.runTurn(normalizeRestTurn({ text: 'gastei R$ 12,34 no mercado na categoria 00000000-0000-4000-8000-000000000001', intentionId: 'intent-mut' }, identity));

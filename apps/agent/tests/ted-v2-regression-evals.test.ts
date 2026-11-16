@@ -22,7 +22,30 @@ type Scenario = BehavioralScenario & {
 
 async function loadScenarios(): Promise<Scenario[]> {
   const path = resolve(import.meta.dirname, "../evals/ted-v2-regression-matrix.json");
-  return JSON.parse(await readFile(path, "utf8")) as Scenario[];
+  const scenarios = JSON.parse(await readFile(path, "utf8")) as Scenario[];
+  return scenarios.map((scenario) => {
+    const exec = scenario.exec as {
+      utterance?: string;
+      utterances?: string[];
+      entities?: { categories?: { id: string; name: string; kind?: "expense" | "income" }[] };
+    };
+    const utterance = exec.utterance ?? exec.utterances?.[0] ?? "";
+    const kind = /\b(recebi|ganhei)\b/i.test(utterance) ? "income" : "expense";
+    if (!exec.entities?.categories) return scenario;
+    return {
+      ...scenario,
+      exec: {
+        ...exec,
+        entities: {
+          ...exec.entities,
+          categories: exec.entities.categories.map((category) => ({
+            ...category,
+            kind: category.kind ?? kind,
+          })),
+        },
+      },
+    };
+  });
 }
 
 describe("TED V2 deterministic regression matrix", () => {

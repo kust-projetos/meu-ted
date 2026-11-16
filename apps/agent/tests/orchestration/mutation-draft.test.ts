@@ -36,8 +36,8 @@ const identity: AuthenticatedIdentity = {
 
 const NUBANK = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
 const ITAU = { id: '00000000-0000-4000-8000-000000000002', name: 'Itaú' };
-const MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' };
-const CARNE_BOVINA = { id: '00000000-0000-4000-8000-000000000021', name: 'Carne Bovina' };
+const MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' , kind: 'expense' };
+const CARNE_BOVINA = { id: '00000000-0000-4000-8000-000000000021', name: 'Carne Bovina' , kind: 'expense' };
 
 const reader = (
   accounts = [NUBANK, ITAU],
@@ -366,9 +366,11 @@ describe('SPEC §25.3.1 — MutationDraft multi-turno', () => {
   it('incompatible new intention: replaced, zero field inheritance', async () => {
     const fake = makeFakeApi();
     const store = new InMemoryMutationDraftStore();
-    const orchestrator = setup(fake, store);
+    const orchestrator = setup(fake, store, {
+      entityReader: reader([NUBANK, ITAU], [MERCADO, { id: 'income-salary', name: 'Salário', kind: 'income' }]),
+    });
     await turn(orchestrator, 'Gastei R$ 85 no mercado', 'msg-replace-1');
-    const second = await turn(orchestrator, 'esquece isso, recebi 500 reais no Nubank categoria mercado', 'msg-replace-2');
+    const second = await turn(orchestrator, 'esquece isso, recebi 500 reais no Nubank categoria salário', 'msg-replace-2');
     expect(second.mutation?.operationId).toMatch(/^pending-/);
     const proposes = fake.request.mock.calls.filter((call) => call[0] === 'POST');
     const body = proposes[proposes.length - 1]?.[2] as { body?: { tool?: string; normalizedArgs?: Record<string, unknown> } };
@@ -593,7 +595,7 @@ describe('A07/R07 — goal metadata, fragments and corrections', () => {
   it('AC14: the "de X" fragment needs a pending category — the fresh path never reads it', async () => {
     const fake = makeFakeApi();
     const store = new InMemoryMutationDraftStore();
-    const IFOOD = { id: '00000000-0000-4000-8000-000000000041', name: 'Ifood' };
+    const IFOOD = { id: '00000000-0000-4000-8000-000000000041', name: 'Ifood', kind: 'expense' };
     const orchestrator = setup(fake, store, {
       entityReader: reader([NUBANK], [IFOOD]),
       now: () => NOW_MS,
@@ -1484,7 +1486,7 @@ describe('A07/RR — interleaving, correção inequívoca e fragmentos', () => {
     const fake = makeFakeApi();
     const store = new InMemoryMutationDraftStore();
     const CARNE_CONTA = { id: '00000000-0000-4000-8000-000000000031', name: 'Carne' };
-    const CARNE_CATEGORIA = { id: '00000000-0000-4000-8000-000000000032', name: 'Carne' };
+    const CARNE_CATEGORIA = { id: '00000000-0000-4000-8000-000000000032', name: 'Carne', kind: 'expense' };
     const orchestrator = await openDraft(fake, store, {
       entityReader: reader([CARNE_CONTA, NUBANK], [CARNE_CATEGORIA]),
     });
@@ -1520,7 +1522,7 @@ describe('A07/RR — interleaving, correção inequívoca e fragmentos', () => {
     const fake = makeFakeApi();
     const store = new InMemoryMutationDraftStore();
     const ALIMENTACAO_CONTA = { id: '00000000-0000-4000-8000-000000000041', name: 'Alimentação' };
-    const ALIMENTACAO_CATEGORIA = { id: '00000000-0000-4000-8000-000000000042', name: 'Alimentação' };
+    const ALIMENTACAO_CATEGORIA = { id: '00000000-0000-4000-8000-000000000042', name: 'Alimentação', kind: 'expense' };
     let categoriesAvailable = false;
     const orchestrator = await openDraft(fake, store, {
       entityReader: {

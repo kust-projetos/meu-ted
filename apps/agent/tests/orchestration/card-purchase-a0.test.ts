@@ -16,7 +16,7 @@ const run = async (text: string, accountRows = accounts(), options: { turnPlan?:
   const orchestrator = new ConversationOrchestrator({
     mutationApiClient: new MutationApiClient({ request }),
     plan: () => options.turnPlan ?? plan(),
-    entityReader: { scope: { workspaceId: options.accountScope ?? 'workspace' }, listAccounts: async () => accountRows, listCategories: async () => [{ id: categoryId, name: 'Mercado' }] },
+    entityReader: { scope: { workspaceId: options.accountScope ?? 'workspace' }, listAccounts: async () => accountRows, listCategories: async () => [{ id: categoryId, name: 'Mercado' , kind: 'expense' }] },
     ...(options.withDraft === false ? {} : { draftStore: new InMemoryMutationDraftStore() }),
     autoExecutionClient,
   });

@@ -10,7 +10,7 @@ import { decodeDelegatedTurnToken } from '../../src/delegated-token.js';
 
 const identity: AuthenticatedIdentity = { actorId: 'actor-1', workspaceId: 'workspace-1', role: 'member', deviceId: 'device-1' };
 const account = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
-const category = { id: '00000000-0000-4000-8000-000000000011', name: 'Almoço' };
+const category = { id: '00000000-0000-4000-8000-000000000011', name: 'Almoço' , kind: 'expense' };
 const reader: EntityReader = { listAccounts: async () => [account], listCategories: async () => [category] };
 const mutationPlan = () => ({
   version: '2' as const, mode: 'mutation-proposal' as const, domain: 'transactions' as const,

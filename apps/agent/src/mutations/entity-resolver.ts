@@ -569,7 +569,8 @@ export const resolveMutationEntities = async (
 
   const scope = reader.scope?.workspaceId;
   const usableAccounts = usableEntities(accounts, scope);
-  const usableCategories = usableEntities(categories, scope);
+  const transactionCategories = categories.filter((category) => category.kind === parsed.kind);
+  const usableCategories = usableEntities(transactionCategories, scope);
   const confirmedAccountId = options.confirmed?.accountId?.trim() ?? '';
   const confirmedCategoryId = options.confirmed?.categoryId?.trim() ?? '';
   // R08: a confirmed alias is checked against the CURRENT list up front, so a
@@ -850,7 +851,11 @@ export const revalidateResolvedEntities = async (
 
   const scope = reader.scope?.workspaceId;
   const usableAccounts = usableEntities(accounts, scope);
-  const usableCategories = usableEntities(categories, scope);
+  const resolvedCategory = categories.find((row) => byId(row.id) === byId(resolution.categoryId));
+  const categoryKind =
+    resolvedCategory?.kind === 'expense' || resolvedCategory?.kind === 'income' ? resolvedCategory.kind : undefined;
+  const categoryCatalog = categoryKind ? categories.filter((row) => row.kind === categoryKind) : categories;
+  const usableCategories = usableEntities(categoryCatalog, scope);
   const account = usableAccounts.find((row) => byId(row.id) === byId(resolution.accountId));
   const category = usableCategories.find((row) => byId(row.id) === byId(resolution.categoryId));
   if (account && category) {

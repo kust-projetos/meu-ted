@@ -53,7 +53,7 @@ const mockProposalUpstream = (options: { terminalSuccess?: boolean } = {}) => {
     }
     if (String(input).includes("/categories")) {
       return new Response(
-        JSON.stringify({ items: [{ id: "00000000-0000-4000-8000-000000000001", name: "Mercado" }] }),
+        JSON.stringify({ items: [{ id: "00000000-0000-4000-8000-000000000001", name: "Mercado", kind: "expense" }] }),
         { status: 200 },
       );
     }

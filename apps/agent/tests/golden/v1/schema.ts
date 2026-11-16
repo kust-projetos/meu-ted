@@ -89,7 +89,7 @@ export type GoldenInput = Readonly<{
 
 export type GoldenInitialState = Readonly<{
   accounts?: readonly Readonly<{ id: string; name: string }>[];
-  categories?: readonly Readonly<{ id: string; name: string }>[];
+  categories?: readonly Readonly<{ id: string; name: string; kind?: "expense" | "income" }>[];
   /** Memories seeded via `rememberFact` before the first turn. */
   memory?: readonly Readonly<{ kind: "fact" | "preference" | "learning" | "summary"; content: string }>[];
   /**

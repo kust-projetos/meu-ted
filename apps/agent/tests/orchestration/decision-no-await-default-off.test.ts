@@ -38,7 +38,7 @@ const reader: EntityReader = {
     { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' },
     { id: '00000000-0000-4000-8000-000000000002', name: 'Itaú' },
   ],
-  listCategories: async () => [{ id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' }],
+  listCategories: async () => [{ id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' , kind: 'expense' }],
 };
 
 const enabledEnv = {

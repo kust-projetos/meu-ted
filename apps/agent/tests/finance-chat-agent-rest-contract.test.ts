@@ -250,7 +250,7 @@ describe("FinanceChatAgent REST Contract & Shared Transcript Security", () => {
         return new Response(JSON.stringify({ items: [{ id: "00000000-0000-4000-8000-0000000000a1", name: "Nubank" }] }), { status: 200 });
       }
       if (String(input).includes("/categories")) {
-        return new Response(JSON.stringify({ items: [{ id: "00000000-0000-4000-8000-000000000001", name: "Mercado" }] }), { status: 200 });
+        return new Response(JSON.stringify({ items: [{ id: "00000000-0000-4000-8000-000000000001", name: "Mercado", kind: "expense" }] }), { status: 200 });
       }
       throw new Error(`unexpected upstream request: ${String(input)}`);
     });

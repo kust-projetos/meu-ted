@@ -17,7 +17,7 @@ const identity: AuthenticatedIdentity = {
 
 const ACCOUNT_NUBANK = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
 const ACCOUNT_ITAU = { id: '00000000-0000-4000-8000-000000000002', name: 'Itaú' };
-const CATEGORY_MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' };
+const CATEGORY_MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' , kind: 'expense' as const };
 
 const mutationPlan = () => ({
   version: '2' as const,
@@ -32,7 +32,7 @@ const mutationPlan = () => ({
 
 const reader = (
   accounts: { id: string; name: string }[],
-  categories: { id: string; name: string }[],
+  categories: { id: string; name: string; kind?: string }[],
 ): EntityReader => ({
   listAccounts: async () => accounts,
   listCategories: async () => categories,
@@ -115,7 +115,7 @@ describe('mutation entity resolution wiring (SPEC §7 H-01)', () => {
     const orchestrator = new ConversationOrchestrator({
       mutationApiClient: api,
       plan: () => mutationPlan(),
-      entityReader: reader([ACCOUNT_NUBANK], [{ id: '00000000-0000-4000-8000-000000000011', name: 'Carne' }]),
+      entityReader: reader([ACCOUNT_NUBANK], [{ id: '00000000-0000-4000-8000-000000000011', name: 'Carne', kind: 'expense' }]),
     });
     const result = await orchestrator.runTurn(
       normalizeRestTurn({ text: 'gastei 50 de carne', intentionId: 'intent-r03-carne' }, identity),
@@ -368,3 +368,4 @@ describe('A08 entity resolution signals in a sanitized event (R08)', () => {
     expect(seen.filter((event) => event.type === 'mutation.entity_resolution')).toHaveLength(0);
   });
 });
+

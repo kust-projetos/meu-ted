@@ -44,7 +44,7 @@ const ctxOf = () => ({
 
 const NUBANK = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
 const ITAU = { id: '00000000-0000-4000-8000-000000000002', name: 'Itaú' };
-const MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' };
+const MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' , kind: 'expense' };
 
 const reader = (accounts = [NUBANK, ITAU], categories = [MERCADO]): EntityReader => ({
   listAccounts: async () => accounts,

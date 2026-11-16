@@ -33,7 +33,7 @@ const IDENTITY = {
 
 const INITIAL = {
   accounts: [{ id: '11111111-1111-4111-8111-111111111111', name: 'Conta Corrente' }],
-  categories: [{ id: '22222222-2222-4222-8222-222222222222', name: 'Alimentação' }],
+  categories: [{ id: '22222222-2222-4222-8222-222222222222', name: 'Alimentação', kind: 'expense' as const }],
 };
 
 type CapturedEvent = { type: string; fields: Record<string, unknown> };
@@ -121,3 +121,4 @@ describe('PR137-HARDEN round 4 P1-B (golden, stack real): outage total → repla
     expect(backend.executionsSucceeded).toBe(1);
   });
 });
+

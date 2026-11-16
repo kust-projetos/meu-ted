@@ -12,17 +12,17 @@ import { interpretMutationUtterance } from '../../src/mutations/semantic-interpr
 
 const ACCOUNT_NUBANK = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
 const ACCOUNT_ITAU = { id: '00000000-0000-4000-8000-000000000002', name: 'Itaú' };
-const CATEGORY_MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado' };
-const CATEGORY_ALIMENTACAO = { id: '00000000-0000-4000-8000-000000000012', name: 'Alimentação' };
-const CATEGORY_CARNE = { id: '00000000-0000-4000-8000-000000000014', name: 'Carne' };
-const CATEGORY_CARNE_BOVINA = { id: '00000000-0000-4000-8000-000000000015', name: 'Carne Bovina' };
+const CATEGORY_MERCADO = { id: '00000000-0000-4000-8000-000000000011', name: 'Mercado', kind: 'expense' };
+const CATEGORY_ALIMENTACAO = { id: '00000000-0000-4000-8000-000000000012', name: 'Alimentação', kind: 'expense' };
+const CATEGORY_CARNE = { id: '00000000-0000-4000-8000-000000000014', name: 'Carne', kind: 'expense' };
+const CATEGORY_CARNE_BOVINA = { id: '00000000-0000-4000-8000-000000000015', name: 'Carne Bovina', kind: 'expense' };
 
 const reader = (
   accounts: EntitySummary[] = [],
   categories: EntitySummary[] = [],
 ): EntityReader => ({
   listAccounts: async () => accounts,
-  listCategories: async () => categories,
+  listCategories: async () => categories.map((category) => ({ kind: 'expense', ...category })),
 });
 
 const parsed = (overrides: Partial<ResolvableMutation> = {}): ResolvableMutation => ({
@@ -34,6 +34,64 @@ const parsed = (overrides: Partial<ResolvableMutation> = {}): ResolvableMutation
 });
 
 describe('entity-resolver (SPEC §7.2/§7.3/§7.6, H-01)', () => {
+  const typedCatalog: EntitySummary[] = [
+    { id: 'expense-housing', name: 'Moradia', kind: 'expense' },
+    { id: 'expense-rent', name: 'Aluguel', kind: 'expense' },
+    { id: 'expense-transit', name: 'Transporte', kind: 'expense' },
+    { id: 'expense-light', name: 'Luz', kind: 'expense' },
+    { id: 'income', name: 'Renda', kind: 'income' },
+    { id: 'income-salary', name: 'Salário', kind: 'income' },
+    { id: 'income-freelance', name: 'Freelance', kind: 'income' },
+  ];
+
+  it('offers only income categories when clarifying an income', async () => {
+    const result = await resolveMutationEntities(
+      parsed({ kind: 'income', amountCents: 320000, description: 'décimo', categoryQuery: undefined }),
+      'Recebi 3200 de décimo',
+      reader([ACCOUNT_NUBANK], typedCatalog),
+    );
+    expect(result.complete).toBe(false);
+    if (!result.complete) {
+      expect(result.clarification).not.toMatch(/Moradia|Aluguel|Transporte|Luz/);
+      expect(result.clarification).toMatch(/Renda/);
+      expect(result.clarification).toMatch(/Salário/);
+      expect(result.clarification).toMatch(/Freelance/);
+    }
+  });
+
+  it('offers only expense categories when clarifying an expense', async () => {
+    const result = await resolveMutationEntities(
+      parsed({ description: 'café' }),
+      'Gastei com café',
+      reader([ACCOUNT_NUBANK], typedCatalog),
+    );
+    expect(result.complete).toBe(false);
+    if (!result.complete) {
+      expect(result.clarification).toMatch(/Moradia|Aluguel|Transporte|Luz/);
+      expect(result.clarification).not.toMatch(/Renda|Salário|Freelance/);
+    }
+  });
+
+  it('fails closed for a category without kind during income resolution', async () => {
+    const result = await resolveMutationEntities(
+      parsed({ kind: 'income', description: 'décimo' }),
+      'Recebi décimo',
+      { listAccounts: async () => [], listCategories: async () => [{ id: 'unknown-kind', name: 'Salário' , kind: 'expense' }] },
+    );
+    expect(result.complete).toBe(false);
+    if (!result.complete) expect(result.clarification).not.toMatch(/Salário/);
+  });
+
+  it('resolves an exact category of the transaction kind', async () => {
+    const result = await resolveMutationEntities(
+      parsed({ kind: 'income', categoryQuery: 'Salário' }),
+      'Recebi salário',
+      reader([ACCOUNT_NUBANK], typedCatalog),
+    );
+    expect(result.complete).toBe(true);
+    if (result.complete) expect(result.categoryId).toBe('income-salary');
+  });
+
   it('RED: multiple accounts without a hint stay unresolved with real missingFields', async () => {
     const result = await resolveMutationEntities(
       parsed(),
@@ -588,6 +646,30 @@ describe('entity-resolver A08 (R08): revalidação antes do propose', () => {
     }
   });
 
+  it('revalidation keeps clarification categories within the resolved transaction kind', async () => {
+    const incomeReader: EntityReader = {
+      scope: { workspaceId: 'workspace-income' },
+      listAccounts: async () => [ACCOUNT_NUBANK],
+      listCategories: async () => [
+        { id: 'income-salary', name: 'Salário', kind: 'income', scopeId: 'other-workspace' },
+        { id: 'expense-market', name: 'Mercado', kind: 'expense', scopeId: 'workspace-income' },
+      ],
+    };
+    const resolution = await resolveMutationEntities(
+      parsed({ kind: 'income', categoryQuery: 'Salário' }),
+      'Recebi salário',
+      reader([ACCOUNT_NUBANK], [{ id: 'income-salary', name: 'Salário', kind: 'income' }]),
+    );
+    if (!resolution.complete) throw new Error('expected a complete income resolution');
+
+    const verified = await revalidateResolvedEntities(resolution, incomeReader);
+    expect(verified.complete).toBe(false);
+    if (!verified.complete) {
+      expect(verified.missingFields).toContain('categoryId');
+      expect(verified.clarification).not.toMatch(/Mercado/);
+    }
+  });
+
   it('RED: revalidação com lista ilegível falha fechado, sem liberar a escrita', async () => {
     const failing: EntityReader = {
       listAccounts: async () => { throw new Error('api.request_failed'); },
@@ -623,7 +705,7 @@ describe('entity-resolver A08 (R08): reader de produção (só linhas ativas)', 
     categories: EntitySummary[],
   ): EntityReader => ({
     listAccounts: async () => accounts.map((account) => ({ ...account, status: 'active' })),
-    listCategories: async () => categories.map((category) => ({ ...category, status: 'active' })),
+    listCategories: async () => categories.map((category) => ({ kind: 'expense', ...category, status: 'active' })),
   });
 
   it('RED: hint mais específico ("Nubank PJ") sem linha correspondente não vira proposta na conta ativa menos específica', async () => {
@@ -960,7 +1042,7 @@ describe('normalizeEntities (fail-closed contract)', () => {
           {
             id: CATEGORY_ALIMENTACAO.id,
             name: 'Alimentação',
-            subcategories: [{ id: CATEGORY_CARNE.id, name: 'Carne' }],
+            subcategories: [{ id: CATEGORY_CARNE.id, name: 'Carne' , kind: 'expense' }],
           },
           { id: CATEGORY_MERCADO.id, name: 'Mercado', children: [{ id: CATEGORY_CARNE_BOVINA.id, name: 'Carne Bovina' }] },
         ],
@@ -996,7 +1078,7 @@ describe('normalizeEntities (fail-closed contract)', () => {
     expectContractError({ items: ['x'] });
     expectContractError({ items: [{ id: ACCOUNT_NUBANK.id, name: 'Nubank' }, null] });
     // Also on a flattened nested child: the tree is read as a whole.
-    expectContractError({ categories: [{ id: CATEGORY_MERCADO.id, name: 'Mercado', subcategories: [null] }] });
+    expectContractError({ categories: [{ id: CATEGORY_MERCADO.id, name: 'Mercado', subcategories: [null] , kind: 'expense' }] });
   });
 
   it('still drops an OBJECT row without id/name instead of raising (documented leniency)', () => {

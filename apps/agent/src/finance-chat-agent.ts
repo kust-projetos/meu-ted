@@ -1,3 +1,4 @@
+// TED_CATEGORY_SUGGESTION_ENABLED enables tool-free category inference only at exact value '1'; otherwise clarification is unchanged.
 import { AIChatAgent, type AgentConnection, type UIMessage } from "agents/ai-chat-agent";
 import { streamText, generateText, stepCountIs } from "ai";
 import { z } from "zod";
@@ -84,6 +85,7 @@ import {
   type AuthenticatedIdentity,
   type TurnInput,
   type TurnPlan,
+  type CategorySuggestionProvider,
 } from "./orchestration/conversation-orchestrator.js";
 import { classifyError, emitSanitizedEvent } from "./observability/events.js";
 import { decisionProviderForDo, type DecisionEnv, type DecisionProvider } from "./decision/provider.js";
@@ -246,7 +248,8 @@ import { isCardPurchaseIntent } from "./mutations/card-purchase-intent.js";
 import { hasAccountDeactivationSignal } from "./mutations/account-deactivation.js";
 import { hasAccountRenameSignal } from "./mutations/account-rename.js";
 import { toActiveOperationRecords } from "./mutations/active-operation-projection.js";
-import { createRequestEntityReader, type EntityReader } from "./mutations/entity-resolver.js";
+import { createRequestEntityReader, normalizeEntities, type EntityReader } from "./mutations/entity-resolver.js";
+import { CATEGORY_SUGGESTION_SYSTEM_PROMPT, categorySuggestionEnabled, categorySuggestionPrompt, parseCategorySuggestion } from "./llm/category-suggestion.js";
 import { isGoalContributionIntent } from "./mutations/goal-contribution-intent.js";
 import { isBudgetCreationIntent } from "./mutations/budget-creation-intent.js";
 import { isBudgetUpdateIntent } from "./mutations/budget-update-intent.js";
@@ -310,6 +313,7 @@ export type Env = {
    * enables search. Unset/blank/any-other ⇒ `disabled`.
    */
   TED_WEB_SEARCH_ENABLED?: string;
+  TED_CATEGORY_SUGGESTION_ENABLED?: string;
   /**
    * A13/G05: OPTIONAL private R2 binding for attachment bytes. Absent ⇒ the
    * ingestion pipeline is UNAVAILABLE (fail-closed) and the upload RPC answers
@@ -2150,6 +2154,45 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     return redactTranscript(text);
   }
 
+  /** Optional tool-free semantic category choice; all failures degrade to clarification. */
+  private async provideCategorySuggestion(request: Parameters<CategorySuggestionProvider>[0]): Promise<{ categoryId: string } | null> {
+    try {
+      const snapshot = await this.resolveIntentionSnapshot(request.input.intentionId);
+      if (!snapshot) return null;
+      const activeSnapshot = await this.authorizeTurn(snapshot, {
+        workspaceId: request.input.workspaceId,
+        actorId: request.input.actorId,
+        intentionId: request.input.intentionId,
+      });
+      const target = {
+        providerId: activeSnapshot.provider_id,
+        modelName: resolveBareModelName(activeSnapshot.provider_id, activeSnapshot.model_id, activeSnapshot.model_name),
+      };
+      if (!target.modelName) return null;
+      const reader = await this.entityReaderForTurn(request.input);
+      const categories = normalizeEntities(await reader.listCategories()).filter((row) =>
+        row.kind === request.kind && row.isActive !== false &&
+        (row.status === undefined || row.status.trim().toLowerCase() === 'active') &&
+        (row.scopeId === undefined || row.scopeId === request.input.workspaceId),
+      );
+      const { prompt, allowedIds } = categorySuggestionPrompt(request, categories);
+      const modelInstance = createLanguageModel(
+        target.providerId, target.modelName, activeSnapshot.protocol as Protocol,
+        (this.env ?? {}) as Record<string, string | undefined>,
+      );
+      const generated = await generateText({
+        model: modelInstance.model,
+        system: CATEGORY_SUGGESTION_SYSTEM_PROMPT,
+        prompt,
+        maxOutputTokens: 100,
+        abortSignal: AbortSignal.timeout(3000),
+      });
+      return parseCategorySuggestion(generated.text, allowedIds);
+    } catch {
+      return null;
+    }
+  }
+
   private orchestratorForChannel(dependencies: {
     mutationApiClient?: MutationApiClient;
     autoExecutionClient?: () => MutationApiClient | undefined;
@@ -2190,6 +2233,9 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       // path (single inference, zero tools) — never the tool-carrying SDK
       // `streamText` loop behind the common provider.
       contentQueryProvider: (input, plan) => this.provideContentQueryResponse(input, plan),
+      ...(categorySuggestionEnabled(this.env) ? {
+        categorySuggestionProvider: (request) => this.provideCategorySuggestion(request),
+      } : {}),
       evidenceProvider: dependencies.evidenceProvider ?? grounding.evidenceProvider,
       correctionProvider: dependencies.correctionProvider ?? grounding.correctionProvider,
       // Issue #86: every channel reaches the optional decision layer through THIS
