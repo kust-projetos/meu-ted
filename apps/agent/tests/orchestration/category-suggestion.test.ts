@@ -5,6 +5,7 @@ import { InMemoryMutationDraftStore } from '../../src/mutations/mutation-draft.j
 import type { EntityReader, EntitySummary } from '../../src/mutations/entity-resolver.js';
 import { initializeMemorySchema, recallCorrectionByFingerprint, rememberCorrection, setMemoryEnabled } from '../../src/agent-config/memory/store.js';
 import { createMemorySql } from '../helpers/memory-sql.js';
+import { FinanceChatAgent } from '../../src/finance-chat-agent.js';
 
 const identity: AuthenticatedIdentity = { actorId: 'actor', workspaceId: 'workspace', role: 'member', deviceId: 'device' };
 const ACCOUNT_A = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
@@ -20,7 +21,7 @@ const makeReader = (categories: readonly EntitySummary[] = [EXPENSE]): EntityRea
   listAccounts: async () => [ACCOUNT_A, ACCOUNT_B],
   listCategories: async () => categories,
 });
-const setup = (suggest?: CategorySuggestionProvider, categories: readonly EntitySummary[] = [EXPENSE], events?: (type: string, fields: Record<string, unknown>) => void, memorySql?: ReturnType<typeof createMemorySql>) => {
+const setup = (suggest?: CategorySuggestionProvider, categories: readonly EntitySummary[] = [EXPENSE], events?: (type: string, fields: Record<string, unknown>) => void, memorySql?: ReturnType<typeof createMemorySql>, draftStore = new InMemoryMutationDraftStore()) => {
   const request = vi.fn(async (method: string, path: string, options?: { body?: unknown }) => {
     if (method === 'GET' && path === '/pending-operations/v2/active') return { items: [], total: 0 };
     if (method === 'POST' && path === '/pending-operations/v2/propose') return { id: 'pending-test' };
@@ -29,17 +30,63 @@ const setup = (suggest?: CategorySuggestionProvider, categories: readonly Entity
   const orchestrator = new ConversationOrchestrator({
     mutationApiClient: new MutationApiClient({ request: request as never }),
     entityReader: makeReader(categories),
-    draftStore: new InMemoryMutationDraftStore(),
+    draftStore,
     plan,
     ...(events ? { events } : {}),
     ...(memorySql ? { memorySql } : {}),
     ...(suggest ? { categorySuggestionProvider: suggest } : {}),
   });
-  const turn = (text: string, intentionId: string) => orchestrator.runTurn(normalizeRestTurn({ text, intentionId }, identity));
-  return { request, turn };
+  const turn = (text: string, intentionId: string, typedText = text) => orchestrator.runTurn(normalizeRestTurn(
+    { text, intentionId },
+    identity,
+    { typedText },
+  ));
+  return { request, turn, orchestrator };
 };
 
 describe('semantic category suggestion fallback', () => {
+  it('keeps category memory read and write off unless the exact rollout flag is enabled', async () => {
+    const sql = createMemorySql();
+    initializeMemorySchema(sql);
+    const request = vi.fn(async (method: string, path: string) => {
+      if (method === 'GET' && path === '/pending-operations/v2/active') return { items: [], total: 0 };
+      if (method === 'POST' && path === '/pending-operations/v2/propose') return { id: 'pending-test' };
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+    const makeWired = (flag: string | undefined, localSql = sql, localDraftStore = new InMemoryMutationDraftStore()) => {
+      const agent = Object.assign(Object.create(FinanceChatAgent.prototype), {
+        env: { TED_CATEGORY_MEMORY_ENABLED: flag },
+        ctx: { storage: { sql: localSql, transactionSync: (fn: () => unknown) => fn() } },
+      }) as FinanceChatAgent;
+      return (agent as unknown as { orchestratorForChannel: (dependencies: Record<string, unknown>) => ConversationOrchestrator })
+        .orchestratorForChannel({
+          mutationApiClient: new MutationApiClient({ request: request as never }),
+          entityReader: makeReader([EXPENSE]),
+          draftStore: localDraftStore,
+          plan,
+        });
+    };
+    rememberCorrection(sql, {
+      workspaceId: 'workspace', actor: 'actor', target: 'carne no nubank', field: 'category',
+      content: 'Para "carne no nubank", a categoria usada é "Mercado".',
+      references: [{ kind: 'category', id: EXPENSE.id }],
+    });
+    const off = makeWired('true');
+    await off.runTurn(normalizeRestTurn({ text: 'gastei 50 de carne no Nubank', intentionId: 'cat-rollout-off-1' }, identity, { typedText: 'gastei 50 de carne no Nubank' }));
+    const offResult = await off.runTurn(normalizeRestTurn({ text: 'Nubank', intentionId: 'cat-rollout-off-2' }, identity, { typedText: 'Nubank' }));
+    expect(offResult.clarification?.missingFields).toContain('categoryId');
+    sql.rows('agent_memory').length = 0;
+    await off.runTurn(normalizeRestTurn({ text: 'categoria Mercado', intentionId: 'cat-rollout-off-3' }, identity, { typedText: 'categoria Mercado' }));
+    expect(sql.rows('agent_memory')).toHaveLength(0);
+
+    const writeSql = createMemorySql();
+    initializeMemorySchema(writeSql);
+    const on = makeWired('1', writeSql);
+    await on.runTurn(normalizeRestTurn({ text: 'gastei 50 de carne no Nubank', intentionId: 'cat-rollout-on-1' }, identity, { typedText: 'gastei 50 de carne no Nubank' }));
+    await on.runTurn(normalizeRestTurn({ text: 'categoria Mercado', intentionId: 'cat-rollout-on-2' }, identity, { typedText: 'categoria Mercado' }));
+    expect(writeSql.rows('agent_memory')).toHaveLength(1);
+  });
+
   it('learns an explicit category answer and reuses it without inference', async () => {
     const sql = createMemorySql();
     initializeMemorySchema(sql);
@@ -99,23 +146,17 @@ describe('semantic category suggestion fallback', () => {
     expect(Object.keys(event ?? {}).sort()).toEqual(['status']);
   });
 
-  it('does not learn category text supplied only by an attachment', async () => {
+  it.each([
+    ['Nubank', 'Nubank [conteúdo do anexo: categoria Mercado]', false],
+    ['categoria Mercado', 'categoria Mercado', true],
+  ])('learns only when typed category provenance matches: %s', async (typedText, composedText, learned) => {
     const sql = createMemorySql();
     initializeMemorySchema(sql);
-    const { turn } = setup(undefined, [EXPENSE], undefined, sql);
-    await turn('gastei 50 de carne', 'cat-attachment-1');
-    const orchestrator = new ConversationOrchestrator({
-      entityReader: makeReader([EXPENSE]),
-      draftStore: new InMemoryMutationDraftStore(),
-      plan,
-      memorySql: sql,
-    });
-    await orchestrator.runTurn(normalizeRestTurn(
-      { text: 'Nubank [conteúdo do anexo: categoria Mercado]', intentionId: 'cat-attachment-2' },
-      identity,
-      { typedText: 'Nubank' },
-    ));
-    expect(sql.rows('agent_memory')).toHaveLength(0);
+    const draftStore = new InMemoryMutationDraftStore();
+    const { turn } = setup(undefined, [EXPENSE], undefined, sql, draftStore);
+    await turn('gastei 50 de carne no Nubank', 'cat-attachment-1');
+    await turn(composedText, 'cat-attachment-2', typedText);
+    expect(sql.rows('agent_memory')).toHaveLength(learned ? 1 : 0);
   });
 
   it('keeps an explicit category choice ahead of memory and never learns an LLM suggestion', async () => {

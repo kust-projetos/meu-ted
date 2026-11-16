@@ -60,6 +60,7 @@ tool→skill derivado das definições — ver `toolSkillLines()`.
 ## Web
 
 `TED_CATEGORY_SUGGESTION_ENABLED` — inferência sem tools para sugerir categoria; somente o valor exato `1` habilita, default-off.
+`TED_CATEGORY_MEMORY_ENABLED` — leitura e aprendizado de memória de categoria; somente o valor exato `1` habilita, default-off.
 
 Env `TAVILY_API_KEY` (preferido) ou `BRAVE_API_KEY` (nenhuma key no código).
 Sem key: tools respondem "busca web indisponível" com elegância.

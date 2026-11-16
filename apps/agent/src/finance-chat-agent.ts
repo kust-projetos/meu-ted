@@ -314,6 +314,7 @@ export type Env = {
    */
   TED_WEB_SEARCH_ENABLED?: string;
   TED_CATEGORY_SUGGESTION_ENABLED?: string;
+  TED_CATEGORY_MEMORY_ENABLED?: string;
   /**
    * A13/G05: OPTIONAL private R2 binding for attachment bytes. Absent ⇒ the
    * ingestion pipeline is UNAVAILABLE (fail-closed) and the upload RPC answers
@@ -2228,7 +2229,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     });
     return new ConversationOrchestrator({
       ...dependencies,
-      memorySql: this.memorySql() ?? undefined,
+      memorySql: this.env?.TED_CATEGORY_MEMORY_ENABLED === '1' ? this.memorySql() ?? undefined : undefined,
       responseProvider: (input, plan) => this.provideUnifiedResponse(input, plan),
       // REVIEW-P1: generative content queries infer through the tool-free
       // path (single inference, zero tools) — never the tool-carrying SDK

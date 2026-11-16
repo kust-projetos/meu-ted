@@ -943,7 +943,10 @@ const normalize = (
   // server-side `typedText` option and is NEVER read from `body`, so a client
   // that sends its own `decisionText`/`typedText` changes nothing.
   const typedText = typeof options?.typedText === 'string' ? scrubForPersistence(options.typedText.trim()) : text;
-  const decisionText = typedText === text ? undefined : typedText;
+  const decisionText = typedText !== text ||
+    (typeof options?.typedText === 'string' && categoryQueryFrom(typedText) !== undefined)
+    ? typedText
+    : undefined;
   // A19-READ-BYPASS: the attachment-data flag is server-side only — a
   // client-supplied `hasAttachmentData` field in `body` is deliberately NOT
   // read, so untrusted input can never route its own turn past the
@@ -5937,19 +5940,24 @@ export class ConversationOrchestrator {
     const partialAmountPending =
       draft.missingFields.includes('amount') &&
       (!Number.isInteger(draft.resolvedArgs.amountCents) || draft.resolvedArgs.amountCents <= 0);
+    const typedDecisionText = input.decisionText ?? (
+      input.attachments.length === 0 && input.hasAttachmentData !== true && !input.attachmentTexts?.length
+        ? input.text
+        : ''
+    );
     const repeatsStoredCategory = draft.missingFields.includes('accountId') &&
       !!draft.resolvedArgs.categoryQuery &&
-      foldSelectorText(input.text) === foldSelectorText(draft.resolvedArgs.categoryQuery);
+      foldSelectorText(typedDecisionText) === foldSelectorText(draft.resolvedArgs.categoryQuery);
     const explicitAccountSpecifierInDraft = /\b(?:na|no)\s+conta\b/iu.test(draft.resolvedArgs.description);
     const categoryAnswerFromAskedSlot = draft.missingFields.includes('categoryId') &&
       explicitAccountSpecifierInDraft
-      ? categoryQueryFrom(input.text, { allowBareFragment: true })
+      ? categoryQueryFrom(typedDecisionText, { allowBareFragment: true })
       : undefined;
     const turnCategory = draft.missingFields.includes('categoryId') || partialAmountPending ||
       (draft.missingFields.includes('accountId') && !!draft.resolvedArgs.categoryQuery)
       ? (categoryAnswerFromAskedSlot ?? (repeatsStoredCategory
         ? { query: draft.resolvedArgs.categoryQuery!, fromFragment: false, bare: true }
-        : categoryQueryFrom(input.text, { allowBareFragment })))
+        : categoryQueryFrom(typedDecisionText, { allowBareFragment })))
       : undefined;
     // FIX-170: a BARE name is adopted as the category answer ONLY when the
     // category is the SOLE pending field. With the account still pending the
@@ -6090,8 +6098,17 @@ export class ConversationOrchestrator {
         },
       },
     );
-    const typedCategoryQuery = categoryQueryFrom(input.decisionText ?? input.text, { allowBareFragment: true })?.query;
-    if (turnCategoryQuery !== undefined && typedCategoryQuery !== undefined && resolution.complete) {
+    const typedCategoryQuery = categoryQueryFrom(typedDecisionText)?.query;
+    const normalizeCategoryProvenance = (value: string): string =>
+      value.normalize('NFC').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR');
+    const categoryProvenanceProven = resolution.complete
+      ? resolution.trace.category.source === 'explicit' &&
+        typedCategoryQuery !== undefined &&
+        [typedCategoryQuery, resolution.categoryName].some(
+          (value) => normalizeCategoryProvenance(value) === normalizeCategoryProvenance(typedCategoryQuery),
+        )
+      : false;
+    if (turnCategoryQuery !== undefined && resolution.complete && categoryProvenanceProven) {
       this.rememberCategoryChoice(input, merged.description, resolution.categoryId, resolution.categoryName);
     }
     const stamp = new Date(this.draftNowMs()).toISOString();
