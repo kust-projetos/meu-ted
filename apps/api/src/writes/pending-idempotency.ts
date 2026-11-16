@@ -137,8 +137,7 @@ const isAccountSnapshot = (value: unknown, householdId: string): value is Accoun
  * transaction id as effect_ref. Replay paths (existing record, lost-race
  * replay, recovery re-execution with the same key) NEVER insert — exactly
  * one audit row per financial effect. Old completed rows without audit are
- * NOT repaired. `schema` selects the audit table shape of the deployment
- * (canonical vs legacy); an unknown operation fails closed.
+ * NOT repaired. An unknown operation fails closed.
  */
 export const runKeyedMutation = async (opts: {
   pool: Pool;
@@ -149,7 +148,6 @@ export const runKeyedMutation = async (opts: {
   audit?: {
     operation: KeyedWriteAuditOperation;
     actorId: string;
-    schema: 'canonical' | 'legacy';
     idempotencyKey?: string;
     beforeDescription?: string;
     afterDescription?: string;
@@ -169,28 +167,13 @@ export const runKeyedMutation = async (opts: {
   const payloadHash = hashPayloadV2(payload);
   const insertAudit = async (client: PoolClient, txId: string): Promise<void> => {
     if (opts.audit === undefined) return;
-    if (opts.audit.schema === 'canonical') {
-      await client.query(
-        `INSERT INTO audit_logs
-           (id, workspace_id, actor_id, operation, event_type, payload_hash, effect_ref, metadata)
-         VALUES (gen_random_uuid(), $1, $2, $3, 'financial_effect.committed', $4, $5, $6)`,
-         [householdId, opts.audit.actorId, opts.audit.operation, payloadHash, txId, JSON.stringify(opts.audit.operation === 'transaction.update'
-           ? { entityType: 'transaction', state: 'completed', idempotencyKey: opts.audit.idempotencyKey, before: { description: opts.audit.beforeDescription }, after: { description: opts.audit.afterDescription } }
-           : { entityType: 'transaction' })],
-      );
-      return;
-    }
     await client.query(
       `INSERT INTO audit_logs
-         (id, household_id, user_id, action, entity_type, entity_id, before_json, after_json, created_at)
-       VALUES (gen_random_uuid(), $1, NULL, $2, 'transaction', $3, $4, $5, NOW())`,
-      [householdId, opts.audit.operation, txId,
-        opts.audit.operation === 'transaction.update'
-          ? JSON.stringify({ description: opts.audit.beforeDescription })
-          : null,
-        opts.audit.operation === 'transaction.update'
-          ? JSON.stringify({ description: opts.audit.afterDescription, idempotencyKey: opts.audit.idempotencyKey, actorId: opts.audit.actorId, state: 'completed' })
-          : null],
+         (id, workspace_id, actor_id, operation, event_type, payload_hash, effect_ref, metadata)
+       VALUES (gen_random_uuid(), $1, $2, $3, 'financial_effect.committed', $4, $5, $6)`,
+       [householdId, opts.audit.actorId, opts.audit.operation, payloadHash, txId, JSON.stringify(opts.audit.operation === 'transaction.update'
+         ? { entityType: 'transaction', state: 'completed', idempotencyKey: opts.audit.idempotencyKey, before: { description: opts.audit.beforeDescription }, after: { description: opts.audit.afterDescription } }
+         : { entityType: 'transaction' })],
     );
   };
   try {
