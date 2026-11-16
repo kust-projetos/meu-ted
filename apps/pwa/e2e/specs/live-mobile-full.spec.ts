@@ -52,6 +52,20 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     await page.screenshot({ path: `test-results/live-mobile/${name}.png`, fullPage: false });
   };
 
+  // A Home V2 não renderiza o seletor de espaço (só o PageHeader das demais telas).
+  // Confirma o workspace ativo onde o seletor existe e volta para a página de origem.
+  const expectTestFamilyActive = async (page: Page) => {
+    const switcher = page.getByRole("button", { name: "Selecionar espaço" });
+    if (await switcher.first().isVisible().catch(() => false)) {
+      await expect(switcher.first()).toContainText("Test Family", { timeout: 15000 });
+      return;
+    }
+    const origin = new URL(page.url()).pathname;
+    await page.goto("/registros", { waitUntil: "domcontentloaded" });
+    await expect(switcher.first()).toContainText("Test Family", { timeout: 15000 });
+    await page.goto(origin, { waitUntil: "domcontentloaded" });
+  };
+
   const openTed = async (page: Page) => {
     const launcher = page.getByRole("button", { name: /abrir assistente ted/i }).last();
     await expect(launcher).toBeVisible({ timeout: 20000 });
@@ -324,10 +338,33 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     await expect(fab).toBeVisible({ timeout: 30000 });
     authComplete = true; // 401 no bootstrap antes do login é esperado.
     // Isolar todos os writes no workspace de teste (nunca no junio pessoal).
-    await page.getByRole("button", { name: "Selecionar espaço" }).click();
-    await page.getByRole("option", { name: /Test Family/ }).click();
-    await expect(page.getByRole("button", { name: "Selecionar espaço" })).toContainText("Test Family", { timeout: 15000 });
+    // A Home V2 não renderiza o seletor de espaço; ele vive no PageHeader das
+    // demais telas. Abre uma delas (navegação client-side) antes de selecionar.
+    const workspaceSwitcher = page.getByRole("button", { name: "Selecionar espaço" });
+    if (!(await workspaceSwitcher.first().isVisible().catch(() => false))) {
+      await page.goto("/registros", { waitUntil: "domcontentloaded" });
+    }
+    await expect(workspaceSwitcher.first()).toBeVisible({ timeout: 30000 });
+    // A lista re-renderiza enquanto os espaços carregam: reabre e tenta de novo
+    // em vez de esperar um clique em elemento que fica se desanexando.
+    let selected = false;
+    for (let attempt = 0; attempt < 4 && !selected; attempt++) {
+      await workspaceSwitcher.first().click();
+      try {
+        await page.getByRole("option", { name: /Test Family/ }).click({ timeout: 8000 });
+        selected = true;
+      } catch {
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(1000);
+      }
+    }
+    expect(selected, "selecionou o workspace Test Family").toBe(true);
+    await expect(workspaceSwitcher.first()).toContainText("Test Family", { timeout: 15000 });
     workspaceGuardReady = true;
+    if (!/\/$/.test(new URL(page.url()).pathname)) {
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      await expect(fab).toBeVisible({ timeout: 30000 });
+    }
     await shot(page, "02-home");
 
     // ── CONTA (fixture única por run; sempre exercita POST /accounts) ─────
@@ -365,7 +402,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
     expect(typeof restoredPreference.currentPrincipalId).toBe("string");
     expect(restoredPreference.currentPrincipalId?.length ?? 0).toBeGreaterThan(0);
     expect(restoredPreference.principalId, "workspace preference must be bound to current principal").toBe(restoredPreference.currentPrincipalId);
-    await expect(page.getByRole("button", { name: "Selecionar espaço" })).toContainText("Test Family", { timeout: 15000 });
+    await expectTestFamilyActive(page);
     expect(await page.getByText(ACCOUNT_NAME).count()).toBe(0);
     const novaBtn = page.getByRole("button", { name: "Nova", exact: true });
     await expect(novaBtn).toBeVisible({ timeout: 30000 });
@@ -416,7 +453,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
 
     // ── TRANSAÇÃO via sheet MOBILE (UI real; unique desc evita warning) ────
     await page.goto("/", { waitUntil: "domcontentloaded" });
-    await expect(page.getByRole("button", { name: "Selecionar espaço" })).toContainText("Test Family", { timeout: 15000 });
+    await expectTestFamilyActive(page);
     await fab.click();
     const launchGroup = page.getByRole("group", { name: "Ações de novo lançamento" });
     await expect(launchGroup).toBeVisible({ timeout: 10000 });
@@ -689,7 +726,7 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
         // workspace-scoped reads remain covered by the request guard above.
         await expect(page.getByRole("tablist", { name: "Alertas" })).toBeVisible({ timeout: 15000 });
       } else {
-        await expect(page.getByRole("button", { name: "Selecionar espaço" })).toContainText("Test Family", { timeout: 15000 });
+        await expectTestFamilyActive(page);
       }
       await expect(page.locator("body")).not.toContainText("Carregando…", { timeout: 30000 });
       await shot(page, `11-nav-${path.replace(/\W+/g, "-")}`);
