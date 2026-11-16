@@ -3,6 +3,8 @@ import { ConversationOrchestrator, normalizeRestTurn, type AuthenticatedIdentity
 import { MutationApiClient } from '../../src/mutations/mutation-api-client.js';
 import { InMemoryMutationDraftStore } from '../../src/mutations/mutation-draft.js';
 import type { EntityReader, EntitySummary } from '../../src/mutations/entity-resolver.js';
+import { initializeMemorySchema, recallCorrectionByFingerprint, rememberCorrection } from '../../src/agent-config/memory/store.js';
+import { createMemorySql } from '../helpers/memory-sql.js';
 
 const identity: AuthenticatedIdentity = { actorId: 'actor', workspaceId: 'workspace', role: 'member', deviceId: 'device' };
 const ACCOUNT_A = { id: '00000000-0000-4000-8000-000000000001', name: 'Nubank' };
@@ -18,7 +20,7 @@ const makeReader = (categories: readonly EntitySummary[] = [EXPENSE]): EntityRea
   listAccounts: async () => [ACCOUNT_A, ACCOUNT_B],
   listCategories: async () => categories,
 });
-const setup = (suggest?: CategorySuggestionProvider, categories: readonly EntitySummary[] = [EXPENSE], events?: (type: string, fields: Record<string, unknown>) => void) => {
+const setup = (suggest?: CategorySuggestionProvider, categories: readonly EntitySummary[] = [EXPENSE], events?: (type: string, fields: Record<string, unknown>) => void, memorySql?: ReturnType<typeof createMemorySql>) => {
   const request = vi.fn(async (method: string, path: string, options?: { body?: unknown }) => {
     if (method === 'GET' && path === '/pending-operations/v2/active') return { items: [], total: 0 };
     if (method === 'POST' && path === '/pending-operations/v2/propose') return { id: 'pending-test' };
@@ -30,6 +32,7 @@ const setup = (suggest?: CategorySuggestionProvider, categories: readonly Entity
     draftStore: new InMemoryMutationDraftStore(),
     plan,
     ...(events ? { events } : {}),
+    ...(memorySql ? { memorySql } : {}),
     ...(suggest ? { categorySuggestionProvider: suggest } : {}),
   });
   const turn = (text: string, intentionId: string) => orchestrator.runTurn(normalizeRestTurn({ text, intentionId }, identity));
@@ -37,6 +40,91 @@ const setup = (suggest?: CategorySuggestionProvider, categories: readonly Entity
 };
 
 describe('semantic category suggestion fallback', () => {
+  it('learns an explicit category answer and reuses it without inference', async () => {
+    const sql = createMemorySql();
+    initializeMemorySchema(sql);
+    const provider = vi.fn(async () => null);
+    const { turn } = setup(provider, [EXPENSE], undefined, sql);
+    await turn('gastei 50 de carne no Nubank', 'cat-memory-learn-1');
+    await turn('categoria Mercado', 'cat-memory-learn-2');
+    expect(recallCorrectionByFingerprint(sql, {
+      workspaceId: 'workspace', actor: 'actor', target: 'carne no nubank', field: 'category',
+    })).toMatchObject({ references: [{ kind: 'category', id: EXPENSE.id }] });
+    expect(provider).not.toHaveBeenCalled();
+  });
+
+  it('uses a valid remembered category before inference', async () => {
+    const sql = createMemorySql();
+    initializeMemorySchema(sql);
+    rememberCorrection(sql, {
+      workspaceId: 'workspace', actor: 'actor', target: 'carne', field: 'category',
+      content: 'Para "carne", a categoria usada é "Mercado".',
+      references: [{ kind: 'category', id: EXPENSE.id }],
+    });
+    const provider = vi.fn(async () => null);
+    const events = vi.fn();
+    const { turn, request } = setup(provider, [EXPENSE], events, sql);
+    await turn('gastei 50 de carne', 'cat-memory-hit-1');
+    const result = await turn('Nubank', 'cat-memory-hit-2');
+    expect(provider).not.toHaveBeenCalled();
+    expect(result.mutation?.operationId).toBe('pending-test');
+    expect(events.mock.calls.find(([type]) => type === 'mutation.category_memory')?.[1]).toMatchObject({ status: 'hit' });
+    expect(request.mock.calls.some(([, path]) => /\/(?:confirm|execute|authorize)$/.test(path))).toBe(false);
+  });
+
+  it('keeps an explicit category choice ahead of memory and never learns an LLM suggestion', async () => {
+    const sql = createMemorySql();
+    initializeMemorySchema(sql);
+    rememberCorrection(sql, {
+      workspaceId: 'workspace', actor: 'actor', target: 'carne no nubank', field: 'category',
+      content: 'Para "carne no nubank", a categoria usada é "Salário".',
+      references: [{ kind: 'category', id: INCOME.id }],
+    });
+    const provider = vi.fn(async () => ({ categoryId: EXPENSE.id }));
+    const { turn, request } = setup(provider, [EXPENSE, INCOME], undefined, sql);
+    await turn('gastei 50 de carne no Nubank', 'cat-memory-explicit-1');
+    const result = await turn('categoria Mercado', 'cat-memory-explicit-2');
+    expect(provider).not.toHaveBeenCalled();
+    expect(result.mutation?.operationId).toBe('pending-test');
+    const payload = request.mock.calls.find(([method, path]) => method === 'POST' && path.endsWith('/propose'))?.[2];
+    expect((payload?.body as { normalizedArgs?: Record<string, unknown> } | undefined)?.normalizedArgs?.categoryId).toBe(EXPENSE.id);
+    expect(sql.rows('agent_memory')).toHaveLength(1);
+  });
+
+  it('does not persist a category inferred by the suggestion provider', async () => {
+    const sql = createMemorySql();
+    initializeMemorySchema(sql);
+    const provider = vi.fn(async () => ({ categoryId: EXPENSE.id }));
+    const { turn } = setup(provider, [EXPENSE], undefined, sql);
+    await turn('gastei 50 de carne', 'cat-memory-model-1');
+    await turn('Nubank', 'cat-memory-model-2');
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(sql.rows('agent_memory')).toHaveLength(0);
+  });
+
+  it.each([
+    ['missing', []],
+    ['changed kind', [{ ...EXPENSE, kind: 'income' }]],
+    ['inactive', [{ ...EXPENSE, isActive: false }]],
+    ['other scope', [{ ...EXPENSE, scopeId: 'workspace-other' }]],
+  ])('ignores learned category when catalog state is %s', async (_label, catalog) => {
+    const sql = createMemorySql();
+    initializeMemorySchema(sql);
+    rememberCorrection(sql, {
+      workspaceId: 'workspace', actor: 'actor', target: 'carne', field: 'category',
+      content: 'Para "carne", a categoria usada é "Mercado".',
+      references: [{ kind: 'category', id: EXPENSE.id }],
+    });
+    const provider = vi.fn(async () => null);
+    const events = vi.fn();
+    const { turn } = setup(provider, catalog as EntitySummary[], events, sql);
+    await turn('gastei 50 de carne', 'cat-memory-invalid-1');
+    await turn('Nubank', 'cat-memory-invalid-2');
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(events.mock.calls.find(([type]) => type === 'mutation.category_memory')?.[1]).toMatchObject({ status: 'invalidated' });
+    expect(sql.rows('agent_memory')).toHaveLength(1);
+  });
+
   it('without provider keeps the clarification and makes no inference call', async () => {
     const { turn } = setup();
     const first = await turn('gastei 50 de carne', 'cat-no-provider-1');

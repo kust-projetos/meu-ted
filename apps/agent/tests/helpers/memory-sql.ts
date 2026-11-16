@@ -48,9 +48,11 @@ const splitTopLevelAnd = (raw: string): string[] => {
   let current = '';
   const tokens = raw.split(/(\s+)/);
   for (const token of tokens) {
-    if (token === '(') depth += 1;
-    if (token === ')') depth -= 1;
-    if (/^AND$/.test(token) && depth === 0) {
+    for (const char of token) {
+      if (char === '(') depth += 1;
+      if (char === ')') depth -= 1;
+    }
+    if (/^AND$/i.test(token) && depth === 0) {
       parts.push(current.trim());
       current = '';
       continue;
@@ -367,11 +369,11 @@ export const createMemorySql = (): MemorySqlMock => {
         return [] as T[];
       }
 
-      const select = q.match(/^SELECT \* FROM (\w+)\s*(?:WHERE (.+))?$/i);
+      const select = q.match(/^SELECT \* FROM (\w+)\s*(?:WHERE (.+?))?(?:\s+LIMIT\s+(\d+))?$/i);
       if (select) {
         const rows = table(select[1]!);
         const where = select[2];
-        if (!where) return rows as T[];
+        if (!where) return rows.slice(0, select[3] ? Number(select[3]) : undefined) as T[];
         const predicates = splitTopLevelAnd(where);
         let cursor = 0;
         for (const predicate of predicates) {
@@ -387,7 +389,7 @@ export const createMemorySql = (): MemorySqlMock => {
             if (!ok) return false;
           }
           return true;
-        }) as T[];
+        }).slice(0, select[3] ? Number(select[3]) : undefined) as T[];
       }
 
       const update = q.match(/^UPDATE (\w+) SET (.+?) WHERE (.+)$/i);

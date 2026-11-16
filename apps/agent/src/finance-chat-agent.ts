@@ -2228,6 +2228,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
     });
     return new ConversationOrchestrator({
       ...dependencies,
+      memorySql: this.memorySql() ?? undefined,
       responseProvider: (input, plan) => this.provideUnifiedResponse(input, plan),
       // REVIEW-P1: generative content queries infer through the tool-free
       // path (single inference, zero tools) — never the tool-carrying SDK

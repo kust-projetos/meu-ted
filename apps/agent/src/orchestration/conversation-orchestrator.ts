@@ -134,6 +134,11 @@ import { TurnBudget, type RecoveryPermit, type ResolutionRecoveryRequest } from 
 import { extractAccountsEvidence, renderAccountsAnswer, seeksAccountBalance } from './account-grounding.js';
 import { makesUnverifiedFinancialClaim } from './financial-claim-guard.js';
 import {
+  recallCorrectionByFingerprint,
+  rememberCorrection,
+  type MemorySql,
+} from '../agent-config/memory/store.js';
+import {
   resolveAttachmentContentQuery,
   type AttachmentContentQuery,
 } from './attachment-content-query.js';
@@ -155,7 +160,6 @@ import {
   proposeForgetMemory,
 } from '../agent-config/memory/forget-proposals.js';
 import { listActiveForgetProposals } from '../agent-config/memory/store.js';
-import type { MemorySql } from '../agent-config/memory/store.js';
 import type { MessageAudienceStamp } from '../privacy/conversation-visibility.js';
 import { UndoProposalService } from '../mutations/undo-proposal.js';
 import { isUndoNegation } from '../mutations/undo-proposal.js';
@@ -559,6 +563,11 @@ const CATEGORY_NEGATION_REPLACEMENT = /^\s*(?:n[aã]o|nunca|jamais)\s*,\s*(.+?)\
 const CATEGORY_SEGMENT_SPLIT = /[>/:|\\]+/u;
 const CATEGORY_BARE_MAX_WORDS = 4;
 const CATEGORY_BARE_INNER_PUNCT = /[.?!,;:"“”'‘’]/u;
+
+const normalizeCategoryMemoryTarget = (description: string): string =>
+  description.normalize('NFC').trim().toLocaleLowerCase('pt-BR')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
 
 const categoryQueryFrom = (
   text: string,
@@ -1021,6 +1030,8 @@ export class ConversationOrchestrator {
      */
     contentQueryProvider?: TurnResponseProvider;
     categorySuggestionProvider?: CategorySuggestionProvider;
+    /** Existing DO memory database; category learning remains actor/workspace scoped. */
+    memorySql?: MemorySql;
     /** Read-path evidence source (EvidenceCollector). Absent = legacy pass-through. */
     evidenceProvider?: (input: TurnInput, plan: TurnPlan) => Promise<EvidenceEnvelope | null>;
     /** ONE structured correction retry for unsupported grounded claims. */
@@ -1086,6 +1097,25 @@ export class ConversationOrchestrator {
       (this.dependencies.events ?? emitSanitizedEvent)(eventType, fields);
     } catch {
       // Observability must never break the turn.
+    }
+  }
+
+  private rememberCategoryChoice(input: TurnInput, description: string, categoryId: string, categoryName: string): void {
+    const sql = this.dependencies.memorySql;
+    const target = normalizeCategoryMemoryTarget(description);
+    if (!sql || !target || !input.actorId) return;
+    try {
+      rememberCorrection(sql, {
+        workspaceId: input.workspaceId,
+        actor: input.actorId,
+        target,
+        field: 'category',
+        content: `Para "${target}", a categoria usada é "${categoryName}".`,
+        references: [{ kind: 'category', id: categoryId }],
+        turnFingerprint: input.intentionId,
+      });
+    } catch {
+      // Learning is best-effort and never changes the approval flow.
     }
   }
 
@@ -6055,11 +6085,66 @@ export class ConversationOrchestrator {
         },
       },
     );
+    if (turnCategoryQuery !== undefined && resolution.complete) {
+      this.rememberCategoryChoice(input, merged.description, resolution.categoryId, resolution.categoryName);
+    }
     const stamp = new Date(this.draftNowMs()).toISOString();
     this.emitEntityResolution(input, plan, resolution.trace);
     if (!resolution.complete && resolution.missingFields.length === 1 &&
-        resolution.missingFields[0] === 'categoryId' &&
-        this.dependencies.categorySuggestionProvider) {
+        resolution.missingFields[0] === 'categoryId') {
+      const memoryTarget = normalizeCategoryMemoryTarget(financialMerged.description);
+      let categoryMemoryStatus: 'hit' | 'miss' | 'invalidated' = 'miss';
+      let learnedCategoryId: string | undefined;
+      try {
+        const item = this.dependencies.memorySql
+          ? recallCorrectionByFingerprint(this.dependencies.memorySql, {
+              workspaceId: input.workspaceId,
+              actor: input.actorId,
+              target: memoryTarget,
+              field: 'category',
+            })
+          : null;
+        const reference = item?.references?.find((entry) => entry.kind === 'category');
+        if (reference) {
+          const categories = normalizeEntities(await this.entityReaderOrClosed().listCategories());
+          const category = categories.find((entry) =>
+            entry.id === reference.id &&
+            entry.kind === financialMerged.kind &&
+            entry.isActive !== false &&
+            (entry.status === undefined || entry.status.trim().toLowerCase() === 'active') &&
+            (entry.scopeId === undefined || entry.scopeId === input.workspaceId),
+          );
+          if (category) {
+            const rememberedResolution = await resolveMutationEntities(
+              { ...financialMerged, categoryQuery: reference.id },
+              resolutionHint,
+              this.entityReaderOrClosed(),
+              { confirmed: {
+                ...(draft.resolvedArgs.accountId ? { accountId: draft.resolvedArgs.accountId } : {}),
+                ...(draft.resolvedArgs.categoryId ? { categoryId: draft.resolvedArgs.categoryId } : {}),
+              } },
+            );
+            if (rememberedResolution.complete) {
+              resolution = rememberedResolution;
+              learnedCategoryId = category.id;
+              categoryMemoryStatus = 'hit';
+            } else {
+              categoryMemoryStatus = 'invalidated';
+            }
+          } else {
+            categoryMemoryStatus = 'invalidated';
+          }
+        }
+      } catch {
+        // Memory/catalog failures degrade to the existing inference path.
+      }
+      this.emit('mutation.category_memory', {
+        intentionId: input.intentionId,
+        traceId: input.traceId,
+        channel: input.channel,
+        status: categoryMemoryStatus,
+      });
+      if (!learnedCategoryId && this.dependencies.categorySuggestionProvider) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       // Telemetria de TODO desfecho (sem texto, valor ou ids): só o aceite
       // gerava evento, então timeout/recusa/erro eram indistinguíveis.
@@ -6113,6 +6198,7 @@ export class ConversationOrchestrator {
         status: suggestionStatus,
         latencyMs: Date.now() - startedMs,
       });
+      }
     }
     if (!resolution.complete) {
       // FIX-170 (d): an identical category answer that adds nothing new and
@@ -7029,6 +7115,7 @@ export class ConversationOrchestrator {
         try {
           const current = await client.get(target.operation.id, identity);
           const args: Record<string, unknown> = { ...current.normalizedArgs };
+          let correctedCategory: { id: string; name: string; description: string } | undefined;
           const hint = correctionHintText(raw);
           const explicitDate = explicitFinancialDate(raw)?.date;
           const relativeDate = resolveRelativeDateFragment(raw, { now: new Date(now) });
@@ -7060,6 +7147,13 @@ export class ConversationOrchestrator {
               const exactCategory = scopedCategories.filter((item) => item.name.toLocaleLowerCase('pt-BR') === categoryOrNamingHint.toLocaleLowerCase('pt-BR'));
               if (exactCategory.length === 1 && 'categoryId' in args) {
                 args.categoryId = exactCategory[0]!.id;
+                if (args.categoryId !== current.normalizedArgs.categoryId) {
+                  correctedCategory = {
+                    id: exactCategory[0]!.id,
+                    name: exactCategory[0]!.name,
+                    description: String(current.normalizedArgs.description ?? ''),
+                  };
+                }
               } else if (namingSignal && 'description' in args && hint) {
                 const description = normalizeCorrectionDescription(hint);
                 if (description) {
@@ -7078,6 +7172,9 @@ export class ConversationOrchestrator {
             expectedProposalHash: current.proposalHash,
             idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, `supersede:${current.id}`),
           });
+          if (correctedCategory) {
+            this.rememberCategoryChoice(input, correctedCategory.description, correctedCategory.id, correctedCategory.name);
+          }
           return this.completeTurn(input, plan, startedAt, base, {
             mutation: freeze({ operationId: result.id, status: 'proposed' }),
             response: freeze({ text: 'Atualizei a proposta. Revise os dados e aprove se estiver tudo certo.' }),
