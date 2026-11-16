@@ -19,8 +19,6 @@ import { domainErrors, DomainError } from './errors.js';
 import { buildIdempotencyKey, hashPayloadV2, matchesPayloadHash, type IdempotencyActorContext, type IdempotencyProducer } from './idempotency.js';
 import { runKeyedMutation, runKeyedAccountMutation, runKeyedCategoryMutation } from './pending-idempotency.js';
 import type { ApplyDefaultsResult, DeleteCategoryResult, WriteStore, UpdateAccountOptions, UpdateCategoryOptions, DeactivateCategoryOptions, EditTransactionDescriptionInput, EditTransactionDescriptionOptions } from './store.js';
-import { resolveApplicationUserId } from '../auth/resolve-user-id.js';
-import { resolveHouseholdId } from '../auth/resolve-household-id.js';
 import { assertWorkspaceWritableInTx } from '../auth/workspace-lifecycle-guard.js';
 import { assertCategoryHasNoPersistedReferencesInTx, lockCategoryDeactivationInTx, lockCategoryReferencesInTx } from '../auth/category-lifecycle-guard.js';
 import type {

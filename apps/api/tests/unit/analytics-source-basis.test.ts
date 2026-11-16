@@ -74,14 +74,6 @@ const appFor = async (source: AnalyticsSource): Promise<FastifyInstance> => {
 
 const H = { 'x-device-token': TOKEN, 'content-type': 'application/json' };
 
-/** As três leituras de despesa que aceitam `basis`. */
-const EXPENSE_READS: Array<(source: AnalyticsSource) => Promise<unknown>> = [
-  (source) => source.sumByKind(HOUSEHOLD_A, '2026-01-01', '2026-03-31', householdScope(), { basis: 'competencia' }),
-  (source) => source.dailySums(HOUSEHOLD_A, '2026-01-01', '2026-03-31', householdScope(), { basis: 'competencia' }),
-  (source) =>
-    source.categorySums(HOUSEHOLD_A, '2026-01-01', '2026-03-31', 'expense', householdScope(), { basis: 'competencia' }),
-];
-
 // Fonte cujo banco não tem V056: declara `competencia` indisponível e a rota recusa.
 const unavailableSource = (pool: ReturnType<typeof stubPool>) => ({
   ...createSqlAnalyticsSource(pool, { stores: stores() }),
