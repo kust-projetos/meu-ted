@@ -21,10 +21,13 @@ describe('Pending V2 category auto-creation policy', () => {
   it('auto-executes only a root category with a bounded, clean name and known kind', () => {
     vi.stubEnv('PENDING_V2_CATEGORY_AUTOCREATE_ENABLED', '1');
     expect(decide({ name: 'Streaming', kind: 'expense' }).action).toBe('auto_execute');
+    expect(decide({ name: 'Alimentação'.normalize('NFD'), kind: 'expense' }).action).toBe('auto_execute');
     for (const args of [
       { name: 'x'.repeat(61), kind: 'expense' },
       { name: '', kind: 'expense' },
       { name: 'a\nb', kind: 'expense' },
+      { name: 'Stream\u200Bing', kind: 'expense' },
+      { name: '\u200DStreaming\u200D', kind: 'expense' },
       { name: 'Streaming', kind: 'other' },
       { name: 'Streaming', kind: 'expense', parentId: '00000000-0000-4000-8000-000000000001' },
       { name: 'Streaming', kind: 'expense', other: true },

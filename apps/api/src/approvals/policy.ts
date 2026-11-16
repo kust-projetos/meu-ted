@@ -8,13 +8,15 @@ export const isPendingV2CategoryAutocreateEnabled = (): boolean =>
 export const isAutoCreatableCategory = (value: unknown): boolean => {
   if (!isPendingV2CategoryAutocreateEnabled() || !value || typeof value !== 'object' || Array.isArray(value)) return false;
   const args = value as Record<string, unknown>;
+  const name = typeof args.name === 'string' ? args.name.normalize('NFC') : '';
   return Object.keys(args).length === 2
     && Object.hasOwn(args, 'name')
     && Object.hasOwn(args, 'kind')
     && typeof args.name === 'string'
-    && args.name.trim().length >= 1
-    && args.name.trim().length <= 60
-    && !/\p{Cc}/u.test(args.name)
+    && name.trim().length >= 1
+    && name.trim().length <= 60
+    // Cf characters can hide visually distinct duplicates and bypass uniqueness.
+    && !/[\p{Cc}\p{Cf}]/u.test(name)
     && (args.kind === 'expense' || args.kind === 'income');
 };
 
