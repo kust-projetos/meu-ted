@@ -16,6 +16,22 @@ describe('category suggestion provider helpers', () => {
     expect(prompt).toContain('Alimentação');
     expect(prompt).not.toContain('Salário');
     expect(allowedIds).toEqual(new Set([ID]));
+    expect(categorySuggestionPrompt({ kind: 'expense', description: 'padaria', amountCents: 1000, date: '2026-01-01' }, rows).prompt)
+      .not.toContain('newCategory');
+    expect(categorySuggestionPrompt({ kind: 'expense', description: 'padaria', amountCents: 1000, date: '2026-01-01' }, rows, true).prompt)
+      .toContain('newCategory');
+  });
+  it('accepts a strictly shaped, normalized new category name and rejects ambiguity/unsafe names', () => {
+    expect(parseCategorySuggestion('{"newCategory":{"name":"  Café  "}}', new Set([ID])))
+      .toEqual({ newCategory: { name: 'Café' } });
+    for (const text of [
+      '{"newCategory":{"name":"x","kind":"expense"}}',
+      '{"newCategory":{"name":"\\n"}}',
+      '{"newCategory":{"name":"x\\u200d"}}',
+      `{"newCategory":{"name":"${'x'.repeat(61)}"}}`,
+      '{"newCategory":{"name":42}}',
+      '{"categoryId":"' + ID + '","newCategory":{"name":"x"}}',
+    ]) expect(parseCategorySuggestion(text, new Set([ID]))).toBeNull();
   });
   it('rejects ids outside the allowed catalog', () => {
     expect(parseCategorySuggestion('{"categoryId":"00000000-0000-4000-8000-000000000099"}', new Set([ID]))).toBeNull();

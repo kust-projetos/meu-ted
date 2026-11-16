@@ -438,7 +438,7 @@ export type TurnResult = Readonly<{
   }>;
 }>;
 export type TurnResponseProvider = (input: TurnInput, plan: TurnPlan) => Promise<string>;
-export type CategorySuggestion = Readonly<{ categoryId: string }>;
+export type CategorySuggestion = Readonly<{ categoryId: string } | { newCategory: Readonly<{ name: string }> }>;
 export type CategorySuggestionProvider = (request: {
   readonly input: TurnInput;
   readonly kind: 'expense' | 'income';
@@ -1036,6 +1036,7 @@ export class ConversationOrchestrator {
     categorySuggestionProvider?: CategorySuggestionProvider;
     /** Existing DO memory database; category learning remains actor/workspace scoped. */
     memorySql?: MemorySql;
+    categoryAutoCreateEnabled?: boolean;
     /** Read-path evidence source (EvidenceCollector). Absent = legacy pass-through. */
     evidenceProvider?: (input: TurnInput, plan: TurnPlan) => Promise<EvidenceEnvelope | null>;
     /** ONE structured correction retry for unsupported grounded claims. */
@@ -6062,6 +6063,7 @@ export class ConversationOrchestrator {
       return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text:'Esta alteração exige o fluxo dedicado de descrição; não propus uma mutação financeira genérica.' }) });
     }
     const financialMerged: ResolvableMutation = { kind: merged.kind, amountCents: merged.amountCents, description: merged.description, date: merged.date, ...(categoryQuery ? { categoryQuery } : {}) };
+    let createdCategoryName: string | undefined;
     const permit = this.permitResolutionRecovery(base, {
       kind: merged.kind,
       args: {
@@ -6189,7 +6191,7 @@ export class ConversationOrchestrator {
         } else if (suggestion) {
           suggestionStatus = 'rejected';
         }
-        if (suggestion && suggestion !== TIMED_OUT && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(suggestion.categoryId)) {
+        if (suggestion && suggestion !== TIMED_OUT && 'categoryId' in suggestion && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(suggestion.categoryId)) {
           const suggestedResolution = await resolveMutationEntities(
             { ...financialMerged, categoryQuery: suggestion.categoryId },
             resolutionHint,
@@ -6202,6 +6204,54 @@ export class ConversationOrchestrator {
           if (suggestedResolution.complete) {
             resolution = suggestedResolution;
             suggestionStatus = 'accepted';
+          }
+        } else if (suggestion && suggestion !== TIMED_OUT && 'newCategory' in suggestion &&
+          this.dependencies.categoryAutoCreateEnabled === true) {
+          const name = suggestion.newCategory.name.trim().normalize('NFC');
+          const fold = (value: string) => value.normalize('NFC').toLocaleLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+          const catalog = await this.entityReaderOrClosed().listCategories();
+          const existing = normalizeEntities(catalog).find((row) => fold(row.name) === fold(name));
+          let categoryId = existing?.id;
+          if (!categoryId) {
+            const client = this.dependencies.mutationApiClient;
+            const elevated = this.dependencies.autoExecutionClient?.();
+            if (!client || !elevated || !input.deviceId) throw new Error('category_autocreate_unavailable');
+            const proposal = await client.propose({
+              tool: 'categories.create',
+              normalizedArgs: { name, kind: financialMerged.kind },
+              summary: name,
+              identity: { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId },
+              idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, 'categories.create'),
+            });
+            const authorization = await this.authorizeAutoExecution(elevated, proposal.id, {
+              workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId,
+            });
+            if (authorization.kind !== 'authorized') throw new Error('category_autocreate_refused');
+            const executed = await new PendingOperationCoordinator({ client: elevated }).executeAuthorized(
+              { operationId: proposal.id, attestation: authorization.attestation },
+              { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId },
+              { tool: 'categories.create' },
+            );
+            const entity = (executed.receipt as unknown as { entity?: { type?: unknown; id?: unknown } } | undefined)?.entity;
+            if (entity?.type !== 'category' || typeof entity.id !== 'string' ||
+                !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(entity.id)) {
+              throw new Error('category_autocreate_id_missing');
+            }
+            categoryId = entity.id;
+            createdCategoryName = name;
+          }
+          if (categoryId) {
+            const suggestedResolution = await resolveMutationEntities(
+              { ...financialMerged, categoryQuery: categoryId }, resolutionHint, this.entityReaderOrClosed(),
+              { confirmed: {
+                ...(draft.resolvedArgs.accountId ? { accountId: draft.resolvedArgs.accountId } : {}),
+                ...(draft.resolvedArgs.categoryId ? { categoryId: draft.resolvedArgs.categoryId } : {}),
+              } },
+            );
+            if (suggestedResolution.complete) {
+              resolution = suggestedResolution;
+              suggestionStatus = 'accepted';
+            }
           }
         }
       } catch {
@@ -6277,7 +6327,8 @@ export class ConversationOrchestrator {
       if (!written.ok) {
         return this.refuseDraftWrite(input, plan, startedAt, base, written.current, resolution.clarification);
       }
-      return this.clarifyDraft(input, plan, startedAt, base, written.record, resolution.clarification);
+      return this.clarifyDraft(input, plan, startedAt, base, written.record,
+        createdCategoryName ? `Criei a categoria “${createdCategoryName}”. ${resolution.clarification}` : resolution.clarification);
     }
     // A07/RR fix 1: the args the resolver validated are the ones written, built
     // over the record read at write time (never over a pre-await snapshot).

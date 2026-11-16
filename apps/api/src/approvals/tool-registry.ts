@@ -27,7 +27,7 @@ import type { PayableStore } from '../payables/store.js';
 import type { GoalStore } from '../goals/store.js';
 import type { BudgetStore } from '../budgets/store.js';
 import { buildTedReceipt } from '../reconciliation/effects-registry.js';
-import { AUTOEXECUTION_ELIGIBLE_TOOLS } from './policy.js';
+import { AUTOEXECUTION_ELIGIBLE_TOOLS, isPendingV2CategoryAutocreateEnabled } from './policy.js';
 
 export const APPROVAL_TOOL_IDS = [
   'transactions.expense.create',
@@ -542,7 +542,7 @@ export const renameAccountArgsSchema = z
 export type RenameAccountArgs = z.infer<typeof renameAccountArgsSchema>;
 
 /**
- * V2-protocol envelope for `categories.create` (manual-only).
+  * V2-protocol envelope for `categories.create`.
  * Strict subset of the writer shape (writes/types.ts): only `name`,
  * `kind` (`expense`|`income`) and optional `parentId`. Display-only
  * extras (icon/color/sortOrder/isDefault) are rejected at propose
@@ -1072,9 +1072,11 @@ const CONTRACTS: Record<ApprovalToolId, ApprovalToolContract> = {
   'categories.create': {
     tool: 'categories.create',
     inputSchema: createCategoryArgsSchema,
-    approvalRequired: true, // Manual-only: never auto-executed (not in AUTOEXECUTION_ELIGIBLE_TOOLS).
+    approvalRequired: true, // Proposal remains auditable; confirmation is conditional on strict policy eligibility.
     authorizationPolicy: 'risk_based',
-    autoExecutionEligible: AUTOEXECUTION_ELIGIBLE_TOOLS.has('categories.create'),
+    get autoExecutionEligible() {
+      return isPendingV2CategoryAutocreateEnabled();
+    },
     executor: executeCategoryCreate,
   },
   'categories.update': {
