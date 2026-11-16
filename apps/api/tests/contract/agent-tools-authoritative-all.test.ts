@@ -89,47 +89,65 @@ const requiredOverrides: Record<string, Record<string, boolean>> = {
   analytics_category_breakdown: { period: true },
 };
 
-type Schema = z.ZodTypeAny;
+// Zod 4: sem ZodEffects/_def. O tipo vem de `_zod.def.type`; refinamentos viram checks no próprio schema
+// e `transform` vira `pipe` (o lado de entrada é o que o OpenAPI descreve).
+type Schema = z.ZodType;
+type ZodDef = {
+  type: string;
+  innerType?: Schema;
+  in?: Schema;
+  element?: Schema;
+  entries?: Record<string, unknown>;
+  checks?: Array<{ _zod: { def: Record<string, any> } }>;
+};
+const defOf = (schema: Schema): ZodDef => (schema as unknown as { _zod: { def: ZodDef } })._zod.def;
+const checkDefs = (schema: Schema): Array<Record<string, any>> => (defOf(schema).checks ?? []).map((check) => check._zod.def);
+const WRAPPERS = new Set(['optional', 'default', 'prefault', 'nullable', 'readonly', 'catch']);
 const unwrap = (schema: Schema): Schema => {
   let current = schema;
-  while (current instanceof z.ZodOptional || current instanceof z.ZodDefault || current instanceof z.ZodNullable || current instanceof z.ZodEffects) {
-    const definition = current._def as any;
-    current = definition.innerType ?? definition.schema;
+  for (;;) {
+    const def = defOf(current);
+    if (WRAPPERS.has(def.type) && def.innerType) current = def.innerType;
+    else if (def.type === 'pipe' && def.in) current = def.in;
+    else return current;
   }
-  return current;
 };
-const isOptional = (schema: Schema): boolean => schema instanceof z.ZodOptional || schema instanceof z.ZodDefault;
+const isOptional = (schema: Schema): boolean => {
+  const type = defOf(schema).type;
+  return type === 'optional' || type === 'default';
+};
 const schemaFields = (schema: Schema): Record<string, Schema> => {
   const unwrapped = unwrap(schema);
-  if (unwrapped instanceof z.ZodObject) return unwrapped.shape;
+  if (defOf(unwrapped).type === 'object') return (unwrapped as unknown as { shape: Record<string, Schema> }).shape;
   return {};
 };
 const zodConstraints = (schema: Schema): Record<string, unknown> => {
   const base = unwrap(schema);
-  if (base instanceof z.ZodString) {
+  const def = defOf(base);
+  const checks = checkDefs(base);
+  if (def.type === 'string') {
     const result: Record<string, unknown> = { type: 'string' };
-    if (base._def.checks.some((check: any) => check.kind === 'uuid')) result.format = 'uuid';
-    for (const check of base._def.checks) {
-      if (check.kind === 'min') result.minLength = check.value;
-      if (check.kind === 'max') result.maxLength = check.value;
-      if (check.kind === 'regex') result.pattern = check.regex.source;
+    for (const check of checks) {
+      if (check.check === 'string_format' && check.format === 'uuid') result.format = 'uuid';
+      if (check.check === 'min_length') result.minLength = check.minimum;
+      if (check.check === 'max_length') result.maxLength = check.maximum;
+      if (check.check === 'string_format' && check.format === 'regex') result.pattern = (check.pattern as RegExp).source;
     }
     return result;
   }
-  if (base instanceof z.ZodEnum) {
-    const result: Record<string, unknown> = { type: 'string', enum: base._def.values };
-    return result;
+  if (def.type === 'enum') {
+    return { type: 'string', enum: Object.values(def.entries ?? {}) };
   }
-  if (base instanceof z.ZodNumber) {
-    const result: Record<string, unknown> = { type: base._def.checks.some((check: any) => check.kind === 'int') ? 'integer' : 'number' };
-    for (const check of base._def.checks) {
-      if (check.kind === 'min') result.minimum = check.inclusive === false ? check.value + 1 : check.value;
-      if (check.kind === 'max') result.maximum = check.inclusive === false ? check.value - 1 : check.value;
+  if (def.type === 'number') {
+    const result: Record<string, unknown> = { type: checks.some((check) => check.check === 'number_format') ? 'integer' : 'number' };
+    for (const check of checks) {
+      if (check.check === 'greater_than') result.minimum = check.inclusive === false ? check.value + 1 : check.value;
+      if (check.check === 'less_than') result.maximum = check.inclusive === false ? check.value - 1 : check.value;
     }
     return result;
   }
-  if (base instanceof z.ZodBoolean) return { type: 'boolean' };
-  if (base instanceof z.ZodArray) return { type: 'array', items: zodConstraints(base._def.type) };
+  if (def.type === 'boolean') return { type: 'boolean' };
+  if (def.type === 'array' && def.element) return { type: 'array', items: zodConstraints(def.element) };
   return {};
 };
 const openApiFields = (name: string, schema: Schema) => {

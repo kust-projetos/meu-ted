@@ -81,12 +81,11 @@
   {
     "id": "GHSA-mrhx-c7xc-m3w5",
     "module": "zod",
-    "scope": "runtime",
+    "scope": "build-time",
     "paths": [
-      "apps__agent>zod",
-      "apps__pwa>@serwist/next"
+      "apps__pwa>@lhci/cli>lighthouse"
     ],
-    "justification": "Transitive via agents / @ai-sdk/anthropic, pinned by epic #87 (AI SDK v6 + agents upgrade); fix available only after that migration.",
+    "justification": "Após a migração para Zod 4.6.7 (api, agent, pwa, llm-contracts) resta apenas o zod 3.25.76 interno do lighthouse, usado só pelo Lighthouse CI (ferramenta de build, não publicada). Remover quando o lighthouse atualizar o zod.",
     "owner": "project-maintainer",
     "expiresOn": "2026-12-31"
   },
