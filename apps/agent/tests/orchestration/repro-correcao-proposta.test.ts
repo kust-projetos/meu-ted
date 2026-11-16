@@ -121,6 +121,22 @@ const setup = (
 };
 
 describe("repro: correção de proposta ativa - Coloca como décimo terceiro", () => {
+  it.each([
+    "Muda minha meta de gastos",
+    "Troca a senha",
+    "Corrige o saldo",
+    "Era pra ser uma transferência",
+  ])("%s não reescreve a descrição sem construção explícita de nomeação", async (text) => {
+    const fake = makeFakeApi();
+    const original = { amountCents: 320000, description: "décimo", date: "2026-11-15", accountId: NUBANK.id, categoryId: "salario" };
+    fake.seed("pending-seeded", "transactions.income.create", original);
+    const before = JSON.parse(fake.ops.get("pending-seeded")!.payload).normalizedArgs;
+    await setup(fake).run(text, `intent-no-description-${text}`);
+    expect(fake.calls.some((call) => call.path.endsWith("/supersede"))).toBe(false);
+    expect(fake.proposePosts()).toHaveLength(0);
+    expect(JSON.parse(fake.ops.get("pending-seeded")!.payload).normalizedArgs).toEqual(before);
+  });
+
   it("substitui proposta por correção referencial e preserva os demais campos", async () => {
     const fake = makeFakeApi();
     const { run } = setup(fake);

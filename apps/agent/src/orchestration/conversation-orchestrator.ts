@@ -446,8 +446,12 @@ export type CategorySuggestionProvider = (request: {
 export const isReferentialCorrectionText = (text: string): boolean =>
   /^(?:coloca|colocar|na verdade|era|foi|isso é|isso e|o valor certo é|o valor certo e|corrige|ajusta|muda|troca)(?:\s|$)/iu.test(text.trim());
 
+const hasExplicitNamingConstruct = (text: string): boolean =>
+  /^(?:coloca(?:r)?\s+como|isso\s+(?:é|e)|na verdade\s+(?:era|é|e))\s+\S/iu.test(text.trim()) ||
+  (/^era\s+\S/iu.test(text.trim()) && !/(?:\d|R\$|reais?|conta|categoria|alimentação|alimentacao|transferência|transferencia)/iu.test(text));
+
 const correctionHintText = (text: string): string =>
-  text.trim().replace(/^(?:coloca(?:r)?\s+como|isso\s+(?:é|e)|na verdade(?:\s+era)?|era|foi|o valor certo\s+(?:é|e)|corrige|ajusta|muda|troca)\s*/iu, '')
+  text.trim().replace(/^(?:coloca(?:r)?\s+como|isso\s+(?:é|e)|na verdade\s+(?:era|é|e))\s*/iu, '')
     .replace(/\s+/gu, ' ')
     .replace(/[.!?,;:]+$/u, '')
     .trim();
@@ -6997,6 +7001,14 @@ export class ConversationOrchestrator {
         newCompleteOperation.description.trim().toLocaleLowerCase('pt-BR') !==
           (actives.length === 0 ? '' : actives[0]?.resolvedArgs.description.trim().toLocaleLowerCase('pt-BR')));
     if (correctionCandidate) {
+      const raw = input.text.trim();
+      const explicitDateSignal = !!explicitFinancialDate(raw)?.date || resolveRelativeDateFragment(raw, { now: new Date(now) }).status === 'date';
+      const amountSignal = /valor certo\s+(?:é|e|para|por)\s*(?:R\$\s*)?[\d.,]+/iu.test(raw);
+      const accountSignal = /(?:coloca|colocar|muda|troca)\s+(?:no|na|para o|para a)\s+\S/iu.test(raw);
+      const namingSignal = hasExplicitNamingConstruct(raw);
+      if (!explicitDateSignal && !amountSignal && !accountSignal && !namingSignal) {
+        return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não consegui identificar uma alteração específica. A proposta anterior continua valendo.' }) });
+      }
       const coordinator = this.coordinatorFor(client);
       if (!input.deviceId) {
         return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não consegui atualizar a proposta com segurança. A proposta anterior continua valendo.' }) });
@@ -7015,7 +7027,6 @@ export class ConversationOrchestrator {
         try {
           const current = await client.get(target.operation.id, identity);
           const args: Record<string, unknown> = { ...current.normalizedArgs };
-          const raw = input.text.trim();
           const hint = correctionHintText(raw);
           const explicitDate = explicitFinancialDate(raw)?.date;
           const relativeDate = resolveRelativeDateFragment(raw, { now: new Date(now) });
@@ -7040,13 +7051,14 @@ export class ConversationOrchestrator {
             const exactAccount = accountHint
               ? accounts.filter((item) => item.name.toLocaleLowerCase('pt-BR') === accountHint.toLocaleLowerCase('pt-BR'))
               : [];
-            if (exactAccount.length === 1 && 'accountId' in args) {
+            if (accountSignal && exactAccount.length === 1 && 'accountId' in args) {
               args.accountId = exactAccount[0]!.id;
             } else {
-              const exactCategory = scopedCategories.filter((item) => item.name.toLocaleLowerCase('pt-BR') === hint.toLocaleLowerCase('pt-BR'));
+              const categoryOrNamingHint = namingSignal ? hint : '';
+              const exactCategory = scopedCategories.filter((item) => item.name.toLocaleLowerCase('pt-BR') === categoryOrNamingHint.toLocaleLowerCase('pt-BR'));
               if (exactCategory.length === 1 && 'categoryId' in args) {
                 args.categoryId = exactCategory[0]!.id;
-              } else if ('description' in args && hint) {
+              } else if (namingSignal && 'description' in args && hint) {
                 const description = normalizeCorrectionDescription(hint);
                 if (description) {
                   args.description = description;
