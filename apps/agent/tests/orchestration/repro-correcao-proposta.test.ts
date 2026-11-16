@@ -29,14 +29,17 @@ const reader = (): EntityReader => ({
 
 type FakeOp = { id: string; status: string; tool?: string; createdAt: string; expiresAt: string; payload: string; idempotencyKey?: string };
 
-const makeFakeApi = (supersedeFailure?: { statusCode: number; code: string }) => {
+const makeFakeApi = (supersedeFailure?: { statusCode: number; code: string; afterCommit?: boolean }, reconciliation?: "empty" | "error") => {
   const ops = new Map<string, FakeOp>();
   const byKey = new Map<string, string>();
   let seq = 0;
   const calls: Array<{ method: string; path: string; body?: unknown; idempotencyKey?: string }> = [];
+  let reconciling = false;
   const request = vi.fn(async (method: string, path: string, opts?: { body?: unknown; idempotencyKey?: string }) => {
     calls.push({ method, path, body: opts?.body, idempotencyKey: opts?.idempotencyKey });
       if (method === "GET" && path === "/pending-operations/v2/active") {
+      if (reconciling && reconciliation === "error") throw new Error("list failed");
+      if (reconciling && reconciliation === "empty") return { items: [], total: 0 };
       const items = [...ops.values()].filter((op) => op.status === "proposed" || op.status === "confirmed").map((op) => {
         const parsed = JSON.parse(op.payload || "{}") as { tool?: unknown; normalizedArgs?: Record<string, unknown> };
         const args = (parsed.normalizedArgs ?? {}) as Record<string, unknown>;
@@ -64,7 +67,10 @@ const makeFakeApi = (supersedeFailure?: { statusCode: number; code: string }) =>
       const oldId = decodeURIComponent(supersedeMatch[1]!);
       const old = ops.get(oldId);
       if (!old) throw Object.assign(new Error("approval.not_found"), { statusCode: 404 });
-      if (supersedeFailure) throw Object.assign(new Error(supersedeFailure.code), supersedeFailure);
+      if (supersedeFailure && !supersedeFailure.afterCommit) {
+        reconciling = true;
+        throw Object.assign(new Error(supersedeFailure.code), supersedeFailure);
+      }
       const wireBody = opts?.body as { tool: string; normalizedArgs: Record<string, unknown> };
       const key = opts?.idempotencyKey!;
       const existingId = byKey.get(key);
@@ -74,6 +80,10 @@ const makeFakeApi = (supersedeFailure?: { statusCode: number; code: string }) =>
       const id = "pending-" + seq;
       ops.set(id, { id, status: "proposed", tool: wireBody.tool, createdAt: old.createdAt, expiresAt: old.expiresAt, payload: JSON.stringify(wireBody), idempotencyKey: key });
       byKey.set(key, id);
+      if (supersedeFailure?.afterCommit) {
+        reconciling = true;
+        throw Object.assign(new Error(supersedeFailure.code), supersedeFailure);
+      }
       return { id, existing: false, supersedes: oldId };
     }
     if (method === "POST" && path === "/pending-operations/v2/propose") {
@@ -135,6 +145,16 @@ describe("repro: correção de proposta ativa - Coloca como décimo terceiro", (
     expect(fake.calls.some((call) => call.path.endsWith("/supersede"))).toBe(false);
     expect(fake.proposePosts()).toHaveLength(0);
     expect(JSON.parse(fake.ops.get("pending-seeded")!.payload).normalizedArgs).toEqual(before);
+  });
+
+  it("não interpreta 'Era pra ser no Inter' como nomeação de descrição", async () => {
+    const fake = makeFakeApi();
+    const original = { amountCents: 320000, description: "décimo", date: "2026-11-15", accountId: NUBANK.id, categoryId: "salario" };
+    fake.seed("pending-seeded", "transactions.income.create", original);
+    const result = await setup(fake).run("Era pra ser no Inter", "intent-era-inter");
+    expect(fake.calls.some((call) => call.path.endsWith("/supersede"))).toBe(false);
+    expect(JSON.parse(fake.ops.get("pending-seeded")!.payload).normalizedArgs).toEqual(original);
+    expect(result.response?.text).toContain("Não consegui identificar");
   });
 
   it("substitui proposta por correção referencial e preserva os demais campos", async () => {
@@ -215,19 +235,50 @@ describe("repro: correção de proposta ativa - Coloca como décimo terceiro", (
     expect(fake.proposePosts()).toHaveLength(0);
   });
 
-  it("reaproveita provider semântico na nova descrição e preserva categoria se ele não sugere", async () => {
+  it("reconcilia resultado incerto sem afirmar estado sem prova", async () => {
+    const committed = makeFakeApi({ statusCode: 503, code: "response_lost", afterCommit: true });
+    committed.seed();
+    const updated = await setup(committed).run("Coloca como décimo terceiro", "intent-uncertain-new");
+    expect(updated.response?.text).toContain("A proposta foi atualizada");
+    expect(updated.response?.text).toContain("Confira o cartão");
+
+    const unchanged = makeFakeApi({ statusCode: 503, code: "offline" });
+    unchanged.seed();
+    const stillActive = await setup(unchanged).run("Coloca como décimo terceiro", "intent-uncertain-old");
+    expect(stillActive.response?.text).toContain("A proposta anterior continua valendo");
+
+    for (const mode of ["empty", "error"] as const) {
+      const unknown = makeFakeApi({ statusCode: 503, code: "offline" }, mode);
+      unknown.seed();
+      const result = await setup(unknown).run("Coloca como décimo terceiro", `intent-uncertain-${mode}`);
+      expect(result.response?.text).toContain("Confira o cartão");
+      expect(result.response?.text).not.toContain("A proposta anterior continua valendo");
+    }
+  });
+
+  it("não consulta provider semântico ao corrigir somente a descrição", async () => {
     const fake = makeFakeApi();
     fake.seed();
     const suggest = vi.fn(async () => null);
     const { run } = setup(fake, suggest);
     await run("Coloca como décimo terceiro", "intent-category-suggestion");
-    expect(suggest).toHaveBeenCalledWith(expect.objectContaining({
-      kind: "income", description: "Décimo terceiro", amountCents: 320000,
-    }));
+    expect(suggest).not.toHaveBeenCalled();
     const replacement = [...fake.ops.values()].find((op) => op.id !== "pending-seeded");
     expect(JSON.parse(replacement!.payload).normalizedArgs).toMatchObject({
       description: "Décimo terceiro", categoryId: "salario",
     });
+  });
+
+  it("preserva categoria na correção de descrição mesmo quando o provider sugere outra", async () => {
+    const fake = makeFakeApi();
+    fake.seed();
+    const suggest = vi.fn(async () => ({ categoryId: "outra-categoria" }));
+    await setup(fake, suggest).run("Coloca como décimo terceiro", "intent-preserve-category");
+    const replacement = [...fake.ops.values()].find((op) => op.id !== "pending-seeded");
+    expect(JSON.parse(replacement!.payload).normalizedArgs).toMatchObject({
+      description: "Décimo terceiro", categoryId: "salario",
+    });
+    expect(suggest).not.toHaveBeenCalled();
   });
 
   it("prioriza conta e categoria existentes antes de tratar o hint como descrição", async () => {

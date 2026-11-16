@@ -447,8 +447,8 @@ export const isReferentialCorrectionText = (text: string): boolean =>
   /^(?:coloca|colocar|na verdade|era|foi|isso é|isso e|o valor certo é|o valor certo e|corrige|ajusta|muda|troca)(?:\s|$)/iu.test(text.trim());
 
 const hasExplicitNamingConstruct = (text: string): boolean =>
-  /^(?:coloca(?:r)?\s+como|isso\s+(?:é|e)|na verdade\s+(?:era|é|e))\s+\S/iu.test(text.trim()) ||
-  (/^era\s+\S/iu.test(text.trim()) && !/(?:\d|R\$|reais?|conta|categoria|alimentação|alimentacao|transferência|transferencia)/iu.test(text));
+  /^(?:coloca(?:r)?\s+como|isso\s+(?:é|e)|na verdade\s+(?:era|é|e))\s+\S/iu.test(text.trim());
+// A bare "era <X>" is intentionally excluded: account corrections can look like descriptions.
 
 const correctionHintText = (text: string): string =>
   text.trim().replace(/^(?:coloca(?:r)?\s+como|isso\s+(?:é|e)|na verdade\s+(?:era|é|e))\s*/iu, '')
@@ -7062,23 +7062,7 @@ export class ConversationOrchestrator {
                 const description = normalizeCorrectionDescription(hint);
                 if (description) {
                   args.description = description;
-                  const provider = this.dependencies.categorySuggestionProvider;
-                  if (provider && 'amountCents' in args && typeof args.amountCents === 'number' && 'date' in args && typeof args.date === 'string') {
-                    let timer: ReturnType<typeof setTimeout> | undefined;
-                    try {
-                      const suggestion = await Promise.race([
-                        provider({ input, kind, description, amountCents: args.amountCents, date: args.date }),
-                        new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 3000); }),
-                      ]);
-                      if (suggestion && scopedCategories.some((item) => item.id === suggestion.categoryId)) {
-                        args.categoryId = suggestion.categoryId;
-                      }
-                    } catch {
-                      // Semantic category suggestion is advisory; retain the current category on failure.
-                    } finally {
-                      if (timer) clearTimeout(timer);
-                    }
-                  }
+                  // Description-only corrections preserve every other proposed field.
                 }
               }
             }
@@ -7097,7 +7081,23 @@ export class ConversationOrchestrator {
             response: freeze({ text: 'Atualizei a proposta. Revise os dados e aprove se estiver tudo certo.' }),
           });
         } catch {
-          return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text }) });
+          try {
+            const reconciled = await client.listActive(identity);
+            const proposed = reconciled.items.filter((item) => item.status === 'proposed');
+            if (!proposed.some((item) => item.id === target.operation.id) && proposed.length === 1) {
+              return this.completeTurn(input, plan, startedAt, base, {
+                response: freeze({ text: 'A proposta foi atualizada. Confira o cartão e revise os dados antes de aprovar.' }),
+              });
+            }
+            if (proposed.some((item) => item.id === target.operation.id)) {
+              return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text }) });
+            }
+          } catch {
+            // Unknown outcome: do not claim which proposal remains active.
+          }
+          return this.completeTurn(input, plan, startedAt, base, {
+            response: freeze({ text: 'Não consegui confirmar o resultado da atualização. Confira o cartão para verificar a proposta ativa.' }),
+          });
         }
       }
       if (target.kind === 'none' || (target.kind === 'single' && target.operation.status !== 'proposed')) {
