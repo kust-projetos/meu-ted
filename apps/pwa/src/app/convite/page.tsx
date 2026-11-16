@@ -191,7 +191,7 @@ const message =
       }
       const deviceRes = await registerDeviceToken(sessionToken);
       if (deviceRes?.token) {
-        setToken(deviceRes.token);
+        setToken(deviceRes.token, deviceRes.householdId);
       }
       if (inviteKind === "workspace") {
         await acceptWorkspaceInvite(token);

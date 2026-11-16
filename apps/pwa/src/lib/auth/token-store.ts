@@ -70,18 +70,42 @@ export function getToken(): string | null {
     return null;
   }
 }
-export function setToken(token: string): void {
+export function setToken(token: string, householdId?: string): void {
   // T04: device persiste sempre (ver doc do módulo). O gate de compat segue
   // valendo só para o bearer legado de sessão (setSessionToken).
+  //
+  // O device token é emitido para UM household (POST /auth/devices/register) e o gateway do
+  // OpenCode exige household === workspace ativo. O household é gravado junto do token: um token
+  // novo sem household nunca herda o vínculo do anterior.
   try {
-    getStorage()?.setItem(`${PREFIX}token`, token);
+    const storage = getStorage();
+    storage?.setItem(`${PREFIX}token`, token);
+    if (householdId) storage?.setItem(`${PREFIX}token-household`, householdId);
+    else storage?.removeItem(`${PREFIX}token-household`);
+  } catch {
+    /* noop */
+  }
+}
+/** Household ao qual o device token persistido foi vinculado (null = desconhecido/legado). */
+export function getTokenHousehold(): string | null {
+  try {
+    return getStorage()?.getItem(`${PREFIX}token-household`) ?? null;
+  } catch {
+    return null;
+  }
+}
+export function setTokenHousehold(householdId: string): void {
+  try {
+    getStorage()?.setItem(`${PREFIX}token-household`, householdId);
   } catch {
     /* noop */
   }
 }
 export function clearToken(): void {
   try {
-    getStorage()?.removeItem(`${PREFIX}token`);
+    const storage = getStorage();
+    storage?.removeItem(`${PREFIX}token`);
+    storage?.removeItem(`${PREFIX}token-household`);
   } catch {
     /* noop */
   }

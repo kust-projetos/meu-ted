@@ -327,7 +327,7 @@ export function AuthGate({ children }: Props) {
         throw new Error("Token de dispositivo não retornado pelo servidor.");
       }
 
-      setToken(res.token);
+      setToken(res.token, res.householdId);
 
       // W1 item 2 (Onda 1): sign-in + device register 2xx provam a
       // autenticação, mas a IDENTIDADE (principal) só vale quando validada

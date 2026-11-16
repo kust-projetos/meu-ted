@@ -49,7 +49,7 @@ const headersAt = (callIndex: number): Record<string, string> =>
   (fetchMock.mock.calls[callIndex]![1] as RequestInit).headers as Record<string, string>;
 
 const deviceResponse = (token: string): Response =>
-  jsonResponse({ token, deviceId: "dev-1", householdId: "hh-1" }, 201);
+  jsonResponse({ token, deviceId: "dev-1", householdId: "ws-1" }, 201);
 
 const mintResponse = (token: string): Response => jsonResponse({ token, expiresIn: 120 });
 
@@ -67,7 +67,7 @@ describe("FIX-PWA-DEVICE-BOUND-MINT — /auth/agent-token carries the device tok
   });
 
   it("attaches x-device-token on the mint when a device token is stored", async () => {
-    setToken("device-token-abc");
+    setToken("device-token-abc", "ws-1");
     expect(getToken()).toBe("device-token-abc");
     fetchMock.mockResolvedValue(mintResponse("conn-jwt"));
 
@@ -82,7 +82,7 @@ describe("FIX-PWA-DEVICE-BOUND-MINT — /auth/agent-token carries the device tok
   });
 
   it("does NOT register a device when one is already stored (zero registration calls)", async () => {
-    setToken("device-token-abc");
+    setToken("device-token-abc", "ws-1");
     routeFetch(() => mintResponse("conn-jwt"));
 
     await fetchAgentConnectionToken("ws-1", true);
@@ -303,7 +303,7 @@ describe("FINDING 2 — mint 401 does not expire the session; the register still
     jsonResponse({ code: "auth.session_required", message: "Token de autenticação inválido ou expirado." }, 401);
 
   it("stays SILENT while the recovery is still pending, then announces the definitive 401", async () => {
-    setToken("device-stale");
+    setToken("device-stale", "ws-1");
     let releaseRetry!: (value: Response) => void;
     let mintCalls = 0;
     routeFetch((url) => {
@@ -338,7 +338,7 @@ describe("FINDING 2 — mint 401 does not expire the session; the register still
   });
 
   it("full recovery flow: mint 401 → re-register (401) expires the session exactly ONCE", async () => {
-    setToken("device-stale");
+    setToken("device-stale", "ws-1");
     let registerCalls = 0;
     routeFetch((url) => {
       if (url.includes(DEVICE_REGISTER_PATH)) {
@@ -357,7 +357,7 @@ describe("FINDING 2 — mint 401 does not expire the session; the register still
   });
 
   it("recoverable flow: mint 401 → re-register → retried mint succeeds with no expiry", async () => {
-    setToken("device-stale");
+    setToken("device-stale", "ws-1");
     let mintCalls = 0;
     routeFetch((url) => {
       if (url.includes(DEVICE_REGISTER_PATH)) return deviceResponse("device-fresh");
@@ -406,7 +406,7 @@ describe("FINDING — a NON-401 retry failure never announces a session expiry",
 
   /** First mint denied (stale device), re-register succeeds, retry per `retryOutcome`. */
   const routeWithRetryOutcome = (retryOutcome: () => Response | Promise<Response>): void => {
-    setToken("device-stale");
+    setToken("device-stale", "ws-1");
     let mintCalls = 0;
     routeFetch((url) => {
       if (url.includes(DEVICE_REGISTER_PATH)) return deviceResponse("device-fresh");
@@ -514,7 +514,7 @@ describe("FINDING 1 + 2 — stale-generation register is inert; single-flight sl
 
     // Logout, then login of ANOTHER user, both before the register answers.
     clearAgentSession();
-    setToken("device-of-the-new-user");
+    setToken("device-of-the-new-user", "ws-1");
 
     // The old generation's registration now fails — that failure belongs to
     // the dead session and must not expire the live one.
@@ -611,7 +611,7 @@ describe("FINDING 3 — a definitive mint 401 announces expiry only in the curre
     jsonResponse({ code: "auth.session_required", message: "Token de autenticação inválido ou expirado." }, 401);
 
   it("definitive 401 in the CURRENT generation announces expiry exactly once", async () => {
-    setToken("device-stale");
+    setToken("device-stale", "ws-1");
     routeFetch((url) => (url.includes(DEVICE_REGISTER_PATH) ? deviceResponse("device-fresh") : unauthorized401()));
 
     await expect(fetchAgentConnectionToken("ws-1", true)).rejects.toMatchObject({ status: 401 });
@@ -622,7 +622,7 @@ describe("FINDING 3 — a definitive mint 401 announces expiry only in the curre
   });
 
   it("definitive 401 observed under an OLD generation does NOT expire the new session", async () => {
-    setToken("device-stale");
+    setToken("device-stale", "ws-1");
     let releaseRetry!: (value: Response) => void;
     let mintCalls = 0;
     routeFetch((url) => {
@@ -639,7 +639,7 @@ describe("FINDING 3 — a definitive mint 401 announces expiry only in the curre
 
     // The session is replaced while the retry is in flight.
     clearAgentSession();
-    setToken("device-of-the-new-user");
+    setToken("device-of-the-new-user", "ws-1");
     releaseRetry(unauthorized401());
 
     await expect(flight).rejects.toMatchObject({ status: 401 });
@@ -648,7 +648,7 @@ describe("FINDING 3 — a definitive mint 401 announces expiry only in the curre
   });
 
   it("successful recovery stays silent (no expiry announced)", async () => {
-    setToken("device-stale");
+    setToken("device-stale", "ws-1");
     let mintCalls = 0;
     routeFetch((url) => {
       if (url.includes(DEVICE_REGISTER_PATH)) return deviceResponse("device-fresh");
@@ -676,7 +676,7 @@ describe("FIX-AGENT-MINT-SELF-HEAL — 401 with a presented device token re-regi
   });
 
   it("re-registers once and repeats the mint with the new device token", async () => {
-    setToken("device-stale");
+    setToken("device-stale", "ws-1");
     let registerCalls = 0;
     let mintCalls = 0;
     routeFetch((url) => {
@@ -707,7 +707,7 @@ describe("FIX-AGENT-MINT-SELF-HEAL — 401 with a presented device token re-regi
   });
 
   it("propagates the 401 after a single retry (max 1 re-registration)", async () => {
-    setToken("device-stale");
+    setToken("device-stale", "ws-1");
     let registerCalls = 0;
     let mintCalls = 0;
     routeFetch((url) => {
@@ -823,7 +823,7 @@ describe("T04 — device token persiste com compat off (sem register storm)", ()
     // Semeia o store com a flag LIGADA (único caminho que persistia antes da
     // T04) para provar que o recovery funciona a partir de um device legado.
     vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", "1");
-    setToken("device-stale");
+    setToken("device-stale", "ws-1");
     vi.stubEnv("NEXT_PUBLIC_LEGACY_BEARER_COMPAT", "off");
     let registerCalls = 0;
     let mintCalls = 0;
@@ -1017,7 +1017,7 @@ describe("T04 wave1-fix-pwa-2 — storage parcialmente falho: obsoleto legível 
     clearAgentConnectionTokenCache();
     // Baseline de geração limpa (incrementos são cumulativos).
     clearAgentSession();
-    fake = { "pi-finance:token": STALE_T1 };
+    fake = { "pi-finance:token": STALE_T1, "pi-finance:token-household": "ws-1" };
     writesFail = true;
     mintTokens.length = 0;
     vi.spyOn(window.localStorage, "getItem").mockImplementation(
@@ -1086,13 +1086,13 @@ describe("T04 wave1-fix-pwa-2 — storage parcialmente falho: obsoleto legível 
     // Fase 2 — convergência: escrita volta a funcionar e o storage passa a
     // conter exatamente o token da sessão (ex.: persistência tardia convergiu).
     writesFail = false;
-    setToken("device-reg-1");
+    setToken("device-reg-1", "ws-1");
     await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
     expect(registerCalls.count).toBe(1);
     expect(mintTokens[mintTokens.length - 1]).toBe("device-reg-1");
 
     // Fase 3 — mudança externa legítima: novo login persiste outro device.
-    setToken("device-external-T3");
+    setToken("device-external-T3", "ws-1");
     await expect(fetchAgentConnectionToken("ws-1", true)).resolves.toBe("conn-jwt");
     expect(registerCalls.count).toBe(1);
     expect(mintTokens[mintTokens.length - 1]).toBe("device-external-T3");

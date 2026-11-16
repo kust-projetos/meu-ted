@@ -169,13 +169,15 @@ export async function fetchSession(): Promise<SessionProbeResult> {
  */
 export async function registerDeviceToken(
   sessionToken?: string,
-  opts?: { skipUnauthorizedEvent?: boolean },
+  opts?: { skipUnauthorizedEvent?: boolean; workspaceId?: string },
 ): Promise<RegisterDeviceResponse> {
   return apiFetch<RegisterDeviceResponse>("/auth/devices/register", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      // Sem este header a API vincula o dispositivo ao primeiro workspace ativo do usuário.
+      ...(opts?.workspaceId ? { "X-Workspace-Id": opts.workspaceId } : {}),
     },
     body: JSON.stringify({ deviceName: "PWA Web Device" }),
     ...(opts?.skipUnauthorizedEvent ? { skipUnauthorizedEvent: true } : {}),
@@ -191,4 +193,18 @@ export async function registerDeviceToken(
  */
 export async function verifyDeviceToken(token: string): Promise<unknown> {
   return apiGet<unknown>("/auth/devices/me", token);
+}
+
+/**
+ * Household ao qual um device token está vinculado (GET /auth/devices/me), para o mint do agente conferir
+ * `household === workspace`. Diferente de `verifyDeviceToken`: aceita o AbortSignal do voo rastreado (o
+ * teardown de sessão H-13 precisa cancelá-lo) e um 401 aqui NÃO expira a sessão — é só uma sondagem local.
+ */
+export async function probeDeviceHousehold(token: string, signal?: AbortSignal): Promise<string | null> {
+  const me = await apiFetch<{ householdId?: unknown } | null>("/auth/devices/me", {
+    token,
+    skipUnauthorizedEvent: true,
+    ...(signal ? { signal } : {}),
+  });
+  return me && typeof me.householdId === "string" && me.householdId.length > 0 ? me.householdId : null;
 }
