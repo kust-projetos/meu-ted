@@ -2184,7 +2184,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       );
       const generated = await generateText({
         model: modelInstance.model,
-         system: allowNewCategory
+        system: allowNewCategory
            ? `${CATEGORY_SUGGESTION_SYSTEM_PROMPT} Se não houver boa correspondência, responda {"newCategory":{"name":"<nome>"}}; não informe kind.`
            : CATEGORY_SUGGESTION_SYSTEM_PROMPT,
         prompt,

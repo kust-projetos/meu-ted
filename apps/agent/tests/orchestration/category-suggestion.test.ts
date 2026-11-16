@@ -67,7 +67,7 @@ const autoCreateSetup = (
           ...(options.missingReceipt ? {} : { receipt: {
             mutationKind: 'categories.create', status: 'succeeded', mutationId: 'mutation-category',
             operationId: 'pending-category',
-              entity: { type: 'category', id: options.emptyCategoryId ? '' : CATEGORY_ID },
+            entity: { type: 'category', id: options.emptyCategoryId ? '' : CATEGORY_ID },
           } }),
         },
       };
