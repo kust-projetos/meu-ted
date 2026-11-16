@@ -10,7 +10,6 @@ import { createPool } from '../../src/db/pool.js';
 import { requireTestDatabase } from '../../src/db/db-guard.js';
 import { runMigrations } from '../../src/read-models/sql/migrate.js';
 import { createPostgresWriteStore } from '../../src/writes/postgres.js';
-import { createLegacyPostgresWriteStore } from '../../src/writes/legacy-postgres.js';
 import type { WriteStore } from '../../src/writes/store.js';
 
 const CANONICAL_DB = 'ted_category_keyed_validation127';
@@ -117,7 +116,6 @@ describeIfDb('internal transaction description writer — PostgreSQL canonical +
 
   const contexts = [
     ['canonical', () => canonical, (pool: Pool) => createPostgresWriteStore({ pool })],
-    ['legacy', () => legacy, (pool: Pool) => createLegacyPostgresWriteStore({ pool })],
   ] as const;
 
   const seed = async (pool: Pool, kind: 'expense' | 'income' | 'transfer' = 'expense') => {

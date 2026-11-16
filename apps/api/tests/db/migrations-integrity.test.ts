@@ -86,24 +86,6 @@ describe('legacy-safe inventory pin (deploy)', () => {
   it('V048 stays excluded: it predicates on categories.status, absent from the legacy projection', () => {
     expect(LEGACY_EXCLUDED_JUSTIFICATIONS['V048']).toMatch(/status/);
     expect(v048).toMatch(/status = 'active'/);
-    // The legacy adapter derives status from the `active` boolean in JS —
-    // the legacy categories projection selects no `status` column.
-    const legacyAdapter = readFileSync(new URL('../../src/writes/legacy-postgres.ts', import.meta.url), 'utf8');
-    const lines = legacyAdapter.split('\n');
-    const anchor = lines.findIndex((line) => line.includes('LEGACY_CATEGORY_COLUMNS ='));
-    expect(anchor).toBeGreaterThanOrEqual(0);
-    // The column list may continue on the following line.
-    const columns = lines
-      .slice(anchor, anchor + 2)
-      .join(' ')
-      .split('=')
-      .slice(1)
-      .join('=')
-      .split(',')
-      .map((column) => column.trim().replace(/['";]/g, ''))
-      .filter(Boolean);
-    expect(columns).toContain('active');
-    expect(columns).not.toContain('status');
   });
 });
 

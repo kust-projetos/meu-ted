@@ -21,7 +21,6 @@ import { runMigrations } from '../../src/read-models/sql/migrate.js';
 import { createPostgresWriteStore } from '../../src/writes/postgres.js';
 import { createPostgresIdempotencyStore } from '../../src/writes/postgres.js';
 import { createPostgresPayableStore } from '../../src/payables/postgres.js';
-import { createLegacyPostgresPayableStore } from '../../src/payables/legacy-postgres.js';
 import { runPayableBulkMutation } from '../../src/payables/keyed-mutations.js';
 
 const DB_URL = process.env.DATABASE_URL_TEST;
@@ -227,39 +226,4 @@ describe('Postgres bulk payable atomicity (DEBT-CODER-BULKTX)', () => {
     }
   }, 30_000);
 
-  itIfDatabase('(c) legacy twin: 3rd-row failure persists ZERO payables (parity)', async () => {
-    const db = legacyPool!;
-    const payables = createLegacyPostgresPayableStore(db);
-    const householdId = randomUUID();
-    const accountId = randomUUID();
-    const tag = randomUUID();
-    const marker = `bulk-fail-${tag}`;
-    await db.query(
-      `INSERT INTO accounts (id, household_id, name, initial_balance_cents) VALUES ($1, $2, 'Legacy payer', 100000)`,
-      [accountId, householdId],
-    );
-    try {
-      const dayOfMonth = new Date().getUTCDate();
-      for (const [name, description, amount] of [
-        [`a1-${tag}`, `bulk-ok-1-${tag}`, 1000],
-        [`a2-${tag}`, `bulk-ok-2-${tag}`, 2000],
-        [`z9-${tag}`, marker, 3000],
-      ] as const) {
-        await payables.createTemplate(householdId, {
-          accountId, name, description, amountCents: amount, frequency: 'monthly', dayOfMonth,
-        });
-      }
-      await installFailTrigger(db, marker);
-      try {
-        await expect(payables.autoCreateFromTemplates(householdId, 30)).rejects.toThrow('bulk-atomic-boom');
-        expect(await payableCount(db, householdId)).toBe(0);
-      } finally {
-        await dropFailTrigger(db);
-      }
-    } finally {
-      await db.query(`DELETE FROM accounts_payable WHERE household_id = $1`, [householdId]).catch(() => undefined);
-      await db.query(`DELETE FROM payable_templates WHERE household_id = $1`, [householdId]).catch(() => undefined);
-      await db.query(`DELETE FROM accounts WHERE household_id = $1`, [householdId]).catch(() => undefined);
-    }
-  }, 30_000);
 });

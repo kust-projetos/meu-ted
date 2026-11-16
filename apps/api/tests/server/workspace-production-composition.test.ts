@@ -25,13 +25,11 @@ const makeAuth = () => createBetterAuth({
 });
 
 describe('workspace production composition', () => {
-  it('mounts workspace and ownership transfer routes in canonical and legacy production compositions', async () => {
+  it('mounts workspace and ownership transfer routes in the production composition', async () => {
     const auth = makeAuth();
     const canonicalApp = Fastify({ logger: false });
-    const legacyApp = Fastify({ logger: false });
 
-    registerPostgresProductionRoutes(canonicalApp, mockPool, false, HOUSEHOLD_A, auth);
-    registerPostgresProductionRoutes(legacyApp, mockPool, true, HOUSEHOLD_A, auth);
+    registerPostgresProductionRoutes(canonicalApp, mockPool, HOUSEHOLD_A, auth);
 
     // Canonical app
     const canonicalWorkspaces = await canonicalApp.inject({ method: 'GET', url: '/workspaces' });
@@ -45,20 +43,7 @@ describe('workspace production composition', () => {
     });
     expect(canonicalTransfers.statusCode).toBe(401);
 
-    // Legacy app
-    const legacyWorkspaces = await legacyApp.inject({ method: 'GET', url: '/workspaces' });
-    expect(legacyWorkspaces.statusCode).toBe(401);
-    expect(legacyWorkspaces.json()).toMatchObject({ code: 'auth.missing_session' });
-
-    const legacyTransfers = await legacyApp.inject({
-      method: 'POST',
-      url: `/workspaces/${HOUSEHOLD_A}/ownership-transfers`,
-      payload: { toUserId: '00000000-0000-4000-8000-000000000002' },
-    });
-    expect(legacyTransfers.statusCode).toBe(401);
-
     await canonicalApp.close();
-    await legacyApp.close();
     await auth.close();
   });
 
@@ -66,7 +51,7 @@ describe('workspace production composition', () => {
     const auth = makeAuth();
     const app = Fastify({ logger: false });
     // inviteDelivery omitted: management remains available but delivery fails closed.
-    registerPostgresProductionRoutes(app, mockPool, false, HOUSEHOLD_A, auth, undefined);
+    registerPostgresProductionRoutes(app, mockPool, HOUSEHOLD_A, auth, undefined);
 
     const inviteRes = await app.inject({
       method: 'POST',
@@ -83,7 +68,7 @@ describe('workspace production composition', () => {
     const auth = makeAuth();
     const explicitDelivery = async () => undefined;
     const app = Fastify({ logger: false });
-    registerPostgresProductionRoutes(app, mockPool, false, HOUSEHOLD_A, auth, explicitDelivery);
+    registerPostgresProductionRoutes(app, mockPool, HOUSEHOLD_A, auth, explicitDelivery);
 
     const inviteRes = await app.inject({
       method: 'POST',
@@ -115,7 +100,7 @@ describe('workspace production composition', () => {
     });
     const cookie = signIn.headers.get('set-cookie') ?? '';
     const app = Fastify({ logger: false });
-    registerPostgresProductionRoutes(app, mockPool, false, HOUSEHOLD_A, auth, async () => undefined);
+    registerPostgresProductionRoutes(app, mockPool, HOUSEHOLD_A, auth, async () => undefined);
 
     const response = await app.inject({
       method: 'POST',

@@ -5,7 +5,6 @@ import { createPool } from '../../src/db/pool.js';
 import { requireTestDatabase } from '../../src/db/db-guard.js';
 import { runMigrations } from '../../src/read-models/sql/migrate.js';
 import { createPostgresWriteStore } from '../../src/writes/postgres.js';
-import { createLegacyPostgresWriteStore } from '../../src/writes/legacy-postgres.js';
 
 const ALLOWED_DBS = new Set(['ted_category_keyed_validation', 'ted_category_lifecycle_validation_20261022']);
 const DB = process.env.CATEGORY_DEACTIVATE_EXPECTED_DB ?? 'ted_category_keyed_validation';
@@ -53,7 +52,6 @@ describeDb('keyed category deactivate PG descartável — canonical + legacy', (
 
   for (const [label, getPool, store] of [
     ['canonical', () => canonical, (p: Pool) => createPostgresWriteStore({ pool: p })],
-    ['legacy', () => legacy, (p: Pool) => createLegacyPostgresWriteStore({ pool: p })],
   ] as const) {
     it(`${label}: CAS, transactional keyed replay and same-key concurrency`, async () => {
       const writes = store(getPool());

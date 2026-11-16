@@ -16,18 +16,12 @@ const ROOT = resolve(import.meta.dirname, '../..');
 const STORE_FILES = [
   'src/auth/device-token.ts',
   'src/budgets/postgres.ts',  'src/cards/postgres.ts',
-  'src/cards/legacy-postgres.ts',
   'src/goals/postgres.ts',
-  'src/goals/legacy-postgres.ts',
   'src/payables/postgres.ts',
-  'src/payables/legacy-postgres.ts',
   'src/subscriptions/postgres.ts',
-  'src/subscriptions/legacy-postgres.ts',
   'src/profile/postgres.ts',
   'src/read-models/postgres-store.ts',
-  'src/read-models/legacy-postgres-store.ts',
   'src/writes/postgres.ts',
-  'src/writes/legacy-postgres.ts',
 ];
 
 const IN_MEMORY_STORE_FILES = [
@@ -67,12 +61,6 @@ describe('store workspace scoping contract', () => {
     }
 
     expect(violations).toEqual([]);
-
-    const legacyReadModel = readFileSync(resolve(ROOT, 'src/read-models/legacy-postgres-store.ts'), 'utf8');
-    expect(legacyReadModel).toMatch(/FROM transactions t\s+WHERE t\.household_id = \$1\s+AND t\.deleted_at IS NULL/);
-
-    const legacyCards = readFileSync(resolve(ROOT, 'src/cards/legacy-postgres.ts'), 'utf8');
-    expect(legacyCards).toMatch(/FROM transactions t\s+WHERE t\.household_id = \$1\s+AND t\.deleted_at IS NULL/);
   });
 
   it('audits every in-memory store for household-scoped paths', () => {

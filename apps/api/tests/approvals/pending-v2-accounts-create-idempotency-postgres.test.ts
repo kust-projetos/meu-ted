@@ -29,7 +29,6 @@ import { requireTestDatabase } from '../../src/db/db-guard.js';
 import { validationDatabaseProfileFromEnvironment } from '../../src/db/validation-preflight.js';
 import { prepareAccountValidationDatabases } from './validation-db-fixture.js';
 import { createPostgresWriteStore, createAccountInTx } from '../../src/writes/postgres.js';
-import { createLegacyPostgresWriteStore, createAccountLegacyInTx } from '../../src/writes/legacy-postgres.js';
 import {
   runKeyedAccountMutation,
 } from '../../src/writes/pending-idempotency.js';
@@ -242,68 +241,6 @@ describeIfDb('accounts.create keyed PG — canonical + legacy (round2)', () => {
   });
 
   describe('legacy', () => {
-    it('workspace isolado: mesma chave em households distintos → 2 contas', async () => {
-      const writes = createLegacyPostgresWriteStore({ pool: legacyPool as never });
-      const H1 = trackLegacy(randomUUID());
-      const H2 = trackLegacy(randomUUID());
-      const payload = { name: 'Conta Iso L', kind: 'cash' as const, initialBalanceCents: 0 };
-      const a = await writes.createAccount(H1, payload, { idempotencyKey: 'k-iso' });
-      const b = await writes.createAccount(H2, payload, { idempotencyKey: 'k-iso' });
-      expect(b.id).not.toBe(a.id);
-      expect(await countAccounts(legacyPool, H1)).toBe(1);
-      expect(await countAccounts(legacyPool, H2)).toBe(1);
-    });
-
-    it.each([
-      { kind: 'boom', error: () => new Error('boom-pre-claim') },
-      {
-        kind: 'archived',
-        error: () => new DomainError('workspace.archived', 'Workspace arquivado.', 403),
-      },
-    ])(
-      'achado 1: B SELECT ausente, A commit, B mutate $kind → replay do vencedor (1 conta)',
-      async ({ error }) => {
-        const H = trackLegacy(randomUUID());
-        const payload = { name: 'Conta Preclaim L', kind: 'bank' as const, initialBalanceCents: 0 };
-        const entered = deferred();
-        const release = deferred();
-        const bMutate = async (): Promise<Account> => {
-          entered.resolve();
-          await release.promise;
-          throw error();
-        };
-        const bPromise = runKeyedAccountMutation(keyedOpts(legacyPool, H, 'k-pre', payload, bMutate));
-        await entered.promise;
-        const winner = await runKeyedAccountMutation(
-          keyedOpts(legacyPool, H, 'k-pre', payload, (client) => createAccountLegacyInTx(client, H, payload)),
-        );
-        release.resolve();
-        const replayed = await bPromise;
-        expect(replayed.id).toBe(winner.id);
-        expect(await countAccounts(legacyPool, H)).toBe(1);
-      },
-    );
-
-    it('happy N=6 concorrente mesma chave+payload → 1 conta, mesmo id', async () => {
-      const writes = createLegacyPostgresWriteStore({ pool: legacyPool as never });
-      const H = trackLegacy(randomUUID());
-      const payload = { name: 'Conta Happy L', kind: 'bank' as const, initialBalanceCents: 1000 };
-      const results = await Promise.all(
-        Array.from({ length: 6 }, () => writes.createAccount(H, payload, { idempotencyKey: 'k-happy' })),
-      );
-      expect(new Set(results.map((a) => a.id)).size).toBe(1);
-      expect(await countAccounts(legacyPool, H)).toBe(1);
-    });
-
-    it('mesma chave + payload divergente → idempotency.conflict', async () => {
-      const writes = createLegacyPostgresWriteStore({ pool: legacyPool as never });
-      const H = trackLegacy(randomUUID());
-      await writes.createAccount(H, { name: 'AL', kind: 'bank', initialBalanceCents: 0 }, { idempotencyKey: 'k-div' });
-      await expect(
-        writes.createAccount(H, { name: 'BL', kind: 'bank', initialBalanceCents: 0 }, { idempotencyKey: 'k-div' }),
-      ).rejects.toMatchObject({ code: 'idempotency.conflict' });
-      expect(await countAccounts(legacyPool, H)).toBe(1);
-    });
 
     it('failure rollback: mutate com efeito + throw → nada persiste; retry converge a 1', async () => {
       const H = trackLegacy(randomUUID());
@@ -341,33 +278,5 @@ describeIfDb('accounts.create keyed PG — canonical + legacy (round2)', () => {
       expect(again.id).toBe(retried.id);
     });
 
-    it('achado 2: chaves distintas + mesmo nome (case-insensitive) → 2ª é in_use, 1 conta', async () => {
-      const writes: WriteStore = createLegacyPostgresWriteStore({ pool: legacyPool as never });
-      const H = trackLegacy(randomUUID());
-      await writes.createAccount(H, { name: 'Caixa L', kind: 'bank', initialBalanceCents: 0 }, { idempotencyKey: 'k-d1' });
-      await expect(
-        writes.createAccount(H, { name: 'caixa l', kind: 'bank', initialBalanceCents: 0 }, { idempotencyKey: 'k-d2' }),
-      ).rejects.toMatchObject({ code: 'in_use' });
-      expect(await countAccounts(legacyPool, H)).toBe(1);
-    });
-
-    it('achado 2: corrida N=6 chaves distintas mesmo nome → 1 criada + 5 in_use', async () => {
-      const writes: WriteStore = createLegacyPostgresWriteStore({ pool: legacyPool as never });
-      const H = trackLegacy(randomUUID());
-      const outcomes = await Promise.allSettled(
-        Array.from({ length: 6 }, (_, i) =>
-          writes.createAccount(
-            H,
-            { name: 'Conta Corrida L', kind: 'bank', initialBalanceCents: 0 },
-            { idempotencyKey: `k-race-${i}` },
-          ),
-        ),
-      );
-      expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1);
-      const rejected = outcomes.filter((o) => o.status === 'rejected') as PromiseRejectedResult[];
-      expect(rejected).toHaveLength(5);
-      for (const r of rejected) expect((r.reason as { code?: string }).code).toBe('in_use');
-      expect(await countAccounts(legacyPool, H)).toBe(1);
-    });
   });
 });

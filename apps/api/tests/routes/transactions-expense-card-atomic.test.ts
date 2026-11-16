@@ -333,39 +333,4 @@ describeIfDb('POST /transactions/expense cardId — Postgres single-tx proofs', 
     expect(final.rows[0]!.n).toBe(1);
   }, 60_000);
 
-  it('legacy: crash after purchase rolls back; retry converges to 1 tx', async () => {
-    const { createLegacyPostgresCardStore } = await import('../../src/cards/legacy-postgres.js');
-    const { createPostgresIdempotencyStore } = await import('../../src/writes/postgres.js');
-    const household = track(randomUUID());
-    const cards = createLegacyPostgresCardStore(legPool);
-    const idempotency = createPostgresIdempotencyStore({ pool: legPool });
-    const catRow = await legPool.query(
-      'INSERT INTO categories (id, household_id, name, kind) VALUES (gen_random_uuid(), $1, $2, $3) RETURNING id',
-      [household, 'PG Food', 'expense'],
-    );
-    const catId = catRow.rows[0]!.id as string;
-    const card = await cards.createCard(household, { name: 'PG Visa', creditLimitCents: 200_000, closingDay: 10, dueDay: 20 });
-    const payload = { accountId: card.id, description: 'PG shop', amountCents: 1500, date: '2026-06-10', categoryId: catId };
-
-    let attempts = 0;
-    await expect(
-      idempotency.lookupOrRecord(household, 'pg-alt-expense-legacy-crash', payload, async (claimTx: unknown) => {
-        attempts += 1;
-        const txs = await runCardMutation(cards, claimTx, household, 'purchase', payload);
-        expect(txs).toHaveLength(1);
-        if (attempts === 1) {
-          await (claimTx as { query: (t: string) => Promise<unknown> }).query('INSERT INTO transactions (id) VALUES (NULL)');
-        }
-        return txs;
-      }),
-    ).rejects.toThrow();
-    const orphaned = await legPool.query('SELECT COUNT(*)::int AS n FROM transactions WHERE household_id = $1', [household]);
-    expect(orphaned.rows[0]!.n).toBe(0);
-    const retry = await idempotency.lookupOrRecord(household, 'pg-alt-expense-legacy-crash', payload, (claimTx: unknown) =>
-      runCardMutation(cards, claimTx, household, 'purchase', payload),
-    );
-    expect(retry.replayed).toBe(false);
-    const final = await legPool.query('SELECT COUNT(*)::int AS n FROM transactions WHERE household_id = $1', [household]);
-    expect(final.rows[0]!.n).toBe(1);
-  }, 60_000);
 });

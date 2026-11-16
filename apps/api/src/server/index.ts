@@ -5,10 +5,8 @@ import {
   type DeviceTokenStore,
 } from "../auth/device-token.js";
 import { createInMemoryBudgetStore } from "../budgets/in-memory.js";
-import { createLegacyPostgresBudgetStore } from "../budgets/legacy-postgres.js";
 import { createPostgresBudgetStore } from "../budgets/postgres.js";
 import { createInMemoryCardStore } from "../cards/in-memory.js";
-import { createLegacyPostgresCardStore } from "../cards/legacy-postgres.js";
 import { createPostgresCardStore } from "../cards/postgres.js";
 import { createPool } from "../db/pool.js";
 import { createPostgresWorkspaceAccessStore } from "../auth/workspace-access.js";
@@ -19,10 +17,8 @@ import { createSmtpInviteDelivery } from "../auth/invite-delivery-smtp.js";
 import { createPostgresAdoptionStore } from "../observability/adoption.js";
 import { loadConfig } from "../env.js";
 import { createInMemoryGoalStore } from "../goals/in-memory.js";
-import { createLegacyPostgresGoalStore } from "../goals/legacy-postgres.js";
 import { createPostgresGoalStore } from "../goals/postgres.js";
 import { createInMemoryPayableStore } from "../payables/in-memory.js";
-import { createLegacyPostgresPayableStore } from "../payables/legacy-postgres.js";
 import { createPostgresPayableStore } from "../payables/postgres.js";
 import { createInMemoryProfileStore } from "../profile/in-memory.js";
 import { createPostgresProfileStore } from "../profile/postgres.js";
@@ -32,7 +28,6 @@ import type { PushSubscriptionStore } from "../push/store.js";
 import { createPostgresReminderScheduler } from "../push/reminder-runtime.js";
 import { createInMemoryPushSubscriptionStore } from "../push/store.js";
 import { loadVapidConfig } from "../push/vapid.js";
-import { createLegacyPostgresReadModelStore } from "../read-models/legacy-postgres-store.js";
 import { createPostgresReadModelStore } from "../read-models/postgres-store.js";
 import { verifySchema } from "./schema-verifier.js";
 import { validateProductionConfig } from "./startup-guard.js";
@@ -40,11 +35,9 @@ import { createInMemoryReadModelStoreFromState } from "../read-models/store.js";
 import { registerRoutes } from "../routes/index.js";
 import { createSqlAnalyticsSource } from "../analytics/source.js";
 import { createInMemorySubscriptionStore } from "../subscriptions/in-memory.js";
-import { createLegacyPostgresSubscriptionStore } from "../subscriptions/legacy-postgres.js";
 import { createPostgresSubscriptionStore } from "../subscriptions/postgres.js";
 import { createInMemoryIdempotencyStore } from "../writes/idempotency.js";
 import { createInMemoryStores } from "../writes/in-memory.js";
-import { createLegacyPostgresWriteStore } from "../writes/legacy-postgres.js";
 import {
   createPostgresIdempotencyStore,
   createPostgresWriteStore,
@@ -62,7 +55,7 @@ import { createPostgresAccountInviteStore } from "../auth/account-invites-postgr
 import { createAccountInviteService } from "../auth/account-invites.js";
 import { createPostgresPendingOperationV2Store } from "../approvals/pending-v2.js";
 import { createUndoService } from "../approvals/undo.js";
-import { createInMemoryAuditLogStore, createLegacyPostgresAuditLogStore, createPostgresAuditLogStore } from "../audit/store.js";
+import { createInMemoryAuditLogStore, createPostgresAuditLogStore } from "../audit/store.js";
 import { createLegacyBearerAuditSink } from "../audit/legacy-bearer-sink.js";
 import { createPendingOperationV2Executor } from "../routes/index.js";
 
@@ -74,8 +67,7 @@ const start = async (): Promise<void> => {
 
   if (cfg.databaseUrl) {
     const pool = createPool({ connectionString: cfg.databaseUrl });
-    const isLegacySchema = process.env.DB_SCHEMA === "legacy";
-    const schemaValid = await verifySchema(pool, isLegacySchema);
+    const schemaValid = await verifySchema(pool, false);
     if (process.env.NODE_ENV === 'production') {
       validateProductionConfig({ authSecret: cfg.betterAuthSecret, databaseUrl: cfg.databaseUrl, schemaValid });
     } else if (!schemaValid) {
@@ -149,228 +141,115 @@ const start = async (): Promise<void> => {
     });
     const accountInviteRuntime = { accountInviteService };
 
-    if (process.env.DB_SCHEMA === "legacy") {
-      app.log.info("using legacy pi_financeiro schema adapters");
-      const store = createLegacyPostgresReadModelStore({ pool });
-      const writes = createLegacyPostgresWriteStore({ pool });
-      const tokenStore = createPostgresDeviceTokenStore(pool);
-      const idempotency = createPostgresIdempotencyStore({ pool, legacy: true });
-      // FIX-P1-UNDO-BOOTSTRAP: audit store real + UndoService com deps reais
-      // (antes /audit/undo respondia `unsupported` em produção).
-      // FIX-P1-UNDO-IDEMPOTENCY: MESMO IdempotencyStore dos writes.
-      const auditLogs = createLegacyPostgresAuditLogStore(pool);
-      const undoService = createUndoService({ auditLogs, writes, idempotency });
-      const cardStore = createLegacyPostgresCardStore(pool);
-      const payableStore = createLegacyPostgresPayableStore(pool);
-      // V4.1 Task 2.15: budgets get their own legacy twin so the new
-      // category gate queries `active` (legacy) instead of `status`.
-      const budgetStore = createLegacyPostgresBudgetStore(pool);
-      const goalStore = createLegacyPostgresGoalStore(pool);
-      const subscriptionStore = createLegacyPostgresSubscriptionStore(pool);
-      const profileStore = createPostgresProfileStore({ pool });
-      const pushStore = createPostgresPushSubscriptionStore(pool);
-      const pushDelivery = vapid
-        ? createWebPushDelivery({ store: pushStore, config: vapid })
+    const store = createPostgresReadModelStore({ pool });
+    const writes = createPostgresWriteStore({ pool });
+    const tokenStore = createPostgresDeviceTokenStore(pool);
+    const idempotency = createPostgresIdempotencyStore({ pool });
+    // FIX-P1-UNDO-BOOTSTRAP: audit store real + UndoService com deps reais
+    // (antes /audit/undo respondia `unsupported` em produção).
+    // FIX-P1-UNDO-IDEMPOTENCY: MESMO IdempotencyStore dos writes.
+    const auditLogs = createPostgresAuditLogStore(pool);
+    const undoService = createUndoService({ auditLogs, writes, idempotency });
+    const cardStore = createPostgresCardStore(pool);
+    const payableStore = createPostgresPayableStore(pool);
+    const budgetStore = createPostgresBudgetStore(pool);
+    const goalStore = createPostgresGoalStore(pool);
+    const subscriptionStore = createPostgresSubscriptionStore(pool);
+    const profileStore = createPostgresProfileStore({ pool });
+    const pushStore = createPostgresPushSubscriptionStore(pool);
+    const adoptionStore = createPostgresAdoptionStore(pool);
+    const pushDelivery = vapid
+      ? createWebPushDelivery({ store: pushStore, config: vapid })
+      : undefined;
+    revocationTargets.tokens = tokenStore;
+    revocationTargets.push = pushStore;
+    const reminderScheduler =
+      vapid && pushDelivery
+        ? createPostgresReminderScheduler({
+            pool,
+            payableStore,
+            delivery: pushDelivery,
+          })
         : undefined;
-      revocationTargets.tokens = tokenStore;
-      revocationTargets.push = pushStore;
-      const reminderScheduler =
-        vapid && pushDelivery
-          ? createPostgresReminderScheduler({
-              pool,
-              payableStore,
-              delivery: pushDelivery,
-            })
-          : undefined;
-      if (reminderScheduler) {
-        const runReminderJob = (): void => {
-          void reminderScheduler
-            .run()
-            .then((result) => {
-              app.log.info(
-                {
-                  event: "push_reminder_run",
-                  processed: result.processed,
-                  sent: result.sent,
-                  removed: result.removed,
-                  deduplicated: result.deduplicated,
-                  failed: result.failed,
-                  lockSkipped: result.lockSkipped,
-                  metrics: result.metrics,
-                  events: result.events,
-                },
-                "push reminder job completed",
-              );
-            })
-            .catch((error: unknown) => {
-              app.log.error({ error }, "push reminder job failed");
-            });
-        };
-        runReminderJob();
-        const timer = setInterval(runReminderJob, 60_000);
-        timer.unref();
-        app.addHook("onClose", async () => clearInterval(timer));
-      }
-      registerRoutes(app, {
-        store,
-        writes,
-        tokenStore,
-        idempotency,
-        defaultHouseholdId: cfg.defaultHouseholdId,
-        cardStore,
-        payableStore,
-        budgetStore,
-        goalStore,
-        subscriptionStore,
-        profileStore,
-        pushStore,
-        priceAlertStore: createInMemoryPriceAlertStore(),
-        auth,
-        adminEmails: cfg.adminEmails,
-        workspaceAccess,
-        workspaceStore,
-        ownershipTransferStore,
-        ...inviteRuntime,
-        ...accountInviteRuntime,
-        inviteSignupGuard,
-        auditLogs,
-        undoService,
-        analyticsSource: createSqlAnalyticsSource(pool, {
-          legacy: true,
-          stores: { store, cardStore, budgetStore, subscriptionStore },
-        }),
-        llmConfigStore: createPostgresLlmConfigStore(pool),
-        agentConnectionSecret: cfg.agentConnectionSecret,
-        agentConfigToken: cfg.agentConfigToken,
-        agentAuthServiceToken: cfg.agentAuthServiceToken,
-        agentReplayStore: createPostgresAgentReplayStore(pool),
-        agentRuntimeOrigin: cfg.agentRuntimeOrigin,
-        agentRuntimeAdminToken: cfg.agentRuntimeAdminToken,
-        trustedOrigins: cfg.trustedOrigins,
-        disableDeviceRegistration: cfg.disableDeviceRegistration,
-        legacyBearerAuditLog: createLegacyBearerAuditSink(pool),
-        pool,
-        // CODER-API-ROUTE-DUPE (incidente 13/10): V2 via threading em
-        // registerRoutes (origem única) — o 2º registerPendingOperationRoutes
-        // v2Only no mesmo app registrava /undo 2x (FST_ERR_DUPLICATED_ROUTE).
-        // FIX-P1 labels: authoritative account/category display labels for
-        // the active presentation resolve from this workspace-scoped store.
-        pendingV2Store: createPostgresPendingOperationV2Store(pool),
-        pendingV2Executor: createPendingOperationV2Executor(writes, cardStore, payableStore, goalStore, budgetStore),
-        pendingV2ReadModel: store,
-        ...(vapid?.publicKey ? { vapidPublicKey: vapid.publicKey } : {}),
-       ...(pushDelivery ? { pushDelivery } : {}),
-      });
-    } else {
-      const store = createPostgresReadModelStore({ pool });
-      const writes = createPostgresWriteStore({ pool });
-      const tokenStore = createPostgresDeviceTokenStore(pool);
-      const idempotency = createPostgresIdempotencyStore({ pool });
-      // FIX-P1-UNDO-BOOTSTRAP: audit store real + UndoService com deps reais
-      // (antes /audit/undo respondia `unsupported` em produção).
-      // FIX-P1-UNDO-IDEMPOTENCY: MESMO IdempotencyStore dos writes.
-      const auditLogs = createPostgresAuditLogStore(pool);
-      const undoService = createUndoService({ auditLogs, writes, idempotency });
-      const cardStore = createPostgresCardStore(pool);
-      const payableStore = createPostgresPayableStore(pool);
-      const budgetStore = createPostgresBudgetStore(pool);
-      const goalStore = createPostgresGoalStore(pool);
-      const subscriptionStore = createPostgresSubscriptionStore(pool);
-      const profileStore = createPostgresProfileStore({ pool });
-      const pushStore = createPostgresPushSubscriptionStore(pool);
-      const adoptionStore = createPostgresAdoptionStore(pool);
-      const pushDelivery = vapid
-        ? createWebPushDelivery({ store: pushStore, config: vapid })
-        : undefined;
-      revocationTargets.tokens = tokenStore;
-      revocationTargets.push = pushStore;
-      const reminderScheduler =
-        vapid && pushDelivery
-          ? createPostgresReminderScheduler({
-              pool,
-              payableStore,
-              delivery: pushDelivery,
-            })
-          : undefined;
-      if (reminderScheduler) {
-        const runReminderJob = (): void => {
-          void reminderScheduler
-            .run()
-            .then((result) => {
-              app.log.info(
-                {
-                  event: "push_reminder_run",
-                  processed: result.processed,
-                  sent: result.sent,
-                  removed: result.removed,
-                  deduplicated: result.deduplicated,
-                  failed: result.failed,
-                  lockSkipped: result.lockSkipped,
-                  metrics: result.metrics,
-                  events: result.events,
-                },
-                "push reminder job completed",
-              );
-            })
-            .catch((error: unknown) => {
-              app.log.error({ error }, "push reminder job failed");
-            });
-        };
-        runReminderJob();
-        const timer = setInterval(runReminderJob, 60_000);
-        timer.unref();
-        app.addHook("onClose", async () => clearInterval(timer));
-      }
-      registerRoutes(app, {
-        store,
-        writes,
-        tokenStore,
-        idempotency,
-        defaultHouseholdId: cfg.defaultHouseholdId,
-        cardStore,
-        payableStore,
-        budgetStore,
-        goalStore,
-        subscriptionStore,
-        profileStore,
-        pushStore,
-        priceAlertStore: createInMemoryPriceAlertStore(),
-        adoptionStore,
-        auth,
-        adminEmails: cfg.adminEmails,
-        workspaceAccess,
-        workspaceStore,
-        ownershipTransferStore,
-        ...inviteRuntime,
-        ...accountInviteRuntime,
-        inviteSignupGuard,
-        auditLogs,
-        undoService,
-        llmConfigStore: createPostgresLlmConfigStore(pool),
-        agentConnectionSecret: cfg.agentConnectionSecret,
-        agentConfigToken: cfg.agentConfigToken,
-        agentAuthServiceToken: cfg.agentAuthServiceToken,
-        agentReplayStore: createPostgresAgentReplayStore(pool),
-        agentRuntimeOrigin: cfg.agentRuntimeOrigin,
-        agentRuntimeAdminToken: cfg.agentRuntimeAdminToken,
-        trustedOrigins: cfg.trustedOrigins,
-        disableDeviceRegistration: cfg.disableDeviceRegistration,
-        legacyBearerAuditLog: createLegacyBearerAuditSink(pool),
-        pool,
-        analyticsSource: createSqlAnalyticsSource(pool, {
-          stores: { store, cardStore, budgetStore, subscriptionStore },
-        }),
-        // CODER-API-ROUTE-DUPE (incidente 13/10): V2 via threading em
-        // registerRoutes (origem única) — ver branch legacy acima.
-        // FIX-P1 labels: authoritative account/category display labels for
-        // the active presentation resolve from this workspace-scoped store.
-        pendingV2Store: createPostgresPendingOperationV2Store(pool),
-        pendingV2Executor: createPendingOperationV2Executor(writes, cardStore, payableStore, goalStore, budgetStore),
-        pendingV2ReadModel: store,
-        ...(vapid?.publicKey ? { vapidPublicKey: vapid.publicKey } : {}),
-        ...(pushDelivery ? { pushDelivery } : {}),
-      });
+    if (reminderScheduler) {
+      const runReminderJob = (): void => {
+        void reminderScheduler
+          .run()
+          .then((result) => {
+            app.log.info(
+              {
+                event: "push_reminder_run",
+                processed: result.processed,
+                sent: result.sent,
+                removed: result.removed,
+                deduplicated: result.deduplicated,
+                failed: result.failed,
+                lockSkipped: result.lockSkipped,
+                metrics: result.metrics,
+                events: result.events,
+              },
+              "push reminder job completed",
+            );
+          })
+          .catch((error: unknown) => {
+            app.log.error({ error }, "push reminder job failed");
+          });
+      };
+      runReminderJob();
+      const timer = setInterval(runReminderJob, 60_000);
+      timer.unref();
+      app.addHook("onClose", async () => clearInterval(timer));
     }
+    registerRoutes(app, {
+      store,
+      writes,
+      tokenStore,
+      idempotency,
+      defaultHouseholdId: cfg.defaultHouseholdId,
+      cardStore,
+      payableStore,
+      budgetStore,
+      goalStore,
+      subscriptionStore,
+      profileStore,
+      pushStore,
+      priceAlertStore: createInMemoryPriceAlertStore(),
+      adoptionStore,
+      auth,
+      adminEmails: cfg.adminEmails,
+      workspaceAccess,
+      workspaceStore,
+      ownershipTransferStore,
+      ...inviteRuntime,
+      ...accountInviteRuntime,
+      inviteSignupGuard,
+      auditLogs,
+      undoService,
+      llmConfigStore: createPostgresLlmConfigStore(pool),
+      agentConnectionSecret: cfg.agentConnectionSecret,
+      agentConfigToken: cfg.agentConfigToken,
+      agentAuthServiceToken: cfg.agentAuthServiceToken,
+      agentReplayStore: createPostgresAgentReplayStore(pool),
+      agentRuntimeOrigin: cfg.agentRuntimeOrigin,
+      agentRuntimeAdminToken: cfg.agentRuntimeAdminToken,
+      trustedOrigins: cfg.trustedOrigins,
+      disableDeviceRegistration: cfg.disableDeviceRegistration,
+      legacyBearerAuditLog: createLegacyBearerAuditSink(pool),
+      pool,
+      analyticsSource: createSqlAnalyticsSource(pool, {
+        stores: { store, cardStore, budgetStore, subscriptionStore },
+      }),
+      // CODER-API-ROUTE-DUPE (incidente 13/10): V2 via threading em
+      // registerRoutes (origem única) — ver branch legacy acima.
+      // FIX-P1 labels: authoritative account/category display labels for
+      // the active presentation resolve from this workspace-scoped store.
+      pendingV2Store: createPostgresPendingOperationV2Store(pool),
+      pendingV2Executor: createPendingOperationV2Executor(writes, cardStore, payableStore, goalStore, budgetStore),
+      pendingV2ReadModel: store,
+      ...(vapid?.publicKey ? { vapidPublicKey: vapid.publicKey } : {}),
+      ...(pushDelivery ? { pushDelivery } : {}),
+    });
+
     app.addHook("onClose", async () => {
       await auth.close();
       await pool.end();
