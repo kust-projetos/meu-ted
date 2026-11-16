@@ -6040,6 +6040,11 @@ export class ConversationOrchestrator {
         resolution.missingFields[0] === 'categoryId' &&
         this.dependencies.categorySuggestionProvider) {
       let timer: ReturnType<typeof setTimeout> | undefined;
+      // Telemetria de TODO desfecho (sem texto, valor ou ids): só o aceite
+      // gerava evento, então timeout/recusa/erro eram indistinguíveis.
+      let suggestionStatus: 'accepted' | 'rejected' | 'timeout' | 'unavailable' | 'error' = 'unavailable';
+      const TIMED_OUT = Symbol('category-suggestion-timeout');
+      const startedMs = Date.now();
       try {
         const suggestion = await Promise.race([
           this.dependencies.categorySuggestionProvider({
@@ -6049,11 +6054,16 @@ export class ConversationOrchestrator {
             amountCents: financialMerged.amountCents,
             date: financialMerged.date,
           }),
-          new Promise<null>((resolve) => {
-            timer = setTimeout(() => resolve(null), 3000);
+          new Promise<typeof TIMED_OUT>((resolve) => {
+            timer = setTimeout(() => resolve(TIMED_OUT), 3000);
           }),
         ]);
-        if (suggestion && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(suggestion.categoryId)) {
+        if (suggestion === TIMED_OUT) {
+          suggestionStatus = 'timeout';
+        } else if (suggestion) {
+          suggestionStatus = 'rejected';
+        }
+        if (suggestion && suggestion !== TIMED_OUT && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(suggestion.categoryId)) {
           const suggestedResolution = await resolveMutationEntities(
             { ...financialMerged, categoryQuery: suggestion.categoryId },
             resolutionHint,
@@ -6065,20 +6075,23 @@ export class ConversationOrchestrator {
           );
           if (suggestedResolution.complete) {
             resolution = suggestedResolution;
-            this.emit('mutation.category_suggestion', {
-              intentionId: input.intentionId,
-              traceId: input.traceId,
-              channel: input.channel,
-              source: 'model',
-              status: 'accepted',
-            });
+            suggestionStatus = 'accepted';
           }
         }
       } catch {
         // Optional inference fails closed to the established clarification.
+        suggestionStatus = 'error';
       } finally {
         if (timer) clearTimeout(timer);
       }
+      this.emit('mutation.category_suggestion', {
+        intentionId: input.intentionId,
+        traceId: input.traceId,
+        channel: input.channel,
+        source: 'model',
+        status: suggestionStatus,
+        latencyMs: Date.now() - startedMs,
+      });
     }
     if (!resolution.complete) {
       // FIX-170 (d): an identical category answer that adds nothing new and
