@@ -38,6 +38,8 @@ export type PendingOperationV2Record = PendingOperationV2 & {
    * false when a new row was created. Never persisted; absent on get/confirm.
    */
   existing?: boolean;
+  supersedesId?: string;
+  supersededById?: string;
   authorizationMode?: 'auto' | 'manual';
   authorizationReason?: string;
   riskTier?: 'low' | 'medium' | 'high' | 'destructive' | null;
@@ -350,6 +352,7 @@ export const sanitizePendingV2FailureCode = (error: unknown): string => {
 
 export type PendingOperationV2Store = {
   propose(operation: PendingOperationV2): Promise<PendingOperationV2Record>;
+  supersede(identity: PendingIdentity, id: string, operation: PendingOperationV2, options: { expectedProposalHash: string; idempotencyKey: string }): Promise<PendingOperationV2Record>;
   get(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
   /** Read-only identity-bound snapshot. Unlike get(), this never performs lazy expiry transitions. */
   getForRead?(id: string, identity: PendingIdentity): Promise<PendingOperationV2Record>;
@@ -513,6 +516,8 @@ const mapV2 = (row: PendingV2Row, token?: string): PendingOperationV2Record => {
     ...(row.authorization_reason !== null && row.authorization_reason !== undefined ? { authorizationReason: String(row.authorization_reason) } : {}),
     ...(row.risk_tier !== undefined ? { riskTier: row.risk_tier === null ? null : String(row.risk_tier) as NonNullable<PendingOperationV2Record['riskTier']> } : {}),
     ...(isoOrUndefined(row.authorized_at) ? { authorizedAt: isoOrUndefined(row.authorized_at)! } : {}),
+    ...(textOrUndefined(row.supersedes_id) ? { supersedesId: String(row.supersedes_id) } : {}),
+    ...(textOrUndefined(row.superseded_by_id) ? { supersededById: String(row.superseded_by_id) } : {}),
   };
 };
 
@@ -533,6 +538,22 @@ export const createPostgresPendingOperationV2Store = (
     if (String(row.actor_id) !== identity.actorId || String(row.device_id) !== identity.deviceId) return fail('approval.binding_mismatch', 'A operação não pertence ao contexto autenticado.', 403);
     return row;
   };
+  const validateProposal = async (operation: unknown): Promise<{ snapshot: PendingOperationV2; argsJson: string; expiresAt: string }> => {
+    const snapshot = snapshotProposeOrFail(fail, operation);
+    const argsJson = JSON.stringify(snapshot.normalizedArgs);
+    if (!(await verifyPendingOperationV2Hash(snapshot))) fail('approval.invalid_hash', 'Proposta V2 inválida ou hash divergente.', 400);
+    assertCanonicalArgs(fail, snapshot);
+    const nowMs = Date.now();
+    const expiresAt = clampPendingV2ExpiresAt(snapshot.expiresAt, nowMs);
+    if (Date.parse(expiresAt) <= nowMs) fail('approval.expired', 'A proposta já expirou.', 409);
+    return { snapshot, argsJson, expiresAt };
+  };
+  const insertProposal = async (client: PoolClient, snapshot: PendingOperationV2, argsJson: string, expiresAt: string) => {
+    return client.query<PendingV2Row>(
+      `INSERT INTO pending_operations (workspace_id, requester_id, operation, payload, reason, idempotency_key, status, expires_at, protocol_version, actor_id, device_id, tool, normalized_args, proposal_hash, execution_status, supersedes_id) VALUES ($1,$2,$3,$4::jsonb,'high_value',$5,'pending',$6,2,$7,$8,$9,$4::jsonb,$10,'proposed',$11) ON CONFLICT (workspace_id,idempotency_key) WHERE protocol_version = 2 AND workspace_id IS NOT NULL AND idempotency_key IS NOT NULL DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key RETURNING *, (xmax = 0) AS is_insert`,
+      [snapshot.workspaceId, snapshot.actorId, snapshot.tool, argsJson, snapshot.idempotencyKey, expiresAt, snapshot.actorId, snapshot.deviceId, snapshot.tool, snapshot.proposalHash, (snapshot as PendingOperationV2 & { supersedesId?: string }).supersedesId ?? null],
+    );
+  };
   return {
     get audit() { return events; },
     get auditDropped() { return auditDropped.count; },
@@ -541,21 +562,61 @@ export const createPostgresPendingOperationV2Store = (
       // await and use it for everything below — no later reads from the
       // caller-owned object (TOCTOU + hidden toJSON).
       const snapshot = snapshotProposeOrFail(fail, operation);
-      const canonicalArgsJson = JSON.stringify(snapshot.normalizedArgs);
-      if (!(await verifyPendingOperationV2Hash(snapshot))) fail('approval.invalid_hash', 'Proposta V2 inválida ou hash divergente.', 400);
-      assertCanonicalArgs(fail, snapshot);
+      const { argsJson: canonicalArgsJson, expiresAt: effectiveExpiresAt } = await validateProposal(snapshot);
       // P2 TTL: authoritative server time — ignore any crafted createdAt for
       // the lifetime window, clamp the expiry to the server max, fail fast
       // on a birth-expired proposal. DB created_at stays the default NOW().
-      const nowMs = Date.now();
-      const effectiveExpiresAt = clampPendingV2ExpiresAt(snapshot.expiresAt, nowMs);
-      if (Date.parse(effectiveExpiresAt) <= nowMs) fail('approval.expired', 'A proposta já expirou.', 409);
-      const result = await pool.query<PendingV2Row>(`INSERT INTO pending_operations (workspace_id, requester_id, operation, payload, reason, idempotency_key, status, expires_at, protocol_version, actor_id, device_id, tool, normalized_args, proposal_hash, execution_status) VALUES ($1,$2,$3,$4::jsonb,'high_value',$5,'pending',$6,$7,$8,$9,$10,$11::jsonb,$12,'proposed') ON CONFLICT (workspace_id,idempotency_key) WHERE protocol_version = 2 AND workspace_id IS NOT NULL AND idempotency_key IS NOT NULL DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key RETURNING *, (xmax = 0) AS is_insert`, [snapshot.workspaceId, snapshot.actorId, snapshot.tool, canonicalArgsJson, snapshot.idempotencyKey, effectiveExpiresAt, 2, snapshot.actorId, snapshot.deviceId, snapshot.tool, canonicalArgsJson, snapshot.proposalHash]);
+      const result = await insertProposal({ query: pool.query.bind(pool) } as unknown as PoolClient, snapshot, canonicalArgsJson, effectiveExpiresAt);
       const row = result.rows[0]!;
       if (String(row.proposal_hash) !== snapshot.proposalHash) fail('idempotency.conflict', 'Chave de idempotência já utilizada com proposta diferente.');
       const existing = row.is_insert === false;
       recordEvent({ operationId: String(row.id), event: 'propose', actorId: snapshot.actorId, at: nowIso() });
       return { ...mapV2(row), existing };
+    },
+    async supersede(identity, id, operation, options) {
+      const prepared = await validateProposal(operation);
+      if (prepared.snapshot.idempotencyKey !== options.idempotencyKey) fail('approval.invalid_args', 'Chave de idempotência divergente.', 400);
+      if (!identityMatches(prepared.snapshot, identity)) fail('approval.binding_mismatch', 'A proposta não pertence ao contexto autenticado.', 403);
+      return withTransaction(pool, async (client) => {
+        const priorKey = await client.query<PendingV2Row>(
+          `SELECT * FROM pending_operations WHERE workspace_id=$1 AND idempotency_key=$2 AND protocol_version=2 FOR UPDATE`,
+          [identity.workspaceId, options.idempotencyKey],
+        );
+        if (priorKey.rows[0]) {
+          const replay = priorKey.rows[0]!;
+          if (String(replay.proposal_hash) !== prepared.snapshot.proposalHash) fail('idempotency.conflict', 'Chave de idempotência já utilizada com proposta diferente.');
+          if (String(replay.actor_id) !== identity.actorId || String(replay.device_id) !== identity.deviceId) fail('approval.binding_mismatch', 'A operação não pertence ao contexto autenticado.', 403);
+          return { ...mapV2(replay), existing: true };
+        }
+        const old = await read(client, id, identity, true);
+        const winner = await client.query<PendingV2Row>(
+          `SELECT * FROM pending_operations WHERE workspace_id=$1 AND idempotency_key=$2 AND protocol_version=2 FOR UPDATE`,
+          [identity.workspaceId, options.idempotencyKey],
+        );
+        if (winner.rows[0]) {
+          const replay = winner.rows[0]!;
+          if (String(replay.proposal_hash) !== prepared.snapshot.proposalHash) fail('idempotency.conflict', 'Chave de idempotência já utilizada com proposta diferente.');
+          if (String(replay.actor_id) !== identity.actorId || String(replay.device_id) !== identity.deviceId) fail('approval.binding_mismatch', 'A operação não pertence ao contexto autenticado.', 403);
+          return { ...mapV2(replay), existing: true };
+        }
+        if (old.superseded_by_id !== null && old.superseded_by_id !== undefined) fail('idempotency.conflict', 'Esta proposta já foi substituída por outro payload.');
+        if (String(old.execution_status) !== 'proposed') fail('approval.supersede_not_allowed', 'A operação não pode mais ser substituída.');
+        if (String(old.tool) !== prepared.snapshot.tool) fail('approval.supersede_tool_mismatch', 'A ferramenta da proposta deve permanecer igual.');
+        if (String(old.proposal_hash) !== options.expectedProposalHash) fail('approval.proposal_hash_conflict', 'A proposta mudou; atualize antes de substituir.');
+        if (Date.parse(String(old.expires_at)) <= Date.now()) fail('approval.expired', 'A proposta já expirou.');
+        const inserted = await insertProposal(client, { ...prepared.snapshot, supersedesId: id } as PendingOperationV2, prepared.argsJson, prepared.expiresAt);
+        const row = inserted.rows[0]!;
+        // Same terminal state as cancel(): only execution_status changes.
+        const cancelled = await client.query(
+          `UPDATE pending_operations SET execution_status='cancelled', superseded_by_id=$2, attestation_hash=NULL, attestation_consumed_at=NULL WHERE id=$1 AND execution_status='proposed'`,
+          [id, row.id],
+        );
+        // A lost race must roll the whole transaction back (no orphan replacement).
+        if (cancelled.rowCount !== 1) fail('approval.supersede_not_allowed', 'A operação não pode mais ser substituída.');
+        recordEvent({ operationId: id, event: 'cancel', actorId: identity.actorId, at: nowIso() });
+        recordEvent({ operationId: String(row.id), event: 'propose', actorId: identity.actorId, at: nowIso() });
+        return { ...mapV2(row), existing: false };
+      });
     },
     async get(id, identity) { return mapV2(await read({ query: pool.query.bind(pool) } as unknown as PoolClient, id, identity)); },
     async getForRead(id, identity) { return mapV2(await read({ query: pool.query.bind(pool) } as unknown as PoolClient, id, identity)); },
@@ -971,6 +1032,46 @@ export const createInMemoryPendingOperationV2Store = (
       records.set(record.id, record);
       recordEvent({ operationId: record.id, event: 'propose', actorId: snapshot.actorId, at: nowIso() });
       return { ...expose(record), existing: false };
+    },
+    async supersede(identity, id, operation, options) {
+      const snapshot = snapshotProposeOrFail(fail, operation);
+      if (!(await verifyPendingOperationV2Hash(snapshot))) fail('approval.invalid_hash', 'Proposta V2 inválida ou hash divergente.', 400);
+      assertCanonicalArgs(fail, snapshot);
+      if (snapshot.idempotencyKey !== options.idempotencyKey || !identityMatches(snapshot, identity)) fail('approval.binding_mismatch', 'A proposta não pertence ao contexto autenticado.', 403);
+      const existing = [...records.values()].find((record) => record.workspaceId === identity.workspaceId && record.idempotencyKey === options.idempotencyKey);
+      if (existing) {
+        if (existing.proposalHash !== snapshot.proposalHash) fail('idempotency.conflict', 'Chave de idempotência já utilizada com proposta diferente.');
+        if (!identityMatches(existing, identity)) fail('approval.binding_mismatch', 'A operação não pertence ao contexto autenticado.', 403);
+        return { ...expose(existing), existing: true };
+      }
+      const old = records.get(id);
+      if (!old || old.workspaceId !== identity.workspaceId) return fail('approval.not_found', 'Operação pendente não encontrada.', 404);
+      if (!identityMatches(old, identity)) fail('approval.binding_mismatch', 'A operação não pertence ao contexto autenticado.', 403);
+      if (old.supersededById) fail('idempotency.conflict', 'Esta proposta já foi substituída por outro payload.');
+      if (old.status !== 'proposed') fail('approval.supersede_not_allowed', 'A operação não pode mais ser substituída.');
+      if (old.tool !== snapshot.tool) fail('approval.supersede_tool_mismatch', 'A ferramenta da proposta deve permanecer igual.');
+      if (old.proposalHash !== options.expectedProposalHash) fail('approval.proposal_hash_conflict', 'A proposta mudou; atualize antes de substituir.');
+      const nowMs = Date.now();
+      const expiresAt = clampPendingV2ExpiresAt(snapshot.expiresAt, nowMs);
+      if (Date.parse(expiresAt) <= nowMs) fail('approval.expired', 'A proposta já expirou.');
+      const replacement: PendingOperationV2Record = {
+        ...snapshot,
+        normalizedArgs: deepCopyJson(snapshot.normalizedArgs),
+        bindings: deepCopyJson(snapshot.bindings),
+        createdAt: new Date(nowMs).toISOString(),
+        expiresAt,
+        id: randomUUID(),
+        status: 'proposed',
+        executionAttemptCount: 0,
+        supersedesId: id,
+      };
+      old.status = 'cancelled';
+      old.supersededById = replacement.id;
+      delete old.attestation;
+      records.set(replacement.id, replacement);
+      recordEvent({ operationId: id, event: 'cancel', actorId: identity.actorId, at: nowIso() });
+      recordEvent({ operationId: replacement.id, event: 'propose', actorId: identity.actorId, at: nowIso() });
+      return { ...expose(replacement), existing: false };
     },
     async get(id, identity) {
       // Plaintext attestations never leave the store via reads: only the
