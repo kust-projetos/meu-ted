@@ -314,6 +314,7 @@ export type Env = {
    */
   TED_WEB_SEARCH_ENABLED?: string;
   TED_CATEGORY_SUGGESTION_ENABLED?: string;
+  TED_CATEGORY_AUTOCREATE_ENABLED?: string;
   /**
    * A13/G05: OPTIONAL private R2 binding for attachment bytes. Absent ⇒ the
    * ingestion pipeline is UNAVAILABLE (fail-closed) and the upload RPC answers
@@ -2155,7 +2156,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
   }
 
   /** Optional tool-free semantic category choice; all failures degrade to clarification. */
-  private async provideCategorySuggestion(request: Parameters<CategorySuggestionProvider>[0]): Promise<{ categoryId: string } | null> {
+  private async provideCategorySuggestion(request: Parameters<CategorySuggestionProvider>[0]): ReturnType<CategorySuggestionProvider> {
     try {
       const snapshot = await this.resolveIntentionSnapshot(request.input.intentionId);
       if (!snapshot) return null;
@@ -2175,14 +2176,17 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
         (row.status === undefined || row.status.trim().toLowerCase() === 'active') &&
         (row.scopeId === undefined || row.scopeId === request.input.workspaceId),
       );
-      const { prompt, allowedIds } = categorySuggestionPrompt(request, categories);
+      const allowNewCategory = this.env?.TED_CATEGORY_AUTOCREATE_ENABLED === '1';
+      const { prompt, allowedIds } = categorySuggestionPrompt(request, categories, allowNewCategory);
       const modelInstance = createLanguageModel(
         target.providerId, target.modelName, activeSnapshot.protocol as Protocol,
         (this.env ?? {}) as Record<string, string | undefined>,
       );
       const generated = await generateText({
         model: modelInstance.model,
-        system: CATEGORY_SUGGESTION_SYSTEM_PROMPT,
+         system: allowNewCategory
+           ? `${CATEGORY_SUGGESTION_SYSTEM_PROMPT} Se não houver boa correspondência, responda {"newCategory":{"name":"<nome>"}}; não informe kind.`
+           : CATEGORY_SUGGESTION_SYSTEM_PROMPT,
         prompt,
         maxOutputTokens: 100,
         abortSignal: AbortSignal.timeout(3000),
@@ -2235,6 +2239,7 @@ export class FinanceChatAgent extends AIChatAgent<Env> {
       contentQueryProvider: (input, plan) => this.provideContentQueryResponse(input, plan),
       ...(categorySuggestionEnabled(this.env) ? {
         categorySuggestionProvider: (request) => this.provideCategorySuggestion(request),
+        categoryAutoCreateEnabled: this.env?.TED_CATEGORY_AUTOCREATE_ENABLED === '1',
       } : {}),
       evidenceProvider: dependencies.evidenceProvider ?? grounding.evidenceProvider,
       correctionProvider: dependencies.correctionProvider ?? grounding.correctionProvider,
