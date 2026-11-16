@@ -240,14 +240,16 @@ describe("repro: correção de proposta ativa - Coloca como décimo terceiro", (
     const committed = makeFakeApi({ statusCode: 503, code: "response_lost", afterCommit: true });
     committed.seed();
     const updated = await setup(committed).run("Coloca como décimo terceiro", "intent-uncertain-new");
-    expect(updated.response?.text).toBe("Não consegui confirmar o resultado da atualização. Confira o cartão antes de aprovar.");
+    expect(updated.response?.text).toBe("Não consegui confirmar o resultado da atualização. Atualize as propostas e confira o cartão.");
+    expect(updated.response?.text).not.toMatch(/aprovar|aprove/i);
     expect(updated.response?.text).not.toContain("proposta foi atualizada");
     expect(committed.calls.filter((call) => call.method === "GET" && call.path === "/pending-operations/v2/active")).toHaveLength(1);
 
     const unchanged = makeFakeApi({ statusCode: 503, code: "offline" });
     unchanged.seed();
     const stillActive = await setup(unchanged).run("Coloca como décimo terceiro", "intent-uncertain-old");
-    expect(stillActive.response?.text).toBe("Não consegui confirmar o resultado da atualização. Confira o cartão antes de aprovar.");
+    expect(stillActive.response?.text).toBe("Não consegui confirmar o resultado da atualização. Atualize as propostas e confira o cartão.");
+    expect(stillActive.response?.text).not.toMatch(/aprovar|aprove/i);
     expect(unchanged.calls.filter((call) => call.method === "GET" && call.path === "/pending-operations/v2/active")).toHaveLength(1);
   });
 
@@ -341,7 +343,8 @@ describe("repro: correção de proposta ativa - Coloca como décimo terceiro", (
     fake.seed();
     const { run } = setup(fake);
     const result = await run("Coloca como décimo terceiro", `intent-${failure.statusCode}`);
-    expect(result.response?.text).toBe("Não consegui confirmar o resultado da atualização. Confira o cartão antes de aprovar.");
+    expect(result.response?.text).toBe("Não consegui confirmar o resultado da atualização. Atualize as propostas e confira o cartão.");
+    expect(result.response?.text).not.toMatch(/aprovar|aprove/i);
     expect(fake.proposePosts()).toHaveLength(0);
     expect(fake.ops.get("pending-seeded")?.status).toBe("proposed");
     expect([...fake.ops.keys()]).toEqual(["pending-seeded"]);

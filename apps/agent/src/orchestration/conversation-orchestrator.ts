@@ -7084,7 +7084,7 @@ export class ConversationOrchestrator {
           });
         } catch {
           return this.completeTurn(input, plan, startedAt, base, {
-            response: freeze({ text: 'Não consegui confirmar o resultado da atualização. Confira o cartão antes de aprovar.' }),
+            response: freeze({ text: 'Não consegui confirmar o resultado da atualização. Atualize as propostas e confira o cartão.' }),
           });
         }
       }
