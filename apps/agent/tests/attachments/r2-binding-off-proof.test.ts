@@ -74,6 +74,8 @@ describe("V1-textual manifest — binding R2 preservado, upload/STT/Vision OFF",
       TED_AUDIO_STT_ENABLED: "0",
       TED_AUDIO_STT_COHORT: "",
       TED_LIVE_SYNC_ENABLED: "1",
+      // Sugestão semântica de categoria (sem tools, só texto): ligada em 16/11.
+      TED_CATEGORY_SUGGESTION_ENABLED: "1",
       // P1 fail-closed (bounded execution pendente): a extração LOCAL da
       // camada de texto (unpdf) segue DESLIGADA no manifesto. A flag não é
       // a única trava: `pdfTextProcessorOverride` devolve `undefined`
