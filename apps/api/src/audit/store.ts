@@ -67,58 +67,6 @@ export const createInMemoryAuditLogStore = (seed: AuditLog[] = []): AuditLogStor
   },
 });
 
-export const createLegacyPostgresAuditLogStore = (pool: Pool): AuditLogStore => ({
-  async listAuditLogs(workspaceId, filters) {
-    const where = ['household_id = $1'];
-    const values: unknown[] = [workspaceId];
-    if (filters.operation !== undefined) { values.push(filters.operation); where.push(`action = $${values.length}`); }
-    if (filters.eventType !== undefined) {
-      const legacyAction = filters.eventType.startsWith('legacy.') ? filters.eventType.slice('legacy.'.length) : filters.eventType;
-      values.push(legacyAction); where.push(`action = $${values.length}`);
-    }
-    if (filters.actorType === 'user') where.push('user_id IS NOT NULL');
-    if (filters.actorType === 'device') where.push('user_id IS NULL');
-    if (filters.entityType !== undefined) { values.push(filters.entityType); where.push(`entity_type = $${values.length}`); }
-    if (filters.entityId !== undefined) { values.push(filters.entityId); where.push(`entity_id = $${values.length}`); }
-    const limit = filters.limit ?? 20;
-    values.push(limit);
-    const result = await pool.query<Row & {
-      household_id: string;
-      user_id: string | null;
-      action: string;
-      entity_type: string;
-      entity_id: string | null;
-      before_json: Record<string, unknown> | null;
-      after_json: Record<string, unknown> | null;
-      total_count: string;
-    }>(
-      `SELECT id, household_id, user_id, action, entity_type, entity_id,
-              before_json, after_json, created_at,
-              COUNT(*) OVER ()::text AS total_count
-         FROM audit_logs
-        WHERE ${where.join(' AND ')}
-        ORDER BY created_at DESC
-        LIMIT $${values.length}`,
-      values,
-    );
-    return {
-      items: result.rows.map((row) => ({
-        id: row.id,
-        workspaceId: row.household_id,
-        actorType: row.user_id === null ? 'device' : 'user',
-        actorId: row.user_id ?? 'legacy-unknown',
-        operation: row.action,
-        eventType: `legacy.${row.action}`,
-        payloadHash: '',
-        ...(row.entity_id === null ? {} : { effectRef: row.entity_id }),
-        metadata: { entityType: row.entity_type, before: row.before_json, after: row.after_json },
-        createdAt: new Date(row.created_at).toISOString(),
-      })),
-      total: result.rows.length === 0 ? 0 : Number(result.rows[0]!.total_count),
-    };
-  },
-});
-
 export const createPostgresAuditLogStore = (pool: Pool): AuditLogStore => ({
   async listAuditLogs(workspaceId, filters) {
     const where = ['workspace_id = $1'];

@@ -17,7 +17,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { createPool } from '../../src/db/pool.js';
 import { createPostgresSubscriptionStore } from '../../src/subscriptions/postgres.js';
-import { createLegacyPostgresSubscriptionStore } from '../../src/subscriptions/legacy-postgres.js';
 import { runSubscriptionMutation } from '../../src/subscriptions/keyed-mutations.js';
 import type { SubscriptionStore } from '../../src/subscriptions/store.js';
 
@@ -95,7 +94,6 @@ describeIfDb('Postgres subscriptions V4.1 PATCH (task 2.19)', () => {
 
   describe.each([
     ['canonical', () => createPostgresSubscriptionStore(canonPool!), () => canonPool!],
-    ['legacy', () => createLegacyPostgresSubscriptionStore(legPool!), () => legPool!],
   ] as const)('%s updateSubscription per-field isolation', (_label, makeStore, getPool) => {
     const cleanup = (hh: string): Promise<unknown> =>
       getPool().query(`DELETE FROM subscriptions WHERE household_id = $1`, [hh]).catch(() => undefined);
@@ -180,7 +178,6 @@ describeIfDb('Postgres subscriptions V4.1 PATCH (task 2.19)', () => {
     };
     const cases = [
       ['canonical', () => createPostgresSubscriptionStore(canonPool!), () => canonPool!],
-      ['legacy', () => createLegacyPostgresSubscriptionStore(legPool!), () => legPool!],
     ] as const;
 
     it.each(cases)('%s exposes createSubscriptionInTx', (_label, makeStore) => {
@@ -224,23 +221,5 @@ describeIfDb('Postgres subscriptions V4.1 PATCH (task 2.19)', () => {
       await getPool().query(`DELETE FROM subscriptions WHERE household_id = $1`, [hh]).catch(() => undefined);
     });
 
-    it('fail-closed: real PG claim client + store without InTx → invariant error, zero rows', async () => {
-      const full = createLegacyPostgresSubscriptionStore(legPool!);
-      const { createSubscriptionInTx: _dropped, ...stripped } = full as unknown as Record<string, unknown>;
-      expect(_dropped).toBeTypeOf('function');
-      const hh = randomUUID();
-      const client = await legPool!.connect();
-      try {
-        await client.query('BEGIN');
-        await expect(
-          runSubscriptionMutation(stripped as never, client, hh, 'create', input),
-        ).rejects.toMatchObject({ code: 'idempotency.atomic_mutation_not_supported' });
-        await client.query('ROLLBACK');
-      } finally {
-        client.release();
-      }
-      const after = await legPool!.query(`SELECT COUNT(*)::int AS n FROM subscriptions WHERE household_id = $1`, [hh]);
-      expect(after.rows[0]!.n).toBe(0);
-    });
   });
 });

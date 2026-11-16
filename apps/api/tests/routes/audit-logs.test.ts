@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildTestApp, TOKEN_A, TOKEN_B } from '../test-app.js';
 import { HOUSEHOLD_A, HOUSEHOLD_B } from '../fixtures/seed.js';
-import { createLegacyPostgresAuditLogStore } from '../../src/audit/store.js';
-import type { Pool } from 'pg';
 
 const auth = (token: string) => ({ 'x-device-token': token });
 
@@ -38,29 +36,6 @@ describe('GET /audit-logs — canonical audit capability', () => {
     const entityMiss = await app.inject({ method: 'GET', url: '/audit-logs?entityType=category&entityId=00000000-0000-4000-8000-0000000000a1', headers: auth(TOKEN_A) });
     expect(entityMiss.statusCode).toBe(200);
     expect(entityMiss.json()).toMatchObject({ total: 0, items: [] });
-  });
-
-  it('serves the legacy production schema through the same API contract', async () => {
-    const legacyPool = {
-      query: async (sql: string) => {
-        expect(sql).toContain('household_id = $1');
-        expect(sql).toContain('action');
-        expect(sql).toContain('entity_type');
-        expect(sql).toContain('entity_id');
-        expect(sql).not.toContain('workspace_id');
-        return {
-          rows: [{
-            id: 'legacy-log-1', household_id: HOUSEHOLD_A, user_id: null, action: 'create',
-            entity_type: 'account', entity_id: '00000000-0000-4000-8000-0000000000a1', before_json: { name: 'Conta anterior' },
-            after_json: { name: 'Conta antiga' }, created_at: '2026-07-31T10:00:00.000Z', total_count: '1',
-          }],
-        };
-      },
-    } as unknown as Pool;
-    const { app } = buildTestApp({}, undefined, createLegacyPostgresAuditLogStore(legacyPool));
-    const response = await app.inject({ method: 'GET', url: '/audit-logs?actorType=device&entityType=account&entityId=00000000-0000-4000-8000-0000000000a1', headers: auth(TOKEN_A) });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ total: 1, items: [{ id: 'legacy-log-1', workspaceId: HOUSEHOLD_A, actorType: 'device', operation: 'create', eventType: 'legacy.create', effectRef: '00000000-0000-4000-8000-0000000000a1', metadata: { entityType: 'account', before: { name: 'Conta anterior' }, after: { name: 'Conta antiga' } } }] });
   });
 
   it('rejects invalid query values', async () => {

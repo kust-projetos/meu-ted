@@ -112,7 +112,7 @@ describe('Postgres invites accept on the canonical schema (V050)', () => {
       trustedOrigins: ['http://localhost:3000'],
     });
     app = Fastify({ logger: false });
-    registerPostgresProductionRoutes(app, pool, false, HOUSEHOLD_A, auth, async (message) => {
+    registerPostgresProductionRoutes(app, pool, HOUSEHOLD_A, auth, async (message) => {
       deliveries.push({ email: normalizeInviteEmail(message.email), token: message.token });
     });
 

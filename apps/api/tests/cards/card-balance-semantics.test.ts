@@ -26,7 +26,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { createPostgresCardStore } from '../../src/cards/postgres.js';
-import { createLegacyPostgresCardStore } from '../../src/cards/legacy-postgres.js';
 
 const H = '11111111-1111-4111-8111-111111111111';
 
@@ -96,33 +95,6 @@ describe('card read DTO — balanceSemantics discriminator', () => {
     expect(cards[0]!.balanceSemantics).toBe('outstanding_debt');
   });
 
-  it('legacy listCreditCardAccounts marks every card legacy_calculated (even debt-like values)', async () => {
-    const store = createLegacyPostgresCardStore(
-      fakePool([
-        [
-          {
-            id: 'card-legacy-1',
-            household_id: H,
-            name: 'Legacy Card',
-            active: true,
-            credit_limit_cents: 1200000,
-            closing_day: 10,
-            due_day: 20,
-            // Legacy computed shape: purchases read back zero/NEGATIVE.
-            // The value must NOT decide the layout — the discriminator does.
-            balance_cents: -4180,
-          },
-        ],
-      ]),
-    );
-
-    const cards = await store.listCreditCardAccounts(H);
-
-    expect(cards).toHaveLength(1);
-    expect(cards[0]).toMatchObject({ id: 'card-legacy-1', balanceCents: -4180 });
-    expect(cards[0]!.balanceSemantics).toBe('legacy_calculated');
-  });
-
   it('canonical createCard carries outstanding_debt without a new schema column', async () => {
     const store = createPostgresCardStore(
       fakePool([
@@ -152,34 +124,6 @@ describe('card read DTO — balanceSemantics discriminator', () => {
     expect(card.balanceSemantics).toBe('outstanding_debt');
   });
 
-  it('legacy createCard carries legacy_calculated', async () => {
-    const store = createLegacyPostgresCardStore(
-      fakePool([
-        [], // INSERT (no RETURNING rows consumed)
-        [
-          {
-            id: 'card-legacy-new',
-            household_id: H,
-            name: 'Novo',
-            active: true,
-            credit_limit_cents: 100000,
-            closing_day: 10,
-            due_day: 20,
-          },
-        ],
-      ]),
-    );
-
-    const card = await store.createCard(H, {
-      name: 'Novo',
-      creditLimitCents: 100000,
-      closingDay: 10,
-      dueDay: 20,
-    });
-
-    expect(card.balanceSemantics).toBe('legacy_calculated');
-  });
-
   it('consumer parsing: known literals pass, missing/unknown stays fallback', () => {
     expect(parseBalanceSemantics('outstanding_debt')).toBe('outstanding_debt');
     expect(parseBalanceSemantics('legacy_calculated')).toBe('legacy_calculated');
@@ -190,7 +134,7 @@ describe('card read DTO — balanceSemantics discriminator', () => {
   });
 
   it('card DTOs leak no raw persistence/schema detail', async () => {
-    const canonical = createPostgresCardStore(
+    const store = createPostgresCardStore(
       fakePool([
         [
           {
@@ -207,30 +151,11 @@ describe('card read DTO — balanceSemantics discriminator', () => {
         ],
       ]),
     );
-    const legacy = createLegacyPostgresCardStore(
-      fakePool([
-        [
-          {
-            id: 'l1',
-            household_id: H,
-            name: 'L',
-            active: true,
-            credit_limit_cents: 5000,
-            closing_day: 1,
-            due_day: 10,
-            balance_cents: 0,
-          },
-        ],
-      ]),
-    );
 
-    const [c] = await canonical.listCreditCardAccounts(H);
-    const [l] = await legacy.listCreditCardAccounts(H);
-    for (const dto of [c, l]) {
-      for (const leaked of LEAK_KEYS) {
-        expect(dto, `must not leak ${leaked}`).not.toHaveProperty(leaked);
-      }
-      expect(['outstanding_debt', 'legacy_calculated']).toContain(dto!.balanceSemantics);
+    const [dto] = await store.listCreditCardAccounts(H);
+    for (const leaked of LEAK_KEYS) {
+      expect(dto, `must not leak ${leaked}`).not.toHaveProperty(leaked);
     }
+    expect(dto!.balanceSemantics).toBe('outstanding_debt');
   });
 });

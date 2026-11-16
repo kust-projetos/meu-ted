@@ -51,17 +51,9 @@ describe('G2.2.5 — Unit of Work contracts', () => {
     ['cards/postgres.ts', 'updatePurchase'],
     ['cards/postgres.ts', 'updateCard'],
     ['goals/postgres.ts', 'contributeToGoal'],
-    ['cards/legacy-postgres.ts', 'createCardPurchase'],
-    ['cards/legacy-postgres.ts', 'createRecurringPurchase'],
-    ['cards/legacy-postgres.ts', 'updatePurchase'],
-    ['cards/legacy-postgres.ts', 'updateCard'],
-    ['goals/legacy-postgres.ts', 'contributeToGoal'],
     ['payables/postgres.ts', 'markPayablePaid'],
     ['payables/postgres.ts', 'undoPayablePayment'],
     ['payables/postgres.ts', 'createPayableWithTemplate'],
-    ['payables/legacy-postgres.ts', 'markPayablePaid'],
-    ['payables/legacy-postgres.ts', 'undoPayablePayment'],
-    ['payables/legacy-postgres.ts', 'updatePayable'],
   ])('%s:%s has a transaction boundary', (file, method) => {
     const source = readFileSync(resolve(import.meta.dirname, `../../src/${file}`), 'utf8');
     const start = source.indexOf(`async ${method}`);

@@ -15,7 +15,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { computePendingOperationV2Hash, type PendingOperationV2 } from '@pi-finance/llm-contracts';
 import { createInMemoryStores } from '../../src/writes/in-memory.js';
 import { createPostgresWriteStore } from '../../src/writes/postgres.js';
-import { createLegacyPostgresWriteStore } from '../../src/writes/legacy-postgres.js';
 import { createPendingOperationV2Executor } from '../../src/routes/index.js';
 import { createInMemoryPendingOperationV2Store } from '../../src/approvals/pending-v2.js';
 
@@ -212,17 +211,5 @@ describe('P1: postgres write stores replay the recorded result (fake pool)', () 
       writes.createExpense(H, { ...input, amountCents: 9999 }, { idempotencyKey: 'op-key-pg-conflict' }),
     ).rejects.toMatchObject({ code: 'idempotency.conflict' });
     expect(recorded.filter((q) => q.text.startsWith('INSERT INTO transactions'))).toHaveLength(1);
-  });
-
-  it('legacy store (production VPS path) replays without a second transaction INSERT', async () => {
-    const { pool, recorded } = makeKeyedFakePool();
-    const writes = createLegacyPostgresWriteStore({ pool });
-    const input = { description: 'Lunch', amountCents: 1000, date: '2026-06-10', accountId: ACCOUNT_ID, categoryId: CATEGORY_ID };
-    const first = await writes.createExpense(H, input, { idempotencyKey: 'op-key-legacy' });
-    const second = await writes.createExpense(H, input, { idempotencyKey: 'op-key-legacy' });
-    expect(second.id).toBe(first.id);
-    expect(recorded.filter((q) => q.text.startsWith('INSERT INTO transactions'))).toHaveLength(1);
-    expect(recorded.findIndex((q) => q.text === 'SELECT pg_advisory_xact_lock_shared(hashtext($1))'))
-      .toBeLessThan(recorded.findIndex((q) => q.text.startsWith('INSERT INTO transactions')));
   });
 });
