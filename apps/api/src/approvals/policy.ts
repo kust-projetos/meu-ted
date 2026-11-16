@@ -1,5 +1,22 @@
 /** API-authoritative risk policy (ADR-026): deterministic code decides; the LLM never grants authorization. */
 export const DEFAULT_HIGH_VALUE_LIMIT_CENTS = 50_000;
+// No daily counter: creation is bounded by the transaction flow that needs a
+// category, and a read-side quota would not be atomic with the keyed write.
+export const isPendingV2CategoryAutocreateEnabled = (): boolean =>
+  process.env.PENDING_V2_CATEGORY_AUTOCREATE_ENABLED === '1';
+
+export const isAutoCreatableCategory = (value: unknown): boolean => {
+  if (!isPendingV2CategoryAutocreateEnabled() || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const args = value as Record<string, unknown>;
+  return Object.keys(args).length === 2
+    && Object.hasOwn(args, 'name')
+    && Object.hasOwn(args, 'kind')
+    && typeof args.name === 'string'
+    && args.name.trim().length >= 1
+    && args.name.trim().length <= 60
+    && !/\p{Cc}/u.test(args.name)
+    && (args.kind === 'expense' || args.kind === 'income');
+};
 
 export type MutationRiskTier = 'low' | 'medium' | 'high' | 'destructive';
 export type MutationAuthorizationAction = 'auto_execute' | 'clarify' | 'require_confirmation';
@@ -20,6 +37,7 @@ export type MutationAuthorizationCandidate = {
   ambiguousEntity?: boolean;
   duplicateSuspected?: boolean;
   explicitIntent?: boolean;
+  args?: unknown;
 };
 export type MutationAuthorizationDecision =
   | { action: 'auto_execute'; risk: 'low'; reason: 'explicit_low_risk' }
@@ -60,12 +78,16 @@ export const createApprovalPolicy = (config?: { highValueLimitCents?: number; li
     },
     evaluateMutation(candidate) {
       // First match wins; preserve this order so incomplete data is clarified before contextual risks.
-      if (!AUTOEXECUTION_ELIGIBLE_TOOLS.has(candidate.tool)) return { action: 'require_confirmation', risk: 'medium', reason: 'policy_required' };
+      const categoryAutocreate = candidate.tool === 'categories.create' && isAutoCreatableCategory(candidate.args);
+      if (!AUTOEXECUTION_ELIGIBLE_TOOLS.has(candidate.tool) && !categoryAutocreate) {
+        return { action: 'require_confirmation', risk: 'medium', reason: 'policy_required' };
+      }
       if (candidate.destructive) return { action: 'require_confirmation', risk: 'destructive', reason: 'destructive' };
       if (candidate.complete !== true) return { action: 'clarify', risk: 'medium', reason: 'missing_fields' };
       if (candidate.ambiguousEntity) return { action: 'clarify', risk: 'medium', reason: 'ambiguous_entity' };
       if (candidate.duplicateSuspected) return { action: 'require_confirmation', risk: 'medium', reason: 'possible_duplicate' };
       if (candidate.explicitIntent !== true) return { action: 'clarify', risk: 'medium', reason: 'intent_not_explicit' };
+      if (candidate.tool === 'categories.create') return { action: 'auto_execute', risk: 'low', reason: 'explicit_low_risk' };
       const limit = candidate.workspaceId ? limitsByWorkspace[candidate.workspaceId] ?? highValueLimitCents : highValueLimitCents;
       if ((candidate.amountCents ?? 0) >= limit) return { action: 'require_confirmation', risk: 'high', reason: 'high_value' };
       if (Number.isSafeInteger(candidate.amountCents) && candidate.amountCents! >= 1) return { action: 'auto_execute', risk: 'low', reason: 'explicit_low_risk' };

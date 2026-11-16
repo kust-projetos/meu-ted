@@ -991,7 +991,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         if (!(await requireActionablePresentation(params.data.id, ctx, 'proposed', reply))) return;
         const record = await v2Store.get(params.data.id, identity(ctx));
         const args = record.normalizedArgs as Record<string, unknown>;
-        const decision = approvalPolicy.evaluateMutation({ tool: record.tool, ...(typeof args.amountCents === 'number' ? { amountCents: args.amountCents } : {}), workspaceId: ctx.householdId, destructive: false, complete: true, ambiguousEntity: false, duplicateSuspected: false, explicitIntent: true });
+        const decision = approvalPolicy.evaluateMutation({ tool: record.tool, args, ...(typeof args.amountCents === 'number' ? { amountCents: args.amountCents } : {}), workspaceId: ctx.householdId, destructive: false, complete: true, ambiguousEntity: false, duplicateSuspected: false, explicitIntent: true });
         const authorization = decision.reason === 'high_value'
           ? { mode: 'manual' as const, reason: 'high_value', riskTier: 'high' as const }
           : decision.reason === 'destructive'
@@ -1034,7 +1034,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         }
         const args = record.normalizedArgs as Record<string, unknown>;
         // Stored args are registry-schema validated; V2 eligible tools are non-destructive; ambiguity/duplicate signals arrive in a later phase; explicit intent is bound to this server-side narrow capability (Agent guard is PR C).
-        const decision = approvalPolicy.evaluateMutation({ tool: record.tool, ...(typeof args.amountCents === 'number' ? { amountCents: args.amountCents } : {}), workspaceId: ctx.householdId, destructive: false, complete: true, ambiguousEntity: false, duplicateSuspected: false, explicitIntent: true });
+        const decision = approvalPolicy.evaluateMutation({ tool: record.tool, args, ...(typeof args.amountCents === 'number' ? { amountCents: args.amountCents } : {}), workspaceId: ctx.householdId, destructive: false, complete: true, ambiguousEntity: false, duplicateSuspected: false, explicitIntent: true });
         const emitDecision = (eventType: 'mutation.authorization.evaluated' | 'mutation.autoauthorized' | 'mutation.autoexecute.blocked') => {
           try {
             const event = buildObservabilityEvent(eventType, { tool: record.tool, risk: decision.risk, decision: decision.action, reason: decision.reason });
