@@ -48,3 +48,16 @@ describe('T4.1 startup fail-closed', () => {
     expect(serverSource.indexOf('await verifySchema')).toBeLessThan(serverSource.indexOf('createBetterAuth({'));
   });
 });
+
+describe('loadConfig reads SMTP and invite settings from the given source only', () => {
+  it('ignores process.env when an explicit source is passed', () => {
+    const before = process.env.SMTP_HOST;
+    process.env.SMTP_HOST = 'leak.example';
+    try {
+      expect(loadConfig({}).smtpHost).toBeNull();
+      expect(loadConfig({ SMTP_HOST: 'mail.example', SMTP_PORT: '465' })).toMatchObject({ smtpHost: 'mail.example', smtpPort: 465, smtpSecure: true });
+    } finally {
+      if (before === undefined) delete process.env.SMTP_HOST; else process.env.SMTP_HOST = before;
+    }
+  });
+});

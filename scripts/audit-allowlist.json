@@ -1,0 +1,138 @@
+[
+  {
+    "id": "GHSA-52cp-r559-cp3m",
+    "module": "js-yaml",
+    "scope": "runtime",
+    "paths": [
+      "apps__agent>agents"
+    ],
+    "justification": "Transitive via agents / @ai-sdk/anthropic, pinned by epic #87 (AI SDK v6 + agents upgrade); fix available only after that migration.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  },
+  {
+    "id": "GHSA-5p4m-2wfm-xmqj",
+    "module": "js-yaml",
+    "scope": "build-time",
+    "paths": [
+      "apps__pwa>@lhci/cli",
+      "apps__agent>agents"
+    ],
+    "justification": "Lighthouse CI/build tooling only; not shipped. Re-check when @lhci/cli publishes a fix.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  },
+  {
+    "id": "GHSA-jmr9-qjv8-65gv",
+    "module": "extract-zip",
+    "scope": "build-time",
+    "paths": [
+      "apps__pwa>@lhci/cli"
+    ],
+    "justification": "Lighthouse CI/build tooling only; not shipped. Re-check when @lhci/cli publishes a fix.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  },
+  {
+    "id": "GHSA-7pqw-9j4j-h8q3",
+    "module": "extract-zip",
+    "scope": "build-time",
+    "paths": [
+      "apps__pwa>@lhci/cli"
+    ],
+    "justification": "Lighthouse CI/build tooling only; not shipped. Re-check when @lhci/cli publishes a fix.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  },
+  {
+    "id": "GHSA-2883-xcg3-v3hh",
+    "module": "js-yaml",
+    "scope": "build-time",
+    "paths": [
+      "apps__pwa>@lhci/cli",
+      "apps__agent>agents"
+    ],
+    "justification": "Lighthouse CI/build tooling only; not shipped. Re-check when @lhci/cli publishes a fix.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  },
+  {
+    "id": "GHSA-c475-qrg2-pj4r",
+    "module": "basic-ftp",
+    "scope": "build-time",
+    "paths": [
+      "apps__pwa>@lhci/cli"
+    ],
+    "justification": "Lighthouse CI/build tooling only; not shipped. Re-check when @lhci/cli publishes a fix.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  },
+  {
+    "id": "GHSA-vc2v-76pw-4v95",
+    "module": "compression",
+    "scope": "build-time",
+    "paths": [
+      "apps__pwa>@lhci/cli"
+    ],
+    "justification": "Lighthouse CI/build tooling only; not shipped. Re-check when @lhci/cli publishes a fix.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  },
+  {
+    "id": "GHSA-mrhx-c7xc-m3w5",
+    "module": "zod",
+    "scope": "runtime",
+    "paths": [
+      "apps__agent>zod",
+      "apps__pwa>@serwist/next"
+    ],
+    "justification": "Transitive via agents / @ai-sdk/anthropic, pinned by epic #87 (AI SDK v6 + agents upgrade); fix available only after that migration.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  },
+  {
+    "id": "GHSA-27r3-jxmh-p828",
+    "module": "body-parser",
+    "scope": "build-time",
+    "paths": [
+      "apps__pwa>@lhci/cli",
+      "apps__agent>agents"
+    ],
+    "justification": "Lighthouse CI/build tooling only; not shipped. Re-check when @lhci/cli publishes a fix.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  },
+  {
+    "id": "GHSA-xjj6-f33q-929c",
+    "module": "undici",
+    "scope": "runtime",
+    "paths": [
+      "apps__agent>@ai-sdk/anthropic"
+    ],
+    "justification": "Transitive via agents / @ai-sdk/anthropic, pinned by epic #87 (AI SDK v6 + agents upgrade); fix available only after that migration.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  },
+  {
+    "id": "GHSA-2m5v-pch6-74hx",
+    "module": "undici",
+    "scope": "runtime",
+    "paths": [
+      "apps__agent>@ai-sdk/anthropic"
+    ],
+    "justification": "Transitive via agents / @ai-sdk/anthropic, pinned by epic #87 (AI SDK v6 + agents upgrade); fix available only after that migration.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  },
+  {
+    "id": "GHSA-qrxm-fqhp-jwvm",
+    "module": "undici",
+    "scope": "runtime",
+    "paths": [
+      "apps__agent>@ai-sdk/anthropic"
+    ],
+    "justification": "Transitive via agents / @ai-sdk/anthropic, pinned by epic #87 (AI SDK v6 + agents upgrade); fix available only after that migration.",
+    "owner": "project-maintainer",
+    "expiresOn": "2026-12-31"
+  }
+]
