@@ -158,7 +158,7 @@ describe('Pending V2 supersede', () => {
   });
 
   it('HTTP feature flag off returns explicit refusal and has no state effect', async () => {
-    const { app, store, request } = routeHarness();
+    const { store, request } = routeHarness();
     process.env.PENDING_V2_SUPERSEDE_ENABLED = '0';
     const old = await store.propose(await proposal(1250, 'route-old-disabled'));
     const next = await proposal(3500, 'unused');
@@ -180,7 +180,7 @@ describe('Pending V2 supersede', () => {
   });
 
   it('HTTP route authenticates, replaces, and replays the deterministic operation', async () => {
-    const { app, store, request } = routeHarness();
+    const { store, request } = routeHarness();
     process.env.PENDING_V2_SUPERSEDE_ENABLED = '1';
     const old = await store.propose(await proposal(1250, 'route-old-enabled'));
     const nextArgs = args(3500);
