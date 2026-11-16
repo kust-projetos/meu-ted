@@ -16,7 +16,9 @@ permissions:
 
 concurrency:
   group: pwa-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel the E2E of a push to main: a newer merge must not erase the
+  # only full-suite signal for the previous one. PRs still cancel superseded runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Required check: "quality (22, 10)". Keep the job id + matrix intact so
@@ -156,7 +158,8 @@ jobs:
   e2e:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-full-e2e'))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Healthy runs finish in ~10 min; 45 min only delayed the signal of a hang.
+    timeout-minutes: 25
 
     strategy:
       matrix:
