@@ -2160,6 +2160,7 @@ export type ActivePendingOperation = Readonly<{
   /** P3.6 statement payment: invoice + payer ids carried by the relay. */
   statementId?: string;
   fromAccountId?: string;
+  supersedes?: string;
   failureCode?: 'in_use';
   presentation?: PendingOperationPresentation;
 }>;
@@ -2178,6 +2179,7 @@ const activePendingOperationSchema = z
     categoryId: z.string().optional(),
     statementId: z.string().optional(),
     fromAccountId: z.string().optional(),
+    supersedes: z.string().min(1).optional(),
     failureCode: z.literal('in_use').optional(),
     presentation: pendingOperationPresentationSchema.optional(),
   })

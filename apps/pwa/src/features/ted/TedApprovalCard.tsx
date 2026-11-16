@@ -24,6 +24,7 @@ export type TedPendingOperation = Readonly<{
    */
   presentation?: PendingOperationPresentation;
   failureCode?: 'in_use';
+  supersedes?: string;
 }>;
 
 interface TedApprovalCardProps {
@@ -898,6 +899,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
             ))}
           </ul>
         )}
+        {operation.supersedes && <div className="mt-1 text-text-muted">Substitui a proposta anterior.</div>}
         <div className="mt-0.5 text-text-muted">{describePendingOperationEffect(presentation.tool)} {describePendingOperationStatus("proposed")}.</div>
 
         {error && <div className="mt-1 font-semibold text-danger">{error}</div>}

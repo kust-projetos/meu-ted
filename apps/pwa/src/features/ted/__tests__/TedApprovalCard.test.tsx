@@ -29,6 +29,14 @@ describe("TedApprovalCard V2", () => {
     vi.mocked(agentClient.decidePendingOperation).mockClear();
   });
 
+  it("identifies a proposal that supersedes an earlier proposal", () => {
+    render(<TedApprovalCard
+      operation={{ id: "op-new", status: "proposed", operation: "transactions.expense.create", supersedes: "op-old", presentation: actionablePresentation("op-new") }}
+      workspaceId="workspace-1"
+    />);
+    expect(screen.getByText("Substitui a proposta anterior.")).toBeInTheDocument();
+  });
+
   it("shows description-only De → Para and confirms with strict target context", async () => {
     const user = userEvent.setup();
     vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({

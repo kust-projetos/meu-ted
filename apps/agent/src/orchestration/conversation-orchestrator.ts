@@ -121,7 +121,7 @@ import {
   type MutationDraftResolvedArgs,
   type MutationDraftStore,
 } from '../mutations/mutation-draft.js';
-import type { MutationDraftChannelMessage, MutationReceipt, PendingOperationPresentation } from '@pi-finance/llm-contracts';
+import type { MutationDraftChannelMessage, MutationReceipt, PendingOperationPresentation, PendingOperationV2 } from '@pi-finance/llm-contracts';
 import { TED_APPROVAL_TOOLS } from '@pi-finance/llm-contracts';
 import { buildApprovalPresentation } from '../mutations/approval-presentation.js';
 import { emitSanitizedEvent } from '../observability/events.js';
@@ -441,6 +441,21 @@ export type CategorySuggestionProvider = (request: {
   readonly amountCents: number;
   readonly date: string;
 }) => Promise<CategorySuggestion | null>;
+
+/** Closed lexical gate for short correction turns; keep this as the sole verb list. */
+export const isReferentialCorrectionText = (text: string): boolean =>
+  /^(?:coloca|colocar|na verdade|era|foi|isso é|isso e|o valor certo é|o valor certo e|corrige|ajusta|muda|troca)(?:\s|$)/iu.test(text.trim());
+
+const correctionHintText = (text: string): string =>
+  text.trim().replace(/^(?:coloca(?:r)?\s+como|isso\s+(?:é|e)|na verdade(?:\s+era)?|era|foi|o valor certo\s+(?:é|e)|corrige|ajusta|muda|troca)\s*/iu, '')
+    .replace(/\s+/gu, ' ')
+    .replace(/[.!?,;:]+$/u, '')
+    .trim();
+
+const normalizeCorrectionDescription = (text: string): string => {
+  const normalized = text.replace(/\s+/gu, ' ').replace(/[.!?,;:]+$/u, '').trim();
+  return normalized ? normalized[0]!.toLocaleUpperCase('pt-BR') + normalized.slice(1) : '';
+};
 export type AuthenticatedIdentity = Readonly<{
   actorId: string;
   workspaceId: string;
@@ -6973,6 +6988,112 @@ export class ConversationOrchestrator {
       }
       return this.continueDraft(input, plan, startedAt, base, draft, client);
     }
+    // A short, explicit correction can replace exactly one still-proposed V2
+    // record. It never confirms or executes the financial operation.
+    const referentialCorrection = isReferentialCorrectionText(input.text);
+    const newCompleteOperation = parseFinancialMutation(input.text);
+    const correctionCandidate = referentialCorrection &&
+      !(newCompleteOperation.kind !== 'none' &&
+        newCompleteOperation.description.trim().toLocaleLowerCase('pt-BR') !==
+          (actives.length === 0 ? '' : actives[0]?.resolvedArgs.description.trim().toLocaleLowerCase('pt-BR')));
+    if (correctionCandidate) {
+      const coordinator = this.coordinatorFor(client);
+      if (!input.deviceId) {
+        return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text: 'Não consegui atualizar a proposta com segurança. A proposta anterior continua valendo.' }) });
+      }
+      const identity = { workspaceId: input.workspaceId, actorId: input.actorId, deviceId: input.deviceId };
+      const target = await coordinator.resolveDecisionTarget(identity, 'decidable', ctx);
+      if (target.kind === 'multiple') {
+        const text = 'Encontrei mais de uma proposta pendente. Qual delas você quer corrigir?';
+        const ambiguousPlan = freeze({ ...plan, missingFields: freeze(['intent']) });
+        return this.completeTurn(input, ambiguousPlan, startedAt, base, {
+          plan: ambiguousPlan, clarification: freeze({ missingFields: ambiguousPlan.missingFields, text }), response: freeze({ text }),
+        });
+      }
+      if (target.kind === 'single' && target.operation.status === 'proposed') {
+        const text = 'Não consegui atualizar a proposta com segurança. A proposta anterior continua valendo.';
+        try {
+          const current = await client.get(target.operation.id, identity);
+          const args: Record<string, unknown> = { ...current.normalizedArgs };
+          const raw = input.text.trim();
+          const hint = correctionHintText(raw);
+          const explicitDate = explicitFinancialDate(raw)?.date;
+          const relativeDate = resolveRelativeDateFragment(raw, { now: new Date(now) });
+          const date = explicitDate ?? (relativeDate.status === 'date' ? relativeDate.date : undefined);
+          const amountText = /(?:valor certo é|valor certo e|para|por)\s*(?:R\$\s*)?([\d.,]+)/iu.exec(raw)?.[1];
+          const accounts = await this.entityReaderOrClosed().listAccounts();
+          const categories = await this.entityReaderOrClosed().listCategories();
+          const kind: 'expense' | 'income' = /income|create_income/iu.test(current.tool) ? 'income' : 'expense';
+          const scopedCategories = categories.filter((item) =>
+            item.kind === kind && item.isActive !== false &&
+            (item.status === undefined || item.status.trim().toLowerCase() === 'active') &&
+            (item.scopeId === undefined || item.scopeId === input.workspaceId),
+          );
+          // Apply exactly one field contribution in the specified precedence.
+          if (date && 'date' in args) {
+            args.date = date;
+          } else if (amountText) {
+            const cents = parseMoneyToCents(amountText);
+            if (Number.isInteger(cents) && cents > 0) args.amountCents = cents;
+          } else {
+            const accountHint = /(?:coloca|colocar|muda|troca)\s+(?:no|na|para o|para a)\s+(.+)$/iu.exec(raw)?.[1]?.trim();
+            const exactAccount = accountHint
+              ? accounts.filter((item) => item.name.toLocaleLowerCase('pt-BR') === accountHint.toLocaleLowerCase('pt-BR'))
+              : [];
+            if (exactAccount.length === 1 && 'accountId' in args) {
+              args.accountId = exactAccount[0]!.id;
+            } else {
+              const exactCategory = scopedCategories.filter((item) => item.name.toLocaleLowerCase('pt-BR') === hint.toLocaleLowerCase('pt-BR'));
+              if (exactCategory.length === 1 && 'categoryId' in args) {
+                args.categoryId = exactCategory[0]!.id;
+              } else if ('description' in args && hint) {
+                const description = normalizeCorrectionDescription(hint);
+                if (description) {
+                  args.description = description;
+                  const provider = this.dependencies.categorySuggestionProvider;
+                  if (provider && 'amountCents' in args && typeof args.amountCents === 'number' && 'date' in args && typeof args.date === 'string') {
+                    let timer: ReturnType<typeof setTimeout> | undefined;
+                    try {
+                      const suggestion = await Promise.race([
+                        provider({ input, kind, description, amountCents: args.amountCents, date: args.date }),
+                        new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 3000); }),
+                      ]);
+                      if (suggestion && scopedCategories.some((item) => item.id === suggestion.categoryId)) {
+                        args.categoryId = suggestion.categoryId;
+                      }
+                    } catch {
+                      // Semantic category suggestion is advisory; retain the current category on failure.
+                    } finally {
+                      if (timer) clearTimeout(timer);
+                    }
+                  }
+                }
+              }
+            }
+          }
+          if (JSON.stringify(args) === JSON.stringify(current.normalizedArgs)) {
+            return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text }) });
+          }
+          const result = await client.supersede({
+            operationId: current.id, tool: current.tool,
+            normalizedArgs: args as PendingOperationV2['normalizedArgs'], identity,
+            expectedProposalHash: current.proposalHash,
+            idempotencyKey: deriveIdempotencyKey(input.workspaceId, input.intentionId, `supersede:${current.id}`),
+          });
+          return this.completeTurn(input, plan, startedAt, base, {
+            mutation: freeze({ operationId: result.id, status: 'proposed' }),
+            response: freeze({ text: 'Atualizei a proposta. Revise os dados e aprove se estiver tudo certo.' }),
+          });
+        } catch {
+          return this.completeTurn(input, plan, startedAt, base, { response: freeze({ text }) });
+        }
+      }
+      if (target.kind === 'none' || (target.kind === 'single' && target.operation.status !== 'proposed')) {
+        return this.completeTurn(input, plan, startedAt, base, {
+          response: freeze({ text: 'Não consegui atualizar a proposta com segurança. A proposta anterior continua valendo.' }),
+        });
+      }
+    }
     return this.freshMutationFlow(input, plan, startedAt, base, client);
   }
 
@@ -8179,6 +8300,14 @@ export class ConversationOrchestrator {
       this.activeCategoryDraft(input) !== undefined
     ) {
       return this.runCategoryCreationTurn(input, plan, client, startedAt, result, decisionText);
+    }
+    // Pending V2 proposals can outlive the local mutation draft. Route only
+    // explicitly referential edit language to the guarded supersede handling.
+    if (
+      this.dependencies.draftStore && client && plan.mode === 'unsupported' &&
+      isReferentialCorrectionText(input.text)
+    ) {
+      return this.runMutationTurn(input, plan, client, startedAt, result, decisionText);
     }
     if (
       this.dependencies.draftStore && client &&

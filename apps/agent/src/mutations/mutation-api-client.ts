@@ -32,6 +32,7 @@ export type ActiveOperationRecord = Readonly<{
   fromAccountId?: string;
   /** V1 completion: the payable targeted by `payables.pay` (money movement). */
   payableId?: string;
+  supersedes?: string;
   failureCode?: 'in_use';
   presentation?: PendingOperationPresentation;
 }>;
@@ -154,6 +155,59 @@ export class MutationApiClient {
         headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId },
       }),
     );
+  }
+
+  /** Full authoritative proposal read; the lean active listing is insufficient for CAS. */
+  get(operationId: string, identity: MutationIdentity): Promise<PendingOperationV2 & { id: string }> {
+    return this.timed('transactions.get', async () => {
+      const result = await this.request<unknown>('GET', `/pending-operations/v2/${encodeURIComponent(operationId)}`, {
+        headers: { 'x-workspace-id': identity.workspaceId, 'x-actor-id': identity.actorId, 'x-device-id': identity.deviceId },
+      });
+      const operation = result && typeof result === 'object' && 'operation' in result
+        ? (result as { operation: unknown }).operation
+        : result;
+      if (!operation || typeof operation !== 'object' || !('normalizedArgs' in operation) ||
+          !('proposalHash' in operation) || !('id' in operation) ||
+          (operation as { id?: unknown }).id !== operationId ||
+          typeof (operation as { proposalHash?: unknown }).proposalHash !== 'string' ||
+          !/^[0-9a-f]{64}$/.test((operation as { proposalHash: string }).proposalHash)) {
+        throw new Error('approval.operation_invalid');
+      }
+      return operation as PendingOperationV2 & { id: string };
+    });
+  }
+
+  /** Replace an unconfirmed proposal only, guarded by its currently observed hash. */
+  supersede(input: {
+    operationId: string;
+    tool: string;
+    normalizedArgs: PendingOperationV2['normalizedArgs'];
+    identity: MutationIdentity;
+    idempotencyKey: string;
+    expectedProposalHash: string;
+  }): Promise<{ id: string; existing: boolean; supersedes: string }> {
+    return this.timed('transactions.supersede', async () => {
+      const result = await this.request<{ id?: unknown; existing?: unknown; supersedes?: unknown }>(
+        'POST', `/pending-operations/v2/${encodeURIComponent(input.operationId)}/supersede`,
+        {
+          body: {
+            tool: input.tool,
+            normalizedArgs: input.normalizedArgs,
+            expectedProposalHash: input.expectedProposalHash,
+          },
+          idempotencyKey: input.idempotencyKey,
+          headers: {
+            'x-workspace-id': input.identity.workspaceId,
+            'x-actor-id': input.identity.actorId,
+            'x-device-id': input.identity.deviceId,
+          },
+        },
+      );
+      if (typeof result.id !== 'string' || result.supersedes !== input.operationId) {
+        throw new Error('approval.supersede_invalid_response');
+      }
+      return { id: result.id, existing: result.existing === true, supersedes: input.operationId };
+    });
   }
 
   /** Bounded history projection source; API identity and read capability remain server-derived. */

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ConversationOrchestrator, normalizeRestTurn, type AuthenticatedIdentity } from "../../src/orchestration/conversation-orchestrator.js";
+import { ConversationOrchestrator, normalizeRestTurn, type AuthenticatedIdentity, type CategorySuggestionProvider } from "../../src/orchestration/conversation-orchestrator.js";
 import { MutationApiClient } from "../../src/mutations/mutation-api-client.js";
 import { InMemoryMutationDraftStore } from "../../src/mutations/mutation-draft.js";
 import type { EntityReader } from "../../src/mutations/entity-resolver.js";
@@ -7,6 +7,7 @@ import { DEFAULT_CATEGORY_CATALOG } from "../../../../apps/api/src/categories/ca
 
 const identity: AuthenticatedIdentity = { actorId: "actor-repro", workspaceId: "workspace-teste-ted", role: "member", deviceId: "device-repro" };
 const NUBANK = { id: "00000000-0000-4000-8000-000000000001", name: "Nubank" };
+const INTER = { id: "00000000-0000-4000-8000-000000000002", name: "Inter" };
 
 const catalogCategories = () => {
   const out: Array<{ id: string; name: string; kind: "expense" | "income"; parentId?: string }> = [];
@@ -21,18 +22,21 @@ const catalogCategories = () => {
   return out;
 };
 
-const reader = (): EntityReader => ({ listAccounts: async () => [NUBANK], listCategories: async () => catalogCategories() });
+const reader = (): EntityReader => ({
+  listAccounts: async () => [NUBANK, INTER],
+  listCategories: async () => catalogCategories(),
+});
 
 type FakeOp = { id: string; status: string; tool?: string; createdAt: string; expiresAt: string; payload: string; idempotencyKey?: string };
 
-const makeFakeApi = () => {
+const makeFakeApi = (supersedeFailure?: { statusCode: number; code: string }) => {
   const ops = new Map<string, FakeOp>();
   const byKey = new Map<string, string>();
   let seq = 0;
   const calls: Array<{ method: string; path: string; body?: unknown; idempotencyKey?: string }> = [];
   const request = vi.fn(async (method: string, path: string, opts?: { body?: unknown; idempotencyKey?: string }) => {
     calls.push({ method, path, body: opts?.body, idempotencyKey: opts?.idempotencyKey });
-    if (method === "GET" && path === "/pending-operations/v2/active") {
+      if (method === "GET" && path === "/pending-operations/v2/active") {
       const items = [...ops.values()].filter((op) => op.status === "proposed" || op.status === "confirmed").map((op) => {
         const parsed = JSON.parse(op.payload || "{}") as { tool?: unknown; normalizedArgs?: Record<string, unknown> };
         const args = (parsed.normalizedArgs ?? {}) as Record<string, unknown>;
@@ -48,6 +52,30 @@ const makeFakeApi = () => {
       op.status = "cancelled";
       return { id, status: "cancelled" };
     }
+    const getMatch = /^\/pending-operations\/v2\/([^/]+)$/.exec(path);
+    if (method === "GET" && getMatch) {
+      const op = ops.get(decodeURIComponent(getMatch[1]!));
+      if (!op) throw Object.assign(new Error("approval.not_found"), { statusCode: 404 });
+      const parsed = JSON.parse(op.payload) as { tool: string; normalizedArgs: Record<string, unknown> };
+      return { ...parsed, id: op.id, status: op.status, proposalHash: "a".repeat(64), workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: identity.deviceId };
+    }
+    const supersedeMatch = /^\/pending-operations\/v2\/([^/]+)\/supersede$/.exec(path);
+    if (method === "POST" && supersedeMatch) {
+      const oldId = decodeURIComponent(supersedeMatch[1]!);
+      const old = ops.get(oldId);
+      if (!old) throw Object.assign(new Error("approval.not_found"), { statusCode: 404 });
+      if (supersedeFailure) throw Object.assign(new Error(supersedeFailure.code), supersedeFailure);
+      const wireBody = opts?.body as { tool: string; normalizedArgs: Record<string, unknown> };
+      const key = opts?.idempotencyKey!;
+      const existingId = byKey.get(key);
+      if (existingId) return { id: existingId, existing: true, supersedes: oldId };
+      old.status = "superseded";
+      seq += 1;
+      const id = "pending-" + seq;
+      ops.set(id, { id, status: "proposed", tool: wireBody.tool, createdAt: old.createdAt, expiresAt: old.expiresAt, payload: JSON.stringify(wireBody), idempotencyKey: key });
+      byKey.set(key, id);
+      return { id, existing: false, supersedes: oldId };
+    }
     if (method === "POST" && path === "/pending-operations/v2/propose") {
       const key = opts?.idempotencyKey;
       const wireBody = (opts?.body ?? {}) as { tool?: unknown; normalizedArgs?: unknown };
@@ -62,34 +90,42 @@ const makeFakeApi = () => {
       }
       seq += 1;
       const id = "pending-" + seq;
-      const op: FakeOp = { id, status: "proposed", tool: typeof wireBody.tool === "string" ? wireBody.tool : undefined, createdAt: "2026-11-15T20:38:00.000Z", expiresAt: "2026-11-15T21:38:00.000Z", payload, idempotencyKey: key };
-      ops.set(id, op);
+      ops.set(id, { id, status: "proposed", tool: typeof wireBody.tool === "string" ? wireBody.tool : undefined, createdAt: "2026-11-15T20:38:00.000Z", expiresAt: "2026-11-15T21:38:00.000Z", payload, idempotencyKey: key });
       if (key) byKey.set(key, id);
       return { id };
     }
     throw new Error("unexpected request " + method + " " + path);
   });
   const proposePosts = () => calls.filter((c) => c.method === "POST" && c.path === "/pending-operations/v2/propose");
-  return { api: new MutationApiClient({ request: request as never }), request, calls, ops, proposePosts };
+  const seed = (id = "pending-seeded", tool = "transactions.income.create", normalizedArgs: Record<string, unknown> = {
+    amountCents: 320000, description: "décimo", date: "2026-11-15", accountId: NUBANK.id, categoryId: "salario",
+  }) => {
+    const op: FakeOp = { id, status: "proposed", tool, createdAt: "2026-11-15T20:38:00.000Z", expiresAt: "2026-11-15T21:38:00.000Z", payload: JSON.stringify({ tool, normalizedArgs }) };
+    ops.set(id, op);
+    return op;
+  };
+  return { api: new MutationApiClient({ request: request as never }), request, calls, ops, proposePosts, seed };
 };
 
-const setup = (fake: ReturnType<typeof makeFakeApi>) => {
+const setup = (
+  fake: ReturnType<typeof makeFakeApi>,
+  categorySuggestionProvider?: CategorySuggestionProvider,
+) => {
   const store = new InMemoryMutationDraftStore();
-  const orchestrator = new ConversationOrchestrator({ mutationApiClient: fake.api, entityReader: reader(), draftStore: store });
+  const orchestrator = new ConversationOrchestrator({
+    mutationApiClient: fake.api, entityReader: reader(), draftStore: store,
+    ...(categorySuggestionProvider ? { categorySuggestionProvider } : {}),
+  });
   const run = (text: string, intentionId: string) => orchestrator.runTurn(normalizeRestTurn({ text, intentionId }, identity));
   return { orchestrator, store, run };
 };
 
 describe("repro: correção de proposta ativa - Coloca como décimo terceiro", () => {
-  it("documenta comportamento ATUAL da sequência real (não corrige bug)", async () => {
+  it("substitui proposta por correção referencial e preserva os demais campos", async () => {
     const fake = makeFakeApi();
     const { run } = setup(fake);
 
-    let turn1Error: unknown; let turn1: any;
-    try { turn1 = await run("Recebi 3200 de décimo", "intent-repro-1"); } catch (e) { turn1Error = e; }
-
-    let turn2Error: unknown; let turn2: any;
-    try { turn2 = await run("Salario", "intent-repro-2"); } catch (e) { turn2Error = e; }
+    fake.seed();
 
     let turn3Error: unknown; let turn3: any;
     try { turn3 = await run("Coloca como décimo terceiro", "intent-repro-3"); } catch (e) { turn3Error = e; }
@@ -98,25 +134,136 @@ describe("repro: correção de proposta ativa - Coloca como décimo terceiro", (
     const turn3HasText = !!(turn3?.response?.text && String(turn3.response.text).trim().length > 0);
     const turn3EmptyNoDecision = !turn3Error && !turn3HasText && !turn3HasStructuredDecision;
 
-    console.log("REPRO_SNAPSHOT:" + JSON.stringify({
-      turn1: { threw: !!turn1Error, error: turn1Error instanceof Error ? (turn1Error.name + ": " + turn1Error.message) : undefined, output: turn1?.response?.text, mode: turn1?.plan?.mode, missing: turn1?.plan?.missingFields ?? turn1?.clarification?.missingFields, mutation: turn1?.mutation },
-      turn2: { threw: !!turn2Error, error: turn2Error instanceof Error ? (turn2Error.name + ": " + turn2Error.message) : undefined, output: turn2?.response?.text, mode: turn2?.plan?.mode, missing: turn2?.plan?.missingFields ?? turn2?.clarification?.missingFields, mutation: turn2?.mutation },
-      turn3: { threw: !!turn3Error, error: turn3Error instanceof Error ? (turn3Error.name + ": " + turn3Error.message) : undefined, stack: turn3Error instanceof Error ? turn3Error.stack?.split("\n").slice(0,6).join("\n") : undefined, output: turn3?.response?.text, mode: turn3?.plan?.mode, mutation: turn3?.mutation, clarification: turn3?.clarification },
-      classification: { turn3HasText, turn3HasStructuredDecision, turn3EmptyNoDecision },
-      proposePosts: fake.proposePosts().length,
-      proposeBodies: fake.proposePosts().map((c) => c.body),
-      activeOps: [...fake.ops.values()].map((o) => ({ id: o.id, status: o.status, tool: o.tool })),
-    }, null, 2));
 
-    expect(turn1Error, "turn1 não deve lançar").toBeFalsy();
-    expect(turn2Error, "turn2 não deve lançar").toBeFalsy();
+    expect(turn3Error).toBeFalsy();
+    expect(turn3EmptyNoDecision).toBe(false);
+    expect(turn3HasText || turn3HasStructuredDecision).toBe(true);
+    expect(fake.calls.some((call) => call.path.endsWith("/supersede"))).toBe(true);
+    expect(fake.proposePosts()).toHaveLength(0);
+    expect(fake.calls.some((call) => /\/(?:confirm|execute|authorize)$/.test(call.path))).toBe(false);
+    const replacement = [...fake.ops.values()].find((op) => op.id !== "pending-seeded");
+    expect(replacement).toBeDefined();
+    expect(JSON.parse(replacement!.payload).normalizedArgs).toMatchObject({
+      description: "Décimo terceiro", amountCents: 320000, date: "2026-11-15", accountId: NUBANK.id, categoryId: "salario",
+    });
+  });
 
-    // Comportamento ATUAL (documentado): se exceção/vazio-sem-decisão => falha retentável na PWA.
-    // Esperado FUTURO: corrigir descrição da proposta ativa com segurança (não assertado aqui).
-    if (turn3Error || turn3EmptyNoDecision) {
-      expect(true).toBe(true); // reprodução da falha: exceção ou resposta vazia sem decisão
-    } else {
-      expect(turn3HasText || turn3HasStructuredDecision).toBe(true);
-    }
+  it("corrige somente o valor e preserva descrição, categoria e conta", async () => {
+    const fake = makeFakeApi();
+    fake.seed("pending-seeded", "transactions.income.create", {
+      amountCents: 320000, description: "Salário", date: "2026-11-15", accountId: NUBANK.id, categoryId: "salario",
+    });
+    const { run } = setup(fake);
+    const result = await run("O valor certo é 3500", "intent-value-correction");
+    expect(result.response?.text).toContain("Atualizei a proposta");
+    const replacement = [...fake.ops.values()].find((op) => op.id !== "pending-seeded");
+    expect(replacement).toBeDefined();
+    expect(JSON.parse(replacement!.payload).normalizedArgs).toMatchObject({
+      amountCents: 350000, description: "Salário", categoryId: "salario", accountId: NUBANK.id,
+    });
+    expect(fake.proposePosts()).toHaveLength(0);
+  });
+
+  it("não substitui um lançamento completo, mesmo com marcador referencial", async () => {
+    const fake = makeFakeApi();
+    fake.seed();
+    const { run } = setup(fake);
+    await run("Na verdade paguei 120 no mercado", "intent-new-operation");
+    expect(fake.calls.some((call) => call.path.endsWith("/supersede"))).toBe(false);
+  });
+
+  it("pede desambiguação quando há duas propostas decidíveis", async () => {
+    const fake = makeFakeApi();
+    fake.seed("pending-a");
+    fake.seed("pending-b");
+    const { run } = setup(fake);
+    const result = await run("Coloca como décimo terceiro", "intent-ambiguous-correction");
+    expect(result.response?.text).toContain("mais de uma proposta");
+    expect(fake.calls.some((call) => call.path.endsWith("/supersede"))).toBe(false);
+    expect(fake.proposePosts()).toHaveLength(0);
+  });
+
+  it("trata replay da mesma chave de supersede como sucesso idempotente", async () => {
+    const fake = makeFakeApi();
+    fake.seed();
+    const identityWithDevice = { workspaceId: identity.workspaceId, actorId: identity.actorId, deviceId: "device-repro" };
+    const normalizedArgs = { amountCents: 350000, description: "Salário", date: "2026-11-15", accountId: NUBANK.id, categoryId: "salario" };
+    const input = {
+      operationId: "pending-seeded", tool: "transactions.income.create", normalizedArgs,
+      identity: identityWithDevice, expectedProposalHash: "a".repeat(64), idempotencyKey: "stable-correction-key",
+    };
+    const first = await fake.api.supersede(input);
+    const replay = await fake.api.supersede(input);
+    expect(replay).toMatchObject({ id: first.id, existing: true, supersedes: "pending-seeded" });
+    expect([...fake.ops.values()].filter((op) => op.status === "proposed")).toHaveLength(1);
+    expect(fake.proposePosts()).toHaveLength(0);
+  });
+
+  it("reaproveita provider semântico na nova descrição e preserva categoria se ele não sugere", async () => {
+    const fake = makeFakeApi();
+    fake.seed();
+    const suggest = vi.fn(async () => null);
+    const { run } = setup(fake, suggest);
+    await run("Coloca como décimo terceiro", "intent-category-suggestion");
+    expect(suggest).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "income", description: "Décimo terceiro", amountCents: 320000,
+    }));
+    const replacement = [...fake.ops.values()].find((op) => op.id !== "pending-seeded");
+    expect(JSON.parse(replacement!.payload).normalizedArgs).toMatchObject({
+      description: "Décimo terceiro", categoryId: "salario",
+    });
+  });
+
+  it("prioriza conta e categoria existentes antes de tratar o hint como descrição", async () => {
+    const accountFake = makeFakeApi();
+    accountFake.seed("pending-seeded", "transactions.income.create", {
+      amountCents: 320000, description: "décimo", date: "2026-11-15", accountId: NUBANK.id, categoryId: "salario",
+    });
+    const accountResult = await setup(accountFake).run("Coloca no Inter", "intent-account-exact");
+    expect(accountResult.response?.text).toContain("Atualizei a proposta");
+    const accountReplacement = [...accountFake.ops.values()].find((op) => op.id !== "pending-seeded");
+    expect(JSON.parse(accountReplacement!.payload).normalizedArgs).toMatchObject({
+      accountId: INTER.id, description: "décimo",
+    });
+
+    const categoryFake = makeFakeApi();
+    categoryFake.seed("pending-seeded", "transactions.income.create", {
+      amountCents: 320000, description: "décimo", date: "2026-11-15", accountId: NUBANK.id, categoryId: "other",
+    });
+    await setup(categoryFake).run("Isso é Salário", "intent-category-exact");
+    const categoryReplacement = [...categoryFake.ops.values()].find((op) => op.id !== "pending-seeded");
+    const salaryCategory = catalogCategories().find((category) => category.kind === "income" && category.name === "Salário");
+    expect(salaryCategory).toBeDefined();
+    expect(JSON.parse(categoryReplacement!.payload).normalizedArgs).toMatchObject({
+      categoryId: salaryCategory!.id, description: "décimo",
+    });
+  });
+
+  it("prioriza a data relativa sem reescrever descrição/valor/conta", async () => {
+    const fake = makeFakeApi();
+    fake.seed("pending-seeded", "transactions.income.create", {
+      amountCents: 320000, description: "décimo", date: "2000-01-01", accountId: NUBANK.id, categoryId: "salario",
+    });
+    await setup(fake).run("Foi ontem", "intent-date-correction");
+    const replacement = [...fake.ops.values()].find((op) => op.id !== "pending-seeded");
+    expect(JSON.parse(replacement!.payload).normalizedArgs).toMatchObject({
+      description: "décimo", amountCents: 320000, accountId: NUBANK.id,
+    });
+    expect(JSON.parse(replacement!.payload).normalizedArgs.date).not.toBe("2000-01-01");
+  });
+
+  it.each([
+    { statusCode: 404, code: "pending.supersede_disabled" },
+    { statusCode: 409, code: "pending.proposal_changed" },
+  ])("$code responde honestamente e não cria outra proposta", async (failure) => {
+    const fake = makeFakeApi(failure);
+    fake.seed();
+    const { run } = setup(fake);
+    const result = await run("Coloca como décimo terceiro", `intent-${failure.statusCode}`);
+    expect(result.response?.text).toContain("A proposta anterior continua valendo");
+    expect(fake.proposePosts()).toHaveLength(0);
+    expect(fake.ops.get("pending-seeded")?.status).toBe("proposed");
+    expect([...fake.ops.keys()]).toEqual(["pending-seeded"]);
+    expect(fake.calls.some((call) => /\/(?:confirm|execute|authorize)$/.test(call.path))).toBe(false);
   });
 });

@@ -36,6 +36,7 @@ const buildRecord = (source: ActiveOperationRecord): ActiveOperationRecord => ({
   ...(source.fromAccountId !== undefined ? { fromAccountId: source.fromAccountId } : {}),
   ...(source.status === 'failed' && source.tool === 'categories.deactivate' && source.failureCode === 'in_use' ? { failureCode: 'in_use' as const } : {}),
   ...(source.presentation !== undefined ? { presentation: source.presentation } : {}),
+  ...(source.supersedes !== undefined ? { supersedes: source.supersedes } : {}),
 });
 
 const parsePresentation = (value: unknown): ActiveOperationRecord['presentation'] => {
@@ -80,6 +81,7 @@ export const toActiveOperationRecords = (input: unknown): ActiveOperationRecord[
         ...(asOptionalString(source.fromAccountId) !== undefined ? { fromAccountId: asOptionalString(source.fromAccountId) } : {}),
         ...(status === 'failed' && tool === 'categories.deactivate' && source.failureCode === 'in_use' ? { failureCode: 'in_use' as const } : {}),
         ...(parsePresentation(source.presentation) !== undefined ? { presentation: parsePresentation(source.presentation) } : {}),
+        ...(asOptionalString(source.supersedes) !== undefined ? { supersedes: asOptionalString(source.supersedes) } : {}),
       }),
     );
   }
