@@ -11,7 +11,7 @@ export type { SystemPromptInput } from './instructions.js';
 export { ALL_SKILLS, skillByName, skillCatalogLines } from './skills/index.js';
 export type { Skill } from './skills/index.js';
 export { memoriaSkill } from './skills/memoria.js';
-export { initializeMemorySchema, isMemoryEnabled, setMemoryEnabled, rememberFact, recallMemories, renderMemoryBlock, containsCardNumber, textSimilarity, bumpTurnCount, MEMORY_BUDGET_CHARS, MEMORY_RECALL_LIMIT, isProhibitedFinancialMemory, isCurrentFinancialState, MEMORY_UNTRUSTED_PREAMBLE } from './memory/store.js';
+export { initializeMemorySchema, isMemoryEnabled, setMemoryEnabled, rememberFact, rememberCorrection, recallMemories, recallCorrectionByFingerprint, renderMemoryBlock, containsCardNumber, textSimilarity, bumpTurnCount, MEMORY_BUDGET_CHARS, MEMORY_RECALL_LIMIT, isProhibitedFinancialMemory, isCurrentFinancialState, MEMORY_UNTRUSTED_PREAMBLE } from './memory/store.js';
 export type { MemoryItem, MemoryKind, MemorySql, RememberResult } from './memory/store.js';
 export { initializeSessionSchema, currentSession, endSession, listPastSessions, getSessionSummary, peekOpenSession, listVisiblePastSessions, getVisibleSessionSummary } from './memory/sessions.js';
 export type { ChatSession } from './memory/sessions.js';

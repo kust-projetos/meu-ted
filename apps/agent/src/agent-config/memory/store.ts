@@ -828,10 +828,13 @@ export const rememberFact = (
     scope?: MemoryScope;
     /** AC26a: deterministic identity for idempotent redelivery. */
     fingerprint?: string | null;
+    /** Explicit catalog references; callers must still revalidate before use. */
+    references?: MemoryReference[];
     /** G06.1: a derived row is a candidate, never an auto-promoted rule. */
     provenance?: MemoryProvenance;
   },
 ): RememberResult => {
+  if (!isMemoryEnabled(sql, input.workspaceId)) return { stored: false, reason: 'disabled' };
   const raw = (input.content ?? '').trim();
   if (raw.length === 0) return { stored: false, reason: 'empty' };
   // H-09: PAN in ANY separator variant refuses the whole write (card
@@ -851,7 +854,7 @@ export const rememberFact = (
   }
 
   const fingerprint = input.fingerprint ?? null;
-  const references = extractMemoryReferences(content);
+  const references = input.references ?? extractMemoryReferences(content);
   const provenance: MemoryProvenance = input.provenance ?? {};
   const derivedFrom = provenance.derivedFrom ?? null;
 
@@ -1104,6 +1107,37 @@ export const recallMemoriesSafe = (
 };
 
 /**
+ * Exact fingerprint lookup is deterministic: it matches the full correction identity without ranking.
+ * It complements textual recall, which remains ranked context retrieval for natural-language queries.
+ */
+export const recallCorrectionByFingerprint = (
+  sql: MemorySql,
+  input: { workspaceId: string; actor: string; target: string; field: string },
+): MemoryItem | null => {
+  if (!isMemoryEnabled(sql, input.workspaceId)) return null;
+  const scope = normalizeMemoryScope({
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    shared: input.actor === '',
+  });
+  const fingerprint = memoryFingerprint({ scope, target: input.target, field: input.field });
+  const rows = [
+    ...sql.exec<Record<string, unknown>>(
+      `SELECT * FROM agent_memory
+       WHERE workspace_id = ? AND actor = ? AND fingerprint = ?
+         AND invalidated_at IS NULL
+         AND (expires_at IS NULL OR expires_at > ?)
+       LIMIT 1`,
+      input.workspaceId,
+      input.actor,
+      fingerprint,
+      nowIso(),
+    ),
+  ];
+  return rows.length ? mapRow(rows[0]!) : null;
+};
+
+/**
  * Candidate resolution for the DESTRUCTIVE forget path (A19 post-merge closure,
  * issue #91 review round 2).
  *
@@ -1242,6 +1276,7 @@ export const rememberCorrection = (
     target: string;
     field: string;
     content: string;
+    references?: MemoryReference[];
     /** Optional turn key; absent falls back to content dedup. */
     turnFingerprint?: string;
     derivedFrom?: { sourceId: string; turnFingerprint?: string | null } | null;
@@ -1250,6 +1285,7 @@ export const rememberCorrection = (
     scope?: MemoryScope;
   },
 ): RememberResult => {
+  if (!isMemoryEnabled(sql, input.workspaceId)) return { stored: false, reason: 'disabled' };
   const scope = input.scope ?? normalizeMemoryScope({ workspaceId: input.workspaceId, actor: input.actor, shared: input.actor === '' });
   const fingerprint = memoryFingerprint({ scope, target: input.target, field: input.field });
   // AC26b: a forgotten identity is never resurrected by redelivery.
@@ -1265,6 +1301,7 @@ export const rememberCorrection = (
     salience: input.salience ?? 0.6,
     source: input.source ?? 'user',
     scope,
+    ...(input.references ? { references: input.references } : {}),
     fingerprint,
     provenance: {
       derivedFrom: input.derivedFrom ?? {

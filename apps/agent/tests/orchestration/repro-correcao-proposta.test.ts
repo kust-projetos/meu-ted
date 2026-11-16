@@ -4,6 +4,8 @@ import { MutationApiClient } from "../../src/mutations/mutation-api-client.js";
 import { InMemoryMutationDraftStore } from "../../src/mutations/mutation-draft.js";
 import type { EntityReader } from "../../src/mutations/entity-resolver.js";
 import { DEFAULT_CATEGORY_CATALOG } from "../../../../apps/api/src/categories/catalog.js";
+import { initializeMemorySchema, recallCorrectionByFingerprint } from "../../src/agent-config/memory/store.js";
+import { createMemorySql } from "../helpers/memory-sql.js";
 
 const identity: AuthenticatedIdentity = { actorId: "actor-repro", workspaceId: "workspace-teste-ted", role: "member", deviceId: "device-repro" };
 const NUBANK = { id: "00000000-0000-4000-8000-000000000001", name: "Nubank" };
@@ -121,10 +123,12 @@ const setup = (
   fake: ReturnType<typeof makeFakeApi>,
   categorySuggestionProvider?: CategorySuggestionProvider,
   entityReader: EntityReader = reader(),
+  memorySql?: ReturnType<typeof createMemorySql>,
 ) => {
   const store = new InMemoryMutationDraftStore();
   const orchestrator = new ConversationOrchestrator({
     mutationApiClient: fake.api, entityReader, draftStore: store,
+    ...(memorySql ? { memorySql } : {}),
     ...(categorySuggestionProvider ? { categorySuggestionProvider } : {}),
   });
   const run = (text: string, intentionId: string) => orchestrator.runTurn(normalizeRestTurn({ text, intentionId }, identity));
@@ -132,6 +136,23 @@ const setup = (
 };
 
 describe("repro: correção de proposta ativa - Coloca como décimo terceiro", () => {
+  it("aprende a categoria alterada somente depois do supersede bem-sucedido", async () => {
+    const fake = makeFakeApi();
+    const sql = createMemorySql();
+    initializeMemorySchema(sql);
+    const transport = catalogCategories().find((category) => category.kind === "expense" && category.name === "Transporte")!;
+    fake.seed("pending-seeded", "transactions.expense.create", {
+      amountCents: 3200, description: "uber", date: "2026-11-15", accountId: NUBANK.id, categoryId: "old-category",
+    });
+    const { run } = setup(fake, undefined, reader(), sql);
+    await run("Coloca como Transporte", "intent-category-correction");
+    expect(fake.calls.some((call) => call.path.endsWith("/supersede"))).toBe(true);
+    expect(recallCorrectionByFingerprint(sql, {
+      workspaceId: identity.workspaceId, actor: identity.actorId, target: "uber", field: "category",
+    })).toMatchObject({ references: [{ kind: "category", id: transport.id }] });
+    expect(fake.calls.some((call) => /\/(?:confirm|execute|authorize)$/.test(call.path))).toBe(false);
+  });
+
   it.each([
     "Muda minha meta de gastos",
     "Troca a senha",
