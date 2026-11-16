@@ -72,6 +72,21 @@ describe("fetchActivePendingOperations", () => {
     await expect(fetchActivePendingOperations("workspace-123")).rejects.toThrow();
   });
 
+  it("accepts supersedes as display metadata while still rejecting unallowlisted data", async () => {
+    vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
+    stubAgentAuth();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ items: [{ ...leanItem, supersedes: "op-previous" }], total: 1 }, { status: 200 }),
+    );
+    const items = await fetchActivePendingOperations("workspace-123");
+    expect(items[0]?.supersedes).toBe("op-previous");
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ items: [{ ...leanItem, supersedes: "op-previous", normalizedArgs: {} }], total: 1 }, { status: 200 }),
+    );
+    await expect(fetchActivePendingOperations("workspace-123")).rejects.toThrow();
+  });
+
   it("discards the payload when the top level carries extra keys (e.g. attestation)", async () => {
     vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.example.test");
     stubAgentAuth();
