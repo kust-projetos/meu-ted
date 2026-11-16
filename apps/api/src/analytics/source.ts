@@ -48,9 +48,9 @@ const resolveBasis = (options?: AnalyticsReadOptions): AnalyticsBasis => options
  * G-A: whether a source can APPLY `competencia` at all.
  *
  * The predicate reads `transactions.statement_payment_id`, and V056 is
- * `canonical-only` (`read-models/sql/migrate.ts`). A source assembled with
- * `legacy: true` therefore DECLARES the basis unavailable instead of emitting
- * SQL for a column that database does not have: the route refuses with a typed
+ * `canonical-only` (`read-models/sql/migrate.ts`). A source whose
+ * database lacks the column DECLARES the basis unavailable instead of emitting
+ * SQL for it: the route refuses with a typed
  * 400 before any query is assembled, rather than surfacing a Postgres
  * "column does not exist" as a 500 that says nothing about what was asked.
  *
@@ -277,24 +277,18 @@ export const createStoreAnalyticsSource = (deps: StoreBackedDeps): AnalyticsSour
 };
 
 /**
- * Aggregate SQL implementation. `legacy=true` switches account scoping to
- * the legacy from/to_account_id columns; the canonical schema uses
- * account_id. Both share household + soft-delete + date filters, and both read
- * monthly flows from the START only (no upper bound — routes declare that).
- *
- * `legacy=true` also means V056 is absent, so `competenciaBasis` is
- * `unavailable` there: see `legacyCompetenciaRefusal`.
+ * Aggregate SQL implementation over the canonical schema (account_id scoping,
+ * V056 `competencia` available). Household + soft-delete + date filters apply,
+ * and monthly flows read from the START only (no upper bound — routes declare
+ * that).
  */
 export const createSqlAnalyticsSource = (
   pool: AnalyticsPool,
-  opts: { legacy?: boolean; stores: StoreBackedDeps },
+  opts: { stores: StoreBackedDeps },
 ): AnalyticsSource => {
   const fallback = createStoreAnalyticsSource(opts.stores);
   const accountFilter = (alias: string, index: number, accountId?: string): { clause: string; values: unknown[] } => {
     if (!accountId) return { clause: '', values: [] };
-    if (opts.legacy) {
-      return { clause: `AND (${alias}.from_account_id = $${index} OR ${alias}.to_account_id = $${index})`, values: [accountId] };
-    }
     return { clause: `AND ${alias}.account_id = $${index}`, values: [accountId] };
   };
 
@@ -310,15 +304,11 @@ export const createSqlAnalyticsSource = (
    */
   const basisFilter = (alias: string, basis: AnalyticsBasis): string => {
     if (basis !== 'competencia') return '';
-    if (opts.legacy) {
-      const refusal = legacyCompetenciaRefusal();
-      throw Object.assign(new Error(refusal.message), { statusCode: 400, code: refusal.code });
-    }
     return `AND (${alias}.kind <> 'expense' OR ${alias}.statement_payment_id IS NULL)`;
   };
 
   return {
-    competenciaBasis: opts.legacy ? 'unavailable' : 'available',
+    competenciaBasis: 'available',
     loadLists: fallback.loadLists,
     async sumByKind(householdId, from, to, scope, options) {
       const basis = resolveBasis(options);

@@ -91,7 +91,7 @@ describe('V2 execution audit — unit (claim-client atomicity, no replay duplica
       idempotencyKey: 'v2-unit-1',
       payload: { description: 'lunch' },
       mutate: async () => fakeTx(),
-      audit: { operation: 'transactions.expense.create', actorId: ACTOR, schema: 'canonical' },
+      audit: { operation: 'transactions.expense.create', actorId: ACTOR },
     });
     expect(tx.id).toBe(TX_ID);
     const inserts = auditInserts(queries);
@@ -114,7 +114,7 @@ describe('V2 execution audit — unit (claim-client atomicity, no replay duplica
       idempotencyKey: 'v2-unit-replay',
       payload: { description: 'lunch' },
       mutate: async () => fakeTx(),
-      audit: { operation: 'transactions.expense.create', actorId: ACTOR, schema: 'canonical' },
+      audit: { operation: 'transactions.expense.create', actorId: ACTOR },
     } as const;
     await runKeyedMutation({ ...opts });
     let mutations = 0;
@@ -127,26 +127,6 @@ describe('V2 execution audit — unit (claim-client atomicity, no replay duplica
     });
     expect(mutations).toBe(0);
     expect(auditInserts(queries)).toHaveLength(1);
-  });
-
-  it('legacy: writes the legacy audit shape with action + entity binding', async () => {
-    const { pool, queries } = makeKeyedFake();
-    await runKeyedMutation({
-      pool,
-      householdId: HOUSEHOLD,
-      idempotencyKey: 'v2-unit-legacy',
-      payload: { description: 'lunch' },
-      mutate: async () => fakeTx(),
-      audit: { operation: 'transactions.income.create', actorId: ACTOR, schema: 'legacy' },
-    });
-    const inserts = auditInserts(queries);
-    expect(inserts).toHaveLength(1);
-    expect(inserts[0]!.text).toContain('household_id');
-    expect(inserts[0]!.text).toContain('action');
-    const values = inserts[0]!.values as unknown[];
-    expect(values).toContain(HOUSEHOLD);
-    expect(values).toContain('transactions.income.create');
-    expect(values).toContain(TX_ID);
   });
 
   it('no audit context: preserves the previous behavior (ledger + record only)', async () => {
@@ -170,7 +150,7 @@ describe('V2 execution audit — unit (claim-client atomicity, no replay duplica
         await client.query('UPDATE transactions SET description = $1', ['after']);
         return { ...fakeTx(), description: 'after' };
       },
-      audit: { operation: 'transaction.update', actorId: ACTOR, schema: 'canonical', idempotencyKey: 'description-audit-key', beforeDescription: 'before', afterDescription: 'after' },
+      audit: { operation: 'transaction.update', actorId: ACTOR, idempotencyKey: 'description-audit-key', beforeDescription: 'before', afterDescription: 'after' },
     });
     const insert = auditInserts(queries)[0]!;
     expect(insert).toBeDefined();
@@ -193,37 +173,10 @@ describe('V2 execution audit — unit (claim-client atomicity, no replay duplica
         await client.query('UPDATE transactions SET description = $1', ['after']);
         return { ...fakeTx(), description: 'after' };
       },
-      audit: { operation: 'transaction.update', actorId: ACTOR, schema: 'canonical', idempotencyKey: 'description-audit-rollback', beforeDescription: 'before', afterDescription: 'after' },
+      audit: { operation: 'transaction.update', actorId: ACTOR, idempotencyKey: 'description-audit-rollback', beforeDescription: 'before', afterDescription: 'after' },
     })).rejects.toThrow('audit insert fault');
     expect(queries.some((query) => query.text === 'ROLLBACK')).toBe(true);
     expect(snapshot()).toEqual({ keys: 0, description: 'before', auditCount: 0 });
-  });
-
-  it('transaction.update legacy: records only before/after descriptions, actor and operation key; replay adds no row', async () => {
-    const { pool, queries } = makeKeyedFake();
-    const input = {
-      pool, householdId: HOUSEHOLD, idempotencyKey: 'description-legacy-key',
-      payload: { tool: 'transactions.description.update', args: { transactionId: TX_ID, description: 'after', expectedDescription: 'before' } },
-      mutate: async (client: import('pg').PoolClient) => {
-        await client.query('UPDATE transactions SET description = $1', ['after']);
-        return { ...fakeTx(), description: 'after' };
-      },
-      audit: { operation: 'transaction.update' as const, actorId: ACTOR, schema: 'legacy' as const,
-        idempotencyKey: 'description-legacy-key', beforeDescription: 'before', afterDescription: 'after' },
-    };
-    await runKeyedMutation(input);
-    let mutations = 0;
-    await runKeyedMutation({ ...input, mutate: async () => { mutations += 1; return fakeTx(); } });
-    expect(mutations).toBe(0);
-    const inserts = auditInserts(queries);
-    expect(inserts).toHaveLength(1);
-    expect(inserts[0]!.text).toContain('before_json');
-    const values = inserts[0]!.values as unknown[];
-    expect(values).toContain('transaction.update');
-    expect(values).toContain(TX_ID);
-    expect(JSON.stringify(values)).toContain('description-legacy-key');
-    expect(JSON.stringify(values)).toContain(ACTOR);
-    expect(JSON.stringify(values)).not.toContain('amountCents');
   });
 });
 
@@ -474,118 +427,5 @@ describeIfPg('V2 execution audit — PG e2e (actual PROPOSE→CONFIRM→EXECUTE 
       [householdId],
     );
     expect(Number(txCount.rows[0]!.n)).toBe(1);
-  }, 60_000);
-});
-
-// ---------------------------------------------------------------------------
-// Legacy-shape deployment (production VPS runs DB_SCHEMA=legacy): the V2
-// execution audit must commit in the legacy audit shape on a real
-// legacy-shaped database. Separate disposable database, same guard.
-// ---------------------------------------------------------------------------
-
-const LEGACY_DB_URL = DB_URL ? DB_URL.replace(/\/[^/?]+(\?.*)?$/, '/pi_test_legacy_v2audit$1') : undefined;
-
-const LEGACY_AUDIT_SHAPE_DDL = [
-  `ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS household_id UUID`,
-  `ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_id UUID`,
-  `ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS action TEXT`,
-  `ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS entity_type TEXT`,
-  `ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS entity_id TEXT`,
-  `ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS before_json JSONB`,
-  `ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS after_json JSONB`,
-  // Deployment compat (same as XLT-07 legacy DDL): canonical NOT NULL
-  // columns are relaxed on legacy-schema deployments, where writers only
-  // fill the legacy shape.
-  `ALTER TABLE audit_logs ALTER COLUMN workspace_id DROP NOT NULL`,
-  `ALTER TABLE audit_logs ALTER COLUMN actor_id DROP NOT NULL`,
-  `ALTER TABLE audit_logs ALTER COLUMN operation DROP NOT NULL`,
-  `ALTER TABLE audit_logs ALTER COLUMN event_type DROP NOT NULL`,
-  `ALTER TABLE audit_logs ALTER COLUMN payload_hash DROP NOT NULL`,
-];
-
-describeIfPg('V2 execution audit — legacy-shape PG (runKeyedMutation legacy audit)', () => {
-  let db: Pool;
-
-  beforeAll(async () => {
-    const admin = createPool({ connectionString: DB_URL!, max: 2 });
-    try {
-      await requireTestDatabase(admin, 'v2-execution-audit-legacy-admin');
-      await admin.query('CREATE DATABASE pi_test_legacy_v2audit').catch((err: Error) => {
-        if (!/already exists/.test(err.message)) throw err;
-      });
-    } finally {
-      await admin.end();
-    }
-    db = createPool({ connectionString: LEGACY_DB_URL!, max: 4 });
-    await db.query('CREATE TABLE IF NOT EXISTS _test_marker (marker_value TEXT PRIMARY KEY)');
-    await db.query('INSERT INTO _test_marker (marker_value) VALUES ($1) ON CONFLICT DO NOTHING', [
-      process.env.DB_TEST_MARKER!,
-    ]);
-    await requireTestDatabase(db, 'v2-execution-audit-legacy');
-    await runMigrations(db);
-    for (const ddl of LEGACY_AUDIT_SHAPE_DDL) await db.query(ddl);
-  }, 180_000);
-
-  afterAll(async () => {
-    await db?.end();
-  });
-
-  it('legacy audit row commits with action + entity binding (no canonical columns touched)', async () => {
-    const householdId = randomUUID();
-    const actorId = randomUUID();
-    const key = `v2legacy-${randomUUID()}`;
-    const payload = { description: 'legacy lunch' };
-    const fakeMutate = async () =>
-      ({
-        id: '22222222-2222-4222-8222-222222222222',
-        householdId,
-        kind: 'expense',
-        description: 'legacy lunch',
-        amountCents: 500,
-        date: '2026-09-14',
-        accountId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      }) as unknown as Transaction;
-    const tx = await runKeyedMutation({
-      pool: db,
-      householdId,
-      idempotencyKey: key,
-      payload,
-      mutate: fakeMutate,
-      audit: { operation: 'transactions.expense.create', actorId, schema: 'legacy' },
-    });
-    expect(tx.id).toBe('22222222-2222-4222-8222-222222222222');
-    const rows = await db.query<{
-      action: string;
-      entity_type: string;
-      entity_id: string | null;
-      household_id: string;
-    }>(
-      `SELECT action, entity_type, entity_id, household_id FROM audit_logs WHERE household_id = $1`,
-      [householdId],
-    );
-    expect(rows.rows).toHaveLength(1);
-    expect(rows.rows[0]).toMatchObject({
-      action: 'transactions.expense.create',
-      entity_type: 'transaction',
-      entity_id: '22222222-2222-4222-8222-222222222222',
-      household_id: householdId,
-    });
-    // Replay with the SAME key: recorded tx returns, producer never runs, no second audit row.
-    let ran = 0;
-    const replayed = await runKeyedMutation({
-      pool: db,
-      householdId,
-      idempotencyKey: key,
-      payload,
-      mutate: async () => {
-        ran += 1;
-        return fakeMutate();
-      },
-      audit: { operation: 'transactions.expense.create', actorId, schema: 'legacy' },
-    });
-    expect(replayed.id).toBe('22222222-2222-4222-8222-222222222222');
-    expect(ran).toBe(0);
-    const after = await db.query(`SELECT id FROM audit_logs WHERE household_id = $1`, [householdId]);
-    expect(after.rows).toHaveLength(1);
   }, 60_000);
 });

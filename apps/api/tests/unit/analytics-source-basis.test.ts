@@ -82,22 +82,13 @@ const EXPENSE_READS: Array<(source: AnalyticsSource) => Promise<unknown>> = [
     source.categorySums(HOUSEHOLD_A, '2026-01-01', '2026-03-31', 'expense', householdScope(), { basis: 'competencia' }),
 ];
 
+// Fonte cujo banco não tem V056: declara `competencia` indisponível e a rota recusa.
+const unavailableSource = (pool: ReturnType<typeof stubPool>) => ({
+  ...createSqlAnalyticsSource(pool, { stores: stores() }),
+  competenciaBasis: 'unavailable' as const,
+});
+
 describe('FIX 2 (fonte): a fonte declara se `competencia` existe no seu dialeto', () => {
-  it('legado declara indisponível e recusa ANTES de qualquer query', async () => {
-    const pool = stubPool();
-    const source = createSqlAnalyticsSource(pool, { legacy: true, stores: stores() });
-    expect(source.competenciaBasis).toBe('unavailable');
-
-    for (const read of EXPENSE_READS) {
-      await expect(read(source)).rejects.toMatchObject({
-        statusCode: 400,
-        code: 'analytics.basis_unsupported',
-      });
-    }
-    // Nenhum SQL foi montado: a coluna que não existe nunca chegou ao banco.
-    expect(pool.queries).toEqual([]);
-  });
-
   it('canônico declara disponível e o predicado V056 entra no SQL', async () => {
     const pool = stubPool();
     const source = createSqlAnalyticsSource(pool, { stores: stores() });
@@ -107,23 +98,12 @@ describe('FIX 2 (fonte): a fonte declara se `competencia` existe no seu dialeto'
     expect(pool.queries).toHaveLength(1);
     expect(pool.queries[0]).toMatch(/statement_payment_id IS NULL/);
   });
-
-  it('legado com liquidez (DEFAULT) continua consultando e respondendo', async () => {
-    const pool = stubPool();
-    const source = createSqlAnalyticsSource(pool, { legacy: true, stores: stores() });
-
-    const sum = await source.sumByKind(HOUSEHOLD_A, '2026-01-01', '2026-03-31', householdScope());
-    expect(sum).toEqual({ income: { cents: 0 }, expense: { cents: 0 }, transactionCount: 0 });
-    expect(pool.queries).toHaveLength(1);
-    // O default não carrega predicado nenhum (o SQL de liquidez é o de sempre).
-    expect(pool.queries[0]).not.toMatch(/statement_payment_id/);
-  });
 });
 
 describe('FIX 2 (rota): o cliente recebe 400 tipado, nunca 500 de coluna', () => {
-  it('as 4 rotas de despesa recusam `competencia` no legado com o código de H-10', async () => {
+  it('as 4 rotas de despesa recusam `competencia` em fonte indisponível com o código de H-10', async () => {
     const pool = stubPool();
-    const app = await appFor(createSqlAnalyticsSource(pool, { legacy: true, stores: stores() }));
+    const app = await appFor(unavailableSource(pool));
     try {
       for (const path of [
         '/analytics/kpis',
@@ -146,9 +126,9 @@ describe('FIX 2 (rota): o cliente recebe 400 tipado, nunca 500 de coluna', () =>
     }
   });
 
-  it('liquidizade (default) e `liquidez` explícito seguem 200 no legado', async () => {
+  it('liquidizade (default) e `liquidez` explícito seguem 200 em fonte indisponível', async () => {
     const pool = stubPool();
-    const app = await appFor(createSqlAnalyticsSource(pool, { legacy: true, stores: stores() }));
+    const app = await appFor(unavailableSource(pool));
     try {
       const omitted = await app.inject({ method: 'GET', url: '/analytics/kpis', headers: H });
       expect(omitted.statusCode).toBe(200);

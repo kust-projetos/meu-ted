@@ -1428,7 +1428,7 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
         idempotencyKey: options.idempotencyKey,
         payload: input,
         mutate: (client) => createExpenseInTx(client, householdId, input),
-        ...(options.audit ? { audit: { ...options.audit, schema: 'canonical' as const } } : {}),
+        ...(options.audit ? { audit: options.audit } : {}),
       });
     },
 
@@ -1443,7 +1443,7 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
         idempotencyKey: options.idempotencyKey,
         payload: input,
         mutate: (client) => createIncomeInTx(client, householdId, input),
-        ...(options.audit ? { audit: { ...options.audit, schema: 'canonical' as const } } : {}),
+        ...(options.audit ? { audit: options.audit } : {}),
       });
     },
 
@@ -1466,7 +1466,7 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
         idempotencyKey: options.idempotencyKey,
         payload: input,
         mutate: (client) => createTransferInTx(client, householdId, input),
-        ...(options.audit ? { audit: { ...options.audit, schema: 'canonical' as const } } : {}),
+        ...(options.audit ? { audit: options.audit } : {}),
       });
     },
 
@@ -1482,7 +1482,7 @@ export const createPostgresWriteStore = (opts: { pool: Pool }): WriteStore => {
       if (description.length < 1 || description.length > 240 || copied.expectedDescription.length < 1 || copied.expectedDescription.length > 240) throw domainErrors.invalid('description', 'deve conter de 1 a 240 caracteres');
       return runKeyedMutation({ pool, householdId, idempotencyKey: options.idempotencyKey,
         payload: { tool: 'transactions.description.update' as const, args: copied },
-        audit: { operation: 'transaction.update', actorId: options.actorId, schema: 'canonical', idempotencyKey: options.idempotencyKey, beforeDescription: copied.expectedDescription, afterDescription: description },
+        audit: { operation: 'transaction.update', actorId: options.actorId, idempotencyKey: options.idempotencyKey, beforeDescription: copied.expectedDescription, afterDescription: description },
         mutate: (client) => editTransactionDescriptionInTx(client, householdId, copied) });
     },
 
@@ -1818,8 +1818,8 @@ const assertStringFormActorStructurallyValid = (actor: unknown): void => {
   }
 };
 
-export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: boolean }): import('./idempotency.js').IdempotencyStore => {
-  const { pool, legacy } = opts;
+export const createPostgresIdempotencyStore = (opts: { pool: Pool }): import("./idempotency.js").IdempotencyStore => {
+  const { pool } = opts;
   // V4.1 Phase 3 Tasks 3.6/3.7: new claims hash V2 (SHA-256 over canonical
   // JSON). Rows written by older builds (v1-sha256 / legacy h*31) still
   // replay — reads compare tolerantly via matchesPayloadHash.
@@ -1909,84 +1909,9 @@ export const createPostgresIdempotencyStore = (opts: { pool: Pool; legacy?: bool
       const payloadHash = hash(payload);
       // T09: defaults históricos quando a chamada não carrega ator — nenhuma
       // reescrita de comportamento para callsites ainda não migrados.
-      const resolvedActorId = actorId ?? (legacy ? 'unknown' : 'device');
+      const resolvedActorId = actorId ?? 'device';
       const resolvedActorType = actorType ?? 'device';
       return withTransaction(pool, async (client) => {
-        if (legacy) {
-          // Hybrid VPS: operation_records is CANONICAL, audit_logs is LEGACY
-          const claim = await client.query<{ id: string; status: string; response: unknown; effect_ref: string | null }>(
-            `INSERT INTO operation_records
-               (workspace_id, actor_id, operation, idempotency_key, payload_hash, actor_type, status,
-                lease_until, retry_until, retention_until)
-             VALUES ($1, $2, $3, $4, $5, $6, 'processing',
-                     NOW() + INTERVAL '5 minutes', NOW() + INTERVAL '7 days', NOW() + INTERVAL '90 days')
-             ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
-             RETURNING id, status, response, effect_ref`,
-            [householdId, resolvedActorId, operation ?? 'write', compositeKey, payloadHash, resolvedActorType],
-          );
-
-          if (claim.rowCount === 1) {
-            const recordId = claim.rows[0]!.id;
-            // FIX-UNDO: the producer receives the open claim client, so a
-            // client-bound effect (undo reversals, InTx helpers) joins this
-            // transaction and commits atomically with claim + completion.
-            // Producers that ignore the argument keep their own boundary.
-            const response = await producer(client);
-            const effectRef = resolveCanonicalEffectRef(response, operation);
-            // Undo eligibility on legacy: derive the reversible action from
-            // the verified receipt (new rows only — old rows untouched);
-            // entity_id binds the financial entity when verified, else the
-            // record id as before (legacy consumer convention).
-            const legacyAuditAction = resolveCanonicalAuditOperation(response, operation);
-            await client.query(
-              `UPDATE operation_records
-                  SET status = 'completed', response = $3, effect_ref = $4, completed_at = NOW()
-                WHERE id = $1 AND workspace_id = $2`,
-              [recordId, householdId, JSON.stringify(response), effectRef],
-            );
-const resolvedUserId = await resolveApplicationUserId(client, actorId);
-            // The idempotency scope id may be a synthetic UUID (workspace.create,
-            // account-invite.create) that is not a real household. audit_logs has an
-            // FK to households(id); resolve the real household when it exists and
-            // fall back to NULL (nullable column, as push notifications use).
-            const resolvedHouseholdId = await resolveHouseholdId(client, householdId);
-            await client.query(
-              `INSERT INTO audit_logs
-                 (id, household_id, user_id, action, entity_type, entity_id, before_json, after_json, created_at)
-               VALUES ($1, $2, $3, $4, 'operation', $5, $6, $7, NOW())`,
-[randomUUID(), resolvedHouseholdId, resolvedUserId, legacyAuditAction, effectRef ?? recordId, null, JSON.stringify(response)],
-            );
-            return { response, replayed: false };
-          }
-
-          // Lost the claim race: explicit processing handling (Finding 3) —
-          // completed replays, live-lease processing 409s, expired-lease
-          // processing is taken over below via the normal completion path.
-          const lost = await resolveLostClaimRace(client, householdId, compositeKey, payload, payloadHash);
-          if ('response' in lost) return { response: lost.response as never, replayed: true };
-          {
-            const recordId = lost.recordId;
-            const response = await producer(client);
-            const effectRef = resolveCanonicalEffectRef(response, operation);
-            const legacyAuditAction = resolveCanonicalAuditOperation(response, operation);
-            await client.query(
-              `UPDATE operation_records
-                  SET status = 'completed', response = $3, effect_ref = $4, completed_at = NOW()
-                WHERE id = $1 AND workspace_id = $2`,
-              [recordId, householdId, JSON.stringify(response), effectRef],
-            );
-            const resolvedUserId = await resolveApplicationUserId(client, actorId);
-            const resolvedHouseholdId = await resolveHouseholdId(client, householdId);
-            await client.query(
-              `INSERT INTO audit_logs
-                 (id, household_id, user_id, action, entity_type, entity_id, before_json, after_json, created_at)
-               VALUES ($1, $2, $3, $4, 'operation', $5, $6, $7, NOW())`,
-              [randomUUID(), resolvedHouseholdId, resolvedUserId, legacyAuditAction, effectRef ?? recordId, null, JSON.stringify(response)],
-            );
-            return { response, replayed: false };
-          }
-        }
-
         // Canonical path: claim + effect + completion + audit in one
         // transaction against operation_records (V013-V016 lifecycle).
         // NOTE: `operation` below stays the generic claim operation
@@ -2005,7 +1930,7 @@ const resolvedUserId = await resolveApplicationUserId(client, actorId);
 
         if (claim.rowCount === 1) {
           const recordId = claim.rows[0]!.id;
-          // FIX-UNDO: same claim-client passthrough as the legacy branch —
+          // FIX-UNDO: claim-client passthrough:
           // the undo reversal joins this transaction (SPEC §12 F3 opção 1).
           const response = await producer(client);
           const effectRef = resolveCanonicalEffectRef(response, operation);

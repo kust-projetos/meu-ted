@@ -18,7 +18,7 @@
  * (`" user-123 "` chegava ao INSERT). Fail-closed: qualquer whitespace
  * em qualquer posição indica entrada contaminada (sessão autenticada
  * nunca fabrica espaços) ⇒ valor manchado = sem ator explícito, cai
- * nos defaults históricos (`device` canônico / `unknown` legacy, nunca
+ * nos defaults históricos (`device`, nunca
  * fabrica). Invariantes body-strip/key/hash + whitespace rodam SEM PG
  * (fake pool); só fresh-claim e replay exigem PG (condicional por env).
  */
@@ -50,7 +50,7 @@ type Captured = { text: string; values?: unknown[] };
 
 /**
  * Fake pool (sem PG): captura o SQL emitido e simula o fresh claim
- * canônico/legacy (INSERT … ON CONFLICT retorna a linha `processing`).
+ * canônico (INSERT … ON CONFLICT retorna a linha `processing`).
  * BEGIN/COMMIT/ROLLBACK caem no retorno neutro abaixo.
  */
 const makeFakePool = (captured: Captured[], recordId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa') => {
@@ -185,28 +185,6 @@ describe('T09 — actor attribution invariants (pure units, no PG)', () => {
     expect(insert!.values?.[5]).toBe('device');
   });
 
-  it('tainted actorId on the legacy path falls back to unknown/device (fake pool, no PG)', async () => {
-    const captured: Captured[] = [];
-    const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured), legacy: true });
-    const household = randomUUID();
-    const key = `t09-ws-legacy-${randomUUID()}`;
-    const payload = httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 });
-
-    const result = await store.lookupOrRecord(
-      household,
-      key,
-      payload,
-      async () => ({ ok: true }),
-      { actorId: ' user-123 ', actorType: 'user' },
-    );
-    expect(result.replayed).toBe(false);
-
-    const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
-    expect(insert).toBeDefined();
-    expect(insert!.values?.[1]).toBe('unknown');
-    expect(insert!.values?.[5]).toBe('device');
-  });
-
   it('T09-r2 P2-1: object-form mixed pair (tainted id + clean type) discards BOTH to defaults (fake pool, no PG)', async () => {
     // Canônico: nenhum par 'device/user' pode sobreviver.
     {
@@ -227,27 +205,6 @@ describe('T09 — actor attribution invariants (pure units, no PG)', () => {
       const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
       expect(insert).toBeDefined();
       expect(insert!.values?.[1]).toBe('device');
-      expect(insert!.values?.[5]).toBe('device');
-    }
-    // Legacy: nenhum par 'unknown/user' pode sobreviver.
-    {
-      const captured: Captured[] = [];
-      const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured), legacy: true });
-      const result = await store.lookupOrRecord(
-        {
-          workspaceId: randomUUID(),
-          actorId: ' user-123 ',
-          actorType: 'user',
-          operation: 'expense.create',
-          key: `t09-mixed-a-legacy-${randomUUID()}`,
-        },
-        httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 }),
-        async () => ({ ok: true }),
-      );
-      expect(result.replayed).toBe(false);
-      const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
-      expect(insert).toBeDefined();
-      expect(insert!.values?.[1]).toBe('unknown');
       expect(insert!.values?.[5]).toBe('device');
     }
   });
@@ -272,27 +229,6 @@ describe('T09 — actor attribution invariants (pure units, no PG)', () => {
       const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
       expect(insert).toBeDefined();
       expect(insert!.values?.[1]).toBe('device');
-      expect(insert!.values?.[5]).toBe('device');
-    }
-    // Legacy: id limpo + tipo manchado — id também cai para 'unknown'.
-    {
-      const captured: Captured[] = [];
-      const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured), legacy: true });
-      const result = await store.lookupOrRecord(
-        {
-          workspaceId: randomUUID(),
-          actorId: 'user-123',
-          actorType: ' user',
-          operation: 'expense.create',
-          key: `t09-mixed-b-legacy-${randomUUID()}`,
-        },
-        httpIdempotencyPayload({ route: 'POST /transactions/expense' }, { amountCents: 1500 }),
-        async () => ({ ok: true }),
-      );
-      expect(result.replayed).toBe(false);
-      const insert = captured.find((c) => c.text.includes('INSERT INTO operation_records'));
-      expect(insert).toBeDefined();
-      expect(insert!.values?.[1]).toBe('unknown');
       expect(insert!.values?.[5]).toBe('device');
     }
   });

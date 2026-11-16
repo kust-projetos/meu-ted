@@ -259,7 +259,7 @@ describeIfDb('V4.1 Phase 3 — Postgres single-tx keyed mutations', () => {
       idempotencyKey: key,
       payload,
       audit: {
-        operation: 'transaction.update', actorId: 'test-server-actor', schema: 'canonical',
+        operation: 'transaction.update', actorId: 'test-server-actor',
         idempotencyKey: key, beforeDescription: 'old', afterDescription: 'new',
       },
       mutate: async () => {

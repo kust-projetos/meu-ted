@@ -178,9 +178,6 @@ const keyedResponse = (kind: string, id: string, type: string, bodyKind?: string
 const canonicalAuditValues = (captured: Captured[]) =>
   captured.find((c) => c.text.includes('INSERT INTO audit_logs') && c.text.includes('operation_record_id'))!.values!;
 
-const legacyAuditValues = (captured: Captured[]) =>
-  captured.find((c) => c.text.includes('INSERT INTO audit_logs') && c.text.includes('household_id'))!.values!;
-
 describe('canonical audit.operation derivation (undo eligibility)', () => {
   it.each([
     ['transaction.create', TX_ID, 'transaction', 'expense', 'transactions.expense.create'],
@@ -246,37 +243,6 @@ describe('canonical audit.operation derivation (undo eligibility)', () => {
       async () => ({ status: 201, body: { id: TX_ID } }) as never,
     );
     expect(canonicalAuditValues(captured)[4]).toBe('write');
-  });
-
-  it('legacy branch: derives action + binds entity_id, falls back otherwise', async () => {
-    const captured: Captured[] = [];
-    const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured), legacy: true });
-    await store.lookupOrRecord(
-      HOUSEHOLD,
-      'k-legacy-expense',
-      { route: 'POST /x', payload: {} },
-      async () => keyedResponse('transaction.create', TX_ID, 'transaction', 'expense') as never,
-    );
-    // legacy columns: id, household_id, user_id, action, entity_id, before, after
-    // (entity_type is the 'operation' literal in the SQL text)
-    const values = legacyAuditValues(captured);
-    expect(values[3]).toBe('transactions.expense.create');
-    expect(values[4]).toBe(TX_ID);
-  });
-
-  it('legacy branch: non-financial writes keep action write + record entity_id', async () => {
-    const recordId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-    const captured: Captured[] = [];
-    const store = createPostgresIdempotencyStore({ pool: makeFakePool(captured, recordId), legacy: true });
-    await store.lookupOrRecord(
-      HOUSEHOLD,
-      'k-legacy-push',
-      { route: 'POST /push/subscriptions', payload: {} },
-      async () => ({ status: 201, body: { ok: true } }) as never,
-    );
-    const values = legacyAuditValues(captured);
-    expect(values[3]).toBe('write');
-    expect(values[4]).toBe(recordId);
   });
 });
 

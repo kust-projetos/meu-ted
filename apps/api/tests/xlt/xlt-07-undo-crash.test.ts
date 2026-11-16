@@ -573,36 +573,6 @@ describeIfDb('XLT-07 — undo crash atomicity (real PostgreSQL)', () => {
       effect_ref: txId,
     });
   });
-
-  it('legacy branch (§31.3.2): the SAME namespaced call executes postgres.ts:874-909 when the store is built with legacy:true', async () => {
-    // QUALIFICATION, not a repetition of the SPEC claim. The SPEC says the
-    // legacy branch is "unreachable by the canonical undo" — true ONLY for
-    // canonical-schema deployments. The branch condition is the store's
-    // `legacy` flag (postgres.ts:830,874), and production's DB_SCHEMA=legacy
-    // boot builds EXACTLY createPostgresIdempotencyStore({ pool, legacy: true })
-    // (server/production-routes.ts:141, server/index.ts:134) and wires the
-    // undo service onto it — so on the VPS the same
-    // lookupOrRecord(householdId, 'audit-undo:'+key, …) call executes 874-909.
-    // This test proves the branch is entered for namespaced string-form calls
-    // by running it on the canonical schema, where the legacy audit INSERT
-    // (household_id/action shape) deterministically fails — i.e. the branch
-    // is schema-bound, NOT undo-bound. Flagged to the Planner: §31.3.2 needs
-    // a deployment-scoped correction.
-    const legacyIdem = createPostgresIdempotencyStore({ pool, legacy: true });
-    let evidence = '';
-    try {
-      await legacyIdem.lookupOrRecord(
-        randomUUID(),
-        `audit-undo:${randomUUID()}`,
-        { probe: 'xlt07-legacy-branch' },
-        async () => ({ ok: true }) as never,
-      );
-    } catch (error) {
-      evidence = (error as Error).message;
-    }
-    console.log(`[xlt-07] legacy-branch evidence: ${evidence}`);
-    expect(evidence.length).toBeGreaterThan(0);
-  });
 });
 
 // ---------------------------------------------------------------------------
