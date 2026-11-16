@@ -1,6 +1,6 @@
 import { apiFetch, announceUnauthorized } from "./client";
-import { registerDeviceToken } from "./auth";
-import { getToken, setToken } from "../auth/token-store";
+import { probeDeviceHousehold, registerDeviceToken } from "./auth";
+import { getToken, getTokenHousehold, setToken, setTokenHousehold } from "../auth/token-store";
 import { clearTedRuntimeViews } from "./ted-runtime-view";
 
 export type AgentConnectionTokenResponse = {
@@ -98,7 +98,16 @@ export const abortAgentConnections = (): void => {
  * Never throws: a rejected/empty registration resolves to `null` so callers
  * keep the deviceless path exactly as before.
  */
-let pendingDeviceSelfHeal: Promise<string | null> | null = null;
+let pendingDeviceSelfHeal: { workspaceId: string | undefined; promise: Promise<string | null> } | null = null;
+
+/**
+ * Pares (token, workspace) para os quais o re-registro de vínculo JÁ foi tentado nesta sessão. Impede
+ * tempestade de registros se o household devolvido pela API divergir do id usado pela PWA (ex.: alias).
+ */
+const reboundFor = new Set<string>();
+
+/** Tokens cujo household já foi sondado (GET /auth/devices/me) nesta sessão: no máximo 1 sondagem por token. */
+const probedFor = new Set<string>();
 
 /**
  * T04 follow-up (review wave1-fix-pwa): cache em memória do device token,
@@ -164,8 +173,8 @@ const readDeviceToken = (): string | null => {
  * somente se o read-back provar que a escrita não pegou, marcando o valor
  * que falhou em ser substituído como superseded.
  */
-const persistDeviceToken = (token: string): void => {
-  setToken(token);
+const persistDeviceToken = (token: string, householdId?: string): void => {
+  setToken(token, householdId);
   const persisted = getToken();
   if (persisted === token) {
     memoryDeviceToken = null;
@@ -185,8 +194,8 @@ const persistDeviceToken = (token: string): void => {
  */
 let sessionGeneration = 0;
 
-const ensureDeviceToken = async (): Promise<string | null> => {
-  if (pendingDeviceSelfHeal) return pendingDeviceSelfHeal;
+const ensureDeviceToken = async (workspaceId?: string): Promise<string | null> => {
+  if (pendingDeviceSelfHeal && pendingDeviceSelfHeal.workspaceId === workspaceId) return pendingDeviceSelfHeal.promise;
   const generation = sessionGeneration;
   const run = async (): Promise<string | null> => {
     try {
@@ -195,7 +204,10 @@ const ensureDeviceToken = async (): Promise<string | null> => {
       // global signal would expire whatever session is active now. The mint
       // announces a definitive expiry once its own retry is exhausted, which
       // is the only place that decision can be made correctly.
-      const res = await registerDeviceToken(undefined, { skipUnauthorizedEvent: true });
+      const res = await registerDeviceToken(undefined, {
+        skipUnauthorizedEvent: true,
+        ...(workspaceId ? { workspaceId } : {}),
+      });
       // Stale generation: the session was cleaned while this registration was
       // in flight. Write nothing and let the caller mint deviceless — the
       // next mint of the NEW generation registers its own device.
@@ -203,7 +215,7 @@ const ensureDeviceToken = async (): Promise<string | null> => {
       if (res?.token) {
         // Overwrite, never clear: the stale token stays harmless because the
         // scoped device flow (T2.5) never presents it.
-        persistDeviceToken(res.token);
+        persistDeviceToken(res.token, res.householdId);
         return res.token;
       }
       return null;
@@ -216,9 +228,9 @@ const ensureDeviceToken = async (): Promise<string | null> => {
     // cleanup may already have handed it to a newer generation's
     // registration; clearing it here would let a third registration start in
     // that generation.
-    if (pendingDeviceSelfHeal === selfHeal) pendingDeviceSelfHeal = null;
+    if (pendingDeviceSelfHeal?.promise === selfHeal) pendingDeviceSelfHeal = null;
   });
-  pendingDeviceSelfHeal = selfHeal;
+  pendingDeviceSelfHeal = { workspaceId, promise: selfHeal };
   return selfHeal;
 };
 
@@ -260,6 +272,44 @@ export const fetchAgentToken = async (
   return { token: tokenString, expiresIn: 90 };
 };
 
+/**
+ * Device token válido para o workspace do mint.
+ *
+ * O device token é emitido para UM household e o gateway do OpenCode exige
+ * `household do dispositivo === workspace ativo` (um dispositivo de B nunca age em A). Registrar só no
+ * login deixava o token preso ao workspace padrão: ao trocar para outro workspace do canário o chat
+ * respondia 403 `auth.workspace_forbidden`. Aqui o vínculo é conferido por mint e, se divergir, o
+ * dispositivo é registrado de novo NO workspace pedido (com `X-Workspace-Id`).
+ *
+ * - vínculo conhecido e igual → reaproveita o token (zero chamadas extras);
+ * - vínculo desconhecido (token anterior a esta checagem) → descobre uma vez via GET /auth/devices/me e grava;
+ * - divergente → re-registra uma única vez por (token, workspace); se falhar, mantém o token atual
+ *   (comportamento anterior: o gateway decide, nunca um downgrade silencioso para deviceless).
+ */
+const deviceTokenForWorkspace = async (workspaceId: string, signal?: AbortSignal): Promise<string | null> => {
+  const stored = readDeviceToken();
+  if (!stored) return ensureDeviceToken(workspaceId);
+
+  let household = getTokenHousehold();
+  if (!household) {
+    const probeKey = stored.slice(-12);
+    if (probedFor.has(probeKey)) return stored;
+    probedFor.add(probeKey);
+    try {
+      household = await probeDeviceHousehold(stored, signal);
+      if (household) setTokenHousehold(household);
+    } catch {
+      return stored;
+    }
+  }
+  if (!household || household === workspaceId) return stored;
+
+  const key = `${stored.slice(-12)}|${workspaceId}`;
+  if (reboundFor.has(key)) return stored;
+  reboundFor.add(key);
+  return (await ensureDeviceToken(workspaceId)) ?? stored;
+};
+
 export const fetchAgentConnectionToken = async (
   workspaceId: string,
   forceFresh = false,
@@ -286,7 +336,7 @@ export const fetchAgentConnectionToken = async (
     // error). A presented-but-rejected device (401: stale/revoked) is
     // re-registered ONCE and the mint repeated with the new token.
     const generationAtMint = sessionGeneration;
-    const deviceToken = readDeviceToken() ?? (await ensureDeviceToken());
+    const deviceToken = await deviceTokenForWorkspace(workspaceId, signal);
     const mint = (token: string | null) =>
       apiFetch<AgentConnectionTokenResponse>("/auth/agent-token", {
         method: "POST",
@@ -360,6 +410,8 @@ export const clearAgentSession = (): void => {
   // registers its own device instead of joining the previous session's.
   sessionGeneration += 1;
   pendingDeviceSelfHeal = null;
+  reboundFor.clear();
+  probedFor.clear();
   // P2: session teardown also drops per-conversation runtime beliefs, so a
   // stale B confirmation can never offer cancel to another login's A0 turns.
   clearTedRuntimeViews();
