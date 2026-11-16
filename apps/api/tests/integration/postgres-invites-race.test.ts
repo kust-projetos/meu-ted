@@ -59,7 +59,7 @@ describe('Postgres invite race integration', () => {
       trustedOrigins: ['http://localhost:3000'],
     });
     app = Fastify({ logger: false });
-    registerPostgresProductionRoutes(app, pool, false, HOUSEHOLD_ID, auth, async (message) => {
+    registerPostgresProductionRoutes(app, pool, HOUSEHOLD_ID, auth, async (message) => {
       deliveries.push({ token: message.token });
     });
 

@@ -11,7 +11,6 @@ import { createPool } from '../../src/db/pool.js';
 import { requireTestDatabase } from '../../src/db/db-guard.js';
 import { runMigrations } from '../../src/read-models/sql/migrate.js';
 import { createPostgresWriteStore } from '../../src/writes/postgres.js';
-import { createLegacyPostgresWriteStore } from '../../src/writes/legacy-postgres.js';
 
 const DISPOSABLE_DB = 'ted_category_keyed_validation';
 const DISPOSABLE_LEGACY_DB = 'ted_category_keyed_validation_legacy';
@@ -81,7 +80,6 @@ describeIfDb('categories.update keyed PG descartável — canonical + legacy', (
 
   for (const [label, getPool, makeStore] of [
     ['canonical', () => pool, (p: Pool) => createPostgresWriteStore({ pool: p })],
-    ['legacy', () => legacyPool, (p: Pool) => createLegacyPostgresWriteStore({ pool: p })],
   ] as const) {
     it(`${label}: rename CAS + stale conflict + no-op`, async () => {
       const p = getPool();

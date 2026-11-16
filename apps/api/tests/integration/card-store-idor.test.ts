@@ -3,7 +3,6 @@ import type { Pool } from 'pg';
 import { createPool } from '../../src/db/pool.js';
 import { runMigrations } from '../../src/read-models/sql/migrate.js';
 import { createPostgresCardStore } from '../../src/cards/postgres.js';
-import { createLegacyPostgresCardStore } from '../../src/cards/legacy-postgres.js';
 import type { CardStore } from '../../src/cards/store.js';
 
 const DB_URL = process.env.DATABASE_URL_TEST;
@@ -170,7 +169,4 @@ describeIfDb('card stores: real Postgres household isolation', () => {
     await exerciseStore(createPostgresCardStore(canonicalPool));
   }, 30_000);
 
-  it('isolates legacy Postgres card data and references', async () => {
-    await exerciseStore(createLegacyPostgresCardStore(legacyPool));
-  }, 30_000);
 });

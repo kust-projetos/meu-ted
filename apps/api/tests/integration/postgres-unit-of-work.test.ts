@@ -4,11 +4,8 @@ import { createPool } from '../../src/db/pool.js';
 import { runMigrations } from '../../src/read-models/sql/migrate.js';
 import { createPostgresWriteStore } from '../../src/writes/postgres.js';
 import { createPostgresCardStore } from '../../src/cards/postgres.js';
-import { createLegacyPostgresCardStore } from '../../src/cards/legacy-postgres.js';
 import { createPostgresPayableStore } from '../../src/payables/postgres.js';
-import { createLegacyPostgresPayableStore } from '../../src/payables/legacy-postgres.js';
 import { createPostgresGoalStore } from '../../src/goals/postgres.js';
-import { createLegacyPostgresGoalStore } from '../../src/goals/legacy-postgres.js';
 
 const DB_URL = process.env.DATABASE_URL_TEST;
 const describeDb = DB_URL ? describe : describe.skip;
@@ -285,50 +282,4 @@ describeDb('G2.2.5 — Postgres Unit of Work rollback', () => {
     expect((await pool.query('SELECT id FROM payable_templates WHERE household_id = $1 AND name = $2', [HOUSEHOLD, 'UoW template'])).rows).toHaveLength(0);
   }, 30_000);
 
-  it('rolls back legacy payable payment after the transaction insert', async () => {
-    const accountId = crypto.randomUUID();
-    const payableId = crypto.randomUUID();
-    // V4.1 Phase 4 Task 4.12: the legacy pay path gates on the computed
-    // balance (Phase 2 F4) — the fixture account must be funded so the
-    // flow reaches the injected fault instead of failing 400 first.
-    await legacyPool.query('INSERT INTO accounts (id, household_id, name, initial_balance_cents) VALUES ($1, $2, $3, 100000)', [accountId, HOUSEHOLD, 'legacy payable account']);
-    await legacyPool.query(
-      `INSERT INTO accounts_payable (id, household_id, account_id, description, amount_cents, due_date, type, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'one_time', 'pending')`,
-      [payableId, HOUSEHOLD, accountId, 'legacy UoW payable', 900, '2026-08-06'],
-    );
-    const broken = createLegacyPostgresPayableStore(failingPool(legacyPool, "UPDATE accounts_payable SET status = 'paid'"));
-
-    await expect(broken.markPayablePaid(HOUSEHOLD, payableId, { paidDate: '2026-08-06' })).rejects.toThrow('injected UoW failure');
-    expect((await legacyPool.query('SELECT status, paid_transaction_id FROM accounts_payable WHERE id = $1', [payableId])).rows[0]).toMatchObject({ status: 'pending', paid_transaction_id: null });
-    expect((await legacyPool.query('SELECT id FROM transactions WHERE household_id = $1 AND description = $2', [HOUSEHOLD, 'legacy UoW payable'])).rows).toHaveLength(0);
-  }, 30_000);
-
-  it('rolls back legacy card editing on failure', async () => {
-    const cards = createLegacyPostgresCardStore(legacyPool);
-    const card = await cards.createCard(HOUSEHOLD, { name: 'legacy UoW edit card', creditLimitCents: 100000, closingDay: 15, dueDay: 25 });
-    const broken = createLegacyPostgresCardStore(failingPool(legacyPool, 'UPDATE accounts'));
-    await expect(broken.updateCard(HOUSEHOLD, card.id, { name: 'should rollback' })).rejects.toThrow('injected UoW failure');
-    expect((await legacyPool.query('SELECT name FROM accounts WHERE id = $1', [card.id])).rows[0]?.name).toBe('legacy UoW edit card');
-  }, 30_000);
-
-  it('rolls back legacy card purchase and statement together (V4.1 Phase 4 Task 4.12: legacy test DDL aligned to the store contract — card_purchases/transactions carry the household/account/link columns the legacy card store reads)', async () => {
-    const cards = createLegacyPostgresCardStore(legacyPool);
-    const card = await cards.createCard(HOUSEHOLD, { name: 'legacy UoW card', creditLimitCents: 100000, closingDay: 15, dueDay: 25 });
-    const broken = createLegacyPostgresCardStore(failingPool(legacyPool, 'UPDATE statements SET total_cents'));
-
-    await expect(broken.createCardPurchase(HOUSEHOLD, { accountId: card.id, description: 'legacy UoW purchase', amountCents: 1000, date: '2026-08-07' })).rejects.toThrow('injected UoW failure');
-    expect((await legacyPool.query('SELECT id FROM statements WHERE household_id = $1 AND account_id = $2', [HOUSEHOLD, card.id])).rows).toHaveLength(0);
-    expect((await legacyPool.query('SELECT id FROM transactions WHERE household_id = $1 AND description = $2', [HOUSEHOLD, 'legacy UoW purchase'])).rows).toHaveLength(0);
-  }, 30_000);
-
-  it('rolls back legacy goal contribution and accumulated value together', async () => {
-    const goals = createLegacyPostgresGoalStore(legacyPool);
-    const goal = await goals.createGoal(HOUSEHOLD, { name: 'legacy UoW goal', goalType: 'savings', targetAmountCents: 5000, startDate: '2026-08-01' });
-    const broken = createLegacyPostgresGoalStore(failingPool(legacyPool, 'INSERT INTO goal_contributions'));
-
-    await expect(broken.contributeToGoal(HOUSEHOLD, goal.id, { amountCents: 1000, contributionDate: '2026-08-07' })).rejects.toThrow('injected UoW failure');
-    expect((await legacyPool.query('SELECT current_amount_cents, status FROM goals WHERE id = $1', [goal.id])).rows[0]).toMatchObject({ current_amount_cents: '0', status: 'active' });
-    expect((await legacyPool.query('SELECT id FROM goal_contributions WHERE goal_id = $1', [goal.id])).rows).toHaveLength(0);
-  }, 30_000);
 });

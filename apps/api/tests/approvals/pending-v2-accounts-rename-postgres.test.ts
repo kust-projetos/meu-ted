@@ -22,7 +22,6 @@ import { requireTestDatabase } from '../../src/db/db-guard.js';
 import { validationDatabaseProfileFromEnvironment } from '../../src/db/validation-preflight.js';
 import { prepareAccountValidationDatabases } from './validation-db-fixture.js';
 import { createPostgresWriteStore } from '../../src/writes/postgres.js';
-import { createLegacyPostgresWriteStore } from '../../src/writes/legacy-postgres.js';
 import { requireApprovalToolContract } from '../../src/approvals/tool-registry.js';
 import type { WriteStore } from '../../src/writes/store.js';
 
@@ -64,11 +63,6 @@ describeIfDb('accounts.update rename PG — canonical + legacy', () => {
     households.push(h);
     return h;
   };
-  const trackLegacy = (h: string): string => {
-    legacyHouseholds.push(h);
-    return h;
-  };
-
   beforeAll(async () => {
     const pools = await prepareAccountValidationDatabases({
       baseUrl: DB_URL!,
@@ -249,149 +243,4 @@ describeIfDb('accounts.update rename PG — canonical + legacy', () => {
     });
   });
 
-  describe('legacy', () => {
-    it('renomeia via chave, replay idêntico, mismatch determinístico', async () => {
-      const writes: WriteStore = createLegacyPostgresWriteStore({ pool: legacyPool as never });
-      const H = trackLegacy(randomUUID());
-      const acc = await writes.createAccount(H, { name: 'Velha L', kind: 'bank', initialBalanceCents: 0 });
-      const first = await exec(writes, H, rename(acc.id, 'Nova L', 'Velha L'), 'k-leg');
-      expect(first.operationId).toBe(acc.id);
-      const second = await exec(writes, H, rename(acc.id, 'Nova L', 'Velha L'), 'k-leg');
-      expect(second.operationId).toBe(acc.id);
-      await expect(
-        exec(writes, H, rename(acc.id, 'Outra', 'Errado'), 'k-leg-clash'),
-      ).rejects.toMatchObject({ code: 'account.name_conflict' });
-      expect(await nameOf(legacyPool, H, acc.id)).toBe('Nova L');
-    });
-
-    it('isolamento cross-workspace + inativo → not_found', async () => {
-      const writes: WriteStore = createLegacyPostgresWriteStore({ pool: legacyPool as never });
-      const H1 = trackLegacy(randomUUID());
-      const H2 = trackLegacy(randomUUID());
-      const a = await writes.createAccount(H1, { name: 'Velha', kind: 'bank', initialBalanceCents: 0 });
-      const b = await writes.createAccount(H2, { name: 'Velha', kind: 'bank', initialBalanceCents: 0 });
-      await exec(writes, H1, rename(a.id, 'Nova', 'Velha'), 'k-iso-l');
-      await exec(writes, H2, rename(b.id, 'Nova', 'Velha'), 'k-iso-l');
-      expect(await nameOf(legacyPool, H1, a.id)).toBe('Nova');
-      expect(await nameOf(legacyPool, H2, b.id)).toBe('Nova');
-      // Inativo via fixture de dados (UPDATE direto): o deactivate legado
-      // exigiria a forma completa de transactions (from_account_id), que
-      // esta base descartável não tem e não será provisionada aqui. O estado
-      // inativo em si é o que o rename valida.
-      const c = await writes.createAccount(H1, { name: 'Alvo', kind: 'bank', initialBalanceCents: 0 });
-      await legacyPool.query('UPDATE accounts SET active = false WHERE id = $1', [c.id]);
-      await expect(
-        exec(writes, H1, rename(c.id, 'Outra', 'Alvo'), 'k-leg-inactive'),
-      ).rejects.toMatchObject({ code: 'not_found' });
-    });
-
-    it('concorrente: dois renames → 1 vence + 1 name_conflict', async () => {
-      const writes: WriteStore = createLegacyPostgresWriteStore({ pool: legacyPool as never });
-      const H = trackLegacy(randomUUID());
-      const acc = await writes.createAccount(H, { name: 'Velha', kind: 'bank', initialBalanceCents: 0 });
-      const outcomes = await Promise.allSettled([
-        exec(writes, H, rename(acc.id, 'Nova A', 'Velha'), 'k-leg-race-1'),
-        exec(writes, H, rename(acc.id, 'Nova B', 'Velha'), 'k-leg-race-2'),
-      ]);
-      expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1);
-      const rejected = outcomes.filter((o) => o.status === 'rejected') as PromiseRejectedResult[];
-      expect(rejected).toHaveLength(1);
-      expect((rejected[0]!.reason as { code?: string }).code).toBe('account.name_conflict');
-      expect(['Nova A', 'Nova B']).toContain(await nameOf(legacyPool, H, acc.id));
-    });
-
-    it('cartão legado (is_credit_card) → validation.invalid, sem rename e sem mudar saldo', async () => {
-      const writes: WriteStore = createLegacyPostgresWriteStore({ pool: legacyPool as never });
-      const H = trackLegacy(randomUUID());
-      // Fixture honesta de cartão legado: flag real is_credit_card (a mesma
-      // que o CardStore legado grava). Sem DDL, só dados.
-      const cardId = randomUUID();
-      await legacyPool.query(
-        `INSERT INTO accounts (id, household_id, name, initial_balance_cents, active, is_credit_card)
-         VALUES ($1, $2, 'Cartão L', 1000, true, true)`,
-        [cardId, H],
-      );
-      await expect(
-        exec(writes, H, rename(cardId, 'Cartão Novo', 'Cartão L'), 'k-leg-card'),
-      ).rejects.toMatchObject({ code: 'validation.invalid' });
-      expect(await nameOf(legacyPool, H, cardId)).toBe('Cartão L');
-      const anchor = await legacyPool.query<{ initial_balance_cents: string }>(
-        'SELECT initial_balance_cents::text AS initial_balance_cents FROM accounts WHERE id = $1',
-        [cardId],
-      );
-      expect(Number(anchor.rows[0]!.initial_balance_cents)).toBe(1000);
-    });
-
-    it('lifecycle legado: active renomeia; archived → 403; deleted → 410', async () => {
-      const writes: WriteStore = createLegacyPostgresWriteStore({ pool: legacyPool as never });
-      const seedHousehold = async (status: string): Promise<string> => {
-        const userId = randomUUID();
-        const id = trackLegacy(randomUUID());
-        // Seed honesto de dados (sem DDL): users + households com owner —
-        // os triggers do schema criam o membership; o guard só lê status.
-        await legacyPool.query('INSERT INTO users (id, email, name, status) VALUES ($1, $2, $3, $4)', [
-          userId,
-          `lseed-${id}@example.test`,
-          'L Seed',
-          'active',
-        ]);
-        trackedLegacyUsers.push(userId);
-        await legacyPool.query(
-          'INSERT INTO households (id, name, kind, status, archived_at, owner_user_id) VALUES ($1, $2, $3, $4, $5, $6)',
-          [id, `L ${id.slice(0, 8)}`, 'shared', status, status === 'archived' ? new Date().toISOString() : null, userId],
-        );
-        return id;
-      };
-      const hActive = await seedHousehold('active');
-      const aActive = await writes.createAccount(hActive, { name: 'Velha', kind: 'bank', initialBalanceCents: 0 });
-      await exec(writes, hActive, rename(aActive.id, 'Nova', 'Velha'), 'k-leg-cycle-active');
-      expect(await nameOf(legacyPool, hActive, aActive.id)).toBe('Nova');
-
-      const hArchived = await seedHousehold('archived');
-      const aArchived = await writes.createAccount(hArchived, { name: 'Velha', kind: 'bank', initialBalanceCents: 0 });
-      await expect(
-        exec(writes, hArchived, rename(aArchived.id, 'Nova', 'Velha'), 'k-leg-cycle-archived'),
-      ).rejects.toMatchObject({ code: 'workspace.archived' });
-      expect(await nameOf(legacyPool, hArchived, aArchived.id)).toBe('Velha');
-
-      const hDeleted = await seedHousehold('deleted');
-      const bDeleted = await writes.createAccount(hDeleted, { name: 'Velha', kind: 'bank', initialBalanceCents: 0 });
-      await expect(
-        exec(writes, hDeleted, rename(bDeleted.id, 'Nova', 'Velha'), 'k-leg-cycle-deleted'),
-      ).rejects.toMatchObject({ code: 'workspace.deleted' });
-      expect(await nameOf(legacyPool, hDeleted, bDeleted.id)).toBe('Velha');
-    });
-
-    it('corrida rename vs archive: archive sempre vence o estado; rename ou aplica antes ou falha 403', async () => {
-      const writes: WriteStore = createLegacyPostgresWriteStore({ pool: legacyPool as never });
-      const H = trackLegacy(randomUUID());
-      const userId = randomUUID();
-      await legacyPool.query('INSERT INTO users (id, email, name, status) VALUES ($1, $2, $3, $4)', [
-        userId,
-        `lseed-${H}@example.test`,
-        'L Seed',
-        'active',
-      ]);
-      trackedLegacyUsers.push(userId);
-      await legacyPool.query(
-        'INSERT INTO households (id, name, kind, status, owner_user_id) VALUES ($1, $2, $3, $4, $5)',
-        [H, `L race ${H.slice(0, 8)}`, 'shared', 'active', userId],
-      );
-      const acc = await writes.createAccount(H, { name: 'Velha', kind: 'bank', initialBalanceCents: 0 });
-      const outcomes = await Promise.allSettled([
-        exec(writes, H, rename(acc.id, 'Nova', 'Velha'), 'k-leg-race-cycle'),
-        legacyPool.query("UPDATE households SET status = 'archived', archived_at = NOW() WHERE id = $1", [H]),
-      ]);
-      const renameOutcome = outcomes[0]!;
-      expect(outcomes[1]!.status).toBe('fulfilled');
-      if (renameOutcome.status === 'fulfilled') {
-        expect(await nameOf(legacyPool, H, acc.id)).toBe('Nova');
-      } else {
-        expect((renameOutcome.reason as { code?: string }).code).toBe('workspace.archived');
-        expect(await nameOf(legacyPool, H, acc.id)).toBe('Velha');
-      }
-      const status = await legacyPool.query<{ status: string }>('SELECT status FROM households WHERE id = $1', [H]);
-      expect(status.rows[0]!.status).toBe('archived');
-    });
-  });
 });
