@@ -118,6 +118,8 @@ pin `opencode.*` ao A0 e expira o pin.
 | Flag | Onde | Valor efetivo | Efeito |
 |---|---|---|---|
 | `TED_LIVE_SYNC_ENABLED` | Agent (wrangler) | `1` | Live-sync push-only habilitado |
+| `TED_CATEGORY_SUGGESTION_ENABLED` | Agent (wrangler) | `1` | Sugestão semântica de categoria (sem tools; escolha passa pela resolução determinística; sempre manual) |
+| `PENDING_V2_SUPERSEDE_ENABLED` | API (env) | `1` | Rota de substituição atômica de proposta Pending V2 |
 | `TED_ATTACHMENTS_ENABLED` | Agent (wrangler) | `0` | Upload de anexos desabilitado |
 | `TED_AUDIO_STT_ENABLED` | Agent (wrangler) | `0` | STT de áudio desabilitado |
 | `TED_PDF_TEXT_ENABLED` | Agent (wrangler) | `0` | Extração de texto de PDF desabilitada |
