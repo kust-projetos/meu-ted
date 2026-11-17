@@ -1,7 +1,6 @@
 import { apiFetch, announceUnauthorized } from "./client";
 import { probeDeviceHousehold, registerDeviceToken } from "./auth";
 import { getToken, getTokenHousehold, setToken, setTokenHousehold } from "../auth/token-store";
-import { clearTedRuntimeViews } from "./ted-runtime-view";
 
 export type AgentConnectionTokenResponse = {
   token: string;
@@ -414,7 +413,6 @@ export const clearAgentSession = (): void => {
   probedFor.clear();
   // P2: session teardown also drops per-conversation runtime beliefs, so a
   // stale B confirmation can never offer cancel to another login's A0 turns.
-  clearTedRuntimeViews();
   // T04 follow-up: o cache em memória pertence à sessão — cai junto com ela
   // (todo clearSensitiveSession, logout, 401/403, switch passa por aqui),
   // com o marcador de supersede (wave1-fix-pwa-2).

@@ -12,9 +12,9 @@ describe("AgentTranscript – Canonical REST Contract & Display Sanitization", (
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
-      { id: "m1", actorId: "user-uuid-12345", role: "user", content: "Minha mensagem", isOwn: true, createdAt: undefined, attachments: undefined },
-      { id: "m2", actorId: "ted", role: "assistant", content: "Mensagem do TED", isOwn: false, createdAt: undefined, attachments: undefined },
-      { id: "m3", actorId: "user-uuid-67890", role: "user", content: "Mensagem de outro membro", isOwn: false, createdAt: undefined, attachments: undefined },
+      { id: "m1", actorId: "user-uuid-12345", role: "user", content: "Minha mensagem", isOwn: true, createdAt: undefined },
+      { id: "m2", actorId: "ted", role: "assistant", content: "Mensagem do TED", isOwn: false, createdAt: undefined },
+      { id: "m3", actorId: "user-uuid-67890", role: "user", content: "Mensagem de outro membro", isOwn: false, createdAt: undefined },
     ]);
   });
 
@@ -55,7 +55,7 @@ describe("AgentTranscript – Canonical REST Contract & Display Sanitization", (
     vi.mocked(agentClient.fetchAgentHistory)
       .mockReturnValueOnce(oldHistory)
       .mockResolvedValueOnce([
-        { id: "workspace-b-message", actorId: "user-b", role: "user", content: "Mensagem do workspace B", isOwn: true, createdAt: undefined, attachments: undefined },
+        { id: "workspace-b-message", actorId: "user-b", role: "user", content: "Mensagem do workspace B", isOwn: true, createdAt: undefined },
       ]);
 
     const { rerender } = render(<AgentTranscript open workspaceId="workspace-a" />);
@@ -65,7 +65,7 @@ describe("AgentTranscript – Canonical REST Contract & Display Sanitization", (
 
     await act(async () => {
       resolveOldHistory([
-        { id: "workspace-a-message", actorId: "user-a", role: "user", content: "Mensagem do workspace A", isOwn: true, createdAt: undefined, attachments: undefined },
+        { id: "workspace-a-message", actorId: "user-a", role: "user", content: "Mensagem do workspace A", isOwn: true, createdAt: undefined },
       ]);
     });
 

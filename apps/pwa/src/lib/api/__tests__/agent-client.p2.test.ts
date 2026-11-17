@@ -31,11 +31,6 @@ vi.mock("../agent-auth", () => ({
 
 import * as agentAuth from "../agent-auth";
 import { fetchAgentHistory, renewAgentSession, sendAgentMessage } from "../agent-client";
-import {
-  clearTedRuntimeViews,
-  getTedRuntimeView,
-  noteTedRuntimeView,
-} from "../ted-runtime-view";
 
 type Captured = { url: string; init: RequestInit };
 
@@ -59,7 +54,6 @@ function headersOf(call: Captured): Record<string, string> {
 beforeEach(() => {
   calls = [];
   deviceState.current = null;
-  clearTedRuntimeViews();
   sessionStorage.clear();
   vi.unstubAllEnvs();
 });
@@ -109,21 +103,6 @@ describe("P2 client — scoped device header and AbortSignal", () => {
     expect(headersOf(calls[0])["x-agent-connection-token"]).toBe("conn-1");
   });
 
-  it("direct external response header never confirms a runtime (same-origin proxy is the only authority)", async () => {
-    deviceState.current = "dev-123";
-    vi.stubEnv("NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", "https://agent.direct.example");
-    mockFetchJson({ turnId: "t-ext", status: "completed", output: "ok" }, 200, {
-      "x-ted-runtime": "opencode",
-    });
-    await sendAgentMessage("ws-1", "oi", { messageId: "m-ext-hdr" });
-    expect(calls[0].url.startsWith("https://agent.direct.example")).toBe(true);
-    expect(getTedRuntimeView("ws-1")).toBe("unknown");
-    // A previously confirmed view is never overwritten by a foreign header.
-    noteTedRuntimeView("ws-1", "agent");
-    await sendAgentMessage("ws-1", "oi", { messageId: "m-ext-hdr2" });
-    expect(getTedRuntimeView("ws-1")).toBe("agent");
-  });
-
   it("sendAgentMessage accepts an optional AbortSignal and links it to the flight", async () => {
     deviceState.current = "dev-123";
     mockFetchJson({ turnId: "t-2", status: "completed", output: "ok" });
@@ -161,56 +140,4 @@ describe("P2 client — scoped device header and AbortSignal", () => {
     expect(JSON.parse(String(calls[0].init.body))).toEqual({});
   });
 
-  it("sendAgentMessage captures x-ted-runtime: opencode into the workspace view", async () => {
-    deviceState.current = "dev-123";
-    expect(getTedRuntimeView("ws-1")).toBe("unknown");
-    mockFetchJson({ turnId: "t-v", status: "completed", output: "ok" }, 200, {
-      "x-ted-runtime": "opencode",
-    });
-    await sendAgentMessage("ws-1", "oi", { messageId: "m-v" });
-    expect(getTedRuntimeView("ws-1")).toBe("opencode");
-  });
-
-  it("fetchAgentHistory error with opencode header still reveals B (first B history load)", async () => {
-    deviceState.current = "dev-123";
-    mockFetchJson({ code: "gateway.invalid_args", message: "conversation cookie is required" }, 400, {
-      "x-ted-runtime": "opencode",
-    });
-    await expect(fetchAgentHistory("ws-1")).rejects.toThrow();
-    expect(getTedRuntimeView("ws-1")).toBe("opencode");
-  });
-
-  it("fetchAgentHistory without the header leaves the view unknown (legacy A0 byte-identical)", async () => {
-    deviceState.current = "dev-123";
-    mockFetchJson({ items: [], total: 0 });
-    await fetchAgentHistory("ws-1");
-    expect(getTedRuntimeView("ws-1")).toBe("unknown");
-  });
-
-  it("renewAgentSession success resets the view then captures the agent header", async () => {
-    noteTedRuntimeView("ws-1", "opencode");
-    mockFetchJson(
-      { ok: true, sessionId: "s-1", previousSessionId: null, messageCount: 0, summarized: false },
-      200,
-      { "x-ted-runtime": "agent" },
-    );
-    await renewAgentSession("ws-1");
-    expect(getTedRuntimeView("ws-1")).toBe("agent");
-  });
-
-  it("renewAgentSession success without the header resets the view to unknown (fresh lifecycle)", async () => {
-    noteTedRuntimeView("ws-1", "opencode");
-    mockFetchJson({ ok: true, sessionId: "s-1", previousSessionId: null, messageCount: 0, summarized: false });
-    await renewAgentSession("ws-1");
-    expect(getTedRuntimeView("ws-1")).toBe("unknown");
-  });
-
-  it("confirmed agent view omits x-device-token on same-origin requests (no new A0 credentials)", async () => {
-    deviceState.current = "dev-123";
-    noteTedRuntimeView("ws-1", "agent");
-    mockFetchJson({ turnId: "t-ag", status: "completed", output: "ok" });
-    await sendAgentMessage("ws-1", "oi", { messageId: "m-ag" });
-    expect(headersOf(calls[0])["x-device-token"]).toBeUndefined();
-    expect(headersOf(calls[0])["x-agent-connection-token"]).toBe("conn-1");
-  });
 });

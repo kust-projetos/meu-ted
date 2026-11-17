@@ -47,9 +47,9 @@ describe("TedChat Component – Canonical FinanceChatAgent REST", () => {
     vi.clearAllMocks();
     vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("mock-connection-token");
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
-      { id: "msg-1", actorId: "user-1", role: "user", content: "Olá TED, meu saldo?", isOwn: true, createdAt: undefined, attachments: undefined },
-      { id: "msg-2", actorId: "ted", role: "assistant", content: "Seu saldo é R$ 2.000,00.", isOwn: false, createdAt: undefined, attachments: undefined },
-      { id: "msg-3", actorId: "user-2", role: "user", content: "Quanto temos na poupança?", isOwn: false, createdAt: undefined, attachments: undefined },
+      { id: "msg-1", actorId: "user-1", role: "user", content: "Olá TED, meu saldo?", isOwn: true, createdAt: undefined },
+      { id: "msg-2", actorId: "ted", role: "assistant", content: "Seu saldo é R$ 2.000,00.", isOwn: false, createdAt: undefined },
+      { id: "msg-3", actorId: "user-2", role: "user", content: "Quanto temos na poupança?", isOwn: false, createdAt: undefined },
     ]);
     vi.mocked(agentClient.sendAgentMessage).mockResolvedValue({
       turnId: "turn-new",

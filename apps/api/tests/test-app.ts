@@ -34,6 +34,9 @@ import type { PendingOperationV2Store } from "../src/approvals/pending-v2.js";
 import { createUndoService } from "../src/approvals/undo.js";
 export type TestAppOptions = {
   clock?: () => Date;
+  pendingMintServiceToken?: string;
+  agentAuthServiceToken?: string;
+  pool?: { query(text: string, values?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }> } | null;
 };
 
 export type TestApp = {
@@ -266,6 +269,11 @@ export const buildTestApp = (
   const delegationSecret = optional.find(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
+  const testOptions = optional.find(
+    (value): value is TestAppOptions =>
+      typeof value === "object" && value !== null &&
+      ("pendingMintServiceToken" in value || "agentAuthServiceToken" in value || "pool" in value),
+  );
   const approvalPolicy = optional.find(
     (value): value is import("../src/approvals/policy.js").ApprovalPolicy =>
       typeof value === "object" &&
@@ -300,6 +308,9 @@ export const buildTestApp = (
     vapidPublicKey: "test-vapid-public-key",
     disableDeviceRegistration,
     ...(delegationSecret ? { delegationSecret } : {}),
+    ...(testOptions?.pendingMintServiceToken ? { pendingMintServiceToken: testOptions.pendingMintServiceToken } : {}),
+    ...(testOptions?.agentAuthServiceToken ? { agentAuthServiceToken: testOptions.agentAuthServiceToken } : {}),
+    ...(testOptions && "pool" in testOptions ? { pool: testOptions.pool } : {}),
     ...(approvalPolicy ? { approvalPolicy } : {}),
     ...(pushDelivery ? { pushDelivery } : {}),
     ...(pendingStore ? { pendingStore } : {}),

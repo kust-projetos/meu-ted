@@ -7,7 +7,7 @@ name: Release Promote
 # autorizado para criar tag/release. Tag manual fora deste fluxo é
 # PROIBIDA (ver docs/RELEASE-PROCESS.md).
 #
-# Ordem canônica: push main -> CI + PWA CI (Gate) -> agent-deploy /
+# Ordem canônica: push main -> CI + PWA CI (Gate) -> PWA Deploy /
 # pwa-deploy (gate -> deploy -> smoke -> attest ATTESTED) -> API Contabo
 # via wrapper manual -> homologação live manual (E2E live-mobile-full
 # PASS) -> ESTE workflow (workflow_dispatch) -> tag anotada + Release.
@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: 'SHA web/main candidato (Agent/PWA, 40-hex) a ser tagueado'
+        description: 'SHA web/main candidato (PWA, 40-hex) a ser tagueado'
         required: true
         type: string
       api_sha:
@@ -178,7 +178,7 @@ jobs:
             }
             core.info(`CI + PWA CI green for ${shas.join(' and ')}.`);
 
-      - name: Require ATTESTED deploy-smoke-pass for Agent + PWA (fail closed)
+      - name: Require ATTESTED deploy-smoke-pass for PWA (fail closed)
         id: attestation
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
@@ -189,11 +189,11 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const evidence = {};
-            for (const name of ['Agent Deploy', 'PWA Deploy']) {
+            for (const name of ['PWA Deploy']) {
               const { data } = await github.rest.actions.listWorkflowRunsForRepo({
                 owner, repo, head_sha: sha, per_page: 50,
               });
-              // Agent/PWA Deploy are dispatched manually (historically also
+              // PWA Deploy is dispatched manually (historically also
               // via `workflow_run`), never on `push`. The `gate` job is the
               // evidence for push-originated CI + PWA CI on the same SHA;
               // require that gate and the attestation jobs below so a deploy
@@ -236,8 +236,7 @@ jobs:
               evidence[name] = { run_number: accepted.run_number, id: accepted.id };
               core.info(`${name}: ATTESTED evidence accepted (run #${accepted.run_number}, id=${accepted.id}).`);
             }
-            core.setOutput('agent_run_id', String(evidence['Agent Deploy'].id));
-            core.setOutput('pwa_run_id', String(evidence['PWA Deploy'].id));
+                        core.setOutput('pwa_run_id', String(evidence['PWA Deploy'].id));
             core.info(`Attestation gate passed for ${sha}.`);
 
       - name: Require API live identity to match api_sha (fail closed)
@@ -280,7 +279,6 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_API_MANIFEST: ${{ inputs.api_manifest }}
           INPUT_E2E_URL: ${{ inputs.e2e_evidence_url }}
-          AGENT_RUN_ID: ${{ steps.attestation.outputs.agent_run_id }}
           PWA_RUN_ID: ${{ steps.attestation.outputs.pwa_run_id }}
         with:
           script: |
@@ -306,7 +304,6 @@ jobs:
               `- web/main sha: ${sha}\n` +
               `- api sha (Contabo): ${apiSha}\n` +
               `- api manifest (VPS): ${process.env.INPUT_API_MANIFEST}\n` +
-              `- agent deploy run id: ${process.env.AGENT_RUN_ID} (ATTESTED/deploy-smoke-pass)\n` +
               `- pwa deploy run id: ${process.env.PWA_RUN_ID} (ATTESTED/deploy-smoke-pass)\n` +
               `- live E2E evidence: ${process.env.INPUT_E2E_URL}\n`;
 
@@ -335,7 +332,7 @@ jobs:
               `# Release ${version} promovida\n\n` +
               `- tag anotada em \`${sha}\`\n` +
               `- API (Contabo): \`${apiSha}\` (manifesto \`${process.env.INPUT_API_MANIFEST}\`, identidade live casada)\n` +
-              `- Agent deploy run \`${process.env.AGENT_RUN_ID}\` + PWA deploy run \`${process.env.PWA_RUN_ID}\` (ATTESTED/deploy-smoke-pass)\n` +
+              `- PWA deploy run \`${process.env.PWA_RUN_ID}\` (ATTESTED/deploy-smoke-pass)\n` +
               `- E2E live: ${process.env.INPUT_E2E_URL}\n`,
               true,
             );

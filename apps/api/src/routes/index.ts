@@ -74,12 +74,7 @@ import { createInMemoryPriceAlertStore, type PriceAlertStore } from "../price-al
 import { isPriceAlertsEnabled, registerPriceAlertRoutes } from "./price-alerts.js";
 import { registerAgentAuthRoutes } from "./agent-auth.js";
 import { registerAgentAutoExecTokenRoutes } from "./agent-autoexec-token.js";
-import { registerAdminAgentLlmConfigRoutes, type AdminLlmReadAudit } from "./admin-agent-llm-config.js";
-import { registerInternalAgentLlmConfigRoutes } from "./internal-agent-llm-config.js";
-import { registerAgentLlmRelayRoutes } from "./internal-agent-llm-relay.js";
-import { createInMemoryLlmConfigStore } from "../agent/llm-config-memory.js";
-import type { LlmConfigStore } from "../agent/llm-config-store.js";
-import { createInMemoryAgentReplayStore, type AgentReplayStore } from "../auth/agent-connection-token-replay.js";
+import { registerAgentPendingTokenRoutes } from "./agent-pending-token.js";
 import { registerWorkspaceAliasRoutes } from "../auth/workspace-alias.js";
 import { requireApprovalToolContract } from "../approvals/tool-registry.js";
 import { createUndoService } from "../approvals/undo.js";
@@ -116,6 +111,7 @@ export type RouteDeps = {
   shadowDivergenceStore?: ShadowDivergenceStore;
   delegationSecret?: string;
   autoExecMintServiceToken?: string | undefined;
+  pendingMintServiceToken?: string | undefined;
   vapidPublicKey?: string;
   auditLogs?: AuditLogStore;
   ownershipTransferStore?: OwnershipTransferStore;
@@ -138,16 +134,9 @@ export type RouteDeps = {
    * OFF). Production composition passes nothing → OFF.
    */
   enablePriceAlerts?: boolean;
-  llmConfigStore?: LlmConfigStore;
   agentConnectionSecret?: string;
-  agentConfigToken?: string;
   agentAuthServiceToken?: string;
-  agentReplayStore?: AgentReplayStore;
-  agentRuntimeOrigin?: string;
-  agentRuntimeAdminToken?: string;
   trustedOrigins?: string[];
-  /** Fase 3 item 9: optional audit sink for sensitive admin LLM reads. */
-  adminLlmAuditLog?: (event: AdminLlmReadAudit) => void;
   /**
    * V4 T2.2 / T0.4.1 (SPEC §24.1): sink para `auth.request.legacy_bearer_used`
    * — emitido SOMENTE quando o cookie/session não autenticou a request E o
@@ -814,21 +803,12 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
   if (deps.ownershipTransferStore) {
     registerOwnershipTransferRoutes(app, deps.ownershipTransferStore);
   }
-  const llmStore = deps.llmConfigStore ?? createInMemoryLlmConfigStore();
-  registerInternalAgentLlmConfigRoutes(app, {
-    store: llmStore,
-    configToken: deps.agentConfigToken ?? process.env.AGENT_CONFIG_TOKEN ?? 'dev-agent-config-token-32-chars-minimum!',
-  });
-
-  const replayStore = deps.agentReplayStore ?? createInMemoryAgentReplayStore();
   const agentServiceToken = deps.agentAuthServiceToken ?? process.env.AGENT_AUTH_SERVICE_TOKEN ?? 'dev-agent-auth-service-token-32-chars!';
 
   registerAgentAuthRoutes(app, {
     auth: deps.auth,
     workspaceAccess: deps.workspaceAccess,
     connectionSecret: deps.agentConnectionSecret ?? process.env.AGENT_CONNECTION_TOKEN_SECRET ?? 'dev-agent-connection-secret-at-least-32-chars!',
-    agentAuthServiceToken: agentServiceToken,
-    replayStore,
     pool: deps.pool ?? null,
     // H-12: device binding at mint time (server-side resolution).
     resolveDeviceToken: resolveToken,
@@ -839,37 +819,18 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
     workspaceAccess: deps.workspaceAccess,
     pool: deps.pool ?? null,
   });
+  registerAgentPendingTokenRoutes(app, {
+    pendingMintServiceToken: deps.pendingMintServiceToken,
+    delegationSecret: deps.delegationSecret ?? process.env.PI_DELEGATED_TOKEN_SECRET,
+    workspaceAccess: deps.workspaceAccess,
+    pool: deps.pool ?? null,
+  });
 
   registerWorkspaceAliasRoutes(app, {
     pool: deps.pool ?? null,
     serviceToken: agentServiceToken,
   });
 
-  registerAgentLlmRelayRoutes(app, {
-    adminToken: deps.agentRuntimeAdminToken ?? process.env.AGENT_RUNTIME_ADMIN_TOKEN ?? 'dev-agent-runtime-admin-token-32-chars!',
-    ...(process.env.OPENCODE_ZEN_API_KEY ? { zenApiKey: process.env.OPENCODE_ZEN_API_KEY } : {}),
-    ...(process.env.OPENCODE_GO_API_KEY ? { opencodeGoApiKey: process.env.OPENCODE_GO_API_KEY } : {}),
-    ...(process.env.OPENAI_API_KEY ? { openaiApiKey: process.env.OPENAI_API_KEY } : {}),
-    ...(process.env.OPENROUTER_API_KEY ? { openrouterApiKey: process.env.OPENROUTER_API_KEY } : {}),
-    llmConfigStore: llmStore,
-  });
-
-  if (deps.auth) {
-    registerAdminAgentLlmConfigRoutes(app, {
-      auth: deps.auth,
-      store: llmStore,
-      // DEBT2: last-resort non-prod placeholders — production composition
-      // always injects these deps explicitly (server/index.ts), so the
-      // literals below never serve production traffic.
-      adminEmails: deps.adminEmails ?? ['admin@example.com'],
-      agentRuntimeOrigin: deps.agentRuntimeOrigin ?? 'https://agent.example',
-      agentRuntimeToken: deps.agentRuntimeAdminToken ?? 'dev-agent-runtime-admin-token-32-chars!',
-      ...(deps.trustedOrigins ? { trustedOrigins: deps.trustedOrigins } : {}),
-      // Fase 3 item 9: sensitive admin reads are audit-logged best-effort;
-      // production defaults to the server log, tests may inject a collector.
-      auditLog: deps.adminLlmAuditLog ?? ((event) => app.log.info({ audit: event.action, ...event })),
-    });
-  }
   if (deps.auth) {
     const consumeAccountInvite = deps.accountInviteService
       ? async (email: string) => {

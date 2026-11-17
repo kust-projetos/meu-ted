@@ -520,6 +520,7 @@ try {
   const { resolveGatewayIdentity } = await mod("src/gateway.mjs");
   const { createConversationStore } = await mod("src/conversations.mjs");
   const { createGatewayServer } = await mod("src/server.mjs");
+  const { createPendingClient } = await mod("src/pending-client.mjs");
   const { bindSession, revokeSession, getBinding, isSameHost, rotateSessionBinding } =
     await mod("src/session-bindings.mjs");
   const { createPromptHost } = await mod("src/prompt.mjs");
@@ -1068,11 +1069,25 @@ try {
     readHistory: (args) => realHost.readHistory(args),
   };
 
+  // The probe only accepts a loopback API origin (validated above), so the
+  // explicit allowlist is empty just as in the runtime's default setup.
+  // Constructing this client is safe for read-only slices: credentials are
+  // checked only when the corresponding pending/deletion operation is called.
+  const pendingClient = createPendingClient({
+    apiBaseUrl,
+    allowedOrigins: [],
+    pendingMintToken: process.env.TED_PENDING_MINT_TOKEN ?? "",
+    workspaceDeletionServiceToken: process.env.TED_WORKSPACE_DELETION_SERVICE_TOKEN ?? "",
+    workspaceDeletionSecret: process.env.WORKSPACE_DELETION_HMAC_SECRET ?? "",
+  });
   gateway = createGatewayServer({
     resolveIdentity: ({ cookie, deviceToken, workspaceId }) =>
       resolveGatewayIdentity({ apiBaseUrl, cookie, deviceToken, workspaceId }),
     store,
     promptHost,
+    pendingClient,
+    workspaceDeletionSecret: process.env.WORKSPACE_DELETION_HMAC_SECRET ?? "",
+    stateDir: tedEnv.dirs.state,
     createRuntimeSession: async () => ({ runtimeSessionId: await createNativeSession() }),
     withAuthenticatedSession,
     diagnosticsSink: () => {},

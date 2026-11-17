@@ -38,8 +38,8 @@
 //      secrets, cookies, tokens, or prompt text.
 
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { openCategoryMemoryStore } from './category-memory-store.mjs';
-import { normalizeMemoryValue } from './category-memory-core.mjs';
 import {
   CONVERSATION_COOKIE_MAX_AGE,
   ConversationError,
@@ -58,13 +58,16 @@ import {
   defaultDiagnosticSink,
 } from './diagnostics.mjs';
 import { proposalIntentRegistry } from './proposal-intents.mjs';
-import { correctionIntentRegistry } from './correction-intents.mjs';
-import { isAttachmentMarkedText, isReferentialCorrectionText, parseCorrectionFields } from './correction-detection.mjs';
+import { createUndoStore } from './undo-store.mjs';
+import { proposeIdempotencyKey, PendingClientError } from './pending-client.mjs';
+import { attestEmptyWorkspace, WorkspaceAttestationError } from './workspace-attestation.mjs';
+import { correctionActionRegistry } from './correction-actions.mjs';
+import { projectActivePendingOperations } from './active-projection.mjs';
 
 export const GATEWAY_BODY_LIMIT_BYTES = 64 * 1024;
 export const GATEWAY_REQUEST_TIMEOUT_MS = 30000;
 
-const ROUTE_RE = /^(?:\/api\/agent)?\/agents\/finance-chat-agent\/([^/]+)\/rpc\/(chat|history|session\/new)$/;
+const ROUTE_RE = /^(?:\/api\/agent)?\/agents\/finance-chat-agent\/([^/]+)\/rpc\/(chat|history|session\/new|pending-operations\/propose|pending-operations\/active|pending-operations\/[^/]+\/decision|undo\/active|undo\/decision|workspace\/[^/]+\/attest-empty)$/;
 
 export function parseRoute(pathname) {
   const m = ROUTE_RE.exec(String(pathname || ''));
@@ -82,6 +85,54 @@ export function parseRoute(pathname) {
 function isLoopbackHost(host) {
   const h = String(host || '').replace(/^\[|\]$/g, '').toLowerCase();
   return h === '127.0.0.1' || h === '::1' || h === 'localhost';
+}
+
+const UUID_VALUE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function validProposalArgs(tool, a) {
+  const fields = {
+    'transactions.expense.create': ['amountCents','description','date','accountId','categoryId'],
+    'transactions.income.create': ['amountCents','description','date','accountId','categoryId'],
+    'cards.purchase.create': ['amountCents','description','date','accountId','categoryId','installmentsTotal'],
+    'transactions.transfer.create': ['amountCents','description','date','fromAccountId','toAccountId'],
+    'cards.statement.pay': ['statementId','fromAccountId','amountCents'],
+    'accounts.create': ['name','kind','initialBalanceCents'],
+    'categories.create': ['name','kind','parentId'],
+    'transactions.update': ['transactionId','description','expectedDescription'],
+    'accounts.update': ['accountId','name','expectedName'],
+    'accounts.deactivate': ['accountId','accountName'],
+    'categories.update': ['categoryId','name','expectedName'],
+    'categories.deactivate': ['categoryId','expectedName'],
+    'payables.create': ['accountId','description','amountCents','dueDate','categoryId'],
+    'payables.pay': ['payableId','description','amountCents','dueDate','accountId','paidDate'],
+  }[tool];
+  if (!fields || !a || typeof a !== 'object' || Array.isArray(a) || Object.keys(a).some((k) => !fields.includes(k))) return false;
+  const required = {
+    'transactions.expense.create': ['amountCents','description','date','accountId','categoryId'],
+    'transactions.income.create': ['amountCents','description','date','accountId','categoryId'],
+    'cards.purchase.create': ['amountCents','description','date','accountId'],
+    'transactions.transfer.create': ['amountCents','description','date','fromAccountId','toAccountId'],
+    'cards.statement.pay': ['statementId','fromAccountId','amountCents'],
+    'accounts.create': ['name','kind','initialBalanceCents'],
+    'categories.create': ['name','kind'],
+    'transactions.update': ['transactionId','description','expectedDescription'],
+    'accounts.update': ['accountId','name','expectedName'],
+    'accounts.deactivate': ['accountId'],
+    'categories.update': ['categoryId','name','expectedName'],
+    'categories.deactivate': ['categoryId','expectedName'],
+    'payables.create': ['accountId','description','amountCents','dueDate'],
+    'payables.pay': ['payableId','description','amountCents','dueDate','accountId'],
+  }[tool];
+  if (required.some((k) => a[k] === undefined || a[k] === null)) return false;
+  const uuidFields = ['accountId','categoryId','parentId','fromAccountId','toAccountId','statementId','transactionId','payableId'];
+  for (const key of uuidFields) if (a[key] !== undefined && !UUID_VALUE.test(a[key])) return false;
+  for (const key of ['date','dueDate','paidDate']) if (a[key] !== undefined && (typeof a[key] !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(a[key]))) return false;
+  for (const key of ['amountCents','initialBalanceCents']) if (a[key] !== undefined && (!Number.isSafeInteger(a[key]) || (key === 'amountCents' ? a[key] <= 0 : Math.abs(a[key]) > 1_000_000_000_000))) return false;
+  for (const key of ['description','name','expectedName','expectedDescription','accountName']) if (a[key] !== undefined && (typeof a[key] !== 'string' || !a[key].trim() || a[key].length > (key.includes('escription') ? 240 : 120))) return false;
+  if (tool === 'transactions.transfer.create' && a.fromAccountId === a.toAccountId) return false;
+  if (tool === 'accounts.create' && (!['bank','cash'].includes(a.kind) || !Number.isSafeInteger(a.initialBalanceCents))) return false;
+  if (tool === 'categories.create' && !['expense','income'].includes(a.kind)) return false;
+  if (tool === 'cards.purchase.create' && a.installmentsTotal !== undefined && (!Number.isInteger(a.installmentsTotal) || a.installmentsTotal < 1 || a.installmentsTotal > 48 || a.installmentsTotal > a.amountCents)) return false;
+  return true;
 }
 
 function readBody(req, limit = GATEWAY_BODY_LIMIT_BYTES, signal = null) {
@@ -160,7 +211,7 @@ function toStatus(code) {
     code === 'conversation.invalid_args' || code === 'conversation.invalid_visibility' ||
     code === 'gateway.invalid_args' || code === 'gateway.a0_pinned'
   ) return 400;
-  if (code === 'prompt.duplicate' || code === 'conversation.runtime_conflict' || code === 'conversation.intention_duplicate' || code === 'prompt.in_progress' || code === 'host_binding_quarantined' || code === 'session.quarantined') return 409;
+  if (code === 'prompt.duplicate' || code === 'conversation.runtime_conflict' || code === 'conversation.intention_duplicate' || code === 'prompt.in_progress' || code === 'host_binding_quarantined' || code === 'session.quarantined' || code === 'pending.not_found' || code === 'pending.not_proposed' || code === 'pending.supersede_disabled') return 409;
   if (code === 'prompt.cancelled' || code === 'gateway.cancelled') return 499;
   if (code === 'gateway.timeout' || code === 'prompt.timeout') return 504;
   if (code === 'history.unavailable') return 503;
@@ -250,8 +301,13 @@ export function createGatewayServer({
   proposalIntents = proposalIntentRegistry,
   autoExecClient = null,
   autoExecEnabled = false,
-  correctionIntents = correctionIntentRegistry,
+  correctionActions = correctionActionRegistry,
   categoryMemoryDbPath,
+  pendingClient = null,
+  undoStore = null,
+  workspaceDeletionSecret = '',
+  categoryMemoryStoreOverride = null,
+  stateDir = null,
   allowNonLoopbackHost = false,
 } = {}) {
   if (typeof resolveIdentity !== 'function') throw new Error('gateway server: resolveIdentity is required');
@@ -259,7 +315,8 @@ export function createGatewayServer({
   if (!promptHost || typeof promptHost.chat !== 'function') throw new Error('gateway server: promptHost.chat is required');
   if (typeof createRuntimeSession !== 'function') throw new Error('gateway server: createRuntimeSession is required');
   const categoryMemoryEnabled = typeof categoryMemoryDbPath === 'string' && categoryMemoryDbPath.length > 0;
-  const categoryMemoryStore = categoryMemoryEnabled ? openCategoryMemoryStore({ dbPath: categoryMemoryDbPath }) : null;
+  const categoryMemoryStore = categoryMemoryStoreOverride || (categoryMemoryEnabled ? openCategoryMemoryStore({ dbPath: categoryMemoryDbPath }) : null);
+  const undoProposals = undoStore || createUndoStore({ persistDir: stateDir || process.cwd() });
   const turnIntentionBySession = new Map();
   void bindAuthenticatedSession; // legacy seam: accepted, never invoked (unsafe path retired)
   const hasSafeWrapper = typeof withAuthenticatedSession === 'function';
@@ -634,12 +691,7 @@ export function createGatewayServer({
       // before the prompt (a failed turn never leaks into the next one).
       proposalIntents.clear(runtimeSessionId);
       turnIntentionBySession.set(runtimeSessionId, body.intentionId);
-      const correctionDetectionEnabled = process.env.TED_OPENCODE_SUPERSEDE_DETECTION_ENABLED === '1';
-      correctionIntents.clear(runtimeSessionId);
-      if (correctionDetectionEnabled && isReferentialCorrectionText(body.text)) {
-        const correction = parseCorrectionFields(body.text);
-        if (correction) correctionIntents.record(runtimeSessionId, correction);
-      }
+      correctionActions.clear(runtimeSessionId);
       let started;
       try {
         started = await requireSafeWrapper()(runtimeSessionId, host, async () => {
@@ -664,8 +716,65 @@ export function createGatewayServer({
         }
         throw e;
       }
-      const correctionCandidate = correctionDetectionEnabled && isReferentialCorrectionText(body.text)
-        ? parseCorrectionFields(body.text) : null;
+      const correctionCandidate = correctionActions.take(runtimeSessionId);
+      let correctionFailureNote = false;
+      if (correctionCandidate?.action === 'undo') {
+        if (correctionCandidate.actorId !== identity.actorId ||
+            correctionCandidate.workspaceId !== identity.workspace ||
+            correctionCandidate.conversationId !== record.conversationId) {
+          throw new GatewayError('auth.workspace_forbidden', 'undo proposal identity mismatch');
+        }
+        undoProposals.proposeForConversation({
+          requestId: correctionCandidate.intentionId,
+          workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId,
+          conversationId: record.conversationId,
+        });
+      }
+      if (correctionCandidate && correctionCandidate.action !== 'undo') {
+        proposalIntents.clear(runtimeSessionId);
+        try {
+          const operationId = record.activeOperationId;
+          if (!operationId || record.activeOperationActorId !== identity.actorId) throw new GatewayError('pending.not_found', 'no pending proposal in this conversation');
+          if (!pendingClient) throw new GatewayError('pending.unavailable', 'pending proposal service unavailable');
+          const token = await pendingClient.mintToken({ workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId, requestId: body.intentionId, signal });
+          if (correctionCandidate.action === 'cancel') {
+            await pendingClient.cancel({ token, id: operationId, workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId, signal });
+            record = store.setActiveOperation(record.conversationId, null);
+          } else {
+            const old = await pendingClient.get({ token, id: operationId, workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId, signal });
+            if (old.status !== 'proposed') throw new GatewayError('pending.not_proposed', 'pending proposal is no longer editable');
+            const merged = { ...old.normalizedArgs, ...correctionCandidate.changed };
+            const allowed = new Set({
+              'transactions.expense.create':['amountCents','description','date','accountId','categoryId'], 'transactions.income.create':['amountCents','description','date','accountId','categoryId'],
+              'cards.purchase.create':['amountCents','description','date','accountId','categoryId','installmentsTotal'],
+            }[old.tool] || []);
+            if (!allowed.size || Object.keys(merged).some(k => !allowed.has(k))) throw new GatewayError('pending.invalid_proposal', 'pending proposal cannot be corrected');
+            const { validateToolArgs } = await import('./tool-defs.mjs');
+            const runtimeTool = old.tool === 'transactions.expense.create' ? 'propose_expense' : old.tool === 'transactions.income.create' ? 'propose_income' : 'propose_card_purchase';
+            const normalizedArgs = validateToolArgs(runtimeTool, merged);
+            for (const key of ['description','date']) if (typeof normalizedArgs[key] === 'string') normalizedArgs[key] = normalizedArgs[key].trim();
+            const { createHash } = await import('node:crypto');
+            const idempotencyKey = createHash('sha256').update(`${identity.workspace}:${body.intentionId}:${old.tool}`).digest('hex');
+            const revised = await pendingClient.supersede({ token, id: operationId, tool: old.tool, normalizedArgs, expectedProposalHash: old.proposalHash, idempotencyKey, workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId, signal });
+            record = store.setActiveOperation(record.conversationId, revised.id, identity.actorId);
+            if (correctionCandidate.changed.categoryId && categoryMemoryStore) {
+              try { categoryMemoryStore.remember({ workspaceId:identity.workspace, actorId:identity.actorId, target: normalizedArgs.description || normalizedArgs.name || record.conversationId, field:'category', value:correctionCandidate.changed.categoryId }); } catch { /* optional memory */ }
+            }
+          }
+        } catch (e) {
+          if (e?.code === 'pending.not_found') {
+            // The model response is still valid; no correction target exists.
+          } else {
+            correctionFailureNote = true;
+          }
+          if (hasIntentions && started && typeof started.userMessageId === 'string') {
+            store.settleIntention(record.conversationId, body.intentionId, {
+              status: 'completed', userMessageId: started.userMessageId, actorId: identity.actorId,
+              ...(typeof started.turnId === 'string' ? { turnId: started.turnId } : {}),
+            });
+          }
+        }
+      }
       let proposalForAutoexec = null;
       let canAutoexec = false;
       if (autoExecEnabled && autoExecClient && pin.pin === 'b' && !correctionCandidate) {
@@ -733,18 +842,6 @@ export function createGatewayServer({
       // PWA POSTs it to the Agent broker; the gateway never mints, never
       // confirms, never executes.
       const proposalIntent = proposalIntents.take(runtimeSessionId);
-      const correction = correctionDetectionEnabled ? correctionIntents.take(runtimeSessionId) : null;
-      if (categoryMemoryStore && correction?.field === 'category' && !isAttachmentMarkedText(body.text)) {
-        const value = normalizeMemoryValue(correction.value);
-        if (value) {
-          try {
-            categoryMemoryStore.remember({
-              workspaceId: identity.workspace, actorId: identity.actorId,
-              target: record.conversationId, field: 'category', value,
-            });
-          } catch { /* optional learning never breaks a settled turn */ }
-        }
-      }
       let deliveredProposal = proposalIntent;
       let autoexec;
       if (autoexecResult?.status === 'executed') {
@@ -753,9 +850,9 @@ export function createGatewayServer({
       } else if (autoexecResult?.reason === 'uncertain') {
         autoexec = { status: 'uncertain' };
       }
-      return correction
-        ? { ...started, correction }
-        : { ...started, ...(deliveredProposal ? { proposal: deliveredProposal } : {}), ...(autoexec ? { autoexec } : {}) };
+      return { ...started,
+        ...(correctionFailureNote ? { output: `${started.output || ''}\n\nNão consegui aplicar o ajuste agora; a proposta segue como estava.`.trim() } : {}),
+        ...(correctionCandidate ? {} : deliveredProposal ? { proposal: deliveredProposal } : {}), ...(autoexec ? { autoexec } : {}) };
     }).catch((e) => ({ __error: e }));
 
     // Turn finish observation: success carries `none`; failures classify
@@ -785,7 +882,6 @@ export function createGatewayServer({
         output: outcome.output,
         ...(outcome.proposal ? { proposal: outcome.proposal } : {}),
         ...(outcome.autoexec ? { autoexec: outcome.autoexec } : {}),
-        ...(outcome.correction ? { correction: outcome.correction } : {}),
       },
       setCookie: pin.pin === 'b' ? null : record.conversationId,
       previousSessionId,
@@ -935,6 +1031,14 @@ export function createGatewayServer({
       // admin, MCP, or write surface on this listener).
       const parsed = parseRoute(url.pathname);
       if (!parsed) {
+        const pathMatch = /^(?:\/api\/agent)?\/agents\/finance-chat-agent\/([^/]+)\/rpc\//.exec(url.pathname);
+        if (pathMatch) {
+          try { decodeURIComponent(pathMatch[1]); }
+          catch {
+            sendJson(res, 400, errorPayload(new GatewayError('gateway.invalid_args', 'malformed workspace id')));
+            return;
+          }
+        }
         sendJson(res, 404, { code: 'gateway.not_found', message: 'unknown route' });
         return;
       }
@@ -1013,6 +1117,162 @@ export function createGatewayServer({
           sendJson(res, 403, errorPayload(new GatewayError('auth.workspace_forbidden', 'path workspace disagrees with canonical workspace')));
           cleanup();
           return;
+        }
+
+        const runtimeIdentity = {
+          workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId,
+        };
+        const requestJson = async (required = true) => {
+          let raw;
+          try { raw = await readBody(req, GATEWAY_BODY_LIMIT_BYTES, signal); }
+          catch (e) {
+            if (e?.code === 'gateway.cancelled') return null;
+            throw new GatewayError('gateway.body_too_large', 'request body too large');
+          }
+          try {
+            const value = raw ? JSON.parse(raw) : (required ? null : {});
+            if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
+            return value;
+          } catch { throw new GatewayError('gateway.invalid_args', 'request body must be a JSON object'); }
+        };
+        const exactKeys = (obj, allowed) => Object.keys(obj).every((k) => allowed.includes(k));
+        const mint = async (requestId) => {
+          if (!pendingClient) throw new PendingClientError('pending.unavailable');
+          return pendingClient.mintToken({ ...runtimeIdentity, requestId, signal });
+        };
+        const apiCall = (name, input) => {
+          if (!pendingClient) throw new PendingClientError('pending.unavailable');
+          return pendingClient[name]({ ...runtimeIdentity, ...input, signal });
+        };
+        const routeMatch = route.match(/^pending-operations\/([^/]+)\/decision$/);
+        if (route.startsWith('pending-operations/') || route.startsWith('undo/') || route.startsWith('workspace/')) {
+          const expectedMethod = route.endsWith('/active') ? 'GET' : 'POST';
+          if (req.method !== expectedMethod) {
+            sendJson(res, 405, { code: 'gateway.invalid_args', message: `route requires ${expectedMethod}` });
+            cleanup(); return;
+          }
+          try {
+            if (route === 'pending-operations/active') {
+              const token = await mint(randomUUID());
+              sendJson(res, 200, projectActivePendingOperations(await apiCall('active', { token })));
+            } else if (route === 'pending-operations/propose') {
+              const body = await requestJson();
+              const tools = new Set(['transactions.expense.create','transactions.income.create','cards.purchase.create','transactions.transfer.create','cards.statement.pay','accounts.create','categories.create','transactions.update','accounts.update','accounts.deactivate','categories.update','categories.deactivate','payables.create','payables.pay']);
+              if (!exactKeys(body, ['tool','intentionId','normalizedArgs']) || !tools.has(body.tool) ||
+                  typeof body.intentionId !== 'string' || body.intentionId.trim().length < 1 || body.intentionId.length > 128 ||
+                  !body.normalizedArgs || typeof body.normalizedArgs !== 'object' || Array.isArray(body.normalizedArgs) ||
+                  !validProposalArgs(body.tool, body.normalizedArgs)) {
+                throw new GatewayError('gateway.invalid_args', 'invalid proposal intent');
+              }
+              const token = await mint(body.intentionId);
+              const result = await apiCall('propose', { token, tool: body.tool, intentionId: body.intentionId,
+                normalizedArgs: body.normalizedArgs, idempotencyKey: proposeIdempotencyKey({ workspaceId, intentionId: body.intentionId, tool: body.tool }) });
+              const proposalPin = parseConversationCookie(req.headers.cookie);
+              if (proposalPin.pin === 'b') {
+                try {
+                  const conversation = store.get(proposalPin.conversationId, identity);
+                  await store.withTurnLock(conversation.conversationId, async () => store.setActiveOperation(conversation.conversationId, result.id, identity.actorId));
+                } catch (e) { console.warn('pending metadata divergence after propose', e?.code || 'store_error'); }
+              }
+              sendJson(res, 200, { id: result.id, existing: result.existing });
+            } else if (routeMatch) {
+              let operationId;
+              try { operationId = decodeURIComponent(routeMatch[1]); }
+              catch { throw new GatewayError('gateway.invalid_args', 'malformed operation id'); }
+              const body = await requestJson();
+              if (!exactKeys(body, ['decision','requestId']) || !['confirm','cancel','retry'].includes(body.decision) || typeof body.requestId !== 'string' || !body.requestId.trim() || body.requestId.length > 240) throw new GatewayError('gateway.invalid_args', 'invalid pending decision');
+              const token = await mint(body.requestId);
+              if (body.decision === 'cancel') {
+                const result = await apiCall('cancel', { token, id: operationId });
+                const conversationPin = parseConversationCookie(req.headers.cookie);
+                if (conversationPin.pin === 'b') {
+                  try {
+                    const conversation = store.get(conversationPin.conversationId, identity);
+                    if (conversation.activeOperationId === operationId) {
+                      await store.withTurnLock(conversation.conversationId, async () =>
+                        store.setActiveOperation(conversation.conversationId, null));
+                    }
+                  } catch (e) { console.warn('pending metadata divergence after cancel', e?.code || 'store_error'); }
+                }
+                sendJson(res, 200, { operationId, status: result.status || 'cancelled' });
+              } else {
+                let transition;
+                try {
+                  transition = body.decision === 'confirm'
+                    ? await apiCall('confirm', { token, id: operationId, intentionId: body.requestId })
+                    : await apiCall('retry', { token, id: operationId, intentionId: body.requestId });
+                } catch { /* replay/outcome below is authoritative, even after 4xx */ }
+                if (transition && typeof transition.attestation === 'string' && transition.attestation.length >= 32) {
+                  try { await apiCall('execute', { token, id: operationId, attestation: transition.attestation, intentionId: body.requestId }); } catch { /* read canonical outcome */ }
+                }
+                try {
+                  const outcome = await apiCall('outcome', { token, id: operationId });
+                  const status = outcome.status;
+                  const allowed = new Set(['proposed', 'succeeded', 'failed', 'cancelled', 'expired']);
+                  if (!allowed.has(status) || (status === 'succeeded' && !outcome.receipt)) throw new Error('uncertain outcome');
+                  sendJson(res, 200, { operationId, status,
+                    ...(typeof outcome.retryable === 'boolean' ? { retryable: outcome.retryable } : {}),
+                    ...(outcome.failureCode === 'in_use' ? { failureCode: 'in_use' } : {}),
+                    ...(status === 'succeeded' ? { receipt: outcome.receipt } : {}) });
+                } catch {
+                  sendJson(res, 502, { code: 'agent.execution_outcome_unknown', message: 'Não foi possível confirmar o resultado agora.' });
+                }
+              }
+            } else if (route === 'undo/active') {
+              sendJson(res, 200, undoProposals.active(runtimeIdentity));
+            } else if (route === 'undo/decision') {
+              const body = await requestJson();
+              if (!exactKeys(body, ['decision','requestId']) || !['confirm','cancel'].includes(body.decision) || typeof body.requestId !== 'string' || !body.requestId || body.requestId.length > 240) throw new GatewayError('gateway.invalid_args', 'invalid undo decision');
+              const record = undoProposals.get(body.requestId, runtimeIdentity);
+              if (!record) { sendJson(res, 404, { code: 'undo.not_found', message: 'undo request not found' }); cleanup(); return; }
+              if (Date.parse(record.expiresAt) <= Date.now() && record.status === 'executing') {
+                throw new GatewayError('undo.executing', 'undo execution is still being reconciled');
+              }
+              if (Date.parse(record.expiresAt) <= Date.now() && record.status === 'proposed') {
+                undoProposals.transition(body.requestId, runtimeIdentity, record.status, 'expired');
+                throw new GatewayError('undo.expired', 'undo request expired');
+              }
+              if (body.decision === 'cancel') {
+                const changed = undoProposals.transition(body.requestId, runtimeIdentity, 'proposed', 'cancelled');
+                if (!changed && record.status !== 'cancelled') throw new GatewayError('undo.conflict', 'undo request is not cancellable');
+                sendJson(res, 200, { requestId: body.requestId, status: 'cancelled' });
+              } else if (record.status === 'confirmed') {
+                sendJson(res, 200, { requestId: body.requestId, status: 'confirmed', ...(record.result ? { result: record.result } : {}) });
+              } else {
+                const claimed = undoProposals.transition(body.requestId, runtimeIdentity, 'proposed', 'executing');
+                if (!claimed && record.status !== 'executing') throw new GatewayError('undo.conflict', 'undo request is not confirmable');
+                if (record.status === 'executing' && record.result) { sendJson(res, 200, { requestId: body.requestId, status: 'confirmed', result: record.result }); cleanup(); return; }
+                try {
+                  const token = await mint(body.requestId);
+                  const result = await apiCall('undo', { token, lastOperationId: record.targetLastOperationId, idempotencyKey: record.idempotencyKey });
+                  const safeResult = { ...(typeof result.undone === 'boolean' ? { undone: result.undone } : {}), ...(result.receipt ? { receipt: result.receipt } : {}) };
+                  undoProposals.update(body.requestId, runtimeIdentity, { status: 'confirmed', result: safeResult });
+                  sendJson(res, 200, { requestId: body.requestId, status: 'confirmed', result: safeResult });
+                } catch (e) {
+                  if (e?.effectMayHaveOccurred === false) {
+                    undoProposals.transition(body.requestId, runtimeIdentity, 'executing', 'proposed');
+                  }
+                  throw e;
+                }
+              }
+            } else {
+              const match = route.match(/^workspace\/([^/]+)\/attest-empty$/);
+              let attestedWorkspace;
+              try { attestedWorkspace = match && decodeURIComponent(match[1]); }
+              catch { throw new GatewayError('gateway.invalid_args', 'malformed workspace id'); }
+              if (attestedWorkspace !== identity.workspace) throw new GatewayError('auth.workspace_forbidden', 'path workspace disagrees with canonical workspace');
+              const body = await requestJson();
+              if (!exactKeys(body, ['inventoryVersion']) || typeof body.inventoryVersion !== 'string') throw new GatewayError('gateway.invalid_args', 'inventoryVersion is required');
+              const result = await attestEmptyWorkspace({ workspaceId: identity.workspace, inventoryVersion: body.inventoryVersion, actorId: identity.actorId, store, categoryMemoryStore,
+                undoStore: undoProposals, secret: workspaceDeletionSecret, client: pendingClient, signal });
+              sendJson(res, 201, result);
+            }
+          } catch (e) {
+            const code = e?.code || 'pending.upstream_error';
+            const status = e?.statusCode || (code === 'gateway.body_too_large' ? 413 : code === 'gateway.invalid_args' ? 400 : code === 'auth.workspace_forbidden' ? 403 : code === 'undo.conflict' || code === 'undo.expired' || code === 'undo.executing' || code === 'agent.workspace_not_empty' || code === 'agent.attestation_unavailable' ? 409 : code === 'pending.not_found' || code === 'pending.not_proposed' || code === 'pending.supersede_disabled' ? 409 : 502);
+            sendJson(res, status, { code, message: e instanceof GatewayError || e instanceof WorkspaceAttestationError ? e.message : 'gateway request failed' });
+          }
+          cleanup(); return;
         }
 
         const extraHeaders = {};

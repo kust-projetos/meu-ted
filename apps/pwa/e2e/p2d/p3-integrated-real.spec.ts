@@ -153,15 +153,10 @@ async function decide(page: Page, button: ReturnType<Page["getByRole"]>) {
   await button.click();
   const res = await response;
   if (res.status() !== 200) {
-    // Diagnostic only: the Agent maps API failures to 502; keep the sanitized
-    // API code/message so the failure names the real cause (no secrets).
+    // Diagnostic only; include the sanitized gateway response (no secrets).
     const body = await res.text().catch(() => "");
-    const log = await fetch(`${CTL}/p2d/agent-log`).then((r) => r.json()).catch(() => null) as
-      | { lastLines?: string[] }
-      | null;
-    const failureLines = (log?.lastLines ?? []).filter((line) => /ted\.approval|decision_failed|approval_failed/i.test(line));
     throw new Error(
-      `decision failed status=${res.status()} body=${body.slice(0, 300)} agentFailure=${JSON.stringify(failureLines).slice(0, 700)}`,
+      `decision failed status=${res.status()} body=${body.slice(0, 300)}`,
     );
   }
   return res;
@@ -185,7 +180,7 @@ test("P3.9 real six-flow: 7 operations, 7 confirmations, continuity and recovery
   };
 
   try {
-    expect(await ctl("/health")).toMatchObject({ ok: true, agentRunning: true, probeRunning: true });
+    expect(await ctl("/health")).toMatchObject({ ok: true, probeRunning: true });
     const initial = await state();
     const itau = byName(initial.accounts, "Itaú");
     const nubank = byName(initial.accounts, "Nubank");

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  EXPECTED_AGENT_ORIGIN,
   EXPECTED_PWA_ORIGIN,
   PRODUCTION_PWA_ORIGIN,
   buildCspValue,
@@ -116,48 +115,48 @@ describe("resolvePwaOrigin (DEBT2 allowlist migration)", () => {
   });
 });
 
-describe("isExpectedOrigin (DEBT2-CODER-ALLOWLISTS-FIX strict pin)", () => {
+describe("isExpectedOrigin (PWA origin strict pin)", () => {
   it("accepts the exact pinned origins (and trailing-slash form)", () => {
     expect(isExpectedOrigin(EXPECTED_PWA_ORIGIN, EXPECTED_PWA_ORIGIN)).toBe(true);
-    expect(isExpectedOrigin(`${EXPECTED_AGENT_ORIGIN}/`, EXPECTED_AGENT_ORIGIN)).toBe(true);
+    expect(isExpectedOrigin(`${EXPECTED_PWA_ORIGIN}/`, EXPECTED_PWA_ORIGIN)).toBe(true);
   });
 
   it("rejects scheme downgrade, userinfo, ports, paths, queries, fragments", () => {
     const bad = [
-      EXPECTED_AGENT_ORIGIN.replace("https://", "http://"),
-      EXPECTED_AGENT_ORIGIN.replace("https://", "https://user:pass@"),
-      `${EXPECTED_AGENT_ORIGIN}:8443`,
-      `${EXPECTED_AGENT_ORIGIN}/rpc/chat`,
-      `${EXPECTED_AGENT_ORIGIN}?q=1`,
-      `${EXPECTED_AGENT_ORIGIN}#h`,
+      EXPECTED_PWA_ORIGIN.replace("https://", "http://"),
+      EXPECTED_PWA_ORIGIN.replace("https://", "https://user:pass@"),
+      `${EXPECTED_PWA_ORIGIN}:8443`,
+      `${EXPECTED_PWA_ORIGIN}/rpc/chat`,
+      `${EXPECTED_PWA_ORIGIN}?q=1`,
+      `${EXPECTED_PWA_ORIGIN}#h`,
       "not-a-url",
       "",
     ];
     for (const value of bad) {
-      expect(isExpectedOrigin(value, EXPECTED_AGENT_ORIGIN)).toBe(false);
+      expect(isExpectedOrigin(value, EXPECTED_PWA_ORIGIN)).toBe(false);
     }
   });
 
   it("rejects external hosts, lookalikes, and userinfo-smuggled hosts", () => {
-    const host = new URL(EXPECTED_AGENT_ORIGIN).hostname;
-    expect(isExpectedOrigin("https://agent.example.net", EXPECTED_AGENT_ORIGIN)).toBe(false);
-    expect(isExpectedOrigin(`https://${host}.evil.example`, EXPECTED_AGENT_ORIGIN)).toBe(false);
+    const host = new URL(EXPECTED_PWA_ORIGIN).hostname;
+    expect(isExpectedOrigin("https://agent.example.net", EXPECTED_PWA_ORIGIN)).toBe(false);
+    expect(isExpectedOrigin(`https://${host}.evil.example`, EXPECTED_PWA_ORIGIN)).toBe(false);
     expect(
-      isExpectedOrigin(EXPECTED_AGENT_ORIGIN.replace("https://", `https://x@${host}.evil.example@`), EXPECTED_AGENT_ORIGIN),
+      isExpectedOrigin(EXPECTED_PWA_ORIGIN.replace("https://", `https://x@${host}.evil.example@`), EXPECTED_PWA_ORIGIN),
     ).toBe(false);
-    expect(isExpectedOrigin(EXPECTED_PWA_ORIGIN, EXPECTED_AGENT_ORIGIN)).toBe(false);
+    expect(isExpectedOrigin(EXPECTED_PWA_ORIGIN, PRODUCTION_PWA_ORIGIN)).toBe(false);
   });
 
   it("rejects shell-metacharacter payloads", () => {
     const evil = [
-      `${EXPECTED_AGENT_ORIGIN}"; curl evil.example #`,
-      `$(curl evil.example)${EXPECTED_AGENT_ORIGIN}`,
-      `\`${EXPECTED_AGENT_ORIGIN}\``,
-      `${EXPECTED_AGENT_ORIGIN} && curl evil.example`,
-      `${EXPECTED_AGENT_ORIGIN}\nEVIL=1`,
+      `${EXPECTED_PWA_ORIGIN}"; curl evil.example #`,
+      `$(curl evil.example)${EXPECTED_PWA_ORIGIN}`,
+      `\`${EXPECTED_PWA_ORIGIN}\``,
+      `${EXPECTED_PWA_ORIGIN} && curl evil.example`,
+      `${EXPECTED_PWA_ORIGIN}\nEVIL=1`,
     ];
     for (const value of evil) {
-      expect(isExpectedOrigin(value, EXPECTED_AGENT_ORIGIN)).toBe(false);
+      expect(isExpectedOrigin(value, EXPECTED_PWA_ORIGIN)).toBe(false);
     }
   });
 });

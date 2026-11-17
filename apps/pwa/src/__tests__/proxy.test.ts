@@ -43,12 +43,12 @@ describe("SECURITY_HEADERS", () => {
     );
   });
 
-  it("buildPermissionsPolicy reflects the microphone capability both ways", () => {
+  it("buildPermissionsPolicy denies microphone unconditionally", () => {
     expect(buildPermissionsPolicy(false)).toBe(
       SECURITY_HEADERS["Permissions-Policy"],
     );
     expect(buildPermissionsPolicy(true)).toBe(
-      "camera=(), microphone=(self), geolocation=()",
+      "camera=(), microphone=(), geolocation=()",
     );
   });
 

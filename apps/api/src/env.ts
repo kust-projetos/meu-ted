@@ -53,10 +53,7 @@ export type AppConfig = {
   disableDeviceRegistration: boolean;
   adminEmails: string[];
   agentConnectionSecret: string;
-  agentConfigToken: string;
   agentAuthServiceToken: string;
-  agentRuntimeOrigin: string;
-  agentRuntimeAdminToken: string;
   inviteDeliveryUrl: string | null;
   inviteDeliveryToken: string | null;
   smtpHost: string | null;
@@ -141,10 +138,7 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig =
     disableDeviceRegistration,
     adminEmails,
     agentConnectionSecret: production ? requiredProductionSecret('AGENT_CONNECTION_TOKEN_SECRET') : (source.AGENT_CONNECTION_TOKEN_SECRET?.trim() || 'dev-agent-connection-secret-at-least-32-chars!'),
-    agentConfigToken: production ? requiredProductionSecret('AGENT_CONFIG_TOKEN') : (source.AGENT_CONFIG_TOKEN?.trim() || 'dev-agent-config-token-32-chars-minimum!'),
     agentAuthServiceToken: production ? requiredProductionSecret('AGENT_AUTH_SERVICE_TOKEN') : (source.AGENT_AUTH_SERVICE_TOKEN?.trim() || 'dev-agent-auth-service-token-32-chars!'),
-    agentRuntimeOrigin: production ? requiredProduction('AGENT_RUNTIME_ORIGIN') : (source.AGENT_RUNTIME_ORIGIN?.trim() || 'https://agent.example'),
-    agentRuntimeAdminToken: production ? requiredProductionSecret('AGENT_RUNTIME_ADMIN_TOKEN') : (source.AGENT_RUNTIME_ADMIN_TOKEN?.trim() || 'dev-agent-runtime-admin-token-32-chars!'),
     inviteDeliveryUrl: source.INVITE_DELIVERY_URL?.trim() || null,
     inviteDeliveryToken: source.INVITE_DELIVERY_TOKEN?.trim() || null,
     smtpHost,

@@ -3,7 +3,7 @@
  * Selects the area-specific gates that apply to a diff.
  *
  * Common commits only run `commit:check`. This script is the opt-in bridge:
- * it runs documentation, governance, agent-policy, PWA-boundary and workflow
+ * it runs documentation, governance, TED-runtime write-policy, PWA-boundary and workflow
  * checks only when the changed paths touch their area.
  *
  * Usage:
@@ -22,13 +22,10 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const AREA_RULES = [
   { area: "api", patterns: [/^apps\/api\//, /^packages\/llm-contracts\//] },
   {
-    area: "agent",
+    area: "ted-runtime",
     patterns: [
-      /^apps\/agent\//,
       /^apps\/ted-runtime\//,
       /^packages\/llm-contracts\//,
-      /^scripts\/generate-agent-tools\.mjs$/,
-      /^docs\/architecture\/tool-capability-inventory\.md$/,
       // write-policy:check scans these write surfaces and the ledger that documents them.
       /^apps\/api\/src\/routes\//,
       /^apps\/pwa\/src\/lib\/state\/commands\.ts$/,
@@ -57,7 +54,7 @@ export const AREA_RULES = [
 export const AREA_COMMANDS = {
   docs: ["pnpm docs:lint"],
   governance: ["pnpm plans:check", "pnpm governance:check"],
-  agent: ["pnpm architecture:check", "pnpm capabilities:check", "pnpm write-policy:check"],
+  "ted-runtime": ["pnpm write-policy:check"],
   pwa: ["pnpm boundary:check"],
   tests: ["pnpm test:skip-gate"],
   workflows: ["pnpm action-pins:check", "pnpm workflows-yaml:check"],

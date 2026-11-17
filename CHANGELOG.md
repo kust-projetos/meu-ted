@@ -1,3 +1,7 @@
+## Unreleased (2026-11-17)
+
+- Descontinuado e removido o runtime A0 (`apps/agent`) do workspace, build e CI; `apps/ted-runtime` permanece como único runtime conversacional e a API continua autoridade financeira. Recursos e dados históricos de produção não foram removidos.
+
 # Changelog
 
 ## v1.0.4 (2026-11-13)

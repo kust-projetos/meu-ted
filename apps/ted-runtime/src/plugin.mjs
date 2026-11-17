@@ -23,6 +23,7 @@
 import { TOOL_DEFS, createToolExecutors, deriveIntentionId } from './tool-defs.mjs';
 import { resolveHost } from './session-bindings.mjs';
 import { proposalIntentRegistry } from './proposal-intents.mjs';
+import { correctionActionRegistry } from './correction-actions.mjs';
 
 export const PRODUCT_TOOL_NAMES = ['list_accounts', 'get_month_summary'];
 
@@ -70,6 +71,9 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
   'propose_category_deactivate',
   'propose_payable_create',
   'propose_payable_pay',
+  'correct_pending_proposal',
+  'cancel_pending_proposal',
+  'propose_undo_last_action',
 ]);
 
 // Opt-in reads. Explicit activation only: the operator sets
@@ -119,6 +123,9 @@ export const P3_WRITE_TOOL_NAMES = [
   'propose_category_deactivate',
   'propose_payable_create',
   'propose_payable_pay',
+  'correct_pending_proposal',
+  'cancel_pending_proposal',
+  'propose_undo_last_action',
 ];
 
 export function isP3ReadsEnabled(env = process.env) {
@@ -256,11 +263,11 @@ export async function getEffectiveToolNames(pluginCtx) {
 // process.env) — lets tests prove default-off/opt-in/production-off without
 // mutating process state.
 // Returns the plugin definition object for Plugin.define(id, setup).
-export function defineTedFinancePlugin(transportFactory, { onEffectiveTools = null, env = process.env, proposalIntents = proposalIntentRegistry } = {}) {
+export function defineTedFinancePlugin(transportFactory, { onEffectiveTools = null, env = process.env, proposalIntents = proposalIntentRegistry, correctionActions = correctionActionRegistry } = {}) {
   if (typeof transportFactory !== 'function') {
     throw new Error('defineTedFinancePlugin: transportFactory (() => transport) is required');
   }
-  const executors = createToolExecutors(transportFactory(), { proposalIntents });
+  const executors = createToolExecutors(transportFactory(), { proposalIntents, correctionActions });
   return {
     id: 'ted-finance',
     async setup(ctx) {

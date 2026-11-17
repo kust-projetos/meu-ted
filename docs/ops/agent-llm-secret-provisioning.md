@@ -1,5 +1,11 @@
 # Agent LLM Secret Provisioning Guide
 
+> **Atualização 2026-11-17:** a API não mantém mais rotas de configuração
+> LLM, relay nem consumo one-shot de token de conexão. O runtime conversacional
+> atual é `apps/ted-runtime` e usa modelo pinado em `src/live-model.json`.
+> As referências abaixo ao A0/Worker e ao relay são históricas, não instruções
+> de provisionamento da API atual.
+
 Este guia detalha o provisionamento seguro de segredos e credenciais para o assistente financeiro TED e o runtime de modelos LLM.
 
 ---
@@ -15,19 +21,12 @@ Este guia detalha o provisionamento seguro de segredos e credenciais para o assi
 ## 2. Segredos Obrigatórios por Componente
 
 ### 2.1 Backend Autoritativo (`apps/api`)
-- `AGENT_RUNTIME_ORIGIN`: URL base do Cloudflare Worker do assistente.
-- `AGENT_RUNTIME_ADMIN_TOKEN`: Token compartilhado para chamadas administrativas e sincronização de runtime.
-- `AGENT_CONNECTION_TOKEN_SECRET`: Segredo HMAC para emissão e validação de tokens curtos de conexão com anti-replay.
-- `AGENT_AUTH_SERVICE_TOKEN`: Token de autenticação interna do serviço de agente.
-- `AGENT_CONFIG_TOKEN`: Token para consulta e validação de configuração em tempo de execução.
-- `AGENT_DELEGATION_SECRET`: Segredo HMAC para assinatura de tokens delegados de workspace.
-- Chaves de provedor usadas pelo relay LLM (`/internal/agent/llm-relay`) — obrigatória a do par ativo/fallback:
-  - `OPENCODE_ZEN_API_KEY`
-  - `OPENCODE_GO_API_KEY`: exigida pelo relay para o provider `opencode-go` (o upstream Go, além da chave, exige o header `x-opencode-session`, enviado pelo relay com o `sessionId` estável por conversa).
-  - `OPENAI_API_KEY`
-  - `OPENROUTER_API_KEY`
+- `AGENT_CONNECTION_TOKEN_SECRET`: segredo HMAC para mint de tokens curtos de conexão.
+- `AGENT_AUTH_SERVICE_TOKEN`: token de autenticação interna usado pelo depósito de atestação e rotas server-to-server existentes.
+- `PI_DELEGATED_TOKEN_SECRET`: segredo HMAC para assinatura de tokens delegated de workspace.
+- Tokens de mint Pending/autoexec são configurados no runtime TED (`TED_RUNTIME_PENDING_MINT_TOKEN` e `TED_RUNTIME_AUTOEXEC_MINT_TOKEN`); não substituem nem removem os segredos acima.
 
-### 2.2 Assistente Cloudflare Worker (`apps/agent`)
+### 2.2 Assistente Cloudflare Worker (`apps/agent`, descontinuado)
 - `PI_API_ORIGIN`: Origem autoritativa da API (`https://api.synkroo.com.br` em produção).
 - `PI_DELEGATED_TOKEN_SECRET`: Segredo HMAC correspondente para validação de tokens delegados.
 - `AGENT_CONNECTION_TOKEN_SECRET`: Segredo HMAC correspondente para validação de conexão cliente.

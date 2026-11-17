@@ -14,10 +14,7 @@ const productionEnv = {
   DEFAULT_HOUSEHOLD_ID: '11111111-1111-4111-8111-111111111111',
   ADMIN_EMAILS: 'admin@example.com',
   AGENT_CONNECTION_TOKEN_SECRET: 'connection-secret-that-is-at-least-32-chars',
-  AGENT_CONFIG_TOKEN: 'config-token-that-is-at-least-32-characters',
   AGENT_AUTH_SERVICE_TOKEN: 'auth-token-that-is-at-least-32-characters',
-  AGENT_RUNTIME_ORIGIN: 'https://agent.example.com',
-  AGENT_RUNTIME_ADMIN_TOKEN: 'runtime-token-that-is-at-least-32-chars',
 };
 
 describe('T4.1 startup fail-closed', () => {

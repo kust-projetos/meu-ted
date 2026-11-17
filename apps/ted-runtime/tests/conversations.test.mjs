@@ -56,6 +56,16 @@ describe('conversation cookie contract (proxy pin)', () => {
 });
 
 describe('conversation visibility + isolation', () => {
+  it('read-only inventory counts workspace sessions and messageCount; invalid counts degrade', () => {
+    const store = createConversationStore({ persistDir: approvedTmpRoot('ted-conv-inventory') });
+    const first = store.create({ workspace: 'H_A', ownerActor: 'actor-A', deviceId: 'dev-A' });
+    store.noteTurn(first.conversationId);
+    store.noteTurn(first.conversationId);
+    store.create({ workspace: 'H_B', ownerActor: 'actor-B', deviceId: 'dev-B' });
+    assert.deepEqual(store.inventory({ workspaceId: 'H_A' }), { sessions: 1, messages: 2 });
+    assert.deepEqual(store.inventory({ workspaceId: 'H_B' }), { sessions: 1, messages: 0 });
+    assert.throws(() => store.inventory({ workspaceId: '' }), /workspaceId/);
+  });
   it('workspace default: same-workspace member reads, other workspace refused', () => {
     const store = createConversationStore({ persistDir: approvedTmpRoot('ted-conv-vis') });
     const rec = store.create({ workspace: 'H_A', ownerActor: 'actor-A', deviceId: 'dev-A' });

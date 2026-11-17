@@ -40,7 +40,7 @@ pnpm lint       # ESLint
 | Variable | Description |
 |----------|-------------|
 | `NEXT_PUBLIC_PI_FINANCE_API_BASE_URL` | Base URL da API autoritativa. Local: `/api/backend` (proxy same-origin para `https://api.synkroo.com.br`); Produção: `https://api.synkroo.com.br` (definido em `wrangler.jsonc` vars). |
-| `NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL` | Base URL do Agent Cloudflare (TED). Local: `/api/agent` (proxy same-origin para `https://<AGENT_HOST>`); Produção: `https://<AGENT_HOST>` (runtime env `PWA_AGENT_PROXY_ORIGIN`, valor de `AGENT_PROD_URL`, ver `resolveAgentOrigin` em `src/app/api/agent/[...path]/route.ts`). |
+| `NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL` | Base same-origin `/api/agent`; o proxy encaminha exclusivamente ao gateway TED configurado por `TED_OPENCODE_GATEWAY_ORIGIN`. |
 
 Sem `NEXT_PUBLIC_PI_FINANCE_API_BASE_URL`, o PWA roda em modo mock **sem** requisições
 de rede — `AuthGate` é bypassado e dados vêm de mocks em memória.

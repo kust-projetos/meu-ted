@@ -1,11 +1,10 @@
 {
   "factsSchemaVersion": "1.0.0",
   "productVersion": "0.1.0",
-  "lastVerified": "2026-11-14",
+  "lastVerified": "2026-11-17",
   "activeWorkspaces": [
     "apps/api",
     "apps/pwa",
-    "apps/agent",
     "apps/ted-runtime"
   ],
   "apps": {
@@ -19,15 +18,6 @@
       "framework": "Next.js / React (Static Export / OpenNext)",
       "runtime": "Cloudflare Pages"
     },
-    "agent": {
-      "name": "pi-finance-agent",
-      "framework": "Cloudflare Workers / Agents SDK (FinanceChatAgent extends AIChatAgent)",
-      "runtime": "Cloudflare Workers / Durable Objects (v2 FinanceChatAgent)",
-      "bindings": [
-        "FINANCE_CHAT_AGENT (FinanceChatAgent)"
-      ],
-      "llmConfig": "V034 global, providers opencode-zen/go, openai-api, openai-codex-subscription experimental_blocked"
-    },
     "tedRuntime": {
       "name": "pi-finance-ted-runtime",
       "framework": "OpenCode SDK (sessão, transcript, plugins e tools nativas)",
@@ -38,14 +28,12 @@
   "counts": {
     "apiRoutes": 120,
     "databaseMigrations": 61,
-    "latestMigration": "V063__workspace_empty_attestation_deposit.sql",
-    "capabilitiesTotal": 54,
-    "capabilityInventoryRows": 75
+    "latestMigration": "V063__workspace_empty_attestation_deposit.sql"
   },
   "architecture": {
     "sourceOfTruth": "Fastify PostgreSQL API (apps/api)",
     "primaryClient": "PWA (apps/pwa)",
-    "assistantEngine": "OpenCode runtime (apps/ted-runtime) with Cloudflare Agent A0 (apps/agent) as rollback",
+    "assistantEngine": "OpenCode runtime (apps/ted-runtime), the sole conversational runtime",
     "canonicalPwaPath": "apps/pwa",
     "deprecatedOrigin": "../pi-finance-web"
   },

@@ -111,6 +111,21 @@ describe('API route authz inventory', () => {
     await testApp.app.close();
   });
 
+  it('does not register retired A0 LLM or connection-token consumption routes', async () => {
+    const testApp = buildTestApp({}, undefined, undefined, activeSessionAuth, fakeInviteService, allowInviteCreate, { resolve: async () => undefined }, fakeOwnershipTransfers);
+    await testApp.app.ready();
+    for (const [method, url] of [
+      ['POST', '/internal/agent/llm-relay'],
+      ['GET', '/internal/agent/llm-config'],
+      ['GET', '/admin/agent/llm-config'],
+      ['POST', '/auth/agent-token/consume'],
+      ['POST', '/internal/agent/consume-token'],
+    ] as const) {
+      expect(testApp.app.hasRoute({ method, url }), `${method} ${url}`).toBe(false);
+    }
+    await testApp.app.close();
+  });
+
   it.each(ROUTE_INVENTORY.filter(({ auth }) => auth === 'session' || auth === 'admin'))('requires session or admin authentication: $method $path', async (entry) => {
     const testApp = buildTestApp({}, undefined, undefined, missingSessionAuth, fakeInviteService, allowInviteCreate, { resolve: async () => undefined }, fakeOwnershipTransfers);
     await testApp.app.ready();
@@ -143,20 +158,6 @@ describe('route composition invariant (P0.2)', () => {
     'workspace-lifecycle-rename',
     'workspace-lifecycle-archive',
     'workspace-lifecycle-restore',
-    'admin-agent-llm-config',
-    'admin-agent-llm-sync',
-    'admin-agent-llm-provider-toggle',
-    'admin-agent-llm-model-toggle',
-    'admin-agent-llm-models-create',
-    'admin-agent-llm-activate',
-    'admin-agent-llm-rollout',
-    'admin-agent-llm-security-epoch',
-    'admin-agent-llm-test',
-    'admin-agent-llm-credential-get',
-    'admin-agent-llm-credential-set',
-    'admin-agent-llm-credential-delete',
-    'admin-agent-llm-provider-test',
-    'admin-agent-llm-remote-models',
     'auth-agent-token',
   ]);
   const SAMPLE_ID = '00000000-0000-4000-8000-000000000001';

@@ -15,7 +15,7 @@ export const VAL_GATES = [
   { id: "VAL.6", name: "TED Runtime", command: "pnpm --filter pi-finance-ted-runtime --fail-if-no-match lint && pnpm --filter pi-finance-ted-runtime --fail-if-no-match typecheck && pnpm --filter pi-finance-ted-runtime --fail-if-no-match test" },
   { id: "VAL.7", name: "PWA Unit & Contract Tests", command: "pnpm --filter pwa --fail-if-no-match test" },
   { id: "VAL.8", name: "Architecture Invariants", command: "pnpm architecture:check" },
-  { id: "VAL-V4.9", name: "Workspace Agent Decommission Guards (ARCH-V4-06a/b)", command: "node scripts/check-legacy-runtime-references.mjs --check=all" },
+  { id: "VAL-V4.9", name: "Remaining legacy integration references", command: "node scripts/check-legacy-runtime-references.mjs --stage=final" },
   { id: "VAL.9", name: "Capabilities, Write Policy, Boundary & Governance", command: "pnpm capabilities:check && pnpm write-policy:check && pnpm boundary:check && pnpm governance:check" },
   { id: "VAL.10", name: "Canonical Documentation Contracts", command: "node --test scripts/canonical-docs-contract.test.mjs scripts/documentation-facts-contract.test.mjs scripts/lint-docs.test.mjs scripts/documentation-gates-t13.test.mjs" },
   { id: "VAL.11", name: "Builds & Distribution Artifacts", command: "pnpm build:all" },

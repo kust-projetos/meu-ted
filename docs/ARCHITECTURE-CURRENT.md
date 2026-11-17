@@ -1,158 +1,28 @@
-# Meu Ted — Arquitetura atual
+# Meu Ted - Arquitetura atual
 
-**Last verified:** 2026-11-14
+**Last verified:** 2026-11-17
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 ## Topologia implementada
 
 ```mermaid
 graph TD
-    User([Usuário]) --> PWA[PWA canônica<br/>Cloudflare/OpenNext]
-    PWA --> Proxy[Proxies same-origin<br/>/api/backend e /api/agent]
-    PWA -. wss /live (push-only) .-> A0
-    Proxy --> API[API Fastify autoritativa<br/>Contabo VPS]
-    Proxy --> A0[TED A0<br/>Cloudflare Worker + DO]
-    Proxy --> OC[ted-runtime<br/>OpenCode + gateway privado<br/>Contabo VPS]
-    A0 --> API
-    OC --> API
-    API --> Postgres[(PostgreSQL 15<br/>schema canônico)]
+    User --> PWA[PWA canônica]
+    PWA --> Gateway[OpenCode TED gateway - apps/ted-runtime]
+    PWA --> API[API financeira - apps/api]
+    Gateway --> API
+    API --> DB[(PostgreSQL)]
 ```
 
-O runtime conversacional principal é o **OpenCode** (`apps/ted-runtime`). O
-A0 (`apps/agent`) permanece ativo como rollback e como emissor autorizado de
-propostas Pending V2. A seleção é persistida por conversa no cookie
-`ted-runtime-conversation`: sentinela `agent` = A0; `opencode.<uuid>` = B. O
-kill switch `TED_OPENCODE_RUNTIME_KILL_SWITCH=1` devolve até conversas com pin
-`opencode.*` ao A0 e expira o pin; operações pendentes vivem na API, então a
-troca de runtime não duplica nem perde nada.
+`apps/ted-runtime` é o único runtime conversacional. O runtime A0 (`apps/agent`) foi descontinuado em 2026-11-17 e removido do repositório ativo, workspaces, build e CI. A aposentadoria de código não remove nem altera recursos ou dados históricos de produção.
 
 ## Responsabilidades e limites
 
-- **API (`apps/api`):** única fonte da verdade financeira. Autentica,
-  autoriza por workspace e aplica idempotência. Pending operations V2 são
-  armazenadas e transitam aqui, vinculadas a `workspaceId`, `actorId` e
-  `deviceId`; confirmação, execução, cancelamento, retry e expiração são
-  rotas autoritativas com capability delegada específica.
-- **PWA (`apps/pwa`):** aplica sessão e CSRF nos proxies same-origin. A
-  autenticação online é session-first e cookie-only. `proxy-utils.ts`
-  classifica o pin e seleciona A0/B; apenas `chat`, `history` e
-  `session/new` vão para o OpenCode. A UX do TED envia apenas uma decisão e
-  um `requestId`; nunca envia/recebe atestação.
-- **OpenCode runtime (`apps/ted-runtime`):** SDK 2.2.4 nativo para sessão,
-  transcript, seleção de modelo e plugins. O gateway privado resolve
-  identidade server-side via `POST /auth/agent-token` + `GET /auth/devices/me`
-  e mantém bindings host-bound. As tools financeiras chamam a API com
-  `x-device-token`/`x-workspace-id`; o transporte aceita apenas loopback ou a
-  origem interna exata listada em `TED_API_ALLOWED_ORIGINS`. Escritas são
-  somente **intenções**: o runtime nunca emite capability, confirma ou executa.
-- **A0 (`apps/agent`):** orquestração e memória conversacional de rollback. O
-  broker `POST /rpc/pending-operations/propose` é o único emissor de
-  `financial.approval.propose` para intenções vindas do OpenCode; o
-  `MutationExecutor` continua sendo o único cliente do ciclo de decisão V2 e
-  o único consumidor/emissor de atestação. O provider/modelo não concede
-  capability, aprovação ou write.
-- **Contratos (`packages/llm-contracts`):** schemas e tipos compartilhados
-  entre API, A0 e testes de contrato.
-- **Memória e sessão:** OpenCode mantém sessão nativa, registry de metadados
-  (`apps/ted-runtime/src/conversations.mjs`), intenção de proposta em memória
-  por sessão (`proposal-intents.mjs`) e turnos serializados. A0 mantém memória
-  e sessões em SQLite do DO (`apps/agent/src/agent-config/memory/`) apenas no
-  fallback/rollback e como broker. API permanece autoridade financeira e de
-  Pending V2.
-- **Sincronização ao vivo (live-sync):** rota `/agents/finance-chat-agent/<ws>/live`, transporte push-only; token single-use por subprotocolo (`ted.v1` + `bearer.<jwt>`), filtro por ator no servidor e binding com expiração em 5 min. REST permanece autoritativo para chat, decisão e mutação. Flag `TED_LIVE_SYNC_ENABLED=1` no Agent e `NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED=1` no build da PWA; origem WS vem de `vars.AGENT_PROD_URL`, separada da origem REST, e CSP permite HTTPS/WSS dessa origem.
-
-## Autorização de mutações
-
-A confirmação humana é condicional, não universal. A policy determinística da
-API pode autoautorizar somente `transactions.expense.create` e
-`transactions.income.create` de baixo risco; o limiar de R$ 500 exige
-confirmação e operações destrutivas/incertas ficam sempre manuais.
-PendingOperation V2, idempotência e receipt permanecem inalterados.
-`TED_RISK_BASED_AUTOEXECUTE` aceita `off|shadow|on`, default `off`; kill
-switch = definir `off`. O modelo não concede autorização. Consulte
-[ADR-026](adr/ADR-026-risk-based-mutation-authorization.md) e
-[observabilidade](ops/ted-autoexecute-observability.md).
+- **API (`apps/api`):** fonte única de verdade financeira; autenticação, autorização por workspace, Pending V2, idempotência, confirmação, execução e recibos.
+- **PWA (`apps/pwa`):** cliente web/mobile e fronteira same-origin; não recebe autoridade financeira nem atestação.
+- **TED runtime (`apps/ted-runtime`):** runtime conversacional OpenCode e gateway privado; usa as ferramentas financeiras apoiadas pelos contratos da API.
+- **Contratos (`packages/llm-contracts`):** tipos e schemas compartilhados entre API e runtime. Paridade de catálogo é validada em `apps/ted-runtime/tests/api-contract-parity.test.mjs`.
 
 ## Segurança operacional
 
-- O gateway OpenCode escuta loopback por padrão; bind não-loopback exige
-  `TED_GATEWAY_ALLOW_NON_LOOPBACK=1` e a origem interna exata em
-  `TED_API_ALLOWED_ORIGINS`. Nenhuma interface administrativa é exposta.
-- O sistema falha fechado se falta esquema, evidência, binding, capability,
-  autorização técnica, receipt ou autoridade do provider.
-- O runtime não segue redirects com o token do dispositivo e não transporta
-  credenciais para origens não listadas.
-- A API web inicializa em modo verify-only. Migrations são executadas somente
-  pelo job explícito documentado em `docs/runbooks/api-migration-v2.md`.
-
-## Legado e estado de implantação
-
-O `WorkspaceAgent` foi removido na V4 (ver
-`docs/adr/ADR-016-workspace-agent-decommissioning.md`). O WhatsApp Bridge e a
-extensão Pi foram removidos dos workspaces, CI e runtime ativo. O
-`apps/codex-broker` foi removido em 2026-11-10: não tinha configuração de
-deploy/secret e seu adapter falhava fechado por ausência de runtime real. O
-cliente opcional `private-broker-client` do A0 permanece inerte sem
-`CODEX_BROKER_ORIGIN` e signing key.
-
-### Estado de entrega (2026-11-14)
-
-OpenCode é o runtime conversacional principal; A0 permanece fallback/broker.
-Live-sync ativo; conversas privadas desabilitadas (`TED_PRIVATE_VIEWS_ENABLED`
-OFF). #218 (freshness de evidência) concluída no PR #367; WhatsApp fora de
-escopo. Produção documentada: API `32a05cb`; Agent e PWA `15c9691`.
-Main de referência: `3d4e0c1`. Nenhuma mudança de arquitetura nesta missão.
-
-### Alcance do canário OpenCode
-
-Canário ativo com `TED_OPENCODE_RUNTIME_ENABLED=1` e gateway
-`https://api.synkroo.com.br/ted-runtime`. Workspaces no canário:
-`d36cb649-4462-486d-940a-47128ad329f2` e
-`550e8400-e29b-41d4-a716-446655440000`. Apenas os RPCs `chat`, `history`
-e `session/new` vão para o OpenCode; pending/undo/attachments permanecem no A0.
-Kill switch: `TED_OPENCODE_RUNTIME_KILL_SWITCH=1` devolve até conversas com
-pin `opencode.*` ao A0 e expira o pin.
-
-### Flags financeiras e capacidades
-
-| Flag | Onde | Valor efetivo | Efeito |
-|---|---|---|---|
-| `TED_LIVE_SYNC_ENABLED` | Agent (wrangler) | `1` | Live-sync push-only habilitado |
-| `TED_CATEGORY_SUGGESTION_ENABLED` | Agent (wrangler) | `1` | Sugestão semântica de categoria (sem tools; escolha passa pela resolução determinística; sempre manual) |
-| `PENDING_V2_SUPERSEDE_ENABLED` | API (env) | `1` | Rota de substituição atômica de proposta Pending V2 |
-| `TED_ATTACHMENTS_ENABLED` | Agent (wrangler) | `0` | Upload de anexos desabilitado |
-| `TED_AUDIO_STT_ENABLED` | Agent (wrangler) | `0` | STT de áudio desabilitado |
-| `TED_PDF_TEXT_ENABLED` | Agent (wrangler) | `0` | Extração de texto de PDF desabilitada |
-| `TED_VISION_ENABLED` | Agent (wrangler) | `0` | Visão de imagem desabilitada |
-| `TED_OPENCODE_P3_READS_ENABLED` | ted-runtime (compose) | `1` | 17 leituras financeiras expostas |
-| `TED_OPENCODE_P3_WRITES_ENABLED` | ted-runtime (compose) | `1` | 14 propostas intent-only (sem API/confirm/execute) |
-| `TED_OPENCODE_RUNTIME_ENABLED` | PWA (wrangler) | `1` | Canário OpenCode ativo |
-| `TED_OPENCODE_WORKSPACES` | PWA (wrangler) | `d36cb649-4462-486d-940a-47128ad329f2,550e8400-e29b-41d4-a716-446655440000` | Workspaces no canário |
-| `TED_RISK_BASED_AUTOEXECUTE` | API (env) | `shadow` (documentado, não re-verificado live) | Autorização por risco em modo shadow |
-| `TED_PRIVATE_VIEWS_ENABLED` | Agent (env) | off | Conversas privadas desabilitadas |
-| `SESSION_BEARER_FALLBACK_ENABLED` | API (env) | off | Bearer legado desabilitado |
-| `NEXT_PUBLIC_LEGACY_BEARER_COMPAT` | PWA (build) | off | Compat legado desabilitado |
-
-WhatsApp está fora de escopo por ora; o Bridge foi removido e não será reconstruído.
-
-
-Produção: OpenCode (`ted-runtime`) e API/PostgreSQL na VPS Contabo atrás do
-Traefik; PWA e A0 do Agent na Cloudflare. O estado vivo de produção (SHAs,
-flags e ledger) é registrado apenas em
-[`MEU-TED-V1-FINAL-STATE.md`](MEU-TED-V1-FINAL-STATE.md) a partir de evidência
-autorizada; fatos de código derivam de
-[`runtime-facts.json`](architecture/runtime-facts.json).
-
-## Dados e esquema
-
-- A API de produção serve o esquema canônico (`DB_SCHEMA=canonical`, database
-  `pi_financeiro_canonical` agora na stack centralizada db-central na VPS
-  (instância homologação db-hml, role `pi_financeiro`, rede `dbcentral_net`;
-  classificação: homologação)); o banco legacy (`pi_financeiro`) permanece como
-  archive intocado.
-- O uso de bearer legado é registrado em sink durável em `audit_logs`
-  (`auth.request.legacy_bearer_used`). A janela D11-R2 fechou com **0 eventos**
-  após `2026-10-19T13:23:55.399917Z` e o flip foi executado em 11/11/2026:
-  `SESSION_BEARER_FALLBACK_ENABLED=off` na API e
-  `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off` no build da PWA (ver
-  [`ROADMAP.md`](ROADMAP.md)).
+A API permanece autoritativa para toda escrita financeira. O runtime conversacional não substitui autenticação, autorização, confirmação ou idempotência da API. Deploy e remoção de recursos de produção não fazem parte desta documentação nem desta mudança.

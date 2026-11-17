@@ -2,14 +2,8 @@ import { z } from "zod";
 import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 import { TED_APPROVAL_TOOLS } from "@pi-finance/llm-contracts/types";
 import { fetchAgentConnectionToken, clearAgentConnectionTokenCache, trackAgentConnection, getActiveDeviceToken } from "./agent-auth";
-import { clearTedRuntimeViews, getTedRuntimeView, noteTedRuntimeView } from "./ted-runtime-view";
-import { getOfflinePrincipalId } from "@/lib/auth/offline-identity";
 
-export const attachmentSchema = z.object({
-  type: z.enum(["image", "pdf", "audio"]),
-  url: z.string(),
-  name: z.string().optional(),
-});
+import { getOfflinePrincipalId } from "@/lib/auth/offline-identity";
 
 const historyItemSchema = z.object({
   id: z.string(),
@@ -19,7 +13,6 @@ const historyItemSchema = z.object({
   text: z.string().optional(),
   createdAt: z.string().optional(),
   isOwn: z.boolean(),
-  attachments: z.array(attachmentSchema).optional(),
   // FIX-169-170-R2 (P2-2): identidade estável do envio ecoada pelo Agent
   // (SPEC §7.7) — a reconciliação a usa como chave primária; ausente em
   // itens legados, que seguem a regra conteúdo+timestamp.
@@ -45,7 +38,6 @@ const historyItemSchema = z.object({
     content: item.content ?? item.text ?? "",
     createdAt: item.createdAt,
     isOwn: item.isOwn,
-    attachments: item.attachments,
     ...(typeof item.intentionId === "string" && item.intentionId ? { intentionId: item.intentionId } : {}),
     ...(proposalOperationId.success ? { proposalOperationId: proposalOperationId.data } : {}),
     ...(proposalTool ? { proposalTool } : {}),
@@ -67,7 +59,6 @@ export type AgentMessage = {
   content: string;
   createdAt: string | undefined;
   isOwn: boolean;
-  attachments?: Array<z.infer<typeof attachmentSchema>>;
   /**
    * FIX-169-170-R2 (P2-2): identidade estável do envio (SPEC §7.7) ecoada
    * pelo Agent quando o turno a gravou. Chave primária da reconciliação —
@@ -946,23 +937,10 @@ function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"]
  * Agent's `intentionId`, so a lost HTTP response can never produce a second
  * proposal. Never regenerate on retry; a new message composes a new id.
  */
-/**
- * A13: an outgoing attachment is EITHER an opaque server-side `ref` (the
- * reference flow) OR the legacy `url` shape. The local preview URL never
- * crosses the wire, so a sent attachment carries `ref` instead.
- */
-export type OutgoingAttachment = Readonly<{
-  type: string;
-  url?: string;
-  ref?: string;
-  name: string;
-}>;
-
 export type PendingChatSend = Readonly<{
   messageId: string;
   content: string;
   createdAt: string;
-  attachments?: ReadonlyArray<OutgoingAttachment>;
   /**
    * P3 recovery: the runtime's expense proposal intent that still needs to be
    * handed to the Agent broker. It survives a failed/lost broker call in this
@@ -973,20 +951,10 @@ export type PendingChatSend = Readonly<{
    */
   proposal?: ProposalIntent;
   /**
-   * R2 FIX 1 (HIGH): `true` quando a âncora veio do formato legado (JSON sem
-   * `anchorVersion`/`attachments`). O envio original podia ter anexos que se
-   * perderam no formato antigo, então o retry é PROIBIDO — reenviar sem os
-   * anexos mudaria o payload sob a mesma identidade (mesmo `intentionId`) e
-   * derrubaria o veto de anexo no Agent. A UI reidrata como failed SEM retry.
+   * Older retry records predate the versioned text-send shape; keep them
+   * non-retryable because their original payload cannot be reconstructed.
    */
   legacyAnchor?: boolean;
-  /**
-   * R3 FIX 3 (MEDIUM): `true` quando o envio original carregava mais anexos
-   * que o limite do servidor. Reenviar (truncado ou não) produziria um
-   * payload diferente sob a mesma identidade — então o retry é PROIBIDO e a
-   * UI reidrata como failed SEM retry, como na âncora legada.
-   */
-  overLimit?: boolean;
 }>;
 
 export function createChatMessageId(): string {
@@ -999,17 +967,13 @@ export function createChatMessageId(): string {
 
 export function composeChatSend(
   content: string,
-  opts?: {
-    attachments?: Array<OutgoingAttachment>;
-    messageId?: string;
-  },
+  opts?: { messageId?: string },
 ): PendingChatSend {
   const messageId = opts?.messageId && opts.messageId.trim() ? opts.messageId.trim() : createChatMessageId();
   return {
     messageId,
     content,
     createdAt: new Date().toISOString(),
-    ...(opts?.attachments ? { attachments: opts.attachments } : {}),
   };
 }
 
@@ -1053,34 +1017,6 @@ const pendingSendKey = (workspaceId: string, actorId?: string | null): string =>
  * identidade (`intentionId`).
  */
 const CHAT_SEND_ANCHOR_VERSION = 1;
-const ANCHOR_ATTACHMENT_TYPES: ReadonlySet<string> = new Set(["image", "pdf", "audio"]);
-/**
- * R3 FIX 3: limite de anexos por envio — o MESMO número do servidor
- * (`MAX_CHAT_ATTACHMENTS = 10` em `apps/agent/src/finance-chat-agent.ts`,
- * que responde 413 `agent.payload_too_large` acima disso). A âncora e a UI
- * usam este número; nenhum teto próprio/inventado no cliente.
- */
-export const CHAT_SEND_ATTACHMENT_LIMIT = 10;
-
-function sanitizeAnchorAttachment(value: unknown): OutgoingAttachment | null {
-  if (!value || typeof value !== "object") return null;
-  const item = value as Record<string, unknown>;
-  if (typeof item.type !== "string" || !ANCHOR_ATTACHMENT_TYPES.has(item.type)) return null;
-  if (typeof item.name !== "string" || item.name.length === 0 || item.name.length > 256) return null;
-  if (
-    item.ref !== undefined &&
-    (typeof item.ref !== "string" || item.ref.length === 0 || item.ref.length > 512)
-  ) {
-    return null;
-  }
-  return {
-    type: item.type,
-    url: "",
-    name: item.name,
-    ...(typeof item.ref === "string" ? { ref: item.ref } : {}),
-  };
-}
-
 /**
  * Persists the in-flight send record (messageId + content + attachment refs —
  * never secrets, never local blob URLs) so a page reload restores the same
@@ -1088,18 +1024,6 @@ function sanitizeAnchorAttachment(value: unknown): OutgoingAttachment | null {
  */
 export function savePendingChatSend(workspaceId: string, send: PendingChatSend, actorId?: string | null): void {
   try {
-    const raw = Array.isArray(send.attachments) ? send.attachments : [];
-    // R3 FIX 3: NUNCA truncar. Um envio acima do limite persiste marcado
-    // `overLimit` (sem retry) — os 10 primeiros sob a mesma identidade seriam
-    // um payload DIFERENTE do original (o 11º levaria 413 no servidor).
-    const overLimit = send.overLimit === true || raw.length > CHAT_SEND_ATTACHMENT_LIMIT;
-    const attachments = raw.map((a) => ({
-      type: a.type,
-      name: a.name,
-      ...(typeof a.ref === "string" && a.ref ? { ref: a.ref } : {}),
-    }));
-    // P3: only the strict expense intent is durable; a malformed value is
-    // dropped here (never persisted, never forwarded).
     const proposal = send.proposal ? sanitizeProposalIntent(send.proposal) : undefined;
     sessionStorage.setItem(
       pendingSendKey(workspaceId, actorId),
@@ -1108,9 +1032,7 @@ export function savePendingChatSend(workspaceId: string, send: PendingChatSend, 
         messageId: send.messageId,
         content: send.content,
         createdAt: send.createdAt,
-        attachments,
         ...(proposal ? { proposal } : {}),
-        ...(overLimit ? { overLimit: true } : {}),
       }),
     );
   } catch {
@@ -1135,7 +1057,6 @@ export function loadPendingChatSend(workspaceId: string, actorId?: string | null
       anchorVersion?: unknown;
       attachments?: unknown;
       proposal?: unknown;
-      overLimit?: unknown;
     };
     if (typeof parsed.messageId !== "string" || !parsed.messageId || typeof parsed.content !== "string") return null;
     const base = {
@@ -1147,27 +1068,13 @@ export function loadPendingChatSend(workspaceId: string, actorId?: string | null
     // dropped (no broker call), never partially rehydrated.
     const proposal = sanitizeProposalIntent(parsed.proposal);
     const withProposal = proposal ? { proposal } : {};
-    // Formato legado (gravado antes do FIX 1): sem versão nem anexos — o
-    // envio original podia ter anexos, então volta marcado como legado (sem
-    // retry; ver `legacyAnchor`). Âncoras sem timestamp caem no epoch, o que
-    // preserva a regra conservadora anterior (igualdade textual suprime).
-    if (parsed.anchorVersion !== CHAT_SEND_ANCHOR_VERSION || !Array.isArray(parsed.attachments)) {
+    if (
+      parsed.anchorVersion !== CHAT_SEND_ANCHOR_VERSION ||
+      Object.prototype.hasOwnProperty.call(parsed, "attachments")
+    ) {
       return { ...base, ...withProposal, legacyAnchor: true };
     }
-    // R3 FIX 3: âncora acima do limite — nunca retryable. Defesa em
-    // profundidade dupla: a flag gravada pelo save novo OU a contagem real
-    // (âncora artesanal/antiga com 11 itens vira non-retryable aqui).
-    if (parsed.overLimit === true || parsed.attachments.length > CHAT_SEND_ATTACHMENT_LIMIT) {
-      return { ...base, ...withProposal, overLimit: true };
-    }
-    const attachments: OutgoingAttachment[] = [];
-    for (const item of parsed.attachments) {
-      const clean = sanitizeAnchorAttachment(item);
-      // Anexo corrompido = payload não mais fiel → trata como legado (sem retry).
-      if (!clean) return { ...base, ...withProposal, legacyAnchor: true };
-      attachments.push(clean);
-    }
-    return { ...base, ...withProposal, attachments };
+    return { ...base, ...withProposal };
   } catch {
     return null;
   }
@@ -1187,22 +1094,7 @@ export function loadPendingChatSend(workspaceId: string, actorId?: string | null
  * marcador no meio (ex: "O que significa [anexo nota.jpg]?") NÃO é evidência
  * de anexo: fail-closed, mantém o failed+retry.
  */
-const ATTACHMENT_HISTORY_MARKERS: readonly string[] = [
-  "[anexo ",
-  "[transcrição do anexo de áudio",
-  "[dados extraídos do anexo de imagem",
-  "[texto extraído do anexo em PDF",
-];
-
-type HistoryItemForSupersede = Pick<AgentMessage, "isOwn" | "content" | "createdAt" | "attachments" | "intentionId">;
-
-function historyItemCarriesAttachment(item: HistoryItemForSupersede): boolean {
-  if (Array.isArray(item.attachments) && item.attachments.length > 0) return true;
-  return (
-    typeof item.content === "string" &&
-    ATTACHMENT_HISTORY_MARKERS.some((marker) => item.content.startsWith(marker))
-  );
-}
+type HistoryItemForSupersede = Pick<AgentMessage, "isOwn" | "content" | "createdAt" | "intentionId">;
 
 /**
  * FIX-169-170-R3 (MEDIUM): o item carrega identidade conhecida (intentionId
@@ -1210,15 +1102,6 @@ function historyItemCarriesAttachment(item: HistoryItemForSupersede): boolean {
  * OS DOIS lados são conhecidos: item legado sem intentionId e âncora sem
  * identidade seguem o fallback legado (conteúdo+timestamp) inalterado.
  */
-function hasDivergingIdentity(item: HistoryItemForSupersede, anchorIdentity: string | undefined): boolean {
-  return (
-    anchorIdentity !== undefined &&
-    typeof item.intentionId === "string" &&
-    item.intentionId.length > 0 &&
-    item.intentionId !== anchorIdentity
-  );
-}
-
 /**
  * FIX-melhorias item 3: a resposta do turno convergiu quando o lote
  * autoritativo já traz a resposta DESTE turno — item do assistente com o
@@ -1276,79 +1159,26 @@ export function isTurnAnswerConvergedByIdentity(
  * usuário. Sem identidade em jogo, a regra legada abaixo vale inalterada.
  */
 export function isAnchorSupersededByHistory(
-  anchor: Pick<PendingChatSend, "content" | "createdAt" | "attachments"> & Partial<Pick<PendingChatSend, "messageId">> & { intentionId?: string },
+  anchor: Pick<PendingChatSend, "content" | "createdAt"> & Partial<Pick<PendingChatSend, "messageId">> & { intentionId?: string },
   history: ReadonlyArray<HistoryItemForSupersede>,
 ): boolean {
-  const anchorIdentity =
-    typeof anchor.intentionId === "string" && anchor.intentionId
-      ? anchor.intentionId
-      : typeof anchor.messageId === "string" && anchor.messageId
-        ? anchor.messageId
-        : undefined;
-  if (anchorIdentity !== undefined) {
-    for (const item of history) {
-      if (!item.isOwn) continue;
-      if (typeof item.intentionId === "string" && item.intentionId && item.intentionId === anchorIdentity) return true;
-    }
-  }
-  const anchorAttachments = Array.isArray(anchor.attachments) ? anchor.attachments : [];
-  if (anchorAttachments.length > 0) {
-    const anchorTime = Date.parse(anchor.createdAt);
-    if (Number.isNaN(anchorTime)) return false;
-    for (const item of history) {
-      if (!item.isOwn) continue;
-      // FIX-169-170-R3 (MEDIUM): identidade conhecida e DIFERENTE da âncora
-      // prova outro envio — nunca reconcilia pelo fallback marcador+timestamp.
-      if (hasDivergingIdentity(item, anchorIdentity)) continue;
-      const itemTime = typeof item.createdAt === "string" ? Date.parse(item.createdAt) : NaN;
-      if (Number.isNaN(itemTime) || itemTime < anchorTime) continue;
-      if (historyItemCarriesAttachment(item)) return true;
-    }
-    return false;
-  }
+  const identity = anchor.intentionId || anchor.messageId;
+  if (identity && history.some((item) => item.isOwn && item.intentionId === identity)) return true;
   const anchorTime = Date.parse(anchor.createdAt);
-  for (const item of history) {
-    if (!item.isOwn || item.content !== anchor.content) continue;
-    // FIX-169-170-R3 (MEDIUM): mesmo texto + ts posterior com intentionId
-    // DIFERENTE é outro envio (send-B), não a persistência da âncora (send-A).
-    if (hasDivergingIdentity(item, anchorIdentity)) continue;
+  return history.some((item) => {
+    if (!item.isOwn || item.content !== anchor.content) return false;
+    if (identity && item.intentionId && item.intentionId !== identity) return false;
     if (Number.isNaN(anchorTime)) return true;
     const itemTime = typeof item.createdAt === "string" ? Date.parse(item.createdAt) : NaN;
-    if (Number.isNaN(itemTime)) return true;
-    if (itemTime >= anchorTime) return true;
-  }
-  return false;
+    return Number.isNaN(itemTime) || itemTime >= anchorTime;
+  });
 }
 
-/**
- * R3 FIX 1 (HIGH): decisão de retry FORA do updater de reconciliação — pura
- * e testável. Com draft armazenado, reusa (mesma identidade, mesmo payload).
- * Sem draft e com qualquer resíduo de anexo (no snapshot da âncora ou no
- * próprio balão), RECUSA (`null`): o payload fiel se perdeu e reenviar sem
- * os anexos mudaria o envio sob a mesma identidade (`intentionId`). Sem
- * draft e texto puro, recompõe o mesmo messageId e conteúdo.
- */
-export type RetrySendResult =
+export function resolveRetrySend(input: { messageId: string; failed: { content: string }; stored?: PendingChatSend }):
   | { ok: true; send: PendingChatSend; draft?: PendingChatSend }
-  | { ok: false; reason: "attachments" | "no_draft" };
-
-export function resolveRetrySend(input: {
-  messageId: string;
-  failed: {
-    content: string;
-    attachments?: ReadonlyArray<{ type: string; url?: string; name?: string }>;
-  };
-  stored?: PendingChatSend;
-  snapshotAttachments?: ReadonlyArray<OutgoingAttachment>;
-}): RetrySendResult {
+  | { ok: false; reason: "no_draft" } {
   if (input.stored) return { ok: true, send: input.stored, draft: input.stored };
-  const snapshotHas =
-    Array.isArray(input.snapshotAttachments) && input.snapshotAttachments.length > 0;
-  const balloonHas = Array.isArray(input.failed.attachments) && input.failed.attachments.length > 0;
-  if (snapshotHas || balloonHas) return { ok: false, reason: "attachments" };
-  if (!input.failed.content || !input.failed.content.trim()) {
-    return { ok: false, reason: "no_draft" };
-  }
+  if (!input.failed.content.trim()) return { ok: false, reason: "no_draft" };
   const send = composeChatSend(input.failed.content, { messageId: input.messageId });
   return { ok: true, send, draft: send };
 }
@@ -1473,10 +1303,8 @@ async function agentAuthHeaders(workspaceId: string, forceFresh = false, url?: s
   // the first B contact needs it before any P2 response confirms the runtime.
   if (typeof url === "string" && url.startsWith("/")) {
     try {
-      if (getTedRuntimeView(workspaceId) !== "agent") {
-        const device = getActiveDeviceToken();
-        if (device) headers["x-device-token"] = device;
-      }
+      const device = getActiveDeviceToken();
+      if (device) headers["x-device-token"] = device;
     } catch {
       // Unreadable store/view: omit the header (gateway fails closed server-side).
     }
@@ -1499,7 +1327,7 @@ async function agentAuthHeaders(workspaceId: string, forceFresh = false, url?: s
 function captureTedRuntime(workspaceId: string, url: string, response: Response): void {
   if (typeof url !== "string" || !url.startsWith("/")) return;
   try {
-    noteTedRuntimeView(workspaceId, response.headers?.get("x-ted-runtime"));
+    
   } catch {
     // View bookkeeping never breaks the turn.
   }
@@ -1552,76 +1380,10 @@ async function fetchWithAgentAuth(workspaceId: string, url: string, init: Reques
  * A13 — attachment upload result. The Agent answers with an OPAQUE server-side
  * reference; there is no public URL and no base64 in this shape.
  */
-export const uploadedAttachmentSchema = z.object({
-  ref: z.string().regex(/^att_[A-Za-z0-9_-]{16,64}$/),
-  kind: z.enum(["image", "pdf", "audio"]),
-  name: z.string(),
-  size: z.number().int().nonnegative(),
-});
-
-export type UploadedAttachment = z.infer<typeof uploadedAttachmentSchema>;
-
-export type AttachmentUploadKind = "image" | "pdf" | "audio";
-
-/**
- * A13 — REAL upload against the Agent's `POST /rpc/attachments`.
- *
- * The bytes go out as a raw binary body with the DECLARED kind/name in headers;
- * the server re-derives the real media type from magic bytes, so a lying
- * client is rejected there. The answer is validated: a payload without a
- * well-formed `ref` throws instead of inventing a reference (fail-closed).
- * Failures carry the typed `code` so the UI can render an explicit state.
- */
-export async function uploadAttachment(
-  workspaceId: string,
-  input: { kind: AttachmentUploadKind; file: File | Blob; name?: string },
-): Promise<UploadedAttachment> {
-  const baseUrl = agentBaseUrl();
-  const name = input.name ?? (input.file instanceof File ? input.file.name : "anexo");
-  const response = await fetchWithAgentAuth(
-    workspaceId,
-    `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/attachments`,
-    {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "content-type": input.file.type || "application/octet-stream",
-        "X-Workspace-Id": workspaceId,
-        "x-ted-attachment-kind": input.kind,
-        "x-ted-attachment-name": name,
-      },
-      body: await input.file.arrayBuffer(),
-    },
-  );
-  if (!response.ok) {
-    let errorMsg = "Não foi possível enviar o anexo.";
-    let errorCode: string | undefined;
-    try {
-      const fields = readAgentErrorFields(await response.json());
-      if (fields.message) errorMsg = fields.message;
-      if (fields.code) errorCode = fields.code;
-    } catch {
-      /* keep the default message */
-    }
-    const err = new Error(errorMsg) as Error & { code?: string; status?: number };
-    err.status = response.status;
-    err.code = errorCode ?? "attachment_upload_failed";
-    throw err;
-  }
-  const parsed = uploadedAttachmentSchema.safeParse(await response.json());
-  if (!parsed.success) {
-    // Never fabricate a reference the Agent did not issue.
-    const err = new Error("O anexo não pôde ser identificado.") as Error & { code?: string };
-    err.code = "attachment_upload_invalid_response";
-    throw err;
-  }
-  return parsed.data;
-}
-
 export async function sendAgentMessage(
   workspaceId: string,
   content: string,
-  opts?: { attachments?: Array<OutgoingAttachment>; messageId?: string; signal?: AbortSignal },
+  opts?: { messageId?: string; signal?: AbortSignal },
 ): Promise<AgentTurn> {
   const baseUrl = agentBaseUrl();
   // SPEC §7.7: the send identity is fixed ONCE here; retries pass the same
@@ -1634,7 +1396,6 @@ export async function sendAgentMessage(
     messageId,
     content,
     createdAt: anchorCreatedAt,
-    ...(opts?.attachments ? { attachments: opts.attachments } : {}),
   });
   const requestUrl = `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/chat`;
   const response = await fetchWithAgentAuth(
@@ -1647,7 +1408,7 @@ export async function sendAgentMessage(
         "content-type": "application/json",
         "X-Workspace-Id": workspaceId,
       },
-      body: JSON.stringify({ text: content, attachments: opts?.attachments, intentionId: messageId }),
+      body: JSON.stringify({ text: content, intentionId: messageId }),
       ...(opts?.signal ? { signal: opts.signal } : {}),
     },
   );
@@ -1693,8 +1454,7 @@ export async function sendAgentMessage(
         messageId,
         content,
         createdAt: anchorCreatedAt,
-        ...(opts?.attachments ? { attachments: opts.attachments } : {}),
-        proposal,
+            proposal,
       });
     } else {
       clearPendingChatSend(workspaceId);
@@ -2084,7 +1844,7 @@ export async function renewAgentSession(
   // P2 — a renewal starts a fresh conversation lifecycle: drop the previous
   // runtime belief, then capture what THIS renewal confirms (B/A0-P2 header,
   // or unknown on the legacy path). No body/DTO/session id crosses.
-  clearTedRuntimeViews(workspaceId);
+  
   captureTedRuntime(workspaceId, requestUrl, response);
   clearPendingChatSend(workspaceId);
   return renewal;

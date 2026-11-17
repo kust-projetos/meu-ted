@@ -3,7 +3,6 @@ import { render, screen, waitFor } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import { TedChat } from "../TedChat";
 import * as agentClient from "@/lib/api/agent-client";
-import { clearTedRuntimeViews, noteTedRuntimeView } from "@/lib/api/ted-runtime-view";
 
 vi.mock("@/lib/auth/workspace-context", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth/workspace-context")>();
@@ -43,7 +42,6 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
 describe("TedChat P2 — cancel affordance in the composer submit slot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    clearTedRuntimeViews();
     sessionStorage.clear();
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([]);
     vi.mocked(agentClient.renewAgentSession).mockResolvedValue({
@@ -55,14 +53,14 @@ describe("TedChat P2 — cancel affordance in the composer submit slot", () => {
     });
   });
 
-  it("A0/unknown turn shows no cancel and sends without signal (no effective cancel)", async () => {
+  it("gateway-only turn always offers cancel and aborts the in-flight send", async () => {
     const user = userEvent.setup();
-    // No server-confirmed B runtime: the view stays unknown (A0 default).
-    let resolveSend!: (turn: { turnId: string; status: string; output: string }) => void;
     vi.mocked(agentClient.sendAgentMessage).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveSend = resolve as (turn: { turnId: string; status: string; output: string }) => void;
+      async (_ws, _text, opts) =>
+        await new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("The operation was aborted.", "AbortError")),
+          );
         }),
     );
 
@@ -73,29 +71,15 @@ describe("TedChat P2 — cancel affordance in the composer submit slot", () => {
     await user.click(screen.getByRole("button", { name: /enviar mensagem/i }));
     await waitFor(() => expect(agentClient.sendAgentMessage).toHaveBeenCalledTimes(1));
 
-    // While the A0 turn is active the submit slot offers NO cancel — the
-    // disabled submit stays, and the send carries no abort wiring.
-    expect(screen.queryByRole("button", { name: /cancelar envio/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /enviar mensagem/i })).toBeDisabled();
-    const sentOpts = vi.mocked(agentClient.sendAgentMessage).mock.calls[0]?.[2] as
-      | { signal?: AbortSignal }
-      | undefined;
-    expect(sentOpts?.signal).toBeUndefined();
-
-    resolveSend({ turnId: "t-a0", status: "completed", output: "resposta a0" });
-    expect(await screen.findByText("resposta a0")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /cancelar envio/i })).not.toBeInTheDocument();
+    const signal = vi.mocked(agentClient.sendAgentMessage).mock.calls[0]?.[2]?.signal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    await user.click(await screen.findByRole("button", { name: /cancelar envio/i }));
+    expect(signal?.aborted).toBe(true);
+    expect(await screen.findByRole("button", { name: /tentar novamente/i })).toBeInTheDocument();
   });
 
   it("cancel aborts the in-flight turn, keeps one message, and retry reuses the same identity", async () => {
     const user = userEvent.setup();
-    // Server-confirmed B runtime for this conversation: the B history
-    // response carries x-ted-runtime, captured the way the real
-    // fetchAgentHistory does (TedChat never invents it).
-    vi.mocked(agentClient.fetchAgentHistory).mockImplementation(async () => {
-      noteTedRuntimeView("ws-1", "opencode");
-      return [];
-    });
     const seenMessageIds: Array<string | undefined> = [];
     let sendCalls = 0;
     vi.mocked(agentClient.sendAgentMessage).mockImplementation(

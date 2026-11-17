@@ -11,6 +11,10 @@ resolvidos sempre server-side; nunca confiar em claim do cliente.
   ADR-031, o chamador delegado pode ser o Agent ou o runtime OpenCode B
   via `/auth/agent/autoexec-token`; atestação nunca vai ao browser,
   workspace/ator/device sempre server-side e API como autoridade.
+- O gateway OpenCode usa modelo pinado; a API mantém o mint
+  `POST /auth/agent-token`, tokens delegated/Pending V2 e depósito de
+  atestação, mas não hospeda relay/configuração LLM nem consumo one-shot
+  de token de conexão.
 - Processo web é verify-only para migrations. Job explícito em
   `docs/runbooks/api-migration-v2.md`; sem migration/restart
   de produção a partir daqui.

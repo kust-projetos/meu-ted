@@ -7,24 +7,20 @@ test("docs-only diff runs only documentation gates", () => {
   const areas = classifyFiles(["docs/reports/2026-11-07-simplificacao-gates.md"]);
   assert.equal(areas.docs, true);
   assert.equal(areas.api, false);
-  assert.equal(areas.agent, false);
+  assert.equal(areas["ted-runtime"], false);
   assert.deepEqual(selectCommands(areas), ["pnpm docs:lint"]);
 });
 
-test("agent diff runs architecture, capability and write-policy gates", () => {
-  const areas = classifyFiles(["apps/agent/src/finance-chat-agent.ts"]);
-  assert.equal(areas.agent, true);
-  assert.deepEqual(selectCommands(areas), [
-    "pnpm architecture:check",
-    "pnpm capabilities:check",
-    "pnpm write-policy:check",
-  ]);
+test("ted-runtime diff runs the retained write-policy gate", () => {
+  const areas = classifyFiles(["apps/ted-runtime/src/live-model.json"]);
+  assert.equal(areas["ted-runtime"], true);
+  assert.deepEqual(selectCommands(areas), ["pnpm write-policy:check"]);
 });
 
-test("ted-runtime diff runs the agent gates", () => {
-  const areas = classifyFiles(["apps/ted-runtime/src/live-model.json"]);
-  assert.equal(areas.agent, true);
-  assert.equal(selectCommands(areas).includes("pnpm capabilities:check"), true);
+test("retired apps/agent paths do not select a workspace gate", () => {
+  const areas = classifyFiles(["apps/agent/src/finance-chat-agent.ts"]);
+  assert.equal(areas["ted-runtime"], false);
+  assert.deepEqual(selectCommands(areas), []);
 });
 
 test("workflow diff runs pin and YAML gates", () => {
@@ -44,7 +40,7 @@ test("unrelated diff selects no gate", () => {
   assert.deepEqual(selectCommands(areas), []);
 });
 
-test("API route and PWA write-surface changes select the agent policy gates", () => {
+test("API route and PWA write-surface changes select the write-policy gate", () => {
   for (const file of ["apps/api/src/routes/accounts.ts", "apps/pwa/src/lib/state/commands.ts", "docs/architecture/write-mutator-policy.md"]) {
     assert.ok(selectCommands(classifyFiles([file])).includes("pnpm write-policy:check"), file);
   }

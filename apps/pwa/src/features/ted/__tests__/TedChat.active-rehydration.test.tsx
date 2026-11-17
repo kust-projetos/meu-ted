@@ -76,8 +76,8 @@ describe("FIX-P1 RED: TedChat reload from active list", () => {
     // History carries NO pendingOperation (post-fix contract): the card must
     // still appear, sourced from the active list.
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
-      { id: "msg-1", actorId: "user-1", role: "user", content: "gastei 850 no mercado", isOwn: true, createdAt: undefined, attachments: undefined },
-      { id: "msg-2", actorId: "ted", role: "assistant", content: "Proposta registrada. Confirma?", isOwn: false, createdAt: undefined, attachments: undefined },
+      { id: "msg-1", actorId: "user-1", role: "user", content: "gastei 850 no mercado", isOwn: true, createdAt: undefined },
+      { id: "msg-2", actorId: "ted", role: "assistant", content: "Proposta registrada. Confirma?", isOwn: false, createdAt: undefined },
     ]);
     vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([
       {
@@ -116,7 +116,7 @@ describe("FIX-P1 RED: TedChat reload from active list", () => {
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
       {
         id: "msg-2", actorId: "ted", role: "assistant", content: "Proposta.", isOwn: false,
-        createdAt: undefined, attachments: undefined,
+        createdAt: undefined,
         pendingOperation: {
           id: "pending-v2-1", status: "proposed", operation: "transactions.expense.create",
           summary: "Mercado", presentation: canonicalPresentation,
@@ -134,7 +134,7 @@ describe("FIX-P1 RED: TedChat reload from active list", () => {
 
   it("active list failure on first load is honest: no card, error signal, history intact", async () => {
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
-      { id: "msg-1", actorId: "user-1", role: "user", content: "Meu saldo?", isOwn: true, createdAt: undefined, attachments: undefined },
+      { id: "msg-1", actorId: "user-1", role: "user", content: "Meu saldo?", isOwn: true, createdAt: undefined },
     ]);
     vi.mocked(agentClient.fetchActivePendingOperations).mockRejectedValue(new Error("down"));
 

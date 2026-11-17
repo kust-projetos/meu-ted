@@ -13,6 +13,7 @@ import {
   ToolError,
 } from '../src/tool-defs.mjs';
 import { PRODUCT_TOOL_NAMES, P3_READ_TOOL_NAMES, P3_WRITE_TOOL_NAMES } from '../src/plugin.mjs';
+import { correctionActionRegistry } from '../src/correction-actions.mjs';
 
 const host = Object.freeze({
   label: 'a',
@@ -56,6 +57,16 @@ describe('ted-runtime tool catalogue (read-only + proposal intent)', () => {
       () => executors.list_accounts({}, host, {}),
       /stable intentionId is required/,
     );
+  });
+
+  it('propose_undo_last_action is P3-write gated and only records an intent', async () => {
+    assert.ok(P3_WRITE_TOOL_NAMES.includes('propose_undo_last_action'));
+    const executors=createToolExecutors(stubTransport({}),{correctionActions:correctionActionRegistry});
+    const result=await executors.propose_undo_last_action({}, {...host,conversationId:'conv-a'}, {intentionId:'msg-undo',sessionID:'runtime-undo'});
+    assert.deepEqual(result,{status:'proposed'});
+    assert.deepEqual(correctionActionRegistry.take('runtime-undo'),{
+      action:'undo',intentionId:'msg-undo',conversationId:'conv-a',workspaceId:host.household,actorId:host.actorId,deviceId:host.deviceId,
+    });
   });
 
   it('refuses hostless execution fail-closed', async () => {

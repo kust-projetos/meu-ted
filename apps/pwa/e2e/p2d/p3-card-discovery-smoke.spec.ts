@@ -101,10 +101,9 @@ test.describe("p3.8 card discovery smoke (real provider, opt-in only)", () => {
     let lastStats: Stats = {};
 
     try {
-      const health = await ctlGet<{ ok: boolean; probeRunning: boolean; agentRunning: boolean }>("/health");
+      const health = await ctlGet<{ ok: boolean; probeRunning: boolean }>("/health");
       expect(health.ok).toBe(true);
       expect(health.probeRunning).toBe(true);
-      expect(health.agentRunning).toBe(true);
 
       const baseline = await ctlStats();
       expect(baseline.mode).toBe("live-real");

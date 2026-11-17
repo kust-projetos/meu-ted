@@ -3,9 +3,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Test lives at apps/pwa/src/features/ted/__tests__/ → TedChat is one level up,
-// the agent source is reached through the repo root (five levels up).
+// runtime source is reached through the repo root.
 const tedChatPath = join(__dirname, "..", "TedChat.tsx");
-const financeChatPath = join(__dirname, "..", "..", "..", "..", "..", "agent", "src", "finance-chat-agent.ts");
+const conversationsTestPath = join(__dirname, "..", "..", "..", "..", "..", "ted-runtime", "tests", "conversations.test.mjs");
 
 describe("TedChat – isolamento de histórico por workspace", () => {
   it("limpa histórico ao trocar de workspace (prevWorkspaceIdRef e useEffect)", () => {
@@ -28,18 +28,20 @@ describe("TedChat – isolamento de histórico por workspace", () => {
     expect(content).toMatch(/useCallback/);
   });
 
-  it("FinanceChatAgent filtra histórico por workspaceId para isolamento server-side", () => {
-    const content = readFileSync(financeChatPath, "utf8");
-    expect(content).toContain("allMessages.filter");
-    expect(content).toContain("workspaceId");
-    expect(content).toMatch(/x-agent-workspace/);
-    expect(content).toMatch(/Isolamento por workspace/);
+  it("runtime restringe sessões a workspace e ator autorizados", () => {
+    const content = readFileSync(conversationsTestPath, "utf8");
+    expect(content).toContain("workspace default: same-workspace member reads, other workspace refused");
+    expect(content).toContain("private: owner only");
+    expect(content).toContain("another workspace");
+    expect(content).toContain("actor-A");
+    expect(content).toContain("actor-B");
   });
 
-  it("não deve vazar mensagens entre workspaces via DO compartilhado", () => {
-    const content = readFileSync(financeChatPath, "utf8");
-    // Verifica que histório filtra por metadata.workspaceId
-    expect(content).toMatch(/metadata.*workspaceId/);
-    expect(content).toMatch(/workspaceId/);
+  it("runtime cobre autorização de identidade no acesso a sessão", () => {
+    const content = readFileSync(conversationsTestPath, "utf8");
+    expect(content).toContain("canAccessConversation");
+    expect(content).toContain("ownerActor");
+    expect(content).toContain("deviceId");
+    expect(content).toContain("forbidden");
   });
 });

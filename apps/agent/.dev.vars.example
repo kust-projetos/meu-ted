@@ -1,9 +1,0 @@
-# Shared with the API. Use a different random value per environment.
-AGENT_DELEGATION_SECRET=replace-with-at-least-32-random-characters
-# Browser (PWA) origin trusted by CORS. Dev/test placeholder below;
-# production MUST set the real host (deploy --var PWA_ORIGIN:<host> or the
-# Cloudflare dashboard — value from the PWA_PROD_URL repo variable).
-PWA_ORIGIN=https://pwa.example
-# Optional safety tuning; defaults are 10000 tokens/day and 20 requests/minute per actor.
-AGENT_DAILY_TOKEN_BUDGET=10000
-AGENT_RATE_LIMIT_MAX_REQUESTS=20

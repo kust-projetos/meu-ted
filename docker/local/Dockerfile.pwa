@@ -7,7 +7,6 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY packages/llm-contracts/package.json packages/llm-contracts/package.json
 COPY apps/pwa/package.json apps/pwa/package.json
 COPY apps/api/package.json apps/api/package.json
-COPY apps/agent/package.json apps/agent/package.json
 RUN pnpm install --frozen-lockfile
 COPY packages/llm-contracts packages/llm-contracts
 COPY apps/pwa apps/pwa

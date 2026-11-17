@@ -7,19 +7,16 @@ import { createInMemoryStores } from '../../src/writes/in-memory.js';
 import { createInMemoryReadModelStoreFromState } from '../../src/read-models/store.js';
 import { createInMemoryDeviceTokenStore } from '../../src/auth/device-token.js';
 import { createInMemoryIdempotencyStore } from '../../src/writes/idempotency.js';
-import { createInMemoryAgentReplayStore, type AgentReplayStore } from '../../src/auth/agent-connection-token-replay.js';
-import { verifyAgentConnectionToken } from '../../src/auth/agent-connection-token.js';
+import { Buffer } from 'node:buffer';
 
 describe('Agent Auth Routes (Task 3)', () => {
   let app: FastifyInstance;
   let auth: ReturnType<typeof createBetterAuth>;
-  let replayStore: AgentReplayStore;
 
   const USER_EMAIL = 'member@example.com';
   const HOUSEHOLD_A = 'household-uuid-a';
   const HOUSEHOLD_B = 'household-uuid-b';
   const CONNECTION_SECRET = 'test-agent-connection-secret-at-least-32-chars!';
-  const SERVICE_TOKEN = 'test-agent-service-token-at-least-32-chars!';
 
   let memberCookie = '';
   let userId = '';
@@ -57,7 +54,6 @@ describe('Agent Auth Routes (Task 3)', () => {
     const { state, writes } = createInMemoryStores();
     const store = createInMemoryReadModelStoreFromState(state);
     tokenStore = createInMemoryDeviceTokenStore();
-    replayStore = createInMemoryAgentReplayStore();
 
     const workspaceAccess = {
       resolve: async (uId: string, hId: string) => {
@@ -82,8 +78,6 @@ describe('Agent Auth Routes (Task 3)', () => {
       auth,
       workspaceAccess,
       agentConnectionSecret: CONNECTION_SECRET,
-      agentAuthServiceToken: SERVICE_TOKEN,
-      agentReplayStore: replayStore,
     });
     await app.ready();
   });
@@ -152,121 +146,10 @@ describe('Agent Auth Routes (Task 3)', () => {
       expect(data.token).toBeTypeOf('string');
 
       // Verify claims directly
-      const claims = await verifyAgentConnectionToken(data.token, CONNECTION_SECRET, HOUSEHOLD_A);
+      const claims = JSON.parse(Buffer.from(data.token.split('.')[1], 'base64url').toString('utf8'));
       expect(claims.sub).toBe(userId);
       expect(claims.workspace).toBe(HOUSEHOLD_A);
       expect(claims.role).toBe('owner');
-    });
-  });
-
-  describe('Anti-Replay Consumption (POST /internal/agent/consume-token & POST /auth/agent-token/consume)', () => {
-    it('returns 401 when service token is missing or forged', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/internal/agent/consume-token',
-        headers: { 'x-agent-service-token': 'wrong-token' },
-        payload: {
-          jti: 'jti-123',
-          workspaceId: HOUSEHOLD_A,
-          actorId: userId,
-        },
-      });
-      expect(res.statusCode).toBe(401);
-      expect(res.json()).toMatchObject({ code: 'auth.invalid_service_token' });
-    });
-
-    it('successfully consumes valid token on first attempt', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/internal/agent/consume-token',
-        headers: { 'x-agent-service-token': SERVICE_TOKEN },
-        payload: {
-          jti: 'jti-unique-12345',
-          workspaceId: HOUSEHOLD_A,
-          actorId: userId,
-          connectionId: 'conn-1',
-          intentionId: 'intent-1',
-        },
-      });
-      expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ ok: true, consumed: true });
-    });
-
-    it('rejects second handshake with the same JTI (anti-replay 409 conflict)', async () => {
-      const payload = {
-        jti: 'jti-replay-test-67890',
-        workspaceId: HOUSEHOLD_A,
-        actorId: userId,
-      };
-
-      // 1. First consumption succeeds
-      const res1 = await app.inject({
-        method: 'POST',
-        url: '/internal/agent/consume-token',
-        headers: { 'x-agent-service-token': SERVICE_TOKEN },
-        payload,
-      });
-      expect(res1.statusCode).toBe(200);
-      expect(res1.json().consumed).toBe(true);
-
-      // 2. Second consumption with identical JTI must be rejected with 409
-      const res2 = await app.inject({
-        method: 'POST',
-        url: '/internal/agent/consume-token',
-        headers: { 'x-agent-service-token': SERVICE_TOKEN },
-        payload,
-      });
-      expect(res2.statusCode).toBe(409);
-      expect(res2.json()).toMatchObject({
-        ok: false,
-        code: 'agent.token_replayed',
-      });
-    });
-
-    it('rejects cross-workspace replay of the same token JTI', async () => {
-      const jti = 'jti-cross-ws-token';
-
-      // Burn in Workspace A
-      const res1 = await app.inject({
-        method: 'POST',
-        url: '/internal/agent/consume-token',
-        headers: { 'x-agent-service-token': SERVICE_TOKEN },
-        payload: { jti, workspaceId: HOUSEHOLD_A, actorId: userId },
-      });
-      expect(res1.statusCode).toBe(200);
-
-      // Attempt reuse in Workspace B (not a member): M-09 revocation wins
-      // with 403 — the token is dead either way, but revoked/non-member
-      // callers get the authorization code, not a replay code.
-      const res2 = await app.inject({
-        method: 'POST',
-        url: '/internal/agent/consume-token',
-        headers: { 'x-agent-service-token': SERVICE_TOKEN },
-        payload: { jti, workspaceId: HOUSEHOLD_B, actorId: userId },
-      });
-      expect(res2.statusCode).toBe(403);
-      expect(res2.json().code).toBe('auth.workspace_forbidden');
-    });
-
-    it('M-09: revoked membership is rejected at consumption WITHOUT burning the token', async () => {      const jti = 'jti-revoked-member';
-      // Non-member (revoked) attempt: 403, store untouched.
-      const denied = await app.inject({
-        method: 'POST',
-        url: '/internal/agent/consume-token',
-        headers: { 'x-agent-service-token': SERVICE_TOKEN },
-        payload: { jti, workspaceId: HOUSEHOLD_B, actorId: userId },
-      });
-      expect(denied.statusCode).toBe(403);
-      expect(denied.json()).toMatchObject({ code: 'auth.workspace_forbidden' });
-
-      // Unknown actor entirely: also 403.
-      const stranger = await app.inject({
-        method: 'POST',
-        url: '/internal/agent/consume-token',
-        headers: { 'x-agent-service-token': SERVICE_TOKEN },
-        payload: { jti: 'jti-stranger', workspaceId: HOUSEHOLD_A, actorId: 'ghost-user' },
-      });
-      expect(stranger.statusCode).toBe(403);
     });
   });
 
@@ -283,7 +166,7 @@ describe('Agent Auth Routes (Task 3)', () => {
         },
       });
       expect(res.statusCode).toBe(200);
-      const claims = await verifyAgentConnectionToken(res.json().token, CONNECTION_SECRET, HOUSEHOLD_A);
+      const claims = JSON.parse(Buffer.from(res.json().token.split('.')[1], 'base64url').toString('utf8'));
       // The bound device is the one resolved server-side (never a client claim).
       const expected = await tokenStore.resolve(deviceToken);
       expect(claims.deviceId).toBe(expected.deviceId);
@@ -314,7 +197,7 @@ describe('Agent Auth Routes (Task 3)', () => {
         },
       });
       expect(res.statusCode).toBe(200);
-      const claims = await verifyAgentConnectionToken(res.json().token, CONNECTION_SECRET, HOUSEHOLD_A);
+      const claims = JSON.parse(Buffer.from(res.json().token.split('.')[1], 'base64url').toString('utf8'));
       expect(claims.deviceId).toBeUndefined();
     });
   });

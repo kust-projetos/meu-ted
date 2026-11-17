@@ -7,7 +7,6 @@ import { createInMemoryStores } from '../../src/writes/in-memory.js';
 import { createInMemoryReadModelStoreFromState } from '../../src/read-models/store.js';
 import { createInMemoryDeviceTokenStore } from '../../src/auth/device-token.js';
 import { createInMemoryIdempotencyStore } from '../../src/writes/idempotency.js';
-import { createInMemoryAgentReplayStore } from '../../src/auth/agent-connection-token-replay.js';
 
 describe('Security: /internal/workspace-alias', () => {
   let app: FastifyInstance;
@@ -49,7 +48,6 @@ describe('Security: /internal/workspace-alias', () => {
       idempotency: createInMemoryIdempotencyStore(),
       auth,
       agentAuthServiceToken: SERVICE_TOKEN,
-      agentReplayStore: createInMemoryAgentReplayStore(),
       pool: mockPool as unknown as never,
     });
     await app.ready();

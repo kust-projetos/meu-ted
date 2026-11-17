@@ -7,30 +7,7 @@
 /** Production API origin (retired from the production CSP — see below). */
 export const PRODUCTION_API_ORIGIN = "https://api.synkroo.com.br";
 
-/**
- * Non-prod fallback Agent origin (DEBT2 allowlist migration). Reference
- * only (upstream target the PWA agent proxy forwards to in dev/test);
- * production MUST set PWA_AGENT_PROXY_ORIGIN (or AGENT_ORIGIN) — see
- * resolveAgentOrigin below. Kept exported under its historic name so existing
- * importers keep compiling.
- */
-export const PRODUCTION_AGENT_ORIGIN = "https://agent.example";
-
-export const FALLBACK_AGENT_ORIGIN = "https://agent.example";
-
-/**
- * Exact production hosts (DEBT2-CODER-ALLOWLISTS-FIX, security review HIGH:
- * shell-injection / open-proxy hardening). These literals are the pinned
- * allowlist for origin validation — every runtime origin (deploy repo
- * variables, worker bindings, proxy env) must match them exactly, or the
- * code fails closed. They are values being PINNED, not secrets; their
- * presence is an irreducible detector-like exception, allowlisted in
- * scripts/check-public-safety.mjs with reason and covered by the
- * edge-gate / route test suites (the safety gate: any host change breaks
- * those tests loudly before it can ship).
- */
 export const EXPECTED_PWA_ORIGIN = "https://pi-finance-pwa.walissonead.workers.dev";
-export const EXPECTED_AGENT_ORIGIN = "https://pi-finance-agent.walissonead.workers.dev";
 
 /**
  * Strict origin check shared by the PWA proxies and deploy validation.
@@ -67,18 +44,6 @@ export function isExpectedOrigin(value: string, expectedOrigin: string): boolean
 }
 
 /**
- * V4 T2.7 G1 — remaining external origins allowed by the production CSP.
- *
- * Contains exclusively the live-sync origin derived from
- * NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN (HTTPS and its WSS equivalent). Any other
- * external origin still requires an explicit per-origin capability entry.
- */
-const liveSyncOrigin = (process.env.NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN ?? "").trim();
-export const REMAINING_EXTERNAL_ORIGINS: readonly string[] = liveSyncOrigin
-  ? [liveSyncOrigin, liveSyncOrigin.replace(/^https:/, "wss:")]
-  : [];
-
-/**
  * Non-prod fallback PWA host (DEBT2 allowlist migration). Used as the
  * localhost-spoof target in dev/test and as the fallback when PWA_ORIGIN is
  * unset/malformed (see resolvePwaOrigin); production MUST set PWA_ORIGIN to
@@ -93,11 +58,6 @@ type EnvLike = {
   NODE_ENV?: string;
   ALLOW_LOCAL_ORIGIN?: string;
   PWA_ORIGIN?: string;
-  PWA_AGENT_PROXY_ORIGIN?: string;
-  AGENT_ORIGIN?: string;
-  TED_OPENCODE_RUNTIME_ENABLED?: string;
-  TED_OPENCODE_RUNTIME_KILL_SWITCH?: string;
-  TED_OPENCODE_WORKSPACES?: string;
   TED_OPENCODE_GATEWAY_ORIGIN?: string;
   TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS?: string;
 };
@@ -191,21 +151,6 @@ export function resolvePwaOrigin(env?: EnvLike): string {
  * ephemeral port); unlike isExpectedOrigin, which pins production HTTPS
  * without a port, this is a test-only/local-dev shape check.
  */
-function parseLoopbackAgentUpstream(value: string): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(value.trim());
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== "http:") return null;
-  if (parsed.username !== "" || parsed.password !== "") return null;
-  if (parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") return null;
-  if (parsed.pathname !== "" && parsed.pathname !== "/") return null;
-  if (parsed.search !== "" || parsed.hash !== "") return null;
-  return parsed.origin;
-}
-
 /**
  * Resolves the Agent upstream only when the runtime binding matches the
  * pinned production origin. This keeps the same-origin proxy from forwarding
@@ -218,36 +163,6 @@ function parseLoopbackAgentUpstream(value: string): string | null {
  * undefined NODE_ENV, missing flag, malformed/credentialed/path/external
  * target) falls through to the existing fail-closed path: placeholder
  * outside production, throw in production. Pinned HTTPS behavior unchanged.
- */
-export function resolveAgentOrigin(env?: AgentProxyEnv): string {
-  const override = env?.PWA_AGENT_PROXY_ORIGIN?.trim() || env?.AGENT_ORIGIN?.trim();
-  if (override) {
-    if (isExpectedOrigin(override, EXPECTED_AGENT_ORIGIN)) return EXPECTED_AGENT_ORIGIN;
-    const loopback = parseLoopbackAgentUpstream(override);
-    if (
-      loopback &&
-      (env?.NODE_ENV === "development" || env?.NODE_ENV === "test") &&
-      env?.ALLOW_LOCAL_ORIGIN === "1"
-    ) {
-      return loopback;
-    }
-    console.error("agent-proxy.invalid_upstream_origin");
-  } else if (env?.NODE_ENV !== "production") {
-    return FALLBACK_AGENT_ORIGIN;
-  }
-  if (env?.NODE_ENV === "production") {
-    throw new Error(
-      "FATAL: PWA_AGENT_PROXY_ORIGIN (or AGENT_ORIGIN) must match the pinned Agent origin in production; refusing to proxy to unsafe defaults.",
-    );
-  }
-  return FALLBACK_AGENT_ORIGIN;
-}
-
-/**
- * V4 T2.7 G3 — shared upstream-Origin decision used by both Next proxies.
- * The spoof to the production host (upstream trustedOrigins escape hatch)
- * happens ONLY when the bypass is enabled; otherwise the origin is
- * forwarded unchanged so the upstream allowlist decides (fail-closed).
  */
 export function resolveForwardOrigin(
   origin: string | null,
@@ -475,9 +390,8 @@ export const SECURITY_HEADERS: Record<string, string> = {
  * Camera and geolocation stay blocked in every configuration, and no
  * cross-origin value is ever emitted for the microphone directive.
  */
-export function buildPermissionsPolicy(micEnabled: boolean): string {
-  const microphone = micEnabled ? "microphone=(self)" : "microphone=()";
-  return `camera=(), ${microphone}, geolocation=()`;
+export function buildPermissionsPolicy(_micEnabled: boolean): string {
+  return "camera=(), microphone=(), geolocation=()";
 }
 
 /**
@@ -531,7 +445,7 @@ export function buildProductionEmissionHeaders(
  * - worker-src: same-origin service worker (Serwist)
  * - connect-src: 'self' ONLY in production (V4 T2.7 G1 — browser traffic
  *   flows through the same-origin proxies since T2.1; no external origin
- *   remains — see REMAINING_EXTERNAL_ORIGINS), plus local API origins in
+ *   remains), plus local API origins in
  *   development when gated
  * - default-src/object-src/form-action: hardened in production (V4 T2.7 G2);
  *   img-src/media-src keep blob:/data: so attachment previews
@@ -548,7 +462,6 @@ export function buildCspValue(nonce: string, allowUnsafeEval = false): string {
   ].join(" ");
   const connectSources = [
     "connect-src 'self'",
-    ...REMAINING_EXTERNAL_ORIGINS,
     ...(allowUnsafeEval
       ? ["http://localhost:3001", "http://127.0.0.1:3001"]
       : []),
@@ -570,122 +483,7 @@ export function buildCspValue(nonce: string, allowUnsafeEval = false): string {
   ].join("; ");
 }
 
-/**
- * P2 — OpenCode runtime pin (server-only selection, shared helpers).
- *
- * Cookie contract (owned by `apps/ted-runtime/src/conversations.mjs`, mirrored
- * here without importing runtime files — the proxy never trusts the browser
- * value, it only classifies it):
- * - name `ted-runtime-conversation`, HttpOnly, SameSite=Lax, scoped Path
- *   `/api/agent/agents/finance-chat-agent/<encoded-workspace>/rpc`, bounded
- *   Max-Age 30d, `Secure` only for HTTPS origins.
- * - exact sentinel `agent` = A0; `opencode.<opaque-uuid>` = B (the cookie
- *   NEVER carries the native runtimeSessionId).
- */
-export const TED_RUNTIME_CONVERSATION_COOKIE = "ted-runtime-conversation";
-export const TED_RUNTIME_A0_SENTINEL = "agent";
-export const TED_RUNTIME_B_PREFIX = "opencode.";
-export const TED_RUNTIME_COOKIE_MAX_AGE = 2592000;
-
-const TED_OPAQUE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export type TedRuntimePin =
-  | { pin: "a0" }
-  | { pin: "b"; conversationId: string }
-  | { pin: "none" }
-  | { pin: "invalid" };
-
-/**
- * Classifies the runtime pin from a raw Cookie header. Returns the pin only —
- * the `invalid` case carries no value (boolean marker) so callers cannot log
- * it by mistake. Pure, no env.
- */
-export function parseTedRuntimePin(cookieHeader: string | null | undefined): TedRuntimePin {
-  if (typeof cookieHeader !== "string" || cookieHeader.length === 0) return { pin: "none" };
-  const parts = cookieHeader.split(";");
-  let value: string | null = null;
-  for (const part of parts) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() !== TED_RUNTIME_CONVERSATION_COOKIE) continue;
-    value = part.slice(eq + 1).trim();
-    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-      value = value.slice(1, -1);
-    }
-  }
-  if (value === null || value === "") return { pin: "none" };
-  if (value === TED_RUNTIME_A0_SENTINEL) return { pin: "a0" };
-  if (value.startsWith(TED_RUNTIME_B_PREFIX)) {
-    const id = value.slice(TED_RUNTIME_B_PREFIX.length);
-    if (TED_OPAQUE_ID_RE.test(id)) return { pin: "b", conversationId: id };
-  }
-  return { pin: "invalid" };
-}
-
-/** Scoped cookie Path for one workspace (mirrors the gateway contract). */
-export function scopedTedRuntimeCookiePath(workspaceId: string): string {
-  return `/api/agent/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc`;
-}
-
-/**
- * Serializes the A0 pin (`agent`) scoped to one workspace. `secure` only when
- * the request origin is HTTPS (the route decides from the request URL).
- */
-export function serializeTedRuntimeA0Pin(workspaceId: string, opts?: { secure?: boolean }): string {
-  const segments = [
-    `${TED_RUNTIME_CONVERSATION_COOKIE}=${TED_RUNTIME_A0_SENTINEL}`,
-    `Path=${scopedTedRuntimeCookiePath(workspaceId)}`,
-    `Max-Age=${TED_RUNTIME_COOKIE_MAX_AGE}`,
-    "HttpOnly",
-    "SameSite=Lax",
-  ];
-  if (opts?.secure) segments.push("Secure");
-  return segments.join("; ");
-}
-
-/**
- * Server-only flag: explicit activation, no NODE_ENV shortcut. The runtime is
- * selected ONLY when the operator sets `TED_OPENCODE_RUNTIME_ENABLED=1`; the
- * kill switch below wins over it (immediate rollback to A0). Reads the passed
- * env only — the client bundle must never read this (no `NEXT_PUBLIC_`).
- */
-export function isTedOpencodeRuntimeEnabled(env?: EnvLike): boolean {
-  if (isTedOpencodeKillSwitchOn(env)) return false;
-  return env?.TED_OPENCODE_RUNTIME_ENABLED === "1";
-}
-
-/**
- * Rollback switch: when exactly `1`, every P2 conversation goes back to A0 —
- * including conversations already pinned to `opencode.*`. The pin is cleared
- * on the way so the next contact starts a clean A0 conversation. Pending
- * financial operations live in the API (workspace-scoped), so switching the
- * conversational runtime never duplicates or loses them.
- */
-export function isTedOpencodeKillSwitchOn(env?: EnvLike): boolean {
-  return env?.TED_OPENCODE_RUNTIME_KILL_SWITCH === "1";
-}
-
-/**
- * Canary allowlist by workspace (`TED_OPENCODE_WORKSPACES`, CSV of exact
- * workspace ids). Absent/empty = NO workspace (fail closed) — the global
- * activation flag alone never opens the runtime to every workspace.
- */
-export function isTedOpencodeWorkspaceEnabled(workspaceId: string | null, env?: EnvLike): boolean {
-  if (typeof workspaceId !== "string" || workspaceId.length === 0) return false;
-  const raw = env?.TED_OPENCODE_WORKSPACES;
-  if (typeof raw !== "string" || raw.trim().length === 0) return false;
-  return raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
-    .includes(workspaceId);
-}
-
-/**
- * Strict well-formed HTTP loopback upstream check for the B gateway (pure, no
- * env). Same shape as the agent loopback check: `http://localhost[:port]` or
- * `http://127.0.0.1[:port]`, no userinfo/path/query/hash.
- */
+/** Strict HTTP loopback target validation for the local TED gateway. */
 function parseTedGatewayLoopback(value: string): string | null {
   let parsed: URL;
   try {
@@ -705,7 +503,7 @@ function parseTedGatewayLoopback(value: string): string | null {
  * Resolves the B gateway origin. Two explicit forms, both operator-set:
  * - HTTPS origin (production deployment): validated as a bare https origin
  *   (no credentials, no path/query/hash). No NODE_ENV shortcut — activation
- *   is the `TED_OPENCODE_RUNTIME_ENABLED` flag, not the build mode.
+ *   is explicit gateway origin configuration, independent of build mode.
  * - Loopback HTTP (local development only): requires NODE_ENV
  *   development/test AND `ALLOW_LOCAL_ORIGIN=1`.
  * Anything else resolves to null and the caller fails closed.
@@ -774,12 +572,15 @@ function parseTedGatewayHttps(value: string): string | null {
 }
 
 /**
- * True only for the three P2 conversational RPCs routed to B:
+ * Expanded routing set: conversational RPCs plus the supported Pending V2,
+ * undo and workspace-attestation endpoints.
+ * Unlike `isTedConversationalRpcPath`, this set also routes those operations to B.
  * `.../rpc/chat`, `.../rpc/history`, `.../rpc/session/new` under
- * `agents/finance-chat-agent/<workspace>/rpc`. Pending/undo/attachment and any
- * other path stay on the current Agent path. Pure, no env.
+ * `agents/finance-chat-agent/<workspace>/rpc`, plus Pending V2 propose/active/
+ * decision, undo active/decision and workspace empty-attestation RPCs.
+ * Attachments, memory/prefs and all unlisted paths stay on A0. Pure, no env.
  */
-export function isTedP2RpcPath(path: readonly string[]): boolean {
+export function isTedRuntimeRpcPath(path: readonly string[]): boolean {
   if (path.length < 5) return false;
   if (path[0] !== "agents" || path[1] !== "finance-chat-agent") return false;
   if (typeof path[2] !== "string" || path[2].length === 0) return false;
@@ -787,7 +588,27 @@ export function isTedP2RpcPath(path: readonly string[]): boolean {
   const tail = path.slice(4);
   if (tail.length === 1 && (tail[0] === "chat" || tail[0] === "history")) return true;
   if (tail.length === 2 && tail[0] === "session" && tail[1] === "new") return true;
+  if (tail.length === 2 && tail[0] === "pending-operations" &&
+      (tail[1] === "propose" || tail[1] === "active")) return true;
+  if (tail.length === 3 && tail[0] === "pending-operations" &&
+      tail[1].length > 0 && tail[2] === "decision") return true;
+  if (tail.length === 2 && tail[0] === "undo" &&
+      (tail[1] === "active" || tail[1] === "decision")) return true;
+  if (tail.length === 3 && tail[0] === "workspace" &&
+      tail[1].length > 0 && tail[2] === "attest-empty") return true;
   return false;
+}
+
+/** Header-view set only: chat/history/session-new; excludes pending/undo/attestation RPCs. */
+export function isTedConversationalRpcPath(path: readonly string[]): boolean {
+  if (path.length < 5) return false;
+  if (path[0] !== "agents" || path[1] !== "finance-chat-agent") return false;
+  if (typeof path[2] !== "string" || path[2].length === 0 || path[3] !== "rpc") return false;
+  const tail = path.slice(4);
+  return (
+    (tail.length === 1 && (tail[0] === "chat" || tail[0] === "history")) ||
+    (tail.length === 2 && tail[0] === "session" && tail[1] === "new")
+  );
 }
 
 /** Workspace id from a P2-shaped path (`agents/finance-chat-agent/<ws>/rpc/...`). */
@@ -798,42 +619,3 @@ export function tedWorkspaceIdFromPath(path: readonly string[]): string | null {
   return typeof ws === "string" && ws.length > 0 ? ws : null;
 }
 
-export type TedRuntimeTarget = "A0" | "B";
-
-/**
- * Selects the runtime for one proxied request. Rules (in order):
- * 1. Non-P2 paths always stay on A0 (pending/undo/attachment never send a
- *    conversational turn to B).
- * 2. An `agent` (A0) pin stays on A0 even when the flag turns ON.
- * 3. An `opencode.*` (B) pin stays on B even when the flag later turns OFF.
- * 4. A foreign/invalid B-shaped value is treated as B so the gateway fails
- *    closed (typed error + scoped clear) instead of silently falling back.
- * 5. No pin: B only when the flag is ON (explicit `session/new` included),
- *    otherwise A0. Pure, no env access — the caller passes `flagOn`.
- */
-export function selectTedRuntimeTarget(
-  pin: TedRuntimePin,
-  opts: { isP2: boolean; flagOn: boolean; killSwitch?: boolean },
-): TedRuntimeTarget {
-  if (!opts.isP2) return "A0";
-  if (opts.killSwitch === true) return "A0";
-  if (pin.pin === "a0") return "A0";
-  if (pin.pin === "b") return "B";
-  if (pin.pin === "invalid") return "B";
-  return opts.flagOn ? "B" : "A0";
-}
-
-/**
- * Expiring pin used by the rollback switch: clears `opencode.*` AND `agent`
- * for one workspace so the next contact starts clean. Same scoped Path as the
- * pin itself — other workspaces are untouched.
- */
-export function serializeTedRuntimePinClear(workspaceId: string): string {
-  return [
-    `${TED_RUNTIME_CONVERSATION_COOKIE}=`,
-    `Path=${scopedTedRuntimeCookiePath(workspaceId)}`,
-    "Max-Age=0",
-    "HttpOnly",
-    "SameSite=Lax",
-  ].join("; ");
-}

@@ -233,7 +233,9 @@ describe("TedChat — P3 proposal intent", () => {
     const confirm = await screen.findByRole("button", { name: /Confirmar R\$ 50,00/ });
     expect(confirm).toBeTruthy();
     expect(propose).toHaveBeenCalledTimes(1);
-    expect(propose).toHaveBeenCalledWith("ws-1", intent, undefined);
+    expect(propose).toHaveBeenCalledWith("ws-1", intent, {
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("never invents a card when the broker refuses; the message stays retryable", async () => {
@@ -336,7 +338,9 @@ describe("TedChat — P3.2 income proposal", () => {
     expect(screen.getByText("Salário")).toBeTruthy();
     expect(screen.getByText("Nubank")).toBeTruthy();
     expect(propose).toHaveBeenCalledTimes(1);
-    expect(propose).toHaveBeenCalledWith("ws-1", incomeIntent, undefined);
+    expect(propose).toHaveBeenCalledWith("ws-1", incomeIntent, {
+      signal: expect.any(AbortSignal),
+    });
     // The intent is not authority: no financial write happens here.
     expect(screen.queryByText(/registrada/i)).toBeNull();
   });

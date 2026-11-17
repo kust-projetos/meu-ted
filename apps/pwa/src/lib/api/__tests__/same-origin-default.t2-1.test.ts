@@ -33,11 +33,33 @@ function readWranglerVars(): Record<string, string> {
   const dir = path.dirname(fileURLToPath(import.meta.url));
   const file = path.resolve(dir, "../../../../wrangler.jsonc");
   const raw = fs.readFileSync(file, "utf8");
-  const withoutComments = raw
-    .split("\n")
-    .filter((line) => !line.trim().startsWith("//"))
-    .join("\n");
-  return (JSON.parse(withoutComments) as { vars: Record<string, string> }).vars;
+  let withoutComments = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i]!;
+    if (inString) {
+      withoutComments += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      withoutComments += char;
+    } else if (char === "/" && raw[i + 1] === "/") {
+      while (i < raw.length && raw[i] !== "\n") i++;
+      withoutComments += "\n";
+    } else if (char === "/" && raw[i + 1] === "*") {
+      i += 2;
+      while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) i++;
+      i++;
+    } else {
+      withoutComments += char;
+    }
+  }
+  return (JSON.parse(withoutComments.replace(/,\s*([}\]])/g, "$1")) as { vars: Record<string, string> }).vars;
 }
 
 function mockOkFetch(): ReturnType<typeof vi.spyOn> {
@@ -64,6 +86,15 @@ describe("T2.1 deploy config: published vars carry no direct browser URLs", () =
 
   it("does not publish NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL", () => {
     expect(readWranglerVars()["NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL"]).toBeUndefined();
+  });
+
+  it("configures the gateway and excludes retired Agent runtime variables", () => {
+    const vars = readWranglerVars();
+    expect(vars["TED_OPENCODE_GATEWAY_ORIGIN"]).toBeDefined();
+    expect(vars["TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS"]).toBeDefined();
+    for (const name of Object.keys(vars)) {
+      expect(name).not.toMatch(/^(PWA_AGENT_PROXY_ORIGIN|AGENT_ORIGIN|TED_OPENCODE_RUNTIME_|TED_OPENCODE_WORKSPACES)/);
+    }
   });
 });
 

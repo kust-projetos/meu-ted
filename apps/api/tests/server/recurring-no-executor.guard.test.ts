@@ -1,13 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { RECURRING_PURCHASES_EXECUTOR_ENABLED, recurringPurchasesCapability } from '../../src/cards/recurring-capability.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { RECURRING_PURCHASES_EXECUTOR_ENABLED, recurringPurchasesCapability } from '../../src/cards/recurring-capability.js';
-
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '..', '..', '..', '..');
-const wranglerSource = readFileSync(resolve(repoRoot, 'apps/agent/wrangler.jsonc'), 'utf8');
-const apiServerSource = readFileSync(resolve(repoRoot, 'apps/api/src/server/index.ts'), 'utf8');
+const apiServerSource = readFileSync(resolve(here, '../../src/server/index.ts'), 'utf8');
 
 /**
  * Phase 7 (V4.1 Task 7.9): recurring card purchases have no executor.
@@ -18,13 +15,6 @@ const apiServerSource = readFileSync(resolve(repoRoot, 'apps/api/src/server/inde
  * otherwise (SPEC §14.4). This guard locks the proof of absence.
  */
 describe('recurring purchases have no executor (Phase 7 guard, D9)', () => {
-  it('agent worker declares no cron triggers', () => {
-    const wrangler = JSON.parse(wranglerSource) as { triggers?: { crons?: unknown }; schedules?: unknown };
-    expect(wrangler.triggers?.crons ?? []).toEqual([]);
-    expect(wrangler.schedules).toBeUndefined();
-    expect(wranglerSource).not.toMatch(/recurring/i);
-  });
-
   it('API server composition wires no recurring scheduler or materializer', () => {
     expect(apiServerSource).not.toMatch(/recurring/i);
     const timers = apiServerSource.split('\n').filter((line) => line.includes('setInterval'));

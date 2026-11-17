@@ -100,10 +100,10 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
     // FIX-P1: history carries no card data; the live card comes from the
     // authoritative active list with the server-derived presentation.
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
-      { id: "msg-1", actorId: "user-1", role: "user", content: "gastei 850 no mercado", isOwn: true, createdAt: undefined, attachments: undefined },
+      { id: "msg-1", actorId: "user-1", role: "user", content: "gastei 850 no mercado", isOwn: true, createdAt: undefined },
       {
         id: "msg-2", actorId: "ted", role: "assistant", content: "Proposta: Mercado. Confirma?", isOwn: false,
-        createdAt: undefined, attachments: undefined,
+        createdAt: undefined,
       },
     ]);
     vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([activeItem()]);
@@ -128,7 +128,7 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
       {
         id: "msg-2", actorId: "ted", role: "assistant", content: "Processando.", isOwn: false,
-        createdAt: undefined, attachments: undefined,
+        createdAt: undefined,
       },
     ]);
     vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([
@@ -152,7 +152,6 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
         content: "Despesa registrada com sucesso.",
         isOwn: false,
         createdAt: undefined,
-        attachments: undefined,
         pendingOperation: {
           id: "pending-v2-1",
           status: "succeeded",
@@ -226,7 +225,7 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
   it("reload failure with prior history preserves it (regression) and invents no card", async () => {
     const user = userEvent.setup();
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
-      { id: "msg-1", actorId: "user-1", role: "user", content: "Meu saldo?", isOwn: true, createdAt: undefined, attachments: undefined },
+      { id: "msg-1", actorId: "user-1", role: "user", content: "Meu saldo?", isOwn: true, createdAt: undefined },
     ]);
 
     render(<TedChat />);

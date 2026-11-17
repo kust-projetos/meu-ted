@@ -57,6 +57,11 @@ export function openCategoryMemoryStore({ dbPath, ttlMs = CATEGORY_MEMORY_TTL_MS
     sweepExpired(nowMs = Date.now()) {
       return Number(db.prepare('DELETE FROM category_memory WHERE expires_at <= ?').run(nowMs).changes);
     },
+    countByWorkspace(workspaceId) {
+      if (!identifier(workspaceId)) throw new TypeError('workspaceId is required');
+      return Number(db.prepare('SELECT COUNT(*) AS n FROM category_memory WHERE workspace_id=? AND tombstone_at IS NULL AND expires_at>?')
+        .get(workspaceId, Date.now()).n);
+    },
     close() { db.close(); },
   };
 }

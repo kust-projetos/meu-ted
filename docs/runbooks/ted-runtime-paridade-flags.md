@@ -1,9 +1,10 @@
 # Runbook — Paridade de flags do TED Runtime
 
 O PR #407 foi mergeado com CI verde; a emenda ao ADR-031, datada de
-2026-11-16, descreve esta paridade. Todas as flags abaixo são `default-off`.
-Este runbook não autoriza produção: habilite cada capacidade somente com
-autorização explícita e validação prévia, uma de cada vez.
+2026-11-16, descreve esta paridade. As flags são `default-off` no runtime;
+o compose de produção habilita explicitamente prompt e memória de categoria,
+mantendo autoexecução desligada. Este runbook não autoriza produção: qualquer
+alteração de capacidade exige autorização explícita e validação prévia.
 
 ## Flags e escopo
 
@@ -15,6 +16,19 @@ autorização explícita e validação prévia, uma de cada vez.
 | `TED_OPENCODE_CATEGORY_MEMORY_ENABLED` | `1` | processo TED Runtime | Habilita store SQLite local e tool de recall. |
 | `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED` | `1` | processo TED Runtime + API elegível | Permite autoexecução da categoria via API, sujeita aos pré-requisitos abaixo. |
 | `TED_RUNTIME_AUTOEXEC_MINT_TOKEN` | credencial, não flag; mínimo de 32 caracteres | perfil/ambiente do processo-filho | Credencial de serviço usada para obter token de autoexecução; nunca a grave em repositório ou instruções. |
+
+### Valores no compose TED Runtime
+
+O `docker/ted-runtime/docker-compose.yml` define:
+
+- `TED_OPENCODE_PRODUCT_PROMPT_ENABLED=1`: inclui as instruções de produto.
+- `TED_OPENCODE_CATEGORY_MEMORY_ENABLED=1`: habilita memória local e recall.
+- `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`: criação automática permanece
+  desligada; exige autorização de operador.
+- `TED_PENDING_MINT_TOKEN` e `TED_WORKSPACE_DELETION_SERVICE_TOKEN` são
+  credenciais opcionais no compose, mas necessárias para o corte das rotas de
+  pending/atestado. Sem elas, essas rotas falham fechado. Nunca registre seus
+  valores no repositório.
 
 ## Pré-requisitos para autoexecução
 

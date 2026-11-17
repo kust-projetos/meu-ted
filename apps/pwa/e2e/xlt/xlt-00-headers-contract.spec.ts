@@ -43,7 +43,6 @@ import {
   buildPermissionsPolicy,
   generateNonce,
 } from "../../src/proxy-utils";
-import { isMicrophoneEnabled } from "../../src/lib/capabilities";
 
 // Artefato do build Cloudflare/OpenNext (ausente sem build — check opcional).
 const HEADERS_PATH = path.resolve(
@@ -59,7 +58,7 @@ const HEADERS_PATH = path.resolve(
  * Emissão via a MESMA função que src/middleware.ts usa, sobre um servidor
  * HTTP real: CSP por resposta com nonce fresco (modo produção: sem
  * unsafe-eval, sem localhost) + headers estáticos, com Permissions-Policy
- * construída da capability vigente.
+ * construída da política fixa.
  */
 function emitProductionHeaders(
   _req: http.IncomingMessage,
@@ -68,7 +67,7 @@ function emitProductionHeaders(
   const emission = buildProductionEmissionHeaders({
     nonce: generateNonce(),
     isDevelopment: false,
-    micEnabled: isMicrophoneEnabled(),
+    micEnabled: false,
   });
   for (const [key, value] of Object.entries(emission)) {
     res.setHeader(key, value);
@@ -76,9 +75,9 @@ function emitProductionHeaders(
   res.end("ok");
 }
 
-/** Valor de Permissions-Policy esperado para a capability vigente. */
+/** Valor de Permissions-Policy esperado para a política fixa. */
 function expectedPermissionsPolicy(): string {
-  return buildPermissionsPolicy(isMicrophoneEnabled());
+  return buildPermissionsPolicy(false);
 }
 
 let server: http.Server;

@@ -8,6 +8,12 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   allowedDevOrigins: ["127.0.0.1"],
   transpilePackages: ["@pi-finance/llm-contracts"],
+  // Keep the Next security-upgrade nudge from stopping the P2D test harness;
+  // normal development and production retain Next's default behavior.
+  ...(process.env.P2D_BROWSER === "1" ||
+  Object.keys(process.env).some((name) => /^P2D_(?:LIVE_|EXPENSE)/.test(name))
+    ? { experimental: { agentUpgrade: false } }
+    : {}),
   // Client-bundle env inlining (production hotfix 2026-09-23): NEXT_PUBLIC_*
   // vars that stay undefined at build time keep a runtime `process.env` access
   // in the browser bundle, which forces the `process` polyfill module — absent
@@ -20,15 +26,6 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_PI_FINANCE_API_BASE_URL: process.env.NEXT_PUBLIC_PI_FINANCE_API_BASE_URL ?? "",
     NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL: process.env.NEXT_PUBLIC_PI_FINANCE_AGENT_BASE_URL ?? "",
-    NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED: process.env.NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED ?? "",
-    NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN: process.env.NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN ?? "",
-    NEXT_PUBLIC_TED_MICROPHONE: process.env.NEXT_PUBLIC_TED_MICROPHONE ?? "",
-    NEXT_PUBLIC_TED_ATTACHMENT_INGESTION: process.env.NEXT_PUBLIC_TED_ATTACHMENT_INGESTION ?? "",
-    // V1-textual: per-type attachment flags explicitamente inlinadas como ""
-    // (desligado) por default — mesma garantia do hotfix acima.
-    NEXT_PUBLIC_TED_ATTACHMENT_IMAGE: process.env.NEXT_PUBLIC_TED_ATTACHMENT_IMAGE ?? "",
-    NEXT_PUBLIC_TED_ATTACHMENT_PDF: process.env.NEXT_PUBLIC_TED_ATTACHMENT_PDF ?? "",
-    NEXT_PUBLIC_TED_ATTACHMENT_AUDIO: process.env.NEXT_PUBLIC_TED_ATTACHMENT_AUDIO ?? "",
     NEXT_PUBLIC_MAX_OFFLINE_AUTH_AGE_HOURS: process.env.NEXT_PUBLIC_MAX_OFFLINE_AUTH_AGE_HOURS ?? "",
     NEXT_PUBLIC_DISABLE_OFFLINE_SNAPSHOT: process.env.NEXT_PUBLIC_DISABLE_OFFLINE_SNAPSHOT ?? "",
     // Semantics-preserving: undefined AND "" both resolve to compat ON

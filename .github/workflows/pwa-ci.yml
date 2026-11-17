@@ -3,7 +3,7 @@ name: PWA CI
 on:
   push:
     branches: [main]
-    # No path filters: the deploy gate (agent-deploy/pwa-deploy) requires a
+    # No path filters: the deploy gate (PWA Deploy) requires a
     # PWA CI run for EVERY main SHA and branch protection requires
     # "quality (22, 10)" on EVERY pull request.
   pull_request:
