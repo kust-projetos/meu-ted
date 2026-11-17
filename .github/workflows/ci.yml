@@ -299,7 +299,7 @@ jobs:
   api-image:
     name: API — image digest to GHCR (main only)
     # Image publication is operator opt-in via repository variable, not an automatic merge effect.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PUBLISH_MAIN_IMAGE == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars['PUBLISH_MAIN_IMAGE'] == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -367,7 +367,7 @@ jobs:
   # ─── Consolidated release manifest (main only) ───────────────────────
   release-manifest:
     name: Release — consolidated manifest (main only)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PUBLISH_MAIN_IMAGE == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars['PUBLISH_MAIN_IMAGE'] == 'true'
     needs: [api-image]
     runs-on: ubuntu-latest
     timeout-minutes: 5
