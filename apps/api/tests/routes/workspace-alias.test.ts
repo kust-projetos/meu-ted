@@ -7,11 +7,8 @@ import { createInMemoryStores } from '../../src/writes/in-memory.js';
 import { createInMemoryReadModelStoreFromState } from '../../src/read-models/store.js';
 import { createInMemoryDeviceTokenStore } from '../../src/auth/device-token.js';
 import { createInMemoryIdempotencyStore } from '../../src/writes/idempotency.js';
-import { createInMemoryAgentReplayStore } from '../../src/auth/agent-connection-token-replay.js';
-import { verifyAgentConnectionToken } from '../../src/auth/agent-connection-token.js';
-import { verifyAgentConnectionToken as verifyWorkerToken } from '../../../agent/src/auth/connection-token.js';
+import { Buffer } from 'node:buffer';
 import * as apiAlias from '../../src/auth/workspace-alias.js';
-import * as workerAlias from '../../../agent/src/auth/workspace-alias.js';
 
 /**
  * Regressão: alias X-Workspace-Id → household canônico
@@ -33,17 +30,6 @@ describe('Workspace alias → household canônico (regressão)', () => {
 
   beforeEach(async () => {
     vi.spyOn(apiAlias, 'resolveCanonicalHouseholdId').mockImplementation(async (_pool: unknown, ws: string) => (ws === SYNTHETIC_WS ? HOUSEHOLD_A : ws));
-    vi.spyOn(workerAlias, 'resolveCanonicalHouseholdId').mockImplementation(async (_origin: string, _token: string, ws: string) => (ws === SYNTHETIC_WS ? HOUSEHOLD_A : ws));
-    // Worker verify should also respect alias via the mocked resolver — mock verify to handle alias
-    const originalVerifyWorker = verifyWorkerToken;
-    vi.spyOn(await import('../../../agent/src/auth/connection-token.js'), 'verifyAgentConnectionToken').mockImplementation(async (token: string, secret: string, expected?: string) => {
-      if (expected === SYNTHETIC_WS) {
-        // Resolve alias to canonical before verify
-        const canonical = SYNTHETIC_WS === expected ? HOUSEHOLD_A : expected;
-        return originalVerifyWorker(token, secret, canonical);
-      }
-      return originalVerifyWorker(token, secret, expected);
-    });
     const memoryDb = { user: [], session: [], account: [], verification: [] };
     auth = createBetterAuth({
       database: memoryAdapter(memoryDb),
@@ -90,7 +76,6 @@ describe('Workspace alias → household canônico (regressão)', () => {
       workspaceAccess,
       agentConnectionSecret: CONNECTION_SECRET,
       agentAuthServiceToken: SERVICE_TOKEN,
-      agentReplayStore: createInMemoryAgentReplayStore(),
     });
     await app.ready();
   });
@@ -121,51 +106,34 @@ describe('Workspace alias → household canônico (regressão)', () => {
     expect(res.json()).toMatchObject({ code: 'auth.workspace_forbidden' });
   });
 
-  it('alias sintético deve resolver para household canônico via fonte persistente (API e Worker alinhados)', async () => {
+  it('alias sintético deve resolver para household canônico na API', async () => {
     // Verifica que a fonte persistente (mockada para teste) resolve alias corretamente
     const apiCanonical = await apiAlias.resolveCanonicalHouseholdId(null as unknown as never, SYNTHETIC_WS);
     expect(apiCanonical).toBe(HOUSEHOLD_A);
-    const workerCanonical = await workerAlias.resolveCanonicalHouseholdId('https://api.example.com', 'svc', SYNTHETIC_WS);
-    expect(workerCanonical).toBe(HOUSEHOLD_A);
     // alias de outro household não deve resolver para o mesmo
     const apiOther = await apiAlias.resolveCanonicalHouseholdId(null as unknown as never, HOUSEHOLD_B);
     expect(apiOther).toBe(HOUSEHOLD_B);
-    const workerOther = await workerAlias.resolveCanonicalHouseholdId('https://api.example.com', 'svc', HOUSEHOLD_B);
-    expect(workerOther).toBe(HOUSEHOLD_B);
-    // token emitido para household real deve passar quando Worker recebe alias resolvido
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/agent-token',
-      headers: { cookie: memberCookie, 'x-workspace-id': HOUSEHOLD_A },
-    });
-    const { token } = res.json() as { token: string };
-    const canonicalForWorker = await workerAlias.resolveCanonicalHouseholdId('https://api.example.com', 'svc', SYNTHETIC_WS);
-    await expect(verifyWorkerToken(token, CONNECTION_SECRET, canonicalForWorker)).resolves.toMatchObject({ workspace: HOUSEHOLD_A });
   });
 
-  it('Verificação API direta: token workspace == household, verificação com mesmo household passa', async () => {
+  it('emite o token do workspace canônico, não do alias apresentado', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/auth/agent-token',
-      headers: { cookie: memberCookie, 'x-workspace-id': HOUSEHOLD_A },
+      headers: { cookie: memberCookie, 'x-workspace-id': SYNTHETIC_WS },
     });
+    expect(res.statusCode).toBe(200);
     const { token } = res.json() as { token: string };
-    await expect(verifyAgentConnectionToken(token, CONNECTION_SECRET, HOUSEHOLD_A)).resolves.toMatchObject({ workspace: HOUSEHOLD_A });
+    const claims = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8'));
+    expect(claims.workspace).toBe(HOUSEHOLD_A);
   });
 
   it('reinício/instância sem estado: alias persiste via fonte persistente e não depende de memória', async () => {
     // Simula reinício: limpa qualquer cache em memória e verifica que alias ainda resolve via fonte persistente (mockada como DB)
     // No teste, o mock da fonte persistente continua válido após "reinício"
     const { resolveCanonicalHouseholdId: apiResolve } = await import('../../src/auth/workspace-alias.js');
-    const { resolveCanonicalHouseholdId: workerResolve } = await import('../../../agent/src/auth/workspace-alias.js');
     // Após reinício, o alias ainda deve resolver corretamente
     const apiAfterRestart = await (apiResolve as unknown as (pool: unknown, ws: string) => Promise<string>)(null as unknown as never, SYNTHETIC_WS);
-    // Para o Worker, o alias deve resolver via endpoint (mockado no beforeEach)
-    const workerAfterRestart = await (workerResolve as unknown as (origin: string, token: string, ws: string) => Promise<string>)('https://api.example.com', 'svc', SYNTHETIC_WS);
     expect(apiAfterRestart).toBe(HOUSEHOLD_A);
-    expect(workerAfterRestart).toBe(HOUSEHOLD_A);
-    // Ambos devem estar alinhados
-    expect(apiAfterRestart).toBe(workerAfterRestart);
     // E o token com alias ainda deve funcionar após reinício
     const res = await app.inject({
       method: 'POST',

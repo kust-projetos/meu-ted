@@ -44,10 +44,6 @@ import {
 } from "../writes/postgres.js";
 import { createBetterAuth } from "../auth/better-auth.js";
 import { createInMemoryPriceAlertStore } from "../price-alerts/store.js";
-import { createInMemoryLlmConfigStore } from "../agent/llm-config-memory.js";
-import { createPostgresLlmConfigStore } from "../agent/llm-config-postgres.js";
-import { createPostgresAgentReplayStore } from "../auth/agent-connection-token-replay-postgres.js";
-import { createInMemoryAgentReplayStore } from "../auth/agent-connection-token-replay.js";
 import { registerCors } from "./cors.js";
 import { createPostgresInviteRuntime, } from "./production-routes.js";
 import { InviteError } from "../auth/invites.js";
@@ -225,14 +221,10 @@ const start = async (): Promise<void> => {
       inviteSignupGuard,
       auditLogs,
       undoService,
-      llmConfigStore: createPostgresLlmConfigStore(pool),
       agentConnectionSecret: cfg.agentConnectionSecret,
-      agentConfigToken: cfg.agentConfigToken,
       agentAuthServiceToken: cfg.agentAuthServiceToken,
       autoExecMintServiceToken: process.env.TED_RUNTIME_AUTOEXEC_MINT_TOKEN,
-      agentReplayStore: createPostgresAgentReplayStore(pool),
-      agentRuntimeOrigin: cfg.agentRuntimeOrigin,
-      agentRuntimeAdminToken: cfg.agentRuntimeAdminToken,
+      pendingMintServiceToken: process.env.TED_RUNTIME_PENDING_MINT_TOKEN,
       trustedOrigins: cfg.trustedOrigins,
       disableDeviceRegistration: cfg.disableDeviceRegistration,
       legacyBearerAuditLog: createLegacyBearerAuditSink(pool),
@@ -308,13 +300,8 @@ const start = async (): Promise<void> => {
       undoService,
       auth,
       adminEmails: cfg.adminEmails,
-      llmConfigStore: createInMemoryLlmConfigStore(),
       agentConnectionSecret: cfg.agentConnectionSecret,
-      agentConfigToken: cfg.agentConfigToken,
       agentAuthServiceToken: cfg.agentAuthServiceToken,
-      agentReplayStore: createInMemoryAgentReplayStore(),
-      agentRuntimeOrigin: cfg.agentRuntimeOrigin,
-      agentRuntimeAdminToken: cfg.agentRuntimeAdminToken,
       trustedOrigins: cfg.trustedOrigins,
       disableDeviceRegistration: cfg.disableDeviceRegistration,
       ...(vapid?.publicKey ? { vapidPublicKey: vapid.publicKey } : {}),

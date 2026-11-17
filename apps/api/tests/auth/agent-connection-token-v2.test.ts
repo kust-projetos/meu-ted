@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createAgentConnectionToken, verifyAgentConnectionToken } from '../../src/auth/agent-connection-token.js';
+import { Buffer } from 'node:buffer';
+import { createAgentConnectionToken } from '../../src/auth/agent-connection-token.js';
 
 describe('Agent connection token V2 capability defaults', () => {
   it('delegated/default connection tokens are read-only', async () => {
@@ -10,12 +11,7 @@ describe('Agent connection token V2 capability defaults', () => {
       now,
     );
 
-    const claims = await verifyAgentConnectionToken(
-      token,
-      'test-secret-at-least-32-characters-long!',
-      undefined,
-      now,
-    );
+    const claims = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8'));
     expect(claims.capabilities).toEqual(['financial.read']);
     expect(claims.capabilities).not.toContain(['financial', 'write'].join('.'));
   });
