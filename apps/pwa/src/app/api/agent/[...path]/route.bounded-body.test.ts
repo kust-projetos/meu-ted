@@ -22,10 +22,14 @@ import { POST } from "./route";
 describe("Agent proxy bounded body read (A19 closure)", () => {
   beforeEach(() => {
     vi.mocked(getCloudflareContext).mockRejectedValue(new Error("no ctx"));
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", "https://gateway.example");
+    vi.stubEnv("TED_OPENCODE_GATEWAY_ALLOWED_ORIGINS", "https://gateway.example");
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     vi.mocked(getCloudflareContext).mockRejectedValue(new Error("no ctx"));
   });
 
@@ -285,40 +289,7 @@ describe("Agent proxy bounded body read (A19 closure)", () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
-  it("forwards a streamed attachment below the attachment ceiling", async () => {
-    let captured: Request | null = null;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      captured = new Request(input as string, init);
-      return new Response(JSON.stringify({ ref: "att_1", kind: "image" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    });
-
-    // 48 x 256 KB == 12 MB: above the chat ceiling, below the 15 MB one.
-    const { stream, stats } = observableStream(256 * 1024, 48);
-    const res = await POST(
-      new Request(attachmentUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/octet-stream",
-          "x-ted-attachment-kind": "image",
-          origin: ORIGIN,
-        },
-        body: stream,
-        // @ts-expect-error duplex is required for streamed bodies outside browsers
-        duplex: "half",
-      }),
-      attachmentContext(),
-    );
-
-    expect(res.status).toBe(200);
-    expect((await captured!.arrayBuffer()).byteLength).toBe(12 * 1024 * 1024);
-    expect(stats.cancels).toBe(0);
-  });
-
-  it("cancels an attachment stream that crosses the attachment ceiling", async () => {
-    // 72 x 256 KB == 18 MB against the 15 MB attachment ceiling.
+  it("cancels an attachment stream that crosses the shared 2 MB ceiling", async () => {
     const { stream, stats } = observableStream(256 * 1024, 72);
     const fetchMock = vi.spyOn(globalThis, "fetch");
 
@@ -327,7 +298,6 @@ describe("Agent proxy bounded body read (A19 closure)", () => {
         method: "POST",
         headers: {
           "content-type": "application/octet-stream",
-          "x-ted-attachment-kind": "image",
           origin: ORIGIN,
         },
         body: stream,
@@ -341,6 +311,30 @@ describe("Agent proxy bounded body read (A19 closure)", () => {
     expect(await bodyTooLarge(res)).toBe("request.body_too_large");
     expect(stats.cancels).toBe(1);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not forward removed attachment claim headers", async () => {
+    let captured: Request | null = null;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      captured = new Request(input as string, init);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    const res = await POST(
+      new Request(attachmentUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          "x-ted-attachment-kind": "image",
+          "x-ted-attachment-name": "x.png",
+          origin: ORIGIN,
+        },
+        body: pngBody(16),
+      }),
+      attachmentContext(),
+    );
+    expect(res.status).toBe(200);
+    expect(captured!.headers.has("x-ted-attachment-kind")).toBe(false);
+    expect(captured!.headers.has("x-ted-attachment-name")).toBe(false);
   });
 
   it("still enforces the ceiling on the no-stream fallback", async () => {

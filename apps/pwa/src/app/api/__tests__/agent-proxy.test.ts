@@ -1,22 +1,38 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { GET } from "@/app/api/agent/[...path]/route";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 const ctx = { params: Promise.resolve({ path: ["agents", "ping"] }) };
+const request = (signal?: AbortSignal) => new Request("https://pwa.test/api/agent/agents/ping", { signal });
+
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "test");
+  vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
+  vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", "http://127.0.0.1:8787");
+});
 
 describe("agent proxy upstream failures (P1-7)", () => {
+  it("returns 503 without a configured gateway", async () => {
+    vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await GET(request(), ctx);
+    expect(res.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.headers.get("x-ted-runtime")).toBe("opencode");
+  });
+
   it("returns 504 structured JSON when upstream times out", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockRejectedValue(
-        new DOMException("The operation was aborted due to timeout", "TimeoutError"),
-      ),
+      vi.fn().mockRejectedValue(Object.assign(new Error("timed out"), { name: "TimeoutError" })),
     );
 
-    const res = await GET(new Request("https://pwa.test/api/agent/agents/ping"), ctx);
+    const res = await GET(request(), ctx);
 
     expect(res.status).toBe(504);
     expect(res.headers.get("content-type")).toContain("application/json");
@@ -32,7 +48,7 @@ describe("agent proxy upstream failures (P1-7)", () => {
       vi.fn().mockRejectedValue(new Error("fetch failed")),
     );
 
-    const res = await GET(new Request("https://pwa.test/api/agent/agents/ping"), ctx);
+    const res = await GET(request(), ctx);
 
     expect(res.status).toBe(502);
     expect(res.headers.get("content-type")).toContain("application/json");
@@ -53,9 +69,19 @@ describe("agent proxy upstream failures (P1-7)", () => {
       ),
     );
 
-    const res = await GET(new Request("https://pwa.test/api/agent/agents/ping"), ctx);
+    const res = await GET(request(), ctx);
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ pong: true });
+  });
+
+  it("returns 499 when the incoming request was cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.fn().mockRejectedValue(new DOMException("aborted", "AbortError"));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await GET(request(controller.signal), ctx);
+    expect(res.status).toBe(499);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

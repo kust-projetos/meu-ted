@@ -31,7 +31,6 @@ function draft(content: string): PendingChatSend {
     messageId: `msg-${content}`,
     content,
     createdAt: new Date().toISOString(),
-    attachments: [],
   };
 }
 
@@ -70,6 +69,32 @@ describe("P1 #176 — rascunho isolado por ator", () => {
     const reloaded = loadPendingChatSend(WS);
     expect(reloaded?.messageId).toBe(send.messageId);
     expect(reloaded?.content).toBe("rascunho de A");
+  });
+
+  it("remove refs de anexos persistidos e bloqueia âncoras antigas com payload não reproduzível", () => {
+    setPrincipal(ACTOR_A);
+    const send = draft("somente texto");
+    savePendingChatSend(WS, send);
+    const stored = sessionStorage.getItem(`ted.pending-send.${ACTOR_A}.${WS}`);
+    expect(stored).not.toContain("blob:");
+    expect(stored).not.toContain("attachments");
+    expect(stored).not.toContain("att_");
+    expect(stored).not.toContain("accessToken");
+    expect(stored).not.toContain("connection-token");
+
+    sessionStorage.setItem(
+      `ted.pending-send.${ACTOR_A}.${WS}`,
+      JSON.stringify({
+        anchorVersion: 1,
+        messageId: "msg-old-attachment",
+        content: "legado",
+        createdAt: new Date().toISOString(),
+        attachments: [{ type: "image", ref: "att_old_reference", name: "nota.jpg" }],
+      }),
+    );
+    const reloaded = loadPendingChatSend(WS);
+    expect(reloaded?.legacyAnchor).toBe(true);
+    expect(reloaded).not.toHaveProperty("attachments");
   });
 
   it("workspaces diferentes não compartilham rascunho mesmo com o mesmo ator", () => {

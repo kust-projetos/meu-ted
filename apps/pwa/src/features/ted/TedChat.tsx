@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
-import { createTedLiveClient } from "@/lib/live/ted-live-client";
 import {
   fetchAgentHistory,
   fetchActivePendingOperations,
@@ -15,9 +14,6 @@ import {
   clearPendingChatSend,
   isAnchorSupersededByHistory,
   isTurnAnswerConvergedByIdentity,
-  resolveRetrySend,
-  CHAT_SEND_ATTACHMENT_LIMIT,
-  uploadAttachment,
   PENDING_OPERATION_STATUS,
   type ActivePendingOperation,
   type ActiveUndoProposal,
@@ -28,16 +24,14 @@ import {
 import { TedMessage, type TedDeliveryState } from "./TedMessage";
 import { TedApprovalCard, type TedPendingOperation } from "./TedApprovalCard";
 import { TedUndoCard, type TedUndoProposal } from "./TedUndoCard";
-import { useRecordingState } from "./use-recording-state";
-import { getChatAttachmentCapabilities } from "@/lib/capabilities";
 import { useOptionalAppState } from "@/lib/state/app-state-context";
 import { routePatrimonio } from "@/lib/routes";
 import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 import { isActionablePendingOperationPresentation } from "@pi-finance/llm-contracts/types";
 import type { PendingOperationDecision, UndoDecision } from "@/lib/api/agent-client";
 import { notifyPendingOperationsChanged } from "@/lib/state/use-pending-operations";
-import { getTedRuntimeView, clearTedRuntimeViews, type TedRuntimeView } from "@/lib/api/ted-runtime-view";
-import { Sparkles, Send, Mic, MicOff, Image as ImageIcon, FileText, Paperclip, Trash2, RefreshCw, Lock, X } from "lucide-react";
+
+import { Sparkles, Send, RefreshCw, Lock, X } from "lucide-react";
 
 const HISTORY_LOAD_ERROR = "Não foi possível carregar o histórico. Tente novamente.";
 const ACTIVE_LOAD_ERROR = "Não foi possível carregar as aprovações agora.";
@@ -92,14 +86,6 @@ const MESSAGE_SEND_RATE_LIMIT_ERROR = "Muitas mensagens seguidas. Aguarde alguns
  */
 const MESSAGE_SEND_INPUT_CAP_ERROR =
   "Sua mensagem está longa demais para o assistente. Tente encurtar e enviar de novo.";
-/**
- * R3 FIX 3: o servidor recusa com 413 acima de `CHAT_SEND_ATTACHMENT_LIMIT`
- * anexos — o excedente é bloqueado na seleção/envio com esta mensagem, nunca
- * truncado em silêncio.
- */
-const MESSAGE_ATTACHMENT_LIMIT_ERROR =
-  `Você pode anexar no máximo ${CHAT_SEND_ATTACHMENT_LIMIT} arquivos por mensagem.`;
-
 /** Ledger denials get their own copy; every other failure is generic. */
 const sendErrorMessage = (err: unknown): string => {
   const code = typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
@@ -223,27 +209,6 @@ interface TedChatProps {
   focusedOperationId?: string | null;
 }
 
-export type TedAttachment = {
-  type: "image" | "pdf" | "audio";
-  /** Local-only preview URL (object URL). It is NEVER sent to the Agent. */
-  url: string;
-  name: string;
-  file?: File | Blob;
-  /**
-   * A13: opaque server-side reference returned by the upload RPC. When present
-   * the send carries `{type, ref, name}` instead of a URL; until the upload
-   * resolves, the attachment is still shown locally but is not sent.
-   */
-  ref?: string;
-  /**
-   * F6: per-attachment upload state. `uploading` BLOCKS the send (the
-   * attachment is not silently dropped when the message goes out mid-upload),
-   * `failed` keeps the chip visible with an explicit reason, and `ready` is the
-   * only state whose reference crosses the wire.
-   */
-  uploadState?: "uploading" | "ready" | "failed";
-};
-
 export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const ws = useWorkspaceSafe();
   const activeWorkspace = ws?.activeWorkspace ?? null;
@@ -263,14 +228,12 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // B is confirmed; A0/unknown keeps the existing disabled submit (no false
   // cancel — A0 has no turn-cancel path upstream). Local per mount, reset on
   // scope teardown; the module view stays keyed by workspace.
-  const [tedRuntime, setTedRuntime] = useState<TedRuntimeView>("unknown");
-  const canCancelTurn = tedRuntime === "opencode";
+  const canCancelTurn = true;
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [status, setStatus] = useState<TedChatStatus>("ready");
-  const [attachments, setAttachments] = useState<TedAttachment[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   /**
@@ -295,8 +258,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const focusedCardRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  const pdfInputRef = useRef<HTMLInputElement>(null);
   const prevWorkspaceIdRef = useRef<string | null>(null);
   // A02/R02 (AC07): live authenticated scope, mirrored on every workspace
   // change. An in-flight turn is bound to the scope that issued it — a result
@@ -312,96 +273,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const isStaleScope = useCallback((scopeId: string) => activeWorkspaceIdRef.current !== scopeId, []);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // SPEC §18 (H-09): sem pipeline de ingestão real, anexos de arquivo ficam
-  // indisponíveis — botões e file inputs nem são renderizados (default: tudo
-  // false; `NEXT_PUBLIC_TED_ATTACHMENT_INGESTION=1` libera quando o pipeline
-  // existir). Leitura viva por render para respeitar o env em testes.
-  // V4 T1.1 (INV-08): o botão do microfone (captura de voz T4.1/SPEC §17)
-  // segue o mesmo padrão atrás de `caps.microphone`
-  // (`NEXT_PUBLIC_TED_MICROPHONE=1|true`) — a mesma flag que a
-  // Permissions-Policy do middleware lê.
-  // F7: `caps.audio` decide se a gravação tem para onde ir — sem ele o blob
-  // não vira anexo (nada é upado, nada é enviado).
-  const caps = getChatAttachmentCapabilities();
-  // F7: nome do arquivo de áudio por contador, não por `Date.now()` — relógio é
-  // função impura e o React Compiler recusa chamá-lo no corpo do callback de
-  // render. O nome é cosmético: a identidade do anexo é o `ref` do servidor.
-  const audioSeqRef = useRef(0);
-
-  // Microphone lifecycle (SPEC §17, H-08): recording state only exists after
-  // getUserMedia + MediaRecorder + start; single idempotent cleanup.
-  // (start/stop expostos de forma estável; cleanupMedia é useCallback estável.)
-  const recordingCtl = useRecordingState({
-    onAudioBlob: (blob) => {
-      // F7: the recorded blob goes through the SAME upload pipeline as a picked
-      // file — without it the attachment never gets a `ref` and the send filter
-      // drops it. With no audio capability there is nowhere to upload it, so
-      // the recording is refused EXPLICITLY instead of becoming a phantom chip
-      // that silently disappears at send time.
-      if (!caps.audio) {
-        setError("O envio de áudio não está disponível.");
-        return;
-      }
-      // R3 FIX 3: teto de anexos também vale para o áudio gravado
-      // (leitura do state, não do ref espelho — o ref só serve ao teardown).
-      if (attachments.length >= CHAT_SEND_ATTACHMENT_LIMIT) {
-        setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
-        return;
-      }
-      const url = URL.createObjectURL(blob);
-      const attachment: TedAttachment = {
-        type: "audio",
-        url,
-        name: `audio-${(audioSeqRef.current += 1)}.webm`,
-        file: blob,
-        uploadState: "uploading",
-      };
-      setAttachments((prev) => [...prev, attachment]);
-      if (activeWorkspace) void uploadSelected(activeWorkspace.id, [attachment]);
-    },
-    onError: (message) => setError(message),
-  });
-  const { state: recordingState, cleanupMedia: cleanupRecordingMedia } = recordingCtl;
-  const isRecording = recordingState === "recording";
-  const isRequestingMic = recordingState === "requesting";
-
-  // Registro de object URLs (INV-08): espelho dos anexos para revogar em
-  // todos os gatilhos de teardown, inclusive unmount com rascunho pendente.
-  const attachmentsRef = useRef<TedAttachment[]>([]);
-  useEffect(() => {
-    attachmentsRef.current = attachments;
-  }, [attachments]);
-
-  /**
-   * A13: object URLs são estritamente LOCAIS (o que cruza a rede é a
-   * referência opaca). Como o rascunho do envio carrega só a referência, o
-   * revoke dos previews é rastreado por messageId aqui — preservando INV-08
-   * (nenhum object URL sobrevive ao sucesso, retry ou teardown).
-   */
-  const draftPreviewUrlsRef = useRef<Map<string, string[]>>(new Map());
-
-  const revokeAttachmentUrls = useCallback((list: ReadonlyArray<{ url?: string }>) => {
-    for (const att of list) {
-      if (typeof att.url !== "string" || att.url === "") continue;
-      try {
-        URL.revokeObjectURL(att.url);
-      } catch {
-        /* já revogada ou URL inválida — revoke é idempotente por natureza */
-      }
-    }
-  }, []);
-
-  const clearAttachments = useCallback(() => {
-    revokeAttachmentUrls(attachmentsRef.current);
-    // Sem escrita no ref: o efeito espelho (linha do useEffect acima) sincroniza
-    // após setAttachments([]); mutar ref aqui viola react-hooks/immutability.
-    setAttachments([]);
-  }, [revokeAttachmentUrls]);
-
-  // SPEC §19.3: send drafts keyed by the stable messageId (SPEC §7.7) —
-  // retry reuses the SAME id, text and LIVE object URLs. Success consumes
-  // the draft; teardown paths that drop failed messages revoke their URLs
-  // first (INV-08) — failed messages are never silently discarded.
+  // Stable per-message retry drafts retain text and intention identity across reloads.
   const draftsRef = useRef<Map<string, PendingChatSend>>(new Map());
   /**
    * R2 FIX 3 + R3 FIX 1/2: snapshots das âncoras restauradas (`messageId` →
@@ -416,7 +288,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
    * de retry infiel (R3 FIX 1: sem draft e com anexos, não há reenvio).
    */
   const anchorSnapshotsRef = useRef<
-    Map<string, Pick<PendingChatSend, "content" | "createdAt" | "attachments" | "messageId">>
+    Map<string, Pick<PendingChatSend, "content" | "createdAt" | "messageId">>
   >(new Map());
   /**
    * P3 recovery: one broker attempt per persisted intent per mount. A failed
@@ -426,31 +298,12 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
    */
   const proposalRecoveryRef = useRef<string | null>(null);
   const loadSeqRef = useRef(0);
-  const nonSilentInFlightRef = useRef(0);
-  const scheduleLiveRefreshRef = useRef<() => void>(() => {});
   const discardDrafts = useCallback(() => {
-    for (const draft of draftsRef.current.values()) {
-      revokeAttachmentUrls(draft.attachments ?? []);
-    }
     draftsRef.current.clear();
-    // R2 FIX 3: snapshots pertencem ao escopo derrubado junto com os drafts.
     anchorSnapshotsRef.current.clear();
-    // A13: previews locais registrados por messageId também são revogados.
-    for (const urls of draftPreviewUrlsRef.current.values()) {
-      revokeAttachmentUrls(urls.map((url) => ({ url })));
-    }
-    draftPreviewUrlsRef.current.clear();
-  }, [revokeAttachmentUrls]);
+  }, []);
 
-  // Unmount: revoga URLs restantes (cobre logout/expiração com rascunho
-  // pendente — esses caminhos desmontam a página do chat).
-  useEffect(() => {
-    return () => {
-      revokeAttachmentUrls(attachmentsRef.current);
-      attachmentsRef.current = [];
-      discardDrafts();
-    };
-  }, [revokeAttachmentUrls, discardDrafts]);
+  useEffect(() => () => discardDrafts(), [discardDrafts]);
 
   const flashNotice = useCallback((text: string) => {
     setNotice(text);
@@ -464,8 +317,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     };
   }, []);
   // Page-bound chat (`/ted`): no dialog shell, no scroll lock, no focus
-  // trap, no Escape-to-close. Recording flows keep their own keyboard
-  // behavior; navigation away unmounts the page.
+  // trap, no Escape-to-close; navigation away unmounts the page.
 
   // debt-undo-rehydration-terminal-fix: the authoritative active list is
   // the SOURCE OF TRUTH. A successful refresh REPLACES local undo cards —
@@ -508,7 +360,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     const silent = options?.silent === true;
     if (!activeWorkspace) return [];
     const seq = ++loadSeqRef.current;
-    if (!silent) nonSilentInFlightRef.current += 1;
     const isObsoleteSilentLoad = () => silent && seq !== loadSeqRef.current;
     try {
     // A02/R02 (AC07 HIGH): this refresh belongs to the scope that started it.
@@ -516,7 +367,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     // P2: re-ground the runtime belief on every history batch — a B pin
     // cleared gateway-side must not keep offering cancel on the A0 that
     // follows. The fetch below re-captures when the header is present.
-    clearTedRuntimeViews(scopeId);
     let history: AgentMessage[];
     try {
       if (!silent) setStatus("connecting");
@@ -532,34 +382,15 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       setStatus("error");
       // P2: even a failed batch may have revealed the runtime (a B 400 with
       // no cookie yet still carries the runtime header, captured above).
-      setTedRuntime(getTedRuntimeView(scopeId));
       return [];
     }
-    // P2: sync the server-confirmed runtime from whatever the history batch
-    // (or its error) revealed — including a B 400 with no cookie yet, whose
-    // response still carries the runtime header. No header (legacy A0) keeps
-    // the reset value below: unknown.
-    if (!isStaleScope(scopeId) && !isObsoleteSilentLoad()) setTedRuntime(getTedRuntimeView(scopeId));
-    // The scope may have changed while the batch was in flight: this batch
-    // belongs to the previous conversation and must never reach the new one.
+    // The scope may have changed while the batch was in flight: never apply it.
     if (isStaleScope(scopeId) || isObsoleteSilentLoad()) return [];
-    // TASK-08 FIX 1 + R2 FIXES 1–3 + R3 FIXES 1–3: consume the in-flight send
-    // anchor (SPEC §7.7, `savePendingChatSend` in `sendAgentMessage`) and
-    // rehydrate it as a `failed` bubble with retry — the SAME stable
-    // messageId, never an automatic resend. Guards: (a) a bubble with that id
-    // already on screen is never duplicated; (b) R2 FIX 2 / R3 FIX 2: when
-    // the authoritative history already carries an own message that
-    // supersedes the anchor (text anchors: identical content with timestamp
-    // >= anchor timestamp; attachment anchors: ONLY a later own message with
-    // attachment evidence — placeholder, extraction carrier or attachments),
-    // the server owns the log and no local failed copy is invented; text
-    // equality alone never suppresses an attachment anchor. (c) R2 FIX 1 /
-    // R3 FIX 3: a legacy OR over-limit anchor rehydrates as failed WITHOUT
-    // retry — the original send may have carried attachments lost in the old
-    // format (legacy) or more attachments than the server accepts (overLimit),
-    // so resending would change the payload under the same identity. The
-    // draft (with the anchor's attachment refs) is registered so `handleRetry`
-    // resends the SAME payload.
+    // Consume the stable in-flight send anchor and restore it as a failed
+    // bubble with retry; never automatically resend. Existing bubbles are
+    // deduplicated, and history supersedes matching anchors by identity or
+    // text/timestamp. Old-format anchors remain non-retryable when their
+    // original payload cannot be reconstructed.
     // R3 FIX 1: o updater abaixo é PURO — só calcula mensagens a partir de
     // decisões tomadas ANTES (ancora superada? quais snapshots reconciliam?
     // a âncora é retryable?). Nenhum `Map.set/delete` e nenhum
@@ -582,11 +413,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     for (const [anchorId, snap] of anchorSnapshotsRef.current) {
       if (isAnchorSupersededByHistory(snap, history)) reconciledIds.push(anchorId);
     }
-    const anchorRetryable =
-      anchored !== null &&
-      !anchoredSuperseded &&
-      anchored.legacyAnchor !== true &&
-      anchored.overLimit !== true;
+    const anchorRetryable = anchored !== null && !anchoredSuperseded && anchored.legacyAnchor !== true;
     setMessages((prev) => {
       let next: ChatMessage[] = [
         ...history,
@@ -620,9 +447,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
               // The local bubble id IS the stable send identity (SPEC §7.7:
               // PWA messageId sent as the turn intentionId).
               messageId: m.id,
-              ...(m.attachments && m.attachments.length > 0
-                ? { attachments: m.attachments.map((a) => ({ type: a.type, url: "", name: a.name ?? "" })) }
-                : {}),
             },
             history,
           ),
@@ -642,7 +466,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
             // anexo viajam só no draft, nunca compostos no texto que o
             // servidor usa para rotear decisões). Sem URL local pós-reload,
             // não há preview — a fidelidade está no payload do retry.
-            ...(anchorRetryable ? {} : { retryable: false }),
+  
           },
         ];
       }
@@ -657,11 +481,8 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       anchorSnapshotsRef.current.delete(anchored.messageId);
       draftsRef.current.delete(anchored.messageId);
     } else if (anchored && !anchorSnapshotsRef.current.has(anchored.messageId)) {
-      // Registra o snapshot UMA vez — SEMPRE (inclusive legada/overLimit,
-      // para a reconciliação tardia remover o failed quando o servidor passar
-      // a trazer a mensagem). O draft fiel, só quando retryable — e sem
-      // sobrescrever o draft vivo de um retry em andamento (`composeChatSend`
-      // geraria um novo `createdAt` e mudaria a ordem de reconciliação).
+      // Record the snapshot once so a later history refresh can reconcile it;
+      // don't overwrite a live retry draft and change its timestamp.
       // Idempotent: repetir o registro com a mesma chave é no-op.
       if (anchorRetryable) {
         draftsRef.current.set(
@@ -671,9 +492,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
             // R2 FIX 1: o draft carrega os MESMOS refs de anexo da âncora —
             // o retry recompõe o payload fiel. Omitido quando vazio para
             // preservar a forma do envio original (sem chave `attachments`).
-            ...(anchored.attachments && anchored.attachments.length > 0
-              ? { attachments: [...anchored.attachments] }
-              : {}),
           }),
         );
       }
@@ -681,9 +499,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
         content: anchored.content,
         createdAt: anchored.createdAt,
         messageId: anchored.messageId,
-        ...(anchored.attachments && anchored.attachments.length > 0
-          ? { attachments: [...anchored.attachments] }
-          : {}),
       });
     }
     setHistoryLoaded(true);
@@ -748,20 +563,8 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     if (proposalRecoveryFailed && !silent) setError(proposalRecoveryError(anchored?.proposal));
     return history;
     } finally {
-      if (!silent) {
-        nonSilentInFlightRef.current -= 1;
-        if (nonSilentInFlightRef.current === 0) scheduleLiveRefreshRef.current();
-      }
     }
   }, [activeWorkspace, applyActiveUndoProposals, isStaleScope]);
-  const loadHistoryRef = useRef(loadHistory);
-  useEffect(() => { loadHistoryRef.current = loadHistory; }, [loadHistory]);
-  const streamingRef = useRef(status === "streaming");
-  useEffect(() => {
-    const streaming = status === "streaming";
-    streamingRef.current = streaming;
-    if (!streaming) scheduleLiveRefreshRef.current();
-  }, [status]);
 
   // Post-approval reconciliation (SPEC §15.4, T3.3): chat history AND
   // financial UI refresh. The REAL execution receipt (API-emitted, relayed
@@ -854,28 +657,22 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     setupSettled &&
     (setupAccountsEmpty || setupCategoriesEmpty);
 
-  // Isolamento por workspace: limpar histórico imediatamente ao trocar de workspace
-  // (SPEC §17: troca de workspace também encerra o microfone via cleanup único)
+  // Isolamento por workspace: limpar histórico imediatamente ao trocar de workspace.
   useEffect(() => {
     const newId = activeWorkspace?.id ?? null;
     if (prevWorkspaceIdRef.current !== null && prevWorkspaceIdRef.current !== newId) {
-      cleanupRecordingMedia();
-      clearAttachments();
-      // §19.3 teardown: workspace isolation drops local failed messages,
-      // so their draft object URLs are revoked here (never leaked).
       discardDrafts();
       setMessages([]);
       setPendingOps([]);
       setUndoProposals([]);
       setHistoryLoaded(false);
       setError(null);
-      setTedRuntime("unknown");
       setStatus("ready");
       proposalRecoveryRef.current = null;
     }
     activeWorkspaceIdRef.current = newId;
     prevWorkspaceIdRef.current = newId;
-  }, [activeWorkspace?.id, cleanupRecordingMedia, clearAttachments, discardDrafts]);
+  }, [activeWorkspace?.id, discardDrafts]);
 
   useEffect(() => {
     if (activeWorkspace) {
@@ -887,57 +684,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     }
   }, [activeWorkspace, loadHistory]);
 
-  useEffect(() => {
-    if (process.env.NEXT_PUBLIC_TED_LIVE_SYNC_ENABLED !== "1" || !activeWorkspace?.id) return;
-    const workspaceId = activeWorkspace.id;
-    const client = createTedLiveClient({ workspaceId });
-    const liveRefreshTimer = { current: undefined as ReturnType<typeof setTimeout> | undefined };
-    const liveRefreshInFlight = { current: false };
-    const liveRefreshDirty = { current: false };
-    const lastLiveRefreshAt = { current: 0 };
-    const scheduleRefresh = () => {
-      if (isStaleScope(workspaceId)) return;
-      if (streamingRef.current) { liveRefreshDirty.current = true; return; }
-      if (nonSilentInFlightRef.current > 0) { liveRefreshDirty.current = true; return; }
-      if (liveRefreshInFlight.current) { liveRefreshDirty.current = true; return; }
-      if (liveRefreshTimer.current !== undefined) return;
-      const delay = Math.max(0, 2000 - (Date.now() - lastLiveRefreshAt.current));
-      liveRefreshTimer.current = setTimeout(() => {
-        liveRefreshTimer.current = undefined;
-        if (isStaleScope(workspaceId)) return;
-        if (streamingRef.current) { liveRefreshDirty.current = true; return; }
-        if (nonSilentInFlightRef.current > 0) { liveRefreshDirty.current = true; return; }
-        liveRefreshInFlight.current = true;
-        liveRefreshDirty.current = false;
-        lastLiveRefreshAt.current = Date.now();
-        void loadHistoryRef.current({ silent: true }).catch(() => {}).finally(() => {
-          liveRefreshInFlight.current = false;
-          if (liveRefreshDirty.current) scheduleRefresh();
-        });
-      }, delay);
-    };
-    scheduleLiveRefreshRef.current = () => {
-      if (liveRefreshDirty.current) scheduleRefresh();
-    };
-    const unsubscribe = client.onFrame(() => { scheduleRefresh(); });
-    let previousState = client.getState();
-    const unsubscribeState = client.onState((nextState) => {
-      if (previousState === "reconnecting" && nextState === "open") scheduleRefresh();
-      previousState = nextState;
-    });
-    void client.start().catch(() => {});
-    return () => {
-      if (liveRefreshTimer.current !== undefined) clearTimeout(liveRefreshTimer.current);
-      liveRefreshTimer.current = undefined;
-      liveRefreshInFlight.current = false;
-      liveRefreshDirty.current = false;
-      lastLiveRefreshAt.current = 0;
-      scheduleLiveRefreshRef.current = () => {};
-      unsubscribe();
-      unsubscribeState();
-      client.stop();
-    };
-  }, [activeWorkspace?.id, isStaleScope]);
 
   /**
    * FIX-P1-UX #173: reduced-motion users always get instant jumps — every
@@ -1028,142 +774,12 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     target.focus({ preventScroll: true });
   }, [focusedOperation]);
 
-  /**
-   * A13: upload real por tipo (o botão/file input já respeita `caps.<tipo>`).
-   *
-   * O preview local (object URL) é apenas para o usuário; o QUE SAI para o
-   * Agent é a referência opaca devolvida pelo upload. Falha de upload vira um
-   * estado explícito na UI e o anexo fica SEM ref — logo não entra no envio
-   * (nunca um envio "degradado" com URL local).
-   */
-  const uploadSelected = useCallback(
-    async (workspaceId: string, pending: ReadonlyArray<TedAttachment>) => {
-      for (const attachment of pending) {
-        if (!attachment.file) continue;
-        try {
-          const uploaded = await uploadAttachment(workspaceId, {
-            kind: attachment.type,
-            file: attachment.file,
-            name: attachment.name,
-          });
-          // A02/R02 (AC07): o ref pertence ao escopo que o emitiu; após troca
-          // de workspace/logout ele é descartado em vez de vazar para o novo.
-          if (activeWorkspaceIdRef.current !== workspaceId) return;
-          // F6: `ready` is the only state whose reference crosses the wire.
-          setAttachments((prev) =>
-            prev.map((item) =>
-              item.url === attachment.url ? { ...item, ref: uploaded.ref, uploadState: "ready" } : item,
-            ),
-          );
-        } catch {
-          if (activeWorkspaceIdRef.current !== workspaceId) return;
-          // F6: the failure is EXPLICIT on the chip itself (`failed`), so the
-          // message can still go out without it — visibly, never silently.
-          setAttachments((prev) =>
-            prev.map((item) => (item.url === attachment.url ? { ...item, uploadState: "failed" } : item)),
-          );
-          setError("Não foi possível enviar o anexo. Verifique o formato e tente novamente.");
-        }
-      }
-    },
-    [],
-  );
-
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!caps.image) return;
-    const files = e.target.files;
-    if (!files) return;
-    // R3 FIX 3: o servidor recusa com 413 acima do limite — o excedente é
-    // bloqueado AQUI, com mensagem, nunca truncado em silêncio.
-    const picked = Array.from(files);
-    const room = CHAT_SEND_ATTACHMENT_LIMIT - attachments.length;
-    if (room <= 0) {
-      setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
-      e.target.value = "";
-      return;
-    }
-    const newAttachments: TedAttachment[] = [];
-    for (const file of picked.slice(0, room)) {
-      if (!file.type.startsWith("image/")) continue;
-      const url = URL.createObjectURL(file);
-      // F6: the chip starts as `uploading`, which BLOCKS the send until the
-      // reference resolves (or the failure is made visible).
-      newAttachments.push({ type: "image", url, name: file.name, file, uploadState: "uploading" });
-    }
-    if (picked.length > room) setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
-    if (newAttachments.length > 0) {
-      setAttachments((prev) => [...prev, ...newAttachments]);
-      if (activeWorkspace) void uploadSelected(activeWorkspace.id, newAttachments);
-    }
-    // reset input to allow re-selecting same file
-    e.target.value = "";
-  };
-
-  const handlePdfSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!caps.pdf) return;
-    const files = e.target.files;
-    if (!files) return;
-    // R3 FIX 3: mesmo bloqueio do excedente (ver `handleImageSelect`).
-    const picked = Array.from(files);
-    const room = CHAT_SEND_ATTACHMENT_LIMIT - attachments.length;
-    if (room <= 0) {
-      setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
-      e.target.value = "";
-      return;
-    }
-    const newAttachments: TedAttachment[] = [];
-    for (const file of picked.slice(0, room)) {
-      if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) continue;
-      const url = URL.createObjectURL(file);
-      newAttachments.push({ type: "pdf", url, name: file.name, file, uploadState: "uploading" });
-    }
-    if (picked.length > room) setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
-    if (newAttachments.length > 0) {
-      setAttachments((prev) => [...prev, ...newAttachments]);
-      if (activeWorkspace) void uploadSelected(activeWorkspace.id, newAttachments);
-    }
-    e.target.value = "";
-  };
-
-  // F6: any attachment still uploading blocks the send. `failed` does NOT: the
-  // message goes out without it, with the failure already visible on the chip.
-  const uploadingAttachments = attachments.some((a) => a.uploadState === "uploading");
-
-  const handleRemoveAttachment = (index: number) => {
-    setAttachments((prev) => {
-      const toRemove = prev[index];
-      if (toRemove) {
-        try {
-          URL.revokeObjectURL(toRemove.url);
-        } catch {
-          /* já revogada — ignore */
-        }
-      }
-      return prev.filter((_, i) => i !== index);
-    });
-  };
-
-  // SPEC §17: estado "recording" só existe após getUserMedia + MediaRecorder + start.
-  // "requesting" é cancelável; "processing" aguarda o onstop gerar o anexo.
-  const handleToggleRecording = () => {
-    if (isRecording || recordingState === "processing") {
-      recordingCtl.stop();
-      return;
-    }
-    if (isRequestingMic) {
-      cleanupRecordingMedia();
-      return;
-    }
-    setError(null);
-    void recordingCtl.start();
-  };
-
   // SPEC §19.1: the actual send lifecycle shared by first sends and §19.3
   // retries. Success marks the optimistic bubble as sent and lets the
   // authoritative history own the log; failure keeps the bubble visible as
   // failed (never silently discarded) with the draft intact for retry.
   //
-  // P2 — cancellable turn, B-confirmed only (see `tedRuntime` above). The
+  // Runtime cancellation is always available.
   // active send owns ONE AbortController (ref, never state — transient by
   // `rerender-use-ref-transient-values`). Cancel aborts the in-flight
   // `sendAgentMessage` only; `loading` stays true until the abort settles in
@@ -1198,7 +814,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
         sendWorkspaceId,
         send.content,
         {
-          ...(send.attachments ? { attachments: [...send.attachments] } : {}),
           // SPEC §7.7: retries pass the SAME messageId back — a lost HTTP
           // response can never produce a second proposal.
           messageId: send.messageId,
@@ -1352,10 +967,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // R3 FIX 1: o snapshot da âncora morre com o draft no sucesso — o
       // histórico autoritativo passa a ser dono do log.
       anchorSnapshotsRef.current.delete(send.messageId);
-      revokeAttachmentUrls(
-        (draftPreviewUrlsRef.current.get(send.messageId) ?? []).map((url) => ({ url })),
-      );
-      draftPreviewUrlsRef.current.delete(send.messageId);
     } catch (err) {
       // A02/R02 (AC07): a failure raised after the scope changed belongs to
       // the previous conversation — never mark a bubble nor surface an error
@@ -1368,58 +979,26 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       setError(sendErrorMessage(err));
       setStatus("error");
       // No history reload on failure: it would wipe the failed bubble.
-      // The draft (messageId, content, live URLs) stays for retry.
+      // The draft (messageId and content) stays for retry.
     } finally {
       if (activeSendControllerRef.current === controller) activeSendControllerRef.current = null;
-      // P2: re-read the server-confirmed runtime after the turn settles (the
-      // turn response carries the header too). Stale scopes write nothing.
-      if (!isStaleScope(sendWorkspaceId)) setTedRuntime(getTedRuntimeView(sendWorkspaceId));
-      setLoading(false);
+      // Keep loading state scoped to the conversation that started the send.
+      if (!isStaleScope(sendWorkspaceId))
+        setLoading(false);
     }
   };
 
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
-    const hasText = input.trim().length > 0;
-    const hasAttachments = attachments.length > 0;
-    // F6: sending while an upload is in flight would drop that attachment
-    // silently (no `ref` yet). The send waits for the reference instead.
-    if (uploadingAttachments) return;
-    if ((!hasText && !hasAttachments) || !activeWorkspace || loading) return;
+    if (!input.trim() || !activeWorkspace || loading) return;
 
-    // F1: `text` is ONLY what the human typed. It used to be composed from the
-    // attachment names (`[pdf: sim confirmo.pdf]`), which put an untrusted,
-    // user-supplied string into the exact field the server routes DECISIONS and
-    // the autoexecute imperative from — a file named "sim confirmo.pdf" decided
-    // pending operations. The attachment travels in its OWN field; the server
-    // renders the `[anexo …]` placeholder from that array.
     const userText = input.trim();
-    // §19.1: EVERY message renders immediately (optimistic), text included —
-    // not only messages carrying attachments. The bubble keeps the LOCAL
-    // object URL (render-only; never sent).
-    const localAttachments = attachments.map((a) => ({ type: a.type, url: a.url, name: a.name }));
-    // A13: what CROSSES the wire is the opaque reference. An attachment whose
-    // upload did not resolve has no ref and is not sent at all — the failure is
-    // already surfaced as an explicit error state (never a silent degradation).
-    const wireAttachments = attachments
-      .filter((a) => Boolean(a.ref))
-      .map((a) => ({ type: a.type, url: "", name: a.name, ref: a.ref as string }));
-    // R3 FIX 3: defesa em profundidade — a seleção já bloqueia o excedente,
-    // mas um estado inconsistente nunca sai como 413 evitável: falha explícita.
-    if (wireAttachments.length > CHAT_SEND_ATTACHMENT_LIMIT) {
-      setError(MESSAGE_ATTACHMENT_LIMIT_ERROR);
-      return;
-    }
     // SPEC §7.7: the send identity is minted ONCE at composition; retries
     // reuse it via the draft record below. Because `content` IS the typed text,
     // the §19.3 retry path re-sends exactly what was typed — the old divergence
     // (markers on the first attempt, plain text on retry) is gone by construction.
-    const send = composeChatSend(userText, wireAttachments.length > 0 ? { attachments: wireAttachments } : undefined);
+    const send = composeChatSend(userText);
     draftsRef.current.set(send.messageId, send);
-    draftPreviewUrlsRef.current.set(
-      send.messageId,
-      localAttachments.map((a) => a.url).filter((url) => url.startsWith("blob:")),
-    );
 
     const optimistic: ChatMessage = {
       id: send.messageId,
@@ -1429,14 +1008,10 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       createdAt: new Date().toISOString(),
       isOwn: true,
       delivery: "sending",
-      ...(localAttachments.length > 0 ? { attachments: localAttachments } : {}),
     };
     setMessages((prev) => [...prev, optimistic]);
 
     setInput("");
-    // The optimistic message now owns the object URLs — do NOT revoke here
-    // (§19.3 keeps them alive while the draft can still be retried).
-    setAttachments([]);
     void executeSend(send);
   };
 
@@ -1480,9 +1055,8 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const handleRetry = (messageId: string) => {
     if (!activeWorkspace || loading) return;
     const failed = messages.find((m) => m.id === messageId && m.delivery === "failed");
-    // R2 FIX 1 + R3 FIX 3: âncora legada/overLimit reidratada
-    // (`retryable: false`) não tem retry — defesa em profundidade (o botão
-    // nem é oferecido).
+    // Legacy anchors whose original payload cannot be reconstructed are not
+    // retryable (the button is not offered).
     if (!failed || failed.retryable === false) return;
     const scopeId = activeWorkspace.id;
     // P3: the persisted intent owns this retry; the chat turn is not re-sent.
@@ -1492,22 +1066,8 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       return;
     }
     const stored = draftsRef.current.get(messageId);
-    const snapshot = anchorSnapshotsRef.current.get(messageId);
-    const result = resolveRetrySend({
-      messageId,
-      failed,
-      ...(stored ? { stored } : {}),
-      ...(snapshot?.attachments?.length ? { snapshotAttachments: snapshot.attachments } : {}),
-    });
-    if (!result.ok) {
-      if (result.reason === "attachments") {
-        setError("Não é possível reenviar esta mensagem com anexos. Reenvie a mensagem (os anexos não são reproduzidos).");
-      } else {
-        setError("Não há rascunho salvo para reenviar. Reenvie a mensagem original.");
-      }
-      return;
-    }
-    const send = result.send;
+    const send = stored ?? composeChatSend(failed.content, { messageId });
+    if (!send.content.trim()) return;
     draftsRef.current.set(messageId, send);
     setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "sending" as const } : m)));
     void executeSend(send);
@@ -1515,10 +1075,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
 
   const handleNewSession = async () => {
     if (!activeWorkspace || loading) return;
-    // SPEC §17: nova sessão encerra o microfone via cleanup único.
-    // INV-08: nova sessão também descarta e revoga o rascunho pendente.
-    cleanupRecordingMedia();
-    clearAttachments();
     discardDrafts();
     setError(null);
     // As listas ativas têm escopo de workspace/ator/device, não de sessão —
@@ -1530,7 +1086,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       if (isStaleScope(scopeId)) return;
       // P2: a renewal defines a fresh conversation lifecycle (the client
       // reset the view on success) — sync the local gate from it.
-      setTedRuntime(getTedRuntimeView(scopeId));
       setMessages([]);
       setInput("");
       // Nova sessão limpa SÓ a exibição local: o lote do /rpc/history logo
@@ -1575,8 +1130,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   // 403 com flag off vira aviso honesto, sem expor ids).
   const handleNewPrivateSession = async () => {
     if (!activeWorkspace || loading) return;
-    cleanupRecordingMedia();
-    clearAttachments();
     discardDrafts();
     setError(null);
     try {
@@ -1842,78 +1395,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
         {/* Footer Input */}
         <form onSubmit={handleSend} className="border-t border-border-subtle bg-surface-1 p-3 pb-[env(safe-area-inset-bottom)]">
           {/* Attachment previews */}
-          {attachments.length > 0 && (
-            <div className="mb-2 flex flex-wrap gap-2">
-              {attachments.map((att, idx) => (
-                <div key={`${att.name}-${idx}`} className="relative flex items-center gap-1.5 rounded-[12px] border border-border-subtle bg-surface-2 px-2.5 py-1.5 text-xs shadow-xs">
-                  {att.type === "image" && (
-                    <img src={att.url} alt={att.name} className="h-10 w-10 rounded-[8px] object-cover border border-border-subtle" />
-                  )}
-                  {att.type === "pdf" && <FileText size={18} className="text-danger" />}
-                  {att.type === "audio" && <Mic size={18} className="text-primary" />}
-                  <span className="max-w-[100px] truncate text-[11px] font-medium text-text-secondary">{att.name}</span>
-                  <span className="text-[10px] text-text-muted">{att.type}</span>
-                  {/* F6: the upload state is VISIBLE on the chip — a pending
-                      upload blocks the send, a failure never hides itself. */}
-                  {att.uploadState === "uploading" && (
-                    <span className="text-[10px] font-medium text-text-muted">enviando…</span>
-                  )}
-                  {att.uploadState === "failed" && (
-                    <span className="text-[10px] font-medium text-danger">falha no envio</span>
-                  )}
-                  <button type="button" aria-label={`Remover ${att.name}`} onClick={() => handleRemoveAttachment(idx)} className="ml-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-surface-3 text-text-muted hover:text-danger">
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Hidden file inputs — só existem quando a capability está ativa (SPEC §18) */}
-          {caps.image && (
-            <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleImageSelect} aria-label="input imagem" />
-          )}
-          {caps.pdf && (
-            <input ref={pdfInputRef} type="file" accept="application/pdf,.pdf" multiple className="hidden" onChange={handlePdfSelect} aria-label="input pdf" />
-          )}
-
           <div className="flex items-end gap-1.5 rounded-[16px] border border-border-subtle bg-surface-2 px-2 py-2 shadow-xs transition-colors focus-within:border-primary focus-within:bg-surface-1">
-            {caps.image && (
-              <button
-                type="button"
-                onClick={() => imageInputRef.current?.click()}
-                aria-label="Anexar imagem"
-                className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-surface-3 text-text-secondary hover:bg-surface-4 hover:text-text-primary cursor-pointer"
-              >
-                <ImageIcon size={16} />
-              </button>
-            )}
-            {caps.pdf && (
-              <button
-                type="button"
-                onClick={() => pdfInputRef.current?.click()}
-                aria-label="Anexar PDF"
-                className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-surface-3 text-text-secondary hover:bg-surface-4 hover:text-text-primary cursor-pointer"
-              >
-                <FileText size={16} />
-              </button>
-            )}
-            {/* V4 T1.1 (INV-08 bidirectional): the record button exists ONLY
-                when the microphone capability is on — absent from the render
-                when off (never disabled), reading the SAME flag as the
-                Permissions-Policy header so UI and header never diverge. */}
-            {caps.microphone && (
-            <button
-              type="button"
-              onClick={handleToggleRecording}
-              aria-label={isRecording ? "Parar gravação" : isRequestingMic ? "Solicitando permissão de microfone" : "Gravar áudio"}
-              className={`flex h-9 w-9 flex-none items-center justify-center rounded-full shadow-xs cursor-pointer ${isRecording ? "bg-danger text-white animate-pulse" : "bg-surface-3 text-text-secondary hover:bg-surface-4"}`}
-            >
-              {isRecording ? <MicOff size={16} /> : <Mic size={16} />}
-            </button>
-            )}
-            {isRecording && <span className="text-[11px] font-bold text-danger animate-pulse">gravando…</span>}
-            {isRequestingMic && <span className="text-[11px] font-medium text-text-muted">solicitando permissão…</span>}
             <textarea
               ref={messageInputRef}
               value={input}
@@ -1942,7 +1424,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
             ) : (
               <button
                 type="submit"
-                disabled={loading || uploadingAttachments || (!input.trim() && attachments.length === 0)}
+                disabled={loading || !input.trim()}
                 aria-label="Enviar mensagem"
                 className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-primary text-white shadow-fab transition-all hover:bg-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none cursor-pointer"
               >
@@ -1953,7 +1435,6 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
           {/* §19.5/§24: keyboard hints assume a physical keyboard — they do
               not occupy space on touch devices (hover:none + pointer:coarse). */}
           <div className="mt-2 flex items-center justify-center gap-2 text-[10px] font-medium tracking-wide text-text-muted [@media(hover:none)_and_(pointer:coarse)]:hidden">
-            <Paperclip size={10} />
             <span>Pressione Enter para enviar • Shift+Enter para nova linha</span>
           </div>
         </form>

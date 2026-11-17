@@ -49,15 +49,7 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
     fetchAgentHistory: vi.fn(),
     sendAgentMessage: vi.fn(),
     renewAgentSession: vi.fn(),
-    // A13: o upload devolve a referência opaca; o wire NUNCA leva o object URL.
-    uploadAttachment: vi
-      .fn()
-      .mockImplementation(async (_ws: string, input: { kind: string; name?: string }) => ({
-        ref: "att_0000000000000000aaaa",
-        kind: input.kind,
-        name: input.name ?? "anexo",
-        size: 33,
-      })),
+    // A13: o upload devolve a referência opaca; o wire NUNCA leva o object URL.),
   };
 });
 
@@ -76,7 +68,7 @@ const INPUT_PLACEHOLDER = "Pergunte sobre gastos, metas ou pagamentos…";
 
 async function renderWithHistoryLoaded() {
   vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
-    { id: "srv-1", actorId: "ted", role: "assistant", content: "Olá! Como posso ajudar?", isOwn: false, createdAt: undefined, attachments: undefined },
+    { id: "srv-1", actorId: "ted", role: "assistant", content: "Olá! Como posso ajudar?", isOwn: false, createdAt: undefined },
   ]);
   render(<TedChat />);
   await screen.findByText("Olá! Como posso ajudar?");
@@ -189,51 +181,6 @@ describe("TedChat — §19.3 retry preserves the draft", () => {
     expect(ids[0]).toBeTruthy();
   });
 
-  it("retry keeps the same attachment object URLs alive; failure never revokes them, success consumes and revokes", async () => {
-    vi.stubEnv("NEXT_PUBLIC_TED_ATTACHMENT_INGESTION", "1");
-    (URL as unknown as { createObjectURL?: unknown }).createObjectURL = vi.fn(() => "blob:mock-url");
-    (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL = vi.fn();
-    const user = userEvent.setup();
-    await renderWithHistoryLoaded();
-
-    vi.mocked(agentClient.sendAgentMessage)
-      .mockRejectedValueOnce(new Error("fail"))
-      .mockResolvedValueOnce(okTurn);
-
-    const imageInput = screen
-      .getByRole("region", { name: "Chat com TED" })
-      .querySelector('input[type="file"][accept*="image"]') as HTMLInputElement;
-    await user.upload(imageInput, new File(["x"], "nota.png", { type: "image/png" }));
-    await screen.findByRole("button", { name: /remover nota\.png/i });
-    await user.click(screen.getByRole("button", { name: /enviar mensagem/i }));
-
-    await screen.findByRole("button", { name: /tentar novamente/i });
-    // Object URL must stay alive while the failed draft exists.
-    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith("blob:mock-url");
-
-    await user.click(screen.getByRole("button", { name: /tentar novamente/i }));
-    await waitFor(() => expect(agentClient.sendAgentMessage).toHaveBeenCalledTimes(2));
-
-    const firstAtts = (vi.mocked(agentClient.sendAgentMessage).mock.calls[0]?.[2] as {
-      attachments?: Array<{ url?: string; ref?: string; name: string; type: string }>;
-    }).attachments;
-    const secondAtts = (vi.mocked(agentClient.sendAgentMessage).mock.calls[1]?.[2] as {
-      attachments?: Array<{ url?: string; ref?: string; name: string; type: string }>;
-    }).attachments;
-    // O retry reenvia o MESMO rascunho (mesma referência, sem re-upload).
-    expect(secondAtts).toEqual(firstAtts);
-    // A13: o anexo cruza a rede como REFERÊNCIA opaca — o object URL é
-    // estritamente local e nunca é enviado.
-    expect(secondAtts?.[0]).toMatchObject({ name: "nota.png", type: "image" });
-    expect(secondAtts?.[0]?.ref).toMatch(/^att_/);
-    expect(JSON.stringify(secondAtts)).not.toContain("blob:mock-url");
-
-    // Success consumes the draft: local object URLs are revoked afterwards.
-    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock-url"));
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: /tentar novamente/i })).toBeNull(),
-    );
-  });
 });
 
 describe("TedChat — §19.4 connection status in pt-BR", () => {

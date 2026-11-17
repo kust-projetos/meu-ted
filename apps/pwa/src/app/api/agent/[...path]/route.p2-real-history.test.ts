@@ -65,7 +65,6 @@ vi.mock("@/lib/api/agent-auth", () => ({
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { GET } from "./route";
 import { fetchAgentHistory } from "@/lib/api/agent-client";
-import { clearTedRuntimeViews, getTedRuntimeView } from "@/lib/api/ted-runtime-view";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROBE = path.resolve(HERE, "../../../../../../ted-runtime/tests/helpers/p2-real-history-probe.mjs");
@@ -222,13 +221,11 @@ class ServeProc {
 beforeEach(() => {
   vi.mocked(getCloudflareContext).mockRejectedValue(new Error("no ctx"));
   deviceState.current = "test-device-p2-history-01";
-  clearTedRuntimeViews();
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
-  clearTedRuntimeViews();
 });
 
 describe("P2 PWA real-history: proxy/client sobre a conversa reaberta pelo SDK real", () => {
@@ -257,6 +254,7 @@ describe("P2 PWA real-history: proxy/client sobre a conversa reaberta pelo SDK r
     ]);
     const base = String(serve.ready["base"]);
     const sessionCookie = String(serve.ready["sessionCookie"] ?? "p2-seam-session=valid");
+    const conversationCookie = `ted-runtime-conversation=opencode.${seeded.conversationId}`;
     const deviceToken = String(serve.ready["deviceToken"] ?? "test-device-p2-history-01");
     const workspace = String(serve.ready["workspace"] ?? "H_P2HIST");
     expect(base.startsWith("http://127.0.0.1:")).toBe(true);
@@ -273,19 +271,15 @@ describe("P2 PWA real-history: proxy/client sobre a conversa reaberta pelo SDK r
     };
 
     try {
-      // Flag de runtime só via stub (restaurada no afterEach); gateway é
-      // loopback permitido pelo `resolveTedGatewayOrigin`.
+      // Gateway local permitido pelo resolveTedGatewayOrigin.
       vi.stubEnv("NODE_ENV", "test");
       vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
-      vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
-    vi.stubEnv("TED_OPENCODE_WORKSPACES", "ws-1");
       vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", base);
 
-      const pinCookie = `ted-runtime-conversation=opencode.${seeded.conversationId}`;
       const historyPath = ["agents", "finance-chat-agent", workspace, "rpc", "history"];
       const historyUrl = `http://localhost:3000/api/agent/agents/finance-chat-agent/${encodeURIComponent(workspace)}/rpc/history`;
       const directHeaders = (): Record<string, string> => ({
-        cookie: `${sessionCookie}; ${pinCookie}`,
+        cookie: `${sessionCookie}; ${conversationCookie}`,
         "x-device-token": deviceToken,
         "x-workspace-id": workspace,
       });
@@ -303,8 +297,9 @@ describe("P2 PWA real-history: proxy/client sobre a conversa reaberta pelo SDK r
             const segments = noQuery.replace(/^\/api\/agent\//, "").split("/").map(decodeURIComponent);
             const incoming = new Headers((init?.headers as HeadersInit | undefined) ?? {});
             const prevCookie = incoming.get("cookie") ?? "";
+            if (!prevCookie) incoming.set("cookie", sessionCookie);
             if (!prevCookie.includes("ted-runtime-conversation")) {
-              incoming.set("cookie", prevCookie ? `${prevCookie}; ${pinCookie}` : `${sessionCookie}; ${pinCookie}`);
+              incoming.set("cookie", `${prevCookie || sessionCookie}; ${conversationCookie}`);
             }
             const req = new Request(`http://localhost:3000${s}`, {
               method: (init as RequestInit | undefined)?.method ?? "GET",
@@ -355,7 +350,6 @@ describe("P2 PWA real-history: proxy/client sobre a conversa reaberta pelo SDK r
         expect(viaClient.map((i) => i.id)).toEqual(expectedIds);
         expect(viaClient[0].content).toBe(seeded.userText);
         expect(viaClient[1].content).toBe(seeded.assistantText);
-        expect(getTedRuntimeView(workspace)).toBe("opencode");
       });
 
       // 5. Reload/mount: segundo GET devolve o MESMO transcript, sem prompt.

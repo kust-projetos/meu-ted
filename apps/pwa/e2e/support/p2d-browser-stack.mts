@@ -51,11 +51,12 @@ const PROBE = path.resolve(HERE, "p2d-synthetic-read-probe.mjs");
 // into this process, the PWA or Next.
 const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
 const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
-// P3 proposal slices (test-only): real Agent Worker + Pending V2 on the
+// P3 proposal slices (test-only): real TED gateway + Pending V2 on the
 // synthetic API + the scripted provider emitting propose_expense (P3.1) or
 // propose_income (P3.2). It reuses the same loopback stack; no external
 // inference and no production data.
 const EXPENSE = process.env.P2D_EXPENSE === "1";
+const EXPENSE_REAL = process.env.P2D_EXPENSE_REAL === "1";
 const INCOME = process.env.P2D_INCOME === "1";
 const CARD = process.env.P2D_CARD === "1";
 const CARD_INSTALLMENTS = process.env.P2D_CARD_INSTALLMENTS === "1";
@@ -63,27 +64,22 @@ const TRANSFER = process.env.P2D_TRANSFER === "1";
 const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
 const P3_PILOT = process.env.P2D_P3_PILOT === "1";
 const P38_CARD_SMOKE = process.env.P2D_P38_CARD_SMOKE === "1";
-// P2D rollback slice: needs the real Agent Worker (A0) for the pin to land on,
-// plus the loopback gateway so a wrong route would be observable. Never prompts
-// the gateway (kill switch forces A0).
-const ROLLBACK = process.env.P2D_ROLLBACK === "1";
-const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
-const AGENT_RUN = PROPOSAL || ROLLBACK;
-if (ROLLBACK && (PROPOSAL || OFFLINE_CHAT || LIVE_REAL)) {
-  throw new Error("[p2d-stack] P2D_ROLLBACK is exclusive with every other P2D mode");
+const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || EXPENSE || EXPENSE_REAL || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+if (EXPENSE_REAL && !LIVE_REAL) {
+  throw new Error("[p2d-stack] P2D_EXPENSE_REAL requires P2D_LIVE_REAL (fail-closed)");
 }
 if (P38_CARD_SMOKE && !LIVE_REAL) {
   throw new Error("[p2d-stack] P2D_P38_CARD_SMOKE requires P2D_LIVE_REAL (fail-closed)");
 }
-if (P38_CARD_SMOKE && (P3_PILOT || EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY || OFFLINE_CHAT)) {
+if (P38_CARD_SMOKE && (P3_PILOT || EXPENSE || EXPENSE_REAL || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY || OFFLINE_CHAT)) {
   throw new Error("[p2d-stack] P2D_P38_CARD_SMOKE is exclusive with P3_PILOT, P3 slices and P2D_OFFLINE_CHAT");
 }
-if (P3_PILOT && (EXPENSE || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY || OFFLINE_CHAT)) {
+if (P3_PILOT && (EXPENSE || EXPENSE_REAL || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY || OFFLINE_CHAT)) {
   throw new Error("[p2d-stack] P2D_P3_PILOT is exclusive with P3 slices and P2D_OFFLINE_CHAT");
 }
-if ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].filter(Boolean).length > 1) {
+if ([EXPENSE, EXPENSE_REAL, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].filter(Boolean).length > 1) {
   throw new Error(
-    "[p2d-stack] select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD|P2D_CARD_INSTALLMENTS|P2D_TRANSFER|P2D_STATEMENT_PAY)",
+    "[p2d-stack] select at most one P3 proposal slice (P2D_EXPENSE|P2D_EXPENSE_REAL|P2D_INCOME|P2D_CARD|P2D_CARD_INSTALLMENTS|P2D_TRANSFER|P2D_STATEMENT_PAY)",
   );
 }
 if (OFFLINE_CHAT && LIVE_REAL) {
@@ -113,6 +109,7 @@ type AuthConfig = Parameters<typeof createBetterAuth>[0];
 const { createBetterAuth } = await import("../../../api/src/auth/better-auth.js");
 const { buildTestApp } = await import("../../../api/tests/test-app.js");
 const { createInMemoryPendingOperationV2Store } = await import("../../../api/src/approvals/pending-v2.js");
+const { createInMemoryDeviceTokenStore } = await import("../../../api/src/auth/device-token.js");
 const {
   ACCOUNT_A1,
   ACCOUNT_A2,
@@ -123,6 +120,7 @@ const {
   CATEGORY_RENT_A,
   CATEGORY_SALARY_A,
   HOUSEHOLD_A,
+  HOUSEHOLD_B,
   TRANSACTIONS,
 } = await import("../../../api/tests/fixtures/seed.js");
 
@@ -143,15 +141,11 @@ function numEnv(name: string, fallback: number): number {
 const API_PORT = numEnv("P2D_API_PORT", 4110);
 const GATEWAY_PORT = numEnv("P2D_GATEWAY_PORT", 3221);
 const CTL_PORT = numEnv("P2D_CTL_PORT", 3200);
-const AGENT_PORT = numEnv("P2D_AGENT_PORT", 3222);
 const SECRET = "test-secret-that-is-at-least-32-characters";
-// Dev-only HMAC pairs for the local Agent/API (same values the repo's
-// docker/local stack uses; never production).
 const DELEGATION_SECRET = "dev-agent-delegation-secret-32-chars!";
-const CONNECTION_SECRET = "dev-agent-connection-secret-at-least-32-chars!";
-const SERVICE_TOKEN = "dev-agent-auth-service-token-32-chars!";
-process.env.AGENT_CONNECTION_TOKEN_SECRET = CONNECTION_SECRET;
-process.env.AGENT_AUTH_SERVICE_TOKEN = SERVICE_TOKEN;
+const PENDING_MINT_TOKEN = "p2d-pending-mint-token-synthetic-32chars";
+const DELETION_SERVICE_TOKEN = "p2d-workspace-deletion-service-token-32chars";
+const DELETION_HMAC_SECRET = "p2d-workspace-deletion-hmac-secret-32chars";
 
 function approvedTmpRoot(prefix: string): string {
   const base =
@@ -166,7 +160,6 @@ function approvedTmpRoot(prefix: string): string {
   }
 }
 const ROOT = approvedTmpRoot("ted-pwa-p2dbrowser");
-const AGENT_PERSIST = approvedTmpRoot("ted-agent-p3");
 console.log(`[p2d-stack] root=${ROOT}`);
 
 // Fixed single-workspace store (test-only): the synthetic user always sees
@@ -179,6 +172,67 @@ const WS_SUMMARY = {
   role: "owner",
   status: "active",
 } as const;
+// Better-Auth creates synthetic session users, while production resolves each
+// auth user to the internal `users.id` used by delegated-token claims.
+const ACTOR_BY_WORKSPACE: Record<string, string> = {
+  [HOUSEHOLD_A]: "11111111-1111-4111-8111-111111111111",
+  [HOUSEHOLD_B]: "22222222-2222-4222-8222-222222222222",
+};
+const syntheticSessionActors = new Map<string, string>();
+const deviceTokenStore = createInMemoryDeviceTokenStore();
+const registeredDevices = new Map<string, { householdId: string; authUserId: string | null }>();
+const deviceByToken = new Map<string, string>();
+const customTokenStore = {
+  resolve: (...args: Parameters<typeof deviceTokenStore.resolve>) => deviceTokenStore.resolve(...args),
+  async register(
+    deviceName: string,
+    householdId: string,
+    opts?: Parameters<typeof deviceTokenStore.register>[2],
+  ) {
+    const registered = await deviceTokenStore.register(deviceName, householdId, opts);
+    registeredDevices.set(registered.deviceId, {
+      householdId: registered.householdId,
+      authUserId: opts?.userId ?? null,
+    });
+    deviceByToken.set(registered.token, registered.deviceId);
+    return registered;
+  },
+  async rotate(
+    currentToken: string | undefined,
+    deviceName: string,
+    householdId: string,
+    opts?: Parameters<typeof deviceTokenStore.rotate>[3],
+  ) {
+    const rotated = await deviceTokenStore.rotate(currentToken, deviceName, householdId, opts);
+    const context = await deviceTokenStore.resolve(rotated.token, rotated.householdId);
+    registeredDevices.set(rotated.deviceId, {
+      householdId: rotated.householdId,
+      authUserId: context.userId ?? null,
+    });
+    deviceByToken.set(rotated.token, rotated.deviceId);
+    return rotated;
+  },
+  async revoke(token: string, householdId?: string) {
+    await deviceTokenStore.revoke(token, householdId);
+    const deviceId = deviceByToken.get(token);
+    if (deviceId) registeredDevices.delete(deviceId);
+    deviceByToken.delete(token);
+  },
+  async revokeAllForUserWorkspace(authUserId: string, householdId: string) {
+    const count = await deviceTokenStore.revokeAllForUserWorkspace(authUserId, householdId);
+    const revokedDevices = new Set<string>();
+    for (const [deviceId, device] of registeredDevices) {
+      if (device.householdId === householdId && device.authUserId === authUserId) {
+        registeredDevices.delete(deviceId);
+        revokedDevices.add(deviceId);
+      }
+    }
+    for (const [token, deviceId] of deviceByToken) {
+      if (revokedDevices.has(deviceId)) deviceByToken.delete(token);
+    }
+    return count;
+  },
+};
 const fixedWorkspaceStore = {
   list: async () => [{ ...WS_SUMMARY }],
   create: async () => ({ ...WS_SUMMARY }),
@@ -209,8 +263,40 @@ const fixedWorkspaceStore = {
 };
 const workspaceAccess = {
   resolve: async (authUserId: string, householdId: string) => {
-    if (householdId !== HOUSEHOLD_A || !authUserId) return undefined;
-    return { userId: authUserId, householdId, role: "owner" as const, kind: "shared" as const };
+    const actorId = ACTOR_BY_WORKSPACE[householdId];
+    if (!actorId || !authUserId) return undefined;
+    syntheticSessionActors.set(`${householdId}:${authUserId}`, actorId);
+    return { userId: actorId, householdId, role: "owner" as const, kind: "shared" as const };
+  },
+};
+// Narrow synthetic DB boundary for the gateway's service-token mint routes.
+// Only the seeded household and UUID-shaped actor/device tuples are accepted.
+const syntheticPool = {
+  async query(text: string, values: unknown[] = []) {
+    const sql = text.replace(/\s+/g, " ").trim().toLowerCase();
+    if (sql.includes("from households") && sql.includes("where id = $1")) {
+      const rows = values[0] === HOUSEHOLD_A ? [{ id: HOUSEHOLD_A }] : [];
+      return { rows, rowCount: rows.length };
+    }
+    if (sql.includes("from invites") && sql.includes("where id = $1")) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql.includes("from device_tokens") && sql.includes("where device_id = $1")) {
+      const [deviceId, householdId, actorId] = values;
+      const device = typeof deviceId === "string" ? registeredDevices.get(deviceId) : undefined;
+      const validTuple =
+        typeof householdId === "string" &&
+        ACTOR_BY_WORKSPACE[householdId] === actorId &&
+        device?.householdId === householdId &&
+        device.authUserId === actorId &&
+        [...syntheticSessionActors.values()].includes(String(actorId)) &&
+        typeof actorId === "string" && /^[0-9a-f-]{36}$/i.test(actorId);
+      const rows = validTuple
+        ? [{ device_id: deviceId, household_id: householdId, user_id: actorId }]
+        : [];
+      return { rows, rowCount: rows.length };
+    }
+    return { rows: [], rowCount: 0 };
   },
 };
 
@@ -244,6 +330,12 @@ const built = buildTestApp(
   false,
   DELEGATION_SECRET,
   ...(pendingV2Store ? [pendingV2Store] : []),
+  customTokenStore,
+  {
+    pendingMintServiceToken: PENDING_MINT_TOKEN,
+    agentAuthServiceToken: DELETION_SERVICE_TOKEN,
+    pool: syntheticPool,
+  },
 );
 // P3.6: seed the invoice BEFORE the probe starts. The stack's own card store
 // is authoritative; the E2E never invents a statement id or amount. A prior
@@ -452,7 +544,17 @@ async function startProbe(): Promise<{ base: string; pid: number | undefined }> 
       ...process.env,
       P2D_GATEWAY_PORT: String(GATEWAY_PORT),
       P2D_CONFIG_JSON: JSON.stringify(buildProbeConfig()),
+      TED_PENDING_MINT_TOKEN: PENDING_MINT_TOKEN,
+      TED_WORKSPACE_DELETION_SERVICE_TOKEN: DELETION_SERVICE_TOKEN,
+      WORKSPACE_DELETION_HMAC_SECRET: DELETION_HMAC_SECRET,
       ...(PROPOSAL ? { TED_OPENCODE_P3_WRITES_ENABLED: "1", NODE_ENV: "test" } : {}),
+      ...(MODE === "live-real"
+        ? {
+            TED_OPENCODE_PRODUCT_PROMPT_ENABLED: "1",
+            TED_OPENCODE_CATEGORY_MEMORY_ENABLED: "1",
+            TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED: "0",
+          }
+        : {}),
     },
   });
   const handle: ProbeHandle = { child, lines: [], stderrTail: "", exited: false, exitCode: null, pid: child.pid };
@@ -593,141 +695,9 @@ async function closeProbe(): Promise<{ exitCode: unknown; pid: number | undefine
   return debug as { exitCode: unknown; pid: number | undefined; forced: boolean };
 }
 
-// P3 proposal E2E: the REAL Agent Worker (Durable Objects included) runs as a
-// dedicated local child via `wrangler dev --local`. It talks to the synthetic
-// API above; the browser reaches it through the PWA same-origin proxy. No
-// deploy, no Cloudflare account, no external inference.
-type AgentHandle = {
-  child: ChildProcess;
-  lines: string[];
-  stderrTail: string;
-  exited: boolean;
-  exitCode: unknown;
-  pid: number | undefined;
-};
-let agent: AgentHandle | null = null;
-
-async function startAgent(): Promise<void> {
-  if (!AGENT_RUN) return;
-  if (agent && !agent.exited) throw new Error("agent already running");
-  const agentDir = path.resolve(PWA_ROOT, "../agent");
-  const env = {
-    ...process.env,
-    API_ORIGIN: `http://127.0.0.1:${API_PORT}`,
-    AGENT_CONFIG_TOKEN: "dev-agent-config-token-32-chars-minimum!",
-    AGENT_RUNTIME_ADMIN_TOKEN: "dev-agent-runtime-admin-token-32-chars!",
-    AGENT_CONNECTION_TOKEN_SECRET: CONNECTION_SECRET,
-    AGENT_AUTH_SERVICE_TOKEN: SERVICE_TOKEN,
-    AGENT_DELEGATION_SECRET: DELEGATION_SECRET,
-    PWA_ORIGIN: NEXT_ORIGIN,
-    ALLOW_LOCAL_ORIGIN: "1",
-    NODE_ENV: "development",
-    TED_ATTACHMENTS_ENABLED: "0",
-    WRANGLER_SEND_METRICS: "false",
-  } as Record<string, string | undefined>;
-  const args = [
-    "exec",
-    "wrangler",
-    "dev",
-    "src/worker.local-entry.ts",
-    "--local",
-    "--port",
-    String(AGENT_PORT),
-    "--ip",
-    "127.0.0.1",
-    "--persist-to",
-    AGENT_PERSIST,
-    // `wrangler dev` does NOT expose the parent process env as Worker vars.
-    // Inject them explicitly (test-only local values; never production).
-    ...Object.entries({
-      API_ORIGIN: `http://127.0.0.1:${API_PORT}`,
-      AGENT_CONFIG_TOKEN: "dev-agent-config-token-32-chars-minimum!",
-      AGENT_RUNTIME_ADMIN_TOKEN: "dev-agent-runtime-admin-token-32-chars!",
-      AGENT_CONNECTION_TOKEN_SECRET: CONNECTION_SECRET,
-      AGENT_AUTH_SERVICE_TOKEN: SERVICE_TOKEN,
-      AGENT_DELEGATION_SECRET: DELEGATION_SECRET,
-      PWA_ORIGIN: NEXT_ORIGIN,
-      ALLOW_LOCAL_ORIGIN: "1",
-      TED_ATTACHMENTS_ENABLED: "0",
-    }).flatMap(([key, value]) => ["--var", `${key}:${value}`]),
-  ];
-  const child =
-    process.platform === "win32"
-      ? spawn("cmd.exe", ["/d", "/s", "/c", `pnpm ${args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}`], {
-          cwd: agentDir,
-          env,
-          stdio: ["ignore", "pipe", "pipe"],
-        })
-      : spawn("pnpm", args, { cwd: agentDir, env, stdio: ["ignore", "pipe", "pipe"] });
-  const handle: AgentHandle = { child, lines: [], stderrTail: "", exited: false, exitCode: null, pid: child.pid };
-  child.stdout?.on("data", (d) => {
-    for (const line of String(d).split("\n")) {
-      if (line.trim()) handle.lines.push(line);
-    }
-  });
-  child.stderr?.on("data", (d) => {
-    handle.stderrTail = `${handle.stderrTail}${String(d)}`.slice(-3000);
-  });
-  child.on("close", (code, signal) => {
-    handle.exited = true;
-    handle.exitCode = signal ? `signal:${signal}` : code;
-  });
-  child.on("error", () => {
-    handle.exited = true;
-    handle.exitCode = "spawn-error";
-  });
-  agent = handle;
-  const deadline = Date.now() + 180000;
-  for (;;) {
-    if (handle.exited) {
-      throw new Error(`agent exited before ready (exit=${handle.exitCode}): ${handle.stderrTail.slice(-1200)}`);
-    }
-    try {
-      const res = await fetch(`http://127.0.0.1:${AGENT_PORT}/health/agent`);
-      if (res.ok) return;
-    } catch {
-      /* not ready yet */
-    }
-    if (Date.now() > deadline) {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        /* noop */
-      }
-      throw new Error(`agent without ready in 180s: ${handle.stderrTail.slice(-1200)}`);
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-}
-
-async function stopAgent(): Promise<void> {
-  if (!agent) return;
-  const handle = agent;
-  try {
-    if (process.platform === "win32" && handle.pid) {
-      spawn("taskkill", ["/pid", String(handle.pid), "/T", "/F"], { stdio: "ignore" });
-    } else {
-      handle.child.kill("SIGTERM");
-    }
-  } catch {
-    /* best effort */
-  }
-  const deadline = Date.now() + 15000;
-  while (!handle.exited && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
-  if (!handle.exited) {
-    try {
-      handle.child.kill("SIGKILL");
-    } catch {
-      /* noop */
-    }
-  }
-  agent = null;
-}
-
 await startProbe();
 console.log(`[p2d-stack] gateway=http://127.0.0.1:${GATEWAY_PORT} pid=${probe?.pid}`);
-await startAgent();
-if (AGENT_RUN) console.log(`[p2d-stack] agent=http://127.0.0.1:${AGENT_PORT} pid=${agent?.pid}`);
+
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
@@ -739,7 +709,7 @@ const ctl = http.createServer((req, res) => {
     try {
       const u = new URL(req.url || "/", "http://127.0.0.1");
       if (req.method === "GET" && u.pathname === "/health") {
-        json(res, 200, { ok: true, probeRunning: !!probe && !probe.exited, agentRunning: !!agent && !agent.exited });
+        json(res, 200, { ok: true, probeRunning: !!probe && !probe.exited });
         return;
       }
       if (req.method === "GET" && u.pathname === "/p2d/stats") {
@@ -764,15 +734,6 @@ const ctl = http.createServer((req, res) => {
                 lastLines: (probe?.lines ?? []).slice(-15),
                 stderrTail: probe?.stderrTail ?? "",
               }),
-        });
-        return;
-      }
-      if (req.method === "GET" && u.pathname === "/p2d/agent-log") {
-        json(res, 200, {
-          running: !!agent && !agent.exited,
-          exitCode: agent?.exitCode ?? null,
-          lastLines: (agent?.lines ?? []).slice(-80),
-          stderrTail: agent?.stderrTail ?? "",
         });
         return;
       }
@@ -868,11 +829,6 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`[p2d-stack] ${signal}: orderly shutdown`);
   try {
     await closeProbe();
-  } catch {
-    /* best effort */
-  }
-  try {
-    await stopAgent();
   } catch {
     /* best effort */
   }

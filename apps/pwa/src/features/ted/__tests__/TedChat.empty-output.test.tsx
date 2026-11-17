@@ -67,7 +67,6 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
     sendAgentMessage: vi.fn(),
     decidePendingOperation: vi.fn(),
     renewAgentSession: vi.fn(),
-    uploadAttachment: vi.fn(),
   };
 });
 

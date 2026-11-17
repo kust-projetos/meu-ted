@@ -18,9 +18,8 @@ import { useEffectiveProfile } from "./hooks";
 import { Sun, Moon, Laptop, LogOut, ChevronRight, ChevronLeft, User, Bell, Shield, FolderOpen } from "lucide-react";
 
 export { AgentTranscript } from "./AgentTranscript";
-import { AgentLlmSettingsSheet } from "./AgentLlmSettingsSheet";
 
-type ProfileSheet = "edit" | "notifications" | "llm-admin" | null;
+type ProfileSheet = "edit" | "notifications" | null;
 
 const BASE_PROFILE_ITEMS = [
   {
@@ -60,30 +59,11 @@ export default function ProfilePage() {
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
 
-  const isAdminUser = Boolean(
-    profile.isAdmin ||
-      (profile as unknown as { isAdmin?: boolean; role?: string }).role === "admin",
-  );
-
-  const items = [
-    ...BASE_PROFILE_ITEMS,
-    ...(isAdminUser
-      ? [
-          {
-            key: "llm-admin" as const,
-            label: "Gerenciador de IA",
-            icon: <Shield size={18} className="text-warning" />,
-          },
-        ]
-      : []),
-  ];
-
   function handleItem(key: string) {
     if (key === "edit") {
       setOpen("edit");
       setEditKey((k) => k + 1);
     } else if (key === "notifications") setOpen("notifications");
-    else if (key === "llm-admin") setOpen("llm-admin");
     else if (key === "workspaces") router.push("/workspaces");
   }
 
@@ -184,13 +164,13 @@ export default function ProfilePage() {
 
         {/* Navigation items */}
         <div className="rounded-[18px] border border-border-subtle bg-surface-1 px-4 py-1 shadow-card">
-          {items.map((item, idx) => (
+          {BASE_PROFILE_ITEMS.map((item, idx) => (
             <button
               key={item.key}
               type="button"
               onClick={() => handleItem(item.key)}
               className={`flex w-full items-center gap-3 py-3.5 transition-colors hover:bg-surface-2/40 ${
-                idx < items.length - 1 ? "border-b border-border-subtle" : ""
+                idx < BASE_PROFILE_ITEMS.length - 1 ? "border-b border-border-subtle" : ""
               }`}
             >
               {item.icon}
@@ -245,10 +225,6 @@ export default function ProfilePage() {
       />
       <NotificationsSheet
         open={open === "notifications"}
-        onClose={() => setOpen(null)}
-      />
-      <AgentLlmSettingsSheet
-        open={open === "llm-admin"}
         onClose={() => setOpen(null)}
       />
     </div>

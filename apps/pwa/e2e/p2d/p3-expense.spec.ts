@@ -86,12 +86,54 @@ async function sendTed(page: import("@playwright/test").Page, text: string) {
   await sendButton.click();
 }
 
+async function gotoWithStartupRetry(
+  page: import("@playwright/test").Page,
+  url: string,
+  projectBaseURL?: string,
+) {
+  const baseURL = process.env.P2D_NEXT_BASE || projectBaseURL || `http://127.0.0.1:${ports.nextPort}`;
+  const readinessUrl = new URL(url, baseURL).href;
+  const readinessDeadline = Date.now() + 60000;
+  while (Date.now() < readinessDeadline) {
+    try {
+      await fetch(readinessUrl, { method: "HEAD", signal: AbortSignal.timeout(2000) });
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      return;
+    } catch (error) {
+      const message = String((error as Error)?.message ?? error);
+      const retryable =
+        /net::ERR_CONNECTION_(?:RESET|REFUSED)/i.test(message) ||
+        /(?:TimeoutError|Timeout[^\n]*(?:exceeded|navigation)|navigation[^\n]*timeout)/i.test(message);
+      if (!retryable || attempt === 10) throw error;
+      await page.waitForTimeout(3000);
+    }
+  }
+}
+
 test.describe.configure({ mode: "serial" });
 
 test.describe("p3 expense slice (real browser, real Agent, Pending V2)", () => {
+  let proposalCalls: Array<{ url: string; status: number; body?: string }> = [];
+
+  async function attachProposalCalls(testInfo: import("@playwright/test").TestInfo) {
+    const body = JSON.stringify(proposalCalls, null, 2);
+    console.log("[p3-expense] proposalCalls", JSON.stringify(proposalCalls));
+    await testInfo.attach("proposal-calls", { body, contentType: "application/json" });
+  }
+
   test.afterEach(async ({}, testInfo) => {
     if (testInfo.status === testInfo.expectedStatus) return;
-    // Bounded diagnostics only: never cookies, tokens, bodies or raw logs.
+    await attachProposalCalls(testInfo);
+    // Bounded diagnostics; proposal/decision bodies are captured separately
+    // with sensitive fields masked and a strict size limit.
     try {
       console.log("[p3-diagnostic] health", JSON.stringify(await ctlGet("/health")));
     } catch {
@@ -106,12 +148,26 @@ test.describe("p3 expense slice (real browser, real Agent, Pending V2)", () => {
 
   test("proposal → lost broker → reload recovery → confirm → launch; reject writes zero", async ({ page }, testInfo) => {
     test.setTimeout(900_000);
+    proposalCalls = [];
+    page.on("response", async (res) => {
+      const url = new URL(res.url()).pathname;
+      if (!/\/rpc\/pending-operations\/(propose|[^/]+\/decision)$/.test(url)) return;
+      let body: string | undefined;
+      try {
+        body = (await res.text())
+          .replace(/("[^"]*(?:authorization|cookie|password|secret|token|credential|api[_-]?key)[^"]*"\s*:\s*)"[^"]*"/gi, '$1"[redacted]"')
+          .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [redacted]")
+          .slice(0, 300);
+      } catch {
+        /* response body may already be consumed */
+      }
+      proposalCalls.push({ url, status: res.status(), body });
+    });
 
     // 1. Stack health + zero-turn baseline.
-    const health = await ctlGet<{ ok: boolean; agentRunning: boolean; probeRunning: boolean }>("/health");
+    const health = await ctlGet<{ ok: boolean; probeRunning: boolean }>("/health");
     expect(health.ok).toBe(true);
     expect(health.probeRunning).toBe(true);
-    expect(health.agentRunning).toBe(true);
     const baseline = await ctlStats();
     expect(baseline.promptCalls).toBe(0);
     expect(baseline.transportCalls).toBe(0);
@@ -119,7 +175,8 @@ test.describe("p3 expense slice (real browser, real Agent, Pending V2)", () => {
 
     // 2. Synthetic user, real Better-Auth login through the UI.
     const email = "ted-p3-expense@example.test";
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+    const projectBaseURL = typeof testInfo.project.use.baseURL === "string" ? testInfo.project.use.baseURL : undefined;
+    await gotoWithStartupRetry(page, "/", projectBaseURL);
     await expect(page.locator("#email")).toBeVisible({ timeout: 120000 });
     const signupStatus = await page.evaluate(async (userEmail) => {
       const res = await fetch("/api/backend/auth/sign-up/email", {
@@ -170,6 +227,7 @@ test.describe("p3 expense slice (real browser, real Agent, Pending V2)", () => {
       timeout: 120000,
     });
     const confirmButton = page.getByRole("button", { name: CONFIRM_LABEL });
+    await attachProposalCalls(testInfo);
     await expect(confirmButton).toBeVisible({ timeout: 300000 });
     expect(brokerAttempts).toBe(2);
     expect(await page.getByRole("button", { name: CONFIRM_LABEL }).count()).toBe(1);
@@ -298,5 +356,6 @@ test.describe("p3 expense slice (real browser, real Agent, Pending V2)", () => {
     const outPath = path.join(outDir, "evidence.json");
     fs.writeFileSync(outPath, `${serialized}\n`, "utf8");
     await testInfo.attach("p3-expense-evidence", { path: outPath, contentType: "application/json" });
+    await attachProposalCalls(testInfo);
   });
 });

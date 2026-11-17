@@ -24,11 +24,8 @@
  *   enough (see BLOCKED note at the end).
  * - Current `sendAgentMessage` exposes no `AbortSignal`: no end-to-end
  *   cancellation claim without test + implementation (see BLOCKED note).
- * - proxy-utils.ts:217-238 (PWA-LOCAL-AGENT-PROXY-GATE): loopback upstream
- *   only with NODE_ENV development/test + ALLOW_LOCAL_ORIGIN=1; forwarding
- *   tokens to an unvalidated destination is forbidden. The P2 adapter keeps
- *   these barriers — no origin override in the browser, no token to an
- *   unpinned destination.
+  * - The gateway-only proxy is same-origin; the client sends its device
+  *   connection token only to the authenticated proxy endpoint.
  * - SPEC section 7.7: PWA `messageId` travels as `intentionId`; retries reuse
  *   the same id; ADR-027 D3: collective default, private only via explicit
  *   opt-in.
@@ -46,11 +43,6 @@ import {
   isAnchorSupersededByHistory,
   isTurnAnswerConvergedByIdentity,
 } from "@/lib/api/agent-client";
-import {
-  resolveAgentOrigin,
-  EXPECTED_AGENT_ORIGIN,
-  FALLBACK_AGENT_ORIGIN,
-} from "@/proxy-utils";
 
 vi.mock("@/lib/api/agent-auth", () => ({
   fetchAgentConnectionToken: vi.fn(async () => "test-conn-token"),
@@ -144,7 +136,7 @@ describe("P2 contrato — sendAgentMessage preserva o fio A0", () => {
     expect(headers["x-agent-connection-token"]).toBe("test-conn-token");
   });
 
-  it("corpo leva só {text, intentionId} (+attachments quando há) — messageId vira intentionId", async () => {
+  it("corpo leva somente {text, intentionId} — messageId vira intentionId", async () => {
     mockFetchOnce({ turnId: "t-2", status: "completed", output: "ok" });
     await sendAgentMessage("ws-1", "Quais contas eu tenho?", { messageId: "msg-abc" });
     const payload = bodyJson(lastCall());
@@ -195,16 +187,6 @@ describe("P2 contrato — sendAgentMessage preserva o fio A0", () => {
     const err = await rejectionOf(sendAgentMessage("ws-1", "oi", { messageId: "m-code" }));
     expect(err.code).toBe("agent.token_replayed");
     expect(calls.length).toBe(2);
-  });
-
-  it("attachments travel as server-issued refs (no local blob URL crosses the wire)", async () => {
-    mockFetchOnce({ turnId: "t-att", status: "completed", output: "ok" });
-    const attachments = [{ type: "image", ref: "att_abcdef1234567890", name: "nota.jpg" }];
-    await sendAgentMessage("ws-1", "veja o anexo", { messageId: "m-att", attachments });
-    const payload = bodyJson(lastCall());
-    expect(payload.attachments).toEqual(attachments);
-    expect(JSON.stringify(payload)).not.toContain("blob:");
-    for (const key of FORBIDDEN_WIRE_KEYS) expect(payload).not.toHaveProperty(key);
   });
 
   it("200 sem output e sem decisão estruturada não inventa sucesso (sem output, sem card)", async () => {
@@ -347,66 +329,6 @@ describe("P2 contrato — identidade/dedup SPEC §7.7 (puro, sem rede)", () => {
   });
 });
 
-describe("P2 contrato — proxy nunca encaminha token a destino não validado", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("produção sem override recusa proxy (fail-closed, sem default inseguro)", () => {
-    expect(() => resolveAgentOrigin({ NODE_ENV: "production" })).toThrow(/pinned Agent origin/);
-  });
-
-  it("produção com origem não pinada recusa proxy mesmo parecendo válida", () => {
-    expect(() =>
-      resolveAgentOrigin({ NODE_ENV: "production", PWA_AGENT_PROXY_ORIGIN: "https://pi-finance-agent.evil.dev" }),
-    ).toThrow(/pinned Agent origin/);
-  });
-
-  it("produção com origem pinada resolve o próprio pin (nada além do exato)", () => {
-    expect(
-      resolveAgentOrigin({ NODE_ENV: "production", PWA_AGENT_PROXY_ORIGIN: `${EXPECTED_AGENT_ORIGIN}/` }),
-    ).toBe(EXPECTED_AGENT_ORIGIN);
-  });
-
-  it("loopback sem ALLOW_LOCAL_ORIGIN=1 não é usado (cai no placeholder, sem token para lá)", () => {
-    const resolved = resolveAgentOrigin({ NODE_ENV: "test", PWA_AGENT_PROXY_ORIGIN: "http://localhost:8787/" });
-    expect(resolved).toBe(FALLBACK_AGENT_ORIGIN);
-    expect(resolved).not.toBe("http://localhost:8787");
-  });
-
-  it("loopback com flag em NODE_ENV=test é a única exceção (PWA-LOCAL-AGENT-PROXY-GATE)", () => {
-    expect(
-      resolveAgentOrigin({
-        NODE_ENV: "test",
-        ALLOW_LOCAL_ORIGIN: "1",
-        PWA_AGENT_PROXY_ORIGIN: "http://127.0.0.1:8787/",
-      }),
-    ).toBe("http://127.0.0.1:8787");
-  });
-
-  it("loopback com credencial embutida nunca é aceito, mesmo com flag", () => {
-    const resolved = resolveAgentOrigin({
-      NODE_ENV: "test",
-      ALLOW_LOCAL_ORIGIN: "1",
-      PWA_AGENT_PROXY_ORIGIN: "http://user:pass@localhost:8787/",
-    });
-    expect(resolved).not.toContain("user");
-  });
-
-  it("loopback em produção nunca é aceito, mesmo com flag", () => {
-    expect(() =>
-      resolveAgentOrigin({
-        NODE_ENV: "production",
-        ALLOW_LOCAL_ORIGIN: "1",
-        PWA_AGENT_PROXY_ORIGIN: "http://localhost:8787/",
-      }),
-    ).toThrow(/pinned Agent origin/);
-  });
-});
 /**
  * BLOCKED — pending work that requires the P1 interface (future module
  * `@/lib/ted/opencode-runtime-adapter`, still nonexistent; no import of it

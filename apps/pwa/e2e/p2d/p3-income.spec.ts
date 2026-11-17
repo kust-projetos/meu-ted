@@ -114,10 +114,9 @@ test.describe("p3.2 income slice (real browser, real Agent, Pending V2)", () => 
     test.setTimeout(900_000);
 
     // 1. Stack health + zero-turn baseline.
-    const health = await ctlGet<{ ok: boolean; agentRunning: boolean; probeRunning: boolean }>("/health");
+    const health = await ctlGet<{ ok: boolean; probeRunning: boolean }>("/health");
     expect(health.ok).toBe(true);
     expect(health.probeRunning).toBe(true);
-    expect(health.agentRunning).toBe(true);
     const baseline = await ctlStats();
     expect(baseline.promptCalls).toBe(0);
     expect(baseline.transportCalls).toBe(0);

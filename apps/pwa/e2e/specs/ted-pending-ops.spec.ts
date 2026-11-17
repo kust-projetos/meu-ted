@@ -21,11 +21,10 @@
  *   action; the journal holds exactly the single denied call.
  *
  * Internal primary→fallback failover within a single agent turn is NOT
- * exercised here; it is covered by the Agent unit suites
- * (apps/agent/tests/llm-relay-failover*.test.ts).
+ * exercised here; relay behavior is covered by the TED runtime unit suites.
  *
  * Transport note: the app calls the same-origin proxy /api/agent (no direct
- * Agent origin is configured in the E2E standalone build). Each test forwards
+ * gateway origin is configured in the E2E standalone build). Each test forwards
  * /api/agent/* to the fixture /agents/finance-chat-agent/* handlers (Node
  * fetch with X-E2E-Test-ID), so every chat/decision call is journaled by the
  * fixture with method+path+body+status. Replies are programmed per test via

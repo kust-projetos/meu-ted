@@ -38,7 +38,7 @@ async function decide(page: Page, button: ReturnType<Page["getByRole"]>) {
 
 test("integrated P3 journey: seven confirmed turns, recovery and context", async ({ page }, info) => {
   test.setTimeout(1_800_000);
-  expect(await ctl<{ ok: boolean; agentRunning: boolean; probeRunning: boolean }>("/health")).toMatchObject({ ok: true, agentRunning: true, probeRunning: true });
+  expect(await ctl<{ ok: boolean; probeRunning: boolean }>("/health")).toMatchObject({ ok: true, probeRunning: true });
   const initial = await state();
   const a1 = initial.accounts.find(a => a.name === "Itaú")!; const a2 = initial.accounts.find(a => a.name === "Nubank")!;
   const card = initial.accounts.find(a => a.kind === "credit_card")!;

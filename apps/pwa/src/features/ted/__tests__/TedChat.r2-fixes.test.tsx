@@ -116,57 +116,6 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
-describe("R2 FIX 1 (HIGH) — retry pós-reload preserva anexos", () => {
-  it("âncora com anexos reidrata failed e o retry reenvia os MESMOS anexos sob a mesma identidade", async () => {
-    const user = userEvent.setup();
-    agentClient.savePendingChatSend("ws-1", {
-      messageId: "msg-anchor-att",
-      content: "Segue o comprovante",
-      createdAt: "2026-10-13T10:00:00.000Z",
-      attachments: [{ type: "image", url: "", name: "nota.jpg", ref: "ref-abc-123" }],
-    });
-
-    render(<TedChat />);
-    await screen.findByText("online");
-
-    expect(screen.getByText("Segue o comprovante")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: RETRY }));
-
-    await waitFor(() => expect(agentClient.sendAgentMessage).toHaveBeenCalledTimes(1));
-    const call = vi.mocked(agentClient.sendAgentMessage).mock.calls[0]!;
-    expect(call[0]).toBe("ws-1");
-    expect(call[1]).toBe("Segue o comprovante");
-    const opts = call[2] as { messageId?: string; attachments?: Array<{ type: string; ref?: string; name?: string }> };
-    expect(opts.messageId).toBe("msg-anchor-att");
-    expect(opts.attachments).toHaveLength(1);
-    expect(opts.attachments?.[0]).toMatchObject({ type: "image", ref: "ref-abc-123", name: "nota.jpg" });
-  });
-
-  it("âncora legada (sem anexos) reidrata como failed SEM retry e nunca reenvia", async () => {
-    // Formato legado: JSON sem `attachments`/`anchorVersion` — como gravado
-    // antes do FIX 1. Escrito cru porque a API nova sempre grava o formato novo.
-    sessionStorage.setItem(
-      "ted.pending-send.ws-1",
-      JSON.stringify({
-        messageId: "msg-legacy-1",
-        content: "texto legado",
-        createdAt: "2026-10-13T10:00:00.000Z",
-      }),
-    );
-
-    render(<TedChat />);
-    await screen.findByText("online");
-
-    // Explícito: o balão failed aparece…
-    expect(screen.getByText("texto legado")).toBeInTheDocument();
-    expect(screen.getByText(/falha no envio/i)).toBeInTheDocument();
-    // …mas SEM affordance de retry (reenviar sem os anexos originais mudaria
-    // o payload sob a mesma identidade).
-    expect(screen.queryByRole("button", { name: RETRY })).toBeNull();
-    expect(agentClient.sendAgentMessage).not.toHaveBeenCalled();
-  });
-});
-
 describe("R2 FIX 2 (MEDIUM) — texto igual não suprime intenção distinta", () => {
   it("'Bom dia' antigo no histórico + nova âncora 'Bom dia' → ambos visíveis (âncora failed + retry)", async () => {
     histories["ws-1"] = [ownMsg("srv-old", "Bom dia", "2026-10-01T09:00:00.000Z")];

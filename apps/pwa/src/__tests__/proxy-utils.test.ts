@@ -1,24 +1,55 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest, NextResponse } from "next/server";
 import { middleware } from "../middleware";
-import { SECURITY_HEADERS } from "../proxy-utils";
+import {
+  SECURITY_HEADERS,
+  buildCspValue,
+  buildPermissionsPolicy,
+  isTedConversationalRpcPath,
+  isTedRuntimeRpcPath,
+} from "../proxy-utils";
 
-describe("live-sync CSP origins", () => {
-  it("adds only the configured HTTPS and WSS origins without changing the policy", async () => {
-    vi.stubEnv("NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN", "https://agent.example.test");
-    vi.resetModules();
-    const { buildCspValue } = await import("../proxy-utils");
+describe("Ted runtime RPC path classifiers", () => {
+  const path = (...tail: string[]) => ["agents", "finance-chat-agent", "ws-1", "rpc", ...tail];
+  const conversational = [
+    path("chat"), path("history"), path("session", "new"),
+  ];
+  const runtimeOnly = [
+    path("pending-operations", "propose"), path("pending-operations", "active"),
+    path("pending-operations", "id-1", "decision"), path("undo", "active"),
+    path("undo", "decision"), path("workspace", "ws-2", "attest-empty"),
+  ];
+  it.each([...conversational, ...runtimeOnly].map((value) => [value]))(
+    "accepts runtime path %j",
+    (value) => expect(isTedRuntimeRpcPath(value)).toBe(true),
+  );
+  it.each(conversational.map((value) => [value]))(
+    "accepts conversational path %j",
+    (value) => expect(isTedConversationalRpcPath(value)).toBe(true),
+  );
+  it.each(runtimeOnly.map((value) => [value]))(
+    "does not classify runtime-only path as conversational %j",
+    (value) => expect(isTedConversationalRpcPath(value)).toBe(false),
+  );
+  it.each([
+    path("attachments"), path("attachments", "observability"), path("memory", "prefs"),
+    path("pending-operations"), path("pending-operations", "id-1"),
+    path("pending-operations", "", "decision"), path("workspace", "ws-2"),
+    path("workspace", "", "attest-empty"), ["rpc", "chat"], path("unknown"),
+  ].map((value) => [value]))("rejects both classifiers for %j", (value) => {
+    expect(isTedRuntimeRpcPath(value)).toBe(false);
+    expect(isTedConversationalRpcPath(value)).toBe(false);
+  });
+});
 
-    expect(buildCspValue("n")).toBe(
-      "script-src 'self' 'nonce-n'; style-src 'self' 'unsafe-inline'; worker-src 'self'; connect-src 'self' https://agent.example.test wss://agent.example.test; default-src 'self'; object-src 'none'; form-action 'self'; img-src 'self' blob: data:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; report-uri /api/csp-report",
-    );
+describe("security policy after live-sync and microphone removal", () => {
+  it("keeps the CSP connect-src same-origin only", () => {
+    expect(buildCspValue("n")).toContain("connect-src 'self';");
+  });
 
-    vi.stubEnv("NEXT_PUBLIC_TED_LIVE_SYNC_ORIGIN", "");
-    vi.resetModules();
-    const withoutOrigin = await import("../proxy-utils");
-    expect(withoutOrigin.buildCspValue("n")).toBe(
-      "script-src 'self' 'nonce-n'; style-src 'self' 'unsafe-inline'; worker-src 'self'; connect-src 'self'; default-src 'self'; object-src 'none'; form-action 'self'; img-src 'self' blob: data:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; report-uri /api/csp-report",
-    );
+  it("denies microphone regardless of the compatibility argument", () => {
+    expect(buildPermissionsPolicy(false)).toBe("camera=(), microphone=(), geolocation=()");
+    expect(buildPermissionsPolicy(true)).toBe("camera=(), microphone=(), geolocation=()");
   });
 });
 

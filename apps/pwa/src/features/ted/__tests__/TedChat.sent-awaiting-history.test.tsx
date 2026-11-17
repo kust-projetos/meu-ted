@@ -45,13 +45,12 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
     fetchAgentHistory: vi.fn(),
     sendAgentMessage: vi.fn(),
     renewAgentSession: vi.fn(),
-    uploadAttachment: vi.fn(),
   };
 });
 
 const INPUT_PLACEHOLDER = "Pergunte sobre gastos, metas ou pagamentos…";
 const SEED: agentClient.AgentMessage[] = [
-  { id: "srv-1", actorId: "ted", role: "assistant", content: "Olá! Como posso ajudar?", isOwn: false, createdAt: undefined, attachments: undefined },
+  { id: "srv-1", actorId: "ted", role: "assistant", content: "Olá! Como posso ajudar?", isOwn: false, createdAt: undefined },
 ];
 
 describe("FIX-169 — sent-awaiting-history (consistência eventual)", () => {
@@ -99,8 +98,8 @@ describe("FIX-169 — sent-awaiting-history (consistência eventual)", () => {
     });
     const converged = (): agentClient.AgentMessage[] => [
       ...SEED,
-      { id: "srv-user-169", actorId: "u1", role: "user", content: "gastei 90 com carne", isOwn: true, createdAt: new Date().toISOString(), attachments: undefined },
-      { id: "srv-asst-169", actorId: "ted", role: "assistant", content: "Proposta registrada.", isOwn: false, createdAt: new Date().toISOString(), attachments: undefined },
+      { id: "srv-user-169", actorId: "u1", role: "user", content: "gastei 90 com carne", isOwn: true, createdAt: new Date().toISOString() },
+      { id: "srv-asst-169", actorId: "ted", role: "assistant", content: "Proposta registrada.", isOwn: false, createdAt: new Date().toISOString() },
     ];
     // Avaliado no momento da chamada (histórico converge DEPOIS do envio —
     // timestamps do servidor >= âncora local, regra do supersede).
@@ -151,8 +150,8 @@ describe("FIX-169 — sent-awaiting-history (consistência eventual)", () => {
       const sentId = (vi.mocked(agentClient.sendAgentMessage).mock.calls[0]?.[2] as { messageId?: string } | undefined)?.messageId ?? "unknown";
       return [
         ...SEED,
-        { id: `msg-user-${sentId}`, actorId: "u1", role: "user", content: "gastei 90 com carne [dado removido]", isOwn: true, createdAt: new Date().toISOString(), attachments: undefined, intentionId: sentId },
-        { id: `msg-asst-${sentId}`, actorId: "ted", role: "assistant", content: "Proposta registrada.", isOwn: false, createdAt: new Date().toISOString(), attachments: undefined, intentionId: sentId },
+        { id: `msg-user-${sentId}`, actorId: "u1", role: "user", content: "gastei 90 com carne [dado removido]", isOwn: true, createdAt: new Date().toISOString(), intentionId: sentId },
+        { id: `msg-asst-${sentId}`, actorId: "ted", role: "assistant", content: "Proposta registrada.", isOwn: false, createdAt: new Date().toISOString(), intentionId: sentId },
       ];
     });
 
@@ -186,8 +185,8 @@ describe("FIX-169 — sent-awaiting-history (consistência eventual)", () => {
       const skewedAt = new Date(Date.now() - 3600_000).toISOString();
       return [
         ...SEED,
-        { id: `msg-user-${sentId}`, actorId: "u1", role: "user", content: "gastei 90 com carne", isOwn: true, createdAt: skewedAt, attachments: undefined, intentionId: sentId },
-        { id: `msg-asst-${sentId}`, actorId: "ted", role: "assistant", content: "Proposta registrada.", isOwn: false, createdAt: skewedAt, attachments: undefined, intentionId: sentId },
+        { id: `msg-user-${sentId}`, actorId: "u1", role: "user", content: "gastei 90 com carne", isOwn: true, createdAt: skewedAt, intentionId: sentId },
+        { id: `msg-asst-${sentId}`, actorId: "ted", role: "assistant", content: "Proposta registrada.", isOwn: false, createdAt: skewedAt, intentionId: sentId },
       ];
     });
 

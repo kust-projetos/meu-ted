@@ -42,8 +42,8 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
 });
 
 const OLD_HISTORY = [
-  { id: "msg-1", actorId: "user-1", role: "user", content: "Meu saldo?", isOwn: true, createdAt: undefined, attachments: undefined },
-  { id: "msg-2", actorId: "ted", role: "assistant", content: "R$ 1.000,00.", isOwn: false, createdAt: undefined, attachments: undefined },
+  { id: "msg-1", actorId: "user-1", role: "user", content: "Meu saldo?", isOwn: true, createdAt: undefined },
+  { id: "msg-2", actorId: "ted", role: "assistant", content: "R$ 1.000,00.", isOwn: false, createdAt: undefined },
 ];
 
 describe("TedChat — Nova sessão limpa o histórico visível", () => {

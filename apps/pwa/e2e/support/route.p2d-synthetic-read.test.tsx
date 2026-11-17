@@ -110,10 +110,8 @@ vi.mock("@/lib/api/agent-auth", () => ({
 }));
 
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { EXPECTED_AGENT_ORIGIN } from "@/proxy-utils";
 import { GET, POST } from "../../src/app/api/agent/[...path]/route";
 import { fetchAgentHistory } from "@/lib/api/agent-client";
-import { clearTedRuntimeViews, getTedRuntimeView } from "@/lib/api/ted-runtime-view";
 import { render, screen } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import { TedChat } from "@/features/ted/TedChat";
@@ -288,13 +286,6 @@ class ServeProc {
   }
 }
 
-function setCookiesOf(res: Response): string[] {
-  const getSetCookie = (res.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie;
-  if (typeof getSetCookie === "function") return getSetCookie.call(res.headers);
-  const single = res.headers.get("set-cookie");
-  return single ? [single] : [];
-}
-
 function firstCookieSegment(setCookie: string | null): string {
   const raw = String(setCookie ?? "");
   const first = raw.split(",").map((s) => s.trim()).find((s) => s.length > 0) ?? "";
@@ -303,13 +294,11 @@ function firstCookieSegment(setCookie: string | null): string {
 
 beforeEach(() => {
   vi.mocked(getCloudflareContext).mockRejectedValue(new Error("no ctx"));
-  clearTedRuntimeViews();
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
-  clearTedRuntimeViews();
 });
 
 describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK → stub provider → real finance tool → real API", () => {
@@ -431,8 +420,6 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
       try {
         vi.stubEnv("NODE_ENV", "test");
         vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
-        vi.stubEnv("TED_OPENCODE_RUNTIME_ENABLED", "1");
-        vi.stubEnv("TED_OPENCODE_WORKSPACES", `${HOUSEHOLD_A},${HOUSEHOLD_B}`);
         vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", base);
 
         const chatPath = (ws: string) => ["agents", "finance-chat-agent", ws, "rpc", "chat"];
@@ -440,8 +427,8 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const historyPath = (ws: string) => ["agents", "finance-chat-agent", ws, "rpc", "history"];
         const rpcUrl = (segs: string[]) =>
           `http://localhost:3000/api/agent/${segs.map(encodeURIComponent).join("/")}`;
-        const headersFor = (cookie: string, deviceToken: string, ws: string, pin?: string): Record<string, string> => ({
-          cookie: pin ? `${cookie}; ${pin}` : cookie,
+        const headersFor = (cookie: string, deviceToken: string, ws: string): Record<string, string> => ({
+          cookie,
           "x-device-token": deviceToken,
           "x-workspace-id": ws,
         });
@@ -461,13 +448,10 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           );
         // Single-level client fetch interceptor (no nesting, no cycles):
         // relative `/api/agent/*` goes to the REAL PWA route handlers with a
-        // test cookie jar (session cookie + harvested B pin + device scope —
-        // the browser jar emulation, bounded and explicit); the legacy A0
-        // upstream origin is stubbed benign (never networked); everything
-        // else (loopback gateway/API) uses the true fetch.
-        const installClientFetch = (opts: { sessionCookie: string; deviceToken: string; ws: string; initialPin?: string }): (() => void) => {
+        // test cookie jar (session cookie + device scope); the gateway/API
+        // remain real loopback services.
+        const installClientFetch = (opts: { sessionCookie: string; deviceToken: string; ws: string }): (() => void) => {
           const trueFetch = globalThis.fetch.bind(globalThis);
-          let jarPin: string | null = opts.initialPin ?? null;
           const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
             const s = String(url);
             if (s.startsWith("/api/agent/")) {
@@ -479,7 +463,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
               // scope ALWAYS come from the test jar, even when the caller set
               // its own values (the mocked getActiveDeviceToken returns a
               // device id, not the token; the real browser sends the token).
-              incoming.set("cookie", opts.sessionCookie + (jarPin ? `; ${jarPin}` : ""));
+               incoming.set("cookie", opts.sessionCookie);
               incoming.set("x-device-token", opts.deviceToken);
               incoming.set("x-workspace-id", opts.ws);
               const method = String((init as RequestInit | undefined)?.method ?? "GET").toUpperCase();
@@ -491,41 +475,27 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
               const res = method === "POST"
                 ? await POST(req, { params: Promise.resolve({ path: segments }) })
                 : await GET(req, { params: Promise.resolve({ path: segments }) });
-              for (const sc of setCookiesOf(res)) {
-                const seg = firstCookieSegment(sc);
-                if (seg.startsWith("ted-runtime-conversation=opencode.")) jarPin = seg;
-              }
               return res;
-            }
-            if (s.startsWith(EXPECTED_AGENT_ORIGIN)) {
-              return new Response(JSON.stringify({ items: [], total: 0 }), {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              });
             }
             return trueFetch(url, init);
           });
           return () => fetchSpy.mockRestore();
         };
 
-        // 4. session/new (actor A): B pin opaco + runtime revelado.
+        // 4. session/new (actor A): gateway runtime is confirmed.
         const newRes = await postViaRoute(sessionNewPath(HOUSEHOLD_A), {}, headersFor(cookieA, regA.token, HOUSEHOLD_A));
         expect(newRes.status).toBe(200);
         expect(newRes.headers.get("x-ted-runtime")).toBe("opencode");
         const newBody = (await newRes.json()) as { ok?: boolean; sessionId?: string };
         expect(newBody.ok).toBe(true);
         expect(typeof newBody.sessionId).toBe("string");
-        const pin = setCookiesOf(newRes).find((c) => c.includes("ted-runtime-conversation=opencode."));
-        expect(pin).toBeDefined();
-        const pinCookie = firstCookieSegment(pin ?? null);
-        expect(pinCookie.startsWith("ted-runtime-conversation=opencode.")).toBe(true);
 
         // 5. Successful synthetic READ via the full chain (PWA proxy POST →
         // gateway → SDK prompt → stub tool_call → transport → API handlers).
         const chatRes = await postViaRoute(
           chatPath(HOUSEHOLD_A),
           { text: CHAT_TEXT, intentionId: INTENTION_1 },
-          headersFor(cookieA, regA.token, HOUSEHOLD_A, pinCookie),
+          headersFor(cookieA, regA.token, HOUSEHOLD_A),
         );
         expect(chatRes.status).toBe(200);
         expect(chatRes.headers.get("x-ted-runtime")).toBe("opencode");
@@ -595,13 +565,13 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
 
         // 6. History via route GET + via PWA client, then reload: stable IDs,
         // zero new prompt, zero new transport.
-        const histRes = await getViaRoute(historyPath(HOUSEHOLD_A), headersFor(cookieA, regA.token, HOUSEHOLD_A, pinCookie));
+        const histRes = await getViaRoute(historyPath(HOUSEHOLD_A), headersFor(cookieA, regA.token, HOUSEHOLD_A));
         expect(histRes.status).toBe(200);
         const histText = await histRes.text();
         expect(histText.includes(EXPECTED_FINAL_TEXT)).toBe(true);
 
         deviceState.current = regA.deviceId;
-        const restoreClientFetch = installClientFetch({ sessionCookie: cookieA, deviceToken: regA.token, ws: HOUSEHOLD_A, initialPin: pinCookie });
+        const restoreClientFetch = installClientFetch({ sessionCookie: cookieA, deviceToken: regA.token, ws: HOUSEHOLD_A });
         let viaClient: Array<{ id: string; content: string; isOwn: boolean }>;
         try {
           viaClient = await fetchAgentHistory(HOUSEHOLD_A);
@@ -613,14 +583,13 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         expect(viaClient[0].isOwn).toBe(true);
         const assistantItem = viaClient.find((i) => !i.isOwn && i.content === EXPECTED_FINAL_TEXT);
         expect(assistantItem).toBeDefined();
-        expect(getTedRuntimeView(HOUSEHOLD_A)).toBe("opencode");
 
-        const reloadRes = await getViaRoute(historyPath(HOUSEHOLD_A), headersFor(cookieA, regA.token, HOUSEHOLD_A, pinCookie));
+        const reloadRes = await getViaRoute(historyPath(HOUSEHOLD_A), headersFor(cookieA, regA.token, HOUSEHOLD_A));
         expect(reloadRes.status).toBe(200);
         expect(await reloadRes.text()).toBe(histText);
         // Route/history reload via the client returns the SAME DTO — no silent
         // errors swallowed: any client/history failure fails the test here.
-        const reloadRestore = installClientFetch({ sessionCookie: cookieA, deviceToken: regA.token, ws: HOUSEHOLD_A, initialPin: pinCookie });
+        const reloadRestore = installClientFetch({ sessionCookie: cookieA, deviceToken: regA.token, ws: HOUSEHOLD_A });
         try {
           const reloadClient = await fetchAgentHistory(HOUSEHOLD_A);
           expect(reloadClient.map((i) => i.id)).toEqual(viaClient.map((i) => i.id));
@@ -657,7 +626,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const replayRes = await postViaRoute(
           chatPath(HOUSEHOLD_A),
           { text: CHAT_TEXT, intentionId: INTENTION_1 },
-          headersFor(cookieA, regA.token, HOUSEHOLD_A, pinCookie),
+          headersFor(cookieA, regA.token, HOUSEHOLD_A),
         );
         expect(replayRes.status).toBe(200);
         const replayBody = (await replayRes.json()) as { status?: string; output?: string; intentionId?: string };
@@ -675,7 +644,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const faultRes = await postViaRoute(
           chatPath(HOUSEHOLD_A),
           { text: CHAT_TEXT, intentionId: INTENTION_2 },
-          headersFor(cookieA, regA.token, HOUSEHOLD_A, pinCookie),
+          headersFor(cookieA, regA.token, HOUSEHOLD_A),
         );
         expect(faultRes.status).not.toBe(200);
         const faultBody = (await faultRes.json()) as { code?: string; output?: string; status?: string };
@@ -696,7 +665,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const faultRetry = await postViaRoute(
           chatPath(HOUSEHOLD_A),
           { text: CHAT_TEXT, intentionId: INTENTION_2 },
-          headersFor(cookieA, regA.token, HOUSEHOLD_A, pinCookie),
+          headersFor(cookieA, regA.token, HOUSEHOLD_A),
         );
         expect(faultRetry.status).not.toBe(200);
         const faultRetryBody = (await faultRetry.json()) as { code?: string; output?: string };
@@ -714,7 +683,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const recoverRes = await postViaRoute(
           chatPath(HOUSEHOLD_A),
           { text: CHAT_TEXT, intentionId: INTENTION_3 },
-          headersFor(cookieA, regA.token, HOUSEHOLD_A, pinCookie),
+          headersFor(cookieA, regA.token, HOUSEHOLD_A),
         );
         expect(recoverRes.status).toBe(200);
         expect(((await recoverRes.json()) as { output?: string }).output).toBe(EXPECTED_FINAL_TEXT);

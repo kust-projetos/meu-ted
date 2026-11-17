@@ -44,8 +44,8 @@ describe("TedChat — sessão renovável e memória (Parte B)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
-      { id: "msg-1", actorId: "user-1", role: "user", content: "Meu saldo?", isOwn: true, createdAt: undefined, attachments: undefined },
-      { id: "msg-2", actorId: "ted", role: "assistant", content: "R$ 1.000,00.", isOwn: false, createdAt: undefined, attachments: undefined },
+      { id: "msg-1", actorId: "user-1", role: "user", content: "Meu saldo?", isOwn: true, createdAt: undefined },
+      { id: "msg-2", actorId: "ted", role: "assistant", content: "R$ 1.000,00.", isOwn: false, createdAt: undefined },
     ]);
     vi.mocked(agentClient.sendAgentMessage).mockResolvedValue({ turnId: "t1", status: "completed" });
     vi.mocked(agentClient.renewAgentSession).mockResolvedValue({

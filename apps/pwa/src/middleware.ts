@@ -28,7 +28,6 @@ import {
   generateNonce,
   buildProductionEmissionHeaders,
 } from "./proxy-utils";
-import { isMicrophoneEnabled } from "./lib/capabilities";
 
 // experimental-edge required for OpenNext/Cloudflare deployment.
 // Proxy.ts (Next.js 16 native) is Node.js-only and rejected by OpenNext.
@@ -40,7 +39,7 @@ export function middleware(request: NextRequest) {
   const emission = buildProductionEmissionHeaders({
     nonce: generateNonce(),
     isDevelopment: process.env.NODE_ENV === "development",
-    micEnabled: isMicrophoneEnabled(),
+    micEnabled: false,
   });
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", emission["x-nonce"]!);
@@ -52,10 +51,8 @@ export function middleware(request: NextRequest) {
     },
   });
 
-  // Apply the shared emission (CSP with nonce + static security headers;
-  // Permissions-Policy already built from the microphone capability inside
-  // buildProductionEmissionHeaders — V4 T1.1, INV-08: header and record-button
-  // UI read the SAME flag, so they never diverge).
+  // Apply CSP with nonce and static security headers. Microphone access is
+  // denied by the fixed Permissions-Policy; the product has no mic capability.
   for (const [key, value] of Object.entries(emission)) {
     response.headers.set(key, value);
   }
