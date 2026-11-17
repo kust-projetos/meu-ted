@@ -722,7 +722,10 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             await user.click(screen.getByRole("button", { name: /enviar mensagem/i }));
             // Exact DTO-derived text on screen: proves DTO → provider context
             // → PWA output instead of a canned string.
-            await screen.findByText(EXPECTED_FINAL_TEXT, undefined, { timeout: 180000 });
+            const answersAfterSend = await screen.findAllByText(EXPECTED_FINAL_TEXT, undefined, { timeout: 180000 });
+            // Three successful intentions (initial, recovery, component send)
+            // legitimately produce three identical assistant bubbles.
+            expect(answersAfterSend).toHaveLength(3);
             stats = await serve.cmd("stats");
             expect(stats["promptCalls"]).toBe(4);
             expect(stats["transportCalls"]).toBe(6);
@@ -744,7 +747,9 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             view.unmount();
             const beforeRemount = await serve.cmd("stats");
             render(<TedChat />);
-            await screen.findByText(EXPECTED_FINAL_TEXT, undefined, { timeout: 120000 });
+            const answersAfterRemount = await screen.findAllByText(EXPECTED_FINAL_TEXT, undefined, { timeout: 120000 });
+            // Rehydration preserves the three history entries without adding copies.
+            expect(answersAfterRemount).toHaveLength(3);
             expect(screen.getByText(COMPONENT_TEXT)).toBeInTheDocument();
             const afterRemount = await serve.cmd("stats");
             expect(afterRemount["promptCalls"]).toBe(beforeRemount["promptCalls"]);
