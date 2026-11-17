@@ -28,6 +28,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { TED_AGENT_SYSTEM_PROMPT } from './agent-system.mjs';
 
 const SCRUB_VARS = [
   'GH_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
@@ -298,7 +299,7 @@ export function setupIsolation(root, identity, profileOrOpts) {
   return result;
 }
 
-export function tedConfig(profileOrOpts, { p3Writes = false } = {}) {
+export function tedConfig(profileOrOpts, { p3Writes = false, productPrompt = false, categoryMemory = false } = {}) {
   const profile = profileOrOpts === undefined ? 'test' : resolveProfileArg(profileOrOpts);
   const base = {
     $schema: 'https://opencode.ai/config.json',
@@ -325,6 +326,7 @@ export function tedConfig(profileOrOpts, { p3Writes = false } = {}) {
           { action: '*', resource: '*', effect: 'deny' },
           { action: 'ted.finance.read', resource: 'list_accounts', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'get_month_summary', effect: 'allow' },
+          ...(categoryMemory ? [{ action: 'ted.finance.read', resource: 'recall_category_preference', effect: 'allow' }] : []),
           { action: 'ted.finance.read', resource: 'list_categories', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'list_card_statements', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'list_credit_cards', effect: 'allow' },
@@ -410,6 +412,7 @@ export function tedConfig(profileOrOpts, { p3Writes = false } = {}) {
       { action: 'tool.use', resource: 'worktree_remove:*', effect: 'deny' },
     ],
   };
+  if (productPrompt) base.agents.ted.system = TED_AGENT_SYSTEM_PROMPT;
   // Live-only delta: native `model` selector from the repo-owned template
   // `src/live-model.json` (never a JS literal, never user-config inheritance)
   // + specific provider allow APPENDED after the deny-all (findLast wins —
@@ -502,17 +505,17 @@ function isModelOverrideCompatible(currentText, wantedText) {
 // any other divergent file is the user's work and refused; a symlink is
 // refused without following.
 // The configDir itself is checked for redirection before any write.
-export function writeTedConfig(configDir, profileOrOpts, { p3Writes = false } = {}) {
+export function writeTedConfig(configDir, profileOrOpts, { p3Writes = false, productPrompt = false, categoryMemory = false } = {}) {
   // NB: defaults to 'test' — never reads ambient TED_RUNTIME_PROFILE, so
   // tests cannot inherit live accidentally. Live is forwarded explicitly.
   const profile = profileOrOpts === undefined ? 'test' : resolveProfileArg(profileOrOpts);
   assertNoRedirectedComponents([configDir]);
   fs.mkdirSync(configDir, { recursive: true });
   const file = path.join(configDir, 'opencode.json');
-  const wanted = JSON.stringify(tedConfig(profile, { p3Writes }), null, 2) + '\n';
+  const wanted = JSON.stringify(tedConfig(profile, { p3Writes, productPrompt, categoryMemory }), null, 2) + '\n';
   // The sibling flag state is OUR config too: switching the P3 local slice on
   // (or off) on an existing isolated home must not be mistaken for user work.
-  const sibling = JSON.stringify(tedConfig(profile, { p3Writes: !p3Writes }), null, 2) + '\n';
+  const sibling = JSON.stringify(tedConfig(profile, { p3Writes: !p3Writes, productPrompt, categoryMemory }), null, 2) + '\n';
   let st;
   try {
     st = fs.lstatSync(file);
@@ -618,7 +621,9 @@ export async function createTedEnvironment({ root, identity = 'a', transportFact
   // the exact propose_expense permission only when the plugin will register it.
   const { isP3WritesEnabled } = await import('./plugin.mjs');
   const p3Writes = isP3WritesEnabled(process.env);
-  writeTedConfig(iso.dirs.config, resolvedProfile, { p3Writes });
+  const categoryMemory = process.env.TED_OPENCODE_CATEGORY_MEMORY_ENABLED === '1';
+  const productPrompt = process.env.TED_OPENCODE_PRODUCT_PROMPT_ENABLED === '1';
+  writeTedConfig(iso.dirs.config, resolvedProfile, { p3Writes, productPrompt, categoryMemory });
   // No process.chdir: SDK boots with explicit config.directory +
   // database.path; chdir would move another service in a shared process.
   const sdkMod = deps.sdkModule ?? await import('@opencode/sdk');

@@ -1,6 +1,7 @@
 # ADR-031 — OpenCode como núcleo conversacional do Meu TED
 
 **Status:** aceita como decisão de direção pelo operador em 2026-10-31; **migração de produção não autorizada**.  
+**Emenda:** 2026-11-16 — autonomia local e restrita de autoexecução de criação de categoria via política da API, com token delegado emitido pela API; **sem autorização de produção**.
 **Data:** 2026-10-31  
 **Decisão:** SELECT_B / OpenCode-first
 
@@ -39,3 +40,27 @@ A sequência autorizada de **trabalho local** é: consolidar evidências e códi
 ## Rollback
 
 Até a autorização de canary, A0 permanece o único caminho produtivo. Qualquer alternância futura exige ownership persistido por conversa, drenagem da execução em voo e reconciliação de propostas/recibos na API. Rollback altera **roteamento de runtime**, nunca desfaz lançamentos ou restaura um ledger antigo.
+
+## Emenda 2026-11-16 — autonomia de criação de categoria sob política da API
+
+Por autorização do operador nesta sessão, o runtime conversacional OpenCode (B, `apps/ted-runtime`) poderá, em condições restritas, disparar o fluxo `propose->authorize->execute` da API para `categories.create` elegível, replicando o caminho já usado por A0 (`isAutoCreatableCategory` em `apps/api/src/approvals/policy.ts` e a flag `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED`). A API permanece a única autoridade: valida a operação, autoriza-a segundo sua política, aplica idempotência e emite o recibo. Esta emenda não confere autoridade ao LLM.
+
+**Invariante:** nenhuma autorização pode emanar de LLM, prompt, tool ou sessão OpenCode. O modelo nunca recebe credencial, capability, hash de proposta ou `operationId`. A autonomia pertence exclusivamente ao HOST do runtime, sob política server-side da API, nunca ao modelo.
+
+**Condições obrigatórias, todas default-off:**
+
+- A flag própria `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED` deve estar exatamente em `'1'`; a política da API deve estar habilitada e a categoria deve ser elegível.
+- Falha fecha: se faltar a flag, credencial, política ou endpoint, a ação vira proposta pendente comum, nunca execução automática.
+- O runtime B obtém um token delegado efêmero e device-bound por turno através de endpoint emissor dedicado da API, com escopo mínimo de capabilities financeiras necessárias, incluindo `financial.approval.autoexecute`. No lado da API, o segredo de delegação é `PI_DELEGATED_TOKEN_SECRET` (via `deps.delegationSecret`), usado para assinar e verificar pelo mesmo preHandler. `AGENT_DELEGATION_SECRET` é o nome no emissor do Agent A0; ambos os lados devem compartilhar o mesmo valor provisionado, sem jamais gravá-lo no repositório. O B autentica-se nesse endpoint com credencial de serviço de escopo baixo, injetada por perfil/variável de ambiente no processo-filho; nenhuma credencial, token ou segredo pode ser gravado no código, repositório, logs, instruções, relatórios ou instruções geradas, nem exposto ao modelo.
+- Usar chave de idempotência estável. É proibida dupla execução por A0 e B para a mesma intenção, respeitando o item 7 original.
+- O runtime B só pode autoexecutar quando for o dono da conversa (roteamento/pin B) e deve usar a mesma derivação de chave de idempotência da intenção lógica usada pelo A0, para não competir com ele pela mesma intenção, respeitando o item 7 original.
+
+**Escopo:** esta emenda permite implementação local e testes. Não autoriza produção, canary, deploy, ativação de flags em ambiente real nem qualquer alteração no roteamento do workspace real junio. O congelamento do item 8 e a afirmação da seção **Fases e critérios** — “Esta ADR não autoriza produção nem prova paridade” — permanecem vigentes.
+
+**Rollback:** desligar `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED` retorna o runtime ao comportamento intent-only. A emenda não altera a API nem o ledger.
+
+**Precedência no mesmo turno:** uma intenção de correção referencial (fatia T3) prevalece sobre proposta e autoexecução: quando há correção, a proposta do turno é descartada e nenhuma autoexecução é tentada. Essa precedência é silenciosa no payload além do campo de correção; a redação de saída do modelo não é alterada pelo host.
+
+**Residuais aceitos:** o claim `request=intentionId` e o `jti` ainda não são consumidos pelas rotas V2; o token delegado vale 300s para operações do mesmo ator/device, e a autoridade final continua sendo a política da API. As rotas V2 existentes não são alteradas nesta fatia para não afetar A0. `financial.read` permanece no conjunto mínimo porque o runtime B precisa de leituras autorizadas (categorias/pending). A prova de idempotência contra dupla execução A0 x B foi coberta por teste na fatia T4b. O `forget()`/tombstone do store de categoria ainda não possui chamador de produto: a garantia de não reensinar preferência esquecida existe no store, sem interface exposta ao modelo ou ao gateway.
+
+Referência de migração: [plano OpenCode-first](../plans/2026-10-31-ted-opencode-first/README.md).

@@ -73,6 +73,7 @@ import { buildObservabilityEvent } from "../audit/events.js";
 import { createInMemoryPriceAlertStore, type PriceAlertStore } from "../price-alerts/store.js";
 import { isPriceAlertsEnabled, registerPriceAlertRoutes } from "./price-alerts.js";
 import { registerAgentAuthRoutes } from "./agent-auth.js";
+import { registerAgentAutoExecTokenRoutes } from "./agent-autoexec-token.js";
 import { registerAdminAgentLlmConfigRoutes, type AdminLlmReadAudit } from "./admin-agent-llm-config.js";
 import { registerInternalAgentLlmConfigRoutes } from "./internal-agent-llm-config.js";
 import { registerAgentLlmRelayRoutes } from "./internal-agent-llm-relay.js";
@@ -114,6 +115,7 @@ export type RouteDeps = {
   adoptionStore?: AdoptionStore;
   shadowDivergenceStore?: ShadowDivergenceStore;
   delegationSecret?: string;
+  autoExecMintServiceToken?: string | undefined;
   vapidPublicKey?: string;
   auditLogs?: AuditLogStore;
   ownershipTransferStore?: OwnershipTransferStore;
@@ -830,6 +832,12 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
     pool: deps.pool ?? null,
     // H-12: device binding at mint time (server-side resolution).
     resolveDeviceToken: resolveToken,
+  });
+  registerAgentAutoExecTokenRoutes(app, {
+    autoExecMintServiceToken: deps.autoExecMintServiceToken,
+    delegationSecret: deps.delegationSecret ?? process.env.PI_DELEGATED_TOKEN_SECRET,
+    workspaceAccess: deps.workspaceAccess,
+    pool: deps.pool ?? null,
   });
 
   registerWorkspaceAliasRoutes(app, {

@@ -38,6 +38,8 @@
 //      secrets, cookies, tokens, or prompt text.
 
 import http from 'node:http';
+import { openCategoryMemoryStore } from './category-memory-store.mjs';
+import { normalizeMemoryValue } from './category-memory-core.mjs';
 import {
   CONVERSATION_COOKIE_MAX_AGE,
   ConversationError,
@@ -56,6 +58,8 @@ import {
   defaultDiagnosticSink,
 } from './diagnostics.mjs';
 import { proposalIntentRegistry } from './proposal-intents.mjs';
+import { correctionIntentRegistry } from './correction-intents.mjs';
+import { isAttachmentMarkedText, isReferentialCorrectionText, parseCorrectionFields } from './correction-detection.mjs';
 
 export const GATEWAY_BODY_LIMIT_BYTES = 64 * 1024;
 export const GATEWAY_REQUEST_TIMEOUT_MS = 30000;
@@ -244,12 +248,19 @@ export function createGatewayServer({
   requestTimeoutMs = GATEWAY_REQUEST_TIMEOUT_MS,
   diagnosticsSink = defaultDiagnosticSink,
   proposalIntents = proposalIntentRegistry,
+  autoExecClient = null,
+  autoExecEnabled = false,
+  correctionIntents = correctionIntentRegistry,
+  categoryMemoryDbPath,
   allowNonLoopbackHost = false,
 } = {}) {
   if (typeof resolveIdentity !== 'function') throw new Error('gateway server: resolveIdentity is required');
   if (!store || typeof store.get !== 'function') throw new Error('gateway server: conversation store is required');
   if (!promptHost || typeof promptHost.chat !== 'function') throw new Error('gateway server: promptHost.chat is required');
   if (typeof createRuntimeSession !== 'function') throw new Error('gateway server: createRuntimeSession is required');
+  const categoryMemoryEnabled = typeof categoryMemoryDbPath === 'string' && categoryMemoryDbPath.length > 0;
+  const categoryMemoryStore = categoryMemoryEnabled ? openCategoryMemoryStore({ dbPath: categoryMemoryDbPath }) : null;
+  const turnIntentionBySession = new Map();
   void bindAuthenticatedSession; // legacy seam: accepted, never invoked (unsafe path retired)
   const hasSafeWrapper = typeof withAuthenticatedSession === 'function';
   function requireSafeWrapper() {
@@ -262,7 +273,7 @@ export function createGatewayServer({
   // Server-side tool host: built ONLY from the verified gateway identity +
   // the presented device credential (transport material, never a client
   // claim). Never crosses HTTP — it goes straight into the private rebind.
-  function buildHost({ identity, deviceToken }) {
+  function buildHost({ identity, deviceToken, conversationId }) {
     if (!identity || typeof identity.actorId !== 'string' || typeof identity.deviceId !== 'string') {
       throw new GatewayError('gateway.invalid_args', 'verified identity is required to build the tool host');
     }
@@ -275,6 +286,8 @@ export function createGatewayServer({
       household: identity.workspace,
       actorId: identity.actorId,
       deviceId: identity.deviceId,
+      ...(typeof conversationId === 'string' ? { conversationId } : {}),
+      ...(categoryMemoryStore ? { categoryMemoryStore } : {}),
     });
   }
 
@@ -311,11 +324,11 @@ export function createGatewayServer({
   // metadata and BEFORE any native use, inside the serialized wrapper below.
   // The host is built from the verified gateway identity + the presented
   // device credential (transport material, never browser-supplied fields).
-  function verifiedHostFor(identity, deviceToken) {
-    return buildHost({ identity, deviceToken });
+  function verifiedHostFor(identity, deviceToken, conversationId) {
+    return buildHost({ identity, deviceToken, conversationId });
   }
 
-  async function handleChat({ workspaceId, body, cookieHeader, identity, pin, resHeaders, signal, deviceToken }) {
+  async function handleChat({ workspaceId, body, cookieHeader, identity, pin, resHeaders, signal, deviceToken, requestDeadline }) {
     if (!body || typeof body.text !== 'string' || body.text.trim().length === 0) {
       const e = new GatewayError('prompt.invalid_args', 'chat text (non-empty) is required');
       return { status: toStatus(e.code), payload: errorPayload(e) };
@@ -561,7 +574,20 @@ export function createGatewayServer({
                   }
                 }
                 record = store.noteTurn(record.conversationId);
-                return { turnId: recovered.turnId, output: recovered.output };
+                let recoveredProposal = null;
+                if (autoExecEnabled) {
+                  const candidate = proposalIntents.peek(runtimeForRecovery);
+                  if (candidate && turnIntentionBySession.get(runtimeForRecovery) === body.intentionId) {
+                    recoveredProposal = proposalIntents.take(runtimeForRecovery);
+                  } else {
+                    proposalIntents.clear(runtimeForRecovery);
+                  }
+                }
+                turnIntentionBySession.delete(runtimeForRecovery);
+                return {
+                  turnId: recovered.turnId, output: recovered.output,
+                  ...(recoveredProposal ? { proposal: recoveredProposal } : {}),
+                };
               }
             }
             const wait = new GatewayError('prompt.in_progress', 'intention admitted but answer not yet observable — retry with the same id, no second prompt issued');
@@ -603,10 +629,17 @@ export function createGatewayServer({
         runtimeSessionId = created.runtimeSessionId;
         record = store.attachRuntime(record.conversationId, runtimeSessionId, identity.actorId);
       }
-      const host = verifiedHostFor(identity, deviceToken);
+      const host = verifiedHostFor(identity, deviceToken, record.conversationId);
       // A proposal intent belongs to exactly ONE turn: clear any residue
       // before the prompt (a failed turn never leaks into the next one).
       proposalIntents.clear(runtimeSessionId);
+      turnIntentionBySession.set(runtimeSessionId, body.intentionId);
+      const correctionDetectionEnabled = process.env.TED_OPENCODE_SUPERSEDE_DETECTION_ENABLED === '1';
+      correctionIntents.clear(runtimeSessionId);
+      if (correctionDetectionEnabled && isReferentialCorrectionText(body.text)) {
+        const correction = parseCorrectionFields(body.text);
+        if (correction) correctionIntents.record(runtimeSessionId, correction);
+      }
       let started;
       try {
         started = await requireSafeWrapper()(runtimeSessionId, host, async () => {
@@ -630,6 +663,42 @@ export function createGatewayServer({
           } catch { /* settle is best-effort metadata; the error still propagates */ }
         }
         throw e;
+      }
+      const correctionCandidate = correctionDetectionEnabled && isReferentialCorrectionText(body.text)
+        ? parseCorrectionFields(body.text) : null;
+      let proposalForAutoexec = null;
+      let canAutoexec = false;
+      if (autoExecEnabled && autoExecClient && pin.pin === 'b' && !correctionCandidate) {
+        proposalForAutoexec = proposalIntents.peek(runtimeSessionId);
+        if (proposalForAutoexec) {
+          const { isAutoEligibleCategoryIntent } = await import('./category-autoexec.mjs');
+          canAutoexec = isAutoEligibleCategoryIntent(proposalForAutoexec);
+        }
+      }
+      if (hasIntentions && canAutoexec) {
+        // Record the admitted native message while keeping the intention
+        // pending, so a disconnected autoexec can recover history by the same
+        // intentionId without issuing a second prompt.
+        store.settleIntention(record.conversationId, body.intentionId, {
+          status: 'pending', actorId: identity.actorId,
+          ...(started && typeof started.turnId === 'string' ? { turnId: started.turnId } : {}),
+          ...(started && typeof started.userMessageId === 'string' ? { userMessageId: started.userMessageId } : {}),
+        });
+      }
+      let autoexecResult = null;
+      if (canAutoexec) {
+        const { tryAutoCreateCategory } = await import('./category-autoexec.mjs');
+        autoexecResult = await tryAutoCreateCategory({
+          client: autoExecClient, identity, intentionId: body.intentionId,
+          intent: proposalForAutoexec, signal, budgetMs: Math.max(1, Math.min(12_000, requestDeadline - Date.now() - 250)),
+        });
+        // A caller disconnect/outer request timeout leaves both the
+        // intention and proposal untouched for same-id recovery.
+        if (signal.aborted) {
+          const interrupted = new GatewayError('gateway.upstream_error', 'request interrupted during autoexec; retry with the same id');
+          interrupted.code = 'gateway.upstream_error';
+          throw interrupted;
+        }
       }
       if (hasIntentions) {
         try {
@@ -658,12 +727,35 @@ export function createGatewayServer({
           throw safe;
         }
       }
+      turnIntentionBySession.delete(runtimeSessionId);
       record = store.noteTurn(record.conversationId);
       // Hand the intent off exactly once, on a settled successful turn. The
       // PWA POSTs it to the Agent broker; the gateway never mints, never
       // confirms, never executes.
       const proposalIntent = proposalIntents.take(runtimeSessionId);
-      return proposalIntent ? { ...started, proposal: proposalIntent } : started;
+      const correction = correctionDetectionEnabled ? correctionIntents.take(runtimeSessionId) : null;
+      if (categoryMemoryStore && correction?.field === 'category' && !isAttachmentMarkedText(body.text)) {
+        const value = normalizeMemoryValue(correction.value);
+        if (value) {
+          try {
+            categoryMemoryStore.remember({
+              workspaceId: identity.workspace, actorId: identity.actorId,
+              target: record.conversationId, field: 'category', value,
+            });
+          } catch { /* optional learning never breaks a settled turn */ }
+        }
+      }
+      let deliveredProposal = proposalIntent;
+      let autoexec;
+      if (autoexecResult?.status === 'executed') {
+          autoexec = { status: 'executed' };
+          deliveredProposal = null;
+      } else if (autoexecResult?.reason === 'uncertain') {
+        autoexec = { status: 'uncertain' };
+      }
+      return correction
+        ? { ...started, correction }
+        : { ...started, ...(deliveredProposal ? { proposal: deliveredProposal } : {}), ...(autoexec ? { autoexec } : {}) };
     }).catch((e) => ({ __error: e }));
 
     // Turn finish observation: success carries `none`; failures classify
@@ -692,6 +784,8 @@ export function createGatewayServer({
         status: 'completed',
         output: outcome.output,
         ...(outcome.proposal ? { proposal: outcome.proposal } : {}),
+        ...(outcome.autoexec ? { autoexec: outcome.autoexec } : {}),
+        ...(outcome.correction ? { correction: outcome.correction } : {}),
       },
       setCookie: pin.pin === 'b' ? null : record.conversationId,
       previousSessionId,
@@ -857,6 +951,7 @@ export function createGatewayServer({
       // single session.interrupt). Timeout maps to 504 when the socket is
       // still open — req.destroy() is never the timeout action.
       const controller = new AbortController();
+      const requestDeadline = Date.now() + requestTimeoutMs;
       let timedOut = false;
       const timer = setTimeout(() => {
         timedOut = true;
@@ -965,7 +1060,7 @@ export function createGatewayServer({
             signal.addEventListener('abort', () => { clearTimeout(t); resolve({ __aborted: true }); }, { once: true });
           });
           const out = await Promise.race([
-            handleChat({ workspaceId, body, cookieHeader, identity, pin, resHeaders: extraHeaders, signal, deviceToken }),
+            handleChat({ workspaceId, body, cookieHeader, identity, pin, resHeaders: extraHeaders, signal, deviceToken, requestDeadline }),
             timeoutPromise,
           ]);
           if ((out && out.__timeout) || timedOut) {
@@ -1068,6 +1163,7 @@ export function createGatewayServer({
         else if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
       } catch { /* best effort */ }
       await new Promise((resolve) => server.close(() => resolve()));
+      if (categoryMemoryStore) categoryMemoryStore.close();
     },
   };
 }

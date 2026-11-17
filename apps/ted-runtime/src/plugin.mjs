@@ -142,7 +142,8 @@ export function isP3WritesEnabled(env = process.env) {
 export function productToolDefs(env = process.env) {
   const names = [
     ...PRODUCT_TOOL_NAMES,
-    ...(isP3ReadsEnabled(env) ? P3_READ_TOOL_NAMES : []),
+    ...(isP3ReadsEnabled(env) ? P3_READ_TOOL_NAMES.filter((name) => name !== 'recall_category_preference') : []),
+    ...(env && env.TED_OPENCODE_CATEGORY_MEMORY_ENABLED === '1' ? ['recall_category_preference'] : []),
     ...(isP3WritesEnabled(env) ? P3_WRITE_TOOL_NAMES : []),
   ];
   const defs = TOOL_DEFS.filter((d) => names.includes(d.name));

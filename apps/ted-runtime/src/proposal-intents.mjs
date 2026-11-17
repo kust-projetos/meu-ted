@@ -7,6 +7,8 @@
 // One pending intent per native session (turns are serialized per session):
 // record() overwrites, take() is destructive, clear() runs at turn start so a
 // failed turn can never leak an intent into the next one.
+// peek() lets the gateway inspect the proposal before settling a turn without
+// consuming the handoff.
 
 function createRegistry() {
   const store = new Map();
@@ -18,6 +20,10 @@ function createRegistry() {
       }
       if (!intent || typeof intent !== 'object') throw new Error('proposal intent: intent is required');
       store.set(sessionID, Object.freeze({ ...intent }));
+    },
+    peek(sessionID) {
+      if (typeof sessionID !== 'string' || sessionID.length === 0) return null;
+      return store.get(sessionID) ?? null;
     },
     take(sessionID) {
       if (typeof sessionID !== 'string' || sessionID.length === 0) return null;

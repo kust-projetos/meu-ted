@@ -229,6 +229,7 @@ const start = async (): Promise<void> => {
       agentConnectionSecret: cfg.agentConnectionSecret,
       agentConfigToken: cfg.agentConfigToken,
       agentAuthServiceToken: cfg.agentAuthServiceToken,
+      autoExecMintServiceToken: process.env.TED_RUNTIME_AUTOEXEC_MINT_TOKEN,
       agentReplayStore: createPostgresAgentReplayStore(pool),
       agentRuntimeOrigin: cfg.agentRuntimeOrigin,
       agentRuntimeAdminToken: cfg.agentRuntimeAdminToken,
