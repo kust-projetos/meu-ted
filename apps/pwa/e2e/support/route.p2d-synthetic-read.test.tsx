@@ -113,6 +113,7 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { GET, POST } from "../../src/app/api/agent/[...path]/route";
 import { fetchAgentHistory } from "@/lib/api/agent-client";
 import { render, screen } from "@/lib/test-utils";
+import { waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TedChat } from "@/features/ted/TedChat";
 // NOTE: `better-auth/adapters/memory` is an API-workspace dependency (not a
@@ -720,17 +721,19 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             );
             await user.type(input, COMPONENT_TEXT);
             await user.click(screen.getByRole("button", { name: /enviar mensagem/i }));
+            await waitFor(async () => {
+              stats = await serve.cmd("stats");
+              expect(stats["promptCalls"]).toBe(4);
+              expect(stats["transportCalls"]).toBe(6);
+            }, { timeout: 180000, interval: 500 });
             // Exact DTO-derived text on screen: proves DTO → provider context
             // → PWA output instead of a canned string.
             const answersAfterSend = await screen.findAllByText(EXPECTED_FINAL_TEXT, undefined, { timeout: 180000 });
             // The stub emits identical final text for multiple intentions;
             // the exact count is not a contract.
             expect(answersAfterSend.length).toBeGreaterThan(0);
-            stats = await serve.cmd("stats");
-            expect(stats["promptCalls"]).toBe(4);
             expect(stats["stubMismatches"]).toEqual([]);
-            // stub turn count is script-dependent; the contract is DTO-derived text + one admitted prompt (promptCalls) + no new effects on remount
-            expect(Number(stats["transportCalls"])).toBeGreaterThan(0);
+            // Stub turn count is script-dependent; counts above prove completion before remount.
             const readsAfterSend = stats["financeReads"] as Array<{
               route?: string; method?: string; statusCode?: number; body?: Record<string, unknown>;
             }>;
