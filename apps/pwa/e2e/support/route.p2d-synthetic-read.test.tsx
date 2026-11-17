@@ -425,10 +425,11 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const chatPath = (ws: string) => ["agents", "finance-chat-agent", ws, "rpc", "chat"];
         const sessionNewPath = (ws: string) => ["agents", "finance-chat-agent", ws, "rpc", "session", "new"];
         const historyPath = (ws: string) => ["agents", "finance-chat-agent", ws, "rpc", "history"];
+        let gatewayCookie = "";
         const rpcUrl = (segs: string[]) =>
           `http://localhost:3000/api/agent/${segs.map(encodeURIComponent).join("/")}`;
         const headersFor = (cookie: string, deviceToken: string, ws: string): Record<string, string> => ({
-          cookie,
+          cookie: [cookie, gatewayCookie].filter(Boolean).join("; "),
           "x-device-token": deviceToken,
           "x-workspace-id": ws,
         });
@@ -463,7 +464,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
               // scope ALWAYS come from the test jar, even when the caller set
               // its own values (the mocked getActiveDeviceToken returns a
               // device id, not the token; the real browser sends the token).
-               incoming.set("cookie", opts.sessionCookie);
+              incoming.set("cookie", [opts.sessionCookie, gatewayCookie].filter(Boolean).join("; "));
               incoming.set("x-device-token", opts.deviceToken);
               incoming.set("x-workspace-id", opts.ws);
               const method = String((init as RequestInit | undefined)?.method ?? "GET").toUpperCase();
@@ -486,6 +487,9 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const newRes = await postViaRoute(sessionNewPath(HOUSEHOLD_A), {}, headersFor(cookieA, regA.token, HOUSEHOLD_A));
         expect(newRes.status).toBe(200);
         expect(newRes.headers.get("x-ted-runtime")).toBe("opencode");
+        const gatewaySetCookie = newRes.headers.getSetCookie?.().find((value) => value.includes("=opencode."));
+        expect(gatewaySetCookie).toBeDefined();
+        gatewayCookie = gatewaySetCookie!.split(";", 1)[0];
         const newBody = (await newRes.json()) as { ok?: boolean; sessionId?: string };
         expect(newBody.ok).toBe(true);
         expect(typeof newBody.sessionId).toBe("string");
