@@ -106,6 +106,8 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
   // Profile is validated inside bootstrap (unknown rejects before boot);
   // read here so the resolved value is forwarded explicitly to the env boot.
   const profile = readEnv('TED_RUNTIME_PROFILE', 'test');
+  const autoExecEnabled = readEnv('TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED', '') === '1';
+  const autoExecServiceToken = readEnv('TED_RUNTIME_AUTOEXEC_MINT_TOKEN', '');
 
   const transportFactory = () => new HttpFinanceTransport({ baseUrl: apiBaseUrl, allowedOrigins: allowedApiOrigins }).call;
   const tedEnv = await createTedEnvironment({ root: home, identity, transportFactory, profile });
@@ -136,12 +138,21 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
     const store = createConversationStore({ persistDir: tedEnv.dirs.state });
     const diagSink = typeof diagnosticsSink === 'function' ? diagnosticsSink : defaultDiagnosticSink;
     const promptHost = tedEnv.serverOps.createPromptHost({ diagnosticsSink: diagSink });
+    let autoExecClient = null;
+    if (autoExecEnabled && autoExecServiceToken.length >= 32) {
+      const { createAutoExecClient } = await import('./autoexec-client.mjs');
+      autoExecClient = createAutoExecClient({
+        apiBaseUrl, allowedApiOrigins, serviceToken: autoExecServiceToken,
+      });
+    }
 
     gateway = createGatewayServer({
       resolveIdentity: ({ cookie, deviceToken, workspaceId, signal }) =>
         resolveGatewayIdentity({ apiBaseUrl, cookie, deviceToken, workspaceId, signal, allowedApiOrigins }),
       store,
       promptHost,
+      autoExecClient,
+      autoExecEnabled: Boolean(autoExecClient),
       createRuntimeSession: async () => ({ runtimeSessionId: await tedEnv.serverOps.createNativeSession() }),
       withAuthenticatedSession: (sessionID, host, fn, opts) =>
         tedEnv.serverOps.withAuthenticatedSession(sessionID, host, fn, {
@@ -152,6 +163,9 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
           ...(opts || {}),
         }),
       requestTimeoutMs,
+      ...(process.env.TED_OPENCODE_CATEGORY_MEMORY_ENABLED === '1'
+        ? { categoryMemoryDbPath: path.join(tedEnv.dirs.state, 'category-memory.sqlite') }
+        : {}),
       diagnosticsSink: diagSink,
       allowNonLoopbackHost: !LOOPBACK_HOSTS.has(listenHost),
     });

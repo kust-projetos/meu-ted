@@ -33,7 +33,7 @@ function stubTransport(cases) {
 
 describe('ted-runtime tool catalogue (read-only + proposal intent)', () => {
   it('knows the P2 reads, the optional P3 reads and the proposal intent (no confirm/execute)', () => {
-    assert.deepEqual([...TOOL_NAMES].sort(), [...PRODUCT_TOOL_NAMES, ...P3_READ_TOOL_NAMES, ...P3_WRITE_TOOL_NAMES].sort());
+    assert.deepEqual([...TOOL_NAMES].sort(), [...PRODUCT_TOOL_NAMES, ...P3_READ_TOOL_NAMES, ...P3_WRITE_TOOL_NAMES, 'recall_category_preference'].sort());
     assert.equal(TOOL_DEFS.length, TOOL_NAMES.length);
     for (const def of TOOL_DEFS) {
       assert.ok(def.input && typeof def.input === 'object', `${def.name} needs input schema`);
