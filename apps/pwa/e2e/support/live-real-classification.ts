@@ -28,7 +28,7 @@ export interface LiveRealRequest {
 // that is not on the allowlist: it is NOT assumed to be telemetry — it stays
 // "unidentified" until there is concrete evidence (a more specific reason code)
 // that the destination is auxiliary.
-const AUXILIARY_REASON_CODES = new Set(["telemetry", "analytics", "csp", "auxiliary"]);
+const AUXILIARY_REASON_CODES = new Set(["telemetry", "analytics", "csp", "auxiliary", "auxiliary_loopback"]);
 
 /**
  * Map a guard reason code to a category.

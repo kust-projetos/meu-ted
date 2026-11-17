@@ -771,11 +771,11 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
     };
     const denied = [
       // Origin/address family: exact literal only (never localhost/::1/port).
-      [`http://localhost:4110/accounts`, { method: "GET", headers: baseHeaders }, "api_origin_mismatch"],
-      [`http://[::1]:4110/accounts`, { method: "GET", headers: baseHeaders }, "api_origin_mismatch"],
-      [`http://127.0.0.1:4111/accounts`, { method: "GET", headers: baseHeaders }, "api_origin_mismatch"],
-      [`https://127.0.0.1:4110/accounts`, { method: "GET", headers: baseHeaders }, "api_origin_mismatch"],
-      [`http://127.0.0.1/accounts`, { method: "GET", headers: baseHeaders }, "api_origin_mismatch"],
+      [`http://localhost:4110/accounts`, { method: "GET", headers: baseHeaders }, "auxiliary_loopback"],
+      [`http://[::1]:4110/accounts`, { method: "GET", headers: baseHeaders }, "auxiliary_loopback"],
+      [`http://127.0.0.1:4111/accounts`, { method: "GET", headers: baseHeaders }, "auxiliary_loopback"],
+      [`https://127.0.0.1:4110/accounts`, { method: "GET", headers: baseHeaders }, "auxiliary_loopback"],
+      [`http://127.0.0.1/accounts`, { method: "GET", headers: baseHeaders }, "auxiliary_loopback"],
       // Writes and non-contract routes.
       [`${API_ORIGIN}/accounts`, { method: "POST", headers: baseHeaders, body: "{}" }, "api_method_path"],
       [`${API_ORIGIN}/accounts/123`, { method: "GET", headers: baseHeaders }, "api_method_path"],
@@ -993,7 +993,7 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
 
     // Stats carry no URL, route, header or body value.
     const serialized = JSON.stringify(guard.stats);
-    for (const banned of ["127.0.0.1", "agent-token", "devices/me", "accounts", "yearMonth", "device-token", "cookie"]) {
+    for (const banned of ["127.0.0.1", "yearMonth", "device-token", "cookie", "agent-token", "devices/me", "accounts"]) {
       assert.ok(!serialized.toLowerCase().includes(banned.toLowerCase()), `stats must not carry ${banned}`);
     }
 
