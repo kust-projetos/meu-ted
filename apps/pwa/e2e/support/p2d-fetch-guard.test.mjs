@@ -3,7 +3,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classifyLiveRealRequest, parseLiveRealApiOrigin } from './p2d-fetch-guard.mjs';
+import {
+  classifyLiveRealRequest,
+  createLiveRealFetchGuard,
+  parseLiveRealApiOrigin,
+} from './p2d-fetch-guard.mjs';
 
 const API = 'http://127.0.0.1:4110';
 const options = { apiOrigin: API };
@@ -14,6 +18,127 @@ const classify = (path, { method = 'GET', init = {} } = {}) =>
   classifyLiveRealRequest(`${API}${path}`, { method, headers, ...init }, options);
 
 describe('p2d live-real fetch guard: V1 completion reads', () => {
+  it('permits only traced catalog headers and denies authorization', () => {
+    const url = 'https://models.opencode.ai/experimental/v2.0/api.json';
+    assert.deepEqual(classifyLiveRealRequest(url, { headers: { b3: 'x', traceparent: 'x', 'user-agent': 'x' } }), {
+      action: 'allow-catalog', reason: 'catalog',
+    });
+    assert.equal(classifyLiveRealRequest(url, { headers: { authorization: 'Bearer x' } }).action, 'deny');
+  });
+
+  it('passes the exact inference config as auxiliary without pinning or inference accounting', async () => {
+    let passed;
+    const guard = createLiveRealFetchGuard({
+      fetchImpl: async (_input, init) => { passed = init; return { status: 204 }; },
+      apiOrigin: API,
+      expectedModelID: 'test-model',
+    });
+    const url = 'https://opencode.ai/console/api/v2/config';
+    assert.deepEqual(classifyLiveRealRequest(url, { headers: {
+      accept: 'application/json', authorization: 'Bearer x', b3: 'x', traceparent: 'x', 'user-agent': 'x',
+    } }), { action: 'allow-auxiliary', reason: 'inference_config' });
+    await guard.fetch(url, { headers: { accept: 'application/json' } });
+    assert.equal(passed.redirect, 'manual');
+    assert.equal(guard.stats.inferenceAttempts, 0);
+    assert.equal(guard.stats.inferenceAllowed, 0);
+    assert.equal(guard.stats.catalogAllowed, 0);
+    assert.equal(guard.stats.apiAllowed, 0);
+    assert.equal(guard.stats.auxiliaryAllowed, 1);
+    assert.deepEqual(guard.stats.auxiliaryStatuses, [204]);
+    assert.deepEqual(
+      [guard.stats.inferenceAllowed, guard.stats.apiAllowed, guard.stats.catalogAllowed],
+      [0, 0, 0],
+    );
+    for (const [target, init] of [
+      [url, { method: 'POST' }],
+      ['https://opencode.ai/console/api/v2/other', { method: 'GET' }],
+    ]) assert.equal(classifyLiveRealRequest(target, init).action, 'deny');
+  });
+
+  it('follows only safe same-host redirects for catalog and auxiliary requests', async () => {
+    const redirect = (location) => ({ status: 302, headers: { location } });
+    const makeGuard = (actionUrl, locations) => {
+      let calls = 0;
+      const guard = createLiveRealFetchGuard({
+        fetchImpl: async (_url, init) => {
+          assert.equal(init.redirect, 'manual');
+          const location = locations[calls++];
+          return location ? redirect(location) : { status: 200 };
+        },
+        apiOrigin: API,
+        expectedModelID: 'test-model',
+      });
+      return { guard, get calls() { return calls; }, actionUrl };
+    };
+    const catalog = makeGuard(
+      'https://models.opencode.ai/experimental/v2.0/api.json',
+      ['/experimental/v2.0/api.json?type=chat'],
+    );
+    assert.equal((await catalog.guard.fetch(catalog.actionUrl)).status, 200);
+    assert.equal(catalog.calls, 2);
+    assert.equal(catalog.guard.stats.redirectsBlocked, 0);
+    assert.deepEqual(catalog.guard.stats.catalogStatuses, [200]);
+    assert.equal(catalog.guard.stats.catalogAllowed, 1);
+
+    const auxiliary = makeGuard('https://opencode.ai/console/api/v2/config', ['/console/api/v2/config']);
+    assert.equal((await auxiliary.guard.fetch(auxiliary.actionUrl)).status, 200);
+    assert.equal(auxiliary.guard.stats.redirectsBlocked, 0);
+    assert.deepEqual(auxiliary.guard.stats.auxiliaryStatuses, [200]);
+  });
+
+  it('blocks unsafe destinations and chains beyond two safe redirect hops', async () => {
+    const redirect = (location) => ({ status: 302, headers: { location } });
+    const catalogUrl = 'https://models.opencode.ai/experimental/v2.0/api.json';
+    for (const location of [
+      'https://attacker.example/experimental/v2.0/api.json',
+      'http://models.opencode.ai/experimental/v2.0/api.json',
+      'https://models.opencode.ai:8443/experimental/v2.0/api.json',
+      'https://user@models.opencode.ai/experimental/v2.0/api.json',
+    ]) {
+      const guard = createLiveRealFetchGuard({
+        fetchImpl: async () => redirect(location), apiOrigin: API, expectedModelID: 'test-model',
+      });
+      await assert.rejects(() => guard.fetch(catalogUrl), /redirect blocked/);
+      assert.equal(guard.stats.redirectsBlocked, 1);
+    }
+
+    const chain = createLiveRealFetchGuard({
+      fetchImpl: async () => redirect('/experimental/v2.0/api.json'),
+      apiOrigin: API, expectedModelID: 'test-model',
+    });
+    await assert.rejects(() => chain.fetch(catalogUrl), /redirect blocked/);
+    assert.equal(chain.stats.redirectsBlocked, 1);
+  });
+
+  it('continues to block redirects for pinned inference and finance API requests', async () => {
+    for (const [url, init] of [
+      ['https://opencode.ai/inference/go/v1/chat/completions', {
+        method: 'POST', headers: { authorization: 'Bearer token' }, body: '{"model":"test-model"}',
+      }],
+      [`${API}/accounts`, { headers }],
+    ]) {
+      const guard = createLiveRealFetchGuard({
+        fetchImpl: async () => ({ status: 302, headers: { location: url } }),
+        apiOrigin: API, expectedModelID: 'test-model',
+      });
+      await assert.rejects(() => guard.fetch(url, init), /redirect blocked/);
+      assert.equal(guard.stats.redirectsBlocked, 1);
+    }
+  });
+
+  it('denies other loopback hosts without counting them as blocked API traffic', async () => {
+    assert.deepEqual(classifyLiveRealRequest('http://localhost:4110/api/tags', {}, options), {
+      action: 'deny', reason: 'auxiliary_loopback',
+    });
+    const guard = createLiveRealFetchGuard({
+      fetchImpl: async () => { throw new Error('denied request reached fetch'); },
+      apiOrigin: API,
+      expectedModelID: 'test-model',
+    });
+    await assert.rejects(() => guard.fetch('http://localhost:4110/api/tags'), /auxiliary_loopback/);
+    assert.equal(guard.stats.apiBlocked, 0);
+    assert.equal(guard.stats.blockedReasons.auxiliary_loopback, 1);
+  });
   it('accepts the loopback API origin only', () => {
     assert.equal(parseLiveRealApiOrigin(API), API);
     assert.equal(parseLiveRealApiOrigin('https://127.0.0.1:4110'), null);

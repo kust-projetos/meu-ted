@@ -13,6 +13,7 @@ describe("live-real request classification", () => {
     expect(classifyGuardReason("telemetry")).toBe("auxiliary");
     expect(classifyGuardReason("analytics")).toBe("auxiliary");
     expect(classifyGuardReason("csp")).toBe("auxiliary");
+    expect(classifyGuardReason("auxiliary_loopback")).toBe("auxiliary");
     expect(classifyGuardReason("api_method_path")).toBe("functional");
     expect(classifyGuardReason("inference_model")).toBe("functional");
     expect(classifyGuardReason("not_https")).toBe("functional");

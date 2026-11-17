@@ -121,7 +121,7 @@ function allowedApiHeaders(route) {
   return undefined;
 }
 
-const CATALOG_ALLOWED_HEADERS = Object.freeze(["user-agent", "if-none-match"]);
+const CATALOG_ALLOWED_HEADERS = Object.freeze(["user-agent", "if-none-match", "b3", "traceparent"]);
 // Catalog filter tokens the installed OpenCode 2.2.4 source actually sends:
 // `?type=chat,decision,image`. `embedding` is NOT requested by the source and
 // is therefore refused (least privilege); `Accept` is not sent either, so it
@@ -363,7 +363,7 @@ export function classifyLiveRealRequest(input, init, options = {}) {
     // Loopback API branch FIRST — before the HTTPS/IP rules below.
     if (parsed.origin === apiOrigin) return classifyApi(input, init, parsed, method);
     const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    if (LOOPBACK_LIKE_HOSTS.has(hostname)) return { action: "deny", reason: "api_origin_mismatch" };
+    if (LOOPBACK_LIKE_HOSTS.has(hostname)) return { action: "deny", reason: "auxiliary_loopback" };
   }
 
   if (parsed.protocol !== "https:") return { action: "deny", reason: "not_https" };
@@ -373,6 +373,15 @@ export function classifyLiveRealRequest(input, init, options = {}) {
 
   if (hostname === LIVE_REAL_CATALOG_HOST) return classifyCatalog(input, init, parsed, method);
   if (hostname === LIVE_REAL_INFERENCE_HOST) {
+    if (parsed.pathname === "/console/api/v2/config") {
+      if (method !== "GET") return { action: "deny", reason: "inference_method" };
+      if (parsed.search !== "") return { action: "deny", reason: "inference_shape" };
+      const allowedHeaders = new Set(["accept", "authorization", "b3", "traceparent", "user-agent"]);
+      for (const name of requestHeaders(input, init)) {
+        if (!allowedHeaders.has(name)) return { action: "deny", reason: "inference_shape" };
+      }
+      return { action: "allow-auxiliary", reason: "inference_config" };
+    }
     if (!parsed.pathname.startsWith(LIVE_REAL_INFERENCE_PREFIX)) {
       return { action: "deny", reason: "inference_path" };
     }
@@ -454,6 +463,31 @@ function pushBounded(list, value, max = 32) {
   if (list.length < max) list.push(value);
 }
 
+async function followSafeRedirect(response, classified, input, init, fetchImpl, options, maxHops = 2) {
+  if (classified.action !== "allow-catalog" && classified.action !== "allow-auxiliary") return response;
+  let currentResponse = response;
+  let currentUrl = new URL(inputUrl(input));
+  for (let hop = 0; hop < maxHops && currentResponse?.status >= 300 && currentResponse.status < 400; hop += 1) {
+    const location = headerValue(currentResponse.headers, "location");
+    if (!location) return null;
+    let target;
+    try {
+      target = new URL(location, currentUrl);
+    } catch {
+      return null;
+    }
+    if (
+      target.protocol !== "https:" || target.hostname.toLowerCase() !== currentUrl.hostname.toLowerCase() ||
+      (target.port !== "" && target.port !== "443") || target.username !== "" || target.password !== "" ||
+      classifyLiveRealRequest(target.href, init, options).action !== classified.action
+    ) return null;
+    currentUrl = target;
+    currentResponse = await fetchImpl(target.href, { ...(init || {}), redirect: "manual" });
+    if (currentResponse?.redirected === true) return null;
+  }
+  return currentResponse?.status >= 300 && currentResponse.status < 400 ? null : currentResponse;
+}
+
 /**
  * Wraps a fetch implementation with the allowlist + manual-redirect policy.
  * `apiOrigin` is REQUIRED (the exact synthetic API origin; fail-closed) and
@@ -484,6 +518,7 @@ export function createLiveRealFetchGuard({ fetchImpl, apiOrigin, expectedModelID
     inferenceAllowed: 0,
     inferenceFailures: 0,
     apiAllowed: 0,
+    auxiliaryAllowed: 0,
     apiBlocked: 0,
     blocked: 0,
     redirectsBlocked: 0,
@@ -493,11 +528,13 @@ export function createLiveRealFetchGuard({ fetchImpl, apiOrigin, expectedModelID
     catalogStatuses: [],
     inferenceStatuses: [],
     apiStatuses: [],
+    auxiliaryStatuses: [],
     inferenceModels: [],
   };
 
   const guardedFetch = async (input, init) => {
-    const classified = classifyLiveRealRequest(input, init, { apiOrigin: normalizedApiOrigin });
+    const requestOptions = { apiOrigin: normalizedApiOrigin };
+    const classified = classifyLiveRealRequest(input, init, requestOptions);
     if (classified.action === "deny") {
       stats.blocked += 1;
       if (classified.reason.startsWith("api_")) stats.apiBlocked += 1;
@@ -509,6 +546,23 @@ export function createLiveRealFetchGuard({ fetchImpl, apiOrigin, expectedModelID
     // JSON or divergent model fails closed with a fixed reason code — only
     // counters are recorded, never the body.
     let inferenceModel = null;
+    if (classified.action === "allow-auxiliary") {
+      const isRequest = typeof Request !== "undefined" && input instanceof Request;
+      const response = isRequest
+        ? await fetchImpl(new Request(input, { ...(init || {}), redirect: "manual" }))
+        : await fetchImpl(input, { ...(init || {}), redirect: "manual" });
+      const finalResponse = await followSafeRedirect(response, classified, input, init, fetchImpl, requestOptions);
+      if (finalResponse === null || finalResponse?.redirected === true) {
+        stats.redirectsBlocked += 1;
+        stats.blockedReasons.redirect = (stats.blockedReasons.redirect ?? 0) + 1;
+        throw new Error("guard: live-real redirect blocked (fail-closed)");
+      }
+      stats.auxiliaryAllowed += 1;
+      if (finalResponse && typeof finalResponse.status === "number") {
+        pushBounded(stats.auxiliaryStatuses, finalResponse.status);
+      }
+      return finalResponse;
+    }
     if (classified.action === "allow-inference") {
       stats.inferenceAttempts += 1;
       const modelCheck = await validateInferenceModel(input, init, expectedModelID);
@@ -528,9 +582,10 @@ export function createLiveRealFetchGuard({ fetchImpl, apiOrigin, expectedModelID
     const response = isRequest
       ? await fetchImpl(new Request(input, { ...(init || {}), redirect: "manual" }))
       : await fetchImpl(input, { ...(init || {}), redirect: "manual" });
+    const finalResponse = await followSafeRedirect(response, classified, input, init, fetchImpl, requestOptions);
     if (
-      (response && typeof response.status === "number" && response.status >= 300 && response.status < 400) ||
-      (response && response.redirected === true)
+      finalResponse === null || finalResponse?.redirected === true ||
+      (finalResponse?.status >= 300 && finalResponse.status < 400)
     ) {
       stats.redirectsBlocked += 1;
       stats.blockedReasons.redirect = (stats.blockedReasons.redirect ?? 0) + 1;
@@ -539,16 +594,16 @@ export function createLiveRealFetchGuard({ fetchImpl, apiOrigin, expectedModelID
     const category =
       classified.action === "allow-catalog" ? "catalog" : classified.action === "allow-api" ? "api" : "inference";
     stats[`${category}Allowed`] += 1;
-    if (response && typeof response.status === "number") {
-      pushBounded(stats[`${category}Statuses`], response.status);
-      if (category === "inference" && (response.status < 200 || response.status >= 300)) {
+    if (finalResponse && typeof finalResponse.status === "number") {
+      pushBounded(stats[`${category}Statuses`], finalResponse.status);
+      if (category === "inference" && (finalResponse.status < 200 || finalResponse.status >= 300)) {
         stats.inferenceFailures += 1;
       }
     }
     if (category === "inference" && inferenceModel !== null) {
       pushBounded(stats.inferenceModels, inferenceModel, 8);
     }
-    return response;
+    return finalResponse;
   };
 
   return { fetch: guardedFetch, stats };
