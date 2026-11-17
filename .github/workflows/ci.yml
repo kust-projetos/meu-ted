@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 3
     outputs:
       api: ${{ steps.areas.outputs.api }}
-      agent: ${{ steps.areas.outputs.agent }}
+      ted-runtime: ${{ steps.areas.outputs.ted-runtime }}
       docs: ${{ steps.areas.outputs.docs }}
       governance: ${{ steps.areas.outputs.governance }}
       workflows: ${{ steps.areas.outputs.workflows }}
@@ -59,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      CODE_CHANGED: ${{ needs.changes.outputs.api == 'true' || needs.changes.outputs.agent == 'true' }}
+      CODE_CHANGED: ${{ needs.changes.outputs.api == 'true' || needs.changes.outputs.ted-runtime == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -86,15 +86,9 @@ jobs:
         run: pnpm --filter meu-ted-api --fail-if-no-match lint
       - if: env.CODE_CHANGED == 'true'
         run: pnpm --filter meu-ted-api --fail-if-no-match typecheck
-      - if: env.CODE_CHANGED == 'true'
-        run: pnpm --filter pi-finance-agent --fail-if-no-match lint
-      - if: env.CODE_CHANGED == 'true'
-        run: pnpm --filter pi-finance-agent --fail-if-no-match typecheck
 
       - if: env.CODE_CHANGED == 'true'
         run: pnpm --filter meu-ted-api --fail-if-no-match build
-      - if: env.CODE_CHANGED == 'true'
-        run: pnpm --filter pi-finance-agent --fail-if-no-match build
 
       # Public-safety is fast (fs/git walk) and protects the public repo
       # from secrets/prohibited metadata; it stays on every PR.
@@ -103,11 +97,11 @@ jobs:
   # ─── TED runtime ────────────────────────────────────────────────────
   # Dedicated coverage for the OpenCode-first runtime slice (ADR-031 P1).
   # Runs on Node 24: the runtime engines field requires >=24 (the SDK uses
-  # explicit resource management). Area-gated with the other agent jobs.
+  # explicit resource management). Area-gated by the ted-runtime workspace.
   ted-runtime:
     name: TED Runtime — lint + typecheck + test
     needs: [changes]
-    if: needs.changes.outputs.agent == 'true'
+    if: needs.changes.outputs.ted-runtime == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -125,7 +119,7 @@ jobs:
       - run: pnpm --filter pi-finance-ted-runtime --fail-if-no-match test
 
   # ─── Functional ───────────────────────────────────────────────────────
-  # Agent/broker/contract suites run only when that area changed. API
+  # Contracts tests run when API or ted-runtime changes. API
   # behaviour (including financial writes, approvals and idempotency) is
   # covered by postgres-financial below, which is the authoritative API run.
   functional:
@@ -152,18 +146,9 @@ jobs:
       - run: pnpm test:scripts
 
       - name: Contracts tests
-        if: needs.changes.outputs.api == 'true' || needs.changes.outputs.agent == 'true'
+        if: needs.changes.outputs.api == 'true' || needs.changes.outputs.ted-runtime == 'true'
         run: pnpm --filter @pi-finance/llm-contracts --fail-if-no-match test
 
-      - name: Agent tests + deterministic eval
-        if: needs.changes.outputs.agent == 'true'
-        run: |
-          pnpm --filter pi-finance-agent --fail-if-no-match test
-          pnpm --filter pi-finance-agent --fail-if-no-match eval:ted-v2
-
-      - name: Workerd — live delivery
-        if: needs.changes.outputs.agent == 'true'
-        run: pnpm --filter pi-finance-agent --fail-if-no-match test:worker
 
   # ─── Financial integrity (Postgres) ───────────────────────────────────
   # Runs when the API, contracts or financial SQL changed. This is the
@@ -289,28 +274,6 @@ jobs:
       - run: pnpm governance:check -- --base "$GITHUB_BASE_SHA"
       - run: node --test scripts/lint-docs.test.mjs scripts/check-active-plan-status.test.mjs scripts/canonical-docs-contract.test.mjs scripts/documentation-facts-contract.test.mjs scripts/check-decision-governance.test.mjs
 
-  # ─── Agent policy (conditional) ──────────────────────────────────────
-  agent-policy:
-    name: Agent policies
-    needs: [changes]
-    if: needs.changes.outputs.agent == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          version: '10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm architecture:check
-      - run: pnpm capabilities:check
-      - run: pnpm write-policy:check
-      - run: node --test scripts/check-agent-v2-invariants.test.mjs scripts/check-tool-capability-inventory.test.mjs scripts/check-write-policy.test.mjs
-
   # ─── Workflow policy (conditional) ───────────────────────────────────
   workflows-gates:
     name: Workflow pins + YAML
@@ -331,55 +294,6 @@ jobs:
       - run: pnpm action-pins:check
       - run: pnpm workflows-yaml:check
       - run: node --test scripts/check-action-pins.test.mjs scripts/check-workflows-yaml.test.mjs
-
-  # ─── Agent deploy manifest (main only) ───────────────────────────────
-  # agent-deploy.yml downloads this artifact; the SHA, run id, lockfile hash
-  # and Wrangler version prove the deployed source passed CI.
-  agent-manifest:
-    name: Agent — deploy manifest (main only)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          version: '10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - name: Write agent deploy manifest (SHA-pinned provenance)
-        env:
-          GIT_SHA: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          mkdir -p /tmp/agent-manifest
-          LOCKFILE_HASH="$(sha256sum pnpm-lock.yaml | cut -d' ' -f1)"
-          # pnpm can print workspace engine warnings before the version (e.g.
-          # apps/ted-runtime wants node >=24 while CI runs node 22); keep only
-          # the last line so the manifest carries the real wrangler version.
-          WRANGLER_VERSION="$(pnpm --filter pi-finance-agent --fail-if-no-match exec wrangler --version 2>/dev/null | tail -n 1)"
-          GIT_SHA="$GIT_SHA" RUN_ID="$RUN_ID" LOCKFILE_HASH="$LOCKFILE_HASH" WRANGLER_VERSION="$WRANGLER_VERSION" node -e "
-          const fs = require('fs');
-          const manifest = {
-            sha: process.env.GIT_SHA,
-            workflow: 'CI',
-            runId: process.env.RUN_ID,
-            lockfileHash: process.env.LOCKFILE_HASH,
-            wranglerVersion: (process.env.WRANGLER_VERSION || '').trim(),
-          };
-          if (!manifest.lockfileHash || !manifest.wranglerVersion) { console.error('refusing to write incomplete manifest'); process.exit(1); }
-          fs.writeFileSync('/tmp/agent-manifest/manifest.json', JSON.stringify(manifest, null, 2) + '\n');
-          "
-          cat /tmp/agent-manifest/manifest.json
-      - name: Upload agent deploy manifest
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: agent-deploy-manifest-${{ github.sha }}
-          path: /tmp/agent-manifest/manifest.json
-          retention-days: 14
 
   # ─── API image provenance (main only) ────────────────────────────────
   api-image:
@@ -453,7 +367,7 @@ jobs:
   release-manifest:
     name: Release — consolidated manifest (main only)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [api-image, agent-manifest]
+    needs: [api-image]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -464,11 +378,7 @@ jobs:
         with:
           name: api-image-provenance-${{ github.sha }}
           path: /tmp/release/api
-      - name: Download Agent deploy manifest
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: agent-deploy-manifest-${{ github.sha }}
-          path: /tmp/release/agent
+
       - name: Assemble consolidated release manifest
         env:
           GIT_SHA: ${{ github.sha }}
@@ -479,7 +389,6 @@ jobs:
           GIT_SHA="$GIT_SHA" BUILD_ID="$BUILD_ID" BUILD_TIME="$BUILD_TIME" node -e "
           const fs = require('fs');
           const api = JSON.parse(fs.readFileSync('/tmp/release/api/api-image-provenance.json', 'utf8'));
-          const agent = JSON.parse(fs.readFileSync('/tmp/release/agent/manifest.json', 'utf8'));
           const manifest = {
             gitSha: process.env.GIT_SHA,
             buildId: process.env.BUILD_ID,
@@ -487,7 +396,6 @@ jobs:
             components: {
               api: { image: api.image, tag: api.tag, digest: api.digest },
               pwa: { artifact: 'pwa-cloudflare-build-pwaci-' + process.env.GIT_SHA },
-              agent: { sha: agent.sha, lockfileHash: agent.lockfileHash, wranglerVersion: agent.wranglerVersion, runId: agent.runId },
             },
           };
           fs.writeFileSync('/tmp/release/release-manifest-' + process.env.GIT_SHA + '.json', JSON.stringify(manifest, null, 2) + '\n');
@@ -506,7 +414,7 @@ jobs:
   gate:
     name: Gate — all checks
     if: always()
-    needs: [changes, quality, functional, ted-runtime, postgres-financial, docs-policies, agent-policy, workflows-gates]
+    needs: [changes, quality, functional, ted-runtime, postgres-financial, docs-policies, workflows-gates]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required and area jobs
@@ -517,7 +425,6 @@ jobs:
           TED_RUNTIME: ${{ needs.ted-runtime.result }}
           POSTGRES: ${{ needs.postgres-financial.result }}
           DOCS: ${{ needs.docs-policies.result }}
-          AGENT: ${{ needs.agent-policy.result }}
           WORKFLOWS: ${{ needs.workflows-gates.result }}
         run: |
           set -euo pipefail
@@ -529,7 +436,7 @@ jobs:
               failed=1
             fi
           done
-          for name in POSTGRES DOCS AGENT WORKFLOWS TED_RUNTIME; do
+          for name in POSTGRES DOCS WORKFLOWS TED_RUNTIME; do
             value="${!name}"
             case "$value" in
               success|skipped) ;;

@@ -1,7 +1,6 @@
 packages:
   - 'apps/pwa'
   - 'apps/api'
-  - 'apps/agent'
   - 'apps/ted-runtime'
   - 'packages/llm-contracts'
 

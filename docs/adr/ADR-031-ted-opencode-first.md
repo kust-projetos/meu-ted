@@ -64,3 +64,8 @@ Por autorização do operador nesta sessão, o runtime conversacional OpenCode (
 **Residuais aceitos:** o claim `request=intentionId` e o `jti` ainda não são consumidos pelas rotas V2; o token delegado vale 300s para operações do mesmo ator/device, e a autoridade final continua sendo a política da API. As rotas V2 existentes não são alteradas nesta fatia para não afetar A0. `financial.read` permanece no conjunto mínimo porque o runtime B precisa de leituras autorizadas (categorias/pending). A prova de idempotência contra dupla execução A0 x B foi coberta por teste na fatia T4b. O `forget()`/tombstone do store de categoria ainda não possui chamador de produto: a garantia de não reensinar preferência esquecida existe no store, sem interface exposta ao modelo ou ao gateway.
 
 Referência de migração: [plano OpenCode-first](../plans/2026-10-31-ted-opencode-first/README.md).
+
+
+## Nota de estado (2026-11-17)
+
+O runtime A0 (`apps/agent`) foi descontinuado e removido do build, workspaces e CI; `apps/ted-runtime` é o único runtime conversacional. Esta nota registra o estado de implementação e não autoriza remoção de recursos ou dados históricos em produção.

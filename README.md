@@ -5,49 +5,27 @@ assistente TED. Dados financeiros e decisões de escrita pertencem à API; o TED
 é um cliente conversacional sujeito às mesmas fronteiras de identidade,
 capability, confirmação e idempotência.
 
-## Estado atual (2026-11-13)
+## Estado atual (2026-11-17)
 
-- **Baseline:** `main` `26014bf` (CI `43441230429` success; PWA CI `43441230568` success).
-- **Produção:** API `32a05cb` (build `43419632296`, Contabo VPS); Agent `15c9691` (deploy `43435350750`, ATTESTED); PWA `15c9691` (build `43434093369`, deploy `43435345101`, ATTESTED). Release `v1.0.4` → `32a05cb`.
-- **Release B fechada (2026-11-11):** `SESSION_BEARER_FALLBACK_ENABLED=off` e PWA com `NEXT_PUBLIC_LEGACY_BEARER_COMPAT=off`.
-- **Assistente:** OpenCode (`apps/ted-runtime`) é o runtime conversacional primário; A0 (`apps/agent`) segue ativo como rollback e único broker de propostas Pending V2.
-- **Canary OpenCode:** `TED_OPENCODE_RUNTIME_ENABLED=1`, gateway `https://api.synkroo.com.br/ted-runtime`, allowlist `TED_OPENCODE_WORKSPACES` = `d36cb649-4462-486d-940a-47128ad329f2` e `550e8400-e29b-41d4-a716-446655440000`. Apenas `chat`, `history` e `session/new` roteiam para OpenCode; pending/undo/attachments permanecem no A0. Kill switch `TED_OPENCODE_RUNTIME_KILL_SWITCH=1` devolve toda conversa ao A0.
-- **WhatsApp:** fora de escopo por ora (bridge removida; não reconstruir nem replanejar).
+- **Assistente:** `apps/ted-runtime` (gateway OpenCode) é o único runtime conversacional. O A0 (`apps/agent`) foi descontinuado e removido do build, workspaces e CI.
+- **Autoridade financeira:** `apps/api` continua sendo a única fonte de verdade para autenticação, autorização por workspace, Pending V2, idempotência e dados financeiros.
+- **Topologia:** PWA e gateway TED na Cloudflare/Contabo conforme seus deploys; API e PostgreSQL na VPS Contabo. Esta alteração não executa deploy nem altera recursos de produção.
+- **WhatsApp:** fora de escopo; bridge removida.
 
 ## Componentes ativos
 
 | Componente | Responsabilidade | Runtime |
 | --- | --- | --- |
-| `apps/ted-runtime` | Runtime conversacional OpenCode (SDK nativo, gateway privado, tools financeiras) | Container Node 24 na Contabo VPS (Traefik) |
-| `apps/agent` | TED A0 (rollback), broker de propostas Pending V2 e confirmação/execução delegada | Cloudflare Workers + Durable Objects |
-| `apps/api` | Fonte de verdade financeira, Better-Auth, autorização de workspace e pending operations V2 | Contabo VPS (migrada em 2026-10-03) + PostgreSQL 15 |
-| `apps/pwa` | Cliente web/mobile canônico e proxies same-origin privados | Cloudflare Pages/Workers + OpenNext |
-| `packages/llm-contracts` | Contratos compartilhados entre API e Agent | Biblioteca interna do monorepo |
+| `apps/pwa` | Cliente web/mobile e proxies same-origin | Cloudflare Pages/Workers + OpenNext |
+| `apps/ted-runtime` | Runtime conversacional OpenCode e gateway privado | Node.js container na Contabo VPS |
+| `apps/api` | Autoridade financeira, autenticação e Pending V2 | Fastify + PostgreSQL na Contabo VPS |
+| `packages/llm-contracts` | Contratos compartilhados entre API e TED runtime | Biblioteca interna do monorepo |
 
-O antigo `apps/whatsapp-bridge` e a extensão `.pi/extensions/financial-tools`
-não são componentes ativos nem fontes de produção.
+A API mantém confirmação, execução, idempotência e recibos; o runtime conversacional não substitui essa autoridade.
 
-## Fronteiras obrigatórias
+## Topologia
 
-1. A API é a única autoridade para dados financeiros e pending operations.
-2. O browser usa `/api/backend` e `/api/agent`; ele não recebe atestação,
-   capability de escrita ou identidade financeira livre.
-3. O Agent normaliza os canais em um pipeline V2. Durable Objects persistem
-   conversa e memória não autoritativa, nunca dados financeiros.
-4. `MutationExecutor` é a única fronteira do Agent para confirmar/executar
-   uma pending operation V2. A operação deve estar vinculada a workspace,
-   ator e dispositivo e ser confirmada antes da escrita.
-5. Rollback pode reverter roteamento de leitura, mas nunca reativa
-   `[EXEC_ACTION]`, writes V1 ou bypasses de capability.
-
-## Topologia de produção
-
-- **Borda (Cloudflare):** PWA (`apps/pwa`, OpenNext) e Agent (`apps/agent`,
-  Workers + Durable Objects) deployados por workflows com gate same-SHA.
-- **Backend (Contabo VPS):** `apps/api` em container com PostgreSQL 15 local,
-  exposto sob HTTPS; API nunca roda no setup local de produção.
-- **Autenticação:** Better-Auth (email/senha com convites administrativos);
-  resolução de workspace e permissões é integralmente server-side.
+O browser acessa a PWA; a PWA encaminha as conversas ao gateway OpenCode e as operações financeiras à API. O gateway também acessa a API segundo os contratos autorizados. PostgreSQL persiste os dados financeiros.
 
 Detalhes em [Arquitetura atual](docs/ARCHITECTURE-CURRENT.md).
 
@@ -210,13 +188,13 @@ status.
   conflitos, sintaxe de JSON/YAML, nomes de segredo e arquivos > 2 MB.
   Bypass de emergência: `git commit --no-verify` (justificar no PR).
 - **Gates por área:** `pnpm check:area` roda `docs:lint`, `governance:check`,
-  `capabilities:check`, `write-policy:check`, `boundary:check`,
+  `write-policy:check`, `boundary:check`,
   `action-pins:check` e `test:skip-gate` somente quando a área correspondente
   mudou. O mesmo mapa roda no CI.
 - **CI obrigatório (required checks):** `Gate — all checks`
   (`.github/workflows/ci.yml`) e `quality (22, 10)`
   (`.github/workflows/pwa-ci.yml`). O CI não duplica PWA entre os dois
-  workflows: backend/agent ficam no `CI`, PWA no `PWA CI`.
+  workflows: API e TED runtime ficam no `CI`, PWA no `PWA CI`.
 - **Fora do caminho do PR:** E2E completo (main ou label `run-full-e2e`),
   Lighthouse, auditoria de dependências, scan de containers e suíte completa
   (`validate:final`) rodam em main, sob demanda ou no workflow `Audits`.
@@ -232,18 +210,16 @@ status.
 ```
 apps/api                # API autoritativa (Fastify 5, Kysely, PostgreSQL, Zod, Better-Auth)
 apps/pwa                # PWA canônica (Next.js 16, React 19, Tailwind CSS v4, Serwist)
-apps/agent              # A0 TED (Cloudflare Agents SDK + Durable Objects/SQLite)
 apps/ted-runtime        # Runtime conversacional OpenCode (gateway privado + tools financeiras)
-packages/llm-contracts  # Contratos compartilhados API <-> Agent
+packages/llm-contracts  # Contratos compartilhados API <-> TED runtime
 docs/                   # Documentação canônica (PRODUCT, ARCHITECTURE, ROADMAP, adr/, runbooks/, reports/)
 scripts/                # Gates de qualidade, governança e validação
 ```
 
 ## Deploy
 
-- **PWA e Agent:** Cloudflare via `workflow_run` pós-CI em `main`
-  (`.github/workflows/pwa-deploy.yml`, `.github/workflows/agent-deploy.yml`),
-  com gates de fork fail-closed e same-SHA.
+- **PWA:** Cloudflare via workflow pós-CI em `main`
+  (`.github/workflows/pwa-deploy.yml`), com gates de fork fail-closed e same-SHA.
 - **API:** Contabo VPS (Docker + Compose + Traefik; migrada da Hostinger em
   2026-10-03, que não mantém mais o pi-financeiro) — imagem publicada no GHCR
   por digest na `main`, com backup pré-release e tags de rollback preservadas.

@@ -169,7 +169,7 @@ jobs:
           node scripts/validate-deploy-origins.mjs --name AGENT_PROD_URL --expect agent --env-file "$GITHUB_ENV"
 
       - name: Deploy tested artifact to Cloudflare Workers
-        run: pnpm --dir apps/pwa exec wrangler deploy --var "PWA_ORIGIN:$PWA_PROD_URL" --var "PWA_AGENT_PROXY_ORIGIN:$AGENT_PROD_URL"
+        run: pnpm --dir apps/pwa exec wrangler deploy --var "PWA_ORIGIN:$PWA_PROD_URL"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

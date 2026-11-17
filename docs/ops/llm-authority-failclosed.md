@@ -2,6 +2,11 @@
 
 **Data:** 2026-09-07
 
+> **Superado em 2026-11-17:** o A0 e seu modelo de configuração/relay foram
+> descontinuados. O runtime atual usa modelo pinado em
+> `apps/ted-runtime/src/live-model.json` e não consulta esta rota. O texto
+> abaixo é somente registro histórico; não use como procedimento operacional.
+
 ## Decisão
 
 Quando a autoridade de configuração (`GET /internal/agent/llm-config`)

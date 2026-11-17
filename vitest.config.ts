@@ -6,7 +6,6 @@ export default defineConfig({
       'packages/llm-contracts',
       'apps/api',
       'apps/pwa',
-      'apps/agent',
     ],
   },
 });

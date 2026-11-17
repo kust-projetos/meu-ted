@@ -144,7 +144,6 @@ export function collectWriteSurface(root = ROOT) {
   const endpointsPath = path.join(root, 'apps', 'pwa', 'src', 'lib', 'api', 'endpoints.ts');
   const routeRoot = path.join(root, 'apps', 'api', 'src', 'routes');
   const toolRoot = path.join(root, '.pi', 'extensions', 'financial-tools', 'tools');
-  const canonicalToolRoot = path.join(root, 'apps', 'agent', 'src', 'generated');
   const pwaRouteRoot = path.join(root, 'apps', 'pwa', 'src', 'app');
   const bridgeServerPath = path.join(root, 'apps', 'whatsapp-bridge', 'src', 'server.ts');
   const surface = [
@@ -168,13 +167,6 @@ export function collectWriteSurface(root = ROOT) {
     for (const filePath of walkFiles(toolRoot, (file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))) {
       surface.push(...discoverPiToolWrites(fs.readFileSync(filePath, 'utf8'), relativeToRoot(filePath)));
     }
-  }
-  const canonicalGenerated = path.join(canonicalToolRoot, 'http-tools.ts');
-  const generatedToolPath = path.join(root, '.pi', 'extensions', 'financial-tools', 'generated', 'http-tools.ts');
-  if (fs.existsSync(canonicalGenerated)) {
-    surface.push(...discoverPiToolWrites(fs.readFileSync(canonicalGenerated, 'utf8'), relativeToRoot(canonicalGenerated)));
-  } else if (fs.existsSync(generatedToolPath)) {
-    surface.push(...discoverPiToolWrites(fs.readFileSync(generatedToolPath, 'utf8'), relativeToRoot(generatedToolPath)));
   }
   return surface;
 }
@@ -289,7 +281,7 @@ export function renderPolicyDocument(discovered) {
     '',
     '## Discovery contract',
     '',
-    '- Sources: `apps/pwa/src/lib/state/commands.ts`, `apps/pwa/src/lib/api/endpoints.ts`, `apps/pwa/src/app/**/route.ts`, `apps/api/src/routes/**/*.ts`, `apps/whatsapp-bridge/src/server.ts`, `.pi/extensions/financial-tools/tools/**/*.ts`, and the generated `.pi/extensions/financial-tools/generated/http-tools.ts` artifact.',
+    '- Sources: `apps/pwa/src/lib/state/commands.ts`, `apps/pwa/src/lib/api/endpoints.ts`, `apps/pwa/src/app/**/route.ts`, `apps/api/src/routes/**/*.ts`, `apps/whatsapp-bridge/src/server.ts`, and any remaining `.pi/extensions/financial-tools/tools/**/*.ts`.',
     '- Only `POST`, `PUT`, `PATCH`, and `DELETE` are write methods. GET/read paths are intentionally excluded.',
     '- `Source`, `Method`, `Path`, `Layer`, and `Operation` are source-derived and must match exactly; do not hand-edit them to hide drift.',
     '- PWA telemetry and bridge ingress rows are included as transport writes; they use `not-applicable (transport)` for idempotency/projection and do not mutate financial projections.',

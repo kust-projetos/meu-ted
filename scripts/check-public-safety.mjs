@@ -67,7 +67,6 @@ const SKIP_PATHS = [
   ".env.pi.example",
   "apps/api/.env.example",
   "apps/pwa/.env.example",
-  "apps/agent/.dev.vars.example",
   "scripts/anonymized-dump.sql", // synthetic seed data, header-verified (see publication-readiness report)
   "pnpm-lock.yaml", // integrity file; URL-cred rule audited manually
 ];
@@ -77,9 +76,6 @@ const SKIP_PATHS = [
 // (review finding 2026-09-16); placeholders are handled by the rule's own
 // negative lookahead, not by allowlist.
 const RULE_ALLOWLIST = [
-  { rule: "private-key-block", path: "apps/agent/tests/transcript-safety.test.ts", reason: "redaction fixture, marker string LIVE-CREDENTIAL" },
-  { rule: "private-key-block", path: "apps/agent/src/privacy/redaction.ts", reason: "detection regex source, not a key" },
-  { rule: "github-token", path: "apps/agent/src/privacy/history.ts", reason: "detection regex source, not a token" },
   { rule: "url-embedded-credentials", path: "scripts/backup-restore-rehearsal.test.mjs", reason: "ephemeral local test container (postgres:postgres@localhost) — no production credential" },
   { rule: "url-embedded-credentials", path: "scripts/capture-production-topology.test.mjs", reason: "redaction unit-test fixture with fake strings (supersecret/abc123xyz)" },
   { rule: "url-embedded-credentials", path: "docs/ops/2026-08-18-postgres-integration-status.md", reason: "local CI test container (postgres:postgres@127.0.0.1) — ephemeral, no production credential" },
@@ -114,7 +110,6 @@ const RULE_ALLOWLIST = [
   // validate-deploy-origins.test.mjs pin the behavior AND the exact host
   // values — any host change breaks those suites before it can ship.
   { rule: "internal-hostname", path: "apps/pwa/src/proxy-utils.ts", reason: "EXPECTED_PWA/AGENT_ORIGIN pins for isExpectedOrigin exact-host validation (fail-closed proxy); covered by edge-gate + route suites" },
-  { rule: "internal-hostname", path: "apps/agent/src/worker.ts", reason: "EXPECTED_PWA_ORIGIN pin for isExpectedPwaOrigin CORS validation (fail-closed); covered by worker-cors-gate suite" },
   { rule: "internal-hostname", path: "scripts/validate-deploy-origins.mjs", reason: "EXPECTED_*_HOST pins for deploy-time repo-variable validation (fail-closed); covered by validate-deploy-origins.test.mjs" },
   { rule: "internal-hostname", path: "scripts/validate-deploy-origins.test.mjs", reason: "pins the exact expected host VALUES asserted by the deploy-validation safety gate (no other production-host use)" },
   // Irreducible without ops decision: default EVOLUTION_GO_API_URL for the
