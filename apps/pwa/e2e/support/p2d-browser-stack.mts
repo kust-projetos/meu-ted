@@ -65,6 +65,8 @@ const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
 const P3_PILOT = process.env.P2D_P3_PILOT === "1";
 const P38_CARD_SMOKE = process.env.P2D_P38_CARD_SMOKE === "1";
 const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || EXPENSE || EXPENSE_REAL || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+// Enable only for synthetic/test proposal flows; never in production.
+if (PROPOSAL) process.env.PENDING_V2_SUPERSEDE_ENABLED = "1";
 if (EXPENSE_REAL && !LIVE_REAL) {
   throw new Error("[p2d-stack] P2D_EXPENSE_REAL requires P2D_LIVE_REAL (fail-closed)");
 }
