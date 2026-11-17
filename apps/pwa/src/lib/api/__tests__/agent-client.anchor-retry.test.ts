@@ -52,7 +52,7 @@ describe("text-only pending-send retry", () => {
       { isOwn: true, content: anchor.content, createdAt: "2026-10-13T10:05:00.000Z" },
     ])).toBe(true);
     expect(isAnchorSupersededByHistory(anchor, [
-      { isOwn: true, content: anchor.content },
+      { isOwn: true, content: anchor.content, createdAt: "2026-10-13T10:05:00.000Z" },
     ])).toBe(true);
   });
 });

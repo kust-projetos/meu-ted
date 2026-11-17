@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 
 const encoder = new TextEncoder();
 const toBase64Url = (b: Uint8Array) => Buffer.from(b).toString('base64url');
-const fromBase64Url = (v: string) => new Uint8Array(Buffer.from(v, 'base64url'));
 const encodeJson = (v: unknown) => toBase64Url(encoder.encode(JSON.stringify(v)));
 
 export type AgentConnectionClaims = {

@@ -163,15 +163,9 @@ test("I5(I4): package metadata and env example describe PostgreSQL as production
   });
 });
 
-// ─── FIX-FINAL-3 (V4 decommission consistency) ───
-// runtime-facts.json must not list the removed agent binding, every archived
-// legacy-pi doc must carry the ARCHIVED header, and ARCHITECTURE-CURRENT
-// must not present the retired agent as active. Forbidden literals are
-// assembled at runtime (xlt-06 pattern) so this contract test itself carries
-// no static reference flaggable by ARCH-V4-06b.
-
-const RETIRED_AGENT = ["Workspace", "Agent"].join("");
-const RETIRED_AGENT_SNAKE = ["WORKSPACE", "AGENT"].join("_");
+// ─── FIX-FINAL-3 (runtime topology consistency) ───
+// The A0 runtime is retired; runtime-facts and current architecture must
+// describe ted-runtime as the sole conversational runtime.
 
 function listArchiveMdFiles(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -185,22 +179,12 @@ function listArchiveMdFiles(dir, out = []) {
   return out;
 }
 
-test("FIX-FINAL-3(a): runtime-facts.json lists no legacy agent binding", () => {
+test("FIX-FINAL-3(a): runtime-facts.json declares ted-runtime as the sole runtime", () => {
   const facts = JSON.parse(readRepoDoc("docs/architecture/runtime-facts.json"));
-  const bindings = facts.apps?.agent?.bindings;
-  assert.ok(Array.isArray(bindings) && bindings.length > 0, "agent bindings must be declared in runtime-facts.json");
-  for (const binding of bindings) {
-    assert.doesNotMatch(
-      String(binding),
-      new RegExp(RETIRED_AGENT, "i"),
-      `runtime-facts.json lists a removed agent binding: ${binding}`,
-    );
-    assert.doesNotMatch(
-      String(binding),
-      new RegExp(RETIRED_AGENT_SNAKE, "i"),
-      `runtime-facts.json lists a removed agent binding: ${binding}`,
-    );
-  }
+  assert.deepEqual(facts.activeWorkspaces, ["apps/api", "apps/pwa", "apps/ted-runtime"]);
+  assert.equal(facts.apps?.tedRuntime?.name, "pi-finance-ted-runtime");
+  assert.match(facts.architecture?.assistantEngine ?? "", /apps\/ted-runtime.*sole conversational runtime/i);
+  assert.equal(Object.hasOwn(facts.apps ?? {}, "agent"), false, "retired runtime must not be listed as active");
 });
 
 test("FIX-FINAL-3(b): every archived legacy-pi doc carries the ARCHIVED header", () => {
@@ -213,13 +197,9 @@ test("FIX-FINAL-3(b): every archived legacy-pi doc carries the ARCHIVED header",
   }
 });
 
-test("FIX-FINAL-3(c): ARCHITECTURE-CURRENT does not present the retired agent as active", () => {
+test("FIX-FINAL-3(c): ARCHITECTURE-CURRENT documents current runtime topology", () => {
   const content = readRepoDoc("docs/ARCHITECTURE-CURRENT.md");
-  assert.doesNotMatch(
-    content,
-    new RegExp(`${RETIRED_AGENT}.{0,80}(existe|ativo|ativa|compatibilidade)`, "i"),
-    "ARCHITECTURE-CURRENT presents the removed agent as active",
-  );
-  assert.match(content, /removid[oa] na V4/i, "ARCHITECTURE-CURRENT must state the V4 removal");
-  assert.match(content, /ADR-016/, "ARCHITECTURE-CURRENT must point to ADR-016");
+  assert.match(content, /apps\/ted-runtime.*único runtime conversacional/i);
+  assert.match(content, /apps\/agent.*descontinuado em 2026-11-17/i);
+  assert.doesNotMatch(content, /removid[oa] na V4/i, "A0 retirement was not a V4 removal");
 });

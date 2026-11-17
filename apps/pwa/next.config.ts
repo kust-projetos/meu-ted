@@ -8,6 +8,12 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   allowedDevOrigins: ["127.0.0.1"],
   transpilePackages: ["@pi-finance/llm-contracts"],
+  // Keep the Next security-upgrade nudge from stopping the P2D test harness;
+  // normal development and production retain Next's default behavior.
+  ...(process.env.P2D_BROWSER === "1" ||
+  Object.keys(process.env).some((name) => /^P2D_(?:LIVE_|EXPENSE)/.test(name))
+    ? { experimental: { agentUpgrade: false } }
+    : {}),
   // Client-bundle env inlining (production hotfix 2026-09-23): NEXT_PUBLIC_*
   // vars that stay undefined at build time keep a runtime `process.env` access
   // in the browser bundle, which forces the `process` polyfill module — absent
