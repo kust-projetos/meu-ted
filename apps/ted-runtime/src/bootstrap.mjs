@@ -364,6 +364,9 @@ export function tedConfig(profileOrOpts, { p3Writes = false, productPrompt = fal
                 { action: 'ted.finance.read', resource: 'propose_category_deactivate', effect: 'allow' },
                 { action: 'ted.finance.read', resource: 'propose_payable_create', effect: 'allow' },
                 { action: 'ted.finance.read', resource: 'propose_payable_pay', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'correct_pending_proposal', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'cancel_pending_proposal', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'propose_undo_last_action', effect: 'allow' },
               ]
             : []),
         ],

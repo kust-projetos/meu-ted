@@ -16,8 +16,19 @@ describe('TED product system prompt', () => {
       /REGRA DE OURO/i, /list_categories/, /propose_category_create/,
       /corrigem a proposta pendente/i, /não é correção/i,
       /Nunca invente números/i, /Nunca peça senhas/i, /Nunca mostre IDs técnicos/i,
+      /primeira mensagem/i, /ambiguidade material/i,
+      /receita, não despesa/i, /propose_card_purchase/i,
+      /propose_statement_payment/i, /nunca é despesa/i,
+      /propose_transfer/i, /sem categoria/i,
+      /reutilize categorias existentes equivalentes/i,
+      /pergunte quando houver ambiguidade material/i,
+      /duas contas homônimas/i, /ano indeterminável/i,
+      /nunca confirma nem executa/i, /preservando os demais/i,
+      /sem dado disponível/i, /nunca adivinhe/i,
     ]) assert.match(TED_AGENT_SYSTEM_PROMPT, text);
     assert.doesNotMatch(TED_AGENT_SYSTEM_PROMPT, /\$\{|<[^>]+>|\{\{|\}\}/);
+    assert.doesNotMatch(TED_AGENT_SYSTEM_PROMPT, /(?:palavras-chave|palavras chave)/i);
+    assert.doesNotMatch(TED_AGENT_SYSTEM_PROMPT, /(?:propose_category_(?:update|fix)|correct_category)/i);
   });
 
   it('gates system prompt injection without changing the default config', () => {

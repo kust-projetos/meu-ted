@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { createGatewayServer } from '../src/server.mjs';
 import { createConversationStore, serializeConversationCookie } from '../src/conversations.mjs';
 import { createProposalIntentRegistry } from '../src/proposal-intents.mjs';
-import { createCorrectionIntentRegistry } from '../src/correction-intents.mjs';
 import { deriveAutoExecIdempotencyKey, tryAutoCreateCategory } from '../src/category-autoexec.mjs';
 import { approvedTmpRoot } from './helpers/tmp-root.mjs';
 
@@ -13,7 +12,6 @@ const category = { tool: 'categories.create', intentionId: 'int-0123456789abcdef
 
 async function turn({ pin = true, enabled = false, client = null, intent = category, text = 'create category', requestTimeoutMs, abortRequestAfterMs, retryAfterAbort = false, seedRecovery = false } = {}) {
   const proposalIntents = createProposalIntentRegistry();
-  const correctionIntents = createCorrectionIntentRegistry();
   const store = createConversationStore({ persistDir: approvedTmpRoot('autoexec-gateway') });
   const settled = [];
   const settleIntention = store.settleIntention.bind(store);
@@ -33,7 +31,7 @@ async function turn({ pin = true, enabled = false, client = null, intent = categ
     async mint() { mintCalls.value++; return { token: secret }; },
   };
   const gateway = createGatewayServer({
-    resolveIdentity: async () => identity, store, proposalIntents, correctionIntents,
+    resolveIdentity: async () => identity, store, proposalIntents,
     autoExecEnabled: enabled, autoExecClient,
     ...(requestTimeoutMs ? { requestTimeoutMs } : {}),
     promptHost: {
@@ -60,8 +58,6 @@ async function turn({ pin = true, enabled = false, client = null, intent = categ
       const fresh = await fetch(url, { method: 'POST', headers: headers(), body: JSON.stringify({ text: 'bootstrap', intentionId: 'boot' }) });
       cookie = fresh.headers.get('set-cookie')?.split(';')[0];
     }
-    if (text.startsWith('corrige')) process.env.TED_OPENCODE_SUPERSEDE_DETECTION_ENABLED = '1';
-    else delete process.env.TED_OPENCODE_SUPERSEDE_DETECTION_ENABLED;
     const send = async (abortAfter) => {
       const requestController = new AbortController();
       const abortTimer = abortAfter ? setTimeout(() => requestController.abort(), abortAfter) : null;
@@ -85,7 +81,6 @@ async function turn({ pin = true, enabled = false, client = null, intent = categ
       proposalIntents,
     };
   } finally {
-    delete process.env.TED_OPENCODE_SUPERSEDE_DETECTION_ENABLED;
     await gateway.close();
   }
 }
@@ -133,28 +128,6 @@ test('gateway autoexec only executes eligible intents on enabled B pin and prese
   assert.doesNotMatch(JSON.stringify(pending.payload), new RegExp(secret));
   assert.equal(pending.intention.status, 'completed');
   assert.equal(pending.proposalIntents.size(), 0);
-});
-
-test('correction precedence and ineligible proposals never mint', async () => {
-  const correctionClient = successfulClient();
-  const corrected = await turn({ enabled: true, client: correctionClient, text: 'corrige categoria para mercado' });
-  assert.deepEqual(corrected.payload.correction, { field: 'category', value: 'mercado' });
-  assert.equal('proposal' in corrected.payload, false);
-  assert.equal('autoexec' in corrected.payload, false);
-  assert.equal(correctionClient.calls.mint, 0);
-
-  for (const intent of [
-    { tool: 'propose_expense', normalizedArgs: { amount: 1 } },
-    { ...category, normalizedArgs: { ...category.normalizedArgs, parentId: 'parent' } },
-    { ...category, normalizedArgs: { name: '\u0000', kind: 'expense' } },
-  ]) {
-    const client = successfulClient();
-    const result = await turn({ enabled: true, client, intent });
-    assert.equal(client.calls.mint, 0);
-    assert.deepEqual(result.payload.proposal, intent);
-    assert.equal('autoexec' in result.payload, false);
-    assert.deepEqual(result.settleWrites.map((entry) => entry.status), ['completed']);
-  }
 });
 
 test('existing proposal is delivered without authorize or execute', async () => {

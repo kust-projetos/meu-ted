@@ -152,7 +152,9 @@ function checkRecordShape(record) {
     typeof record.ownerActor === 'string' && record.ownerActor.length > 0 &&
     typeof record.deviceId === 'string' && record.deviceId.length > 0 &&
     CONVERSATION_VISIBILITIES.includes(record.visibility) &&
-    (record.runtimeSessionId === null || typeof record.runtimeSessionId === 'string')
+    (record.runtimeSessionId === null || typeof record.runtimeSessionId === 'string') &&
+    (record.activeOperationId === undefined || record.activeOperationId === null || (typeof record.activeOperationId === 'string' && OPAQUE_ID_RE.test(record.activeOperationId))) &&
+    (record.activeOperationActorId === undefined || record.activeOperationActorId === null || (typeof record.activeOperationActorId === 'string' && record.activeOperationActorId.length > 0))
   )) return false;
   return checkIntentionsShape(record.intentions);
 }
@@ -284,6 +286,22 @@ export function createConversationStore({ persistDir } = {}) {
   }
 
   return {
+    inventory({ workspaceId } = {}) {
+      requireLoaded();
+      if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+        throw new ConversationError('conversation.invalid_args', 'workspaceId is required for inventory');
+      }
+      let sessions = 0;
+      let messages = 0;
+      let degraded = false;
+      for (const record of records.values()) {
+        if (record.workspace !== workspaceId) continue;
+        sessions += 1;
+        if (!Number.isSafeInteger(record.messageCount) || record.messageCount < 0) degraded = true;
+        else messages += record.messageCount;
+      }
+      return { sessions, messages, ...(degraded ? { degraded: true } : {}) };
+    },
     create({ workspace, ownerActor, deviceId, visibility = 'workspace' } = {}) {
       requireLoaded();
       if (typeof workspace !== 'string' || workspace.length === 0) {
@@ -308,6 +326,8 @@ export function createConversationStore({ persistDir } = {}) {
         runtimeOwner: null,
         messageCount: 0,
         intentions: {},
+        activeOperationId: null,
+        activeOperationActorId: null,
         createdAt: stamped,
         updatedAt: stamped,
       };
@@ -355,6 +375,17 @@ export function createConversationStore({ persistDir } = {}) {
       record.updatedAt = nowIso();
       persist();
       return { ...record };
+    },
+
+    setActiveOperation(conversationId, operationId, actorId = null) {
+      requireLoaded();
+      const record = records.get(conversationId);
+      if (!record) throw new ConversationError('conversation.not_found', 'conversation not found');
+      if (operationId !== null && (typeof operationId !== 'string' || !OPAQUE_ID_RE.test(operationId))) throw new ConversationError('conversation.invalid_args', 'active operation id is invalid');
+      if (operationId !== null && (typeof actorId !== 'string' || actorId.length === 0)) throw new ConversationError('conversation.invalid_args', 'active operation actor is required');
+      record.activeOperationId = operationId;
+      record.activeOperationActorId = operationId === null ? null : actorId;
+      record.updatedAt = nowIso(); persist(); return { ...record };
     },
 
     noteTurn(conversationId) {

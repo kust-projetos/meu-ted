@@ -108,6 +108,9 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
   const profile = readEnv('TED_RUNTIME_PROFILE', 'test');
   const autoExecEnabled = readEnv('TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED', '') === '1';
   const autoExecServiceToken = readEnv('TED_RUNTIME_AUTOEXEC_MINT_TOKEN', '');
+  const pendingMintToken = readEnv('TED_PENDING_MINT_TOKEN', '');
+  const workspaceDeletionServiceToken = readEnv('TED_WORKSPACE_DELETION_SERVICE_TOKEN', '');
+  const workspaceDeletionSecret = readEnv('WORKSPACE_DELETION_HMAC_SECRET', '');
 
   const transportFactory = () => new HttpFinanceTransport({ baseUrl: apiBaseUrl, allowedOrigins: allowedApiOrigins }).call;
   const tedEnv = await createTedEnvironment({ root: home, identity, transportFactory, profile });
@@ -145,6 +148,10 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
         apiBaseUrl, allowedApiOrigins, serviceToken: autoExecServiceToken,
       });
     }
+    const { createPendingClient } = await import('./pending-client.mjs');
+    const pendingClient = createPendingClient({
+      apiBaseUrl, allowedOrigins: allowedApiOrigins, pendingMintToken, workspaceDeletionServiceToken,
+    });
 
     gateway = createGatewayServer({
       resolveIdentity: ({ cookie, deviceToken, workspaceId, signal }) =>
@@ -152,6 +159,9 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
       store,
       promptHost,
       autoExecClient,
+      pendingClient,
+      workspaceDeletionSecret,
+      stateDir: tedEnv.dirs.state,
       autoExecEnabled: Boolean(autoExecClient),
       createRuntimeSession: async () => ({ runtimeSessionId: await tedEnv.serverOps.createNativeSession() }),
       withAuthenticatedSession: (sessionID, host, fn, opts) =>

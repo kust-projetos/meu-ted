@@ -627,6 +627,25 @@ export const TOOL_DEFS = [
     },
     output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
   },
+
+  {
+    name: 'correct_pending_proposal',
+    description: 'Corrige a proposta PENDENTE DESTA CONVERSA alterando só os campos citados; nunca cria outra operação. Se não houver proposta pendente, falha.',
+    input: { type: 'object', properties: { amountCents:{type:'integer',minimum:1}, date:{type:'string'}, description:{type:'string',minLength:1,maxLength:240}, categoryId:{type:'string'}, accountId:{type:'string'}, installmentsTotal:{type:'integer',minimum:1,maximum:48} }, required:[], additionalProperties:false },
+    output: { type:'object', description:'Resultado seguro da correção pendente.' },
+  },
+  {
+    name: 'cancel_pending_proposal',
+    description: 'Cancela a proposta PENDENTE DESTA CONVERSA; nunca cria outra operação. Se não houver proposta pendente, falha.',
+    input: { type:'object', properties:{}, required:[], additionalProperties:false },
+    output: { type:'object', description:'Resultado seguro do cancelamento.' },
+  },
+  {
+    name: 'propose_undo_last_action',
+    description: 'Propõe um cartão para desfazer a última ação financeira reversível desta conversa. Não executa o desfazimento.',
+    input: { type:'object', properties:{}, required:[], additionalProperties:false },
+    output: { type:'object', description:'Proposta de desfazimento aguardando confirmação explícita.' },
+  },
 ];
 
 export const TOOL_NAMES = TOOL_DEFS.map((d) => d.name);
@@ -667,6 +686,8 @@ const FORBIDDEN_KEYS = new Set([
 ]);
 
 function knownKeys(name) {
+  if (name === 'correct_pending_proposal') return ['amountCents','date','description','categoryId','accountId','installmentsTotal'];
+  if (name === 'cancel_pending_proposal') return [];
   if (name === 'recall_category_preference') return ['target', 'field'];
   if (name === 'list_accounts') return ['kind', 'includeInactive'];
   if (name === 'list_recent_transactions') return ['accountId', 'categoryId', 'kind', 'startDate', 'endDate', 'minAmountCents', 'maxAmountCents', 'query', 'limit', 'offset'];
@@ -1030,6 +1051,13 @@ export function validateToolArgs(name, args) {
     }
   } else if (name === 'list_credit_cards') {
     // No arguments. Structural enforcement is via knownKeys/additionalProperties.
+  } else if (name === 'correct_pending_proposal') {
+    if (!Object.keys(args).length) throw new ToolError('tool.invalid_args','correct_pending_proposal: at least one field is required');
+    const pick = Object.keys(args).includes('installmentsTotal') ? 'propose_card_purchase' : 'propose_expense';
+    const probe = { amountCents: 1000000000000, description: 'x', date: '2026-01-01', accountId: '00000000-0000-0000-0000-000000000000', categoryId: '00000000-0000-0000-0000-000000000000', ...args };
+    validateToolArgs(pick, probe);
+  } else if (name === 'cancel_pending_proposal') {
+    // Exact empty object enforced by knownKeys.
   } else if (name === 'list_accounts') {
     if (args.kind !== undefined && typeof args.kind !== 'string') {
       throw new ToolError('tool.invalid_args', 'list_accounts: kind must be a string');
@@ -1299,7 +1327,7 @@ function formatBRL(amountCents) {
   return `R$ ${value.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
 }
 
-export function createToolExecutors(transport, { proposalIntents } = {}) {
+export function createToolExecutors(transport, { proposalIntents, correctionActions } = {}) {
   const recallCategoryPreference = async (args, host) => {
     if (!host || typeof host.household !== 'string' || typeof host.actorId !== 'string' ||
         !host.categoryMemoryStore || typeof host.categoryMemoryStore.recall !== 'function') {
@@ -1314,6 +1342,23 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
   const run = async (name, args, host, opts = {}) => {
     requireHostContext(name, host);
     if (name === 'recall_category_preference') return recallCategoryPreference(validateToolArgs(name, args), host);
+    if (name === 'correct_pending_proposal' || name === 'cancel_pending_proposal') {
+      requireIntention(name, opts);
+      if (typeof opts.sessionID !== 'string' || !opts.sessionID) throw new ToolError('host_context_required', `${name}: sessionID required`);
+      if (!correctionActions) throw new ToolError('tool.unavailable', `${name}: correction action unavailable`);
+      const changed = validateToolArgs(name, args);
+      correctionActions.record(opts.sessionID, { action: name === 'correct_pending_proposal' ? 'correct' : 'cancel', changed, intentionId: opts.intentionId });
+      return { status: 'accepted' };
+    }
+    if (name === 'propose_undo_last_action') {
+      requireIntention(name, opts);
+      if (typeof opts.sessionID !== 'string' || !opts.sessionID || !correctionActions) throw new ToolError('tool.unavailable', 'undo proposal unavailable');
+      correctionActions.record(opts.sessionID, {
+        action: 'undo', intentionId: opts.intentionId,
+        conversationId: host.conversationId, workspaceId: host.household, actorId: host.actorId, deviceId: host.deviceId,
+      });
+      return { status: 'proposed' };
+    }
     const intentionId = requireIntention(name, opts);
     const safeArgs = validateToolArgs(name, args);
     const route = routeFor(name, safeArgs);
@@ -1516,6 +1561,9 @@ export function createToolExecutors(transport, { proposalIntents } = {}) {
   };
   return {
     recall_category_preference: (args, host) => recallCategoryPreference(args, host),
+    correct_pending_proposal: (args, host, opts) => run('correct_pending_proposal', args, host, opts),
+    cancel_pending_proposal: (args, host, opts) => run('cancel_pending_proposal', args, host, opts),
+    propose_undo_last_action: (args, host, opts) => run('propose_undo_last_action', args, host, opts),
     list_accounts: (args, host, opts) => run('list_accounts', args, host, opts),
     list_recent_transactions: (args, host, opts) => run('list_recent_transactions', args, host, opts),
     spending_insights: (args, host, opts) => run('spending_insights', args, host, opts),
