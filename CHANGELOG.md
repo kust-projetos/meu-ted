@@ -6,7 +6,8 @@
 
 ## Unreleased (2026-11-18)
 
-- Validação documental da missão MEU TED Financial Intelligence V2.1: desenvolvimento concluído; homologação e ativação pendentes. Produção permanece no baseline `79d8b09`, sem deploy; detalhes em [VALIDATION.md](docs/plans/2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md).
+- Deploy de produção da Financial Intelligence V2.1 no baseline `9dc5d1c65883bfbce4dabaf43b2759919843f8e1`; `categories.create` autoexec está ativada por autorização explícita do operador. P5 com LLM real permanece INCONCLUSIVE e a ativação ocorreu sem homologação prévia, risco assumido. Evidências em [VALIDATION.md](docs/plans/2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md).
+- PR #435 (`fix(gateway): inject category autoexec mint token into compose`) mesclado antes do deploy para disponibilizar o token dedicado no compose do gateway.
 - Corte final TED OpenCode-only confirmado em API, PWA e gateway (`79d8b09`); E2E com LLM real aprovado. Worker A0 removido em produção; R2/DO preservados.
 
 ## v1.0.4 (2026-11-13)

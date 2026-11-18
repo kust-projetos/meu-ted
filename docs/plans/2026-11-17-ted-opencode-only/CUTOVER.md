@@ -3,18 +3,15 @@
 ## Versões
 
 - Merge em `main`: `25457482fe857159eeb80abb480ebea0b944f3be`.
-- Versões publicadas confirmadas: API, PWA e gateway `ted-runtime` em
-  `79d8b09`.
+- Baseline de produção atual (após deploy V2.1 em 2026-11-18): API, PWA e
+  gateway `ted-runtime` em
+  `9dc5d1c65883bfbce4dabaf43b2759919843f8e1` (anterior `79d8b09`).
 
 ## Ordem de publicação
 
-1. **API** — EXECUTADO: lane source-build via
-   `scripts/ops/api-release-20260930.sh` para `79d8b09`; ci-run 44214219471.
-2. **Gateway `ted-runtime`** — EXECUTADO: código instalado, config regenerada,
-   secrets provisionados (nomes apenas), imagem `ted-runtime:main`; health
-   healthy e rota responde 401 de auth.
-3. **PWA** — EXECUTADO: run 44216692235 com gate, deploy, smoke e attestation
-   success; `/api/build-info` confirma gitSha `79d8b092...`.
+1. **API** - EXECUTADO: wrapper `scripts/ops/api-release-20260930.sh`, lane source-build, CI run `44330661848`; backup `pre-90ec37f-20261118` (sha256 `f3dc4886165fd8b03f4a929c08286f5ad59a6adbfb7453449b77bb7ddef5d48a`); rollback tag `pi-finance-api:rollback-pre-9dc5d1c`; `/ready`=200.
+2. **Gateway `ted-runtime`** - EXECUTADO: rollback tag `ted-runtime:rollback-pre-9dc5d1c`; config regenerada pelo bootstrap, backup `opencode.json.bak-pre-9dc5d1c`; token de autoexecução provisionado fora do repositório; health healthy e `/pending-operations/active` responde 401 de autenticação.
+3. **PWA** - EXECUTADO: workflow `PWA Deploy` run `44336496351`, gate, deploy, smoke e attestation success; `/api/build-info` confirma gitSha `9dc5d1c...`.
 4. **Smoke** — EXECUTADO: pós-corte PWA 200, API /health 200 com gitSha
    79d8b09, gateway up (404 em rota desconhecida).
 
@@ -77,3 +74,15 @@ O endpoint do Worker A0 removido retorna 404. `apps/ted-runtime` é o gateway
 
 O corte e descomissionamento acima foram executados em 2026-11-18 conforme
 decisão do operador.
+
+## Atualização V2.1 (2026-11-18)
+
+O operador autorizou explicitamente **“Publicar e ativar capacidades novas”**.
+PR #435 (`fix(gateway): inject category autoexec mint token into compose`) foi
+mesclado antes do deploy. `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1` e
+`PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1`; autoexecução de `categories.create`
+está ativa. `TED_RISK_BASED_AUTOEXECUTE=on` é valor pré-existente, não alterado.
+A homologação integral com LLM real (P5) permanece **INCONCLUSIVE**; ativação
+em produção ocorreu por decisão explícita do operador, sem homologação prévia,
+com risco assumido. Detalhes em
+`../2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md`.
