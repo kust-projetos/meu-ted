@@ -10,7 +10,7 @@ alteração de capacidade exige autorização explícita e validação prévia.
 
 - Gateway: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`, `TED_OPENCODE_PRODUCT_PROMPT_ENABLED=1`, `TED_OPENCODE_CATEGORY_MEMORY_ENABLED=1`, `TED_OPENCODE_P3_READS_ENABLED=1` e `TED_OPENCODE_P3_WRITES_ENABLED=1`. O token dedicado de categoria está set; `TED_RUNTIME_AUTOEXEC_MINT_TOKEN` está unset. Não registrar valores de credenciais.
 - API: `TED_RISK_BASED_AUTOEXECUTE=on` (preexistente), `PENDING_V2_SUPERSEDE_ENABLED=1` e `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1`. Com a flag do gateway em `0`, não há cliente de autoexecução; `categories.create` autoexec não está ativa.
-- Em redeploy que altere configuração gerada, faça primeiro backup e remova o `opencode.json` stale; caso contrário `writeTedConfig` falha fechado por conteúdo divergente e o container reinicia. Qualquer mudança de flag requer autorização explícita do operador.
+- Antes de qualquer redeploy ou mudança de flag, faça backup da configuração. `writeTedConfig` reconhece configurações geradas por versões anteriores com qualquer combinação de `p3Writes`, `productPrompt` e `categoryMemory` e as reescreve conforme as flags solicitadas; assim, uma transição não falha fechado apenas por existir um `opencode.json` gerado desatualizado. Um override nativo legítimo de `model` continua preservado. Edições arbitrárias do usuário e symlinks continuam recusados, sem sobrescrita/seguimento. Qualquer mudança de flag requer autorização explícita do operador.
 
 ## Flags e escopo
 
