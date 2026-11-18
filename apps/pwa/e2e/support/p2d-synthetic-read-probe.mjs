@@ -1088,6 +1088,9 @@ try {
     pendingClient,
     workspaceDeletionSecret: process.env.WORKSPACE_DELETION_HMAC_SECRET ?? "",
     stateDir: tedEnv.dirs.state,
+    ...(process.env.TED_OPENCODE_CATEGORY_MEMORY_ENABLED === '1'
+      ? { categoryMemoryDbPath: path.join(tedEnv.dirs.state, 'category-memory.sqlite') }
+      : {}),
     createRuntimeSession: async () => ({ runtimeSessionId: await createNativeSession() }),
     withAuthenticatedSession,
     diagnosticsSink: () => {},
