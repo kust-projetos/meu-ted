@@ -39,6 +39,7 @@ const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
 const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
 const EXPENSE_REAL = process.env.P2D_EXPENSE_REAL === "1";
 const FINANCE_INTERPRETATION_REAL = process.env.P2D_FINANCE_INTERPRETATION_REAL === "1";
+const CATEGORY_CORRECTION_REAL = process.env.P2D_CATEGORY_CORRECTION_REAL === "1";
 // P3 proposal slices: gateway + Pending V2 + scripted propose_expense
 // (P3.1), propose_income (P3.2), propose_transfer (P3.3), propose_card_purchase
 // 1x (P3.4) or with installments (P3.5). They reuse the synthetic stack and
@@ -51,7 +52,7 @@ const TRANSFER = process.env.P2D_TRANSFER === "1";
 const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
 const P3_PILOT = process.env.P2D_P3_PILOT === "1";
 const P38_CARD_SMOKE = process.env.P2D_P38_CARD_SMOKE === "1";
-if ((EXPENSE_REAL || FINANCE_INTERPRETATION_REAL) && (!LIVE_REAL || P3_PILOT || P38_CARD_SMOKE || (EXPENSE_REAL && FINANCE_INTERPRETATION_REAL) || [EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].some(Boolean))) {
+if ((EXPENSE_REAL || FINANCE_INTERPRETATION_REAL || CATEGORY_CORRECTION_REAL) && (!LIVE_REAL || P3_PILOT || P38_CARD_SMOKE || [EXPENSE_REAL, FINANCE_INTERPRETATION_REAL, CATEGORY_CORRECTION_REAL].filter(Boolean).length > 1 || [EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].some(Boolean))) {
   throw new Error("P2D_EXPENSE_REAL requires P2D_LIVE_REAL and is exclusive with other P2D expense slices");
 }
 if (P3_PILOT && ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY, LIVE_PREP, OFFLINE_CHAT, P38_CARD_SMOKE].some(Boolean))) {
@@ -69,14 +70,16 @@ if ([LIVE_PREP, OFFLINE_CHAT, LIVE_REAL].filter(Boolean).length > 1) {
   throw new Error("select at most one P2D live mode (P2D_LIVE_PREP|P2D_OFFLINE_CHAT|P2D_LIVE_REAL)");
 }
 const P2D_LIVE_MODE = LIVE_PREP || OFFLINE_CHAT || LIVE_REAL;
-const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || EXPENSE || EXPENSE_REAL || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || EXPENSE || EXPENSE_REAL || CATEGORY_CORRECTION_REAL || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
 const P2D_ACTIVE = P2D || P2D_LIVE_MODE || PROPOSAL;
 const P2D_SPEC = LIVE_PREP
   ? "**/p2d/p2d-live-prep.spec.ts"
   : OFFLINE_CHAT
     ? "**/p2d/p2d-live-offline.spec.ts"
       : LIVE_REAL
-        ? EXPENSE_REAL
+        ? CATEGORY_CORRECTION_REAL
+          ? "**/p2d/p5-category-correction-real.spec.ts"
+          : EXPENSE_REAL
           ? "**/p2d/p3-expense-real.spec.ts"
           : FINANCE_INTERPRETATION_REAL
             ? "**/p2d/p4-interpretation-real.spec.ts"
@@ -125,6 +128,7 @@ if (P2D_LIVE_MODE) {
   if (LIVE_REAL && P3_PILOT) clean.P2D_P3_PILOT = "1";
   if (LIVE_REAL && P38_CARD_SMOKE) clean.P2D_P38_CARD_SMOKE = "1";
   if (LIVE_REAL && EXPENSE_REAL) clean.P2D_EXPENSE_REAL = "1";
+  if (LIVE_REAL && CATEGORY_CORRECTION_REAL) clean.P2D_CATEGORY_CORRECTION_REAL = "1";
   if (LIVE_REAL && FINANCE_INTERPRETATION_REAL) clean.P2D_FINANCE_INTERPRETATION_REAL = "1";
   for (const key of Object.keys(process.env)) delete process.env[key];
   Object.assign(process.env, clean);
@@ -366,6 +370,7 @@ export default defineConfig({
               ...(STATEMENT_PAY ? { P2D_STATEMENT_PAY: "1" } : {}),
               ...(P3_PILOT ? { P2D_P3_PILOT: "1" } : {}),
               ...(P38_CARD_SMOKE ? { P2D_P38_CARD_SMOKE: "1" } : {}),
+              ...(CATEGORY_CORRECTION_REAL ? { P2D_CATEGORY_CORRECTION_REAL: "1" } : {}),
               ...(FINANCE_INTERPRETATION_REAL ? { P2D_FINANCE_INTERPRETATION_REAL: "1" } : {}),
             },
           },

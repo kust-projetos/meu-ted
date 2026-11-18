@@ -65,7 +65,8 @@ const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
 const P3_PILOT = process.env.P2D_P3_PILOT === "1";
 const P38_CARD_SMOKE = process.env.P2D_P38_CARD_SMOKE === "1";
 const FINANCE_INTERPRETATION = process.env.P2D_FINANCE_INTERPRETATION_REAL === "1";
-const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || FINANCE_INTERPRETATION || EXPENSE || EXPENSE_REAL || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
+const CATEGORY_CORRECTION = process.env.P2D_CATEGORY_CORRECTION_REAL === "1";
+const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || FINANCE_INTERPRETATION || CATEGORY_CORRECTION || EXPENSE || EXPENSE_REAL || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
 // Enable only for synthetic/test proposal flows; never in production.
 if (PROPOSAL) process.env.PENDING_V2_SUPERSEDE_ENABLED = "1";
 if (EXPENSE_REAL && !LIVE_REAL) {
@@ -76,6 +77,12 @@ if (P38_CARD_SMOKE && !LIVE_REAL) {
 }
 if (FINANCE_INTERPRETATION && !LIVE_REAL) {
   throw new Error("[p2d-stack] P2D_FINANCE_INTERPRETATION_REAL requires P2D_LIVE_REAL (fail-closed)");
+}
+if (CATEGORY_CORRECTION && !LIVE_REAL) {
+  throw new Error("[p2d-stack] P2D_CATEGORY_CORRECTION_REAL requires P2D_LIVE_REAL (fail-closed)");
+}
+if (CATEGORY_CORRECTION && (EXPENSE || EXPENSE_REAL || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY || P3_PILOT || P38_CARD_SMOKE || FINANCE_INTERPRETATION || OFFLINE_CHAT)) {
+  throw new Error("[p2d-stack] P2D_CATEGORY_CORRECTION_REAL is exclusive with other P2D proposal slices");
 }
 if (FINANCE_INTERPRETATION && (EXPENSE || EXPENSE_REAL || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY || P3_PILOT || P38_CARD_SMOKE || OFFLINE_CHAT)) {
   throw new Error("[p2d-stack] P2D_FINANCE_INTERPRETATION_REAL is exclusive with P3 slices, P3_PILOT, P2D_P38_CARD_SMOKE and P2D_OFFLINE_CHAT");
@@ -404,7 +411,7 @@ function buildProbeConfig(): Record<string, unknown> {
     ctlBaseUrl: `http://127.0.0.1:${CTL_PORT}`,
   };
   if (PROPOSAL) {
-    if ((P3_PILOT || P38_CARD_SMOKE || FINANCE_INTERPRETATION) && LIVE_REAL) {
+    if ((P3_PILOT || P38_CARD_SMOKE || FINANCE_INTERPRETATION || CATEGORY_CORRECTION) && LIVE_REAL) {
       const liveModel = LIVE_MODEL as string;
       return {
         ...base,
