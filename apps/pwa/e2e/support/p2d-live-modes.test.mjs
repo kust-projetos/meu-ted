@@ -1063,7 +1063,12 @@ describe("p2d live modes: Playwright env + launcher selection", () => {
 
   it("launcher and config select the new specs without leaking credentials", () => {
     const prep = fs.readFileSync(PREP_FILE, "utf8");
-    for (const required of ["P2D_OFFLINE_CHAT", "P2D_LIVE_REAL", "p2d-live-offline", "p2d-live-real"]) {
+    for (const required of [
+      "P2D_OFFLINE_CHAT",
+      "P2D_LIVE_REAL",
+      "p2d-live-offline",
+      "p2d-live-real|live-real: correct",
+    ]) {
       assert.ok(prep.includes(required), `launcher must contain ${required}`);
     }
     const config = fs.readFileSync(CONFIG_FILE, "utf8");
