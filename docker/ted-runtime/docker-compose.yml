@@ -7,8 +7,8 @@
 #
 # Required host env (never committed):
 #   OPENCODE_GO_API_KEY   provider credential, injected at run time
-#   TED_PENDING_MINT_TOKEN and TED_WORKSPACE_DELETION_SERVICE_TOKEN are needed
-#   for the cutover; without them pending/attestation routes fail closed.
+#   TED_PENDING_MINT_TOKEN, TED_WORKSPACE_DELETION_SERVICE_TOKEN, and
+#   WORKSPACE_DELETION_HMAC_SECRET are needed for pending/attestation routes.
 #
 # Usage:
 #   docker compose -f docker/ted-runtime/docker-compose.yml --project-name ted-runtime up -d --build
@@ -46,6 +46,8 @@ services:
       # Required for pending/attestation routes; keep values out of the repository.
       TED_PENDING_MINT_TOKEN: ${TED_PENDING_MINT_TOKEN:-}
       TED_WORKSPACE_DELETION_SERVICE_TOKEN: ${TED_WORKSPACE_DELETION_SERVICE_TOKEN:-}
+      # Signs workspace deletion attestations; inject the value from the host environment.
+      WORKSPACE_DELETION_HMAC_SECRET: ${WORKSPACE_DELETION_HMAC_SECRET:-}
       # Provider credential comes from the host env only.
       OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:?OPENCODE_GO_API_KEY is required}
     volumes:
