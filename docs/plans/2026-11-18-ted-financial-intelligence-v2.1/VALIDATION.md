@@ -154,4 +154,13 @@ Conclusão: o CTA de login está presente e visível em produção nas rotas afe
 
 Os quatro timeouts dos arquivos completos foram causados por lentidão de runner/infra sob carga; todos os quatro testes passaram em reexecuções focadas, sem defeito funcional observado nas suítes 1–8. Os comandos focados de supersede foram `pending-v2-supersede.test.ts -t "feature flag off returns explicit refusal"` e `pending-v2-supersede.test.ts -t "audits the cancelled original and the replacement proposal"`. Os runs de arquivo completo seguem lentos neste ambiente; reexecuções isoladas foram confiáveis. Não houve alteração de código de produto para obter esses resultados. Sem chamada paga à LLM e sem E2E live-real; estes resultados não declaram homologação integral.
 
+### E2E sintético (sem LLM pago)
+
+Execuções no projeto Playwright existente `p2d-synthetic`, com provider somente scripted local, sem credenciais reais, sem flags live-real e sem LLM paga:
+
+- **Jornada B — despesa, recuperação e transação única:** `P2D_EXPENSE=1`, spec `apps/pwa/e2e/p2d/p3-expense.spec.ts` — **PASS 1/1**, exit 0. Evidência em `apps/pwa/test-results/p3-expense/evidence.json`: `proposeRequests=2`, `confirmRequests=1`, `executeRequests=1`, `cancelRequests=1`, `recoveredAfterReload=true`, `reloadNewPrompts=0`, `syntheticExpenseRows=1`, `duplicateLaunch=false`, `rejectedWrites=0`, `ledgerTotal=5`.
+- **Jornada A — receita:** `P2D_INCOME=1`, spec `apps/pwa/e2e/p2d/p3-income.spec.ts` — primeira execução **INCONCLUSIVE**: o probe do `webServer` não ficou pronto em 180 s e nenhum teste foi executado. Na reexecução focada, **PASS 1/1**, exit 0. Evidência em `apps/pwa/test-results/p3-income/evidence.json`: `recoveredAfterReload=true`, `reloadNewPrompts=0`, `syntheticIncomeRows=1`, `duplicateLaunch=false`, `rejectedWrites=0`, `balanceDeltaCents=250000` e um ID de transação presente. Classificação final: **PASS**, com a ressalva do timeout transitório do probe na primeira execução.
+- As suítes determinísticas acima cobrem memória/recall de categoria e correção/supersede. Uma única jornada de navegador que combine criação/reuso/deduplicação de categoria e aprendizado em uma sessão NOVA com LLM real **não está coberta** e permanece **INCONCLUSIVE**. Recuperação sem duplicação (D) está coberta sinteticamente pelas asserções `recoveredAfterReload`, `reloadNewPrompts=0` e `duplicateLaunch=false` descritas acima.
+- Não há alegação de homologação com LLM real; P5 permanece **INCONCLUSIVE**.
+
 Nenhuma flag de produção foi alterada e nenhum deploy foi realizado nesta missão de validação. Estes checks não constituem homologação integral.
