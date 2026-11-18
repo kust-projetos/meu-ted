@@ -33,7 +33,7 @@ export function createNetworkReport(page: {
   off(event: "response", listener: (response: ResponseLike) => void): void;
 }) {
   const events: NetworkEvent[] = [];
-  const pending: Promise<void>[] = [];
+  const BODY_TIMEOUT_MS = 1500;
   const listener = (response: ResponseLike) => {
     const request = response.request();
     const url = new URL(response.url());
@@ -51,19 +51,27 @@ export function createNetworkReport(page: {
       }
     } catch { /* duration is optional */ }
     events.push(event);
-    pending.push((async () => {
+    void (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const body = await response.json();
+        const body = await Promise.race([
+          response.json(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("response body timed out")), BODY_TIMEOUT_MS);
+          }),
+        ]);
         if (typeof body === "object" && body !== null && "code" in body && typeof body.code === "string") {
           event.code = body.code;
         }
       } catch { /* response may not contain JSON */ }
-    })());
+      finally {
+        if (timer) clearTimeout(timer);
+      }
+    })();
   };
   page.on("response", listener);
   return {
     async report() {
-      await Promise.all(pending);
       const counts = Object.fromEntries(
         [...new Set(events.map((event) => event.route))].map((route) => [
           route,

@@ -47,6 +47,17 @@ test("captures a successful response without a code", async () => {
   report.stop();
 });
 
+test("captures a successful response code", async () => {
+  const page = new MockPage();
+  const report = createNetworkReport(page);
+  await page.emit(response("/rpc/pending-operations/propose", 200, { code: "pending.ready" }));
+  const result = await report.report();
+  assert.equal(result.events[0]?.status, 200);
+  assert.equal(result.events[0]?.route, "/rpc/pending-operations/propose");
+  assert.equal(result.events[0]?.code, "pending.ready");
+  report.stop();
+});
+
 test("captures the gateway error code from an unsuccessful response", async () => {
   const page = new MockPage();
   const report = createNetworkReport(page);
@@ -57,6 +68,30 @@ test("captures the gateway error code from an unsuccessful response", async () =
   assert.equal(result.events[0]?.code, "pending.upstream_403_propose");
   assert.equal(result.events[0]?.stage, "propose");
   assert.equal(result.events[0]?.route, "/rpc/pending-operations/propose");
+  report.stop();
+});
+
+test("keeps the response event when its body is invalid JSON", async () => {
+  const page = new MockPage();
+  const report = createNetworkReport(page);
+  await page.emit({ ...response("/rpc/pending-operations/propose", 502, null), json: async () => { throw new SyntaxError("invalid JSON"); } });
+  const result = await report.report();
+  assert.equal(result.events[0]?.status, 502);
+  assert.equal(result.events[0]?.route, "/rpc/pending-operations/propose");
+  assert.equal(result.events[0]?.code, undefined);
+  report.stop();
+});
+
+test("reports promptly when a response body never settles", async () => {
+  const page = new MockPage();
+  const report = createNetworkReport(page);
+  await page.emit({ ...response("/rpc/pending-operations/active", 502, null), json: () => new Promise(() => {}) });
+  const started = Date.now();
+  const result = await report.report();
+  assert.ok(Date.now() - started < 500);
+  assert.equal(result.events[0]?.status, 502);
+  assert.equal(result.events[0]?.route, "/rpc/pending-operations/active");
+  assert.equal(result.events[0]?.code, undefined);
   report.stop();
 });
 
