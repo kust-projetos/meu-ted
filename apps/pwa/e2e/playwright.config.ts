@@ -366,6 +366,7 @@ export default defineConfig({
               ...(STATEMENT_PAY ? { P2D_STATEMENT_PAY: "1" } : {}),
               ...(P3_PILOT ? { P2D_P3_PILOT: "1" } : {}),
               ...(P38_CARD_SMOKE ? { P2D_P38_CARD_SMOKE: "1" } : {}),
+              ...(FINANCE_INTERPRETATION_REAL ? { P2D_FINANCE_INTERPRETATION_REAL: "1" } : {}),
             },
           },
           {
