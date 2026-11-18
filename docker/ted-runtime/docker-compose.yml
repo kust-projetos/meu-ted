@@ -45,6 +45,8 @@ services:
       TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED: "0"
       # Required for pending/attestation routes; keep values out of the repository.
       TED_PENDING_MINT_TOKEN: ${TED_PENDING_MINT_TOKEN:-}
+      # Inject from the host environment or .env; never store the value in the repository.
+      TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN: ${TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN:-}
       TED_WORKSPACE_DELETION_SERVICE_TOKEN: ${TED_WORKSPACE_DELETION_SERVICE_TOKEN:-}
       # Signs workspace deletion attestations; inject the value from the host environment.
       WORKSPACE_DELETION_HMAC_SECRET: ${WORKSPACE_DELETION_HMAC_SECRET:-}
