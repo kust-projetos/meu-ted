@@ -2,7 +2,7 @@
 
 ## Decisão e baseline
 
-O orientador ChatGPT decidiu **EXECUTAR**, sem mudança arquitetural, sem A0/broker e sem deploy. O baseline de produção `79d8b09` permaneceu inalterado, confirmado por `/health` e `/api/build-info` ao vivo.
+Desenvolvimento executado sem mudança arquitetural nem A0/broker. Em 2026-11-18, o operador escolheu explicitamente **“Publicar e ativar capacidades novas”** e autorizou o deploy de produção da V2.1. O deploy foi executado com sucesso; baseline atual de produção: `9dc5d1c65883bfbce4dabaf43b2759919843f8e1` (anterior: `79d8b09`).
 
 ## Marco 1 — Interpretação semântica
 
@@ -96,4 +96,16 @@ Habilitação futura deve: provisionar o token dedicado fora do repo, exigir don
 
 **Decisão do orientador:** encerrar a missão de homologação com bloqueio de infraestrutura documentado. Sem novas tentativas, sem chamadas pagas, sem declarar infraestrutura corrigida nem P5 aprovado. Instrumentação de `/propose` e `/active` preservada (PR #430, validada 3/3) para futura investigação.
 
-**Estado final:** V2.1 implementada e integrada, mas **NÃO homologada integralmente**; P5 **INCONCLUSIVE**; prontidão das quatro portas não comprovada; baseline de produção `79d8b09` inalterado; nenhuma flag ativada; nenhum deploy. Próxima retomada exige primeiro diagnóstico confiável da inicialização P2D e comprovação de prontidão de API/coordenador/gateway/Next antes de qualquer nova execução com LLM real.
+**Estado da homologação:** V2.1 implementada e integrada, mas **NÃO homologada integralmente**; P5 **INCONCLUSIVE**. A homologação integral com LLM real permanece INCONCLUSIVE. Apesar disso, após decisão explícita do operador, houve ativação em produção sem homologação prévia; esse risco foi assumido e está documentado. O timeout/inicialização P2D e a jornada P5 não foram declarados resolvidos.
+
+## Deploy de produção V2.1 (2026-11-18)
+
+O operador autorizou explicitamente **“Publicar e ativar capacidades novas”**. PR #435 (`fix(gateway): inject category autoexec mint token into compose`) foi mesclado antes do deploy para injetar `TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN` no compose do gateway.
+
+- **Baseline de produção:** `9dc5d1c65883bfbce4dabaf43b2759919843f8e1` (anterior `79d8b09`).
+- **API:** wrapper `scripts/ops/api-release-20260930.sh`, lane source-build, CI run `44330661848`; backup `pre-90ec37f-20261118` (sha256 `f3dc4886165fd8b03f4a929c08286f5ad59a6adbfb7453449b77bb7ddef5d48a`); rollback tag `pi-finance-api:rollback-pre-9dc5d1c`. Health ao vivo `{"status":"ok","gitSha":"9dc5d1c...","buildId":"44330661848"}` e `/ready`=200.
+- **Gateway ted-runtime:** rollback tag `ted-runtime:rollback-pre-9dc5d1c`; `opencode.json` regenerada pelo bootstrap, backup `opencode.json.bak-pre-9dc5d1c`; token `TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN` provisionado (valor fora do repositório); `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1`; health healthy; `/pending-operations/active` retorna 401 por autenticação (rota existe, não 404).
+- **PWA:** workflow `PWA Deploy`, run `44336496351` no SHA `9dc5d1c`; gate, deploy, smoke e attestation todos success; `/api/build-info` informa `gitSha` `9dc5d1c...`.
+- **Capacidades:** autoexecução de `categories.create` ativa em produção; `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1`. `TED_RISK_BASED_AUTOEXECUTE` permanece `on` como valor pré-existente, não alterado neste deploy.
+
+**Risco assumido:** ativação de produção ocorreu por decisão explícita do operador **sem homologação integral prévia com LLM real**. P5 continua INCONCLUSIVE; os fatos do deploy e os smokes acima não equivalem à homologação da jornada financeira ponta a ponta.
