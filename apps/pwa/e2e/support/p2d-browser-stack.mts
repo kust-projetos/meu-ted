@@ -395,6 +395,19 @@ type ProbeHandle = {
 };
 let probe: ProbeHandle | null = null;
 
+const PROBE_SECRET_PATTERN = /(api.?key|token|credential|authorization|secret|bearer)(\s*[:=]\s*)\S+/gi;
+
+function redactProbeOutput(value: string): string {
+  return value.replace(PROBE_SECRET_PATTERN, "$1$2[REDACTED]");
+}
+
+function probeOutput(handle: ProbeHandle | null): { lastLines: string[]; stderrTail: string } {
+  return {
+    lastLines: (handle?.lines ?? []).slice(-15).map(redactProbeOutput),
+    stderrTail: redactProbeOutput(handle?.stderrTail ?? ""),
+  };
+}
+
 function buildProbeConfig(): Record<string, unknown> {
   const base = {
     root: ROOT,
@@ -609,12 +622,12 @@ async function startProbe(): Promise<{ base: string; pid: number | undefined }> 
       })
       .find((j) => j && j["phase"] === "serve-ready");
     if (ready) return { base: String(ready["base"]), pid: handle.pid };
-        if (handle.exited) {
-          // live-real: never surface the child's stderr (SDK internals may
-          // embed the credential). Offline/synthetic keep the diagnostic.
-          const tail = MODE === "live-real" ? "" : `: ${handle.stderrTail}`;
-          throw new Error(`probe exited before ready (exit=${handle.exitCode})${tail}`);
-        }
+    if (handle.exited) {
+      const output = probeOutput(handle);
+      throw new Error(
+        `probe exited before ready (exit=${handle.exitCode}): ${JSON.stringify(output)}`,
+      );
+    }
     if (Date.now() > deadline) {
       try {
         child.kill("SIGKILL");
@@ -705,11 +718,7 @@ async function closeProbe(): Promise<{ exitCode: unknown; pid: number | undefine
     pid: handle.pid,
     forced,
   };
-  // live-real: omit raw child output (SDK internals may embed the credential).
-  if (MODE !== "live-real") {
-    debug.lastLines = handle.lines.slice(-15);
-    debug.stderrTail = handle.stderrTail;
-  }
+  Object.assign(debug, probeOutput(handle));
   return debug as { exitCode: unknown; pid: number | undefined; forced: boolean };
 }
 
@@ -744,14 +753,7 @@ const ctl = http.createServer((req, res) => {
         json(res, 200, {
           running: !!probe && !probe.exited,
           exitCode: probe?.exitCode ?? null,
-          // live-real: no raw child output (SDK internals may embed the
-          // credential); debug-only endpoint, never evidence.
-          ...(MODE === "live-real"
-            ? {}
-            : {
-                lastLines: (probe?.lines ?? []).slice(-15),
-                stderrTail: probe?.stderrTail ?? "",
-              }),
+          ...probeOutput(probe),
         });
         return;
       }
