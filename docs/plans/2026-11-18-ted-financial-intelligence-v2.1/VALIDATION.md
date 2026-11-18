@@ -26,18 +26,28 @@ Validação na main: runtime 417 testes/0 falhas; API focada 41 testes/3 arquivo
 
 ## Marco 4 — Jornada E2E completa
 
-**NÃO COMPROVADA.** Spec `p5-category-correction-real.spec.ts` mesclado em #424 (`3c3bff`) e ajustado em #425 (`b7e5ed1`, mensagem inicial passou a especificar “no Nubank” para evitar esclarecimento de conta). Duas execuções com modelo real, uma por versão, `--retries=0`, sem deploy:
+**INCONCLUSIVE.** Spec `p5-category-correction-real.spec.ts` mesclado em #424 (`3c3bff`) e ajustado em #425 (`b7e5ed1`, mensagem inicial passou a especificar "no Nubank" para evitar esclarecimento de conta). Duas execuções com modelo real, uma por versão, `--retries=0`, sem deploy:
 
 - `3c3bff`: modelo interpretou corretamente (categoria Mercado, R$50, data ontem) mas pediu esclarecimento de conta (Itaú/Nubank); nenhuma proposta; falha no botão “Confirmar R$ 50,00” após 300s.
 - `b7e5ed1`: UI reportou “TED indisponível”, “Falha no envio”, “Não foi possível preparar a proposta de despesa. Tente novamente.”; nenhuma proposta; mesma falha de botão.
 
 Consequência: correção para R$55, decisão `succeeded`, receipt, transação de 5500 cents, POST de execute, replay idempotente e reutilização de categoria NÃO foram alcançados/verificados neste spec. A prova anterior de proposta/confirmação/idempotência com modelo real permanece a da missão anterior (`p3-expense-real.spec.ts`).
 
+## Pendências verificáveis (sem causa atribuída)
+
+- Falha na listagem `/pending-operations/active` no harness (banner "Não foi possível carregar as aprovações agora."), observada nas execuções, sem causa atribuída.
+- Indisponibilidade do gateway/provider observada na 2ª execução do P5 ("TED indisponível", "Falha no envio", "Não foi possível preparar a proposta de despesa"), sem causa atribuída.
+
+Nenhuma chamada paga à LLM foi executada após a decisão de encerramento do orientador.
+
+**Financial Intelligence V2.1 — DESENVOLVIMENTO CONCLUÍDO; HOMOLOGAÇÃO INTEGRADA E ATIVAÇÃO EM PRODUÇÃO PENDENTES.**
+
+A próxima prioridade é homologação operacional em ambiente controlado, com habilitação condicionada a evidência integrada com LLM real e autorização específica do operador.
+
 ## Limitações e resíduos
 
 - Custo/tokens do modelo NOT_OBSERVED.
-- Banner “Não foi possível carregar as aprovações agora.” (listagem `/pending-operations/active` falha no harness, tratada como alerta não-bloqueante em `TedChat.tsx:542-550`) registrado para investigação futura.
-- Cinco execuções com modelo real foram gastas nesta missão (3 no P4 + 2 no P5). O orientador fixou limite de “sem ciclos indefinidos de estabilização” — novas execuções exigem nova orientação.
+- Cinco execuções com modelo real foram gastas nesta missão (3 no P4 + 2 no P5). O orientador fixou limite de "sem ciclos indefinidos de estabilização" - novas execuções exigem nova orientação.
 
 ## Flags desativadas e habilitação controlada futura
 
