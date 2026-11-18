@@ -60,6 +60,66 @@ test('conversation active operation metadata persists and can be cleared', () =>
   assert.equal(store.get(conversation.conversationId, { workspace: 'w', actorId: 'a' }).activeOperationId, null);
 });
 
+test('turn gets safe pending proposal context only for the matching actor and degrades softly', async () => {
+  const scenarios = [
+    { name: 'matching proposal', activeActor: 'owner', fails: false, context: true },
+    { name: 'no active proposal', activeActor: null, fails: false, context: false },
+    { name: 'different proposal actor', activeActor: 'other', fails: false, context: false },
+    { name: 'pending lookup failure', activeActor: 'owner', fails: true, context: false },
+  ];
+  for (const scenario of scenarios) {
+    const store = createConversationStore({ persistDir: approvedTmpRoot(`turn-context-${scenario.name.replaceAll(' ', '-')}`) });
+    const owner = { workspace: 'w', actorId: 'owner', deviceId: 'd' };
+    const conversation = store.create({ workspace: 'w', ownerActor: 'owner', deviceId: 'd' });
+    store.attachRuntime(conversation.conversationId, 'runtime-context', 'owner');
+    if (scenario.activeActor) store.setActiveOperation(conversation.conversationId, '550e8400-e29b-41d4-a716-446655440099', scenario.activeActor);
+    let observedText;
+    const gateway = createGatewayServer({
+      resolveIdentity: async () => owner, store,
+      pendingClient: {
+        async mintToken() { return 'private-token'; },
+        async get() {
+          if (scenario.fails) throw new Error('lookup failed');
+          return {
+            id: '550e8400-e29b-41d4-a716-446655440099', tool: 'transactions.expense.create',
+            status: 'proposed', proposalHash: 'private-hash',
+            normalizedArgs: { amountCents: 350000, description: 'Almoço', date: '2026-11-17' },
+          };
+        },
+      },
+      promptHost: { async chat({ text }) {
+        observedText = text;
+        return { turnId: 'turn-context', output: 'OK' };
+      } },
+      createRuntimeSession: async () => ({ runtimeSessionId: 'runtime-context' }),
+      withAuthenticatedSession: async (_id, _host, fn) => fn(),
+      diagnosticsSink: () => {},
+    });
+    try {
+      const { host, port } = await gateway.listen();
+      const response = await fetch(`http://${host}:${port}/agents/finance-chat-agent/w/rpc/chat`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', 'x-device-token': 'host-device-token',
+          cookie: serializeConversationCookie('w', conversation.conversationId).split(';')[0],
+        },
+        body: JSON.stringify({ text: 'Na verdade, foram 3500.', intentionId: `context-${scenario.name}` }),
+      });
+      assert.equal(response.status, 200, scenario.name);
+      if (scenario.context) {
+        assert.match(observedText, /\[PENDING PROPOSAL CONTEXT/);
+        assert.match(observedText, /tool: transactions\.expense\.create/);
+        assert.match(observedText, /amountCents=350000/);
+        assert.doesNotMatch(observedText, /private-token|private-hash|550e8400-e29b-41d4-a716-446655440099/);
+      } else {
+        assert.equal(observedText, 'Na verdade, foram 3500.');
+      }
+    } finally {
+      await gateway.close();
+    }
+  }
+});
+
 test('gateway supersedes only a proposed owner operation, merges untouched args and suppresses proposal', async () => {
   const directory = approvedTmpRoot('correction-turn');
   const store = createConversationStore({ persistDir: directory });
@@ -113,13 +173,13 @@ test('gateway supersedes only a proposed owner operation, merges untouched args 
     const payload = await response.json();
     assert.equal(payload.status, 'completed');
     assert.equal('proposal' in payload, false);
-    assert.deepEqual(calls.map(([name]) => name), ['get', 'supersede']);
-    assert.deepEqual(calls[1][1].normalizedArgs, {
+    assert.deepEqual(calls.map(([name]) => name), ['get', 'get', 'supersede']);
+    assert.deepEqual(calls[2][1].normalizedArgs, {
       amountCents: 7500, description: 'Almoço', date: '2026-11-17',
       accountId: '00000000-0000-0000-0000-000000000001',
       categoryId: '00000000-0000-0000-0000-000000000002',
     });
-    assert.equal(calls[1][1].expectedProposalHash, 'a'.repeat(64));
+    assert.equal(calls[2][1].expectedProposalHash, 'a'.repeat(64));
     assert.equal(store.get(conversation.conversationId, owner).activeOperationId, newId);
   } finally {
     correctionActionRegistry.clear('runtime-correction');
@@ -300,7 +360,7 @@ test('shared conversation keeps proposal actor bound: A cannot change B operatio
     actor: 'actor-b', action: 'correct', client, store, conversation, runtimeSessionId: 'runtime-shared',
   });
   assert.equal(accepted.response.status, 200);
-  assert.deepEqual(calls, ['mint', ['get', op2], ['supersede', op2]]);
+  assert.deepEqual(calls, ['mint', ['get', op2], 'mint', ['get', op2], ['supersede', op2]]);
   assert.equal(store.get(conversation.conversationId, { workspace: 'w', actorId: 'actor-a' }).activeOperationId, op3);
   assert.equal(store.get(conversation.conversationId, { workspace: 'w', actorId: 'actor-a' }).activeOperationActorId, 'actor-b');
 });
@@ -359,6 +419,8 @@ test('loopback supersede 404 is typed, preserves activeOperationId, and never fa
     assert.equal(recovered.response.status,200);
     assert.equal(recovered.payload.output,'Proposta revisada.');
     assert.deepEqual(seen.map(({ path }) => path), [
+      '/auth/agent/pending-token',
+      `/pending-operations/v2/${oldId}`,
       '/auth/agent/pending-token',
       `/pending-operations/v2/${oldId}`,
       `/pending-operations/v2/${oldId}/supersede`,
