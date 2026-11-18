@@ -4,6 +4,7 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 import { resolveP2dPorts } from "../support/ports";
+import { createNetworkReport } from "../support/p2d-network-report.mts";
 
 const ports = resolveP2dPorts(process.env);
 const CTL = `http://127.0.0.1:${ports.ctlPort}`;
@@ -94,7 +95,9 @@ async function openTed(page: Page, projectBaseURL?: string) {
 
 test("live-real: correct expense amount before confirmation without creating a category", async ({ page }, testInfo) => {
   test.setTimeout(900000);
+  const networkReport = createNetworkReport(page);
 
+  try {
   expect(await ctlGet<{ ok: boolean; probeRunning: boolean }>("/health")).toMatchObject({
     ok: true,
     probeRunning: true,
@@ -192,4 +195,14 @@ test("live-real: correct expense amount before confirmation without creating a c
     }, null, 2)),
     contentType: "application/json",
   });
+  } finally {
+    try {
+      await testInfo.attach("p5-network-report", {
+        body: Buffer.from(JSON.stringify(await networkReport.report(), null, 2)),
+        contentType: "application/json",
+      });
+    } finally {
+      networkReport.stop();
+    }
+  }
 });
