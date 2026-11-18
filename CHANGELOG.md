@@ -4,6 +4,10 @@
 
 # Changelog
 
+## Unreleased (2026-11-18)
+
+- Corte final TED OpenCode-only confirmado em API, PWA e gateway (`79d8b09`); E2E com LLM real aprovado. Worker A0 removido em produção; R2/DO preservados.
+
 ## v1.0.4 (2026-11-13)
 
 - Release publicada e atestada: tag `v1.0.4` aponta para `32a05cb0cc277c92db625895259070a2de3b1c38`; Agent Deploy `43420642428` e PWA Deploy `43420646867` com `ATTESTED reason=deploy-smoke-pass`. Manifesto da API: `release-manifest-32a05cb0cc277c92db625895259070a2de3b1c38.json`.

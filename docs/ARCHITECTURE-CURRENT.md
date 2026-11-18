@@ -1,6 +1,6 @@
 # Meu Ted - Arquitetura atual
 
-**Last verified:** 2026-11-17
+**Last verified:** 2026-11-18
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 ## Topologia implementada
@@ -15,6 +15,8 @@ graph TD
 ```
 
 `apps/ted-runtime` é o único runtime conversacional. O runtime A0 (`apps/agent`) foi descontinuado em 2026-11-17 e removido do repositório ativo, workspaces, build e CI. A aposentadoria de código não remove nem altera recursos ou dados históricos de produção.
+
+Em produção, o Worker A0 foi removido; o gateway é o runtime único. R2/DO foram preservados.
 
 ## Responsabilidades e limites
 
