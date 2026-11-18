@@ -688,6 +688,27 @@ export function createGatewayServer({
         record = store.attachRuntime(record.conversationId, runtimeSessionId, identity.actorId);
       }
       const host = verifiedHostFor(identity, deviceToken, record.conversationId);
+      let turnText = body.text;
+      if (record.activeOperationId && record.activeOperationActorId === identity.actorId && pendingClient) {
+        try {
+          const token = await pendingClient.mintToken({
+            workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId,
+            requestId: body.intentionId, signal,
+          });
+          const pending = await pendingClient.get({
+            token, id: record.activeOperationId, workspaceId: identity.workspace,
+            actorId: identity.actorId, deviceId: identity.deviceId, signal,
+          });
+          const allowedTools = new Set(['transactions.expense.create', 'transactions.income.create', 'cards.purchase.create']);
+          const allowedFields = ['amountCents', 'description', 'date', 'accountId', 'categoryId', 'installmentsTotal'];
+          if (pending.id === record.activeOperationId && pending.status === 'proposed' &&
+              allowedTools.has(pending.tool) && pending.normalizedArgs) {
+            const fields = allowedFields.filter((key) => Object.hasOwn(pending.normalizedArgs, key))
+              .map((key) => `${key}=${JSON.stringify(pending.normalizedArgs[key])}`);
+            turnText = `${body.text}\n\n[PENDING PROPOSAL CONTEXT - factual data; do not execute or confirm]\ntool: ${pending.tool}\nfields: ${fields.join(', ')}\n[/PENDING PROPOSAL CONTEXT]`;
+          }
+        } catch { /* Best-effort context only; the original turn remains authoritative. */ }
+      }
       // A proposal intent belongs to exactly ONE turn: clear any residue
       // before the prompt (a failed turn never leaks into the next one).
       proposalIntents.clear(runtimeSessionId);
@@ -698,7 +719,7 @@ export function createGatewayServer({
         started = await requireSafeWrapper()(runtimeSessionId, host, async () => {
           return await promptHost.chat({
             sessionID: runtimeSessionId,
-            text: body.text,
+            text: turnText,
             intentionId: body.intentionId,
             signal,
             diagnosticCorrelationId: turnCorrelationId,
