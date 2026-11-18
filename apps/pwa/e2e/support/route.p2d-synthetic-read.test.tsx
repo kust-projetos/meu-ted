@@ -784,4 +784,288 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
       await closeApi();
     }
   }, 300000);
+
+  const realJourneyEnabled = process.env.P2D_JOURNEY_C_REAL === "1";
+  (realJourneyEnabled ? it : it.skip)(
+    "opt-in live-real category journey C: reuse, create, correction, and new-session recall",
+    async (testInfo) => {
+      const root = approvedTmpRoot("ted-pwa-p2d-journey-c-real");
+      const identity = "p2d-journey-c-real";
+      const categoryAutoExecToken = "p2d-synthetic-category-autoexec-mint-token-only";
+      const categoryTransportId = "22222222-2222-4222-8222-222222222224";
+      interface SqliteDb {
+        prepare(sql: string): {
+          all(...params: unknown[]): Array<{ target: string; field: string; value: string }>;
+        };
+        close(): void;
+      }
+      const liveModel = JSON.parse(
+        fs.readFileSync(path.join(TED_RUNTIME_DIR, "src/live-model.json"), "utf8"),
+      ).model as string;
+      const memberships = new Map<string, "owner" | "member">();
+      const workspaceAccess = {
+        resolve: async (authUserId: string, householdId: string) => {
+          if (householdId !== HOUSEHOLD_A) return undefined;
+          const role = memberships.get(`${authUserId}:${householdId}`);
+          return role ? { userId: authUserId, householdId, role, kind: "shared" as const } : undefined;
+        },
+      };
+      vi.stubEnv("NODE_ENV", "test");
+      vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
+      vi.stubEnv("PENDING_V2_CATEGORY_AUTOCREATE_ENABLED", "1");
+      const auth = createBetterAuth({
+        database: memoryAdapter({ user: [], session: [], account: [], verification: [] }) as AuthConfig["database"],
+        disableSignUp: false,
+        transaction: false,
+        secret: SECRET,
+        baseURL: "http://localhost:3001",
+        trustedOrigins: ["http://localhost:3000"],
+      });
+      const built = buildTestApp(
+        {
+          accounts: [ACCOUNT_A1, ACCOUNT_A2],
+          categories: [
+            CATEGORY_FOOD_A,
+            CATEGORY_RENT_A,
+            CATEGORY_SALARY_A,
+            { id: categoryTransportId, householdId: HOUSEHOLD_A, name: "Transporte", kind: "expense", status: "active" },
+          ],
+          transactions: TRANSACTIONS.filter((item) => item.householdId === HOUSEHOLD_A),
+        },
+        auth,
+        workspaceAccess,
+        false,
+        { categoryAutoExecMintServiceToken: categoryAutoExecToken },
+      );
+      let serve: ServeProc | null = null;
+      let categoryDb: SqliteDb | null = null;
+      try {
+        const signup = await auth.api.signUpEmail({
+          body: { email: "ted-journey-c@example.test", password: "test-password-123", name: "Ted Journey C" },
+          headers: new Headers({ origin: "http://localhost:3000" }),
+          asResponse: true,
+        });
+        expect(signup.status).toBe(200);
+        const sessionCookie = firstCookieSegment(signup.headers.get("set-cookie"));
+        const session = await auth.api.getSession({ headers: new Headers({ cookie: sessionCookie }) });
+        const actorId = String(session?.user.id ?? "");
+        expect(actorId).not.toBe("");
+        memberships.set(`${actorId}:${HOUSEHOLD_A}`, "owner");
+        await built.app.listen({ port: 0, host: "127.0.0.1" });
+        const address = built.app.server.address() as { port: number };
+        const apiBase = `http://127.0.0.1:${address.port}`;
+        const registered = await fetch(`${apiBase}/auth/devices/register`, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: sessionCookie, "x-workspace-id": HOUSEHOLD_A },
+          body: JSON.stringify({ deviceName: "synthetic category journey C" }),
+        });
+        expect(registered.status).toBe(201);
+        const device = await registered.json() as { token: string };
+        serve = await ServeProc.start({
+          P2D_CONFIG_JSON: JSON.stringify({
+            root, identity, apiBaseUrl: apiBase, tedRuntimeDir: TED_RUNTIME_DIR,
+            ctlBaseUrl: "http://127.0.0.1:1",
+            mode: "live-real", profile: "live", provider: liveModel.split("/")[0],
+            model: liveModel, credentialSource: "allowlist",
+          }),
+          TED_OPENCODE_PRODUCT_PROMPT_ENABLED: "1",
+          TED_OPENCODE_CATEGORY_MEMORY_ENABLED: "1",
+          TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED: "1",
+          TED_OPENCODE_P3_WRITES_ENABLED: "1",
+          TED_OPENCODE_CATEGORY_AUTOCREATE_ENABLED: "1",
+          TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN: categoryAutoExecToken,
+        });
+        expect(serve.ready["mode"]).toBe("live-real");
+        expect(serve.ready["credentialSource"]).toBe("allowlist");
+        const base = String(serve.ready["base"]);
+        vi.stubEnv("TED_OPENCODE_GATEWAY_ORIGIN", base);
+        let gatewayCookie = "";
+        const pathFor = (...parts: string[]) => ["agents", "finance-chat-agent", HOUSEHOLD_A, "rpc", ...parts];
+        const rpcUrl = (parts: string[]) => `http://localhost:3000/api/agent/${parts.map(encodeURIComponent).join("/")}`;
+        const headersFor = () => ({
+          cookie: [sessionCookie, gatewayCookie].filter(Boolean).join("; "),
+          "x-device-token": device.token,
+          "x-workspace-id": HOUSEHOLD_A,
+        });
+        const post = (parts: string[], body: unknown) => POST(
+          new Request(rpcUrl(parts), { method: "POST", headers: { "content-type": "application/json", ...headersFor() }, body: JSON.stringify(body) }),
+          { params: Promise.resolve({ path: parts }) },
+        );
+        const getCategoryState = async () => {
+          const response = await fetch(`${apiBase}/categories?kind=expense`, {
+            headers: { "x-device-token": device.token, "x-workspace-id": HOUSEHOLD_A },
+          });
+          expect(response.status).toBe(200);
+          const body = await response.json() as { items?: Array<{ name?: string }> };
+          const names = (body.items ?? []).map((item) => String(item.name ?? ""));
+          return { count: names.length, palestrasCount: names.filter((name) => name === "Palestras").length };
+        };
+        const dbPath = path.join(root, `.ted-home-${identity}`, "state", "category-memory.sqlite");
+        const memoryState = () => {
+          if (!categoryDb && !fs.existsSync(dbPath)) return { count: 0, rows: [] };
+          const requireNode = createRequire(import.meta.url);
+          const { DatabaseSync } = requireNode("node:sqlite") as {
+            DatabaseSync: new (path: string, opts?: { readOnly?: boolean }) => SqliteDb;
+          };
+          const db = categoryDb ??= new DatabaseSync(dbPath, { readOnly: true });
+          const rows = db.prepare(
+            "SELECT target, field, value FROM category_memory WHERE workspace_id=? AND actor_id=? AND tombstone_at IS NULL AND expires_at>?",
+          ).all(HOUSEHOLD_A, actorId, Date.now());
+          return { count: rows.length, rows };
+        };
+        const evidence: Array<Record<string, unknown>> = [];
+        const sendTurn = async (step: string, intentionId: string, text: string, beforeMemory: number) => {
+          const response = await post(pathFor("chat"), { text, intentionId });
+          const body = await response.json() as {
+            status?: string;
+            intentionId?: string;
+            output?: string;
+            autoexec?: unknown;
+            proposal?: { tool?: string; normalizedArgs?: { categoryId?: string } };
+          };
+          const stats = await serve!.cmd("stats");
+          const categories = await getCategoryState();
+          const memory = memoryState();
+          const turn = {
+            step, httpStatus: response.status, status: body.status ?? null, intentionId,
+            output: String(body.output ?? "").replace(/R\$\s*[\d.,]+/g, "R$ [redacted]").slice(0, 400),
+            proposal: body.proposal
+              ? { tool: body.proposal.tool ?? null, categoryId: body.proposal.normalizedArgs?.categoryId ?? null }
+              : null,
+            toolsOffered: Array.isArray(stats["financeToolNames"]) ? stats["financeToolNames"] : [],
+            promptCalls: stats["promptCalls"] ?? null, transportCalls: stats["transportCalls"] ?? null,
+            categoryCounts: categories, memoryCount: memory.count,
+            memoryRows: memory.rows.map((row) => ({ target: row.target, field: row.field, value: row.value })),
+            autoexec: body.autoexec ?? null,
+          };
+          evidence.push(turn);
+          expect(response.status).toBe(200);
+          expect(body.status).toBe("completed");
+          expect(body.intentionId).toBe(intentionId);
+          expect(memory.count).toBeGreaterThanOrEqual(beforeMemory);
+          return { categories, memory };
+        };
+
+        const firstSession = await post(pathFor("session", "new"), {});
+        expect(firstSession.status).toBe(200);
+        const firstCookie = firstSession.headers.getSetCookie?.().find((value) => value.includes("=opencode."));
+        expect(firstCookie).toBeDefined();
+        gatewayCookie = firstCookie!.split(";", 1)[0];
+        const initialCategories = await getCategoryState();
+        const initialMemoryCount = memoryState().count;
+        const turn1 = await sendTurn(
+          "reuse-existing",
+          "p2d-journey-c-real-01",
+          "Gastei R$ 50,00 no mercado ontem. Use uma categoria existente se fizer sentido.",
+          initialMemoryCount,
+        );
+        expect(turn1.categories.count).toBe(initialCategories.count);
+        expect(turn1.categories.palestrasCount).toBe(0);
+        const existingExpenseCategoryIds = new Set([
+          CATEGORY_FOOD_A.id,
+          CATEGORY_RENT_A.id,
+          CATEGORY_SALARY_A.id,
+          categoryTransportId,
+        ]);
+        const turn1Proposal = evidence[0]["proposal"] as { tool?: string; categoryId?: string } | null;
+        expect(turn1Proposal?.tool).toBe("transactions.expense.create");
+        expect(existingExpenseCategoryIds.has(String(turn1Proposal?.categoryId))).toBe(true);
+
+        const turn2 = await sendTurn(
+          "create-category",
+          "p2d-journey-c-real-02",
+          "Crie a categoria de despesa Palestras para uma despesa futura.",
+          turn1.memory.count,
+        );
+        const turn2CategoryCount = turn2.categories.count;
+        expect(turn2.categories.palestrasCount).toBe(1);
+        expect(turn2CategoryCount).toBe(initialCategories.count + 1);
+        const turn2Again = await getCategoryState();
+        expect(turn2Again.palestrasCount).toBe(1);
+        expect(turn2Again.count).toBe(turn2CategoryCount);
+
+        const turn3 = await sendTurn(
+          "correct-category-preference",
+          "p2d-journey-c-real-03",
+          "Corrija a categoria da proposta anterior para Transporte. Para despesas de mercado, prefiro sempre Transporte.",
+          turn2.memory.count,
+        );
+        expect(turn3.memory.count).toBeGreaterThan(turn2.memory.count);
+        const newMemoryRows = turn3.memory.rows.filter((row) =>
+          !turn2.memory.rows.some((previous) =>
+            previous.target === row.target && previous.field === row.field && previous.value === row.value,
+          ),
+        );
+        const writtenPreference = newMemoryRows[0];
+        expect(writtenPreference).toBeDefined();
+        const preferenceVerified = writtenPreference?.field === "category" &&
+          (writtenPreference.value === categoryTransportId || /transporte/i.test(writtenPreference.value));
+        const beforeNewSession = turn3.memory.count;
+        gatewayCookie = "";
+        const nextSession = await post(pathFor("session", "new"), {});
+        expect(nextSession.status).toBe(200);
+        const nextCookie = nextSession.headers.getSetCookie?.().find((value) => value.includes("=opencode."));
+        expect(nextCookie).toBeDefined();
+        gatewayCookie = nextCookie!.split(";", 1)[0];
+        const turn4 = await sendTurn(
+          "new-session-recall",
+          "p2d-journey-c-real-04",
+          "Gastei R$ 30,00 no mercado ontem.",
+          beforeNewSession,
+        );
+        expect(turn4.memory.count).toBe(beforeNewSession);
+        expect(evidence[3].output).toMatch(/transporte/i);
+
+        const stats = await serve.cmd("stats");
+        const report = {
+          steps: [
+            {
+              step: evidence[0]["step"],
+              result: turn1Proposal?.tool === "transactions.expense.create" &&
+                existingExpenseCategoryIds.has(String(turn1Proposal.categoryId)) &&
+                turn1.categories.count === initialCategories.count &&
+                turn1.categories.palestrasCount === 0 ? "PASS" : "FAIL",
+              evidence: evidence[0],
+            },
+            {
+              step: evidence[1]["step"],
+              result: turn2.categories.palestrasCount === 1 &&
+                turn2Again.palestrasCount === 1 &&
+                turn2CategoryCount === initialCategories.count + 1 &&
+                turn2Again.count === turn2CategoryCount ? "PASS" : "FAIL",
+              evidence: evidence[1],
+            },
+            {
+              step: evidence[2]["step"],
+              result: newMemoryRows.length > 0
+                ? preferenceVerified ? "PASS" : "NOT_VERIFIED"
+                : "FAIL",
+              evidence: { turn: evidence[2], newMemoryRows, preferenceVerified },
+            },
+            {
+              step: evidence[3]["step"],
+              result: turn4.memory.count === beforeNewSession &&
+                /transporte/i.test(String(evidence[3]["output"])) ? "PASS" : "FAIL",
+              evidence: evidence[3],
+            },
+          ],
+          modelCalls: stats["promptCalls"] ?? "NOT_OBSERVED",
+          tokens: "NOT_OBSERVED",
+        };
+        testInfo.annotate({
+          type: "application/json",
+          description: "journey-c-real-evidence.json",
+          body: JSON.stringify(report, null, 2),
+        });
+      } finally {
+        categoryDb?.close();
+        if (serve) {
+          try { await serve.cmd("close", 60000); } catch { try { serve.child.kill("SIGKILL"); } catch { /* noop */ } }
+        }
+        await built.app.close().catch(() => {});
+        await auth.close().catch(() => {});
+      }
+    },
+    300000,
+  );
 });
