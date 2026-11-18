@@ -36,6 +36,7 @@ export const V2_APPROVAL_CAPABILITIES = {
   retry: 'financial.approval.retry',
   cancel: 'financial.approval.cancel',
   authorize: 'financial.approval.autoexecute',
+  autoexecuteCategory: 'financial.approval.autoexecute.category',
 } as const;
 
 export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
@@ -1018,17 +1019,21 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
     // capability: marking an intent is part of confirming, never a read.
     app.post('/pending-operations/v2/confirmation-intentions/bind', async (req, reply) => { if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.confirm)) return; let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); } const body = z.object({ intentionId: z.string().trim().min(1).max(240) }).strict().safeParse(req.body ?? {}); if (!body.success) return reply.code(400).send({ code: 'validation.error', issues: body.error.issues }); try { return reply.send(await v2Store.bindConfirmationIntention(identity(ctx), body.data.intentionId)); } catch (error) { return handleError(error, reply, true); } });
     app.post('/pending-operations/v2/:id/authorize', async (req, reply) => {
-      if (!requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.authorize)) return;
+      const categoryAutoexecute = req.delegatedTurn?.capabilities.includes(V2_APPROVAL_CAPABILITIES.autoexecuteCategory) ?? false;
+      if (!categoryAutoexecute && !requireV2Capability(req, reply, V2_APPROVAL_CAPABILITIES.authorize)) return;
       let ctx; try { ctx = await resolve(req); } catch (error) { return handleError(error, reply); }
       const params = idSchema.safeParse(req.params);
       if (!params.success) return reply.code(400).send({ code: 'validation.error', issues: params.error.issues });
       const body = z.object({}).strict().safeParse(req.body ?? {});
       if (!body.success) return reply.code(400).send({ code: 'validation.error', issues: body.error.issues });
       const mode = getTedRiskBasedAutoexecute();
-      if (mode === 'off') return reply.code(409).send({ code: 'approval.autoexecute_disabled' });
       try {
         const operationIdentity = identity(ctx);
         const record = await v2Store.get(params.data.id, operationIdentity);
+        if (categoryAutoexecute && record.tool !== 'categories.create') {
+          return reply.code(403).send({ code: 'auth.delegation_scope_forbidden' });
+        }
+        if (!categoryAutoexecute && mode === 'off') return reply.code(409).send({ code: 'approval.autoexecute_disabled' });
         if (record.status !== 'proposed') {
           return reply.send(await v2Store.authorize(params.data.id, operationIdentity, { mode: 'auto', reason: 'explicit_low_risk', riskTier: 'low' }));
         }
@@ -1043,7 +1048,7 @@ export const registerPendingOperationRoutes = (app: FastifyInstance, opts: {
         };
         if (mode === 'shadow') {
           emitDecision('mutation.authorization.evaluated');
-          return reply.code(409).send({ code: 'approval.autoexecute_disabled' });
+          if (!categoryAutoexecute) return reply.code(409).send({ code: 'approval.autoexecute_disabled' });
         }
         if (decision.action !== 'auto_execute') {
           emitDecision('mutation.autoexecute.blocked');

@@ -224,6 +224,7 @@ const start = async (): Promise<void> => {
       agentConnectionSecret: cfg.agentConnectionSecret,
       agentAuthServiceToken: cfg.agentAuthServiceToken,
       autoExecMintServiceToken: process.env.TED_RUNTIME_AUTOEXEC_MINT_TOKEN,
+      categoryAutoExecMintServiceToken: process.env.TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN,
       pendingMintServiceToken: process.env.TED_RUNTIME_PENDING_MINT_TOKEN,
       trustedOrigins: cfg.trustedOrigins,
       disableDeviceRegistration: cfg.disableDeviceRegistration,

@@ -12,6 +12,7 @@ const DEVICE = 'device-auto';
 const ACCOUNT = '11111111-1111-4111-8111-111111111111';
 const CATEGORY = '22222222-2222-4222-8222-222222222222';
 const AUTO = 'financial.approval.autoexecute';
+const CATEGORY_AUTO = 'financial.approval.autoexecute.category';
 const CONFIRM = 'financial.approval.confirm';
 const EXECUTE = 'financial.approval.execute';
 const PROPOSE = 'financial.approval.propose';
@@ -46,8 +47,14 @@ const createProposal = async (store: PendingOperationV2Store, amountCents: numbe
   const base = { version: 2 as const, ...bound, tool: 'transactions.expense.create', normalizedArgs: { description: 'Test purchase', amountCents, date: '2026-10-02', accountId: ACCOUNT, categoryId: CATEGORY }, proposalHash: '', idempotencyKey: key, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(), bindings: bound };
   return store.propose({ ...base, proposalHash: await computePendingOperationV2Hash(base) });
 };
+const createCategoryProposal = async (store: PendingOperationV2Store, args: Record<string, unknown>, key = randomUUID()) => {
+  const bound = identity();
+  const base = { version: 2 as const, ...bound, tool: 'categories.create', normalizedArgs: args, proposalHash: '', idempotencyKey: key, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(), bindings: bound };
+  return store.propose({ ...base, proposalHash: await computePendingOperationV2Hash(base) });
+};
 const post = (app: ReturnType<typeof setup>['app'], id: string, action: string, payload?: unknown) => app.inject({ method: 'POST', url: `/pending-operations/v2/${id}/${action}`, ...(payload !== undefined ? { payload } : {}) });
 afterEach(() => { delete process.env.TED_RISK_BASED_AUTOEXECUTE; vi.restoreAllMocks(); });
+afterEach(() => { delete process.env.PENDING_V2_CATEGORY_AUTOCREATE_ENABLED; });
 
 describe('POST /pending-operations/v2/:id/authorize', () => {
   it.each([['unset', undefined], ['off', 'off']] as const)('fails closed when flag is %s', async (_label, flag) => {
@@ -83,6 +90,37 @@ describe('POST /pending-operations/v2/:id/authorize', () => {
     expect(record).toMatchObject({ status: 'succeeded', authorizationMode: 'auto', authorizationReason: 'explicit_low_risk', riskTier: 'low' }); expect(record.authorizedAt).toBeTruthy();
     const replay = await post(app, saved.id, 'execute', { attestation: token });
     expect(replay.statusCode).toBe(403); expect(replay.json().code).toBe('approval.attestation_replayed'); expect(harness.effects).toBe(1);
+  });
+
+  it('authorizes eligible categories with the category-scoped capability while global autoexecute is off', async () => {
+    process.env.TED_RISK_BASED_AUTOEXECUTE = 'off';
+    process.env.PENDING_V2_CATEGORY_AUTOCREATE_ENABLED = '1';
+    const { app, v2Store } = setup([PROPOSE, CATEGORY_AUTO, EXECUTE]);
+    const saved = await createCategoryProposal(v2Store, { name: 'Food', kind: 'expense' });
+    const response = await post(app, saved.id, 'authorize');
+    expect(response.statusCode).toBe(200);
+    expect(response.json().attestation).toEqual(expect.any(String));
+  });
+
+  it('rejects a category-scoped capability for any other tool', async () => {
+    process.env.TED_RISK_BASED_AUTOEXECUTE = 'off';
+    const { app, v2Store } = setup([PROPOSE, CATEGORY_AUTO, EXECUTE]);
+    const saved = await createProposal(v2Store, 3499);
+    const response = await post(app, saved.id, 'authorize');
+    expect(response.statusCode).toBe(403);
+    expect(response.json().code).toBe('auth.delegation_scope_forbidden');
+    expect(response.json()).not.toHaveProperty('attestation');
+  });
+
+  it('does not authorize a category when its category-autocreate policy is disabled or ineligible', async () => {
+    process.env.TED_RISK_BASED_AUTOEXECUTE = 'off';
+    const { app, v2Store } = setup([PROPOSE, CATEGORY_AUTO, EXECUTE]);
+    const saved = await createCategoryProposal(v2Store, { name: 'Food', kind: 'expense' });
+    const response = await post(app, saved.id, 'authorize');
+    expect(response.statusCode).toBe(409);
+    expect(response.json().code).toBe('approval.autoexecute_not_eligible');
+    expect(response.json()).not.toHaveProperty('attestation');
+    expect(await v2Store.get(saved.id, identity())).toMatchObject({ status: 'proposed' });
   });
 
   it('blocks high-value mutations without leaking an attestation', async () => {
