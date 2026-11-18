@@ -56,7 +56,6 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { DatabaseSync } from "node:sqlite";
 
 vi.mock("@opennextjs/cloudflare", () => ({
   getCloudflareContext: vi.fn(),
@@ -794,6 +793,12 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
       const identity = "p2d-journey-c-real";
       const categoryAutoExecToken = "p2d-synthetic-category-autoexec-mint-token-only";
       const categoryTransportId = "22222222-2222-4222-8222-222222222224";
+      interface SqliteDb {
+        prepare(sql: string): {
+          all(...params: unknown[]): Array<{ target: string; field: string; value: string }>;
+        };
+        close(): void;
+      }
       const liveModel = JSON.parse(
         fs.readFileSync(path.join(TED_RUNTIME_DIR, "src/live-model.json"), "utf8"),
       ).model as string;
@@ -833,7 +838,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         { categoryAutoExecMintServiceToken: categoryAutoExecToken },
       );
       let serve: ServeProc | null = null;
-      let categoryDb: DatabaseSync | null = null;
+      let categoryDb: SqliteDb | null = null;
       try {
         const signup = await auth.api.signUpEmail({
           body: { email: "ted-journey-c@example.test", password: "test-password-123", name: "Ted Journey C" },
@@ -898,10 +903,14 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const dbPath = path.join(root, `.ted-home-${identity}`, "state", "category-memory.sqlite");
         const memoryState = () => {
           if (!categoryDb && !fs.existsSync(dbPath)) return { count: 0, rows: [] };
+          const requireNode = createRequire(import.meta.url);
+          const { DatabaseSync } = requireNode("node:sqlite") as {
+            DatabaseSync: new (path: string, opts?: { readOnly?: boolean }) => SqliteDb;
+          };
           const db = categoryDb ??= new DatabaseSync(dbPath, { readOnly: true });
           const rows = db.prepare(
             "SELECT target, field, value FROM category_memory WHERE workspace_id=? AND actor_id=? AND tombstone_at IS NULL AND expires_at>?",
-          ).all(HOUSEHOLD_A, actorId, Date.now()) as Array<{ target: string; field: string; value: string }>;
+          ).all(HOUSEHOLD_A, actorId, Date.now());
           return { count: rows.length, rows };
         };
         const evidence: Array<Record<string, unknown>> = [];
