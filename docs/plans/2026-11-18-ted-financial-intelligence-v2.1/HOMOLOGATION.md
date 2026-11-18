@@ -50,6 +50,12 @@ ou reiniciar a sessão, mantendo o mesmo stack.
   `NOT_OBSERVED`.
 - Nenhuma chamada paga sem autorização explícita do operador.
 
+## Registro da tentativa (2026-11-18)
+
+Homologação instrumentada — tentativa única (2026-11-18): a execução autorizada com `P2D_LIVE_REAL=1 P2D_CATEGORY_CORRECTION_REAL=1` falhou ANTES de iniciar o teste com `Error: Timed out waiting 600000ms from config.webServer`. A spec não chegou a rodar: SEM anexo `p5-network-report`, SEM jornada financeira executada, SEM status/code de rede capturados. Custo/tokens NOT_OBSERVED. `.env.local` restaurado com hash idêntico; portas liberadas. Classificação: falha de infraestrutura do harness (prontidão do webServer), não falha funcional demonstrada; causa do timeout não determinada. Nenhuma nova execução paga foi realizada, conforme o limite do orientador.
+
+Instrumentação de rede integrada e validada gratuitamente (teste 3/3, PR #430, commit em `b69cd73`); permanece pronta para futura homologação, mediante nova autorização de chamada paga. P5 permanece INCONCLUSIVE. Estado: desenvolvimento concluído; homologação e ativação em produção pendentes.
+
 ## Habilitação em produção
 
 Exige evidência aprovada do cenário único acima e autorização específica do

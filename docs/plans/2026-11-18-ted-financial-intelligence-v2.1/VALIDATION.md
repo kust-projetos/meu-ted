@@ -35,6 +35,12 @@ Consequência: correção para R$55, decisão `succeeded`, receipt, transação 
 
 ## Pendências verificáveis (sem causa atribuída)
 
+### Homologação instrumentada — tentativa única (2026-11-18)
+
+A execução autorizada com `P2D_LIVE_REAL=1 P2D_CATEGORY_CORRECTION_REAL=1` falhou ANTES de iniciar o teste com `Error: Timed out waiting 600000ms from config.webServer`. A spec não chegou a rodar: SEM anexo `p5-network-report`, SEM jornada financeira executada, SEM status/code de rede capturados. Custo/tokens NOT_OBSERVED. `.env.local` restaurado com hash idêntico; portas liberadas. Classificação: falha de infraestrutura do harness (prontidão do webServer), não falha funcional demonstrada; causa do timeout não determinada. Nenhuma nova execução paga foi realizada, conforme o limite do orientador.
+
+Instrumentação de rede integrada e validada gratuitamente (teste 3/3, PR #430, commit em `b69cd73`); permanece pronta para futura homologação, mediante nova autorização de chamada paga.
+
 - `/pending-operations/active` respondeu 200 em todas as 9 requisições do harness sintético, sem `code` de erro. O banner "Não foi possível carregar as aprovações agora." não se reproduziu no sintético.
 - `/pending-operations/propose` respondeu 200 nas 2 requisições do trace sintético, sem `code`. A spec sintética `p3-expense.spec.ts` passou (proposta → confirmação → 1 transação).
 - Diagnóstico de código identificou, com alta confiança, que na 2ª execução do P5 em live-real o chat devolveu uma proposta e a falha ocorreu no POST `.../rpc/pending-operations/propose` (`TedChat.tsx:882-890`, `agent-client.ts:1483-1513`), não no provider/modelo. O `code` do gateway (`pending.upstream_<status>_mint` ou `_propose`, `pending-client.mjs:39-50`) não foi gravado em nenhum artefato da execução live-real.
@@ -65,7 +71,7 @@ As suítes foram executadas uma por vez para eliminar flake de concorrência:
 
 Nenhuma chamada paga à LLM foi executada após a decisão de encerramento do orientador.
 
-**Financial Intelligence V2.1 — DESENVOLVIMENTO CONCLUÍDO; HOMOLOGAÇÃO INTEGRADA E ATIVAÇÃO EM PRODUÇÃO PENDENTES.**
+**Financial Intelligence V2.1 — DESENVOLVIMENTO CONCLUÍDO; HOMOLOGAÇÃO E ATIVAÇÃO EM PRODUÇÃO PENDENTES.**
 
 A próxima prioridade é homologação operacional em ambiente controlado, com habilitação condicionada a evidência integrada com LLM real e autorização específica do operador.
 
